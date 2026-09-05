@@ -765,13 +765,22 @@ export function permissionKindForSupervisedCodingAction(
   actionKind: CodingWorkbenchSupervisedActionKind,
 ): CodingWorkbenchPermissionRequestKind {
   if (actionKind === "file-edit" || actionKind === "git-stage") return "workspace-write";
-  if (actionKind === "verification-command") return "command-execution";
-  if (actionKind === "research" || actionKind === "ci-observe") return "network-egress";
+  // ci-observe and connector-read carry the same bounded, non-mutating, single-command risk as
+  // verification-command (3941816393) -- unlike research they must NOT map to "network-egress":
+  // that kind couples the Workbench prompt to the research destination review channel
+  // (CodingWorkbenchWindow's ResearchDestination/evidenceBound gate), which has no reader for
+  // these two actions and would leave Approve permanently unbound. They also must never map to
+  // "connector-access": that permission kind is hard-denied at every mode by
+  // unavailableRuntimeActionEvent (codingRuntimeManager.ts), which would make them unreachable.
   if (
-    actionKind === "connector-write" ||
-    actionKind === "external-write" ||
+    actionKind === "verification-command" ||
+    actionKind === "ci-observe" ||
     actionKind === "connector-read"
   ) {
+    return "command-execution";
+  }
+  if (actionKind === "research") return "network-egress";
+  if (actionKind === "connector-write" || actionKind === "external-write") {
     return "connector-access";
   }
   return "delivery-substrate";

@@ -836,6 +836,75 @@ describe("productive runtime status/diff/stage lane", () => {
     expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("1");
   });
 
+  // #3384 F4 residual (wave-3 audit): the test above pins `execute()`'s own already-correct order,
+  // but the admission-gated path actually wired through the tool facade --
+  // codingToolAuthorityPort.ts's `finishAdmission` -> productionManagedWorktreeTools.ts's
+  // `runCommitRequest` -- used to call `consumeCommit` (spending the one-use approval) at
+  // admission time, strictly BEFORE this preflight block could run. A legitimate block on that
+  // path burned the approval anyway, forcing a re-propose/re-approve round trip the direct-`execute`
+  // pin above could not catch. This proves the SAME bridge-issued approval survives a
+  // conflict-marker block reached through the real tool-authority admission path.
+  it("keeps a bridge-issued commit approval redeemable across a conflict-marker block reached through the tool-authority admission path", async () => {
+    let blocking = true;
+    service = createVerifiedCommitService({
+      ...options,
+      execution: {
+        ...options.execution,
+        conflictMarkerReader: (): Promise<number> => Promise.resolve(blocking ? 1 : 0),
+      },
+    });
+    const { facade, bridge, verification } = commitFacadeFixture({
+      service,
+      root,
+      mode: "autonomous-delivery",
+      live: () => live,
+      report,
+    });
+    const invoke = (body: unknown): ReturnType<typeof facade.execute> =>
+      facade.execute({ capability: "server-capability", body: JSON.stringify(body) });
+    expect((await invoke(verification)).status).toBe("completed");
+    const proposed = await invoke({
+      action: "delivery",
+      intent: "commit",
+      phase: "propose",
+      actionId: "propose-block-1",
+      idempotencyKey: "propose-block-1",
+      message: "feat: conflict-blocked runtime commit",
+    });
+    if (!("verifiedCommit" in proposed))
+      throw new Error("receipt missing from runtime observation");
+    const id = proposed.verifiedCommit.proposalId;
+    expect(bridge.issueCommit?.("run-1", id)).toBeDefined();
+    const execute = {
+      action: "delivery",
+      intent: "commit",
+      phase: "execute",
+      proposalId: id,
+      actionId: "commit-block-1",
+      idempotencyKey: "commit-block-1",
+    };
+    const blocked = await invoke(execute);
+    expect(blocked).toMatchObject({
+      status: "completed",
+      verifiedCommit: { status: "blocked", reason: "conflict-markers" },
+    });
+    expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("0");
+    // The admission-consumed lease bug (#3384 F4) would have burned the approval on this
+    // legitimate block; the SAME bridge-issued approval still matches the SAME proposal.
+    expect(service.matchesApproval(id)).toBe(true);
+    blocking = false;
+    const result = await invoke({
+      ...execute,
+      actionId: "commit-block-2",
+      idempotencyKey: "commit-block-2",
+    });
+    expect(result).toMatchObject({
+      status: "completed",
+      verifiedCommit: { status: "succeeded", headSha: git(["rev-parse", "HEAD"]) },
+    });
+    expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("1");
+  });
+
   // Owner audit batch 5, item 5 / today's security review: a frozen runtime-authority/workspace
   // binding captured at propose time can make a later persistence attempt throw for a stale
   // proposal; `record()`'s own recovery-path call was unguarded, so a persistence rejection could

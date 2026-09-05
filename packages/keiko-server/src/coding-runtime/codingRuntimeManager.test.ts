@@ -2793,6 +2793,88 @@ describe("coding runtime manager", () => {
     ).toBe(false);
   });
 
+  it("raises a pendingPermission for a governed CI observation and admits it exactly once after approval (3941816393)", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const codingToolApprovals = createCodingToolApprovalBridge();
+    const request = {
+      action: "git" as const,
+      operation: "ci" as const,
+      actionId: "session:ci-call",
+      idempotencyKey: "session:ci-call",
+    };
+    const approvalProof = {
+      approvalId: request.actionId,
+      approvalDigest: codingToolApprovalBindingDigest("run-1991", request),
+    };
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      codingToolApprovals,
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    await manager.start(
+      governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "permission-ci-observe",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "approval-required",
+        actionKind: "ci-observe",
+        scopeLabel: "workspace-scope",
+        risk: "high",
+        policyReason: "approval-required",
+        commandLabel: "ci",
+        actionId: request.actionId,
+        idempotencyKey: request.idempotencyKey,
+        approvalId: approvalProof.approvalId,
+        approvalDigest: approvalProof.approvalDigest,
+      }),
+    );
+    await settle();
+
+    expect(events.find((event) => event.kind === "permission-requested")).toMatchObject({
+      permissionRequest: { requestId: "permission-ci-observe", actionKind: "ci-observe" },
+    });
+    expect(
+      codingToolApprovals.consume({
+        runId: "run-1991",
+        request: { ...request, approvalProof },
+        nowMs: Date.parse("2026-07-07T13:00:00.000Z"),
+      }),
+    ).toBe(false);
+    expect(
+      manager.issueApproval({
+        runId: "run-1991",
+        requestId: "permission-ci-observe",
+        actionKind: "ci-observe",
+        approvedByUserId: "operator",
+      }).ok,
+    ).toBe(true);
+    expect(
+      codingToolApprovals.consume({
+        runId: "run-1991",
+        request: { ...request, approvalProof },
+        nowMs: Date.parse("2026-07-07T13:00:00.000Z"),
+      }),
+    ).toBe(true);
+    expect(
+      codingToolApprovals.consume({
+        runId: "run-1991",
+        request: { ...request, approvalProof },
+        nowMs: Date.parse("2026-07-07T13:00:00.000Z"),
+      }),
+    ).toBe(false);
+  });
+
   it("rolls back the issued approval when verification bridge activation fails", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();

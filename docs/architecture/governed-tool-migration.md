@@ -160,7 +160,13 @@ and `currentHead` must agree with `pendingH1`'s own fields; `landedDevCommit` mu
 git-verified ancestor of `dev`; and its `catalogRevision`/`projectionDigest` must match what the
 current real producer compiles for the record's own declared `profile` — `handlerSetDigest` is
 format-checked only, since the real bound handler set is a `keiko-server` composition fact this
-pure-producer script cannot independently reproduce. Missing, stale, or mismatched evidence fails
+pure-producer script cannot independently reproduce. It also resolves `sourceHead` against real Git
+(`realSourceHeadFailures`): the commit must exist and resolve a real tree, and the H1-owned-source
+digest recomputed from `git show` of the H1-owned inventory paths (`H1_OWNED_SOURCE_PATHS`, derived
+from the same single migration inventory rather than a second hand-authored list) must equal the
+declared `treeDigest` — checked at BOTH `sourceHead` (the reviewed producer commit) and
+`currentHead` (the consuming commit), so a caller cannot bind a real review to content that never
+actually landed. Missing, stale, unresolvable, or mismatched evidence fails
 `checkToolCatalogMigrationCloseout` closed with a precise, named reason; nothing here writes or
 fabricates `h1-provenance.v1.json` itself — only #3414, once a real dev-landing exists, may do that
 (#3414 AC7).

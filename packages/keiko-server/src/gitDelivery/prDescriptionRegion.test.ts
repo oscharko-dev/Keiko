@@ -195,14 +195,7 @@ describe("managed PR region byte preservation", () => {
   // An unterminated fence runs to the end of the body: a marker pair after an opening delimiter
   // that never closes is documentation-in-progress, not the real managed region.
   it("treats an unterminated fence as running to the end of the body, preserving the marker pair inside it", () => {
-    const body = [
-      "# Human template",
-      "",
-      "```markdown",
-      START,
-      "content",
-      END,
-    ].join("\n");
+    const body = ["# Human template", "", "```markdown", START, "content", END].join("\n");
     const region = framePrDescriptionRegion("new");
     const result = reconcilePrDescriptionRegion(body, region);
     expect(result.finalBody).toBe(body + "\n\n" + region);

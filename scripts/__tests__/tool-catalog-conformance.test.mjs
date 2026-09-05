@@ -12,8 +12,11 @@ import {
   checkH1HandoffEvidence,
   h1ProvenanceShapeFailures,
   realProducerIdentityFailures,
+  realSourceHeadFailures,
+  ownedSourceDigestAt,
   isAncestorOfDev,
   H1_PROVENANCE_PATH,
+  H1_OWNED_SOURCE_PATHS,
   activeToolCatalogMigrations,
   retiredBridgeMigrations,
   generatedToolCatalogManifest,
@@ -25,6 +28,7 @@ import {
   toolCatalogMigrationBytes,
 } from "../check-tool-catalog-conformance.mjs";
 import { scanToolRegistrySource } from "../lib/tool-catalog-inventory.mjs";
+import { resolveHostExecutable } from "../lib/host-executable.mjs";
 import {
   buildSyntheticRegistrationSet,
   deriveLookupIterations,
@@ -39,6 +43,17 @@ import * as sharedNegativeFixture from "../../tests/architecture/fixtures/tool-c
 const ROOT = process.cwd();
 const PROBE = "packages/keiko-server/src/gateway-tool-calling-probe.ts";
 const NEGATIVE_FIXTURES_DIR = "tests/architecture/fixtures/tool-catalog-negatives";
+const gitExecutable = resolveHostExecutable("git");
+// Hermetic Git helper for building throwaway H1-handoff repositories (no network, no shared
+// state): every caller below creates its own mkdtempSync directory and removes it afterward.
+function git(cwd, args) {
+  return execFileSync(gitExecutable, args, { cwd, encoding: "utf8" }).trim();
+}
+function initHermeticRepo(cwd) {
+  git(cwd, ["init", "--quiet", "--initial-branch=dev"]);
+  git(cwd, ["config", "user.email", "h1-evidence@example.invalid"]);
+  git(cwd, ["config", "user.name", "H1 Evidence Test"]);
+}
 describe("initial compiler and finite migration conformance gate", () => {
   // CI head 02785dbd (run 33983984303): this test does real producer/legacy-table compilation and
   // regeneration work (~1.8s locally) and was timing out at the shared 15s default on GitHub's
@@ -380,20 +395,23 @@ describe("#3415 catalog-semantic negative-fixture matrix", () => {
   });
 });
 
+// Shared by both the recheck describe block below and the sourceHead-binding describe block
+// (review 3941891302) further down -- one well-formed fixture record, never restated per file.
+const VALID_RECORD = Object.freeze({
+  schemaVersion: 1,
+  integrationPr: 3394,
+  sourceHead: "a".repeat(40),
+  treeDigest: "b".repeat(64),
+  verificationRef: "https://example.invalid/verification",
+  reviewRef: "https://example.invalid/review",
+  catalogRevision: "revision-1",
+  profile: { id: "legacy-native", version: 1 },
+  projectionDigest: "c".repeat(64),
+  handlerSetDigest: "d".repeat(64),
+  currentHead: "e".repeat(40),
+});
+
 describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
-  const VALID_RECORD = Object.freeze({
-    schemaVersion: 1,
-    integrationPr: 3394,
-    sourceHead: "a".repeat(40),
-    treeDigest: "b".repeat(64),
-    verificationRef: "https://example.invalid/verification",
-    reviewRef: "https://example.invalid/review",
-    catalogRevision: "revision-1",
-    profile: { id: "legacy-native", version: 1 },
-    projectionDigest: "c".repeat(64),
-    handlerSetDigest: "d".repeat(64),
-    currentHead: "e".repeat(40),
-  });
   let workDir;
   afterEach(() => {
     if (workDir !== undefined) rmSync(workDir, { recursive: true, force: true });
@@ -507,6 +525,7 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
           throw new Error("not an ancestor");
         },
         identityFailures: async () => [],
+        sourceHeadFailures: async () => [],
       },
     );
     expect(errors).toEqual([
@@ -522,7 +541,7 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
     const errors = await checkH1HandoffEvidence(
       root,
       { landedDevCommit: record.currentHead, landedTreeDigest: record.treeDigest },
-      { execute: () => "", identityFailures: async () => [] },
+      { execute: () => "", identityFailures: async () => [], sourceHeadFailures: async () => [] },
     );
     expect(errors).toEqual([]);
   });
@@ -540,6 +559,7 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
         identityFailures: async () => [
           "H1 handoff evidence identity mismatch: catalogRevision does not match the current producer",
         ],
+        sourceHeadFailures: async () => [],
       },
     );
     expect(errors).toEqual([
@@ -592,5 +612,212 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
     ).toContain(
       "H1 handoff evidence identity mismatch: projectionDigest does not match the current producer",
     );
+  });
+});
+
+// Review 3941891302 [P2]: the recheck compared only two caller-declared tree digests and never
+// resolved `sourceHead` against Git or verified its tree/owned-source content against the
+// consuming commit -- the reviewer demonstrated this with a nonexistent `sourceHead` and a
+// fabricated `treeDigest` repeated in both records, which passed with zero failures. Every test
+// below uses a hermetic, throwaway `git init` repository (no network, no shared state).
+describe("review 3941891302: sourceHead must resolve against real Git and bind to the consuming commit", () => {
+  let workDir;
+  afterEach(() => {
+    if (workDir !== undefined) rmSync(workDir, { recursive: true, force: true });
+    workDir = undefined;
+  });
+
+  it("H1_OWNED_SOURCE_PATHS derives from the real single migration inventory and names real, existing files", () => {
+    expect(H1_OWNED_SOURCE_PATHS.length).toBeGreaterThan(0);
+    expect(H1_OWNED_SOURCE_PATHS).toEqual([...H1_OWNED_SOURCE_PATHS].sort());
+    for (const path of H1_OWNED_SOURCE_PATHS) {
+      expect(() => readFileSync(join(ROOT, path), "utf8")).not.toThrow();
+    }
+  });
+
+  // Fails before the fix: the reviewer's exact repro (real dev tip, current producer projection,
+  // a nonexistent 40-`f` sourceHead, a fabricated treeDigest repeated in both records) returned
+  // `[]`. Uses checkH1HandoffEvidence's real, unstubbed `execute`/`sourceHeadFailures` defaults --
+  // only `identityFailures` is stubbed, to isolate this from the unrelated producer-projection
+  // dimension.
+  it("reproduces the reviewed exploit (nonexistent sourceHead + fabricated repeated treeDigest) and now fails closed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-exploit-"));
+    workDir = root;
+    initHermeticRepo(root);
+    git(root, ["commit", "--allow-empty", "-m", "dev tip"]);
+    const devTip = git(root, ["rev-parse", "HEAD"]);
+    mkdirSync(join(root, "docs", "architecture"), { recursive: true });
+    const forgedDigest = "1".repeat(64);
+    const record = {
+      ...VALID_RECORD,
+      sourceHead: "f".repeat(40),
+      currentHead: devTip,
+      treeDigest: forgedDigest,
+    };
+    writeFileSync(join(root, H1_PROVENANCE_PATH), JSON.stringify(record));
+    const errors = await checkH1HandoffEvidence(
+      root,
+      { landedDevCommit: devTip, landedTreeDigest: forgedDigest },
+      { identityFailures: async () => [] },
+    );
+    expect(errors).toEqual([
+      `H1 handoff evidence unverifiable: sourceHead ${record.sourceHead} is not a resolvable Git commit`,
+    ]);
+  });
+
+  it("passes a genuine H1 handoff end-to-end: sourceHead resolves and its owned-source digest matches at both sourceHead and the consuming commit", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-real-"));
+    workDir = root;
+    initHermeticRepo(root);
+    const ownedPaths = ["owned/a.ts", "owned/b.ts"];
+    mkdirSync(join(root, "owned"), { recursive: true });
+    writeFileSync(join(root, "owned", "a.ts"), "export const a = 1;\n");
+    writeFileSync(join(root, "owned", "b.ts"), "export const b = 2;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "H1 producer commit"]);
+    const sourceHead = git(root, ["rev-parse", "HEAD"]);
+    // Real formula, derived from the exported production helper -- never restated (AGENTS.md §7).
+    const treeDigest = ownedSourceDigestAt(sourceHead, root, execFileSync, ownedPaths);
+    // The consuming commit lands on dev without touching the owned paths: a different commit,
+    // identical owned-source content.
+    writeFileSync(join(root, "unrelated.txt"), "noise\n");
+    git(root, ["add", "unrelated.txt"]);
+    git(root, ["commit", "-m", "unrelated dev change"]);
+    const currentHead = git(root, ["rev-parse", "HEAD"]);
+    mkdirSync(join(root, "docs", "architecture"), { recursive: true });
+    const record = { ...VALID_RECORD, sourceHead, currentHead, treeDigest };
+    writeFileSync(join(root, H1_PROVENANCE_PATH), JSON.stringify(record));
+    const errors = await checkH1HandoffEvidence(
+      root,
+      { landedDevCommit: currentHead, landedTreeDigest: treeDigest },
+      {
+        identityFailures: async () => [],
+        sourceHeadFailures: (r, rec, exec) => realSourceHeadFailures(r, rec, exec, ownedPaths),
+      },
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it("fails closed when the consuming commit's owned-source content diverges from the reviewed sourceHead", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-drift-"));
+    workDir = root;
+    initHermeticRepo(root);
+    const ownedPaths = ["owned/a.ts"];
+    mkdirSync(join(root, "owned"), { recursive: true });
+    writeFileSync(join(root, "owned", "a.ts"), "export const a = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "H1 producer commit"]);
+    const sourceHead = git(root, ["rev-parse", "HEAD"]);
+    const treeDigest = ownedSourceDigestAt(sourceHead, root, execFileSync, ownedPaths);
+    // The consuming commit silently swaps the owned file's content after review.
+    writeFileSync(join(root, "owned", "a.ts"), "export const a = 999;\n");
+    git(root, ["add", "owned/a.ts"]);
+    git(root, ["commit", "-m", "swapped after review"]);
+    const currentHead = git(root, ["rev-parse", "HEAD"]);
+    mkdirSync(join(root, "docs", "architecture"), { recursive: true });
+    const record = { ...VALID_RECORD, sourceHead, currentHead, treeDigest };
+    writeFileSync(join(root, H1_PROVENANCE_PATH), JSON.stringify(record));
+    const errors = await checkH1HandoffEvidence(
+      root,
+      { landedDevCommit: currentHead, landedTreeDigest: treeDigest },
+      {
+        identityFailures: async () => [],
+        sourceHeadFailures: (r, rec, exec) => realSourceHeadFailures(r, rec, exec, ownedPaths),
+      },
+    );
+    expect(errors).toEqual([
+      "H1 handoff evidence identity mismatch: the consuming commit's owned source content does not match the reviewed treeDigest",
+    ]);
+  });
+
+  it("fails closed when the declared treeDigest does not match the real owned source content at sourceHead", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-wrong-digest-"));
+    workDir = root;
+    initHermeticRepo(root);
+    mkdirSync(join(root, "owned"), { recursive: true });
+    writeFileSync(join(root, "owned", "a.ts"), "export const a = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "producer commit"]);
+    const sourceHead = git(root, ["rev-parse", "HEAD"]);
+    const errors = await realSourceHeadFailures(
+      root,
+      { sourceHead, currentHead: sourceHead, treeDigest: "0".repeat(64) },
+      execFileSync,
+      ["owned/a.ts"],
+    );
+    expect(errors).toEqual([
+      "H1 handoff evidence identity mismatch: treeDigest does not match the real owned source content at sourceHead",
+    ]);
+  });
+
+  it("fails closed when a declared H1-owned source path is missing at sourceHead", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-missing-"));
+    workDir = root;
+    initHermeticRepo(root);
+    git(root, ["commit", "--allow-empty", "-m", "producer commit without the owned path"]);
+    const sourceHead = git(root, ["rev-parse", "HEAD"]);
+    const errors = await realSourceHeadFailures(
+      root,
+      { sourceHead, currentHead: sourceHead, treeDigest: "0".repeat(64) },
+      execFileSync,
+      ["owned/does-not-exist.ts"],
+    );
+    expect(errors).toEqual([
+      `H1 handoff evidence unverifiable: an H1-owned source path is missing from sourceHead ${sourceHead}`,
+    ]);
+  });
+
+  it("fails closed when sourceHead does not resolve to a real Git commit", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-nonexistent-"));
+    workDir = root;
+    initHermeticRepo(root);
+    git(root, ["commit", "--allow-empty", "-m", "unrelated"]);
+    const forgedSha = "f".repeat(40);
+    const errors = await realSourceHeadFailures(
+      root,
+      { sourceHead: forgedSha, currentHead: forgedSha, treeDigest: "0".repeat(64) },
+      execFileSync,
+      [],
+    );
+    expect(errors).toEqual([
+      `H1 handoff evidence unverifiable: sourceHead ${forgedSha} is not a resolvable Git commit`,
+    ]);
+  });
+
+  it("fails closed when currentHead (the consuming commit) does not resolve to a real Git commit", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-current-nonexistent-"));
+    workDir = root;
+    initHermeticRepo(root);
+    git(root, ["commit", "--allow-empty", "-m", "producer commit"]);
+    const sourceHead = git(root, ["rev-parse", "HEAD"]);
+    // Empty ownedPaths makes the digest a stable constant, letting this isolate the currentHead
+    // resolution step alone using the real exported helper (never a restated formula).
+    const emptyDigest = ownedSourceDigestAt(sourceHead, root, execFileSync, []);
+    const forgedSha = "f".repeat(40);
+    const errors = await realSourceHeadFailures(
+      root,
+      { sourceHead, currentHead: forgedSha, treeDigest: emptyDigest },
+      execFileSync,
+      [],
+    );
+    expect(errors).toEqual([
+      `H1 handoff evidence unverifiable: currentHead ${forgedSha} is not a resolvable Git commit`,
+    ]);
+  });
+
+  // The tests above use custom ownedPaths (a hermetic repo cannot host this repository's real
+  // directory structure). This proves the REAL production default (H1_OWNED_SOURCE_PATHS, this
+  // repository's actual owned files) computes a stable, well-formed digest against this
+  // repository's own real Git history -- not just that the DI seam works.
+  it("the real (unstubbed) owned-source digest agrees with itself against this repository's actual HEAD", () => {
+    let headSha;
+    try {
+      headSha = git(ROOT, ["rev-parse", "HEAD"]);
+    } catch {
+      return;
+    }
+    const digest = ownedSourceDigestAt(headSha, ROOT, execFileSync);
+    expect(digest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(ownedSourceDigestAt(headSha, ROOT, execFileSync)).toBe(digest);
   });
 });

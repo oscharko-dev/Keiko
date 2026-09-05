@@ -530,6 +530,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.actionKind.file-edit": "Dateibearbeitung",
   "codingWorkbench.approval.actionKind.git-stage": "Änderungen vormerken",
   "codingWorkbench.approval.actionKind.verification-command": "Verifikationsbefehl",
+  "codingWorkbench.approval.actionKind.ci-observe": "CI-Statusabfrage",
+  "codingWorkbench.approval.actionKind.connector-read": "Connector-Lesezugriff",
   "codingWorkbench.approval.actionKind.research": "Recherche",
   "codingWorkbench.approval.actionKind.commit": "Commit",
   "codingWorkbench.approval.actionKind.push": "Push",

@@ -468,6 +468,7 @@ async function landedEvidenceFailures(root, landedDevCommit, landedTreeDigest, d
       : [
           `H1 handoff evidence unreachable: landedDevCommit ${landedDevCommit} is not an ancestor of dev`,
         ]),
+    ...(await deps.sourceHeadFailures(root, record, deps.execute)),
     ...(await deps.identityFailures(root, record)),
   ];
 }
@@ -475,7 +476,11 @@ async function landedEvidenceFailures(root, landedDevCommit, landedTreeDigest, d
 export async function checkH1HandoffEvidence(
   root = process.cwd(),
   pendingH1,
-  { execute = execFileSync, identityFailures = realProducerIdentityFailures } = {},
+  {
+    execute = execFileSync,
+    identityFailures = realProducerIdentityFailures,
+    sourceHeadFailures = realSourceHeadFailures,
+  } = {},
 ) {
   const migration = pendingH1 ?? JSON.parse(await toolCatalogMigrationBytes(root)).pendingH1;
   const { landedDevCommit, landedTreeDigest } = migration;
@@ -484,6 +489,7 @@ export async function checkH1HandoffEvidence(
   return landedEvidenceFailures(root, landedDevCommit, landedTreeDigest, {
     execute,
     identityFailures,
+    sourceHeadFailures,
   });
 }
 const CATALOG_NEGATIVE_FIXTURES_DIR = "tests/architecture/fixtures/tool-catalog-negatives";

@@ -27,7 +27,11 @@ import type {
   GitProcessResult,
   GitProcessRunner,
 } from "@oscharko-dev/keiko-git";
-import { gitLazyFetchGuardSupportedForVersion } from "@oscharko-dev/keiko-tools/internal/git-worktree-snapshot-node";
+import {
+  gitConfigIndicatesPromisorRemote,
+  gitLazyFetchGuardSupportedForVersion,
+  parseGitVersionOutput,
+} from "@oscharko-dev/keiko-tools/internal/git-worktree-snapshot-node";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { AbortDeadlineRaceError, raceAbortDeadline } from "./abort-race.js";
 import { codingWorkbenchRemoteDigest } from "./coding-context/githubIssueResolution.js";
@@ -110,12 +114,21 @@ export interface GitChangeSnapshotServiceOptions {
   readonly now?: () => number;
 }
 
-// A promisor remote (`remote.<name>.promisor = true`) is what makes lazy fetch possible at all — a
-// repository without one has nothing for GIT_NO_LAZY_FETCH to guard, in any git version. Any probe
-// ambiguity (a thrown error, a non-zero/truncated exit other than the expected "no match") is
-// treated as "cannot rule out a promisor remote", never as "safe". Mirrors the read-lane guard in
-// keiko-tools (git-worktree-snapshot-node.ts, reviewer 3941836280 / D2 need) against this
-// independent GitProcessRunner-based execution boundary.
+// A promisor remote is what makes lazy fetch possible at all — a repository without one has
+// nothing for GIT_NO_LAZY_FETCH to guard, in any git version. Git treats a remote as a promisor
+// remote from EITHER an explicit `remote.<name>.promisor` (true by git's own boolean grammar — a
+// bare key with no value at all is true) OR from `remote.<name>.partialclonefilter` being
+// configured AT ALL, independent of any `promisor` key. The probe reads git's EFFECTIVE
+// configuration — no `--local` scope restriction — so system/global/worktree config and any
+// `include.path`/`includeIf` directive are honoured exactly as a real `git` invocation would.
+// `gitConfigIndicatesPromisorRemote` is the SAME parser keiko-tools' read-lane guard uses
+// (git-worktree-snapshot-node.ts), so the two independent execution boundaries can never drift
+// apart on what counts as promisor risk (reviewer 3941943601). Any probe ambiguity (a thrown
+// error, a non-zero/truncated exit other than the expected "no match") is treated as "cannot rule
+// out a promisor remote", never as "safe". This is re-evaluated on EVERY call, never cached: the
+// repository's own config can change while Keiko runs, and an earlier safe verdict must never
+// authorize a later, riskier one — a real transition this file's own fixtures exercise (reviewer
+// 3941943603).
 async function repositoryHasPromisorRemote(
   runner: GitProcessRunner,
   options: GitProcessOptions,
@@ -123,7 +136,7 @@ async function repositoryHasPromisorRemote(
   let result: GitProcessResult;
   try {
     result = await runner(
-      ["config", "--local", "--get-regexp", String.raw`^remote\..*\.promisor$`],
+      ["config", "--get-regexp", String.raw`^remote\..*\.(promisor|partialclonefilter)$`],
       options,
     );
   } catch {
@@ -131,40 +144,70 @@ async function repositoryHasPromisorRemote(
   }
   if (result.exitCode === 1 && result.stdout.trim().length === 0) return false;
   if (result.exitCode !== 0 || result.truncated) return true;
-  return result.stdout
-    .trim()
-    .split("\n")
-    .some((line) => /\bpromisor\s+(?:true|yes|on|1)$/iu.test(line));
+  return gitConfigIndicatesPromisorRemote(result.stdout);
 }
 
 // `--no-lazy-fetch`/`--no-replace-objects` fail closed exactly like git's own docs promise ONLY on
 // a git that recognises them (added together in git 2.45); `ubuntu-latest`'s pinned git 2.43
 // silently accepts either flag as a no-op equivalent-environment-variable setter that its own
-// environment.c does not yet implement. The installed git's version is a property of the PROCESS
-// (cached by the runner instance — one real runner in production, a fresh fake per test) and cannot
-// change mid-process, so it is detected once and reused. Promisor status is NOT cached the same
-// way: it is the repository's OWN config, which a long-lived server process can observe change on a
+// environment.c does not yet implement. The probe is MEMOIZED across every future call on this
+// runner, so it must never inherit one particular caller's own cancellation/timeout — it gets its
+// own short, independent, bounded budget instead (`options.abortSignal` is deliberately dropped).
+// The installed git's version is a property of the PROCESS and cannot change mid-process, so a
+// DETERMINATE reading (git actually answered with a parseable version) is cached for the runner's
+// lifetime; an INDETERMINATE probe (spawn failure, non-zero exit, the probe's own bounded timeout,
+// or an unparseable banner) is the opposite of a durable fact and is never cached — the eviction
+// below removes it the moment it settles, so the very next call gets a fresh probe instead of
+// replaying one bad probe as a permanent "guard unsupported" verdict for every later, unrelated
+// workspace on the same runner (reviewer 3941928444). Promisor status is NOT cached the same way:
+// it is the repository's OWN config, which a long-lived server process can observe change on a
 // workspace it has already read — caching it risks replaying a stale "not at risk" verdict against
 // a repository that has since become one (a real transition this file's own fixtures exercise). It
 // is one cheap local `git config` read; re-probing it on every call is deliberate.
-const versionGuardSupportedCache = new WeakMap<GitProcessRunner, Promise<boolean>>();
+const GIT_LAZY_FETCH_GUARD_VERSION_PROBE_TIMEOUT_MS = 5_000;
+
+// `undefined` marks an INDETERMINATE probe outcome — never cached; `true`/`false` is a determinate,
+// process-lifetime-stable fact about the installed git binary.
+const versionGuardSupportedCache = new WeakMap<GitProcessRunner, Promise<boolean | undefined>>();
+
+async function probeVersionGuardSupport(
+  runner: GitProcessRunner,
+  options: GitProcessOptions,
+): Promise<boolean | undefined> {
+  let result: GitProcessResult;
+  try {
+    result = await runner(["version"], {
+      cwd: options.cwd,
+      maxBytes: options.maxBytes,
+      timeoutMs: GIT_LAZY_FETCH_GUARD_VERSION_PROBE_TIMEOUT_MS,
+    });
+  } catch {
+    return undefined;
+  }
+  if (result.exitCode !== 0) return undefined;
+  if (parseGitVersionOutput(result.stdout) === undefined) return undefined;
+  return gitLazyFetchGuardSupportedForVersion(result.stdout);
+}
+
+function cachedVersionGuardSupport(
+  runner: GitProcessRunner,
+  options: GitProcessOptions,
+): Promise<boolean | undefined> {
+  const cached = versionGuardSupportedCache.get(runner);
+  if (cached !== undefined) return cached;
+  const probe = probeVersionGuardSupport(runner, options);
+  versionGuardSupportedCache.set(runner, probe);
+  void probe.then((support) => {
+    if (support === undefined) versionGuardSupportedCache.delete(runner);
+  });
+  return probe;
+}
 
 async function versionGuardSupported(
   runner: GitProcessRunner,
   options: GitProcessOptions,
 ): Promise<boolean> {
-  const cached = versionGuardSupportedCache.get(runner);
-  if (cached !== undefined) return cached;
-  const probe = (async (): Promise<boolean> => {
-    try {
-      const result = await runner(["version"], options);
-      return result.exitCode === 0 && gitLazyFetchGuardSupportedForVersion(result.stdout);
-    } catch {
-      return false;
-    }
-  })();
-  versionGuardSupportedCache.set(runner, probe);
-  return probe;
+  return (await cachedVersionGuardSupport(runner, options)) ?? false;
 }
 
 // `--no-replace-objects` is an ancient global option (git 1.6.6, the replace-refs feature itself)

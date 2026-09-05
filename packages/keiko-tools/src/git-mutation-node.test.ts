@@ -30,11 +30,12 @@ async function continuePastUnsignedSigningPolicy(rec: SpawnRecorder): Promise<vo
   await expect.poll(() => rec.calls()).toHaveLength(2);
 }
 
-// Every mutating command's FIRST spawn against a given (fresh, per-test) workspace root is now the
-// version-gated lazy-fetch/replace-objects guard probe (`git config --local --get-regexp
-// ^remote\..*\.promisor$`, git-worktree-snapshot-node.ts, reviewer 3941836280) — cached thereafter,
-// so it never repeats within one test. Exit 1 with no stdout means "no promisor remote configured"
-// (not at risk), so the guard admits the real command without a version probe of its own.
+// Every mutating command's FIRST spawn is the version-gated lazy-fetch/replace-objects guard's own
+// promisor-remote probe (`git config --get-regexp ^remote\..*\.(promisor|partialclonefilter)$`,
+// git-worktree-snapshot-node.ts, reviewer 3941836280 / 3941943601) — re-probed on every call, never
+// cached, since the repository's own config can change while Keiko runs (reviewer 3941943603).
+// Exit 1 with no stdout means "no promisor remote configured" (not at risk), so the guard admits
+// the real command without a version probe of its own.
 async function continuePastLazyFetchGuardProbe(rec: SpawnRecorder): Promise<void> {
   const before = rec.calls().length;
   rec.child.emit("close", 1, null);
@@ -53,9 +54,8 @@ describe("node git mutation adapter — governed argv reaches the spawn boundary
     expect(rec.calls()).toHaveLength(2);
     expect(rec.calls()[0]?.args).toEqual([
       "config",
-      "--local",
       "--get-regexp",
-      String.raw`^remote\..*\.promisor$`,
+      String.raw`^remote\..*\.(promisor|partialclonefilter)$`,
     ]);
     expect(rec.calls()[1]?.command).toBe("git");
     expect(rec.calls()[1]?.args).toEqual([

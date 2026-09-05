@@ -665,8 +665,8 @@ describe("supervised coding action authority", () => {
       "command-execution",
     );
     expect(permissionKindForSupervisedCodingAction("research")).toBe("network-egress");
-    expect(permissionKindForSupervisedCodingAction("ci-observe")).toBe("network-egress");
-    expect(permissionKindForSupervisedCodingAction("connector-read")).toBe("connector-access");
+    expect(permissionKindForSupervisedCodingAction("ci-observe")).toBe("command-execution");
+    expect(permissionKindForSupervisedCodingAction("connector-read")).toBe("command-execution");
     expect(permissionKindForSupervisedCodingAction("connector-write")).toBe("connector-access");
     expect(permissionKindForSupervisedCodingAction("external-write")).toBe("connector-access");
     expect(permissionKindForSupervisedCodingAction("commit")).toBe("delivery-substrate");

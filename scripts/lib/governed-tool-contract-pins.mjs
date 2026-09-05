@@ -31,6 +31,11 @@ export const GOVERNED_TOOL_CONTRACT_PINS = {
   // `checkH1HandoffEvidence` (check-tool-catalog-conformance.mjs, folded into
   // checkToolCatalogMigrationCloseout) independently rechecks both fields the moment either is
   // populated -- see docs/architecture/governed-tool-migration.md for exactly what it verifies.
+  // Review 3941891302: that recheck also resolves the durable record's `sourceHead` against real
+  // Git and rebinds its declared `treeDigest` to this exact `owner`'s inventory rows below --
+  // `check-tool-catalog-conformance.mjs`'s `H1_OWNED_SOURCE_PATHS` derives "H1's owned source
+  // paths" from every row in this same file's `inventory` whose `ownerIssue` equals `owner` here,
+  // never a second, hand-authored path list.
   pendingH1: {
     owner: 3386,
     canonicalTool: { canonicalId: "keiko.repo.search", contractVersion: 1 },

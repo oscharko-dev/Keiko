@@ -237,7 +237,7 @@ interface GitLazyFetchGuardSupport {
 }
 
 // A dedicated, narrow rule set for the guard's own two probes (git's version banner and a read-only
-// local-scope config lookup) — STRUCTURALLY SEPARATE from the main read allowlist above (mirrors
+// effective-config lookup) — STRUCTURALLY SEPARATE from the main read allowlist above (mirrors
 // git-mutation-node.ts's GLOBAL_SIGNING_POLICY_COMMAND_RULES) so neither probe widens what an
 // ordinary snapshot read may invoke, and "config" here can never reach a value-setting form: every
 // scope/write flag is denied, and the only argv this module ever builds for it is a fixed, literal
@@ -285,19 +285,26 @@ async function runGuardProbe(ctx: ReadContext, argv: readonly string[]): Promise
   );
 }
 
-// A promisor remote (`remote.<name>.promisor = true`) is what makes lazy fetch possible at all — a
-// repository without one has nothing for GIT_NO_LAZY_FETCH to guard, in any git version. Any
-// ambiguity (probe failure, non-zero/truncated exit) is treated as "cannot rule out a promisor
-// remote" rather than as "safe", so a broken probe falls through to the strict version gate instead
-// of silently skipping it.
+// A promisor remote is what makes lazy fetch possible at all — a repository without one has
+// nothing for GIT_NO_LAZY_FETCH to guard, in any git version. Git treats a remote as a promisor
+// remote from EITHER an explicit `remote.<name>.promisor` (true by git's own boolean grammar — a
+// bare key with no value at all is true, same as `= true`/`yes`/`on`/`1`) OR from
+// `remote.<name>.partialclonefilter` being configured AT ALL, independent of any `promisor` key
+// (https://github.com/git/git/blob/v2.43.0/promisor-remote.c). The probe reads git's EFFECTIVE
+// configuration — no `--local` scope restriction — so system/global/worktree config and any
+// `include.path`/`includeIf` directive are honoured exactly as a real `git` invocation would
+// (reviewer 3941943601). Any ambiguity (probe failure, non-zero/truncated exit) is treated as
+// "cannot rule out a promisor remote" rather than as "safe", so a broken probe falls through to the
+// strict version gate instead of silently skipping it. This is re-evaluated on EVERY call, never
+// cached: the repository's own config can change while Keiko runs, and an earlier safe verdict must
+// never authorize a later, riskier one (reviewer 3941943603).
 async function repositoryHasPromisorRemote(ctx: ReadContext): Promise<boolean> {
   let result: CommandResult;
   try {
     result = await runGuardProbe(ctx, [
       "config",
-      "--local",
       "--get-regexp",
-      String.raw`^remote\..*\.promisor$`,
+      String.raw`^remote\..*\.(promisor|partialclonefilter)$`,
     ]);
   } catch (error) {
     // A cancelled/timed-out probe is not "ambiguous risk" — it is the caller's OWN signal firing,
@@ -308,18 +315,66 @@ async function repositoryHasPromisorRemote(ctx: ReadContext): Promise<boolean> {
   }
   if (result.exitCode === 1 && result.stdout.trim().length === 0) return false;
   if (result.exitCode !== 0 || result.truncated) return true;
-  return result.stdout
+  return gitConfigIndicatesPromisorRemote(result.stdout);
+}
+
+// Parses the raw `git config --get-regexp '^remote\..*\.(promisor|partialclonefilter)$'` stdout
+// this probe (and keiko-server's independent GitProcessRunner-based gitChangeSnapshotService.ts
+// lane) produces, into a single promisor-risk verdict. Exported so BOTH lanes share this ONE
+// reading of git's config-value grammar instead of two independent parsers that can silently drift
+// apart — exactly reviewer 3941943601's failure mode.
+export function gitConfigIndicatesPromisorRemote(getRegexpStdout: string): boolean {
+  return getRegexpStdout
     .trim()
     .split("\n")
-    .some((line) => /\bpromisor\s+(?:true|yes|on|1)$/iu.test(line));
+    .some((line) => isPromisorRiskConfigLine(line));
+}
+
+function isPromisorRiskConfigLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) return false;
+  const spaceIndex = trimmed.indexOf(" ");
+  const key = (spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex)).toLowerCase();
+  // A configured partial-clone filter makes the remote a promisor remote to git on its own, with
+  // no `promisor` key required — the filter spec (its value) carries no boolean meaning.
+  if (key.endsWith(".partialclonefilter")) return true;
+  if (!key.endsWith(".promisor")) return false;
+  // git's config boolean grammar (https://git-scm.com/docs/git-config#_values): a variable with no
+  // value at all is true; explicit "yes"/"on"/"true"/"1" (case-insensitive) are true; anything else
+  // (including "no"/"off"/"false"/"0"/empty) is false.
+  if (spaceIndex === -1) return true;
+  return /^(?:true|yes|on|1)$/iu.test(trimmed.slice(spaceIndex + 1).trim());
+}
+
+// The version probe is MEMOIZED across every future call on this spawn function (below), so it
+// must never inherit one particular caller's own cancellation signal or timeout — a caller who
+// aborts their own read must not poison this shared, cached probe for every later, unrelated
+// caller (reviewer 3941928444). It gets its own short, independent, bounded budget instead.
+const GIT_LAZY_FETCH_GUARD_VERSION_PROBE_TIMEOUT_MS = 5_000;
+
+async function runVersionProbe(ctx: ReadContext): Promise<CommandResult> {
+  const runDeps: RunCommandDeps = {
+    ...ctx.runDeps,
+    commandRules: GIT_LAZY_FETCH_GUARD_PROBE_COMMAND_RULES,
+    onTerminated: ctx.runDeps.onTerminated,
+  };
+  return runCommand(
+    {
+      command: "git",
+      args: ["version"],
+      cwd: undefined,
+      timeoutMs: GIT_LAZY_FETCH_GUARD_VERSION_PROBE_TIMEOUT_MS,
+      signal: new AbortController().signal,
+    },
+    runDeps,
+  );
 }
 
 async function probeGitVersionGuardSupport(ctx: ReadContext): Promise<GitLazyFetchGuardSupport> {
   let result: CommandResult;
   try {
-    result = await runGuardProbe(ctx, ["version"]);
-  } catch (error) {
-    if (error instanceof CommandCancelledError || error instanceof CommandTimeoutError) throw error;
+    result = await runVersionProbe(ctx);
+  } catch {
     return { supported: false, gitVersion: undefined };
   }
   if (result.exitCode !== 0) return { supported: false, gitVersion: undefined };
@@ -332,12 +387,15 @@ async function probeGitVersionGuardSupport(ctx: ReadContext): Promise<GitLazyFet
 }
 
 // The installed git's version is a property of the PROCESS (keyed by the spawn function — one real
-// binary in production, a fresh fake per test) and cannot change mid-process, so it is detected
-// once and reused. Promisor-remote status is NOT cached the same way: it is a property of the
-// repository's OWN config, which a long-lived server process can observe change on a workspace it
-// has already read (`git config remote.<name>.promisor` flips after an earlier, unrelated read) —
-// caching it risks replaying a stale "not at risk" verdict against a repository that has since
-// become one. It is one cheap local `git config` read; re-probing it every call is deliberate.
+// binary in production, a fresh fake per test) and cannot change mid-process, so a DETERMINATE
+// reading (git actually answered with a parseable version) is cached for the spawn function's
+// lifetime. An INDETERMINATE probe (spawn failure — e.g. a workspace root that briefly is not a
+// directory — non-zero exit, the probe's own bounded timeout, or an unparseable banner) is the
+// opposite of a durable fact and is never cached: `gitVersion` stays `undefined` for exactly these
+// cases, and the eviction below removes the entry the moment it settles, so the very next call
+// gets a fresh probe instead of replaying one bad probe as a permanent "guard unsupported" verdict
+// for every later, unrelated workspace on the same spawn function (reviewer 3941928444). Promisor-
+// remote status is NOT cached the same way — see `repositoryHasPromisorRemote` above.
 const gitVersionGuardSupportCache = new WeakMap<SpawnFn, Promise<GitLazyFetchGuardSupport>>();
 
 function cachedVersionGuardSupport(ctx: ReadContext): Promise<GitLazyFetchGuardSupport> {
@@ -346,10 +404,9 @@ function cachedVersionGuardSupport(ctx: ReadContext): Promise<GitLazyFetchGuardS
   if (cached !== undefined) return cached;
   const probe = probeGitVersionGuardSupport(ctx);
   gitVersionGuardSupportCache.set(spawn, probe);
-  // A rejected probe (cancellation/timeout — the only rejection it can now produce, per the
-  // re-throw above) must NOT be memoized: caching it would replay one operation's cancellation as
-  // a permanent "guard unsupported" verdict for every later, unrelated call on the same spawn.
-  probe.catch(() => gitVersionGuardSupportCache.delete(spawn));
+  void probe.then((support) => {
+    if (support.gitVersion === undefined) gitVersionGuardSupportCache.delete(spawn);
+  });
   return probe;
 }
 

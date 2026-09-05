@@ -31,8 +31,9 @@ function stripFenceIndent(line: string): string {
 // restriction.
 function matchOpeningFence(line: string): OpenFence | undefined {
   const match = /^(`{3,}|~{3,})(.*)$/.exec(stripFenceIndent(line));
-  if (!match) return undefined;
-  const [, run, infoString] = match as [string, string, string];
+  const run = match?.[1];
+  const infoString = match?.[2];
+  if (run === undefined || infoString === undefined) return undefined;
   const char = run.charAt(0) as "`" | "~";
   if (char === "`" && infoString.includes("`")) return undefined;
   return { char, length: run.length };
@@ -45,9 +46,8 @@ function matchOpeningFence(line: string): OpenFence | undefined {
 function isClosingFence(line: string, open: OpenFence): boolean {
   // `open.char` is always "`" or "~", neither a regex metacharacter, so no escaping is needed.
   const match = new RegExp(`^(${open.char}+)([ \\t]*)$`).exec(stripFenceIndent(line));
-  if (!match) return false;
-  const [, run] = match as [string, string, string];
-  return run.length >= open.length;
+  const run = match?.[1];
+  return run !== undefined && run.length >= open.length;
 }
 
 // #3384 B5-7: a maintainer's own fenced-code-block quote of the marker syntax (e.g. a README-style

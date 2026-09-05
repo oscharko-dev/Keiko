@@ -170,6 +170,7 @@ function gateBudget(
     // #3384 wave-3 W3-8 "needs": forwards the controller's real exhaustion read through the same
     // `allowed()` gate every other budget effect already goes through, so an authority-denied run
     // never reports "exhausted" for a budget it was never entitled to read in the first place.
+    repairBudgetExhausted: () => allowed() && budget.repairBudgetExhausted?.() === true,
   };
 }
 function knownScope(
