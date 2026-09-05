@@ -3,12 +3,20 @@
 #endif
 
 #if defined(_WIN32)
+#ifndef UNICODE
 #define UNICODE
+#endif
+#ifndef _UNICODE
 #define _UNICODE
+#endif
 #include <stdarg.h>
 #include <stdio.h>
 #include <wchar.h>
 #include <windows.h>
+
+#if defined(KEIKO_PORTABLE_GENERATION_ID)
+#include "keiko-portable-tree-hash.h"
+#endif
 
 #if defined(_MSC_VER)
 /* MessageBoxW lives in user32, which neither cl invocation links by default. */
@@ -53,10 +61,12 @@ static int dirname_in_place(wchar_t *path) {
   return 1;
 }
 
+#if !defined(KEIKO_PORTABLE_GENERATION_ID) || defined(KEIKO_PORTABLE_LAUNCHER_TEST)
 static int append_path(wchar_t *out, size_t cap, const wchar_t *base, const wchar_t *suffix) {
   int written = _snwprintf_s(out, cap, _TRUNCATE, L"%ls%ls", base, suffix);
   return written > 0 && (size_t)written < cap;
 }
+#endif
 
 static int quote_arg(wchar_t *out, size_t cap, const wchar_t *value) {
   int written = _snwprintf_s(out, cap, _TRUNCATE, L"\"%ls\"", value);
@@ -116,6 +126,21 @@ typedef struct {
   wchar_t command[KEIKO_COMMAND_CAP];
 } keiko_launcher_buffers;
 
+#if defined(KEIKO_PORTABLE_GENERATION_ID)
+
+#include "keiko-portable-generation-windows.h"
+
+#else
+
+static int select_legacy_resources(keiko_launcher_buffers *buffers) {
+  return append_path(buffers->node, KEIKO_PATH_CAP, buffers->root,
+                     L"\\runtime\\node\\node.exe") &&
+         append_path(buffers->cli, KEIKO_PATH_CAP, buffers->root,
+                     L"\\app\\dist\\cli\\index.js");
+}
+
+#endif
+
 static keiko_launcher_buffers *allocate_launcher_buffers(void) {
   HANDLE heap = GetProcessHeap();
   if (heap == NULL) {
@@ -131,32 +156,7 @@ static void free_launcher_buffers(keiko_launcher_buffers *buffers) {
   }
 }
 
-static int run_launcher(keiko_launcher_buffers *buffers) {
-  DWORD len = GetModuleFileNameW(NULL, buffers->root, KEIKO_PATH_CAP);
-  if (len == 0 || len >= (DWORD)KEIKO_PATH_CAP) {
-    return 1;
-  }
-  if (!dirname_in_place(buffers->root)) {
-    return 1;
-  }
-
-  if (!append_path(
-        buffers->node,
-        KEIKO_PATH_CAP,
-        buffers->root,
-        L"\\runtime\\node\\node.exe"
-      )) {
-    return 1;
-  }
-  if (!append_path(
-        buffers->cli,
-        KEIKO_PATH_CAP,
-        buffers->root,
-        L"\\app\\dist\\cli\\index.js"
-      )) {
-    return 1;
-  }
-
+static int run_selected_launcher(keiko_launcher_buffers *buffers, int has_console) {
   if (!quote_arg(buffers->quoted_node, KEIKO_PATH_CAP, buffers->node)) {
     return 1;
   }
@@ -165,18 +165,6 @@ static int run_launcher(keiko_launcher_buffers *buffers) {
   }
   if (!quote_arg(buffers->quoted_root, KEIKO_PATH_CAP, buffers->root)) {
     return 1;
-  }
-
-  /* Same double-click marker as the macOS launcher: the portable CLI surfaces launch failures
-   * visibly only when a human started the app through this binary, and the marker's contract must
-   * hold on every platform. A /SUBSYSTEM:WINDOWS binary never owns a console of its own, so
-   * GetConsoleWindow() alone cannot tell a cmd/PowerShell start from an Explorer double-click —
-   * both report NULL. Attaching to the parent's console distinguishes them: it succeeds for a
-   * shell start (keep console semantics, keep Node output visible) and fails for Explorer
-   * (set the UI-launch marker and suppress the child console window). */
-  int has_console = GetConsoleWindow() != NULL;
-  if (!has_console && AttachConsole(ATTACH_PARENT_PROCESS)) {
-    has_console = 1;
   }
 
   /* The CLI's own failure dialog cannot load when the Node runtime or the app bundle itself is
@@ -285,6 +273,46 @@ static int run_launcher(keiko_launcher_buffers *buffers) {
   return (int)exit_code;
 }
 
+static int launcher_has_console(void) {
+  /* Same double-click marker as the macOS launcher: the portable CLI surfaces launch failures
+   * visibly only when a human started the app through this binary, and the marker's contract must
+   * hold on every platform. A /SUBSYSTEM:WINDOWS binary never owns a console of its own, so
+   * GetConsoleWindow() alone cannot tell a cmd/PowerShell start from an Explorer double-click —
+   * both report NULL. Attaching to the parent's console distinguishes them: it succeeds for a
+   * shell start (keep console semantics, keep Node output visible) and fails for Explorer
+   * (set the UI-launch marker and suppress the child console window). */
+  int has_console = GetConsoleWindow() != NULL;
+  if (!has_console && AttachConsole(ATTACH_PARENT_PROCESS)) has_console = 1;
+  return has_console;
+}
+
+static int run_launcher(keiko_launcher_buffers *buffers) {
+  DWORD length = GetModuleFileNameW(NULL, buffers->root, KEIKO_PATH_CAP);
+  int has_console = launcher_has_console();
+  if (length == 0 || length >= (DWORD)KEIKO_PATH_CAP || !dirname_in_place(buffers->root)) return 1;
+#if defined(KEIKO_PORTABLE_GENERATION_ID)
+  {
+    keiko_generation_pins pins;
+    int result;
+    if (!select_generation_resources(buffers, &pins)) {
+      report_bootstrap_failure(
+        has_console,
+        L"keiko portable launch: the selected installation generation is unavailable or damaged\n",
+        L"Keiko could not start: the selected installation generation is unavailable or damaged.\r\n"
+        L"Reinstall Keiko, or run Keiko.exe from a terminal for details."
+      );
+      return 1;
+    }
+    result = run_selected_launcher(buffers, has_console);
+    close_generation_pins(&pins);
+    return result;
+  }
+#else
+  if (!select_legacy_resources(buffers)) return 1;
+  return run_selected_launcher(buffers, has_console);
+#endif
+}
+
 int wmain(void) {
   keiko_launcher_buffers *buffers = allocate_launcher_buffers();
   if (buffers == NULL) {
@@ -302,6 +330,8 @@ int wmain(void) {
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include "keiko-portable-update-coordinator.h"
 
 static int dirname_copy(char *out, size_t cap, const char *path) {
   if (strlen(path) >= cap) {
@@ -321,7 +351,28 @@ static int join_path(char *out, size_t cap, const char *base, const char *suffix
   return written > 0 && (size_t)written < cap;
 }
 
-int main(void) {
+static int resume_update(keiko_coordinator_context *coordinator, const char *executable,
+                         int restoring) {
+  char macos_dir[PATH_MAX];
+  char contents_dir[PATH_MAX];
+  char app_root[PATH_MAX];
+  char node[PATH_MAX];
+  char cli[PATH_MAX];
+  if (!dirname_copy(macos_dir, sizeof(macos_dir), executable) ||
+      !dirname_copy(contents_dir, sizeof(contents_dir), macos_dir) ||
+      !dirname_copy(app_root, sizeof(app_root), contents_dir) ||
+      !join_path(node, sizeof(node), app_root, "/Contents/Resources/runtime/node/bin/node") ||
+      !join_path(cli, sizeof(cli), app_root, "/Contents/Resources/app/dist/cli/index.js") ||
+      setenv("KEIKO_STATE_DIR", coordinator->state_dir, 1) != 0) return 1;
+  execl(node, node, cli, "ui", "--host", "127.0.0.1", "--port",
+        coordinator->plan.field[KEIKO_KHP_OLD_PORT], "--launch-id",
+        coordinator->plan.field[restoring ? KEIKO_KHP_RESTORE_LAUNCH_ID
+                                          : KEIKO_KHP_NEW_LAUNCH_ID],
+        (char *)NULL);
+  return 1;
+}
+
+int main(int argc, char **argv) {
   char raw[PATH_MAX];
   uint32_t raw_size = sizeof(raw);
   if (_NSGetExecutablePath(raw, &raw_size) != 0) {
@@ -331,6 +382,29 @@ int main(void) {
   if (realpath(raw, executable) == NULL) {
     return 1;
   }
+
+  if (argc == 3 && strcmp(argv[1], "--coordinate-update") == 0) {
+    keiko_coordinator_context coordinator;
+    if (!keiko_khp_is_lower_hex(argv[2], 32u) ||
+        !keiko_coordinator_prepare_posix(&coordinator, argv[2], executable)) return 74;
+    /* The parser and all pre-exit authorities are live, but KHA1 stays fail-closed
+     * until the finite executor and rollback receipt state machine are complete. */
+    keiko_coordinator_clear(&coordinator);
+    return 74;
+  }
+  if (argc == 3 && strcmp(argv[1], "--resume-update") == 0) {
+    keiko_coordinator_context coordinator;
+    if (!keiko_khp_is_lower_hex(argv[2], 32u) ||
+        !keiko_coordinator_prepare_resume_posix(&coordinator, argv[2], executable, 0)) return 74;
+    return resume_update(&coordinator, executable, 0);
+  }
+  if (argc == 3 && strcmp(argv[1], "--resume-restored-update") == 0) {
+    keiko_coordinator_context coordinator;
+    if (!keiko_khp_is_lower_hex(argv[2], 32u) ||
+        !keiko_coordinator_prepare_resume_posix(&coordinator, argv[2], executable, 1)) return 74;
+    return resume_update(&coordinator, executable, 1);
+  }
+  if (argc != 1) return 1;
 
   char macos_dir[PATH_MAX];
   char contents_dir[PATH_MAX];

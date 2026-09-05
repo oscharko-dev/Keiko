@@ -119,12 +119,15 @@ try {
   # Comments and dead code are stripped by the shared assertion before any producer is checked.
   # A plain `Contains` on the unfiltered function would accept a flag surviving only in a comment.
   $requiredNativeLinkFlagLiterals = @('"/MT"', '"/DEPENDENTLOADFLAG:0x800"')
+  $requiredLauncherLinkFlagLiterals = @(
+    '"/MT"', '"/SUBSYSTEM:WINDOWS"', '"/ENTRY:wmainCRTStartup"', '"/DEPENDENTLOADFLAG:0x800"'
+  )
   Assert-NativeProducerLinkFlags -Source $productionScriptSource `
     -FunctionName "compileWindowsLauncher" `
     -EndMarker "function requireWindowsLauncherIconSource(" `
     -ProducerPath "scripts/stage-portable-runtime.mjs" `
     -ArgumentListStartMarker 'windowsToolFromPath(env.PATH, "cl.exe"),' `
-    -RequiredFlagLiterals $requiredNativeLinkFlagLiterals
+    -RequiredFlagLiterals $requiredLauncherLinkFlagLiterals
   Assert-NativeProducerLinkFlags -Source $setupBuildScriptSource `
     -FunctionName "compileSetupBootstrap" `
     -EndMarker "function fsyncFile(" `
@@ -153,6 +156,9 @@ try {
   # Proven present above, byte-for-byte, in the production entry point -- not an independent guess.
   $productionMTFlag = "/MT"
   $productionLinkFlags = @("/DEPENDENTLOADFLAG:0x800")
+  $productionLauncherLinkFlags = @("/SUBSYSTEM:WINDOWS", "/ENTRY:wmainCRTStartup") + $productionLinkFlags
+  $windowsVersionDefine = "/D_WIN32_WINNT=0x0A00"
+  $generationDefine = '/DKEIKO_PORTABLE_GENERATION_ID="6c88e790a0339797e4941fec266c2f861e7515fb667739e297b8c42c622e6eaa"'
 
   $launcher = Join-Path $root "native/portable-launcher/keiko-portable-launcher.c"
   $launcherOut = Join-Path $scratch "keiko-launcher.exe"
@@ -160,6 +166,13 @@ try {
   & cl.exe @nativeFlags $productionMTFlag '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
     "/Fo:$launcherObject" "/Fe:$launcherOut" $launcher /link @productionLinkFlags
   if ($LASTEXITCODE -ne 0) { throw "MSVC native quality analysis failed" }
+
+  $generationLauncherOut = Join-Path $scratch "keiko-generation-launcher.exe"
+  $generationLauncherObject = Join-Path $scratch "keiko-generation-launcher.obj"
+  & cl.exe @nativeFlags $productionMTFlag $windowsVersionDefine $generationDefine `
+    '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
+    "/Fo:$generationLauncherObject" "/Fe:$generationLauncherOut" $launcher /link @productionLauncherLinkFlags
+  if ($LASTEXITCODE -ne 0) { throw "MSVC generation launcher quality analysis failed" }
 
   $launcherTest = Join-Path $root "native/portable-launcher/keiko-portable-launcher.windows.test.c"
   $launcherTestOut = Join-Path $scratch "keiko-launcher-test.exe"
@@ -169,6 +182,24 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "MSVC launcher behavior build failed" }
   & $launcherTestOut
   if ($LASTEXITCODE -ne 0) { throw "Windows launcher behavior verification failed" }
+
+  $generationLauncherTestOut = Join-Path $scratch "keiko-generation-launcher-test.exe"
+  $generationLauncherTestObject = Join-Path $scratch "keiko-generation-launcher-test.obj"
+  & cl.exe @nativeFlags $windowsVersionDefine $generationDefine `
+    '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
+    "/Fo:$generationLauncherTestObject" "/Fe:$generationLauncherTestOut" $launcherTest
+  if ($LASTEXITCODE -ne 0) { throw "MSVC generation launcher behavior build failed" }
+  & $generationLauncherTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows generation launcher behavior verification failed" }
+
+  $treeHashTest = Join-Path $root "native/portable-launcher/keiko-portable-tree-hash.test.c"
+  $treeHashTestOut = Join-Path $scratch "keiko-tree-hash-test.exe"
+  $treeHashTestObject = Join-Path $scratch "keiko-tree-hash-test.obj"
+  & cl.exe @nativeFlags $windowsVersionDefine "/Fo:$treeHashTestObject" `
+    "/Fe:$treeHashTestOut" $treeHashTest
+  if ($LASTEXITCODE -ne 0) { throw "MSVC tree-hash behavior build failed" }
+  & $treeHashTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows tree-hash behavior verification failed" }
 
   # This is a finite namespace-replacement primitive probe, not a launcher qualification or a
   # power-loss test. It deliberately exercises the current runner's filesystem and SDK through
@@ -180,6 +211,23 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "Windows cutover primitive probe build failed" }
   & $cutoverProbeOut
   if ($LASTEXITCODE -ne 0) { throw "Windows cutover primitive probe failed" }
+
+  $handoffProtocolTest = Join-Path $root "native/portable-launcher/keiko-portable-update-protocol.test.c"
+  $handoffProtocolTestOut = Join-Path $scratch "keiko-handoff-protocol-test.exe"
+  $handoffProtocolTestObject = Join-Path $scratch "keiko-handoff-protocol-test.obj"
+  & cl.exe @nativeFlags '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
+    "/Fo:$handoffProtocolTestObject" "/Fe:$handoffProtocolTestOut" $handoffProtocolTest
+  if ($LASTEXITCODE -ne 0) { throw "MSVC handoff protocol behavior build failed" }
+  & $handoffProtocolTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows handoff protocol verification failed" }
+
+  $handoffSha256Test = Join-Path $root "native/portable-launcher/keiko-portable-sha256.test.c"
+  $handoffSha256TestOut = Join-Path $scratch "keiko-handoff-sha256-test.exe"
+  $handoffSha256TestObject = Join-Path $scratch "keiko-handoff-sha256-test.obj"
+  & cl.exe @nativeFlags "/Fo:$handoffSha256TestObject" "/Fe:$handoffSha256TestOut" $handoffSha256Test
+  if ($LASTEXITCODE -ne 0) { throw "MSVC handoff SHA-256 behavior build failed" }
+  & $handoffSha256TestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows handoff SHA-256 verification failed" }
 
   # #2992: the Keiko-owned native setup bootstrap replaces the IExpress self-extractor. It is held
   # to the same /W4 /WX /analyze bar as the launcher. The baked-payload defines here are QUALITY

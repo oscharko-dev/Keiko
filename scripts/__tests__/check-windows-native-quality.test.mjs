@@ -2,11 +2,11 @@
 // PRODUCTION hardening flags — compileWindowsLauncher() in stage-portable-runtime.mjs,
 // compileSetupBootstrap() in build-windows-portable-setup.mjs, windowsCompilerFlags() in
 // build-secure-workspace-read.mjs, and compilerInvocation() in build-runtime-supervisor.mjs — and
-// it derives those flags from each producer rather than restating them. A change that drops `/MT`
-// or `/DEPENDENTLOADFLAG:0x800` from any shipped command cannot leave the gate happily proving a
-// configuration the product no longer ships. The original review found that the gate derived only
-// the launcher, and its follow-up found that it omitted the setup bootstrap; the same protection
-// now covers both dev-lane native helpers.
+// it derives those flags from each producer rather than restating them. A change that drops `/MT`,
+// the launcher's subsystem/entry point, or `/DEPENDENTLOADFLAG:0x800` cannot leave the gate happily
+// proving a configuration the product no longer ships. The original review found that the gate
+// derived only the launcher, and its follow-up found that it omitted the setup bootstrap; the same
+// protection now covers both dev-lane native helpers.
 //
 // That derivation is itself untested logic living in PowerShell, which is exactly the shape that
 // rots unnoticed. These tests run the real derivation block against the real production files and
@@ -67,10 +67,11 @@ function derivationAccepts({
     `$secureReadSource = Get-Content -Raw ${JSON.stringify(secureReadBuildSourcePath)}`,
     `$supervisorSource = Get-Content -Raw ${JSON.stringify(runtimeSupervisorBuildSourcePath)}`,
     `$required = @('"/MT"', '"/DEPENDENTLOADFLAG:0x800"')`,
+    `$launcherRequired = @('"/MT"', '"/SUBSYSTEM:WINDOWS"', '"/ENTRY:wmainCRTStartup"', '"/DEPENDENTLOADFLAG:0x800"')`,
     `$secureReadCompileRequired = @('"/MT"')`,
     `$secureReadLinkRequired = @('"/DEPENDENTLOADFLAG:0x800"')`,
     "try {",
-    "  Assert-NativeProducerLinkFlags -Source $launcherSource -FunctionName 'compileWindowsLauncher' -EndMarker 'function requireWindowsLauncherIconSource(' -ProducerPath 'scripts/stage-portable-runtime.mjs' -ArgumentListStartMarker 'windowsToolFromPath(env.PATH, \"cl.exe\"),' -RequiredFlagLiterals $required",
+    "  Assert-NativeProducerLinkFlags -Source $launcherSource -FunctionName 'compileWindowsLauncher' -EndMarker 'function requireWindowsLauncherIconSource(' -ProducerPath 'scripts/stage-portable-runtime.mjs' -ArgumentListStartMarker 'windowsToolFromPath(env.PATH, \"cl.exe\"),' -RequiredFlagLiterals $launcherRequired",
     "  Assert-NativeProducerLinkFlags -Source $setupSource -FunctionName 'compileSetupBootstrap' -EndMarker 'function fsyncFile(' -ProducerPath 'scripts/build-windows-portable-setup.mjs' -ArgumentListStartMarker 'windowsToolFromPath(env.PATH, \"cl.exe\"),' -RequiredFlagLiterals $required",
     "  Assert-NativeProducerLinkFlags -Source $secureReadSource -FunctionName 'windowsCompilerFlags' -EndMarker 'const supported =' -ProducerPath 'scripts/build-secure-workspace-read.mjs' -ArgumentListStartMarker 'return' -RequiredFlagLiterals $secureReadCompileRequired",
     "  Assert-NativeProducerLinkFlags -Source $secureReadSource -FunctionName 'compilerInvocation' -EndMarker 'export async function runSecureWorkspaceReadBuild(' -ProducerPath 'scripts/build-secure-workspace-read.mjs' -ArgumentListStartMarker 'target === \"windows-x64\"' -RequiredFlagLiterals $secureReadLinkRequired",
@@ -139,6 +140,30 @@ function lockResolvedVersion(lock, packageId) {
   expect(typeof resolved).toBe("string");
   return resolved;
 }
+
+describe("Windows immutable-generation native quality wiring", () => {
+  it("builds and executes the generation launcher and tree-hash regressions", () => {
+    const activeGate = stripLineComments(readFileSync(GATE, "utf8"));
+    const required = [
+      `$generationDefine = '/DKEIKO_PORTABLE_GENERATION_ID="6c88e790a0339797e4941fec266c2f861e7515fb667739e297b8c42c622e6eaa"'`,
+      '$productionLauncherLinkFlags = @("/SUBSYSTEM:WINDOWS", "/ENTRY:wmainCRTStartup") + $productionLinkFlags',
+      "& cl.exe @nativeFlags $productionMTFlag $windowsVersionDefine $generationDefine",
+      '"/Fo:$generationLauncherObject" "/Fe:$generationLauncherOut" $launcher /link @productionLauncherLinkFlags',
+      'throw "MSVC generation launcher quality analysis failed"',
+      "& cl.exe @nativeFlags $windowsVersionDefine $generationDefine",
+      '"/Fo:$generationLauncherTestObject" "/Fe:$generationLauncherTestOut" $launcherTest',
+      'throw "MSVC generation launcher behavior build failed"',
+      "& $generationLauncherTestOut",
+      'throw "Windows generation launcher behavior verification failed"',
+      '$treeHashTest = Join-Path $root "native/portable-launcher/keiko-portable-tree-hash.test.c"',
+      '& cl.exe @nativeFlags $windowsVersionDefine "/Fo:$treeHashTestObject"',
+      'throw "MSVC tree-hash behavior build failed"',
+      "& $treeHashTestOut",
+      'throw "Windows tree-hash behavior verification failed"',
+    ];
+    for (const wiring of required) expect(activeGate).toContain(wiring);
+  });
+});
 
 // Always-on: these pins must not hide behind `pwsh`. The Windows compile half of the gate stays
 // CI-only; the lock contract is a committed artifact and can be checked on every host.
@@ -241,13 +266,15 @@ describe.skipIf(!hasPwsh())("check-windows-native-quality flag derivation", () =
 
   // One case per required flag: dropping either from the shipped launcher command must fail the
   // gate, because continuing would compile with hardening the product no longer applies.
-  it.each(['"/MT"', '"/DEPENDENTLOADFLAG:0x800"'])(
-    "rejects a launcher build that drops %s",
-    (flag) => {
-      const launcherSourcePath = copyLauncherWith((source) => source.replace(flag, '"/REMOVED"'));
-      expect(derivationAccepts({ launcherSourcePath })).toContain("REJECTED");
-    },
-  );
+  it.each([
+    '"/MT"',
+    '"/SUBSYSTEM:WINDOWS"',
+    '"/ENTRY:wmainCRTStartup"',
+    '"/DEPENDENTLOADFLAG:0x800"',
+  ])("rejects a launcher build that drops %s", (flag) => {
+    const launcherSourcePath = copyLauncherWith((source) => source.replace(flag, '"/REMOVED"'));
+    expect(derivationAccepts({ launcherSourcePath })).toContain("REJECTED");
+  });
 
   // The gap this extension closes: dropping either flag from compileSetupBootstrap() must
   // INDEPENDENTLY fail the gate, even though compileWindowsLauncher() — a different function in a
