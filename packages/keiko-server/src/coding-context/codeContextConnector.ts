@@ -13,6 +13,8 @@ import {
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import {
   isJiraConnectorAuthorized,
   type QiConnectorConfig,
@@ -100,6 +102,18 @@ export interface CodeContextConnectorDeps {
   readonly connectors: Readonly<Record<CodeContextSource, CodeContextConnector>>;
   readonly connectorConfig?: CodeContextConnectorConfig | undefined;
   readonly nowIso: () => string;
+  /**
+   * The owning server activity-log port (#3941762925). Optional and never defaulted internally —
+   * a caller that wants the sanitisation evidence below in production must inject its own
+   * `ServerLogSink` (e.g. via `processServerLogSink()`), the same way `githubCodeContextPort.ts`
+   * does. Left undefined, `buildCodeContextPack` stays a pure read with no log side effect, which
+   * is what every existing unit test in `codeContextConnector.test.ts` relies on.
+   */
+  readonly activityLog?: ServerLogSink | undefined;
+  /** The calling operation's correlation id, threaded onto the sanitisation evidence line below.
+   * Falls back to `UNKNOWN_CORRELATION_ID` when a caller has none in scope, never to an ad-hoc
+   * string (ADR-0173). */
+  readonly correlationId?: string | undefined;
 }
 
 export interface CodeContextPackComment {
@@ -255,6 +269,7 @@ export async function buildCodeContextPack(
 ): Promise<CodeContextPackResult> {
   const blocked: CodeContextBlockedRef[] = [];
   const items: CodeContextPackItem[] = [];
+  const sanitizationTallies: ItemSanitizationTally[] = [];
   for (const ref of request.refs) {
     const decision = authorizeCodeContextRead(ref, request, deps.connectorConfig);
     if (!decision.allowed) {
@@ -262,8 +277,11 @@ export async function buildCodeContextPack(
       continue;
     }
     const raw = await deps.connectors[ref.source].read(ref);
-    items.push(packItem(raw, request.maxBodyBytes));
+    const packed = packItem(raw, request.maxBodyBytes);
+    items.push(packed.item);
+    if (packed.sanitization !== undefined) sanitizationTallies.push(packed.sanitization);
   }
+  emitSanitizationEvidence(deps, request, items, sanitizationTallies);
   const status = statusFor(items, blocked);
   return {
     status,
@@ -271,6 +289,88 @@ export async function buildCodeContextPack(
     blocked,
     evidence: evidenceSummary(request.runId, deps.nowIso(), status, items, blocked),
   };
+}
+
+/** Per-item tally of bytes `stripUnsafeFormatChars` removed, kept only for items where it removed
+ * something — see `emitSanitizationEvidence` below. `objectId` is the provider's own public
+ * issue/PR number, never content, so it is safe to carry onto a body-free log line unredacted. */
+interface ItemSanitizationTally {
+  readonly objectId: string;
+  readonly titleBytesRemoved: number;
+  readonly bodyBytesRemoved: number;
+  readonly commentBytesRemoved: number;
+}
+
+/**
+ * Record body-free evidence of the prompt-safety transformation `packItem`/`packComment` apply
+ * (review 3941762925): `stripUnsafeFormatChars` removes bidi-override/zero-width/control content
+ * from title, body and every comment before the byte bound, but until now nothing logged WHICH
+ * fields were changed or WHAT the transformed text was reduced to — a customer's activity log
+ * could not distinguish a clean pack from one that had silently dropped hostile formatting, and
+ * `evidence.contentDigest` continues to identify the RAW provider text (by design: it is also the
+ * issue binding's `contentRevisionDigest`, see `codeContextContentDigest`'s own comment).
+ *
+ * Emits through the existing, already-catalogued `coding-context.pack` operation (reused rather
+ * than a new op literal) and only when at least one field across the pack actually changed; a
+ * clean read emits nothing, matching `logPackBlocked`'s sibling shape in
+ * `codingRuntimeIssueIntake.ts`. `deps.activityLog` is never defaulted here — a caller that wants
+ * this in production must inject its own sink (see `CodeContextConnectorDeps.activityLog`).
+ */
+function emitSanitizationEvidence(
+  deps: CodeContextConnectorDeps,
+  request: CodeContextReadRequest,
+  items: readonly CodeContextPackItem[],
+  tallies: readonly ItemSanitizationTally[],
+): void {
+  if (tallies.length === 0 || deps.activityLog === undefined) return;
+  const totals = tallies.reduce(
+    (sum, tally) => ({
+      title: sum.title + tally.titleBytesRemoved,
+      body: sum.body + tally.bodyBytesRemoved,
+      comment: sum.comment + tally.commentBytesRemoved,
+    }),
+    { title: 0, body: 0, comment: 0 },
+  );
+  deps.activityLog.write({
+    level: "info",
+    category: "security",
+    op: "coding-context.pack",
+    correlationId: deps.correlationId ?? UNKNOWN_CORRELATION_ID,
+    extra: {
+      runId: request.runId,
+      outcome: "sanitized",
+      sanitizedItemCount: tallies.length,
+      sanitizedObjectIds: tallies.map((tally) => tally.objectId),
+      sanitizedTitleBytesRemoved: totals.title,
+      sanitizedBodyBytesRemoved: totals.body,
+      sanitizedCommentBytesRemoved: totals.comment,
+      sanitizedContentDigest: sanitizedPackDigest(items),
+    },
+  });
+}
+
+/**
+ * sha256 over the FINAL (sanitised + bounded) pack content actually sent onward — deliberately a
+ * different formula and a different input than `codeContextContentDigest` (which hashes the RAW
+ * provider text and must keep doing so, see that function's own comment). This is what lets a
+ * customer log identify the transformed context a run actually used, without ever logging the
+ * text itself.
+ */
+function sanitizedPackDigest(items: readonly CodeContextPackItem[]): string {
+  return sha256Hex(
+    items
+      .map((item) =>
+        sha256Hex(
+          JSON.stringify({
+            objectId: item.objectId,
+            title: item.title,
+            body: item.body,
+            comments: item.comments.map((comment) => comment.body),
+          }),
+        ),
+      )
+      .join("\n"),
+  );
 }
 
 interface AuthorizationDecision {
@@ -347,25 +447,54 @@ function blockedRef(
 // through the exact same canonical sanitiser, in the same order (sanitise, then bound), so a
 // bidi-override / zero-width payload a human preview shows safely cannot still reach the model
 // prompt unsanitised.
-function packItem(raw: CodeContextRawObject, maxBodyBytes: number): CodeContextPackItem {
-  const body = bounded(stripUnsafeFormatChars(raw.body), maxBodyBytes);
-  return {
+function packItem(
+  raw: CodeContextRawObject,
+  maxBodyBytes: number,
+): { readonly item: CodeContextPackItem; readonly sanitization: ItemSanitizationTally | undefined } {
+  const sanitizedTitle = stripUnsafeFormatChars(raw.title);
+  const sanitizedRawBody = stripUnsafeFormatChars(raw.body);
+  const body = bounded(sanitizedRawBody, maxBodyBytes);
+  const comments = raw.comments.map((comment) => packComment(comment, maxBodyBytes));
+  const titleBytesRemoved = sanitizationBytesRemoved(raw.title, sanitizedTitle);
+  const bodyBytesRemoved = sanitizationBytesRemoved(raw.body, sanitizedRawBody);
+  const commentBytesRemoved = comments.reduce((sum, comment) => sum + comment.bytesRemoved, 0);
+  const item: CodeContextPackItem = {
     source: raw.source,
     objectKind: raw.objectKind,
     objectId: raw.objectId,
     label: contextLabel(raw.source, raw.objectKind, raw.objectId),
     untrusted: true,
-    title: stripUnsafeFormatChars(raw.title),
+    title: sanitizedTitle,
     body: body.value,
     bodyTruncated: body.truncated,
-    comments: raw.comments.map((comment) => packComment(comment, maxBodyBytes)),
+    comments: comments.map((comment) => comment.comment),
     contentDigest: codeContextContentDigest(raw),
+  };
+  const sanitized = titleBytesRemoved > 0 || bodyBytesRemoved > 0 || commentBytesRemoved > 0;
+  return {
+    item,
+    sanitization: sanitized
+      ? { objectId: raw.objectId, titleBytesRemoved, bodyBytesRemoved, commentBytesRemoved }
+      : undefined,
   };
 }
 
-function packComment(comment: CodeContextRawComment, maxBodyBytes: number): CodeContextPackComment {
-  const body = bounded(stripUnsafeFormatChars(comment.body), maxBodyBytes);
-  return { id: comment.id, body: body.value, bodyTruncated: body.truncated };
+function packComment(
+  comment: CodeContextRawComment,
+  maxBodyBytes: number,
+): { readonly comment: CodeContextPackComment; readonly bytesRemoved: number } {
+  const sanitizedBody = stripUnsafeFormatChars(comment.body);
+  const body = bounded(sanitizedBody, maxBodyBytes);
+  return {
+    comment: { id: comment.id, body: body.value, bodyTruncated: body.truncated },
+    bytesRemoved: sanitizationBytesRemoved(comment.body, sanitizedBody),
+  };
+}
+
+/** Bytes `stripUnsafeFormatChars` removed from `raw`, or 0 when it was already clean — a plain
+ * byte-length diff rather than the returned string, so the count itself never carries content. */
+function sanitizationBytesRemoved(raw: string, sanitized: string): number {
+  return sanitized === raw ? 0 : byteLength(raw) - byteLength(sanitized);
 }
 
 function contextLabel(

@@ -233,6 +233,7 @@ async function mutation(
   invoke: (
     runtime: CodingRuntimeOrchestrator,
     body: unknown,
+    correlationId?: string,
   ) => ReturnType<CodingRuntimeOrchestrator["start"]>,
 ): Promise<RouteResult> {
   const denied = requireMutationAuthority(ctx, deps, runId);
@@ -247,7 +248,7 @@ async function mutation(
       logRuntimeOperationRefusal(deps, ctx.correlationId, operationName, runId, "invalid-intent");
       return failureResult("invalid-intent", ctx.correlationId);
     }
-    const result = await invoke(required.orchestrator, body);
+    const result = await invoke(required.orchestrator, body, ctx.correlationId);
     if (result.ok) return { status: 200, body: result.snapshot };
     logRuntimeOperationRefusal(deps, ctx.correlationId, operationName, runId, result.failureCode);
     return failureResult(result.failureCode, ctx.correlationId, result.issueBindingFailure);
@@ -448,8 +449,8 @@ export function handleCodingRuntimeFollowUp(
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound(ctx.correlationId))
-    : mutation(ctx, deps, runId, "follow-up", (runtime, body) =>
-        runtime.submitFollowUp(runId, body),
+    : mutation(ctx, deps, runId, "follow-up", (runtime, body, correlationId) =>
+        runtime.submitFollowUp(runId, body, correlationId),
       );
 }
 
@@ -473,7 +474,9 @@ export function handleCodingRuntimeQuestionAnswer(
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound(ctx.correlationId))
-    : mutation(ctx, deps, runId, "answer", (runtime, body) => runtime.answerQuestion(runId, body));
+    : mutation(ctx, deps, runId, "answer", (runtime, body, correlationId) =>
+        runtime.answerQuestion(runId, body, correlationId),
+      );
 }
 
 export function handleCodingRuntimeQuestionReject(
@@ -486,7 +489,9 @@ export function handleCodingRuntimeQuestionReject(
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound(ctx.correlationId))
-    : mutation(ctx, deps, runId, "reject", (runtime, body) => runtime.rejectQuestion(runId, body));
+    : mutation(ctx, deps, runId, "reject", (runtime, body, correlationId) =>
+        runtime.rejectQuestion(runId, body, correlationId),
+      );
 }
 
 export function handleCodingRuntimeQuestionList(
@@ -508,7 +513,7 @@ export function handleCodingRuntimeQuestionList(
   return withBody(async () => {
     const body = await readBody(ctx.req);
     if (body === undefined) return failureResult("invalid-intent", ctx.correlationId);
-    const result = await required.orchestrator.listQuestions(runId, body);
+    const result = await required.orchestrator.listQuestions(runId, body, ctx.correlationId);
     if (!result.ok) return failureResult(result.failureCode, ctx.correlationId);
     const payload: CodingWorkbenchRuntimeQuestionsChannelPayload = {
       session: "active",

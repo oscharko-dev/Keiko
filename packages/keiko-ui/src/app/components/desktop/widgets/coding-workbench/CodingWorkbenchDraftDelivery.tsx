@@ -148,6 +148,33 @@ function draftMatchesTarget(
   );
 }
 
+// Review comment 3941638345 (#3394, T44 artifact-digest binding): the server-side
+// `descriptionDraftValidator` (coding-workbench-runtime-api.ts) already rejects a fetched draft
+// whose artifact digest does not match the requested `draftDigest` — but `reviewDraft` is an
+// injected seam (the `reviewDraft` prop, defaulted to the real fetch) that a caller or test can
+// resolve directly, bypassing that server-side check. Before this fix, a resolved draft that failed
+// `draftMatchesTarget` was dropped in the `.then()` below with no diagnostic and no operator-visible
+// state — indistinguishable from a request that never completed. Body-free: proposal id and
+// truncated (12-char) digests only, never the artifact markdown.
+function draftMismatchReason(
+  target: WorkbenchDescriptionDraftTarget,
+  draft: WorkbenchDescriptionDraftReview,
+): "proposal-mismatch" | "snapshot-mismatch" | "digest-mismatch" {
+  if (draft.proposalId !== target.proposalId) return "proposal-mismatch";
+  if (draft.artifact.binding.snapshotDigest !== target.snapshotDigest) return "snapshot-mismatch";
+  return "digest-mismatch";
+}
+
+function draftMismatchDiagnostic(
+  target: WorkbenchDescriptionDraftTarget,
+  draft: WorkbenchDescriptionDraftReview,
+): string {
+  const reason = draftMismatchReason(target, draft);
+  const expected = target.draftDigest.slice(0, 12);
+  const actual = draft.artifact.artifactDigest.slice(0, 12);
+  return `[keiko] workbench description draft rejected: ${reason} proposal ${target.proposalId} expected ${expected} actual ${actual}`;
+}
+
 function descriptionReviewTarget(
   status: WorkbenchDescriptionStatus,
   delivery: DraftDeliveryRecord | undefined,
@@ -307,12 +334,15 @@ function useWorkbenchDraftReview(
       draftTarget.draftDigest,
     )
       .then((result) => {
-        if (
-          reviewGeneration.current === generation &&
-          draftMatchesTarget(result.draft, draftTarget)
-        ) {
+        if (reviewGeneration.current !== generation) return;
+        if (draftMatchesTarget(result.draft, draftTarget)) {
           setDraft(result.draft);
+          return;
         }
+        setUnavailable(true);
+        reportClientDiagnostic(draftMismatchDiagnostic(draftTarget, result.draft), {
+          correlationId: draftTarget.runId,
+        });
       })
       .catch((error: unknown) => {
         if (reviewGeneration.current !== generation) return;

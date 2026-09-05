@@ -92,7 +92,11 @@ export class CodingRuntimeOperationCoordinator {
 
   public constructor(private readonly deps: RuntimeOperationCoordinatorDeps) {}
 
-  public submitFollowUp(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
+  public submitFollowUp(
+    runId: string,
+    input: unknown,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
     return this.deps.serial(async () => {
       const operation = this.prepare(runId, input, ["requestId", "expectedRevision", "taskIntent"]);
       if (
@@ -116,7 +120,14 @@ export class CodingRuntimeOperationCoordinator {
           expectedRevision: operation.current.revision,
           taskIntent: operation.value.taskIntent,
         });
-      } catch {
+      } catch (error) {
+        recordRuntimeOperationTransportFailure(this.deps.activityLog, {
+          op: "coding-runtime.follow-up.dispatch-failed",
+          runId,
+          correlationId,
+          operation: "follow-up",
+          error,
+        });
         dispatched = { ok: false };
       }
       if (!dispatched.ok) {
@@ -132,6 +143,7 @@ export class CodingRuntimeOperationCoordinator {
   public listQuestions(
     runId: string,
     input: unknown,
+    correlationId?: string,
   ): Promise<CodingRuntimeQuestionOperationResult> {
     return this.deps.serial<CodingRuntimeQuestionOperationResult>(async () => {
       const operation = this.prepare(runId, input, ["requestId", "expectedRevision"]);
@@ -143,7 +155,14 @@ export class CodingRuntimeOperationCoordinator {
       let questions: CodingWorkbenchRuntimeQuestionsResponse | undefined;
       try {
         questions = await this.deps.questionPort.list(operationRequest(runId, operation));
-      } catch {
+      } catch (error) {
+        recordRuntimeOperationTransportFailure(this.deps.activityLog, {
+          op: "coding-runtime.question.list-failed",
+          runId,
+          correlationId,
+          operation: "list",
+          error,
+        });
         questions = undefined;
       }
       if (questions === undefined) {
@@ -161,7 +180,11 @@ export class CodingRuntimeOperationCoordinator {
     });
   }
 
-  public answerQuestion(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
+  public answerQuestion(
+    runId: string,
+    input: unknown,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
     return this.deps.serial(async () => {
       const operation = this.prepareAnswer(runId, input);
       if (!operation.ok) {
@@ -169,7 +192,7 @@ export class CodingRuntimeOperationCoordinator {
           operation.reason === "replay-cap-exhausted" ? "replay-cap-exhausted" : "invalid-intent",
         );
       }
-      const outcome = await this.applyAnswer(runId, operation);
+      const outcome = await this.applyAnswer(runId, operation, correlationId);
       if (!outcome.ok) {
         operation.reservation.release();
         return failure(outcome.reason);
@@ -179,7 +202,11 @@ export class CodingRuntimeOperationCoordinator {
     });
   }
 
-  public rejectQuestion(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
+  public rejectQuestion(
+    runId: string,
+    input: unknown,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
     return this.deps.serial(async () => {
       const operation = this.prepare(runId, input, ["requestId", "expectedRevision", "questionId"]);
       if (!operation.ok || !validQuestionId(operation.value.questionId)) {
@@ -190,7 +217,12 @@ export class CodingRuntimeOperationCoordinator {
             : "invalid-intent",
         );
       }
-      const outcome = await this.applyReject(runId, operation, operation.value.questionId);
+      const outcome = await this.applyReject(
+        runId,
+        operation,
+        operation.value.questionId,
+        correlationId,
+      );
       if (!outcome.ok) {
         operation.reservation.release();
         return failure(outcome.reason);
@@ -213,7 +245,13 @@ export class CodingRuntimeOperationCoordinator {
     let dispatched: Awaited<ReturnType<CodingRuntimeTaskDispatcher["dispatch"]>>;
     try {
       dispatched = await this.deps.taskDispatcher.dispatch(input);
-    } catch {
+    } catch (error) {
+      recordRuntimeOperationTransportFailure(this.deps.activityLog, {
+        op: "coding-runtime.initial-turn.dispatch-failed",
+        runId: input.runId,
+        operation: "initial-turn-dispatch",
+        error,
+      });
       dispatched = { ok: false };
     }
     if (dispatched.ok) {
@@ -225,7 +263,13 @@ export class CodingRuntimeOperationCoordinator {
     try {
       const stopped = await this.deps.manager.stop(input.runId);
       return stopped.ok ? "failed" : "recovery-required";
-    } catch {
+    } catch (error) {
+      recordRuntimeOperationTransportFailure(this.deps.activityLog, {
+        op: "coding-runtime.initial-turn.stop-failed",
+        runId: input.runId,
+        operation: "initial-turn-stop",
+        error,
+      });
       return "recovery-required";
     }
   }
@@ -252,6 +296,7 @@ export class CodingRuntimeOperationCoordinator {
   private async applyAnswer(
     runId: string,
     operation: Extract<PreparedAnswerOperation, { readonly ok: true }>,
+    correlationId?: string,
   ): Promise<QuestionMutationOutcome> {
     try {
       const accepted = await this.deps.questionPort.answer({
@@ -272,7 +317,13 @@ export class CodingRuntimeOperationCoordinator {
       if (error instanceof CodingRuntimeQuestionAnswerRejectedError) {
         return { ok: false, reason: "question-answer-rejected" };
       }
-      recordQuestionMutationAuthorityFailure(this.deps.activityLog, runId, "answer", error);
+      recordRuntimeOperationTransportFailure(this.deps.activityLog, {
+        op: "coding-runtime.question.authority-resolution-failed",
+        runId,
+        correlationId,
+        operation: "answer",
+        error,
+      });
       return { ok: false, reason: "authority-resolution-failed" };
     }
   }
@@ -286,6 +337,7 @@ export class CodingRuntimeOperationCoordinator {
     runId: string,
     operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
     questionId: string,
+    correlationId?: string,
   ): Promise<QuestionMutationOutcome> {
     try {
       const accepted = await this.deps.questionPort.reject({
@@ -297,7 +349,13 @@ export class CodingRuntimeOperationCoordinator {
       // Same non-validation error path as applyAnswer's catch (T50): reject has no typed
       // incompatible-answer case of its own, so every exception here is a genuine authority
       // failure and is logged the same way.
-      recordQuestionMutationAuthorityFailure(this.deps.activityLog, runId, "reject", error);
+      recordRuntimeOperationTransportFailure(this.deps.activityLog, {
+        op: "coding-runtime.question.authority-resolution-failed",
+        runId,
+        correlationId,
+        operation: "reject",
+        error,
+      });
       return { ok: false, reason: "authority-resolution-failed" };
     }
   }
@@ -466,27 +524,47 @@ class RuntimeOperationReplayCoordinator {
   }
 }
 
-// AGENTS.md §8 rule 1 / review T50: the non-validation error path on a question mutation (a
-// transport failure, a runtime host exception, anything that is not the typed incompatible-answer
-// rejection) must leave body-free, structured evidence behind instead of collapsing silently into
-// the generic authority-resolution-failed outcome. No per-request correlation id reaches this
-// run-scoped coordinator (the HTTP route's ctx.correlationId is not threaded past the orchestrator
-// boundary), so the run id is the correlation key -- the same convention this subsystem already
-// uses for its other run-scoped diagnostics (see codingRuntimeOrchestrator.ts's
-// runtimeDiagnosticCorrelationId, which correlationIdOrUnknown replicates here).
-function recordQuestionMutationAuthorityFailure(
+// Every non-validation exception this coordinator used to discard silently (a question
+// answer/reject transport failure, a follow-up or initial-turn dispatch failure, a question-list
+// failure, a stop-after-dispatch-failure exception) is the SAME defect class (AGENTS.md §7 "fix
+// the whole class"): it must leave body-free, structured evidence behind instead of collapsing
+// into the generic outcome with nothing in the activity log. One writer serves every one of those
+// call sites so no future catch here can forget it (AGENTS.md §8 rule 1).
+//
+// `correlationId` is the per-request id threaded from the HTTP route (codingRuntimeRoutes.ts's
+// ctx.correlationId, via CodingRuntimeOrchestrator's four question/follow-up methods) for the
+// operations reachable from a route; `startInitialTurn` has no per-request HTTP caller and passes
+// none. Either way the run id is kept in `extra` (body-free) so a reader can join on EITHER the
+// request's correlation id or the run id, and `correlationIdOrUnknown` falls back to the run id
+// -- then to the sanctioned unknown marker -- only when no valid per-request id was supplied.
+function recordRuntimeOperationTransportFailure(
   activityLog: ServerLogSink | undefined,
-  runId: string,
-  operation: "answer" | "reject",
-  error: unknown,
+  input: {
+    readonly op: string;
+    readonly runId: string;
+    readonly correlationId?: string | undefined;
+    readonly operation:
+      | "follow-up"
+      | "list"
+      | "answer"
+      | "reject"
+      | "initial-turn-dispatch"
+      | "initial-turn-stop";
+    readonly error: unknown;
+  },
 ): void {
   (activityLog ?? processServerLogSink()).write({
     category: "process",
     level: "warn",
-    op: "coding-runtime.question.authority-resolution-failed",
-    correlationId: correlationIdOrUnknown(runId),
-    errorKind: errorKindOf(error),
-    extra: { runId, operation, frames: keikoStackFrames(error), causeChain: causeChain(error) },
+    op: input.op,
+    correlationId: correlationIdOrUnknown(input.correlationId ?? input.runId),
+    errorKind: errorKindOf(input.error),
+    extra: {
+      runId: input.runId,
+      operation: input.operation,
+      frames: keikoStackFrames(input.error),
+      causeChain: causeChain(input.error),
+    },
   });
 }
 

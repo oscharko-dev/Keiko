@@ -687,7 +687,11 @@ class VerifiedCommitController implements VerifiedCommitService {
     const receipt = this.options.snapshots.get(context.runId)?.verifiedCommitResult;
     if (receipt?.status !== "recovery-required") return receipt;
     const recovered = await reconcileVerifiedCommit(receipt, context, this.options.execution ?? {});
-    this.options.snapshots.recordVerifiedCommit(recovered);
+    // Same fail-closed persistence guard as `record()` (#3384 audit batch 5 item 5): a frozen
+    // binding whose reconciled outcome can no longer be persisted must not throw out of a public
+    // API — it degrades to the same closed recovery-required result instead.
+    if (!this.persist(context, recovered, recovered.status, recovered.reason, recovered))
+      return this.result(recovered, "recovery-required", "execution-uncertain");
     this.log(context, "reconcile", { state: recovered.status, proposalId: recovered.proposalId });
     return recovered;
   }

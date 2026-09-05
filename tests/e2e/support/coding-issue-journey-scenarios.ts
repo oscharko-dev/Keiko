@@ -53,7 +53,9 @@ export function isScenarioSelected(
 export function currentPlatformKey(): string {
   const key = platformKeyFor(process.platform, process.arch);
   if (key === undefined) {
-    throw new Error(`coding-issue-journey: unsupported qualification platform ${process.platform}/${process.arch}`);
+    throw new Error(
+      `coding-issue-journey: unsupported qualification platform ${process.platform}/${process.arch}`,
+    );
   }
   return key;
 }
@@ -85,7 +87,9 @@ function headCommitSha(): string {
  * fallback) and threaded to both the launched server and this worker process -- see
  * `playwright.coding-issue-journey.config.ts`. Required here rather than re-defaulted so a
  * misconfigured invocation fails loudly instead of writing evidence somewhere unexpected. */
-export function receiptsDir(env: Readonly<Record<string, string | undefined>> = process.env): string {
+export function receiptsDir(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string {
   const dir = env.KEIKO_QUALIFICATION_RECEIPTS_DIR;
   if (dir === undefined || dir.length === 0) {
     throw new Error(

@@ -79,7 +79,10 @@ export async function runCiRepairScenario(page: Page): Promise<ScenarioRunResult
   };
 }
 
-async function deliverForDescription(page: Page, env: LiveJourneyEnv): Promise<DeliveredPullRequest> {
+async function deliverForDescription(
+  page: Page,
+  env: LiveJourneyEnv,
+): Promise<DeliveredPullRequest> {
   return driveOrReuseDraftPullRequest(page, { ...env, mode: "autonomous-delivery" });
 }
 

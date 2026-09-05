@@ -118,8 +118,11 @@ though Apple/Windows signing (#2198) and the Atlassian half of #2952 are exclude
   `packages/keiko-sandbox`'s Seatbelt/gateway confinement tests passing, cross-referenced against
   the live run's own `runtime.confinement.spawned` activity-log evidence. See "Operator sequence"
   below for the exact commands.
-- **The real-model harness skeleton.** `tests/e2e/coding-issue-journey.spec.ts`,
-  `tests/e2e/config/playwright.coding-issue-journey.config.ts`, and
+- **The real-model harness.** `tests/e2e/coding-issue-journey.spec.ts` drives all eight
+  fully-harness-owned `playwright-journey` scenarios listed in step 2 below, each through its own
+  `test()` gated by `KEIKO_QUALIFICATION_SCENARIOS`, reusing generalized issue-intake/mode-selection/
+  approval-answering helpers under `tests/e2e/support/coding-issue-journey-live*.ts` rather than one
+  hardcoded "Full access" path. `tests/e2e/config/playwright.coding-issue-journey.config.ts`, and
   `tests/e2e/servers/coding-issue-journey-server.mts` compose the actual production factory
   (`@oscharko-dev/keiko-cli`'s `runUiCli`, the same composition `npm run dev:start` uses) — never
   the scripted resolver in `tests/e2e/servers/coding-runtime-server-shared.mts`. The server process
@@ -158,21 +161,27 @@ inputs in section 1/2 above), a qualification run follows this sequence.
      into the launched production process's own environment
      (`tests/e2e/servers/coding-issue-journey-server.mts`) and always recorded on the manifest, but
      see "Budget note" below for exactly what it does and does not enforce.
-   - `KEIKO_CODING_DEPLOYMENT_CEILING=autonomous-delivery` — the server reads its deployment
-     ceiling once at process start (`packages/keiko-server/src/deps.ts`) and defaults to
-     `governed-assist` when this is unset; the checked-in Playwright config's own `webServer.env`
-     block does not set it, so an operator who skips this gets a server clamped below the mode the
-     "Full access" journey scenarios need. Setting the highest ceiling here does not force the
+   - `KEIKO_CODING_DEPLOYMENT_CEILING` — the server reads its deployment ceiling once at process
+     start (`packages/keiko-server/src/deps.ts`) and defaults to `governed-assist` when unset.
+     `playwright.coding-issue-journey.config.ts`'s own `webServer.env` block now resolves this to
+     `autonomous-delivery` by default (an operator override is still honoured), so a bare
+     `npm run test:e2e:coding-issue-journey:live` invocation is no longer clamped below the mode
+     the "Full access" journey scenarios need. Setting the highest ceiling here does not force the
      effective mode: ADR-0138 still lets the actual mode be selected independently, at or below the
      ceiling, through the Settings → Security UI radios — one server process covers every mode row
      without a restart.
 2. **Run the journey scenarios.** `npm run test:e2e:coding-issue-journey:live`, scoped to one or
-   more scenario ids via `KEIKO_QUALIFICATION_SCENARIOS` (comma-separated) and pointed at a
-   receipts directory via `KEIKO_QUALIFICATION_RECEIPTS_DIR`, drives the real production
-   composition end to end and writes a `<scenarioId>.receipt.json` (`{ scenarioId, commitSha,
-   platform, testStatus, recordedAt, provenance }`) plus a `<scenarioId>.artifact` file per selected
-   scenario into that directory — for example
-   `docs/qa/evidence/coding-issue-journey/3390/receipts/`. This produces the eight
+   more scenario ids via `KEIKO_QUALIFICATION_SCENARIOS` (comma-separated; unset or empty runs
+   every scenario in the file) and, optionally, pointed at a receipts directory via
+   `KEIKO_QUALIFICATION_RECEIPTS_DIR` — unset defaults to
+   `docs/qa/evidence/coding-issue-journey/3390/receipts` (`playwright.coding-issue-journey.config.ts`),
+   the exact path these receipts are committed under. Each selected scenario's `test()` drives the
+   real production composition end to end and writes a `<scenarioId>.receipt.json` (`{ scenarioId,
+   commitSha, platform, testStatus, recordedAt, provenance }`) plus a `<scenarioId>.artifact` file
+   into that directory, using the same shared writer the platform launch drivers use
+   (`scripts/lib/qualification-evidence-receipt.mjs`) — never a fabricated `passed` result: a
+   scenario that does not reach its asserted real effect within its bounded wait records `failed`
+   with the observed reason. This produces the eight
    fully-harness-owned `playwright-journey` scenarios (`issue-to-pr-governed-assist`,
    `issue-to-pr-supervised-coding`, `issue-to-pr-autonomous-delivery`, `ci-repair-loop`,
    `description-auto-draft-and-apply`, `mark-ready-intent`, `git-to-chat-connect-refine-apply`,

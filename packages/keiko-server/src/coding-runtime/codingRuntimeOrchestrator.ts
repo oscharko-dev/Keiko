@@ -471,6 +471,10 @@ export class CodingRuntimeOrchestrator {
       },
       questionPort: deps.questionPort,
       manager: deps.manager,
+      // [P1] review 3941746512: this seam was never wired, so every question/follow-up transport
+      // failure silently fell back to processServerLogSink() instead of the composed ServerLogSink
+      // production actually reads.
+      activityLog: deps.activityLog,
     });
     // Production bootstrap marks stale active rows recovery-required before composition. Restore only
     // that content-free slot; no adapter turn or productive action is ever replayed.
@@ -563,20 +567,36 @@ export class CodingRuntimeOrchestrator {
     return snapshot ? this.publicSnapshotWithDescription(snapshot) : undefined;
   }
 
-  submitFollowUp(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
-    return this.operations.submitFollowUp(runId, input);
+  submitFollowUp(
+    runId: string,
+    input: unknown,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    return this.operations.submitFollowUp(runId, input, correlationId);
   }
 
-  listQuestions(runId: string, input: unknown): Promise<CodingRuntimeQuestionOperationResult> {
-    return this.operations.listQuestions(runId, input);
+  listQuestions(
+    runId: string,
+    input: unknown,
+    correlationId?: string,
+  ): Promise<CodingRuntimeQuestionOperationResult> {
+    return this.operations.listQuestions(runId, input, correlationId);
   }
 
-  answerQuestion(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
-    return this.operations.answerQuestion(runId, input);
+  answerQuestion(
+    runId: string,
+    input: unknown,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    return this.operations.answerQuestion(runId, input, correlationId);
   }
 
-  rejectQuestion(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
-    return this.operations.rejectQuestion(runId, input);
+  rejectQuestion(
+    runId: string,
+    input: unknown,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    return this.operations.rejectQuestion(runId, input, correlationId);
   }
 
   /**

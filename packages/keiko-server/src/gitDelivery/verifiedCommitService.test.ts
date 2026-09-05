@@ -848,4 +848,42 @@ describe("productive runtime status/diff/stage lane", () => {
     });
     expect(JSON.stringify(events)).not.toContain("snapshot store unavailable");
   });
+
+  // Same bug class as the recovery-path fix above, at reconcile()'s own direct
+  // `snapshots.recordVerifiedCommit` call (never routed through `record()`).
+  it("fails closed instead of throwing when reconcile cannot persist the recovered outcome", async () => {
+    const id = await verifiedProposal();
+    const approval = await claim(id);
+    const completed = await service.execute(id, approval);
+    if (completed === undefined) throw new Error("receipt unavailable");
+    const { headSha, committedTreeDigest, ...binding } = completed;
+    expect(headSha).toBe(git(["rev-parse", "HEAD"]));
+    expect(committedTreeDigest).toBe(completed.stagedTreeDigest);
+    options.snapshots.recordVerifiedCommit({
+      ...binding,
+      status: "recovery-required",
+      reason: "execution-uncertain",
+    });
+    service = createVerifiedCommitService({
+      ...options,
+      snapshots: {
+        ...options.snapshots,
+        recordVerifiedCommit: (): never => {
+          throw new Error("snapshot store unavailable");
+        },
+      },
+    });
+    await expect(service.reconcile()).resolves.toMatchObject({
+      status: "recovery-required",
+      reason: "execution-uncertain",
+    });
+    const failure = events.find((event) => event.extra?.phase === "persist-failed");
+    expect(failure).toMatchObject({
+      op: "git.verified-commit",
+      level: "warn",
+      errorKind: "internal",
+      correlationId: "verified-commit-test",
+    });
+    expect(JSON.stringify(events)).not.toContain("snapshot store unavailable");
+  });
 });

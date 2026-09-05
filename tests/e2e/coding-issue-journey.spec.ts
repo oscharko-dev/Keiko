@@ -40,7 +40,10 @@ import {
 test.describe.configure({ mode: "serial" });
 
 async function observedToolCallEvents(page: Page): Promise<number> {
-  return page.locator('[data-timeline-kind="tool"]').count().catch(() => 0);
+  return page
+    .locator('[data-timeline-kind="tool"]')
+    .count()
+    .catch(() => 0);
 }
 
 function toError(value: unknown): Error {
