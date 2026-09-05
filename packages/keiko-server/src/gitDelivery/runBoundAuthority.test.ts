@@ -528,13 +528,15 @@ describe("authorizeGitDelivery", () => {
     ]);
   });
 
-  // ADR-0138 D2 / #3386 contract correction 1: proves the redemption end-to-end through the
-  // composed gate `gitDeliveryAuthorityGate` actually mounts, not only the raw predicate
-  // `authorizeGitDelivery` accepts. Before this change, a supervised-coding push was hard-denied
-  // as "mode-denied" with no approval channel at all; a minted "authority-admission" claim, bound
-  // to this exact run's identity and the attempted operation, now admits it.
-  it("admits a supervised-coding push once its approval-required disposition is redeemed by a minted claim", () => {
-    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+  // Final-audit F2/#3390 (ADR-0138 D2 / #3386 contract correction 1): proves the redemption
+  // end-to-end through the composed gate `gitDeliveryAuthorityGate` actually mounts, not only the
+  // raw predicate `authorizeGitDelivery` accepts. Before this fix, a supervised-coding push was
+  // hard-denied as "approval-required" with no way to ever redeem it — the coarse admission layer
+  // had no production caller that threaded a claim through this seam. Push's OWN execute path
+  // already enforces a mandatory, mode-independent consumed approval regardless of mode
+  // (pushRoutes.ts's `runPushMutation`), so the route defers this coarse disposition to it instead
+  // of demanding a second, redundant claim here.
+  it("admits a supervised-coding push once its approval-required disposition is deferred to the operation's own mandatory downstream approval", () => {
     const workspace = { root: WORKSPACE_ROOT } as WorkspaceInfo;
     const deps = {
       gitDeliveryAuthority: permittedGitDeliveryAuthority(
@@ -543,17 +545,6 @@ describe("authorizeGitDelivery", () => {
         "supervised-coding",
       ),
     };
-    const issued = approvalStore.issue({
-      binding: {
-        projectId: PROJECT_ID,
-        operation: "authority-admission",
-        command: { operation: "push" },
-        runId: "test-run",
-        envelopeDigest: "c".repeat(64),
-      },
-      approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
-      nowMs: Date.parse(NOW),
-    });
 
     const result = gitDeliveryAuthorityGate(
       { correlationId: "correlation-3" } as never,
@@ -562,14 +553,71 @@ describe("authorizeGitDelivery", () => {
       workspace,
       "push",
       { headBranchName: "feature/test", remoteBranchName: "feature/test" },
+      { nowIso: NOW, deliveryApprovalDeferred: true },
+    );
+
+    expect(result).toEqual({ allowed: true, runId: "test-run", envelopeDigest: "c".repeat(64) });
+  });
+
+  // Final-audit F1/#3390: the workspace-contained counterpart. Local mutations have no
+  // operation-independent mandatory downstream enforcement (the repo/org policy pack decides
+  // per-command), so `deliveryApprovalDeferred` must never apply here — redemption requires an
+  // actual matching claim, peeked (never consumed) against the SAME "local-mutation" binding
+  // `localMutationRoutes.ts` already mints/parses from its own request body.
+  it("admits a governed-assist local mutation once its approval-required disposition is redeemed by a matching local-mutation claim", () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const workspace = { root: WORKSPACE_ROOT } as WorkspaceInfo;
+    const deps = {
+      gitDeliveryAuthority: permittedGitDeliveryAuthority(
+        () => PROJECT_ID,
+        () => WORKSPACE_ROOT,
+        "governed-assist",
+      ),
+    };
+    const command = { kind: "stage", pathspecs: ["a.txt"], includeUntracked: false };
+    const issued = approvalStore.issue({
+      binding: {
+        projectId: PROJECT_ID,
+        operation: "local-mutation",
+        command,
+        runId: "test-run",
+        envelopeDigest: "c".repeat(64),
+      },
+      approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
+      nowMs: Date.parse(NOW),
+    });
+
+    const result = gitDeliveryAuthorityGate(
+      { correlationId: "correlation-5" } as never,
+      deps,
+      PROJECT_ID,
+      workspace,
+      "stage",
+      {},
       {
         nowIso: NOW,
         approval: { kind: "claim", claim: issued.approval },
         approvalStore,
+        approvalBinding: { operation: "local-mutation", command },
       },
     );
 
     expect(result).toEqual({ allowed: true, runId: "test-run", envelopeDigest: "c".repeat(64) });
+    // The peek never consumed the claim: it still matches for the route's own subsequent, single
+    // real consumption (the invariant this mechanism exists to preserve).
+    expect(
+      approvalStore.matches({
+        approval: issued.approval,
+        binding: {
+          projectId: PROJECT_ID,
+          operation: "local-mutation",
+          command,
+          runId: "test-run",
+          envelopeDigest: "c".repeat(64),
+        },
+        nowMs: Date.parse(NOW),
+      }),
+    ).toBe(true);
   });
 
   it("still refuses a supervised-coding push when no claim is offered to redeem it, and logs the approval-required reason", () => {

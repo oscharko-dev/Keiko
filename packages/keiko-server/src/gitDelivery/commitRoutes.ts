@@ -887,6 +887,10 @@ export const createHandleCommitExecute = (
       {},
       {
         logSink: seams.activityLog,
+        // Final-audit F2/#3390 (ADR-0138 D2): commit's own execute path already enforces a
+        // mandatory, mode-independent consumed approval below (see `commitApprovalRequiredBlock`),
+        // so this coarse admission layer defers to it instead of demanding a second claim.
+        deliveryApprovalDeferred: true,
       },
     );
     if (!authority.allowed) return authority.result;
@@ -959,6 +963,10 @@ export const createHandleCommitApprove = (
       {},
       {
         logSink: seams.activityLog,
+        // Final-audit F2/#3390 (ADR-0138 D2): commit's own execute path already enforces a
+        // mandatory, mode-independent consumed approval below (see `commitApprovalRequiredBlock`),
+        // so this coarse admission layer defers to it instead of demanding a second claim.
+        deliveryApprovalDeferred: true,
       },
     );
     if (!authority.allowed) return authority.result;

@@ -72,7 +72,9 @@ describe("GitChangeScopePill", () => {
   // Dateien" instead of "1 geänderte Datei"). Failing-before: with the old unconditional
   // "gitChangeScope.counts.files" key, `getByText("1 file changed")` below never matches.
   it("uses the singular count message for exactly one changed file", () => {
-    const chat = makeChat({ gitChangeScopes: [makeGitChangeScope({ fileCount: 1, totalFiles: 1 })] });
+    const chat = makeChat({
+      gitChangeScopes: [makeGitChangeScope({ fileCount: 1, totalFiles: 1 })],
+    });
     render(<GitChangeScopePill chat={chat} updateScopes={vi.fn()} refreshScope={vi.fn()} />);
     expect(screen.getByText("1 file changed")).toBeInTheDocument();
     expect(screen.queryByText("1 files changed")).not.toBeInTheDocument();

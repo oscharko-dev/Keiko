@@ -598,13 +598,14 @@ async function abortRuntimeTask(
 // egress through that SAME authority, and generates through #3398's Model Gateway core -- never
 // publishing (epic correction 1: remote PR-body mutation stays #3399's approval-gated apply lane).
 //
-// `mintDescriptionAuthority` is `undefined` until a follow-up threads the server-owned
-// authority-minting capability through the runtime host chain (productionCodingRuntimeResolver.ts
-// -> productionCodingRuntimeHost.ts -> codingRuntimeControlPlane.ts -> deps.ts), mirroring how
-// `gitDeliveryDescriptionAuthority`'s READ port is already threaded there -- chat-handlers.ts's own
-// `admitGitChangeDescriptionTurn` comment names the same open item for its Chat-originated scope.
-// Until that lands, every scope admits closed (`model-egress-denied`), never open: the absence of a
-// minting capability is exactly the same as no live authority record ever having been minted.
+// `mintDescriptionAuthority` is threaded from the server-owned authority-minting capability
+// through the runtime host chain (productionCodingRuntimeResolver.ts ->
+// productionCodingRuntimeHost.ts -> codingRuntimeControlPlane.ts -> deps.ts's
+// `attachWorkbenchDescriptionSupport`), the SAME chain `gitDeliveryDescriptionAuthority`'s READ
+// port already uses (description-composition-closeout). It stays optional here because a caller
+// that supplies no minting capability at all (a test fixture, or a composition graph that never
+// wired the chain) is deliberately treated exactly the same as no live authority record ever
+// having been minted: every scope then admits closed (`model-egress-denied`), never open.
 export interface ProductionWorkbenchDescriptionDeps {
   /** Best-effort: the single-slot active workspace root at dispatch time, never a stored path. */
   readonly activeWorkspaceRoot: () => string | undefined;

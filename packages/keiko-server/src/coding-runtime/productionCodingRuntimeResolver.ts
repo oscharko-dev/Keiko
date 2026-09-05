@@ -257,7 +257,7 @@ function composeRuntime(
   // receive it at construction time. Mirrors the `receiver` indirection immediately above: a
   // mutable slot a run-bound closure reads through, filled in once by
   // `attachVerifiedHeadNotifier` right after the control plane builds its orchestrator.
-  let notifyVerifiedHeadAdvanced: (runId: string) => void = () => undefined;
+  const verifiedHeadNotifier: { current: (runId: string) => void } = { current: () => undefined };
   const manager = createProductionRuntimeManager(runs, authority, () => runtimeNow(input));
   const research: ResearchComposition = { grants: researchGrants, pending: pendingResearch };
   return {
@@ -274,7 +274,7 @@ function composeRuntime(
         receiver(event);
       },
       (runId): void => {
-        notifyVerifiedHeadAdvanced(runId);
+        verifiedHeadNotifier.current(runId);
       },
     ),
     // The approved `research` action mints its grant here — the one seam that sees both the
@@ -286,17 +286,7 @@ function composeRuntime(
     questionPort: createProductionRuntimeQuestionPort(runs),
     permissionPort: createProductionRuntimePermissionPort(runs),
     cancellationRegistry: { signalFor: (runId) => runs.get(runId)?.controller.signal },
-    runtimeCapabilityAuthenticator: {
-      authenticate: (capability, audience) =>
-        authority.authenticateCapability(capability, audience),
-      reservePromptTokens: (capability, promptTokens) =>
-        reservePromptWithCiRepair(
-          authority,
-          (runId) => runs.get(runId)?.ciRepairBudget,
-          capability,
-          promptTokens,
-        ),
-    },
+    runtimeCapabilityAuthenticator: runtimeCapabilityAuthenticatorFor(authority, runs),
     gitDeliveryAuthority: authority.gitDeliveryAuthorityPort(),
     // #3399 (epic #3384 correction 4): threaded through the exact same chain as
     // `gitDeliveryAuthority` above (-> productionCodingRuntimeHost.ts ->
@@ -311,26 +301,51 @@ function composeRuntime(
     // the SAME deployment ceiling every other authority-minting path in this file uses -- a mint
     // outside a live run (the terminal-dispatch and Chat-turn callers both run after the run's own
     // envelope may already be gone) never assumes the ceiling is a widening default.
-    mintDescriptionAuthority: (
-      scope: GitDeliveryDescriptionAuthorityScope,
-      nowIso: string,
-    ): void => {
-      authority.mintGitDeliveryDescriptionAuthority({
-        scope,
-        requestedMode: input.workspaceAuthority.deploymentCeiling,
-        deploymentCeiling: input.workspaceAuthority.deploymentCeiling,
-        nowIso,
-      });
-    },
+    mintDescriptionAuthority: mintDescriptionAuthorityFor(authority, input),
     // #3401 CI-repair notify: the setter half of the `notifyVerifiedHeadAdvanced` slot above.
     // Called exactly once by `codingRuntimeControlPlane.ts` right after it builds the orchestrator
     // that owns the real method.
     attachVerifiedHeadNotifier: (notify: (runId: string) => void): void => {
-      notifyVerifiedHeadAdvanced = notify;
+      verifiedHeadNotifier.current = notify;
     },
     ...(input.backend.safeActivityProjection
       ? { safeActivityProjection: input.backend.safeActivityProjection }
       : {}),
+  };
+}
+
+function runtimeCapabilityAuthenticatorFor(
+  authority: CodingRuntimeAuthorityService,
+  runs: Map<string, ResolverRunRecord>,
+): NonNullable<QualifiedProductionCodingRuntime["runtimeCapabilityAuthenticator"]> {
+  return {
+    authenticate: (capability, audience) => authority.authenticateCapability(capability, audience),
+    reservePromptTokens: (capability, promptTokens) =>
+      reservePromptWithCiRepair(
+        authority,
+        (runId) => runs.get(runId)?.ciRepairBudget,
+        capability,
+        promptTokens,
+      ),
+  };
+}
+
+// #3401 (epic #3384 closeout, description-composition-closeout): the MINT capability
+// `gitDeliveryDescriptionAuthority`'s READ port needs a producer for. Clamped by the SAME
+// deployment ceiling every other authority-minting path in this file uses -- a mint outside a live
+// run (the terminal-dispatch and Chat-turn callers both run after the run's own envelope may
+// already be gone) never assumes the ceiling is a widening default.
+function mintDescriptionAuthorityFor(
+  authority: CodingRuntimeAuthorityService,
+  input: ProductionCodingRuntimeResolverInput,
+): (scope: GitDeliveryDescriptionAuthorityScope, nowIso: string) => void {
+  return (scope, nowIso): void => {
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope,
+      requestedMode: input.workspaceAuthority.deploymentCeiling,
+      deploymentCeiling: input.workspaceAuthority.deploymentCeiling,
+      nowIso,
+    });
   };
 }
 
@@ -550,6 +565,31 @@ function runtimeCiServices(
   return { ciRepairBudget, ciObservationService };
 }
 
+interface RunToolContextPieces {
+  readonly leases: ReturnType<typeof createLeaseCoordinator>;
+  readonly skillCatalog: SkillCatalog;
+  readonly explicitSkills: ReturnType<typeof createExplicitSkillInvocationTracker>;
+  readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
+}
+
+// Extracted so `createRunToolSurface` stays under AGENTS.md §6's 50-line ceiling: this piece is
+// independent of the git/CI services `runtimeGitServices` builds, only of the invocation registry
+// leases are coordinated against.
+function prepareRunToolContext(
+  input: ProductionCodingRuntimeResolverInput,
+  request: ProductionRuntimeBackendInput["request"],
+  context: CodingRuntimeTrustedContext,
+  invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
+): RunToolContextPieces {
+  const leases = createLeaseCoordinator(invocationRegistry);
+  const skillCatalog = createServerApprovedSkillCatalog();
+  const explicitSkills = createExplicitSkillInvocationTracker(skillCatalog);
+  const resolveWorkspaceRootAccess = runWorkspaceRootAccessResolver(input, context);
+  if (resolveWorkspaceRootAccess() === undefined) throw new Error("runtime-workspace-unqualified");
+  explicitSkills.observeTurn(request.taskIntent);
+  return { leases, skillCatalog, explicitSkills, resolveWorkspaceRootAccess };
+}
+
 function createRunToolSurface(
   input: ProductionCodingRuntimeResolverInput,
   request: ProductionRuntimeBackendInput["request"],
@@ -572,12 +612,8 @@ function createRunToolSurface(
     notifyVerifiedHeadAdvanced,
   );
   const { codingToolApprovals } = services;
-  const leases = createLeaseCoordinator(invocationRegistry);
-  const skillCatalog = createServerApprovedSkillCatalog();
-  const explicitSkills = createExplicitSkillInvocationTracker(skillCatalog);
-  const resolveWorkspaceRootAccess = runWorkspaceRootAccessResolver(input, context);
-  if (resolveWorkspaceRootAccess() === undefined) throw new Error("runtime-workspace-unqualified");
-  explicitSkills.observeTurn(request.taskIntent);
+  const { leases, skillCatalog, explicitSkills, resolveWorkspaceRootAccess } =
+    prepareRunToolContext(input, request, context, invocationRegistry);
   const toolFacade = createManagedToolFacade({
     input,
     context,

@@ -69,8 +69,7 @@ export interface CodingRuntimeHost {
   // automatic-description dispatcher can mint a scope before checking it, exactly the way the
   // Chat-turn admission check and the pull-request route already only READ.
   readonly mintDescriptionAuthority?:
-    | ((scope: GitDeliveryDescriptionAuthorityScope, nowIso: string) => void)
-    | undefined;
+    ((scope: GitDeliveryDescriptionAuthorityScope, nowIso: string) => void) | undefined;
   // #3401 CI-repair notify: called exactly once, right after this control plane builds its
   // orchestrator, so a per-run CI-repair controller minted deep inside the runtime resolver (long
   // before the orchestrator exists) can still reach `CodingRuntimeOrchestrator

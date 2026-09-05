@@ -186,18 +186,21 @@ describe("git delivery approval store", () => {
     ).toBeUndefined();
   });
 
-  // #3386 (ADR-0138 D2): "authority-admission" is the coarse, run-identity-bound claim
-  // `runBoundAuthority.authorizeGitDelivery`'s redemption hook consumes for a lower mode's
-  // approval-required disposition (see requestPreparation.ts's `gitDeliveryApprovalRedemption`).
-  // It carries no command shape of its own beyond the attempted operation — proven here through the
-  // SAME generic issue/consume path every other operation kind already uses, so this is additive,
-  // not a parallel mechanism.
-  it("mints and redeems an authority-admission claim bound to a run's identity and the attempted operation", () => {
+  // #3386 (ADR-0138 D2) introduced an "authority-admission" claim operation as a coarse,
+  // run-identity-bound claim meant to redeem `runBoundAuthority.authorizeGitDelivery`'s
+  // "approval-required" disposition for a lower mode. Final-audit F2/#3390: no production HTTP
+  // route ever minted a claim bound to it (there was no matching `/approve` endpoint), so it was
+  // permanently unreachable and has been removed from `GitDeliveryApprovalOperation`.
+  // `requestPreparation.ts`'s `gitDeliveryApprovalRedemption` now redeems "approval-required" by
+  // reusing the SAME per-operation claim shape the route already mints/parses (here: the
+  // "local-mutation" binding local-mutation routes already issue and consume), proven generically
+  // below through the same issue/consume path every other operation kind already uses.
+  it("mints and redeems a local-mutation claim bound to a run's identity and the attempted command", () => {
     const store = createInMemoryGitDeliveryApprovalStore();
     const binding: GitDeliveryApprovalBinding = {
       projectId: "/workspace/repo",
-      operation: "authority-admission",
-      command: { operation: "push" },
+      operation: "local-mutation",
+      command: { kind: "branch-create", branchName: "feature/x" },
       runId: "run-a",
       envelopeDigest: "a".repeat(64),
     };
@@ -209,20 +212,21 @@ describe("git delivery approval store", () => {
       resolveGitDeliveryApprovalRequirement(parsed, { store, binding, nowMs: NOW + 1 }),
     ).toMatchObject({ required: true });
 
-    // Bound to the specific operation attempted: a claim minted for "push" does not redeem "pull".
+    // Bound to the specific command attempted: a claim minted for "branch-create" does not redeem
+    // "stage".
     const other = createInMemoryGitDeliveryApprovalStore();
-    const issuedForPush = other.issue({
+    const issuedForCreate = other.issue({
       binding,
       approvedByUserId: "u-1",
       nowMs: NOW,
       ttlMs: 60_000,
     });
-    const parsedForPush = parseGitDeliveryApprovalRequest(issuedForPush.approval);
-    if (parsedForPush?.kind !== "claim") throw new Error("expected claim");
+    const parsedForCreate = parseGitDeliveryApprovalRequest(issuedForCreate.approval);
+    if (parsedForCreate?.kind !== "claim") throw new Error("expected claim");
     expect(
-      resolveGitDeliveryApprovalRequirement(parsedForPush, {
+      resolveGitDeliveryApprovalRequirement(parsedForCreate, {
         store: other,
-        binding: { ...binding, command: { operation: "pull" } },
+        binding: { ...binding, command: { kind: "stage", pathspecs: ["a.txt"] } },
         nowMs: NOW + 1,
       }),
     ).toBeUndefined();

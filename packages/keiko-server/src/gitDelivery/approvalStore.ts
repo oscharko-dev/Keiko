@@ -13,12 +13,20 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 // approval-gated (actionSheetRoutes.ts always sets `approvalRequirement: { required: false }`
 // and never touches the approval store), so the member was pure type-noise that suggested a
 // non-existent binding could be constructed.
-// "authority-admission" (#3386, ADR-0138 D2): a coarse, run-identity-bound claim redeemed by
-// `runBoundAuthority.authorizeGitDelivery`'s own "approval-required" disposition for a lower mode
-// (governed-assist, supervised-coding) — see `gitDeliveryApprovalRedemption` in
-// requestPreparation.ts. Distinct from the operation-specific bindings above: it carries no command
-// shape of its own, only the operation attempted, because it stands for "this run may attempt this
-// operation right now" rather than approval of one exact command.
+// "authority-admission" (#3386, ADR-0138 D2) was REMOVED (final-audit F2/#3390): it was meant as a
+// coarse, run-identity-bound claim redeemed by `runBoundAuthority.authorizeGitDelivery`'s own
+// "approval-required" disposition for a lower mode, but no production HTTP route ever minted a
+// claim bound to it (`grep -rn 'operation: "authority-admission"' packages/keiko-server/src` before
+// this fix matched only this file's own type declaration and unit tests that hand-built the
+// binding) -- there was no `/approve`-equivalent endpoint for it, so every lower-mode delivery
+// admission was permanently unredeemable. `requestPreparation.ts`'s `gitDeliveryApprovalRedemption`
+// now redeems "approval-required" two ways instead: (1) `deliveryApprovalDeferred` defers to the
+// operation's OWN mandatory, mode-independent execute-time approval consumption (commit, push, pr,
+// merge, pr-mark-ready, pr-description-apply all already enforce this unconditionally -- see
+// policyPackMintability.ts), so the coarse gate does not need a second, redundant claim; (2) a
+// non-consuming peek (`matches`) against the SAME per-operation claim the route already parses from
+// its own request body, for operations without such downstream enforcement (local-mutation). Both
+// reuse the existing per-operation claim shapes below; neither needs a new token kind.
 // "pr-mark-ready" (#3389, epic #3384 correction 7): the draft->ready transition, deliberately a
 // SEPARATE operation from "pr" so the generic pr-update admission (convertFromDraft) can never
 // redeem it — the bound command carries the exact facts (repository, PR identity, base/head SHAs,
@@ -30,8 +38,7 @@ export type GitDeliveryApprovalOperation =
   | "pr"
   | "merge"
   | "pr-description-apply"
-  | "pr-mark-ready"
-  | "authority-admission";
+  | "pr-mark-ready";
 
 export interface GitDeliveryApprovalBinding {
   readonly projectId: string;
@@ -175,6 +182,45 @@ function requirementFor(record: StoredApprovalRecord): GitDeliveryApprovalRequir
   };
 }
 
+type GitDeliveryCommitLikeOperation = "commit" | "local-mutation" | "push" | "pr";
+
+// F31 (final-audit, simplicity-and-reuse): `matchesStageBinding`/`consumeStageBinding`,
+// `matchesDeliveryBinding`/`consumeDeliveryBinding`, and `matchesCommitBinding`/
+// `consumeCommitBinding` were three copy-paste-identical pairs (prune, then `commitBindingRecord`
+// filtered by an operation set, then -- for consume -- delete + `requirementFor`) differing only in
+// which operation(s) they accept. Collapsed into this one parameterized pair; callers below become
+// one-line wrappers naming their own allowed operation set, and every external caller (
+// `draftDeliveryService.ts`, `runtimeGitService.ts`, `verifiedCommitService.ts`) is unchanged since
+// the method names and signatures on `GitDeliveryApprovalStore` did not change.
+function matchesOperationBinding(
+  records: Map<string, StoredApprovalRecord>,
+  binding: GitDeliveryApprovalBinding,
+  nowMs: number,
+  maxRecords: number,
+  allowed: readonly GitDeliveryCommitLikeOperation[],
+): boolean {
+  pruneExpired(records, nowMs, maxRecords);
+  const operation = binding.operation;
+  if (!(allowed as readonly string[]).includes(operation)) return false;
+  return commitBindingRecord(records, binding, nowMs, operation as GitDeliveryCommitLikeOperation) !== undefined;
+}
+
+function consumeOperationBinding(
+  records: Map<string, StoredApprovalRecord>,
+  binding: GitDeliveryApprovalBinding,
+  nowMs: number,
+  maxRecords: number,
+  allowed: readonly GitDeliveryCommitLikeOperation[],
+): GitDeliveryApprovalRequirement | undefined {
+  pruneExpired(records, nowMs, maxRecords);
+  const operation = binding.operation;
+  if (!(allowed as readonly string[]).includes(operation)) return undefined;
+  const matched = commitBindingRecord(records, binding, nowMs, operation as GitDeliveryCommitLikeOperation);
+  if (matched === undefined) return undefined;
+  records.delete(matched[0]);
+  return requirementFor(matched[1]);
+}
+
 // eslint-disable-next-line max-lines-per-function -- approval issue/consume state machine is intentionally co-located.
 export function createInMemoryGitDeliveryApprovalStore(
   options: {
@@ -213,41 +259,22 @@ export function createInMemoryGitDeliveryApprovalStore(
       };
     },
     matchesStageBinding(binding, nowMs): boolean {
-      pruneExpired(records, nowMs, maxRecords);
-      return commitBindingRecord(records, binding, nowMs, "local-mutation") !== undefined;
+      return matchesOperationBinding(records, binding, nowMs, maxRecords, ["local-mutation"]);
     },
     consumeStageBinding(binding, nowMs): GitDeliveryApprovalRequirement | undefined {
-      pruneExpired(records, nowMs, maxRecords);
-      const matched = commitBindingRecord(records, binding, nowMs, "local-mutation");
-      if (matched === undefined) return undefined;
-      records.delete(matched[0]);
-      return requirementFor(matched[1]);
+      return consumeOperationBinding(records, binding, nowMs, maxRecords, ["local-mutation"]);
     },
     matchesDeliveryBinding(binding, nowMs): boolean {
-      pruneExpired(records, nowMs, maxRecords);
-      return (
-        (binding.operation === "push" || binding.operation === "pr") &&
-        commitBindingRecord(records, binding, nowMs, binding.operation) !== undefined
-      );
+      return matchesOperationBinding(records, binding, nowMs, maxRecords, ["push", "pr"]);
     },
     consumeDeliveryBinding(binding, nowMs): GitDeliveryApprovalRequirement | undefined {
-      pruneExpired(records, nowMs, maxRecords);
-      if (binding.operation !== "push" && binding.operation !== "pr") return undefined;
-      const matched = commitBindingRecord(records, binding, nowMs, binding.operation);
-      if (matched === undefined) return undefined;
-      records.delete(matched[0]);
-      return requirementFor(matched[1]);
+      return consumeOperationBinding(records, binding, nowMs, maxRecords, ["push", "pr"]);
     },
     matchesCommitBinding(binding, nowMs): boolean {
-      pruneExpired(records, nowMs, maxRecords);
-      return commitBindingRecord(records, binding, nowMs) !== undefined;
+      return matchesOperationBinding(records, binding, nowMs, maxRecords, ["commit"]);
     },
     consumeCommitBinding(binding, nowMs): GitDeliveryApprovalRequirement | undefined {
-      pruneExpired(records, nowMs, maxRecords);
-      const matched = commitBindingRecord(records, binding, nowMs);
-      if (matched === undefined) return undefined;
-      records.delete(matched[0]);
-      return requirementFor(matched[1]);
+      return consumeOperationBinding(records, binding, nowMs, maxRecords, ["commit"]);
     },
     matches(input): boolean {
       pruneExpired(records, input.nowMs, maxRecords);

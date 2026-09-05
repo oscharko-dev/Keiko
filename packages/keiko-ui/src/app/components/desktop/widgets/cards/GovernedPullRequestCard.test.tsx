@@ -677,10 +677,9 @@ describe("GovernedPullRequestCard — Description panel localization (DE)", () =
     const client = makeDescriptionClient();
     renderDescriptionPanelInGerman(client);
 
-    fireEvent.change(
-      await screen.findByLabelText("Beschreibung Repository (Besitzer/Repo)"),
-      { target: { value: "oscharko-dev/Keiko" } },
-    );
+    fireEvent.change(await screen.findByLabelText("Beschreibung Repository (Besitzer/Repo)"), {
+      target: { value: "oscharko-dev/Keiko" },
+    });
     fireEvent.change(screen.getByLabelText("Beschreibung Pull-Request-Nummer"), {
       target: { value: "1499" },
     });
@@ -724,10 +723,9 @@ describe("GovernedPullRequestCard — Description panel localization (DE)", () =
     });
     renderDescriptionPanelInGerman(client);
 
-    fireEvent.change(
-      await screen.findByLabelText("Beschreibung Repository (Besitzer/Repo)"),
-      { target: { value: "oscharko-dev/Keiko" } },
-    );
+    fireEvent.change(await screen.findByLabelText("Beschreibung Repository (Besitzer/Repo)"), {
+      target: { value: "oscharko-dev/Keiko" },
+    });
     fireEvent.change(screen.getByLabelText("Beschreibung Pull-Request-Nummer"), {
       target: { value: "1499" },
     });

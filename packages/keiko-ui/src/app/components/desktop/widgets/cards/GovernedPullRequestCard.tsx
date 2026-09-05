@@ -843,7 +843,12 @@ interface DescriptionFieldsProps {
   readonly t: I18nTranslate;
 }
 
-function PrDescriptionPrNumberField({ form, busy, onChange, t }: DescriptionFieldsProps): ReactNode {
+function PrDescriptionPrNumberField({
+  form,
+  busy,
+  onChange,
+  t,
+}: DescriptionFieldsProps): ReactNode {
   const prNumberHintId = useId();
   const prNumberInvalid = form.prNumber !== "" && !isValidDescriptionPrNumber(form.prNumber);
   // The visible label text intentionally matches the aria-label below (both say "Description pull
@@ -875,7 +880,12 @@ function PrDescriptionPrNumberField({ form, busy, onChange, t }: DescriptionFiel
   );
 }
 
-function PrDescriptionLanguageField({ form, busy, onChange, t }: DescriptionFieldsProps): ReactNode {
+function PrDescriptionLanguageField({
+  form,
+  busy,
+  onChange,
+  t,
+}: DescriptionFieldsProps): ReactNode {
   return (
     <label style={{ ...LABEL_STYLE, flex: 1 }}>
       {t("governedPullRequestCard.description.field.language")}{" "}

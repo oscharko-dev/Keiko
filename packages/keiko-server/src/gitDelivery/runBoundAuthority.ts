@@ -236,7 +236,13 @@ function resolveModeDecision(
   if (decision.ok) {
     return { allowed: true, runId: active.runId, envelopeDigest: active.envelopeDigest };
   }
-  if (redeemApproval?.(active, request) === true) {
+  // Final-audit F2: redemption is consulted ONLY for "approval-required" — matching
+  // `GitDeliveryApprovalRedemption`'s own documented contract ("Invoked only when the matrix
+  // resolves 'approval-required'"), which this line previously did not enforce (it consulted
+  // redemption for ANY non-ok reason, "mode-denied" included). A hard "mode-denied" stays
+  // mode-independent and non-redeemable, matching AGENTS.md's fail-closed posture for a genuine
+  // denial versus a disposition a human can still clear.
+  if (decision.reason === "approval-required" && redeemApproval?.(active, request) === true) {
     return { allowed: true, runId: active.runId, envelopeDigest: active.envelopeDigest };
   }
   return { allowed: false, reason: decision.reason };

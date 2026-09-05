@@ -23,11 +23,11 @@ import {
   type ActiveGitDeliveryRunAuthority,
   type GitDeliveryApprovalRedemption,
   type GitDeliveryAuthorityDenial,
-  type GitDeliveryAuthorityRequest,
   type GitDeliveryDescriptionAuthorityAdmission,
 } from "./runBoundAuthority.js";
 import {
-  resolveGitDeliveryApprovalRequirement,
+  DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
+  type GitDeliveryApprovalOperation,
   type GitDeliveryApprovalStore,
   type ParsedGitDeliveryApprovalRequest,
 } from "./approvalStore.js";
@@ -56,18 +56,51 @@ export interface GitDeliveryAuthorityTarget {
   readonly remoteBranchName?: string | undefined;
 }
 
+// The exact per-operation approval binding this admission attempt corresponds to — the SAME
+// operation + typed command the route's own approve/execute logic mints/consumes moments later.
+// Paired with `GitDeliveryAuthorityAuditSeams.approval`/`approvalStore` for the non-consuming peek
+// in `gitDeliveryApprovalRedemption` below; never consumed here (the route's own execute-time
+// `resolveGitDeliveryApprovalRequirement` call is the single-use consumption).
+export interface GitDeliveryApprovalBindingHint {
+  readonly operation: GitDeliveryApprovalOperation;
+  readonly command: unknown;
+}
+
 export interface GitDeliveryAuthorityAuditSeams {
   readonly nowIso?: string | undefined;
   readonly logSink?: ServerLogSink | undefined;
   readonly expectedAuthority?: GitDeliveryAuthorityIdentity | undefined;
   readonly phase?: GitDeliveryAuthorityPhase | undefined;
-  // ADR-0138 D2: when the mode/resource-scope/risk matrix resolves "approval-required" for a lower
-  // mode (governed-assist, supervised-coding), the caller may offer a one-use claim to redeem it
-  // instead of failing closed outright. Both must be supplied together to have any effect; either
-  // omitted leaves "approval-required" a hard refusal (today's behaviour for every mounted route,
-  // since none yet threads a claim through this seam — #3387/#3390 are the producers that will).
+  // Final-audit F2/#3390 (ADR-0138 D2, epic #3384 correction 5): a delivery effect (commit, push,
+  // pull-request, merge, pr-mark-ready, pr-description-apply) is designed to be approval-required,
+  // never mode-denied, in every mode below `autonomous-delivery`. Every one of those operations'
+  // OWN execute path already enforces a mandatory, mode-independent consumed approval claim
+  // regardless of what the repo/org policy pack decides (policyPackMintability.ts documents each
+  // one) — so this coarse admission layer does not need a SECOND, redundant claim of its own to
+  // admit the attempt. Setting this true defers the "approval-required" disposition to that
+  // downstream enforcement, exactly mirroring how `autonomous-delivery` already bypasses the same
+  // matrix cell. It must be set at BOTH the mint (`/approve`) and execute admission calls for such
+  // an operation (minting has no delivery effect of its own — the human's actual consent is
+  // exercised once the minted claim is presented at execute — so it would be incoherent to admit
+  // execute but refuse the mint that produces what execute needs) and at the continuity re-check
+  // immediately before remote dispatch. Never set it for an operation without such downstream
+  // enforcement (workspace-contained local mutations) — see `approval`/`approvalBinding` below for
+  // that case instead.
+  readonly deliveryApprovalDeferred?: boolean | undefined;
+  // The workspace-contained-scope alternative to `deliveryApprovalDeferred` above: local mutations
+  // (branch-create/switch, stage/unstage) have no operation-independent mandatory downstream
+  // enforcement — the repo/org policy pack decides per command whether a consumed claim is even
+  // required — so a lower mode's "approval-required" disposition can only be redeemed by an actual
+  // matching claim, never by deferring unconditionally (that would let a routine local edit skip
+  // human confirmation entirely in "Ask for approval" mode). `approval` is the SAME claim the
+  // caller already parsed from its own request body; `approvalBinding` names the exact operation +
+  // command it is bound to. Both are required together; either omitted leaves "approval-required" a
+  // hard refusal. The check is a non-consuming peek (`GitDeliveryApprovalStore.matches`) — the
+  // caller's own subsequent `resolveGitDeliveryApprovalRequirement` call is what actually consumes
+  // the claim once, so it is never spent twice on the same request.
   readonly approval?: ParsedGitDeliveryApprovalRequest | undefined;
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
+  readonly approvalBinding?: GitDeliveryApprovalBindingHint | undefined;
   // #3399 (epic #3384 correction 4): admits the "pull-request" body-only description apply outside
   // a running Code task, over the server-minted description authority, when no run is active. Has
   // no effect on any other operation — `authorizeGitDelivery` only consults it for "pull-request".
@@ -203,34 +236,48 @@ function admittedAuthorityGate(
 }
 
 // Builds the caller-side redemption hook `authorizeGitDelivery` consults only when its own
-// mode/resource-scope/risk matrix resolves "approval-required" for a lower mode. The claim is bound
-// to the run's own identity and the operation attempted — never to a route-specific command shape,
-// since this coarse admission layer redeems a distinct "this run may attempt this operation right
-// now" fact, not the operation's own execute-time approval (commit's, for instance, which binds the
-// exact message and is consumed separately by the commit route itself). Returns undefined when the
-// caller supplied neither an approval request nor a store, so every existing route that does not yet
-// thread this seam (all of them, until #3387/#3390 land) is unaffected: "approval-required" stays a
-// hard refusal, exactly today's fail-closed posture for what was previously "mode-denied".
+// mode/resource-scope/risk matrix resolves "approval-required" for a lower mode (per
+// `resolveModeDecision`'s own contract in runBoundAuthority.ts). Two independent mechanisms, never
+// combined for one call:
+//
+//   1. `deliveryApprovalDeferred` — the delivery-scope path (commit/push/pr/merge/pr-mark-ready/
+//      pr-description-apply). These operations already enforce a mandatory, mode-independent
+//      approval consumption at their OWN execute layer, so admission simply defers to it instead of
+//      demanding a second claim of its own — exactly like `autonomous-delivery` already bypasses
+//      this same matrix cell.
+//   2. `approval` + `approvalStore` + `approvalBinding` — the workspace-contained path (local
+//      mutations). A non-consuming peek (`GitDeliveryApprovalStore.matches`) against the SAME claim
+//      the caller already parsed from its own request body, bound to the exact operation + command
+//      it names. Never `.consume()`s the record: the caller's own subsequent
+//      `resolveGitDeliveryApprovalRequirement` call performs the single real consumption, so the
+//      claim is spent exactly once even though it is checked here first.
+//
+// Returns undefined when the caller set neither, so a route that has not been threaded through this
+// seam is unaffected: "approval-required" stays a hard refusal (fail-closed).
 function gitDeliveryApprovalRedemption(
   projectId: string,
   audit: GitDeliveryAuthorityAuditSeams,
 ): GitDeliveryApprovalRedemption | undefined {
-  if (audit.approval === undefined) return undefined;
-  const approval = audit.approval;
-  return (active: ActiveGitDeliveryRunAuthority, request: GitDeliveryAuthorityRequest): boolean => {
-    const requirement = resolveGitDeliveryApprovalRequirement(approval, {
-      store: audit.approvalStore,
+  if (audit.deliveryApprovalDeferred === true) {
+    return (): boolean => true;
+  }
+  if (audit.approval?.kind !== "claim" || audit.approvalBinding === undefined) return undefined;
+  const claim = audit.approval.claim;
+  const { operation, command } = audit.approvalBinding;
+  const store = audit.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;
+  const nowMs = Date.parse(audit.nowIso ?? new Date().toISOString());
+  return (active: ActiveGitDeliveryRunAuthority): boolean =>
+    store.matches({
+      approval: claim,
       binding: {
         projectId,
-        operation: "authority-admission",
-        command: { operation: request.operation },
+        operation,
+        command,
         runId: active.runId,
         envelopeDigest: active.envelopeDigest,
       },
-      nowMs: Date.parse(audit.nowIso ?? new Date().toISOString()),
+      nowMs,
     });
-    return requirement?.required === true;
-  };
 }
 
 /**

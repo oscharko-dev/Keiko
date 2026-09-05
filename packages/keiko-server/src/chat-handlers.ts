@@ -2576,8 +2576,9 @@ export function validateCurrentDesktopChatSend(
 // before any snapshot content reaches the Model Gateway. `deps.gitChangeDescriptionAuthorityPort`
 // is a direct, official `UiHandlerDeps` field (description-composition-closeout): production
 // composition threads the SAME minted port onto it and onto `gitDeliveryDescriptionAuthority`
-// (deps.test.ts pins the two are `===`) — `undefined` means "not yet wired", and admission fails
-// CLOSED, never open: no port to consult is exactly the same as no live authority record.
+// (deps.test.ts pins the two are `===`) — `undefined` (an unqualified runtime host, or a test
+// fixture that never wired one) fails admission CLOSED, never open: no port to consult is exactly
+// the same as no live authority record.
 
 // The scope always keys on the immutable base/head pair rather than a PR identity: `remoteDigest`
 // (correction 6) plus `baseRef`/`headRef` are present on every connected git-change scope whether
