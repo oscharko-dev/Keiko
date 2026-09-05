@@ -196,6 +196,14 @@ function isRetainedDescriptionProposal(
   );
 }
 
+function matchesDescriptionProposal(
+  status: WorkbenchDescriptionStatus | undefined,
+  proposalId: string,
+  snapshotDigest: string,
+): status is WorkbenchDescriptionStatus {
+  return status?.proposalId === proposalId && status.snapshotDigest === snapshotDigest;
+}
+
 function runtimePauseFailureCode(
   code:
     | "authority-expired"
@@ -1670,19 +1678,19 @@ export class CodingRuntimeOrchestrator {
     proposalId: string,
     snapshotDigest: string,
   ): PrDescriptionDraftPreview | undefined {
+    const support = this.description;
+    if (support === undefined) return undefined;
     const snapshot = this.deps.snapshots.get(runId);
-    const status = this.description?.jobs.current(runId);
-    const scope = snapshot === undefined ? undefined : this.descriptionScope(snapshot);
-    if (
-      status?.proposalId !== proposalId ||
-      status.snapshotDigest !== snapshotDigest ||
-      scope === undefined ||
-      scope.applicationTarget !== undefined ||
-      !isRetainedDescriptionProposal(this.description, scope, status, proposalId, snapshotDigest)
-    ) {
+    if (snapshot === undefined) return undefined;
+    const status = support.jobs.current(runId);
+    if (!matchesDescriptionProposal(status, proposalId, snapshotDigest)) return undefined;
+    const scope = this.descriptionScope(snapshot);
+    if (scope === undefined || scope.applicationTarget !== undefined) return undefined;
+    if (!isRetainedDescriptionProposal(support, scope, status, proposalId, snapshotDigest))
       return undefined;
-    }
-    const review = this.description?.dispatcher?.reviewDraft?.(scope, proposalId, snapshotDigest);
+    const reviewDraft = support.dispatcher?.reviewDraft;
+    if (reviewDraft === undefined) return undefined;
+    const review = reviewDraft(scope, proposalId, snapshotDigest);
     if (review !== undefined)
       this.logDescriptionEvent(scope, "reviewed", { proposalRetained: true });
     return review;

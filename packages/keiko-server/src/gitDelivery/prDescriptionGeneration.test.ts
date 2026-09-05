@@ -48,6 +48,56 @@ function source(current: GatewayConfig | undefined): RuntimeGatewayConfigSource 
   return { current: () => current, generation: () => 1 };
 }
 
+function configWithCapability(): GatewayConfig {
+  const configured = config();
+  return parseGatewayConfig({
+    providers: configured.providers,
+    capabilities: [
+      {
+        ...createDefaultChatCapability("test-chat"),
+        contextWindow: 32_768,
+        maxOutputTokens: 2048,
+      },
+    ],
+    branding: configured.branding,
+  });
+}
+
+function productionCallDeps(
+  generation: NonNullable<ReturnType<typeof createProductionPrDescriptionGeneration>>,
+  fixture: DescriptionFixture,
+  reference: string,
+): PrDescription.PrDescriptionDeps {
+  return {
+    ...generation,
+    now: () => fixture.now,
+    revalidateAuthority: (authority, signal) =>
+      !signal.aborted &&
+      authority.authorityDigest === fixture.context.authorityDigest &&
+      authority.correlationId === fixture.context.correlationId &&
+      fixture.context.stillAuthorized(),
+    resolveSnapshot: (supplied): ReturnType<PrDescription.PrDescriptionDeps["resolveSnapshot"]> => {
+      if (supplied !== reference) return Promise.resolve(undefined);
+      const content = fixture.snapshots.read(
+        reference,
+        fixture.context.accessScope,
+        fixture.context.correlationId,
+      );
+      return Promise.resolve(
+        content === undefined
+          ? undefined
+          : {
+              snapshot: content.snapshot,
+              evidence: content.files.map((file) => ({
+                evidenceId: file.evidenceId,
+                text: JSON.stringify(file),
+              })),
+            },
+      );
+    },
+  };
+}
+
 let logs: BufferedServerLogSink;
 
 beforeEach(() => {
@@ -132,24 +182,7 @@ describe("createProductionPrDescriptionGeneration (#3399)", () => {
   // hand-building a `GitChangeSnapshot` — that digest formula is owned by
   // `gitChangeSnapshotDigestFields`/`GitChangeSnapshotService`, never restated here (AGENTS.md §7).
   it("generates a real description through the production composition and a fake Model Gateway HTTP transport", async () => {
-    const cfgWithCapability = parseGatewayConfig({
-      providers: [
-        {
-          modelId: "test-chat",
-          baseUrl: "https://gateway.example.com/v1",
-          apiKey: "test-token",
-        },
-      ],
-      capabilities: [
-        {
-          ...createDefaultChatCapability("test-chat"),
-          contextWindow: 32_768,
-          maxOutputTokens: 2048,
-        },
-      ],
-      branding: { logoUrl: `https://cdn.example.org/${"a".repeat(40)}/keiko-logo.svg` },
-    });
-    const generation = createProductionPrDescriptionGeneration(source(cfgWithCapability));
+    const generation = createProductionPrDescriptionGeneration(source(configWithCapability()));
     if (generation === undefined) throw new Error("expected a composed generation");
     const fixture = new DescriptionFixture();
     try {
@@ -203,32 +236,7 @@ describe("createProductionPrDescriptionGeneration (#3399)", () => {
             correlationId: fixture.context.correlationId,
           },
         },
-        {
-          ...generation,
-          // The fixture's own snapshot capture is stamped with its fixed clock (`fixture.now`);
-          // matching it here avoids a spurious `invalid-snapshot` from comparing a captured/expiry
-          // timestamp against the real wall clock instead of the clock that produced it.
-          now: () => fixture.now,
-          resolveSnapshot: (supplied) => {
-            if (supplied !== reference) return Promise.resolve(undefined);
-            const content = fixture.snapshots.read(
-              reference,
-              fixture.context.accessScope,
-              fixture.context.correlationId,
-            );
-            return Promise.resolve(
-              content === undefined
-                ? undefined
-                : {
-                    snapshot: content.snapshot,
-                    evidence: content.files.map((file) => ({
-                      evidenceId: file.evidenceId,
-                      text: JSON.stringify(file),
-                    })),
-                  },
-            );
-          },
-        },
+        productionCallDeps(generation, fixture, reference),
       );
       expect(fetchSpy).toHaveBeenCalled();
       expect(result.status).toBe("generated");
@@ -236,6 +244,41 @@ describe("createProductionPrDescriptionGeneration (#3399)", () => {
       expect(result.artifact.markdown).toContain("Change the exported value.");
       const ops = logs.events.map((event) => event.op);
       expect(ops.some((op) => op.startsWith("pr-description.generation."))).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+      fixture.close();
+    }
+  });
+
+  it("denies the composed model call when the exact live description authority is revoked", async () => {
+    const generation = createProductionPrDescriptionGeneration(source(configWithCapability()));
+    if (generation === undefined) throw new Error("expected a composed generation");
+    const fixture = new DescriptionFixture();
+    try {
+      const captured = await fixture.snapshots.capture({
+        workspace: fixture.context.workspace,
+        baseRef: fixture.remote.identity.baseSha,
+        headRef: fixture.remote.identity.headSha,
+        accessScope: fixture.context.accessScope,
+        correlationId: fixture.context.correlationId,
+      });
+      if (captured.reference === undefined) throw new Error("expected a captured snapshot");
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+      fixture.live = false;
+      const result = await PrDescription.generatePrDescription(
+        {
+          snapshotReference: captured.reference,
+          language: "en",
+          authority: {
+            authorityDigest: fixture.context.authorityDigest,
+            correlationId: fixture.context.correlationId,
+          },
+        },
+        productionCallDeps(generation, fixture, captured.reference),
+      );
+      expect(result).toEqual({ status: "unavailable", reason: "authority-denied" });
+      expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
       fixture.close();

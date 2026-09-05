@@ -554,9 +554,11 @@ describe("coding runtime routes", () => {
         draft: { proposalId: "proposal-1", artifact: { markdown: "## Exact generic draft" } },
       },
     });
-    expect(
-      handleCodingRuntimeDescriptionDraft(context("", { runId: "run-1" }, path), runtime()),
-    ).toEqual({ status: 404, body: expect.any(Object) });
+    const denied = handleCodingRuntimeDescriptionDraft(
+      context("", { runId: "run-1" }, path),
+      runtime(),
+    );
+    expect(denied.status).toBe(404);
   });
 
   it("#2802: the content-free status and run projections never carry a reviewable path", () => {

@@ -132,23 +132,32 @@ export interface CodingWorkbenchDescriptionDraftResult {
   readonly draft: WorkbenchDescriptionDraftReview;
 }
 
-function isDescriptionDraftResult(value: unknown): value is CodingWorkbenchDescriptionDraftResult {
+function isDescriptionArtifactPreview(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as Record<string, unknown>).markdown === "string"
+  );
+}
+
+function isDescriptionDraftReview(value: unknown): value is WorkbenchDescriptionDraftReview {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const result = value as Record<string, unknown>;
-  const draft = result.draft;
-  if (result.outcome !== "draft" || typeof draft !== "object" || draft === null) return false;
-  const review = draft as Record<string, unknown>;
-  const artifact = review.artifact;
+  const review = value as Record<string, unknown>;
   return (
     review.schemaVersion === "1" &&
     typeof review.proposalId === "string" &&
     review.proposalId.length > 0 &&
     typeof review.expiresAt === "string" &&
     Number.isFinite(Date.parse(review.expiresAt)) &&
-    typeof artifact === "object" &&
-    artifact !== null &&
-    typeof (artifact as Record<string, unknown>).markdown === "string"
+    isDescriptionArtifactPreview(review.artifact)
   );
+}
+
+function isDescriptionDraftResult(value: unknown): value is CodingWorkbenchDescriptionDraftResult {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const result = value as Record<string, unknown>;
+  return result.outcome === "draft" && isDescriptionDraftReview(result.draft);
 }
 
 function descriptionDraftValidator(

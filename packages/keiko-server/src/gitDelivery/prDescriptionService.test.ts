@@ -42,8 +42,9 @@ describe("body-only description application", () => {
   it("holds a generic draft in the same proposal owner without granting apply authority", async () => {
     const artifact = await fixture.generateArtifact("Generic Workbench draft");
     const held = fixture.service.holdDraftArtifact(artifact, fixture.now);
-    expect(held).toMatchObject({ artifact, proposalId: expect.any(String) });
     if (held === undefined) throw new Error("draft proposal absent");
+    expect(held.artifact).toEqual(artifact);
+    expect(typeof held.proposalId).toBe("string");
     expect(fixture.service.reviewDraft(held.proposalId)).toEqual(held);
     expect(fixture.service.review(held.proposalId)).toBeUndefined();
     expect(fixture.service.issueApproval(held.proposalId)).toBeUndefined();

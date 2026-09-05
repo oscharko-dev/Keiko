@@ -180,16 +180,13 @@ async function startVerified(
   return root;
 }
 async function finish(page: Page, revoked = false): Promise<void> {
+  await control("finish");
   const current = await snapshot(page);
   if (revoked) {
-    await control("finish");
     expect(current).toMatchObject({ state: "failed", failureCode: "revoked" });
     return;
   }
-  if (current.state !== "succeeded")
-    await page.getByRole("button", { name: "Stop run", exact: true }).click();
-  await control("finish");
-  await expect.poll(async () => (await snapshot(page)).state).toMatch(/^(?:succeeded|cancelled)$/u);
+  await expect.poll(async () => (await snapshot(page)).state).toBe("succeeded");
 }
 
 async function approveDelivery(page: Page): Promise<void> {
@@ -405,7 +402,9 @@ for (const [index, mode] of (
     const number = createdRecord.pullRequest?.number;
     await page.reload();
     await expect(
-      page.getByRole("link", { name: `Pull request #${String(number)}`, exact: true }),
+      page
+        .getByRole("region", { name: "Repository delivery" })
+        .getByRole("link", { name: `Pull request #${String(number)}`, exact: true }),
     ).toHaveAttribute("href", `https://github.com/${DELIVERY_REPOSITORY}/pull/${String(number)}`);
     await expect(
       page.getByRole("region", { name: "Reviewed pull request description" }),
