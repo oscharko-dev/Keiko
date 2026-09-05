@@ -1146,6 +1146,33 @@ describe("createHandleGitChangeApplyDescription — the real handler Chat reache
     expect(result.body).toMatchObject({ error: { code: "GIT_CHANGE_APPLY_UNAVAILABLE" } });
   });
 
+  // Approval-required: a proposal that was never previewed/approved for this (project, repository,
+  // PR) has no consumable one-use lease -- apply must never fall through to a default/implicit
+  // approval. Distinct from the one-use replay proof above (a proposal consumed ONCE already);
+  // this proves the FIRST call with an unapproved id is refused just as closed.
+  it("blocks with 409 when the proposal was never approved (approval-required)", async () => {
+    const deps = fixtureDeps();
+    const chat = store.createChat(projectId, "t", "m");
+    const relationshipId = "rel-never-approved";
+    store.updateChat(chat.id, { gitChangeScopes: [connectedScope(relationshipId)] });
+
+    const applyHandler = createHandleGitChangeApplyDescription(fixtureOptions());
+    const result = await applyHandler(
+      requestContext({
+        schemaVersion: "1",
+        chatId: chat.id,
+        relationshipId,
+        proposalId: "never-previewed-or-approved",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({ error: { code: "GIT_CHANGE_APPLY_UNKNOWN_PROPOSAL" } });
+    expect(fixture.writes).toHaveLength(0);
+    expect(executeGovernedPullRequestSpy).not.toHaveBeenCalled();
+  });
+
   // Epic negative qualification: #3399's own body-only apply effect (prDescriptionEffects.ts's
   // `applyDescription`) reuses `executeGovernedPullRequest` as its underlying git-mutation
   // primitive -- the SAME shared function every governed PR route uses -- so "never reached" is

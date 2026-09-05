@@ -447,6 +447,25 @@ function health(): RouteResult {
   return { status: 200, body: { status: "ok", version: SDK_VERSION } };
 }
 
+// #3400 final-audit F5: chat-handlers.ts and gitChangeRoutes.ts already form an ESM import cycle
+// through this module (chat-handlers.ts -> gitChangeRoutes.ts -> routes.ts, for `errorBody` and
+// the shared route types). Calling `createHandleGitChangeApplyDescription()` eagerly while
+// building the `API_ROUTES` array below can run during that cycle's re-entry into chat-handlers.ts
+// before its own top-level evaluation reaches the definition, when THIS module happens to be
+// reached first (e.g. from a test entry point that imports chat-handlers.ts directly). Deferring
+// the factory call to first dispatch, well after every module has finished loading, sidesteps the
+// ordering hazard entirely; the built handler is cached and reused for every later request.
+let gitChangeApplyDescriptionHandler:
+  ReturnType<typeof createHandleGitChangeApplyDescription> | undefined;
+
+function dispatchGitChangeApplyDescription(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  gitChangeApplyDescriptionHandler ??= createHandleGitChangeApplyDescription();
+  return gitChangeApplyDescriptionHandler(ctx, deps);
+}
+
 // The full route contract: the twelve original (ADR-0011 D5), the first-run gateway setup
 // endpoint, the 10 additive UI-store routes (ADR-0013 D7), three Issue #66 run-summary routes,
 // two desktop chat routes, desktop terminal JSON routes, and read-only Files widget routes.
@@ -1542,7 +1561,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   {
     method: "POST",
     pattern: "/api/git-change/apply-description",
-    handler: createHandleGitChangeApplyDescription(),
+    handler: dispatchGitChangeApplyDescription,
   },
   // #2256 left the browser-owned Authority Envelope confirmation/execution routes unmounted;
   // #2958 (KEIKO-0115/KEIKO-0135) deleted them outright, together with the policy and approval

@@ -123,35 +123,58 @@ function logGatewayRejection(
   });
 }
 
+// One row per message literal `badRequest`/`validationErrorForChatRequest` actually builds — a
+// message change and this table must move together; there is deliberately no fallback row that
+// could silently misclassify a future one.
+const BAD_REQUEST_MESSAGE_REASONS: readonly {
+  readonly test: (message: string) => boolean;
+  readonly reason: CodingSidecarGatewayRejectionReason;
+}[] = [
+  {
+    test: (message) => message.startsWith("Request body messages exceed profile maxInputMessages"),
+    reason: "input-messages-exceeded",
+  },
+  {
+    test: (message) =>
+      message.startsWith("Request body estimated prompt tokens exceed profile maxPromptTokens"),
+    reason: "prompt-tokens-exceeded",
+  },
+  {
+    test: (message) => message === "Request body tools must be OpenAI-compatible function tools.",
+    reason: "tools-not-openai-compatible",
+  },
+  {
+    test: (message) => message === "Request body must include a non-empty messages array.",
+    reason: "body-empty-messages",
+  },
+  {
+    test: (message) =>
+      message.startsWith("Request body temperature") || message.startsWith("Request body top_p"),
+    reason: "invalid-sampling",
+  },
+];
+
+function badRequestErrorFields(result: RouteResult): {
+  readonly code: string | undefined;
+  readonly message: string | undefined;
+} {
+  const error = isRecord(result.body) ? result.body.error : undefined;
+  return {
+    code: isRecord(error) && typeof error.code === "string" ? error.code : undefined,
+    message: isRecord(error) && typeof error.message === "string" ? error.message : undefined,
+  };
+}
+
 /**
  * Classifies a rejection this file itself built (`badRequest`/`readJsonObject`/invalid-model)
- * into the closed reason vocabulary above by its fixed `code`/message shape. Every branch here
- * mirrors a message literal authored in this module, so a message change and this function must
- * move together; there is deliberately no silent default that could misclassify a future one.
+ * into the closed reason vocabulary above by its fixed `code`/message shape.
  */
 function classifyBadRequestReason(result: RouteResult): CodingSidecarGatewayRejectionReason {
-  const error = isRecord(result.body) ? result.body.error : undefined;
-  const code = isRecord(error) && typeof error.code === "string" ? error.code : undefined;
-  const message = isRecord(error) && typeof error.message === "string" ? error.message : undefined;
+  const { code, message } = badRequestErrorFields(result);
   if (code === "PAYLOAD_TOO_LARGE") return "request-too-large";
   if (code === "INVALID_MODEL") return "invalid-model";
   if (message === undefined) return "body-not-json";
-  if (message.startsWith("Request body messages exceed profile maxInputMessages")) {
-    return "input-messages-exceeded";
-  }
-  if (message.startsWith("Request body estimated prompt tokens exceed profile maxPromptTokens")) {
-    return "prompt-tokens-exceeded";
-  }
-  if (message === "Request body tools must be OpenAI-compatible function tools.") {
-    return "tools-not-openai-compatible";
-  }
-  if (message === "Request body must include a non-empty messages array.") {
-    return "body-empty-messages";
-  }
-  if (message.startsWith("Request body temperature") || message.startsWith("Request body top_p")) {
-    return "invalid-sampling";
-  }
-  return "body-not-json";
+  return BAD_REQUEST_MESSAGE_REASONS.find(({ test }) => test(message))?.reason ?? "body-not-json";
 }
 
 function isModelReasoningEffort(value: unknown): value is ModelReasoningEffort {
@@ -912,9 +935,10 @@ function isRuntimeReadinessProbe(parsed: CodingSidecarGatewayChatCompletionReque
   );
 }
 
-function toolContractRejectionReason(
-  tools: readonly ToolDefinition[] | undefined,
-): { readonly code: string; readonly reason: CodingSidecarGatewayRejectionReason } {
+function toolContractRejectionReason(tools: readonly ToolDefinition[] | undefined): {
+  readonly code: string;
+  readonly reason: CodingSidecarGatewayRejectionReason;
+} {
   if (tools === undefined) {
     return { code: "CODING_GATEWAY_TOOL_CONTRACT_MISSING", reason: "tool-contract-missing" };
   }
@@ -1752,6 +1776,19 @@ export async function handleCodingSidecarGatewayChatCompletions(
   }
 }
 
+function logChatRequestRejection(
+  ctx: RouteContext,
+  runId: string,
+  validationError: RouteResult,
+): void {
+  logGatewayRejection(
+    ctx,
+    runId,
+    validationError.status,
+    classifyBadRequestReason(validationError),
+  );
+}
+
 async function runHandleCodingSidecarGatewayChatCompletions(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -1773,12 +1810,7 @@ async function runHandleCodingSidecarGatewayChatCompletions(
     authentication.runtimeAuthenticated,
   );
   if (validationError !== undefined) {
-    logGatewayRejection(
-      ctx,
-      authentication.runId,
-      validationError.status,
-      classifyBadRequestReason(validationError),
-    );
+    logChatRequestRejection(ctx, authentication.runId, validationError);
     return validationError;
   }
   if (isRouteResult(parsed)) {

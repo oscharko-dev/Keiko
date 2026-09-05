@@ -404,7 +404,8 @@ export class CodingRuntimeAuthorityService {
     return {
       current: (scope, nowIso): ActiveGitDeliveryDescriptionAuthority | undefined =>
         this.currentGitDeliveryDescriptionAuthority(scope, nowIso),
-      expired: (scope, nowIso): boolean => this.gitDeliveryDescriptionAuthorityExpired(scope, nowIso),
+      expired: (scope, nowIso): boolean =>
+        this.gitDeliveryDescriptionAuthorityExpired(scope, nowIso),
     };
   }
 
