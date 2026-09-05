@@ -3,7 +3,7 @@
 // are deterministic string functions so the security-critical argv is pinned by unit tests.
 
 import { basename, dirname, isAbsolute } from "node:path";
-import { isValidNetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts";
+import { isValidNetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import type { IsolatedRunPlan, NetworkGatewayPolicy, SandboxBackend } from "./types.js";
 
 export interface WrappedCommand {

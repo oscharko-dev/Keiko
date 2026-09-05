@@ -98,10 +98,11 @@ import type { UiHandlerDeps } from "./deps.js";
 // Issue #3400 (epic #3384, contract correction 4): the server-minted description authority
 // (#3399) that admits model egress of git-change snapshot content outside a running Code task.
 // Read-only consumption of the existing owning module — never redefined here.
+import { authorizeGitDeliveryModelEgress } from "./gitDelivery/runBoundAuthority.js";
 import {
-  authorizeGitDeliveryModelEgress,
-  type GitDeliveryDescriptionAuthorityScope,
-} from "./gitDelivery/runBoundAuthority.js";
+  generateGitChangeChatDescription,
+  gitChangeDescriptionAuthorityScopeFor,
+} from "./gitChangeChatContext.js";
 // Issue #3400 (epic #3384, Frozen Product Decision 6 / issue correction 1): the apply action
 // routes ONLY through the existing body-only description application service (#3399), never
 // through `executeGovernedPullRequest`'s coupled title+body+base update path. Read-only
@@ -117,7 +118,7 @@ import {
 } from "./gitDelivery/prDescriptionRoutes.js";
 // Re-derives the SAME trusted repository root the connect flow resolved, through the SAME
 // git-membership check -- never a second, independently-drifting copy of that trust boundary.
-import { resolveChatRepository } from "./gitChangeRoutes.js";
+import { resolveChatRepository } from "./gitChangeRepository.js";
 import { observedGitRunner } from "./gitProcessActivity.js";
 import { defaultGitProcessRunner } from "@oscharko-dev/keiko-git";
 import {
@@ -2203,7 +2204,10 @@ async function finalizeAndRecordBufferedTurn(
   deps: UiHandlerDeps,
   turn: BufferedTurnContext,
   memory: ConversationMemoryResultWire,
-  result: { userMessage: ChatMessage; response: NormalizedResponse },
+  result: {
+    userMessage: ChatMessage;
+    response: Pick<NormalizedResponse, "content"> & { usage?: NormalizedResponse["usage"] };
+  },
   abortSignal: AbortSignal,
   compaction: BufferedCompactionContext,
 ): Promise<RouteResult> {
@@ -2226,7 +2230,12 @@ function commitBufferedTurn(
   deps: UiHandlerDeps,
   turn: BufferedTurnContext,
   memory: ConversationMemoryResultWire,
-  result: { readonly userMessage: ChatMessage; readonly response: NormalizedResponse },
+  result: {
+    readonly userMessage: ChatMessage;
+    readonly response: Pick<NormalizedResponse, "content"> & {
+      readonly usage?: NormalizedResponse["usage"];
+    };
+  },
   redactedContent: string,
   memoryActions: readonly ConversationMemoryActionWire[],
 ): RouteResult {
@@ -2259,7 +2268,7 @@ function commitBufferedTurn(
     body: {
       chat: updatedChat,
       messages: [userMessage, assistantMessage],
-      usage: result.response.usage,
+      ...(result.response.usage === undefined ? {} : { usage: result.response.usage }),
       memory: { ...memory, actions: memoryActions },
       ...(conversationImageDeliveries(request).length === 0
         ? {}
@@ -2275,7 +2284,10 @@ async function finalizeBufferedTurn(
   deps: UiHandlerDeps,
   turn: BufferedTurnContext,
   memory: ConversationMemoryResultWire,
-  result: { userMessage: ChatMessage; response: NormalizedResponse },
+  result: {
+    userMessage: ChatMessage;
+    response: Pick<NormalizedResponse, "content"> & { usage?: NormalizedResponse["usage"] };
+  },
   abortSignal: AbortSignal,
 ): Promise<RouteResult> {
   const { request, modelId, memoryContext } = turn;
@@ -2289,6 +2301,227 @@ async function finalizeBufferedTurn(
     return requestCancelledResult();
   }
   return commitBufferedTurn(deps, turn, memory, result, redactedContent, memoryActions);
+}
+
+interface HeldChatDescription {
+  readonly proposalId?: string;
+  readonly status: ChatGitChangeScope["descriptionStatus"];
+  readonly service?: import("./gitDelivery/prDescriptionTypes.js").PrDescriptionApplicationService;
+}
+
+async function holdChatDescriptionProposal(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  chat: Chat,
+  scope: ChatGitChangeScope,
+  artifact: import("@oscharko-dev/keiko-contracts").PrDescriptionArtifact,
+  correlationId: string,
+): Promise<HeldChatDescription> {
+  if (scope.pullRequestNumber === undefined) {
+    return { status: artifact.outcome === "complete" ? "current" : artifact.outcome };
+  }
+  const ownerAndRepo = await resolveGitChangeApplyOwnerAndRepo(deps, chat, correlationId);
+  if (ownerAndRepo === undefined) return { status: "blocked" };
+  const resolution = resolvePrDescriptionApplicationServiceForRequest(
+    deps,
+    ctx,
+    {
+      projectId: chat.projectPath,
+      ownerAndRepo,
+      prNumber: scope.pullRequestNumber,
+      snapshotDigest: scope.snapshotDigest,
+    },
+    correlationId,
+    {},
+    gitChangeDescriptionAuthorityScopeFor(scope),
+  );
+  if (!resolution.ok) return { status: "blocked" };
+  const preview = await resolution.service.previewArtifact(artifact);
+  return preview.outcome === "preview"
+    ? {
+        proposalId: preview.preview.proposalId,
+        status: preview.preview.status.state,
+        service: resolution.service,
+      }
+    : {
+        status: preview.outcome === "observed" ? preview.status.state : "blocked",
+        service: resolution.service,
+      };
+}
+
+function updateChatDescriptionScope(
+  deps: UiHandlerDeps,
+  chatId: string,
+  expected: ChatGitChangeScope,
+  held: HeldChatDescription,
+): Chat | undefined {
+  const current = deps.store.findChatById(chatId);
+  const scopes = current?.gitChangeScopes;
+  if (current === undefined || scopes === undefined) return undefined;
+  const selected = scopes.find((scope) => scope.relationshipId === expected.relationshipId);
+  if (selected?.snapshotDigest !== expected.snapshotDigest) return undefined;
+  const next = scopes.map((scope): ChatGitChangeScope => {
+    if (scope.relationshipId !== expected.relationshipId) return scope;
+    const base = { ...scope };
+    delete base.descriptionProposalId;
+    return {
+      ...base,
+      descriptionStatus: held.status,
+      ...(held.proposalId === undefined ? {} : { descriptionProposalId: held.proposalId }),
+    };
+  });
+  return deps.store.updateChat(chatId, { gitChangeScopes: next });
+}
+
+async function generateAdmittedGitChangeTurn(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  scope: ChatGitChangeScope,
+  admission: AdmittedTurnHandle,
+  signal: AbortSignal,
+  correlationId: string,
+): Promise<Awaited<ReturnType<typeof generateGitChangeChatDescription>>> {
+  const gatewayTurn = captureGatewayTurnSnapshot(deps, prepared.request, admission.userMessage);
+  return generateGitChangeChatDescription({
+    deps,
+    projectPath: prepared.chat.projectPath,
+    scope,
+    correlationId,
+    signal,
+    history: gatewayHistoryPrefix(gatewayTurn),
+    latestIntent: prepared.request.content,
+  });
+}
+
+function descriptionTurnResponse(
+  content: string,
+  usage:
+    | import("@oscharko-dev/keiko-model-gateway").PrDescription.PrDescriptionGenerationUsage
+    | undefined,
+): Pick<NormalizedResponse, "content"> & { usage?: NormalizedResponse["usage"] } {
+  return {
+    content,
+    ...(usage === undefined
+      ? {}
+      : {
+          usage: {
+            requestId: usage.requestId,
+            promptTokens: usage.promptTokens,
+            completionTokens: usage.completionTokens,
+            latencyMs: usage.latencyMs,
+            costClass: usage.costClass,
+          },
+        }),
+  };
+}
+
+function gitChangeGenerationFailure(reason: string): RouteResult {
+  return reason === "cancelled"
+    ? requestCancelledResult()
+    : {
+        status: reason === "snapshot-unavailable" || reason === "invalid-snapshot" ? 409 : 503,
+        body: errorBody(
+          "GIT_CHANGE_DESCRIPTION_UNAVAILABLE",
+          "The connected Git change could not produce a current description.",
+        ),
+      };
+}
+
+function rejectUnavailableGitChangeGeneration(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  admission: AdmittedTurnHandle,
+  reason: string,
+): RouteResult {
+  settleRejectedDesktopChatTurn(
+    deps,
+    prepared,
+    admission,
+    reason === "cancelled" ? "cancelled" : "failed",
+  );
+  return gitChangeGenerationFailure(reason);
+}
+
+export async function persistGitChangeDescriptionTurn(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  abortSignal: AbortSignal,
+): Promise<RouteResult> {
+  const scope = activeGitChangeScope(prepared.chat);
+  if (scope === undefined)
+    return { status: 409, body: errorBody("GIT_CHANGE_SCOPE_NOT_FOUND", "Scope not found.") };
+  const admission = admitDesktopChatTurn(deps, prepared);
+  if (admission.kind === "replay") return { status: 200, body: admission.response };
+  if (admission.kind === "rejected") return admission.result;
+  const memory = await resolveBufferedMemory(
+    deps,
+    prepared,
+    admission,
+    abortSignal,
+    ctx.correlationId,
+  );
+  if (isRouteResult(memory)) return memory;
+  return completeGitChangeDescriptionTurn(
+    ctx,
+    deps,
+    prepared,
+    scope,
+    admission,
+    memory,
+    abortSignal,
+  );
+}
+
+async function completeGitChangeDescriptionTurn(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  scope: ChatGitChangeScope,
+  admission: AdmittedTurnHandle,
+  memory: ConversationMemoryResultWire,
+  abortSignal: AbortSignal,
+): Promise<RouteResult> {
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+  const generated = await generateAdmittedGitChangeTurn(
+    deps,
+    prepared,
+    scope,
+    admission,
+    abortSignal,
+    correlationId,
+  );
+  if (generated.status === "unavailable") {
+    return rejectUnavailableGitChangeGeneration(deps, prepared, admission, generated.reason);
+  }
+  const held = await holdChatDescriptionProposal(
+    ctx,
+    deps,
+    prepared.chat,
+    scope,
+    generated.artifact,
+    correlationId,
+  );
+  if (updateChatDescriptionScope(deps, prepared.chat.id, scope, held) === undefined) {
+    held.service?.invalidate();
+    failDesktopChatTurn(deps, prepared.request);
+    return gitChangeGenerationFailure("snapshot-unavailable");
+  }
+  const result = await finalizeBufferedTurn(
+    deps,
+    prepared,
+    memory,
+    {
+      userMessage: admission.userMessage,
+      response: descriptionTurnResponse(generated.artifact.markdown, generated.usage),
+    },
+    abortSignal,
+  );
+  if (result.status !== 200) {
+    held.service?.invalidate();
+    updateChatDescriptionScope(deps, prepared.chat.id, scope, { status: "blocked" });
+  }
+  return result;
 }
 
 export async function handleCreateDesktopChat(
@@ -2606,16 +2839,6 @@ export function validateCurrentDesktopChatSend(
 // Exported (final-audit F4, #3400) so the git-change connect flow (gitChangeRoutes.ts) can mint an
 // authority record under the EXACT SAME scope shape this admission check derives — one formula,
 // never a second, independently-drifting copy of it at the mint call site.
-export function gitChangeDescriptionAuthorityScopeFor(
-  scope: ChatGitChangeScope,
-): GitDeliveryDescriptionAuthorityScope {
-  return {
-    remoteDigest: scope.remoteDigest,
-    pr: { baseRef: scope.baseRef, headRef: scope.headRef },
-    snapshotDigest: scope.snapshotDigest,
-  };
-}
-
 // #3400/#3401 final-audit F1: the closed reason a denied Chat admission carries — distinguishes a
 // description authority record that existed for the exact scope but has passed its `expiresAt`
 // from every other closed case (no port wired at all, or a scope that was never minted), reusing
@@ -2670,7 +2893,7 @@ function logGitChangeTurnAuthority(
 
 // V1 connects at most one git-change comparison per chat in practice; a chat that somehow carries
 // several treats the most-recently-connected one as the active turn scope.
-function activeGitChangeScope(chat: Chat): ChatGitChangeScope | undefined {
+export function activeGitChangeScope(chat: Chat): ChatGitChangeScope | undefined {
   const scopes = chat.gitChangeScopes;
   return scopes === undefined || scopes.length === 0 ? undefined : scopes[scopes.length - 1];
 }
@@ -2832,6 +3055,7 @@ function gitChangeApplyUnavailableResult(): RouteResult {
 interface GitChangeApplyDescriptionTarget {
   readonly request: GitChangeApplyDescriptionRequest;
   readonly baseFields: PrDescriptionBaseFields;
+  readonly scope: ChatGitChangeScope;
 }
 
 async function resolveGitChangeApplyTarget(
@@ -2848,6 +3072,7 @@ async function resolveGitChangeApplyTarget(
   if (ownerAndRepo === undefined) return gitChangeApplyUnavailableResult();
   return {
     request,
+    scope: found.scope,
     baseFields: {
       projectId: found.chat.projectPath,
       ownerAndRepo,
@@ -2895,6 +3120,7 @@ export const createHandleGitChangeApplyDescription = (
       target.baseFields,
       correlationId,
       options,
+      gitChangeDescriptionAuthorityScopeFor(target.scope),
     );
     if (!resolution.ok) return resolution.result;
     const lease = resolution.service.consumeApproval(request.proposalId);
@@ -2910,8 +3136,55 @@ export const createHandleGitChangeApplyDescription = (
       lease,
     );
     if (applied === undefined) return gitChangeApplyUnavailableResult();
+    updateChatDescriptionScope(deps, target.request.chatId, target.scope, {
+      status: applied.outcome === "observed" ? applied.status.state : "blocked",
+    });
     logGitChangeApplyOutcome(deps, correlationId, applied.outcome);
     return { status: 200, body: deps.redactor(applied) };
+  };
+};
+
+/** Issues the one-use approval for the exact Chat-held artifact and snapshot-bound service. */
+export const createHandleGitChangeApproveDescription = (
+  options: PrDescriptionRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    const parsed = await readJsonObject(ctx.req);
+    if (isRouteResult(parsed)) return parsed;
+    const request = parseGitChangeApplyDescriptionRequest(parsed);
+    if (request === undefined) {
+      return {
+        status: 400,
+        body: errorBody("BAD_REQUEST", "Invalid approve-description request."),
+      };
+    }
+    const target = await resolveGitChangeApplyTarget(deps, request, correlationId);
+    if (!("baseFields" in target)) return target;
+    const resolution = resolvePrDescriptionApplicationServiceForRequest(
+      deps,
+      ctx,
+      target.baseFields,
+      correlationId,
+      options,
+      gitChangeDescriptionAuthorityScopeFor(target.scope),
+    );
+    if (!resolution.ok) return resolution.result;
+    const issued = resolution.service.issueApproval(request.proposalId);
+    if (issued === undefined) {
+      return {
+        status: 409,
+        body: errorBody("GIT_CHANGE_APPROVE_UNKNOWN_PROPOSAL", "Proposal is unknown or expired."),
+      };
+    }
+    return {
+      status: 200,
+      body: deps.redactor({
+        schemaVersion: "1",
+        proposalId: request.proposalId,
+        expiresAt: new Date(issued.expiresAtMs).toISOString(),
+      }),
+    };
   };
 };
 
@@ -2924,12 +3197,11 @@ export async function handleSendDesktopChat(
     const parsed = await parseDesktopChatSend(ctx, deps, cancellation.signal);
     if (cancellation.signal.aborted) return requestCancelledResult();
     if (isRouteResult(parsed)) return parsed;
-    await ensureOnDemandConversationReadiness(
-      deps,
-      parsed.request.modelId ?? parsed.chat.selectedModel,
-    );
     const prepared = validateDesktopChatSend(parsed, deps);
     if (isRouteResult(prepared)) return prepared;
+    if (activeGitChangeScope(prepared.chat) === undefined) {
+      await ensureOnDemandConversationReadiness(deps, prepared.modelId);
+    }
     const gitChangeDenial = admitGitChangeScopedTurn(deps, prepared.chat, ctx.correlationId);
     if (gitChangeDenial !== undefined) return gitChangeDenial;
     const inspection = inspectDesktopChatTurn(deps, prepared);
@@ -2946,7 +3218,9 @@ export async function handleSendDesktopChat(
         // a queued turn may wait long enough for the authority to expire in between.
         const gitChangeDenial = admitGitChangeScopedTurn(deps, current.chat, ctx.correlationId);
         if (gitChangeDenial !== undefined) return gitChangeDenial;
-        return persistModelChatTurn(deps, current, cancellation.signal, ctx.correlationId);
+        return activeGitChangeScope(current.chat) === undefined
+          ? persistModelChatTurn(deps, current, cancellation.signal, ctx.correlationId)
+          : persistGitChangeDescriptionTurn(ctx, deps, current, cancellation.signal);
       },
     );
     return result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result;

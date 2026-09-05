@@ -91,14 +91,15 @@ function createContext(
   };
 }
 
+function retrievalKind(mode: CodingRepositorySearchRequest["mode"]): RetrievalQuery["kind"] {
+  if (mode === "lexical") return "natural-language";
+  if (mode === "symbol" || mode === "literal") return "exact-symbol";
+  return "regex";
+}
+
 function retrievalQuery(request: CodingRepositorySearchRequest, nowMs: number): RetrievalQuery {
   return {
-    kind:
-      request.mode === "lexical"
-        ? "natural-language"
-        : request.mode === "symbol" || request.mode === "literal"
-          ? "exact-symbol"
-          : "regex",
+    kind: retrievalKind(request.mode),
     text: request.query,
     caseSensitive: request.caseSensitive,
     maxResults: request.maxResults,

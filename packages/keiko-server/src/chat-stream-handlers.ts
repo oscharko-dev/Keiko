@@ -51,6 +51,7 @@ import {
   admitGitChangeScopedTurn,
   inspectDesktopChatTurn,
   parseDesktopChatSend,
+  persistGitChangeDescriptionTurn,
   recordChatCompaction,
   validateDesktopChatSend,
   validateDesktopChatProviderBoundary,
@@ -62,6 +63,7 @@ import {
   type SendDesktopChatRequest,
   type GatewayTurnSnapshot,
   type DesktopChatExecutionAdmission,
+  activeGitChangeScope,
 } from "./chat-handlers.js";
 import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
 import { createRequestCancellation } from "./request-cancellation.js";
@@ -727,6 +729,45 @@ interface DesktopChatStreamState {
   started: boolean;
 }
 
+function writeGitChangeDescriptionStream(
+  ctx: RouteContext,
+  response: DesktopChatSendResponse,
+): HandlerOutcome {
+  ctx.res.writeHead(200, SSE_HEADERS);
+  const assistant = response.messages.find((message) => message.role === "assistant");
+  if (assistant !== undefined) {
+    writeTerminalFrame(ctx, sseMessage({ event: "token", data: { text: assistant.content } }));
+  }
+  writeTerminalFrame(ctx, sseMessage({ event: "done", data: response }));
+  ctx.res.end();
+  return STREAMING;
+}
+
+async function runGitChangeDescriptionStream(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  start: Extract<DesktopChatStreamPreparation, { readonly kind: "ready" }>,
+  controller: AbortController,
+): Promise<HandlerOutcome> {
+  const result = await runSerializedChatTurn(
+    deps,
+    start.parsed.request.chatId,
+    controller.signal,
+    async () => {
+      const prepared = validateCurrentDesktopChatSend(start.parsed, deps);
+      if ("status" in prepared) return prepared;
+      const denial = admitGitChangeScopedTurn(deps, prepared.chat, ctx.correlationId);
+      return denial ?? persistGitChangeDescriptionTurn(ctx, deps, prepared, controller.signal);
+    },
+  );
+  if (result === CHAT_TURN_WAIT_CANCELLED) {
+    return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
+  }
+  return result.status === 200
+    ? writeGitChangeDescriptionStream(ctx, result.body as DesktopChatSendResponse)
+    : result;
+}
+
 async function runDesktopChatStream(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -738,6 +779,9 @@ async function runDesktopChatStream(
   }
   if (start.kind === "outcome") return start.outcome;
   if (start.kind === "replay") return streamingReplayOutcome(ctx, start.response);
+  if (activeGitChangeScope(start.parsed.chat) !== undefined) {
+    return runGitChangeDescriptionStream(ctx, deps, start, controller);
+  }
   // Fresh-install gap: verify the target model on demand before the sync readiness guards,
   // mirroring the create and buffered entries.
   await ensureOnDemandConversationReadiness(

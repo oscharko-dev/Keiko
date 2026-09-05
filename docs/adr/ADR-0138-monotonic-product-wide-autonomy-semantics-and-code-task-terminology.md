@@ -225,14 +225,16 @@ is:
    no longer determines the outcome for `push`/`pull-request`/`merge`/`commit` below
    `autonomous-delivery` either (`deliveryScopeCheckDeferredToModeDecision` already skips it, and
    the mode/approval matrix resolves before this leg would matter). `fetch`/`pull` have no
-   `GitDeliveryActionKind` / kernel policy pack of their own and no dedicated HTTP mint route
-   (`syncRoutes.ts`'s header comment), so they cannot use `deliveryApprovalDeferred` either; the
-   final-audit F2 repair redeems their lower-mode `approval-required` disposition the SAME way
-   `local-mutation` is redeemed instead — a non-consuming peek (`GitDeliveryApprovalStore.matches`)
-   against a claim bound to `{projectId, operation, command}` with no run identity, minted directly
-   through the approval store (there is no `/approve` route for either, exactly like local
-   mutations), with the real single-use consumption happening once, immediately after admission
-   passes, and the continuity re-check right before the actual network dispatch deferring
+   `GitDeliveryActionKind` / kernel policy pack of their own, so they cannot rely on downstream
+   kernel approval enforcement. Their guarded `/api/git-delivery/{fetch,pull}/approve` routes
+   validate the same bounded request and active run authority as execute, then mint into the shared
+   approval store. Their lower-mode `approval-required` disposition is redeemed the SAME way
+   `local-mutation` is redeemed — a non-consuming peek (`GitDeliveryApprovalStore.matches`) against
+   that claim bound to `{projectId, operation, command}` with no run identity, followed by real
+   single-use consumption immediately after admission passes. The Git Client's explicit Fetch/Pull
+   action performs this mint-then-execute sequence, so Ask and Supervised modes have a mounted,
+   user-driven redemption path rather than a test-only store call. The continuity re-check right
+   before the actual network dispatch defers
    (`deliveryApprovalDeferred: true`) to that already-verified consumption rather than peeking the
    now-emptied record a second time. Nothing in this record, `runBoundAuthority.ts`, #3386, #3387,
    or #3390 admits an unapproved delivery effect in any mode, including Full access — `autonomous-

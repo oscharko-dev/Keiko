@@ -35,7 +35,10 @@ export function parsePrDescriptionPreviewRequest(
     )
   )
     return undefined;
-  if (!PR_DESCRIPTION_LANGUAGES.some((language) => language === input.language)) return undefined;
+  if (
+    !PR_DESCRIPTION_LANGUAGES.includes(input.language as (typeof PR_DESCRIPTION_LANGUAGES)[number])
+  )
+    return undefined;
   if (
     input.refinement !== undefined &&
     (typeof input.refinement !== "string" || Buffer.byteLength(input.refinement, "utf8") > 4096)
@@ -197,27 +200,70 @@ export async function prepareDescription(
   const generated = await generate(options, context, request, captured.reference);
   if (generated.status !== "generated" || generated.artifact.outcome === "failed")
     throw new PrDescriptionFailure("provider-failed");
-  return finishPreparation(
+  return finishPreparation({
     options,
     context,
     previous,
     input,
-    captured.reference,
-    generated.artifact,
-    Math.min(now + 60_000, Date.parse(snapshot.expiresAt)),
+    reference: captured.reference,
+    artifact: generated.artifact,
+    expiresAt: Math.min(now + 60_000, Date.parse(snapshot.expiresAt)),
     now,
-  );
+  });
 }
-function finishPreparation(
+
+export async function prepareDescriptionArtifact(
   options: PrDescriptionServiceOptions,
   context: PrDescriptionContext,
-  previous: GitPrBody,
-  input: PreparedPrDescription["captureInput"],
-  reference: string,
   artifact: PreparedPrDescription["artifact"],
-  expiresAt: number,
   now: number,
-): PreparedPrDescription {
+): Promise<PreparedPrDescription> {
+  const previous = await readDescriptionBody(options, context);
+  const input = captureInput(context, previous);
+  const captured = await options.snapshots.capture(input);
+  const snapshot = captured.snapshot;
+  if (
+    !isGitChangeSnapshot(snapshot) ||
+    captured.reference === undefined ||
+    snapshot.baseSha !== previous.identity.baseSha ||
+    snapshot.headSha !== previous.identity.headSha ||
+    snapshot.remoteDigest !== codingWorkbenchRemoteDigest(context.repository) ||
+    artifact.binding.repositoryId !== snapshot.repositoryId ||
+    artifact.binding.snapshotDigest !== snapshot.snapshotDigest
+  ) {
+    throw new PrDescriptionFailure("stale-snapshot");
+  }
+  return finishPreparation({
+    options,
+    context,
+    previous,
+    input,
+    reference: captured.reference,
+    artifact,
+    expiresAt: Math.min(now + 60_000, Date.parse(snapshot.expiresAt)),
+    now,
+  });
+}
+interface FinishPreparationInput {
+  readonly options: PrDescriptionServiceOptions;
+  readonly context: PrDescriptionContext;
+  readonly previous: GitPrBody;
+  readonly input: PreparedPrDescription["captureInput"];
+  readonly reference: string;
+  readonly artifact: PreparedPrDescription["artifact"];
+  readonly expiresAt: number;
+  readonly now: number;
+}
+function finishPreparation({
+  options,
+  context,
+  previous,
+  input,
+  reference,
+  artifact,
+  expiresAt,
+  now,
+}: FinishPreparationInput): PreparedPrDescription {
   const region = preparedRegion(options, previous, artifact);
   const binding = bindingFor(context, previous, artifact, region);
   const proposalId = randomUUID();

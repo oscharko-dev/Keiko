@@ -22,13 +22,11 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   applyGitChangeChatDescription,
-  fetchGitDeliveryPrDescriptionApprove,
-  fetchGitDeliveryPrDescriptionPreview,
-  fetchGitRemotes,
+  approveGitChangeChatDescription,
   refreshGitChangeScope,
   updateChatGitChangeScopes,
 } from "@/lib/api";
-import { useLocale, useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
 import { restoreScopeHeaderFocus } from "./ConnectedScopePill";
 import { formatUserError } from "./format-error";
@@ -37,7 +35,6 @@ import type {
   GitChangeBlockedReason,
   GitDeliveryPrDescriptionApproveResponse,
   PrDescriptionApplicationResultWire,
-  PrDescriptionLanguage,
 } from "@/lib/api";
 
 // #3400 final-audit F5 — the ONLY write action a Chat-connected git-change scope offers beyond
@@ -46,16 +43,8 @@ import type {
 // never a second free-text composer (Frozen Decision 5) and never a raw browser-authored
 // `ownerAndRepo` -- `applyGitChangeChatDescription` names only the chat/relationship/proposal ids,
 // letting the server re-derive the repository from the SAME trusted checkout the scope was
-// connected against. Preview/approve reuse the EXISTING `/api/git-delivery/pr-description/*`
-// routes, so the browser resolves `ownerAndRepo` itself from the project's own remotes
-// (`resolveGitChangeOwnerAndRepo` below) exactly the way GitClientWindow.tsx does for
-// GovernedPullRequestCard.
-export type PreviewGitChangeDescriptionFn = (
-  chat: Chat,
-  scope: ChatGitChangeScope,
-  language: PrDescriptionLanguage,
-) => Promise<PrDescriptionApplicationResultWire>;
-
+// connected against. Approval and apply both name only the Chat-held proposal; the server
+// re-derives the live repository identity and snapshot-bound service instance.
 export type ApproveGitChangeDescriptionFn = (
   chat: Chat,
   scope: ChatGitChangeScope,
@@ -75,7 +64,6 @@ export interface GitChangeScopePillProps {
   /** Injectable wire seams for tests. Default to the real BFF helpers. */
   readonly updateScopes?: typeof updateChatGitChangeScopes;
   readonly refreshScope?: typeof refreshGitChangeScope;
-  readonly previewDescription?: PreviewGitChangeDescriptionFn;
   readonly approveDescription?: ApproveGitChangeDescriptionFn;
   readonly applyDescription?: ApplyGitChangeDescriptionFn;
 }
@@ -120,75 +108,13 @@ export function gitChangeBlockedReasonMessage(
   return t(BLOCKED_REASON_KEY[reason]);
 }
 
-// ─── #3400 final-audit F5 — description preview/approve/apply for a connected, PR-resolved scope
-
-// Duplicated from GitClientWindow.tsx's own private `ownerRepoFromRemoteUrl` (GitHub-only,
-// https or ssh) rather than imported: that module is a concurrently-edited, out-of-scope file for
-// this item, and the browser here only ever needs a read-only hint for the EXISTING
-// pr-description preview/approve routes' `ownerAndRepo` field -- the apply action above never
-// trusts it. Flagged for consolidation once that file's own edits land.
-function ownerRepoFromRemoteUrl(value: string | undefined): string | undefined {
-  if (value === undefined || value === "") return undefined;
-  const trimmed = value.replace(/\.git$/u, "");
-  const sshMatch = /^git@github\.com:([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+)$/u.exec(trimmed);
-  if (sshMatch?.[1] !== undefined) return sshMatch[1];
-  try {
-    const url = new URL(trimmed);
-    if (url.hostname !== "github.com") return undefined;
-    const parts = url.pathname.split("/").filter(Boolean);
-    if (parts.length >= 2) return `${parts[0]}/${parts[1]}`;
-  } catch {
-    return undefined;
-  }
-  return undefined;
-}
-
-async function resolveGitChangeOwnerAndRepo(projectPath: string): Promise<string | undefined> {
-  const { remotes } = await fetchGitRemotes(projectPath);
-  for (const remote of remotes) {
-    const ownerAndRepo =
-      ownerRepoFromRemoteUrl(remote.fetchUrl) ?? ownerRepoFromRemoteUrl(remote.pushUrl);
-    if (ownerAndRepo !== undefined) return ownerAndRepo;
-  }
-  return undefined;
-}
-
-function requireDescriptionTarget(
-  chat: Chat,
-  scope: ChatGitChangeScope,
-  ownerAndRepo: string | undefined,
-): { readonly projectId: string; readonly ownerAndRepo: string; readonly prNumber: number } {
-  if (ownerAndRepo === undefined || scope.pullRequestNumber === undefined) {
-    throw new Error("Could not determine the GitHub repository for this connected comparison.");
-  }
-  return { projectId: chat.projectPath, ownerAndRepo, prNumber: scope.pullRequestNumber };
-}
-
-const defaultPreviewDescription: PreviewGitChangeDescriptionFn = async (chat, scope, language) => {
-  const target = requireDescriptionTarget(
-    chat,
-    scope,
-    await resolveGitChangeOwnerAndRepo(chat.projectPath),
-  );
-  return fetchGitDeliveryPrDescriptionPreview({
-    ...target,
-    language,
-    snapshotDigest: scope.snapshotDigest,
+// ─── #3400 — approve/apply the exact Chat-generated artifact for a PR-bound scope ──────────────
+const defaultApproveDescription: ApproveGitChangeDescriptionFn = async (chat, scope, proposalId) =>
+  approveGitChangeChatDescription({
+    chatId: chat.id,
+    relationshipId: scope.relationshipId,
+    proposalId,
   });
-};
-
-const defaultApproveDescription: ApproveGitChangeDescriptionFn = async (
-  chat,
-  scope,
-  proposalId,
-) => {
-  const target = requireDescriptionTarget(
-    chat,
-    scope,
-    await resolveGitChangeOwnerAndRepo(chat.projectPath),
-  );
-  return fetchGitDeliveryPrDescriptionApprove({ ...target, proposalId });
-};
 
 const defaultApplyDescription: ApplyGitChangeDescriptionFn = (chat, relationshipId, proposalId) =>
   applyGitChangeChatDescription({ chatId: chat.id, relationshipId, proposalId });
@@ -270,8 +196,6 @@ async function runDescriptionAction<TResult>(
 interface GitChangeDescriptionActionsProps {
   readonly chat: Chat;
   readonly scope: ChatGitChangeScope;
-  readonly language: PrDescriptionLanguage;
-  readonly previewDescription: PreviewGitChangeDescriptionFn;
   readonly approveDescription: ApproveGitChangeDescriptionFn;
   readonly applyDescription: ApplyGitChangeDescriptionFn;
   readonly t: I18nTranslate;
@@ -284,13 +208,11 @@ interface GitChangeDescriptionActionsState {
   readonly applied: boolean;
   readonly canApprove: boolean;
   readonly canApply: boolean;
-  readonly runPreview: () => void;
   readonly runApprove: () => void;
   readonly runApply: () => void;
 }
 
 interface DescriptionRunnerFns {
-  readonly preview: PreviewGitChangeDescriptionFn;
   readonly approve: ApproveGitChangeDescriptionFn;
   readonly apply: ApplyGitChangeDescriptionFn;
 }
@@ -302,7 +224,6 @@ interface DescriptionRunnerState {
   // report canApprove/canApply as false for rendering (mirrors GovernedPullRequestCard's own
   // `state !== "stale"` gate on the underlying action, not only on the button's disabled state).
   readonly stale: boolean;
-  readonly language: PrDescriptionLanguage;
   readonly proposalId: string | undefined;
   readonly approvedProposalId: string | undefined;
   readonly setResult: (result: PrDescriptionApplicationResultWire) => void;
@@ -319,23 +240,10 @@ function buildDescriptionRunners(
   fns: DescriptionRunnerFns,
   state: DescriptionRunnerState,
 ): {
-  readonly runPreview: () => void;
   readonly runApprove: () => void;
   readonly runApply: () => void;
 } {
   const { chat, scope } = ctx;
-  const runPreview = (): void => {
-    if (state.busy) return;
-    void runDescriptionAction(
-      ctx,
-      () => fns.preview(chat, scope, state.language),
-      (next) => {
-        state.setResult(next);
-        state.setApprovedProposalId(undefined);
-        state.setApplied(false);
-      },
-    );
-  };
   const runApprove = (): void => {
     const proposalId = state.proposalId;
     if (state.busy || state.stale || proposalId === undefined) return;
@@ -358,7 +266,7 @@ function buildDescriptionRunners(
       },
     );
   };
-  return { runPreview, runApprove, runApply };
+  return { runApprove, runApply };
 }
 
 // Extracted from GitChangePillItem so it stays under the max-lines-per-function bar; mirrors
@@ -366,23 +274,21 @@ function buildDescriptionRunners(
 function useGitChangeDescriptionActions(
   props: GitChangeDescriptionActionsProps,
 ): GitChangeDescriptionActionsState {
-  const { chat, scope, language, previewDescription, approveDescription, applyDescription, t } =
-    props;
+  const { chat, scope, approveDescription, applyDescription, t } = props;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PrDescriptionApplicationResultWire | undefined>(undefined);
   const [approvedProposalId, setApprovedProposalId] = useState<string | undefined>(undefined);
   const [applied, setApplied] = useState(false);
   const ctx: DescriptionRunContext = { chat, scope, t, setBusy, setError };
-  const proposalId = descriptionProposalId(result);
+  const proposalId = scope.descriptionProposalId ?? descriptionProposalId(result);
   const stale = scope.descriptionStatus === "stale" || descriptionResultState(result) === "stale";
-  const { runPreview, runApprove, runApply } = buildDescriptionRunners(
+  const { runApprove, runApply } = buildDescriptionRunners(
     ctx,
-    { preview: previewDescription, approve: approveDescription, apply: applyDescription },
+    { approve: approveDescription, apply: applyDescription },
     {
       busy,
       stale,
-      language,
       proposalId,
       approvedProposalId,
       setResult,
@@ -398,7 +304,6 @@ function useGitChangeDescriptionActions(
     applied,
     canApprove: !busy && !stale && proposalId !== undefined && approvedProposalId === undefined,
     canApply: !busy && !stale && approvedProposalId !== undefined,
-    runPreview,
     runApprove,
     runApply,
   };
@@ -416,15 +321,6 @@ function DescriptionActionButtons({
   const label = scope.comparisonLabel;
   return (
     <span style={{ display: "inline-flex", gap: 4 }}>
-      <button
-        type="button"
-        data-testid="git-change-description-preview"
-        aria-disabled={actions.busy}
-        aria-label={t("gitChangeScope.description.previewAria", { label })}
-        onClick={actions.runPreview}
-      >
-        {t("gitChangeScope.description.preview")}
-      </button>
       <button
         type="button"
         data-testid="git-change-description-approve"
@@ -478,29 +374,25 @@ function DescriptionResultStatus({
 function GitChangeDescriptionPanel({
   chat,
   scope,
-  previewDescription,
   approveDescription,
   applyDescription,
   t,
 }: {
   readonly chat: Chat;
   readonly scope: ChatGitChangeScope;
-  readonly previewDescription: PreviewGitChangeDescriptionFn;
   readonly approveDescription: ApproveGitChangeDescriptionFn;
   readonly applyDescription: ApplyGitChangeDescriptionFn;
   readonly t: I18nTranslate;
 }): ReactNode {
-  const language = useLocale();
   const actions = useGitChangeDescriptionActions({
     chat,
     scope,
-    language,
-    previewDescription,
     approveDescription,
     applyDescription,
     t,
   });
-  if (scope.pullRequestNumber === undefined) return null;
+  if (scope.pullRequestNumber === undefined || scope.descriptionProposalId === undefined)
+    return null;
   return (
     <span
       data-testid="git-change-description-panel"
@@ -525,7 +417,6 @@ interface GitChangePillItemProps {
   readonly onRefreshed?: ((chat: Chat) => void) | undefined;
   readonly updateScopes: typeof updateChatGitChangeScopes;
   readonly refreshScope: typeof refreshGitChangeScope;
-  readonly previewDescription: PreviewGitChangeDescriptionFn;
   readonly approveDescription: ApproveGitChangeDescriptionFn;
   readonly applyDescription: ApplyGitChangeDescriptionFn;
   readonly t: I18nTranslate;
@@ -546,11 +437,27 @@ interface GitChangePillActions {
   readonly handleRefresh: () => void;
 }
 
+async function refreshGitChangePill(
+  props: GitChangePillItemProps,
+  latestChatRef: RefObject<Chat>,
+  setError: (error: string) => void,
+): Promise<void> {
+  const { chat, scope, refreshScope, onRefreshed, allScopes, t } = props;
+  const result = await refreshScope(chat.id, scope.relationshipId);
+  if (result.status === "blocked") {
+    setError(gitChangeBlockedReasonMessage(result.reason, t));
+    return;
+  }
+  // Preserve chat changes that landed while the refresh was in flight.
+  const latestChat = latestChatRef.current;
+  const remaining = otherScopes(latestChat.gitChangeScopes ?? allScopes, scope.relationshipId);
+  onRefreshed?.({ ...latestChat, gitChangeScopes: [...remaining, result.scope] });
+}
+
 // Extracted from GitChangePillItem so the component body stays under the max-lines-per-function
 // bar; both handlers share the same busy/error state and scope-list derivation.
 function useGitChangePillActions(props: GitChangePillItemProps): GitChangePillActions {
-  const { chat, scope, allScopes, onDisconnect, onRefreshed, updateScopes, refreshScope, t } =
-    props;
+  const { chat, scope, allScopes, onDisconnect, updateScopes, t } = props;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const disconnectRef = useRef<HTMLButtonElement | null>(null);
@@ -584,17 +491,7 @@ function useGitChangePillActions(props: GitChangePillItemProps): GitChangePillAc
     setError(null);
     setBusy(true);
     try {
-      const result = await refreshScope(chat.id, scope.relationshipId);
-      if (result.status === "blocked") {
-        setError(gitChangeBlockedReasonMessage(result.reason, t));
-        return;
-      }
-      // Merge onto the freshest chat, not the one captured when the button was clicked (b1-6):
-      // every field the refresh itself did not change survives whatever landed while it was in
-      // flight.
-      const latestChat = latestChatRef.current;
-      const remaining = otherScopes(latestChat.gitChangeScopes ?? allScopes, scope.relationshipId);
-      onRefreshed?.({ ...latestChat, gitChangeScopes: [...remaining, result.scope] });
+      await refreshGitChangePill(props, latestChatRef, setError);
     } catch (error_) {
       setError(formatRefreshErrorMessage(error_, t));
     } finally {
@@ -664,7 +561,7 @@ function GitChangePillRow({
 }
 
 function GitChangePillItem(props: GitChangePillItemProps): ReactNode {
-  const { chat, scope, t, previewDescription, approveDescription, applyDescription } = props;
+  const { chat, scope, t, approveDescription, applyDescription } = props;
   const { busy, error, disconnectRef, handleDisconnect, handleRefresh } =
     useGitChangePillActions(props);
 
@@ -687,7 +584,6 @@ function GitChangePillItem(props: GitChangePillItemProps): ReactNode {
       <GitChangeDescriptionPanel
         chat={chat}
         scope={scope}
-        previewDescription={previewDescription}
         approveDescription={approveDescription}
         applyDescription={applyDescription}
         t={t}
@@ -726,7 +622,6 @@ export function GitChangeScopePill({
   onRefreshed,
   updateScopes = updateChatGitChangeScopes,
   refreshScope = refreshGitChangeScope,
-  previewDescription = defaultPreviewDescription,
   approveDescription = defaultApproveDescription,
   applyDescription = defaultApplyDescription,
 }: GitChangeScopePillProps): ReactNode {
@@ -768,7 +663,6 @@ export function GitChangeScopePill({
           onRefreshed={onRefreshed}
           updateScopes={updateScopes}
           refreshScope={refreshScope}
-          previewDescription={previewDescription}
           approveDescription={approveDescription}
           applyDescription={applyDescription}
           t={t}

@@ -42,6 +42,9 @@ function generatedStatus(
     remoteDigest: target.remoteDigest,
     baseSha: target.baseSha,
     headSha: target.headSha,
+    ...(target.generationBinding === undefined
+      ? {}
+      : { generationBinding: target.generationBinding }),
     generationVersion,
     state: "current",
     reason: "generated",
@@ -53,6 +56,48 @@ function generatedStatus(
 }
 
 describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supersede", () => {
+  it("retains generation binding through recovery and rejects settlement with a different binding", () => {
+    const store = openStore();
+    const target = scope({
+      generationBinding: {
+        taskDigest: "a".repeat(64),
+        authorityDigest: "b".repeat(64),
+        runtimeBindingDigest: "c".repeat(64),
+        deliveryBindingDigest: "d".repeat(64),
+      },
+    });
+    const attempt = store.beginDispatch(target, NOW);
+    if (attempt.kind !== "dispatch") throw new Error("expected dispatch");
+    expect(() =>
+      store.settle(target, 1, attempt.revision, generatedStatus(scope(), 1), NOW),
+    ).toThrow(/scope/u);
+    expect(store.reconcileInterrupted(LATER)).toEqual([target.runId]);
+    expect(store.current(target.runId)).toMatchObject({
+      generationBinding: target.generationBinding,
+      state: "blocked",
+      reason: "interrupted",
+    });
+  });
+
+  it.each(["taskDigest", "authorityDigest", "runtimeBindingDigest", "deliveryBindingDigest"])(
+    "supersedes an unchanged head when %s changes",
+    (field) => {
+      const store = openStore();
+      const generationBinding = {
+        taskDigest: "a".repeat(64),
+        authorityDigest: "b".repeat(64),
+        runtimeBindingDigest: "c".repeat(64),
+        deliveryBindingDigest: null,
+      };
+      store.beginDispatch({ ...scope(), generationBinding }, NOW);
+      const next = store.beginDispatch(
+        { ...scope(), generationBinding: { ...generationBinding, [field]: "d".repeat(64) } },
+        LATER,
+      );
+      expect(next).toMatchObject({ kind: "dispatch", generationVersion: 2, revision: 1 });
+    },
+  );
+
   it("dispatches exactly once for a stable successful head", () => {
     const store = openStore();
     const decision = store.beginDispatch(scope(), NOW);

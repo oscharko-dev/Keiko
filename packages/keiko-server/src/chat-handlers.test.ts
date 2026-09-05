@@ -15,6 +15,7 @@ import {
   applyGitChangeDescription,
   chatTurnShapeFields,
   captureDesktopChatExecutionAdmission,
+  createHandleGitChangeApproveDescription,
   createHandleGitChangeApplyDescription,
   handleCreateDesktopChat,
   handleSendDesktopChat,
@@ -46,6 +47,7 @@ import {
 import type { RouteContext } from "./routes.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
+import { initializeGitChangeDescriptionFixture } from "./gitChangeChatTestSupport.js";
 
 const VALID_GROUNDING_SCOPE_IDENTITY = `gsi-v1:${"a".repeat(64)}`;
 const INVALID_CLIENT_TURN_ID = {
@@ -848,9 +850,11 @@ describe("git-change description-authority admission (#3400)", () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));
     try {
-      attachGitChangeScope(fixture.deps, fixture.chatId);
+      const description = await initializeGitChangeDescriptionFixture(fixture.projectPath);
+      fixture.deps.store.updateChat(fixture.chatId, { gitChangeScopes: [description.scope] });
       const admittingDeps = {
         ...fixture.deps,
+        ...description.deps,
         gitChangeDescriptionAuthorityPort: {
           current: (): { readonly effectiveMode: string } => ({ effectiveMode: "governed-assist" }),
         },
@@ -878,19 +882,15 @@ describe("git-change description-authority admission (#3400)", () => {
         admittingDeps,
       );
 
-      // Admitted past the gate, so execution proceeds to the real gateway path (and fails there
-      // for the unrelated reason that no provider is actually configured) rather than being
-      // denied by the git-change gate itself.
-      expect(result.body).not.toMatchObject({
-        error: { code: "GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED" },
-      });
-      expect(fetchSpy).toHaveBeenCalled();
+      expect(result.status).toBe(200);
+      expect(JSON.stringify(result.body)).toContain("Update the exported value.");
+      expect(fetchSpy).not.toHaveBeenCalled();
       expect(sink.events).toContainEqual(
         expect.objectContaining({
           category: "security",
           op: "pr-description.chat.turn.admitted",
           correlationId: "corr-git-change-2",
-          extra: { relationshipId: "rel-1" },
+          extra: { relationshipId: "rel-description" },
         }),
       );
     } finally {
@@ -1073,6 +1073,32 @@ describe("createHandleGitChangeApplyDescription — the real handler Chat reache
     );
     return proposalId;
   }
+
+  it("approves the exact proposal held by the Chat generation path", async () => {
+    const deps = fixtureDeps();
+    const chat = store.createChat(projectId, "t", "m");
+    const relationshipId = "rel-chat-approve";
+    store.updateChat(chat.id, { gitChangeScopes: [connectedScope(relationshipId)] });
+    const artifact = await fixture.generateArtifact();
+    const preview = await fixture.service.previewArtifact(artifact);
+    if (preview.outcome !== "preview") throw new Error("expected held Chat artifact");
+
+    const approved = await createHandleGitChangeApproveDescription(fixtureOptions())(
+      requestContext({
+        schemaVersion: "1",
+        chatId: chat.id,
+        relationshipId,
+        proposalId: preview.preview.proposalId,
+      }),
+      deps,
+    );
+
+    expect(approved).toMatchObject({
+      status: 200,
+      body: { schemaVersion: "1", proposalId: preview.preview.proposalId },
+    });
+    expect(fixture.service.consumeApproval(preview.preview.proposalId)).toBeDefined();
+  });
 
   it("reaches executeApproved with a one-use approval and applies the real body-only PATCH", async () => {
     const deps = fixtureDeps();

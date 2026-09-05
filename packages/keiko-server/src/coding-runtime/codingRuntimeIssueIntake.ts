@@ -11,6 +11,7 @@ import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import { errorKindOf } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
 
 export interface CodingRuntimeIssueAttachment {
   readonly issueNumber: number;
@@ -123,8 +124,10 @@ function bindingFailure(
     issueBinding: binding,
   });
   if (!validated.ok) return refused(input, "resolution", "invalid-reference");
+  const activeRepositoryId = githubIssueReaderRepositoryId(input.active.instance.repositoryRoot);
   if (
-    binding.repositoryId !== input.active.instance.repositoryId ||
+    activeRepositoryId === undefined ||
+    binding.repositoryId !== activeRepositoryId ||
     binding.defaultBaseRef !== input.active.instance.baseBranch
   ) {
     return refused(input, "base-branch", "repository-mismatch");

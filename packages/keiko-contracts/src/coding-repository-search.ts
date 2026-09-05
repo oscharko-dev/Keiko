@@ -110,7 +110,8 @@ function boundedInteger(value: unknown, maximum: number): value is number {
 
 function hasControlCharacter(value: string): boolean {
   for (const character of value) {
-    if (character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127) return true;
+    const codePoint = character.codePointAt(0);
+    if (codePoint !== undefined && (codePoint < 32 || codePoint === 127)) return true;
   }
   return false;
 }

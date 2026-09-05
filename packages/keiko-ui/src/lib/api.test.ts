@@ -24,6 +24,7 @@ import {
   fetchGitBranches,
   fetchGitDeliverySyncExecute,
   fetchGitDeliverySyncPreview,
+  proposeGitDeliverySync,
   fetchGitDiff,
   fetchGitStructuredDiff,
   fetchGitBlame,
@@ -110,6 +111,7 @@ import {
   fetchGitDeliveryPrDescriptionApply,
   fetchGitDeliveryPrDescriptionStatus,
   applyGitChangeChatDescription,
+  approveGitChangeChatDescription,
   type GitHubIssuePreviewResponseWire,
 } from "./api";
 import {
@@ -1933,6 +1935,58 @@ describe("files API helpers", () => {
           schemaVersion: "1",
           projectId: "/repo space",
           remote: "origin",
+        }),
+      }),
+    );
+  });
+
+  it("proposes sync by minting the exact approval before execute", async () => {
+    const approval = {
+      schemaVersion: "1" as const,
+      approvalId: "gda_sync_1",
+      approvalToken: "t".repeat(64),
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          approval,
+          expiresAt: "2026-09-05T18:00:00.000Z",
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          operation: "pull",
+          status: "succeeded",
+          available: true,
+          truncated: false,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await proposeGitDeliverySync({ operation: "pull", projectId: "/repo", remote: "origin" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/git-delivery/pull/approve",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ schemaVersion: "1", projectId: "/repo", remote: "origin" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/git-delivery/pull/execute",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          schemaVersion: "1",
+          projectId: "/repo",
+          remote: "origin",
+          approval,
         }),
       }),
     );
@@ -4384,6 +4438,21 @@ describe("Chat's git-change apply-description action (#3400 final-audit F5)", ()
   }
 
   const INPUT = { chatId: "chat-1", relationshipId: "rel-1", proposalId: "prop-1" };
+
+  it("approves the same server-held Chat proposal without repository identity", async () => {
+    const approved = {
+      schemaVersion: "1",
+      proposalId: "prop-1",
+      expiresAt: "2026-01-01T00:00:30.000Z",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk(approved));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(approveGitChangeChatDescription(INPUT)).resolves.toEqual(approved);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-change/approve-description");
+    expect(JSON.parse(init.body as string)).toEqual({ schemaVersion: "1", ...INPUT });
+  });
 
   it("posts exactly chatId, relationshipId and proposalId — never ownerAndRepo", async () => {
     const fetchMock = vi

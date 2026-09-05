@@ -31,6 +31,7 @@ import {
   type CatalogFacadeBridge,
   type CatalogFacadeBudgetPort,
 } from "../tool-catalog/catalogToolFacadeBridge.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { defaultServerDiagnosticSink, type ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { ServerLogSink } from "../observability/server-log.js";
@@ -56,6 +57,7 @@ export type CodingToolAuthorityContextProvider = () => CodingToolAuthorityContex
 
 interface CodingToolAuthorityPortOptions {
   readonly approvalProofVerifier?: CodingToolApprovalProofVerifier | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
   readonly requireProducerBinding?: boolean | undefined;
   readonly reserveEditDelegation?: boolean | undefined;
 }
@@ -124,6 +126,7 @@ function admissionPreflight(
   request: CodingToolActionRequest,
   verifier: CodingToolApprovalProofVerifier | undefined,
   requireProducerBinding: boolean,
+  activityLog?: ServerLogSink,
 ): AdmissionPreflight {
   if (capability === undefined) return { ok: false, reason: "capability-missing" };
   const trusted = context();
@@ -140,13 +143,30 @@ function admissionPreflight(
   });
   if (!preflight.ok) return { ok: false, reason: preflight.reason };
   const approvalMatched = approved(preflight.envelope, trusted, request, verifier);
-  if (!actionAllowed(preflight.envelope, request, approvalMatched))
+  if (!actionAllowed(preflight.envelope, request, approvalMatched)) {
+    logAuthorityDenial(activityLog, trusted, preflight.envelope, request);
     return {
       ok: false,
       reason: "action-not-authorized",
       approvalRequired: !approvalMatched && actionAllowed(preflight.envelope, request, true),
     };
+  }
   return { ok: true, trusted, binding, approvalMatched };
+}
+
+function logAuthorityDenial(
+  activityLog: ServerLogSink | undefined,
+  context: CodingToolAuthorityContext,
+  envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+  request: CodingToolActionRequest,
+): void {
+  activityLog?.write({
+    level: "warn",
+    category: "security",
+    op: "coding-runtime.tool-authority.denied",
+    correlationId: context.correlationId ?? UNKNOWN_CORRELATION_ID,
+    extra: { action: request.action, effectiveMode: envelope.authority.effectiveMode },
+  });
 }
 
 export function createCodingToolAuthorityPort(
@@ -167,6 +187,7 @@ export function createCodingToolAuthorityPort(
         options.approvalProofVerifier,
         options.requireProducerBinding === true,
         options.reserveEditDelegation === true,
+        options.activityLog,
       ),
   };
 }
@@ -182,6 +203,7 @@ function admit(
   approvalProofVerifier: CodingToolApprovalProofVerifier | undefined,
   requireProducerBinding: boolean,
   reserveEditDelegation: boolean,
+  activityLog: ServerLogSink | undefined,
 ): ReturnType<CodingToolAuthorityPort["admit"]> {
   if (capability === undefined) return { ok: false, reason: "capability-missing" };
   const preflight = admissionPreflight(
@@ -191,6 +213,7 @@ function admit(
     request,
     approvalProofVerifier,
     requireProducerBinding,
+    activityLog,
   );
   if (!preflight.ok) return { ok: false, reason: preflight.reason };
   const { trusted, binding, approvalMatched } = preflight;
@@ -200,6 +223,7 @@ function admit(
   const resolved = resolveDelegation(authority, trusted, capability, request);
   if (!resolved.ok) return { ok: false, reason: resolved.reason };
   if (!actionAllowed(resolved.envelope, request, approvalMatched)) {
+    logAuthorityDenial(activityLog, trusted, resolved.envelope, request);
     return { ok: false, reason: "action-not-authorized" };
   }
   // A one-shot proof is consumed only after the delegation budget has been reserved. Consuming it
@@ -387,6 +411,7 @@ export function createRuntimeCodingToolFacade(
     {
       authority: createCodingToolAuthorityPort(authority, context, {
         approvalProofVerifier: options.approvalProofVerifier,
+        activityLog: options.catalogActivityLog ?? processServerLogSink(),
         requireProducerBinding: true,
         reserveEditDelegation: options.reserveEditDelegation === true,
       }),
@@ -578,13 +603,27 @@ function additionalPolicyAllowed(
         ? commitPolicyAllowed(envelope, request, approvalVerified)
         : deliveryAllowed(envelope, request.intent);
     case "connector":
-      return connectorAllowed(envelope, request.scope);
+      return (
+        internetPolicyAllowed(envelope, approvalVerified) &&
+        connectorAllowed(envelope, request.scope)
+      );
     case "egress":
-      return networkAllowed(envelope);
+      return internetPolicyAllowed(envelope, approvalVerified) && networkAllowed(envelope);
     case "skill":
     case "child-agent":
       return true;
   }
+}
+
+function internetPolicyAllowed(
+  envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+  approvalVerified: boolean,
+): boolean {
+  return (
+    approvalVerified ||
+    codingWorkbenchPolicyEffectFor(envelope.authority.effectiveMode, "internet", "medium") ===
+      "allowed"
+  );
 }
 
 function commitPolicyAllowed(

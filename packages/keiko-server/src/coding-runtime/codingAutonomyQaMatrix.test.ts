@@ -7,6 +7,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { describe, expect, it } from "vitest";
 
+const REPOSITORY_ROOT = resolve(import.meta.dirname, "../../../..");
+
 describe("coding autonomy closeout QA matrix", () => {
   it("keeps class admission separate from the three scope and risk policies", () => {
     for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"] as const) {
@@ -105,7 +107,7 @@ describe("coding autonomy closeout QA matrix", () => {
       "rejects a claim replayed under a different runtime Authority Envelope",
     ],
   ] as const)("keeps %s proof wired into the closeout ledger", (_label, filePath, expectedText) => {
-    const absolutePath = resolve(process.cwd(), filePath);
+    const absolutePath = resolve(REPOSITORY_ROOT, filePath);
     expect(existsSync(absolutePath), filePath).toBe(true);
     expect(readFileSync(absolutePath, "utf8")).toContain(expectedText);
   });

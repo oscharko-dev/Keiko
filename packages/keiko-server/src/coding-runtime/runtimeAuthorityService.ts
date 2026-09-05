@@ -35,6 +35,7 @@ import {
   validateCodingWorkbenchRuntimeState,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import {
+  codingWorkbenchPolicyEffectFor,
   isCodingWorkbenchModeWidening,
   resolveEffectiveCodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
@@ -92,6 +93,99 @@ const PROMPT_RESERVATION_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeSt
   "ready",
   "running",
 ]);
+
+function deliveryScopeGranted(mode: CodingWorkbenchMode): boolean {
+  return codingWorkbenchPolicyEffectFor(mode, "delivery", "medium") !== "denied";
+}
+
+export const DELIVERY_CONNECTOR_SCOPES: readonly CodingWorkbenchConnectorScope[] = [
+  "source-control.read",
+  "source-control.write",
+];
+
+export function codingRuntimeActionClassesForMode(
+  mode: CodingWorkbenchMode,
+  researchEgressEnabled: boolean | undefined,
+): readonly CodingWorkbenchActionClass[] {
+  const actionClasses: CodingWorkbenchActionClass[] = [
+    "workspace-read",
+    "workspace-write",
+    "verification",
+  ];
+  if (mode !== "governed-assist") actionClasses.push("command-execution");
+  if (deliveryScopeGranted(mode)) actionClasses.push("delivery-substrate", "connector-access");
+  if (researchEgressEnabled === true || mode === "autonomous-delivery") {
+    actionClasses.push("network-egress");
+  }
+  return actionClasses;
+}
+
+export function codingRuntimeConnectorScopesForMode(
+  mode: CodingWorkbenchMode,
+): readonly CodingWorkbenchConnectorScope[] {
+  return deliveryScopeGranted(mode) ? DELIVERY_CONNECTOR_SCOPES : [];
+}
+
+export function codingRuntimeNetworkPolicyForMode(
+  mode: CodingWorkbenchMode,
+  researchEgressEnabled: boolean | undefined,
+): CodingWorkbenchNetworkPolicy {
+  if (mode === "autonomous-delivery") {
+    return {
+      mode: "connector-scoped-egress",
+      allowLoopback: false,
+      connectorScopes: DELIVERY_CONNECTOR_SCOPES,
+    };
+  }
+  return researchEgressEnabled === true
+    ? { mode: "governed-egress", allowLoopback: false, connectorScopes: [] }
+    : { mode: "deny-all", allowLoopback: false, connectorScopes: [] };
+}
+
+export function codingRuntimeCommandPolicyForMode(
+  mode: CodingWorkbenchMode,
+): CodingWorkbenchCommandPolicy {
+  return {
+    mode: mode === "governed-assist" ? "deny" : "governed",
+    allow: [],
+    deny: [],
+    maxCommandTimeoutMs: 120_000,
+    requirePerCommandApproval: mode !== "autonomous-delivery",
+  };
+}
+
+function narrowedCommandPolicy(
+  policy: CodingWorkbenchCommandPolicy,
+  mode: CodingWorkbenchMode,
+): CodingWorkbenchCommandPolicy {
+  const ceiling = codingRuntimeCommandPolicyForMode(mode);
+  return {
+    ...policy,
+    mode: policy.mode === "deny" || ceiling.mode === "deny" ? "deny" : policy.mode,
+    requirePerCommandApproval:
+      policy.requirePerCommandApproval || ceiling.requirePerCommandApproval,
+  };
+}
+
+function narrowAuthorityToMode(
+  authority: CodingWorkbenchAuthorityEnvelope,
+  mode: CodingWorkbenchMode,
+): CodingWorkbenchAuthorityEnvelope {
+  if (authority.effectiveMode === mode) return authority;
+  const retainGovernedResearch = authority.networkPolicy.mode === "governed-egress";
+  const allowedActionClasses = codingRuntimeActionClassesForMode(mode, retainGovernedResearch);
+  const allowedConnectorScopes = codingRuntimeConnectorScopesForMode(mode);
+  return {
+    ...authority,
+    effectiveMode: mode,
+    actionClasses: authority.actionClasses.filter((value) => allowedActionClasses.includes(value)),
+    connectorScopes: authority.connectorScopes.filter((value) =>
+      allowedConnectorScopes.includes(value),
+    ),
+    commandPolicy: narrowedCommandPolicy(authority.commandPolicy, mode),
+    networkPolicy: codingRuntimeNetworkPolicyForMode(mode, retainGovernedResearch),
+  };
+}
 
 export interface CodingRuntimeTrustedContext {
   /** Captured before start confirmation; absent legacy contexts cannot execute verified commits. */
@@ -764,10 +858,7 @@ export class CodingRuntimeAuthorityService {
       ok: true,
       envelope: {
         ...resolution.envelope,
-        authority: {
-          ...resolution.envelope.authority,
-          effectiveMode: this.activeEffectiveMode,
-        },
+        authority: narrowAuthorityToMode(resolution.envelope.authority, this.activeEffectiveMode),
       },
     };
   }
@@ -805,7 +896,7 @@ export class CodingRuntimeAuthorityService {
     if (!this.registry.revalidateRetainedRuntime(reference, nowIso).ok) return undefined;
     return {
       ...active,
-      authority: { ...active.authority, effectiveMode: this.activeEffectiveMode },
+      authority: narrowAuthorityToMode(active.authority, this.activeEffectiveMode),
     };
   }
 

@@ -153,6 +153,25 @@ const CATALOG_SEMANTIC_NEGATIVE_FIXTURES = Object.freeze([
     ],
   },
 ]);
+async function semanticFixtureFailures(producer, fixturesDir, { file, cases }) {
+  const fixture = await import(pathToFileURL(join(fixturesDir, file)).href);
+  const errors = [];
+  for (const { fn, reason } of cases) {
+    try {
+      fixture[fn](producer);
+      errors.push(`tool catalog negative fixture escaped: ${file}#${fn}`);
+    } catch (error) {
+      const actual =
+        error !== null && typeof error === "object" && "reason" in error ? error.reason : undefined;
+      if (actual !== reason)
+        errors.push(
+          `tool catalog negative fixture ${file}#${fn} rejected with reason ` +
+            `"${String(actual)}", expected "${reason}"`,
+        );
+    }
+  }
+  return errors;
+}
 /**
  * Runs the full catalog-semantic negative-fixture matrix (#3415 AC2) against the real producer.
  * Complements `checkToolCatalogConformanceNegatives` (AST-level literal-registry detection):
@@ -163,25 +182,8 @@ export async function checkToolCatalogSemanticNegatives(root = process.cwd()) {
   const producer = await loadToolCatalogProducer(root);
   const fixturesDir = join(root, CATALOG_NEGATIVE_FIXTURES_DIR);
   const errors = [];
-  for (const { file, cases } of CATALOG_SEMANTIC_NEGATIVE_FIXTURES) {
-    const fixture = await import(pathToFileURL(join(fixturesDir, file)).href);
-    for (const { fn, reason } of cases) {
-      try {
-        fixture[fn](producer);
-        errors.push(`tool catalog negative fixture escaped: ${file}#${fn}`);
-      } catch (error) {
-        const actual =
-          error !== null && typeof error === "object" && "reason" in error
-            ? error.reason
-            : undefined;
-        if (actual !== reason)
-          errors.push(
-            `tool catalog negative fixture ${file}#${fn} rejected with reason ` +
-              `"${String(actual)}", expected "${reason}"`,
-          );
-      }
-    }
-  }
+  for (const fixtureCase of CATALOG_SEMANTIC_NEGATIVE_FIXTURES)
+    errors.push(...(await semanticFixtureFailures(producer, fixturesDir, fixtureCase)));
   const legacyFixture = await import(
     pathToFileURL(join(fixturesDir, "legacy-table-reintroduction.mjs")).href
   );

@@ -98,17 +98,19 @@ export interface NodeGitPullRequestAdapterDeps {
   readonly onTerminated?: ((evidence: CommandTerminationEvidence) => void) | undefined;
 }
 
-function executionResult(
+function executionResult<
+  Result extends GitPrExecResult | GitPrMarkReadyExecResult = GitPrExecResult,
+>(
   outcome: GitDeliveryExecutionResult["outcome"],
   durationMs: number,
-  extra?: Partial<GitPrExecResult>,
-): GitPrExecResult {
+  extra?: Partial<Result>,
+): Result {
   return {
     schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
     outcome,
     durationMs: Math.max(0, Math.trunc(durationMs)),
     ...extra,
-  };
+  } as Result;
 }
 
 interface RunContext {
@@ -316,23 +318,10 @@ function readPrIdentity(
   );
 }
 
-function markReadyResult(
-  outcome: GitDeliveryExecutionResult["outcome"],
-  durationMs: number,
-  extra?: Partial<GitPrMarkReadyExecResult>,
-): GitPrMarkReadyExecResult {
-  return {
-    schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
-    outcome,
-    durationMs: Math.max(0, Math.trunc(durationMs)),
-    ...extra,
-  };
-}
-
 // Projects a `GitPrExecResult` failure (from `fetchPrNodeId` / `runGh`) onto the narrower mark-ready
 // result shape — never carries the create-specific `createdPrExternalId`/`createdPrIdentity` fields.
 function asMarkReadyFailure(result: GitPrExecResult): GitPrMarkReadyExecResult {
-  return markReadyResult(result.outcome, result.durationMs, {
+  return executionResult<GitPrMarkReadyExecResult>(result.outcome, result.durationMs, {
     ...(result.errorCode !== undefined ? { errorCode: result.errorCode } : {}),
     ...(result.rejectionReason !== undefined ? { rejectionReason: result.rejectionReason } : {}),
   });
@@ -398,10 +387,12 @@ async function markPullRequestReady(
 ): Promise<GitPrMarkReadyExecResult> {
   const before = await readPrIdentity(ctx, req);
   if (!before.ok) {
-    return markReadyResult("failed", 0, { errorCode: "precondition-failed" });
+    return executionResult<GitPrMarkReadyExecResult>("failed", 0, {
+      errorCode: "precondition-failed",
+    });
   }
   if (isPreMutationDrift(before.value, req)) {
-    return markReadyResult("failed", 0, {
+    return executionResult<GitPrMarkReadyExecResult>("failed", 0, {
       errorCode: "precondition-failed",
       observedIdentity: before.value,
     });
@@ -412,15 +403,19 @@ async function markPullRequestReady(
   }
   const after = await readPrIdentity(ctx, req);
   if (!after.ok) {
-    return markReadyResult("failed", mutation.durationMs, { errorCode: "precondition-failed" });
+    return executionResult<GitPrMarkReadyExecResult>("failed", mutation.durationMs, {
+      errorCode: "precondition-failed",
+    });
   }
   if (isPostMutationDrift(after.value, req)) {
-    return markReadyResult("failed", mutation.durationMs, {
+    return executionResult<GitPrMarkReadyExecResult>("failed", mutation.durationMs, {
       errorCode: "precondition-failed",
       observedIdentity: after.value,
     });
   }
-  return markReadyResult("succeeded", mutation.durationMs, { observedIdentity: after.value });
+  return executionResult<GitPrMarkReadyExecResult>("succeeded", mutation.durationMs, {
+    observedIdentity: after.value,
+  });
 }
 
 async function updatePullRequest(

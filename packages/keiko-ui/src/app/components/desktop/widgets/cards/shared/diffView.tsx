@@ -60,13 +60,19 @@ interface TokensProps {
 }
 
 function TokenSpans({ tokens }: TokensProps): ReactNode {
+  const occurrences = new Map<string, number>();
   return (
     <>
-      {tokens.map((tok, idx) => (
-        <span key={idx} className={`hl-${tok[0]}`}>
-          {tok[1]}
-        </span>
-      ))}
+      {tokens.map((tok) => {
+        const baseKey = `${tok[0]}:${tok[1]}`;
+        const occurrence = occurrences.get(baseKey) ?? 0;
+        occurrences.set(baseKey, occurrence + 1);
+        return (
+          <span key={`${baseKey}:${String(occurrence)}`} className={`hl-${tok[0]}`}>
+            {tok[1]}
+          </span>
+        );
+      })}
     </>
   );
 }

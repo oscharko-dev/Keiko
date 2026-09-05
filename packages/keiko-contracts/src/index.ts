@@ -2212,7 +2212,6 @@ export type {
   ToolCallResult,
   ToolPort,
 } from "./tools.js";
-export { isValidNetworkGatewayPolicy } from "./tools.js";
 export type {
   DEFAULT_ENV_ALLOWLIST,
   DEFAULT_SANDBOX_POLICY,

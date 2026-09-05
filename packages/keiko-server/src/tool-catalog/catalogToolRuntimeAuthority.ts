@@ -71,7 +71,9 @@ export function captureCatalogInvocation(
 ): BoundToolInvocation {
   const object = captureInvocationObject(source);
   requireDispatch(
-    Object.keys(object).sort().join() === "arguments,kind,offerId,projectionDigest,toolRef",
+    Object.keys(object)
+      .sort((left, right) => left.localeCompare(right))
+      .join() === "arguments,kind,offerId,projectionDigest,toolRef",
     "invalid",
     "invalid-arguments",
   );
@@ -116,7 +118,9 @@ function captureRef(value: CatalogJsonValue | undefined): ReturnType<typeof crea
   );
   const ref = value as CatalogJsonObject;
   requireDispatch(
-    Object.keys(ref).sort().join() === "canonicalId,contractVersion",
+    Object.keys(ref)
+      .sort((left, right) => left.localeCompare(right))
+      .join() === "canonicalId,contractVersion",
     "invalid",
     "unknown-tool",
   );

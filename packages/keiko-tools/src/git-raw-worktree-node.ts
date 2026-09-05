@@ -9,6 +9,7 @@
 import { parseGitIndexStat, indexStatMatches, type GitIndexStat } from "./git-index-stat.js";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 import { readGitStageFile } from "@oscharko-dev/keiko-workspace/internal/git-index";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { GitChangedFile, GitStatusCode } from "@oscharko-dev/keiko-contracts";
 import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import { gitBlobObjectId, gitIndexEntriesDigest, type IndexEntry } from "./git-index-identity.js";
@@ -82,7 +83,7 @@ export async function readGitRawChanges(deps: NodeGitWorktreeReaderDeps): Promis
   );
   const paths = [
     ...new Set([...index.keys(), ...head.keys(), ...(await readGitUntrackedPaths(deps))]),
-  ].sort();
+  ].sort(compareStrings);
   const scanned = await scanPaths(
     deps,
     paths,

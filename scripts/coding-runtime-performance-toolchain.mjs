@@ -46,7 +46,7 @@ export function codingPerformanceToolchainDigest(
 
 export function codingPerformanceSubjectPath(path) {
   if (
-    /(?:^|\/)(?:__tests__|dist|node_modules|coverage)\/|\.(?:test|spec)\.|\/_support\.[cm]?ts$/u.test(
+    /(?:(?:^|\/)(?:__tests__|dist|node_modules|coverage)\/|\.(?:test|spec)\.|\/_support\.[cm]?ts$)/u.test(
       path,
     )
   )

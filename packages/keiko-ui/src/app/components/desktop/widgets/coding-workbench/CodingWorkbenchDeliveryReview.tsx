@@ -24,6 +24,23 @@ export function approvalHelpKey(kind: ActionKind): CodingWorkbenchMessageKey {
   return "codingWorkbench.approval.help";
 }
 
+function deliveryReviewMessageKey(
+  status: UseCodingWorkbenchApprovalReviewResult["status"],
+): CodingWorkbenchMessageKey {
+  return status === "loading"
+    ? "codingWorkbench.approval.delivery.loading"
+    : "codingWorkbench.approval.delivery.unavailable";
+}
+
+function deliveryRetry(
+  state: UseCodingWorkbenchApprovalReviewResult,
+  t: CodingWorkbenchTranslate,
+): { readonly retry?: { readonly label: string; readonly onRetry: () => void | Promise<void> } } {
+  return state.status === "unavailable"
+    ? { retry: { label: t("codingWorkbench.approval.delivery.retry"), onRetry: state.retry } }
+    : {};
+}
+
 /** Only the existing authenticated, permission-bound review supplies transient PR text. */
 export function CodingWorkbenchDeliveryReview({
   state,
@@ -47,20 +64,9 @@ export function CodingWorkbenchDeliveryReview({
         </h3>
         {review === undefined ? (
           <RetryMessage
-            text={t(
-              state.status === "loading"
-                ? "codingWorkbench.approval.delivery.loading"
-                : "codingWorkbench.approval.delivery.unavailable",
-            )}
+            text={t(deliveryReviewMessageKey(state.status))}
             className={styles.approvalResearchDetail}
-            {...(state.status === "unavailable"
-              ? {
-                  retry: {
-                    label: t("codingWorkbench.approval.delivery.retry"),
-                    onRetry: state.retry,
-                  },
-                }
-              : {})}
+            {...deliveryRetry(state, t)}
           />
         ) : (
           <DeliveryBindingFacts delivery={review.record} t={t} />

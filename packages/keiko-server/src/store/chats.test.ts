@@ -961,6 +961,18 @@ describe("updateChat — gitChangeScopes round-trip (#3400)", () => {
     expect(fetched?.gitChangeScopes).toEqual([scope]);
   });
 
+  it("round-trips the bounded server-held description proposal id", () => {
+    const c = store.createChat(proj, "t", "m");
+    const scope = gitChangeScope({ descriptionProposalId: "proposal-chat-1" });
+    store.updateChat(c.id, { gitChangeScopes: [scope] });
+    expect(store.findChatById(c.id)?.gitChangeScopes).toEqual([scope]);
+    expect(() =>
+      store.updateChat(c.id, {
+        gitChangeScopes: [gitChangeScope({ descriptionProposalId: "x".repeat(129) })],
+      }),
+    ).toThrow(/well-formed/u);
+  });
+
   it("clears the list when patched with gitChangeScopes: null", () => {
     const c = store.createChat(proj, "t", "m");
     store.updateChat(c.id, { gitChangeScopes: [gitChangeScope()] });

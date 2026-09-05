@@ -6,6 +6,7 @@ export type {
   PrDescriptionDeps,
   PrDescriptionEvidence,
   PrDescriptionGenerationResult,
+  PrDescriptionGenerationUsage,
   PrDescriptionLimits,
   PrDescriptionRequest,
   PrDescriptionResolvedSnapshot,

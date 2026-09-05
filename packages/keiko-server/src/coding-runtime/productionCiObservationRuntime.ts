@@ -14,6 +14,11 @@ import type {
 import { resolveDraftDeliveryContext } from "./productionDraftDeliveryRuntime.js";
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
 
+function randomEventId(): string {
+  const randomHex = randomBytes(16).toString("hex");
+  return `event-${BigInt("0x" + randomHex).toString(10)}`;
+}
+
 export function createProductionCiObservationService(
   deps: DraftDeliveryDependencies | undefined,
   verified: VerifiedCommitRuntimeDependencies | undefined,
@@ -44,7 +49,7 @@ export function publishCiObservation(
   const encoded = JSON.stringify(snapshot);
   const event: CodingWorkbenchRuntimeEvent = {
     schemaVersion: "1",
-    eventId: `event-${BigInt(`0x${randomBytes(16).toString("hex")}`).toString(10)}`,
+    eventId: randomEventId(),
     runId: snapshot.runId,
     occurredAt: snapshot.observedAt,
     kind: "artifact-produced",

@@ -13,7 +13,6 @@ import {
   cloneRepository as fetchCloneRepository,
   createProject,
   fetchGitBranches,
-  fetchGitDeliverySyncExecute,
   fetchGitDeliverySyncPreview,
   fetchGitDeliveryCommitExecute,
   fetchGitDeliveryCommitPreview,
@@ -35,6 +34,7 @@ import {
   fetchGitStatus,
   fetchProjects,
   proposeCommit,
+  proposeGitDeliverySync,
   proposePush,
   reconnectProject,
 } from "@/lib/api";
@@ -131,8 +131,8 @@ describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
     expect(DEFAULT_GIT_CLIENT.syncPreview).toBe(fetchGitDeliverySyncPreview);
   });
 
-  it("syncExecute is fetchGitDeliverySyncExecute", () => {
-    expect(DEFAULT_GIT_CLIENT.syncExecute).toBe(fetchGitDeliverySyncExecute);
+  it("syncExecute is the approval-minting sync proposal", () => {
+    expect(DEFAULT_GIT_CLIENT.syncExecute).toBe(proposeGitDeliverySync);
   });
 
   it("pushPreview is fetchGitDeliveryPushPreview", () => {

@@ -257,13 +257,14 @@ export class CatalogInvocation {
     if (this.settled) return;
     this.finishing = true;
     this.stopWatching();
-    let terminal = result ?? this.envelope(status, reason);
+    const initialTerminal = result ?? this.envelope(status, reason);
+    let terminal = initialTerminal;
     try {
       this.account();
-    } catch (failure) {
+    } catch (error_) {
       this.accountingUncertain = true;
       terminal = this.envelope("failed", "budget-port-failed");
-      error = failure;
+      error = error_;
     }
     this.continuation?.discardUnless(terminal.page?.cursor ?? null);
     const receipt = this.receipt(terminal.status);

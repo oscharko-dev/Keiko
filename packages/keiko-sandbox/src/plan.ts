@@ -3,7 +3,7 @@
 // (egress requested but unenforceable). The attestation it returns is recorded on the CommandResult so
 // keiko-verification can report an HONEST `enforced` network flag (ADR-0043).
 
-import { isValidNetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts";
+import { isValidNetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { buildWrappedCommand } from "./backends.js";
 import { selectEnforcingBackend, selectGatewayBackend } from "./select.js";
 import type { BackendAvailability, IsolatedRunDecision, IsolatedRunPlan } from "./types.js";

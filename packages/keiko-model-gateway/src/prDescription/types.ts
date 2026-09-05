@@ -6,7 +6,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 import type { Gateway } from "../gateway.js";
 import type { ModelGatewayLogSink } from "../observability.js";
-import type { GatewayConfig } from "../types.js";
+import type { GatewayConfig, UsageMetadata } from "../types.js";
 
 export interface PrDescriptionEvidence {
   readonly evidenceId: string;
@@ -66,8 +66,23 @@ export interface PrDescriptionDeps {
 }
 
 export type PrDescriptionGenerationResult =
-  | { readonly status: "generated"; readonly artifact: PrDescriptionArtifact }
+  | {
+      readonly status: "generated";
+      readonly artifact: PrDescriptionArtifact;
+      /** Actual aggregate of accepted provider calls; absent only when no call was made. */
+      readonly usage?: PrDescriptionGenerationUsage | undefined;
+    }
   | { readonly status: "unavailable"; readonly reason: PrDescriptionReason };
+
+export interface PrDescriptionGenerationUsage {
+  readonly modelId: string;
+  readonly requestId: string;
+  readonly requestCount: number;
+  readonly promptTokens: number;
+  readonly completionTokens: number;
+  readonly latencyMs: number;
+  readonly costClass: UsageMetadata["costClass"];
+}
 
 export const PR_DESCRIPTION_LIMIT_CEILINGS: PrDescriptionLimits = Object.freeze({
   maxCalls: 8,

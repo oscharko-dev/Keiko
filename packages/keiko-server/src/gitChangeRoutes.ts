@@ -25,21 +25,21 @@
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import type {
+  Chat,
   ChatGitChangeScope,
   GitChangeBlockedReason,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { GitChangeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
 import { isGitChangeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
-import { defaultGitProcessRunner, resolveGitMembership } from "@oscharko-dev/keiko-git";
+import { defaultGitProcessRunner } from "@oscharko-dev/keiko-git";
 import type { GitProcessRunner } from "@oscharko-dev/keiko-git";
 import { createNodeGitPullRequestAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
-import { realpath } from "node:fs/promises";
 import type { UiHandlerDeps } from "./deps.js";
 // Final-audit F4 (#3400): mints the Chat-turn description authority under the EXACT scope shape
 // chat-handlers.ts's own admission check derives -- the one formula, imported rather than
 // restated (AGENTS.md §7's fixture/formula rule applies to a mint key exactly like a fixture).
-import { gitChangeDescriptionAuthorityScopeFor } from "./chat-handlers.js";
+import { gitChangeDescriptionAuthorityScopeFor } from "./gitChangeChatContext.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
@@ -62,6 +62,8 @@ import type {
   RelationshipMutationResult,
 } from "./relationship-handlers.js";
 import type { StoredRelationship } from "./store/relationships.js";
+import { resolveChatRepository } from "./gitChangeRepository.js";
+import { MAX_GIT_CHANGE_SCOPES } from "./store/chats.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
 
@@ -70,6 +72,7 @@ type GitChangeErrorCode =
   | "GIT_CHANGE_PAYLOAD_TOO_LARGE"
   | "GIT_CHANGE_CHAT_NOT_FOUND"
   | "GIT_CHANGE_SCOPE_NOT_FOUND"
+  | "GIT_CHANGE_SCOPE_LIMIT_REACHED"
   | "GIT_CHANGE_ENGINE_UNAVAILABLE";
 
 const SAFE_MESSAGES: Readonly<Record<GitChangeErrorCode, string>> = {
@@ -77,6 +80,7 @@ const SAFE_MESSAGES: Readonly<Record<GitChangeErrorCode, string>> = {
   GIT_CHANGE_PAYLOAD_TOO_LARGE: "The git-change request exceeds the maximum size.",
   GIT_CHANGE_CHAT_NOT_FOUND: "The chat does not exist.",
   GIT_CHANGE_SCOPE_NOT_FOUND: "No connected git-change scope matches this relationship.",
+  GIT_CHANGE_SCOPE_LIMIT_REACHED: "This chat already has the maximum Git change scopes.",
   GIT_CHANGE_ENGINE_UNAVAILABLE: "The relationship engine is not available.",
 };
 
@@ -157,38 +161,6 @@ function parseRefreshRequest(value: unknown): RefreshRequest | undefined {
     return undefined;
   }
   return { chatId, relationshipId };
-}
-
-// ─── Trusted repository resolution ─────────────────────────────────────────────────────────────
-// Reuses the chat's own already-validated `projectPath` (set at project-creation time) as the
-// candidate root — never a fresh browser-authored path — and the same git-membership resolver
-// every generic Git route uses. Mirrors gitChangeSnapshotService.ts's own internal
-// `repositoryReader` safety check (the snapshot capture below re-validates this independently;
-// the duplication is intentional defense-in-depth, not a second trust boundary).
-export interface ResolvedChatRepository {
-  readonly repositoryRoot: string;
-}
-
-// Exported (final-audit F5, #3400) so the git-change apply path (chat-handlers.ts) re-derives the
-// SAME trusted repository root through the SAME git-membership check, rather than a second,
-// independently-drifting copy of this trust-boundary logic (AGENTS.md §5/§7).
-export async function resolveChatRepository(
-  projectPath: string,
-  runner: GitProcessRunner,
-  timeoutMs: number,
-): Promise<ResolvedChatRepository | undefined> {
-  let root: string;
-  try {
-    root = await realpath(projectPath);
-  } catch {
-    return undefined;
-  }
-  const membership = await resolveGitMembership(root, runner, { timeoutMs });
-  if (!membership.ok || membership.membership.prefix !== "") return undefined;
-  const repositoryRoot = await realpath(membership.membership.repositoryRoot).catch(
-    () => membership.membership.repositoryRoot,
-  );
-  return { repositoryRoot };
 }
 
 function contentFreeWorkspace(root: string): WorkspaceInfo {
@@ -560,8 +532,9 @@ export async function handleGitChangeConnect(
   const request = parseConnectRequest(parsed.value);
   if (request === undefined) return errResult(400, "GIT_CHANGE_BAD_REQUEST");
   const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-  const chat = deps.store.findChatById(request.chatId);
-  if (chat === undefined) return errResult(404, "GIT_CHANGE_CHAT_NOT_FOUND");
+  const chatResult = connectChat(deps, request.chatId);
+  if (!chatResult.ok) return chatResult.result;
+  const { chat } = chatResult;
 
   let captured: CapturedComparison & { readonly prNumber: number | undefined };
   try {
@@ -578,6 +551,19 @@ export async function handleGitChangeConnect(
     captured,
     correlationId,
   );
+}
+
+function connectChat(
+  deps: UiHandlerDeps,
+  chatId: string,
+):
+  | { readonly ok: true; readonly chat: Chat }
+  | { readonly ok: false; readonly result: RouteResult } {
+  const chat = deps.store.findChatById(chatId);
+  if (chat === undefined) return { ok: false, result: errResult(404, "GIT_CHANGE_CHAT_NOT_FOUND") };
+  return (chat.gitChangeScopes?.length ?? 0) >= MAX_GIT_CHANGE_SCOPES
+    ? { ok: false, result: errResult(409, "GIT_CHANGE_SCOPE_LIMIT_REACHED") }
+    : { ok: true, chat };
 }
 
 function blockedConnectResult(
@@ -636,7 +622,6 @@ function persistStaleScope(
 ): RouteResult {
   const workspaceId = deps.relationship?.scopeResolver(ctx.req)?.workspaceId;
   if (workspaceId === undefined) return errResult(503, "GIT_CHANGE_ENGINE_UNAVAILABLE");
-  archiveGitChangeRelationship(deps, workspaceId, found.scope.relationshipId);
   const mutation = createGitChangeRelationship(
     deps,
     workspaceId,
@@ -654,13 +639,19 @@ function persistStaleScope(
     ),
     descriptionStatus: "stale",
   };
-  // Final-audit F4: re-mints under the NEW snapshot digest -- the scope key moved, so the prior
-  // mint (if any) no longer matches and every subsequent Chat turn would otherwise deny closed.
-  const minted = mintGitChangeDescriptionAuthority(deps, staleScope, Date.now());
   const remaining = found.existing.filter(
     (entry) => entry.relationshipId !== found.scope.relationshipId,
   );
-  deps.store.updateChat(chatId, { gitChangeScopes: [...remaining, staleScope] });
+  try {
+    deps.store.updateChat(chatId, { gitChangeScopes: [...remaining, staleScope] });
+  } catch (error) {
+    archiveGitChangeRelationship(deps, workspaceId, staleScope.relationshipId);
+    throw error;
+  }
+  // Final-audit F4: re-mints under the NEW snapshot digest only after the replacement scope is
+  // durable. A failed Chat write therefore leaves neither an active replacement edge nor grant.
+  const minted = mintGitChangeDescriptionAuthority(deps, staleScope, Date.now());
+  archiveGitChangeRelationship(deps, workspaceId, found.scope.relationshipId);
   logGitChangeEvent(deps, "git-change.chat.stale", correlationId, {
     relationshipId: staleScope.relationshipId,
     remoteDigestPrefix: staleScope.remoteDigest.slice(0, 8),

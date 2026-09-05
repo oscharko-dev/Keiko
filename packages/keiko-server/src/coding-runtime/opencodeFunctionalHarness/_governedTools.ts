@@ -1,4 +1,4 @@
-import { Script } from "node:vm";
+import { Buffer } from "node:buffer";
 import { webcrypto } from "node:crypto";
 import { createGeneratedOpenCodeBundle } from "../opencodeRuntimeAdapter.js";
 import { projectOpenCodePermissionEvent } from "../opencodeProtocol.js";
@@ -15,6 +15,7 @@ interface GeneratedTool {
     context: GeneratedToolContext,
   ) => Promise<unknown>;
 }
+type GeneratedToolFactory = (runtime: Readonly<Record<string, unknown>>) => unknown;
 interface PendingPermission {
   readonly row: Record<string, unknown>;
   readonly settle: (allowed: boolean) => void;
@@ -32,25 +33,55 @@ export interface ScriptedToolPhase {
   readonly phase: "entered" | "ipc-requested" | "ipc-returned" | "completed" | "failed";
 }
 
+function generatedToolModuleSource(source: string): string {
+  const exportDeclaration = "export default {";
+  if (!source.includes(exportDeclaration)) throw new Error("functional-generated-tool-invalid");
+  return [
+    "export default function createGeneratedTool(runtime) {",
+    "const { process, crypto, fetch, AbortController, TextEncoder, TextDecoder, Uint8Array, setTimeout, clearTimeout } = runtime;",
+    source.replace(exportDeclaration, "const generated = {"),
+    "return generated;",
+    "}",
+  ].join("\n");
+}
+
+async function loadGeneratedTool(
+  source: string,
+  input: ScriptedGovernedToolsInput,
+): Promise<unknown> {
+  const moduleSource = generatedToolModuleSource(source);
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(moduleSource).toString("base64")}`;
+  const module: unknown = await import(moduleUrl);
+  if (
+    typeof module !== "object" ||
+    module === null ||
+    !("default" in module) ||
+    typeof module.default !== "function"
+  ) {
+    throw new Error("functional-generated-tool-invalid");
+  }
+  const factory = module.default as GeneratedToolFactory;
+  return factory({
+    process: { env: input.env },
+    crypto: webcrypto,
+    fetch: input.fetch ?? globalThis.fetch,
+    AbortController,
+    TextEncoder,
+    TextDecoder,
+    Uint8Array,
+    setTimeout,
+    clearTimeout,
+  });
+}
+
 /** Executes repository-owned generated shims, never source supplied by the model or workspace. */
-function generatedTool(name: string, input: ScriptedGovernedToolsInput): GeneratedTool {
+async function generatedTool(
+  name: string,
+  input: ScriptedGovernedToolsInput,
+): Promise<GeneratedTool> {
   const source = createGeneratedOpenCodeBundle().toolSources[name];
   if (source === undefined) throw new Error("functional-generated-tool-unavailable");
-  const script = new Script(`${source.replace("export default", "const generated =")}\ngenerated;`);
-  const value: unknown = script.runInNewContext(
-    {
-      process: { env: input.env },
-      crypto: webcrypto,
-      fetch: input.fetch ?? globalThis.fetch,
-      AbortController,
-      TextEncoder,
-      TextDecoder,
-      Uint8Array,
-      setTimeout,
-      clearTimeout,
-    },
-    { timeout: 1000 },
-  );
+  const value = await loadGeneratedTool(source, input);
   if (
     typeof value !== "object" ||
     value === null ||
@@ -118,7 +149,8 @@ export class ScriptedGovernedTools {
       this.phase(call.name, "ipc-returned");
       return response;
     };
-    const result = await generatedTool(call.name, { ...this.input, fetch }).execute(call.args, {
+    const tool = await generatedTool(call.name, { ...this.input, fetch });
+    const result = await tool.execute(call.args, {
       sessionID: this.input.sessionId,
       callID: call.id,
       abort: signal,

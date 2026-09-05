@@ -27,8 +27,12 @@ import {
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
 import { createGatewayToolCatalogBridge } from "./toolCatalogBridge.js";
-import { bindNormalizedToolCalls, parseNormalizedToolCalls } from "./normalize.js";
-import { normalizeChatResponse, textFromContent } from "./normalize.js";
+import {
+  bindNormalizedToolCalls,
+  normalizeChatResponse,
+  parseNormalizedToolCalls,
+  textFromContent,
+} from "./normalize.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import { assertValidGatewaySamplingParameters } from "./types.js";
 import {

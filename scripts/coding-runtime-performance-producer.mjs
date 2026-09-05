@@ -48,8 +48,8 @@ export function codingPerformanceEnvironment(root = ROOT) {
   if (process.versions.node !== EXPECTED_NODE_BASELINE || npmVersion !== EXPECTED_NPM_ENGINE) {
     throw new Error("pinned-node-npm-toolchain-required");
   }
-  const git = execFileSync(resolveHostExecutable("git"), ["--version"], { encoding: "utf8" }).match(
-    /\d+\.\d+\.\d+/u,
+  const git = /[0-9]+(?:\.[0-9]+){2}/u.exec(
+    execFileSync(resolveHostExecutable("git"), ["--version"], { encoding: "utf8" }),
   )?.[0];
   if (git === undefined) throw new Error("git-version-unavailable");
   const approval = JSON.parse(readFileSync(join(root, "portable-runtime-approvals.json"), "utf8"));

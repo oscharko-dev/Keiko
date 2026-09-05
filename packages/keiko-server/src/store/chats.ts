@@ -35,7 +35,7 @@ import { deriveChatGroundingScopeIdentity } from "./chat-grounding-scope-identit
 // Issue #3400 (epic #3384) — a chat rarely connects more than one Git comparison at a time; this
 // cap is deliberately far below the combined-source cap (`combinedSourceCap`, which does not
 // include this list — git-change scopes are not folder/connector "grounding sources").
-const MAX_GIT_CHANGE_SCOPES = 8;
+export const MAX_GIT_CHANGE_SCOPES = 8;
 const CHAT_GIT_CHANGE_DESCRIPTION_STATUS_SET: ReadonlySet<ChatGitChangeDescriptionStatus> = new Set(
   CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
 );
@@ -435,8 +435,8 @@ function decodeGitChangeScopeObject(raw: unknown): ChatGitChangeScope | undefine
   if (scope.kind !== "git-change" || !hasValidGitChangeIdentityFields(scope)) return undefined;
   const counts = decodeGitChangeScopeCounts(scope);
   if (counts === undefined) return undefined;
-  const pullRequestNumber = decodePullRequestNumber(scope.pullRequestNumber);
-  if (scope.pullRequestNumber !== undefined && pullRequestNumber === undefined) return undefined;
+  const optional = decodeGitChangeOptionalFields(scope);
+  if (optional === undefined) return undefined;
   return {
     kind: "git-change",
     relationshipId: scope.relationshipId,
@@ -448,9 +448,22 @@ function decodeGitChangeScopeObject(raw: unknown): ChatGitChangeScope | undefine
     headSha: scope.headSha,
     mergeBaseSha: scope.mergeBaseSha,
     snapshotDigest: scope.snapshotDigest,
-    ...(pullRequestNumber === undefined ? {} : { pullRequestNumber }),
+    ...optional,
     ...counts,
     descriptionStatus: scope.descriptionStatus,
+  };
+}
+
+function decodeGitChangeOptionalFields(
+  scope: Record<string, unknown>,
+): Pick<ChatGitChangeScope, "pullRequestNumber" | "descriptionProposalId"> | undefined {
+  const pullRequestNumber = decodePullRequestNumber(scope.pullRequestNumber);
+  if (scope.pullRequestNumber !== undefined && pullRequestNumber === undefined) return undefined;
+  const proposalId = scope.descriptionProposalId;
+  if (proposalId !== undefined && !isBoundedNonEmptyString(proposalId, 128)) return undefined;
+  return {
+    ...(pullRequestNumber === undefined ? {} : { pullRequestNumber }),
+    ...(proposalId === undefined ? {} : { descriptionProposalId: proposalId }),
   };
 }
 
@@ -952,6 +965,9 @@ function encodeGitChangeScopeObject(value: ChatGitChangeScope): Record<string, u
     omittedFiles: value.omittedFiles,
     truncatedFiles: value.truncatedFiles,
     descriptionStatus: value.descriptionStatus,
+    ...(value.descriptionProposalId === undefined
+      ? {}
+      : { descriptionProposalId: value.descriptionProposalId }),
     connectedAtMs: value.connectedAtMs,
   };
 }

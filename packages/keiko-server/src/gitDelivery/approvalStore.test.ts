@@ -58,6 +58,84 @@ describe("git delivery approval store", () => {
     expect(replay).toBeUndefined();
   });
 
+  it("rotates an existing claim when the exact binding is approved again", () => {
+    const store = createInMemoryGitDeliveryApprovalStore();
+    const first = store.issue({
+      binding: BINDING,
+      approvedByUserId: "u-1",
+      nowMs: NOW,
+      ttlMs: 60_000,
+    });
+    const second = store.issue({
+      binding: BINDING,
+      approvedByUserId: "u-2",
+      nowMs: NOW + 1,
+      ttlMs: 30_000,
+    });
+
+    expect(
+      store.consume({ approval: first.approval, binding: BINDING, nowMs: NOW + 2 }),
+    ).toBeUndefined();
+    expect(store.consume({ approval: second.approval, binding: BINDING, nowMs: NOW + 2 })).toEqual({
+      required: true,
+      approvalTokenHash: second.approvalTokenHash,
+      approvedByUserId: "u-2",
+      approvedAtMs: NOW + 1,
+      expiresAtMs: NOW + 30_001,
+    });
+    expect(
+      store.consume({ approval: second.approval, binding: BINDING, nowMs: NOW + 3 }),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    ["commit", "consumeCommitBinding"],
+    ["local-mutation", "consumeStageBinding"],
+    ["push", "consumeDeliveryBinding"],
+  ] as const)(
+    "keeps only the newest %s authorization for server-side binding consumption",
+    (operation, consumeMethod) => {
+      const store = createInMemoryGitDeliveryApprovalStore();
+      const binding: GitDeliveryApprovalBinding = {
+        projectId: "/workspace/repo",
+        operation,
+        command: { kind: operation },
+        proposalId: "proposal-1",
+        runId: "run-a",
+        envelopeDigest: "a".repeat(64),
+      };
+      store.issue({
+        binding,
+        approvedByUserId: "u-1",
+        nowMs: NOW,
+        ttlMs: 60_000,
+      });
+      const newest = store.issue({
+        binding,
+        approvedByUserId: "u-2",
+        nowMs: NOW + 1,
+        ttlMs: 30_000,
+      });
+      const consume = (nowMs: number): unknown => {
+        if (consumeMethod === "consumeCommitBinding") {
+          return store.consumeCommitBinding(binding, nowMs);
+        }
+        if (consumeMethod === "consumeStageBinding") {
+          return store.consumeStageBinding?.(binding, nowMs);
+        }
+        return store.consumeDeliveryBinding?.(binding, nowMs);
+      };
+
+      expect(consume(NOW + 2)).toMatchObject({
+        approvalTokenHash: newest.approvalTokenHash,
+        approvedByUserId: "u-2",
+        approvedAtMs: NOW + 1,
+        expiresAtMs: NOW + 30_001,
+      });
+      expect(consume(NOW + 3)).toBeUndefined();
+    },
+  );
+
   it("rejects claims with the wrong operation binding", () => {
     const store = createInMemoryGitDeliveryApprovalStore();
     const issued = store.issue({

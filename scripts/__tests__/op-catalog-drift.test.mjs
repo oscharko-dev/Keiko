@@ -70,6 +70,43 @@ describe("op catalog drift", () => {
     expect(checkedIn.generatedBy).toBe("scripts/generate-op-catalog.mjs");
   });
 
+  // PR #3394 regression: a stale regeneration dropped these 26 still-emitted operations while
+  // leaving the catalog internally self-consistent. Pin the incident's complete vocabulary at the
+  // production generator boundary so regenerating the JSON cannot silently bless the same loss.
+  it("retains every operation lost by the issue-to-PR catalog regression", () => {
+    const catalog = generateOpCatalog(repoRoot);
+    expect(catalog.operations).toEqual(
+      expect.arrayContaining([
+        "coding-runtime.description",
+        "coding-runtime.operation.refused",
+        "coding-runtime.run.recovery-acknowledged",
+        "coding-sidecar.gateway.readiness-insufficient",
+        "coding-sidecar.gateway.rejected",
+        "coding-sidecar.tool-facade.rejected",
+        "editor.producer-turn.completed",
+        "gateway.tool-catalog.native-passthrough",
+        "git-change.chat.apply",
+        "git-change.chat.blocked",
+        "git-change.chat.connected",
+        "git-change.chat.refreshed",
+        "git-change.chat.stale",
+        "git.delivery.commit.approval.minted",
+        "git.delivery.commit.approval.required",
+        "git.delivery.pr.approval.minted",
+        "git.delivery.pr.approval.required",
+        "git.delivery.push.approval.minted",
+        "git.delivery.push.approval.required",
+        "git.journey-outcome.recorded",
+        "pr-description.chat.turn.admitted",
+        "pr-description.chat.turn.denied",
+        "pr-description.model-egress.denied",
+        "pr-description.workbench.egress.denied",
+        "runtime.confinement.unavailable",
+        "tool-catalog.dispatch-unbound",
+      ]),
+    );
+  });
+
   // #2902 W5: orchestrator.ts's logIndexing/logEmbeddingRun/logDocument hardcode `category` inside
   // their OWN body rather than the caller's object literal, so tier 1 (findSiblingCategory) never
   // finds a sibling `category:` at these call sites, and tier 3 (fileCategoryBinding) backs off

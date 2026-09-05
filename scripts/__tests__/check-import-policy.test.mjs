@@ -166,7 +166,8 @@ describe("checkArchitectureImportPolicy", () => {
     );
 
     expect(Object.fromEntries([...counts.entries()].sort())).toEqual({
-      "adr-0175-tool-catalog-pure-imports": 1,
+      // Both core filesystem access and third-party SDK access are independently forbidden.
+      "adr-0175-tool-catalog-pure-imports": 2,
       "adr-0165-raw-coordinate-owner": 1,
       "adr-0005-owned-root-authority-implementation-private": 1,
       "adr-0005-owned-root-containment-allowed-callers": 1,

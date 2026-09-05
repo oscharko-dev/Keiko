@@ -3,7 +3,7 @@ import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-j
 
 /** Each independent evidence lease can expire before the overall lifecycle observation. */
 export function useJourneyClock(outcome: JourneyOutcome): number {
-  const [, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
   const observation = outcome.expiresAt;
   const ci = outcome.readiness?.expiresAt;
   const description = outcome.description?.expiresAt;
@@ -28,5 +28,5 @@ export function useJourneyClock(outcome: JourneyOutcome): number {
       globalThis.removeEventListener("pageshow", update);
     };
   }, [observation, ci, description]);
-  return Date.now();
+  return now;
 }

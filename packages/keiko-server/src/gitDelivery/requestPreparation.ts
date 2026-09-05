@@ -11,7 +11,8 @@
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { GitRepositoryAgentOperationKind } from "@oscharko-dev/keiko-contracts";
-import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
+import type { RouteContext, RouteResult } from "../routes.js";
+import { errorBody } from "../route-error.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { CORRELATION_RESPONSE_HEADER, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
@@ -254,10 +255,10 @@ function admittedAuthorityGate(
 //      approval consumption at their OWN execute layer, so admission simply defers to it instead of
 //      demanding a second claim of its own — exactly like `autonomous-delivery` already bypasses
 //      this same matrix cell.
-//   2. `approval` + `approvalStore` + `approvalBinding` — the workspace-contained path (local
-//      mutations). A non-consuming peek (`GitDeliveryApprovalStore.matches`) against the SAME claim
-//      the caller already parsed from its own request body, bound to the exact operation + command
-//      it names. Never `.consume()`s the record: the caller's own subsequent
+//   2. `approval` + `approvalStore` + `approvalBinding` — the per-operation path used by local
+//      mutations and fetch/pull. A non-consuming peek (`GitDeliveryApprovalStore.matches`) against
+//      the SAME claim the caller already parsed from its own request body, bound to the exact
+//      operation + command it names. Never `.consume()`s the record: the caller's own subsequent
 //      `resolveGitDeliveryApprovalRequirement` call performs the single real consumption, so the
 //      claim is spent exactly once even though it is checked here first.
 //

@@ -272,7 +272,9 @@ export interface GitDeliveryDescriptionAuthorityAdmission {
   readonly scope: GitDeliveryDescriptionAuthorityScope;
 }
 
-function descriptionAuthorityEnvelopeDigest(scope: GitDeliveryDescriptionAuthorityScope): string {
+export function descriptionAuthorityEnvelopeDigest(
+  scope: GitDeliveryDescriptionAuthorityScope,
+): string {
   return sha256Hex(canonicalise(scope));
 }
 

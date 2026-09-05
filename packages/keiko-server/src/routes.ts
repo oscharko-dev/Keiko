@@ -8,6 +8,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import type { UiHandlerDeps } from "./deps.js";
+import { errorBody, type ApiError } from "./route-error.js";
+export { errorBody } from "./route-error.js";
+export type { ApiError } from "./route-error.js";
+import { STREAMING } from "./route-outcome.js";
+export { STREAMING } from "./route-outcome.js";
 import {
   handleConfig,
   handleModels,
@@ -46,6 +51,7 @@ import {
 } from "./store-handlers.js";
 import { WORKSPACE_MANIFEST_ROUTE_GROUP } from "./workspace-manifest-routes.js";
 import {
+  createHandleGitChangeApproveDescription,
   createHandleGitChangeApplyDescription,
   handleCreateDesktopChat,
   handleRegenerateDesktopChat,
@@ -388,18 +394,6 @@ import { GIT_DELIVERY_JOURNEY_ROUTE_GROUP } from "./gitDelivery/journeyRoutes.js
 import { GIT_CHANGE_ROUTE_GROUP } from "./gitChangeRoutes.js";
 import { handleClientDiagnosticIngest } from "./client-diagnostics-routes.js";
 
-export interface ApiError {
-  readonly error: {
-    readonly code: string;
-    readonly message: string;
-    // RB-6 (GEN-OBS-CORRELATION-103/402): a request-scoped correlation id an operator can grep for.
-    // Optional and additive — when absent the body is byte-identical to the pre-RB-6 shape, so the
-    // hundreds of routes/tests that assert `{ error: { code, message } }` are unaffected. Only the
-    // paths that mint an id (the top-level 500 and any handler that opts in) surface it.
-    readonly correlationId?: string;
-  };
-}
-
 // A route handler returns the HTTP status and the JSON body to serialize, or STREAMING when it has
 // written directly to the ServerResponse (SSE) and the server must not write a JSON body.
 export interface RouteResult {
@@ -408,7 +402,6 @@ export interface RouteResult {
   readonly headers?: Readonly<Record<string, string | readonly string[]>> | undefined;
 }
 
-export const STREAMING = Symbol("streaming");
 export type HandlerOutcome = RouteResult | typeof STREAMING;
 
 export interface RouteContext {
@@ -458,6 +451,16 @@ function health(): RouteResult {
 // ordering hazard entirely; the built handler is cached and reused for every later request.
 let gitChangeApplyDescriptionHandler:
   ReturnType<typeof createHandleGitChangeApplyDescription> | undefined;
+let gitChangeApproveDescriptionHandler:
+  ReturnType<typeof createHandleGitChangeApproveDescription> | undefined;
+
+function dispatchGitChangeApproveDescription(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  gitChangeApproveDescriptionHandler ??= createHandleGitChangeApproveDescription();
+  return gitChangeApproveDescriptionHandler(ctx, deps);
+}
 
 function dispatchGitChangeApplyDescription(
   ctx: RouteContext,
@@ -504,6 +507,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/editor/verification/trust",
     handler: handleGetWorkspaceScriptTrust,
+  },
+  {
+    method: "POST",
+    pattern: "/api/git-change/approve-description",
+    handler: dispatchGitChangeApproveDescription,
   },
   {
     method: "POST",
@@ -1694,10 +1702,6 @@ export function matchRoute(
 
 export function isApiPath(pathname: string): boolean {
   return pathname === "/api" || pathname.startsWith("/api/");
-}
-
-export function errorBody(code: string, message: string, correlationId?: string): ApiError {
-  return { error: { code, message, ...(correlationId === undefined ? {} : { correlationId }) } };
 }
 
 export function notFoundBody(): ApiError {

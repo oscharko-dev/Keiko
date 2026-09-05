@@ -88,6 +88,17 @@ function fresh(snapshot: ReadinessSnapshot, now: number): boolean {
     now < Date.parse(snapshot.expiresAt)
   );
 }
+function observedOutcome(
+  attempt: CiRepairBudgetRecord["attempts"][number],
+  snapshot: ReadinessSnapshot,
+): "succeeded" | "failed" | undefined {
+  if (snapshot.state === "technical-ready") return "succeeded";
+  if (snapshot.state !== "failed") return undefined;
+  return attempt.headSha !== snapshot.headSha ||
+    attempt.failureSignatureDigest !== snapshot.failureSignatureDigest
+    ? "failed"
+    : undefined;
+}
 function noChargeLease(context: CiRepairBudgetContext | undefined): CiRepairExecutionLease {
   return { check: () => context?.stillAuthorized() ?? true, settle: () => undefined };
 }
@@ -179,9 +190,9 @@ export class CodingRuntimeCiRepairController implements CiRepairExecutionBudget 
     const current = this.deps.readiness.get(context.runId);
     if (current?.evidenceRef !== snapshot.evidenceRef) return;
     const attempt = active(this.accepted(context).record);
-    if (attempt?.runId !== context.runId || attempt.headSha === snapshot.headSha) return;
-    if (snapshot.state === "technical-ready") this.settle(context, attempt.attemptId, "succeeded");
-    else if (snapshot.state === "failed") this.settle(context, attempt.attemptId, "failed");
+    if (attempt?.runId !== context.runId) return;
+    const outcome = observedOutcome(attempt, snapshot);
+    if (outcome !== undefined) this.settle(context, attempt.attemptId, outcome);
   }
   private prepare(
     context: CiRepairBudgetContext,

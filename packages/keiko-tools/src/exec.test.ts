@@ -1106,7 +1106,7 @@ describe("runCommand — outputScrub: credentials-only", () => {
       },
       echoDeps({ PATH: process.env.PATH ?? "", API_TOKEN: secret }, true),
     );
-    expect(result.stdout.length).toBe(secret.length);
+    expect(result.stdout).toHaveLength(secret.length);
     expect(result.stdout).toBe("[REDACTED]");
     expect(result.outputRedacted).toBe(true);
   });

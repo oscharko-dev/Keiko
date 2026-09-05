@@ -61,6 +61,7 @@ import type {
 import type { ConversationId, ProjectId, WorkspaceId } from "@oscharko-dev/keiko-contracts/memory";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
+import { initializeGitChangeDescriptionFixture } from "./gitChangeChatTestSupport.js";
 
 const CHAT_MODEL = "example-chat-model";
 const ALTERNATE_CHAT_MODEL = "alternate-chat-model";
@@ -3370,7 +3371,7 @@ describe("git-change description-authority admission on the streaming send path 
         category: "security",
         op: "pr-description.chat.turn.denied",
         correlationId: "corr-stream-git-change-1",
-        errorKind: "authority-denied",
+        errorKind: "model-egress-denied",
         extra: { relationshipId: "rel-stream-1" },
       }),
     );
@@ -3380,7 +3381,8 @@ describe("git-change description-authority admission on the streaming send path 
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));
     const chatId = seedChat();
-    attachGitChangeScope(chatId);
+    const description = await initializeGitChangeDescriptionFixture(projectDir);
+    store.updateChat(chatId, { gitChangeScopes: [description.scope] });
     let streamCalls = 0;
     const model: ModelPort = {
       call: () => Promise.resolve(normalizedResponse("unused")),
@@ -3392,6 +3394,7 @@ describe("git-change description-authority admission on the streaming send path 
     };
     const admittingDeps = {
       ...deps(model),
+      ...description.deps,
       gitChangeDescriptionAuthorityPort: {
         current: (): { readonly effectiveMode: string } => ({ effectiveMode: "governed-assist" }),
       },
@@ -3415,13 +3418,14 @@ describe("git-change description-authority admission on the streaming send path 
     );
 
     expect(result).toBe(STREAMING);
-    expect(streamCalls).toBe(1);
+    expect(streamCalls).toBe(0);
+    expect(captured.writes.join("\n")).toContain("Update the exported value.");
     expect(sink.events).toContainEqual(
       expect.objectContaining({
         category: "security",
         op: "pr-description.chat.turn.admitted",
         correlationId: "corr-stream-git-change-2",
-        extra: { relationshipId: "rel-stream-1" },
+        extra: { relationshipId: "rel-description" },
       }),
     );
   });

@@ -236,6 +236,8 @@ export interface ChatGitChangeScope {
   readonly omittedFiles: number;
   readonly truncatedFiles: number;
   readonly descriptionStatus: ChatGitChangeDescriptionStatus;
+  /** Server-held exact description proposal selected by the latest successful Chat turn. */
+  readonly descriptionProposalId?: string;
   readonly connectedAtMs: number;
 }
 

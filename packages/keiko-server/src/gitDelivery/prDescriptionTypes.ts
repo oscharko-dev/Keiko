@@ -73,6 +73,8 @@ export interface PreparedPrDescription {
 }
 export interface PrDescriptionApplicationService {
   preview(request: unknown): Promise<PrDescriptionApplicationResult>;
+  /** Holds an already-generated Chat artifact as the exact proposal; never calls the model. */
+  previewArtifact(artifact: PrDescriptionArtifact): Promise<PrDescriptionApplicationResult>;
   review(proposalId: string): PrDescriptionPreview | undefined;
   issueApproval(proposalId: string): GitDeliveryIssuedApproval | undefined;
   matchesApproval(proposalId: string): boolean;

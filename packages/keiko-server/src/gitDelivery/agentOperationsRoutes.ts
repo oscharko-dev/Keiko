@@ -20,7 +20,8 @@ import {
   parseGitRepositoryAgentOperationRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository-agent";
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
-import { STREAMING, type RouteContext, type RouteDefinition, type RouteResult } from "../routes.js";
+import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
+import { STREAMING } from "../route-outcome.js";
 import { handleGitBranches, handleGitDiff, handleGitStatus } from "../gitRoutes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { createGitDeliveryCommitRouteGroup } from "./commitRoutes.js";

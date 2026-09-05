@@ -48,6 +48,7 @@ import {
   createHandlePrDescriptionApprove,
   createHandlePrDescriptionPreview,
   createHandlePrDescriptionStatus,
+  resolvePrDescriptionApplicationServiceForRequest,
   type PrDescriptionRouteOptions,
 } from "./prDescriptionRoutes.js";
 import { DescriptionFixture } from "./prDescriptionTestSupport.js";
@@ -173,6 +174,48 @@ describe("pr-description routes — mount (#3399)", () => {
   it("the route group did not exist before this change and now exposes exactly the four patterns", () => {
     const patterns = createGitDeliveryPrDescriptionRouteGroup().map((route) => route.pattern);
     expect(patterns).toEqual([PREVIEW, APPROVE, APPLY, STATUS]);
+  });
+
+  it("isolates proposal holders by dependency scope and immutable snapshot", () => {
+    const factory = vi.fn(() => fixture.service);
+    const firstDeps = deps();
+    const firstRequest = {
+      projectId,
+      ownerAndRepo: "owner/repo",
+      prNumber: 123,
+      snapshotDigest: "a".repeat(64),
+    };
+    const first = resolvePrDescriptionApplicationServiceForRequest(
+      firstDeps,
+      ctxFor(PREVIEW, firstRequest),
+      firstRequest,
+      "cache-1",
+      { serviceFactory: factory },
+    );
+    const repeated = resolvePrDescriptionApplicationServiceForRequest(
+      firstDeps,
+      ctxFor(PREVIEW, firstRequest),
+      firstRequest,
+      "cache-2",
+      { serviceFactory: factory },
+    );
+    const refreshedRequest = { ...firstRequest, snapshotDigest: "b".repeat(64) };
+    resolvePrDescriptionApplicationServiceForRequest(
+      firstDeps,
+      ctxFor(PREVIEW, refreshedRequest),
+      refreshedRequest,
+      "cache-3",
+      { serviceFactory: factory },
+    );
+    resolvePrDescriptionApplicationServiceForRequest(
+      deps(),
+      ctxFor(PREVIEW, firstRequest),
+      firstRequest,
+      "cache-4",
+      { serviceFactory: factory },
+    );
+    expect(first.ok && repeated.ok && first.service).toBe(repeated.ok && repeated.service);
+    expect(factory).toHaveBeenCalledTimes(3);
   });
 });
 

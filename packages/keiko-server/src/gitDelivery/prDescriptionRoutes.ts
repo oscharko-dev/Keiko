@@ -175,7 +175,10 @@ function validatePreview(parsed: unknown): Validation<PreviewRequest> {
   if (scanErr !== undefined) return { kind: "err", result: scanErr };
   const base = baseFields(parsed, new Set(["language", "refinement", "snapshotDigest"]));
   if (base.kind === "err") return base;
-  if (!PR_DESCRIPTION_LANGUAGES.some((language) => language === parsed.language)) return bad;
+  if (
+    !PR_DESCRIPTION_LANGUAGES.includes(parsed.language as (typeof PR_DESCRIPTION_LANGUAGES)[number])
+  )
+    return bad;
   return {
     kind: "ok",
     value: { ...base.value, language: parsed.language, refinement: parsed.refinement },
@@ -260,6 +263,7 @@ function admitDescription(
   request: BaseFields,
   workspace: WorkspaceInfo,
   logSink: ServerLogSink,
+  authorityScope?: GitDeliveryDescriptionAuthorityScope,
 ):
   | { readonly allowed: true; readonly scope: AdmittedScope }
   | { readonly allowed: false; readonly result: RouteResult } {
@@ -268,11 +272,9 @@ function admitDescription(
       ? undefined
       : {
           port: deps.gitDeliveryDescriptionAuthority,
-          scope: descriptionScopeFor(
-            request.ownerAndRepo,
-            request.prNumber,
-            request.snapshotDigest,
-          ),
+          scope:
+            authorityScope ??
+            descriptionScopeFor(request.ownerAndRepo, request.prNumber, request.snapshotDigest),
         };
   const gate = gitDeliveryAuthorityGate(
     ctx,
@@ -326,18 +328,26 @@ export function admitDescriptionModelEgress(
 // instance per HTTP request would lose between steps. `context()` is re-derived fresh on every
 // internal call (never cached), so a revoked or changed authority is observed on the very next call
 // without needing to evict the cache entry itself.
-const serviceCache = new Map<string, PrDescriptionApplicationService>();
+let serviceCaches = new WeakMap<UiHandlerDeps, Map<string, PrDescriptionApplicationService>>();
 const MAX_CACHED_SERVICES = 512;
 
-function cacheKey(projectId: string, ownerAndRepo: string, prNumber: number): string {
-  return `${projectId} ${ownerAndRepo.toLowerCase()} ${String(prNumber)}`;
+function cacheKey(request: BaseFields, authorityIdentity: string): string {
+  return `${request.projectId}\u0000${request.ownerAndRepo.toLowerCase()}\u0000${String(request.prNumber)}\u0000${request.snapshotDigest ?? "run-bound"}\u0000${authorityIdentity}`;
 }
 
-function pruneServiceCache(): void {
-  while (serviceCache.size > MAX_CACHED_SERVICES) {
-    const first = serviceCache.keys().next().value;
+function serviceCacheFor(deps: UiHandlerDeps): Map<string, PrDescriptionApplicationService> {
+  const cached = serviceCaches.get(deps);
+  if (cached !== undefined) return cached;
+  const created = new Map<string, PrDescriptionApplicationService>();
+  serviceCaches.set(deps, created);
+  return created;
+}
+
+function pruneServiceCache(cache: Map<string, PrDescriptionApplicationService>): void {
+  while (cache.size > MAX_CACHED_SERVICES) {
+    const first = cache.keys().next().value;
     if (first === undefined) break;
-    serviceCache.delete(first);
+    cache.delete(first);
   }
 }
 
@@ -403,6 +413,7 @@ function descriptionContextProvider(
   correlationId: string,
   logSink: ServerLogSink,
   key: string,
+  authorityScope?: GitDeliveryDescriptionAuthorityScope,
 ): () => PrDescriptionContext | undefined {
   // ONE object for this provider's whole lifetime (one prepared request), never rebuilt per call.
   // `PrDescriptionApplicationService.preview()`/`apply()` call `context()` more than once per
@@ -412,7 +423,7 @@ function descriptionContextProvider(
   // never only on a genuinely revoked authority.
   const accessScope = { key };
   return (): PrDescriptionContext | undefined => {
-    const reAdmitted = admitDescription(ctx, deps, request, workspace, logSink);
+    const reAdmitted = admitDescription(ctx, deps, request, workspace, logSink, authorityScope);
     if (!reAdmitted.allowed) return undefined;
     return {
       workspace,
@@ -423,7 +434,7 @@ function descriptionContextProvider(
       correlationId,
       ...(reAdmitted.scope.runId === undefined ? {} : { runId: reAdmitted.scope.runId }),
       stillAuthorized: (): boolean =>
-        admitDescription(ctx, deps, request, workspace, logSink).allowed,
+        admitDescription(ctx, deps, request, workspace, logSink, authorityScope).allowed,
     };
   };
 }
@@ -436,15 +447,16 @@ function serviceFor(
   key: string,
   contextProvider: () => PrDescriptionContext | undefined,
 ): PrDescriptionApplicationService | undefined {
-  const cached = serviceCache.get(key);
+  const cache = serviceCacheFor(deps);
+  const cached = cache.get(key);
   if (cached !== undefined) return cached;
   const built =
     options.serviceFactory !== undefined
       ? options.serviceFactory(contextProvider)
       : createServiceFromDeps(deps, seams, workspace, contextProvider);
   if (built === undefined) return undefined;
-  serviceCache.set(key, built);
-  pruneServiceCache();
+  cache.set(key, built);
+  pruneServiceCache(cache);
   return built;
 }
 
@@ -464,6 +476,58 @@ export type PrDescriptionServiceResolution =
   | { readonly ok: true; readonly service: PrDescriptionApplicationService }
   | { readonly ok: false; readonly result: RouteResult };
 
+function matchingDescriptionContext(
+  request: BaseFields,
+  workspace: WorkspaceInfo,
+  provider: () => PrDescriptionContext | undefined,
+): () => PrDescriptionContext | undefined {
+  return (): PrDescriptionContext | undefined => {
+    const context = provider();
+    if (
+      context?.workspace.root !== workspace.root ||
+      context.repository.toLowerCase() !== request.ownerAndRepo.toLowerCase() ||
+      context.prNumber !== request.prNumber
+    ) {
+      return undefined;
+    }
+    return context;
+  };
+}
+
+/**
+ * Resolves the shared proposal holder for a server-owned background producer that already owns a
+ * live description context. The same deps/key cache is used by HTTP preview/approve/apply.
+ */
+export function resolvePrDescriptionApplicationServiceForContext(
+  deps: UiHandlerDeps,
+  request: BaseFields,
+  contextProvider: () => PrDescriptionContext | undefined,
+  options: PrDescriptionRouteOptions = {},
+): PrDescriptionServiceResolution {
+  const workspace = resolveProjectWorkspace(deps, request.projectId);
+  if (workspace === undefined) {
+    return { ok: false, result: errResult(404, "GIT_DELIVERY_PR_DESCRIPTION_UNKNOWN_PROJECT") };
+  }
+  const initial = matchingDescriptionContext(request, workspace, contextProvider)();
+  if (initial === undefined) {
+    return { ok: false, result: errResult(403, "GIT_DELIVERY_PR_DESCRIPTION_UNAVAILABLE") };
+  }
+  const authorityIdentity = `${initial.runId ?? "description-authority"}:${initial.authorityDigest}`;
+  const key = cacheKey(request, authorityIdentity);
+  const seams = options.execution ?? {};
+  const service = serviceFor(
+    options,
+    deps,
+    seams,
+    workspace,
+    key,
+    matchingDescriptionContext(request, workspace, contextProvider),
+  );
+  return service === undefined
+    ? { ok: false, result: unavailableService() }
+    : { ok: true, service };
+}
+
 // Final-audit F5 (#3400): the ONE reusable admission + service-cache path this route group's own
 // handlers run through `prepare()` below, exposed for chat-handlers.ts's git-change apply path so
 // a Chat-originated apply reaches the SAME cached, per-(project, repository, PR) service instance
@@ -477,6 +541,7 @@ export function resolvePrDescriptionApplicationServiceForRequest(
   request: BaseFields,
   correlationId: string,
   options: PrDescriptionRouteOptions = {},
+  authorityScope?: GitDeliveryDescriptionAuthorityScope,
 ): PrDescriptionServiceResolution {
   const workspace = resolveProjectWorkspace(deps, request.projectId);
   if (workspace === undefined) {
@@ -484,9 +549,10 @@ export function resolvePrDescriptionApplicationServiceForRequest(
   }
   const seams = options.execution ?? {};
   const logSink = seams.activityLog ?? processServerLogSink();
-  const admitted = admitDescription(ctx, deps, request, workspace, logSink);
+  const admitted = admitDescription(ctx, deps, request, workspace, logSink, authorityScope);
   if (!admitted.allowed) return { ok: false, result: admitted.result };
-  const key = cacheKey(request.projectId, request.ownerAndRepo, request.prNumber);
+  const authorityIdentity = `${admitted.scope.runId ?? "description-authority"}:${admitted.scope.authorityDigest}`;
+  const key = cacheKey(request, authorityIdentity);
   const contextProvider = descriptionContextProvider(
     ctx,
     deps,
@@ -495,6 +561,7 @@ export function resolvePrDescriptionApplicationServiceForRequest(
     correlationId,
     logSink,
     key,
+    authorityScope,
   );
   const service = serviceFor(options, deps, seams, workspace, key, contextProvider);
   return service === undefined
@@ -529,7 +596,8 @@ async function prepare<V extends BaseFields>(
   const logSink = seams.activityLog ?? processServerLogSink();
   const admitted = admitDescription(ctx, deps, request, workspace, logSink);
   if (!admitted.allowed) return { ok: false, result: admitted.result };
-  const key = cacheKey(request.projectId, request.ownerAndRepo, request.prNumber);
+  const authorityIdentity = `${admitted.scope.runId ?? "description-authority"}:${admitted.scope.authorityDigest}`;
+  const key = cacheKey(request, authorityIdentity);
   const contextProvider = descriptionContextProvider(
     ctx,
     deps,
@@ -702,5 +770,5 @@ export const GIT_DELIVERY_PR_DESCRIPTION_ROUTE_GROUP: readonly RouteDefinition[]
 // Test/diagnostic-only: clears the process-wide service cache between test files so one file's
 // admitted scope can never leak a stateful proposal into another's.
 export function clearPrDescriptionServiceCache(): void {
-  serviceCache.clear();
+  serviceCaches = new WeakMap();
 }

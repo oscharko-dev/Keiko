@@ -3,6 +3,8 @@
 //   * POST /api/git-delivery/{fetch,pull}/preview  — READ-ONLY. Projects the sync readiness envelope
 //       (branch / upstream / ahead / behind / hasRemote / hasUpstream / dirty + an executable gate and
 //       typed blockReason). Never mutates, never records evidence.
+//   * POST /api/git-delivery/{fetch,pull}/approve  — Validates the exact sync request against the
+//       active run authority and mints the one-use claim the execute route consumes.
 //   * POST /api/git-delivery/{fetch,pull}/execute  — Requires an executable preview before running
 //       ONE bounded fetch/pull through the credential-capable runner (NOT the #472 kernel —
 //       fetch/pull have no GitDeliveryActionKind) and appends a content-free sync evidence record for
@@ -21,6 +23,7 @@
 // so they are NOT re-checked here.
 
 import type {
+  GitDeliveryApprovalClaim,
   GitDeliveryApprovalRequirement,
   GitSyncExecuteResponse,
   GitSyncOperation,
@@ -30,9 +33,13 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { GIT_SYNC_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-sync";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { logGitDeliveryNoSpawnRefusal } from "./execution.js";
 import {
+  DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
+  GIT_DELIVERY_LOCAL_OPERATOR_ID,
   parseGitDeliveryApprovalRequest,
   resolveGitDeliveryApprovalRequirement,
   type GitDeliveryApprovalBinding,
@@ -344,16 +351,92 @@ function syncApprovalBinding(
   return { projectId, operation, command };
 }
 
-function syncAuthorityGate(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-  workspace: WorkspaceInfo,
+export interface GitDeliverySyncApproveResponseBody {
+  readonly schemaVersion: "1";
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAt: string;
+}
+
+function logSyncApprovalMinted(
+  activityLog: ServerLogSink,
+  correlationId: string,
   operation: GitSyncOperation,
-  binding: GitDeliveryApprovalBinding,
-  approval: ParsedGitDeliveryApprovalRequest,
-  seams: GitDeliverySyncSeams,
-  nowIso: string,
-): GitDeliveryAuthorityGateResult {
+  runId: string,
+): void {
+  activityLog.write({
+    category: "security",
+    op: "git.delivery.sync.approval.minted",
+    correlationId,
+    status: 200,
+    extra: { operation, runId },
+  });
+}
+
+export const createHandleSyncApprove = (
+  operation: GitSyncOperation,
+  options: GitDeliverySyncRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  const seams = options.execution ?? {};
+  return async (ctx, deps): Promise<RouteResult> => {
+    const prepared = await prepareGitDeliveryRequest(ctx, deps, SYNC_REQUEST_ERRORS, validate);
+    if (!prepared.ok) return prepared.result;
+    const { projectId, remote } = prepared.value;
+    const nowMs = (seams.now ?? Date.now)();
+    const authority = gitDeliveryAuthorityGate(
+      ctx,
+      deps,
+      projectId,
+      prepared.workspace,
+      operation,
+      {},
+      {
+        logSink: seams.activityLog,
+        nowIso: new Date(nowMs).toISOString(),
+        deliveryApprovalDeferred: true,
+      },
+    );
+    if (!authority.allowed) return authority.result;
+    const store = seams.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;
+    const issued = store.issue({
+      binding: syncApprovalBinding(projectId, operation, remote),
+      approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
+      nowMs,
+    });
+    logSyncApprovalMinted(
+      seams.activityLog ?? processServerLogSink(),
+      ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+      operation,
+      authority.runId,
+    );
+    const body: GitDeliverySyncApproveResponseBody = {
+      schemaVersion: "1",
+      approval: issued.approval,
+      expiresAt: new Date(issued.expiresAtMs).toISOString(),
+    };
+    return { status: 200, body: deps.redactor(body) };
+  };
+};
+
+interface SyncAuthorityGateInput {
+  readonly ctx: RouteContext;
+  readonly deps: UiHandlerDeps;
+  readonly workspace: WorkspaceInfo;
+  readonly operation: GitSyncOperation;
+  readonly binding: GitDeliveryApprovalBinding;
+  readonly approval: ParsedGitDeliveryApprovalRequest;
+  readonly seams: GitDeliverySyncSeams;
+  readonly nowIso: string;
+}
+function syncAuthorityGate({
+  ctx,
+  deps,
+  workspace,
+  operation,
+  binding,
+  approval,
+  seams,
+  nowIso,
+}: SyncAuthorityGateInput): GitDeliveryAuthorityGateResult {
   return gitDeliveryAuthorityGate(
     ctx,
     deps,
@@ -395,17 +478,27 @@ type SyncAdmission =
 // Extracted purely to keep `handleSyncExecute` under the repo's max-lines-per-function bar
 // (AGENTS.md §6) — no behavioral seam of its own. Runs the admission gate (peek), then the single
 // real consumption, in that order.
-function admitSyncExecute(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-  workspace: WorkspaceInfo,
-  operation: GitSyncOperation,
-  binding: GitDeliveryApprovalBinding,
-  approval: ParsedGitDeliveryApprovalRequest,
-  seams: GitDeliverySyncSeams,
-  nowMs: number,
-): SyncAdmission {
-  const authority = syncAuthorityGate(
+interface AdmitSyncExecuteInput {
+  readonly ctx: RouteContext;
+  readonly deps: UiHandlerDeps;
+  readonly workspace: WorkspaceInfo;
+  readonly operation: GitSyncOperation;
+  readonly binding: GitDeliveryApprovalBinding;
+  readonly approval: ParsedGitDeliveryApprovalRequest;
+  readonly seams: GitDeliverySyncSeams;
+  readonly nowMs: number;
+}
+function admitSyncExecute({
+  ctx,
+  deps,
+  workspace,
+  operation,
+  binding,
+  approval,
+  seams,
+  nowMs,
+}: AdmitSyncExecuteInput): SyncAdmission {
+  const authority = syncAuthorityGate({
     ctx,
     deps,
     workspace,
@@ -413,8 +506,8 @@ function admitSyncExecute(
     binding,
     approval,
     seams,
-    new Date(nowMs).toISOString(),
-  );
+    nowIso: new Date(nowMs).toISOString(),
+  });
   if (!authority.allowed) return { ok: false, result: authority.result };
   if (resolveSyncApproval(approval, binding, seams, nowMs) === undefined) {
     return { ok: false, result: errResult(400, "GIT_DELIVERY_SYNC_BAD_REQUEST") };
@@ -434,7 +527,7 @@ async function handleSyncExecute(
   const { projectId, remote, approval } = prepared.value;
   const nowMs = (seams.now ?? Date.now)();
   const binding = syncApprovalBinding(projectId, operation, remote);
-  const admission = admitSyncExecute(
+  const admission = admitSyncExecute({
     ctx,
     deps,
     workspace,
@@ -443,7 +536,7 @@ async function handleSyncExecute(
     approval,
     seams,
     nowMs,
-  );
+  });
   if (!admission.ok) return admission.result;
   let before: GitSyncPreview;
   try {
@@ -497,6 +590,11 @@ export const createGitDeliverySyncRouteGroup = (
   },
   {
     method: "POST",
+    pattern: "/api/git-delivery/fetch/approve",
+    handler: createHandleSyncApprove("fetch", options),
+  },
+  {
+    method: "POST",
     pattern: "/api/git-delivery/fetch/execute",
     handler: createHandleSyncExecute("fetch", options),
   },
@@ -504,6 +602,11 @@ export const createGitDeliverySyncRouteGroup = (
     method: "POST",
     pattern: "/api/git-delivery/pull/preview",
     handler: createHandleSyncPreview("pull", options),
+  },
+  {
+    method: "POST",
+    pattern: "/api/git-delivery/pull/approve",
+    handler: createHandleSyncApprove("pull", options),
   },
   {
     method: "POST",

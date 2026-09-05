@@ -85,6 +85,19 @@ function firstAttempt(
 ): CiRepairBudgetRecord["attempts"][number] | undefined {
   return test.store.read(test.context).record?.attempts[0];
 }
+function hasSettlementLog(
+  logs: readonly ServerLogEvent[],
+  status: string,
+  attemptStatus: string,
+): boolean {
+  return logs.some(
+    (event) =>
+      event.op === "git.ci-repair.budget" &&
+      event.extra?.phase === "settle" &&
+      event.extra.status === status &&
+      event.extra.attemptStatus === attemptStatus,
+  );
+}
 const verify = (
   id: string,
 ): {
@@ -329,6 +342,44 @@ describe("CI repair accounting around admitted model work", () => {
     const test = fixture({}, notify);
     test.controller.admitTool(verify("verify-1"))?.settle({ status: "failed" });
     expect(notify).not.toHaveBeenCalled();
+  });
+  it("settles a verification repair when the exact current head becomes technical-ready", () => {
+    const notify = vi.fn();
+    const test = fixture({}, notify);
+    expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
+    const repaired = readySnapshot();
+    expect(test.readiness.complete(test.readiness.begin("run-1"), repaired)).toBe(true);
+
+    test.controller.observed(repaired);
+
+    expect(test.store.read(test.context).record?.attempts[0]?.status).toBe("succeeded");
+    expect(notify).toHaveBeenCalledExactlyOnceWith("run-1");
+    expect(hasSettlementLog(test.logs, "recorded", "succeeded")).toBe(true);
+  });
+  it("ignores a same-head technical-ready observation carrying stale evidence", () => {
+    const test = fixture();
+    expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
+    const current = readySnapshot();
+    expect(test.readiness.complete(test.readiness.begin("run-1"), current)).toBe(true);
+
+    test.controller.observed({ ...current, evidenceRef: "ci-observation-stale" });
+
+    expect(test.store.read(test.context).record?.attempts[0]?.status).toBe("active");
+  });
+  it("ignores duplicate same-signature failure but settles a changed failure on the same head", () => {
+    const test = fixture();
+    expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
+    const duplicate = failed();
+    expect(test.readiness.complete(test.readiness.begin("run-1"), duplicate)).toBe(true);
+    test.controller.observed(duplicate);
+    expect(test.store.read(test.context).record?.attempts[0]?.status).toBe("active");
+
+    const changed = { ...duplicate, failureSignatureDigest: "c".repeat(64) };
+    expect(test.readiness.complete(test.readiness.begin("run-1"), changed)).toBe(true);
+    test.controller.observed(changed);
+
+    expect(test.store.read(test.context).record?.attempts[0]?.status).toBe("failed");
+    expect(hasSettlementLog(test.logs, "recorded", "failed")).toBe(true);
   });
   // Review repair (#3401 accepted-review minor 3b): a rejected CAS (stale revision -- a
   // concurrent write already moved the record past the revision this settle read) must never be

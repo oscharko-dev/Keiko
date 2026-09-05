@@ -1,6 +1,8 @@
 import { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
-import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
-import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchMode,
+  CodingWorkbenchRuntimeEvent,
+} from "@oscharko-dev/keiko-contracts";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { createVerifiedCommitService } from "../gitDelivery/verifiedCommitService.js";

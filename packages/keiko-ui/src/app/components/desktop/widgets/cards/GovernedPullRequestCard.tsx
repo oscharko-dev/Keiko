@@ -883,7 +883,7 @@ function PrDescriptionPreviewBody({
   readonly result: PrDescriptionApplicationResultWire | null;
   readonly t: I18nTranslate;
 }): ReactNode {
-  if (result === null || result.outcome !== "preview") return null;
+  if (result?.outcome !== "preview") return null;
   return (
     <div style={LABEL_STYLE}>
       <span>{t("governedPullRequestCard.description.previewCaption")}</span>

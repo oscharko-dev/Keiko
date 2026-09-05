@@ -36,7 +36,7 @@ const KEYS = [
   "nonce",
   "pageSequence",
 ]
-  .sort()
+  .sort((left, right) => left.localeCompare(right))
   .join();
 const TOKEN = /^[A-Za-z0-9_-]{1,128}$/u;
 const DIGEST = /^[a-f0-9]{64}$/u;
@@ -85,7 +85,9 @@ function scalarFields(value: CatalogJsonObject): void {
 function identityFields(value: CatalogJsonObject): void {
   const ref = object(value.toolRef);
   requireDispatch(
-    Object.keys(ref).sort().join() === "canonicalId,contractVersion" &&
+    Object.keys(ref)
+      .sort((left, right) => left.localeCompare(right))
+      .join() === "canonicalId,contractVersion" &&
       typeof ref.canonicalId === "string" &&
       typeof ref.contractVersion === "number",
     "invalid",
@@ -107,7 +109,13 @@ function identityFields(value: CatalogJsonObject): void {
 export function captureCursorBinding(source: unknown): CursorBinding {
   try {
     const value = object(captureCatalogJson(source, 4096));
-    requireDispatch(Object.keys(value).sort().join() === KEYS, "invalid", "cursor-invalid");
+    requireDispatch(
+      Object.keys(value)
+        .sort((left, right) => left.localeCompare(right))
+        .join() === KEYS,
+      "invalid",
+      "cursor-invalid",
+    );
     scalarFields(value);
     identityFields(value);
     return deepFreeze(value) as unknown as CursorBinding;

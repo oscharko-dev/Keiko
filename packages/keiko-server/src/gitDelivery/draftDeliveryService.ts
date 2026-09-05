@@ -178,20 +178,14 @@ export class DraftDeliveryController implements DraftDeliveryService {
       extra: { runId: context.runId, phase: "failed", reason, ...describeError(error) },
     });
     const current = currentDraft(this.options, context);
-    return current === undefined
-      ? unavailable("provider-unavailable")
-      : recorded(
-          advanceDraft(
-            this.options,
-            context,
-            current,
-            "recovery-required",
-            reason,
-            error instanceof DraftDeliveryFailure
-              ? (error.pullRequest ?? current.pullRequest)
-              : current.pullRequest,
-          ),
-        );
+    if (current === undefined) return unavailable("provider-unavailable");
+    const pullRequest =
+      error instanceof DraftDeliveryFailure
+        ? (error.pullRequest ?? current.pullRequest)
+        : current.pullRequest;
+    return recorded(
+      advanceDraft(this.options, context, current, "recovery-required", reason, pullRequest),
+    );
   }
   private getOrAdopt(context: DraftDeliveryRunContext): DraftDeliveryRecord | undefined {
     return currentDraft(this.options, context) ?? adoptDraftPredecessor(this.options, context);
@@ -366,8 +360,9 @@ export class DraftDeliveryController implements DraftDeliveryService {
     context: DraftDeliveryRunContext,
   ): Promise<CodingRuntimeDeliveryResult> {
     await resolveDraftRepository(this.options, context);
-    let current = this.getOrAdopt(context);
-    if (current === undefined) return unavailable("verified-commit-required");
+    const adopted = this.getOrAdopt(context);
+    if (adopted === undefined) return unavailable("verified-commit-required");
+    let current: DraftDeliveryRecord = adopted;
     await assertDraftLocalCandidate(this.options, context, current.binding);
     const remote = await readDraftRemoteState(this.options, context, current.binding);
     assertKnownDraftIdentity(current, remote);

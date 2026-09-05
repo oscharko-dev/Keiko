@@ -67,6 +67,8 @@ export interface WorkbenchDescriptionStatus {
   readonly remoteDigest: string;
   readonly baseSha: string;
   readonly headSha: string;
+  /** Absent only on legacy records created before execution-binding continuity was recorded. */
+  readonly generationBinding?: WorkbenchDescriptionGenerationBinding;
   /** Monotonic per run; increments on every new dispatch (a fresh head or a repaired head). */
   readonly generationVersion: number;
   readonly state: WorkbenchDescriptionState;
@@ -78,6 +80,13 @@ export interface WorkbenchDescriptionStatus {
   /** #3398's own artifact outcome for the rendered draft; null exactly when none was rendered. */
   readonly artifactOutcome: PrDescriptionOutcome | null;
   readonly observedAt: string;
+}
+
+export interface WorkbenchDescriptionGenerationBinding {
+  readonly taskDigest: string;
+  readonly authorityDigest: string;
+  readonly runtimeBindingDigest: string;
+  readonly deliveryBindingDigest: string | null;
 }
 
 const DIGEST = /^[a-f0-9]{64}$/u;
@@ -102,8 +111,18 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 function keys(value: Record<string, unknown>): boolean {
+  const count = KEYS.length + (Object.hasOwn(value, "generationBinding") ? 1 : 0);
+  return Reflect.ownKeys(value).length === count && KEYS.every((key) => Object.hasOwn(value, key));
+}
+
+export function isWorkbenchDescriptionGenerationBinding(
+  value: unknown,
+): value is WorkbenchDescriptionGenerationBinding {
+  if (!record(value) || Reflect.ownKeys(value).length !== 4) return false;
   return (
-    Reflect.ownKeys(value).length === KEYS.length && KEYS.every((key) => Object.hasOwn(value, key))
+    ["taskDigest", "authorityDigest", "runtimeBindingDigest"].every(
+      (key) => typeof value[key] === "string" && DIGEST.test(value[key]),
+    ) && nullableDigest(value.deliveryBindingDigest)
   );
 }
 
@@ -161,6 +180,8 @@ export function isWorkbenchDescriptionStatus(value: unknown): value is Workbench
   return (
     validIdentity(value) &&
     validVersioning(value) &&
+    (!Object.hasOwn(value, "generationBinding") ||
+      isWorkbenchDescriptionGenerationBinding(value.generationBinding)) &&
     validReasonState(value) &&
     validArtifact(value)
   );

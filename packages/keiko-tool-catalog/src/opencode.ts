@@ -41,6 +41,7 @@ import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/gover
 import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { CODING_REPOSITORY_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type {
   CatalogEffect,
   CatalogIdempotency,
@@ -165,10 +166,11 @@ function managedObjectSchema(
   // required (the runtime declares every custom-tool argument required in its provider
   // projection). `required` is intentionally alphabetical: `compileCatalogSchema` (schema.ts)
   // re-sorts it, so an unsorted literal here would silently diverge from the compiled descriptor.
+  const sortedRequired = [...required].sort(compareStrings);
   return {
     type: "object",
     properties,
-    required: [...required].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+    required: sortedRequired,
     additionalProperties: true,
   };
 }

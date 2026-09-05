@@ -20,6 +20,8 @@ describe("semantic runtime Git IPC", () => {
   it.each([
     { operation: "status" },
     { operation: "ci" },
+    { operation: "ci", forceFresh: true },
+    { operation: "ci", forceFresh: false },
     { operation: "diff", scope: "working-tree", paths: ["code.ts"] },
     { operation: "diff", scope: "index", paths: ["code.ts"] },
     { operation: "stage", phase: "propose", paths: ["code.ts"] },
@@ -28,7 +30,10 @@ describe("semantic runtime Git IPC", () => {
     expect(parse({ ...identity, ...request })).toEqual({ ...identity, ...request });
   });
   it.each([
-    { operation: "ci", forceFresh: true },
+    // Freshness is a bounded observation intent; repository/PR identity remains server-owned.
+    { operation: "ci", forceFresh: true, prNumber: 99 },
+    { operation: "ci", forceFresh: true, headSha: "a".repeat(40) },
+    { operation: "ci", forceFresh: "true" },
     { operation: "ci", prNumber: 99 },
     { operation: "ci", headSha: "a".repeat(40) },
     { operation: "status", argv: ["status"] },

@@ -141,17 +141,23 @@ function humanReview(facts: GitCiProviderFacts): GitCiHumanReviewState {
     changesRequestedCount: tally?.changes ?? null,
   };
 }
+function pullRequestConflict(mergeable: boolean | null): GitCiPullRequestContext["conflict"] {
+  if (mergeable === null) return "unknown";
+  return mergeable ? "clear" : "conflicting";
+}
+function pullRequestBaseCurrency(
+  mergeState: GitCiProviderFacts["mergeState"],
+): GitCiPullRequestContext["baseCurrency"] {
+  if (mergeState === "unknown") return "unknown";
+  if (mergeState === "behind") return "behind";
+  return "current";
+}
 function pullRequest(facts: GitCiProviderFacts): GitCiPullRequestContext {
   return {
     status: facts.merged ? "merged" : facts.identity.state,
     isDraft: facts.identity.isDraft,
-    conflict: facts.mergeable === null ? "unknown" : facts.mergeable ? "clear" : "conflicting",
-    baseCurrency:
-      facts.mergeState === "unknown"
-        ? "unknown"
-        : facts.mergeState === "behind"
-          ? "behind"
-          : "current",
+    conflict: pullRequestConflict(facts.mergeable),
+    baseCurrency: pullRequestBaseCurrency(facts.mergeState),
   };
 }
 function pullRequestReason(facts: GitCiProviderFacts): GitCiReadinessReason | undefined {

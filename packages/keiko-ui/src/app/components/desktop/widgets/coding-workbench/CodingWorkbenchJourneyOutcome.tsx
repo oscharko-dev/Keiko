@@ -151,7 +151,7 @@ function ChangedFilesSummary({
   readonly summary: CodingWorkbenchJourneyChangedFilesSummary | undefined;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  if (summary === undefined || summary.status !== "ready") return null;
+  if (summary?.status !== "ready") return null;
   return (
     <p className={common.helpText}>
       {t("codingWorkbench.journey.changedFiles", { count: summary.fileCount })}
@@ -273,14 +273,14 @@ function JourneyActionFeedback({
     <>
       {ready && <p className={common.helpText}>{t("codingWorkbench.journey.readyHelp")}</p>}
       {pending && (
-        <p id="journey-propose-ready-pending" role="status" className={common.helpText}>
+        <output id="journey-propose-ready-pending" aria-live="polite" className={common.helpText}>
           {t("codingWorkbench.journey.proposeReadyPending")}
-        </p>
+        </output>
       )}
       {busy && (
-        <p role="status" className={common.helpText}>
+        <output aria-live="polite" className={common.helpText}>
           {t("codingWorkbench.journey.busy")}
-        </p>
+        </output>
       )}
       {failure !== null && (
         <p role="alert" className={styles["cmp-journey-error"]}>

@@ -35,7 +35,8 @@ import {
   type GitProcessResult,
   type GitProcessRunner,
 } from "@oscharko-dev/keiko-git";
-import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
+import { errorBody } from "./route-error.js";
+import type { RouteContext, RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { observedGitRunner } from "./gitProcessActivity.js";
 import type { ServerLogSink } from "./observability/index.js";

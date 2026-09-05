@@ -194,6 +194,132 @@ describe("CodingToolAuthorityPort", () => {
     });
     expect(resolveCapabilityForDelegation).not.toHaveBeenCalled();
   });
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "denies connector and egress dispatch under a stale broad envelope narrowed to %s",
+    (effectiveMode) => {
+      const envelope = restrictedEnvelope({ effectiveMode });
+      const resolveCapabilityForDelegation = vi.fn(() => ({ ok: true as const, envelope }));
+      const revalidateCapabilityForMutation = vi.fn(() => ({ ok: true as const, envelope }));
+      const port = createCodingToolAuthorityPort(
+        { resolveCapabilityForDelegation, revalidateCapabilityForMutation },
+        runtimeContext,
+      );
+
+      expect(
+        port.admit("capability", {
+          action: "connector",
+          actionId: "connector-after-narrow",
+          idempotencyKey: "connector-after-narrow",
+          scope: "issue-tracker.write",
+        }),
+      ).toEqual({ ok: false, reason: "action-not-authorized" });
+      expect(
+        port.admit("capability", {
+          action: "egress",
+          actionId: "egress-after-narrow",
+          idempotencyKey: "egress-after-narrow",
+          target: "approved-target",
+        }),
+      ).toEqual({ ok: false, reason: "action-not-authorized" });
+      expect(resolveCapabilityForDelegation).not.toHaveBeenCalled();
+    },
+  );
+  it("emits body-free denial evidence when narrowed internet effects reach the facade", async () => {
+    const envelope = restrictedEnvelope({ effectiveMode: "governed-assist" });
+    const authority = {
+      revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+      resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+    };
+    const log = createBufferedServerLogSink();
+    const connector = vi.fn(() => Promise.resolve({ status: "completed" as const }));
+    const egress = vi.fn(() => Promise.resolve({ status: "completed" as const }));
+    const runtime = createRuntimeCodingToolFacade(
+      authority,
+      () => ({ ...runtimeContext(), correlationId: "authority-narrowing" }),
+      {
+        ...governedPorts(),
+        connectorAuthority: { execute: connector },
+        egressAuthority: { execute: egress },
+      },
+      { catalogActivityLog: log, disableCatalogBridge: true },
+    );
+
+    await expect(
+      runtime.execute({
+        capability: "capability",
+        body: JSON.stringify({
+          action: "connector",
+          actionId: "connector-after-narrow",
+          idempotencyKey: "connector-after-narrow",
+          scope: "issue-tracker.write",
+        }),
+      }),
+    ).resolves.toEqual({ status: "denied", evidence: [] });
+    await expect(
+      runtime.execute({
+        capability: "capability",
+        body: JSON.stringify({
+          action: "egress",
+          actionId: "egress-after-narrow",
+          idempotencyKey: "egress-after-narrow",
+          target: "private.example.test",
+        }),
+      }),
+    ).resolves.toEqual({ status: "denied", evidence: [] });
+
+    expect(connector).not.toHaveBeenCalled();
+    expect(egress).not.toHaveBeenCalled();
+    expect(log.events).toEqual([
+      expect.objectContaining({
+        category: "security",
+        op: "coding-runtime.tool-authority.denied",
+        correlationId: "authority-narrowing",
+        extra: { action: "connector", effectiveMode: "governed-assist" },
+      }),
+      expect.objectContaining({
+        category: "security",
+        op: "coding-runtime.tool-authority.denied",
+        correlationId: "authority-narrowing",
+        extra: { action: "egress", effectiveMode: "governed-assist" },
+      }),
+    ]);
+    expect(log.lines().join("\n")).not.toContain("private.example.test");
+  });
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "keeps approved commit delivery available after narrowing to %s",
+    (effectiveMode) => {
+      const envelope = restrictedEnvelope({
+        effectiveMode,
+        actionClasses: ["workspace-read", "delivery-substrate", "connector-access"],
+        connectorScopes: ["source-control.read", "source-control.write"],
+        networkPolicy: { mode: "deny-all", connectorScopes: [] },
+      });
+      const authority = {
+        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+      };
+      const approvalProofVerifier = {
+        matches: vi.fn(() => false),
+        consume: vi.fn(() => false),
+        matchesCommit: vi.fn(() => true),
+        consumeCommit: vi.fn(() => ({ approvalId: "commit-approved" })),
+      };
+      const port = createCodingToolAuthorityPort(authority, runtimeContext, {
+        approvalProofVerifier,
+      });
+      const request = {
+        action: "delivery" as const,
+        actionId: "commit-after-narrow",
+        idempotencyKey: "commit-after-narrow",
+        intent: "commit" as const,
+        phase: "execute" as const,
+        proposalId: "commit-proposal",
+      };
+
+      expect(port.admit("capability", request).ok).toBe(true);
+      expect(approvalProofVerifier.consumeCommit).toHaveBeenCalledWith("run-authority-a", request);
+    },
+  );
   it("previews live authority without reserving delegation or returning mutation authority", () => {
     const resolveCapabilityForDelegation = vi.fn(() => ({
       ok: true as const,

@@ -513,6 +513,93 @@ describe("CodingRuntimeAuthorityService", () => {
     });
   });
 
+  it("narrows every retained authority field when a Full access run resumes in Ask for approval", () => {
+    const authority = service();
+    const fullContext: CodingRuntimeTrustedContext = {
+      ...context(),
+      actionClasses: [
+        "workspace-read",
+        "workspace-write",
+        "command-execution",
+        "verification",
+        "delivery-substrate",
+        "connector-access",
+        "network-egress",
+      ],
+      connectorScopes: [
+        "source-control.read",
+        "source-control.write",
+        "issue-tracker.read",
+        "issue-tracker.write",
+      ],
+      commandPolicy: {
+        mode: "governed",
+        allow: [],
+        deny: [],
+        maxCommandTimeoutMs: 60_000,
+        requirePerCommandApproval: false,
+      },
+      networkPolicy: {
+        mode: "connector-scoped-egress",
+        allowLoopback: false,
+        connectorScopes: [
+          "source-control.read",
+          "source-control.write",
+          "issue-tracker.read",
+          "issue-tracker.write",
+        ],
+      },
+    };
+    const fullIntent = { ...intent, requestedMode: "autonomous-delivery" as const };
+    const confirmation = authority.confirmStart(
+      fullIntent,
+      fullContext.taskId,
+      fullContext.operatorId,
+      NOW,
+    );
+    const minted = authority.mintStart(fullIntent, fullContext, confirmation, NOW);
+    if (!minted.ok) throw new Error("expected mint");
+    authority.transition(minted.authorityRef.runId, "ready", NOW);
+    authority.transition(minted.authorityRef.runId, "running", NOW);
+    expect(authority.pause("run-1", NOW)).toMatchObject({ ok: true });
+    expect(authority.resume("run-1", "governed-assist", NOW)).toMatchObject({ ok: true });
+
+    const live = facts({
+      actionClasses: fullContext.actionClasses,
+      connectorScopes: fullContext.connectorScopes,
+      commandPolicyDigest: codingRuntimeFactDigest(fullContext.commandPolicy),
+      networkPolicyDigest: codingRuntimeFactDigest(fullContext.networkPolicy),
+    });
+    const resolution = resolve(authority, minted.authorityRef, live);
+    if (!resolution.ok) throw new Error("expected narrowed resolution");
+    expect(resolution.envelope.authority).toMatchObject({
+      effectiveMode: "governed-assist",
+      actionClasses: [
+        "workspace-read",
+        "workspace-write",
+        "verification",
+        "delivery-substrate",
+        "connector-access",
+      ],
+      connectorScopes: ["source-control.read", "source-control.write"],
+      commandPolicy: { mode: "deny", requirePerCommandApproval: true },
+      networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
+    });
+    expect(authority.gitDeliveryAuthorityPort().current(NOW)?.authority).toMatchObject({
+      effectiveMode: "governed-assist",
+      actionClasses: [
+        "workspace-read",
+        "workspace-write",
+        "verification",
+        "delivery-substrate",
+        "connector-access",
+      ],
+      connectorScopes: ["source-control.read", "source-control.write"],
+      commandPolicy: { mode: "deny", requirePerCommandApproval: true },
+      networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
+    });
+  });
+
   it("fails pause closed when retained authority is expired or revoked", () => {
     const expired = service();
     expect(mint(expired)).toMatchObject({ ok: true });

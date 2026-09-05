@@ -57,6 +57,8 @@ interface Generation {
   readonly log: ModelGatewayLogSink;
   readonly elapsed: () => number;
   readonly candidates: PrDescriptionCandidate[];
+  readonly usages: NormalizedResponse["usage"][];
+  modelId: string | undefined;
   budget: QualityIntelligenceBudgetState;
   calls: number;
   inputBytes: number;
@@ -191,6 +193,8 @@ function acceptResponse(
   response: NormalizedResponse,
   evidenceIds: readonly string[],
 ): boolean {
+  generation.usages.push(response.usage);
+  generation.modelId = call.modelId;
   const validation = validatePrDescriptionResponse(
     response,
     evidenceIds,
@@ -200,7 +204,9 @@ function acceptResponse(
   if (response.modelId !== call.modelId) generation.reason = "invalid-model-output";
   else if (responseBudgetExceeded(call, response)) generation.reason = "budget-exhausted";
   else if (!validation.ok) generation.reason = validation.reason;
-  else generation.candidates.push(validation.value);
+  else {
+    generation.candidates.push(validation.value);
+  }
   const accepted = generation.reason === "none";
   if (!accepted) generation.candidates.length = 0;
   generation.log.write({
@@ -214,6 +220,22 @@ function acceptResponse(
     },
   });
   return accepted;
+}
+
+function aggregateUsage(
+  generation: Generation,
+): import("./types.js").PrDescriptionGenerationUsage | undefined {
+  const first = generation.usages[0];
+  if (first === undefined || generation.modelId === undefined) return undefined;
+  return {
+    modelId: generation.modelId,
+    requestId: first.requestId,
+    requestCount: generation.usages.length,
+    promptTokens: generation.usages.reduce((total, usage) => total + usage.promptTokens, 0),
+    completionTokens: generation.usages.reduce((total, usage) => total + usage.completionTokens, 0),
+    latencyMs: generation.usages.reduce((total, usage) => total + usage.latencyMs, 0),
+    costClass: first.costClass,
+  };
 }
 
 async function generateCandidates(generation: Generation): Promise<void> {
@@ -306,7 +328,8 @@ function completeGeneration(generation: Generation): PrDescriptionGenerationResu
       outputBytes: generation.outputBytes,
     },
   });
-  return { status: "generated", artifact };
+  const usage = aggregateUsage(generation);
+  return { status: "generated", artifact, ...(usage === undefined ? {} : { usage }) };
 }
 
 async function resolveAndGenerate(
@@ -332,6 +355,8 @@ async function resolveAndGenerate(
     log,
     elapsed: logTimer(),
     candidates: [],
+    usages: [],
+    modelId: undefined,
     budget: createBudget(limits.maxTokens),
     calls: 0,
     inputBytes: 0,

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local port fixtures are contextually typed. */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CodexRuntimeControl } from "./codexRuntimeComposition.js";
 import type { OpenCodeRunPort } from "./opencodeRuntimeComposition.js";
@@ -774,6 +774,9 @@ function codexControl(input: {
 }
 
 describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
+  beforeEach(() => {
+    generatePrDescriptionMock.mockReset();
+  });
   const REMOTE = "d".repeat(64);
   const BASE_SHA = "1".repeat(40);
   const HEAD_SHA = "2".repeat(40);
@@ -995,9 +998,12 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
   it("reports generation-unavailable when admitted but no model profile is configured", async () => {
     const dispatcher = createProductionWorkbenchDescriptionDispatcher(
       fakeDeps({
-        snapshots: fakeSnapshots(() =>
-          Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
-        ),
+        snapshots: {
+          ...fakeSnapshots(() =>
+            Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+          ),
+          recheck: () => Promise.resolve({ state: "current", snapshot: snapshotFixture() }),
+        },
         descriptionAuthority: admittingPort(),
         generation: undefined,
       }),
@@ -1029,7 +1035,7 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
     );
   });
 
-  it("generates through the Model Gateway core once admitted and maps a complete artifact", async () => {
+  function generatedDescription(): PrDescription.PrDescriptionGenerationResult {
     const artifact: PrDescriptionArtifact = {
       schemaVersion: "1",
       renderingVersion: "1",
@@ -1047,16 +1053,60 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
       markdown: "Summary",
       artifactDigest: "b".repeat(64),
     };
-    const generated: PrDescription.PrDescriptionGenerationResult = {
+    return {
       status: "generated",
       artifact,
     };
+  }
+
+  it.each(["stale", "authority-expired"] as const)(
+    "discards a generated draft when the post-model check is %s",
+    async (state) => {
+      let returned = false;
+      generatePrDescriptionMock.mockImplementationOnce(() => {
+        returned = true;
+        return Promise.resolve(generatedDescription());
+      });
+      const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+        fakeDeps({
+          snapshots: {
+            ...fakeSnapshots(() =>
+              Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+            ),
+            recheck: () => Promise.resolve({ state: state === "stale" ? "stale" : "current" }),
+          },
+          descriptionAuthority: {
+            current: (...args) =>
+              returned && state === "authority-expired"
+                ? undefined
+                : admittingPort().current(...args),
+            expired: () => returned && state === "authority-expired",
+          },
+          generation: {
+            gateway: { chat: vi.fn() },
+            config: {} as PrDescription.PrDescriptionDeps["config"],
+            log: { write: () => undefined },
+          },
+        }),
+      );
+      expect(await dispatcher.generate(SCOPE, new AbortController().signal)).toEqual({
+        reason: state === "stale" ? "stale-snapshot" : "authority-expired",
+      });
+      expect(generatePrDescriptionMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("generates through the Model Gateway core once admitted and maps a complete artifact", async () => {
+    const generated = generatedDescription();
     generatePrDescriptionMock.mockResolvedValueOnce(generated);
     const dispatcher = createProductionWorkbenchDescriptionDispatcher(
       fakeDeps({
-        snapshots: fakeSnapshots(() =>
-          Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
-        ),
+        snapshots: {
+          ...fakeSnapshots(() =>
+            Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+          ),
+          recheck: () => Promise.resolve({ state: "current", snapshot: snapshotFixture() }),
+        },
         descriptionAuthority: admittingPort(),
         generation: {
           gateway: { chat: vi.fn() },

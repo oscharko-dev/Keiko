@@ -96,7 +96,7 @@ function validTool(value: CatalogJsonValue | undefined): boolean {
   if (value === null) return true;
   const ref = object(value);
   exactKeys(ref, ["canonicalId", "contractVersion"]);
-  requireLifecycle(typeof ref.canonicalId === "string" && typeof ref.contractVersion === "number");
+  if (typeof ref.canonicalId !== "string" || typeof ref.contractVersion !== "number") return false;
   createToolRef(ref.canonicalId, ref.contractVersion);
   return true;
 }
@@ -110,13 +110,13 @@ function validDiagnostics(key: string, value: CatalogJsonValue | undefined): boo
     value.every((item, index) => item === redacted[index])
   );
 }
+function metricMaximum(key: string): number {
+  if (key === "resultCount") return TOOL_CATALOG_LIMITS.maxArrayItems;
+  if (key === "durationMs") return Number.MAX_SAFE_INTEGER;
+  return TOOL_CATALOG_LIMITS.maxResultBytes;
+}
 function validMetric(key: string, value: CatalogJsonValue): boolean {
-  const maximum =
-    key === "resultCount"
-      ? TOOL_CATALOG_LIMITS.maxArrayItems
-      : key === "durationMs"
-        ? Number.MAX_SAFE_INTEGER
-        : TOOL_CATALOG_LIMITS.maxResultBytes;
+  const maximum = metricMaximum(key);
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= maximum;
 }
 function validField(key: string, value: CatalogJsonValue): boolean {
@@ -140,9 +140,9 @@ function validStateField(key: string, value: CatalogJsonValue): boolean {
   return typeof value === "string";
 }
 function optionalFields(phase: ToolLifecyclePhase): readonly string[] {
-  const own =
-    phase === "terminal" ? TERMINAL_OPTIONAL : phase === "projection" ? ["resultCount"] : [];
-  return ["parentCorrelationId", ...own];
+  if (phase === "terminal") return ["parentCorrelationId", ...TERMINAL_OPTIONAL];
+  if (phase === "projection") return ["parentCorrelationId", "resultCount"];
+  return ["parentCorrelationId"];
 }
 function terminalStatus(value: CatalogJsonObject): void {
   requireLifecycle(

@@ -429,7 +429,7 @@ function launchResolver(
       );
       if (!minted.ok) throw new Error(minted.reason);
       try {
-        const record = createRunRecord(
+        const record = createRunRecord({
           input,
           request,
           context,
@@ -438,7 +438,7 @@ function launchResolver(
           research,
           onRuntimeEvent,
           notifyVerifiedHeadAdvanced,
-        );
+        });
         runs.set(request.runId, withCurrentToolFacadeBridge(record, toolFacadeBridge));
         return launchRequest(record, context, minted);
       } catch (error) {
@@ -630,17 +630,29 @@ function prepareRunToolContext(
   return { leases, skillCatalog, explicitSkills, resolveWorkspaceRootAccess };
 }
 
-function createRunToolSurface(
-  input: ProductionCodingRuntimeResolverInput,
-  request: ProductionRuntimeBackendInput["request"],
-  context: CodingRuntimeTrustedContext,
-  minted: MintedRuntime,
-  authority: CodingRuntimeAuthorityService,
-  research: ResearchComposition,
-  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
-  signal: AbortSignal,
-  notifyVerifiedHeadAdvanced: (runId: string) => void,
-): RunToolSurface {
+interface RunToolSurfaceInput {
+  readonly input: ProductionCodingRuntimeResolverInput;
+  readonly request: ProductionRuntimeBackendInput["request"];
+  readonly context: CodingRuntimeTrustedContext;
+  readonly minted: MintedRuntime;
+  readonly authority: CodingRuntimeAuthorityService;
+  readonly research: ResearchComposition;
+  readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+  readonly signal: AbortSignal;
+  readonly notifyVerifiedHeadAdvanced: (runId: string) => void;
+}
+function createRunToolSurface(args: RunToolSurfaceInput): RunToolSurface {
+  const {
+    input,
+    request,
+    context,
+    minted,
+    authority,
+    research,
+    onRuntimeEvent,
+    signal,
+    notifyVerifiedHeadAdvanced,
+  } = args;
   const invocationRegistry = createCodingToolInvocationRegistry();
   const services = runtimeGitServices(
     input,
@@ -679,18 +691,8 @@ function createRunToolSurface(
   };
 }
 
-function createRunRecord(
-  input: ProductionCodingRuntimeResolverInput,
-  request: ProductionRuntimeBackendInput["request"],
-  context: CodingRuntimeTrustedContext,
-  minted: MintedRuntime,
-  authority: CodingRuntimeAuthorityService,
-  research: ResearchComposition,
-  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
-  notifyVerifiedHeadAdvanced: (runId: string) => void,
-): ResolverRunRecord {
-  const controller = new AbortController();
-  const surface = createRunToolSurface(
+function createRunRecord(args: Omit<RunToolSurfaceInput, "signal">): ResolverRunRecord {
+  const {
     input,
     request,
     context,
@@ -698,9 +700,10 @@ function createRunRecord(
     authority,
     research,
     onRuntimeEvent,
-    controller.signal,
     notifyVerifiedHeadAdvanced,
-  );
+  } = args;
+  const controller = new AbortController();
+  const surface = createRunToolSurface({ ...args, signal: controller.signal });
   const backend = createBackendRun({
     input,
     request,

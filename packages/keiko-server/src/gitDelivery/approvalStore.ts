@@ -35,7 +35,7 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 // readiness digest, transition-payload digest) re-verified immediately before execution.
 // "fetch" / "pull" (final-audit F2 repair, #3390): bound to `{projectId, operation, command}` only —
 // no run identity — mirroring "local-mutation" exactly, since either operation is admitted via the
-// SAME non-consuming-peek-then-consume mechanism (syncRoutes.ts), not a dedicated mint/approve route.
+// SAME non-consuming-peek-then-consume mechanism. syncRoutes.ts owns their guarded HTTP mint routes.
 export type GitDeliveryApprovalOperation =
   | "local-mutation"
   | "commit"
@@ -149,6 +149,15 @@ function pruneExpired(
   }
 }
 
+function revokeMatchingBindingRecords(
+  records: Map<string, StoredApprovalRecord>,
+  bindingHash: string,
+): void {
+  for (const [id, record] of records) {
+    if (record.bindingHash === bindingHash) records.delete(id);
+  }
+}
+
 function matchingRecord(
   records: Map<string, StoredApprovalRecord>,
   input: GitDeliveryApprovalConsumeInput,
@@ -250,12 +259,14 @@ export function createInMemoryGitDeliveryApprovalStore(
     issue(input): GitDeliveryIssuedApproval {
       const nowMs = input.nowMs ?? Date.now();
       pruneExpired(records, nowMs, maxRecords);
+      const bindingHash = gitDeliveryApprovalBindingHash(input.binding);
+      revokeMatchingBindingRecords(records, bindingHash);
       const approvalId = `gda_${randomBytes(16).toString("hex")}`;
       const approvalToken = randomBytes(32).toString("hex");
       const tokenHash = hashToken(approvalToken);
       const expiresAtMs = nowMs + (input.ttlMs ?? ttlMs);
       records.set(approvalId, {
-        bindingHash: gitDeliveryApprovalBindingHash(input.binding),
+        bindingHash,
         tokenHash,
         approvedByUserId: input.approvedByUserId,
         approvedAtMs: nowMs,

@@ -181,7 +181,7 @@ import {
 // binding this module used to import here — `isGitHubOwnerAndRepo`, the issue-preview title/excerpt
 // bounds, `GITHUB_ISSUE_NUMBER_MAX` — moved to `./coding-workbench-lazy-fetchers.ts` (epic #3384
 // final-audit F18), loaded only through `previewCodingWorkbenchIssue`'s `await import(...)` below.
-import { GITHUB_ISSUE_REFERENCE_MAX_CHARS as CONTRACT_GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+export { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import type { PrDescriptionLanguage } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 import type {
@@ -3036,6 +3036,7 @@ export interface GitDeliverySyncInput {
   readonly operation: GitSyncOperation;
   readonly projectId: string;
   readonly remote?: string | undefined;
+  readonly approval?: GitDeliveryApprovalClaim | undefined;
 }
 
 function gitDeliverySyncBody(input: GitDeliverySyncInput): string {
@@ -3043,10 +3044,14 @@ function gitDeliverySyncBody(input: GitDeliverySyncInput): string {
     schemaVersion: "1",
     projectId: input.projectId,
     ...(input.remote === undefined ? {} : { remote: input.remote }),
+    ...(input.approval === undefined ? {} : { approval: input.approval }),
   });
 }
 
-function gitDeliverySyncPath(operation: GitSyncOperation, phase: "preview" | "execute"): string {
+function gitDeliverySyncPath(
+  operation: GitSyncOperation,
+  phase: "preview" | "approve" | "execute",
+): string {
   return `/api/git-delivery/${operation}/${phase}`;
 }
 
@@ -3078,6 +3083,35 @@ export async function fetchGitDeliverySyncExecute(
     },
     validateGitSyncExecuteResponse,
   );
+}
+
+export interface GitDeliverySyncApproveResponse {
+  readonly schemaVersion: "1";
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAt: string;
+}
+
+export async function fetchGitDeliverySyncApprove(
+  input: Omit<GitDeliverySyncInput, "approval">,
+  signal?: AbortSignal,
+): Promise<GitDeliverySyncApproveResponse> {
+  return fetchJson(gitDeliverySyncPath(input.operation, "approve"), {
+    method: "POST",
+    body: gitDeliverySyncBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+/**
+ * Treats one explicit Fetch/Pull action as the approval-mint plus one-use execute sequence. The
+ * server independently validates the same project, operation, and remote at both steps.
+ */
+export async function proposeGitDeliverySync(
+  input: Omit<GitDeliverySyncInput, "approval">,
+  signal?: AbortSignal,
+): Promise<GitSyncExecuteResponse> {
+  const minted = await fetchGitDeliverySyncApprove(input, signal);
+  return fetchGitDeliverySyncExecute({ ...input, approval: minted.approval }, signal);
 }
 
 // ─── Governed GitHub pull request command center (#477, ADR-0064) ────────────────────────────────────
@@ -3351,7 +3385,6 @@ export type CodingWorkbenchIssuePreviewRequest = CodingWorkbenchIssuePreviewRequ
 // `./coding-workbench-lazy-fetchers.ts` (epic #3384 final-audit F18) -- this is the one binding
 // from that contract module CodingWorkbenchIssueIntake.tsx still needs synchronously (a
 // `maxLength` prop outside the dynamic() boundary), so it stays an eager re-export here.
-export const GITHUB_ISSUE_REFERENCE_MAX_CHARS = CONTRACT_GITHUB_ISSUE_REFERENCE_MAX_CHARS;
 // GITHUB_ISSUE_BINDING_ID_MAX_CHARS, SHA256_HEX, isRecordValue and isBoundedText live in
 // `./api-shared-primitives.ts` (imported and re-exported near the top of this file) so this
 // module and `./coding-workbench-lazy-fetchers.ts` both depend on that leaf instead of on each
@@ -3462,9 +3495,7 @@ function isGitCommitShaHex(value: unknown): value is string {
 // Owner audit b1-12 — the sibling `blocked` reason is checked against the closed set below; this
 // mirrors it for `descriptionStatus` instead of accepting any bounded string, so an unrecognised
 // value is rejected here rather than reaching the pill's status-badge lookup and throwing.
-function isChatGitChangeDescriptionStatus(
-  value: unknown,
-): value is ChatGitChangeDescriptionStatus {
+function isChatGitChangeDescriptionStatus(value: unknown): value is ChatGitChangeDescriptionStatus {
   return typeof value === "string" && CHAT_GIT_CHANGE_DESCRIPTION_STATUS_SET.has(value);
 }
 
@@ -3916,6 +3947,17 @@ export interface ApplyGitChangeChatDescriptionInput {
   readonly chatId: string;
   readonly relationshipId: string;
   readonly proposalId: string;
+}
+
+export async function approveGitChangeChatDescription(
+  input: ApplyGitChangeChatDescriptionInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrDescriptionApproveResponse> {
+  return fetchJson<GitDeliveryPrDescriptionApproveResponse>("/api/git-change/approve-description", {
+    method: "POST",
+    body: JSON.stringify({ schemaVersion: "1", ...input }),
+    ...(signal === undefined ? {} : { signal }),
+  });
 }
 
 /**

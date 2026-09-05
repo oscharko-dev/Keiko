@@ -391,6 +391,31 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
     expect(relationship.source).toMatchObject({ kind: "chat", id: chat.id });
     expect(relationship.target.kind).toBe("git-change");
   });
+
+  it("rejects a ninth scope before snapshot capture or relationship creation", async () => {
+    const snapshot = fixtureSnapshot();
+    const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [snapshot] });
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    await connectHandler(makeCtx(connectRequestBody(chat.id)), deps);
+    const first = requireDefined(
+      chatStore.findChatById(chat.id)?.gitChangeScopes?.[0],
+      "first scope",
+    );
+    chatStore.updateChat(chat.id, {
+      gitChangeScopes: Array.from({ length: 8 }, (_, index) => ({
+        ...first,
+        relationshipId: `rel-cap-${String(index)}`,
+      })),
+    });
+
+    const result = asRouteResult(await connectHandler(makeCtx(connectRequestBody(chat.id)), deps));
+
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: { code: "GIT_CHANGE_SCOPE_LIMIT_REACHED" } },
+    });
+    expect(chatStore.findChatById(chat.id)?.gitChangeScopes).toHaveLength(8);
+  });
 });
 
 function pullRequestIdentity(
@@ -547,6 +572,38 @@ describe("POST /api/git-change/refresh (Issue #3400)", () => {
     expect(scopes).toHaveLength(1);
     expect(requireDefined(scopes[0], "refreshed persisted scope").relationshipId).toBe(
       staleScope.relationshipId,
+    );
+  });
+
+  it("keeps the old relationship active when replacement creation throws", async () => {
+    const original = fixtureSnapshot();
+    const moved = fixtureSnapshot({ headSha: "f".repeat(40), snapshotDigest: "9".repeat(64) });
+    const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [original, moved] });
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    const connected = asRouteResult(
+      await connectHandler(makeCtx(connectRequestBody(chat.id)), deps),
+    );
+    const oldScope = requireDefined((connected.body as GitChangeScopeBody).scope, "original scope");
+    const relationshipStore = requireDefined(deps.relationship, "relationship deps").store;
+    vi.spyOn(relationshipStore, "createRelationship").mockImplementationOnce(() => {
+      throw new Error("replacement creation failed");
+    });
+
+    await expect(
+      refreshHandler(
+        makeCtx({
+          schemaVersion: "1",
+          chatId: chat.id,
+          relationshipId: oldScope.relationshipId,
+        }),
+        deps,
+      ),
+    ).rejects.toThrow("replacement creation failed");
+    expect(relationshipStore.getRelationship("ws-1", oldScope.relationshipId)?.lifecycleState).toBe(
+      "active",
+    );
+    expect(chatStore.findChatById(chat.id)?.gitChangeScopes?.[0]?.relationshipId).toBe(
+      oldScope.relationshipId,
     );
   });
 });

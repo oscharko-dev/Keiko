@@ -1,7 +1,10 @@
 import type { DraftDeliveryService } from "./draftDeliveryTypes.js";
 import { requestDraftDeliveryApproval } from "../coding-runtime/productionDraftDeliveryRuntime.js";
 import type { RuntimeGitService } from "./runtimeGitService.js";
-import { requestRuntimeStageApproval } from "../coding-runtime/productionVerifiedCommitRuntime.js";
+import {
+  requestRuntimeStageApproval,
+  requestVerifiedCommitApproval,
+} from "../coding-runtime/productionVerifiedCommitRuntime.js";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeAuthorityEnvelope,
@@ -16,7 +19,6 @@ import {
   codingToolApprovalBindingDigest,
 } from "../coding-runtime/codingToolApprovalBridge.js";
 import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
-import { requestVerifiedCommitApproval } from "../coding-runtime/productionVerifiedCommitRuntime.js";
 import type { VerifiedCommitService } from "./verifiedCommitTypes.js";
 
 interface CommitFacadeFixtureInput {

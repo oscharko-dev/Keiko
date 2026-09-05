@@ -10,6 +10,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import { isGitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import {
   assessGitCiFacts,
   gitCiCheckCounts,
@@ -133,7 +134,7 @@ function failureIdentity(assessment: GitCiAssessment | undefined): {
   const failures = assessment.checks.required
     .filter((check) => check.classification === "failed")
     .map((check) => canonicalise(check.requirement))
-    .sort();
+    .sort(compareStrings);
   return failures.length === 0
     ? {}
     : {

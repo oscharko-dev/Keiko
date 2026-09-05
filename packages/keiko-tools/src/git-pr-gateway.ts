@@ -212,7 +212,8 @@ export function buildPrReadByHeadArgv(req: GitPrReadHeadRequest): readonly strin
   // an unscoped `state=all&per_page=2` can push an older open PR off the page behind a more
   // recently created closed one, hiding it from a caller that filters the page to open PRs after
   // the fact. Scoping the query itself keeps every one of the (at most) two returned slots open.
-  const query = `state=open&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=2&page=1`;
+  const head = encodeURIComponent(owner + ":" + branch);
+  const query = `state=open&head=${head}&per_page=2&page=1`;
   return buildGitHubApiGetArgv(`/repos/${repo}/pulls?${query}`, `[.[] | ${GIT_PR_IDENTITY_JQ}]`);
 }
 

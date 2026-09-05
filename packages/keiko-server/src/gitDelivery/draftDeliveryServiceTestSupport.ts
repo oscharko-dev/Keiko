@@ -73,7 +73,7 @@ export class DraftDeliveryFixture {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       env: {
-        PATH: process.env.PATH,
+        PATH: process.platform === "win32" ? "C:\\Windows\\System32" : "/usr/bin:/bin",
         GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
         GIT_CONFIG_NOSYSTEM: "1",
       },

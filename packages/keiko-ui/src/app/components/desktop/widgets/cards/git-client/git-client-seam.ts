@@ -17,7 +17,6 @@ import {
   cloneRepository as fetchCloneRepository,
   createProject,
   fetchGitBranches,
-  fetchGitDeliverySyncExecute,
   fetchGitDeliverySyncPreview,
   fetchGitDeliveryCommitExecute,
   fetchGitDeliveryCommitPreview,
@@ -45,6 +44,7 @@ import {
   fetchGitStatus,
   fetchProjects,
   proposeCommit,
+  proposeGitDeliverySync,
   proposePush,
   reconnectProject,
   type GitDeliveryCommitPreviewResponse,
@@ -91,7 +91,7 @@ export interface GitClientSeam {
   // `proposePush`, api.ts).
   readonly commitPropose: typeof proposeCommit;
   readonly syncPreview: typeof fetchGitDeliverySyncPreview;
-  readonly syncExecute: typeof fetchGitDeliverySyncExecute;
+  readonly syncExecute: typeof proposeGitDeliverySync;
   readonly pushPreview: typeof fetchGitDeliveryPushPreview;
   readonly pushExecute: typeof fetchGitDeliveryPushExecute;
   readonly pushPropose: typeof proposePush;
@@ -132,7 +132,7 @@ export const DEFAULT_GIT_CLIENT: GitClientSeam = {
   commitExecute: fetchGitDeliveryCommitExecute,
   commitPropose: proposeCommit,
   syncPreview: fetchGitDeliverySyncPreview,
-  syncExecute: fetchGitDeliverySyncExecute,
+  syncExecute: proposeGitDeliverySync,
   pushPreview: fetchGitDeliveryPushPreview,
   pushExecute: fetchGitDeliveryPushExecute,
   pushPropose: proposePush,

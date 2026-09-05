@@ -29,5 +29,6 @@ export function proposalIdPattern(): string {
  * shape but is never redeemed through keiko_git_execute.
  */
 export function mintProposalId(prefix: ProposalIdPrefix | "recovery"): string {
-  return `${prefix}-${BigInt(`0x${randomBytes(16).toString("hex")}`).toString(10)}`;
+  const randomHex = randomBytes(16).toString("hex");
+  return `${prefix}-${BigInt("0x" + randomHex).toString(10)}`;
 }

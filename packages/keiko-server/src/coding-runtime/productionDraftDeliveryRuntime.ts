@@ -21,6 +21,11 @@ import type { GovernedCodingToolResult } from "./codingToolGovernedDelegate.js";
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
 import type { DraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
 
+function randomEventId(): string {
+  const randomHex = randomBytes(16).toString("hex");
+  return `event-${BigInt("0x" + randomHex).toString(10)}`;
+}
+
 export function createProductionDraftDeliveryService(
   deps: DraftDeliveryDependencies | undefined,
   verified: VerifiedCommitRuntimeDependencies | undefined,
@@ -68,7 +73,7 @@ export function publishDraftDeliveryRecord(
   emit(
     {
       schemaVersion: "1",
-      eventId: `event-${BigInt(`0x${randomBytes(16).toString("hex")}`).toString(10)}`,
+      eventId: randomEventId(),
       runId: record.binding.runId,
       occurredAt: record.recordedAt,
       kind: "artifact-produced",

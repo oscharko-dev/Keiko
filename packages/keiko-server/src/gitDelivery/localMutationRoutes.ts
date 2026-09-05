@@ -228,16 +228,26 @@ const readParsed = (req: IncomingMessage): Promise<GitDeliveryParsedBody<RouteRe
 // against the SAME clock that consumption uses, rather than silently falling back to real
 // wall-clock time and disagreeing with an injected one. Extracted purely to keep the handler under
 // the repo's max-lines-per-function/complexity bar — no behavioral seam of its own.
-function localMutationAuthorityDenial(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-  projectId: string,
-  workspace: WorkspaceInfo,
-  operation: LocalDeliveryOperation,
-  command: GitMutationCommand,
-  approval: ParsedGitDeliveryApprovalRequest,
-  seams: GitDeliveryExecutionSeams,
-): RouteResult | undefined {
+interface LocalMutationAuthorityDenialInput {
+  readonly ctx: RouteContext;
+  readonly deps: UiHandlerDeps;
+  readonly projectId: string;
+  readonly workspace: WorkspaceInfo;
+  readonly operation: LocalDeliveryOperation;
+  readonly command: GitMutationCommand;
+  readonly approval: ParsedGitDeliveryApprovalRequest;
+  readonly seams: GitDeliveryExecutionSeams;
+}
+function localMutationAuthorityDenial({
+  ctx,
+  deps,
+  projectId,
+  workspace,
+  operation,
+  command,
+  approval,
+  seams,
+}: LocalMutationAuthorityDenialInput): RouteResult | undefined {
   return gitDeliveryAuthorityDenial(
     ctx,
     deps,
@@ -269,7 +279,7 @@ export const createHandleLocalMutation = (
     if (workspace === undefined) return errResult(404, "GIT_DELIVERY_LOCAL_UNKNOWN_PROJECT");
     const operation = spec.operation ?? localDeliveryOperationFor(command);
     if (operation === undefined) return errResult(400, "GIT_DELIVERY_LOCAL_BAD_REQUEST");
-    const authorityDenial = localMutationAuthorityDenial(
+    const authorityDenial = localMutationAuthorityDenial({
       ctx,
       deps,
       projectId,
@@ -278,7 +288,7 @@ export const createHandleLocalMutation = (
       command,
       approval,
       seams,
-    );
+    });
     if (authorityDenial !== undefined) return authorityDenial;
     const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
       store: seams.approvalStore,

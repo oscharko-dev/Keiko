@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -317,6 +317,7 @@ describe("macOS runtime qualification", () => {
 
   it("writes nothing when --qualification-receipts is not set", () => {
     const value = fixture();
+    const receiptsDir = root();
     qualifyMacosRuntimeRelease(
       {
         "execution-app-root": "/Applications/KeikoQualification-fixture.app",
@@ -332,6 +333,7 @@ describe("macOS runtime qualification", () => {
       },
     );
     // No throw and no --scenario-id required: the bridge is opt-in.
+    expect(readdirSync(receiptsDir)).toEqual([]);
   });
 
   it("requires --scenario-id when writing qualification evidence", () => {

@@ -61,6 +61,12 @@ function identity(
   pr: Record<string, unknown>,
   target: GitJourneyReadTarget,
 ): GitJourneyHeader["identity"] {
+  const state =
+    pr.state === "MERGED"
+      ? "closed"
+      : typeof pr.state === "string"
+        ? pr.state.toLowerCase()
+        : pr.state;
   const value = parseGitPrIdentity(
     {
       number: pr.number,
@@ -72,12 +78,7 @@ function identity(
       headSha: pr.headRefOid,
       baseRef: pr.baseRefName,
       baseSha: pr.baseRefOid,
-      state:
-        pr.state === "MERGED"
-          ? "closed"
-          : typeof pr.state === "string"
-            ? pr.state.toLowerCase()
-            : pr.state,
+      state,
       isDraft: pr.isDraft,
     },
     target.repository,

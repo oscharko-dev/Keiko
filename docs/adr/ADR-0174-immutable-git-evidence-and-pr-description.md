@@ -75,6 +75,16 @@ and omission statements are deterministic. A partial snapshot cannot become a co
 unavailable or expired evidence cannot be silently replaced by another revision. Artifacts are
 immutable and bind their canonical digest to the source snapshot and rendered result.
 
+Workbench generation starts only after a succeeded run with a durable verified commit. The existing
+runtime job register binds deduplication and settlement to the exact revisions, accepted task,
+runtime authority, execution binding and, when present, a digest of the delivery binding. A changed
+binding supersedes the attempt even when the commit is unchanged. Completion rechecks the live
+snapshot and authority, and the orchestrator discards a result whose accepted binding changed
+during generation. The durable status retains only these digests and closed outcomes. Migration
+marks older rendered statuses without this continuity proof stale; it never treats them as freshly
+authorized results. Restart reconciliation retains the binding while marking interrupted work
+blocked.
+
 ### D4 — Trusted rendering and separately governed application
 
 One contract owns the versioned managed-region markers. Model output cannot author those markers,

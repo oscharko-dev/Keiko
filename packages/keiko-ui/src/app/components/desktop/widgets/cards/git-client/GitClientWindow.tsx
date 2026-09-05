@@ -763,6 +763,15 @@ function shouldShowBranchOutcome(
   return !dialogOpen && (error !== null || (outcome !== null && outcome.status !== "succeeded"));
 }
 
+function repositoryRootForMutation(
+  status: GitRepositoryStatusResponse | null,
+  statusProjectKey: string | null,
+  selectedPath: string | null,
+): string | undefined {
+  if (statusProjectKey !== selectedPath || status?.available !== true) return undefined;
+  return status.repositoryRoot ?? status.root;
+}
+
 export function GitClientWindow({
   projectId,
   initialPath,
@@ -853,10 +862,7 @@ export function GitClientWindow({
   // Two independent governed-mutation flows: one for staging, one for the commit composer. Each
   // carries its own stale-guard so concurrent stage clicks and a later commit do not cross results.
   const projectKey = selectedPath ?? "";
-  const mutationRepositoryRoot =
-    statusProjectKey === selectedPath && status?.available === true
-      ? (status.repositoryRoot ?? status.root)
-      : undefined;
+  const mutationRepositoryRoot = repositoryRootForMutation(status, statusProjectKey, selectedPath);
   const branchActions = useGitActions(client, projectKey, mutationRepositoryRoot);
   const staging = useGitActions(client, projectKey, mutationRepositoryRoot);
   const commit = useGitActions(client, projectKey, mutationRepositoryRoot);

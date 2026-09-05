@@ -814,11 +814,10 @@ function staticPropertyName(property) {
 function closedObjectPreservesOperation(expression) {
   const properties = objectProperties(expression.trim());
   return (
-    properties !== undefined &&
-    properties.every(({ text }) => {
+    properties?.every(({ text }) => {
       const name = staticPropertyName(text);
       return name !== undefined && name !== "operation";
-    })
+    }) ?? false
   );
 }
 

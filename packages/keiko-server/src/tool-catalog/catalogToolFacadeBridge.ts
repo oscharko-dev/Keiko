@@ -9,16 +9,14 @@ import type {
   CatalogVersionRef,
   CompiledToolProjection,
   ToolDescriptor,
+  ToolResultReason,
+  ToolResultStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { captureToolInvocationReceipt } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { errorKindOf } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
-import type {
-  ToolResultReason,
-  ToolResultStatus,
-} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ToolBudgetDisposition } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import type { CodingToolActionRequest } from "../coding-runtime/codingToolIpc.js";
 import { emitToolLifecycleEvent, type CatalogLifecycleLogPort } from "./catalogToolLifecycle.js";
@@ -333,13 +331,11 @@ function settleReservation(
     if (effectStarted) runtime.input.budget.commit(reservation);
     else runtime.input.budget.release(reservation);
     return { budgetDisposition: effectStarted ? "committed" : "released" };
-  } catch (accountingFault) {
+  } catch (error_) {
     return {
       budgetDisposition: effectStarted ? "commit-uncertain" : "release-uncertain",
       accountingFault:
-        accountingFault instanceof Error
-          ? accountingFault
-          : new Error("catalog-budget-accounting-failed"),
+        error_ instanceof Error ? error_ : new Error("catalog-budget-accounting-failed"),
     };
   }
 }
@@ -366,23 +362,23 @@ function settleSuccess<T>(
   return result;
 }
 
-/** Settles the failure path: releases the reservation once and reports the original rejection
- * (classified through the shared `CatalogDispatchFault` vocabulary), never the handler's own
- * error masked by an unrelated accounting failure. */
+/** Settles the failure path after the handler has started: conservatively commits the reservation
+ * and reports the original rejection (classified through the shared `CatalogDispatchFault`
+ * vocabulary), never the handler's own error masked by an unrelated accounting failure. */
 function settleFailure(
   runtime: BridgeRuntime,
   meta: InvocationMeta,
   reservation: CatalogFacadeBudgetReservation,
   error: unknown,
 ): void {
-  const accounting = settleReservation(runtime, reservation, false);
+  const accounting = settleReservation(runtime, reservation, true);
   const classified = classifyFailure(error);
   emitSettlement(runtime, {
     ...meta,
     status: accounting.accountingFault === undefined ? classified.status : "failed",
     reason: accounting.accountingFault === undefined ? classified.reason : "budget-port-failed",
     reservationId: reservation.reservationId,
-    effectStarted: false,
+    effectStarted: true,
     budgetDisposition: accounting.budgetDisposition,
     error: accounting.accountingFault ?? error,
   });

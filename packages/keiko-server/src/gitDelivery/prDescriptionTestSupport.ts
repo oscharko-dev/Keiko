@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDefaultChatCapability } from "@oscharko-dev/keiko-model-gateway";
+import { createDefaultChatCapability, PrDescription } from "@oscharko-dev/keiko-model-gateway";
+import type { PrDescriptionArtifact } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-contracts";
 import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
@@ -96,12 +97,64 @@ export class DescriptionFixture {
     this.git(["config", "user.email", "test@example.test"]);
     this.git(["config", "user.name", "Test"]);
   }
+  public async generateArtifact(
+    refinement = "Chat-selected intent",
+  ): Promise<PrDescriptionArtifact> {
+    const captureInput = {
+      workspace: this.context.workspace,
+      baseRef: this.remote.identity.baseSha,
+      headRef: this.remote.identity.headSha,
+      expectedHeadSha: this.remote.identity.headSha,
+      accessScope: this.context.accessScope,
+      correlationId: this.context.correlationId,
+    };
+    const captured = await this.snapshots.capture(captureInput);
+    if (captured.reference === undefined) throw new Error("description snapshot unavailable");
+    const result = await PrDescription.generatePrDescription(
+      {
+        snapshotReference: captured.reference,
+        language: "en",
+        refinement,
+        authority: {
+          authorityDigest: this.context.authorityDigest,
+          correlationId: this.context.correlationId,
+        },
+      },
+      {
+        ...this.generation(),
+        resolveSnapshot: (reference) => {
+          const content = this.snapshots.read(
+            reference,
+            this.context.accessScope,
+            this.context.correlationId,
+          );
+          return Promise.resolve(
+            content === undefined
+              ? undefined
+              : {
+                  snapshot: content.snapshot,
+                  evidence: content.files.map((file) => ({
+                    evidenceId: file.evidenceId,
+                    text: JSON.stringify(file),
+                  })),
+                },
+          );
+        },
+      },
+    );
+    if (result.status !== "generated") throw new Error("description generation unavailable");
+    return result.artifact;
+  }
   private git(args: string[]): string {
     return execFileSync("git", args, {
       cwd: this.root,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      env: { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+      env: {
+        PATH: process.platform === "win32" ? "C:\\Windows\\System32" : "/usr/bin:/bin",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+      },
     }).trim();
   }
   private makeOptions(): PrDescriptionServiceOptions {

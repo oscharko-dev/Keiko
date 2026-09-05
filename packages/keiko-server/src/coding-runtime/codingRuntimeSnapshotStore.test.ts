@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { CodingWorkbenchIssueBinding } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_RUNTIME_FAILURE_CODES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { restoreV13SchemaFixture } from "../store/legacySchemaTestFixture.js";
-import { runMigrations, SCHEMA_VERSION } from "../store/schema.js";
+import { MIGRATIONS, runMigrations, SCHEMA_VERSION } from "../store/schema.js";
 import {
   createCodingRuntimeSnapshotStore,
   type CodingRuntimeSnapshot,
@@ -69,6 +69,31 @@ function columnNames(db: DatabaseSync): readonly string[] {
 }
 
 describe("CodingRuntimeSnapshotStore", () => {
+  it("preserves v29 identity and receipt columns while adding the issue failure code", () => {
+    const db = new DatabaseSync(":memory:");
+    for (const migration of MIGRATIONS.filter((entry) => entry.version <= 29)) {
+      db.exec(migration.sql);
+      migration.apply?.(db);
+    }
+    db.exec("PRAGMA user_version = 29");
+    createCodingRuntimeSnapshotStore(db).create({ ...snapshot(), issueBinding: ISSUE_BINDING });
+    db.exec(`UPDATE coding_runtime_snapshots SET
+      verified_commit_result = '{}', draft_delivery_record = '{}',
+      draft_delivery_source_receipt = '{}', last_successful_verified_commit = '{}',
+      ci_readiness_record = '{}', ci_observation_revision = 7`);
+    const before = db.prepare("SELECT * FROM coding_runtime_snapshots").get();
+    runMigrations(db);
+    expect(db.prepare("SELECT * FROM coding_runtime_snapshots").get()).toEqual(before);
+    expect(() => { db.exec(`UPDATE coding_runtime_snapshots
+      SET failure_code = 'issue-context-unavailable'`); },
+    ).not.toThrow();
+    expect(() => { db.exec(`UPDATE coding_runtime_snapshots
+      SET failure_code = 'unknown-failure'`); },
+    ).toThrow(/CHECK/u);
+    expect(() => createCodingRuntimeSnapshotStore(db).create(snapshot("run-2"))).toThrow();
+    db.close();
+  });
+
   it("round-trips only the bounded terminal process result", () => {
     const s = store();
     s.create(snapshot());

@@ -35,7 +35,7 @@ export function isRecordValue(value: unknown): value is Record<string, unknown> 
 }
 
 // eslint-disable-next-line no-control-regex -- the class IS the control range being refused
-const CONTROL_CHARACTER = new RegExp("[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F]", "u");
+const CONTROL_CHARACTER = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/u;
 
 export function isBoundedText(
   value: unknown,

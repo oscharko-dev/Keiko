@@ -26,7 +26,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 import type { WorkbenchDescriptionReason } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
 import { PrDescription } from "@oscharko-dev/keiko-model-gateway";
-import type { GitChangeSnapshotService } from "../gitChangeSnapshotService.js";
+import type {
+  GitChangeSnapshotService,
+  GitChangeSnapshotCaptureInput,
+} from "../gitChangeSnapshotService.js";
 import type { GitChangeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
 import {
   authorizeGitDeliveryModelEgress,
@@ -92,7 +95,7 @@ export function createProductionRuntimeOperationGuard(
   return {
     reserve: (request, mode = "mutation"): ProductionRuntimeOperationReservation | undefined => {
       if (
-        inadmissibleOperation(request, runId, lastRevision, mode) ||
+        inadmissibleOperation(request, runId, lastRevision) ||
         usedRequestIds.has(request.requestId) ||
         pending !== undefined
       ) {
@@ -137,24 +140,13 @@ function inadmissibleOperation(
   request: CodingRuntimeRunOperation,
   runId: string,
   lastRevision: number,
-  mode: "mutation" | "read",
 ): boolean {
-  // A read must stay repeatable at the revision most recently committed by a mutation (see the
-  // commit() comment above): a mutation that is accepted without itself advancing the run's live
-  // revision -- the initial turn's dispatch is the one case (runInitialTurn settles into "running"
-  // and dispatches in the same revision, never advancing again on acceptance) -- would otherwise
-  // set lastRevision to the run's own current live revision and permanently lock out every future
-  // read at that unchanged revision (epic #3384). A mutation still rejects a REPLAY at the exact
-  // committed revision (`<=`); only a genuinely superseded, already-evicted revision (`<`) closes a
-  // read.
-  const revisionExhausted =
-    mode === "read" ? request.expectedRevision < lastRevision : request.expectedRevision <= lastRevision;
   return (
     request.runId !== runId ||
     !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(request.requestId) ||
     !Number.isSafeInteger(request.expectedRevision) ||
     request.expectedRevision < 0 ||
-    revisionExhausted
+    request.expectedRevision <= lastRevision
   );
 }
 
@@ -687,21 +679,26 @@ async function dispatchWorkbenchDescription(
   const root = deps.activeWorkspaceRoot();
   if (root === undefined) return { reason: "generation-unavailable" };
   const accessScope = {};
-  const capture = await deps.snapshots.capture({
+  const captureInput: GitChangeSnapshotCaptureInput = {
     workspace: minimalWorkspaceInfo(root),
-    baseRef: scope.baseSha,
-    headRef: scope.headSha,
+    baseRef: scope.baseRef ?? scope.baseSha,
+    headRef: scope.headRef ?? scope.headSha,
+    expectedHeadSha: scope.headSha,
     accessScope,
     correlationId: scope.runId,
     signal,
-  });
+  };
+  const capture = await deps.snapshots.capture(captureInput);
   const captured = capture.snapshot;
   if (captured.outcome === "failed") return { reason: "provider-failed" };
   if (captured.outcome === "unavailable") return { reason: "generation-unavailable" };
   if (capture.reference === undefined || captured.remoteDigest !== scope.remoteDigest) {
     return { reason: "generation-unavailable" };
   }
-  return admitAndGenerate(deps, scope, captured, capture.reference, accessScope, signal);
+  if (captured.baseSha !== scope.baseSha || captured.headSha !== scope.headSha) {
+    return { reason: "stale-snapshot" };
+  }
+  return admitAndGenerate(deps, scope, captured, capture.reference, captureInput, signal);
 }
 
 async function admitAndGenerate(
@@ -709,7 +706,7 @@ async function admitAndGenerate(
   scope: WorkbenchDescriptionScope,
   captured: GitChangeSnapshot,
   reference: string,
-  accessScope: object,
+  captureInput: GitChangeSnapshotCaptureInput,
   signal: AbortSignal,
 ): Promise<ProductionWorkbenchDescriptionOutcome> {
   const authorityScope: GitDeliveryDescriptionAuthorityScope = {
@@ -742,12 +739,40 @@ async function admitAndGenerate(
           deps.snapshots,
           reference,
           scope.runId,
-          accessScope,
+          captureInput.accessScope,
           supplied,
           sig,
         ),
     },
   );
+  return recheckWorkbenchDescription(deps, scope, captureInput, reference, authorityScope, result);
+}
+
+async function recheckWorkbenchDescription(
+  deps: ProductionWorkbenchDescriptionDeps,
+  scope: WorkbenchDescriptionScope,
+  input: GitChangeSnapshotCaptureInput,
+  reference: string,
+  authorityScope: GitDeliveryDescriptionAuthorityScope,
+  result: PrDescription.PrDescriptionGenerationResult,
+): Promise<ProductionWorkbenchDescriptionOutcome> {
+  if (result.status !== "generated") return workbenchDescriptionOutcome(result);
+  const current = await deps.snapshots.recheck(reference, input);
+  if (
+    input.signal?.aborted ||
+    current.state !== "current" ||
+    deps.activeWorkspaceRoot() !== input.workspace.root
+  )
+    return { reason: "stale-snapshot" };
+  const denied = modelEgressDenialReason(
+    deps.descriptionAuthority,
+    authorityScope,
+    new Date(deps.now()).toISOString(),
+  );
+  if (denied !== undefined) {
+    logWorkbenchModelEgressDenied(scope.runId, denied);
+    return { reason: denied };
+  }
   return workbenchDescriptionOutcome(result);
 }
 

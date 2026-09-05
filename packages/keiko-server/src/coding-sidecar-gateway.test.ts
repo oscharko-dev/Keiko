@@ -18,6 +18,7 @@ import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
+  _classifyBadRequestReasonForTests,
   createOpenCodeGatewayReadinessRegistry,
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
@@ -3444,6 +3445,36 @@ describe("coding-sidecar gateway", () => {
 describe("coding sidecar gateway rejection activity log", () => {
   afterEach(() => {
     resetServerLogger();
+  });
+
+  it("classifies an unknown rejection separately without changing its wire response", () => {
+    const result: RouteResult = {
+      status: 400,
+      body: { error: { code: "FUTURE_REJECTION", message: "Future fixed rejection text." } },
+    };
+    const wire = structuredClone(result);
+
+    expect(_classifyBadRequestReasonForTests(result)).toBe("unclassified-rejection");
+    expect(result).toEqual(wire);
+  });
+
+  it("keeps invalid JSON on the explicit body-not-json evidence path without changing its wire response", async () => {
+    const sink = captureServerLog("warn");
+    const deps = depsValue(configValue(provider(), capability()));
+
+    const result = await handleCodingSidecarGatewayChatCompletions(routeContext("{"), deps);
+
+    expect(result).toEqual({
+      status: 400,
+      body: { error: { code: "BAD_REQUEST", message: "Request body is not valid JSON." } },
+    });
+    expect(sink.events).toEqual([
+      expect.objectContaining({
+        op: "coding-sidecar.gateway.rejected",
+        status: 400,
+        extra: { reason: "body-not-json", runId: "run-gateway-test" },
+      }),
+    ]);
   });
 
   it("logs a body-free rejection line when estimated prompt tokens exceed the profile budget", async () => {

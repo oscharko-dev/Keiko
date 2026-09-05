@@ -81,15 +81,14 @@ export function createCatalogProfileDeclaration(value: unknown): CatalogProfileD
   const compatibility = catalogArray(object.compatibility).map(compatibilityFrom);
   const identities = compatibility.map((entry) => canonicalise(entry));
   requireCatalog(new Set(identities).size === compatibility.length, "duplicate-identity");
+  compatibility.sort((left, right) => compareStrings(canonicalise(left), canonicalise(right)));
   return deepFreeze({
     profile: versionRefFrom(object.profile),
     toolRefs,
     nativeExtensions,
     adapterDialect: versionRefFrom(object.adapterDialect),
     adapterRuntime,
-    compatibility: compatibility.sort((left, right) =>
-      compareStrings(canonicalise(left), canonicalise(right)),
-    ),
+    compatibility,
   });
 }
 

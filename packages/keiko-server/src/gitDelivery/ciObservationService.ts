@@ -247,7 +247,7 @@ async function readFailureContext(
     return { status: "superseded" };
   if (!failureContextMatches(snapshot, result))
     return { status: "unavailable", failure: gitDeliveryObservationFailure("revision-changed") };
-  return JSON.parse(JSON.stringify(result)) as GitCiFailureContextResult;
+  return structuredClone(result);
 }
 
 function failureContextMatches(

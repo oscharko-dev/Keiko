@@ -2,14 +2,19 @@ import {
   EDITOR_AGENT_CONFLICT_CODES,
   EDITOR_AGENT_FAILURE_CODES,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { VERIFICATION_RUNNER_ERROR_CODES } from "../editor/verificationRunnerErrors.js";
+import { DraftDeliveryFixture } from "../gitDelivery/draftDeliveryServiceTestSupport.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import type { CodingToolAuthorityPort, CodingToolDelegatePort } from "./codingToolFacadePorts.js";
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
 
 const capability = "capability-1-opaque-runtime-secret";
+const deliveryFixtures: DraftDeliveryFixture[] = [];
+afterEach(() => {
+  for (const fixture of deliveryFixtures.splice(0)) fixture.close();
+});
 const changeset = {
   patch: "--- a/src/file.ts\n+++ b/src/file.ts\n@@\n-old\n+new\n",
   files: [{ file: "src/file.ts", expectedContentHash: "a".repeat(64) }],
@@ -418,14 +423,11 @@ describe("CodingToolFacade", () => {
 
   it("reports a recorded draft delivery as completed", async () => {
     const ports = facade();
-    const draftDelivery = {
-      status: "recorded" as const,
-      record: {
-        phase: "push-proposed" as const,
-        runId: "run-1",
-        headBranch: "claude/issue-1",
-      },
-    };
+    const fixture = new DraftDeliveryFixture();
+    deliveryFixtures.push(fixture);
+    await fixture.recordVerifiedCommit();
+    const draftDelivery = await fixture.service.proposePush();
+    expect(draftDelivery.status).toBe("recorded");
     ports.delegate.execute = vi.fn(() =>
       Promise.resolve({ outcome: "completed", evidence: [], draftDelivery }),
     );
@@ -440,6 +442,25 @@ describe("CodingToolFacade", () => {
       status: "completed",
       evidence: [{ kind: "governed-delegate", code: "completed" }],
       draftDelivery,
+    });
+  });
+
+  it("rejects a recorded delivery whose payload is not a validated delivery record", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "completed",
+        draftDelivery: { status: "recorded", record: { phase: "push-proposed", runId: "run-1" } },
+      }),
+    );
+    await expect(
+      createCodingToolFacade(ports).execute({
+        body: requestBody({ action: "delivery", intent: "push", phase: "reconcile" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "failed" }],
     });
   });
 

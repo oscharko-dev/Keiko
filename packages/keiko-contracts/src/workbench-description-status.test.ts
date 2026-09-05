@@ -33,6 +33,31 @@ function missingObservedAt(): Record<string, unknown> {
 }
 
 describe("isWorkbenchDescriptionStatus", () => {
+  it("validates the complete body-free generation binding without admitting extra content", () => {
+    const generationBinding = {
+      taskDigest: digest,
+      authorityDigest: digest,
+      runtimeBindingDigest: digest,
+      deliveryBindingDigest: null,
+    };
+    expect(isWorkbenchDescriptionStatus(valid({ generationBinding }))).toBe(true);
+    expect(
+      isWorkbenchDescriptionStatus(
+        valid({
+          generationBinding: { ...generationBinding, deliveryBindingDigest: digest },
+        }),
+      ),
+    ).toBe(true);
+    for (const changed of [
+      { ...generationBinding, taskDigest: "short" },
+      { ...generationBinding, authorityDigest: undefined },
+      { ...generationBinding, deliveryBindingDigest: "not-a-digest" },
+      { ...generationBinding, body: "untrusted content" },
+    ]) {
+      expect(isWorkbenchDescriptionStatus({ ...valid(), generationBinding: changed })).toBe(false);
+    }
+  });
+
   it("accepts a well-formed status for every closed reason and its paired state", () => {
     for (const [reason, state] of Object.entries(WORKBENCH_DESCRIPTION_REASON_STATES)) {
       const artifactBearing = state === "current" || state === "partial" || state === "fallback";

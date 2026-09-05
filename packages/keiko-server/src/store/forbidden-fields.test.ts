@@ -490,6 +490,8 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
         "phase",
         "status_json",
         "updated_at",
+        // V31 stores only the four validated digests of the accepted generation binding.
+        "generation_binding",
       ]);
       for (const col of columnNames(inspector, "coding_runtime_description_jobs")) {
         const lower = col.toLowerCase();

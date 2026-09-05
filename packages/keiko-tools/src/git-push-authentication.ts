@@ -27,7 +27,8 @@ export function gitCredentialHelperCommand(
   if (!absolute || /[\r\n\0]/u.test(path)) throw new TypeError("git-push-auth-executable-invalid");
   if (platform === "win32" && !path.toLowerCase().endsWith(".exe"))
     throw new TypeError("git-push-auth-executable-invalid");
-  return `!'${path.replaceAll("'", "'\\''")}' auth git-credential`;
+  const escaped = path.replaceAll("'", String.raw`'\''`);
+  return `!'${escaped}' auth git-credential`;
 }
 
 /**

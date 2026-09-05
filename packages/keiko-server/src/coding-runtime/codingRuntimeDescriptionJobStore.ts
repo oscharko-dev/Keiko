@@ -12,6 +12,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
   isWorkbenchDescriptionStatus,
+  isWorkbenchDescriptionGenerationBinding,
+  type WorkbenchDescriptionGenerationBinding,
   WORKBENCH_DESCRIPTION_REASON_STATES,
   type WorkbenchDescriptionReason,
   type WorkbenchDescriptionStatus,
@@ -23,6 +25,10 @@ export interface WorkbenchDescriptionScope {
   readonly remoteDigest: string;
   readonly baseSha: string;
   readonly headSha: string;
+  /** Live server-resolved refs; durable identity remains the exact revision and generation binding. */
+  readonly baseRef?: string;
+  readonly headRef?: string;
+  readonly generationBinding?: WorkbenchDescriptionGenerationBinding;
 }
 
 export type WorkbenchDescriptionDispatchDecision =
@@ -80,6 +86,7 @@ interface Row {
   readonly remote_digest: string;
   readonly base_sha: string;
   readonly head_sha: string;
+  readonly generation_binding: string | null;
   readonly generation_version: number;
   readonly revision: number;
   readonly phase: "dispatched" | "settled";
@@ -96,17 +103,40 @@ function assertScope(scope: WorkbenchDescriptionScope): void {
     !RUN_ID.test(scope.runId) ||
     !DIGEST.test(scope.remoteDigest) ||
     !OBJECT_ID.test(scope.baseSha) ||
-    !OBJECT_ID.test(scope.headSha)
+    !OBJECT_ID.test(scope.headSha) ||
+    (scope.generationBinding !== undefined &&
+      !isWorkbenchDescriptionGenerationBinding(scope.generationBinding))
   ) {
     throw new TypeError("invalid description job scope");
   }
+}
+
+function serializedBinding(scope: WorkbenchDescriptionScope): string | null {
+  const binding = scope.generationBinding;
+  if (binding === undefined) return null;
+  return JSON.stringify({
+    taskDigest: binding.taskDigest,
+    authorityDigest: binding.authorityDigest,
+    runtimeBindingDigest: binding.runtimeBindingDigest,
+    deliveryBindingDigest: binding.deliveryBindingDigest,
+  });
+}
+
+function persistedBinding(row: Row): Pick<WorkbenchDescriptionScope, "generationBinding"> {
+  if (row.generation_binding === null) return {};
+  const binding: unknown = JSON.parse(row.generation_binding);
+  if (!isWorkbenchDescriptionGenerationBinding(binding)) {
+    throw new TypeError("invalid persisted description generation binding");
+  }
+  return { generationBinding: binding };
 }
 
 function sameHead(row: Row, scope: WorkbenchDescriptionScope): boolean {
   return (
     row.remote_digest === scope.remoteDigest &&
     row.base_sha === scope.baseSha &&
-    row.head_sha === scope.headSha
+    row.head_sha === scope.headSha &&
+    row.generation_binding === serializedBinding(scope)
   );
 }
 
@@ -139,6 +169,9 @@ function blockedStatus(
     remoteDigest: scope.remoteDigest,
     baseSha: scope.baseSha,
     headSha: scope.headSha,
+    ...(scope.generationBinding === undefined
+      ? {}
+      : { generationBinding: scope.generationBinding }),
     generationVersion,
     state: WORKBENCH_DESCRIPTION_REASON_STATES[reason],
     reason,
@@ -161,7 +194,7 @@ interface Statements {
 }
 
 const ROW_COLUMNS =
-  "run_id, remote_digest, base_sha, head_sha, generation_version, revision, phase, status_json";
+  "run_id, remote_digest, base_sha, head_sha, generation_binding, generation_version, revision, phase, status_json";
 
 function prepareStatements(db: DatabaseSync): Statements {
   return {
@@ -172,10 +205,10 @@ function prepareStatements(db: DatabaseSync): Statements {
       "SELECT COUNT(*) AS count FROM coding_runtime_description_jobs WHERE phase = 'dispatched'",
     ),
     insert: db.prepare(
-      "INSERT INTO coding_runtime_description_jobs (run_id, remote_digest, base_sha, head_sha, generation_version, revision, phase, status_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'dispatched', NULL, ?)",
+      "INSERT INTO coding_runtime_description_jobs (run_id, remote_digest, base_sha, head_sha, generation_binding, generation_version, revision, phase, status_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'dispatched', NULL, ?)",
     ),
     upsertDispatch: db.prepare(
-      "UPDATE coding_runtime_description_jobs SET remote_digest = ?, base_sha = ?, head_sha = ?, generation_version = ?, revision = ?, phase = 'dispatched', status_json = NULL, updated_at = ? WHERE run_id = ?",
+      "UPDATE coding_runtime_description_jobs SET remote_digest = ?, base_sha = ?, head_sha = ?, generation_binding = ?, generation_version = ?, revision = ?, phase = 'dispatched', status_json = NULL, updated_at = ? WHERE run_id = ?",
     ),
     settleRow: db.prepare(
       "UPDATE coding_runtime_description_jobs SET phase = 'settled', status_json = ?, updated_at = ? WHERE run_id = ? AND revision = ?",
@@ -184,10 +217,10 @@ function prepareStatements(db: DatabaseSync): Statements {
     // to settle: these two make the run's current head visible as blocked directly, choosing
     // insert vs. update by whether a row for the run already exists.
     insertSettled: db.prepare(
-      "INSERT INTO coding_runtime_description_jobs (run_id, remote_digest, base_sha, head_sha, generation_version, revision, phase, status_json, updated_at) VALUES (?, ?, ?, ?, ?, 0, 'settled', ?, ?)",
+      "INSERT INTO coding_runtime_description_jobs (run_id, remote_digest, base_sha, head_sha, generation_binding, generation_version, revision, phase, status_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, 'settled', ?, ?)",
     ),
     upsertSettled: db.prepare(
-      "UPDATE coding_runtime_description_jobs SET remote_digest = ?, base_sha = ?, head_sha = ?, generation_version = ?, phase = 'settled', status_json = ?, updated_at = ? WHERE run_id = ?",
+      "UPDATE coding_runtime_description_jobs SET remote_digest = ?, base_sha = ?, head_sha = ?, generation_binding = ?, generation_version = ?, phase = 'settled', status_json = ?, updated_at = ? WHERE run_id = ?",
     ),
     interrupted: db.prepare(
       `SELECT ${ROW_COLUMNS} FROM coding_runtime_description_jobs WHERE phase = 'dispatched'`,
@@ -222,6 +255,7 @@ function beginDispatch(
       scope.remoteDigest,
       scope.baseSha,
       scope.headSha,
+      serializedBinding(scope),
       generationVersion,
       revision,
       nowIso,
@@ -231,6 +265,7 @@ function beginDispatch(
       scope.remoteDigest,
       scope.baseSha,
       scope.headSha,
+      serializedBinding(scope),
       generationVersion,
       revision,
       nowIso,
@@ -260,6 +295,7 @@ function settle(
     status.remoteDigest !== scope.remoteDigest ||
     status.baseSha !== scope.baseSha ||
     status.headSha !== scope.headSha ||
+    serializedBinding(status) !== serializedBinding(scope) ||
     status.generationVersion !== generationVersion
   ) {
     throw new TypeError("description job settle payload does not match its dispatched scope");
@@ -283,6 +319,7 @@ function recordBudgetExhausted(
       scope.remoteDigest,
       scope.baseSha,
       scope.headSha,
+      serializedBinding(scope),
       generationVersion,
       JSON.stringify(status),
       nowIso,
@@ -293,6 +330,7 @@ function recordBudgetExhausted(
     scope.remoteDigest,
     scope.baseSha,
     scope.headSha,
+    serializedBinding(scope),
     generationVersion,
     JSON.stringify(status),
     nowIso,
@@ -309,6 +347,7 @@ function reconcileInterrupted(statements: Statements, nowIso: string): readonly 
       remoteDigest: row.remote_digest,
       baseSha: row.base_sha,
       headSha: row.head_sha,
+      ...persistedBinding(row),
     };
     const status = blockedStatus(scope, "interrupted", row.generation_version, nowIso);
     statements.settleRow.run(JSON.stringify(status), nowIso, row.run_id, row.revision);

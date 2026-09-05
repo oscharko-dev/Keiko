@@ -16,6 +16,7 @@ import {
 import {
   parsePrDescriptionPreviewRequest,
   prepareDescription,
+  prepareDescriptionArtifact,
   readDescriptionBody,
   sameDescriptionContext,
   validDescriptionContext,
@@ -30,6 +31,11 @@ import {
   type PrDescriptionPreview,
 } from "./prDescriptionTypes.js";
 import type { GitDeliveryIssuedApproval } from "./approvalStore.js";
+
+type ProposalPreparation = (
+  context: PrDescriptionContext,
+  now: number,
+) => Promise<PreparedPrDescription>;
 
 export function createPrDescriptionApplicationService(
   options: PrDescriptionServiceOptions,
@@ -104,15 +110,29 @@ class DescriptionService implements PrDescriptionApplicationService {
   }
   public async preview(raw: unknown): Promise<PrDescriptionApplicationResult> {
     const request = parsePrDescriptionPreviewRequest(raw);
-    const context = this.admittedContext();
     if (request === undefined) return { outcome: "blocked", reason: "invalid-request" };
+    return this.previewPrepared((context, now) =>
+      prepareDescription(this.options, context, request, now),
+    );
+  }
+  public previewArtifact(
+    artifact: PreparedPrDescription["artifact"],
+  ): Promise<PrDescriptionApplicationResult> {
+    return this.previewPrepared((context, now) =>
+      prepareDescriptionArtifact(this.options, context, artifact, now),
+    );
+  }
+  private async previewPrepared(
+    prepare: ProposalPreparation,
+  ): Promise<PrDescriptionApplicationResult> {
+    const context = this.admittedContext();
     if (context === undefined || this.busy)
       return { outcome: "blocked", reason: "authority-denied" };
     const generation = ++this.generation;
     this.busy = true;
     try {
       if (!this.current(context)) throw new PrDescriptionFailure("authority-denied");
-      const proposal = await prepareDescription(this.options, context, request, this.time());
+      const proposal = await prepare(context, this.time());
       if (!this.generationCurrent(generation, context))
         throw new PrDescriptionFailure("authority-denied");
       if (!this.allowed(proposal)) throw new PrDescriptionFailure("policy-blocked");

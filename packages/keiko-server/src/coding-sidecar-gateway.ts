@@ -108,7 +108,8 @@ type CodingSidecarGatewayRejectionReason =
   | "tool-contract-missing"
   | "tool-contract-empty"
   | "origin-not-allowed"
-  | "runtime-prompt-budget-denied";
+  | "runtime-prompt-budget-denied"
+  | "unclassified-rejection";
 
 /** Body-free: `reason` is closed, `runId` and every `extra` field are counts/ids, never text. */
 function logGatewayRejection(
@@ -128,12 +129,18 @@ function logGatewayRejection(
 }
 
 // One row per message literal `badRequest`/`validationErrorForChatRequest` actually builds — a
-// message change and this table must move together; there is deliberately no fallback row that
-// could silently misclassify a future one.
+// message change and this table must move together. A future unmatched shape receives the explicit
+// `unclassified-rejection` reason instead of borrowing one of these known meanings.
 const BAD_REQUEST_MESSAGE_REASONS: readonly {
   readonly test: (message: string) => boolean;
   readonly reason: CodingSidecarGatewayRejectionReason;
 }[] = [
+  {
+    test: (message) =>
+      message === "Request body is not valid JSON." ||
+      message === "Request body must be a JSON object.",
+    reason: "body-not-json",
+  },
   {
     test: (message) => message.startsWith("Request body messages exceed profile maxInputMessages"),
     reason: "input-messages-exceeded",
@@ -186,8 +193,19 @@ function classifyBadRequestReason(result: RouteResult): CodingSidecarGatewayReje
   const { code, message } = badRequestErrorFields(result);
   if (code === "PAYLOAD_TOO_LARGE") return "request-too-large";
   if (code === "INVALID_MODEL") return "invalid-model";
-  if (message === undefined) return "body-not-json";
-  return BAD_REQUEST_MESSAGE_REASONS.find(({ test }) => test(message))?.reason ?? "body-not-json";
+  if (message === undefined) return "unclassified-rejection";
+  return (
+    BAD_REQUEST_MESSAGE_REASONS.find(({ test }) => test(message))?.reason ??
+    "unclassified-rejection"
+  );
+}
+
+// Test seam: keeps the future/unknown classification directly provable without inventing a
+// production parser branch that does not exist yet.
+export function _classifyBadRequestReasonForTests(
+  result: RouteResult,
+): CodingSidecarGatewayRejectionReason {
+  return classifyBadRequestReason(result);
 }
 
 function isModelReasoningEffort(value: unknown): value is ModelReasoningEffort {
@@ -581,6 +599,14 @@ function toolCatalogFor(
     : undefined;
 }
 
+function toolRequestFields(
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+): Pick<GatewayCallRequest, "toolCatalog" | "tools"> {
+  const toolCatalog = toolCatalogFor(parsed.tools);
+  if (toolCatalog !== undefined) return { toolCatalog };
+  return parsed.tools === undefined ? {} : { tools: parsed.tools };
+}
+
 function buildChatRequest(
   parsed: CodingSidecarGatewayChatCompletionRequest,
   modelAlias: string,
@@ -589,15 +615,10 @@ function buildChatRequest(
   correlationId: string | undefined,
   reasoningEffort: ModelReasoningEffort | undefined,
 ): GatewayCallRequest {
-  const toolCatalog = toolCatalogFor(parsed.tools);
   return {
     modelId: modelAlias,
     messages: parsed.messages,
-    ...(toolCatalog !== undefined
-      ? { toolCatalog }
-      : parsed.tools === undefined
-        ? {}
-        : { tools: parsed.tools }),
+    ...toolRequestFields(parsed),
     ...(parsed.temperature === undefined ? {} : { temperature: parsed.temperature }),
     ...(parsed.top_p === undefined ? {} : { topP: parsed.top_p }),
     cancellationSignal,

@@ -264,6 +264,15 @@ describe("production Gateway PR narrative composition", () => {
     expect(result.artifact.markdown).toContain("by Keiko");
     expect(result.artifact.markdown).not.toContain("![Keiko]");
     expect(Object.isFrozen(result.artifact.candidate.summary)).toBe(true);
+    expect(result.usage).toMatchObject({
+      modelId: "narrative-model",
+      requestCount: 1,
+      promptTokens: 10,
+      completionTokens: 20,
+      latencyMs: 1,
+      costClass: "medium",
+    });
+    expect(result.usage?.requestId).toMatch(/^[0-9a-f-]+$/u);
   });
 
   it.each([
@@ -315,6 +324,12 @@ describe("production Gateway PR narrative composition", () => {
     expect(result.artifact.markdown).toContain("1 changed files");
     expect(result.artifact.markdown).toContain("no executed test results");
     expect(result.artifact.candidate.summary).toEqual([]);
+    expect(result.usage).toMatchObject({
+      requestCount: 1,
+      promptTokens: 10,
+      completionTokens: 20,
+    });
+    expect(result.usage?.requestId).toMatch(/^[0-9a-f-]+$/u);
   });
 
   it.each(["length", "content_filter", "tool_calls", "error", "cancelled"] as const)(

@@ -7,20 +7,27 @@
 // (`buildContext`, keyed off the durable binding's own issue number) before the first turn — never
 // silently start context-free, and never blanket-refuse a still-readable issue either.
 
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type {
   CodingWorkbenchIssueBinding,
   CodingWorkbenchRuntimeStartRequest,
 } from "@oscharko-dev/keiko-contracts";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
+import { deriveRepositoryId } from "../task-workspace/naming.js";
 import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
+import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
 import {
   admitCodingRuntimeIssue,
   type CodingRuntimeIssueAttachment,
   type CodingRuntimeIssueIntake,
 } from "./codingRuntimeIssueIntake.js";
 
-const REPOSITORY_ID = "repository-0123456789abcdef";
+const REPOSITORY_ROOT = realpathSync(process.cwd());
+const REPOSITORY_ID = githubIssueReaderRepositoryId(REPOSITORY_ROOT);
+if (REPOSITORY_ID === undefined) throw new Error("Expected repository fixture identity");
 
 const ISSUE_BINDING: CodingWorkbenchIssueBinding = {
   schemaVersion: "1",
@@ -50,7 +57,7 @@ const REQUEST: CodingWorkbenchRuntimeStartRequest = {
 const ACTIVE: ActiveWorkspaceView = {
   instance: {
     repositoryId: REPOSITORY_ID,
-    repositoryRoot: "/repo",
+    repositoryRoot: REPOSITORY_ROOT,
     baseBranch: "dev",
   },
 } as unknown as ActiveWorkspaceView;
@@ -98,7 +105,7 @@ describe("admitCodingRuntimeIssue — durable-binding reattach (#3390)", () => {
     expect(port.resolve).not.toHaveBeenCalled();
     expect(port.buildContext).toHaveBeenCalledWith({
       runId: "run-2",
-      repositoryRoot: "/repo",
+      repositoryRoot: REPOSITORY_ROOT,
       binding: ISSUE_BINDING,
       effectiveMode: "supervised-coding",
       correlationId: "run-2",
@@ -177,8 +184,8 @@ describe("admitCodingRuntimeIssue — durable-binding reattach (#3390)", () => {
       request: { ...REQUEST, issueRef: undefined },
       active: {
         instance: {
-          repositoryId: "a-different-repository",
-          repositoryRoot: "/repo",
+          repositoryId: deriveRepositoryId(tmpdir()),
+          repositoryRoot: tmpdir(),
           baseBranch: "dev",
         },
       } as unknown as ActiveWorkspaceView,
@@ -193,6 +200,37 @@ describe("admitCodingRuntimeIssue — durable-binding reattach (#3390)", () => {
       issueBindingFailure: "repository-mismatch",
     });
     expect(port.buildContext).not.toHaveBeenCalled();
+  });
+
+  it("accepts a canonical issue binding when the active workspace root is a symlink", async () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "keiko-issue-intake-symlink-"));
+    const repositoryRoot = join(fixtureRoot, "repository");
+    const aliasRoot = join(fixtureRoot, "alias");
+    mkdirSync(repositoryRoot);
+    symlinkSync(repositoryRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+    const canonicalRepositoryId = githubIssueReaderRepositoryId(aliasRoot);
+    if (canonicalRepositoryId === undefined) throw new Error("Expected canonical repository id");
+    const binding = { ...ISSUE_BINDING, repositoryId: canonicalRepositoryId };
+    const port = intake({ resolve: () => Promise.resolve({ ok: true, binding }) });
+
+    try {
+      const result = await admitCodingRuntimeIssue({
+        request: { ...REQUEST, issueRef: "3390" },
+        active: {
+          instance: {
+            repositoryId: deriveRepositoryId(aliasRoot),
+            repositoryRoot: aliasRoot,
+            baseBranch: "dev",
+          },
+        } as unknown as ActiveWorkspaceView,
+        runId: "run-symlink",
+        intake: port,
+      });
+
+      expect(result).toEqual({ ok: true, binding, attachment: ISSUE_ATTACHMENT });
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
   });
 
   it("happy path unchanged: no issueRef and no prior binding starts with no issue involved", async () => {

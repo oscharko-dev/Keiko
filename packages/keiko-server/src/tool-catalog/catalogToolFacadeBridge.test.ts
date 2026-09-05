@@ -267,10 +267,11 @@ describe("CatalogFacadeBridge (#3413 F8)", () => {
     expect(settled.status).toBe("denied");
     expect(settled.reason).toBe("budget-exhausted");
     expect(settled.reservationId).toBeNull();
+    expect(settled.effectStarted).toBe(false);
     expect(settled.budgetDisposition).toBe("not-reserved");
   });
 
-  it("records handler-failed and releases the reservation when the wrapped handler throws", async () => {
+  it("records handler-failed and commits the reservation after the wrapped handler starts and throws", async () => {
     const commit = vi.fn();
     const release = vi.fn();
     const budget: CatalogFacadeBudgetPort = {
@@ -286,13 +287,14 @@ describe("CatalogFacadeBridge (#3413 F8)", () => {
     await expect(bridge.dispatch(discoverRequest, run)).rejects.toBe(failure);
 
     expect(run).toHaveBeenCalledOnce();
-    expect(commit).not.toHaveBeenCalled();
-    expect(release).toHaveBeenCalledWith({ reservationId: "reservation-1" });
+    expect(commit).toHaveBeenCalledWith({ reservationId: "reservation-1" });
+    expect(release).not.toHaveBeenCalled();
     expect(log.events[1]?.op).toBe("tool-catalog.invocation-settled");
     const settled = log.events[1]?.extra as Record<string, unknown>;
     expect(settled.status).toBe("failed");
     expect(settled.reason).toBe("handler-failed");
-    expect(settled.budgetDisposition).toBe("released");
+    expect(settled.effectStarted).toBe(true);
+    expect(settled.budgetDisposition).toBe("committed");
     expect(settled.reservationId).toBe("reservation-1");
     expect(JSON.stringify(settled)).not.toContain("handler exploded");
   });
@@ -303,7 +305,7 @@ describe("CatalogFacadeBridge (#3413 F8)", () => {
   // the exact shape `generationPort.ts`/`judgePort.ts` fabricate and `errorKindOf` -- already
   // imported here for the settlement's `errorKind` field -- already classifies specifically), and
   // `classifyFailure` must recognize it instead of falling through to the opaque-rejection branch.
-  it("records cancelled/parent-cancelled and releases the reservation when the handler rejects with an AbortError", async () => {
+  it("records cancelled/parent-cancelled and commits the reservation when the started handler rejects with an AbortError", async () => {
     const commit = vi.fn();
     const release = vi.fn();
     const budget: CatalogFacadeBudgetPort = {
@@ -319,13 +321,14 @@ describe("CatalogFacadeBridge (#3413 F8)", () => {
     await expect(bridge.dispatch(discoverRequest, run)).rejects.toBe(aborted);
 
     expect(run).toHaveBeenCalledOnce();
-    expect(commit).not.toHaveBeenCalled();
-    expect(release).toHaveBeenCalledWith({ reservationId: "reservation-1" });
+    expect(commit).toHaveBeenCalledWith({ reservationId: "reservation-1" });
+    expect(release).not.toHaveBeenCalled();
     expect(log.events[1]?.op).toBe("tool-catalog.invocation-settled");
     const settled = log.events[1]?.extra as Record<string, unknown>;
     expect(settled.status).toBe("cancelled");
     expect(settled.reason).toBe("parent-cancelled");
-    expect(settled.budgetDisposition).toBe("released");
+    expect(settled.effectStarted).toBe(true);
+    expect(settled.budgetDisposition).toBe("committed");
     expect(settled.reservationId).toBe("reservation-1");
   });
 
@@ -396,6 +399,7 @@ describe("CatalogFacadeBridge (#3413 F8)", () => {
     expect(settled.status).toBe("failed");
     expect(settled.reason).toBe("budget-port-failed");
     expect(settled.reservationId).toBeNull();
+    expect(settled.effectStarted).toBe(false);
     expect(settled.budgetDisposition).toBe("not-reserved");
     expect(JSON.stringify(settled)).not.toContain("budget backend unreachable");
   });
@@ -423,22 +427,22 @@ describe("CatalogFacadeBridge (#3413 F8)", () => {
     expect(settled.status).toBe("failed");
     expect(settled.reason).toBe("budget-port-failed");
     expect(settled.reservationId).toBeNull();
+    expect(settled.effectStarted).toBe(false);
     expect(settled.budgetDisposition).toBe("not-reserved");
   });
 
-  // Symmetric to the commit()-throws pin above: release() throwing while settling a handler
-  // FAILURE must take the same fail-closed, exactly-once-accounting path, not merely the commit
-  // (success) side of settleReservation().
-  it("fails closed as budget-port-failed without a second accounting call when release itself throws", async () => {
-    const releaseFailure = new Error("ledger unavailable");
-    const commit = vi.fn();
+  // A thrown handler has already started effects, so its budget accounting is the same conservative
+  // commit path as a successful handler. A failed commit remains exactly-once and uncertain.
+  it("records commit-uncertain without releasing when handler and commit both throw", async () => {
+    const commitFailure = new Error("ledger unavailable");
+    const release = vi.fn();
     const budget: CatalogFacadeBudgetPort = {
       available: () => true,
       reserve: () => ({ reservationId: "reservation-3" }),
-      commit,
-      release: () => {
-        throw releaseFailure;
+      commit: () => {
+        throw commitFailure;
       },
+      release,
     };
     const { bridge, log } = bridgeFixture(budget);
     const handlerFailure = new Error("handler exploded");
@@ -454,12 +458,12 @@ describe("CatalogFacadeBridge (#3413 F8)", () => {
 
     expect(rejection).toBe(handlerFailure);
     expect(run).toHaveBeenCalledOnce();
-    expect(commit).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
     const settled = log.events[1]?.extra as Record<string, unknown>;
     expect(settled.status).toBe("failed");
     expect(settled.reason).toBe("budget-port-failed");
-    expect(settled.budgetDisposition).toBe("release-uncertain");
-    expect(settled.effectStarted).toBe(false);
+    expect(settled.budgetDisposition).toBe("commit-uncertain");
+    expect(settled.effectStarted).toBe(true);
     expect(JSON.stringify(settled)).not.toContain("ledger unavailable");
     expect(JSON.stringify(settled)).not.toContain("handler exploded");
   });

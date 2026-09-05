@@ -24,6 +24,34 @@ async function approved(): Promise<{ review: PrDescriptionPreview; lease: object
   return { review, lease };
 }
 describe("body-only description application", () => {
+  it("holds and applies the exact pre-generated artifact without a second generation", async () => {
+    const artifact = await fixture.generateArtifact("Selected Chat intent");
+    const result = await fixture.service.previewArtifact(artifact);
+    expect(result.outcome).toBe("preview");
+    if (result.outcome !== "preview") throw new Error("artifact preview absent");
+    expect(result.preview.managedRegion).toBe(artifact.markdown);
+    expect(result.preview.finalBody).toContain(artifact.markdown);
+    fixture.service.issueApproval(result.preview.proposalId);
+    const lease = fixture.service.consumeApproval(result.preview.proposalId);
+    expect(lease).toBeDefined();
+    if (lease === undefined) return;
+    await fixture.service.executeApproved(result.preview.proposalId, lease);
+    expect(fixture.writes[0]?.body).toContain(artifact.markdown);
+  });
+
+  it("rejects a pre-generated artifact bound to another snapshot", async () => {
+    const artifact = await fixture.generateArtifact();
+    const stale = {
+      ...artifact,
+      binding: { ...artifact.binding, snapshotDigest: "f".repeat(64) },
+    };
+    await expect(fixture.service.previewArtifact(stale)).resolves.toEqual({
+      outcome: "blocked",
+      reason: "stale-snapshot",
+    });
+    expect(fixture.writes).toHaveLength(0);
+  });
+
   it("creates a real snapshot and narrative, requires one use approval, preserves outside bytes", async () => {
     const { review, lease } = await approved();
     expect(review.finalBody.startsWith(fixture.remote.body)).toBe(true);

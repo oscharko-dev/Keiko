@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
+import { e2eStateDir } from "../support/e2e-state-dir.js";
 
 // Issue #3390: the real-model production-composition harness. Unlike every sibling
 // `playwright.coding-issue-*.config.ts`, `webServer.command` never runs a scripted server -- it
@@ -27,7 +28,7 @@ const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "4390");
 // Nesting the state dir under `.keiko` (already the default runtime-state directory name and
 // already `.gitignore`d) satisfies the SAME exemption `resolveConfiguredPath` grants its own
 // default `.keiko` runtime state root, without weakening or bypassing the guard itself.
-const stateDir = join(root, ".keiko", "coding-issue-journey-e2e");
+const stateDir = e2eStateDir("coding-issue-journey-e2e", root, ".keiko");
 
 // Live-run pairing fix: `coding-issue-journey-server.mts` and `coding-issue-journey.spec.ts` run
 // in SEPARATE processes (the webServer's launched `keiko ui` process, and this test runner's own

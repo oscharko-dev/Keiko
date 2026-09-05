@@ -18,7 +18,7 @@ function stableKey(chatId: string, workspacePath: string): string {
   let h = 2166136261;
   const input = `${chatId}|${workspacePath}`;
   for (let i = 0; i < input.length; i += 1) {
-    h = Math.imul(h ^ input.charCodeAt(i), 16777619);
+    h = Math.imul(h ^ (input.codePointAt(i) ?? 0), 16777619);
   }
   return `rc-${(h >>> 0).toString(36)}-${(input.length & 0xffff).toString(36)}`;
 }

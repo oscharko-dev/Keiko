@@ -966,8 +966,10 @@ export function codeTaskQualificationManifestFailures(
   for (const scenario of manifest.scenarios) {
     failures.push(...scenarioQualificationFailures(scenario, registered));
   }
-  failures.push(...missingRequiredScenarioFailures(manifest, binding));
-  failures.push(...manifestCrossFieldFailures(manifest));
+  failures.push(
+    ...missingRequiredScenarioFailures(manifest, binding),
+    ...manifestCrossFieldFailures(manifest),
+  );
   return failures;
 }
 

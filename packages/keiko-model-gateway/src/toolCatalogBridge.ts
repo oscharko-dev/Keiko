@@ -128,13 +128,9 @@ function captureCall(input: NormalizedToolCall): NormalizedToolCall {
   return object as unknown as NormalizedToolCall;
 }
 function reject(log: ModelGatewayLogSink, phase: "projection" | "response", cause: unknown): never {
+  const reason = phase === "projection" ? "projection-mismatch" : "invalid-arguments";
   const error =
-    cause instanceof GatewayToolCatalogError
-      ? cause
-      : new GatewayToolCatalogError(
-          phase === "projection" ? "projection-mismatch" : "invalid-arguments",
-          cause,
-        );
+    cause instanceof GatewayToolCatalogError ? cause : new GatewayToolCatalogError(reason, cause);
   log.write({
     level: "warn",
     category: "gateway",

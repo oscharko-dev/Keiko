@@ -1,5 +1,6 @@
 /** Server-owned, single-slot lifecycle coordinator for the Coding Workbench (issue #2256). */
 import { createHash, randomUUID } from "node:crypto";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
@@ -71,8 +72,36 @@ import {
   WORKBENCH_DESCRIPTION_REASON_STATES,
   type WorkbenchDescriptionReason,
   type WorkbenchDescriptionStatus,
+  type WorkbenchDescriptionGenerationBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
 export type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
+
+function descriptionGenerationBinding(
+  snapshot: CodingRuntimeSnapshot,
+): WorkbenchDescriptionGenerationBinding {
+  return {
+    taskDigest: snapshot.taskDigest,
+    authorityDigest: snapshot.authorityDigest,
+    runtimeBindingDigest: snapshot.bindingDigest,
+    deliveryBindingDigest:
+      snapshot.draftDelivery === undefined
+        ? null
+        : sha256Hex(canonicalise(snapshot.draftDelivery.binding)),
+  };
+}
+
+function descriptionComparisonRefs(
+  snapshot: CodingRuntimeSnapshot,
+  workspace: ActiveWorkspaceView | undefined,
+  fallback: { readonly baseRef: string; readonly headRef: string },
+): { readonly baseRef: string; readonly headRef: string } {
+  const delivery = snapshot.draftDelivery?.binding;
+  if (delivery !== undefined) return { baseRef: delivery.baseRef, headRef: delivery.headRef };
+  return {
+    baseRef: workspace?.instance.baseBranch ?? fallback.baseRef,
+    headRef: workspace?.instance.taskBranch ?? fallback.headRef,
+  };
+}
 
 // #3401: the outcome a wired generator reports for one dispatched scope. `snapshotDigest` and
 // `draftDigest` are present only for the reasons that produce them (see
@@ -144,6 +173,14 @@ type RuntimeLifecycleFailureReason = "failure-redacted" | "runtime-stopped-live"
 
 function runtimeDiagnosticCorrelationId(runId: string): string {
   return isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID;
+}
+
+function isExactRunRevision(
+  snapshot: CodingRuntimeSnapshot | undefined,
+  runId: string,
+  revision: number,
+): snapshot is CodingRuntimeSnapshot {
+  return snapshot?.runId === runId && snapshot.revision === revision;
 }
 
 function recordRuntimeStartFailure(
@@ -230,9 +267,10 @@ function recordRuntimeRunSettled(
 
 function descriptionSettleOp(
   reason: WorkbenchDescriptionReason,
-): "generated" | "blocked" | "failed" {
+): "generated" | "blocked" | "failed" | "stale" {
   const state = WORKBENCH_DESCRIPTION_REASON_STATES[reason];
   if (state === "failed") return "failed";
+  if (state === "stale") return "stale";
   return state === "blocked" ? "blocked" : "generated";
 }
 
@@ -1137,10 +1175,14 @@ export class CodingRuntimeOrchestrator {
     // "recovery-required" exits, so the dispatch-failure branches below are unaffected.
     const running = this.transitionActive("running");
     if (!running.ok) return running;
+    const runningSnapshot = this.current();
+    if (!isExactRunRevision(runningSnapshot, runId, running.snapshot.revision)) {
+      return this.transitionActive("recovery-required", "recovery-required");
+    }
     const initialTurn = await this.operations.startInitialTurn({
       runId,
       requestId: request.requestId,
-      expectedRevision: running.snapshot.revision,
+      expectedRevision: runningSnapshot.revision,
       taskIntent: request.taskIntent,
       ...(attachment === undefined ? {} : { initialContext: renderInitialTurnContext(attachment) }),
     });
@@ -1157,7 +1199,9 @@ export class CodingRuntimeOrchestrator {
         },
       });
     }
-    if (initialTurn === "accepted") return running;
+    if (initialTurn === "accepted") {
+      return this.advanceRevision(runningSnapshot, "task-submitted");
+    }
     if (initialTurn === "failed") {
       recordRuntimeStartFailure(this.deps.diagnostics, runId, "initial-turn-dispatch");
       return this.transitionActive("failed", "runtime-failed");
@@ -1532,14 +1576,20 @@ export class CodingRuntimeOrchestrator {
   // or a still-in-flight attempt for the same head coalesces, and a new head supersedes.
   private dispatchDescriptionIfEligible(next: CodingRuntimeSnapshot): void {
     const support = this.description;
-    if (support === undefined) return;
+    if (support === undefined || next.state !== "succeeded") return;
     const commit = this.deps.snapshots.getLastSuccessfulVerifiedCommit?.(next.runId);
     if (commit?.headSha === undefined) return;
+    const workspace = this.activeWorkspaceOrUndefined();
     const scope: WorkbenchDescriptionScope = {
       runId: next.runId,
       remoteDigest: commit.repositoryDigest,
       baseSha: commit.baseSha,
       headSha: commit.headSha,
+      ...descriptionComparisonRefs(next, workspace, {
+        baseRef: commit.baseSha,
+        headRef: commit.headSha,
+      }),
+      generationBinding: descriptionGenerationBinding(next),
     };
     const nowIso = this.now().toISOString();
     const decision = support.jobs.beginDispatch(scope, nowIso);
@@ -1608,6 +1658,18 @@ export class CodingRuntimeOrchestrator {
       });
   }
 
+  private isDescriptionScopeCurrent(scope: WorkbenchDescriptionScope): boolean {
+    const current = this.deps.snapshots.get(scope.runId);
+    const commit = this.deps.snapshots.getLastSuccessfulVerifiedCommit?.(scope.runId);
+    return (
+      current?.state === "succeeded" &&
+      commit?.headSha === scope.headSha &&
+      commit.baseSha === scope.baseSha &&
+      commit.repositoryDigest === scope.remoteDigest &&
+      canonicalise(descriptionGenerationBinding(current)) === canonicalise(scope.generationBinding)
+    );
+  }
+
   private settleDescriptionDispatch(
     support: CodingRuntimeDescriptionSupport,
     scope: WorkbenchDescriptionScope,
@@ -1616,24 +1678,28 @@ export class CodingRuntimeOrchestrator {
     outcome: WorkbenchDescriptionDispatchOutcome,
   ): void {
     const observedAt = this.now().toISOString();
+    const reason = this.isDescriptionScopeCurrent(scope) ? outcome.reason : "stale-snapshot";
     const status: WorkbenchDescriptionStatus = {
       schemaVersion: "1",
       runId: scope.runId,
       remoteDigest: scope.remoteDigest,
       baseSha: scope.baseSha,
       headSha: scope.headSha,
+      ...(scope.generationBinding === undefined
+        ? {}
+        : { generationBinding: scope.generationBinding }),
       generationVersion,
-      state: WORKBENCH_DESCRIPTION_REASON_STATES[outcome.reason],
-      reason: outcome.reason,
+      state: WORKBENCH_DESCRIPTION_REASON_STATES[reason],
+      reason,
       snapshotDigest: outcome.snapshotDigest ?? null,
       draftDigest: outcome.draftDigest ?? null,
       artifactOutcome: outcome.artifactOutcome ?? null,
       observedAt,
     };
     const accepted = support.jobs.settle(scope, generationVersion, revision, status, observedAt);
-    this.logDescriptionEvent(scope, accepted ? descriptionSettleOp(outcome.reason) : "superseded", {
+    this.logDescriptionEvent(scope, accepted ? descriptionSettleOp(reason) : "superseded", {
       generationVersion,
-      reason: outcome.reason,
+      reason,
     });
   }
 
@@ -1644,8 +1710,10 @@ export class CodingRuntimeOrchestrator {
   // event on this file's sibling ops is distinguished by an `extra` field, not by the op string
   // itself) keeps this catalog-resolvable and journey-reconstructable.
   private logDescriptionEvent(
-    identity: { readonly runId: string; readonly remoteDigest?: string },
-    event: "dispatched" | "coalesced" | "superseded" | "blocked" | "generated" | "failed",
+    identity: Pick<WorkbenchDescriptionScope, "runId" | "generationBinding"> & {
+      readonly remoteDigest?: string;
+    },
+    event: "dispatched" | "coalesced" | "superseded" | "blocked" | "generated" | "failed" | "stale",
     extra: Readonly<Record<string, unknown>>,
     errorKind?: string,
   ): void {
@@ -1654,7 +1722,17 @@ export class CodingRuntimeOrchestrator {
       op: "coding-runtime.description",
       correlationId: runtimeDiagnosticCorrelationId(identity.runId),
       ...(errorKind === undefined ? {} : { errorKind }),
-      extra: { runId: identity.runId, remoteDigest: identity.remoteDigest, event, ...extra },
+      extra: {
+        runId: identity.runId,
+        remoteDigest: identity.remoteDigest,
+        event,
+        ...extra,
+        ...(identity.generationBinding === undefined
+          ? {}
+          : {
+              generationBindingDigest: sha256Hex(canonicalise(identity.generationBinding)),
+            }),
+      },
     });
   }
 
