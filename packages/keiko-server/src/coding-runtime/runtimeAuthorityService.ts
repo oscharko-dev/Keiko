@@ -72,6 +72,17 @@ const OPERATOR_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> =
   "running",
   "paused",
 ]);
+// #3390: "ready" and "running" share the same treeBound precondition (see transitionAllowed
+// below) and "ready" -> "running" is the only legal step out of "ready" other than a terminal
+// failure -- "ready" is not a state a reservation can be replayed into from anywhere else. The
+// orchestrator's initial-turn dispatch (codingRuntimeOrchestrator.runInitialTurn) can legitimately
+// reach the sidecar while the run is still settling into "running", and the sidecar's very first
+// model call must not be refused just because it raced that settling instead of a real admission
+// failure. Every other reservePromptTokens clause (audience, runId, envelopeDigest match) stays
+// exactly as strict; only the running-only state gate widens to also admit "ready".
+const PROMPT_RESERVATION_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set(
+  ["ready", "running"],
+);
 
 export interface CodingRuntimeTrustedContext {
   /** Captured before start confirmation; absent legacy contexts cannot execute verified commits. */
@@ -474,7 +485,7 @@ export class CodingRuntimeAuthorityService {
     if (
       authenticated.binding.audience !== "model-gateway" ||
       reference === undefined ||
-      this.runtimeState.state !== "running" ||
+      !PROMPT_RESERVATION_ADMISSIBLE_STATES.has(this.runtimeState.state) ||
       this.runtimeState.runId !== authenticated.binding.runId ||
       reference.runId !== authenticated.binding.runId ||
       reference.envelopeDigest !== authenticated.binding.envelopeDigest

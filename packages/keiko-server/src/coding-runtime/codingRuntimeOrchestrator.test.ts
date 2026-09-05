@@ -690,7 +690,7 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledWith({
       runId: "run-1",
       requestId: start.requestId,
-      expectedRevision: 2,
+      expectedRevision: 3,
       taskIntent: start.taskIntent,
     });
     expect(JSON.stringify([...f.rows.values()])).not.toContain(start.taskIntent);
@@ -2161,7 +2161,7 @@ describe("issue-bound runs (#3385)", () => {
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledWith({
       runId: "run-1",
       requestId: start.requestId,
-      expectedRevision: 2,
+      expectedRevision: 3,
       taskIntent: start.taskIntent,
       initialContext: renderInitialTurnContext(ISSUE_ATTACHMENT),
     });
@@ -2364,7 +2364,7 @@ describe("issue-bound runs (#3385)", () => {
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledWith({
       runId: "run-1",
       requestId: start.requestId,
-      expectedRevision: 2,
+      expectedRevision: 3,
       taskIntent: start.taskIntent,
     });
   });
