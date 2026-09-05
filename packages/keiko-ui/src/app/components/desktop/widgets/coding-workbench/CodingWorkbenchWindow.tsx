@@ -581,6 +581,24 @@ function RunWorkspaceMismatchNotice({ visible }: { readonly visible: boolean }):
   );
 }
 
+/**
+ * Epic #3384 cascade: a refused edit used to leave the operator with nothing — the model just
+ * asked "how would you like to proceed?" while every `keiko_changeset_edit` kept failing
+ * NO_ACTIVE_SESSION. `useCodingWorkbenchEditorBridge` now retries the registration on its own
+ * (`bridgeUnavailable` reports whether that retry is still in flight); this is the one place the
+ * operator sees that anything is happening at all instead of a silent gap that looks identical to
+ * a healthy, idle bridge.
+ */
+function EditorBridgeUnavailableNotice({ visible }: { readonly visible: boolean }): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  if (!visible) return null;
+  return (
+    <output className={styles.alert}>
+      <span aria-hidden="true">!</span> {t("codingWorkbench.editorBridge.reconnecting")}
+    </output>
+  );
+}
+
 // The three props this level owns are named; the rest belong to `WorkbenchColumns` and pass
 // through as one rest object, so a new column prop is not restated on this hop at all.
 function WorkbenchContent({
@@ -615,6 +633,20 @@ function WorkbenchContent({
       </div>
     </section>
   );
+}
+
+// Epic #3384 cascade, end-to-end run 2026-09-05: after a stop, this window's activity feed showed
+// "Reconnect activity" and stayed disconnected even once a different run started — the operator
+// had to click Reconnect (or reload the page) before seeing anything for it. `retry` is a stable,
+// pure epoch-bump (`useCodingWorkbenchSafeActivity`); calling it once per newly observed run id is
+// therefore always safe, whatever the feed's current status happens to be.
+function useReconnectActivityOnNewRun(runId: string | undefined, retry: () => void): void {
+  const seenRunIdRef = useRef<string | undefined>(runId);
+  useEffect(() => {
+    if (runId === undefined || runId === seenRunIdRef.current) return;
+    seenRunIdRef.current = runId;
+    retry();
+  }, [runId, retry]);
 }
 
 function WorkbenchColumns({
@@ -692,6 +724,14 @@ function WorkbenchColumns({
     bindingPending: workspaceBindingPending,
     submittedRoot: runBoundRoot,
   });
+  // Epic #3384 cascade: a run this window observes as a NEW run id — a status poll or stream
+  // catching up after a stop, or a run started from another paired client — must not leave the
+  // activity feed sitting on "Reconnect activity" until the operator clicks it (or reloads the
+  // page). `activity`'s own connection effect already reacts to a `runId` change; this reconnects
+  // it EVEN WHEN the feed's projected status is currently a failure/terminal one that would
+  // otherwise wait for a manual retry (`useCodingWorkbenchSafeActivity`'s own resync only fires
+  // for an ALREADY-known run's runtime events, never for the transition onto a brand new one).
+  useReconnectActivityOnNewRun(state.run.value?.runId, activity.retry);
   // The session stream is a bounded scroll region below the header; a run's newest activity lands
   // at its end. Follow that growth while the operator is at the bottom, never yank a reader who
   // scrolled up into the history, and start following again for every new run (#3257 Wave 0).
@@ -899,6 +939,7 @@ function WorkbenchColumns({
         </div>
         <CodexSubscriptionAuthCard state={state} actions={actions} />
         <RunWorkspaceMismatchNotice visible={runIsActive && runWorkspace.mismatched} />
+        <EditorBridgeUnavailableNotice visible={editorBridge.bridgeUnavailable} />
         <RuntimeControls
           state={state}
           actions={actions}

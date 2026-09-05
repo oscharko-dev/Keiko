@@ -254,6 +254,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Pausieren Sie den aktiven Lauf, um eine Rückfrage zu senden. Ein entworfener Follow-up wird nur im pausierten Zustand zugelassen und niemals in eine Warteschlange gestellt.",
   "codingWorkbench.composer.workspaceMismatch":
     "Dieser Lauf behält die Autorität des Arbeitsbereichs, in dem er gestartet wurde; dieser ist nicht mehr der aktive. Chips, Git und die Änderungen des Laufs bleiben bei seinem Arbeitsbereich. Wechseln Sie zurück, um diese Dateien zu prüfen oder zu bearbeiten.",
+  "codingWorkbench.editorBridge.reconnecting":
+    "Bearbeitungen sind pausiert: Die Editor-Bridge wird neu verbunden.",
   "codingWorkbench.questions.sectionLabel": "Laufzeitfragen",
   "codingWorkbench.questions.eyebrow": "Eingabe erforderlich",
   "codingWorkbench.questions.title": "Laufzeitfragen",

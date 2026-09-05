@@ -236,6 +236,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Pause the active run to send a follow-up. A drafted follow-up is admitted only while paused and is never queued.",
   "codingWorkbench.composer.workspaceMismatch":
     "This run keeps the authority of the workspace it started in, which is no longer the active one. The chips, Git and the run's changes stay on the run's workspace; switch back to it to review or edit those files.",
+  "codingWorkbench.editorBridge.reconnecting": "Edits are paused: reconnecting the editor bridge.",
   "codingWorkbench.questions.sectionLabel": "Runtime questions",
   "codingWorkbench.questions.eyebrow": "Input needed",
   "codingWorkbench.questions.title": "Runtime questions",

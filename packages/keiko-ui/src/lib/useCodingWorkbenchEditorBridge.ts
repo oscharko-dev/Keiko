@@ -380,7 +380,7 @@ export function useCodingWorkbenchEditorBridge(
     if (retriedEpochRef.current === registrationFailureEpoch) return undefined;
     retriedEpochRef.current = registrationFailureEpoch;
     const timer = setTimeout(() => void forceReconnect(), FORCE_RECONNECT_SETTLE_MS);
-    return () => clearTimeout(timer);
+    return (): void => clearTimeout(timer);
   }, [enabled, registrationFailureEpoch, forceReconnect]);
 
   // `lastDecisionRef` remembers which decision to retry: a failed Approve must resurface as a
