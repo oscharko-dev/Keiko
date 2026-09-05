@@ -242,7 +242,8 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
         body: { status: "unavailable", reason: "observation-in-flight" },
       });
       const line = h.events.find(
-        (event) => event.op === "git.journey-observation" && event.extra?.reason === "observation-in-flight",
+        (event) =>
+          event.op === "git.journey-observation" && event.extra?.reason === "observation-in-flight",
       );
       expect(line).toMatchObject({ level: "warn", extra: { runId: "run-1" } });
 

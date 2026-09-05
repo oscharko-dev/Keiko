@@ -20,6 +20,7 @@ describe("semantic runtime Git IPC", () => {
   it.each([
     { operation: "status" },
     { operation: "ci" },
+    { operation: "ci", forceFresh: true },
     { operation: "diff", scope: "working-tree", paths: ["code.ts"] },
     { operation: "diff", scope: "index", paths: ["code.ts"] },
     { operation: "stage", phase: "propose", paths: ["code.ts"] },
@@ -28,7 +29,9 @@ describe("semantic runtime Git IPC", () => {
     expect(parse({ ...identity, ...request })).toEqual({ ...identity, ...request });
   });
   it.each([
-    { operation: "ci", forceFresh: true },
+    // forceFresh is the documented optional flag of the ci observation (#3388); only a non-boolean
+    // value is scope widening.
+    { operation: "ci", forceFresh: "yes" },
     { operation: "ci", prNumber: 99 },
     { operation: "ci", headSha: "a".repeat(40) },
     { operation: "status", argv: ["status"] },

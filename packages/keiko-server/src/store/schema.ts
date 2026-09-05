@@ -8,7 +8,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 29;
+export const SCHEMA_VERSION = 30;
 
 interface Migration {
   readonly version: number;
@@ -923,6 +923,149 @@ CREATE TABLE coding_runtime_description_jobs (
 ) STRICT;
 `;
 
+// V30 (owner audit finding b2-2, PR #3394) — widens the `coding_runtime_snapshots.failure_code`
+// table-level CHECK to admit two literals `CODING_WORKBENCH_RUNTIME_FAILURE_CODES` already declares
+// but the V20 constraint (frozen at 19 members) rejects: `issue-context-unavailable` (#3390, added
+// after V20 shipped) and `question-answer-rejected` (a rejected free-text answer to a non-custom
+// question, distinct from the authority code `authority-resolution-failed`). Exactly the V20
+// precedent: SQLite cannot ALTER a table-level CHECK, so the table is rebuilt. No column is added or
+// removed and no other CHECK clause changes, so — like V20 — this migration needs no
+// `legacySchemaTestFixture.ts` rollback fragment (see that file's header comment) and no
+// `coding_runtime_ci_repair_budgets`/`git_journey_outcomes`/`coding_runtime_description_jobs`
+// sibling table is touched. `coding_runtime_snapshots` has no live foreign-key child (unlike
+// `relationships` in V28), so the direct create/copy/drop/rename sequence V20 used is safe here too.
+const V30_SQL = `
+CREATE TABLE coding_runtime_snapshots_v30 (
+  run_id TEXT NOT NULL PRIMARY KEY,
+  schema_version TEXT NOT NULL,
+  state TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  requested_mode TEXT NOT NULL,
+  runtime_source TEXT NOT NULL,
+  model_source TEXT NOT NULL,
+  failure_code TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  terminal_at TEXT,
+  recovery_acknowledged_at TEXT,
+  predecessor_run_id TEXT,
+  task_digest TEXT NOT NULL,
+  workspace_digest TEXT NOT NULL,
+  operator_digest TEXT NOT NULL,
+  authority_digest TEXT NOT NULL,
+  binding_digest TEXT NOT NULL,
+  provenance_digest TEXT NOT NULL,
+  tool_call_count INTEGER NOT NULL DEFAULT 0,
+  patch_byte_count INTEGER NOT NULL DEFAULT 0,
+  model_request_count INTEGER NOT NULL DEFAULT 0,
+  recovery_handle TEXT,
+  result_status TEXT
+    CHECK (result_status IS NULL OR result_status IN ('cancelled','failed','signalled','succeeded')),
+  exit_code INTEGER
+    CHECK (exit_code IS NULL OR exit_code BETWEEN 0 AND 255),
+  stdout_byte_count INTEGER
+    CHECK (stdout_byte_count IS NULL OR stdout_byte_count BETWEEN 0 AND 1073741824),
+  stdout_line_count INTEGER
+    CHECK (stdout_line_count IS NULL OR stdout_line_count BETWEEN 0 AND 1000000),
+  stdout_sha256 TEXT
+    CHECK (stdout_sha256 IS NULL OR length(stdout_sha256) = 64),
+  stdout_truncated INTEGER
+    CHECK (stdout_truncated IS NULL OR stdout_truncated IN (0,1)),
+  stderr_byte_count INTEGER
+    CHECK (stderr_byte_count IS NULL OR stderr_byte_count BETWEEN 0 AND 1073741824),
+  stderr_line_count INTEGER
+    CHECK (stderr_line_count IS NULL OR stderr_line_count BETWEEN 0 AND 1000000),
+  stderr_sha256 TEXT
+    CHECK (stderr_sha256 IS NULL OR length(stderr_sha256) = 64),
+  stderr_truncated INTEGER
+    CHECK (stderr_truncated IS NULL OR stderr_truncated IN (0,1)),
+  issue_repository_id TEXT
+    CHECK (issue_repository_id IS NULL OR length(issue_repository_id) BETWEEN 1 AND 128),
+  issue_remote_digest TEXT
+    CHECK (issue_remote_digest IS NULL OR length(issue_remote_digest) = 64),
+  issue_number INTEGER
+    CHECK (issue_number IS NULL OR issue_number BETWEEN 1 AND 1000000000),
+  issue_id_digest TEXT
+    CHECK (issue_id_digest IS NULL OR length(issue_id_digest) = 64),
+  issue_default_base_ref TEXT
+    CHECK (issue_default_base_ref IS NULL OR length(issue_default_base_ref) BETWEEN 1 AND 255),
+  issue_content_revision_digest TEXT
+    CHECK (issue_content_revision_digest IS NULL OR length(issue_content_revision_digest) = 64),
+  issue_binding_digest TEXT
+    CHECK (issue_binding_digest IS NULL OR length(issue_binding_digest) = 64),
+  verified_commit_result TEXT
+    CHECK (verified_commit_result IS NULL OR (length(verified_commit_result) <= 8192 AND json_valid(verified_commit_result))),
+  draft_delivery_record TEXT
+    CHECK (draft_delivery_record IS NULL OR (length(draft_delivery_record) <= 8192 AND json_valid(draft_delivery_record))),
+  draft_delivery_source_receipt TEXT
+    CHECK (draft_delivery_source_receipt IS NULL OR (length(draft_delivery_source_receipt) <= 8192 AND json_valid(draft_delivery_source_receipt))),
+  last_successful_verified_commit TEXT
+    CHECK (last_successful_verified_commit IS NULL OR (length(last_successful_verified_commit) <= 8192 AND json_valid(last_successful_verified_commit))),
+  ci_observation_revision INTEGER NOT NULL DEFAULT 0
+    CHECK (ci_observation_revision BETWEEN 0 AND 1000000),
+  ci_readiness_record TEXT
+    CHECK (ci_readiness_record IS NULL OR (length(ci_readiness_record) <= 8192 AND json_valid(ci_readiness_record))),
+  CHECK (
+    schema_version = '1'
+    AND state IN ('starting','ready','running','paused','awaiting-approval','stopping','succeeded','failed','cancelled','taken-over','recovery-required')
+    AND requested_mode IN ('governed-assist','supervised-coding','autonomous-delivery')
+    AND runtime_source IN ('keiko-sidecar','codex-cli-adapter','delivery-runner')
+    AND model_source IN ('keiko-model-gateway','openai-api-key-through-gateway','chatgpt-codex-subscription-profile')
+    AND (failure_code IS NULL OR failure_code IN ('runtime-unavailable','active-run-conflict','invalid-intent','approval-activation-failed','authority-resolution-failed','authority-expired','authority-replayed','task-drift','workspace-drift','project-drift','branch-drift','scope-drift','budget-drift','authority-budget-exceeded','source-drift','runtime-failed','revoked','recovery-required','replay-cap-exhausted','issue-context-unavailable','question-answer-rejected'))
+    AND revision >= 0
+    AND tool_call_count BETWEEN 0 AND 1000000
+    AND patch_byte_count BETWEEN 0 AND 1073741824
+    AND model_request_count BETWEEN 0 AND 1000000
+    AND length(run_id) BETWEEN 1 AND 128
+    AND length(task_digest) BETWEEN 1 AND 128
+    AND length(workspace_digest) BETWEEN 1 AND 128
+    AND length(operator_digest) BETWEEN 1 AND 128
+    AND length(authority_digest) BETWEEN 1 AND 128
+    AND length(binding_digest) BETWEEN 1 AND 128
+    AND length(provenance_digest) BETWEEN 1 AND 128
+    AND (recovery_handle IS NULL OR length(recovery_handle) BETWEEN 1 AND 128)
+  )
+) STRICT;
+
+INSERT INTO coding_runtime_snapshots_v30 (
+  run_id, schema_version, state, revision, requested_mode, runtime_source, model_source,
+  failure_code, created_at, updated_at, terminal_at, recovery_acknowledged_at,
+  predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest,
+  binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count,
+  recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count,
+  stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256,
+  stderr_truncated, issue_repository_id, issue_remote_digest, issue_number, issue_id_digest,
+  issue_default_base_ref, issue_content_revision_digest, issue_binding_digest,
+  verified_commit_result, draft_delivery_record, draft_delivery_source_receipt,
+  last_successful_verified_commit, ci_observation_revision, ci_readiness_record
+)
+SELECT
+  run_id, schema_version, state, revision, requested_mode, runtime_source, model_source,
+  failure_code, created_at, updated_at, terminal_at, recovery_acknowledged_at,
+  predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest,
+  binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count,
+  recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count,
+  stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256,
+  stderr_truncated, issue_repository_id, issue_remote_digest, issue_number, issue_id_digest,
+  issue_default_base_ref, issue_content_revision_digest, issue_binding_digest,
+  verified_commit_result, draft_delivery_record, draft_delivery_source_receipt,
+  last_successful_verified_commit, ci_observation_revision, ci_readiness_record
+FROM coding_runtime_snapshots;
+
+DROP TABLE coding_runtime_snapshots;
+
+ALTER TABLE coding_runtime_snapshots_v30 RENAME TO coding_runtime_snapshots;
+
+CREATE UNIQUE INDEX uniq_coding_runtime_active_slot
+  ON coding_runtime_snapshots((1))
+  WHERE terminal_at IS NULL;
+CREATE INDEX idx_coding_runtime_recent_active
+  ON coding_runtime_snapshots(terminal_at, updated_at DESC, run_id);
+CREATE INDEX idx_coding_runtime_settled_oldest
+  ON coding_runtime_snapshots(terminal_at, updated_at, run_id)
+  WHERE terminal_at IS NOT NULL;
+`;
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
 // change.
@@ -956,6 +1099,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 27, sql: V27_SQL },
   { version: 28, sql: V28_SQL },
   { version: 29, sql: V29_SQL },
+  { version: 30, sql: V30_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

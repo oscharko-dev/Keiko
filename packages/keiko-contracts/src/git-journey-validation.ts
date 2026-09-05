@@ -265,8 +265,7 @@ const NULL_REMOTE_REASONS: ReadonlySet<GitJourneyReason> = new Set([
 function outcomeRemote(value: Record<string, unknown>, binding: GitJourneyBinding): boolean {
   if (value.remote === null)
     return (
-      !value.keikoDescriptionApplied &&
-      NULL_REMOTE_REASONS.has(value.reason as GitJourneyReason)
+      !value.keikoDescriptionApplied && NULL_REMOTE_REASONS.has(value.reason as GitJourneyReason)
     );
   return (
     value.observationFailure === null &&

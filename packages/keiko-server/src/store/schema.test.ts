@@ -117,3 +117,191 @@ describe("v28 migration — relationships CHECK widening (Issue #3400)", () => {
     expect(row.git_change_scope_json).toBeNull();
   });
 });
+
+// Owner audit finding b1-20 (PR #3394): only v28 had a forward-migration test; v21-v27 and v29 (all
+// added by this PR) had none. Each test below applies migrations only up to the version BEFORE the
+// one under test, then runs the real `runMigrations` and asserts the exact structural change that
+// version's own `V<n>_SQL` documents — proving the forward path, not just the fully-migrated shape
+// every other suite in this repo already exercises incidentally.
+const DIGEST_64 = "a".repeat(64);
+
+function insertMinimalCodingRuntimeSnapshot(db: DatabaseSync, runId: string): void {
+  db.exec(`
+    INSERT INTO coding_runtime_snapshots (
+      run_id, schema_version, state, revision, requested_mode, runtime_source, model_source,
+      created_at, updated_at, task_digest, workspace_digest, operator_digest,
+      authority_digest, binding_digest, provenance_digest
+    ) VALUES (
+      '${runId}', '1', 'starting', 1, 'governed-assist', 'keiko-sidecar',
+      'keiko-model-gateway', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+      '${DIGEST_64}', '${DIGEST_64}', '${DIGEST_64}', '${DIGEST_64}', '${DIGEST_64}', '${DIGEST_64}'
+    );
+  `);
+}
+
+describe("forward migrations v21-v27, v29, v30 (Owner audit finding b1-20)", () => {
+  it("v21 creates github_issue_reader_authorization with the documented CHECK", () => {
+    const db = openWithForeignKeys();
+    applyMigrationsUpTo(db, 20);
+    runMigrations(db);
+    db.exec(`
+      INSERT INTO github_issue_reader_authorization (repository_id, authorized, revision, updated_at)
+      VALUES ('repo-1', 1, 0, '2026-01-01T00:00:00.000Z');
+    `);
+    const row = db
+      .prepare("SELECT authorized FROM github_issue_reader_authorization WHERE repository_id = 'repo-1'")
+      .get() as { authorized: number };
+    expect(row.authorized).toBe(1);
+    expect(() =>
+      db.exec(
+        "INSERT INTO github_issue_reader_authorization (repository_id, authorized, revision, updated_at) VALUES ('repo-2', 2, 0, 'x')",
+      ),
+    ).toThrow(/CHECK constraint failed/);
+  });
+
+  it("v22 adds the seven issue_* columns to coding_runtime_snapshots, existing rows NULL", () => {
+    const db = openWithForeignKeys();
+    applyMigrationsUpTo(db, 21);
+    insertMinimalCodingRuntimeSnapshot(db, "run-v22");
+    runMigrations(db);
+    const row = db
+      .prepare("SELECT issue_repository_id, issue_number FROM coding_runtime_snapshots WHERE run_id = 'run-v22'")
+      .get() as { issue_repository_id: string | null; issue_number: number | null };
+    expect(row.issue_repository_id).toBeNull();
+    expect(row.issue_number).toBeNull();
+  });
+
+  it("v23 adds verified_commit_result as a body-free JSON column", () => {
+    const db = openWithForeignKeys();
+    applyMigrationsUpTo(db, 22);
+    insertMinimalCodingRuntimeSnapshot(db, "run-v23");
+    runMigrations(db);
+    expect(() =>
+      db.exec(
+        "UPDATE coding_runtime_snapshots SET verified_commit_result = 'not-json' WHERE run_id = 'run-v23'",
+      ),
+    ).toThrow(/CHECK constraint failed/);
+    db.exec(
+      `UPDATE coding_runtime_snapshots SET verified_commit_result = '{"ok":true}' WHERE run_id = 'run-v23'`,
+    );
+    const row = db
+      .prepare("SELECT verified_commit_result FROM coding_runtime_snapshots WHERE run_id = 'run-v23'")
+      .get() as { verified_commit_result: string };
+    expect(row.verified_commit_result).toBe('{"ok":true}');
+  });
+
+  it("v24 adds draft_delivery_record as a body-free JSON column", () => {
+    const db = openWithForeignKeys();
+    applyMigrationsUpTo(db, 23);
+    insertMinimalCodingRuntimeSnapshot(db, "run-v24");
+    runMigrations(db);
+    const columns = (
+      db.prepare("PRAGMA table_info(coding_runtime_snapshots)").all() as { name: string }[]
+    ).map((c) => c.name);
+    expect(columns).toContain("draft_delivery_record");
+  });
+
+  it("v25 adds draft_delivery_source_receipt as a body-free JSON column", () => {
+    const db = openWithForeignKeys();
+    applyMigrationsUpTo(db, 24);
+    insertMinimalCodingRuntimeSnapshot(db, "run-v25");
+    runMigrations(db);
+    const columns = (
+      db.prepare("PRAGMA table_info(coding_runtime_snapshots)").all() as { name: string }[]
+    ).map((c) => c.name);
+    expect(columns).toContain("draft_delivery_source_receipt");
+  });
+
+  it("v26 adds verified-commit accounting columns and the ci-repair budget table", () => {
+    const db = openWithForeignKeys();
+    applyMigrationsUpTo(db, 25);
+    insertMinimalCodingRuntimeSnapshot(db, "run-v26");
+    runMigrations(db);
+    const columns = (
+      db.prepare("PRAGMA table_info(coding_runtime_snapshots)").all() as { name: string }[]
+    ).map((c) => c.name);
+    expect(columns).toEqual(
+      expect.arrayContaining([
+        "last_successful_verified_commit",
+        "ci_observation_revision",
+        "ci_readiness_record",
+      ]),
+    );
+    db.exec(`
+      INSERT INTO coding_runtime_ci_repair_budgets (
+        task_digest, remote_digest, pr_number, revision, record_json
+      ) VALUES ('${DIGEST_64}', '${DIGEST_64}', 1, 0, '{}');
+    `);
+    const row = db
+      .prepare(`SELECT pr_number FROM coding_runtime_ci_repair_budgets WHERE task_digest = '${DIGEST_64}'`)
+      .get() as { pr_number: number };
+    expect(row.pr_number).toBe(1);
+  });
+
+  it("v27 creates the content-free git_journey_outcomes projection", () => {
+    const db = openWithForeignKeys();
+    applyMigrationsUpTo(db, 26);
+    runMigrations(db);
+    db.exec(`
+      INSERT INTO git_journey_outcomes (
+        remote_digest, pr_number, run_id, revision, state, reason, head_sha, evidence_ref,
+        observed_at, updated_at
+      ) VALUES (
+        '${DIGEST_64}', 1, 'run-v27', 0, 'ready', 'checks-green', 'aaaaaaa', 'ev-1',
+        '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+      );
+    `);
+    const row = db
+      .prepare("SELECT state FROM git_journey_outcomes WHERE run_id = 'run-v27'")
+      .get() as { state: string };
+    expect(row.state).toBe("ready");
+  });
+
+  it("v29 creates the deduplicated coding_runtime_description_jobs ledger", () => {
+    const db = openWithForeignKeys();
+    applyMigrationsUpTo(db, 28);
+    runMigrations(db);
+    db.exec(`
+      INSERT INTO coding_runtime_description_jobs (
+        run_id, remote_digest, base_sha, head_sha, generation_version, revision, phase, updated_at
+      ) VALUES (
+        'run-v29', '${DIGEST_64}', '${"b".repeat(40)}', '${"c".repeat(40)}', 1, 0, 'dispatched',
+        '2026-01-01T00:00:00.000Z'
+      );
+    `);
+    expect(() =>
+      db.exec(
+        `UPDATE coding_runtime_description_jobs SET status_json = '{}' WHERE run_id = 'run-v29'`,
+      ),
+    ).toThrow(/CHECK constraint failed/);
+    db.exec(`UPDATE coding_runtime_description_jobs SET phase = 'settled', status_json = '{}' WHERE run_id = 'run-v29'`);
+    const row = db
+      .prepare("SELECT phase FROM coding_runtime_description_jobs WHERE run_id = 'run-v29'")
+      .get() as { phase: string };
+    expect(row.phase).toBe("settled");
+  });
+
+  it("v30 widens failure_code to admit issue-context-unavailable and question-answer-rejected", () => {
+    const db = openWithForeignKeys();
+    applyMigrationsUpTo(db, 29);
+    insertMinimalCodingRuntimeSnapshot(db, "run-v30");
+    expect(() =>
+      db.exec(
+        "UPDATE coding_runtime_snapshots SET failure_code = 'question-answer-rejected' WHERE run_id = 'run-v30'",
+      ),
+    ).toThrow(/CHECK constraint failed/);
+
+    runMigrations(db);
+
+    db.exec(
+      "UPDATE coding_runtime_snapshots SET failure_code = 'question-answer-rejected' WHERE run_id = 'run-v30'",
+    );
+    db.exec(
+      "UPDATE coding_runtime_snapshots SET failure_code = 'issue-context-unavailable' WHERE run_id = 'run-v30'",
+    );
+    const row = db
+      .prepare("SELECT failure_code FROM coding_runtime_snapshots WHERE run_id = 'run-v30'")
+      .get() as { failure_code: string };
+    expect(row.failure_code).toBe("issue-context-unavailable");
+  });
+});

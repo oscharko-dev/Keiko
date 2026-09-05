@@ -14,6 +14,13 @@ describe("CODING_WORKBENCH_RUNTIME_FAILURE_CODES", () => {
     expect(CODING_WORKBENCH_RUNTIME_FAILURE_CODES).toContain("issue-context-unavailable");
   });
 
+  // Owner audit finding F-question-answer-rejected (PR #3394): a free-text answer to a question
+  // whose options carry no `custom` flag is refused by the runtime reply itself; this closed code
+  // lets the coordinator distinguish that runtime rejection from a real authority failure.
+  it("carries the question-answer-rejected closed code", () => {
+    expect(CODING_WORKBENCH_RUNTIME_FAILURE_CODES).toContain("question-answer-rejected");
+  });
+
   it("is a frozen array with no duplicate entries", () => {
     expect(Object.isFrozen(CODING_WORKBENCH_RUNTIME_FAILURE_CODES)).toBe(true);
     expect(new Set(CODING_WORKBENCH_RUNTIME_FAILURE_CODES).size).toBe(

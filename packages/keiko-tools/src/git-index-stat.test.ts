@@ -14,7 +14,7 @@ import { indexStatMatches, parseGitIndexStat, type GitIndexStat } from "./git-in
 function debugFrame(path: string, ctime: string, mtime: string, size: number): string {
   return (
     `${path}\0  ctime: ${ctime}\n  mtime: ${mtime}\n  dev: 1\tino: 1\n` +
-    `  uid: 0\tgid: 0\n  size: ${size}\tflags: 0\n`
+    `  uid: 0\tgid: 0\n  size: ${String(size)}\tflags: 0\n`
   );
 }
 
