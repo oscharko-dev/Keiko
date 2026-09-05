@@ -117,11 +117,11 @@ describe("buildWrappedCommand seatbelt case honours the network policy shape", (
     expect(wrapped?.args[1]).toContain('(remote tcp4 "localhost:1983")');
   });
 
-  it("builds the general deny-egress profile unchanged for a plain \"none\" policy", () => {
+  it('builds the general deny-egress profile unchanged for a plain "none" policy', () => {
     const wrapped = buildWrappedCommand("seatbelt", { ...basePlan, network: "none" });
     expect(wrapped?.command).toBe("sandbox-exec");
     expect(wrapped?.args).toEqual(["-p", expect.any(String), "/trusted/opencode", "serve"]);
-    expect(wrapped?.args[1]).toContain('localhost:*');
+    expect(wrapped?.args[1]).toContain("localhost:*");
   });
 
   it("carries the IPv6 loopback family through to the profile", () => {

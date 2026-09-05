@@ -59,7 +59,8 @@ describe("isValidNetworkGatewayPolicy", () => {
   );
 
   it("rejects a missing port", () => {
-    const { port: _port, ...withoutPort } = valid;
+    const withoutPort: Record<string, unknown> = { ...valid };
+    delete withoutPort.port;
     expect(isValidNetworkGatewayPolicy(withoutPort)).toBe(false);
   });
 

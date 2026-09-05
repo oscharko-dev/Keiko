@@ -1,11 +1,13 @@
 import type {
   CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchMode,
   CodingWorkbenchPolicyResourceScope,
   GitRepositoryAgentOperationKind,
 } from "@oscharko-dev/keiko-contracts";
 // Runtime values live behind the explicit runtime/<domain> subpath (see keiko-contracts/src/index.ts's
 // own header comment) — the bare package specifier is a type-only surface.
 import { codingWorkbenchPolicyEffectFor } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   gitOperationRequirement,
   type GitOperationRequirement,
@@ -30,6 +32,49 @@ export interface ActiveGitDeliveryRunAuthority {
 export interface GitDeliveryRunAuthorityPort {
   current(nowIso: string): ActiveGitDeliveryRunAuthority | undefined;
 }
+
+// #3399 (epic #3384 correction 4): the server-minted, bounded description authority that admits
+// description generation and the "pull-request" body-only apply outside a running Code task.
+// Produced and revalidated exclusively by `runtimeAuthorityService.ts` (the owner of this and
+// `ActiveGitDeliveryRunAuthority` alike); this module only consults it at admission.
+export interface GitDeliveryDescriptionAuthorityPrIdentity {
+  readonly ownerAndRepo: string;
+  readonly prNumber: number;
+}
+export interface GitDeliveryDescriptionAuthorityBaseHead {
+  readonly baseRef: string;
+  readonly headRef: string;
+}
+export interface GitDeliveryDescriptionAuthorityScope {
+  readonly remoteDigest: string;
+  readonly pr: GitDeliveryDescriptionAuthorityPrIdentity | GitDeliveryDescriptionAuthorityBaseHead;
+  readonly snapshotDigest: string;
+}
+export interface ActiveGitDeliveryDescriptionAuthority {
+  readonly scope: GitDeliveryDescriptionAuthorityScope;
+  readonly effectiveMode: CodingWorkbenchMode;
+  readonly expiresAt: string;
+}
+export interface GitDeliveryDescriptionAuthorityPort {
+  current(
+    scope: GitDeliveryDescriptionAuthorityScope,
+    nowIso: string,
+  ): ActiveGitDeliveryDescriptionAuthority | undefined;
+}
+// The two effects the description authority may admit — deliberately a SMALL, LOCAL union rather
+// than a `GitRepositoryAgentOperationKind` member: "model-egress" is not a Git operation at all
+// (there is no argv, no adapter, no branch target), and reusing that broader vocabulary here would
+// force every unrelated switch/table over it (`gitOperationRequirements.ts`'s per-kind connector
+// scopes, the action-sheet preview projection) to grow a case that means something structurally
+// different. "pull-request" reuses the SAME string the run-bound admission already uses for both
+// pr-create and pr-update, since the apply is scoped by policy (KEIKO_DEFAULT_PR_POLICY_PACK's
+// dedicated `pr-description-apply` rule) and by the approval binding, not by this operation tag.
+export type GitDeliveryDescriptionAuthorityOperation = "model-egress" | "pull-request";
+// A fixed, non-secret run identity so the description authority can be threaded through the SAME
+// `runId`/`envelopeDigest`-bound approval binding shape every other Git delivery approval uses,
+// without a real Code task run. `envelopeDigest` is the scope's own content digest, so an approval
+// minted against a stale scope cannot be redeemed once the scope changes underneath it.
+export const DESCRIPTION_AUTHORITY_RUN_ID = "description-authority";
 
 export type GitDeliveryAuthorityDenial =
   | "accepted-run-unavailable"

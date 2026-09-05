@@ -126,6 +126,25 @@ state before UI and watcher processes disappear. The stop command waits for the 
 tracked child; it does not report success while a tracked process remains alive. `--force` remains
 an explicit last-resort hard stop.
 
+### D8 — Cross-platform gateway policy moves to a shared contract type (Issue #2951 follow-up, 2026-09-05)
+
+D6's Seatbelt confinement now flows through a contract-level `NetworkGatewayPolicy`
+(`keiko-contracts/src/tools.ts`) and keiko-sandbox's generic `planIsolatedRun`/`selectGatewayBackend`
+planning path (ADR-0043 D14) instead of a macOS-only helper called directly: the dev-lane backend
+builds an `IsolatedRunPlan` with that policy and lets the shared planner pick (and, on an
+unsupported host, refuse) the backend, rather than assuming Seatbelt is always present. The observed
+behaviour on a working macOS host is unchanged — same profile, same `/usr/bin/sandbox-exec` path —
+but a macOS host missing `sandbox-exec` itself now fails the launch closed with a reasoned decision
+instead of an OS-level spawn error surfacing after the fact.
+
+D6's Windows/native gap also gets an explicit, shared refusal: `nativeRuntimeProcessBackend.ts` can
+now be given the same gateway policy and, because its launch-packet protocol has no way to enforce
+one, always fails the launch with the identical reason keiko-sandbox's planner would produce for an
+unsupported host. Production composition does not yet attach that policy to a native/Windows launch,
+so a Windows-activated sidecar still runs without kernel-enforced egress today — this addendum closes
+the refusal path the backend offers, not the platform coverage itself, consistent with D6's own
+statement of the gap.
+
 ## Consequences
 
 - The Wave-1 anti-false-green proof becomes executable: an env-gated production-discovery variant

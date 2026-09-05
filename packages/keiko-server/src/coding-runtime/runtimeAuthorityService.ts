@@ -45,7 +45,10 @@ import {
   type EditorAgentRuntimeDelegationRequest,
 } from "../editor/agentAuthorityRegistry.js";
 import type {
+  ActiveGitDeliveryDescriptionAuthority,
   ActiveGitDeliveryRunAuthority,
+  GitDeliveryDescriptionAuthorityPort,
+  GitDeliveryDescriptionAuthorityScope,
   GitDeliveryRunAuthorityPort,
 } from "../gitDelivery/runBoundAuthority.js";
 import {
@@ -142,9 +145,44 @@ export type CodingRuntimeCapabilityRecheckInput = Omit<
   "delegationId" | "idempotencyKey" | "usage"
 >;
 
+// ─── Description authority (#3399, epic #3384 correction 4) ──────────────────────────────────────
+//
+// Admits exactly two effects outside a running Code task: model egress of snapshot content through
+// the Model Gateway (description generation) and the "pull-request" body-only description apply. It
+// is minted server-side for one immutable scope — never for "every PR" or "every repository" — and
+// carries no workspace-write or command action classes: it exists only to let a Chat turn or a
+// post-terminal Workbench job re-derive admission for these two narrow effects after the run that
+// produced the snapshot has ended (or never existed), never to reuse a terminated run's own
+// capabilities (runtimeAuthorityService.ts's `revokeBeforeTerminate` already clears those). The
+// scope/authority shapes live in runBoundAuthority.ts (the module that already owns every other
+// Git-delivery authority shape and consults this one at admission) so this file stays a producer
+// of that owning module's types, exactly like `ActiveGitDeliveryRunAuthority` above.
+interface StoredDescriptionAuthority {
+  readonly scope: GitDeliveryDescriptionAuthorityScope;
+  readonly effectiveMode: CodingWorkbenchMode;
+  readonly expiresAtMs: number;
+}
+export interface MintGitDeliveryDescriptionAuthorityInput {
+  readonly scope: GitDeliveryDescriptionAuthorityScope;
+  readonly requestedMode: CodingWorkbenchMode;
+  readonly deploymentCeiling: CodingWorkbenchMode;
+  readonly nowIso: string;
+  readonly ttlMs?: number;
+}
+
+const DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS = 10 * 60 * 1000;
+const MAX_DESCRIPTION_AUTHORITIES = 256;
+
+export function descriptionAuthorityScopeDigest(
+  scope: GitDeliveryDescriptionAuthorityScope,
+): string {
+  return sha256Hex(canonicalise(scope));
+}
+
 export class CodingRuntimeAuthorityService {
   private activeAuthorityRef: CodingRuntimeAuthorityRef | undefined;
   private activeGitDeliveryAuthority: ActiveGitDeliveryRunAuthority | undefined;
+  private readonly descriptionAuthorities = new Map<string, StoredDescriptionAuthority>();
   private activeTreeBindingId: string | undefined;
   private activeEffectiveMode: CodingWorkbenchMode | undefined;
   private reapPending: { readonly runId: string; readonly treeBindingId: string } | undefined;
@@ -329,6 +367,76 @@ export class CodingRuntimeAuthorityService {
       current: (nowIso): ActiveGitDeliveryRunAuthority | undefined =>
         this.currentGitDeliveryAuthority(nowIso),
     };
+  }
+
+  // Mints a bounded, server-owned description authority for exactly one (remoteDigest, PR
+  // identity or base/head pair, snapshotDigest) scope. `effectiveMode` is clamped by the SAME
+  // producer every runtime envelope uses, never by the caller's requested mode alone. Minting the
+  // SAME scope again while a live record exists replaces it (a fresh mint always narrows or
+  // matches the prior grant; it never widens an unrelated live record).
+  public mintGitDeliveryDescriptionAuthority(
+    input: MintGitDeliveryDescriptionAuthorityInput,
+  ): ActiveGitDeliveryDescriptionAuthority {
+    const effectiveMode = resolveEffectiveCodingWorkbenchMode(
+      input.requestedMode,
+      input.deploymentCeiling,
+    );
+    const nowMs = Date.parse(input.nowIso);
+    const expiresAtMs = nowMs + (input.ttlMs ?? DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS);
+    this.pruneDescriptionAuthorities(nowMs);
+    const digest = descriptionAuthorityScopeDigest(input.scope);
+    this.descriptionAuthorities.set(digest, { scope: input.scope, effectiveMode, expiresAtMs });
+    return {
+      scope: input.scope,
+      effectiveMode,
+      expiresAt: new Date(expiresAtMs).toISOString(),
+    };
+  }
+
+  /**
+   * Server-private projection consumed only by `runBoundAuthority.ts`'s description-authority
+   * admission for the two operations it names. Revalidates on every read: an exact scope match
+   * (the caller's freshly re-derived snapshot/base/head digests, not a cached identity) that has
+   * not expired. A changed scope — a stale re-check, a different PR, a moved base/head — simply
+   * finds no record, which is the fail-closed default: this port never widens what it returns.
+   */
+  public gitDeliveryDescriptionAuthorityPort(): GitDeliveryDescriptionAuthorityPort {
+    return {
+      current: (scope, nowIso): ActiveGitDeliveryDescriptionAuthority | undefined =>
+        this.currentGitDeliveryDescriptionAuthority(scope, nowIso),
+    };
+  }
+
+  /** Explicit revocation for a scope change or stale re-check the caller has already detected. */
+  public revokeGitDeliveryDescriptionAuthority(scope: GitDeliveryDescriptionAuthorityScope): void {
+    this.descriptionAuthorities.delete(descriptionAuthorityScopeDigest(scope));
+  }
+
+  private currentGitDeliveryDescriptionAuthority(
+    scope: GitDeliveryDescriptionAuthorityScope,
+    nowIso: string,
+  ): ActiveGitDeliveryDescriptionAuthority | undefined {
+    const nowMs = Date.parse(nowIso);
+    const stored = this.descriptionAuthorities.get(descriptionAuthorityScopeDigest(scope));
+    if (stored === undefined || Number.isNaN(nowMs) || stored.expiresAtMs <= nowMs) {
+      return undefined;
+    }
+    return {
+      scope: stored.scope,
+      effectiveMode: stored.effectiveMode,
+      expiresAt: new Date(stored.expiresAtMs).toISOString(),
+    };
+  }
+
+  private pruneDescriptionAuthorities(nowMs: number): void {
+    for (const [digest, record] of this.descriptionAuthorities) {
+      if (record.expiresAtMs <= nowMs) this.descriptionAuthorities.delete(digest);
+    }
+    while (this.descriptionAuthorities.size > MAX_DESCRIPTION_AUTHORITIES) {
+      const first = this.descriptionAuthorities.keys().next().value;
+      if (first === undefined) break;
+      this.descriptionAuthorities.delete(first);
+    }
   }
 
   /** Authenticates and atomically reserves estimated prompt tokens before provider dispatch. */

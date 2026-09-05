@@ -37,6 +37,17 @@ interface MutableFacadePorts {
   delegate: { execute: CodingToolDelegatePort["execute"] };
 }
 
+// A valid CodingRepositoryResult (#3386 H1), included on every stub outcome so the exhaustive
+// "one delegate call per action" test's blanket mock also satisfies the search action's own
+// projection without a special case; other actions ignore the unrelated field.
+const stubSearchResult = {
+  ok: true as const,
+  kind: "search" as const,
+  hits: [],
+  metrics: { candidatesDiscovered: 0, filesScanned: 0, skippedFiles: 0, durationMs: 0 },
+  truncationReasons: [],
+};
+
 function facade(admitted = true): MutableFacadePorts {
   return {
     authority: {
@@ -46,7 +57,11 @@ function facade(admitted = true): MutableFacadePorts {
           : { ok: false as const },
       ),
     },
-    delegate: { execute: vi.fn(() => Promise.resolve({ outcome: "completed", evidence: [] })) },
+    delegate: {
+      execute: vi.fn(() =>
+        Promise.resolve({ outcome: "completed", evidence: [], search: stubSearchResult }),
+      ),
+    },
   };
 }
 
@@ -267,6 +282,18 @@ describe("CodingToolFacade", () => {
     const subject = createCodingToolFacade(ports);
     const bodies = [
       { action: "edit", changeset },
+      {
+        action: "search",
+        repositoryRequest: {
+          kind: "search",
+          mode: "literal",
+          query: "safeActivity",
+          caseSensitive: false,
+          includeGlobs: [],
+          excludeGlobs: [],
+          maxResults: 20,
+        },
+      },
       { action: "command", commandId: "test" },
       { action: "verification", verifierId: "unit" },
       { action: "git", operation: "read" },
@@ -663,6 +690,58 @@ describe("CodingToolFacade", () => {
       });
     },
   );
+
+  it("forwards a search domain outcome, including its own ok:false reason, as evidence (#3386 H1)", async () => {
+    const ports = facade();
+    const denied = { ok: false as const, reason: "scope-denied" as const };
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "completed", evidence: [], search: denied }),
+    );
+    const subject = createCodingToolFacade(ports);
+    const body = requestBody({
+      action: "search",
+      repositoryRequest: {
+        kind: "read",
+        path: ".env",
+        startLine: 1,
+        endLine: 1,
+        maxBytes: 4096,
+      },
+    });
+
+    const result = await subject.execute({ body, capability });
+
+    expect(result).toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "scope-denied" }],
+      search: denied,
+    });
+  });
+
+  it("fails closed for a malformed search delegate outcome instead of trusting an unvalidated shape", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "completed", evidence: [], search: { ok: "not-a-boolean" } }),
+    );
+    const subject = createCodingToolFacade(ports);
+    const body = requestBody({
+      action: "search",
+      repositoryRequest: {
+        kind: "search",
+        mode: "literal",
+        query: "safeActivity",
+        caseSensitive: false,
+        includeGlobs: [],
+        excludeGlobs: [],
+        maxResults: 20,
+      },
+    });
+
+    await expect(subject.execute({ body, capability })).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "failed" }],
+    });
+  });
 
   it("fails closed for blocked, denied, and malformed delegate outcomes", async () => {
     const ports = facade();

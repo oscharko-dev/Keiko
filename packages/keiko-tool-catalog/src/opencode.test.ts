@@ -22,11 +22,12 @@ function assertManagedShape(schema: unknown): void {
 }
 
 describe("opencode registration set", () => {
-  it("declares the six representable managed tools under their reserved canonical identities", () => {
+  it("declares the seven representable managed tools under their reserved canonical identities", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
     expect(projection.tools.map((tool) => tool.toolRef.canonicalId).sort()).toEqual(
       [
+        "keiko.changeset.edit",
         "keiko.child.run",
         "keiko.research.fetch",
         "keiko.skill.invoke",
@@ -37,6 +38,7 @@ describe("opencode registration set", () => {
     );
     expect(projection.tools.map((tool) => tool.alias).sort()).toEqual(
       [
+        "keiko_changeset_edit",
         "keiko_child_agent",
         "keiko_research_fetch",
         "keiko_skill",
@@ -47,13 +49,11 @@ describe("opencode registration set", () => {
     );
   });
 
-  it("never registers the changeset-edit or repository-search identities (documented gaps)", () => {
+  it("never registers the repository-search identity (H1 handler not yet bound)", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
     const canonicalIds = projection.tools.map((tool) => tool.toolRef.canonicalId);
-    expect(canonicalIds).not.toContain("keiko.changeset.edit");
     expect(canonicalIds).not.toContain("keiko.repo.search");
-    expect(projection.tools.map((tool) => tool.alias)).not.toContain("keiko_changeset_edit");
     expect(projection.tools.map((tool) => tool.alias)).not.toContain("keiko_repository_search");
   });
 
@@ -76,11 +76,11 @@ describe("opencode registration set", () => {
     for (const tool of projection.tools) assertManagedShape(tool.inputSchema);
   });
 
-  it("is the single source gatewayToolDefinitions()/opencodeToolSchemas.ts derive from", () => {
+  it("is the source coding-sidecar-gateway.ts derives its outgoing gateway advertisement from", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const definitions = gatewayToolDefinitions(catalog, OPENCODE_PROFILE);
-    expect(definitions).toHaveLength(6);
-    expect(new Set(definitions.map((tool) => tool.name)).size).toBe(6);
+    expect(definitions).toHaveLength(7);
+    expect(new Set(definitions.map((tool) => tool.name)).size).toBe(7);
     for (const tool of definitions) expect(tool.description.length).toBeGreaterThan(0);
   });
 

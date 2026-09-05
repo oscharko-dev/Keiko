@@ -204,3 +204,22 @@ The #3388 shared provider-observation vocabulary distinguishes local admission, 
 have 19 focused tests, including changing total counts, cap exhaustion, captured bounds and an abort
 during the final read. These are read primitives; complete requirements discovery, model-driven repair,
 persisted cumulative budgets and browser qualification remain open.
+
+## Qualification inputs (#3390)
+
+#3390's own deterministic pieces are landed: the `CodeTaskQualificationManifestV1` schema
+extension (`packages/keiko-contracts/src/code-task-acceptance.ts`), the
+`check:coding-issue-journey-evidence` machine validator and its nine fixtures
+(`scripts/check-coding-issue-journey-evidence.mjs`, `scripts/lib/coding-issue-journey-evidence.mjs`),
+and the `test:e2e:coding-issue-journey:live` real-model harness skeleton (a Playwright spec,
+config and server that compose the real `keiko ui` production factory and fail closed when
+unconfigured, never the scripted resolver in `tests/e2e/servers/coding-runtime-server-shared.mts`).
+
+Four qualification inputs remain external and blocked in every environment this epic's agents run
+in, never faked green: an operator-authorized controlled-repository checkout with a real seeded
+issue; an approved real-model/LiteLLM profile with a bounded spend budget; the signed platform
+artifacts tracked by the still-open #2951 (sidecar egress attestation), #2952 (coding-runtime
+performance budgets) and #2198 (signed/notarized macOS reference installation); and the
+`keiko-issue-audit` reviewer reference, which runs outside this repository entirely. Full detail,
+including which manifest rows are `blocked` on which issue, is in
+[`docs/design-system/evidence/3390/README.md`](../design-system/evidence/3390/README.md).

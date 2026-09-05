@@ -825,6 +825,228 @@ describe("production managed worktree tools", () => {
   );
 });
 
+describe("H1 repository search mounted into production composition (#3386)", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  function tempWorkspace(): string {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-production-"));
+    roots.push(root);
+    return root;
+  }
+
+  function searchBody(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      action: "search",
+      actionId: "search-1",
+      idempotencyKey: "search-1",
+      repositoryRequest: {
+        kind: "search",
+        mode: "literal",
+        query: "parseConfig",
+        caseSensitive: false,
+        includeGlobs: [],
+        excludeGlobs: [],
+        maxResults: 50,
+        ...overrides,
+      },
+    });
+  }
+
+  function readBody(path: string): string {
+    return JSON.stringify({
+      action: "search",
+      actionId: "search-1",
+      idempotencyKey: "search-1",
+      repositoryRequest: { kind: "read", path, startLine: 1, endLine: 1, maxBytes: 4096 },
+    });
+  }
+
+  function searchFacade(input: {
+    readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
+    readonly authorityExpiresAt?: string;
+    readonly activityLog?: { write: (event: ServerLogEvent) => void };
+  }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
+    return createProductionManagedWorktreeToolFacade({
+      authority: {
+        revalidateCapabilityForMutation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(true),
+        }),
+        resolveCapabilityForDelegation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(true),
+        }),
+      },
+      authorityRef: { runId: "run-h1-search", envelopeDigest: DIGEST },
+      workspaceRoot: "/managed/worktree",
+      resolveWorkspaceRootAccess: input.resolveWorkspaceRootAccess,
+      authorityExpiresAt: input.authorityExpiresAt ?? "2099-01-01T00:00:00.000Z",
+      effectiveMode: "autonomous-delivery",
+      deploymentCeiling: "autonomous-delivery",
+      liveFacts: () => ({
+        ...FACTS,
+        actionClasses: ["workspace-read", "workspace-write", "verification"],
+      }),
+      secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: false, reason: "denied" }) },
+      editorAgentClient: {
+        action: () =>
+          Promise.resolve({
+            ok: false as const,
+            error: { kind: "route" as const, code: "denied", message: "denied" },
+          }),
+      },
+      invocationRegistry: createCodingToolInvocationRegistry(),
+      verificationRunner: { runToReport: vi.fn() },
+      onRuntimeEvent: vi.fn(),
+      ...(input.activityLog === undefined ? {} : { activityLog: input.activityLog }),
+    });
+  }
+
+  it("returns a real bounded search result from a temp workspace through the actual production composition", async () => {
+    const root = tempWorkspace();
+    mkdirSync(join(root, "src"));
+    writeFileSync(
+      join(root, "src", "example.ts"),
+      'const token = "private-credential-value";\nexport const parseConfig = true;\n',
+    );
+    const events: ServerLogEvent[] = [];
+    const facade = searchFacade({
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task" as const,
+        canonicalRoot: root,
+        fs: nodeWorkspaceFs,
+        repositoryRoot: root,
+      }),
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+
+    const result = await facade.execute({ capability: "opaque-capability", body: searchBody() });
+
+    expect(result).toMatchObject({ status: "completed" });
+    const search = result as { search: { ok: true; hits: readonly unknown[] } };
+    expect(search.search.ok).toBe(true);
+    expect(search.search.hits[0]).toMatchObject({
+      path: "src/example.ts",
+      snippet: "export const parseConfig = true;",
+    });
+    expect(JSON.stringify(result)).not.toContain("private-credential-value");
+    // Body-free evidence reaches the activity log through the real production path.
+    expect(events.map((event) => event.op)).toEqual([
+      "coding-repository-handler.started",
+      "coding-repository-handler.settled",
+    ]);
+    expect(JSON.stringify(events)).not.toContain("parseConfig");
+  });
+
+  it("denies a workspace-denylisted path as a completed domain outcome, never invented coverage", async () => {
+    const root = tempWorkspace();
+    writeFileSync(join(root, ".env"), "SECRET=sentinel-value\n");
+    const facade = searchFacade({
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task" as const,
+        canonicalRoot: root,
+        fs: nodeWorkspaceFs,
+        repositoryRoot: root,
+      }),
+    });
+
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: readBody(".env"),
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      search: { ok: false, reason: "scope-denied" },
+    });
+  });
+
+  it("reports a result-limit truncation instead of inventing exhaustive coverage", async () => {
+    const root = tempWorkspace();
+    mkdirSync(join(root, "src"));
+    for (const name of ["one.ts", "two.ts", "three.ts"]) {
+      writeFileSync(join(root, "src", name), "export const truncationProbe = true;\n");
+    }
+    const facade = searchFacade({
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task" as const,
+        canonicalRoot: root,
+        fs: nodeWorkspaceFs,
+        repositoryRoot: root,
+      }),
+    });
+
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: searchBody({ query: "truncationProbe", maxResults: 2 }),
+    });
+
+    const search = result as { search: { ok: true; hits: readonly unknown[]; truncationReasons: readonly string[] } };
+    expect(search.search.ok).toBe(true);
+    expect(search.search.hits).toHaveLength(2);
+    expect(search.search.truncationReasons).toContain("result-limit");
+  });
+
+  it("fails closed when authority resolves live at admission but is revoked before the handler binds", async () => {
+    const root = tempWorkspace();
+    let calls = 0;
+    const facade = searchFacade({
+      resolveWorkspaceRootAccess: (): WorkspaceRootAccess | undefined => {
+        calls += 1;
+        return calls === 1
+          ? { kind: "managed-task" as const, canonicalRoot: root, fs: nodeWorkspaceFs, repositoryRoot: root }
+          : undefined;
+      },
+    });
+
+    await expect(
+      facade.execute({ capability: "opaque-capability", body: searchBody() }),
+    ).resolves.toMatchObject({ status: "failed", reasonCode: "capability-backend-unavailable" });
+  });
+
+  it("fails closed with a distinct reason when the run's authority already expired", async () => {
+    const root = tempWorkspace();
+    const facade = searchFacade({
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task" as const,
+        canonicalRoot: root,
+        fs: nodeWorkspaceFs,
+        repositoryRoot: root,
+      }),
+      authorityExpiresAt: "2000-01-01T00:00:00.000Z",
+    });
+
+    await expect(
+      facade.execute({ capability: "opaque-capability", body: searchBody() }),
+    ).resolves.toMatchObject({ status: "failed", reasonCode: "search-authority-revoked" });
+  });
+
+  it("cancels an already-aborted search before the workspace is ever touched", async () => {
+    const root = tempWorkspace();
+    const facade = searchFacade({
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task" as const,
+        canonicalRoot: root,
+        fs: nodeWorkspaceFs,
+        repositoryRoot: root,
+      }),
+    });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: searchBody(),
+        signal: controller.signal,
+      }),
+    ).resolves.toMatchObject({ status: "cancelled" });
+  });
+});
+
 function verificationReport(overallStatus: VerificationStatus): VerificationReport {
   return {
     workspaceRoot: "/managed/worktree",

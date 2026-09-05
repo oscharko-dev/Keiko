@@ -1,5 +1,11 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
+import {
+  compileToolProjection,
+  createKeikoToolCatalog,
+  opencodeRegistrationSet,
+} from "@oscharko-dev/keiko-tool-catalog";
+import type { GatewayToolCatalogAdvertisement } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import {
   CODING_TOOL_DISCOVER_MAX_RESULTS,
   CODING_TOOL_READ_MAX_START_LINE,

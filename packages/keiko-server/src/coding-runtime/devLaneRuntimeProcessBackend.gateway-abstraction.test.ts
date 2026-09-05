@@ -9,14 +9,20 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { afterEach, describe, expect, it } from "vitest";
-import { createRuntimeGatewayConfinement, type BackendAvailability } from "@oscharko-dev/keiko-sandbox";
+import {
+  createRuntimeGatewayConfinement,
+  type BackendAvailability,
+} from "@oscharko-dev/keiko-sandbox";
 import { createBufferedServerLogSink } from "../observability/index.js";
 
 import {
   createDevLaneRuntimeProcessBackend,
   type DevLaneRuntimeChildProcess,
 } from "./devLaneRuntimeProcessBackend.js";
-import { CLOSED_RUNTIME_LAUNCH_PROFILE, type RuntimeSupervisorLaunchRequest } from "./runtimeProcessSupervisor.js";
+import {
+  CLOSED_RUNTIME_LAUNCH_PROFILE,
+  type RuntimeSupervisorLaunchRequest,
+} from "./runtimeProcessSupervisor.js";
 
 const IDENTITY = { platform: "darwin", arch: "arm64", backend: "macos-app-sandbox" } as const;
 const ALL: BackendAvailability = {
@@ -39,7 +45,11 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function fixture(): { readonly runtimeRoot: string; readonly executable: string; readonly cwd: string } {
+function fixture(): {
+  readonly runtimeRoot: string;
+  readonly executable: string;
+  readonly cwd: string;
+} {
   const root = mkdtempSync(join(tmpdir(), "keiko-dev-lane-gateway-abstraction-"));
   roots.push(root);
   const runtimeRoot = join(root, "payload");
@@ -63,9 +73,7 @@ function gatewayConfinement(): ReturnType<typeof createRuntimeGatewayConfinement
   });
 }
 
-function launchRequest(
-  paths: ReturnType<typeof fixture>,
-): RuntimeSupervisorLaunchRequest {
+function launchRequest(paths: ReturnType<typeof fixture>): RuntimeSupervisorLaunchRequest {
   return {
     runId: "run-2951",
     recoveryHandle: "0".repeat(32),
@@ -84,10 +92,14 @@ function fakeChild(): DevLaneRuntimeChildProcess {
     pid: 4711,
     stdout: new PassThrough(),
     stderr: new PassThrough(),
-    settled: () => false,
-    kill: () => true,
-    onExit: () => {},
-    onError: () => {},
+    settled: (): boolean => false,
+    kill: (): boolean => true,
+    onExit: (): void => {
+      // Never settles in these tests: the fail-closed cases assert on the throw, not on exit.
+    },
+    onError: (): void => {
+      // Never invoked in these tests; present only to satisfy the DevLaneRuntimeChildProcess shape.
+    },
   };
 }
 

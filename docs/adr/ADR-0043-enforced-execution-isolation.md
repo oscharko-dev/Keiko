@@ -211,3 +211,34 @@ This confinement mechanism is additive: it does not change `network: "none"`, th
 backends, or the CI-proven egress denial in D5. It is a second, narrower policy shape for a shape of
 execution (long-lived, one-endpoint-allowed) that D1–D10 did not address, scoped today to the one
 platform (macOS) that has a production long-lived sidecar activation path (ADR-0140).
+
+## Addendum — a contract-level `NetworkGatewayPolicy` and an honest cross-platform posture (2026-09-05)
+
+### D14 — The gateway-allowlist shape moves into `keiko-contracts`, and macOS reuses one Seatbelt formula
+
+`packages/keiko-contracts/src/tools.ts` now carries `NetworkGatewayPolicy` (`{ mode: "gateway",
+host: "127.0.0.1" | "::1", port }`) as a third `NetworkPolicy` variant alongside `"inherit"`/`"none"`,
+guarded by `isValidNetworkGatewayPolicy` — deliberately not a general allowlist: one loopback host,
+one in-range port, nothing else. `IsolatedRunPlan.network` accepts it directly, so
+`planIsolatedRun`/`selectGatewayBackend` (new in `keiko-sandbox`) can plan a gateway-confined run
+through the SAME `buildWrappedCommand` dispatch every other backend goes through. The macOS Seatbelt
+profile string itself now lives in exactly one place, `backends.ts`'s `buildGatewaySeatbeltCommand`;
+D11's `buildRuntimeGatewaySeatbeltCommand` is now a thin thirteen-line wrapper over that same
+function (its exported name and observable behaviour are unchanged, so existing callers and D11's
+own description above still hold). There is no longer a second, independently-maintained copy of the
+"(deny network*) plus one port-specific allow" formula.
+
+Linux and Windows remain fail-closed for this policy, and D12's stated gap is now a *reasoned*
+refusal rather than silent non-enforcement: `selectGatewayBackend` never selects bubblewrap, unshare,
+or a container runtime for a gateway policy, because each of those isolates the child into its own
+network namespace with no route back to the *parent's* loopback socket — reachability a general
+`network:"none"` deny-all run never needed and a `network:"inherit"` run never isolated either. `nativeRuntimeProcessBackend.ts` (the Windows/native-release backend) now accepts an optional
+`gatewayConfinement` and, when one is attached, refuses the launch outright with the identical
+`GATEWAY_UNSUPPORTED_ON_HOST_REASON` string `planIsolatedRun` would produce, rather than a silent
+unconfined spawn — its native launch-packet protocol has no field for a network policy and cannot
+enforce one. Production composition (`productionOpenCodeBackend.ts`) does not yet attach a
+confinement to its native/Windows launches, so this closes the *expressibility and refusal* gap, not
+D12's platform-coverage gap itself: a Windows sidecar launched today still runs with no OS-enforced
+egress boundary, honestly, because nothing yet asks the backend to confine it. Building the actual
+Linux network-namespace bridge, a Windows-native equivalent, and wiring production composition to
+request gateway confinement on every platform all remain out of scope and tracked as before.

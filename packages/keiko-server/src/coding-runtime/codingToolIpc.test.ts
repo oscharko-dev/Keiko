@@ -89,6 +89,54 @@ describe("coding tool IPC repository discovery", () => {
   });
 });
 
+describe("coding tool IPC repository search (#3386 H1)", () => {
+  const search = {
+    action: "search",
+    actionId: "search-1",
+    idempotencyKey: "search-key",
+    repositoryRequest: {
+      kind: "search",
+      mode: "literal",
+      query: "parseConfig",
+      caseSensitive: false,
+      includeGlobs: [],
+      excludeGlobs: [],
+      maxResults: 50,
+    },
+  };
+  const read = {
+    action: "search",
+    actionId: "search-2",
+    idempotencyKey: "search-key-2",
+    repositoryRequest: { kind: "read", path: "src/a.ts", startLine: 1, endLine: 10, maxBytes: 4096 },
+  };
+
+  it("admits an exact search request and an exact ranged-read handoff, never restating the contract's limits", () => {
+    expect(parseCodingToolRequest(JSON.stringify(search), 262_144)).toEqual(search);
+    expect(parseCodingToolRequest(JSON.stringify(read), 262_144)).toEqual(read);
+  });
+
+  it("rejects a query beyond the contract's own bound instead of a locally restated one", () => {
+    const oversized = {
+      ...search,
+      repositoryRequest: { ...search.repositoryRequest, query: "q".repeat(201) },
+    };
+    expect(parseCodingToolRequest(JSON.stringify(oversized), 262_144)).toBeUndefined();
+  });
+
+  it.each([
+    ["an unknown envelope key", { workspaceRoot: "/private" }],
+    ["a missing repositoryRequest", { repositoryRequest: undefined }],
+    ["an unknown nested repository-request key", { repositoryRequest: { ...search.repositoryRequest, untrusted: "x" } }],
+    ["a non-relative read path", { repositoryRequest: { ...read.repositoryRequest, path: "/etc/passwd" } }],
+    ["an oversized maxResults beyond the contract's returned-hits limit", { repositoryRequest: { ...search.repositoryRequest, maxResults: 51 } }],
+  ])("rejects %s before a search request exists", (_name, extra) => {
+    expect(
+      parseCodingToolRequest(JSON.stringify({ ...search, ...extra }), 262_144),
+    ).toBeUndefined();
+  });
+});
+
 describe("coding tool IPC auxiliary requests", () => {
   it("admits only model-safe skill fields", () => {
     const body = {

@@ -22,9 +22,11 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
+import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import type {
   createProductionJourneyReader as ProductionJourneyReaderFn,
   resolveJourneyCheckoutRoot as ResolveJourneyCheckoutRootFn,
@@ -216,6 +218,35 @@ function descriptionFor(
   };
 }
 
+/**
+ * CAS write into the durable projection (#3389 AC6), body-free logged so a support timeline can
+ * tell a genuinely recorded outcome from one rejected as stale without ever carrying the outcome's
+ * own content. `outcomes` is absent until `codingRuntimeSnapshotStore.ts` gains a `journeyOutcomes`
+ * sub-store (see `GitDeliveryJourneyRouteOptions.outcomes`); an absent store never fails the request.
+ */
+function recordJourneyOutcome(
+  deps: UiHandlerDeps,
+  outcomes: GitJourneyOutcomeStore | undefined,
+  correlationId: string,
+  outcome: JourneyOutcome,
+): boolean {
+  if (outcomes === undefined) return true;
+  const recorded = outcomes.record(outcome);
+  (deps.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    op: "git.journey-outcome.recorded",
+    correlationId,
+    level: recorded ? "info" : "warn",
+    extra: {
+      runId: outcome.binding.runId,
+      state: outcome.state,
+      reason: outcome.reason,
+      recorded,
+    },
+  });
+  return recorded;
+}
+
 // ─── Handler ────────────────────────────────────────────────────────────────────────────────────
 
 async function handleJourneyRefresh(
@@ -262,8 +293,8 @@ async function handleJourneyRefresh(
       draft.pullRequest.number,
       draftDelivery.resolveJourneyCheckoutRoot,
     ),
-    recordOutcome: (_context, outcome): boolean =>
-      options.outcomes === undefined ? true : options.outcomes.record(outcome),
+    recordOutcome: (observeContext, outcome): boolean =>
+      recordJourneyOutcome(deps, options.outcomes, observeContext.correlationId, outcome),
     ...(deps.activityLog === undefined ? {} : { activityLog: deps.activityLog }),
   };
   const result = await new JourneyObservationController(observationOptions).observe();

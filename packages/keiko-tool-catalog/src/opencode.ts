@@ -1,10 +1,18 @@
 // #3414: the "opencode" registration set. ADR-0175 D2 reserves the seven managed-OpenCode
 // canonical identities below plus the two exhaustively-declared native extensions (`question`,
 // `todowrite` -- adapter-native, never Keiko tool descriptors, per D2's explicit "not Keiko tools
-// or compatibility exceptions"). Descriptors here are the single source for these tools' governed
-// shape; packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts derives its
-// model-visible/gateway wire list from this set via `gatewayToolDefinitions` rather than
-// hand-authoring a second copy.
+// or compatibility exceptions"). packages/keiko-server/src/coding-sidecar-gateway.ts uses this set
+// to build the `toolCatalog` advertisement it forwards to the real model provider (the schema shown
+// to the underlying LLM as a function-calling interface -- advisory only; the provider performs no
+// server-side schema enforcement of its own).
+//
+// This set is intentionally NOT the source for
+// packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts's `OPENCODE_MODEL_VISIBLE_TOOLS`/
+// `OPENCODE_TOOL_SOURCE_DEFINITIONS`: those pin what the real, pinned OpenCode 1.17.17 runtime
+// itself generates and enforces BEFORE a call ever reaches Keiko (owned by the concurrently-worked
+// opencodeRuntimeAdapter.ts) and must keep matching that generated adapter source exactly, pattern
+// keyword included, or the sidecar-gateway's incoming exact-set trust check
+// (`hasExactOpenCodeVisibleToolContract`) would start rejecting legitimate real traffic.
 //
 // Known, reported representability gap (ADR-0175 D3: "unsupported dialect semantics are
 // incompatibility, never silently omitted keywords"): packages/keiko-tool-catalog/src/schema.ts's
@@ -12,10 +20,10 @@
 // the format-level regexes the real OpenCode wire schemas use today for `relativePath` (path
 // traversal), `expectedContentHash` (hex-64), `target` (https-only) and `skillId` (skill-id shape)
 // cannot be expressed in a catalog descriptor. Following the precedent already accepted for
-// `keiko.file.read`'s `path` in legacy.ts (also pattern-free), those format checks remain owned by
-// the real handler at dispatch time, not by this advertised/argument-gate schema; this file never
-// widens an existing catalog-enforced constraint, it simply does not duplicate handler-owned format
-// validation the closed dialect cannot represent.
+// `keiko.file.read`'s `path` in legacy.ts (also pattern-free), those format checks stay owned by
+// the real handler and OpenCode's own generated adapter source, never by this advisory,
+// model-facing schema; once schema.ts gains `pattern` support this set becomes a candidate single
+// source for OPENCODE_TOOL_SOURCE_DEFINITIONS too (see the #3414 report).
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import type {
@@ -237,9 +245,11 @@ function childRunSpec(): OpenCodeToolSpec {
 
 /**
  * The canonical "opencode" registration set (ADR-0175 D2). Declares the seven managed-OpenCode
- * governed tools this file can safely and losslessly represent, plus the two exhaustively-declared
- * native extensions. `keiko.changeset.edit` and `keiko_repository_search` (H1, #3386) are not yet
- * members -- see the comments above and the #3414 report for exact reasons and follow-ups.
+ * governed tools plus the two exhaustively-declared native extensions. `keiko_repository_search`
+ * (H1, #3386) is not yet a member -- H1's handler is not implemented; see the #3414 report.
+ * `keiko.changeset.edit`'s descriptor is a structurally-equivalent, strictly LOOSER projection of
+ * the real wire schema (all fields required, nested `additionalProperties` stripped-as-true) --
+ * see `changesetEditSpec` above for exactly why and why that is safe for its one consumer.
  *
  * NOTE for consumers building a live gateway advertisement: `packages/keiko-model-gateway/src/
  * toolCatalogBridge.ts`'s `normalizerFor` (and `invocation.ts`'s `selectedTools`) do not yet merge

@@ -33,6 +33,7 @@ function governedPorts(): CodingToolGovernedPorts {
   return {
     repositoryRead: governedPort(),
     repositoryDiscover: governedPort(),
+    repositorySearch: governedPort(),
     editorChangeset: governedPort(),
     commandRunner: governedPort(),
     verificationRunner: governedPort(),
@@ -164,6 +165,19 @@ describe("CodingToolGovernedDelegate", () => {
     const actions: readonly CodingToolActionRequest[] = [
       { ...identity, action: "read", relativePath: "src/a.ts" },
       { ...identity, action: "discover", query: "safeActivity", maxResults: 20 },
+      {
+        ...identity,
+        action: "search",
+        repositoryRequest: {
+          kind: "search",
+          mode: "literal",
+          query: "safeActivity",
+          caseSensitive: false,
+          includeGlobs: [],
+          excludeGlobs: [],
+          maxResults: 20,
+        },
+      },
       { ...identity, action: "edit", changeset },
       { ...identity, action: "command", commandId: "command-1" },
       { ...identity, action: "verification", verifierId: "verification-1" },
@@ -180,6 +194,7 @@ describe("CodingToolGovernedDelegate", () => {
     }
     expect(ports.repositoryRead.execute).toHaveBeenCalledTimes(1);
     expect(ports.repositoryDiscover.execute).toHaveBeenCalledTimes(1);
+    expect(ports.repositorySearch.execute).toHaveBeenCalledTimes(1);
     expect(ports.editorChangeset.execute).toHaveBeenCalledTimes(1);
     expect(ports.commandRunner.execute).toHaveBeenCalledTimes(1);
     expect(ports.verificationRunner.execute).toHaveBeenCalledTimes(1);
@@ -233,6 +248,40 @@ describe("CodingToolGovernedDelegate", () => {
       liveGuard,
     );
     expect(ports.editorChangeset.execute).not.toHaveBeenCalled();
+  });
+
+  it("carries a search port's CodingRepositoryResult through to the outcome unchanged (#3386 H1)", async () => {
+    const ports = governedPorts();
+    const search = { ok: true as const, kind: "search" as const, hits: [], metrics: {
+      candidatesDiscovered: 0,
+      filesScanned: 0,
+      skippedFiles: 0,
+      durationMs: 1,
+    }, truncationReasons: [] };
+    ports.repositorySearch = {
+      execute: vi.fn(() => Promise.resolve({ status: "completed" as const, search })),
+    };
+    const delegate = createCodingToolGovernedDelegate(ports);
+
+    await expect(
+      delegate.execute(
+        {
+          ...identity,
+          action: "search",
+          repositoryRequest: {
+            kind: "search",
+            mode: "literal",
+            query: "safeActivity",
+            caseSensitive: false,
+            includeGlobs: [],
+            excludeGlobs: [],
+            maxResults: 20,
+          },
+        },
+        undefined,
+        liveGuard,
+      ),
+    ).resolves.toEqual({ outcome: "completed", search });
   });
 
   it("fails a stop race at the governed port mutation boundary", async () => {
