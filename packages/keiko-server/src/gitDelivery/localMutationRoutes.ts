@@ -240,6 +240,17 @@ export const createHandleLocalMutation = (
       workspace,
       operation,
       localMutationAuthorityTarget(command),
+      // Final-audit F1/#3390 (ADR-0138 D2): a local mutation has no operation-independent
+      // mandatory downstream enforcement (the policy pack decides per command), so a lower mode's
+      // "approval-required" disposition is redeemed only by an actual matching claim — the SAME
+      // "local-mutation" claim this route already parses from its own request body (peeked, not
+      // consumed, here; the `resolveGitDeliveryApprovalRequirement` call right below is the one
+      // real single-use consumption, unchanged).
+      {
+        approval,
+        approvalStore: seams.approvalStore,
+        approvalBinding: { operation: "local-mutation", command },
+      },
     );
     if (authorityDenial !== undefined) return authorityDenial;
     const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {

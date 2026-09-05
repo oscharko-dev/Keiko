@@ -45,6 +45,11 @@ import type {
 } from "./memory-operations.js";
 import type { DiscussionMode } from "./discussion-intelligence.js";
 import { isCodingWorkbenchMode, type CodingWorkbenchMode } from "./coding-workbench.js";
+// The Chat git-change description-status vocabulary is the SAME frozen outcome vocabulary
+// #3399 owns (epic #3384 correction 3, one outcome-vocabulary table) — imported so the array
+// below is checked at compile time rather than independently restated (see F29 in the epic
+// #3384 final audit: this was previously a bare literal array with no compile-time link).
+import type { PrDescriptionApplicationState } from "./pr-description-application.js";
 // Path-free aggregate of the deterministic context-assembly pass (ADR-0052 / ADR-0057 D1).
 // ContextLaneId is a fixed 8-member string literal union, never a path; ContextBudgetPressure
 // is a 4-value enum. Importing these is intra-package (contracts → contracts), not a sibling edge.
@@ -184,7 +189,7 @@ export const CHAT_GIT_CHANGE_DESCRIPTION_STATUSES = [
   "fallback",
   "blocked",
   "failed",
-] as const;
+] as const satisfies readonly PrDescriptionApplicationState[];
 export type ChatGitChangeDescriptionStatus = (typeof CHAT_GIT_CHANGE_DESCRIPTION_STATUSES)[number];
 
 // Issue #3400 (epic #3384, contract corrections 2 and 6) — a THIRD Chat scope list, sibling to

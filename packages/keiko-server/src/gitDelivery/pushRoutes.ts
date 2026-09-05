@@ -324,7 +324,9 @@ async function runPushMutation(input: PushMutationInput): Promise<RouteResult> {
     admitted: authority,
     next: seams.beforeRemoteDispatch,
     denialCapture,
-    audit: { logSink: seams.activityLog },
+    // Same deferral as the up-front admission gate above: the approval was already verified as
+    // consumed before this dispatch was reached, so the continuity re-check must not re-demand it.
+    audit: { logSink: seams.activityLog, deliveryApprovalDeferred: true },
   });
   try {
     const result = await executeGovernedPublish(
@@ -362,6 +364,10 @@ export const createHandlePushExecute = (
     };
     const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "push", target, {
       logSink: seams.activityLog,
+      // Final-audit F2/#3390 (ADR-0138 D2, #3387): push's own execute path already enforces a
+      // mandatory, mode-independent consumed approval below (`pushApprovalRequiredBlock`), so this
+      // coarse admission layer defers to it instead of demanding a second claim.
+      deliveryApprovalDeferred: true,
     });
     if (!authority.allowed) return authority.result;
     return runPushMutation({
@@ -420,6 +426,10 @@ export const createHandlePushApprove = (
     };
     const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "push", target, {
       logSink: seams.activityLog,
+      // Final-audit F2/#3390 (ADR-0138 D2, #3387): push's own execute path already enforces a
+      // mandatory, mode-independent consumed approval below (`pushApprovalRequiredBlock`), so this
+      // coarse admission layer defers to it instead of demanding a second claim.
+      deliveryApprovalDeferred: true,
     });
     if (!authority.allowed) return authority.result;
     const store = seams.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;

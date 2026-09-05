@@ -307,10 +307,16 @@ const WRITE_KEYS: Readonly<Record<GitRepositoryAgentOperationKind, ReadonlySet<s
   status: new Set(),
   diff: new Set(),
   "branch-list": new Set(),
-  "branch-create": new Set(["branchName", "baseBranchName", "startPointRefHash"]),
-  "branch-switch": new Set(["branchName"]),
-  stage: new Set(["pathspecs", "includeUntracked"]),
-  unstage: new Set(["pathspecs"]),
+  // "approval" (final-audit F1+F2/#3390): forwarded verbatim to the delegated route, which is the
+  // ONLY place that ever parses/consumes it (`delegatedBody` spreads `...payload` unchanged) — this
+  // facade never reads it. Allows a caller holding a claim minted directly through the delegated
+  // route's own `/approve` endpoint to redeem it via this facade too, exactly as if it had called
+  // the delegated route directly. Omitted for `commit` (redirected to the verified runtime commit
+  // service above) and `fetch`/`pull` (no mint route exists for either yet).
+  "branch-create": new Set(["branchName", "baseBranchName", "startPointRefHash", "approval"]),
+  "branch-switch": new Set(["branchName", "approval"]),
+  stage: new Set(["pathspecs", "includeUntracked", "approval"]),
+  unstage: new Set(["pathspecs", "approval"]),
   commit: new Set(["messageDraft", "message", "allowEmpty"]),
   fetch: new Set(["remote"]),
   pull: new Set(["remote"]),
@@ -320,6 +326,7 @@ const WRITE_KEYS: Readonly<Record<GitRepositoryAgentOperationKind, ReadonlySet<s
     "sourceBranchName",
     "forcePush",
     "setUpstreamTracking",
+    "approval",
   ]),
   "pull-request": new Set([
     "kind",
@@ -332,6 +339,7 @@ const WRITE_KEYS: Readonly<Record<GitRepositoryAgentOperationKind, ReadonlySet<s
     "prExternalId",
     "convertToDraft",
     "convertFromDraft",
+    "approval",
   ]),
   merge: new Set([
     "kind",
@@ -342,6 +350,7 @@ const WRITE_KEYS: Readonly<Record<GitRepositoryAgentOperationKind, ReadonlySet<s
     "mergeStrategy",
     "deleteBranchAfterMerge",
     "expectedHeadRefHash",
+    "approval",
   ]),
 };
 
@@ -587,12 +596,20 @@ export async function handleGitAgentOperation(
         ),
       };
     }
+    // Final-audit F1+F2/#3390 (ADR-0138 D2): this is a pre-check ahead of delegation, not the final
+    // authority — every op below delegates to the SAME route handler that independently re-runs
+    // `gitDeliveryAuthorityGate`/`gitDeliveryAuthorityDenial` with the correct per-operation
+    // redemption (deferred for delivery ops, peeked against the forwarded `approval` for local
+    // mutations). Deferring uniformly here is therefore safe: it never widens what the delegated
+    // handler itself admits, and avoids re-deriving that same per-operation distinction twice.
     const gate = gitDeliveryAuthorityDenial(
       ctx,
       deps,
       parsed.request.projectId,
       workspace,
       parsed.request.operation,
+      {},
+      { deliveryApprovalDeferred: true },
     );
     if (gate !== undefined) {
       return {

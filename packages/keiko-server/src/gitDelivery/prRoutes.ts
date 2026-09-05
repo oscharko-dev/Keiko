@@ -390,7 +390,7 @@ async function dispatchGovernedPr(input: GovernedPrDispatch): Promise<RouteResul
     admitted: authority,
     next: seams.beforeRemoteDispatch,
     denialCapture,
-    audit: { logSink: seams.activityLog },
+    audit: { logSink: seams.activityLog, deliveryApprovalDeferred: true },
   });
   try {
     const result = await executeGovernedPullRequest(
@@ -429,7 +429,13 @@ async function handlePrExecute(
     workspace,
     "pull-request",
     target,
-    { logSink: seams.activityLog },
+    {
+      logSink: seams.activityLog,
+      // Final-audit F2/#3390 (ADR-0138 D2, #3387): PR create/update's own execute path already
+      // enforces a mandatory, mode-independent consumed approval below, so this coarse admission
+      // layer defers to it instead of demanding a second claim.
+      deliveryApprovalDeferred: true,
+    },
   );
   if (!authority.allowed) return authority.result;
   const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
@@ -511,7 +517,7 @@ export const createHandlePrApprove = (
       workspace,
       "pull-request",
       target,
-      { logSink: seams.activityLog },
+      { logSink: seams.activityLog, deliveryApprovalDeferred: true },
     );
     if (!authority.allowed) return authority.result;
     const store = seams.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;

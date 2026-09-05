@@ -131,7 +131,12 @@ interface GitDeliveryAuthorityContinuityInput {
   readonly target?: GitDeliveryAuthorityTarget | undefined;
   readonly admitted: GitDeliveryAuthorityIdentity;
   readonly next?: (() => boolean) | undefined;
-  readonly audit?: Pick<GitDeliveryAuthorityAuditSeams, "nowIso" | "logSink"> | undefined;
+  readonly audit?:
+    | Pick<
+        GitDeliveryAuthorityAuditSeams,
+        "nowIso" | "logSink" | "deliveryApprovalDeferred" | "approval" | "approvalStore" | "approvalBinding"
+      >
+    | undefined;
   // Optional out-parameter: when the continuity re-check denies (the admitted authority changed or
   // was revoked between admission and remote dispatch), the denial's 403 RouteResult is written here
   // — see GitDeliveryAuthorityContinuityDenialCapture for why the caller needs it.

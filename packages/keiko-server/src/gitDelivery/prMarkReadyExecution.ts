@@ -367,6 +367,10 @@ export const createHandlePrMarkReadyApprove = (
       {},
       {
         logSink: options.activityLog,
+        // Final-audit F2/#3390 (ADR-0138 D2, #3389): pr-mark-ready's own execute path already
+        // enforces a mandatory, mode-independent consumed approval below, so this coarse admission
+        // layer defers to it instead of demanding a second claim.
+        deliveryApprovalDeferred: true,
       },
     );
     if (!authority.allowed) return authority.result;
@@ -507,7 +511,7 @@ async function dispatchOrBlock(
     admitted: authority,
     next: options.beforeRemoteDispatch,
     denialCapture,
-    audit: { logSink: options.activityLog },
+    audit: { logSink: options.activityLog, deliveryApprovalDeferred: true },
   });
   try {
     const result = await dispatchGovernedMarkReady({
@@ -544,6 +548,7 @@ async function handleMarkReadyExecute(
     {},
     {
       logSink: options.activityLog,
+      deliveryApprovalDeferred: true,
     },
   );
   if (!authority.allowed) return authority.result;

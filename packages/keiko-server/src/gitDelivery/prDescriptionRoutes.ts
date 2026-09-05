@@ -278,7 +278,14 @@ function admitDescription(
     workspace,
     "pull-request",
     {},
-    { logSink, descriptionAuthority },
+    {
+      logSink,
+      descriptionAuthority,
+      // Final-audit F2/#3390 (ADR-0138 D2, #3399): the apply route's own execute path already
+      // enforces a mandatory, mode-independent consumed approval (`service.consumeApproval`), so
+      // this coarse admission layer defers to it instead of demanding a second claim.
+      deliveryApprovalDeferred: true,
+    },
   );
   if (!gate.allowed) return { allowed: false, result: gate.result };
   // The description authority's fixed identity never matches a real run's `runId`, so `runId` is

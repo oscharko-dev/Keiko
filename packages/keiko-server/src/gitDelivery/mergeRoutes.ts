@@ -263,7 +263,13 @@ export const createHandleMergeApprove = (
         headBranchName: command.headBranchName,
         baseBranchName: command.baseBranchName,
       },
-      { logSink: seams.activityLog },
+      {
+        logSink: seams.activityLog,
+        // Final-audit F2/#3390 (ADR-0138 D2): merge's own execute path already enforces a
+        // mandatory, mode-independent consumed approval below, so this coarse admission layer
+        // defers to it instead of demanding a second claim.
+        deliveryApprovalDeferred: true,
+      },
     );
     if (!authority.allowed) return authority.result;
     const store = seams.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;
@@ -339,7 +345,7 @@ async function dispatchGovernedMerge(input: GovernedMergeDispatch): Promise<Rout
     admitted: authority,
     next: seams.beforeRemoteDispatch,
     denialCapture,
-    audit: { logSink: seams.activityLog },
+    audit: { logSink: seams.activityLog, deliveryApprovalDeferred: true },
   });
   try {
     const result = await executeGovernedMerge(
@@ -373,6 +379,7 @@ async function handleMergeExecute(
   const target = mergeAuthorityTarget(command);
   const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "merge", target, {
     logSink: seams.activityLog,
+    deliveryApprovalDeferred: true,
   });
   if (!authority.allowed) return authority.result;
   const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
