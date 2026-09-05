@@ -7,7 +7,10 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import { driveOrReuseDraftPullRequest } from "./coding-issue-journey-live-cache.js";
 import type { DeliveredPullRequest } from "./coding-issue-journey-live.js";
-import { waitForCiRepairOutcome } from "./coding-issue-journey-live-ci.js";
+import {
+  evaluateCiRepairLoopOutcome,
+  waitForCiRepairOutcome,
+} from "./coding-issue-journey-live-ci.js";
 import {
   applyAutoDraftDescriptionThroughPrCard,
   mountGovernedPullRequestCard,
@@ -15,8 +18,8 @@ import {
 } from "./coding-issue-journey-live-description.js";
 import { proposeJourneyReady } from "./coding-issue-journey-live-mark-ready.js";
 import {
+  attachDisposableBranchCheckout,
   connectControlledPullRequestToChat,
-  ensureBranchCheckedOut,
   refineDescriptionOverChat,
   reviewApproveApplyGitChangeDescription,
 } from "./coding-issue-journey-live-git-chat.js";
@@ -70,11 +73,27 @@ export async function runCiRepairScenario(page: Page): Promise<ScenarioRunResult
   const env = resolveLiveJourneyEnv();
   await driveOrReuseDraftPullRequest(page, { ...env, mode: "autonomous-delivery" });
   const outcome = await waitForCiRepairOutcome(page);
+  const evidence = evaluateCiRepairLoopOutcome(outcome);
+  const repairHeadChanged = outcome.failureHeadSha !== outcome.finalHeadSha;
+  if (evidence.result !== "passed") {
+    // Review 3941793538: an immediately blocked PR, an already-green PR, or a "ready" readiness on
+    // the SAME head the failure was observed on must never be recorded as a passing receipt --
+    // throwing here (rather than returning assertions) makes `recordOutcome` write a `failed`
+    // receipt, with the causal facts spelled out in the error so the evidence is explicit, never
+    // silent.
+    throw new Error(
+      `ci-repair-loop did not qualify (${evidence.result}: ${evidence.reason}) -- ` +
+        `finalState=${outcome.finalState} observedFailureBeforeReady=${String(outcome.observedFailureBeforeReady)} ` +
+        `repairHeadChanged=${String(repairHeadChanged)}`,
+    );
+  }
   return {
     assertions: [
       `ci-terminal-state:${outcome.finalState}`,
       `observed-failure-before-ready:${String(outcome.observedFailureBeforeReady)}`,
       `required-checks-total:${String(outcome.requiredChecks.total)}`,
+      `repair-head-changed:${String(repairHeadChanged)}`,
+      `ci-repair-evidence:${evidence.reason}`,
     ],
   };
 }
@@ -120,13 +139,13 @@ export async function runGitToChatScenario(
   request: APIRequestContext,
 ): Promise<ScenarioRunResult> {
   const env = resolveLiveJourneyEnv();
-  const restore = ensureBranchCheckedOut(env.repositoryRoot, "docs/usage-section");
+  const worktree = attachDisposableBranchCheckout(env.repositoryRoot, "docs/usage-section");
   try {
-    await connectControlledPullRequestToChat(page, request, env.repositoryRoot);
+    await connectControlledPullRequestToChat(page, request, worktree.root);
     await refineDescriptionOverChat(page, GIT_TO_CHAT_TURNS);
     await reviewApproveApplyGitChangeDescription(page);
   } finally {
-    restore();
+    worktree.release();
   }
   return {
     assertions: [

@@ -338,6 +338,22 @@ function exactWorkflowContext(check: Check, input: GitCiChecksInput): boolean {
     )
   );
 }
+// Owner audit finding b5-9: `checks` (from `workflowCandidate`) is pre-filtered by name-suffix only,
+// so it can admit a check that is NOT the required workflow at all — an entirely unrelated
+// repository whose path merely happens to share the required filename. Distinguish that "no real
+// candidate exists" case from every other zero-exact-match case this classifier already treats as
+// genuinely ambiguous: a check from the SAME numeric repository (only its revision/PR-context proof
+// failed), or a check that self-reports (via a non-empty `referencedWorkflows`) some link to a
+// reusable workflow, even one that fails full validation. Both of those are real, if unproven,
+// evidence — declaring them "missing" would be a false confident-absence claim, so they stay
+// "unknown". Only a check with NEITHER signal is a pure coincidental filename collision.
+function workflowCouldBeRealCandidate(
+  requirement: GitCiWorkflowRequirement,
+  check: Check,
+): boolean {
+  if (check.raw.repositoryId === requirement.repositoryId) return true;
+  return Array.isArray(check.raw.referencedWorkflows) && check.raw.referencedWorkflows.length > 0;
+}
 function workflowClass(
   requirement: GitCiWorkflowRequirement,
   checks: readonly Check[],
@@ -348,13 +364,11 @@ function workflowClass(
       sameRepositoryWorkflow(requirement, check, input) ||
       referencedWorkflow(requirement, check, input),
   );
-  // `checks` (from `workflowCandidate`, owner audit b5-9) is pre-filtered by name-suffix only, so it
-  // can admit an unrelated same-suffix run from a different repository — one that `matching`'s exact
-  // identity checks then correctly reject. Zero exact matches means the requirement has NO real
-  // candidate at all: that is "missing", not the more ambiguous "unknown" duplicate-or-conflicting-
-  // evidence case, which stays reserved for more than one exact match.
-  if (matching.length === 0) return "missing";
   if (matching.length > 1) return "unknown";
+  if (matching.length === 0)
+    return checks.some((check) => workflowCouldBeRealCandidate(requirement, check))
+      ? "unknown"
+      : "missing";
   const check = matching[0];
   if (check === undefined) return "unknown";
   if (!exactWorkflowContext(check, input)) return "stale-or-wrong-app";

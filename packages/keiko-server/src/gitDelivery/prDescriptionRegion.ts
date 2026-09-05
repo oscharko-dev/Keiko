@@ -49,15 +49,24 @@ function firstUnfencedIndex(body: string, marker: string, fenced: ReadonlySet<nu
   }
 }
 
-function split(body: string): { prefix: string; region: string; suffix: string } | undefined {
-  if (!containsPrDescriptionMarker(body)) return undefined;
-  // Only gate on fence membership when a fence delimiter is actually present, so the common
-  // unfenced body pays no extra cost. A marker found only inside a fenced span is documentation,
-  // not the managed region: skip it and look for a genuine, unfenced pair instead.
+// Locates the real (non-fenced) START/END pair, when one exists. Only gates on fence membership
+// when a fence delimiter is actually present, so the common unfenced body pays no extra cost.
+// Returns undefined when every marker occurrence in a fenced body is inside a fence — pure
+// documentation, no managed region at all — so `split` never mistakes it for a malformed one.
+function findMarkerBounds(body: string): { start: number; end: number } | undefined {
   const fenced = bodyHasFence(body) ? fencedOffsets(body) : undefined;
-  const start = fenced === undefined ? body.indexOf(START) : firstUnfencedIndex(body, START, fenced);
+  const start =
+    fenced === undefined ? body.indexOf(START) : firstUnfencedIndex(body, START, fenced);
   const end = fenced === undefined ? body.indexOf(END) : firstUnfencedIndex(body, END, fenced);
   if (start < 0 && end < 0 && fenced !== undefined) return undefined;
+  return { start, end };
+}
+
+function split(body: string): { prefix: string; region: string; suffix: string } | undefined {
+  if (!containsPrDescriptionMarker(body)) return undefined;
+  const bounds = findMarkerBounds(body);
+  if (bounds === undefined) return undefined;
+  const { start, end } = bounds;
   if (start < 0 || end < start) throw new TypeError("Malformed PR description region");
   const prefix = body.slice(0, start);
   const region = body.slice(start + START.length, end);

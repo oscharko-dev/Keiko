@@ -218,7 +218,13 @@ export const createHandleMergePreview = (
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
     const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-    const prepared = await prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate, mergeOwnerAndRepoOf);
+    const prepared = await prepareGitDeliveryRequest(
+      ctx,
+      deps,
+      MERGE_REQUEST_ERRORS,
+      validate,
+      mergeOwnerAndRepoOf,
+    );
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { command } = prepared.value;
@@ -256,7 +262,13 @@ export const createHandleMergeApprove = (
     // Reuses the IDENTICAL `validate()` the preview/execute handlers use, so the GitMergeCommand this
     // mints against is byte-for-byte the same typed value execute will rebuild from the same request
     // body — the binding-hash consume() already enforces then matches by construction.
-    const prepared = await prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate, mergeOwnerAndRepoOf);
+    const prepared = await prepareGitDeliveryRequest(
+      ctx,
+      deps,
+      MERGE_REQUEST_ERRORS,
+      validate,
+      mergeOwnerAndRepoOf,
+    );
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { projectId, command } = prepared.value;
@@ -379,7 +391,13 @@ async function handleMergeExecute(
   seams: GitDeliveryMergeSeams,
 ): Promise<RouteResult> {
   const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-  const prepared = await prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate, mergeOwnerAndRepoOf);
+  const prepared = await prepareGitDeliveryRequest(
+    ctx,
+    deps,
+    MERGE_REQUEST_ERRORS,
+    validate,
+    mergeOwnerAndRepoOf,
+  );
   if (!prepared.ok) return prepared.result;
   const { workspace } = prepared;
   const { projectId, command, approval } = prepared.value;

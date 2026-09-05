@@ -59,7 +59,10 @@ import {
   gitDeliveryRepositoryBindingMismatch,
 } from "./requestPreparation.js";
 import { authorizeGitDeliveryModelEgress } from "./runBoundAuthority.js";
-import type { GitDeliveryDescriptionAuthorityScope } from "./runBoundAuthority.js";
+import type {
+  ActiveGitDeliveryRunAuthority,
+  GitDeliveryDescriptionAuthorityScope,
+} from "./runBoundAuthority.js";
 import { createPrDescriptionApplicationService } from "./prDescriptionService.js";
 import type {
   PrDescriptionApplicationService,
@@ -324,7 +327,7 @@ function admitDescription(
 // populated, a request naming a different repository or PR number is refused, never silently
 // widened to cover it.
 function admittedForRunBoundPullRequest(
-  active: { readonly pullRequest?: { readonly ownerAndRepo: string; readonly prNumber: number } },
+  active: Pick<ActiveGitDeliveryRunAuthority, "pullRequest">,
   request: BaseFields,
 ): boolean {
   if (active.pullRequest === undefined) return true;

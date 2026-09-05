@@ -7,7 +7,11 @@
 // against the real PR body.
 
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import { grantGithubAccess } from "./coding-issue-journey-live.js";
 import { createChatForFixture, seedWorkspace } from "./git-change-chat-3400.js";
 
 // Matches `seedWorkspace`'s own hardcoded window ids (support/git-change-chat-3400.ts) -- these
@@ -21,17 +25,69 @@ function git(root: string, args: readonly string[]): string {
   return execFileSync("git", args, { cwd: root, encoding: "utf8", timeout: 30_000 }).trim();
 }
 
+function localBranchExists(root: string, branch: string): boolean {
+  try {
+    execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
+      cwd: root,
+      timeout: 30_000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface DisposableBranchCheckout {
+  readonly root: string;
+  readonly release: () => void;
+}
+
+// Review 3941793533: the previous helper ran `checkout -B <branch> origin/<branch>` directly in
+// the shared checkout, which resets an EXISTING local branch's tip to match origin (destroying an
+// unpushed commit) and, for a detached original HEAD, restores only the literal string "HEAD" --
+// never the original commit. A linked git worktree is a separate working directory backed by the
+// SAME repository object store: attaching one never reads, resets, or overwrites the shared
+// checkout's own HEAD/branch, so there is nothing about `root` to restore afterward. If a local
+// branch already named `branch` exists (a genuine conflicting operator branch), this refuses
+// outright rather than reusing or resetting it.
 /**
- * Checks out the controlled repository's real remote branch locally so the Git window's own
- * "Head branch" resolves to it (it reads the checkout's current branch, not a picker). Returns a
- * restore function so the shared checkout is left exactly as found once this scenario finishes.
+ * Attaches a disposable git worktree -- checked out on a brand-new local branch tracking the
+ * controlled repository's real remote branch -- so the Git window's own "Head branch" resolves to
+ * it (it reads the checkout's current branch, not a picker), without ever touching the shared
+ * checkout `root`.
  */
-export function ensureBranchCheckedOut(root: string, branch: string): () => void {
-  const original = git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
+export function attachDisposableBranchCheckout(
+  root: string,
+  branch: string,
+): DisposableBranchCheckout {
+  if (localBranchExists(root, branch)) {
+    throw new Error(
+      `coding-issue-journey: refusing to check out ${branch} in ${root} -- a local branch with ` +
+        "that name already exists; remove or rename it before running this scenario",
+    );
+  }
   git(root, ["fetch", "origin", branch]);
-  git(root, ["checkout", "-B", branch, `origin/${branch}`]);
-  return (): void => {
-    git(root, ["checkout", original]);
+  const parent = mkdtempSync(join(tmpdir(), "keiko-e2e-git-to-chat-"));
+  // `git worktree add` must create the target itself -- remove the empty dir mkdtemp left behind.
+  rmSync(parent, { recursive: true, force: true });
+  git(root, ["worktree", "add", "-b", branch, parent, `origin/${branch}`]);
+  const worktreeRoot = realpathSync(parent);
+  return {
+    root: worktreeRoot,
+    release: (): void => {
+      execFileSync("git", ["worktree", "remove", "--force", worktreeRoot], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 30_000,
+      });
+      // The temporary branch this attachment created is cleaned up too, so a repeat invocation
+      // never trips the conflicting-branch refusal above against its own leftover state.
+      execFileSync("git", ["branch", "-D", branch], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 30_000,
+      });
+    },
   };
 }
 
@@ -41,13 +97,17 @@ export interface ConnectedGitChatSession {
 
 /** Connects the checked-out branch's real open pull request to a real Chat -- the exact real
  * routes the scripted sibling's "Open pull request for this branch" case drives, here reached
- * against the real controlled repository instead of an intercepted fixture response. */
+ * against the real controlled repository instead of an intercepted fixture response. Establishes
+ * the repository-reader grant itself (review 3941793542) through the same authorized route
+ * `driveIssueToDraftPullRequest` uses, so this scenario does not silently depend on an earlier
+ * issue-to-PR scenario having run first in the same process to create that grant. */
 export async function connectControlledPullRequestToChat(
   page: Page,
   request: APIRequestContext,
   repositoryRoot: string,
 ): Promise<ConnectedGitChatSession> {
   const chat = await createChatForFixture(request, repositoryRoot);
+  await grantGithubAccess(page, repositoryRoot);
   await seedWorkspace(page, repositoryRoot, chat);
   await page.goto("/");
   const gitWindow = page.locator(`[data-window-id="${GIT_WINDOW_ID}"]`);
@@ -64,9 +124,42 @@ export async function connectControlledPullRequestToChat(
   return { chatId: chat.id };
 }
 
-/** Sends each turn as a real Chat message and waits for the real assistant reply to finish
- * streaming before the next one -- content is nondeterministic (a real model), so only the
- * user's own authored text and the composer becoming usable again are asserted. */
+const TERMINAL_SEND_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const IN_FLIGHT_SEND_STATUSES = new Set(["queued", "contacting", "streaming"]);
+
+/** Waits for the chat's own `data-send-status` live region (`SendLifecycleStatus`,
+ * `ChatWindow.tsx`) to leave an idle/leftover-terminal value into an in-flight one, THEN waits for
+ * it to reach a terminal value again -- proving THIS click's turn is what settled, not a stale
+ * "completed" left over from the previous turn (`sendStatus` never auto-resets to "idle" between
+ * turns). Throws on a turn error so a failed/cancelled turn never reads as a silent success. */
+async function waitForOwnTerminalSendStatus(page: Page, chatWindowId: string): Promise<void> {
+  const sendStatus = page.locator(`[data-window-id="${chatWindowId}"] [data-send-status]`);
+  await expect
+    .poll(
+      async () =>
+        IN_FLIGHT_SEND_STATUSES.has((await sendStatus.getAttribute("data-send-status")) ?? ""),
+      { timeout: 30_000, message: "expected this turn to leave the idle/prior-terminal state" },
+    )
+    .toBe(true);
+  await expect
+    .poll(
+      async () =>
+        TERMINAL_SEND_STATUSES.has((await sendStatus.getAttribute("data-send-status")) ?? ""),
+      { timeout: 180_000, message: "expected the assistant turn to reach a terminal state" },
+    )
+    .toBe(true);
+  const finalStatus = await sendStatus.getAttribute("data-send-status");
+  if (finalStatus === "failed" || finalStatus === "cancelled") {
+    throw new Error(`chat turn ended in "${finalStatus}" state instead of completing`);
+  }
+}
+
+/** Sends each turn as a real Chat message and waits for the real assistant reply to reach a
+ * terminal turn state before the next one -- content is nondeterministic (a real model), so only
+ * the user's own authored text and the turn's own completion are asserted. Review 3941793534: the
+ * composer is aria-disabled while empty (`isComposerReadyToSend`), and sending clears the draft, so
+ * waiting for "Send enabled" right after a send can never observe anything but a timeout; the next
+ * message is filled in before Send is checked again, at the top of the next iteration. */
 export async function refineDescriptionOverChat(
   page: Page,
   turns: readonly string[],
@@ -80,7 +173,7 @@ export async function refineDescriptionOverChat(
     await expect(send).toBeEnabled();
     await send.click();
     await expect(chatWindow.getByText(message)).toBeVisible();
-    await expect(send).toBeEnabled({ timeout: 180_000 });
+    await waitForOwnTerminalSendStatus(page, CHAT_WINDOW_ID);
   }
 }
 

@@ -273,7 +273,7 @@ function readH1Provenance(root) {
   }
 }
 
-function isAncestorOfDev(commit, root, execute) {
+export function isAncestorOfDev(commit, root, execute) {
   try {
     execute(resolveHostExecutable("git"), ["merge-base", "--is-ancestor", commit, "dev"], {
       cwd: root,
@@ -285,7 +285,7 @@ function isAncestorOfDev(commit, root, execute) {
   }
 }
 
-async function realProducerIdentityFailures(root, record) {
+export async function realProducerIdentityFailures(root, record) {
   if (typeof record.profile?.id !== "string") return [];
   try {
     const producer = await loadToolCatalogProducer(root);

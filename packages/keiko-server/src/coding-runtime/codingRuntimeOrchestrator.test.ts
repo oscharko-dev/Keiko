@@ -110,6 +110,11 @@ function fixture(
   issueIntake?: CodingRuntimeIssueIntake,
   descriptionSupport?: CodingRuntimeDescriptionSupport,
   verifiedCommits?: ReadonlyMap<string, VerifiedCommitResult>,
+  // #3384 B3-22: overridable so the automatic-description-dispatch suite (the one path here that
+  // reaches the real codingRuntimeDescriptionJobStore, which now enforces correlation.ts's
+  // 8-character floor) can mint ids that satisfy it, without changing every other describe block's
+  // established "run-1"/"run-2" convention.
+  newRunId?: () => string,
 ) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
@@ -298,7 +303,7 @@ function fixture(
       ...(activityLog ? { activityLog } : {}),
       ...(issueIntake ? { issueIntake } : {}),
       now: clock ?? ((): Date => new Date("2026-01-01T00:00:00.000Z")),
-      newRunId: () => `run-${String(rows.size + 1)}`,
+      newRunId: newRunId ?? ((): string => `run-${String(rows.size + 1)}`),
     },
     descriptionSupport,
   );

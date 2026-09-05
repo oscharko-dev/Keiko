@@ -38,7 +38,9 @@ export interface RetainedDescriptionBinding {
 interface PrDescriptionReviewWireBody {
   readonly preview: {
     readonly proposalId: string;
-    readonly status: { readonly binding: { readonly snapshotDigest: string; readonly draftDigest: string } };
+    readonly status: {
+      readonly binding: { readonly snapshotDigest: string; readonly draftDigest: string };
+    };
   };
 }
 
@@ -63,7 +65,7 @@ export async function waitForAutoDraftDescription(page: Page): Promise<Workbench
     },
   );
   const status = snapshot.descriptionStatus;
-  if (status === undefined || status.proposalId === undefined) {
+  if (status?.proposalId === undefined) {
     throw new Error("expected a recorded retained description proposal");
   }
   return status;
@@ -84,26 +86,29 @@ function retainedBindingOf(status: WorkbenchDescriptionStatus): RetainedDescript
   };
 }
 
-/** Adds a real `governedPullRequest` window to the live desktop session bound to the delivered
- * PR's exact retained proposal, mirroring `CodingWorkbenchWindow`'s own "Review description"
- * control (`onOpenGit({ ..., descriptionReview })` -> `widgets/index.tsx`'s `governedPullRequest`
- * cfg) so the card's `useRetainedDescriptionProposal` effect calls the retained-review route
- * itself -- this never fills the create/update form or clicks the manual preview button. Returns
- * the retained binding once the automatic `prDescriptionReview` response has confirmed it reviewed
- * that EXACT draft (not one it generated fresh). */
-export async function mountGovernedPullRequestCard(
+interface GovernedPullRequestWindowInput {
+  readonly repositoryRoot: string;
+  readonly pullRequest: DeliveredPullRequest;
+  readonly retained: RetainedDescriptionBinding;
+}
+
+/** The window-seeding half of `mountGovernedPullRequestCard`, extracted only to keep that
+ * function under the function-size bar (AGENTS.md §6) -- pushes the SAME cfg shape
+ * `CodingWorkbenchWindow`'s "Review description" control produces. */
+async function pushGovernedPullRequestWindow(
   page: Page,
-  repositoryRoot: string,
-  pullRequest: DeliveredPullRequest,
-  status: WorkbenchDescriptionStatus,
-): Promise<RetainedDescriptionBinding> {
-  const retained = retainedBindingOf(status);
-  const reviewed = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" && response.url().endsWith(REVIEW_ENDPOINT),
-  );
+  input: GovernedPullRequestWindowInput,
+): Promise<void> {
   await page.evaluate(
-    ({ windowId, projectPath, headBranchName, ownerAndRepo, prNumber, proposalId, snapshotDigest }) => {
+    ({
+      windowId,
+      projectPath,
+      headBranchName,
+      ownerAndRepo,
+      prNumber,
+      proposalId,
+      snapshotDigest,
+    }) => {
       const raw = window.localStorage.getItem("keiko.workspace.v4");
       const windows: unknown[] = raw === null ? [] : (JSON.parse(raw) as unknown[]);
       windows.push({
@@ -128,18 +133,20 @@ export async function mountGovernedPullRequestCard(
     },
     {
       windowId: GOVERNED_PR_WINDOW_ID,
-      projectPath: repositoryRoot,
-      headBranchName: pullRequest.headRef,
-      ownerAndRepo: pullRequest.repository,
-      prNumber: pullRequest.number,
-      proposalId: retained.proposalId,
-      snapshotDigest: retained.snapshotDigest,
+      projectPath: input.repositoryRoot,
+      headBranchName: input.pullRequest.headRef,
+      ownerAndRepo: input.pullRequest.repository,
+      prNumber: input.pullRequest.number,
+      proposalId: input.retained.proposalId,
+      snapshotDigest: input.retained.snapshotDigest,
     },
   );
-  await page.reload();
-  await expect(page.locator(`[data-window-id="${GOVERNED_PR_WINDOW_ID}"]`)).toBeVisible();
-  const response = await reviewed;
-  const body = (await response.json()) as PrDescriptionReviewWireBody;
+}
+
+function assertReviewMatchesRetained(
+  body: PrDescriptionReviewWireBody,
+  retained: RetainedDescriptionBinding,
+): void {
   if (
     body.preview.proposalId !== retained.proposalId ||
     body.preview.status.binding.snapshotDigest !== retained.snapshotDigest ||
@@ -147,6 +154,31 @@ export async function mountGovernedPullRequestCard(
   ) {
     throw new Error("retained description review did not resolve to the automatic draft");
   }
+}
+
+/** Adds a real `governedPullRequest` window to the live desktop session bound to the delivered
+ * PR's exact retained proposal, mirroring `CodingWorkbenchWindow`'s own "Review description"
+ * control (`onOpenGit({ ..., descriptionReview })` -> `widgets/index.tsx`'s `governedPullRequest`
+ * cfg) so the card's `useRetainedDescriptionProposal` effect calls the retained-review route
+ * itself -- this never fills the create/update form or clicks the manual preview button. Returns
+ * the retained binding once the automatic `prDescriptionReview` response has confirmed it reviewed
+ * that EXACT draft (not one it generated fresh). */
+export async function mountGovernedPullRequestCard(
+  page: Page,
+  repositoryRoot: string,
+  pullRequest: DeliveredPullRequest,
+  status: WorkbenchDescriptionStatus,
+): Promise<RetainedDescriptionBinding> {
+  const retained = retainedBindingOf(status);
+  const reviewed = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" && response.url().endsWith(REVIEW_ENDPOINT),
+  );
+  await pushGovernedPullRequestWindow(page, { repositoryRoot, pullRequest, retained });
+  await page.reload();
+  await expect(page.locator(`[data-window-id="${GOVERNED_PR_WINDOW_ID}"]`)).toBeVisible();
+  const response = await reviewed;
+  assertReviewMatchesRetained((await response.json()) as PrDescriptionReviewWireBody, retained);
   return retained;
 }
 

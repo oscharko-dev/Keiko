@@ -27,7 +27,10 @@ export const GOVERNED_TOOL_CONTRACT_PINS = {
   // `removalIssue` is #3414, which alone may remove this entry once it lands the durable
   // H1Provenance handoff. `landedDevCommit`/`landedTreeDigest` stay null here (initially empty) --
   // this entry grants no allowlist exception and is never read as an authorization by any code
-  // path; only #3414 may populate those two fields once H1 actually reaches dev.
+  // path; only #3414 may populate those two fields once H1 actually reaches dev. #3415's
+  // `checkH1HandoffEvidence` (check-tool-catalog-conformance.mjs, folded into
+  // checkToolCatalogMigrationCloseout) independently rechecks both fields the moment either is
+  // populated -- see docs/architecture/governed-tool-migration.md for exactly what it verifies.
   pendingH1: {
     owner: 3386,
     canonicalTool: { canonicalId: "keiko.repo.search", contractVersion: 1 },

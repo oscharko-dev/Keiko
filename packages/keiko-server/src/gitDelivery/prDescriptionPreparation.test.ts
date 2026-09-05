@@ -18,7 +18,10 @@ vi.mock("@oscharko-dev/keiko-model-gateway", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@oscharko-dev/keiko-model-gateway")>();
   return {
     ...actual,
-    PrDescription: { ...actual.PrDescription, generatePrDescription: vi.fn(actual.PrDescription.generatePrDescription) },
+    PrDescription: {
+      ...actual.PrDescription,
+      generatePrDescription: vi.fn(actual.PrDescription.generatePrDescription),
+    },
   };
 });
 

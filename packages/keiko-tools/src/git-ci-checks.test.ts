@@ -387,4 +387,23 @@ describe("required workflow definition and exact PR provenance", () => {
       advisory: [{ id: 21, classification: "passed" }],
     });
   });
+  // Owner audit finding b5-9: `workflowCandidate`'s pre-filter is name-suffix only, so an unrelated
+  // workflow run from a completely different repository — sharing only the required path's
+  // filename, and not even self-reporting (via `referencedWorkflows`) any link to it — must not
+  // make a genuinely missing required workflow read as the more ambiguous "unknown".
+  it("classifies an unrelated same-suffix workflow run from a different repository as missing", () => {
+    const impostor = {
+      ...WORKFLOW,
+      id: 22,
+      repositoryId: 999,
+      headRepositoryId: 999,
+      path: `unrelated-org/unrelated-repo/.github/workflows/policy.yml@${POLICY_SHA}`,
+      referencedWorkflows: [],
+    };
+    expect(classifyGitCiChecks(workflows([impostor]))).toMatchObject({
+      status: "observed",
+      overall: "pending",
+      required: [{ classification: "missing" }],
+    });
+  });
 });

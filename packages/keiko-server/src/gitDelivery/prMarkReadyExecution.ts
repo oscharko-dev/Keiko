@@ -383,6 +383,23 @@ function logMarkReadyFailure(
   });
 }
 
+// Shared by approve and execute — both run the identical prologue (read/validate/resolve-workspace
+// plus the #3384 B5-8 repository-binding check against `markReadyOwnerAndRepoOf`). Extracted purely
+// to keep both call sites under the repo's max-lines-per-function bar — no behavioral seam of its
+// own.
+function prepareMarkReadyRequest(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): ReturnType<typeof prepareGitDeliveryRequest<ValidatedMarkReadyRequest>> {
+  return prepareGitDeliveryRequest(
+    ctx,
+    deps,
+    MARK_READY_REQUEST_ERRORS,
+    validate,
+    markReadyOwnerAndRepoOf,
+  );
+}
+
 // ─── Approve handler (mints the server-issued approval claim execute consumes) ────────────────────
 
 export interface GitDeliveryPrMarkReadyApproveResponseBody {
@@ -396,13 +413,7 @@ export const createHandlePrMarkReadyApprove = (
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   return async (ctx, deps): Promise<RouteResult> => {
     const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-    const prepared = await prepareGitDeliveryRequest(
-      ctx,
-      deps,
-      MARK_READY_REQUEST_ERRORS,
-      validate,
-      markReadyOwnerAndRepoOf,
-    );
+    const prepared = await prepareMarkReadyRequest(ctx, deps);
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { projectId, command } = prepared.value;
@@ -624,13 +635,7 @@ async function handleMarkReadyExecute(
   options: GitDeliveryPrMarkReadyRouteOptions,
 ): Promise<RouteResult> {
   const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-  const prepared = await prepareGitDeliveryRequest(
-    ctx,
-    deps,
-    MARK_READY_REQUEST_ERRORS,
-    validate,
-    markReadyOwnerAndRepoOf,
-  );
+  const prepared = await prepareMarkReadyRequest(ctx, deps);
   if (!prepared.ok) return prepared.result;
   const { workspace } = prepared;
   const { projectId, command, approval } = prepared.value;

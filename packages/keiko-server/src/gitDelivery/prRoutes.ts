@@ -285,7 +285,13 @@ export const createHandlePrPreview = (
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
     const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-    const prepared = await prepareGitDeliveryRequest(ctx, deps, PR_REQUEST_ERRORS, validate, prOwnerAndRepoOf);
+    const prepared = await prepareGitDeliveryRequest(
+      ctx,
+      deps,
+      PR_REQUEST_ERRORS,
+      validate,
+      prOwnerAndRepoOf,
+    );
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { command } = prepared.value;
@@ -449,7 +455,13 @@ async function handlePrExecute(
   seams: GitDeliveryPullRequestSeams,
 ): Promise<RouteResult> {
   const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-  const prepared = await prepareGitDeliveryRequest(ctx, deps, PR_REQUEST_ERRORS, validate, prOwnerAndRepoOf);
+  const prepared = await prepareGitDeliveryRequest(
+    ctx,
+    deps,
+    PR_REQUEST_ERRORS,
+    validate,
+    prOwnerAndRepoOf,
+  );
   if (!prepared.ok) return prepared.result;
   const { workspace } = prepared;
   const { projectId, command, approval } = prepared.value;
@@ -523,7 +535,13 @@ export const createHandlePrApprove = (
     // GitPullRequestCommand this mints against is byte-for-byte the same typed value execute will
     // rebuild from the same request body — the binding-hash consume() already enforces then matches
     // by construction.
-    const prepared = await prepareGitDeliveryRequest(ctx, deps, PR_REQUEST_ERRORS, validate, prOwnerAndRepoOf);
+    const prepared = await prepareGitDeliveryRequest(
+      ctx,
+      deps,
+      PR_REQUEST_ERRORS,
+      validate,
+      prOwnerAndRepoOf,
+    );
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { projectId, command } = prepared.value;
