@@ -226,7 +226,7 @@ describe("dev-lane runtime process backend", () => {
   });
 
   // The activity line exposes the bounded child-executable policy without logging either path.
-  it("records the runtime-and-Apple-git executable boundary (#3390)", () => {
+  it("records the runtime-and-attested-git executable boundary (#3390)", () => {
     const fixture = stageFixture();
     const activityLog = createBufferedServerLogSink();
     const backend = createDevLaneRuntimeProcessBackend({
@@ -245,7 +245,8 @@ describe("dev-lane runtime process backend", () => {
         correlationId: "run-2475",
         extra: expect.objectContaining({
           profile: "keiko-gateway",
-          childExecutablePolicy: "runtime-and-apple-git-only",
+          childExecutablePolicy: "runtime-and-attested-git-only",
+          childExecutableDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
         }) as unknown,
       }),
     );

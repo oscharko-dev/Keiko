@@ -1,105 +1,82 @@
-# Epic #3384: incomplete implementation handoff
+# Epic #3384: paused work-in-progress handoff
 
-The owner stopped implementation on 2026-09-05 and explicitly requested that all
-outstanding work be committed and pushed immediately to the existing PR #3394.
-This is an incomplete work-in-progress checkpoint, not a verified epic closeout.
-The following inventory supersedes earlier completion implications in the delivery
-plan. No child issue or dependency is declared complete by this publication.
+The owner requested an immediate checkpoint and stop on 2026-09-05 at 18:23 UTC.
+All current source and preliminary evidence are preserved in PR #3394 on
+`epic/3384-issue-to-pr`. This checkpoint is incomplete and is not a merge-readiness
+or issue-closeout claim. Agents are stopped and the five-minute heartbeat is paused.
+No merge, auto-merge, direct push to `dev`, or force push was performed.
 
-## Delivery and consolidation
+## Accepted scope
 
-- All outstanding workspace changes are published together on
-  `epic/3384-issue-to-pr`, targeting `dev` through PR #3394.
-- Source PR #3419 was consolidated locally in commit `9f13989e`; its architecture,
-  raw-coordinate boundary and review repairs are included in this delivery history.
-  Later integration changes must be reviewed against the final tree. Source review
-  history remains relevant: ten conversations were unresolved at the recorded audit.
-- Existing repository search/read is extended; this checkpoint is not evidence that
-  every catalog consumer has migrated or that a second subsystem is required.
-- The owner's merge of `dev` into the epic branch (`a69af598`) is retained in the
-  normal merge history. No force push or direct push to `dev` is authorized.
-- Final review and merge remain with the owner. Auto-merge stays disabled.
+Complete Epic #3384 and the referenced technical dependencies. The owner excludes
+Apple, Windows and other platform signing/notarization and Atlassian work from this
+accepted delivery. Separate release qualification issues remain open. Coding
+confinement and performance remain in scope. The approved controlled repository is
+`oscharko/Wegwerf-Repo`; the aggregate budget for all real-model attempts and retries
+is USD 50. No paid model request was launched during this resumed audit. Existing
+configuration availability does not constitute a live qualification receipt.
 
-## Implemented source and remaining work
+## Preserved work
 
-| Issue / dependency            | Work present                                                                                                                                                                               | Still incomplete                                                                                                                                  |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| #3385                         | Canonical issue intake, checkout authorization, accepted binding, managed workspace provisioning, UI/recovery, transient initial model context                                             | Re-capture browser evidence after the latest synthetic-context change; real model qualification                                                   |
-| #3386                         | Runtime status/diff/stage, exact-tree verification, one-use commit approval, durable commit results, bounded repository search/read; retained successful commit across subsequent attempts | Final integrated verification and model-visible managed OpenCode search projection                                                                |
-| #3387                         | Exact-SHA governed push, bound draft PR creation/reuse, template seed, persisted intent and uncertain-result reconciliation                                                                | Live GitHub/model qualification and final integrated review                                                                                       |
-| #3388                         | Required/advisory CI facts, exact-revision readiness, bounded failure context, cumulative repair budgets, late-result guards, readiness/repair UI and repeated-commit browser journey      | Final integrated checks; one earlier stage-to-verification browser stall remains unexplained despite two later passing serial runs                |
-| #3397                         | Immutable change snapshot producer, bounded transient evidence, metadata parsing and freshness validation                                                                                  | All production consumers and end-to-end qualification                                                                                             |
-| #3398                         | Shared Model Gateway description generation foundations, evidence binding, marker grammar, deterministic fallback and budgets                                                              | Full Chat and terminal lifecycle integration                                                                                                      |
-| #3399                         | Body-only PR description preview/review/apply service, preserved human text, dedicated approval, pre/post-read checks, uncertain-result handling; standalone receipt CAS store             | Receipt CAS propagation through the service, production composition, UI preview/apply wiring and overlapping-service integration                  |
-| #3389                         | Read-only canonical journey facts, separate readiness/review/merge/issue state contracts and observation service; standalone journey UI                                                    | Durable production projection, routes, runtime/UI connection, one-use mark-ready approval/execute/reconciliation and full handoff browser journey |
-| #3400                         | Shared snapshot/generation/apply foundations only                                                                                                                                          | Git-connected normal Chat journey and production integration                                                                                      |
-| #3401                         | Shared generation foundations only                                                                                                                                                         | Durable deduplicated terminal-success draft generation, authority refresh and repaired-head regeneration                                          |
-| #3390                         | Focused fixture journeys and evidence foundations                                                                                                                                          | Real OpenCode/model/GitHub journeys, negative manifest qualification, signed platform receipts and final consistency audit                        |
-| #3411 / #3419                 | Consolidated architecture/raw-coordinate contract and review repairs in the epic history                                                                                                   | Review all inherited unresolved findings on the final integrated tree                                                                             |
-| #3406 / #3412 / #3413 / #3409 | Catalog/projection foundations, operation scanner, authority binder, bounded continuation, body-free logging, native host/harness migration and authority/budget regression repairs        | Final catalog/migration artifact refresh; one legacy editor integration failure; complete remaining consumer migration                            |
-| #3407 / #3414 / #3415         | Shared producer and binder foundations                                                                                                                                                     | Read-only child/editor/managed OpenCode projection, H1 model availability, complete conformance and performance qualification                     |
-| #2951                         | Existing sandbox/egress foundation assessed                                                                                                                                                | Full filesystem containment, real OpenCode session failure, Linux/Windows containment and qualification; no full containment claim                |
-| #2952                         | Measurement/verdict separation and focused tests                                                                                                                                           | Reference-container calibration and derived performance budgets                                                                                   |
-| #2198                         | Existing signing implementation reused from merged #2261                                                                                                                                   | Fresh actual signed/notarized platform receipts                                                                                                   |
+- Cold ESM imports are repaired through leaf route error/outcome modules and fresh
+  process regression coverage.
+- Issue intake, authority/approval routes, durable outcomes, CI repair, shared PR
+  description generation/application, Chat and Workbench integration have substantial
+  implementation and regression repairs. See the acceptance evidence map for criteria.
+- The V32 forward migration preserves original V27 outcome rows. The shared rewind
+  fixture now restores the real historical blob schema and refuses to invent lost
+  outcome facts from populated bounded projections.
+- Question controls distinguish a typed incompatible answer from unavailable,
+  revoked, missing or failed runtime controls. The latter retain their authority
+  failure instead of instructing the operator to change a valid answer.
+- The latest unfinalized changes remove legacy name-only gateway/tool compatibility,
+  preserve the historical 43-entry ownership census, derive the active migration
+  register from live source, and give concurrent delivery an explicit in-flight reason.
+- Sandbox Git attestation and Workbench artifact-digest binding are preserved as
+  interrupted P1 repairs. They require completed verification after resuming.
+- PR-description retention preserves symbolic refs and rejects a same-SHA PR retarget.
+  The positive journey reached generated output, but retained HTTP review remains
+  blocked by a cached operation AbortSignal. This final composition repair is unfinished.
+- Preliminary browser captures for #3389/#3400 are preserved. Their current source
+  hashes and README/qualification disposition need final verification; #3401 remains
+  incomplete. Scripted browser captures are not real-model evidence.
 
-Additional source changes include correlated, body-free activity/support timelines,
-SSE terminal-write/backpressure regression repairs, package graph/export wiring,
-ADR updates, browser fixtures and CI suite registration. Their final combined
-release qualification remains outstanding.
+## Executed verification and its limits
 
-GitHub's PR body API does not provide a documented atomic body/head compare-and-swap.
-The implemented read-check-write-verify path cannot rule out an intervening edit
-being overwritten within the write window; the preview discloses that limitation.
+These are actual checkpoint results, not claims about the complete final tree:
 
-## Checks actually recorded
+| Checkpoint / scope | Result |
+| --- | --- |
+| Package coverage at `9b617173` | 39,711 passed; 3 failed; 49 skipped. Two inventory failures and the real-OS test fixture failure were subsequently repaired in focused runs. |
+| Package coverage floors at `9b617173` | All four package metric gates, strict UI/CLI release targets, and 68 per-file floors passed. |
+| Updated coverage inventory | 66 tests passed; enforced package/per-file thresholds preserved or raised. |
+| UI coverage at `a9869962` | 444 files, 7,992 tests passed; 1 skipped. Lines 92.92%, branches 82.59%. |
+| Script coverage at `a9869962` | 196 files, 5,042 tests passed; 26 skipped. |
+| Full lint / architecture / negative architecture / format at `9b617173` | Passed. |
+| Local Sonar at `ca664db2` | Passed; rerun required for later changes. |
+| Latest catalog closeout and busy-delivery targeted run | 8 files, 263 tests passed. Active migration closeout gate passed; postmerge H1 identities remain unset. |
+| Question/migration targeted suites | 196 tests passed; additional production question/route coverage 84 passed. |
+| Latest root focused lint | Two remaining errors: an unnecessary narrowed readiness condition and a void-expression arrow in the migration test. |
+| Combined final typecheck/build | Not qualified. An intermediate complete typecheck passed during catalog migration; newer sandbox/module and review edits need a fresh run. |
 
-These are checkpoint results on the source snapshots tested at the time. They are
-not a claim that all tests passed against the final published combined commit.
+## Work to resume
 
-- Architecture consolidation: 717 focused tests and 560 architecture coverage tests;
-  positive/negative architecture, scoped lint/format and ADR checks passed.
-- Bounded repository search/read: 432 tests; 97% lines and 94.41% branches;
-  architecture, error-observability and three retrieval gates passed.
-- Issue initial-context repair: six failing regressions reproduced, then 200 tests
-  passed; a later scoped run passed 117 tests.
-- Retained successful commit: 127 store/authority tests and 39 guard tests passed.
-- Draft delivery: eleven browser cases passed. CI repair: two successive serial
-  journey runs passed, including a second verified commit/push on the same PR.
-- UI checkpoint: 437 suites, 7,710 passing tests and one existing skip;
-  89.98% statements, 82.49% branches, 91.57% functions, 92.86% lines.
-- PR description core: 284 tests passed. The latest standalone receipt store
-  (`packages/keiko-server/src/gitDelivery/prDescriptionReceiptStore.test.ts`) passed
-  twelve tests at recording time; this does not establish complete service CAS
-  integration. Counts below drift as work continues in a multi-agent tree, so treat
-  every number here as a snapshot, not a current fact: re-run the named test file(s)
-  for the true current count. The owner's independent audit of PR #3394 (posted
-  2026-09-05 against head `25a7b7c9`) already found this file at seventeen tests;
-  a later re-check on this handoff's own working tree found it still at seventeen.
-- Journey observation/core (`journeyObservationService.test.ts` +
-  `journeyOutcome.test.ts`, both under `packages/keiko-server/src/gitDelivery/`):
-  34 tests passed at recording time. The same owner audit found this pair at
-  forty-two tests on head `25a7b7c9`; a later re-check on this handoff's own
-  working tree found it still at forty-two (11 + 31). Latest adjacent journey UI
-  run: 177 tests across seven suites passed.
-- Native migration checkpoint: 204 tests across thirteen suites passed. An earlier
-  broader tools/harness/SDK run had 1,824 passes and one unresolved failure in
-  `editor-agent-tool-host.integration.test.ts` (`editor_list_sessions`).
-- CLI checkpoint: 52 suites, 1,167 passes and one existing skip. Support analysis
-  reconstructed the recorded CI/tool activity. SSE regression checkpoint: 57 passes.
-- Immediately before the stop, `git diff --check` and
-  `tsc -b packages/keiko-server` passed. These are not full root/UI test typechecking.
+1. Finish the interrupted sandbox and draft-digest P1 repairs and the cached-signal
+   description-retention defect; rerun the complete positive delivery and handoff journeys.
+2. Repair the two known focused lint errors, refresh generated catalogs/source hashes,
+   and remeasure inventory if additional production files remain.
+3. Finish the acceptance map for #3411–#3415 and reconcile historical documentation.
+   Keep actual postmerge H1/issue closure facts conditional on the owner's merge.
+4. Finish review resolution. The last fetched snapshot at 18:15 UTC had 49 unresolved
+   conversations, including new findings delegated or repaired afterward. Fetch fresh
+   state before resolving anything. CodeRabbit's 926-file/100-file-limit notice was
+   minimized at the owner's request; other reviewers remain authoritative inputs.
+5. Enforce the USD 50 aggregate budget before every paid provider attempt, including
+   retries and restarts, then execute the real-model/GitHub qualification. Budget
+   configuration currently supplies metadata, not a proven pre-call monetary ceiling.
+6. Complete seven-mode visual/accessibility evidence, the agreed coding performance
+   reference runs, full final gates, packaged surface smoke and exact-head required CI.
 
-## Final checks not performed
-
-The complete combined-head minimum loop, full coverage/release checks, generated
-operation/catalog/migration consistency, package-surface smoke, final Sonar,
-Linux gate matrix, live model qualification and fresh platform evidence were not
-completed before the owner's immediate publication request. Earlier passing
-checkpoint checks cannot substitute for them. Do not merge on the basis of this
-handoff, dismiss findings, weaken gates or mark the epic complete.
-
-The final new activity operations still require catalog regeneration and validation.
-Board updates were unavailable with the existing token's project permissions.
-Earlier containment probes were rejected by automatic approval review; no alternate
-execution path was used to bypass that rejection. Temporary local logs and manifests
-under `/tmp` are diagnostic working material, not durable release receipts.
+The detailed local execution logs and review disposition ledgers are under
+`/tmp/keiko-3384-audit/` on the audit machine. They are transient local diagnostics;
+only checked-in evidence and the relevant GitHub replies are durable PR artifacts.

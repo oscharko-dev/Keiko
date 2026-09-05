@@ -102,11 +102,9 @@ export interface RealtimeNegotiationRequest {
   readonly transcriptionDelay?: RealtimeTranscriptionDelay | undefined;
   readonly turnDetection?: Readonly<Record<string, unknown>> | undefined;
   // Published 0.2.15 request fields retained for source compatibility. The canonical Twin pipeline
-  // deliberately ignores them and never forwards provider-native instructions, voices, or tools.
+  // deliberately ignores them and never forwards provider-native instructions or voices.
   readonly instructions?: string | undefined;
   readonly voiceId?: string | undefined;
-  readonly tools?: readonly RealtimeSessionTool[] | undefined;
-  readonly toolChoice?: RealtimeSessionToolChoice | undefined;
   readonly disableAutomaticResponse?: boolean | undefined;
   // Optional content-free abuse-monitoring identifier (OpenAI `safety_identifier`). A stable, pseudonymous
   // token — never PII, never a raw chat id — so the provider can rate-limit / flag abuse per end user.
@@ -125,25 +123,6 @@ export interface RealtimeNegotiationRequest {
 export type RealtimeSessionType = "dialogue" | "transcription";
 
 export type RealtimeTranscriptionDelay = "minimal" | "low" | "medium" | "high" | "xhigh";
-
-/** Compatibility only. Provider-native realtime tools are disabled by the canonical pipeline. */
-export interface RealtimeFunctionTool {
-  readonly type: "function";
-  readonly name: string;
-  readonly description?: string | undefined;
-  readonly parameters: Record<string, unknown>;
-}
-
-/** Compatibility only. Provider-native realtime tools are disabled by the canonical pipeline. */
-export type RealtimeSessionTool = RealtimeFunctionTool;
-
-/** Compatibility only. Provider-native realtime tools are disabled by the canonical pipeline. */
-export type RealtimeSessionToolChoice =
-  | "auto"
-  | "none"
-  | "required"
-  | { readonly type: "function"; readonly name: string }
-  | { readonly type: "function"; readonly function: { readonly name: string } };
 
 export interface RealtimeNegotiationSuccess {
   // The provider's opaque SDP answer. `secret-bearing` per the protocol (may carry private ICE

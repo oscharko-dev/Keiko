@@ -328,7 +328,12 @@ describe("Coding Workbench runtime API endpoints", () => {
     };
     const fetchMock = stubFetch(response);
     await expect(
-      getCodingWorkbenchRuntimeDescriptionDraft("run/1", "proposal-1", "b".repeat(64)),
+      getCodingWorkbenchRuntimeDescriptionDraft(
+        "run/1",
+        "proposal-1",
+        "b".repeat(64),
+        "c".repeat(64),
+      ),
     ).resolves.toEqual(response);
     expect(fetchMock).toHaveBeenLastCalledWith(
       `/api/coding-workbench/runtime/runs/run%2F1/description-draft?proposalId=proposal-1&snapshotDigest=${"b".repeat(64)}`,
@@ -347,7 +352,32 @@ describe("Coding Workbench runtime API endpoints", () => {
       },
     });
     await expect(
-      getCodingWorkbenchRuntimeDescriptionDraft("run-1", "proposal-1", "b".repeat(64)),
+      getCodingWorkbenchRuntimeDescriptionDraft(
+        "run-1",
+        "proposal-1",
+        "b".repeat(64),
+        "c".repeat(64),
+      ),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED", status: 502 });
+  });
+
+  it("rejects a generic draft whose artifact digest differs from the durable status", async () => {
+    stubFetch({
+      outcome: "draft",
+      draft: {
+        schemaVersion: "1",
+        proposalId: "proposal-1",
+        expiresAt: "2026-09-05T18:00:00.000Z",
+        artifact: genericDescriptionArtifact(),
+      },
+    });
+    await expect(
+      getCodingWorkbenchRuntimeDescriptionDraft(
+        "run-1",
+        "proposal-1",
+        "b".repeat(64),
+        "d".repeat(64),
+      ),
     ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED", status: 502 });
   });
 

@@ -106,8 +106,8 @@ export class DescriptionFixture {
   ): Promise<PrDescriptionArtifact> {
     const captureInput = {
       workspace: this.context.workspace,
-      baseRef: refs?.baseRef ?? this.remote.identity.baseSha,
-      headRef: refs?.headRef ?? this.remote.identity.headSha,
+      baseRef: refs?.baseRef ?? this.remote.identity.baseRef,
+      headRef: refs?.headRef ?? this.remote.identity.headRef,
       expectedHeadSha: this.remote.identity.headSha,
       accessScope: this.context.accessScope,
       correlationId: this.context.correlationId,

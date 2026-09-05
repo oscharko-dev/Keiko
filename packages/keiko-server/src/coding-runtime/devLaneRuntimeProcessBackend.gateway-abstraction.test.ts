@@ -32,6 +32,7 @@ const ALL: BackendAvailability = {
   docker: true,
   podman: true,
 };
+const ATTESTED_GIT = { path: "/qualified/apple/git", sha256: "d".repeat(64) } as const;
 const NONE: BackendAvailability = {
   bubblewrap: false,
   unshare: false,
@@ -113,6 +114,7 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
       gatewayConfinement: gatewayConfinement(),
       probeAvailability: () => ALL,
       platform: "darwin",
+      resolveGitExecutable: () => ATTESTED_GIT,
       spawnRuntime: (command, args) => {
         spawned = { command, args };
         return fakeChild();
@@ -123,6 +125,30 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
 
     expect(spawned?.command).toBe("/usr/bin/sandbox-exec");
     expect(spawned?.args[1]).toContain('(remote tcp4 "localhost:1983")');
+  });
+
+  it("fails closed before spawn when the exact Git launcher cannot be attested", () => {
+    const paths = fixture();
+    let spawns = 0;
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: paths.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      probeAvailability: () => ALL,
+      platform: "darwin",
+      resolveGitExecutable: () => {
+        throw new Error("runtime-gateway-git-untrusted");
+      },
+      spawnRuntime: () => {
+        spawns += 1;
+        return fakeChild();
+      },
+    });
+
+    expect(() => backend.spawnOwnedTree(launchRequest(paths))).toThrow(
+      "runtime-gateway-git-untrusted",
+    );
+    expect(spawns).toBe(0);
   });
 
   // Failing-before: before this change, spawnConfinedTree always built the wrapper directly and

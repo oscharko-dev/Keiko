@@ -7,6 +7,8 @@ import {
   checkToolCatalogConformanceNegatives,
   checkToolCatalogMigrationCloseout,
   checkToolCatalogSemanticNegatives,
+  activeToolCatalogMigrations,
+  retiredBridgeMigrations,
   generatedToolCatalogManifest,
   legacyProjectionDiffers,
   loadToolCatalogProducer,
@@ -39,7 +41,11 @@ describe("initial compiler and finite migration conformance gate", () => {
       await toolCatalogMigrationBytes(ROOT),
     );
     const migration = JSON.parse(await toolCatalogMigrationBytes(ROOT));
-    expect(migration.inventory).toHaveLength(43);
+    expect(migration.inventory).toEqual([]);
+    expect(migration.historicalInventory).toEqual({
+      rowCount: 43,
+      digest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
     expect(migration.nonDispatchProbes).toHaveLength(1);
     expect(
       migration.inventory.some((entry) => entry.id === migration.nonDispatchProbes[0].id),
@@ -121,18 +127,37 @@ describe("initial compiler and finite migration conformance gate", () => {
     ).toEqual([]);
   });
 });
-describe("closeout enforcement is opt-in, not the default PR-lane behaviour", () => {
-  it("fails a non-empty inventory only under --closeout and passes an empty one", async () => {
+describe("closeout enforcement", () => {
+  it("passes only after the source-derived active migration inventory reaches zero", async () => {
     const migration = JSON.parse(await toolCatalogMigrationBytes(ROOT));
-    expect(migration.inventory.length).toBeGreaterThan(0);
-    // Fails-before: the current, real, non-empty inventory must be rejected once closeout is
-    // requested — this is the actual production migration document, not a restated count.
-    expect(await checkToolCatalogMigrationCloseout(ROOT)).toEqual([
-      `migration inventory not empty at closeout: ${String(migration.inventory.length)} row(s) remain`,
-    ]);
-    // The default (non-closeout) gate never enforces this, by construction: it simply never
-    // calls checkToolCatalogMigrationCloseout, proven above by checkToolCatalogConformance()
-    // passing with the same non-empty inventory in the first describe block.
+    expect(activeToolCatalogMigrations(ROOT)).toEqual([]);
+    expect(migration.inventory).toEqual([]);
+    expect(await checkToolCatalogMigrationCloseout(ROOT)).toEqual([]);
+  });
+  it.each([
+    [
+      "packages/keiko-contracts/src/gateway.ts",
+      "readonly tools?: readonly ToolDefinition[]",
+      "generic-gateway",
+    ],
+    [
+      "packages/keiko-contracts/src/governed-tool-bridge.ts",
+      "LegacyNamedToolInvocation",
+      "generic-tool-port",
+    ],
+    [
+      "packages/keiko-tool-catalog/src/invocation.ts",
+      'value.kind === "legacy-name"',
+      "generic-tool-port",
+    ],
+    ["packages/keiko-model-gateway/src/toolCatalogBridge.ts", "legacySession", "generic-gateway"],
+    [
+      "packages/keiko-model-gateway/src/realtime-voice-adapter.ts",
+      "RealtimeSessionTool",
+      "realtime-compatibility",
+    ],
+  ])("restores migration %s when retired bridge source %s returns", (path, probe, id) => {
+    expect(retiredBridgeMigrations({ [path]: probe })).toEqual([id]);
   });
 });
 describe("compiler measurements reuse the existing sample and percentile convention", () => {

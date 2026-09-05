@@ -9,7 +9,6 @@ import {
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
   type ToolInvocationNormalizer,
 } from "@oscharko-dev/keiko-tool-catalog";
-import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
 import { MalformedToolCallError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type { GatewayRequest, NormalizedToolCall, ToolDefinition } from "./types.js";
 import { resolveLogSink, type ModelGatewayLogSink } from "./observability.js";
@@ -45,10 +44,9 @@ function capturedAdvertisement(input: unknown): GatewayToolCatalogAdvertisement 
     "projection-mismatch",
   );
   const object = value as Readonly<Record<string, unknown>>;
-  const legacy = object.kind === "legacy-native";
-  const keys = ["kind", "catalog", "projection", "offered", ...(legacy ? ["legacySession"] : [])];
+  const keys = ["kind", "catalog", "projection", "offered"];
   requireBridge(
-    (legacy || object.kind === "bound") &&
+    object.kind === "bound" &&
       Object.keys(object).length === keys.length &&
       keys.every((key) => Object.hasOwn(object, key)),
     "projection-mismatch",
@@ -110,7 +108,7 @@ function normalizerFor(advertisement: GatewayToolCatalogAdvertisement): ToolInvo
     projection: advertisement.projection,
     offered: advertisement.offered,
   };
-  return createToolInvocationNormalizer(binding, advertisement.legacySession);
+  return createToolInvocationNormalizer(binding);
 }
 function captureCall(input: NormalizedToolCall): NormalizedToolCall {
   const object = captureCatalogJson(input) as Readonly<Record<string, unknown>>;
@@ -220,21 +218,13 @@ function prepare(
   const input = dataField(request, "toolCatalog");
   const oldTools = dataField(request, "tools");
   if (input === undefined) {
-    requireBridge(
-      oldTools === undefined || canonicalise(captureCatalogJson(oldTools)) === "[]",
-      "projection-mismatch",
-    );
+    requireBridge(oldTools === undefined, "projection-mismatch");
     return bridge(undefined, Object.freeze([]), now, log);
   }
   const advertisement = capturedAdvertisement(input);
   const normalizer = normalizerFor(advertisement);
   const tools = definitions(normalizer, now());
-  if (oldTools !== undefined)
-    requireBridge(
-      advertisement.kind === "legacy-native" &&
-        canonicalise(captureCatalogJson(oldTools)) === canonicalise(tools),
-      "projection-mismatch",
-    );
+  requireBridge(oldTools === undefined, "projection-mismatch");
   log.write({
     level: "info",
     category: "gateway",

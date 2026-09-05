@@ -262,21 +262,29 @@ describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", ()
   // remains available, but the executable transition is deny-by-default and admits only the
   // verified runtime plus Apple's fixed git launcher/implementation paths.
   it("denies arbitrary child executables while admitting only the runtime and Apple git", () => {
-    const wrapped = buildGatewaySeatbeltCommand(gateway, "/trusted/opencode", ["serve"]);
+    const wrapped = buildGatewaySeatbeltCommand(
+      gateway,
+      "/trusted/opencode",
+      ["serve"],
+      "/qualified/apple/git",
+    );
     const profile = wrapped.args[1];
     expect(profile).not.toContain("process-fork");
     expect(profile).toContain("(deny process-exec)");
     expect(profile).toContain('(literal "/trusted/opencode")');
-    expect(profile).toContain('(literal "/usr/bin/git")');
-    expect(profile).toContain('(literal "/Library/Developer/CommandLineTools/usr/bin/git")');
-    expect(profile).toContain('(literal "/Applications/Xcode.app/Contents/Developer/usr/bin/git")');
+    expect(profile).toContain('(literal "/qualified/apple/git")');
+    expect(profile).not.toContain('(literal "/usr/bin/git")');
+    expect(profile).not.toContain("CommandLineTools");
+    expect(profile).not.toContain("Xcode.app");
     expect(profile).not.toContain("(allow process-exec)");
     for (const denied of ["network*", "mach-lookup", "appleevent-send", "lsopen"])
       expect(profile).toContain(`(deny ${denied})`);
   });
 
   it("rejects a relative runtime executable before compiling the profile", () => {
-    expect(() => buildGatewaySeatbeltCommand(gateway, "opencode", ["serve"])).toThrow(
+    expect(() =>
+      buildGatewaySeatbeltCommand(gateway, "opencode", ["serve"], "/qualified/apple/git"),
+    ).toThrow(
       "gateway-seatbelt-command-not-absolute",
     );
   });

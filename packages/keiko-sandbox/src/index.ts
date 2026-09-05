@@ -24,6 +24,11 @@ export {
 } from "./debug-capsule.js";
 export { probeBackends, currentPlatform, isExecutableOnPath } from "./probe.js";
 export {
+  attestDarwinGitExecutable,
+  resolveDarwinGitExecutable,
+  type AttestedDarwinGitExecutable,
+} from "./darwin-git.js";
+export {
   createRuntimeGatewayConfinement,
   copyRuntimeGatewayConfinement,
   isRuntimeGatewayConfinement,

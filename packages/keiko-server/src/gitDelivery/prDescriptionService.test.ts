@@ -52,6 +52,27 @@ describe("body-only description application", () => {
     expect(result.preview.status.binding.snapshotDigest).toBe(artifact.binding.snapshotDigest);
   });
 
+  it("rejects a same-SHA PR retarget before recapturing the artifact", async () => {
+    const artifact = await fixture.generateArtifact("Selected Chat intent", {
+      baseRef: "main",
+      headRef: "feature",
+    });
+    fixture.remote = {
+      ...fixture.remote,
+      identity: { ...fixture.remote.identity, baseRef: "release" },
+    };
+    let recaptured = false;
+    fixture.afterCapture = (): void => {
+      recaptured = true;
+    };
+
+    await expect(fixture.service.previewArtifact(artifact)).resolves.toEqual({
+      outcome: "blocked",
+      reason: "stale-snapshot",
+    });
+    expect(recaptured).toBe(false);
+  });
+
   it("holds a generic draft in the same proposal owner without granting apply authority", async () => {
     const artifact = await fixture.generateArtifact("Generic Workbench draft");
     const held = fixture.service.holdDraftArtifact(artifact, fixture.now);

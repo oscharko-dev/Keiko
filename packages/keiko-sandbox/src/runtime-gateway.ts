@@ -194,6 +194,7 @@ export function buildRuntimeGatewaySeatbeltCommand(
   policy: RuntimeGatewayConfinement,
   command: string,
   args: readonly string[],
+  gitExecutable: string,
 ): WrappedCommand {
   const closed = copyRuntimeGatewayConfinement(policy);
   if (closed === undefined) invalidPolicy();
@@ -202,5 +203,5 @@ export function buildRuntimeGatewaySeatbeltCommand(
     host: closed.addressFamily === "ipv4" ? "127.0.0.1" : "::1",
     port: closed.port,
   };
-  return buildGatewaySeatbeltCommand(gateway, command, args);
+  return buildGatewaySeatbeltCommand(gateway, command, args, gitExecutable);
 }

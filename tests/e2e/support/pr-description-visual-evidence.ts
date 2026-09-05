@@ -45,6 +45,9 @@ async function captureMode(
   mode: (typeof CODING_WORKBENCH_EVIDENCE_MODES)[number],
 ): Promise<unknown> {
   await applyCodingWorkbenchEvidenceMode(input.page, frame, mode);
+  await input.page.locator(frame).evaluate((element) => {
+    (element as HTMLElement).style.transform = "translate3d(0, 0, 0)";
+  });
   await input.page.locator(input.surface).scrollIntoViewIfNeeded();
   await settleAnimations(input.page, frame);
   const violations = await runAxe(input.page, input.surface);

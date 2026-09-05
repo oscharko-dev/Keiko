@@ -1,9 +1,10 @@
 # Epic 3384 implementation and qualification plan
 
-**Active owner-authorized completion audit, 2026-09-05:** implementation, review repairs and
-qualification continue in PR #3394. The [acceptance evidence map](epic-3384-acceptance-evidence-map.md)
-records current findings and remaining verification. Earlier stopped-work handoffs and the
-baseline inventory below are historical; neither constitutes final combined-head qualification.
+**Paused on owner request, 2026-09-05 at 18:23 UTC:** current implementation and preliminary
+qualification work are preserved as an incomplete checkpoint in PR #3394. The
+[paused handoff](epic-3384-work-in-progress-handoff.md) records verified checkpoints,
+known failures and unfinished work. The acceptance evidence map remains an audit ledger,
+not a final closeout. Agents and the five-minute heartbeat are stopped.
 
 Audit baseline: PR #3394, `epic/3384-issue-to-pr`, commit
 `30fb85b54f863e86585d5db27a6ba2e6e4e660c6` (2026-09-04). The three latest commits

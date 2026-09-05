@@ -97,9 +97,14 @@ export function checkToolCatalogInventory(root) {
   const contract = JSON.parse(
     readFileSync(join(root, "docs/architecture/governed-tool-contract.v1.json"), "utf8"),
   );
-  const allowed = new Set(contract.inventory.map((row) => row.path));
-  for (const migration of Object.values(contract.inventoryMigrations))
-    for (const replacement of migration.replacements) allowed.add(replacement.path);
+  // At closeout the historical census is not an allowlist. Only the two audited source owners
+  // that must retain literal runtime schemas are exempt: Editor's existing host schema and the
+  // pinned OpenCode wire contract. Every other production path is scanned, including historical
+  // owner/replacement paths, so restoring a second registry cannot hide behind the census.
+  const retainedRegistryIds = new Set(["editor-schema", "opencode-schema"]);
+  const allowed = new Set(
+    contract.inventory.filter((row) => retainedRegistryIds.has(row.id)).map((row) => row.path),
+  );
   const errors = checkInventoryProbes(contract, root);
   for (const directory of sourceRoots(root)) {
     for (const file of listFilesSorted(directory)) {

@@ -133,6 +133,28 @@ export async function seedWorkspace(
   );
 }
 
+export async function seedGovernedPrDescriptionWindow(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "keiko.workspace.v4",
+      JSON.stringify([
+        {
+          id: "issue-3389-governed-pr-window",
+          type: "governedPullRequest",
+          x: 24,
+          y: 24,
+          w: 760,
+          h: 900,
+          z: 20,
+          cfg: { projectPath: "issue-3389-governed-project", headBranchName: "feature/x" },
+          max: false,
+        },
+      ]),
+    );
+    window.localStorage.removeItem("keiko.conns.v1");
+  });
+}
+
 // The Git window's own toolbar-and-picker gating (BoundRootSurface) reads `/api/projects`, a
 // concept entirely separate from the git-change server route's repository-membership check (which
 // reads the real filesystem directly). Faking only this list — never the git read/write routes —

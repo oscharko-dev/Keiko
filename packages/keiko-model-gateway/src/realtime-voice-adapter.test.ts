@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL,
   DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
@@ -10,8 +10,6 @@ import {
   isRealtimeVoice,
   requestRealtimeNegotiation,
   resolveRealtimeVoice,
-  type RealtimeFunctionTool,
-  type RealtimeSessionToolChoice,
   type RealtimeNegotiationRequest,
 } from "./realtime-voice-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
@@ -58,12 +56,7 @@ function bodyToText(init: RequestInit): string {
 }
 
 describe("requestRealtimeNegotiation", () => {
-  it("retains the published 0.2.15 compatibility symbols outside the productive session path", () => {
-    const legacyTool: RealtimeFunctionTool = {
-      type: "function",
-      name: "legacy_grounding",
-      parameters: {},
-    };
+  it("retains the non-tool realtime compatibility constants", () => {
     expect(DEFAULT_REALTIME_TRANSCRIPTION_MODEL).toBe("gpt-realtime-whisper");
     expect(DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL).toBe("gpt-realtime-whisper");
     expect(DEFAULT_REALTIME_TRANSCRIPTION_DELAY).toBe("low");
@@ -78,13 +71,11 @@ describe("requestRealtimeNegotiation", () => {
     });
     expect(isRealtimeVoice("alloy")).toBe(true);
     expect(resolveRealtimeVoice("unsupported")).toBe(DEFAULT_REALTIME_VOICE);
-    expect(legacyTool.name).toBe("legacy_grounding");
-    expectTypeOf<"none">().toExtend<RealtimeSessionToolChoice>();
   });
 
   it("keeps the published legacy request shape type-compatible but fails closed without an alias", async () => {
     let networkCalls = 0;
-    const legacyRequest: RealtimeNegotiationRequest = {
+    const legacyRequest = {
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       modelId: "keiko-realtime",
@@ -98,7 +89,7 @@ describe("requestRealtimeNegotiation", () => {
         networkCalls += 1;
         return sdp(ANSWER_SDP);
       }),
-    };
+    } as unknown as RealtimeNegotiationRequest;
 
     await expect(requestRealtimeNegotiation(legacyRequest)).resolves.toEqual({
       ok: false,

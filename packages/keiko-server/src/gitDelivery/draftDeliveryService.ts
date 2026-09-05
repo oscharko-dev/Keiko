@@ -169,9 +169,9 @@ export class DraftDeliveryController implements DraftDeliveryService {
       op: "git.draft-delivery",
       correlationId: context.correlationId,
       level: "warn",
-      extra: { runId: context.runId, phase: "refused", reason: "proposal-unavailable" },
+      extra: { runId: context.runId, phase: "refused", reason: "operation-in-flight" },
     });
-    return unavailable("proposal-unavailable");
+    return unavailable("operation-in-flight");
   }
   private failure(context: DraftDeliveryRunContext, error: unknown): CodingRuntimeDeliveryResult {
     this.proposal = undefined;

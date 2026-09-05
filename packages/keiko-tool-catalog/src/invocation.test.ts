@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type {
-  LegacyNativeToolSession,
-  ToolInvocationBinding,
-} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+import type { ToolInvocationBinding } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import { createInitialToolCatalog } from "./legacy.js";
 import { compileToolProjection } from "./projection.js";
 import { createToolInvocationNormalizer } from "./invocation.js";
@@ -30,19 +27,6 @@ function binding(legacy = false): ToolInvocationBinding {
       toolRefs: projection.tools.map((tool) => tool.toolRef),
       expiresAt: new Date(NOW + 30_000).toISOString(),
     },
-  };
-}
-function session(input: ToolInvocationBinding): LegacyNativeToolSession {
-  return {
-    consumer: "native-harness",
-    profile: { id: "legacy-native", version: 1 },
-    catalogRevision: input.catalog.catalogRevision,
-    projectionDigest: input.projection.projectionDigest,
-    offerId: input.offered.offerId,
-    openedAt: new Date(NOW).toISOString(),
-    expiresAt: new Date(NOW + 60_000).toISOString(),
-    ownerIssue: 3409,
-    removalIssue: 3415,
   };
 }
 function bound(input = binding()): object {
@@ -114,16 +98,15 @@ describe("catalog invocation bridge", () => {
     );
     expect(() => subject.bindAlias("read_file", {}, NOW)).toThrow();
   });
-  it("accepts name-only input only inside the exact named legacy-native session", () => {
+  it("rejects the removed name-only arm even with legacy session-shaped data", () => {
     const input = binding(true);
-    const request = { kind: "legacy-name", name: "read_file", arguments: { path: "src/a.ts" } };
+    const request = {
+      kind: "legacy-name",
+      name: "read_file",
+      arguments: { path: "src/a.ts" },
+      legacySession: { consumer: "native-harness" },
+    };
     expect(() => createToolInvocationNormalizer(input).normalize(request, NOW)).toThrow();
-    expect(
-      createToolInvocationNormalizer(input, session(input)).normalize(request, NOW),
-    ).toMatchObject({
-      kind: "bound",
-      toolRef: { canonicalId: "keiko.file.read", contractVersion: 1 },
-    });
   });
   it.each([
     { name: "fixture_read" },
@@ -188,30 +171,5 @@ describe("catalog invocation bridge", () => {
       tools: input.projection.tools.map((tool) => ({ ...tool, description: "changed semantics" })),
     };
     expect(() => createToolInvocationNormalizer({ ...input, projection })).toThrow();
-  });
-  it.each([
-    { consumer: "unlisted-consumer" },
-    { ownerIssue: 3414 },
-    { removalIssue: 9999 },
-    { profile: { id: "legacy-native", version: 2 } },
-    { offerId: "other" },
-    { catalogRevision: "a".repeat(64) },
-    { projectionDigest: "a".repeat(64) },
-    { openedAt: new Date(NOW + 1).toISOString() },
-    { expiresAt: new Date(NOW).toISOString() },
-    { expiresAt: new Date(NOW + 604_800_001).toISOString() },
-  ])("refuses a stale or widened compatibility session %j", (override) => {
-    const input = binding(true);
-    expect(() =>
-      createToolInvocationNormalizer(input, {
-        ...session(input),
-        ...override,
-      } as LegacyNativeToolSession).tools(NOW),
-    ).toThrow();
-  });
-  it("does not allow a legacy-native session to authorize another profile", () => {
-    expect(() =>
-      createToolInvocationNormalizer(binding(), session(binding(true))).tools(NOW),
-    ).toThrow();
   });
 });

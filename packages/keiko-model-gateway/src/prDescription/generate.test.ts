@@ -252,7 +252,7 @@ describe("production Gateway PR narrative composition", () => {
     const result = await generatePrDescription(REQUEST, setup.deps);
     expect(result.status).toBe("generated");
     expect(setup.calls).toHaveLength(1);
-    expect(setup.calls[0]?.tools).toBeUndefined();
+    expect(setup.calls[0]?.toolCatalog).toBeUndefined();
     expect(setup.calls[0]?.responseFormat?.type === "json_schema").toBe(flags.enforced);
     if (result.status !== "generated") throw new Error("Missing fixture artifact");
     expect(result.artifact.outcome).toBe("complete");

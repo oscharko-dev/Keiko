@@ -53,6 +53,7 @@ import type {
   NormalizedResponse,
   NormalizedToolCall,
   ProviderAdapter,
+  ToolDefinition,
   UsageMetadata,
 } from "./types.js";
 
@@ -216,7 +217,11 @@ function outputTokenLimit(
 }
 
 // eslint-disable-next-line complexity
-function buildBody(request: GatewayRequest, config: ModelProviderConfig): ChatRequestBody {
+type ProviderGatewayRequest = GatewayRequest & {
+  readonly tools?: readonly ToolDefinition[] | undefined;
+};
+
+function buildBody(request: ProviderGatewayRequest, config: ModelProviderConfig): ChatRequestBody {
   assertValidGatewaySamplingParameters(request);
   const messages = request.messages.map(buildMessage);
   const base: ChatRequestBody = { model: request.modelId, messages };
@@ -263,7 +268,10 @@ function buildBody(request: GatewayRequest, config: ModelProviderConfig): ChatRe
 export const STREAM_IDLE_TIMEOUT_MS = 60_000;
 
 // `include_usage` requests a final usage-only chunk so token accounting survives.
-function buildStreamBody(request: GatewayRequest, config: ModelProviderConfig): ChatRequestBody {
+function buildStreamBody(
+  request: ProviderGatewayRequest,
+  config: ModelProviderConfig,
+): ChatRequestBody {
   return {
     ...buildBody(request, config),
     stream: true,
@@ -797,7 +805,7 @@ export class OpenAiAdapter implements ProviderAdapter {
   }
 
   private async dispatch(
-    request: GatewayRequest,
+    request: ProviderGatewayRequest,
     config: ModelProviderConfig,
     secrets: readonly string[],
     stream = false,

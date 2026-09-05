@@ -657,11 +657,10 @@ export function assertValidGatewaySamplingParameters(parameters: GatewaySampling
 }
 
 export interface GatewayRequest {
-  /** Server-produced projection/offer; handwritten tools require its finite legacy session arm. */
+  /** Server-produced projection/offer. Tool-bearing requests require this exact bound arm. */
   readonly toolCatalog?: GatewayToolCatalogAdvertisement | undefined;
   readonly modelId: string;
   readonly messages: readonly ChatMessage[];
-  readonly tools?: readonly ToolDefinition[] | undefined;
   readonly responseFormat?: ResponseFormat | undefined;
   readonly stream?: boolean | undefined;
   readonly cancellationSignal?: AbortSignal | undefined;

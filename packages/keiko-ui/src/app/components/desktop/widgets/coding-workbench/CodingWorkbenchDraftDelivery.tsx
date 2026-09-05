@@ -120,19 +120,21 @@ interface WorkbenchDescriptionDraftTarget {
   readonly runId: string;
   readonly proposalId: string;
   readonly snapshotDigest: string;
+  readonly draftDigest: string;
 }
 
 type WorkbenchDescriptionDraftReader = (
   runId: string,
   proposalId: string,
   snapshotDigest: string,
+  draftDigest: string,
   signal?: AbortSignal,
 ) => Promise<CodingWorkbenchDescriptionDraftResult>;
 
 function descriptionDraftTargetKey(target: WorkbenchDescriptionDraftTarget | undefined): string {
   return target === undefined
     ? ""
-    : [target.runId, target.proposalId, target.snapshotDigest].join("\u0000");
+    : [target.runId, target.proposalId, target.snapshotDigest, target.draftDigest].join("\u0000");
 }
 
 function draftMatchesTarget(
@@ -141,7 +143,8 @@ function draftMatchesTarget(
 ): boolean {
   return (
     draft.proposalId === target.proposalId &&
-    draft.artifact.binding.snapshotDigest === target.snapshotDigest
+    draft.artifact.binding.snapshotDigest === target.snapshotDigest &&
+    draft.artifact.artifactDigest === target.draftDigest
   );
 }
 
@@ -174,11 +177,17 @@ function descriptionDraftTarget(
     runId === undefined ||
     status.proposalId === undefined ||
     status.snapshotDigest === null ||
+    status.draftDigest === null ||
     delivery?.pullRequest !== undefined
   ) {
     return undefined;
   }
-  return { runId, proposalId: status.proposalId, snapshotDigest: status.snapshotDigest };
+  return {
+    runId,
+    proposalId: status.proposalId,
+    snapshotDigest: status.snapshotDigest,
+    draftDigest: status.draftDigest,
+  };
 }
 
 // #3401: content-free status for the automatically generated description draft. Reviewing opens
@@ -252,9 +261,14 @@ function WorkbenchDescriptionReview({
     <>
       <DescriptionReviewButton onClick={openDraft} />
       {draft === undefined ? null : (
-        <pre className={styles.cmpDescriptionDraft} data-testid="cwb-description-draft">
-          {draft.artifact.markdown}
-        </pre>
+        <textarea
+          className={styles.cmpDescriptionDraft}
+          data-testid="cwb-description-draft"
+          aria-label={t("codingWorkbench.descriptionStatus.title")}
+          readOnly
+          rows={8}
+          value={draft.artifact.markdown}
+        />
       )}
       {unavailable ? (
         <p className={styles.helpText}>{t("codingWorkbench.descriptionStatus.unavailable")}</p>
@@ -286,7 +300,12 @@ function useWorkbenchDraftReview(
   const openDraft = useCallback((): void => {
     if (draftTarget === undefined) return;
     const generation = ++reviewGeneration.current;
-    reviewDraft(draftTarget.runId, draftTarget.proposalId, draftTarget.snapshotDigest)
+    reviewDraft(
+      draftTarget.runId,
+      draftTarget.proposalId,
+      draftTarget.snapshotDigest,
+      draftTarget.draftDigest,
+    )
       .then((result) => {
         if (
           reviewGeneration.current === generation &&

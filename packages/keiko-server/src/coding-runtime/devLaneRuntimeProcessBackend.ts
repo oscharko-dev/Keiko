@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
+import { dirname } from "node:path";
 import type { Readable } from "node:stream";
 import {
   copyRuntimeGatewayConfinement,
@@ -6,6 +7,8 @@ import {
   isRuntimeGatewayConfinement,
   planIsolatedRun,
   probeBackends,
+  resolveDarwinGitExecutable,
+  type AttestedDarwinGitExecutable,
   type BackendAvailability,
   type RuntimeGatewayConfinement,
 } from "@oscharko-dev/keiko-sandbox";
@@ -33,9 +36,9 @@ import type {
  * The existing dev/evaluation backend wraps the runtime in a deny-by-default network profile.
  * Service-based process escapes (mach-lookup, Apple Events, LSOpen) are denied. Fork remains
  * available for the sidecar's git handshake (#3390), while process-exec admits only the verified
- * runtime and Apple's fixed git chain. Descendants inherit that executable allowlist and the exact
- * gateway TCP family/port restriction. Release signatures and platform qualification remain
- * separate requirements.
+ * runtime and one root-owned, content-attested Git implementation. Descendants inherit that exact
+ * executable allowlist and the gateway TCP family/port restriction. Release signatures and
+ * platform qualification remain separate requirements.
  */
 export interface DevLaneRuntimeBackendIdentity {
   readonly platform: "darwin";
@@ -77,6 +80,8 @@ export interface DevLaneRuntimeProcessBackendOptions {
   readonly probeAvailability?: (() => BackendAvailability) | undefined;
   /** Test seam for the platform keiko-sandbox plans against; real host platform by default. */
   readonly platform?: NodeJS.Platform | undefined;
+  /** Test seam; production resolves and attests one developer-tool Git executable per launch. */
+  readonly resolveGitExecutable?: (() => AttestedDarwinGitExecutable) | undefined;
 }
 
 interface DevLaneTree extends RuntimeProcessTree {
@@ -98,6 +103,7 @@ export function createDevLaneRuntimeProcessBackend(
     options.activityLog ?? processServerLogSink(),
     options.probeAvailability ?? probeBackends,
     options.platform ?? currentPlatform(),
+    options.resolveGitExecutable ?? resolveDarwinGitExecutable,
   );
 }
 
@@ -114,6 +120,7 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     private readonly activityLog: ServerLogSink,
     private readonly probeAvailability: () => BackendAvailability,
     private readonly platform: NodeJS.Platform,
+    private readonly resolveGitExecutable: () => AttestedDarwinGitExecutable,
   ) {}
 
   public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
@@ -134,18 +141,25 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     const executable = safeRealFile(request.executable);
     if (!pathIsContained(this.runtimeRoot, executable)) invalidRequest();
     const cwd = safeRealDirectory(request.cwd);
+    const gitExecutable = this.resolveGitExecutable();
     // Routed through the shared keiko-sandbox plan/backend core (ADR-0043 D14, #2951) rather than
     // the seatbelt-argv formula directly, so a host missing sandbox-exec fails this launch closed
     // instead of spawning the literal, hardcoded "/usr/bin/sandbox-exec" path unconfined.
     const decision = planIsolatedRun(
-      { command: executable, args: request.args, cwd, network: gatewayNetworkPolicy(policy) },
+      {
+        command: executable,
+        args: request.args,
+        cwd,
+        network: gatewayNetworkPolicy(policy),
+        gatewayChildExecutable: gitExecutable.path,
+      },
       this.probeAvailability(),
       this.platform,
     );
     if (decision.kind !== "wrapped") throw new Error("runtime-gateway-confinement-unavailable");
     const child = this.spawnRuntime(decision.command, decision.args, {
       cwd,
-      env: request.env,
+      env: { ...request.env, PATH: dirname(gitExecutable.path) },
       detached: true,
       shell: false,
     });
@@ -161,7 +175,8 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
         modelProfileDigest: policy.modelProfileDigest,
         treeBindingId: policy.treeBindingId,
         profile: policy.profile,
-        childExecutablePolicy: "runtime-and-apple-git-only",
+        childExecutablePolicy: "runtime-and-attested-git-only",
+        childExecutableDigest: gitExecutable.sha256,
       },
     });
     const tree = ownTree(`dev-lane-opencode-${String(this.nextTreeId++)}`, child, (error) => {

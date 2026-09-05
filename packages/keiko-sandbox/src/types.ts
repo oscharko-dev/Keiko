@@ -40,6 +40,8 @@ export interface IsolatedRunPlan {
   readonly cwd: string;
   readonly network: IsolatedRunNetworkPolicy;
   readonly filesystem?: FilesystemPolicy | undefined;
+  /** Exact trusted child executable admitted by the long-lived gateway profile. */
+  readonly gatewayChildExecutable?: string | undefined;
 }
 
 // The decision for a single run:

@@ -144,12 +144,14 @@ function isDescriptionDraftResult(value: unknown): value is CodingWorkbenchDescr
 function descriptionDraftValidator(
   proposalId: string,
   snapshotDigest: string,
+  draftDigest: string,
 ): (path: string, value: unknown) => CodingWorkbenchDescriptionDraftResult {
   return (path, value): CodingWorkbenchDescriptionDraftResult => {
     if (
       isDescriptionDraftResult(value) &&
       value.draft.proposalId === proposalId &&
-      value.draft.artifact.binding.snapshotDigest === snapshotDigest
+      value.draft.artifact.binding.snapshotDigest === snapshotDigest &&
+      value.draft.artifact.artifactDigest === draftDigest
     ) {
       return value;
     }
@@ -347,6 +349,7 @@ export function getCodingWorkbenchRuntimeDescriptionDraft(
   runId: string,
   proposalId: string,
   snapshotDigest: string,
+  draftDigest: string,
   signal?: AbortSignal,
 ): Promise<CodingWorkbenchDescriptionDraftResult> {
   const query = new URLSearchParams({ proposalId, snapshotDigest });
@@ -354,7 +357,7 @@ export function getCodingWorkbenchRuntimeDescriptionDraft(
   return bffFetchJson(
     path,
     { cache: "no-store", ...(signal ? { signal } : {}) },
-    { validator: descriptionDraftValidator(proposalId, snapshotDigest) },
+    { validator: descriptionDraftValidator(proposalId, snapshotDigest, draftDigest) },
   );
 }
 

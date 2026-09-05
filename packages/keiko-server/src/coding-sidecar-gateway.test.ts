@@ -2864,7 +2864,7 @@ describe("coding-sidecar gateway", () => {
     });
   });
 
-  it("projects a valid OpenAI-compatible tool into the gateway request shape", async () => {
+  it("rejects a non-catalog handwritten tool before the gateway request", async () => {
     const seenRequests: GatewayRequest[] = [];
     const deps = depsValue(
       configValue(provider(), capability()),
@@ -2904,21 +2904,8 @@ describe("coding-sidecar gateway", () => {
     );
 
     assertRouteResult(result);
-    expect(result.status).toBe(200);
-    expect(seenRequests).toHaveLength(1);
-    expect(seenRequests[0]?.tools).toEqual([
-      {
-        name: "search",
-        description: "Look up files",
-        parameters: {
-          type: "object",
-          properties: {
-            query: { type: "string" },
-          },
-          required: ["query"],
-        },
-      },
-    ]);
+    expect(result.status).toBe(403);
+    expect(seenRequests).toHaveLength(0);
   });
 
   it("returns BAD_REQUEST for invalid JSON bodies via readJsonObject", async () => {

@@ -32,6 +32,7 @@ const basePlan: IsolatedRunPlan = {
   args: ["serve"],
   cwd: "/work/root",
   network: gateway,
+  gatewayChildExecutable: "/qualified/apple/git",
 };
 
 describe("selectGatewayBackend", () => {

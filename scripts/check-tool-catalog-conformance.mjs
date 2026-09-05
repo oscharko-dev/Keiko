@@ -15,6 +15,54 @@ import { GOVERNED_TOOL_CONTRACT_PINS } from "./lib/governed-tool-contract-pins.m
 
 export const TOOL_CATALOG_MANIFEST_PATH = "docs/architecture/tool-catalog-manifest.v1.json";
 export const TOOL_CATALOG_MIGRATION_PATH = "docs/architecture/tool-catalog-migration.v1.json";
+const RETIRED_BRIDGE_PROBES = Object.freeze([
+  {
+    id: "generic-gateway",
+    path: "packages/keiko-contracts/src/gateway.ts",
+    probes: ["readonly tools?: readonly ToolDefinition[]"],
+  },
+  {
+    id: "generic-tool-port",
+    path: "packages/keiko-contracts/src/governed-tool-bridge.ts",
+    probes: ["LegacyNativeToolSession", "LegacyNamedToolInvocation", "ToolInvocationBridge"],
+  },
+  {
+    id: "generic-tool-port",
+    path: "packages/keiko-tool-catalog/src/invocation.ts",
+    probes: ["legacySession", 'value.kind === "legacy-name"'],
+  },
+  {
+    id: "generic-gateway",
+    path: "packages/keiko-model-gateway/src/toolCatalogBridge.ts",
+    probes: ["legacySession", 'object.kind === "legacy-native"'],
+  },
+  {
+    id: "realtime-compatibility",
+    path: "packages/keiko-model-gateway/src/realtime-voice-adapter.ts",
+    probes: ["RealtimeSessionTool", "RealtimeSessionToolChoice"],
+  },
+]);
+
+export function retiredBridgeMigrations(sources) {
+  const ids = new Set();
+  for (const entry of RETIRED_BRIDGE_PROBES) {
+    const source = sources[entry.path] ?? "";
+    if (entry.probes.some((probe) => source.includes(probe))) ids.add(entry.id);
+  }
+  return [...ids].sort(compareStrings);
+}
+
+export function activeToolCatalogMigrations(root = process.cwd()) {
+  return retiredBridgeMigrations(
+    Object.fromEntries(
+      RETIRED_BRIDGE_PROBES.map((entry) => [
+        entry.path,
+        readFileSync(join(root, entry.path), "utf8"),
+      ]),
+    ),
+  );
+}
+
 export async function toolCatalogMigrationBytes(root = process.cwd()) {
   const sourceContract = "docs/architecture/governed-tool-contract.v1.json";
   const bytes = readFileSync(join(root, sourceContract), "utf8");
@@ -26,11 +74,19 @@ export async function toolCatalogMigrationBytes(root = process.cwd()) {
     closeoutIssue: 3415,
     sourceContract,
     sourceContractDigest,
-    inventory: contract.inventory.map(({ id, ownerIssue, disposition }) => ({
-      id,
-      ownerIssue,
-      disposition,
-    })),
+    // The 43-row source contract is the immutable architecture census. This generated array is
+    // the active compatibility register and is derived from the actual retired bridge symbols.
+    // It reaches zero only when the name-only GatewayRequest/normalizer and realtime tool surface
+    // are absent; the repository-wide registry scan below independently rejects parallel tables.
+    inventory: activeToolCatalogMigrations(root).map((id) => {
+      const row = contract.inventory.find((entry) => entry.id === id);
+      if (row === undefined) throw new TypeError(`Missing historical inventory row: ${id}`);
+      return { id: row.id, ownerIssue: row.ownerIssue, disposition: row.disposition };
+    }),
+    historicalInventory: {
+      rowCount: contract.inventory.length,
+      digest: sha256Hex(canonicalise(contract.inventory)),
+    },
     nonDispatchProbes: [nonDispatchProbeDisposition()],
     // Non-authorizing pending-H1 handoff record (#3406); see governed-tool-contract-pins.mjs's
     // `pendingH1` comment for what each field means and who may change it. The prerequisite #3411

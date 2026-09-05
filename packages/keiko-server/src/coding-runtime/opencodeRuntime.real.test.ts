@@ -46,7 +46,7 @@ import {
   readBoundedBody,
   type OpenCodeToolBridge,
 } from "./opencodeRuntimeComposition.js";
-import { hasExactOpenCodeVisibleToolContract } from "./opencodeToolSchemas.js";
+import { createOpenCodeGatewayToolCatalogAdvertisement } from "./opencodeToolSchemas.js";
 import {
   createRuntimeProcessSupervisor,
   type RuntimeProcessBackend,
@@ -1030,8 +1030,16 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         }
         expect(productiveActions).toEqual(["read", "edit"]);
         expect(gateway.requests).toHaveLength(4);
+        const expectedProjection = createOpenCodeGatewayToolCatalogAdvertisement(
+          Date.parse("2026-09-05T00:00:00.000Z"),
+        ).projection;
         expect(
-          gateway.requests.every((request) => hasExactOpenCodeVisibleToolContract(request.tools)),
+          gateway.requests.every(
+            (request) =>
+              request.toolCatalog?.kind === "bound" &&
+              request.toolCatalog.projection.projectionDigest ===
+                expectedProjection.projectionDigest,
+          ),
         ).toBe(true);
         expect(gateway.calls() - gateway.requests.length).toBe(1);
         expect(duplicateGovernedEffects).toBe(0);
@@ -1066,7 +1074,9 @@ describe("[functional-only] real staged OpenCode runtime", () => {
           ),
         ).resolves.toBe(true);
         expect(gateway.requests).toHaveLength(5);
-        expect(hasExactOpenCodeVisibleToolContract(gateway.requests.at(-1)?.tools)).toBe(true);
+        expect(gateway.requests.at(-1)?.toolCatalog?.projection.projectionDigest).toBe(
+          expectedProjection.projectionDigest,
+        );
         await expect(runtime.runPort.abortTask(RUN_ID)).resolves.toBe(true);
         responseControl.release();
         await expect(abortedTerminal).resolves.toBe(true);

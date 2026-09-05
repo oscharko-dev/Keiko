@@ -337,7 +337,10 @@ function scriptedGatewayConfig(): GatewayConfig {
   const config = functionalGatewayConfig();
   return {
     ...config,
-    providers: config.providers.map((provider) => ({ ...provider, timeoutMs: 30_000 })),
+    // The final model response is deliberately held while Playwright reviews and approves the
+    // commit, push, and PR through mounted routes. Match the fixture's bounded control wait so a
+    // slow CI host cannot time out that already-open request before returning its terminal turn.
+    providers: config.providers.map((provider) => ({ ...provider, timeoutMs: 180_000 })),
   };
 }
 

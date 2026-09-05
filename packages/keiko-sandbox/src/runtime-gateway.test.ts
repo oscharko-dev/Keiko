@@ -5,11 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  buildRuntimeGatewaySeatbeltCommand,
+  buildRuntimeGatewaySeatbeltCommand as buildRuntimeGatewaySeatbeltCommandCore,
   createRuntimeGatewayConfinement,
   isRuntimeGatewayConfinement,
+  type RuntimeGatewayConfinement,
   type RuntimeGatewayConfinementInput,
 } from "./runtime-gateway.js";
+import { resolveDarwinGitExecutable } from "./darwin-git.js";
 import { currentPlatform, probeBackends } from "./probe.js";
 
 const input: RuntimeGatewayConfinementInput = {
@@ -20,6 +22,16 @@ const input: RuntimeGatewayConfinementInput = {
   runtimeArtifactDigest: "c".repeat(64),
   modelProfileDigest: "d".repeat(64),
 };
+const gitExecutable =
+  currentPlatform() === "darwin" ? resolveDarwinGitExecutable().path : "/usr/bin/git";
+
+function buildRuntimeGatewaySeatbeltCommand(
+  policy: RuntimeGatewayConfinement,
+  command: string,
+  args: readonly string[],
+): ReturnType<typeof buildRuntimeGatewaySeatbeltCommandCore> {
+  return buildRuntimeGatewaySeatbeltCommandCore(policy, command, args, gitExecutable);
+}
 
 describe("long-lived gateway network confinement", () => {
   it("rejects accessors without invoking them before compiling a wrapper", () => {
@@ -56,14 +68,15 @@ describe("long-lived gateway network confinement", () => {
 
   // Regression pin (#3390 live run): fork remains available for OpenCode's git handshake, while a
   // deny-by-default process-exec rule prevents the sidecar from selecting arbitrary child binaries.
-  it("allows fork only into the runtime and Apple git executable allowlist (#3390)", () => {
+  it("allows fork only into the runtime and the exact attested Git executable (#3390)", () => {
     const policy = createRuntimeGatewayConfinement(input);
     const profile = buildRuntimeGatewaySeatbeltCommand(policy, "/trusted/opencode", ["serve"])
       .args[1];
     expect(profile).not.toContain("process-fork");
     expect(profile).toContain("(deny process-exec)");
     expect(profile).toContain('(literal "/trusted/opencode")');
-    expect(profile).toContain('(literal "/usr/bin/git")');
+    expect(profile).toContain(`(literal ${JSON.stringify(gitExecutable)})`);
+    expect(profile).not.toContain("Xcode.app");
     expect(profile).not.toContain("(allow process-exec)");
     for (const denied of ["network*", "mach-lookup", "appleevent-send", "lsopen"])
       expect(profile).toContain(`(deny ${denied})`);
@@ -241,7 +254,7 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
         "const { spawnSync } = require('node:child_process');",
         "const denied = spawnSync('/bin/echo', ['unexpected'], { encoding: 'utf8' });",
         "if (denied.error?.code !== 'EPERM') { process.stdout.write('UNAPPROVED_ALLOWED'); process.exit(2); }",
-        "const git = spawnSync('/usr/bin/git', ['rev-parse', '--is-inside-work-tree'], { encoding: 'utf8' });",
+        `const git = spawnSync(${JSON.stringify(gitExecutable)}, ['rev-parse', '--is-inside-work-tree'], { encoding: 'utf8' });`,
         "if (git.status !== 0 || git.stdout.trim() !== 'true') { process.stdout.write('GIT_DENIED'); process.exit(3); }",
         "process.stdout.write('DENIED_UNAPPROVED_ALLOWED_GIT');",
       ].join("");

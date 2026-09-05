@@ -78,10 +78,11 @@ export function bindHarnessCatalog(
 export function catalogAdvertisement(ctx: RunContext): GatewayToolCatalogAdvertisement | undefined {
   if (ctx.catalog === undefined) return undefined;
   const offer = ctx.catalog.port.offer();
-  const normalizer = createToolInvocationNormalizer(
-    { catalog: offer.catalog, projection: offer.projection, offered: offer.offered },
-    offer.kind === "legacy-native" ? offer.legacySession : undefined,
-  );
+  const normalizer = createToolInvocationNormalizer({
+    catalog: offer.catalog,
+    projection: offer.projection,
+    offered: offer.offered,
+  });
   normalizer.tools(ctx.clock.now());
   ctx.catalog.normalizer = normalizer;
   return { kind: "bound", ...normalizer.binding };

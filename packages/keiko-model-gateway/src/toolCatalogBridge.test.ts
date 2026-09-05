@@ -12,10 +12,7 @@ import {
 } from "./__fixtures__/toolCatalog.js";
 import { describe, expect, it, vi } from "vitest";
 import { createInitialToolCatalog, gatewayToolDefinitions } from "@oscharko-dev/keiko-tool-catalog";
-import type {
-  GatewayToolCatalogAdvertisement,
-  LegacyNativeToolSession,
-} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+import type { GatewayToolCatalogAdvertisement } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import { withCorrelationId } from "./observability.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
@@ -109,7 +106,10 @@ describe("production gateway catalog bridge", () => {
     });
     await expect(
       adapter.call(
-        { ...request(), tools: [{ name: "read_file", description: "read", parameters: {} }] },
+        {
+          ...request(),
+          tools: [{ name: "read_file", description: "read", parameters: {} }],
+        } as unknown as GatewayRequest,
         CONFIG,
       ),
     ).rejects.toThrow();
@@ -162,9 +162,9 @@ describe("production gateway catalog bridge", () => {
   });
 });
 
-function legacyRequest(): GatewayRequest {
+function removedLegacyRequest(): GatewayRequest {
   const source = advertisement();
-  const legacySession: LegacyNativeToolSession = {
+  const legacySession = {
     consumer: "native-harness",
     profile: { id: "legacy-native", version: 1 },
     catalogRevision: source.catalog.catalogRevision,
@@ -179,7 +179,7 @@ function legacyRequest(): GatewayRequest {
     ...request(),
     toolCatalog: { ...source, kind: "legacy-native", legacySession },
     tools: gatewayToolDefinitions(source.catalog, source.projection.profile),
-  };
+  } as unknown as GatewayRequest;
 }
 function adapter(
   fetchImpl: typeof fetch,
@@ -201,25 +201,25 @@ function adapter(
 }
 
 describe("gateway bridge trust and compatibility boundaries", () => {
-  it("normalizes finite legacy transport to the same new bound response", async () => {
-    const result = await adapter(() => Promise.resolve(response())).call(legacyRequest(), CONFIG);
-    expect(result.toolCalls[0]?.invocation?.kind).toBe("bound");
-  });
-  it("rejects both advertisement arms together and changed legacy schemas before fetch", async () => {
+  it("rejects the removed legacy advertisement and handwritten tools before fetch", async () => {
     const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(response()));
     const subject = adapter(fetchImpl);
-    await expect(
-      subject.call(
-        { ...request(), toolCatalog: advertisement(), tools: legacyRequest().tools },
-        CONFIG,
-      ),
-    ).rejects.toBeInstanceOf(GatewayToolCatalogError);
-    await expect(
-      subject.call(
-        { ...legacyRequest(), tools: [{ name: "read_file", description: "read", parameters: {} }] },
-        CONFIG,
-      ),
-    ).rejects.toBeInstanceOf(GatewayToolCatalogError);
+    const definitions = gatewayToolDefinitions(
+      advertisement().catalog,
+      advertisement().projection.profile,
+    );
+    for (const input of [
+      removedLegacyRequest(),
+      { ...request(), toolCatalog: advertisement(), tools: definitions },
+      {
+        ...request(),
+        toolCatalog: advertisement(),
+        tools: [{ name: "read_file", description: "read", parameters: {} }],
+      },
+    ])
+      await expect(subject.call(input as GatewayRequest, CONFIG)).rejects.toBeInstanceOf(
+        GatewayToolCatalogError,
+      );
     expect(fetchImpl).not.toHaveBeenCalled();
   });
   it("binds a streamed tool call, assembled from SSE deltas, at the done chunk", async () => {

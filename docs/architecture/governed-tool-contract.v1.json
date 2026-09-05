@@ -737,10 +737,10 @@
     {
       "id": "realtime-compatibility",
       "path": "packages/keiko-model-gateway/src/realtime-voice-adapter.ts",
-      "probe": "RealtimeSessionTool",
-      "disposition": "migrate/delete",
+      "probe": "requestRealtimeNegotiation",
+      "disposition": "retain owner",
       "ownerIssue": 3409,
-      "scope": "unsupported tools currently ignored; explicit invalid/unsupported-capability preflight"
+      "scope": "provider-native tool request types were removed at #3415 closeout; the media/transcription negotiation owner remains and never accepts or forwards tools"
     },
     {
       "id": "cli-composition",

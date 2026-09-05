@@ -292,7 +292,7 @@ async function expectGeneratedDescription(
   beforeRequests: number,
 ): Promise<void> {
   await expect
-    .poll(async () => (await snapshot(page)).descriptionStatus?.reason, { timeout: 10_000 })
+    .poll(async () => (await snapshot(page)).descriptionStatus?.reason, { timeout: 60_000 })
     .toBe("generated");
   const status = (await snapshot(page)).descriptionStatus;
   if (

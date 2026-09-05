@@ -419,9 +419,9 @@ export const GOVERNED_TOOL_CONTRACT_PINS = {
     {
       id: "realtime-compatibility",
       path: "packages/keiko-model-gateway/src/realtime-voice-adapter.ts",
-      probe: "RealtimeSessionTool",
+      probe: "requestRealtimeNegotiation",
       ownerIssue: 3409,
-      disposition: "migrate/delete",
+      disposition: "retain owner",
     },
     {
       id: "cli-composition",

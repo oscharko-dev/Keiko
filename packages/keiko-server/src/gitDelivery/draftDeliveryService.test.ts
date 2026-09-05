@@ -153,7 +153,7 @@ describe("draft delivery hard boundaries", () => {
     await entered.promise;
     await expect(fixture.service.reconcile()).resolves.toEqual({
       status: "unavailable",
-      reason: "proposal-unavailable",
+      reason: "operation-in-flight",
     });
     expect(fixture.events).toContainEqual(
       expect.objectContaining({
@@ -162,7 +162,7 @@ describe("draft delivery hard boundaries", () => {
         extra: {
           runId: "run-1",
           phase: "refused",
-          reason: "proposal-unavailable",
+          reason: "operation-in-flight",
         },
       }),
     );

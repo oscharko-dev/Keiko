@@ -6,6 +6,7 @@ export const CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS = [
   "issue-unavailable",
   "verified-commit-required",
   "proposal-unavailable",
+  "operation-in-flight",
   "payload-invalid",
   "provider-unavailable",
 ] as const;

@@ -601,10 +601,10 @@ function toolCatalogFor(
 
 function toolRequestFields(
   parsed: CodingSidecarGatewayChatCompletionRequest,
-): Pick<GatewayCallRequest, "toolCatalog" | "tools"> {
+): Pick<GatewayCallRequest, "toolCatalog"> {
   const toolCatalog = toolCatalogFor(parsed.tools);
   if (toolCatalog !== undefined) return { toolCatalog };
-  return parsed.tools === undefined ? {} : { tools: parsed.tools };
+  return {};
 }
 
 function buildChatRequest(
@@ -1830,6 +1830,14 @@ function runtimeGatewayAdmissionResponse(
   authentication: AuthenticatedGatewayRequest,
   modelAlias: string,
 ): RouteResult | typeof STREAMING | undefined {
+  if (
+    parsed.tools !== undefined &&
+    parsed.tools.length > 0 &&
+    !isExactManagedToolSet(parsed.tools)
+  ) {
+    emitGatewayToolContractDiagnostic(ctx, deps, authentication.runId, parsed.tools);
+    return forbiddenGatewayRequest();
+  }
   if (!authentication.runtimeAuthenticated) return undefined;
   const registry = gatewayReadinessRegistry(deps);
   if (!isAdmittedManagedToolSet(parsed.tools, registry, authentication.runId)) {

@@ -227,6 +227,7 @@ describe("durable repository delivery in the Code task", () => {
       snapshot.runId,
       "generic-description-1",
       "b".repeat(64),
+      "c".repeat(64),
     );
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
@@ -294,6 +295,27 @@ describe("durable repository delivery in the Code task", () => {
       return older.promise;
     });
     expect(screen.getByTestId("cwb-description-draft").textContent).toBe(newerArtifact.markdown);
+  });
+
+  it("does not display a returned artifact that differs from the durable draft digest", async () => {
+    const reviewDraft = vi.fn(async () => ({
+      outcome: "draft" as const,
+      draft: {
+        schemaVersion: "1" as const,
+        proposalId: "generic-description-1",
+        expiresAt: "2026-09-05T18:00:00.000Z",
+        artifact: { ...genericDescriptionArtifact(), artifactDigest: "d".repeat(64) },
+      },
+    }));
+    render(
+      <CodingWorkbenchDraftDelivery
+        snapshot={descriptionStatusSnapshot({ proposalId: "generic-description-1" })}
+        reviewDraft={reviewDraft}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Review exact draft" }));
+    await waitFor(() => expect(reviewDraft).toHaveBeenCalledOnce());
+    expect(screen.queryByTestId("cwb-description-draft")).not.toBeInTheDocument();
   });
 
   it("renders nothing for the description status when it is absent, without a diagnostic", () => {

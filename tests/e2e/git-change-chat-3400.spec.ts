@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import {
   buildGitChangeChatFixture,
   createChatForFixture,
@@ -7,6 +7,7 @@ import {
   interceptPrDescriptionLifecycle,
   interceptProjectList,
   removeGitChangeChatFixture,
+  seedGovernedPrDescriptionWindow,
   seedWorkspace,
   type GitChangeChatFixture,
 } from "./support/git-change-chat-3400.js";
@@ -15,6 +16,10 @@ import {
   capturePrDescriptionState,
   writePrDescriptionJourneyEvidence,
 } from "./support/pr-description-visual-evidence.js";
+import {
+  interceptWorkbenchDescriptionRace,
+  seedWorkbenchDescriptionWindow,
+} from "./support/workbench-description-3401.js";
 
 const CHAT_VISUAL_SOURCES = [
   "tests/e2e/git-change-chat-3400.spec.ts",
@@ -33,10 +38,26 @@ const PR_CARD_VISUAL_SOURCES = [
   "tests/e2e/support/git-change-chat-3400.ts",
   "tests/e2e/support/pr-description-visual-evidence.ts",
   "packages/keiko-ui/src/app/components/desktop/widgets/cards/GovernedPullRequestCard.tsx",
-  "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/GitClientWindow.tsx",
+  "packages/keiko-ui/src/app/components/desktop/widgets/index.tsx",
   "packages/keiko-ui/src/lib/api.ts",
   "packages/keiko-ui/src/lib/coding-workbench-lazy-fetchers.ts",
 ] as const;
+
+const WORKBENCH_VISUAL_SOURCES = [
+  "tests/e2e/git-change-chat-3400.spec.ts",
+  "tests/e2e/config/playwright.git-change-chat-3400.config.ts",
+  "tests/e2e/support/pr-description-visual-evidence.ts",
+  "tests/e2e/support/workbench-description-3401.ts",
+  "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchDraftDelivery.tsx",
+  "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css",
+  "packages/keiko-ui/src/lib/coding-workbench-runtime-api.ts",
+] as const;
+
+async function activateWithKeyboard(control: Locator): Promise<void> {
+  await control.focus();
+  await expect(control).toBeFocused();
+  await control.press("Enter");
+}
 
 // Issue #3400 (epic #3384) — "Connect a Git change to Chat for iterative pull request
 // description refinement". Frozen Decision 5: the Git window only CONNECTS a comparison to a
@@ -210,27 +231,19 @@ test("reviews, approves and applies the held description through the connected p
 
 test("qualifies the governed PR Description panel through preview, approval and apply", async ({
   page,
-  request,
 }) => {
-  const fixture = buildGitChangeChatFixture();
-  fixtures.push(fixture);
-  const chat = await createChatForFixture(request, fixture.root);
-  await interceptProjectList(page, fixture.root);
   const lifecycle = await interceptGovernedPrDescriptionLifecycle(page);
-  await seedWorkspace(page, fixture.root, chat);
+  await seedGovernedPrDescriptionWindow(page);
   await page.goto("/");
 
-  const gitWindow = page.locator('[data-window-id="issue-3400-git-window"]');
-  const createPullRequest = gitWindow.getByRole("button", { name: "Create pull request" });
-  await createPullRequest.focus();
-  await createPullRequest.press("Enter");
-  const description = gitWindow.getByTestId("gpr-description");
+  const prWindow = page.locator('[data-window-id="issue-3389-governed-pr-window"]');
+  const description = prWindow.getByTestId("gpr-description");
   await expect(description).toBeVisible();
   await description
     .getByLabel("Description repository (owner/repo)")
     .fill("keiko-e2e/git-change-chat-3400");
   await description.getByLabel("Description pull request number").fill("42");
-  await description.getByTestId("gpr-description-preview-button").click();
+  await activateWithKeyboard(description.getByTestId("gpr-description-preview-button"));
   await expect(description.getByTestId("gpr-description-preview")).toHaveText(lifecycle.finalBody, {
     useInnerText: false,
   });
@@ -241,15 +254,15 @@ test("qualifies the governed PR Description panel through preview, approval and 
   await capturePrDescriptionModes({
     issue: 3389,
     page,
-    windowId: "issue-3400-git-window",
+    windowId: "issue-3389-governed-pr-window",
     surface: '[data-testid="gpr-description"]',
     state: "preview-loaded",
     sources: PR_CARD_VISUAL_SOURCES,
     keyboardTarget: '[data-testid="gpr-description-approve-button"]',
   });
-  await description.getByTestId("gpr-description-approve-button").click();
+  await activateWithKeyboard(description.getByTestId("gpr-description-approve-button"));
   await expect(description.getByTestId("gpr-description-apply-button")).toBeEnabled();
-  await description.getByTestId("gpr-description-apply-button").click();
+  await activateWithKeyboard(description.getByTestId("gpr-description-apply-button"));
   await expect(description.getByTestId("gpr-description-state")).toHaveAttribute(
     "data-state",
     "current",
@@ -257,7 +270,7 @@ test("qualifies the governed PR Description panel through preview, approval and 
   const appliedCapture = await capturePrDescriptionState(
     page,
     3389,
-    "issue-3400-git-window",
+    "issue-3389-governed-pr-window",
     "09-applied",
   );
   expect(lifecycle.calls).toEqual({ review: 1, approve: 1, apply: 1 });
@@ -275,5 +288,62 @@ test("qualifies the governed PR Description panel through preview, approval and 
       appliedCapture,
     },
     sources: PR_CARD_VISUAL_SOURCES,
+  });
+});
+
+test("keeps the current generic Workbench draft visible when an older response lands late", async ({
+  page,
+}) => {
+  const fixture = buildGitChangeChatFixture();
+  fixtures.push(fixture);
+  const race = await interceptWorkbenchDescriptionRace(page);
+  await seedWorkbenchDescriptionWindow(page, fixture.root);
+  await page.goto("/");
+
+  const workbench = page.locator('[data-window-id="issue-3401-workbench-window"]');
+  const description = workbench.getByRole("region", { name: "Pull request description draft" });
+  await expect(description).toBeVisible();
+  await activateWithKeyboard(description.getByRole("button", { name: "Review exact draft" }));
+  await race.oldRequestStarted;
+  race.advanceToNewHead();
+  await expect(description).toContainText(race.newHeadSha);
+  await activateWithKeyboard(description.getByRole("button", { name: "Review exact draft" }));
+  const draft = description.getByTestId("cwb-description-draft");
+  await expect(draft).toHaveValue(race.currentMarkdown);
+  race.releaseOldResponse();
+  await expect.poll(() => race.calls).toMatchObject({ oldDraft: 1, newDraft: 1 });
+  await expect(draft).toHaveValue(race.currentMarkdown);
+  await expect(draft).not.toHaveValue(race.oldMarkdown);
+
+  await capturePrDescriptionModes({
+    issue: 3401,
+    page,
+    windowId: "issue-3401-workbench-window",
+    surface: '[aria-label="Pull request description draft"]',
+    state: "generic-held-draft-after-response-race",
+    sources: WORKBENCH_VISUAL_SOURCES,
+    keyboardTarget: '[data-testid="cwb-description-review"]',
+  });
+  const currentCapture = await capturePrDescriptionState(
+    page,
+    3401,
+    "issue-3401-workbench-window",
+    "09-response-race-current",
+  );
+  writePrDescriptionJourneyEvidence({
+    issue: 3401,
+    cases: [
+      "generic no-PR artifact remains reviewable",
+      "exact server-held final markdown is displayed",
+      "late older response cannot replace the current proposal",
+    ],
+    observations: {
+      ...race.calls,
+      hasPullRequestTarget: false,
+      exactCurrentMarkdownDisplayed: true,
+      olderResponseDiscarded: true,
+      currentCapture,
+    },
+    sources: WORKBENCH_VISUAL_SOURCES,
   });
 });

@@ -116,17 +116,16 @@ function seatbeltArgs(plan: IsolatedRunPlan): readonly string[] {
   return ["-p", SEATBELT_DENY_EGRESS_PROFILE, plan.command, ...plan.args];
 }
 
-const APPLE_GIT_EXECUTABLES = Object.freeze([
-  "/usr/bin/git",
-  "/Library/Developer/CommandLineTools/usr/bin/git",
-  "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
-] as const);
-
-function gatewayProcessExecPolicy(command: string): string {
-  if (!isAbsolute(command) || command.includes("\0")) {
+function gatewayProcessExecPolicy(command: string, childExecutable: string): string {
+  if (
+    !isAbsolute(command) ||
+    command.includes("\0") ||
+    !isAbsolute(childExecutable) ||
+    childExecutable.includes("\0")
+  ) {
     throw new TypeError("gateway-seatbelt-command-not-absolute");
   }
-  const executables = new Set([command, ...APPLE_GIT_EXECUTABLES]);
+  const executables = new Set([command, childExecutable]);
   const literals = [...executables].map((path) => `(literal ${JSON.stringify(path)})`).join(" ");
   return `(deny process-exec)(allow process-exec ${literals})`;
 }
@@ -137,19 +136,20 @@ function gatewayProcessExecPolicy(command: string): string {
 // `buildWrappedCommand` planning path call into this single formula — there is no second copy of
 // the profile string anywhere in the package.
 //
-// `process-fork` remains available because the pinned OpenCode sidecar forks Apple git during its
+// `process-fork` remains available because the pinned OpenCode sidecar forks Git during its
 // session/history handshake (#3390). Executable transitions are independently deny-by-default:
-// only the already verified runtime executable and Apple's fixed git launcher/implementation paths
-// may execute. Descendants inherit both this executable allowlist and the network restriction.
+// only the verified runtime executable and the one separately attested Git implementation may
+// execute. Descendants inherit both this executable allowlist and the network restriction.
 export function buildGatewaySeatbeltCommand(
   gateway: NetworkGatewayPolicy,
   command: string,
   args: readonly string[],
+  childExecutable: string,
 ): WrappedCommand {
   const family = gateway.host === "127.0.0.1" ? "tcp4" : "tcp6";
   const profile =
     "(version 1)(allow default)(deny network*)" +
-    gatewayProcessExecPolicy(command) +
+    gatewayProcessExecPolicy(command, childExecutable) +
     "(deny mach-lookup)(deny appleevent-send)(deny lsopen)" +
     `(allow network-outbound (remote ${family} "localhost:${String(gateway.port)}"))` +
     `(allow network-inbound (local ${family} "localhost:*"))`;
@@ -194,7 +194,12 @@ export function buildWrappedCommand(
       return { command: "unshare", args: unshareArgs(plan) };
     case "seatbelt":
       return isValidNetworkGatewayPolicy(plan.network)
-        ? buildGatewaySeatbeltCommand(plan.network, plan.command, plan.args)
+        ? buildGatewaySeatbeltCommand(
+            plan.network,
+            plan.command,
+            plan.args,
+            plan.gatewayChildExecutable ?? "",
+          )
         : { command: "sandbox-exec", args: seatbeltArgs(plan) };
     case "container-docker":
       return { command: "docker", args: containerArgs(plan, DEFAULT_CONTAINER_IMAGE) };
