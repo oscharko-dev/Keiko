@@ -432,18 +432,31 @@ function DescriptionActionButtons({
 
 function DescriptionPreview({
   result,
+  label,
+  t,
 }: {
   readonly result: PrDescriptionApplicationResultWire | undefined;
+  readonly label: string;
+  readonly t: I18nTranslate;
 }): ReactNode {
   if (result?.outcome !== "preview") return null;
   return (
     <span style={{ display: "grid", gap: 4, width: "100%" }}>
-      <pre
+      <textarea
         data-testid="git-change-description-preview-body"
-        style={{ whiteSpace: "pre-wrap", maxHeight: 220, overflow: "auto", margin: 0 }}
-      >
-        {result.preview.finalBody}
-      </pre>
+        readOnly
+        rows={8}
+        value={result.preview.finalBody}
+        aria-label={t("gitChangeScope.description.previewAria", { label })}
+        style={{
+          width: "100%",
+          whiteSpace: "pre-wrap",
+          maxHeight: 220,
+          overflow: "auto",
+          resize: "vertical",
+          margin: 0,
+        }}
+      />
       <span>{result.preview.concurrencyLimitation}</span>
     </span>
   );
@@ -508,7 +521,7 @@ function GitChangeDescriptionPanel({
       style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}
     >
       <DescriptionActionButtons actions={actions} scope={scope} t={t} />
-      <DescriptionPreview result={actions.result} />
+      <DescriptionPreview result={actions.result} label={scope.comparisonLabel} t={t} />
       <DescriptionResultStatus result={actions.result} t={t} />
       {actions.error !== null ? (
         <span role="alert" className="scope-connect-error">

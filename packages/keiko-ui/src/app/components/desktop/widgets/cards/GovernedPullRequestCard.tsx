@@ -937,18 +937,21 @@ function PrDescriptionPreviewBody({
   return (
     <div style={LABEL_STYLE}>
       <span>{t("governedPullRequestCard.description.previewCaption")}</span>
-      <pre
+      <textarea
         data-testid="gpr-description-preview"
+        readOnly
+        rows={8}
+        value={result.preview.finalBody}
+        aria-label={t("governedPullRequestCard.description.previewCaption")}
         style={{
           ...FIELD_STYLE,
           whiteSpace: "pre-wrap",
           maxHeight: 220,
           overflow: "auto",
+          resize: "vertical",
           margin: 0,
         }}
-      >
-        {result.preview.finalBody}
-      </pre>
+      />
       <span style={{ font: "var(--text-caption)", color: "var(--fg-muted)" }}>
         {result.preview.concurrencyLimitation}
       </span>

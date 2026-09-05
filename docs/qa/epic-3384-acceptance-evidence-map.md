@@ -260,6 +260,97 @@ GitHub body compare-and-swap that the selected adapter cannot perform.
 
 ---
 
+## #3406 — Build the canonical governed-tool catalog and projection compiler
+
+Primary evidence: `packages/keiko-tool-catalog/src/`,
+`scripts/check-tool-catalog-conformance.mjs`, `scripts/check-tool-catalog-performance.mjs`, and
+`docs/architecture/tool-catalog-manifest.v1.json`.
+
+| #   | Criterion (shortened)                                                                   | Status      | Evidence test                                                                                                         | Evidence code / closeability note                                                                                    |
+| --- | --------------------------------------------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| 1   | One descriptor deterministically compiles for every supported profile                   | implemented | `packages/keiko-tool-catalog/src/catalog.test.ts`; `composer.test.ts`; `opencode.test.ts`; `child.test.ts`            | `descriptor.ts`; `projection.ts`; the generated profiles consume registered descriptors rather than copied tables.   |
+| 2   | Descriptor/projection digests are distinct, domain-separated, and bind all semantics    | implemented | `packages/keiko-tool-catalog/src/catalog.test.ts:130-151`; `composer.test.ts`                                         | `catalog.ts`; `projection.ts`; profile, alias, schemas, dialect, actions, policy, and handler are digest inputs.     |
+| 3   | Compiler rejects collisions, downgrade, unsafe shapes, unsupported or lossy projections | implemented | `validation.test.ts` “bounded hostile declaration capture” and “closed lossless schema core”; `compatibility.test.ts` | `validation.ts`; `compatibility.ts`; reflective failures remain body-free.                                           |
+| 4   | Published descriptors are deeply immutable and canonical output ignores insertion order | implemented | `validation.test.ts:218` “normalizes source insertion order”; `catalog.test.ts` mutation cases                        | `json.ts`; `catalog.ts`; inputs are detached and frozen at registration.                                             |
+| 5   | Pure package has only contracts/security dependencies and performs no effects           | implemented | `scripts/__tests__/tool-catalog-conformance.test.mjs`; architecture/package-surface gates                             | `packages/keiko-tool-catalog/package.json`; package import boundaries reject server, I/O, network, model and policy. |
+| 6   | Canonical seven-status bounded result envelope, paging, cursor and body-free metrics    | implemented | `result.test.ts`; `arguments.test.ts`; `packages/keiko-server/src/tool-catalog/catalogToolContinuation.test.ts`       | `result.ts`; `invocation.ts`; server continuation uses opaque bound cursors.                                         |
+| 7   | Initial AST guard freezes parallel registries and non-authorizing H1 handoff            | implemented | `scripts/__tests__/tool-catalog-conformance.test.mjs`; normal conformance gate                                        | `docs/architecture/tool-catalog-migration.v1.json`; the inventory grants no advertisement/dispatch exception.        |
+| 8   | Deterministic cold compile/lookup budgets use the existing measurement convention       | implemented | `scripts/__tests__/tool-catalog-conformance.test.mjs`; `npm run check:tool-catalog-performance`                       | Performance gate passed with thirty measured samples per case; excluded external calibration remains unclaimed.      |
+
+Closeability verdict: **code-complete**. The generated manifest and migration inventory are
+machine-produced; external performance work excluded in the accepted scope is not used as evidence
+for this package's deterministic local measurements.
+
+---
+
+## #3407 — Migrate the read-only child-agent tool surface to canonical projections
+
+Primary evidence: `packages/keiko-server/src/coding-runtime/productionReadOnlyChildRunner.ts`,
+`readOnlyChildOrchestrator.ts`, and `packages/keiko-tool-catalog/src/child.ts`.
+
+| #   | Criterion (shortened)                                                          | Status      | Evidence test                                                                                                                     | Evidence code / closeability note                                                                        |
+| --- | ------------------------------------------------------------------------------ | ----------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 1   | Real managed parent launches a child, bound read executes, result returns      | implemented | `productionReadOnlyChildRunner.test.ts:119` “executes an approved keiko_child_workspace_read call...”                             | `productionReadOnlyChildRunner.ts`; the read uses the parent's secure workspace port.                    |
+| 2   | Projection, invocation, workspace, authority and budgets bind and recheck      | implemented | `productionReadOnlyChildRunner.test.ts`; `packages/keiko-tool-catalog/src/child.test.ts`; `readOnlyChildOrchestrator.test.ts:608` | `productionReadOnlyChildRunner.ts`; `readOnlyChildOrchestrator.ts`.                                      |
+| 3   | Hostile input, stale identity, replay, unavailable handler and pre-cancel deny | implemented | `productionReadOnlyChildRunner.test.ts:166-262`; `readOnlyChildOrchestrator.test.ts:353-466`; `child.test.ts`                     | Exact catalog argument qualification occurs before the secure read port.                                 |
+| 4   | Mid-flight cancel/timeout prevents late publication, retry and double charge   | implemented | `productionReadOnlyChildRunner.test.ts` cancellation/timeout cases; `readOnlyChildOrchestrator.test.ts` terminal cases            | AbortSignal flows through runner and read port; terminal latch permits one settlement.                   |
+| 5   | New profile exposes only keiko_child_workspace_read; read_file is legacy-bound | implemented | `packages/keiko-tool-catalog/src/child.test.ts`; `invocation.test.ts:117`                                                         | `child.ts`; legacy alias is accepted only under the exact digest-bound compatibility profile.            |
+| 6   | Result envelope and aggregate/output bounds validate before model publication  | implemented | `productionReadOnlyChildRunner.test.ts:119,136,253`; `packages/keiko-tool-catalog/src/result.test.ts`                             | Truncation is explicit; denied reads do not count as useful results.                                     |
+| 7   | Exactly one logical terminal and one healthy-primary activity write            | implemented | `readOnlyChildOrchestrator.test.ts` success/denial/crash cases and “still latches a governance terminal...”                       | `readOnlyChildOrchestrator.ts`; trust violations use the structured activity path while SSE is redacted. |
+| 8   | Evidence is correlated and excludes path/input/output/prompt/error bodies      | implemented | `readOnlyChildOrchestrator.test.ts` structured security-failure assertions; log-redaction tests                                   | Evidence retains ids, digests, counts, status, duration and error kind only.                             |
+
+Closeability verdict: **code-complete**. Platform confinement qualification excluded by the
+accepted scope remains separate and is not presented as child-catalog evidence.
+
+---
+
+## #3409 — Migrate legacy workspace tools, harness, and SDK to canonical projections
+
+Primary evidence: `packages/keiko-tool-catalog/src/legacy.ts`, `invocation.ts`,
+`packages/keiko-harness/src/legacy-port-catalog.ts`, and
+`packages/keiko-server/src/tool-catalog/`.
+
+| #   | Criterion (shortened)                                                           | Status      | Evidence test                                                                                                    | Evidence code / closeability note                                                                        |
+| --- | ------------------------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 1   | Six legacy tools derive from canonical descriptors; old registries cannot drift | implemented | `packages/keiko-tools/src/registry.test.ts`; `packages/keiko-tool-catalog/src/legacy.test.ts`; registry AST gate | `packages/keiko-tools/src/schemas.ts` is a compatibility projection, not a second authoring source.      |
+| 2   | Gateway advertises representable bound projections; malformed/stale calls deny  | implemented | `invocation.test.ts:94-212`; model-gateway tool projection tests                                                 | `invocation.ts`; bound arm carries tool ref and projection identity.                                     |
+| 3   | Harness derives policy/effects and delegates invocation accounting/settlement   | implemented | `packages/keiko-harness/src/legacy-port-catalog.test.ts:69-106`; harness cancellation tests                      | `legacy-port-catalog.ts`; outer run accounting stays distinct from invocation receipts.                  |
+| 4   | Dispatch rechecks authority, root, readiness, budgets and idempotency           | implemented | `catalogToolProduction.test.ts:122-205`; `catalogToolCompatibility.test.ts:52,70`                                | `catalogToolRuntimeAuthority.ts`; missing handler returns failed/handler-unavailable.                    |
+| 5   | Dry-run is non-productive; CLI/server/SDK fail closed without bound handlers    | implemented | `nativeCatalogToolPort.test.ts`; CLI/server composition tests; SDK ToolPort tests                                | Readiness and result status remain separate vocabularies.                                                |
+| 6   | Provider adapters reject unsupported/lossy semantics before session start       | implemented | catalog dialect tests; model-gateway Realtime unsupported-capability tests                                       | Adapter compilation cannot silently discard schema semantics.                                            |
+| 7   | Additive old/new bridge is version/digest bounded and rejects ambiguity/replay  | implemented | `invocation.test.ts:117-212`; `catalogToolCompatibility.test.ts`                                                 | New producers emit bound calls; legacy name-only calls require the exact server-held legacy profile.     |
+| 8   | Cancellation yields one invocation terminal and one independent run terminal    | implemented | `catalogToolFacadeBridge.test.ts:308`; harness cancellation/settlement tests                                     | Reservation commits/releases once; activity-log primary failure follows ADR-0173 unknown-state behavior. |
+| 9   | Public exports, package graph and migrated provider/harness suites remain green | implemented | package-surface smoke; architecture checks; harness/model-gateway workspace suites                               | Obsolete definitions are deleted or isolated behind the finite profile.                                  |
+| 10  | Activity evidence is correlated and body-free                                   | implemented | `catalogToolFacadeBridge.test.ts:224` “emits a real tool-catalog.* ... pair with a correlation id and no bodies” | `catalogToolLifecycle.ts`; arguments, commands, paths, provider bodies and output are absent.            |
+
+Closeability verdict: **code-complete**. The compatibility arm is deliberately temporary and its
+removal is proven by the final migration closeout; it is not a permanent name-based dispatch path.
+
+---
+
+## #3410 — Canonical governed-tool catalog epic
+
+Primary evidence: `packages/keiko-tool-catalog/`, `packages/keiko-server/src/tool-catalog/`, the
+consumer projection tests, generated manifests, and the repository architecture/gate scripts.
+
+| #   | Definition-of-Done criterion (shortened)                                       | Status      | Evidence test / artifact                                                                                                          | Evidence code / closeability note                                                                                    |
+| --- | ------------------------------------------------------------------------------ | ----------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| 1   | Mandatory children have current-head acceptance evidence                       | implemented | The criterion tables in this map plus the current review-disposition audit                                                        | Formal issue/PR settlement is the integration owner's final bookkeeping step.                                        |
+| 2   | Pure package and generated manifests have one owner and legal dependencies     | implemented | catalog boundary, conformance, generation and package-surface gates                                                               | `packages/keiko-tool-catalog/`; generated artifacts are checked, never hand-edited.                                  |
+| 3   | Production consumers derive projections and bind exhaustive ready handlers     | implemented | native, managed OpenCode, child, harness/SDK and server catalog composition suites                                                | Static catalog intent remains distinct from live handler readiness and authority.                                    |
+| 4   | Repository search producer/projection provenance survives migration cleanup    | implemented | `packages/keiko-workspace/src/codingRepositorySearch.test.ts`; `productionManagedWorktreeTools.test.ts`; H1 provenance gate tests | One existing search owner supplies raw coordinates; no second search implementation is introduced.                   |
+| 5   | Operation/lifecycle evidence is reconstructable, correlated and redacted       | implemented | op-catalog generator tests; `catalogToolFacadeBridge.test.ts`; support-analyzer catalog lifecycle tests                           | Primary-write failure remains an honest sequence gap/unknown result plus independent warning.                        |
+| 6   | Security negatives cover hostile schemas, identity, authority and race classes | implemented | catalog validation/invocation negatives; cursor, production authority, cancellation, workspace containment tests                  | Includes downgrade, prototype/cycle/depth/width, replay, revoked authority and path/link escape.                     |
+| 7   | Migration inventory is zero and no permanent handwritten registry remains      | partial     | `npm run check:tool-catalog-conformance -- --closeout` fails with 43 inventory rows                                               | `docs/architecture/tool-catalog-migration.v1.json`; zero-inventory closeout is not satisfied on this head.           |
+| 8   | Applicable local gates and exact-head required checks settle                   | partial     | Local gate records and PR #3394 required-check results                                                                            | Current-head required checks and review resolution remain integration-owner actions; no dev merge is performed here. |
+
+Closeability verdict: **partial**. The ordinary catalog conformance gate and deterministic
+performance gate pass, but the explicit closeout gate still reports 43 migration rows. Final
+exact-head PR settlement also remains pending. Signing and Atlassian qualification remain
+expressly excluded and unclaimed under the accepted scope.
+
+---
+
 ## #3400 — Connect a Git change to Chat for iterative refinement
 
 Primary evidence: `packages/keiko-server/src/gitChangeRoutes.ts`, `chat-handlers.ts`,
