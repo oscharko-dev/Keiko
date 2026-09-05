@@ -242,9 +242,11 @@ async function runCiObservation(
   service: CiObservationService | undefined,
   forceFresh: boolean | undefined,
 ): Promise<import("./codingToolGovernedDelegate.js").GovernedCodingToolResult> {
-  return service === undefined
-    ? { status: "failed", reasonCode: "capability-backend-unavailable" }
-    : { status: "completed", ci: await service.observe(forceFresh) };
+  if (service === undefined) return { status: "failed", reasonCode: "capability-backend-unavailable" };
+  // Preserve the exact zero-argument call when the model omits forceFresh (#3388): an explicit
+  // `undefined` argument is a different, observable call shape from no argument at all.
+  const observation = forceFresh === undefined ? await service.observe() : await service.observe(forceFresh);
+  return { status: "completed", ci: observation };
 }
 
 function requestStageReview(

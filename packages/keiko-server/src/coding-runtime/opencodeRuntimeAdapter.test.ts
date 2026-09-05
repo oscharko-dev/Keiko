@@ -417,12 +417,12 @@ describe("OpenCode runtime adapter readiness", () => {
     // #3386/#3387/#3388: each propose-phase Git/delivery tool posts its fixed wire action/intent
     // literal, never a model-supplied one; the model never commits, pushes or opens a pull
     // request directly, it only proposes.
-    expect(bundle.toolSources.keiko_git_status).toContain('"action":"git"');
+    expect(bundle.toolSources.keiko_git_status).toContain('const wireAction = "git";');
     expect(bundle.toolSources.keiko_git_status).toContain('"operation":"status"');
     expect(bundle.toolSources.keiko_git_diff).toContain('"operation":"diff"');
     expect(bundle.toolSources.keiko_git_stage).toContain('"operation":"stage","phase":"propose"');
+    expect(bundle.toolSources.keiko_git_commit).toContain('const wireAction = "delivery";');
     expect(bundle.toolSources.keiko_git_commit).toContain('"intent":"commit","phase":"propose"');
-    expect(bundle.toolSources.keiko_git_commit).toContain('"action":"delivery"');
     expect(bundle.toolSources.keiko_git_push).toContain('"intent":"push","phase":"propose"');
     expect(bundle.toolSources.keiko_pull_request).toContain(
       '"intent":"pull-request","phase":"propose"',

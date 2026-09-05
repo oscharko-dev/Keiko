@@ -8,18 +8,11 @@ function userVersion(db: DatabaseSync): number {
   return typeof row?.user_version === "number" ? row.user_version : 0;
 }
 
-// Test-only reverse fixture for the D9 migration pins. Production remains strictly forward-only:
-// this helper starts from the current schema, removes every post-v13 object, and fails on any
-// mismatch instead of letting a partially rewound database masquerade as a real v13 store.
-export function restoreV13SchemaFixture(db: DatabaseSync): void {
-  const actualVersion = userVersion(db);
-  if (actualVersion !== SCHEMA_VERSION) {
-    throw new Error(
-      `legacy schema fixture requires current version ${String(SCHEMA_VERSION)}, received ${String(actualVersion)}`,
-    );
-  }
-
-  db.exec(`
+// Module-level (not inline in the function body) so the SQL text — one statement per rolled-back
+// migration, oldest column drops last — never counts against restoreV13SchemaFixture's own line
+// budget, mirroring how schema.ts's own `V<n>_SQL` migration constants live outside their
+// consuming function.
+const V13_ROLLBACK_SQL = `
     ALTER TABLE chats DROP COLUMN git_change_scope_json;
     ALTER TABLE relationships RENAME TO relationships_v28;
     DROP INDEX idx_relationships_source;
@@ -119,6 +112,7 @@ export function restoreV13SchemaFixture(db: DatabaseSync): void {
     CREATE INDEX idx_relationship_lifecycle_relationship
       ON relationship_lifecycle_history(relationship_id, occurred_at);
     DROP TABLE relationships_v28;
+    DROP TABLE coding_runtime_description_jobs;
     DROP TABLE git_journey_outcomes;
     DROP TABLE coding_runtime_ci_repair_budgets;
     ALTER TABLE coding_runtime_snapshots DROP COLUMN ci_observation_revision;
@@ -150,8 +144,19 @@ export function restoreV13SchemaFixture(db: DatabaseSync): void {
     ALTER TABLE coding_runtime_snapshots DROP COLUMN stderr_sha256;
     ALTER TABLE coding_runtime_snapshots DROP COLUMN stderr_truncated;
     PRAGMA user_version = ${String(V13_SCHEMA_VERSION)};
-  `);
+  `;
 
+// Test-only reverse fixture for the D9 migration pins. Production remains strictly forward-only:
+// this helper starts from the current schema, removes every post-v13 object, and fails on any
+// mismatch instead of letting a partially rewound database masquerade as a real v13 store.
+export function restoreV13SchemaFixture(db: DatabaseSync): void {
+  const actualVersion = userVersion(db);
+  if (actualVersion !== SCHEMA_VERSION) {
+    throw new Error(
+      `legacy schema fixture requires current version ${String(SCHEMA_VERSION)}, received ${String(actualVersion)}`,
+    );
+  }
+  db.exec(V13_ROLLBACK_SQL);
   if (userVersion(db) !== V13_SCHEMA_VERSION) {
     throw new Error("legacy schema fixture did not reach version 13");
   }

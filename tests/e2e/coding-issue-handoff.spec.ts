@@ -4,12 +4,17 @@
 // journey GraphQL read is the only substituted boundary (see coding-issue-handoff-transport.mts);
 // every other effect — commit, push, PR create — runs through the unmodified production path.
 //
+// Also proves the pr-mark-ready intent (epic #3384 corrections 1/2/7): a real one-use approval mint
+// and execute against the SAME production routes, the ready-approval race (two independently minted
+// proposals for the identical transition — only whichever executes first ever performs it, the
+// other observes drift and performs nothing), and strict one-use redemption.
+//
 // Proves: a human merge is observed distinctly from the bound issue's own closure; delayed/absent
 // closure stays pending rather than completing early; a PR closed without a merge is never reported
 // as completed; and across the whole run the coding runtime never calls a merge or issue-close
 // endpoint — there is none to call, and this proves the observation path never attempts one.
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type APIResponse } from "@playwright/test";
 import { readFileSync, writeFileSync } from "node:fs";
 import {
   handoffProviderPath,
@@ -17,7 +22,11 @@ import {
   type HandoffFixtureMode,
   type HandoffProviderState,
 } from "./support/coding-issue-handoff.js";
-import { startHandoffDraft, handoffControl } from "./support/coding-issue-handoff-journey.js";
+import {
+  HANDOFF_REPOSITORY_ROOT,
+  startHandoffDraft,
+  handoffControl,
+} from "./support/coding-issue-handoff-journey.js";
 
 test.describe.configure({ mode: "serial" });
 const stateDir = handoffStateDir();
@@ -66,6 +75,13 @@ interface JourneyRefreshResponse {
     readonly remote: {
       readonly mergedAt: string | null;
       readonly issue: { readonly state: string };
+      readonly identity: {
+        readonly number: number;
+        readonly repository: string;
+        readonly headSha: string;
+        readonly baseSha: string;
+        readonly isDraft: boolean;
+      };
     } | null;
   };
   readonly reason?: string;
@@ -160,5 +176,148 @@ test("#3389 @coding-issue-handoff renders the ready-for-review control as closed
       page.getByText("The ready-for-review approval path is not available yet."),
     ).toBeVisible();
   }
+  await handoffControl("finish");
+});
+
+// ─── pr-mark-ready intent (#3389 AC3, epic #3384 corrections 1/2/7) ───────────────────────────────
+
+interface MarkReadyBody {
+  readonly schemaVersion: "1";
+  readonly projectId: string;
+  readonly ownerAndRepo: string;
+  readonly prExternalId: string;
+  readonly headSha: string;
+  readonly baseSha: string;
+  readonly readinessDigest: string;
+}
+
+interface MarkReadyApproveResponse {
+  readonly approval: unknown;
+}
+
+interface MarkReadyExecuteResponse {
+  readonly status: string;
+  readonly executionErrorCode?: string;
+}
+
+async function mintMarkReadyApproval(page: Page, body: MarkReadyBody): Promise<unknown> {
+  const response = await page.request.post("/api/git-delivery/pr/mark-ready/approve", {
+    headers: { "X-Keiko-CSRF": "1" },
+    data: body,
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  return ((await response.json()) as MarkReadyApproveResponse).approval;
+}
+async function executeMarkReady(
+  page: Page,
+  body: MarkReadyBody,
+  approval: unknown,
+): Promise<APIResponse> {
+  return page.request.post("/api/git-delivery/pr/mark-ready/execute", {
+    headers: { "X-Keiko-CSRF": "1" },
+    data: { ...body, approval },
+  });
+}
+
+test("#3389 @coding-issue-handoff pr-mark-ready: the ready-approval race — two minted proposals, only the first execution ever performs the transition", async ({
+  page,
+}) => {
+  mode("open");
+  const runId = await startHandoffDraft(page, 47);
+
+  const before = await refresh(page, runId);
+  const identity = before.outcome?.remote?.identity;
+  if (identity === undefined) throw new Error("Expected an observed remote identity");
+  expect(identity.isDraft).toBe(true);
+
+  const markReadyBody: MarkReadyBody = {
+    schemaVersion: "1",
+    projectId: HANDOFF_REPOSITORY_ROOT,
+    ownerAndRepo: identity.repository,
+    prExternalId: String(identity.number),
+    headSha: identity.headSha,
+    baseSha: identity.baseSha,
+    readinessDigest: "e".repeat(64),
+  };
+
+  // Two independently minted proposals ("two proposals") for the identical draft->ready
+  // transition — as if the human clicked "propose ready" twice before the first request settled.
+  const firstApproval = await mintMarkReadyApproval(page, markReadyBody);
+  const secondApproval = await mintMarkReadyApproval(page, markReadyBody);
+
+  // The first claim actually performs the transition.
+  const firstExecute = await executeMarkReady(page, markReadyBody, firstApproval);
+  expect(firstExecute.ok(), await firstExecute.text()).toBe(true);
+  const firstBody = (await firstExecute.json()) as MarkReadyExecuteResponse;
+  expect(firstBody.status).toBe("succeeded");
+
+  // The re-read observes the real transition through the shared fixture state — never assumed.
+  const after = await refresh(page, runId);
+  expect(after.outcome?.remote?.identity.isDraft).toBe(false);
+
+  // The second, still-unredeemed claim is refused with drift: the live PR is no longer the draft
+  // it was minted against, so it performs nothing further — "one claim" is whichever executes
+  // first, never both.
+  const secondExecute = await executeMarkReady(page, markReadyBody, secondApproval);
+  expect(secondExecute.ok(), await secondExecute.text()).toBe(true);
+  const secondBody = (await secondExecute.json()) as MarkReadyExecuteResponse;
+  expect(secondBody.status).toBe("failed");
+  expect(secondBody.executionErrorCode).toBe("precondition-failed");
+
+  // The first claim is strictly one-use independent of drift: redeeming it again is refused
+  // outright (already consumed) rather than re-dispatching.
+  const replay = await executeMarkReady(page, markReadyBody, firstApproval);
+  expect(replay.status()).toBe(400);
+
+  await handoffControl("finish");
+});
+
+test("#3389 @coding-issue-handoff pr-mark-ready: execute refuses without a consumed claim, and never reaches the generic pr-update convertFromDraft path", async ({
+  page,
+}) => {
+  mode("open");
+  const runId = await startHandoffDraft(page, 48);
+  const observed = await refresh(page, runId);
+  const identity = observed.outcome?.remote?.identity;
+  if (identity === undefined) throw new Error("Expected an observed remote identity");
+
+  const markReadyBody: MarkReadyBody = {
+    schemaVersion: "1",
+    projectId: HANDOFF_REPOSITORY_ROOT,
+    ownerAndRepo: identity.repository,
+    prExternalId: String(identity.number),
+    headSha: identity.headSha,
+    baseSha: identity.baseSha,
+    readinessDigest: "e".repeat(64),
+  };
+
+  // No approval attached at all: refused as approval-required, nothing executes.
+  const unapproved = await executeMarkReady(page, markReadyBody, undefined);
+  expect(unapproved.ok(), await unapproved.text()).toBe(true);
+  const unapprovedBody = (await unapproved.json()) as MarkReadyExecuteResponse;
+  expect(unapprovedBody.status).toBe("approval-required");
+
+  // Correction 1: the generic pr-update command rejects convertFromDraft unconditionally — the
+  // approval-less path is closed even when a validly-shaped, unrelated approval is attached.
+  const genericAttempt = await page.request.post("/api/git-delivery/pr/execute", {
+    headers: { "X-Keiko-CSRF": "1" },
+    data: {
+      schemaVersion: "1",
+      projectId: HANDOFF_REPOSITORY_ROOT,
+      kind: "pr-update",
+      ownerAndRepo: identity.repository,
+      prExternalId: String(identity.number),
+      headBranchName: "irrelevant",
+      baseBranchName: "irrelevant",
+      title: "t",
+      body: "b",
+      convertFromDraft: true,
+    },
+  });
+  expect(genericAttempt.status()).toBe(400);
+
+  const stillDraft = await refresh(page, runId);
+  expect(stillDraft.outcome?.remote?.identity.isDraft).toBe(true);
+
   await handoffControl("finish");
 });

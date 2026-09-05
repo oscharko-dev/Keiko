@@ -424,6 +424,90 @@ const CHILD_AGENT_SCHEMA = {
   required: ["objective", "maxToolCalls"],
 } as const;
 
+// #3386/#3387/#3388: the Git status/diff/stage/commit, push/pull-request and CI-observation
+// tools, independently hand-typed here (never imported from opencodeToolSchemas.ts) so this file
+// keeps pinning the real OpenCode 1.17.17 wire contract against a second, independently authored
+// source rather than the production array it verifies.
+const GIT_STATUS_SCHEMA = { type: "object", properties: {}, required: [] } as const;
+const GIT_PUSH_SCHEMA = { type: "object", properties: {}, required: [] } as const;
+const GIT_DIFF_SCHEMA = {
+  type: "object",
+  properties: {
+    scope: { type: "string", enum: ["working-tree", "index"] },
+    paths: {
+      type: "array",
+      minItems: 1,
+      maxItems: 50,
+      items: { type: "string", minLength: 1, maxLength: 512 },
+      description: "Workspace-relative paths to diff; denied or ignored paths never appear.",
+    },
+  },
+  required: ["scope", "paths"],
+} as const;
+const GIT_STAGE_SCHEMA = {
+  type: "object",
+  properties: {
+    paths: {
+      type: "array",
+      minItems: 1,
+      maxItems: 50,
+      items: { type: "string", minLength: 1, maxLength: 512 },
+      description: "Workspace-relative paths to propose staging.",
+    },
+  },
+  required: ["paths"],
+} as const;
+const GIT_COMMIT_SCHEMA = {
+  type: "object",
+  properties: {
+    message: {
+      type: "string",
+      minLength: 1,
+      maxLength: 8_192,
+      description: "Proposed commit message. This proposes only; a human approval is required.",
+    },
+  },
+  required: ["message"],
+} as const;
+const GIT_PULL_REQUEST_SCHEMA = {
+  type: "object",
+  properties: {
+    title: {
+      type: "string",
+      minLength: 1,
+      maxLength: 256,
+      pattern: "^[^\\0\\r\\n]+$",
+      description: "Proposed draft pull-request title.",
+    },
+  },
+  required: ["title"],
+} as const;
+const GIT_CI_STATUS_SCHEMA = {
+  type: "object",
+  properties: {
+    forceFresh: {
+      type: "boolean",
+      description:
+        "Set true to bypass the cached readiness snapshot and force one fresh provider read.",
+    },
+  },
+  required: ["forceFresh"],
+} as const;
+const GIT_EXECUTE_SCHEMA = {
+  type: "object",
+  properties: {
+    kind: { type: "string", enum: ["stage", "commit", "push", "pull-request"] },
+    proposalId: {
+      type: "string",
+      minLength: 1,
+      maxLength: 64,
+      pattern: "^(?:stage|delivery)-[0-9]{1,39}$",
+      description: "The proposalId returned by the matching propose-phase tool call.",
+    },
+  },
+  required: ["kind", "proposalId"],
+} as const;
+
 const PINNED_MODEL_VISIBLE_TOOLS = [
   { name: "question", parameters: QUESTION_SCHEMA },
   { name: "keiko_workspace_discover", parameters: WORKSPACE_DISCOVER_SCHEMA },
@@ -433,6 +517,14 @@ const PINNED_MODEL_VISIBLE_TOOLS = [
   { name: "keiko_research_fetch", parameters: RESEARCH_FETCH_SCHEMA },
   { name: "keiko_skill", parameters: SKILL_SCHEMA },
   { name: "keiko_child_agent", parameters: CHILD_AGENT_SCHEMA },
+  { name: "keiko_git_status", parameters: GIT_STATUS_SCHEMA },
+  { name: "keiko_git_diff", parameters: GIT_DIFF_SCHEMA },
+  { name: "keiko_git_stage", parameters: GIT_STAGE_SCHEMA },
+  { name: "keiko_git_commit", parameters: GIT_COMMIT_SCHEMA },
+  { name: "keiko_git_push", parameters: GIT_PUSH_SCHEMA },
+  { name: "keiko_pull_request", parameters: GIT_PULL_REQUEST_SCHEMA },
+  { name: "keiko_git_execute", parameters: GIT_EXECUTE_SCHEMA },
+  { name: "keiko_ci_status", parameters: GIT_CI_STATUS_SCHEMA },
   { name: "todowrite", parameters: TODO_WRITE_SCHEMA },
 ] as const;
 
@@ -822,6 +914,14 @@ describe("coding-sidecar gateway", () => {
       ["keiko_research_fetch", "8510b5132cc06c627c2b46c20df92c3fcca392f0d16a621b7006eb41d2bf02b5"],
       ["keiko_skill", "c3a50e828f78a32481ce662f8cd92e04dd6375af8df916f3c588b0628ff2de2d"],
       ["keiko_child_agent", "aa977e5c893cef8e1c7f6e5185836e039bb0a874e35c476d6a896a14441cb0ab"],
+      ["keiko_git_status", "c8a1ac469a826ea3547ac220c7bbfdcd6b58080d4ec596ff2a0149c5ccb9b699"],
+      ["keiko_git_diff", "fa6966974e9e03d9fb30fb9b95a9f3dd53935ba03f991ce5b6575c5d5ee17a10"],
+      ["keiko_git_stage", "647e9587fc6f6fff73280f3dca63fe3f66a7614eb14652a467acff7de2192dc4"],
+      ["keiko_git_commit", "2df8d578416a283a3a72f8c71c4102264305107ae7c4e7b0e5d1806c3b066112"],
+      ["keiko_git_push", "c8a1ac469a826ea3547ac220c7bbfdcd6b58080d4ec596ff2a0149c5ccb9b699"],
+      ["keiko_pull_request", "459ee94f01b4f6fe7581ea0d365a6adfc702c298d8eec915c51c4da311967c0a"],
+      ["keiko_git_execute", "28eccc61103a21bde0f696517ae6158b165665c689c6735d78384f3ce138e18b"],
+      ["keiko_ci_status", "ffc444855e40f3ea3f6f091de97e0f552480d929ff020bc9dc15c88c14199a80"],
       ["todowrite", "0adc662a3338db20587ec0eb8dc2c057847f940e2cd2e4e6b160abd6a68173d6"],
     ]);
     const chat = vi.fn((_request: GatewayRequest) =>

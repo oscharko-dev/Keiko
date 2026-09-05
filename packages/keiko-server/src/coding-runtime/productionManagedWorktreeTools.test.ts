@@ -81,6 +81,30 @@ describe("production managed worktree tools", () => {
     });
     expect(observe).toHaveBeenCalledExactlyOnceWith();
   });
+  // #3388: keiko_ci_status's bounded optional forceFresh threads through to the observer exactly
+  // as supplied -- an omitted forceFresh keeps calling observe() with no argument at all (the
+  // prior test pins that shape), never an explicit `undefined`.
+  it("forwards an explicit forceFresh to the CI observer", async () => {
+    const observe = vi.fn<CiObservationService["observe"]>(() =>
+      Promise.resolve({ status: "observed", snapshot: readySnapshot(), retryAfterMs: 0 }),
+    );
+    const facade = verificationFacade({
+      runToReport: vi.fn(),
+      records: [],
+      ciObservationService: { observe },
+    });
+    await facade.execute({
+      capability: "runtime-capability",
+      body: JSON.stringify({
+        action: "git",
+        operation: "ci",
+        actionId: "ci-2",
+        idempotencyKey: "ci-2",
+        forceFresh: true,
+      }),
+    });
+    expect(observe).toHaveBeenCalledExactlyOnceWith(true);
+  });
   it("keeps an unavailable CI backend explicit and rejects model-selected PR targets", async () => {
     const facade = verificationFacade({ runToReport: vi.fn(), records: [] });
     const request = { action: "git", operation: "ci", actionId: "ci-1", idempotencyKey: "ci-1" };

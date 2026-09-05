@@ -244,6 +244,49 @@ vi.mock("@oscharko-dev/keiko-git", async () => {
   };
 });
 
+// Pull-request-mode (contract correction 7) tests never hit the real network or spawn `gh`: the
+// GitHub-reader authorization decision and the adapter's `findPullRequestsByHead` read are both
+// injected through this slot rather than the real `deps.store` grant + `gh` process.
+interface PullRequestByHeadSlot {
+  authorized: boolean;
+  identities: readonly {
+    readonly number: number;
+    readonly externalId: string;
+    readonly url: string;
+    readonly repository: string;
+    readonly headRepository: string;
+    readonly headRef: string;
+    readonly headSha: string;
+    readonly baseRef: string;
+    readonly baseSha: string;
+    readonly state: "open" | "closed";
+    readonly isDraft: boolean;
+  }[];
+}
+
+const pullRequestByHeadSlot = vi.hoisted<PullRequestByHeadSlot>(() => ({
+  authorized: false,
+  identities: [],
+}));
+
+vi.mock("./coding-context/githubIssueReaderAuthorization.js", () => ({
+  isGitHubIssueReaderAuthorized: (): boolean => pullRequestByHeadSlot.authorized,
+  githubRemoteOwnerAndRepoFor: (): Promise<string> => Promise.resolve("acme/widgets"),
+}));
+
+vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async () => {
+  const actual = await vi.importActual<typeof import("@oscharko-dev/keiko-tools/internal/git-mutation")>(
+    "@oscharko-dev/keiko-tools/internal/git-mutation",
+  );
+  return {
+    ...actual,
+    createNodeGitPullRequestAdapter: () => ({
+      findPullRequestsByHead: () =>
+        Promise.resolve({ ok: true as const, value: pullRequestByHeadSlot.identities }),
+    }),
+  };
+});
+
 let tmpRoot: string;
 let repoRoot: string;
 

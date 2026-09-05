@@ -561,6 +561,13 @@ export interface UiHandlerDeps {
   // description generation and the "pull-request" body-only apply outside a running Code task.
   // Absent means those two effects execute fail closed exactly like a missing `gitDeliveryAuthority`.
   readonly gitDeliveryDescriptionAuthority?: GitDeliveryDescriptionAuthorityPort | undefined;
+  // Same minted port as `gitDeliveryDescriptionAuthority` above, exposed under the field name
+  // chat-handlers.ts's git-change turn admission (#3400) already reads via its documented
+  // "not yet wired" optional-cast seam (`GitChangeDescriptionAuthorityDeps`). One authority
+  // mechanism, two field names for its two production consumers (the PR-identity route surface
+  // and the base/head Chat scope) — see `GitDeliveryDescriptionAuthorityScope`'s union of both
+  // shapes. Absent means a Chat turn on a git-change-connected chat denies closed, same as above.
+  readonly gitChangeDescriptionAuthorityPort?: GitDeliveryDescriptionAuthorityPort | undefined;
   readonly openCodeGatewayReadinessRegistry?:
     | {
         readonly claim: (runId: string) => boolean;
@@ -4193,6 +4200,7 @@ interface CodingRuntimeControlPlaneDeps {
   runtimeCapabilityAuthenticator?: UiHandlerDeps["runtimeCapabilityAuthenticator"];
   gitDeliveryAuthority?: UiHandlerDeps["gitDeliveryAuthority"];
   gitDeliveryDescriptionAuthority?: UiHandlerDeps["gitDeliveryDescriptionAuthority"];
+  gitChangeDescriptionAuthorityPort?: UiHandlerDeps["gitChangeDescriptionAuthorityPort"];
   openCodeGatewayReadinessRegistry?: UiHandlerDeps["openCodeGatewayReadinessRegistry"];
 }
 
@@ -4246,6 +4254,13 @@ function buildCodingRuntimeControlPlaneDeps(
         }
       : {}),
     ...codingRuntimeControlPlanePassthroughDeps(controlPlane),
+    // Same value as the `gitDeliveryDescriptionAuthority` passthrough above, under the field name
+    // chat-handlers.ts's git-change turn admission reads — see the field's doc comment on
+    // `UiHandlerDeps` for why this is one authority, two consumer-facing names, not a second
+    // authority mechanism.
+    ...(controlPlane.gitDeliveryDescriptionAuthority !== undefined
+      ? { gitChangeDescriptionAuthorityPort: controlPlane.gitDeliveryDescriptionAuthority }
+      : {}),
   };
 }
 

@@ -1166,6 +1166,43 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     void deps.dispose?.();
   });
 
+  // Review repair (#3399/#3400 production-wiring, description-production-wiring item): the
+  // description authority minted for the composed production runtime must reach BOTH of its
+  // production consumers -- prDescriptionRoutes.ts under `gitDeliveryDescriptionAuthority` and
+  // chat-handlers.ts's git-change turn admission under `gitChangeDescriptionAuthorityPort` (read
+  // via that module's documented optional-cast seam). Before this fix, `assembleUiHandlerDeps`
+  // exposed only the first field, so a real `buildUiHandlerDeps()` composition left
+  // `gitChangeDescriptionAuthorityPort` permanently `undefined` and every Chat turn on a
+  // git-change-connected chat denied closed regardless of any live authority record.
+  it("threads the SAME minted description authority onto both its production consumer field names", () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-runtime-description-authority-"),
+      env: {},
+      uiDbPath: join(tmp("ui-runtime-description-authority-"), "keiko-ui.db"),
+      codingRuntimeStartConfirmationConsumer: { consume: () => undefined },
+      codingRuntimeProductionPorts: {
+        backend: {
+          createRun: (): never => {
+            throw new Error("backend must not be reached");
+          },
+        },
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        },
+        editorAgentClient: {
+          action: () => Promise.reject(new Error("editor must not be reached")),
+        },
+      },
+    });
+
+    expect(deps.codingRuntimeHostQualified).toBe(true);
+    expect(deps.gitDeliveryDescriptionAuthority).toBeDefined();
+    expect(deps.gitChangeDescriptionAuthorityPort).toBeDefined();
+    expect(deps.gitChangeDescriptionAuthorityPort).toBe(deps.gitDeliveryDescriptionAuthority);
+    void deps.dispose?.();
+  });
+
   it("wires production Local Knowledge encryption for heading metadata and retrieval citations", async () => {
     const uiDir = tmp("ui-lk-");
     const evidenceDir = tmp("ev-lk-");

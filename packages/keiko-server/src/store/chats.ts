@@ -36,8 +36,9 @@ import { deriveChatGroundingScopeIdentity } from "./chat-grounding-scope-identit
 // cap is deliberately far below the combined-source cap (`combinedSourceCap`, which does not
 // include this list — git-change scopes are not folder/connector "grounding sources").
 const MAX_GIT_CHANGE_SCOPES = 8;
-const CHAT_GIT_CHANGE_DESCRIPTION_STATUS_SET: ReadonlySet<ChatGitChangeDescriptionStatus> =
-  new Set(CHAT_GIT_CHANGE_DESCRIPTION_STATUSES);
+const CHAT_GIT_CHANGE_DESCRIPTION_STATUS_SET: ReadonlySet<ChatGitChangeDescriptionStatus> = new Set(
+  CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
+);
 
 const MAX_CONNECTED_SCOPE_PATHS = 50;
 const SELECTED_SCOPE_KIND_SET: ReadonlySet<SelectedScopeKind> = new Set(SELECTED_SCOPE_KINDS);
@@ -349,9 +350,7 @@ function decodeGitChangeCount(value: unknown): number | undefined {
     : undefined;
 }
 
-function isChatGitChangeDescriptionStatus(
-  value: unknown,
-): value is ChatGitChangeDescriptionStatus {
+function isChatGitChangeDescriptionStatus(value: unknown): value is ChatGitChangeDescriptionStatus {
   return (
     typeof value === "string" &&
     CHAT_GIT_CHANGE_DESCRIPTION_STATUS_SET.has(value as ChatGitChangeDescriptionStatus)
@@ -399,26 +398,35 @@ interface GitChangeIdentityFields {
   readonly descriptionStatus: ChatGitChangeDescriptionStatus;
 }
 
-// Every field is an independent, flat shape guard against a hostile or corrupted row; a single
-// failure collapses the whole decode (never a partially-trusted scope). A genuine type predicate
-// (not a plain boolean) so the caller narrows `scope` instead of re-casting each field below.
-function hasValidGitChangeIdentityFields(
-  scope: Record<string, unknown>,
-): scope is Record<string, unknown> & GitChangeIdentityFields {
+function hasValidGitChangeRefFields(scope: Record<string, unknown>): boolean {
   return (
-    isBoundedNonEmptyString(scope.relationshipId, 256) &&
-    isCodeTaskSha256Digest(scope.remoteDigest) &&
     isBoundedNonEmptyString(scope.comparisonLabel, 240) &&
     isBoundedNonEmptyString(scope.baseRef, 512) &&
     isBoundedNonEmptyString(scope.headRef, 512) &&
     isSafeGitRefName(scope.baseRef) &&
-    isSafeGitRefName(scope.headRef) &&
+    isSafeGitRefName(scope.headRef)
+  );
+}
+
+function hasValidGitChangeDigestFields(scope: Record<string, unknown>): boolean {
+  return (
+    isBoundedNonEmptyString(scope.relationshipId, 256) &&
+    isCodeTaskSha256Digest(scope.remoteDigest) &&
     isCodeTaskGitCommitSha(scope.baseSha) &&
     isCodeTaskGitCommitSha(scope.headSha) &&
     isCodeTaskGitCommitSha(scope.mergeBaseSha) &&
     isCodeTaskSha256Digest(scope.snapshotDigest) &&
     isChatGitChangeDescriptionStatus(scope.descriptionStatus)
   );
+}
+
+// Every field is an independent, flat shape guard against a hostile or corrupted row; a single
+// failure collapses the whole decode (never a partially-trusted scope). A genuine type predicate
+// (not a plain boolean) so the caller narrows `scope` instead of re-casting each field below.
+function hasValidGitChangeIdentityFields(
+  scope: Record<string, unknown>,
+): scope is Record<string, unknown> & GitChangeIdentityFields {
+  return hasValidGitChangeRefFields(scope) && hasValidGitChangeDigestFields(scope);
 }
 
 function decodeGitChangeScopeObject(raw: unknown): ChatGitChangeScope | undefined {
@@ -786,13 +794,17 @@ function validateChatPatch(patch: UpdateChatPatch, limits?: UpdateChatOptions): 
 
 // Issue #3400 — every entry is server-issued by gitChangeRoutes.ts; this is defense-in-depth
 // against a tampered or hand-crafted PATCH body, mirroring validatePatchLocalKnowledgeScopes.
-function validatePatchGitChangeScopes(scopes: readonly ChatGitChangeScope[] | null | undefined): void {
+function validatePatchGitChangeScopes(
+  scopes: readonly ChatGitChangeScope[] | null | undefined,
+): void {
   if (scopes === undefined || scopes === null) return;
   if (!Array.isArray(scopes)) {
     throw invalidRequest("gitChangeScopes must be an array or null.");
   }
   if (scopes.length > MAX_GIT_CHANGE_SCOPES) {
-    throw invalidRequest(`gitChangeScopes must contain at most ${String(MAX_GIT_CHANGE_SCOPES)} entries.`);
+    throw invalidRequest(
+      `gitChangeScopes must contain at most ${String(MAX_GIT_CHANGE_SCOPES)} entries.`,
+    );
   }
   for (const scope of scopes) {
     if (decodeGitChangeScopeObject(scope) === undefined) {
@@ -932,7 +944,9 @@ function encodeGitChangeScopeObject(value: ChatGitChangeScope): Record<string, u
     headSha: value.headSha,
     mergeBaseSha: value.mergeBaseSha,
     snapshotDigest: value.snapshotDigest,
-    ...(value.pullRequestNumber === undefined ? {} : { pullRequestNumber: value.pullRequestNumber }),
+    ...(value.pullRequestNumber === undefined
+      ? {}
+      : { pullRequestNumber: value.pullRequestNumber }),
     fileCount: value.fileCount,
     totalFiles: value.totalFiles,
     omittedFiles: value.omittedFiles,

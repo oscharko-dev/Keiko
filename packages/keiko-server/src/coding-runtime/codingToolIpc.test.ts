@@ -269,3 +269,45 @@ describe("coding tool IPC edit containment is the live workspace-escape gate", (
     expect(parseCodingToolRequest(editBody(file), 262_144)).toBeUndefined();
   });
 });
+
+describe("coding tool IPC CI observation (#3388)", () => {
+  function ciBody(extra: Record<string, unknown>): string {
+    return JSON.stringify({
+      action: "git",
+      operation: "ci",
+      actionId: "ci-1",
+      idempotencyKey: "ci-key",
+      ...extra,
+    });
+  }
+
+  it("admits a CI request with no forceFresh", () => {
+    expect(parseCodingToolRequest(ciBody({}), 262_144)).toEqual({
+      action: "git",
+      operation: "ci",
+      actionId: "ci-1",
+      idempotencyKey: "ci-key",
+    });
+  });
+
+  it.each([
+    ["forceFresh true", true],
+    ["forceFresh false", false],
+  ])("admits an explicit %s", (_name, forceFresh) => {
+    expect(parseCodingToolRequest(ciBody({ forceFresh }), 262_144)).toEqual({
+      action: "git",
+      operation: "ci",
+      actionId: "ci-1",
+      idempotencyKey: "ci-key",
+      forceFresh,
+    });
+  });
+
+  it.each([
+    ["a non-boolean forceFresh", { forceFresh: "true" }],
+    ["an unexpected extra key alongside forceFresh", { forceFresh: true, extra: "SENTINEL" }],
+    ["an unexpected extra key with no forceFresh", { extra: "SENTINEL" }],
+  ])("rejects %s before a CI observation request exists", (_name, extra) => {
+    expect(parseCodingToolRequest(ciBody(extra), 262_144)).toBeUndefined();
+  });
+});
