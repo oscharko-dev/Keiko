@@ -1432,6 +1432,13 @@ export const DE_MESSAGES = {
   "gitChangeScope.connect.chatLoadError":
     "Die Chats für dieses Repository konnten nicht geladen werden.",
   "gitChangeScope.connect.error": "Diese Git-Änderung konnte nicht mit dem Chat verbunden werden.",
+  "gitChangeScope.description.preview": "Vorschau",
+  "gitChangeScope.description.previewAria": "Vorschau der Beschreibung für {label}",
+  "gitChangeScope.description.approve": "Genehmigen",
+  "gitChangeScope.description.approveAria": "Beschreibung für {label} genehmigen",
+  "gitChangeScope.description.apply": "Auf PR übernehmen",
+  "gitChangeScope.description.applyAria": "Beschreibung auf {label} übernehmen",
+  "gitChangeScope.description.error": "Die Beschreibungsaktion konnte nicht abgeschlossen werden.",
   "scope.budget.pressure.low": "Niedrig",
   "scope.budget.pressure.moderate": "Mittel",
   "scope.budget.pressure.high": "Hoch",
