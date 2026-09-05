@@ -228,3 +228,161 @@ describe("git delivery approval store", () => {
     ).toBeUndefined();
   });
 });
+
+// #3399: negative coverage for the "pr-description-apply" operation — the description service's own
+// `PrDescriptionApprovals` continuation mints and consumes through this SAME generic store, so a
+// claim minted for the description apply must be exactly as cross-operation-safe and collision-safe
+// as every other operation kind already proven above.
+describe("git delivery approval store — pr-description-apply (#3399)", () => {
+  const DESCRIPTION_BINDING: GitDeliveryApprovalBinding = {
+    projectId: "repo_abc123",
+    operation: "pr-description-apply",
+    runId: "run-a",
+    envelopeDigest: "a".repeat(64),
+    proposalId: "proposal-1",
+    command: {
+      kind: "pr-description-apply",
+      binding: {
+        repositoryId: "repo_abc123",
+        remoteDigest: "b".repeat(64),
+        repository: "owner/repo",
+        prNumber: 123,
+        prExternalId: "123",
+        baseRef: "main",
+        baseSha: "c".repeat(40),
+        headRepository: "owner/repo",
+        headRef: "feature",
+        headSha: "d".repeat(40),
+        isDraft: true,
+        snapshotDigest: "e".repeat(64),
+        draftDigest: "f".repeat(64),
+        renderingVersion: "1",
+        expectedBodyDigest: "0".repeat(64),
+        outsideRegionDigest: "1".repeat(64),
+        finalBodyDigest: "2".repeat(64),
+        providerUpdatedAt: "2026-09-05T00:00:00.000Z",
+      },
+    },
+  };
+
+  it("mints a claim redeemable exactly once for the exact bound proposal", () => {
+    const store = createInMemoryGitDeliveryApprovalStore();
+    const issued = store.issue({
+      binding: DESCRIPTION_BINDING,
+      approvedByUserId: "u-1",
+      nowMs: NOW,
+      ttlMs: 60_000,
+    });
+    const parsed = parseGitDeliveryApprovalRequest(issued.approval);
+    if (parsed?.kind !== "claim") throw new Error("expected claim");
+    expect(
+      resolveGitDeliveryApprovalRequirement(parsed, {
+        store,
+        binding: DESCRIPTION_BINDING,
+        nowMs: NOW + 1,
+      }),
+    ).toMatchObject({ required: true });
+    // Redeemed: a second attempt against the identical binding no longer matches.
+    expect(
+      resolveGitDeliveryApprovalRequirement(parsed, {
+        store,
+        binding: DESCRIPTION_BINDING,
+        nowMs: NOW + 2,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("cross-operation reuse: a claim minted for commit/push/pr never redeems a pr-description-apply binding with the identical proposalId/runId/envelopeDigest", () => {
+    for (const operation of ["commit", "push", "pr", "merge"] as const) {
+      const store = createInMemoryGitDeliveryApprovalStore();
+      const foreignBinding: GitDeliveryApprovalBinding = {
+        projectId: DESCRIPTION_BINDING.projectId,
+        operation,
+        runId: DESCRIPTION_BINDING.runId,
+        envelopeDigest: DESCRIPTION_BINDING.envelopeDigest,
+        proposalId: DESCRIPTION_BINDING.proposalId,
+        command: DESCRIPTION_BINDING.command,
+      };
+      const issued = store.issue({
+        binding: foreignBinding,
+        approvedByUserId: "u-1",
+        nowMs: NOW,
+        ttlMs: 60_000,
+      });
+      const parsed = parseGitDeliveryApprovalRequest(issued.approval);
+      if (parsed?.kind !== "claim") throw new Error("expected claim");
+      expect(
+        resolveGitDeliveryApprovalRequirement(parsed, {
+          store,
+          binding: DESCRIPTION_BINDING,
+          nowMs: NOW + 1,
+        }),
+      ).toBeUndefined();
+    }
+  });
+
+  it("canonical-hash collision: two proposals whose commands differ only in property declaration order never collide, and an identically-shaped command for a different proposalId never redeems", () => {
+    const store = createInMemoryGitDeliveryApprovalStore();
+    const reordered: GitDeliveryApprovalBinding = {
+      command: DESCRIPTION_BINDING.command,
+      envelopeDigest: DESCRIPTION_BINDING.envelopeDigest,
+      operation: DESCRIPTION_BINDING.operation,
+      projectId: DESCRIPTION_BINDING.projectId,
+      proposalId: DESCRIPTION_BINDING.proposalId,
+      runId: DESCRIPTION_BINDING.runId,
+    };
+    // canonicalise() is key-order-independent: reordering the same fields must still match.
+    const issued = store.issue({
+      binding: DESCRIPTION_BINDING,
+      approvedByUserId: "u-1",
+      nowMs: NOW,
+      ttlMs: 60_000,
+    });
+    const parsed = parseGitDeliveryApprovalRequest(issued.approval);
+    if (parsed?.kind !== "claim") throw new Error("expected claim");
+    expect(
+      resolveGitDeliveryApprovalRequirement(parsed, { store, binding: reordered, nowMs: NOW + 1 }),
+    ).toMatchObject({ required: true });
+
+    // A different proposalId for an otherwise byte-identical binding must never collide.
+    const store2 = createInMemoryGitDeliveryApprovalStore();
+    const issuedForOther = store2.issue({
+      binding: { ...DESCRIPTION_BINDING, proposalId: "proposal-2" },
+      approvedByUserId: "u-1",
+      nowMs: NOW,
+      ttlMs: 60_000,
+    });
+    const parsedForOther = parseGitDeliveryApprovalRequest(issuedForOther.approval);
+    if (parsedForOther?.kind !== "claim") throw new Error("expected claim");
+    expect(
+      resolveGitDeliveryApprovalRequirement(parsedForOther, {
+        store: store2,
+        binding: DESCRIPTION_BINDING,
+        nowMs: NOW + 1,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("rejects a binding that smuggles an extra operation-specific field (mergeMethod, closeIssue) before any match can succeed", () => {
+    const store = createInMemoryGitDeliveryApprovalStore();
+    const issued = store.issue({
+      binding: DESCRIPTION_BINDING,
+      approvedByUserId: "u-1",
+      nowMs: NOW,
+      ttlMs: 60_000,
+    });
+    const parsed = parseGitDeliveryApprovalRequest(issued.approval);
+    if (parsed?.kind !== "claim") throw new Error("expected claim");
+    const smuggled: GitDeliveryApprovalBinding = {
+      ...DESCRIPTION_BINDING,
+      command: {
+        ...(DESCRIPTION_BINDING.command as Record<string, unknown>),
+        mergeMethod: "squash",
+        closeIssue: true,
+      },
+    };
+    expect(
+      resolveGitDeliveryApprovalRequirement(parsed, { store, binding: smuggled, nowMs: NOW + 1 }),
+    ).toBeUndefined();
+  });
+});

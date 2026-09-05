@@ -60,6 +60,9 @@ const ALLOWED_CHATS_COLUMNS = new Set([
   "connected_scope_at",
   // Issue #200 persists the local knowledge scope selection on the chat row.
   "local_knowledge_scope_json",
+  // V28 (issue #3400): the third, sibling Git-change scope list — server-issued snapshot
+  // reference and safe metadata only (contract correction 2). No path, diff, or credential.
+  "git_change_scope_json",
   "created_at",
   "updated_at",
 ]);
@@ -178,6 +181,7 @@ const EXPECTED_TABLES = new Set([
   "chats",
   "coding_runtime_snapshots",
   "coding_runtime_ci_repair_budgets",
+  "coding_runtime_description_jobs",
   "git_journey_outcomes",
   "github_issue_reader_authorization",
   "memory_autonomy_policy",
@@ -366,6 +370,71 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
           "url",
           "owner",
         ]) {
+          expect(lower).not.toContain(forbidden);
+        }
+      }
+    } finally {
+      inspector.close();
+    }
+  });
+
+  // V28 (issue #3400) rebuilds the `relationships` table (SQLite cannot ALTER a table-level CHECK)
+  // to widen it for the new `git-change` object kind. This pins that the rebuild changed the CHECK
+  // only — same table name, same column set, same order — and introduced no credential-class field.
+  it("V28 relationships rebuild kept the exact pre-existing column set", () => {
+    const inspector = openMigratedSchema(join(tmpDir, "relationships.db"));
+    try {
+      expect(columnNames(inspector, "relationships")).toEqual([
+        "id",
+        "schema_version",
+        "workspace_scope_id",
+        "scope_kind",
+        "scope_coordinate",
+        "type",
+        "source_kind",
+        "source_id",
+        "target_kind",
+        "target_id",
+        "lifecycle",
+        "created_at",
+        "updated_at",
+        "etag",
+        "confidence",
+        "summary",
+      ]);
+      expect(columnNames(inspector, "relationship_lifecycle_history")).toEqual([
+        "id",
+        "relationship_id",
+        "from_state",
+        "to_state",
+        "occurred_at",
+        "summary",
+      ]);
+    } finally {
+      inspector.close();
+    }
+  });
+
+  // V29 (#3401) automatic description job: only identity digests/ids, exact revision SHAs, a
+  // monotonic version/CAS revision, a closed phase and one bounded validated JSON status — never a
+  // title, body, diff, prompt or provider payload.
+  it("V29 description job record has only bounded identity and a closed status column", () => {
+    const inspector = openMigratedSchema(join(tmpDir, "description-job.db"));
+    try {
+      expect(columnNames(inspector, "coding_runtime_description_jobs")).toEqual([
+        "run_id",
+        "remote_digest",
+        "base_sha",
+        "head_sha",
+        "generation_version",
+        "revision",
+        "phase",
+        "status_json",
+        "updated_at",
+      ]);
+      for (const col of columnNames(inspector, "coding_runtime_description_jobs")) {
+        const lower = col.toLowerCase();
+        for (const forbidden of [...FORBIDDEN_SUBSTRINGS, "title", "body", "diff", "prompt", "url"]) {
           expect(lower).not.toContain(forbidden);
         }
       }

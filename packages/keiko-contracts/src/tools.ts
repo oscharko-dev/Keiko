@@ -38,7 +38,7 @@ export interface NetworkGatewayPolicy {
   readonly port: number;
 }
 
-export type NetworkPolicy = "inherit" | "none" | NetworkGatewayPolicy;
+export type NetworkPolicy = "inherit" | "none";
 
 // Structural guard, not a coercion: true only for a value shaped exactly like a
 // `NetworkGatewayPolicy` — a loopback host, an in-range TCP port, and no other fields. A

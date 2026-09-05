@@ -751,6 +751,10 @@
       "types": "./dist/pr-description-application.d.ts",
       "import": "./dist/pr-description-application.js"
     },
+    "./runtime/workbench-description-status": {
+      "types": "./dist/workbench-description-status.d.ts",
+      "import": "./dist/workbench-description-status.js"
+    },
     "./runtime/pr-description-region": {
       "types": "./dist/pr-description-region.d.ts",
       "import": "./dist/pr-description-region.js"

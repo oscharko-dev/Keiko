@@ -816,7 +816,10 @@ function quarantineCorruptDb(target: string, cause?: unknown): void {
 //
 // FIXED, closed table-name list this package already owns — enumerated explicitly from
 // `schema.ts`'s own `CREATE TABLE` statements, never a dynamic `sqlite_master` walk. No migration
-// through v19 has ever dropped or renamed one of these tables.
+// through v19 has ever dropped or renamed one of these tables. The v28 migration (Issue #3400)
+// internally renames and rebuilds `relationships` and `relationship_lifecycle_history` to widen
+// the `relationships` CHECK constraint, but both tables exist under their ORIGINAL names once the
+// migration completes — this list needs no change for that rebuild.
 export const UI_STORE_FINGERPRINT_TABLES = [
   "projects",
   "chats",
@@ -829,6 +832,7 @@ export const UI_STORE_FINGERPRINT_TABLES = [
   "coding_runtime_snapshots",
   "coding_runtime_ci_repair_budgets",
   "git_journey_outcomes",
+  "coding_runtime_description_jobs",
   "memory_autonomy_policy",
   "github_issue_reader_authorization",
   "workspace_trust_records",

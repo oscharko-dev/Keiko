@@ -29,7 +29,6 @@
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { PrDescription } from "@oscharko-dev/keiko-model-gateway";
-import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { PR_DESCRIPTION_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 import type { GitPullRequestBodyAdapter } from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
@@ -51,10 +50,7 @@ import {
 } from "./requestGuards.js";
 import { gitDeliveryAuthorityGate } from "./requestPreparation.js";
 import { authorizeGitDeliveryModelEgress } from "./runBoundAuthority.js";
-import type {
-  GitDeliveryDescriptionAuthorityPort,
-  GitDeliveryDescriptionAuthorityScope,
-} from "./runBoundAuthority.js";
+import type { GitDeliveryDescriptionAuthorityScope } from "./runBoundAuthority.js";
 import { createPrDescriptionApplicationService } from "./prDescriptionService.js";
 import type {
   PrDescriptionApplicationService,
@@ -371,6 +367,69 @@ interface PreparedPrDescriptionRequest<V extends BaseFields> {
   readonly context: () => PrDescriptionContext | undefined;
 }
 
+// Builds the `context()` closure passed into the (possibly newly created) service: re-derives
+// admission fresh on every call, so a revoked or changed authority is observed by the SERVICE's own
+// `current()`/`stillAuthorized()` checks on the very next call — never a value cached from the
+// moment the route first admitted the request. Extracted purely to keep `prepare` under the
+// repo's max-lines-per-function bar (AGENTS.md §6) — no behavioral seam of its own.
+function descriptionContextProvider(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  request: BaseFields,
+  workspace: WorkspaceInfo,
+  correlationId: string,
+  logSink: ServerLogSink,
+  key: string,
+): () => PrDescriptionContext | undefined {
+  return (): PrDescriptionContext | undefined => {
+    const reAdmitted = admitDescription(ctx, deps, request, workspace, logSink);
+    if (!reAdmitted.allowed) return undefined;
+    return {
+      workspace,
+      repository: request.ownerAndRepo,
+      prNumber: request.prNumber,
+      accessScope: { key },
+      authorityDigest: reAdmitted.scope.authorityDigest,
+      correlationId,
+      ...(reAdmitted.scope.runId === undefined ? {} : { runId: reAdmitted.scope.runId }),
+      stillAuthorized: (): boolean =>
+        admitDescription(ctx, deps, request, workspace, logSink).allowed,
+    };
+  };
+}
+
+function serviceFor(
+  options: PrDescriptionRouteOptions,
+  deps: UiHandlerDeps,
+  seams: PrDescriptionRouteExecutionSeams,
+  workspace: WorkspaceInfo,
+  key: string,
+  contextProvider: () => PrDescriptionContext | undefined,
+): PrDescriptionApplicationService | undefined {
+  const cached = serviceCache.get(key);
+  if (cached !== undefined) return cached;
+  const built =
+    options.serviceFactory !== undefined
+      ? options.serviceFactory(contextProvider)
+      : createServiceFromDeps(deps, seams, workspace, contextProvider);
+  if (built === undefined) return undefined;
+  serviceCache.set(key, built);
+  pruneServiceCache();
+  return built;
+}
+
+function createServiceFromDeps(
+  deps: UiHandlerDeps,
+  seams: PrDescriptionRouteExecutionSeams,
+  workspace: WorkspaceInfo,
+  contextProvider: () => PrDescriptionContext | undefined,
+): PrDescriptionApplicationService | undefined {
+  const serviceOptions = buildServiceOptions(deps, seams, workspace, contextProvider);
+  return serviceOptions === undefined
+    ? undefined
+    : createPrDescriptionApplicationService(serviceOptions);
+}
+
 async function prepare<V extends BaseFields>(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -399,35 +458,17 @@ async function prepare<V extends BaseFields>(
   const admitted = admitDescription(ctx, deps, request, workspace, logSink);
   if (!admitted.allowed) return { ok: false, result: admitted.result };
   const key = cacheKey(request.projectId, request.ownerAndRepo, request.prNumber);
-  const contextProvider = (): PrDescriptionContext | undefined => {
-    const nowIso = new Date((seams.now ?? Date.now)()).toISOString();
-    const reAdmitted = admitDescription(ctx, deps, request, workspace, logSink);
-    if (!reAdmitted.allowed) return undefined;
-    return {
-      workspace,
-      repository: request.ownerAndRepo,
-      prNumber: request.prNumber,
-      accessScope: { key },
-      authorityDigest: reAdmitted.scope.authorityDigest,
-      correlationId,
-      ...(reAdmitted.scope.runId === undefined ? {} : { runId: reAdmitted.scope.runId }),
-      stillAuthorized: (): boolean =>
-        admitDescription(ctx, deps, request, workspace, logSink).allowed,
-      signal: undefined as AbortSignal | undefined,
-    };
-  };
-  let service = serviceCache.get(key);
-  if (service === undefined) {
-    if (options.serviceFactory !== undefined) {
-      service = options.serviceFactory(contextProvider);
-    } else {
-      const serviceOptions = buildServiceOptions(deps, seams, workspace, contextProvider);
-      if (serviceOptions === undefined) return { ok: false, result: unavailableService() };
-      service = createPrDescriptionApplicationService(serviceOptions);
-    }
-    serviceCache.set(key, service);
-    pruneServiceCache();
-  }
+  const contextProvider = descriptionContextProvider(
+    ctx,
+    deps,
+    request,
+    workspace,
+    correlationId,
+    logSink,
+    key,
+  );
+  const service = serviceFor(options, deps, seams, workspace, key, contextProvider);
+  if (service === undefined) return { ok: false, result: unavailableService() };
   return { ok: true, value: { value: request, workspace, service, context: contextProvider } };
 }
 

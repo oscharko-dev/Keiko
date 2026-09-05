@@ -44,8 +44,13 @@ export interface IsolatedRunPlan {
 
 // The decision for a single run:
 //   - passthrough: network "inherit" — run as-is, no isolation, networkEnforced false.
-//   - wrapped: network "none" with an enforcing backend — run the wrapped command.
-//   - fail-closed: network "none" but no enforcing backend — the caller MUST NOT run the command.
+//   - wrapped: network "none" with an enforcing backend, OR a valid gateway policy with a backend
+//     that can bind the child to exactly that loopback destination (macOS Seatbelt today) — run
+//     the wrapped command.
+//   - fail-closed: network "none" with no enforcing backend, OR a gateway policy on a platform
+//     with no backend that can reach the host's loopback gateway (Linux network-namespace/
+//     container isolation cannot bridge back to it; Windows has no backend at all) — the caller
+//     MUST NOT run the command.
 export type IsolatedRunDecision =
   | {
       readonly kind: "passthrough";

@@ -12,7 +12,10 @@ import {
   DEFAULT_GROUNDING_LIMITS,
   GROUNDING_LIMIT_CEILINGS,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { isCodeTaskGitCommitSha, isCodeTaskSha256Digest } from "@oscharko-dev/keiko-contracts";
+import {
+  isCodeTaskGitCommitSha,
+  isCodeTaskSha256Digest,
+} from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
 import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { redact } from "@oscharko-dev/keiko-security";
 import { pathIsDenied } from "../files-deny.js";
@@ -377,6 +380,8 @@ function decodeGitChangeScopeObject(raw: unknown): ChatGitChangeScope | undefine
     !isBoundedNonEmptyString(relationshipId, 256) ||
     !isCodeTaskSha256Digest(remoteDigest) ||
     !isBoundedNonEmptyString(comparisonLabel, 240) ||
+    !isBoundedNonEmptyString(baseRef, 512) ||
+    !isBoundedNonEmptyString(headRef, 512) ||
     !isSafeGitRefName(baseRef) ||
     !isSafeGitRefName(headRef) ||
     !isCodeTaskGitCommitSha(scope.baseSha) ||

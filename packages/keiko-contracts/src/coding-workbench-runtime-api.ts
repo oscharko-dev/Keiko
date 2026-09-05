@@ -40,6 +40,10 @@ import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
 import { isVerifiedCommitResult, type VerifiedCommitResult } from "./verified-commit.js";
 import { isDraftDeliveryRecord, type DraftDeliveryRecord } from "./draft-delivery.js";
 import { isReadinessSnapshot, type ReadinessSnapshot } from "./git-ci-readiness.js";
+import {
+  isWorkbenchDescriptionStatus,
+  type WorkbenchDescriptionStatus,
+} from "./workbench-description-status.js";
 
 /** Browser-level preference, deliberately not an adapter, model, profile, or endpoint selector. */
 export type CodingWorkbenchRuntimePreference = "managed-gateway" | "codex-subscription";
@@ -247,6 +251,13 @@ export interface CodingWorkbenchRuntimeSnapshot {
   readonly draftDelivery?: DraftDeliveryRecord | undefined;
   /** Last bounded CI observation. Its timestamp and head binding confer no execution authority. */
   readonly ciReadiness?: ReadinessSnapshot | undefined;
+  /**
+   * Present exactly when a stable succeeded head has an automatic description-draft attempt
+   * (#3401). No title, body, diff or model text ever crosses this boundary — see
+   * `WorkbenchDescriptionStatus`. Generation grants no remote-write authority: applying the draft
+   * still uses #3399's existing PR preview, policy and one-use approval.
+   */
+  readonly descriptionStatus?: WorkbenchDescriptionStatus | undefined;
 }
 
 export type CodingWorkbenchRuntimeStatus = CodingWorkbenchRuntimeSnapshot;
@@ -549,6 +560,7 @@ export function validateCodingWorkbenchRuntimeSnapshot(
       "verifiedCommitResult",
       "draftDelivery",
       "ciReadiness",
+      "descriptionStatus",
     ],
     "runtimeSnapshot",
   );
@@ -557,6 +569,7 @@ export function validateCodingWorkbenchRuntimeSnapshot(
   validateSnapshotVerifiedCommit(value, errors);
   validateSnapshotDraftDelivery(value, errors);
   validateSnapshotCiReadiness(value, errors);
+  validateSnapshotDescriptionStatus(value, errors);
   validateRuntimeResult(value.result, errors);
   if (
     value.result !== undefined &&
@@ -631,6 +644,22 @@ function validateSnapshotCiReadiness(snapshot: Record<string, unknown>, errors: 
     ].every(Boolean)
   )
     errors.push("ciReadiness must match the snapshot run and confirmed delivery target");
+}
+
+// The status can outlive the LATEST `verifiedCommitResult` shown on the snapshot (that field
+// reflects the most recent proposal attempt, which may be a later failed/blocked one, while the
+// description job binds the last SUCCESSFUL head — codingRuntimeVerifiedCommitAuthorityStore.ts /
+// epic #3384 correction 5), so only the run identity is cross-checked here.
+function validateSnapshotDescriptionStatus(snapshot: Record<string, unknown>, errors: string[]): void {
+  const status = snapshot.descriptionStatus;
+  if (status === undefined) return;
+  if (!isWorkbenchDescriptionStatus(status)) {
+    errors.push("descriptionStatus must be a closed durable description status");
+    return;
+  }
+  if (status.runId !== snapshot.runId) {
+    errors.push("descriptionStatus must match the snapshot run");
+  }
 }
 
 function validateRuntimeResult(value: unknown, errors: string[]): void {

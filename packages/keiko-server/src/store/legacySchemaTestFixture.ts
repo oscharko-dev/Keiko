@@ -20,6 +20,105 @@ export function restoreV13SchemaFixture(db: DatabaseSync): void {
   }
 
   db.exec(`
+    ALTER TABLE chats DROP COLUMN git_change_scope_json;
+    ALTER TABLE relationships RENAME TO relationships_v28;
+    DROP INDEX idx_relationships_source;
+    DROP INDEX idx_relationships_target;
+    DROP INDEX idx_relationships_type;
+    DROP INDEX idx_relationships_lifecycle;
+    DROP INDEX uniq_relationships_produces_evidence_source;
+    DROP INDEX uniq_relationships_starts_workflow_target;
+    CREATE TABLE relationships (
+      id                  TEXT NOT NULL PRIMARY KEY,
+      schema_version      TEXT NOT NULL,
+      workspace_scope_id  TEXT NOT NULL,
+      scope_kind          TEXT NOT NULL,
+      scope_coordinate    TEXT NOT NULL,
+      type                TEXT NOT NULL,
+      source_kind         TEXT NOT NULL,
+      source_id           TEXT NOT NULL,
+      target_kind         TEXT NOT NULL,
+      target_id           TEXT NOT NULL,
+      lifecycle           TEXT NOT NULL,
+      created_at          INTEGER NOT NULL,
+      updated_at          INTEGER NOT NULL,
+      etag                TEXT NOT NULL,
+      confidence          REAL,
+      summary             TEXT,
+      CHECK (
+        schema_version IN ('1')
+        AND type IN (
+          'reads-context','proposes-patch','uses-tool','starts-workflow',
+          'produces-evidence','references-document','depends-on'
+        )
+        AND lifecycle IN (
+          'draft','active','archived','superseded','revoked','blocked','stale'
+        )
+        AND scope_kind IN ('user','workspace','project','workflow','global')
+        AND source_kind IN (
+          'memory','capsule','capsule-set','workflow-run','evidence-run',
+          'workspace-path','chat','tool','patch-proposal',
+          'agent','connector','data-source','skill','mcp-tool'
+        )
+        AND target_kind IN (
+          'memory','capsule','capsule-set','workflow-run','evidence-run',
+          'workspace-path','chat','tool','patch-proposal',
+          'agent','connector','data-source','skill','mcp-tool'
+        )
+        AND created_at >= 0
+        AND updated_at >= created_at
+        AND (confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0))
+        AND (summary IS NULL OR length(summary) <= 240)
+      )
+    ) STRICT;
+    INSERT INTO relationships (
+      id, schema_version, workspace_scope_id, scope_kind, scope_coordinate, type,
+      source_kind, source_id, target_kind, target_id, lifecycle, created_at, updated_at,
+      etag, confidence, summary
+    )
+    SELECT
+      id, schema_version, workspace_scope_id, scope_kind, scope_coordinate, type,
+      source_kind, source_id, target_kind, target_id, lifecycle, created_at, updated_at,
+      etag, confidence, summary
+    FROM relationships_v28;
+    CREATE INDEX idx_relationships_source
+      ON relationships(workspace_scope_id, source_kind, source_id);
+    CREATE INDEX idx_relationships_target
+      ON relationships(workspace_scope_id, target_kind, target_id);
+    CREATE INDEX idx_relationships_type
+      ON relationships(workspace_scope_id, type, lifecycle);
+    CREATE INDEX idx_relationships_lifecycle
+      ON relationships(workspace_scope_id, lifecycle, updated_at);
+    CREATE UNIQUE INDEX uniq_relationships_produces_evidence_source
+      ON relationships(workspace_scope_id, source_kind, source_id)
+      WHERE type = 'produces-evidence' AND lifecycle IN ('draft','active','archived');
+    CREATE UNIQUE INDEX uniq_relationships_starts_workflow_target
+      ON relationships(workspace_scope_id, target_kind, target_id)
+      WHERE type = 'starts-workflow' AND lifecycle IN ('draft','active','archived');
+    CREATE TABLE relationship_lifecycle_history_v13 (
+      id              TEXT NOT NULL PRIMARY KEY,
+      relationship_id TEXT NOT NULL REFERENCES relationships(id) ON DELETE CASCADE,
+      from_state      TEXT NOT NULL,
+      to_state        TEXT NOT NULL,
+      occurred_at     INTEGER NOT NULL,
+      summary         TEXT,
+      CHECK (
+        from_state IN ('draft','active','archived','superseded','revoked','blocked','stale')
+        AND to_state IN ('draft','active','archived','superseded','revoked','blocked','stale')
+        AND occurred_at >= 0
+        AND (summary IS NULL OR length(summary) <= 240)
+      )
+    ) STRICT;
+    INSERT INTO relationship_lifecycle_history_v13 (
+      id, relationship_id, from_state, to_state, occurred_at, summary
+    )
+    SELECT id, relationship_id, from_state, to_state, occurred_at, summary
+    FROM relationship_lifecycle_history;
+    DROP TABLE relationship_lifecycle_history;
+    ALTER TABLE relationship_lifecycle_history_v13 RENAME TO relationship_lifecycle_history;
+    CREATE INDEX idx_relationship_lifecycle_relationship
+      ON relationship_lifecycle_history(relationship_id, occurred_at);
+    DROP TABLE relationships_v28;
     DROP TABLE git_journey_outcomes;
     DROP TABLE coding_runtime_ci_repair_budgets;
     ALTER TABLE coding_runtime_snapshots DROP COLUMN ci_observation_revision;

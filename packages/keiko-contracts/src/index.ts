@@ -5053,6 +5053,15 @@ export type {
 } from "./pr-description-application.js";
 
 export type {
+  WorkbenchDescriptionStatus,
+  WorkbenchDescriptionState,
+  WorkbenchDescriptionReason,
+  WORKBENCH_DESCRIPTION_STATUS_SCHEMA_VERSION,
+  WORKBENCH_DESCRIPTION_REASON_STATES,
+  isWorkbenchDescriptionStatus,
+} from "./workbench-description-status.js";
+
+export type {
   GitJourneyBinding,
   GitJourneyRemoteFacts,
   GitJourneyReason,

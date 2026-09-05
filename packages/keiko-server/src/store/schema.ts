@@ -8,7 +8,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 28;
+export const SCHEMA_VERSION = 29;
 
 interface Migration {
   readonly version: number;
@@ -771,6 +771,17 @@ CREATE TABLE git_journey_outcomes (
 const V28_SQL = `
 ALTER TABLE relationships RENAME TO relationships_v27;
 
+-- Index names are unique DATABASE-WIDE, not per-table. The rename above carries every index
+-- bound to "relationships" over to "relationships_v27" under its ORIGINAL name (index names never
+-- gain the parent table's new name), so each must be dropped before a same-named index can be
+-- created on the new "relationships" table below.
+DROP INDEX idx_relationships_source;
+DROP INDEX idx_relationships_target;
+DROP INDEX idx_relationships_type;
+DROP INDEX idx_relationships_lifecycle;
+DROP INDEX uniq_relationships_produces_evidence_source;
+DROP INDEX uniq_relationships_starts_workflow_target;
+
 CREATE TABLE relationships (
   id                  TEXT NOT NULL PRIMARY KEY,
   schema_version      TEXT NOT NULL,
@@ -877,6 +888,33 @@ ALTER TABLE chats ADD COLUMN git_change_scope_json TEXT
   CHECK (git_change_scope_json IS NULL OR (length(git_change_scope_json) <= 32768 AND json_valid(git_change_scope_json)));
 `;
 
+// #3401: the durable, deduplicated automatic-description job record, keyed by run so a restart or a
+// repeated terminal-success signal for the same stable head never dispatches a second generation
+// attempt (AC "no duplicate model work"). `revision` is the CAS guard every write bumps by exactly
+// one; a write whose expected revision has moved underneath it is rejected by the caller before it
+// ever reaches this table (codingRuntimeDescriptionJobStore.ts). `phase = 'dispatched'` marks an
+// in-flight attempt with no `status_json` yet; a row still `dispatched` after a process restart is
+// reconciled to a closed `blocked` status by the same store, never silently resumed or lost. A new
+// head for the same run REPLACES this row (supersedes the prior attempt) rather than appending a
+// second one — the run's description status is always exactly one durable fact, matching how
+// `draft_delivery_record` and `ci_readiness_record` are each one fact per run. Content-free: no
+// title, body, diff, prompt or provider payload — see `WorkbenchDescriptionStatus`.
+const V29_SQL = `
+CREATE TABLE coding_runtime_description_jobs (
+  run_id TEXT NOT NULL CHECK (length(run_id) BETWEEN 1 AND 128),
+  remote_digest TEXT NOT NULL CHECK (length(remote_digest) = 64),
+  base_sha TEXT NOT NULL CHECK (length(base_sha) IN (40, 64)),
+  head_sha TEXT NOT NULL CHECK (length(head_sha) IN (40, 64)),
+  generation_version INTEGER NOT NULL CHECK (generation_version >= 1),
+  revision INTEGER NOT NULL CHECK (revision >= 0),
+  phase TEXT NOT NULL CHECK (phase IN ('dispatched', 'settled')),
+  status_json TEXT CHECK (status_json IS NULL OR (length(status_json) <= 4096 AND json_valid(status_json))),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (run_id),
+  CHECK ((phase = 'dispatched') = (status_json IS NULL))
+) STRICT;
+`;
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
 // change.
@@ -909,6 +947,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 26, sql: V26_SQL },
   { version: 27, sql: V27_SQL },
   { version: 28, sql: V28_SQL },
+  { version: 29, sql: V29_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {
