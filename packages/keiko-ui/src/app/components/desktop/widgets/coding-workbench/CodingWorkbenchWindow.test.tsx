@@ -1328,6 +1328,46 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.queryByText("Research destination")).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["ci-observe", "CI status check"],
+    ["connector-read", "Connector read"],
+  ] as const)(
+    "3941816393: labels a governed %s approval and admits it without a destination review",
+    (actionKind, label) => {
+      researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null, retry: vi.fn() });
+      renderWorkbench(
+        liveState({
+          run: {
+            status: "ready",
+            error: null,
+            value: snapshot({
+              state: "awaiting-approval",
+              runId: "run-1",
+              pendingPermission: {
+                requestId: "governed-bounded-read-1",
+                kind: "command-execution",
+                actionClass: "command-execution",
+                reasonCode: "approval-required",
+                actionKind,
+                scopeLabel: "workspace-scope",
+                risk: "high",
+                policyReason: "approval-required",
+                commandLabel: actionKind,
+                expiresAt: "2026-07-13T12:05:00.000Z",
+              },
+            }),
+          },
+        }),
+      );
+
+      expect(screen.getByText(label)).toBeInTheDocument();
+      // Neither maps to "network-egress", so no destination-review coupling applies and the
+      // approve control is not blocked waiting on evidence it has no reader for (3941816393).
+      expect(screen.queryByText("Research destination")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Approve once" })).toBeEnabled();
+    },
+  );
+
   it("#2802: shows the files and magnitude of the edit the operator is approving", async () => {
     approvalReviewHookMock.mockReturnValue({
       status: "ready",

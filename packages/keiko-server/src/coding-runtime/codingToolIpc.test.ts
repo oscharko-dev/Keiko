@@ -237,7 +237,12 @@ describe("coding tool IPC approval proofs", () => {
   it("still admits an egress request with no approvalProof field defined", () => {
     // #3941816393: egress deliberately never gained an approvalProof (only connector did) --
     // pinned so a future shared refactor of simpleNamedRequest cannot silently widen it.
-    const request = { action: "egress", target: "https://example.test", actionId: "e-1", idempotencyKey: "e-1" };
+    const request = {
+      action: "egress",
+      target: "https://example.test",
+      actionId: "e-1",
+      idempotencyKey: "e-1",
+    };
     expect(parseCodingToolRequest(JSON.stringify(request), 262_144)).toEqual(request);
     expect(
       parseCodingToolRequest(JSON.stringify({ ...request, approvalProof: proof }), 262_144),
@@ -349,7 +354,9 @@ describe("coding tool IPC CI observation (#3388)", () => {
 
   it("admits forceFresh alongside an approvalProof (3941816393)", () => {
     const proof = { approvalId: "ci-1", approvalDigest: "b".repeat(64) };
-    expect(parseCodingToolRequest(ciBody({ forceFresh: true, approvalProof: proof }), 262_144)).toEqual({
+    expect(
+      parseCodingToolRequest(ciBody({ forceFresh: true, approvalProof: proof }), 262_144),
+    ).toEqual({
       action: "git",
       operation: "ci",
       actionId: "ci-1",

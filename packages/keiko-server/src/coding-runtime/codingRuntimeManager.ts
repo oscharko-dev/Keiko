@@ -3038,11 +3038,9 @@ function supervisedMutationEvent(
  * branches, so a future addition to CodingWorkbenchSupervisedActionKind cannot silently fall
  * through this gate the way "ci-observe"/"connector-read" previously did.
  */
-const TOOL_APPROVAL_BRIDGE_ACTION_KINDS: ReadonlySet<CodingWorkbenchSupervisedActionKind> = new Set([
-  "verification-command",
-  "ci-observe",
-  "connector-read",
-]);
+const TOOL_APPROVAL_BRIDGE_ACTION_KINDS: ReadonlySet<CodingWorkbenchSupervisedActionKind> = new Set(
+  ["verification-command", "ci-observe", "connector-read"],
+);
 
 // Duplicates codingToolApprovalBridge.ts's private CI_OBSERVATION_TARGET_ID: that file is owned by
 // another concurrent change and does not export it. Needs: export the constant there so this

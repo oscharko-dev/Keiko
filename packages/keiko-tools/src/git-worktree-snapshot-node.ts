@@ -324,17 +324,22 @@ async function repositoryHasPromisorRemote(ctx: ReadContext): Promise<boolean> {
 // reading of git's config-value grammar instead of two independent parsers that can silently drift
 // apart — exactly reviewer 3941943601's failure mode.
 export function gitConfigIndicatesPromisorRemote(getRegexpStdout: string): boolean {
+  // Deliberately NOT `.trim()`-ed as a whole blob first: `git config --get-regexp` prints an
+  // explicit empty-string value (`git config remote.origin.promisor ""`) as the key followed by a
+  // single trailing space and nothing else — trimming the blob (or the line) would erase exactly
+  // the space that distinguishes that FALSE value from a bare key's TRUE. Splitting on "\n" and
+  // dropping only the wholly-empty trailing entry (from the final newline) preserves it.
   return getRegexpStdout
-    .trim()
     .split("\n")
+    .filter((line) => line.length > 0)
     .some((line) => isPromisorRiskConfigLine(line));
 }
 
-function isPromisorRiskConfigLine(line: string): boolean {
-  const trimmed = line.trim();
-  if (trimmed.length === 0) return false;
-  const spaceIndex = trimmed.indexOf(" ");
-  const key = (spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex)).toLowerCase();
+function isPromisorRiskConfigLine(rawLine: string): boolean {
+  const line = rawLine.replace(/^\s+/u, "");
+  if (line.length === 0) return false;
+  const spaceIndex = line.indexOf(" ");
+  const key = (spaceIndex === -1 ? line : line.slice(0, spaceIndex)).toLowerCase();
   // A configured partial-clone filter makes the remote a promisor remote to git on its own, with
   // no `promisor` key required — the filter spec (its value) carries no boolean meaning.
   if (key.endsWith(".partialclonefilter")) return true;
@@ -343,7 +348,7 @@ function isPromisorRiskConfigLine(line: string): boolean {
   // value at all is true; explicit "yes"/"on"/"true"/"1" (case-insensitive) are true; anything else
   // (including "no"/"off"/"false"/"0"/empty) is false.
   if (spaceIndex === -1) return true;
-  return /^(?:true|yes|on|1)$/iu.test(trimmed.slice(spaceIndex + 1).trim());
+  return /^(?:true|yes|on|1)$/iu.test(line.slice(spaceIndex + 1).replace(/\r$/u, ""));
 }
 
 // The version probe is MEMOIZED across every future call on this spawn function (below), so it

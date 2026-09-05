@@ -493,7 +493,8 @@ function simpleNamedRequest(
   const identity = requestIdentity(value);
   if (identity === undefined) return undefined;
   if (action === "egress") {
-    return hasExactKeys(value, ["action", "actionId", "idempotencyKey", key]) && nonEmpty(value[key])
+    return hasExactKeys(value, ["action", "actionId", "idempotencyKey", key]) &&
+      nonEmpty(value[key])
       ? { ...identity, action, target: value[key] }
       : undefined;
   }
@@ -543,7 +544,13 @@ function ciRequest(
     ...(approvalProof.kind === "present" ? { approvalProof: approvalProof.proof } : {}),
   };
   if (!Object.hasOwn(value, "forceFresh"))
-    return hasAllowedKeys(value, ["action", "actionId", "idempotencyKey", "operation", "approvalProof"])
+    return hasAllowedKeys(value, [
+      "action",
+      "actionId",
+      "idempotencyKey",
+      "operation",
+      "approvalProof",
+    ])
       ? base
       : undefined;
   return hasAllowedKeys(value, [

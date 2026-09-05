@@ -11,10 +11,13 @@ import { dirname, join } from "node:path";
 import { gitEnv } from "@oscharko-dev/keiko-git";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { recordingSpawn } from "./_support.js";
+import { nodeSpawnFn, type SpawnFn } from "./exec.js";
 import {
   GIT_WORKTREE_READ_COMMAND_RULES,
   GitLazyFetchGuardUnsupportedError,
   GitWorktreeReadError,
+  ensureGitLazyFetchGuardSupported,
+  gitConfigIndicatesPromisorRemote,
   readGitRemoteAliases,
   readGitRemoteUrl,
   readGitPushRemoteUrls,
@@ -197,6 +200,147 @@ describe("lazy-fetch guard: version-gated, fail-closed for an at-risk (promisor)
     spawn.child.emit("close", 0, null);
     expect(await pending).toEqual(["origin"]);
     expect(spawn.calls()[2]?.args).toEqual(["remote"]);
+  });
+});
+
+// Real `nodeSpawnFn` for every invocation, but each subcommand is recorded first — the definitive
+// signal for "was promisor risk (re)detected", since `probeGitVersionGuardSupport`'s `version`
+// probe is reached ONLY when `repositoryHasPromisorRemote` judged the repository at risk.
+function recordingRealSpawn(): {
+  readonly fn: SpawnFn;
+  readonly subcommands: () => readonly string[];
+} {
+  const subcommands: string[] = [];
+  const fn: SpawnFn = (command, args, options) => {
+    subcommands.push(args[0] ?? "");
+    return nodeSpawnFn(command, args, options);
+  };
+  return { fn, subcommands: () => subcommands };
+}
+
+// Real git for everything, except the FIRST `git version` invocation fails synchronously — the
+// exact shape of a workspace-local spawn failure (e.g. ENOTDIR) reviewer 3941928444 reproduced.
+// Every later call, including a later `version` probe, reaches the real binary.
+function realSpawnFailingVersionProbeOnce(): SpawnFn {
+  let versionCalls = 0;
+  return (command, args, options) => {
+    if (args[0] === "version") {
+      versionCalls += 1;
+      if (versionCalls === 1) throw new Error("ENOTDIR: not a directory");
+    }
+    return nodeSpawnFn(command, args, options);
+  };
+}
+
+describe("lazy-fetch guard: promisor detection matches git's effective configuration, and neither risk nor a failed probe goes stale", () => {
+  it("treats `partialclonefilter` alone as a promisor remote, with no `promisor` key set at all (reviewer 3941943601)", async () => {
+    git(["remote", "add", "origin", "https://example.invalid/repo.git"]);
+    git(["config", "remote.origin.partialclonefilter", "blob:none"]);
+    const rec = recordingRealSpawn();
+    await ensureGitLazyFetchGuardSupported({ ...deps(), spawn: rec.fn });
+    // A version probe runs ONLY when the repository is judged at risk — proof that
+    // `partialclonefilter` alone was enough, matching git's own promisor-remote.c.
+    expect(rec.subcommands().filter((s) => s === "version")).toHaveLength(1);
+  });
+
+  it("treats a bare `remote.<name>.promisor` key (no `=`) as true, per git's config boolean grammar (reviewer 3941943601)", async () => {
+    git(["remote", "add", "origin", "https://example.invalid/repo.git"]);
+    git(["config", "remote.origin.promisor", "true"]);
+    // Rewrite the freshly written explicit `= true` line into git's own legal bare-key shape (an
+    // implicit true with no value at all) — a real, on-disk config file, not a synthetic string
+    // handed straight to a parser under test.
+    const configPath = join(root, ".git", "config");
+    writeFileSync(
+      configPath,
+      readFileSync(configPath, "utf8").replace("promisor = true\n", "promisor\n"),
+      "utf8",
+    );
+    expect(git(["config", "--get-regexp", String.raw`^remote\..*\.promisor$`])).toBe(
+      "remote.origin.promisor\n",
+    );
+    const rec = recordingRealSpawn();
+    await ensureGitLazyFetchGuardSupported({ ...deps(), spawn: rec.fn });
+    expect(rec.subcommands().filter((s) => s === "version")).toHaveLength(1);
+  });
+
+  it("honours an `include.path` setting promisor risk, unlike the old `--local`-scoped read (reviewer 3941943601)", async () => {
+    git(["remote", "add", "origin", "https://example.invalid/repo.git"]);
+    const includeDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-include-")));
+    scratchDirs.push(includeDir);
+    const includePath = join(includeDir, "promisor.gitconfig");
+    writeFileSync(includePath, '[remote "origin"]\n\tpromisor = true\n', "utf8");
+    git(["config", "--add", "include.path", includePath]);
+    // RED proof, on this SAME repository: the guard's OLD `--local`-scoped read cannot see an
+    // `include.path` at all — it is genuinely blind here, not merely differently parsed.
+    expect(() =>
+      execFileSync("git", ["config", "--local", "--get-regexp", String.raw`^remote\..*\.promisor$`], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    ).toThrow();
+    const rec = recordingRealSpawn();
+    await ensureGitLazyFetchGuardSupported({ ...deps(), spawn: rec.fn });
+    expect(rec.subcommands().filter((s) => s === "version")).toHaveLength(1);
+  });
+
+  it("re-evaluates promisor risk on every call — an earlier safe verdict never authorizes a later, riskier one (reviewer 3941943603)", async () => {
+    git(["remote", "add", "origin", "https://example.invalid/repo.git"]);
+    const rec = recordingRealSpawn();
+    const readerDeps = { ...deps(), spawn: rec.fn };
+    await ensureGitLazyFetchGuardSupported(readerDeps);
+    // No promisor remote yet: admitted with only the config probe, no version check needed.
+    expect(rec.subcommands()).toEqual(["config"]);
+    git(["config", "remote.origin.promisor", "true"]);
+    await ensureGitLazyFetchGuardSupported(readerDeps);
+    // The SAME reader deps, the SAME spawn function — risk was still re-checked, not replayed
+    // from the first call's safe verdict.
+    expect(rec.subcommands().slice(1)).toEqual(["config", "version"]);
+  });
+
+  it("evicts a failed git-version probe instead of caching it forever (reviewer 3941928444)", async () => {
+    git(["remote", "add", "origin", "https://example.invalid/repo.git"]);
+    git(["config", "remote.origin.promisor", "true"]);
+    const readerDeps = { ...deps(), spawn: realSpawnFailingVersionProbeOnce() };
+    await expect(ensureGitLazyFetchGuardSupported(readerDeps)).rejects.toBeInstanceOf(
+      GitLazyFetchGuardUnsupportedError,
+    );
+    // A second, healthy call on the SAME spawn function must re-probe and succeed: the first
+    // probe's spawn failure is indeterminate, not a durable "guard unsupported" fact.
+    await expect(ensureGitLazyFetchGuardSupported(readerDeps)).resolves.toBeUndefined();
+  });
+});
+
+describe("gitConfigIndicatesPromisorRemote", () => {
+  it("matches an explicit `promisor` value and its boolean-true synonyms", () => {
+    for (const value of ["true", "yes", "on", "1", "TRUE", "On"]) {
+      expect(gitConfigIndicatesPromisorRemote(`remote.origin.promisor ${value}\n`)).toBe(true);
+    }
+  });
+
+  it("rejects an explicit false spelling, an empty value, and an unrelated remote key", () => {
+    for (const value of ["false", "no", "off", "0"]) {
+      expect(gitConfigIndicatesPromisorRemote(`remote.origin.promisor ${value}\n`)).toBe(false);
+    }
+    // git prints an explicit empty-string value as the key, ONE trailing space, then nothing —
+    // the exact shape `git config remote.origin.promisor ""` produces.
+    expect(gitConfigIndicatesPromisorRemote("remote.origin.promisor \n")).toBe(false);
+    expect(gitConfigIndicatesPromisorRemote("remote.origin.url https://example.invalid/x.git\n")).toBe(
+      false,
+    );
+  });
+
+  it("treats a bare key with no value at all as true", () => {
+    expect(gitConfigIndicatesPromisorRemote("remote.origin.promisor\n")).toBe(true);
+  });
+
+  it("treats a configured partialclonefilter as promisor risk regardless of its own value", () => {
+    expect(gitConfigIndicatesPromisorRemote("remote.origin.partialclonefilter blob:none\n")).toBe(
+      true,
+    );
+  });
+
+  it("returns false for empty output", () => {
+    expect(gitConfigIndicatesPromisorRemote("")).toBe(false);
   });
 });
 
