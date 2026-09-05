@@ -22,6 +22,7 @@ import type { GitProcessResult, GitProcessRunner } from "../gitRoutes.js";
 import { createHandleSyncExecute, createHandleSyncPreview } from "./syncRoutes.js";
 import type { GitDeliverySyncSeams } from "./syncExecution.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
+import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 
 const FETCH_PREVIEW = "/api/git-delivery/fetch/preview";
 const FETCH_EXECUTE = "/api/git-delivery/fetch/execute";
@@ -714,6 +715,112 @@ describe("pull execute — outcomes", () => {
     const body = res.body as GitSyncExecuteResponse;
     expect(body.status).toBe("detached-head");
     expect(scripted.calls()).toEqual(["status", "remote"]);
+  });
+});
+
+// ─── admission redemption below autonomous-delivery (final-audit F2 repair, #3390) ────────────────
+//
+// Before this fix, fetch/pull below `autonomous-delivery` were the one gap `deliveryApprovalDeferred`
+// could not close: unlike push/pr/merge/commit, they have no `GitDeliveryActionKind` / kernel policy
+// pack of their own to defer approval enforcement to (syncExecution.ts's header comment), so the
+// coarse admission gate's "approval-required" disposition was permanently unredeemable for them.
+// Redeemed the SAME way `localMutationRoutes.ts` redeems local mutations: a non-consuming peek
+// against a claim bound to `{projectId, operation, command}` (no run identity), minted directly
+// through the approval store (there is no dedicated `/approve` HTTP route for fetch/pull, exactly
+// like local mutations). FAILING BEFORE THE FIX: every case in the first `it.each` below returned
+// 403 GIT_DELIVERY_AUTHORITY_DENIED at `gitDeliveryAuthorityGate`, never reaching `runSyncExecute`
+// — reproduced by temporarily dropping this describe's `approval`/`approvalStore`/`approvalBinding`
+// wiring from `syncAuthorityGate` and rerunning (see the item's report for the exact command).
+
+describe("sync execute — admission redemption below autonomous-delivery", () => {
+  const MODES = ["governed-assist", "supervised-coding"] as const;
+  const OPERATIONS = ["fetch", "pull"] as const;
+  const CASES = MODES.flatMap((mode) => OPERATIONS.map((operation) => [mode, operation] as const));
+
+  function pathFor(operation: (typeof OPERATIONS)[number]): string {
+    return operation === "fetch" ? FETCH_EXECUTE : PULL_EXECUTE;
+  }
+
+  it.each(CASES)("mints and consumes a %s approval end to end at %s", async (mode, operation) => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const issued = approvalStore.issue({
+      binding: { projectId, operation, command: { kind: operation, remote: undefined } },
+      approvedByUserId: "local-operator",
+      nowMs: 1_700_000_000_000,
+    });
+    const scripted = scriptedRunner({
+      status: ok(porcelain({ upstream: "origin/main" })),
+      fetch: ok(""),
+      pull: ok("Already up to date.\n"),
+    });
+    const handler = createHandleSyncExecute(operation, {
+      execution: { runner: scripted.runner, now: () => 1_700_000_000_000, approvalStore },
+    });
+    const modeDeps = deps({
+      gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId, () => projectId, mode),
+    });
+    const res = await handler(
+      ctxFor(pathFor(operation), syncBody({ approval: issued.approval })),
+      modeDeps,
+    );
+    expect(res.status).toBe(200);
+    expect((res.body as GitSyncExecuteResponse).operation).toBe(operation);
+    expect(scripted.calls()).toContain(operation);
+  });
+
+  it.each(CASES)(
+    "still returns approval-required (never mode-denied) at %s for %s when execute carries no approval",
+    async (mode, operation) => {
+      const scripted = scriptedRunner({});
+      const handler = createHandleSyncExecute(operation, {
+        execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
+      });
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId, () => projectId, mode),
+      });
+      const res = await handler(ctxFor(pathFor(operation), syncBody()), modeDeps);
+      expect(res.status).toBe(403);
+      expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+      expect(scripted.calls()).toEqual([]);
+    },
+  );
+
+  it("does not let a claim minted for fetch redeem a pull (bound to the exact operation)", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const issued = approvalStore.issue({
+      binding: { projectId, operation: "fetch", command: { kind: "fetch", remote: undefined } },
+      approvedByUserId: "local-operator",
+      nowMs: 1_700_000_000_000,
+    });
+    const scripted = scriptedRunner({});
+    const handler = createHandleSyncExecute("pull", {
+      execution: { runner: scripted.runner, now: () => 1_700_000_000_000, approvalStore },
+    });
+    const modeDeps = deps({
+      gitDeliveryAuthority: permittedGitDeliveryAuthority(
+        () => projectId,
+        () => projectId,
+        "governed-assist",
+      ),
+    });
+    const res = await handler(
+      ctxFor(PULL_EXECUTE, syncBody({ approval: issued.approval })),
+      modeDeps,
+    );
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+    expect(scripted.calls()).toEqual([]);
+  });
+
+  it("autonomous-delivery still executes without any approval (unaffected by the redemption wiring)", async () => {
+    const scripted = scriptedRunner({ fetch: ok("") });
+    const handler = createHandleSyncExecute("fetch", {
+      execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
+    });
+    const res = await handler(ctxFor(FETCH_EXECUTE, syncBody()), deps());
+    expect(res.status).toBe(200);
+    expect((res.body as GitSyncExecuteResponse).status).toBe("succeeded");
+    expect(scripted.calls()).toContain("fetch");
   });
 });
 

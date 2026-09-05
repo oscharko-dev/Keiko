@@ -25,14 +25,27 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 // merge, pr-mark-ready, pr-description-apply all already enforce this unconditionally -- see
 // policyPackMintability.ts), so the coarse gate does not need a second, redundant claim; (2) a
 // non-consuming peek (`matches`) against the SAME per-operation claim the route already parses from
-// its own request body, for operations without such downstream enforcement (local-mutation). Both
-// reuse the existing per-operation claim shapes below; neither needs a new token kind.
+// its own request body, for operations without such downstream enforcement (local-mutation, and —
+// final-audit F2 repair — fetch/pull, which are bounded network operations with no `GitDeliveryActionKind`
+// / kernel policy pack of their own to defer to; see syncRoutes.ts). Both reuse the existing
+// per-operation claim shapes below; neither needs a new token kind.
 // "pr-mark-ready" (#3389, epic #3384 correction 7): the draft->ready transition, deliberately a
 // SEPARATE operation from "pr" so the generic pr-update admission (convertFromDraft) can never
 // redeem it — the bound command carries the exact facts (repository, PR identity, base/head SHAs,
 // readiness digest, transition-payload digest) re-verified immediately before execution.
+// "fetch" / "pull" (final-audit F2 repair, #3390): bound to `{projectId, operation, command}` only —
+// no run identity — mirroring "local-mutation" exactly, since either operation is admitted via the
+// SAME non-consuming-peek-then-consume mechanism (syncRoutes.ts), not a dedicated mint/approve route.
 export type GitDeliveryApprovalOperation =
-  "local-mutation" | "commit" | "push" | "pr" | "merge" | "pr-description-apply" | "pr-mark-ready";
+  | "local-mutation"
+  | "commit"
+  | "push"
+  | "pr"
+  | "merge"
+  | "pr-description-apply"
+  | "pr-mark-ready"
+  | "fetch"
+  | "pull";
 
 export interface GitDeliveryApprovalBinding {
   readonly projectId: string;

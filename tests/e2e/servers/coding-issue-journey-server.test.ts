@@ -6,14 +6,20 @@
 // environment string.
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { SESSION_PAIRING_LAUNCHER_SECRET_ENV } from "@oscharko-dev/keiko-server";
 
-import { defaultUiStaticRoot, launchedEnv } from "./coding-issue-journey-server.mjs";
+import {
+  defaultUiStaticRoot,
+  launchedEnv,
+  resolveLauncherSecret,
+} from "./coding-issue-journey-server.mjs";
 
 describe("launchedEnv", () => {
   it("threads the resolved spend budget into the launched process env", () => {
     const result = launchedEnv(
       { PATH: "/usr/bin", KEIKO_QUALIFICATION_SPEND_BUDGET_USD: "bogus" },
       25,
+      "a-resolved-launcher-secret",
     );
     expect(result.KEIKO_QUALIFICATION_SPEND_BUDGET_USD).toBe("25");
     expect(result.PATH).toBe("/usr/bin");
@@ -21,8 +27,44 @@ describe("launchedEnv", () => {
 
   it("does not mutate the base env", () => {
     const base = { KEIKO_QUALIFICATION_SPEND_BUDGET_USD: "10" };
-    launchedEnv(base, 40);
+    launchedEnv(base, 40, "a-resolved-launcher-secret");
     expect(base.KEIKO_QUALIFICATION_SPEND_BUDGET_USD).toBe("10");
+  });
+
+  // Live-run bug: the real Coding Workbench reported "Workbench is not paired" because this
+  // harness never minted a launcher pairing attestation, and it never could -- the launched
+  // `keiko ui` process never received a launcher secret under the key the real pairing port
+  // reads. Threading it under `SESSION_PAIRING_LAUNCHER_SECRET_ENV` (imported from
+  // `@oscharko-dev/keiko-server`, the SAME producer the pairing port itself exports the key
+  // from -- never a restated literal) is what makes a minted attestation verifiable at all.
+  it("threads the resolved launcher secret under the real pairing port's env key", () => {
+    const result = launchedEnv({ PATH: "/usr/bin" }, 10, "resolved-secret-value");
+    expect(result[SESSION_PAIRING_LAUNCHER_SECRET_ENV]).toBe("resolved-secret-value");
+  });
+});
+
+describe("resolveLauncherSecret", () => {
+  it("uses the operator-provided secret when present", () => {
+    expect(
+      resolveLauncherSecret({ KEIKO_QUALIFICATION_LAUNCHER_SECRET: "operator-secret-value" }),
+    ).toBe("operator-secret-value");
+  });
+
+  it("generates a sufficiently long secret when none is configured, never a fixed fallback", () => {
+    const first = resolveLauncherSecret({});
+    const second = resolveLauncherSecret({});
+    expect(first.length).toBeGreaterThanOrEqual(32);
+    expect(second.length).toBeGreaterThanOrEqual(32);
+    // Never reuses one hardcoded value across invocations -- unlike the scripted fixture servers'
+    // shared constant secret, this harness launches the REAL product, so a fixed secret would be a
+    // standing pairing credential against it.
+    expect(first).not.toBe(second);
+  });
+
+  it("treats an empty configured value as absent rather than pairing with an empty secret", () => {
+    expect(
+      resolveLauncherSecret({ KEIKO_QUALIFICATION_LAUNCHER_SECRET: "" }).length,
+    ).toBeGreaterThanOrEqual(32);
   });
 });
 

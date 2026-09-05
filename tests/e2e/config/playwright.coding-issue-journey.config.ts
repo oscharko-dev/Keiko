@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
 // Issue #3390: the real-model production-composition harness. Unlike every sibling
@@ -14,6 +15,19 @@ import { join } from "node:path";
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "4390");
 const stateDir = join(root, ".keiko-e2e-state", "coding-issue-journey");
+
+// Live-run pairing fix: `coding-issue-journey-server.mts` and `coding-issue-journey.spec.ts` run
+// in SEPARATE processes (the webServer's launched `keiko ui` process, and this test runner's own
+// worker process), so the ONE launcher pairing secret both sides must agree on -- the spec mints
+// an attestation against it, the launched server verifies it -- can only be handed to both from
+// here. Resolved once (operator override honoured, generated otherwise) and written back into
+// `process.env` BEFORE `defineConfig` returns: Playwright forks worker processes after this module
+// finishes evaluating, inheriting this process's env exactly like `dotenv`-style config setup does,
+// so the spec's own `process.env.KEIKO_QUALIFICATION_LAUNCHER_SECRET` read sees the SAME value
+// `webServer.env` below hands the launched server. Never logged.
+const launcherSecret =
+  process.env.KEIKO_QUALIFICATION_LAUNCHER_SECRET ?? randomBytes(32).toString("hex");
+process.env.KEIKO_QUALIFICATION_LAUNCHER_SECRET = launcherSecret;
 const serverEntry = join(
   "tests",
   "e2e",
@@ -60,6 +74,7 @@ export default defineConfig({
       KEIKO_E2E_STATE_DIR: stateDir,
       KEIKO_STATE_DIR: join(stateDir, "state"),
       KEIKO_LOG_LEVEL: "debug",
+      KEIKO_QUALIFICATION_LAUNCHER_SECRET: launcherSecret,
     },
   },
 });

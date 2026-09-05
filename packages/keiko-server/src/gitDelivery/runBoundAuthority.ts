@@ -205,11 +205,14 @@ type GitDeliveryModeDecision =
 // ADR-0138 D2 at this enforcement point. `autonomous-delivery` (Full access) is resolved outright:
 // the matrix's "delivery" row is approval-required at every risk tier in every mode, including Full
 // access, but this coarse admission layer is not where that approval is redeemed for an operation
-// whose own execute path already carries mandatory, mode-independent approval enforcement (merge
-// today, the commit route as of this change) — re-deriving it here would double-gate those
-// operations against a store this function cannot see into. A lower mode's approval-required
-// delivery effect DOES need to clear here, because — unlike merge/commit — push/pull-request/fetch
-// carry no such execute-path enforcement yet (ADR-0138 D4; #3387 owns their mint routes).
+// whose own execute path already carries mandatory, mode-independent approval enforcement (commit,
+// merge, push, pr, pr-mark-ready, pr-description-apply — `deliveryApprovalDeferred` in
+// requestPreparation.ts) — re-deriving it here would double-gate those operations against a store
+// this function cannot see into. A lower mode's approval-required delivery effect still needs to
+// clear HERE for the two operations with no such downstream enforcement of their own: fetch/pull
+// (no `GitDeliveryActionKind` / kernel policy pack at all — syncRoutes.ts) and local mutations (the
+// pack decides per command). Both redeem via the SAME non-consuming-peek mechanism instead
+// (`approval`/`approvalStore`/`approvalBinding` below), final-audit F1/F2 (#3390).
 function modeDecision(
   active: ActiveGitDeliveryRunAuthority,
   requirement: GitOperationRequirement,

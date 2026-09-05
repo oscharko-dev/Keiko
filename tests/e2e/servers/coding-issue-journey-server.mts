@@ -13,14 +13,35 @@
 // otherwise substituted runtime -- either this process launches the real product against a real
 // model and a real repository, or the lane does not start at all.
 
+import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { runUiCli, type CliIo } from "@oscharko-dev/keiko-cli";
+import { SESSION_PAIRING_LAUNCHER_SECRET_ENV } from "@oscharko-dev/keiko-server";
 
 import { resolveCodingIssueJourneyQualificationConfig } from "../support/coding-issue-journey-config.js";
 
 const PORT = Number(process.env.KEIKO_E2E_UI_PORT ?? "4390");
+const GENERATED_LAUNCHER_SECRET_BYTES = 32;
+
+/**
+ * Live-run bug (#3390 harness gap): the real Coding Workbench refused to start ("Workbench is not
+ * paired. Open Keiko from the launcher.") because this harness never pairs the browser at all --
+ * unlike `coding-issue-intake.spec.ts` (#3385), which mints a launcher pairing attestation
+ * (`mintLauncherPairingAttestation`) against a secret the launched server also holds. This resolves
+ * that SAME secret: the operator-provided `KEIKO_QUALIFICATION_LAUNCHER_SECRET` (threaded in by
+ * `playwright.coding-issue-journey.config.ts`, which is the only place that also hands the value to
+ * the spec process) when present, or a freshly generated one otherwise so a standalone invocation
+ * of this server never runs unpaired-only. Never logged -- `processIo` above is the only sanctioned
+ * stdout/stderr writer in this file and never receives this value.
+ */
+export function resolveLauncherSecret(env: Readonly<Record<string, string | undefined>>): string {
+  const configured = env.KEIKO_QUALIFICATION_LAUNCHER_SECRET;
+  return configured !== undefined && configured.length > 0
+    ? configured
+    : randomBytes(GENERATED_LAUNCHER_SECRET_BYTES).toString("hex");
+}
 
 /**
  * Live-run bug (#3390 harness gap): the compiled entrypoint runs from
@@ -55,18 +76,27 @@ function processIo(): CliIo {
 }
 
 /**
- * Threads the resolved, already-validated bounded evaluation budget into the launched process env
- * (#3390 audit F15) rather than relying on the raw, unvalidated `process.env` string this same
- * config surface read it from -- the launched process observes the exact positive number
+ * Threads the resolved, already-validated bounded evaluation budget, and the resolved launcher
+ * pairing secret, into the launched process env (#3390 audit F15; live-run pairing fix) rather
+ * than relying on the raw, unvalidated `process.env` string this same config surface read it
+ * from -- the launched process observes the exact positive number
  * `resolveCodingIssueJourneyQualificationConfig` accepted, never a re-parse of the original
- * string. Exported so a unit test can assert the env this process would launch with, without
- * spawning the real `keiko ui` composition.
+ * string, and the exact launcher secret `resolveLauncherSecret` resolved, under the SAME env key
+ * (`SESSION_PAIRING_LAUNCHER_SECRET_ENV`) the real `keiko-server` pairing port reads
+ * (`launcherSessionPairingPort.ts`'s `resolveLauncherSecret`) -- never a differently-named,
+ * harness-only variable. Exported so a unit test can assert the env this process would launch
+ * with, without spawning the real `keiko ui` composition.
  */
 export function launchedEnv(
   baseEnv: Readonly<Record<string, string | undefined>>,
   spendBudgetUsd: number,
+  launcherSecret: string,
 ): Record<string, string | undefined> {
-  return { ...baseEnv, KEIKO_QUALIFICATION_SPEND_BUDGET_USD: String(spendBudgetUsd) };
+  return {
+    ...baseEnv,
+    KEIKO_QUALIFICATION_SPEND_BUDGET_USD: String(spendBudgetUsd),
+    [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: launcherSecret,
+  };
 }
 
 async function main(): Promise<number> {
@@ -109,9 +139,13 @@ async function main(): Promise<number> {
   // opens PRs through) from it, exactly as when an operator runs `keiko ui` from inside their own
   // project. Pointing it at the controlled repository checkout is what makes this composition
   // real rather than a stand-in.
-  return runUiCli(args, processIo(), launchedEnv(process.env, resolved.config.spendBudgetUsd), {
-    cwd: resolved.config.controlledRepositoryRoot,
-  });
+  const launcherSecret = resolveLauncherSecret(process.env);
+  return runUiCli(
+    args,
+    processIo(),
+    launchedEnv(process.env, resolved.config.spendBudgetUsd, launcherSecret),
+    { cwd: resolved.config.controlledRepositoryRoot },
+  );
 }
 
 // Guarded like the sibling `coding-issue-delivery-server.mts`: only run the real production

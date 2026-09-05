@@ -1,4 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 
 // Issue #3390: the real-model production-composition journey. This spec is deliberately the only
 // one in `tests/e2e/` that installs NO `page.route()` interception and imports NO scripted server
@@ -25,10 +28,45 @@ const SURFACE = 'section[aria-label="Coding Workbench"][data-state]';
 const REPOSITORY_FIELD = "Repository path";
 const ISSUE_FIELD = "Issue URL or #number";
 const AUTH_ENDPOINT = "/api/coding-workbench/github-authorization";
+const MODELS_ENDPOINT = "/api/models";
+const GATEWAY_SETUP_ENDPOINT = "/api/gateway/setup";
+const READINESS_ENDPOINT = "/api/coding-workbench/runtime/readiness";
 const CSRF = { "X-Keiko-CSRF": "1" };
 
 function workbench(page: Page): Locator {
   return page.locator(SURFACE);
+}
+
+// Live-run blocker (A): unlike every scripted `coding-issue-*.spec.ts` sibling, this file drives
+// the REAL `keiko ui` production composition, which starts every browser session unpaired. An
+// unpaired session gets no app-session read authority at all (`appSessionReadAuthority.ts`), so
+// the issue-preview route -- and every other content-bearing route -- answers 403
+// `authority-denied` no matter what the caller does next; that is the observed "Workbench is not
+// paired" narration and the reported preview 403 in one. The fix mints the SAME single-use
+// launcher pairing attestation `coding-issue-intake.spec.ts` (#3385) mints against its scripted
+// server's fixed fixture secret -- here against the real launched server's own secret, resolved
+// identically on both sides from `KEIKO_QUALIFICATION_LAUNCHER_SECRET`
+// (`playwright.coding-issue-journey.config.ts` resolves it once and hands it to both the launched
+// server and this spec process; `coding-issue-journey-server.mts`'s `resolveLauncherSecret` reads
+// it server-side). Pairing MUST happen before any authority-gated call -- see `grantGithubAccess`
+// and the issue-preview flow below, which is exactly what previously 403'd.
+async function pair(page: Page): Promise<void> {
+  const launcherSecret = process.env.KEIKO_QUALIFICATION_LAUNCHER_SECRET;
+  expect(
+    launcherSecret,
+    "KEIKO_QUALIFICATION_LAUNCHER_SECRET must be resolved by the Playwright config and handed " +
+      "to both this process and the launched server",
+  ).toBeTruthy();
+  if (launcherSecret === undefined) return;
+  const fragment = encodeCodingAppSessionPairingFragment(
+    mintLauncherPairingAttestation({
+      secret: launcherSecret,
+      requestId: `coding-issue-journey-${String(Date.now())}`,
+      issuedAtMs: Date.now(),
+    }),
+  );
+  await page.goto(`/${fragment}`);
+  await expect.poll(() => page.url()).not.toContain("keiko-app-session");
 }
 
 async function openWorkbench(page: Page, repositoryRoot: string): Promise<void> {
@@ -56,9 +94,62 @@ async function openWorkbench(page: Page, repositoryRoot: string): Promise<void> 
     },
     { root: repositoryRoot },
   );
-  await page.goto("/");
+  await pair(page);
   await expect(workbench(page)).toBeVisible();
   await expect(page.getByLabel(REPOSITORY_FIELD)).toHaveValue(repositoryRoot);
+}
+
+// Live-run blocker (B): the real gateway config may hold a chat model that is tool-calling capable
+// but not yet marked workflow-eligible ("The tool-calling chat model is not workflow-eligible.
+// Enable workflow eligibility in Settings -> Models."). This performs the SAME real route the
+// product's own Settings -> Models "workflow eligible" toggle calls
+// (`packages/keiko-ui/src/app/components/desktop/modals/GatewaySetupDialog.tsx` submits
+// `workflowEligibleModelIds` to this endpoint), discovering the candidate model id from the real
+// `/api/models` capability list -- never a hardcoded model id, since the configured deployment
+// name varies by operator profile. `preserveExisting: true` updates only the workflow-eligible
+// selection, exactly the production "update an existing gateway config" path
+// (`gateway-setup.test.ts`'s "coding-update"/"coding-unknown" cases pin this same minimal body).
+async function ensureWorkflowEligibleModel(page: Page): Promise<void> {
+  const modelsResponse = await page.request.get(MODELS_ENDPOINT);
+  expect(modelsResponse.ok()).toBe(true);
+  const { models } = (await modelsResponse.json()) as {
+    readonly models: readonly ModelCapability[];
+  };
+  const toolCallingChatModels = models.filter(
+    (model) => model.kind === "chat" && model.toolCalling,
+  );
+  expect(
+    toolCallingChatModels.length,
+    "the configured Model Gateway must expose at least one tool-calling chat model",
+  ).toBeGreaterThan(0);
+  if (toolCallingChatModels.some((model) => model.workflowEligible)) return;
+  const modelId = toolCallingChatModels[0]?.id;
+  const setupResponse = await page.request.post(GATEWAY_SETUP_ENDPOINT, {
+    headers: CSRF,
+    data: { preserveExisting: true, workflowEligibleModelIds: [modelId] },
+  });
+  expect(setupResponse.ok()).toBe(true);
+  // The browser's own source/profile projection is fetched once on mount, not polled -- reload so
+  // the Workbench observes the just-enabled eligibility the same way a real operator's refresh
+  // after a Settings change would.
+  await page.reload();
+  await expect(workbench(page)).toBeVisible();
+}
+
+async function assertRuntimeReady(page: Page): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const response = await page.request.get(
+          `${READINESS_ENDPOINT}?${new URLSearchParams({ requestedMode: "autonomous-delivery" }).toString()}`,
+        );
+        if (!response.ok()) return false;
+        const body = (await response.json()) as { readonly runtimeAvailable: boolean };
+        return body.runtimeAvailable;
+      },
+      { timeout: 60_000, message: "coding runtime must report ready before a run may start" },
+    )
+    .toBe(true);
 }
 
 // The real, generic per-repository read-authorization route (not a fixture): the same consent a
@@ -105,8 +196,15 @@ test("a real model resolves the controlled issue through visible, causally linke
   ).toBeTruthy();
   if (controlledRepositoryRoot === undefined || controlledIssueReference === undefined) return;
 
+  // Pairing (blocker A) must land before any authority-gated call -- `grantGithubAccess` isn't
+  // authority-gated, but the issue-preview route right after it is, so pairing is established
+  // inside `openWorkbench` first regardless. Model eligibility (blocker B) and runtime host
+  // readiness are real preconditions the product itself checks before a run may start, so they
+  // are asserted here too rather than discovered as a timeout on "Start coding run".
   await openWorkbench(page, controlledRepositoryRoot);
+  await ensureWorkflowEligibleModel(page);
   await grantGithubAccess(page, controlledRepositoryRoot);
+  await assertRuntimeReady(page);
 
   await page.getByLabel(ISSUE_FIELD).fill(controlledIssueReference);
   await page.getByRole("button", { name: "Preview issue", exact: true }).click();
