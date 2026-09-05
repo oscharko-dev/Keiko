@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   CodeTaskGrantId,
@@ -22,6 +25,7 @@ import type { CiObservationService } from "../gitDelivery/ciObservationService.j
 import { readySnapshot } from "../gitDelivery/ciObservationTest/_support.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
 
 const DIGEST = "a".repeat(64);
 const resolveWorkspaceRootAccess = (): WorkspaceRootAccess => ({

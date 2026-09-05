@@ -3,6 +3,7 @@ import { isCodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/c
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
 import { isCodingRuntimeGitResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { isVerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import { isCodingRepositoryResult } from "./codingRepositorySearchHandler.js";
 import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 
@@ -105,6 +106,7 @@ const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   "git-authority-revoked",
   "delivery-authority-revoked",
   "connector-authority-revoked",
+  "search-authority-revoked",
   ...GOVERNED_VERIFICATION_REASON_CODES,
   // The verification runner's own closed codes (editor/verificationRunnerErrors.ts), sourced rather
   // than restated for the same reason the two contract enums above are. A verification the runner
@@ -273,6 +275,8 @@ function project(request: CodingToolActionRequest, input: unknown): CodingToolRe
   if (git !== undefined) return git;
   const commit = projectVerifiedCommit(request, value);
   if (commit !== undefined) return commit;
+  const search = projectSearch(request, value);
+  if (search !== undefined) return search;
   const auxiliary = projectAuxiliary(request, value.auxiliary);
   if (auxiliary !== undefined) {
     return {
@@ -333,6 +337,26 @@ function projectVerifiedCommit(
       : projected("failed");
   }
   return undefined;
+}
+
+// A search's OWN outcome (`ok: false`, e.g. scope-denied/file-too-large/cancelled/timeout) is
+// content-free by construction (CodingRepositoryFailureReason) and rides out on a "completed"
+// governed-delegate outcome, exactly like a search hit — only a pre-invoke authority/backend
+// refusal (no live workspace, revoked mid-request) produces the outer "failed" status above.
+function projectSearch(
+  request: CodingToolActionRequest,
+  value: Record<string, unknown>,
+): CodingToolResult | undefined {
+  if (request.action !== "search") return undefined;
+  return isCodingRepositoryResult(value.search)
+    ? {
+        status: "completed",
+        evidence: [
+          { kind: "governed-delegate", code: value.search.ok ? "completed" : value.search.reason },
+        ],
+        search: value.search,
+      }
+    : projected("failed");
 }
 
 function projectGovernedFailure(value: Record<string, unknown>): CodingToolResult {

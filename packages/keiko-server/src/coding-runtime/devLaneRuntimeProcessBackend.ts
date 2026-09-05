@@ -1,11 +1,15 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
 import {
-  buildRuntimeGatewaySeatbeltCommand,
   copyRuntimeGatewayConfinement,
+  currentPlatform,
   isRuntimeGatewayConfinement,
+  planIsolatedRun,
+  probeBackends,
+  type BackendAvailability,
   type RuntimeGatewayConfinement,
 } from "@oscharko-dev/keiko-sandbox";
+import type { NetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts";
 import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { processServerLogSink } from "../process-log-sink.js";
@@ -66,6 +70,10 @@ export interface DevLaneRuntimeProcessBackendOptions {
   readonly activityLog?: ServerLogSink | undefined;
   readonly spawnRuntime?: DevLaneRuntimeSpawn | undefined;
   readonly killProcessGroup?: ((pid: number, signal: NodeJS.Signals) => void) | undefined;
+  /** Test seam for the host-probe keiko-sandbox uses to pick a confining backend; real host by default. */
+  readonly probeAvailability?: (() => BackendAvailability) | undefined;
+  /** Test seam for the platform keiko-sandbox plans against; real host platform by default. */
+  readonly platform?: NodeJS.Platform | undefined;
 }
 
 interface DevLaneTree extends RuntimeProcessTree {
@@ -85,6 +93,8 @@ export function createDevLaneRuntimeProcessBackend(
     options.killProcessGroup ?? killGroup,
     copyRuntimeGatewayConfinement(options.gatewayConfinement),
     options.activityLog ?? processServerLogSink(),
+    options.probeAvailability ?? probeBackends,
+    options.platform ?? currentPlatform(),
   );
 }
 
@@ -99,6 +109,8 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     private readonly killProcessGroup: (pid: number, signal: NodeJS.Signals) => void,
     private readonly gatewayConfinement: RuntimeGatewayConfinement | undefined,
     private readonly activityLog: ServerLogSink,
+    private readonly probeAvailability: () => BackendAvailability,
+    private readonly platform: NodeJS.Platform,
   ) {}
 
   public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
@@ -119,8 +131,16 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     const executable = safeRealFile(request.executable);
     if (!pathIsContained(this.runtimeRoot, executable)) invalidRequest();
     const cwd = safeRealDirectory(request.cwd);
-    const wrapper = buildRuntimeGatewaySeatbeltCommand(policy, executable, request.args);
-    const child = this.spawnRuntime(wrapper.command, wrapper.args, {
+    // Routed through the shared keiko-sandbox plan/backend core (ADR-0043 D14, #2951) rather than
+    // the seatbelt-argv formula directly, so a host missing sandbox-exec fails this launch closed
+    // instead of spawning the literal, hardcoded "/usr/bin/sandbox-exec" path unconfined.
+    const decision = planIsolatedRun(
+      { command: executable, args: request.args, cwd, network: gatewayNetworkPolicy(policy) },
+      this.probeAvailability(),
+      this.platform,
+    );
+    if (decision.kind !== "wrapped") throw new Error("runtime-gateway-confinement-unavailable");
+    const child = this.spawnRuntime(decision.command, decision.args, {
       cwd,
       env: request.env,
       detached: true,
@@ -131,7 +151,7 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       op: "runtime.confinement.spawned",
       correlationId: request.runId,
       extra: {
-        backend: "seatbelt",
+        backend: decision.attestation.backend,
         policyDigest: policy.policyDigest,
         authorityDigest: policy.envelopeDigest,
         runtimeArtifactDigest: policy.runtimeArtifactDigest,
@@ -192,6 +212,14 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     if (!this.ownedTrees.has(tree)) throw new Error("dev-lane-runtime-tree-not-owned");
     return tree as DevLaneTree;
   }
+}
+
+function gatewayNetworkPolicy(policy: RuntimeGatewayConfinement): NetworkGatewayPolicy {
+  return {
+    mode: "gateway",
+    host: policy.addressFamily === "ipv4" ? "127.0.0.1" : "::1",
+    port: policy.port,
+  };
 }
 
 function recordConfinementFailure(sink: ServerLogSink, runId: string, error: unknown): void {

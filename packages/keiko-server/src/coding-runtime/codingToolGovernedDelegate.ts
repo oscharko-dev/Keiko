@@ -3,6 +3,7 @@ import { processServerLogSink } from "../process-log-sink.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import type { CodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
+import type { CodingRepositoryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import type {
   AuxiliaryCapabilityOutcomeV1,
   VerifiedCommitResult,
@@ -43,6 +44,7 @@ export type GovernedCodingToolResult =
       readonly verifiedCommit?: VerifiedCommitResult;
       readonly git?: CodingRuntimeGitResult;
       readonly ci?: CodingRuntimeCiResult;
+      readonly search?: CodingRepositoryResult;
     }
   // `reasonCode` is a closed-vocabulary marker. The facade forwards only its own allowlisted,
   // body-free codes and collapses every unrecognized value to a bare failed outcome.
@@ -51,6 +53,7 @@ export type GovernedCodingToolResult =
 export interface CodingToolGovernedPorts {
   readonly repositoryRead: GovernedCodingToolPort<"read">;
   readonly repositoryDiscover: GovernedCodingToolPort<"discover">;
+  readonly repositorySearch: GovernedCodingToolPort<"search">;
   readonly editorChangeset: GovernedCodingToolPort<"edit">;
   readonly commandRunner: GovernedCodingToolPort<"command">;
   readonly verificationRunner: GovernedCodingToolPort<"verification">;
@@ -150,6 +153,9 @@ function governedOutcome(
   if (result.status !== "completed") return { outcome: result.status };
   const git = gitOutcome(action, result);
   if (git !== undefined) return git;
+  if (action === "search" && result.search !== undefined) {
+    return { outcome: "completed", search: result.search };
+  }
   if (READ_BEARING_ACTIONS.has(action) && result.read !== undefined) {
     return { outcome: "completed", read: result.read };
   }
@@ -188,6 +194,8 @@ function dispatch(
       return ports.repositoryRead.execute(request, signal, mutationGuard);
     case "discover":
       return ports.repositoryDiscover.execute(request, signal, mutationGuard);
+    case "search":
+      return ports.repositorySearch.execute(request, signal, mutationGuard);
     case "edit":
       return ports.editorChangeset.execute(request, signal, mutationGuard);
     case "command":

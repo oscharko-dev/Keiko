@@ -16,6 +16,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.journey.proposeReady": "Review ready-for-review request",
   "codingWorkbench.journey.readyHelp":
     "Review the change from draft to ready for review before approving it once.",
+  "codingWorkbench.journey.proposeReadyPending":
+    "The ready-for-review approval path is not available yet.",
   "codingWorkbench.journey.busy": "Updating handoff status…",
   "codingWorkbench.journey.actionError.refresh":
     "Status refresh failed. The saved observations remain visible.",

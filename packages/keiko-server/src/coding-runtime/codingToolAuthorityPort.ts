@@ -466,6 +466,7 @@ const STATIC_REQUIRED_CLASSES: Readonly<
 > = {
   read: ["workspace-read"],
   discover: ["workspace-read"],
+  search: ["workspace-read"],
   edit: ["workspace-write"],
   command: ["command-execution"],
   verification: ["verification"],
@@ -509,6 +510,7 @@ function additionalPolicyAllowed(
   switch (request.action) {
     case "read":
     case "discover":
+    case "search":
     case "edit":
       return true;
     case "verification":

@@ -7,12 +7,13 @@
 
 export {
   buildWrappedCommand,
+  buildGatewaySeatbeltCommand,
   SEATBELT_DENY_EGRESS_PROFILE,
   DEFAULT_CONTAINER_IMAGE,
 } from "./backends.js";
 export type { WrappedCommand } from "./backends.js";
-export { selectEnforcingBackend } from "./select.js";
-export { planIsolatedRun } from "./plan.js";
+export { selectEnforcingBackend, selectGatewayBackend } from "./select.js";
+export { planIsolatedRun, GATEWAY_UNSUPPORTED_ON_HOST_REASON } from "./plan.js";
 export {
   DEBUG_CAPSULE_RUNTIME_MOUNT,
   planStrictDebugCapsule,
@@ -53,6 +54,7 @@ export type {
   BackendAvailability,
   IsolatedRunDecision,
   IsolatedRunPlan,
+  NetworkGatewayPolicy,
   NetworkPolicy,
   SandboxAttestation,
   SandboxBackend,

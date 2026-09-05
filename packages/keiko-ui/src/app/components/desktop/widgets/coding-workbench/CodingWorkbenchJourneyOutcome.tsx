@@ -22,6 +22,16 @@ export interface CodingWorkbenchJourneyOutcomeProps {
   readonly onRefresh?: () => void | Promise<void>;
   readonly onProposeReady?: () => void | Promise<void>;
   readonly busy?: boolean;
+  /**
+   * The narrow `pr-mark-ready` approval/execute path (#3389 AC3) is a separate slice landing in a
+   * later wave; this route/UI change wires observation only. Until a caller passes `true` — meaning
+   * the mint route actually exists and `onProposeReady` is genuinely backed by it — the ready-for-
+   * review control renders visibly but stays a closed, non-clickable "approval path pending" state,
+   * never a click that silently does nothing or reaches a generic command with no approval bound to
+   * it (see the corrected #3389 contract: the generic `pr-update` transition must not be presented
+   * as this approval path).
+   */
+  readonly markReadyAvailable?: boolean;
 }
 /** A historical outcome never reconstructs a grant or completes a provider mutation. */
 export function CodingWorkbenchJourneyOutcome(
@@ -76,14 +86,13 @@ function JourneyControls(
   const busy = props.busy === true || action.busy;
   const refresh = props.onRefresh;
   const ready = props.onProposeReady;
+  const markReadyAvailable = props.markReadyAvailable === true;
+  const canPropose = props.ready && ready !== undefined && markReadyAvailable;
+  const pending = props.ready && !markReadyAvailable;
   const propose = (): void => {
-    if (
-      busy ||
-      ready === undefined ||
-      !canProposeJourneyReady(props.outcome, props.snapshot?.state, Date.now())
-    )
+    if (busy || !canPropose || !canProposeJourneyReady(props.outcome, props.snapshot?.state, Date.now()))
       return;
-    void action.invoke("propose-ready", ready);
+    if (ready !== undefined) void action.invoke("propose-ready", ready);
   };
   return (
     <div aria-busy={busy}>
@@ -100,17 +109,19 @@ function JourneyControls(
             {t("codingWorkbench.journey.refresh")}
           </button>
         )}
-        {props.ready && ready !== undefined && (
-          <button type="button" className={common.button} disabled={busy} onClick={propose}>
+        {props.ready && (
+          <button
+            type="button"
+            className={common.button}
+            disabled={busy || !canPropose}
+            aria-describedby={pending ? "journey-propose-ready-pending" : undefined}
+            onClick={propose}
+          >
             {t("codingWorkbench.journey.proposeReady")}
           </button>
         )}
       </div>
-      <JourneyActionFeedback
-        busy={busy}
-        failure={action.failure}
-        ready={props.ready && ready !== undefined}
-      />
+      <JourneyActionFeedback busy={busy} failure={action.failure} ready={canPropose} pending={pending} />
     </div>
   );
 }
@@ -118,15 +129,22 @@ function JourneyActionFeedback({
   busy,
   failure,
   ready,
+  pending,
 }: {
   readonly busy: boolean;
   readonly failure: "refresh" | "propose-ready" | null;
   readonly ready: boolean;
+  readonly pending: boolean;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   return (
     <>
       {ready && <p className={common.helpText}>{t("codingWorkbench.journey.readyHelp")}</p>}
+      {pending && (
+        <p id="journey-propose-ready-pending" role="status" className={common.helpText}>
+          {t("codingWorkbench.journey.proposeReadyPending")}
+        </p>
+      )}
       {busy && (
         <p role="status" className={common.helpText}>
           {t("codingWorkbench.journey.busy")}

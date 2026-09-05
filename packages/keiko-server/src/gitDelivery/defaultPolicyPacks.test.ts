@@ -51,15 +51,17 @@ import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import { executeGovernedPullRequest, KEIKO_DEFAULT_PR_POLICY_PACK } from "./prExecution.js";
 import { executeGovernedPublish, KEIKO_DEFAULT_PUBLISH_POLICY_PACK } from "./pushExecution.js";
 
-// KEIKO-0526: only merge exposes an /approve mint route today. A future policy pack that named
-// approval-gated for another action kind would silently fail closed at execute time with no
-// operator-actionable pointer to the misconfiguration. This test pins the load-time guard.
+// KEIKO-0526: only mint-route-backed action kinds may name approval-gated. A future policy pack
+// that named approval-gated for another action kind would silently fail closed at execute time
+// with no operator-actionable pointer to the misconfiguration. This test pins the load-time guard.
+// #3387 relocated the fixture off "push", which is now mintable (POST /api/git-delivery/push/
+// approve) — "branch-create" has no mint route and remains a valid non-mintable pin.
 describe("assertPolicyPackMintable (KEIKO-0526)", () => {
   it("throws for approval-gated rule on a non-mintable action kind", () => {
     const pack: GitDeliveryRepoPolicyPack = {
       schemaVersion: "1",
       repoId: "test-repo",
-      rules: [{ actionKind: "push", decision: "approval-gated", requiredApprovers: [] }],
+      rules: [{ actionKind: "branch-create", decision: "approval-gated", requiredApprovers: [] }],
     };
     expect(() => {
       assertPolicyPackMintable(pack);

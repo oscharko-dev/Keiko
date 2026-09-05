@@ -45,7 +45,17 @@ describe("assertPolicyPackMintable", () => {
     }).not.toThrow();
   });
 
-  it.each(["push", "pull-request", "fetch", "pull", "branch-create"] as const)(
+  // #3387: push and PR create/update joined once their mint routes existed, mirroring commit.
+  it.each(["push", "pr-create", "pr-update"] as const)(
+    "accepts approval-gated for %s now that its mint route exists",
+    (actionKind) => {
+      expect(() => {
+        assertPolicyPackMintable(repoPack({ rules: [{ actionKind, decision: "approval-gated" }] }));
+      }).not.toThrow();
+    },
+  );
+
+  it.each(["fetch", "pull", "branch-create"] as const)(
     "still throws for approval-gated %s: no mint route exists for it yet",
     (actionKind) => {
       expect(() => {
@@ -74,7 +84,7 @@ describe("assertPolicyPacksMintable", () => {
     const orgPack: GitDeliveryOrgPolicyPack = {
       schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
       orgId: "org",
-      rules: [{ actionKind: "push", decision: "approval-gated" }],
+      rules: [{ actionKind: "branch-create", decision: "approval-gated" }],
       defaultRule: { decision: "constrained", constraints: [] },
     };
     expect(() => {
@@ -97,7 +107,7 @@ describe("defaultMintableRepoPack", () => {
   it("throws for a pack that names a non-mintable approval-gated action kind", () => {
     expect(() =>
       defaultMintableRepoPack(
-        repoPack({ rules: [{ actionKind: "push", decision: "approval-gated" }] }),
+        repoPack({ rules: [{ actionKind: "branch-create", decision: "approval-gated" }] }),
       ),
     ).toThrow(/no mint route exists/);
   });

@@ -86,12 +86,16 @@ describe("git-delivery action-kind / risk-class guards", () => {
     expect(isGitDeliveryActionKind(undefined)).toBe(false);
   });
 
+  // #3399 (epic #3384 correction 4): relocated from 11 to 12 members — "pr-description-apply"
+  // joined as a distinct action kind, deliberately separate from "pr-update" so the policy-pack
+  // layer can hold a decision for it that never widens to title/base/draft-state mutations.
   it("GIT_DELIVERY_ACTION_KINDS pins the cardinality and includes branch-switch", () => {
-    expect(GIT_DELIVERY_ACTION_KINDS).toHaveLength(11);
+    expect(GIT_DELIVERY_ACTION_KINDS).toHaveLength(12);
     expect(GIT_DELIVERY_ACTION_KINDS).toContain("branch-switch");
+    expect(GIT_DELIVERY_ACTION_KINDS).toContain("pr-description-apply");
     expect(new Set(GIT_DELIVERY_ACTION_KINDS).size).toBe(GIT_DELIVERY_ACTION_KINDS.length);
     // The risk-default table is exhaustive over the kinds (one entry per kind).
-    expect(Object.keys(GIT_DELIVERY_ACTION_RISK_DEFAULTS)).toHaveLength(11);
+    expect(Object.keys(GIT_DELIVERY_ACTION_RISK_DEFAULTS)).toHaveLength(12);
     expect(GIT_DELIVERY_ACTION_RISK_DEFAULTS["branch-switch"]).toBe("local-mutation");
   });
 

@@ -518,6 +518,13 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
     }
   });
 
+  // #3387 (ADR-0138 D2): an accepted run's push now requires an actually consumed, server-issued
+  // claim (pushRoutes.ts's runPushMutation), unconditionally, before the downstream worktree/policy
+  // gate is ever reached. This facade's own request contract (GitRepositoryAgentOperationRequest)
+  // carries no approval field and mints none, so a push delegated through it can never supply one —
+  // it now observes the SAME "approval-required" disposition every unapproved HTTP push does,
+  // relocated from the prior worktree-unavailable (409) outcome the facade saw before that
+  // unconditional check existed.
   it("routes an accepted autonomous push to its downstream policy and approval gate", async () => {
     const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
     const body = executeRequest("push", "push-autonomous");
@@ -536,10 +543,11 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
       }),
     );
 
-    expect(result.status).toBe(409);
+    expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
       status: "delegated",
       operation: "push",
+      response: { status: "approval-required" },
     });
   });
 

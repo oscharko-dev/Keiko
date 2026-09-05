@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -71,7 +71,10 @@ describe("resolveCodingIssueJourneyQualificationConfig", () => {
     const result = resolveCodingIssueJourneyQualificationConfig(fullyConfiguredEnv(root));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.config.controlledRepositoryRoot).toBe(root);
+    // Canonicalized (realpath'd), matching githubIssueReaderRepositoryId's own resolution --
+    // macOS resolves the system tmp dir through a /private symlink, so a raw string comparison
+    // against `root` is not portable.
+    expect(result.config.controlledRepositoryRoot).toBe(realpathSync(root));
     expect(result.config.controlledRepositorySlug).toBe("example-org/controlled-repo");
     expect(result.config.spendBudgetUsd).toBe(5);
     expect(result.config.gatewayConfigPath).toBeUndefined();

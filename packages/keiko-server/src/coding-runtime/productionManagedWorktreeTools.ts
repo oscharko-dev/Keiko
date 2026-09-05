@@ -42,6 +42,13 @@ import type {
   CodingToolGovernedPorts,
   GovernedCodingToolPort,
 } from "./codingToolGovernedDelegate.js";
+import {
+  createCodingRepositorySearchHandler,
+  type CodingRepositorySearchHandler,
+} from "./codingRepositorySearchHandler.js";
+import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
+import { processServerLogSink } from "../process-log-sink.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import { createProductionAuxiliaryPorts } from "./productionAuxiliaryPorts.js";
 import {
@@ -98,6 +105,8 @@ export interface ProductionManagedWorktreeToolInput {
   readonly commandRunner?: Pick<CommandRunnerManager, "execute"> | undefined;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  /** Body-free activity-log sink for the H1 search handler; defaults to the process-wide log. */
+  readonly activityLog?: ServerLogSink | undefined;
   // Present only when read-only public research (#2387) is activated for this run: the run-bound
   // grant registry and the gateway's outbound egress config (proxy/CA). When absent, the egress
   // authority stays the fail-closed stub, so a run without research can never reach the internet.
@@ -189,6 +198,7 @@ function governedPorts(
   return {
     ...readEdit,
     ...auxiliaryPorts(input, catalog),
+    repositorySearch: buildRepositorySearchPort(input),
     commandRunner: buildCommandRunner(input),
     verificationRunner: buildVerificationRunner(input),
     gitAuthority: buildRuntimeGitPort(input),
@@ -322,6 +332,51 @@ function buildCommandRunner(
 
 function signalAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
+}
+
+// H1 (#3386): the bounded in-process content-search/ranged-read handler, mounted on the same
+// managed-worktree resolver and liveness guard as every other governed read-class port. The
+// workspace is (re)detected per call — never cached at facade construction — so a mid-run
+// workspace-root change is observed exactly as `discoveryWorkspace()` (codingToolReadEditPorts.ts)
+// already observes it for read/discover.
+function buildRepositorySearchPort(
+  input: ProductionManagedWorktreeToolInput,
+): GovernedCodingToolPort<"search"> {
+  return {
+    execute: async (
+      request,
+      signal,
+      guard,
+    ): ReturnType<GovernedCodingToolPort<"search">["execute"]> => {
+      if (signalAborted(signal) || !guard.check() || !live(input)) {
+        return { status: "failed", reasonCode: "search-authority-revoked" };
+      }
+      const handler = repositorySearchHandler(input, guard, signal);
+      if (handler === undefined || handler.readiness() !== "ready") {
+        return { status: "failed", reasonCode: "capability-backend-unavailable" };
+      }
+      const result = await handler.invoke(request.repositoryRequest, {
+        correlationId: input.authorityRef.runId,
+        signal: signal ?? new AbortController().signal,
+      });
+      return { status: "completed", search: result };
+    },
+  };
+}
+
+function repositorySearchHandler(
+  input: ProductionManagedWorktreeToolInput,
+  guard: CodingToolMutationGuard,
+  signal: AbortSignal | undefined,
+): CodingRepositorySearchHandler | undefined {
+  const access = input.resolveWorkspaceRootAccess();
+  if (access === undefined) return undefined;
+  return createCodingRepositorySearchHandler({
+    workspace: detectWorkspaceAt(access.canonicalRoot, access.fs),
+    fs: access.fs,
+    isCurrent: (): boolean => !signalAborted(signal) && guard.check() && live(input),
+    log: input.activityLog ?? processServerLogSink(),
+  });
 }
 
 function buildSidecarCapabilityPort<Kind extends "git" | "delivery" | "connector">(

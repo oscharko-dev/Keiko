@@ -24,7 +24,9 @@ describe("independent handoff freshness and action boundaries", () => {
         ...fixture.outcome,
         [kind]: { ...evidence, expiresAt: "2026-09-05T00:00:10.000Z" },
       };
-      render(<CodingWorkbenchJourneyOutcome {...fixture} onProposeReady={vi.fn()} />);
+      render(
+        <CodingWorkbenchJourneyOutcome {...fixture} onProposeReady={vi.fn()} markReadyAvailable />,
+      );
       expect(screen.getByRole("button", { name: "Review ready-for-review request" })).toBeEnabled();
       act(() => {
         vi.advanceTimersByTime(5_001);
@@ -46,7 +48,13 @@ describe("independent handoff freshness and action boundaries", () => {
   it("checks freshness at click time even when the browser timer has not rendered yet", () => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     const callback = vi.fn();
-    render(<CodingWorkbenchJourneyOutcome {...journeyFixture()} onProposeReady={callback} />);
+    render(
+      <CodingWorkbenchJourneyOutcome
+        {...journeyFixture()}
+        onProposeReady={callback}
+        markReadyAvailable
+      />,
+    );
     vi.mocked(Date.now).mockReturnValue(NOW + 60_000);
     fireEvent.click(screen.getByRole("button", { name: "Review ready-for-review request" }));
     expect(callback).not.toHaveBeenCalled();

@@ -2,6 +2,11 @@ import { parseDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
 import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import type { CodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
 import { parseRuntimeGitRequest, type RuntimeGitRequest } from "./codingRuntimeGitIpc.js";
+import {
+  captureCodingRepositoryRequest,
+  type CodingRepositoryRequest,
+  type CodingRepositoryResult,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { isUtf8 } from "node:buffer";
 
 import type {
@@ -27,6 +32,7 @@ export const CODING_TOOL_DISCOVER_MAX_RESULTS = 100;
 export type CodingToolAction =
   | "read"
   | "discover"
+  | "search"
   | "edit"
   | "command"
   | "verification"
@@ -60,6 +66,10 @@ export type CodingToolActionRequest =
       readonly action: "discover";
       readonly query: string;
       readonly maxResults: number;
+    })
+  | (CodingToolRequestIdentity & {
+      readonly action: "search";
+      readonly repositoryRequest: CodingRepositoryRequest;
     })
   | (CodingToolRequestIdentity & {
       readonly action: "edit";
@@ -117,6 +127,11 @@ export type CodingToolResult =
       readonly status: "completed";
       readonly evidence: readonly CodingToolEvidence[];
       readonly verifiedCommit: VerifiedCommitResult;
+    }
+  | {
+      readonly status: "completed";
+      readonly evidence: readonly CodingToolEvidence[];
+      readonly search: CodingRepositoryResult;
     }
   | {
       readonly status: "completed";
@@ -217,6 +232,8 @@ function requestFromRecord(value: Record<string, unknown>): CodingToolActionRequ
       return readRequest(value);
     case "discover":
       return discoverRequest(value);
+    case "search":
+      return searchRequest(value);
     case "edit":
       return editRequest(value);
     case "command":
@@ -253,6 +270,23 @@ function discoverRequest(value: Record<string, unknown>): CodingToolActionReques
         maxResults: value.maxResults,
       }
     : undefined;
+}
+
+// Every field-shape and numeric limit lives in the contract's own `captureCodingRepositoryRequest`
+// (packages/keiko-contracts/src/coding-repository-search.ts) and is never restated here: this
+// parser only carries the envelope identity and hands the untrusted payload straight to it.
+function searchRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
+  const identity = requestIdentity(value);
+  if (
+    identity === undefined ||
+    !hasExactKeys(value, ["action", "actionId", "idempotencyKey", "repositoryRequest"])
+  ) {
+    return undefined;
+  }
+  const repositoryRequest = captureCodingRepositoryRequest(value.repositoryRequest);
+  return repositoryRequest === undefined
+    ? undefined
+    : { ...identity, action: "search", repositoryRequest };
 }
 
 function skillRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {

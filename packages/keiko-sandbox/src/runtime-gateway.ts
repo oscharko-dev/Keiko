@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import type { WrappedCommand } from "./backends.js";
+import { buildGatewaySeatbeltCommand, type WrappedCommand } from "./backends.js";
+import type { NetworkGatewayPolicy } from "./types.js";
 
 /** Transient server-owned destination and identity; never persist the URL or wrapper profile. */
 export interface RuntimeGatewayConfinementInput {
@@ -182,7 +183,13 @@ function validPolicyIdentity(record: Record<string, unknown>): boolean {
   );
 }
 
-/** OS-enforced single-process policy; process-tree qualification remains a separate receipt. */
+/**
+ * Thin consumer of the shared gateway Seatbelt builder (`backends.ts`, ADR-0043 D11/D14): this
+ * function stays the stable public entry point for existing callers, but no longer carries its own
+ * copy of the profile-string formula. `copyRuntimeGatewayConfinement` still owns the tamper-evident
+ * validation this policy's richer attestation binding (runId/treeBindingId/digests) needs, which is
+ * out of scope for the narrower `NetworkGatewayPolicy` contract shape.
+ */
 export function buildRuntimeGatewaySeatbeltCommand(
   policy: RuntimeGatewayConfinement,
   command: string,
@@ -190,11 +197,10 @@ export function buildRuntimeGatewaySeatbeltCommand(
 ): WrappedCommand {
   const closed = copyRuntimeGatewayConfinement(policy);
   if (closed === undefined) invalidPolicy();
-  const family = closed.addressFamily === "ipv4" ? "tcp4" : "tcp6";
-  const profile =
-    "(version 1)(allow default)(deny network*)(deny process-fork)" +
-    "(deny mach-lookup)(deny appleevent-send)(deny lsopen)" +
-    `(allow network-outbound (remote ${family} "localhost:${String(closed.port)}"))` +
-    `(allow network-inbound (local ${family} "localhost:*"))`;
-  return { command: "/usr/bin/sandbox-exec", args: ["-p", profile, command, ...args] };
+  const gateway: NetworkGatewayPolicy = {
+    mode: "gateway",
+    host: closed.addressFamily === "ipv4" ? "127.0.0.1" : "::1",
+    port: closed.port,
+  };
+  return buildGatewaySeatbeltCommand(gateway, command, args);
 }

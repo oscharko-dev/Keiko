@@ -25,7 +25,10 @@
 // Content-free in evidence: title/body strings flow to the provider but only their byte lengths enter
 // the ledger. CSRF + JSON content type are enforced centrally by server.ts.
 
-import type { GitDeliveryApprovalClaim, GitDeliveryApprovalRequirement } from "@oscharko-dev/keiko-contracts";
+import type {
+  GitDeliveryApprovalClaim,
+  GitDeliveryApprovalRequirement,
+} from "@oscharko-dev/keiko-contracts";
 import type { GitPullRequestCommand } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
@@ -509,7 +512,11 @@ export const createHandlePrApprove = (
       approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
       nowMs: (seams.now ?? Date.now)(),
     });
-    logPrApprovalMinted(seams.activityLog ?? processServerLogSink(), correlationId, authority.runId);
+    logPrApprovalMinted(
+      seams.activityLog ?? processServerLogSink(),
+      correlationId,
+      authority.runId,
+    );
     const body: GitDeliveryPrApproveResponseBody = {
       schemaVersion: "1",
       approval: issued.approval,

@@ -58,7 +58,7 @@ export function assertPolicyPackMintable(
       throw new Error(
         `git-delivery policy pack names approval-gated for '${rule.actionKind}' ` +
           "but no mint route exists for it (only 'merge', 'commit', 'push', 'pr-create', " +
-            "'pr-update', and 'pr-description-apply' currently expose /approve)",
+          "'pr-update', and 'pr-description-apply' currently expose /approve)",
       );
     }
   }

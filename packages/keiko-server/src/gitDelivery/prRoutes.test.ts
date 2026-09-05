@@ -850,7 +850,10 @@ describe("pr approve — mints the server-issued claim execute consumes (#3387)"
     );
     const events = activity.filter((event) => event.op === "git.delivery.pr.approval.minted");
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ correlationId: "corr-pr-mint-1", extra: { runId: "test-run" } });
+    expect(events[0]).toMatchObject({
+      correlationId: "corr-pr-mint-1",
+      extra: { runId: "test-run" },
+    });
     expect(JSON.stringify(events[0])).not.toContain("governed pull request command center");
   });
 });

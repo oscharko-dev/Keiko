@@ -40,10 +40,29 @@ describe("observed issue journey handoff", () => {
     expect(screen.getByText("Human review required")).toBeInTheDocument();
     expect(screen.queryByText("Issue journey completed")).not.toBeInTheDocument();
   });
-  it("proposes a one-use approval without performing the ready transition", async () => {
+  it("renders ready-for-review as a closed, non-clickable approval-path-pending control by default (#3389 AC3)", async () => {
     const onProposeReady = vi.fn();
     render(<CodingWorkbenchJourneyOutcome {...journeyFixture()} onProposeReady={onProposeReady} />);
-    fireEvent.click(screen.getByRole("button", { name: "Review ready-for-review request" }));
+    const button = screen.getByRole("button", { name: "Review ready-for-review request" });
+    expect(button).toBeDisabled();
+    expect(screen.getByText("The ready-for-review approval path is not available yet.")).toBeInTheDocument();
+    fireEvent.click(button);
+    await act(async () => {});
+    expect(onProposeReady).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /merge|close issue/i })).not.toBeInTheDocument();
+  });
+  it("proposes a one-use approval without performing the ready transition once the mark-ready path is available", async () => {
+    const onProposeReady = vi.fn();
+    render(
+      <CodingWorkbenchJourneyOutcome
+        {...journeyFixture()}
+        onProposeReady={onProposeReady}
+        markReadyAvailable
+      />,
+    );
+    const button = screen.getByRole("button", { name: "Review ready-for-review request" });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
     await act(async () => {});
     expect(onProposeReady).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: /merge|close issue/i })).not.toBeInTheDocument();
@@ -115,7 +134,9 @@ describe("observed issue journey handoff", () => {
         },
       };
       expect(isJourneyOutcome(fixture.outcome)).toBe(true);
-      render(<CodingWorkbenchJourneyOutcome {...fixture} onProposeReady={vi.fn()} />);
+      render(
+        <CodingWorkbenchJourneyOutcome {...fixture} onProposeReady={vi.fn()} markReadyAvailable />,
+      );
       expect(
         screen.getByText(
           translateCodingWorkbench("en", `codingWorkbench.journey.completeness.${state}`),
@@ -182,6 +203,7 @@ describe("observed issue journey handoff", () => {
           {...journeyFixture()}
           onRefresh={callback}
           onProposeReady={callback}
+          markReadyAvailable
         />,
       );
       fireEvent.click(

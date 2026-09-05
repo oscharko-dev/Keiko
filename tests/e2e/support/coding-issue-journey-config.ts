@@ -17,7 +17,7 @@
 // what is missing — never a silent fallback to scripted composition.
 
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 
 export interface CodingIssueJourneyQualificationConfig {
   readonly gatewayConfigPath: string | undefined;
@@ -51,6 +51,17 @@ function hasRealModelGatewayProfile(env: Readonly<Record<string, string | undefi
   return hasEnvOnlyModelProfile(env);
 }
 
+/** Resolves `root` to a canonical absolute path, or `undefined` when it does not exist. Mirrors
+ * `githubIssueReaderRepositoryId`'s own canonicalisation so a symlinked checkout (every path
+ * under macOS `/tmp` is one) resolves the same way the production reader resolves it. */
+function canonicalRoot(root: string): string | undefined {
+  try {
+    return realpathSync(root);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The controlled repository's GitHub `owner/repo` slug, or `undefined` when `root` is not a git
  * checkout with a GitHub `origin` remote. */
 function controlledRepositorySlug(root: string): string | undefined {
@@ -70,8 +81,9 @@ function resolveControlledRepository(
   env: Readonly<Record<string, string | undefined>>,
   missing: string[],
 ): { readonly root: string; readonly slug: string } | undefined {
-  const root = env.KEIKO_QUALIFICATION_CONTROLLED_REPOSITORY_ROOT;
-  if (root === undefined || root.length === 0 || !existsSync(root)) {
+  const rawRoot = env.KEIKO_QUALIFICATION_CONTROLLED_REPOSITORY_ROOT;
+  const root = rawRoot === undefined || rawRoot.length === 0 ? undefined : canonicalRoot(rawRoot);
+  if (root === undefined) {
     missing.push(
       "KEIKO_QUALIFICATION_CONTROLLED_REPOSITORY_ROOT (an existing local checkout of the " +
         "operator-authorized controlled repository)",

@@ -9,10 +9,10 @@ network confinement wraps its launch. The entry follows the
 
 ## The coding sidecar never becomes ready on macOS, or exits immediately after launch
 
-| Field             | Value                                                                                                  |
-| ----------------- | -------------------------------------------------------------------------------------------------------- |
-| Severity          | High                                                                                                       |
-| Surface           | Local UI / Workspace                                                                                       |
+| Field             | Value                                                                                                     |
+| ----------------- | --------------------------------------------------------------------------------------------------------- |
+| Severity          | High                                                                                                      |
+| Surface           | Local UI / Workspace                                                                                      |
 | Stable identifier | `runtime.confinement.failed`, `runtime-gateway-confinement-required`, `runtime-gateway-confinement-drift` |
 
 **Symptom**
@@ -61,6 +61,7 @@ backend refuses to spawn at all — never falling back to an unconfined launch �
 
    `command not found`, a non-zero exit, or output other than `ok` confirms case 3 above — the
    sandbox backend itself cannot run on this machine, independent of Keiko's policy.
+
 3. If the log instead shows `runtime-gateway-confinement-required` or
    `runtime-gateway-confinement-drift` with **zero** spawn attempts, the failure occurred before
    any process existed; this points at the composition that constructed the backend, not at the

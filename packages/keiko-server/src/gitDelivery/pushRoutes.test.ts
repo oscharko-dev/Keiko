@@ -430,7 +430,10 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
     const res = await handler(
       ctxFor(
         EXECUTE,
-        pushBody({ setUpstreamTracking: true, approval: issuePushApproval(approvalStore, command) }),
+        pushBody({
+          setUpstreamTracking: true,
+          approval: issuePushApproval(approvalStore, command),
+        }),
       ),
       deps({ evidenceStore: cap.store }),
     );
@@ -763,7 +766,10 @@ describe("push approve — mints the server-issued claim execute consumes (#3387
   it("mints a claim that execute accepts for the exact same push, letting an approval-required push proceed", async () => {
     const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const approveHandler = createHandlePushApprove({ execution: seams({ approvalStore }) });
-    const minted = await approveHandler(ctxFor("/api/git-delivery/push/approve", pushBody()), deps());
+    const minted = await approveHandler(
+      ctxFor("/api/git-delivery/push/approve", pushBody()),
+      deps(),
+    );
     expect(minted.status).toBe(200);
     const approval = (minted.body as { approval: GitDeliveryApprovalClaim }).approval;
 
@@ -833,12 +839,20 @@ describe("push approve — mints the server-issued claim execute consumes (#3387
       execution: seams({ activityLog: activity.sink }),
     });
     await handler(
-      { ...ctxFor("/api/git-delivery/push/approve", pushBody()), correlationId: "corr-push-mint-1" },
+      {
+        ...ctxFor("/api/git-delivery/push/approve", pushBody()),
+        correlationId: "corr-push-mint-1",
+      },
       deps(),
     );
-    const events = activity.events.filter((event) => event.op === "git.delivery.push.approval.minted");
+    const events = activity.events.filter(
+      (event) => event.op === "git.delivery.push.approval.minted",
+    );
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ correlationId: "corr-push-mint-1", extra: { runId: "test-run" } });
+    expect(events[0]).toMatchObject({
+      correlationId: "corr-push-mint-1",
+      extra: { runId: "test-run" },
+    });
     expect(JSON.stringify(events[0])).not.toContain("feat/x");
   });
 });
@@ -1017,7 +1031,10 @@ describe("push execute activity log (AGENTS.md §8 Rule 1)", () => {
     await handler(
       ctxWithCorrelation(
         EXECUTE,
-        pushBody({ setUpstreamTracking: true, approval: issuePushApproval(approvalStore, command) }),
+        pushBody({
+          setUpstreamTracking: true,
+          approval: issuePushApproval(approvalStore, command),
+        }),
         "corr-push-failed-1",
       ),
       deps(),
@@ -1060,7 +1077,10 @@ describe("push execute activity log (AGENTS.md §8 Rule 1)", () => {
     const res = await handler(
       ctxWithCorrelation(
         EXECUTE,
-        pushBody({ setUpstreamTracking: true, approval: issuePushApproval(approvalStore, command) }),
+        pushBody({
+          setUpstreamTracking: true,
+          approval: issuePushApproval(approvalStore, command),
+        }),
         "corr-push-000001",
       ),
       deps(),

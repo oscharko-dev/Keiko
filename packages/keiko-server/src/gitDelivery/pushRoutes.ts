@@ -428,7 +428,11 @@ export const createHandlePushApprove = (
       approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
       nowMs: (seams.now ?? Date.now)(),
     });
-    logPushApprovalMinted(seams.activityLog ?? processServerLogSink(), correlationId, authority.runId);
+    logPushApprovalMinted(
+      seams.activityLog ?? processServerLogSink(),
+      correlationId,
+      authority.runId,
+    );
     const body: GitDeliveryPushApproveResponseBody = {
       schemaVersion: "1",
       approval: issued.approval,
