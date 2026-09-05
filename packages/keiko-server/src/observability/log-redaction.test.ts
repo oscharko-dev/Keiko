@@ -1092,3 +1092,35 @@ describe("epic #3384 — readiness/git-change.chat field names survive as body-f
     expect(redactLogFields(fields)).toStrictEqual(fields);
   });
 });
+
+// #3389: draft PR -> ready (mark-ready) approval/execution evidence
+// (`prMarkReadyExecution.ts`'s `log(...)` call sites) and Chat's own description-generation
+// admission gate ahead of the Model Gateway (`chat-handlers.ts`'s `logGitChangeTurnAuthority`).
+// Field names and shapes are read off those real producers, never guessed.
+describe("epic #3384 — pr-mark-ready and pr-description.chat.turn field names survive as body-free evidence", () => {
+  it("keeps the mark-ready approval pair's runId/prExternalId intact", () => {
+    const fields = { runId: "run-42", prExternalId: "pr-7" };
+    expect(redactLogFields(fields)).toStrictEqual(fields);
+  });
+
+  it("keeps the mark-ready outcome pair's prExternalId/outcome intact for both succeeded and failed", () => {
+    for (const outcome of ["succeeded", "failed", "aborted"]) {
+      const fields = { prExternalId: "pr-7", outcome };
+      expect(redactLogFields(fields)).toStrictEqual(fields);
+    }
+  });
+
+  it("keeps the chat-turn admission gate's relationshipId intact whether admitted or denied", () => {
+    const fields = { relationshipId: "rel-1" };
+    expect(redactLogFields(fields)).toStrictEqual(fields);
+  });
+
+  it("rejects a filesystem path or a credential smuggled under prExternalId", () => {
+    expect(redactLogFields({ prExternalId: "private/customer.txt" })).not.toEqual({
+      prExternalId: "private/customer.txt",
+    });
+    expect(redactLogFields({ prExternalId: GITHUB_PAT })).not.toEqual({
+      prExternalId: GITHUB_PAT,
+    });
+  });
+});

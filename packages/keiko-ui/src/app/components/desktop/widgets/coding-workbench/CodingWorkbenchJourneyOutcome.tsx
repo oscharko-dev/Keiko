@@ -3,6 +3,7 @@
 import { useEffect, type ReactNode } from "react";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
+import { proposePrMarkReady, type GitDeliveryPrMarkReadyInput } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import { JourneyDetails } from "./_JourneyDetails";
@@ -31,15 +32,60 @@ export interface CodingWorkbenchJourneyOutcomeProps {
   readonly busy?: boolean;
   readonly changedFiles?: CodingWorkbenchJourneyChangedFilesSummary;
   /**
-   * The narrow `pr-mark-ready` approval/execute path (#3389 AC3) is a separate slice landing in a
-   * later wave; this route/UI change wires observation only. Until a caller passes `true` — meaning
-   * the mint route actually exists and `onProposeReady` is genuinely backed by it — the ready-for-
-   * review control renders visibly but stays a closed, non-clickable "approval path pending" state,
-   * never a click that silently does nothing or reaches a generic command with no approval bound to
-   * it (see the corrected #3389 contract: the generic `pr-update` transition must not be presented
-   * as this approval path).
+   * The narrow `pr-mark-ready` approval/execute path (#3389 AC3) is now live: `POST
+   * /api/git-delivery/pr/mark-ready/approve` mints the one-use claim and `POST
+   * /api/git-delivery/pr/mark-ready/execute` redeems it (prMarkReadyExecution.ts). The Coding
+   * Workbench window builds `onProposeReady` and `markReadyAvailable` from
+   * `createPrMarkReadyProposeHandler` below, computed from this same `outcome`, rather than
+   * re-deriving the request shape. Until the caller passes `true` here — meaning a genuine request
+   * could be built AND `onProposeReady` is backed by it — the ready-for-review control renders
+   * visibly but stays a closed, non-clickable "approval path pending" state, never a click that
+   * silently does nothing or reaches a generic command with no approval bound to it (the generic
+   * `pr-update` transition must not be presented as this approval path — epic #3384 correction 1).
    */
   readonly markReadyAvailable?: boolean;
+}
+
+/**
+ * Derives the exact pr-mark-ready mint/execute request from a JourneyOutcome's own observed remote
+ * identity and CI readiness snapshot — undefined when either is missing. An incomplete or stale
+ * observation can never be proposed as ready: every field this binds is a fact the journey read
+ * actually observed, never guessed or defaulted (AC3's "base/head SHAs, a readiness digest, the
+ * current draft state" binding).
+ */
+export function prMarkReadyProposalRequestFor(
+  outcome: JourneyOutcome,
+  projectId: string,
+): Omit<GitDeliveryPrMarkReadyInput, "approval"> | undefined {
+  const identity = outcome.remote?.identity;
+  const readinessDigest = outcome.readiness?.requirementsDigest ?? undefined;
+  if (identity === undefined || readinessDigest === undefined) return undefined;
+  return {
+    projectId,
+    ownerAndRepo: identity.repository,
+    prExternalId: String(identity.number),
+    headSha: identity.headSha,
+    baseSha: identity.baseSha,
+    readinessDigest,
+  };
+}
+
+/**
+ * Builds the genuine `onProposeReady` handler for the Coding Workbench window to pass through:
+ * mints then immediately redeems the one-use pr-mark-ready approval via the governed BFF routes
+ * (`proposePrMarkReady`, api.ts). Returns undefined when the outcome does not yet carry the facts
+ * the approval must bind — the caller gates `markReadyAvailable` on that same `undefined` check, so
+ * the control is never offered as clickable without a handler genuinely backed by a real request.
+ */
+export function createPrMarkReadyProposeHandler(
+  outcome: JourneyOutcome,
+  projectId: string,
+): (() => Promise<void>) | undefined {
+  const request = prMarkReadyProposalRequestFor(outcome, projectId);
+  if (request === undefined) return undefined;
+  return async (): Promise<void> => {
+    await proposePrMarkReady(request);
+  };
 }
 /** A historical outcome never reconstructs a grant or completes a provider mutation. */
 export function CodingWorkbenchJourneyOutcome(

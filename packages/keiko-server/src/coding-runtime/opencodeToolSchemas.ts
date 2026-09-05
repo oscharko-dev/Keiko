@@ -7,6 +7,7 @@ import {
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
 } from "@oscharko-dev/keiko-tool-catalog";
 import type { GatewayToolCatalogAdvertisement } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import {
   CODING_TOOL_DISCOVER_MAX_RESULTS,
   CODING_TOOL_READ_MAX_START_LINE,
@@ -207,6 +208,104 @@ const CHILD_AGENT_SCHEMA = {
   required: ["objective", "maxToolCalls"],
 } as const;
 
+// #3386/#3387/#3388: the Git status/diff/stage/commit, push/pull-request and CI-observation
+// tools. Every arguments field the model can supply is server-validated by the existing
+// codingToolIpc.ts wire parsers (codingRuntimeGitIpc.ts's `RuntimeGitRequest`,
+// codingRuntimeDeliveryIpc.ts's `DraftToolRequest`, VerifiedCommitService's commit propose/execute
+// branch) -- these schemas only bound the shape shown to the model, never the enforcement boundary.
+// A path/SHA/proposal identity handed back by the server is never re-validated by the model; the
+// model never commits, pushes or opens a PR directly, it only proposes and, once a human approves
+// through the existing Workbench approval channel, redeems the resulting proposalId.
+const GIT_STATUS_SCHEMA = { type: "object", properties: {}, required: [] } as const;
+
+const GIT_PUSH_SCHEMA = { type: "object", properties: {}, required: [] } as const;
+
+const GIT_DIFF_SCHEMA = {
+  type: "object",
+  properties: {
+    scope: { type: "string", enum: ["working-tree", "index"] },
+    paths: {
+      type: "array",
+      minItems: 1,
+      maxItems: CODING_RUNTIME_GIT_MAX_PATHS,
+      items: { type: "string", minLength: 1, maxLength: 512 },
+      description: "Workspace-relative paths to diff; denied or ignored paths never appear.",
+    },
+  },
+  required: ["scope", "paths"],
+} as const;
+
+const GIT_STAGE_SCHEMA = {
+  type: "object",
+  properties: {
+    paths: {
+      type: "array",
+      minItems: 1,
+      maxItems: CODING_RUNTIME_GIT_MAX_PATHS,
+      items: { type: "string", minLength: 1, maxLength: 512 },
+      description: "Workspace-relative paths to propose staging.",
+    },
+  },
+  required: ["paths"],
+} as const;
+
+const GIT_COMMIT_SCHEMA = {
+  type: "object",
+  properties: {
+    message: {
+      type: "string",
+      minLength: 1,
+      maxLength: 8_192,
+      description: "Proposed commit message. This proposes only; a human approval is required.",
+    },
+  },
+  required: ["message"],
+} as const;
+
+const GIT_PULL_REQUEST_SCHEMA = {
+  type: "object",
+  properties: {
+    title: {
+      type: "string",
+      minLength: 1,
+      maxLength: 256,
+      pattern: String.raw`^[^\0\r\n]+$`,
+      description: "Proposed draft pull-request title.",
+    },
+  },
+  required: ["title"],
+} as const;
+
+const GIT_CI_STATUS_SCHEMA = {
+  type: "object",
+  properties: {
+    forceFresh: {
+      type: "boolean",
+      description:
+        "Set true to bypass the cached readiness snapshot and force one fresh provider read.",
+    },
+  },
+  required: ["forceFresh"],
+} as const;
+
+// The four write-class proposals (stage/commit/push/pull-request) share one redemption tool: once
+// the Workbench approval channel admits a proposal, the model redeems it by kind + proposalId
+// rather than each proposal type growing its own execute-phase tool.
+const GIT_EXECUTE_SCHEMA = {
+  type: "object",
+  properties: {
+    kind: { type: "string", enum: ["stage", "commit", "push", "pull-request"] },
+    proposalId: {
+      type: "string",
+      minLength: 1,
+      maxLength: 64,
+      pattern: "^(?:stage|delivery)-[0-9]{1,39}$",
+      description: "The proposalId returned by the matching propose-phase tool call.",
+    },
+  },
+  required: ["kind", "proposalId"],
+} as const;
+
 export const OPENCODE_MODEL_VISIBLE_TOOLS = [
   { name: "question", parameters: QUESTION_SCHEMA },
   { name: "keiko_workspace_discover", parameters: WORKSPACE_DISCOVER_SCHEMA },
@@ -216,6 +315,14 @@ export const OPENCODE_MODEL_VISIBLE_TOOLS = [
   { name: "keiko_research_fetch", parameters: RESEARCH_FETCH_SCHEMA },
   { name: "keiko_skill", parameters: SKILL_SCHEMA },
   { name: "keiko_child_agent", parameters: CHILD_AGENT_SCHEMA },
+  { name: "keiko_git_status", parameters: GIT_STATUS_SCHEMA },
+  { name: "keiko_git_diff", parameters: GIT_DIFF_SCHEMA },
+  { name: "keiko_git_stage", parameters: GIT_STAGE_SCHEMA },
+  { name: "keiko_git_commit", parameters: GIT_COMMIT_SCHEMA },
+  { name: "keiko_git_push", parameters: GIT_PUSH_SCHEMA },
+  { name: "keiko_pull_request", parameters: GIT_PULL_REQUEST_SCHEMA },
+  { name: "keiko_git_execute", parameters: GIT_EXECUTE_SCHEMA },
+  { name: "keiko_ci_status", parameters: GIT_CI_STATUS_SCHEMA },
   { name: "todowrite", parameters: TODO_WRITE_SCHEMA },
 ] as const;
 

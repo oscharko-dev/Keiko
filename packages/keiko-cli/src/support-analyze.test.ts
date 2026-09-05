@@ -1599,7 +1599,27 @@ describe("issueToPrJourney — epic #3384 reconstruction", () => {
         providerError: false,
         count: 5,
       }),
+      // #3389: draft PR -> ready (mark-ready) — the mint half of the approval pair, then a
+      // successful execution of the governed mutation itself.
       journeyLine(13, CORRELATION_ID, {
+        category: "security",
+        op: "git.delivery.pr-mark-ready.approval.minted",
+        runId: "run-42",
+        prExternalId: "pr-7",
+      }),
+      journeyLine(14, CORRELATION_ID, {
+        category: "process",
+        op: "git.delivery.pr-mark-ready.executed",
+        prExternalId: "pr-7",
+        outcome: "succeeded",
+      }),
+      // Chat's description-generation admission gate, ahead of the Model Gateway.
+      journeyLine(15, CORRELATION_ID, {
+        category: "security",
+        op: "pr-description.chat.turn.admitted",
+        relationshipId: "rel-1",
+      }),
+      journeyLine(16, CORRELATION_ID, {
         category: "process",
         op: "git.pr-description",
         phase: "apply",
@@ -1610,7 +1630,7 @@ describe("issueToPrJourney — epic #3384 reconstruction", () => {
         artifactDigest: "sha256:art1",
         bodyDigest: "sha256:body1",
       }),
-      journeyLine(14, CORRELATION_ID, {
+      journeyLine(17, CORRELATION_ID, {
         category: "process",
         op: "git.pr-description.receipt",
         phase: "record",
@@ -1618,7 +1638,7 @@ describe("issueToPrJourney — epic #3384 reconstruction", () => {
         state: "current",
         scopeDigest: "sha256:scope1",
       }),
-      journeyLine(15, CORRELATION_ID, {
+      journeyLine(18, CORRELATION_ID, {
         category: "process",
         op: "git.journey-observation",
         phase: "observed",
@@ -1633,7 +1653,7 @@ describe("issueToPrJourney — epic #3384 reconstruction", () => {
         descriptionState: "current",
         complete: true,
       }),
-      journeyLine(16, CORRELATION_ID, {
+      journeyLine(19, CORRELATION_ID, {
         category: "process",
         op: "git.journey-outcome.recorded",
         runId: "run-42",
@@ -1658,11 +1678,65 @@ describe("issueToPrJourney — epic #3384 reconstruction", () => {
       expect(hasIssueToPrJourneyOps(analyzeLogText(FIXTURE_TEXT))).toBe(false);
     });
 
+    // These four ops are correctly mapped in JOURNEY_OP_PHASE but, unlike the ops above, are not
+    // otherwise exercised by the success/blocked fixtures — a standalone correlation covers them.
+    it("recognises the coding-repository-handler and coding-context.github op families", () => {
+      const correlationId = "journey-search-authz-0006";
+      const text =
+        [
+          journeyLine(1, correlationId, {
+            category: "search",
+            op: "coding-repository-handler.started",
+          }),
+          journeyLine(2, correlationId, {
+            category: "search",
+            op: "coding-repository-handler.settled",
+            state: "completed",
+            reason: "none",
+            resultCount: 3,
+          }),
+          journeyLine(3, correlationId, {
+            category: "process",
+            op: "coding-context.github.read",
+            outcome: "succeeded",
+            byteCount: 128,
+          }),
+          journeyLine(4, correlationId, {
+            category: "security",
+            op: "coding-context.github-authorization.changed",
+            repositoryId: "repo-1",
+            authorized: true,
+            revision: 4,
+          }),
+        ].join("\n") + "\n";
+
+      const seed = buildReproductionSeed(text, correlationId, GENERATED, OPTIONS);
+      const steps = seed?.issueToPrJourney?.steps ?? [];
+
+      expect(steps).toHaveLength(4);
+      expect(steps[0]).toMatchObject({ phase: "intake", op: "coding-repository-handler.started" });
+      expect(steps[1]).toMatchObject({
+        phase: "intake",
+        op: "coding-repository-handler.settled",
+        status: "completed",
+        reason: "none",
+      });
+      expect(steps[2]).toMatchObject({
+        phase: "intake",
+        op: "coding-context.github.read",
+        status: "succeeded",
+      });
+      expect(steps[3]).toMatchObject({
+        phase: "authority",
+        op: "coding-context.github-authorization.changed",
+      });
+    });
+
     it("reconstructs one timeline covering every phase, in order, with the closed-vocabulary values verbatim", () => {
       const seed = buildReproductionSeed(TEXT, CORRELATION_ID, GENERATED, OPTIONS);
       const journey = seed?.issueToPrJourney;
 
-      expect(journey?.steps).toHaveLength(16);
+      expect(journey?.steps).toHaveLength(19);
       expect(journey?.phasesObserved).toEqual([
         "intake",
         "authority",
@@ -1687,6 +1761,22 @@ describe("issueToPrJourney — epic #3384 reconstruction", () => {
         status: "completed",
       });
       expect(steps[12]).toMatchObject({
+        phase: "readiness",
+        op: "git.delivery.pr-mark-ready.approval.minted",
+        digests: { runId: "run-42", prExternalId: "pr-7" },
+      });
+      expect(steps[13]).toMatchObject({
+        phase: "readiness",
+        op: "git.delivery.pr-mark-ready.executed",
+        status: "succeeded",
+        digests: { prExternalId: "pr-7" },
+      });
+      expect(steps[14]).toMatchObject({
+        phase: "description",
+        op: "pr-description.chat.turn.admitted",
+        digests: { relationshipId: "rel-1" },
+      });
+      expect(steps[15]).toMatchObject({
         phase: "description",
         op: "git.pr-description",
         status: "current",
@@ -1697,7 +1787,7 @@ describe("issueToPrJourney — epic #3384 reconstruction", () => {
           bodyDigest: "sha256:body1",
         },
       });
-      expect(steps[14]).toMatchObject({
+      expect(steps[17]).toMatchObject({
         phase: "outcome",
         op: "git.journey-observation",
         status: "ready-for-human-review",
@@ -1708,7 +1798,7 @@ describe("issueToPrJourney — epic #3384 reconstruction", () => {
           headSha: "abc123def456",
         },
       });
-      expect(steps[15]).toMatchObject({
+      expect(steps[18]).toMatchObject({
         phase: "outcome",
         op: "git.journey-outcome.recorded",
         status: "ready-for-human-review",
@@ -1773,7 +1863,27 @@ describe("issueToPrJourney — epic #3384 reconstruction", () => {
         providerError: true,
         count: 0,
       }),
+      // #3389: mark-ready blocked on approval, then the branch moved under it (drift) — the
+      // precondition-failed variant of the mutation, never folded into `.executed`.
       journeyLine(6, CORRELATION_ID, {
+        category: "security",
+        op: "git.delivery.pr-mark-ready.approval.required",
+        runId: "run-99",
+        prExternalId: "pr-9",
+      }),
+      journeyLine(7, CORRELATION_ID, {
+        category: "process",
+        op: "git.delivery.pr-mark-ready.drift",
+        prExternalId: "pr-9",
+        outcome: "failed",
+      }),
+      journeyLine(8, CORRELATION_ID, {
+        category: "security",
+        op: "pr-description.chat.turn.denied",
+        errorKind: "authority-denied",
+        relationshipId: "rel-9",
+      }),
+      journeyLine(9, CORRELATION_ID, {
         category: "process",
         op: "git.pr-description",
         level: "warn",
@@ -1783,7 +1893,7 @@ describe("issueToPrJourney — epic #3384 reconstruction", () => {
         state: "blocked",
         effect: "none",
       }),
-      journeyLine(7, CORRELATION_ID, {
+      journeyLine(10, CORRELATION_ID, {
         category: "process",
         op: "git.journey-observation",
         phase: "unavailable",
@@ -1819,11 +1929,28 @@ describe("issueToPrJourney — epic #3384 reconstruction", () => {
         errorKind: "internal",
       });
       expect(steps[5]).toMatchObject({
+        phase: "readiness",
+        op: "git.delivery.pr-mark-ready.approval.required",
+        digests: { runId: "run-99", prExternalId: "pr-9" },
+      });
+      expect(steps[6]).toMatchObject({
+        phase: "readiness",
+        op: "git.delivery.pr-mark-ready.drift",
+        status: "failed",
+        digests: { prExternalId: "pr-9" },
+      });
+      expect(steps[7]).toMatchObject({
+        phase: "description",
+        op: "pr-description.chat.turn.denied",
+        errorKind: "authority-denied",
+        digests: { relationshipId: "rel-9" },
+      });
+      expect(steps[8]).toMatchObject({
         phase: "description",
         status: "blocked",
         reason: "approval-required",
       });
-      expect(steps[6]).toMatchObject({
+      expect(steps[9]).toMatchObject({
         phase: "outcome",
         status: "unavailable",
         reason: "authority-denied",

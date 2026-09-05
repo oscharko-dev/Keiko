@@ -222,7 +222,8 @@ function buildRuntimeGitPort(
     ): ReturnType<GovernedCodingToolPort<"git">["execute"]> => {
       if (signalAborted(signal) || !guard.check() || !live(input))
         return { status: "failed", reasonCode: "git-authority-revoked" };
-      if (request.operation === "ci") return runCiObservation(input.ciObservationService);
+      if (request.operation === "ci")
+        return runCiObservation(input.ciObservationService, request.forceFresh);
       if (
         input.runtimeGitService === undefined ||
         request.operation === "read" ||
@@ -239,10 +240,11 @@ function buildRuntimeGitPort(
 
 async function runCiObservation(
   service: CiObservationService | undefined,
+  forceFresh: boolean | undefined,
 ): Promise<import("./codingToolGovernedDelegate.js").GovernedCodingToolResult> {
   return service === undefined
     ? { status: "failed", reasonCode: "capability-backend-unavailable" }
-    : { status: "completed", ci: await service.observe() };
+    : { status: "completed", ci: await service.observe(forceFresh) };
 }
 
 function requestStageReview(

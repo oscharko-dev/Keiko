@@ -87,7 +87,12 @@ export type CodingToolActionRequest =
     })
   | (CodingToolRequestIdentity & { readonly action: "git"; readonly operation: "read" })
   | (CodingToolRequestIdentity & { readonly action: "git"; readonly operation: "write" })
-  | (CodingToolRequestIdentity & { readonly action: "git"; readonly operation: "ci" })
+  | (CodingToolRequestIdentity & {
+      readonly action: "git";
+      readonly operation: "ci";
+      /** #3388: bypasses the cached readiness snapshot for one fresh provider read. */
+      readonly forceFresh?: boolean;
+    })
   | RuntimeGitRequest
   | (CodingToolRequestIdentity & {
       readonly action: "delivery";
@@ -484,13 +489,30 @@ function simpleNamedRequest(
 
 function gitRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
   const identity = requestIdentity(value);
+  if (identity === undefined) return undefined;
+  if (value.operation === "ci") return ciRequest(value, identity);
   const operation = value.operation;
-  const simple = operation === "read" || operation === "write" || operation === "ci";
-  if (identity !== undefined && !simple) return parseRuntimeGitRequest(value, identity);
-  return identity !== undefined &&
-    hasExactKeys(value, ["action", "actionId", "idempotencyKey", "operation"]) &&
-    simple
+  const simple = operation === "read" || operation === "write";
+  if (!simple) return parseRuntimeGitRequest(value, identity);
+  return hasExactKeys(value, ["action", "actionId", "idempotencyKey", "operation"])
     ? { ...identity, action: "git", operation }
+    : undefined;
+}
+
+// #3388: the CI-observation tool's one optional argument. `forceFresh` stays a plain boolean
+// (never a token/identifier) so it cannot smuggle anything the model does not already own.
+function ciRequest(
+  value: Record<string, unknown>,
+  identity: CodingToolRequestIdentity,
+): CodingToolActionRequest | undefined {
+  const base = { ...identity, action: "git" as const, operation: "ci" as const };
+  if (!Object.hasOwn(value, "forceFresh"))
+    return hasExactKeys(value, ["action", "actionId", "idempotencyKey", "operation"])
+      ? base
+      : undefined;
+  return hasExactKeys(value, ["action", "actionId", "idempotencyKey", "operation", "forceFresh"]) &&
+    typeof value.forceFresh === "boolean"
+    ? { ...base, forceFresh: value.forceFresh }
     : undefined;
 }
 

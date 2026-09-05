@@ -134,11 +134,15 @@ that warning as an instruction to read the file position ordering with less conf
 specific lines, not as a defect.
 
 Epic #3384's repository-delivery journey (intake, mutation authority, verified commit, push, draft
-PR, CI readiness, description generation/apply, and the recorded journey outcome) reconstructs on
-the same per-correlation timeline as every other operation — `git.delivery.*`,
-`git.pr-description`/`git.pr-description.receipt`, `git.journey-observation`/
-`git.journey-outcome.recorded`, `coding-context.github*` and `git-change.chat.*` lines simply
-appear on it like any other line, and `--clusters` groups them the same way. `keiko support
+PR, CI readiness — including the `pr-mark-ready` draft-to-ready transition (#3389) — description
+generation/apply, and the recorded journey outcome) reconstructs on the same per-correlation
+timeline as every other operation — `git.delivery.*` (including
+`git.delivery.pr-mark-ready.approval.required`/`.minted`/`.executed`/`.drift`),
+`git.pr-description`/`git.pr-description.receipt`, `pr-description.chat.turn.admitted`/`.denied`
+(Chat's own description-generation admission gate ahead of the Model Gateway),
+`git.journey-observation`/`git.journey-outcome.recorded`, `coding-context.github*` and
+`git-change.chat.*` lines simply appear on it like any other line, and `--clusters` groups them the
+same way. `keiko support
 analyze --seed --correlation-id <id>` additionally assembles an `issueToPrJourney` view onto the
 `ReproductionSeed`: one step per recognised line, tagged with a closed `phase`
 (`intake`/`authority`/`commit`/`push`/`pr`/`readiness`/`description`/`outcome`) and carrying the

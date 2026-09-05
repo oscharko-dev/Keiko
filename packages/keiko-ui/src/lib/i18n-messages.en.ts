@@ -1367,7 +1367,8 @@ export const EN_MESSAGES = {
     "Blocked: more than one open pull request matches this branch.",
   "gitChangeScope.blocked.readerUnauthorized":
     "Blocked: GitHub read access is not authorized for this repository.",
-  "gitChangeScope.blocked.remoteUnresolved": "Blocked: the repository's remote could not be resolved.",
+  "gitChangeScope.blocked.remoteUnresolved":
+    "Blocked: the repository's remote could not be resolved.",
   "gitChangeScope.blocked.repositoryUnavailable": "Blocked: the repository is unavailable.",
   "gitChangeScope.blocked.snapshotUnavailable": "Blocked: the comparison could not be captured.",
   "gitChangeScope.blocked.snapshotFailed": "Blocked: capturing the comparison failed.",

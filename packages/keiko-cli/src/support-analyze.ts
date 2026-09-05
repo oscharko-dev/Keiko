@@ -908,8 +908,21 @@ const JOURNEY_OP_PHASE = new Map<string, IssueToPrJourneyPhase>([
   ["git.delivery.pr.approval.required", "pr"],
   ["git.delivery.pr.approval.minted", "pr"],
   ["git.delivery.readiness.observed", "readiness"],
+  // #3389 (epic #3384 correction 7): the draft-PR -> ready transition. `.approval.required`/
+  // `.approval.minted` mirror the commit/push/pr approval pair above; `.executed`/`.drift` are the
+  // mark-ready-specific outcome pair (drift is the precondition-failed case of the same mutation,
+  // never folded into `.executed` so a replay can tell "ready" from "the branch moved under us").
+  ["git.delivery.pr-mark-ready.approval.required", "readiness"],
+  ["git.delivery.pr-mark-ready.approval.minted", "readiness"],
+  ["git.delivery.pr-mark-ready.executed", "readiness"],
+  ["git.delivery.pr-mark-ready.drift", "readiness"],
   ["git.pr-description", "description"],
   ["git.pr-description.receipt", "description"],
+  // Chat's own admission gate ahead of the Model Gateway for a git-change-connected turn
+  // (chat-handlers.ts `logGitChangeTurnAuthority`) — the description-generation admission decision
+  // itself, distinct from the apply/receipt evidence above.
+  ["pr-description.chat.turn.admitted", "description"],
+  ["pr-description.chat.turn.denied", "description"],
   ["git.journey-observation", "outcome"],
   ["git.journey-outcome.recorded", "outcome"],
 ]);
@@ -923,6 +936,12 @@ const JOURNEY_ACTION_KIND_PHASE: Readonly<Record<string, IssueToPrJourneyPhase>>
   "pr-create": "pr",
   "pr-update": "pr",
   "pr-description-apply": "description",
+  // #3389: `pr-mark-ready` is a real `GitDeliveryActionKind` member (git-delivery.ts) and this
+  // generic mutation-lifecycle path (`git.delivery.mutation.completed`/`.failed`) is capable of
+  // reporting on any action kind — mapped here for the same completeness reason every other
+  // action kind is, even though today's mark-ready flow logs its own dedicated ops (above)
+  // instead of routing through this generic path.
+  "pr-mark-ready": "readiness",
 };
 const JOURNEY_ACTION_KIND_OPS: ReadonlySet<string> = new Set([
   "git.delivery.mutation.completed",

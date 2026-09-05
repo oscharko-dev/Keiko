@@ -1394,9 +1394,11 @@ export const DE_MESSAGES = {
   "gitChangeScope.announcement.connected": "Git-Änderung verbunden.",
   "gitChangeScope.announcement.stale":
     "Die verbundene Git-Änderung ist veraltet; zum Fortfahren aktualisieren.",
-  "gitChangeScope.blocked.detachedHead": "Blockiert: HEAD des Repositorys ist losgelöst (detached).",
+  "gitChangeScope.blocked.detachedHead":
+    "Blockiert: HEAD des Repositorys ist losgelöst (detached).",
   "gitChangeScope.blocked.unbornHead": "Blockiert: Das Repository enthält noch keine Commits.",
-  "gitChangeScope.blocked.missingRef": "Blockiert: Die ausgewählte Referenz konnte nicht aufgelöst werden.",
+  "gitChangeScope.blocked.missingRef":
+    "Blockiert: Die ausgewählte Referenz konnte nicht aufgelöst werden.",
   "gitChangeScope.blocked.noPullRequest":
     "Blockiert: Für diesen Branch wurde kein offener Pull Request gefunden.",
   "gitChangeScope.blocked.ambiguousPullRequest":
@@ -1406,8 +1408,10 @@ export const DE_MESSAGES = {
   "gitChangeScope.blocked.remoteUnresolved":
     "Blockiert: Das Remote des Repositorys konnte nicht aufgelöst werden.",
   "gitChangeScope.blocked.repositoryUnavailable": "Blockiert: Das Repository ist nicht verfügbar.",
-  "gitChangeScope.blocked.snapshotUnavailable": "Blockiert: Der Vergleich konnte nicht erfasst werden.",
-  "gitChangeScope.blocked.snapshotFailed": "Blockiert: Das Erfassen des Vergleichs ist fehlgeschlagen.",
+  "gitChangeScope.blocked.snapshotUnavailable":
+    "Blockiert: Der Vergleich konnte nicht erfasst werden.",
+  "gitChangeScope.blocked.snapshotFailed":
+    "Blockiert: Das Erfassen des Vergleichs ist fehlgeschlagen.",
   "gitChangeScope.blocked.chatProjectUnavailable":
     "Blockiert: Das Projekt des Chats ist nicht verfügbar.",
   "gitChangeScope.connect.title": "Git-Änderung mit Chat verbinden",

@@ -1,7 +1,18 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isJourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-validation";
-import { CodingWorkbenchJourneyOutcome } from "./CodingWorkbenchJourneyOutcome";
+
+const { proposePrMarkReadyMock } = vi.hoisted(() => ({ proposePrMarkReadyMock: vi.fn() }));
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
+  return { ...actual, proposePrMarkReady: proposePrMarkReadyMock };
+});
+
+import {
+  CodingWorkbenchJourneyOutcome,
+  createPrMarkReadyProposeHandler,
+  prMarkReadyProposalRequestFor,
+} from "./CodingWorkbenchJourneyOutcome";
 import { completedJourneyFixture, journeyFixture } from "./_journeyOutcomeTestSupport";
 
 import { axe } from "jest-axe";
@@ -285,5 +296,93 @@ describe("observed issue journey handoff", () => {
     screen.getByRole("button", { name: "Refresh observed status" }).focus();
     expect(screen.getByRole("button", { name: "Refresh observed status" })).toHaveFocus();
     expect(await axe(document.body)).toHaveNoViolations();
+  });
+});
+
+// #3389 (epic #3384 correction 7): the pr-mark-ready wiring helpers. `createPrMarkReadyProposeHandler`
+// is what the Coding Workbench window builds `onProposeReady`/`markReadyAvailable` from — proving it
+// here means the window only needs to pass this outcome's own facts through, never re-derive the
+// binding shape or reach a generic command with no approval bound to it.
+describe("pr-mark-ready proposal wiring", () => {
+  const PROJECT_ID = "/repos/keiko-checkout";
+
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW.getTime());
+    proposePrMarkReadyMock.mockReset();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("derives the exact mint/execute request from the observed remote identity and readiness digest", () => {
+    const { outcome } = journeyFixture();
+    const request = prMarkReadyProposalRequestFor(outcome, PROJECT_ID);
+    const identity = outcome.remote?.identity;
+    if (identity === undefined) throw new Error("Expected fixture remote identity");
+    expect(request).toEqual({
+      projectId: PROJECT_ID,
+      ownerAndRepo: identity.repository,
+      prExternalId: String(identity.number),
+      headSha: identity.headSha,
+      baseSha: identity.baseSha,
+      readinessDigest: outcome.readiness?.requirementsDigest,
+    });
+  });
+
+  it("returns undefined when the observation has no remote identity (never guesses a request)", () => {
+    const { outcome } = journeyFixture();
+    const request = prMarkReadyProposalRequestFor({ ...outcome, remote: null }, PROJECT_ID);
+    expect(request).toBeUndefined();
+  });
+
+  it("returns undefined when the readiness snapshot carries no requirements digest", () => {
+    const { outcome } = journeyFixture();
+    if (outcome.readiness === null) throw new Error("Expected fixture readiness");
+    const request = prMarkReadyProposalRequestFor(
+      { ...outcome, readiness: { ...outcome.readiness, requirementsDigest: null } },
+      PROJECT_ID,
+    );
+    expect(request).toBeUndefined();
+  });
+
+  it("builds a handler that calls proposePrMarkReady with the derived request", async () => {
+    const { outcome } = journeyFixture();
+    const handler = createPrMarkReadyProposeHandler(outcome, PROJECT_ID);
+    if (handler === undefined) throw new Error("Expected a handler for a complete observation");
+    proposePrMarkReadyMock.mockResolvedValueOnce({
+      schemaVersion: "1",
+      actionKind: "pr-mark-ready",
+      status: "succeeded",
+    });
+    await handler();
+    expect(proposePrMarkReadyMock).toHaveBeenCalledTimes(1);
+    expect(proposePrMarkReadyMock).toHaveBeenCalledWith(
+      prMarkReadyProposalRequestFor(outcome, PROJECT_ID),
+    );
+  });
+
+  it("returns no handler at all when the observation cannot yet back a genuine request", () => {
+    const { outcome } = journeyFixture();
+    expect(
+      createPrMarkReadyProposeHandler({ ...outcome, remote: null }, PROJECT_ID),
+    ).toBeUndefined();
+    expect(proposePrMarkReadyMock).not.toHaveBeenCalled();
+  });
+
+  it("wires end to end: markReadyAvailable + the derived handler make the control clickable", async () => {
+    const fixture = journeyFixture();
+    const handler = createPrMarkReadyProposeHandler(fixture.outcome, PROJECT_ID);
+    if (handler === undefined) throw new Error("Expected a handler for a complete observation");
+    proposePrMarkReadyMock.mockResolvedValueOnce({
+      schemaVersion: "1",
+      actionKind: "pr-mark-ready",
+      status: "succeeded",
+    });
+    render(
+      <CodingWorkbenchJourneyOutcome {...fixture} onProposeReady={handler} markReadyAvailable />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Review ready-for-review request" }));
+    await waitFor(() => expect(proposePrMarkReadyMock).toHaveBeenCalledTimes(1));
   });
 });
