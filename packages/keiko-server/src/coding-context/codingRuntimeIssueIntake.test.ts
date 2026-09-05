@@ -85,7 +85,7 @@ interface Fixture {
   readonly logged: ServerLogEvent[];
 }
 
-function fixture(): Fixture {
+function fixture(overrides?: { readonly title?: string; readonly body?: string }): Fixture {
   const store = createInMemoryUiStore();
   cleanups.push(() => {
     store.close();
@@ -97,8 +97,8 @@ function fixture(): Fixture {
     nodeId: "I_test",
     state: "open",
     isPullRequest: false,
-    title: "Issue context attachment",
-    body: "Body",
+    title: overrides?.title ?? "Issue context attachment",
+    body: overrides?.body ?? "Body",
     url: "https://github.com/owner/repo/issues/42",
   };
   const readJson = vi.fn((argv: readonly string[]): Promise<unknown> =>
@@ -178,5 +178,53 @@ describe("production coding-runtime issue-context attachment (epic #3384 correct
     expect(line?.extra?.blockedReasons).toEqual(["missing-scope"]);
     // Body-free: never the issue title, body, or URL.
     expect(JSON.stringify(line)).not.toContain("Issue context attachment");
+  });
+
+  // Review 3941762925: `buildCodeContextPack`'s sanitisation evidence
+  // (`codeContextConnector.ts:319`, `emitSanitizationEvidence`) only reaches the log when a caller
+  // injects `activityLog`/`correlationId` into its deps. This production caller had the fixture's
+  // `activityLog` in scope (see `logPackBlocked` above) but never threaded it, or the request's own
+  // correlation id, into `buildPack`'s call to `buildCodeContextPack` — so a hostile issue body was
+  // silently sanitised with no trace in a customer's log. Pins the fix at
+  // `codingRuntimeIssueIntake.ts`'s `buildPack`.
+  it("logs sanitisation evidence with the request correlationId when a hostile issue body is packed", async () => {
+    const hostileTitle = "\u202Emalicious title\u200B";
+    const hostileBody = "clean prefix\u202E hostile suffix";
+    const f = fixture({ title: hostileTitle, body: hostileBody });
+    const intake = createProductionCodingRuntimeIssueIntake(f.deps);
+    const resolved = await intake.resolve({
+      repositoryRoot: root,
+      issueRef: "#42",
+      correlationId: "run-hostile",
+    });
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+
+    const attached = await intake.buildContext({
+      runId: "run-hostile",
+      repositoryRoot: root,
+      binding: resolved.binding,
+      effectiveMode: "supervised-coding",
+      correlationId: "run-hostile-correlation",
+    });
+    expect(attached.ok).toBe(true);
+
+    const line = f.logged.find(
+      (event) => event.op === "coding-context.pack" && event.extra?.outcome === "sanitized",
+    );
+    expect(line).toBeDefined();
+    if (line === undefined) return;
+    expect(line.category).toBe("security");
+    expect(line.correlationId).toBe("run-hostile-correlation");
+    const extra = line.extra as Record<string, unknown>;
+    expect(extra.sanitizedItemCount).toBe(1);
+    expect(extra.sanitizedObjectIds).toEqual(["42"]);
+    expect(extra.sanitizedTitleBytesRemoved).toBeGreaterThan(0);
+    expect(extra.sanitizedBodyBytesRemoved).toBeGreaterThan(0);
+
+    // Body-free: never the raw or sanitised issue title/body.
+    const serialized = JSON.stringify(line);
+    expect(serialized).not.toContain("malicious title");
+    expect(serialized).not.toContain("hostile suffix");
   });
 });

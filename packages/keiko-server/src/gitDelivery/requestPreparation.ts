@@ -387,7 +387,15 @@ export async function gitDeliveryRepositoryBindingMismatch(
   workspace: WorkspaceInfo,
   ownerAndRepo: string,
 ): Promise<boolean> {
-  const remote = await readVerifiedGitHubOwnerAndRepo({ workspace });
+  // Fails closed on a read failure (an unreadable or non-Git worktree, a broken `git`) exactly like
+  // `githubRemoteOwnerAndRepoFor`'s own resolver already does for the coding-context surface: a
+  // denial that is really a broken read is still a denial, never a silent admit.
+  let remote: string | undefined;
+  try {
+    remote = await readVerifiedGitHubOwnerAndRepo({ workspace });
+  } catch {
+    return true;
+  }
   if (remote === undefined) return true;
   return codingWorkbenchRemoteDigest(remote) !== codingWorkbenchRemoteDigest(ownerAndRepo);
 }

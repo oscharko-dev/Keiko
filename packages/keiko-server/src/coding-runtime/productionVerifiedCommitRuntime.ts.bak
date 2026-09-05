@@ -62,7 +62,7 @@ export function resolveVerifiedCommitContext(
     workspace,
     baseRef: context.branch.baseRef,
     headRef: context.branch.headRef,
-    correlationId: binding.runId,
+    correlationId: correlationIdOrUnknown(binding.runId),
     signal: binding.signal,
     stillAuthorized: binding.stillAuthorized,
     buffersClean: () => deps.buffersClean(context.workspaceRoot, binding.runId),

@@ -8,6 +8,7 @@
 //   * AC5 — PR execution cannot bypass the gateway: blocked attempts execute nothing yet still record
 //           content-free evidence (title/body never enter the ledger).
 
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -293,10 +294,26 @@ async function startBound(overrides: Partial<UiHandlerDeps> = {}): Promise<void>
   port = started.port;
 }
 
+// #3384 B5-8: `prepareGitDeliveryRequest` now binds every request's `ownerAndRepo` to the resolved
+// workspace's own `origin` remote before admitting it, so this fixture's project root must be a
+// real checkout whose origin resolves to the SAME "oscharko-dev/Keiko" every test body in this file
+// already names — mirrors DescriptionFixture's identical `git remote add origin` setup
+// (prDescriptionTestSupport.ts).
+function initOriginFixture(root: string): void {
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: root });
+  execFileSync("git", ["remote", "add", "origin", "https://github.com/oscharko-dev/Keiko.git"], {
+    cwd: root,
+  });
+}
+
 beforeEach(() => {
   staticRoot = mkdtempSync(join(tmpdir(), "keiko-gd-pr-static-"));
   store = createInMemoryUiStore();
-  projectId = store.createProject(mkdtempSync(join(tmpdir(), "keiko-gd-pr-proj-"))).path;
+  const projectRoot = mkdtempSync(join(tmpdir(), "keiko-gd-pr-proj-"));
+  initOriginFixture(projectRoot);
+  projectId = store.createProject(projectRoot).path;
 });
 
 afterEach(() => {
@@ -312,22 +329,33 @@ describe("pr routes — central enforcement", () => {
     await closeServer();
   });
 
-  it("does not require a deployment enable flag before checking the worktree", async () => {
+  // #3384 B5-8: `prepareGitDeliveryRequest`'s repository-binding check now runs before this route
+  // ever reaches a worktree read, for the SAME underlying cause this test originally exercised (a
+  // project workspace with no readable Git remote) — so the earliest observable gate moved from
+  // "worktree unavailable" to "repository mismatch". Still proves the same claim: no deployment
+  // enable flag is required before the check runs.
+  it("does not require a deployment enable flag before checking the repository binding", async () => {
     await closeServer();
     await startBound({ env: {} });
+    const bareProjectId = store.createProject(
+      mkdtempSync(join(tmpdir(), "keiko-gd-pr-bare-")),
+    ).path;
     for (const path of [PREVIEW, EXECUTE]) {
       const body =
         path === EXECUTE
-          ? await approveThenBody(createBody(), "/api/git-delivery/pr/approve")
-          : createBody();
+          ? await approveThenBody(
+              createBody({ projectId: bareProjectId }),
+              "/api/git-delivery/pr/approve",
+            )
+          : createBody({ projectId: bareProjectId });
       const res = await fetch(`http://${UI_HOST}:${String(port)}${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
         body: JSON.stringify(body),
       });
-      expect(res.status).toBe(409);
+      expect(res.status).toBe(403);
       expect(await res.json()).toMatchObject({
-        error: { code: "GIT_DELIVERY_PR_WORKTREE_UNAVAILABLE" },
+        error: { code: "GIT_DELIVERY_PR_REPOSITORY_MISMATCH" },
       });
     }
   });
@@ -407,6 +435,21 @@ describe("pr preview — read-only metadata + readiness (AC1/AC2/AC3)", () => {
         )
       ).status,
     ).toBe(400);
+  });
+
+  // #3384 B5-8: a client-supplied `ownerAndRepo` naming a repository other than the resolved
+  // workspace's OWN `origin` remote (fork, upstream, or an entirely unrelated repository) is refused
+  // — the workspace's live remote is the only repository this route may ever mutate, never a
+  // client-asserted string alone. The workspace's real origin is "oscharko-dev/Keiko" (this file's
+  // shared beforeEach); "someone-else/other-repo" is format-valid but not that remote.
+  it("refuses a well-formed ownerAndRepo that does not match this project's own Git remote", async () => {
+    const handler = createHandlePrPreview({ execution: seams() });
+    const res = await handler(
+      ctxFor(PREVIEW, createBody({ ownerAndRepo: "someone-else/other-repo" })),
+      deps(),
+    );
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_PR_REPOSITORY_MISMATCH" } });
   });
 
   // The invariant: a PR body carrying a credential is refused at the boundary. The sample is a

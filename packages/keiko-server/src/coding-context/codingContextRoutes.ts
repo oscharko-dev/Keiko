@@ -41,6 +41,7 @@ import {
   buildCodeContextPack,
   type CodeContextConnector,
   type CodeContextConnectorConfig,
+  type CodeContextConnectorDeps,
   type CodeContextReadRequest,
   type CodeContextRef,
 } from "./codeContextConnector.js";
@@ -335,6 +336,27 @@ export function composeCodingContextConnectors(
   };
 }
 
+/**
+ * #3941762925: the route composes connectors/config above but, until now, never threaded its own
+ * `activityLog` port or the request's `correlationId` into `buildCodeContextPack`'s deps — so
+ * `emitSanitizationEvidence` (`codeContextConnector.ts:319`) had nowhere to write and a hostile
+ * issue body was sanitised with no trace in the customer log. Split out of
+ * `handleCodingContextPack` to keep that function under the 50-line bar.
+ */
+function contextPackDeps(
+  deps: UiHandlerDeps,
+  composed: ComposedConnectors,
+  correlationId: string | undefined,
+): CodeContextConnectorDeps {
+  return {
+    connectors: composed.connectors,
+    connectorConfig: composed.connectorConfig,
+    nowIso: (): string => new Date().toISOString(),
+    activityLog: deps.activityLog,
+    correlationId,
+  };
+}
+
 export async function handleCodingContextPack(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -357,16 +379,10 @@ export async function handleCodingContextPack(
         { correlationId: ctx.correlationId },
       ),
     );
-    const pack = await buildCodeContextPack(request, {
-      connectors: composed.connectors,
-      connectorConfig: composed.connectorConfig,
-      nowIso: (): string => new Date().toISOString(),
-      // #3941762925: thread the route's own activity-log port and the request's correlation id so
-      // `buildCodeContextPack`'s sanitisation evidence (`codeContextConnector.ts:319`,
-      // `emitSanitizationEvidence`) reaches the log instead of being silently dropped.
-      activityLog: deps.activityLog,
-      correlationId: ctx.correlationId,
-    });
+    const pack = await buildCodeContextPack(
+      request,
+      contextPackDeps(deps, composed, ctx.correlationId),
+    );
     return { status: 200, body: { schemaVersion: "1", ...pack } };
   } catch (error) {
     // Port failures stay opaque: content-free code + correlation id only. The

@@ -819,6 +819,15 @@ describe("productive runtime status/diff/stage lane", () => {
   // proposal; `record()`'s own recovery-path call was unguarded, so a persistence rejection could
   // cascade into an uncaught rejection out of execute()/executeApproved() instead of a closed
   // result. Latent today (nothing mutates the frozen binding columns post-insert), fixed proactively.
+  //
+  // Review finding (comment 3941793530, #3384 audit): this used to also cover a real bug, not just
+  // the latent one above. `executeConsumed()` called `record()` for the pre-effect write-ahead
+  // marker and discarded its return value, so a persistence failure here still fell through to
+  // `mutate()` and committed anyway — a crash right after left `reconcile()` with no durable
+  // recovery-required receipt to inspect. Every persist call throws for the whole test, so this is
+  // the pre-effect case: the write-ahead marker itself never reaches durable storage, and the fix
+  // must stop before the Git mutation ever runs. HEAD staying put is the assertion that would have
+  // failed against the pre-fix code.
   it("fails closed with a recovery-required result and a body-free log line when persisting the outcome throws", async () => {
     let rejectPersist = false;
     const realSnapshots = options.snapshots;
@@ -834,17 +843,69 @@ describe("productive runtime status/diff/stage lane", () => {
     });
     const id = await verifiedProposal();
     const approval = await claim(id);
+    const head = git(["rev-parse", "HEAD"]);
     rejectPersist = true;
     await expect(service.execute(id, approval)).resolves.toMatchObject({
       status: "recovery-required",
       reason: "execution-uncertain",
     });
+    // Pre-effect: the write-ahead marker could not be persisted, so the Git mutation must never
+    // have run. Before the fix this failed: HEAD advanced even though no recovery-required receipt
+    // was ever durably stored.
+    expect(git(["rev-parse", "HEAD"])).toBe(head);
     const failure = events.find((event) => event.extra?.phase === "persist-failed");
     expect(failure).toMatchObject({
       op: "git.verified-commit",
       level: "warn",
       errorKind: "internal",
       correlationId: "verified-commit-test",
+      extra: { effectPhase: "pre-effect" },
+    });
+    expect(JSON.stringify(events)).not.toContain("snapshot store unavailable");
+  });
+
+  // Same review finding, the post-effect half: the write-ahead marker persists fine (1st call), the
+  // Git mutation runs, and only the terminal-result persist (2nd call) fails. Unlike the pre-effect
+  // case above, the effect already happened — this must still resolve recovery-required (so a
+  // caller never mistakes it for success) but HEAD has legitimately moved, and the log line must
+  // say `post-effect`, not `pre-effect`, so an operator reading the activity log per AGENTS.md §8
+  // knows a mutation may need reconciliation rather than assuming none was ever attempted.
+  it("stays fail-closed as recovery-required, with the mutation already applied, when persistence fails AFTER the Git effect", async () => {
+    let persistCalls = 0;
+    const realSnapshots = options.snapshots;
+    service = createVerifiedCommitService({
+      ...options,
+      snapshots: {
+        ...realSnapshots,
+        recordVerifiedCommit: (result): ReturnType<typeof realSnapshots.recordVerifiedCommit> => {
+          persistCalls += 1;
+          if (persistCalls === 2) throw new Error("snapshot store unavailable");
+          return realSnapshots.recordVerifiedCommit(result);
+        },
+      },
+    });
+    const id = await verifiedProposal();
+    const approval = await claim(id);
+    const head = git(["rev-parse", "HEAD"]);
+    // `propose()` already persisted the "approval-required" result once; only count persist calls
+    // made from inside `execute()` itself (call 1 = pre-effect write-ahead, call 2 = post-effect
+    // terminal result).
+    persistCalls = 0;
+    await expect(service.execute(id, approval)).resolves.toMatchObject({
+      status: "recovery-required",
+      reason: "execution-uncertain",
+    });
+    // Post-effect: the write-ahead marker persisted (call 1), so the mutation was allowed to run,
+    // and it did — HEAD moved even though the terminal persist (call 2) then failed.
+    expect(git(["rev-parse", "HEAD"])).not.toBe(head);
+    const failures = events.filter((event) => event.extra?.phase === "persist-failed");
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
+      op: "git.verified-commit",
+      level: "warn",
+      errorKind: "internal",
+      correlationId: "verified-commit-test",
+      extra: { effectPhase: "post-effect" },
     });
     expect(JSON.stringify(events)).not.toContain("snapshot store unavailable");
   });

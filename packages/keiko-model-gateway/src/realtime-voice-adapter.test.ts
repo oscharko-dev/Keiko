@@ -357,7 +357,7 @@ describe("requestRealtimeNegotiation", () => {
     expect(parsed.session.safety_identifier).toBe("keiko-voice-abc123");
   });
 
-  it("drops legacy assistant instructions, voice, and tools even from an untyped caller", async () => {
+  it("drops legacy assistant instructions and voice even from an untyped caller", async () => {
     let clientSecretBody = "{}";
     const fetchImpl = mockFetch((url, init) => {
       if (url.endsWith("/realtime/client_secrets")) {
@@ -378,14 +378,6 @@ describe("requestRealtimeNegotiation", () => {
       offerSdp: OFFER_SDP,
       instructions: "legacy provider assistant instruction",
       voiceId: "shimmer",
-      tools: [
-        {
-          type: "function",
-          name: "search_keiko_grounding",
-          parameters: { type: "object" },
-        },
-      ],
-      toolChoice: "auto",
       fetchImpl,
     } as TestNegotiationRequest;
     await requestConfiguredRealtimeNegotiation(legacyRequest);
@@ -396,6 +388,32 @@ describe("requestRealtimeNegotiation", () => {
     expect(session.tool_choice).toBeUndefined();
     expect((session.audio as { output?: unknown }).output).toBeUndefined();
   });
+
+  // #3409 AC6: relocated from the prior "drops ... tools" pin (which blessed a silent drop this
+  // AC forbids) — a Realtime adapter that cannot represent tools must reject the request with the
+  // canonical closed reason before the session starts, from an untyped caller too, on both auth
+  // modes this module supports (`buildRealtimeSession` is the one choke point both share).
+  it.each(["ephemeral-session", "standard"] as const)(
+    "rejects caller-supplied tools with unsupported-capability before the session starts (%s auth)",
+    async (realtimeAuthMode) => {
+      const fetchImpl = vi.fn(mockFetch(() => sdp(ANSWER_SDP)));
+      const legacyRequest = {
+        endpoint: ENDPOINT,
+        apiKey: SECRET_API_KEY,
+        realtimeAuthMode,
+        modelId: "keiko-realtime",
+        offerSdp: OFFER_SDP,
+        tools: [{ type: "function", name: "search_keiko_grounding", parameters: {} }],
+        toolChoice: "auto",
+        fetchImpl,
+      } as TestNegotiationRequest;
+      await expect(requestConfiguredRealtimeNegotiation(legacyRequest)).rejects.toMatchObject({
+        name: "GatewayToolCatalogError",
+        reason: "unsupported-capability",
+      });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses configured input transcription and explicit VAD when optional fields are not supplied", async () => {
     let clientSecretBody = "{}";

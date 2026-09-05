@@ -326,6 +326,32 @@ state machine itself -- the part that requires a prior `offer()` and a catalog-s
 object neither of which `codingToolFacade.ts`'s already-parsed `CodingToolActionRequest` carries --
 not the fault-shaping or accounting discipline, which are shared.
 
+**Decision recorded (#3413 F8 review, finding b1-1).** `catalogToolFacadeBridge.ts` remains the one
+production dispatch owner; `createCatalogToolBinder`/`CatalogInvocation` and their offer/dispatch/
+cursor/idempotency-registry state machine are kept as an independently-tested reference
+implementation of this section's full contract, not deleted, but are never wired into a production
+composition -- reshaping either side to fit the other would reintroduce the exact shape mismatch
+this section already documents, and AGENTS.md section 5 forbids growing a second parallel dispatch
+path regardless. Acceptance criteria that need real production behaviour are closed inside the
+bridge's own construction and dispatch path instead: a canonical id `catalogIdFor` maps a request to
+but the composed catalog does not contain fails closed with a real `tool-catalog.bind-unavailable`
+line (readiness `unavailable`, reason `unknown-tool`) instead of running the action unbound;
+`CatalogFacadeBridgeInput.catalog` accepts a `() => ToolCatalog` provider in addition to a static
+value, and `dispatchCovered` re-derives the projection identity from it before every dispatch,
+settling `invalid`/`projection-mismatch` the moment a live catalog source drifts from what was
+compiled at construction (a static catalog, today's only production wiring, cannot drift and this
+check is a guaranteed no-op for it); and every dispatch races the handler against
+`descriptor.bounds.maxDurationMs`, settling `timeout`/`deadline-exceeded` when the deadline wins and
+quarantining (`tool-catalog.completion-discarded`) a handler resolution/rejection that arrives after
+that settlement instead of double-settling or silently dropping it. `busy`/cross-process-restart
+dedup, opaque cursors, and a result schema/size bound before `completed` remain genuinely open: they
+need, respectively, the same `CodingToolInvocationRegistry` idempotency discipline
+`codingToolFacade.ts` already applies to `edit` extended to every catalog-bridged action family, a
+registry threaded into the bridge from its composition layer plus a page/cursor-shaped return
+contract on the `search`/`discover` domain handlers, and a verified-safe result contract for each of
+the ~9 covered action families individually -- each is a composition or domain-handler change
+outside `catalogToolFacadeBridge.ts`'s own write scope, not a gap this file can close by itself.
+
 ### D7 — Phase-valid activity evidence
 
 The `phases` table freezes operation names for #3412's existing generator; it is not a second

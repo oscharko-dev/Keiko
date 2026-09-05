@@ -663,4 +663,64 @@ describe("coding context pack route", () => {
     const error = bodyOf(result).error as Record<string, unknown>;
     expect(error.correlationId).toBe("req-thread-0123456789");
   });
+
+  // Review 3941762925 [P2]: `buildCodeContextPack`'s sanitisation evidence
+  // (`codeContextConnector.ts:319`, `emitSanitizationEvidence`) only reaches the log when a caller
+  // injects `activityLog`/`correlationId` into its deps. This route composed `connectorConfig` and
+  // `connectors` but never threaded `deps.activityLog` or `ctx.correlationId` into the
+  // `buildCodeContextPack` call, so a hostile issue body was sanitised with no trace in the
+  // customer log. Pins the fix at `codingContextRoutes.ts`'s `handleCodingContextPack`.
+  it("threads the route's activityLog and correlationId so sanitisation evidence reaches the log", async () => {
+    const hostileGitHubPort: GitHubCodeContextApiPort = {
+      readJson: (argv) =>
+        Promise.resolve(
+          argv[1]?.includes("/comments") === true
+            ? []
+            : {
+                title: "\u202Emalicious title\u200B",
+                body: "clean prefix\u202E hostile suffix",
+                html_url: "",
+              },
+        ),
+    };
+    const events: Record<string, unknown>[] = [];
+    const request = packRequest({
+      refs: [
+        {
+          source: "github",
+          objectKind: "issue",
+          ownerAndRepo: "oscharko-dev/Keiko",
+          objectId: "1989",
+        },
+      ],
+    });
+    const ctx = { ...ctxFor(request), correlationId: "req-sanitize-0123456789" };
+
+    const result = await handleCodingContextPack(
+      ctx,
+      depsFor({
+        codingContextGitHubPort: hostileGitHubPort,
+        activityLog: { write: (event) => void events.push(event as Record<string, unknown>) },
+      }),
+    );
+
+    expect(result.status).toBe(200);
+    const line = events.find(
+      (event) =>
+        event.op === "coding-context.pack" &&
+        (event.extra as Record<string, unknown> | undefined)?.outcome === "sanitized",
+    );
+    expect(line).toBeDefined();
+    expect(line?.category).toBe("security");
+    expect(line?.correlationId).toBe("req-sanitize-0123456789");
+    const extra = line?.extra as Record<string, unknown>;
+    expect(extra.sanitizedItemCount).toBe(1);
+    expect(extra.sanitizedTitleBytesRemoved).toBeGreaterThan(0);
+    expect(extra.sanitizedBodyBytesRemoved).toBeGreaterThan(0);
+
+    // Body-free: never the raw or sanitised issue title/body.
+    const serialized = JSON.stringify(line);
+    expect(serialized).not.toContain("malicious title");
+    expect(serialized).not.toContain("hostile suffix");
+  });
 });

@@ -28,6 +28,11 @@ import {
 } from "./http.js";
 import type { OutboundHttpEgressConfig, RealtimeAuthMode } from "./types.js";
 import { providerSpeechLanguage } from "./provider-language.js";
+// #3409 AC6: a Realtime adapter that cannot represent tools must reject a caller-supplied `tools`
+// request with the canonical closed reason before the session starts, never silently drop it.
+// Reuses the package's one closed-vocabulary "unsupported-capability" error (already used by the
+// chat/completions tool-catalog bridge) rather than inventing a second one.
+import { GatewayToolCatalogError } from "./toolCatalogBridge.js";
 
 // SDP offers/answers are small (a single audio m-line plus ICE/DTLS metadata is typically a few KB);
 // cap the negotiated answer well below the 10 MB gateway default so a hostile or misconfigured
@@ -395,7 +400,19 @@ function buildClientSecretBody(request: RealtimeNegotiationRequest): string {
   return JSON.stringify({ session: buildRealtimeSession(request) });
 }
 
+// `RealtimeNegotiationRequest` has no `tools`/`toolChoice` field (this adapter's session shape is
+// media/VAD/input-transcription only — see the module header), so a caller-supplied value can
+// only arrive on the raw runtime object, past the typed surface (the same "even from an untyped
+// caller" compatibility shape realtime-voice-adapter.test.ts already pins for `instructions`/
+// `voiceId`). Checked with `Object.hasOwn`, never a plain property read, so a caller that merely
+// inherits one of these names off a prototype cannot trigger the reject.
+function callerSuppliedTools(request: RealtimeNegotiationRequest): boolean {
+  const raw = request as unknown as Record<string, unknown>;
+  return Object.hasOwn(raw, "tools") || Object.hasOwn(raw, "toolChoice");
+}
+
 function buildRealtimeSession(request: RealtimeNegotiationRequest): Record<string, unknown> {
+  if (callerSuppliedTools(request)) throw new GatewayToolCatalogError("unsupported-capability");
   return request.sessionType === "transcription"
     ? buildLiveDictationRealtimeSession(request)
     : buildMediaTranscriptionClientSecretSession(request);

@@ -1,3 +1,4 @@
+import { correlationIdOrUnknown } from "../correlation.js";
 import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type {
@@ -64,7 +65,7 @@ function budgetContext(
   const budget = binding.context.budget;
   return {
     runId: binding.runId,
-    correlationId: binding.runId,
+    correlationId: correlationIdOrUnknown(binding.runId),
     remoteDigest: draft.binding.remoteDigest,
     prNumber: draft.pullRequest.number,
     limits: {
@@ -131,7 +132,7 @@ function availabilityGuard(input: AvailabilityInput): () => boolean {
     log.write({
       category: "process",
       op: "git.ci-repair.budget",
-      correlationId: binding.runId,
+      correlationId: correlationIdOrUnknown(binding.runId),
       ...(error === undefined ? {} : { level: "warn" as const, errorKind: "internal" as const }),
       extra: {
         phase: "availability",

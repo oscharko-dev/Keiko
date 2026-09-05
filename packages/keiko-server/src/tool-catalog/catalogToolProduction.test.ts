@@ -1,3 +1,12 @@
+/**
+ * SCOPE (#3413 F8 review, findings b1-1/AC10): this file proves `createCatalogToolBinder` composes
+ * correctly with a REAL domain handler and a REAL authority port in isolation -- mode coverage,
+ * approval consumption, hard denials, and revocation. It does NOT prove that composition is
+ * reachable from an actual server request: production traffic never constructs a
+ * `CatalogToolBinder` (see catalogToolFacadeBridge.ts's header and ADR-0175 D6 "Production
+ * mounting" for the decision record). The equivalent real-request-reachable coverage for the
+ * bridge's own construction/dispatch behaviour lives in catalogToolFacadeBridge.test.ts.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodingToolActionRequest } from "../coding-runtime/codingToolIpc.js";
 import { codingToolApprovalBindingDigest } from "../coding-runtime/codingToolApprovalBridge.js";

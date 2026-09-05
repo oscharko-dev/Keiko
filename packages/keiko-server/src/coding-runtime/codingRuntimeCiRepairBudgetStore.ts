@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+import { correlationIdOrUnknown } from "../correlation.js";
 import { describeError } from "../diagnostics-log.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import type {
@@ -197,7 +198,7 @@ class SqliteCiRepairBudgetStore implements CodingRuntimeCiRepairBudgetStore {
         category: "process",
         op: "git.ci-repair.budget",
         level: "warn",
-        correlationId: context.correlationId,
+        correlationId: correlationIdOrUnknown(context.correlationId),
         errorKind: "internal",
         extra: { phase, reason: "storage-unavailable", ...describeError(error) },
       });
@@ -434,7 +435,7 @@ class SqliteCiRepairBudgetStore implements CodingRuntimeCiRepairBudgetStore {
     this.deps.activityLog.write({
       category: "process",
       op: "git.ci-repair.budget",
-      correlationId: context.correlationId,
+      correlationId: correlationIdOrUnknown(context.correlationId),
       extra: {
         phase,
         status: result.status,

@@ -19,9 +19,11 @@ import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
   _classifyBadRequestReasonForTests,
+  _resetCumulativeSpendUsdForTests,
   createOpenCodeGatewayReadinessRegistry,
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
+  QUALIFICATION_SPEND_BUDGET_USD_ENV,
 } from "./coding-sidecar-gateway.js";
 import { mockRequest, mockResponse, probeVerifiedGatewayConfig } from "./_support.js";
 import {
@@ -3860,5 +3862,103 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
       runMetadata: { maxPromptTokens: 32_000 },
     });
     expect(sink.events).toHaveLength(0);
+  });
+});
+
+// ─── live-journey-readiness-1: pre-call monetary ceiling ────────────────────────
+
+describe("coding-sidecar gateway spend budget", () => {
+  afterEach(() => {
+    _resetCumulativeSpendUsdForTests();
+  });
+
+  function pricedCapability(overrides: Partial<ModelCapability> = {}): ModelCapability {
+    return capability({
+      pricing: { inputUsdPerMillionTokens: 1_000_000, outputUsdPerMillionTokens: 1_000_000 },
+      ...overrides,
+    });
+  }
+
+  function chatRequest(): RouteContext {
+    return authenticatedContext({
+      model: "azure-coding-model",
+      messages: [{ role: "user", content: "continue" }],
+      tools: [],
+    });
+  }
+
+  it("fails closed with spend-pricing-unavailable when a budget is configured but the model declares no pricing", async () => {
+    const sink = captureServerLog("warn");
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const deps = depsValue(configValue(provider(), capability()), () => chat, {
+      [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "50",
+    });
+
+    const result = await handleCodingSidecarGatewayChatCompletions(chatRequest(), deps);
+
+    expect(result).toMatchObject({ status: 403 });
+    expect(chat).not.toHaveBeenCalled();
+    expect(sink.events).toEqual([
+      expect.objectContaining({
+        op: "coding-sidecar.gateway.rejected",
+        status: 403,
+        extra: { reason: "spend-pricing-unavailable", runId: "run-gateway-test" },
+      }),
+    ]);
+  });
+
+  it("fails closed with spend-budget-exceeded before dispatch once the estimated cost would exceed the budget", async () => {
+    const sink = captureServerLog("warn");
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const deps = depsValue(configValue(provider(), pricedCapability()), () => chat, {
+      [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0.000001",
+    });
+
+    const result = await handleCodingSidecarGatewayChatCompletions(chatRequest(), deps);
+
+    expect(result).toMatchObject({ status: 403 });
+    expect(chat).not.toHaveBeenCalled();
+    expect(sink.events).toEqual([
+      expect.objectContaining({
+        op: "coding-sidecar.gateway.rejected",
+        status: 403,
+        extra: { reason: "spend-budget-exceeded", runId: "run-gateway-test" },
+      }),
+    ]);
+  });
+
+  it("does not enforce any ceiling when no spend budget is configured", async () => {
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const deps = depsValue(configValue(provider(), pricedCapability()), () => chat);
+
+    const result = await handleCodingSidecarGatewayChatCompletions(chatRequest(), deps);
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression differentiator: budget covers a bit more than ONE call's pre-call estimate
+  // (dominated by maxOutputTokens(4096) * outputUsdPerMillionTokens(1)/1e6 ≈ $4,096) but strictly
+  // less than TWO such estimates stacked. `assistantResponse`'s real usage (promptTokens: 12,
+  // completionTokens: 8) costs only a few cents against this pricing — a tiny fraction of the
+  // pre-call estimate. If the ledger wrongly booked the pre-call ESTIMATE instead of the provider's
+  // real reported usage, the second call's pre-check would see roughly double the estimate and
+  // reject it.
+  it("accumulates the ledger from the provider's real reported usage, never the pre-call estimate", async () => {
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const priced = pricedCapability({
+      maxOutputTokens: 4_096,
+      pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1_000_000 },
+    });
+    const deps = depsValue(configValue(provider(), priced), () => chat, {
+      [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "6144",
+    });
+
+    const first = await handleCodingSidecarGatewayChatCompletions(chatRequest(), deps);
+    const second = await handleCodingSidecarGatewayChatCompletions(chatRequest(), deps);
+
+    expect(first).toMatchObject({ status: 200 });
+    expect(second).toMatchObject({ status: 200 });
+    expect(chat).toHaveBeenCalledTimes(2);
   });
 });

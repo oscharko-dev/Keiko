@@ -533,8 +533,34 @@ class VerifiedCommitController implements VerifiedCommitService {
     if (blocked !== undefined) return blocked;
     this.proposals.delete(binding.proposalId);
     this.proof = undefined;
-    this.record(context, binding, "recovery-required", "execution-uncertain");
+    // Review finding (comment 3941793530, #3384 audit): the write-ahead recovery-required marker
+    // is a hard PRECONDITION of the Git mutation, not a best-effort log line. Previously this
+    // called `record()` and discarded its result, so a persistence failure here still fell through
+    // to `mutate()` — the commit could land with no durable recovery-required receipt for
+    // `reconcile()` to find after a crash. Now a failed write-ahead persist stops before the
+    // effect and returns the closed result directly; the approval stays spent, same as any other
+    // post-preflight block (no restore/re-issue — it is already a one-use claim).
+    const notRecorded = this.recordWriteAhead(context, binding);
+    if (notRecorded !== undefined) return notRecorded;
     return await this.mutate(proposal, claim);
+  }
+
+  private recordWriteAhead(
+    context: VerifiedCommitRunContext,
+    binding: VerifiedCommitBinding,
+  ): VerifiedCommitResult | undefined {
+    const result = this.result(binding, "recovery-required", "execution-uncertain");
+    if (
+      !this.persist(context, binding, "recovery-required", "execution-uncertain", result, "pre-effect")
+    )
+      return result;
+    this.log(context, "result", {
+      state: "recovery-required",
+      reason: "execution-uncertain",
+      proposalId: binding.proposalId,
+      stagedTreeDigest: binding.stagedTreeDigest,
+    });
+    return undefined;
   }
 
   private async mutate(
@@ -614,12 +640,20 @@ class VerifiedCommitController implements VerifiedCommitService {
   // unhandled rejection out of execute()/executeApproved(), with a body-free diagnostic line
   // (existing catalogued `op`, closed `errorKind`, the run's correlationId) an operator can read
   // from the activity log per AGENTS.md §8.
+  //
+  // `effectPhase` (review finding, comment 3941793530) distinguishes, in that same log line,
+  // whether the failed write was `recordWriteAhead`'s pre-effect marker — where the caller must
+  // treat `false` as a hard stop, since the Git mutation has not run yet and never will for this
+  // attempt — from every other, post-effect call (a terminal result after the mutation ran, a
+  // pre-mutation block/drift, or a `reconcile()` receipt): those already fail closed to
+  // recovery-required and the mutation, if any, has already happened.
   private persist(
     context: VerifiedCommitRunContext,
     binding: VerifiedCommitBinding,
     status: VerifiedCommitStatus,
     reason: VerifiedCommitReason,
     result: VerifiedCommitResult,
+    effectPhase: "pre-effect" | "post-effect" = "post-effect",
   ): boolean {
     try {
       this.options.snapshots.recordVerifiedCommit(result);
@@ -632,6 +666,7 @@ class VerifiedCommitController implements VerifiedCommitService {
           proposalId: binding.proposalId,
           attemptedStatus: status,
           attemptedReason: reason,
+          effectPhase,
           ...describeError(error),
         },
         true,

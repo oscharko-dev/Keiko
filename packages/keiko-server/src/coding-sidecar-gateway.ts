@@ -71,6 +71,79 @@ function maxActiveCodingGatewayRequests(env: NodeJS.ProcessEnv = process.env): n
 export function _resetActiveCodingGatewayRequestsForTests(): void {
   activeCodingGatewayRequests = 0;
 }
+
+// live-journey-readiness-1: KEIKO_QUALIFICATION_SPEND_BUDGET_USD previously had no reader anywhere
+// in production — it was validated as test/manifest metadata but enforced no real-dollar ceiling
+// before dispatch. `cumulativeSpendUsd` is a process-wide, in-memory USD ledger that accumulates
+// ONLY from a completed call's REPORTED usage (never the pre-call estimate), so — unlike the
+// per-run authority prompt-token budget — it never needs a settle/reconcile step: nothing
+// provisional is ever booked into it, only real observed cost. The pre-call check previews
+// `cumulative + this call's estimate` against the budget without mutating the ledger.
+export const QUALIFICATION_SPEND_BUDGET_USD_ENV = "KEIKO_QUALIFICATION_SPEND_BUDGET_USD";
+let cumulativeSpendUsd = 0;
+
+export function _resetCumulativeSpendUsdForTests(): void {
+  cumulativeSpendUsd = 0;
+}
+
+function qualificationSpendBudgetUsd(env: UiHandlerDeps["env"]): number | undefined {
+  const raw = env[QUALIFICATION_SPEND_BUDGET_USD_ENV];
+  if (raw === undefined || raw.trim().length === 0) return undefined;
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function capabilityPricingFor(
+  config: GatewayConfig,
+  modelId: string,
+): ModelCapabilityPricing | undefined {
+  return config.capabilities?.find((capability) => capability.id === modelId)?.pricing;
+}
+
+function callCostUsd(
+  pricing: ModelCapabilityPricing,
+  promptTokens: number,
+  completionTokens: number,
+): number {
+  return (
+    (promptTokens / 1_000_000) * pricing.inputUsdPerMillionTokens +
+    (completionTokens / 1_000_000) * pricing.outputUsdPerMillionTokens
+  );
+}
+
+/** Body-free spend-ledger update: no prompt/response content, only the two token counts. */
+function accumulateActualSpend(
+  config: GatewayConfig,
+  modelId: string,
+  usage: Pick<NormalizedResponse["usage"], "promptTokens" | "completionTokens">,
+): void {
+  const pricing = capabilityPricingFor(config, modelId);
+  if (pricing === undefined) return;
+  cumulativeSpendUsd += callCostUsd(pricing, usage.promptTokens, usage.completionTokens);
+}
+
+type SpendBudgetRejectionReason = "spend-pricing-unavailable" | "spend-budget-exceeded";
+
+/**
+ * Fail-closed pre-call monetary ceiling. Absent when no budget is configured. A budget configured
+ * against a model with no declared `pricing` fails closed before the first call rather than
+ * silently treating the model as free.
+ */
+function spendBudgetRejectionFor(
+  env: UiHandlerDeps["env"],
+  config: GatewayConfig,
+  modelId: string,
+  estimatedPromptTokens: number,
+  maxOutputTokens: number,
+): SpendBudgetRejectionReason | undefined {
+  const budget = qualificationSpendBudgetUsd(env);
+  if (budget === undefined) return undefined;
+  const pricing = capabilityPricingFor(config, modelId);
+  if (pricing === undefined) return "spend-pricing-unavailable";
+  const estimatedCostUsd = callCostUsd(pricing, estimatedPromptTokens, maxOutputTokens);
+  return cumulativeSpendUsd + estimatedCostUsd > budget ? "spend-budget-exceeded" : undefined;
+}
+
 const CODING_SIDECAR_GATEWAY_ERROR_CODE = "CODING_SIDECAR_UNAVAILABLE";
 const CODING_SIDECAR_GATEWAY_ROUTE = "POST /api/coding-sidecar/gateway/chat/completions";
 const CODING_SAFE_SIDECAR_GATEWAY_PROFILE_ID = "coding-safe-openai-compatible";
@@ -1400,6 +1473,7 @@ async function executeBufferedGatewayChat(
   stream: BufferedOpenAiStreamSession | undefined,
 ): Promise<RouteResult | typeof STREAMING> {
   const response = await chatFactoryFor(deps, binding.gateway)(binding.config, modelAlias)(request);
+  accumulateActualSpend(binding.config, modelAlias, response.usage);
   const metrics = outputMetrics(response);
   if (cancellationSignal.aborted) {
     recordGatewayOutcome(deps, runId, "cancelled", metrics.completionTokens, metrics.outputBytes);
@@ -1449,6 +1523,7 @@ async function streamGatewayChat(
   const session = createGatewayStreamSession(
     ctx,
     deps,
+    binding.config,
     modelId,
     request,
     runId,
@@ -1477,6 +1552,8 @@ interface GatewayStreamSession {
   readonly id: string;
   readonly created: number;
   readonly modelId: string;
+  /** live-journey-readiness-1: carries pricing lookup through to the final usage-bearing chunk. */
+  readonly config: GatewayConfig;
   readonly request: GatewayRequest;
   readonly runId: string;
   readonly cancellationSignal: AbortSignal;
@@ -1492,6 +1569,7 @@ interface GatewayStreamSession {
 function createGatewayStreamSession(
   ctx: RouteContext,
   deps: UiHandlerDeps,
+  config: GatewayConfig,
   modelId: string,
   request: GatewayRequest,
   runId: string,
@@ -1504,6 +1582,7 @@ function createGatewayStreamSession(
     id: `chatcmpl-${randomUUID()}`,
     created: Math.floor(Date.now() / 1000),
     modelId,
+    config,
     request,
     runId,
     cancellationSignal,
@@ -1610,11 +1689,12 @@ async function streamGatewayResponse(
   session: GatewayStreamSession,
   response: NormalizedResponse,
 ): Promise<void> {
-  const { ctx, id, created, modelId, request, iterator, metrics } = session;
+  const { ctx, id, created, modelId, config, request, iterator, metrics } = session;
   const outcome = outputMetrics(response);
   metrics.completionTokens = outcome.completionTokens;
   metrics.outputBytes = outcome.outputBytes;
   metrics.promptTokens = response.usage.promptTokens;
+  accumulateActualSpend(config, modelId, response.usage);
   if (exceedsOutputBudget(outcome, request.maxOutputTokens ?? 1)) {
     await iterator.return?.();
     recordSessionOutcome(session, "output-limit");
@@ -2001,6 +2081,17 @@ function executeBudgetedGatewayChat(
     readonly upstreamStreamingSupported: boolean;
   },
 ): Promise<RouteResult | typeof STREAMING> {
+  const spendRejection = spendBudgetRejectionFor(
+    deps.env,
+    binding.config,
+    profile.modelAlias,
+    promptTokenEstimate(parsed),
+    profile.maxOutputTokens,
+  );
+  if (spendRejection !== undefined) {
+    logGatewayRejection(ctx, authentication.runId, 403, spendRejection);
+    return Promise.resolve(forbiddenGatewayRequest());
+  }
   if (!reserveGatewayPromptBudget(deps, authentication.capability, authentication.runId, parsed)) {
     logGatewayRejection(ctx, authentication.runId, 403, "runtime-prompt-budget-denied");
     return Promise.resolve(forbiddenGatewayRequest());
