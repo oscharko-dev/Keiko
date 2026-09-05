@@ -641,7 +641,7 @@ function dispatchDescriptionAction<T>(
   void run()
     .then((value) => {
       if (token !== seq.current) return;
-      setState((s) => ({ ...s, ...onSettled(value) }));
+      setState((s) => ({ ...s, busy: false, ...onSettled(value) }));
     })
     .catch((err: unknown) => handleError(err, token));
 }

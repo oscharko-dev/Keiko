@@ -54,8 +54,7 @@ import {
   type GitDeliveryPullRequestSeams,
 } from "./prExecution.js";
 import {
-  createHandlePrMarkReadyApprove,
-  createHandlePrMarkReadyExecute,
+  createGitDeliveryPrMarkReadyRouteGroup,
   type GitDeliveryPrMarkReadyRouteOptions,
 } from "./prMarkReadyExecution.js";
 import {
@@ -555,16 +554,10 @@ export const createGitDeliveryPrRouteGroup = (
     pattern: "/api/git-delivery/pr/execute",
     handler: createHandlePrExecute(options),
   },
-  {
-    method: "POST",
-    pattern: "/api/git-delivery/pr/mark-ready/approve",
-    handler: createHandlePrMarkReadyApprove(options.markReady),
-  },
-  {
-    method: "POST",
-    pattern: "/api/git-delivery/pr/mark-ready/execute",
-    handler: createHandlePrMarkReadyExecute(options.markReady),
-  },
+  // #3389: the mark-ready mint/execute route DEFINITIONS live only in prMarkReadyExecution.ts
+  // (createGitDeliveryPrMarkReadyRouteGroup) — spread here rather than re-listed, so this route
+  // table and that module's own route group can never drift apart.
+  ...createGitDeliveryPrMarkReadyRouteGroup(options.markReady),
 ];
 
 export const GIT_DELIVERY_PR_ROUTE_GROUP: readonly RouteDefinition[] =

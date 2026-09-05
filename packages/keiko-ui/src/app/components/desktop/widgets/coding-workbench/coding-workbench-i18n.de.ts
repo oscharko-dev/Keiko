@@ -592,6 +592,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Übermittlung wurde unterbrochen. Vor dem Fortsetzen muss der Zustand auf dem Server geprüft werden.",
   "codingWorkbench.draftDelivery.reason.preflight-failed":
     "Die Voraussetzungen für die Übermittlung waren nicht erfüllt.",
+  "codingWorkbench.draftDelivery.pendingApprovalHint":
+    "Reagieren Sie auf die ausstehende Berechtigungsanfrage, um diese Übermittlung freizugeben oder abzulehnen.",
   "codingWorkbench.draftDelivery.pullRequest": "Pull Request #{number}",
   "codingWorkbench.draftDelivery.remoteState": "Zuletzt beobachteter PR-Status",
   "codingWorkbench.draftDelivery.remoteHead": "Zuletzt beobachteter PR-Commit",

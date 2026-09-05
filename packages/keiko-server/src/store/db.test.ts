@@ -1161,6 +1161,9 @@ describe("computeStoreFingerprint (Wave 4a, epic #3233 §6.2)", () => {
       expect(codingRuntimeTables).toEqual([
         "coding_runtime_snapshots",
         "coding_runtime_ci_repair_budgets",
+        // V29 (#3401): the deduplicated description-job register, content-free by the same
+        // forbidden-fields pin that governs the two tables above.
+        "coding_runtime_description_jobs",
       ]);
       const budgetColumns = (
         db.prepare("PRAGMA table_info(coding_runtime_ci_repair_budgets)").all() as {

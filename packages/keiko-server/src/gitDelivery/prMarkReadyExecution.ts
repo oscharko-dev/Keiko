@@ -448,7 +448,12 @@ async function dispatchGovernedMarkReady(
     return { schemaVersion: "1", outcome: "aborted", durationMs: 0 };
   }
   if (await liveReadinessDrifted(workspace, options, correlationId, command, continuityGuard)) {
-    return { schemaVersion: "1", outcome: "failed", durationMs: 0, errorCode: "precondition-failed" };
+    return {
+      schemaVersion: "1",
+      outcome: "failed",
+      durationMs: 0,
+      errorCode: "precondition-failed",
+    };
   }
   const adapter = markReadyAdapterFor(workspace, options, correlationId);
   return adapter.markPullRequestReady({

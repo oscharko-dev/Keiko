@@ -570,6 +570,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Delivery was interrupted. Remote state must be checked before continuing.",
   "codingWorkbench.draftDelivery.reason.preflight-failed":
     "Delivery prerequisites were not satisfied.",
+  "codingWorkbench.draftDelivery.pendingApprovalHint":
+    "Respond to the pending permission request to approve or deny this delivery.",
   "codingWorkbench.draftDelivery.pullRequest": "Pull request #{number}",
   "codingWorkbench.draftDelivery.remoteState": "Last observed PR state",
   "codingWorkbench.draftDelivery.remoteHead": "Last observed PR commit",

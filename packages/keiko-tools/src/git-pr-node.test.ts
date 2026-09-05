@@ -458,6 +458,29 @@ describe("node PR adapter — markPullRequestReady (#3389)", () => {
     expect(spawn.calls()).toHaveLength(1);
   });
 
+  // #3389 repair (review finding): readPrIdentity backs BOTH the pre- and post-mutation drift
+  // gate, so an altered (secret-redacted) read must fail closed the same way readPullRequestBody's
+  // exact-body read already does for a comparable governed read — never gate (or report) a mutation
+  // on a read the spawn boundary rewrote.
+  it("fails closed (precondition-failed, no further spawn) when the pre-mutation identity read comes back redacted", async () => {
+    const credential = "1234567890";
+    const spawn = scriptedSpawn([
+      { stdout: JSON.stringify({ ...PR_IDENTITY, externalId: credential }) },
+    ]);
+    const { info } = makeWorkspace();
+    const adapter = createNodeGitPullRequestAdapter({
+      workspace: info,
+      processEnv: { PATH: "/usr/bin", GH_TOKEN: credential },
+      spawn: spawn.fn,
+      home: FAKE_HOME,
+      resolveExecutable: () => "gh",
+    });
+    const result = await adapter.markPullRequestReady(MARK_READY_REQ);
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("precondition-failed");
+    expect(spawn.calls()).toHaveLength(1);
+  });
+
   it("drift: reports failure when the mutation appears to succeed but the post-read still shows a draft", async () => {
     const spawn = scriptedSpawn([
       { stdout: JSON.stringify(PR_IDENTITY) },

@@ -50,6 +50,33 @@ describe("durable repository delivery in the Code task", () => {
     },
   );
 
+  // #3386/#3387: before this hint existed, a "push-proposed"/"pr-proposed" proposal showed only its
+  // reason text (which already says a matching approval is required) with no pointer to WHERE that
+  // approval happens — a viewer had no way to discover the pending permission request from this
+  // card. Every other phase must stay silent: the hint targets exactly the two "approval-required"
+  // phases, never a phase whose own reason is unrelated (in-flight/completed/remote-drift).
+  it.each([
+    ["push-proposed", "approval-required", true],
+    ["pr-proposed", "approval-required", true],
+    ["pushing", "in-flight", false],
+    ["pushed", "completed", false],
+    ["creating-pr", "in-flight", false],
+    ["recovery-required", "remote-drift", false],
+  ] as const)("shows the pending-approval hint only for phase %s", (phase, reason, expectHint) => {
+    const snapshot = draftDeliverySnapshot({ phase, reason });
+    if (snapshot.draftDelivery !== undefined)
+      Reflect.deleteProperty(snapshot.draftDelivery, "pullRequest");
+    render(<CodingWorkbenchDraftDelivery snapshot={snapshot} />);
+    const hint = screen.queryByTestId("cwb-draft-delivery-approval-hint");
+    if (expectHint) {
+      expect(hint).toHaveTextContent("Respond to the pending permission request");
+    } else {
+      expect(hint).not.toBeInTheDocument();
+    }
+    // The hint is informational text only — it must never add a second approve control.
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
   it("distinguishes last observed remote facts from the approved target during recovery", () => {
     const snapshot = draftDeliverySnapshot({ phase: "recovery-required", reason: "remote-drift" });
     const pr = snapshot.draftDelivery?.pullRequest;
@@ -172,5 +199,8 @@ describe("durable repository delivery in the Code task", () => {
     expect(translateCodingWorkbench("de", "codingWorkbench.descriptionStatus.state.blocked")).toBe(
       "Entwurf blockiert",
     );
+    expect(
+      translateCodingWorkbench("de", "codingWorkbench.draftDelivery.pendingApprovalHint"),
+    ).toContain("Berechtigungsanfrage");
   });
 });

@@ -302,6 +302,16 @@ function readPrIdentity(
       const identity = parseGitPrIdentity(value, input.ownerAndRepo);
       return String(identity?.number) === input.prExternalId ? identity : undefined;
     },
+    // #3389 repair (review finding): this exact read backs BOTH the public readPullRequest
+    // inspection AND markPullRequestReady's pre/post-mutation drift gate, matching the fail-closed
+    // treatment readPullRequestBody already gets for a comparable governed read. Defense-in-depth,
+    // not independently black-box-testable here: every GitPullRequestIdentity field is
+    // format-validated (isGitPullRequestIdentity), and the redactor's literal "[REDACTED]" marker
+    // cannot satisfy any of those formats — a redacted read on THIS endpoint already fails the
+    // existing field validation before this flag is ever consulted. It still matters as the
+    // structural invariant "a governed mutation gate never trusts an altered read" rather than
+    // relying on incidental format strictness to keep that true.
+    true,
   );
 }
 

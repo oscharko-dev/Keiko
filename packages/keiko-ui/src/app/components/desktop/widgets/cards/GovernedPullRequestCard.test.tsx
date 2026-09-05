@@ -425,7 +425,11 @@ describe("GovernedPullRequestCard", () => {
     const prApprove = vi.fn(async () => makeApprove());
     const prExecute = vi.fn(async () => makeExecute({ createdPrExternalId: "1499" }));
     render(
-      <GovernedPullRequestCard projectId={PROJECT} client={makeClient({ prApprove, prExecute })} />,
+      <GovernedPullRequestCard
+        projectId={PROJECT}
+        headBranchName="claude/issue-477-x"
+        client={makeClient({ prApprove, prExecute })}
+      />,
     );
     fillForm();
     fireEvent.click(screen.getByTestId("gpr-submit"));
@@ -439,7 +443,13 @@ describe("GovernedPullRequestCard", () => {
   it("still executes unapproved when the injected client has no prApprove (legacy seam)", async () => {
     const prExecute = vi.fn(async () => makeExecute());
     const client = makeClient({ prApprove: undefined, prExecute });
-    render(<GovernedPullRequestCard projectId={PROJECT} client={client} />);
+    render(
+      <GovernedPullRequestCard
+        projectId={PROJECT}
+        headBranchName="claude/issue-477-x"
+        client={client}
+      />,
+    );
     fillForm();
     fireEvent.click(screen.getByTestId("gpr-submit"));
     expect(await screen.findByTestId("gpr-outcome")).toBeInTheDocument();

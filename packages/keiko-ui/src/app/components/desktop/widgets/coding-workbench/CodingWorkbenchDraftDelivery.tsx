@@ -44,6 +44,32 @@ function useDraftDeliveryDiagnostic(
   }, [note, runId]);
 }
 
+// #3386/#3387: a "push-proposed"/"pr-proposed" phase is a pending delivery-substrate permission
+// request (productionDraftDeliveryRuntime.ts `requestDraftDeliveryApproval` — actionKind "push" |
+// "pull-request", actionClass "delivery-substrate"). This card stays read-only (Durable facts only,
+// per its own contract above): the actual approve/deny control is the existing bounded-action review
+// surface every other pending tool permission already uses (`codingWorkbench.approval.*`) — adding a
+// second approve affordance here would be a duplicate authority for the SAME pending request. This
+// hint only points the user at that existing surface.
+const PENDING_APPROVAL_PHASES: ReadonlySet<DraftDeliveryRecord["phase"]> = new Set([
+  "push-proposed",
+  "pr-proposed",
+]);
+
+function PendingApprovalHint({
+  phase,
+}: {
+  readonly phase: DraftDeliveryRecord["phase"];
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  if (!PENDING_APPROVAL_PHASES.has(phase)) return null;
+  return (
+    <p className={styles.helpText} data-testid="cwb-draft-delivery-approval-hint">
+      {t("codingWorkbench.draftDelivery.pendingApprovalHint")}
+    </p>
+  );
+}
+
 function DraftDeliveryCard({
   delivery,
 }: {
@@ -58,6 +84,7 @@ function DraftDeliveryCard({
       <p className={styles.helpText}>
         {t(`codingWorkbench.draftDelivery.reason.${delivery.reason}`)}
       </p>
+      <PendingApprovalHint phase={delivery.phase} />
       <ObservedPullRequest delivery={delivery} t={t} />
       <DeliveryBinding delivery={delivery} t={t} />
     </section>
