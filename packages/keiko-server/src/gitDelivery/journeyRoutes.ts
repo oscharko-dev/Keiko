@@ -31,11 +31,7 @@ import type {
   createProductionJourneyReader as ProductionJourneyReaderFn,
   resolveJourneyCheckoutRoot as ResolveJourneyCheckoutRootFn,
 } from "../coding-runtime/productionDraftDeliveryDependencies.js";
-import {
-  hasOnlyAllowedKeys,
-  isPlainObject,
-  readParsedGitDeliveryBody,
-} from "./requestGuards.js";
+import { hasOnlyAllowedKeys, isPlainObject, readParsedGitDeliveryBody } from "./requestGuards.js";
 import {
   JourneyObservationController,
   type JourneyObservationContext,
@@ -49,12 +45,12 @@ import type { PrDescriptionContext } from "./prDescriptionTypes.js";
 // ─── Error envelope ─────────────────────────────────────────────────────────────────────────────
 
 type GitDeliveryJourneyErrorCode =
-  | "GIT_DELIVERY_JOURNEY_BAD_REQUEST"
-  | "GIT_DELIVERY_JOURNEY_PAYLOAD_TOO_LARGE";
+  "GIT_DELIVERY_JOURNEY_BAD_REQUEST" | "GIT_DELIVERY_JOURNEY_PAYLOAD_TOO_LARGE";
 
 const SAFE_MESSAGES: Readonly<Record<GitDeliveryJourneyErrorCode, string>> = {
   GIT_DELIVERY_JOURNEY_BAD_REQUEST: "The request body is not a valid journey observation request.",
-  GIT_DELIVERY_JOURNEY_PAYLOAD_TOO_LARGE: "The journey observation request exceeds the maximum size.",
+  GIT_DELIVERY_JOURNEY_PAYLOAD_TOO_LARGE:
+    "The journey observation request exceeds the maximum size.",
 };
 
 function errResult(status: number, code: GitDeliveryJourneyErrorCode): RouteResult {
@@ -73,8 +69,13 @@ function parseRunId(value: unknown): string | undefined {
   return typeof runId === "string" && RUN_ID_PATTERN.test(runId) ? runId : undefined;
 }
 
-function unavailableResult(reason: Extract<JourneyObservationResult, { status: "unavailable" }>["reason"]): RouteResult {
-  return { status: 200, body: { status: "unavailable", reason } satisfies JourneyObservationResult };
+function unavailableResult(
+  reason: Extract<JourneyObservationResult, { status: "unavailable" }>["reason"],
+): RouteResult {
+  return {
+    status: 200,
+    body: { status: "unavailable", reason } satisfies JourneyObservationResult,
+  };
 }
 
 // ─── Description-status read (#3389 AC9) ───────────────────────────────────────────────────────
@@ -101,7 +102,8 @@ function readDescriptionStatus(
     // guard below is the whole of `redactEvidenceString`'s body.
     redact: (value: string): string => {
       const redacted = deps.redactor(value);
-      if (typeof redacted !== "string") throw new TypeError("Evidence redactor returned a non-string value.");
+      if (typeof redacted !== "string")
+        throw new TypeError("Evidence redactor returned a non-string value.");
       return redacted;
     },
   });
@@ -191,7 +193,10 @@ function readinessFor(
   options: GitDeliveryJourneyRouteOptions,
   readiness: ReadinessSnapshot | undefined,
 ): JourneyObservationOptions["readiness"] {
-  return options.readiness ?? ((): Promise<ReadinessSnapshot | null> => Promise.resolve(readiness ?? null));
+  return (
+    options.readiness ??
+    ((): Promise<ReadinessSnapshot | null> => Promise.resolve(readiness ?? null))
+  );
 }
 
 function descriptionFor(
@@ -274,7 +279,12 @@ async function handleJourneyRefresh(
   const repositoryId = issueBinding.repositoryId;
   const draftDelivery = await loadDraftDeliveryReaderModule();
   let context: JourneyObservationContext;
-  const reader = readerFor(deps, options, repositoryId, draftDelivery.createProductionJourneyReader);
+  const reader = readerFor(
+    deps,
+    options,
+    repositoryId,
+    draftDelivery.createProductionJourneyReader,
+  );
   context = {
     draft,
     accessScope: {},

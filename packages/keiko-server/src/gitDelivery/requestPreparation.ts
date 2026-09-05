@@ -24,6 +24,7 @@ import {
   type GitDeliveryApprovalRedemption,
   type GitDeliveryAuthorityDenial,
   type GitDeliveryAuthorityRequest,
+  type GitDeliveryDescriptionAuthorityAdmission,
 } from "./runBoundAuthority.js";
 import {
   resolveGitDeliveryApprovalRequirement,
@@ -67,6 +68,10 @@ export interface GitDeliveryAuthorityAuditSeams {
   // since none yet threads a claim through this seam — #3387/#3390 are the producers that will).
   readonly approval?: ParsedGitDeliveryApprovalRequest | undefined;
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
+  // #3399 (epic #3384 correction 4): admits the "pull-request" body-only description apply outside
+  // a running Code task, over the server-minted description authority, when no run is active. Has
+  // no effect on any other operation — `authorizeGitDelivery` only consults it for "pull-request".
+  readonly descriptionAuthority?: GitDeliveryDescriptionAuthorityAdmission | undefined;
 }
 
 export type GitDeliveryAuthorityPhase = "admission" | "continuity";
@@ -247,6 +252,7 @@ export function gitDeliveryAuthorityGate(
     { projectId, workspaceRoot: workspace.root, operation, ...target },
     audit.nowIso ?? new Date().toISOString(),
     gitDeliveryApprovalRedemption(projectId, audit),
+    audit.descriptionAuthority,
   );
   const logSink = audit.logSink ?? processServerLogSink();
   const phase = authorityPhaseFor(audit);

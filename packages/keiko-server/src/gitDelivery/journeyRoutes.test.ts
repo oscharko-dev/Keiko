@@ -21,6 +21,7 @@ import type {
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
 import { createDraftRun, readySnapshot } from "./ciObservationTest/_support.js";
 import { createGitDeliveryJourneyRouteGroup } from "./journeyRoutes.js";
 
@@ -45,6 +46,7 @@ function ctxFor(body: unknown): RouteContext {
 
 interface Harness {
   readonly deps: UiHandlerDeps;
+  readonly events: ServerLogEvent[];
   readonly cleanup: () => void;
 }
 
@@ -52,13 +54,20 @@ function harness(): Harness {
   const db = new DatabaseSync(":memory:");
   const snapshots = createDraftRun(db);
   const dir = mkdtempSync(join(tmpdir(), "keiko-journey-route-"));
+  const events: ServerLogEvent[] = [];
   const deps = {
     codingRuntimeSnapshotStore: snapshots,
     evidenceStore: createNodeEvidenceStore(dir),
     redactor: (value: string): string => value,
+    activityLog: {
+      write: (event: ServerLogEvent): void => {
+        events.push(event);
+      },
+    },
   } as UiHandlerDeps;
   return {
     deps,
+    events,
     cleanup: (): void => {
       db.close();
       rmSync(dir, { recursive: true, force: true });
@@ -98,9 +107,9 @@ function fakeReader(result: GitJourneyFactsResult): GitJourneyReader {
 describe("journey observation route registration (#3389 AC1)", () => {
   it("registers POST /api/git-delivery/journey/refresh in the real route table", async () => {
     const { API_ROUTES } = await import("../routes.js");
-    expect(
-      API_ROUTES.some((route) => route.method === "POST" && route.pattern === PATTERN),
-    ).toBe(true);
+    expect(API_ROUTES.some((route) => route.method === "POST" && route.pattern === PATTERN)).toBe(
+      true,
+    );
   });
 });
 
@@ -135,7 +144,10 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
         ctxFor({ schemaVersion: "1", runId: "unbound-run" }),
         h.deps,
       )) as RouteResult;
-      expect(result).toEqual({ status: 200, body: { status: "unavailable", reason: "draft-unavailable" } });
+      expect(result).toEqual({
+        status: 200,
+        body: { status: "unavailable", reason: "draft-unavailable" },
+      });
     } finally {
       h.cleanup();
     }
@@ -161,6 +173,33 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
           binding: { runId: "run-1", remoteDigest: "a".repeat(64), prNumber: 17 },
         },
       });
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("logs a body-free recorded/rejected outcome line for the durable projection write (#3389 AC6)", async () => {
+    const h = harness();
+    try {
+      const outcomes = { get: (): undefined => undefined, record: (): boolean => false };
+      const group = createGitDeliveryJourneyRouteGroup({
+        reader: (): GitJourneyReader => fakeReader(OBSERVED_FACTS),
+        readiness: () => Promise.resolve(readySnapshot()),
+        description: () => Promise.resolve(null),
+        outcomes,
+      });
+      const result = (await group[0]?.handler(
+        ctxFor({ schemaVersion: "1", runId: "run-1" }),
+        h.deps,
+      )) as RouteResult;
+      expect(result.body).toMatchObject({ status: "unavailable", reason: "observation-superseded" });
+      const recorded = h.events.find((event) => event.op === "git.journey-outcome.recorded");
+      expect(recorded).toMatchObject({
+        op: "git.journey-outcome.recorded",
+        level: "warn",
+        extra: { runId: "run-1", recorded: false },
+      });
+      expect(JSON.stringify(h.events)).not.toMatch(/owner\/repository|PR_17/u);
     } finally {
       h.cleanup();
     }

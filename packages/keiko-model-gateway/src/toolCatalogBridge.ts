@@ -180,7 +180,6 @@ function prepare(
   request: GatewayRequest,
   now: () => number,
   log: ModelGatewayLogSink,
-  streaming: boolean,
 ): GatewayToolCatalogBridge {
   const input = dataField(request, "toolCatalog");
   const oldTools = dataField(request, "tools");
@@ -194,7 +193,6 @@ function prepare(
   const advertisement = capturedAdvertisement(input);
   const normalizer = normalizerFor(advertisement);
   const tools = definitions(normalizer, now());
-  requireBridge(!streaming || tools.length === 0, "unsupported-capability");
   if (oldTools !== undefined)
     requireBridge(
       advertisement.kind === "legacy-native" &&
@@ -213,16 +211,19 @@ function prepare(
   });
   return bridge(normalizer, tools, now, log);
 }
-/** Runs before transport; captures the exact advertisement used again after asynchronous provider work. */
+/**
+ * Runs before transport; captures the exact advertisement used again after asynchronous provider
+ * work. Streaming and buffered calls bind identically -- the streaming adapter accumulates tool
+ * calls from SSE deltas and binds them at the terminal `done` chunk via the same `bindCalls`.
+ */
 export function createGatewayToolCatalogBridge(
   request: GatewayRequest,
   now: () => number,
   sink?: ModelGatewayLogSink,
-  streaming = false,
 ): GatewayToolCatalogBridge {
   const log = resolveLogSink(sink);
   try {
-    return prepare(request, now, log, streaming);
+    return prepare(request, now, log);
   } catch (cause) {
     return reject(log, "projection", cause);
   }

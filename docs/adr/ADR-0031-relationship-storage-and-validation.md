@@ -140,6 +140,7 @@ The complete contract is in [`docs/relationship-engine/api-contract.md`](../rela
 ### Neutral
 
 - Forward-looking endpoint kinds (`agent`, `connector`, `data-source`, `skill`, `mcp-tool`) are enumerated in the schema's `CHECK` constraint so the schema is stable when the owning registries land. The validator rejects them until then. No row with a forward-looking kind ever exists in production at `schemaVersion: "1"`.
+- Issue #3400 (epic #3384) added `git-change` as a fifteenth object kind and a `reads-context` target kind: a server-resolved, immutable Git comparison (exact base/head or one resolved same-repository pull request) connected to a Chat. Unlike the forward-looking kinds above, it entered `RELATIONSHIP_SUPPORTED_OBJECT_KINDS` in the SAME migration (the v28 rebuild of `relationships`/`relationship_lifecycle_history`) that widened the `CHECK` — there is no not-yet-supported window for it, and no `schemaVersion` bump (this is an additive change per the versioning rule below).
 
 ## Alternatives considered
 
@@ -174,6 +175,8 @@ Considered: extend `memory_edges` with cross-domain endpoint types. **Rejected**
 ## Migration
 
 Forward-only. The V5 migration adds the `relationships` and `relationship_lifecycle_history` tables to the existing UI-persistence database. Running the migration twice is a no-op. The existing `PRAGMA user_version` runner is the migration mechanism.
+
+The v28 migration (Issue #3400) is the first migration to extend the `CHECK` constraint added at V5: SQLite cannot widen a `CHECK` with `ALTER TABLE`, so the migration rebuilds `relationships` under the widened kind lists (adding `git-change` to both the source-kind and target-kind enumerations) and copies every existing row across unchanged, then leaves `relationship_lifecycle_history` untouched — its `relationship_id REFERENCES relationships(id) ON DELETE CASCADE` foreign key means the rebuild must `INSERT`-then-`DROP` the old table (never `DROP`-then-recreate) so no history row is cascaded away. This is the same additive-migration shape the "Future schema evolution" note below already sanctions; v28 is its first real occurrence.
 
 Rolling back a bad migration uses the corrupt-DB quarantine flow inherited from the existing store: rename to `.corrupt.<iso>` and start clean. The relationship table is recoverable from evidence manifest references (audit ledger is canonical for lineage); the operational story is documented in [`docs/relationship-engine/storage.md`](../relationship-engine/storage.md) §6.3.
 

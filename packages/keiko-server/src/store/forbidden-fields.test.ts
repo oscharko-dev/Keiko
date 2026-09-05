@@ -358,7 +358,14 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
       ]);
       for (const col of columnNames(inspector, "git_journey_outcomes")) {
         const lower = col.toLowerCase();
-        for (const forbidden of [...FORBIDDEN_SUBSTRINGS, "title", "body", "diff", "url", "owner"]) {
+        for (const forbidden of [
+          ...FORBIDDEN_SUBSTRINGS,
+          "title",
+          "body",
+          "diff",
+          "url",
+          "owner",
+        ]) {
           expect(lower).not.toContain(forbidden);
         }
       }

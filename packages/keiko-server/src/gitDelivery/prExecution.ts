@@ -78,12 +78,22 @@ const PR_BASE_CONSTRAINTS = [
   },
 ] as const;
 
+// #3399 (epic #3384 correction 4): `pr-description-apply` names the same "any approver" shape
+// ADR-0080 D5 defines (`requiredApprovers: []`) for documentation and pack-mintability parity with
+// `pr-create`/`pr-update` above. Its LIVE enforcement is not this rule: `evaluateGitPullRequestEffectivePolicy`
+// (keiko-tools/git-pr-gateway.ts) is closed over `actionKind: "pr-create" | "pr-update"` only, so
+// prDescriptionService.ts's own policy check necessarily reuses the `pr-update` base-branch
+// constraint as a proxy and never looks this rule up. The description apply's real, unconditional
+// approval requirement is prDescriptionService.ts's own `PrDescriptionApprovals` continuation
+// (mint via issueApproval, redeem via consumeApproval/executeApproved) — matching how commit/push/
+// pr enforce ADR-0138 D2 at their own route/service layer rather than through this pack's decision.
 export const KEIKO_DEFAULT_PR_POLICY_PACK: GitDeliveryRepoPolicyPack = {
   schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   repoId: "keiko-pr-default",
   rules: [
     { actionKind: "pr-create", decision: "constrained", constraints: [...PR_BASE_CONSTRAINTS] },
     { actionKind: "pr-update", decision: "constrained", constraints: [...PR_BASE_CONSTRAINTS] },
+    { actionKind: "pr-description-apply", decision: "approval-gated", requiredApprovers: [] },
   ],
   defaultRule: { decision: "blocked" },
 };

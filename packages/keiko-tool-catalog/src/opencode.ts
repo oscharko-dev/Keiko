@@ -203,10 +203,9 @@ function researchFetchSpec(): OpenCodeToolSpec {
     canonicalId: "keiko.research.fetch",
     alias: "keiko_research_fetch",
     description: "Fetch one public https URL for read-only research.",
-    inputSchema: managedObjectSchema(
-      { target: { type: "string", minLength: 9, maxLength: 512 } },
-      ["target"],
-    ),
+    inputSchema: managedObjectSchema({ target: { type: "string", minLength: 9, maxLength: 512 } }, [
+      "target",
+    ]),
     effect: "network-egress",
     idempotency: "server-key-required",
     handlerId: "opencode-research-fetch-port",

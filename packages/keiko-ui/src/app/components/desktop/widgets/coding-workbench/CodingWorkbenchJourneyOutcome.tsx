@@ -113,7 +113,11 @@ function JourneyControls(
   const canPropose = props.ready && ready !== undefined && markReadyAvailable;
   const pending = props.ready && !markReadyAvailable;
   const propose = (): void => {
-    if (busy || !canPropose || !canProposeJourneyReady(props.outcome, props.snapshot?.state, Date.now()))
+    if (
+      busy ||
+      !canPropose ||
+      !canProposeJourneyReady(props.outcome, props.snapshot?.state, Date.now())
+    )
       return;
     if (ready !== undefined) void action.invoke("propose-ready", ready);
   };
@@ -144,7 +148,12 @@ function JourneyControls(
           </button>
         )}
       </div>
-      <JourneyActionFeedback busy={busy} failure={action.failure} ready={canPropose} pending={pending} />
+      <JourneyActionFeedback
+        busy={busy}
+        failure={action.failure}
+        ready={canPropose}
+        pending={pending}
+      />
     </div>
   );
 }

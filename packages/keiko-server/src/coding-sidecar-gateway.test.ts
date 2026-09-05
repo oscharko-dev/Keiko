@@ -600,7 +600,8 @@ describe("coding-sidecar gateway", () => {
 
   it("produces a GatewayRequest whose toolCatalog projection canonically equals the forwarded managed tools and reaches fetch", async () => {
     resetGatewayInstanceCacheForTests();
-    let requestBody: { tools?: readonly { function: { name: string; parameters: unknown } }[] } | undefined;
+    let requestBody:
+      { tools?: readonly { function: { name: string; parameters: unknown } }[] } | undefined;
     vi.stubGlobal(
       "fetch",
       vi.fn((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -637,7 +638,9 @@ describe("coding-sidecar gateway", () => {
         new Set(projectedByAlias.keys()),
       );
       for (const tool of sentTools) {
-        expect(tool.function.parameters).toEqual(projectedByAlias.get(tool.function.name)?.inputSchema);
+        expect(tool.function.parameters).toEqual(
+          projectedByAlias.get(tool.function.name)?.inputSchema,
+        );
       }
     } finally {
       vi.unstubAllGlobals();

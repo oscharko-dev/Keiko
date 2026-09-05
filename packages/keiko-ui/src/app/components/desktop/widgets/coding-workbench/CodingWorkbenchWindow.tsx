@@ -40,7 +40,10 @@ import { isCodingWorkbenchModel } from "@oscharko-dev/keiko-contracts/runtime/ga
 import { useTranslate } from "@/lib/i18n";
 import { CodingWorkbenchCiReadiness } from "./CodingWorkbenchCiReadiness";
 import { CodingWorkbenchDraftDelivery } from "./CodingWorkbenchDraftDelivery";
-import { CodingWorkbenchJourneyOutcome } from "./CodingWorkbenchJourneyOutcome";
+import {
+  CodingWorkbenchJourneyOutcome,
+  type CodingWorkbenchJourneyChangedFilesSummary,
+} from "./CodingWorkbenchJourneyOutcome";
 import { CodingWorkbenchCommitResult } from "./CodingWorkbenchCommitResult";
 import {
   CodingWorkbenchCommitReview,
@@ -197,6 +200,18 @@ function latestChangesSignal(events: readonly CodingWorkbenchRuntimeSseEvent[]):
     if (event?.kind === "status" || event?.eventKind === "diff-summarized") return event.cursor;
   }
   return null;
+}
+
+/** Joins `CodingWorkbenchChanges`' own live file list to a bounded count + truncation flag (AC2) —
+ * never a path, a diff or the underlying provider error detail. */
+function changedFilesSummary(
+  changes: ReturnType<typeof useCodingWorkbenchChanges>,
+): CodingWorkbenchJourneyChangedFilesSummary {
+  if (changes.status === "ready") {
+    return { status: "ready", fileCount: changes.files.length, truncated: changes.truncated };
+  }
+  if (changes.status === "loading") return { status: "loading", fileCount: 0, truncated: false };
+  return { status: "unavailable", fileCount: 0, truncated: false };
 }
 
 interface CodingWorkbenchJourneyState {
@@ -664,7 +679,9 @@ function WorkbenchColumns({
   useEffect(() => {
     if (runId !== undefined) followNewest();
   }, [followNewest, runId]);
-  const journey = useCodingWorkbenchJourney(state.run.value?.draftDelivery?.pullRequest !== undefined ? runId : undefined);
+  const journey = useCodingWorkbenchJourney(
+    state.run.value?.draftDelivery?.pullRequest !== undefined ? runId : undefined,
+  );
   const journeyChanges = useCodingWorkbenchChanges({
     root: liveWorkspaceRoot,
     runId: state.run.value?.runId,
@@ -794,6 +811,12 @@ function WorkbenchColumns({
           <PermissionPrompt state={state} research={research} onDecision={onDecision} />
           <CodingWorkbenchCiReadiness snapshot={state.run.value ?? undefined} />
           <CodingWorkbenchDraftDelivery snapshot={state.run.value ?? undefined} />
+          <CodingWorkbenchJourneyOutcome
+            snapshot={state.run.value ?? undefined}
+            outcome={journey.outcome}
+            onRefresh={journey.onRefresh}
+            changedFiles={changedFilesSummary(journeyChanges)}
+          />
           <CodingWorkbenchCommitResult
             result={state.run.value?.verifiedCommitResult}
             runId={runId}

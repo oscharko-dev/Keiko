@@ -3512,9 +3512,11 @@ describe("Coding Workbench journey observation API (#3389)", () => {
     const { outcome } = journeyFixture();
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        jsonOk({ status: "observed", outcome: { ...outcome, state: "fabricated-current" } }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonOk({ status: "observed", outcome: { ...outcome, state: "fabricated-current" } }),
+        ),
     );
 
     await expect(fetchCodingWorkbenchJourneyRefresh({ runId: "run-1" })).rejects.toMatchObject({

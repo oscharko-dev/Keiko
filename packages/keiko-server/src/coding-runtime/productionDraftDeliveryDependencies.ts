@@ -124,7 +124,10 @@ function journeyReaderWorkspace(root: string): WorkspaceInfo {
   };
 }
 
-function journeyReaderRoot(deps: JourneyReadCompositionDeps, repositoryId: string): string | undefined {
+function journeyReaderRoot(
+  deps: JourneyReadCompositionDeps,
+  repositoryId: string,
+): string | undefined {
   for (const project of deps.store.listProjects()) {
     const resolved = resolveProjectWorkspace(deps, project.path);
     if (resolved !== undefined && githubIssueReaderRepositoryId(resolved.root) === repositoryId) {

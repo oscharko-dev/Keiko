@@ -345,8 +345,7 @@ function applyToolCallDelta(accumulator: ToolCallAccumulator, chunk: unknown): v
     const fn = isRecord(raw.function) ? raw.function : undefined;
     accumulator.set(raw.index, {
       id: typeof raw.id === "string" && raw.id.length > 0 ? raw.id : (existing?.id ?? ""),
-      name:
-        typeof fn?.name === "string" && fn.name.length > 0 ? fn.name : (existing?.name ?? ""),
+      name: typeof fn?.name === "string" && fn.name.length > 0 ? fn.name : (existing?.name ?? ""),
       argumentsText:
         (existing?.argumentsText ?? "") + (typeof fn?.arguments === "string" ? fn.arguments : ""),
     });
@@ -626,9 +625,12 @@ export class OpenAiAdapter implements ProviderAdapter {
     return bindNormalizedToolCalls(redactResponse(normalized, secrets), catalog.bindCalls);
   };
 
-  // Streaming chat path (Layer 1): yields redacted content-delta tokens as they
-  // arrive, then a terminal `done` with the assembled, redacted NormalizedResponse.
-  // Tool-call streaming is out of scope — only `choices[0].delta.content` is surfaced.
+  // Streaming chat path (Layer 1): yields redacted content-delta tokens as they arrive, then a
+  // terminal `done` with the assembled, redacted, catalog-bound NormalizedResponse. Tool calls are
+  // accumulated from `choices[0].delta.tool_calls` fragments across chunks and bound against the
+  // advertised catalog only once fully assembled at `done` — never exposed mid-stream, and never
+  // reaching the caller unbound if the catalog rejects them (catalog.bindCalls throws, so this
+  // generator throws before yielding `done`).
   callStream = async function* (
     this: OpenAiAdapter,
     request: GatewayRequest,
@@ -642,7 +644,7 @@ export class OpenAiAdapter implements ProviderAdapter {
       );
     }
     const start = this.now();
-    const catalog = createGatewayToolCatalogBridge(request, this.now, this.log, true);
+    const catalog = createGatewayToolCatalogBridge(request, this.now, this.log);
     const response = await this.dispatch(
       { ...request, tools: catalog.tools.length === 0 ? undefined : catalog.tools },
       config,
@@ -653,13 +655,20 @@ export class OpenAiAdapter implements ProviderAdapter {
       const errorPayload = await this.readErrorBody(response);
       mapHttpError(response, config.modelId, secrets, errorPayload);
     }
-    const acc = { content: "", finishReason: "stop" as FinishReason, prompt: 0, completion: 0 };
+    const acc: StreamAccumulator = {
+      content: "",
+      finishReason: "stop",
+      prompt: 0,
+      completion: 0,
+      toolCalls: new Map(),
+    };
     for await (const token of this.streamDeltas(response, config, secrets, acc)) {
       yield { type: "delta", token };
     }
     const assembled = this.assembleResponse(config, start, acc);
     assertUsableAssistantResponse(assembled, config.modelId, secrets);
-    yield { type: "done", response: redactResponse(assembled, secrets) };
+    const bound = bindNormalizedToolCalls(redactResponse(assembled, secrets), catalog.bindCalls);
+    yield { type: "done", response: bound };
   };
 
   // Iterates the SSE stream, yielding redacted content tokens while mutating `acc`.

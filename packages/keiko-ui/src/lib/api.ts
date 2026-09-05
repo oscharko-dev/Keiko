@@ -3322,9 +3322,15 @@ export function validateCodingWorkbenchJourneyRefreshResponse(
   if (value.status === "unavailable") {
     return isBoundedText(value.reason, 64)
       ? { ok: true }
-      : { ok: false, reasons: ["journey refresh response.reason must be a bounded, non-empty string"] };
+      : {
+          ok: false,
+          reasons: ["journey refresh response.reason must be a bounded, non-empty string"],
+        };
   }
-  return { ok: false, reasons: ["journey refresh response.status must be observed or unavailable"] };
+  return {
+    ok: false,
+    reasons: ["journey refresh response.status must be observed or unavailable"],
+  };
 }
 
 /** Reads/refreshes the bounded journey observation for one accepted draft-delivery run (#3389). */
@@ -3333,7 +3339,11 @@ export async function fetchCodingWorkbenchJourneyRefresh(
   signal?: AbortSignal,
 ): Promise<CodingWorkbenchJourneyRefreshResult> {
   if (!isBoundedText(input.runId, RUN_ID_MAX_CHARS)) {
-    throw new ApiError("CONTRACT_VALIDATION_FAILED", "runId must be a bounded, non-empty string", 400);
+    throw new ApiError(
+      "CONTRACT_VALIDATION_FAILED",
+      "runId must be a bounded, non-empty string",
+      400,
+    );
   }
   return fetchJson(
     "/api/git-delivery/journey/refresh",

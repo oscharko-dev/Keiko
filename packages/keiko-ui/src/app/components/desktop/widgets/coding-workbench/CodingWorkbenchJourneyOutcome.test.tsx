@@ -45,7 +45,9 @@ describe("observed issue journey handoff", () => {
     render(<CodingWorkbenchJourneyOutcome {...journeyFixture()} onProposeReady={onProposeReady} />);
     const button = screen.getByRole("button", { name: "Review ready-for-review request" });
     expect(button).toBeDisabled();
-    expect(screen.getByText("The ready-for-review approval path is not available yet.")).toBeInTheDocument();
+    expect(
+      screen.getByText("The ready-for-review approval path is not available yet."),
+    ).toBeInTheDocument();
     fireEvent.click(button);
     await act(async () => {});
     expect(onProposeReady).not.toHaveBeenCalled();

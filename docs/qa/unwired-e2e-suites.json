@@ -1,8 +1,9 @@
 {
   "purpose": "Suites that exist as npm scripts but run in no workflow lane, Playwright configs that have no owning npm script at all, spec files no script can reach, and /api paths a spec names that this server deliberately does not mount. A debt register, not an exemption list: scripts/check-e2e-suite-wiring.mjs fails on any suite, config, spec or path missing from here, and fails again on any entry that has since been wired, given a script, made reachable, mounted, or deleted, so these lists can only shrink. suiteProtection records the strongest concrete event class for every E2E script; any change to that class fails the gate until the baseline is updated through an explicit reviewed change.",
   "recordedBy": "#2629 (epic #2285 Wave 2); configsWithoutScript added by #2891 (audit KEIKO-0077); suiteProtection added by #3120 (audits KEIKO-0151 and KEIKO-0256); specsWithoutLane and externalApiPaths added by #2955 (audits KEIKO-0078, KEIKO-0080, KEIKO-0094)",
-  "note": "Every entry predates the gate that records it; none was added to silence a failure. Wiring one is a CI-minute decision owned by the suite area, not by this file. The creation date is in git history rather than duplicated here, where it could only drift. test:e2e:editor-perf is deliberate: it is driven by the D12 evidence regeneration flow (docs/qa/perf-evidence.md), not by a lane.",
+  "note": "Every entry predates the gate that records it; none was added to silence a failure. Wiring one is a CI-minute decision owned by the suite area, not by this file. The creation date is in git history rather than duplicated here, where it could only drift. test:e2e:editor-perf is deliberate: it is driven by the D12 evidence regeneration flow (docs/qa/perf-evidence.md), not by a lane. test:e2e:coding-issue-journey:live (epic #3384, #3390) is deliberate as well: it composes the production factory against a real Model Gateway profile and an operator-controlled repository and fails closed with qualification-input-unavailable when those inputs are absent, so no hosted lane can run it; it is executed by the release owner on a prepared host and its manifest is validated by check:coding-issue-journey-evidence.",
   "suites": [
+    "test:e2e:coding-issue-journey:live",
     "test:e2e:coding-workbench-1990",
     "test:e2e:coding-workbench-1991",
     "test:e2e:coding-workbench-1992",
@@ -24,7 +25,11 @@
     "test:e2e:code-task:authority": "scheduled-nonblocking",
     "test:e2e:code-task:opencode-tracer": "scheduled-nonblocking",
     "test:e2e:code-task:real-binary": "scheduled-nonblocking",
+    "test:e2e:coding-issue-ci": "scheduled-nonblocking",
+    "test:e2e:coding-issue-commit": "scheduled-nonblocking",
+    "test:e2e:coding-issue-delivery": "scheduled-nonblocking",
     "test:e2e:coding-issue-intake": "scheduled-nonblocking",
+    "test:e2e:coding-issue-journey:live": "unwired",
     "test:e2e:coding-workbench-1990": "unwired",
     "test:e2e:coding-workbench-1991": "unwired",
     "test:e2e:coding-workbench-1992": "unwired",
@@ -71,10 +76,7 @@
     "test:e2e:workspace-search-2090": "unwired",
     "test:e2e:workspace-selection-2060": "unwired",
     "test:e2e:workspace-surfaces": "scheduled-nonblocking",
-    "test:e2e:workspace-trust-2523": "scheduled-nonblocking",
-    "test:e2e:coding-issue-commit": "scheduled-nonblocking",
-    "test:e2e:coding-issue-delivery": "scheduled-nonblocking",
-    "test:e2e:coding-issue-ci": "scheduled-nonblocking"
+    "test:e2e:workspace-trust-2523": "scheduled-nonblocking"
   },
   "configsWithoutScriptNote": "A config with no owning script is less runnable than a suite that merely runs in no lane: nothing can even name it, so the suites list above cannot see it. Each entry states why a script would be wrong today rather than merely absent. Adding the script is the fix; recording it here is the interim. Reasons are in configsWithoutScriptReasons, keyed by the same file name.",
   "configsWithoutScript": [

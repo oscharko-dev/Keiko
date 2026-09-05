@@ -46,6 +46,12 @@ export type {
   ChatRole,
   WorkflowStatus,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+// Issue #3400 (epic #3384) — the third, sibling Git-change Chat scope list.
+export type {
+  ChatGitChangeScope,
+  ChatGitChangeDescriptionStatus,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
+export { CHAT_GIT_CHANGE_DESCRIPTION_STATUSES } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 export interface MemoryAutonomyPolicyRecord {
   readonly requestedMode: CodingWorkbenchMode;

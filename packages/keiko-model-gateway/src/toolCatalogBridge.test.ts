@@ -13,7 +13,7 @@ import type {
 import type { ModelGatewayLogEvent } from "./observability.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
-import type { GatewayRequest, ModelProviderConfig } from "./types.js";
+import type { GatewayRequest, GatewayStreamChunk, ModelProviderConfig } from "./types.js";
 
 const NOW = Date.parse("2026-09-05T00:00:00.000Z");
 const CONFIG: ModelProviderConfig = {
@@ -55,6 +55,40 @@ function response(args: unknown = { path: "src/example.ts" }): Response {
 }
 function request(): GatewayRequest {
   return { modelId: CONFIG.modelId, messages: [{ role: "user", content: "fixture" }] };
+}
+
+function toolCallDeltaLine(id: string, name: string, argumentsText: string): string {
+  return `data: ${JSON.stringify({
+    choices: [
+      {
+        delta: {
+          tool_calls: [
+            { index: 0, id, type: "function", function: { name, arguments: argumentsText } },
+          ],
+        },
+      },
+    ],
+  })}\n`;
+}
+function toolCallFinishLine(): string {
+  return `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n`;
+}
+function toolCallStream(lines: readonly string[]): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller): void {
+      const enc = new TextEncoder();
+      for (const line of [...lines, "data: [DONE]\n"]) controller.enqueue(enc.encode(line));
+      controller.close();
+    },
+  });
+  return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+async function collectToolCallStream(
+  iterable: AsyncIterable<GatewayStreamChunk>,
+): Promise<GatewayStreamChunk[]> {
+  const out: GatewayStreamChunk[] = [];
+  for await (const chunk of iterable) out.push(chunk);
+  return out;
 }
 
 describe("production gateway catalog bridge", () => {
@@ -181,15 +215,68 @@ describe("gateway bridge trust and compatibility boundaries", () => {
     ).rejects.toBeInstanceOf(GatewayToolCatalogError);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
-  it("rejects tool-bearing streaming requests before starting an unsupported stream", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(response()));
-    const subject = adapter(fetchImpl);
-    const stream = subject.callStream({ ...request(), toolCatalog: advertisement() }, CONFIG);
-    await expect(stream.next()).rejects.toMatchObject({
-      status: "invalid",
-      reason: "unsupported-capability",
+  it("binds a streamed tool call, assembled from SSE deltas, at the done chunk", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        toolCallStream([
+          toolCallDeltaLine("call-1", "read_file", JSON.stringify({ path: "src/example.ts" })),
+          toolCallFinishLine(),
+        ]),
+      ),
+    );
+    const chunks = await collectToolCallStream(
+      adapter(fetchImpl).callStream({ ...request(), toolCatalog: advertisement() }, CONFIG),
+    );
+    const done = chunks.find((chunk) => chunk.type === "done");
+    if (done?.type !== "done") throw new Error("expected a done chunk");
+    expect(done.response.toolCalls).toHaveLength(1);
+    expect(done.response.toolCalls[0]).toMatchObject({
+      name: "read_file",
+      invocation: { kind: "bound", toolRef: { canonicalId: "keiko.file.read" } },
     });
-    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects a streamed call to an alias absent from the offer — no result reaches the caller", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        toolCallStream([
+          toolCallDeltaLine("call-1", "not_a_governed_tool", "{}"),
+          toolCallFinishLine(),
+        ]),
+      ),
+    );
+    await expect(
+      collectToolCallStream(
+        adapter(fetchImpl).callStream({ ...request(), toolCatalog: advertisement() }, CONFIG),
+      ),
+    ).rejects.toMatchObject({ status: "invalid", reason: "invalid-arguments" });
+  });
+
+  it("rejects a streamed call when no catalog was advertised at all", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        toolCallStream([toolCallDeltaLine("call-1", "read_file", "{}"), toolCallFinishLine()]),
+      ),
+    );
+    await expect(
+      collectToolCallStream(adapter(fetchImpl).callStream(request(), CONFIG)),
+    ).rejects.toMatchObject({ status: "invalid", reason: "unoffered-tool" });
+  });
+
+  it("rejects a streamed call carrying a malformed (non-JSON) argument payload", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        toolCallStream([
+          toolCallDeltaLine("call-1", "read_file", "{not json"),
+          toolCallFinishLine(),
+        ]),
+      ),
+    );
+    await expect(
+      collectToolCallStream(
+        adapter(fetchImpl).callStream({ ...request(), toolCatalog: advertisement() }, CONFIG),
+      ),
+    ).rejects.toThrow();
   });
   it("rejects unsolicited tool calls when no tool was advertised", async () => {
     await expect(

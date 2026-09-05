@@ -8,6 +8,7 @@ import {
   assertNeverFilesTreeEntryKind,
   buildGroundedAnswerContextPackSummary,
   canonicalDesktopChatTurnReferenceSeed,
+  CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
   classifyAttachmentMime,
   DEFAULT_GROUNDING_LIMITS,
   DESKTOP_CHAT_SEND_ABORT_CONTRACT,
@@ -29,6 +30,8 @@ import {
   parseUpdateMemoryAutonomyPolicyWire,
   resolveGroundingLimits,
   type Chat,
+  type ChatGitChangeDescriptionStatus,
+  type ChatGitChangeScope,
   type ChatLocalKnowledgeScope,
   type DesktopChatSendRequestWire,
   type DesktopChatStreamTerminalEvent,
@@ -781,6 +784,82 @@ describe("local-knowledge multi-source contract (#189)", () => {
     expect(citation.source).toBe("Capsule A");
     expect(citation.htmlManual?.open.state).toBe("available");
     expect(hybrid.contextPack.reranker?.status).toBe("applied");
+  });
+});
+
+// Issue #3400 (epic #3384) — the THIRD, sibling Git-change Chat scope list (contract corrections
+// 2, 3 and 6). No legacy single-source field: this scope kind was never overloaded onto an
+// earlier shape, unlike connectedScope/localKnowledgeScope.
+describe("git-change Chat scope contract (#3400)", () => {
+  function gitChangeScope(patch: Partial<ChatGitChangeScope> = {}): ChatGitChangeScope {
+    return {
+      kind: "git-change",
+      relationshipId: "rel-1",
+      remoteDigest: "d".repeat(64),
+      comparisonLabel: "main...feature/x",
+      baseRef: "main",
+      headRef: "feature/x",
+      baseSha: "a".repeat(40),
+      headSha: "b".repeat(40),
+      mergeBaseSha: "c".repeat(40),
+      snapshotDigest: "e".repeat(64),
+      fileCount: 3,
+      totalFiles: 3,
+      omittedFiles: 0,
+      truncatedFiles: 0,
+      descriptionStatus: "current",
+      connectedAtMs: 10,
+      ...patch,
+    };
+  }
+
+  it("pins the frozen 6-member description-status vocabulary (contract correction 3)", () => {
+    expect([...CHAT_GIT_CHANGE_DESCRIPTION_STATUSES]).toEqual([
+      "current",
+      "stale",
+      "partial",
+      "fallback",
+      "blocked",
+      "failed",
+    ]);
+  });
+
+  it("is addressable as a third, sibling list on Chat and UpdateChatPatch", () => {
+    const base = {
+      id: "c1",
+      projectPath: "/p",
+      title: "t",
+      selectedModel: "m",
+      branchLabel: undefined,
+      status: undefined,
+      connectedScope: undefined,
+      localKnowledgeScope: undefined,
+      createdAt: 1,
+      updatedAt: 1,
+    } as const;
+    const scope = gitChangeScope();
+    const chat: Chat = { ...base, gitChangeScopes: [scope] };
+    expect(chat.gitChangeScopes).toEqual([scope]);
+    expect(chat.connectedScopes).toBeUndefined();
+    expect(chat.localKnowledgeScopes).toBeUndefined();
+
+    const patch: import("./bff-wire.js").UpdateChatPatch = { gitChangeScopes: [scope] };
+    expect(patch.gitChangeScopes).toEqual([scope]);
+    const cleared: import("./bff-wire.js").UpdateChatPatch = { gitChangeScopes: null };
+    expect(cleared.gitChangeScopes).toBeNull();
+  });
+
+  it("carries the remoteDigest identity, never repositoryId (contract correction 6)", () => {
+    const scope = gitChangeScope({ remoteDigest: "f".repeat(64) });
+    expect(scope.remoteDigest).toBe("f".repeat(64));
+    expect((scope as Record<string, unknown>).repositoryId).toBeUndefined();
+  });
+
+  it("every description status is a valid ChatGitChangeDescriptionStatus", () => {
+    for (const status of CHAT_GIT_CHANGE_DESCRIPTION_STATUSES) {
+      const scope = gitChangeScope({ descriptionStatus: status as ChatGitChangeDescriptionStatus });
+      expect(scope.descriptionStatus).toBe(status);
+    }
   });
 });
 

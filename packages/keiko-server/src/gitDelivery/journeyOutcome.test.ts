@@ -216,7 +216,9 @@ describe("durable journey outcome projection (#3389 AC6)", () => {
       // A fresh store instance over the SAME database simulates a restarted observation context —
       // no run authority, no live snapshot, only the persisted row.
       const restarted = createGitJourneyOutcomeStore(db);
-      expect(restarted.get(outcome.binding.remoteDigest, outcome.binding.prNumber)).toEqual(outcome);
+      expect(restarted.get(outcome.binding.remoteDigest, outcome.binding.prNumber)).toEqual(
+        outcome,
+      );
     } finally {
       db.close();
     }
@@ -243,9 +245,9 @@ describe("durable journey outcome projection (#3389 AC6)", () => {
     runMigrations(db);
     try {
       const store = createGitJourneyOutcomeStore(db);
-      expect(store.record({ ...produceJourneyOutcome(journeyFixture()), state: "bogus" } as never)).toBe(
-        false,
-      );
+      expect(
+        store.record({ ...produceJourneyOutcome(journeyFixture()), state: "bogus" } as never),
+      ).toBe(false);
     } finally {
       db.close();
     }

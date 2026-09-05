@@ -23,6 +23,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Prüfe den Wechsel vom Entwurf zur Review-Bereitschaft, bevor du ihn einmalig freigibst.",
   "codingWorkbench.journey.proposeReadyPending":
     "Der Freigabepfad für die Review-Bereitschaft ist noch nicht verfügbar.",
+  "codingWorkbench.journey.changedFiles": "{count} geänderte Dateien",
+  "codingWorkbench.journey.changedFilesTruncated": "(Liste gekürzt)",
   "codingWorkbench.journey.busy": "Übergabestatus wird aktualisiert…",
   "codingWorkbench.journey.actionError.refresh":
     "Statusaktualisierung fehlgeschlagen. Die gespeicherten Beobachtungen bleiben sichtbar.",

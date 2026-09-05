@@ -228,7 +228,16 @@ function insertJourneyOutcome(db: DatabaseSync, outcome: JourneyOutcome, json: s
         (remote_digest, pr_number, run_id, revision, state, reason, observed_at, outcome_json, updated_at)
         VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
     )
-    .run(remoteDigest, prNumber, runId, outcome.state, outcome.reason, outcome.observedAt, json, outcome.observedAt);
+    .run(
+      remoteDigest,
+      prNumber,
+      runId,
+      outcome.state,
+      outcome.reason,
+      outcome.observedAt,
+      json,
+      outcome.observedAt,
+    );
   return Number(result.changes) === 1;
 }
 
