@@ -200,7 +200,7 @@ async function executeAdmitted(
   if (input.signal?.aborted === true) return empty("cancelled");
   if (!admission.mutationGuard.check()) return empty("denied");
   if (request.action === "edit" && invocationRegistry !== undefined) {
-    return executeStagedEdit(ports, input, request, admission, invocationRegistry);
+    return executeStagedEdit(ports, input, request, admission, invocationRegistry, catalogBridge);
   }
   if (request.action === "edit" && requireInvocationRegistryForEdits) return empty("denied");
   return executePlainAction(ports, input, request, admission, catalogBridge);
@@ -236,6 +236,7 @@ async function executeStagedEdit(
   request: Extract<CodingToolActionRequest, { readonly action: "edit" }>,
   admission: Extract<CodingToolAdmission, { readonly ok: true }>,
   registry: CodingToolInvocationRegistry,
+  catalogBridge: CatalogFacadeBridge | undefined,
 ): Promise<CodingToolResult> {
   const binding = admission.binding ?? admission.mutationGuard.binding;
   const payload = typeof input.body === "string" ? Buffer.from(input.body, "utf8") : input.body;
@@ -257,26 +258,40 @@ async function executeStagedEdit(
   const claimed = registry.take(identity);
   if (claimed.kind !== "ready") return wipeAndReturn(payload, empty("denied"));
   try {
-    return await executeClaimedEdit(ports, input, request, admission, claimed);
+    return await executeClaimedEdit(ports, input, request, admission, claimed, catalogBridge);
   } finally {
     registry.settle(identity);
   }
 }
 
+// F8 (#3413): the ONE production path a governed `edit` actually takes (a real invocation registry
+// is always supplied in production, per `createRuntimeCodingToolFacade`'s
+// `requireInvocationRegistryForEdits: true`) -- so `keiko.changeset.edit` coverage belongs here,
+// not only in the plain-action path `executeStagedEdit`'s caller never reaches for `edit`. Wraps
+// the exact same single delegate call `executePlainAction` wraps, with the same denied-fault
+// branch; the staging/claim/wipe security path above and the post-delegate cancellation recheck
+// below are both untouched.
 async function executeClaimedEdit(
   ports: CodingToolFacadePorts,
   input: CodingToolFacadeInput,
   request: Extract<CodingToolActionRequest, { readonly action: "edit" }>,
   admission: Extract<CodingToolAdmission, { readonly ok: true }>,
   claimed: Extract<CodingToolInvocationTakeResult, { readonly kind: "ready" }>,
+  catalogBridge: CatalogFacadeBridge | undefined,
 ): Promise<CodingToolResult> {
   const signal =
     input.signal === undefined ? claimed.signal : AbortSignal.any([input.signal, claimed.signal]);
   if (isAborted(signal)) return empty("cancelled");
+  const runDelegate = (): Promise<unknown> =>
+    ports.delegate.execute(request, signal, admission.mutationGuard);
   try {
-    const result = await ports.delegate.execute(request, signal, admission.mutationGuard);
+    const result =
+      catalogBridge === undefined
+        ? await runDelegate()
+        : await catalogBridge.dispatch(request, runDelegate);
     return isAborted(signal) ? empty("cancelled") : project(request, result);
-  } catch {
+  } catch (error) {
+    if (error instanceof CatalogDispatchFault && error.status === "denied") return empty("denied");
     return projected("failed");
   }
 }

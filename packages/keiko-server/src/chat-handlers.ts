@@ -2584,7 +2584,10 @@ export function validateCurrentDesktopChatSend(
 // does not carry (correction 2 admits only safe, server-issued facts). Whichever module mints this
 // authority for a Chat-originated scope (#3399/#3401) must mint it under the SAME
 // (remoteDigest, {baseRef, headRef}, snapshotDigest) key for this admission check to find it.
-function gitChangeDescriptionAuthorityScopeFor(
+// Exported (final-audit F4, #3400) so the git-change connect flow (gitChangeRoutes.ts) can mint an
+// authority record under the EXACT SAME scope shape this admission check derives — one formula,
+// never a second, independently-drifting copy of it at the mint call site.
+export function gitChangeDescriptionAuthorityScopeFor(
   scope: ChatGitChangeScope,
 ): GitDeliveryDescriptionAuthorityScope {
   return {

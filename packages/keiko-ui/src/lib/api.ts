@@ -167,7 +167,6 @@ import {
   validateGitRepositorySummary,
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository-summary";
 import {
-  isSafeGitRefName,
   validateGitRepositoryDiffResponse,
   validateGitRepositoryStatusResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
@@ -175,24 +174,18 @@ import {
   validateGitSyncExecuteResponse,
   validateGitSyncPreview,
 } from "@oscharko-dev/keiko-contracts/runtime/git-sync";
-import {
-  CODING_WORKBENCH_ISSUE_PREVIEW_EXCERPT_MAX_CHARS,
-  CODING_WORKBENCH_ISSUE_PREVIEW_TITLE_MAX_CHARS,
-  GITHUB_ISSUE_NUMBER_MAX as CONTRACT_GITHUB_ISSUE_NUMBER_MAX,
-  GITHUB_ISSUE_REFERENCE_MAX_CHARS as CONTRACT_GITHUB_ISSUE_REFERENCE_MAX_CHARS,
-  isGitHubOwnerAndRepo,
-} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+// Only the one numeric bound below is a genuine eager dependency: `GITHUB_ISSUE_REFERENCE_MAX_CHARS`
+// is a value re-export consumed synchronously by CodingWorkbenchIssueIntake.tsx (a `maxLength` prop,
+// not behind the dynamic() boundary the rest of the Coding Workbench tree sits behind). Every other
+// binding this module used to import here — `isGitHubOwnerAndRepo`, the issue-preview title/excerpt
+// bounds, `GITHUB_ISSUE_NUMBER_MAX` — moved to `./coding-workbench-lazy-fetchers.ts` (epic #3384
+// final-audit F18), loaded only through `previewCodingWorkbenchIssue`'s `await import(...)` below.
+import { GITHUB_ISSUE_REFERENCE_MAX_CHARS as CONTRACT_GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
-import { isJourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-validation";
-import {
-  PR_DESCRIPTION_LANGUAGES,
-  type PrDescriptionLanguage,
-} from "@oscharko-dev/keiko-contracts/runtime/pr-description";
-import {
-  isPrDescriptionApplicationStatus,
-  PR_DESCRIPTION_APPLICATION_REASON_STATES,
-  type PrDescriptionApplicationReason,
-  type PrDescriptionApplicationStatus,
+import type { PrDescriptionLanguage } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
+import type {
+  PrDescriptionApplicationReason,
+  PrDescriptionApplicationStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
 import {
@@ -3322,67 +3315,25 @@ export async function fetchGitDeliveryMergeExecute(
 // Coding Workbench journey observation (#3389) — read-only refresh/reconciliation of the accepted
 // draft delivery run's confirmed PR and bound issue. Admitted by the server's per-checkout
 // GitHub-reader grant, never the run-bound mutation gate, so it works after the run has terminated.
+//
+// The validator + fetcher live in `./coding-workbench-lazy-fetchers.ts` (epic #3384 final-audit
+// F18): `isJourneyOutcome` transitively pulls in `git-journey-validation` and its own dependency
+// graph, weight the desktop shell's first-load chunk never needs since every caller
+// (CodingWorkbenchWindow) is already behind a `next/dynamic({ ssr: false })` boundary. This function
+// keeps its name and signature so no caller needs to change.
 // ---------------------------------------------------------------------------
-
-const RUN_ID_MAX_CHARS = 128;
 
 export type CodingWorkbenchJourneyRefreshResult =
   | { readonly status: "observed"; readonly outcome: JourneyOutcome }
   | { readonly status: "unavailable"; readonly reason: string };
-
-/**
- * The outcome itself is fully validated against the shared contract (`isJourneyOutcome`): its state,
- * reason and binding vocabularies are never restated here. The "unavailable" envelope has no
- * contracts-level type of its own (it is this route's own closed reason set, journeyRoutes.ts
- * `JourneyObservationResult`), so this checks only its structural shape — a non-empty reason string
- * — rather than duplicating that server-owned enum on the client.
- */
-export function validateCodingWorkbenchJourneyRefreshResponse(
-  value: unknown,
-): GitRepositoryValidation {
-  if (!isRecordValue(value)) {
-    return { ok: false, reasons: ["journey refresh response must be an object"] };
-  }
-  if (value.status === "observed") {
-    return isJourneyOutcome(value.outcome)
-      ? { ok: true }
-      : { ok: false, reasons: ["journey refresh response.outcome must be a valid JourneyOutcome"] };
-  }
-  if (value.status === "unavailable") {
-    return isBoundedText(value.reason, 64)
-      ? { ok: true }
-      : {
-          ok: false,
-          reasons: ["journey refresh response.reason must be a bounded, non-empty string"],
-        };
-  }
-  return {
-    ok: false,
-    reasons: ["journey refresh response.status must be observed or unavailable"],
-  };
-}
 
 /** Reads/refreshes the bounded journey observation for one accepted draft-delivery run (#3389). */
 export async function fetchCodingWorkbenchJourneyRefresh(
   input: { readonly runId: string },
   signal?: AbortSignal,
 ): Promise<CodingWorkbenchJourneyRefreshResult> {
-  if (!isBoundedText(input.runId, RUN_ID_MAX_CHARS)) {
-    throw new ApiError(
-      "CONTRACT_VALIDATION_FAILED",
-      "runId must be a bounded, non-empty string",
-      400,
-    );
-  }
-  return fetchJson(
-    "/api/git-delivery/journey/refresh",
-    {
-      method: "POST",
-      body: JSON.stringify({ schemaVersion: "1", runId: input.runId }),
-      ...(signal === undefined ? {} : { signal }),
-    },
-    validateCodingWorkbenchJourneyRefreshResponse,
-  );
+  const adapter = await import("./coding-workbench-lazy-fetchers");
+  return adapter.fetchCodingWorkbenchJourneyRefresh(fetchJson, input, signal);
 }
 
 // ---------------------------------------------------------------------------

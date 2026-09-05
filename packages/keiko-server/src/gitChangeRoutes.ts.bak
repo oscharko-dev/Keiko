@@ -425,7 +425,7 @@ function mintGitChangeDescriptionAuthority(
   scope: ChatGitChangeScope,
   nowMs: number,
 ): boolean {
-  return false; // TEMP-DISABLED-FOR-PROOF
+  if (deps.mintDescriptionAuthority === undefined) return false;
   deps.mintDescriptionAuthority(
     gitChangeDescriptionAuthorityScopeFor(scope),
     new Date(nowMs).toISOString(),

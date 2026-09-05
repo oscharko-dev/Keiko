@@ -331,6 +331,7 @@ import {
 } from "./coding-runtime/productionCodingRuntimePorts.js";
 import type {
   GitDeliveryDescriptionAuthorityPort,
+  GitDeliveryDescriptionAuthorityScope,
   GitDeliveryRunAuthorityPort,
 } from "./gitDelivery/runBoundAuthority.js";
 import {
@@ -583,6 +584,16 @@ export interface UiHandlerDeps {
   // and the base/head Chat scope) — see `GitDeliveryDescriptionAuthorityScope`'s union of both
   // shapes. Absent means a Chat turn on a git-change-connected chat denies closed, same as above.
   readonly gitChangeDescriptionAuthorityPort?: GitDeliveryDescriptionAuthorityPort | undefined;
+  // Final-audit F4 (#3400 Chat-connected git-change): the MINT half of the same authority read
+  // through the two fields above. Threaded from the SAME production chain
+  // `codingRuntimeControlPlane.mintDescriptionAuthority` already feeds
+  // `attachWorkbenchDescriptionSupport`'s automatic-description dispatcher — this is a second
+  // consumer-facing name for that one capability, never a second minting mechanism. Absent means
+  // the git-change connect route (gitChangeRoutes.ts) cannot mint a Chat-turn authority, so every
+  // subsequent turn on that connected scope denies closed exactly like a missing read port.
+  readonly mintDescriptionAuthority?:
+    | ((scope: GitDeliveryDescriptionAuthorityScope, nowIso: string) => void)
+    | undefined;
   readonly openCodeGatewayReadinessRegistry?:
     | {
         readonly claim: (runId: string) => boolean;
@@ -4340,6 +4351,7 @@ interface CodingRuntimeControlPlaneDeps {
   gitDeliveryAuthority?: UiHandlerDeps["gitDeliveryAuthority"];
   gitDeliveryDescriptionAuthority?: UiHandlerDeps["gitDeliveryDescriptionAuthority"];
   gitChangeDescriptionAuthorityPort?: UiHandlerDeps["gitChangeDescriptionAuthorityPort"];
+  mintDescriptionAuthority?: UiHandlerDeps["mintDescriptionAuthority"];
   openCodeGatewayReadinessRegistry?: UiHandlerDeps["openCodeGatewayReadinessRegistry"];
 }
 
@@ -4352,6 +4364,10 @@ const CODING_RUNTIME_CONTROL_PLANE_PASSTHROUGH_KEYS = [
   "runtimeCapabilityAuthenticator",
   "gitDeliveryAuthority",
   "gitDeliveryDescriptionAuthority",
+  // Final-audit F4: passed through under its OWN name (unlike `gitChangeDescriptionAuthorityPort`
+  // below, which renames the read port) since chat-handlers.ts's git-change turn admission and
+  // gitChangeRoutes.ts's connect-flow mint both read `deps.mintDescriptionAuthority` directly.
+  "mintDescriptionAuthority",
   "openCodeGatewayReadinessRegistry",
 ] as const;
 

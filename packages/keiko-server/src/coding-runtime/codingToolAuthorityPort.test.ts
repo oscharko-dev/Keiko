@@ -1011,6 +1011,124 @@ describe("CodingToolAuthorityPort", () => {
       );
     });
 
+    // #3413 F8: `edit` is the one covered action whose real production path is `executeStagedEdit`
+    // (a real invocation registry, exactly as `createRuntimeCodingToolFacade` always wires it), not
+    // the plain-action path the other tests in this describe block exercise -- so this proves
+    // coverage on the path production actually takes, not merely on `executePlainAction`.
+    it("settles keiko.changeset.edit through the real staged-edit production path", async () => {
+      const log = createBufferedServerLogSink();
+      const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+      const editorChangeset = vi.fn(() => Promise.resolve({ status: "completed" as const }));
+      const runtime = createRuntimeCodingToolFacade(
+        authority,
+        () => ({ ...runtimeContext(), correlationId: "d".repeat(36) }),
+        { ...governedPorts(), editorChangeset: { execute: editorChangeset } },
+        { invocationRegistry: registry, catalogActivityLog: log },
+      );
+
+      const result = await runtime.execute({
+        body: JSON.stringify({
+          action: "edit",
+          actionId: "catalog-edit",
+          idempotencyKey: "catalog-edit-key",
+          changeset: {
+            patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
+            files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
+          },
+        }),
+        capability: "runtime-capability-secret",
+      });
+
+      expect(result.status).toBe("completed");
+      expect(editorChangeset).toHaveBeenCalledOnce();
+      const catalogEvents = log.events.filter((event) => event.op.startsWith("tool-catalog."));
+      expect(catalogEvents.map((event) => event.op)).toEqual([
+        "tool-catalog.invocation-started",
+        "tool-catalog.invocation-settled",
+      ]);
+      for (const event of catalogEvents) expect(event.correlationId).toBe("d".repeat(36));
+      const started = catalogEvents[0]?.extra as Record<string, unknown>;
+      expect((started.toolRef as { canonicalId: string }).canonicalId).toBe("keiko.changeset.edit");
+    });
+
+    it("denies a staged edit before the editor delegate ever runs when the catalog budget denies it", async () => {
+      const log = createBufferedServerLogSink();
+      const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+      const editorChangeset = vi.fn(() => Promise.resolve({ status: "completed" as const }));
+      const runtime = createRuntimeCodingToolFacade(
+        authority,
+        runtimeContext,
+        { ...governedPorts(), editorChangeset: { execute: editorChangeset } },
+        {
+          invocationRegistry: registry,
+          catalogActivityLog: log,
+          catalogBudget: {
+            available: () => false,
+            reserve: () => {
+              throw new Error("must not reserve when unavailable");
+            },
+            commit: () => undefined,
+            release: () => undefined,
+          },
+        },
+      );
+
+      const result = await runtime.execute({
+        body: JSON.stringify({
+          action: "edit",
+          actionId: "catalog-edit-denied",
+          idempotencyKey: "catalog-edit-denied-key",
+          changeset: {
+            patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
+            files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
+          },
+        }),
+        capability: "runtime-capability-secret",
+      });
+
+      expect(result).toEqual({ status: "denied", evidence: [] });
+      expect(editorChangeset).not.toHaveBeenCalled();
+      const settled = log.events.find((event) => event.op === "tool-catalog.invocation-settled");
+      expect((settled?.extra as Record<string, unknown> | undefined)?.status).toBe("denied");
+    });
+
+    it("records handler-failed and releases budget when the staged-edit delegate throws", async () => {
+      const log = createBufferedServerLogSink();
+      const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+      const editorChangeset = vi.fn(() => Promise.reject(new Error("editor blew up")));
+      const runtime = createRuntimeCodingToolFacade(
+        authority,
+        runtimeContext,
+        { ...governedPorts(), editorChangeset: { execute: editorChangeset } },
+        { invocationRegistry: registry, catalogActivityLog: log },
+      );
+
+      const result = await runtime.execute({
+        body: JSON.stringify({
+          action: "edit",
+          actionId: "catalog-edit-failed",
+          idempotencyKey: "catalog-edit-failed-key",
+          changeset: {
+            patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
+            files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
+          },
+        }),
+        capability: "runtime-capability-secret",
+      });
+
+      expect(result).toEqual({
+        status: "failed",
+        evidence: [{ kind: "governed-delegate", code: "failed" }],
+      });
+      expect(editorChangeset).toHaveBeenCalledOnce();
+      const settled = log.events.find((event) => event.op === "tool-catalog.invocation-settled");
+      const fields = settled?.extra as Record<string, unknown> | undefined;
+      expect(fields?.status).toBe("failed");
+      expect(fields?.reason).toBe("handler-failed");
+      expect(fields?.budgetDisposition).toBe("released");
+      expect(JSON.stringify(settled)).not.toContain("editor blew up");
+    });
+
     it("runs an action the catalog does not cover (command) unwrapped with one dispatch-unbound line", async () => {
       const log = createBufferedServerLogSink();
       const commandRunner = vi.fn(() => Promise.resolve({ status: "completed" as const }));

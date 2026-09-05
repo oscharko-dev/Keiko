@@ -35,6 +35,13 @@ import {
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { STREAMING } from "./routes.js";
+// Final-audit F4 (#3400): proves the connect flow mints a REAL description authority a subsequent
+// Chat turn admits against — the exact production chain (mint capability + read port both backed
+// by ONE `CodingRuntimeAuthorityService` instance), never a hand-rolled fake authority store.
+import { CodingRuntimeAuthorityService } from "./coding-runtime/runtimeAuthorityService.js";
+import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
+import { admitGitChangeScopedTurn } from "./chat-handlers.js";
+import type { GitDeliveryDescriptionAuthorityScope } from "./gitDelivery/runBoundAuthority.js";
 
 const connectHandler = handleGitChangeConnect;
 const refreshHandler = handleGitChangeRefresh;
@@ -541,6 +548,93 @@ describe("POST /api/git-change/refresh (Issue #3400)", () => {
     expect(requireDefined(scopes[0], "refreshed persisted scope").relationshipId).toBe(
       staleScope.relationshipId,
     );
+  });
+});
+
+// Final-audit F4 — before this fix, nothing ever minted a description authority for a
+// Chat-originated {remoteDigest, baseRef/headRef, snapshotDigest} scope, so `admitGitChangeScopedTurn`
+// (chat-handlers.ts) denied EVERY turn on a connected chat with `GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED`
+// regardless of mode or approval. Proven here against a REAL `CodingRuntimeAuthorityService`
+// instance (the exact production mint+read pair), never a hand-rolled fake authority store.
+describe("connect mints a description authority a Chat turn admits (final-audit F4)", () => {
+  it("mints on connect and admits a subsequent chat turn instead of denying it closed", async () => {
+    const snapshot = fixtureSnapshot();
+    const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [snapshot] });
+    const authority = new CodingRuntimeAuthorityService(new EditorAgentAuthorityRegistry());
+    const wiredDeps: UiHandlerDeps = {
+      ...deps,
+      mintDescriptionAuthority: (scope: GitDeliveryDescriptionAuthorityScope, nowIso: string) => {
+        authority.mintGitDeliveryDescriptionAuthority({
+          scope,
+          requestedMode: "supervised-coding",
+          deploymentCeiling: "autonomous-delivery",
+          nowIso,
+        });
+      },
+      gitChangeDescriptionAuthorityPort: authority.gitDeliveryDescriptionAuthorityPort(),
+    };
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+
+    const connected = asRouteResult(
+      await connectHandler(makeCtx(connectRequestBody(chat.id)), wiredDeps),
+    );
+    expect((connected.body as GitChangeScopeBody).status).toBe("connected");
+
+    const connectedChat = requireDefined(chatStore.findChatById(chat.id), "connected chat");
+    const denial = admitGitChangeScopedTurn(wiredDeps, connectedChat, "corr-turn-1");
+    expect(denial).toBeUndefined();
+  });
+
+  it("denies the turn closed when no minting capability was wired (fail-closed default)", async () => {
+    const snapshot = fixtureSnapshot();
+    const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [snapshot] });
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+
+    const connected = asRouteResult(await connectHandler(makeCtx(connectRequestBody(chat.id)), deps));
+    expect((connected.body as GitChangeScopeBody).status).toBe("connected");
+
+    const connectedChat = requireDefined(chatStore.findChatById(chat.id), "connected chat");
+    const denial = admitGitChangeScopedTurn(deps, connectedChat, "corr-turn-2");
+    expect(denial?.status).toBe(409);
+  });
+
+  it("re-mints under the new snapshot digest when a refresh finds a moved head", async () => {
+    const original = fixtureSnapshot();
+    const moved = fixtureSnapshot({ headSha: "f".repeat(40), snapshotDigest: "9".repeat(64) });
+    const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [original, moved] });
+    const authority = new CodingRuntimeAuthorityService(new EditorAgentAuthorityRegistry());
+    const wiredDeps: UiHandlerDeps = {
+      ...deps,
+      mintDescriptionAuthority: (scope: GitDeliveryDescriptionAuthorityScope, nowIso: string) => {
+        authority.mintGitDeliveryDescriptionAuthority({
+          scope,
+          requestedMode: "supervised-coding",
+          deploymentCeiling: "autonomous-delivery",
+          nowIso,
+        });
+      },
+      gitChangeDescriptionAuthorityPort: authority.gitDeliveryDescriptionAuthorityPort(),
+    };
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    const connected = asRouteResult(
+      await connectHandler(makeCtx(connectRequestBody(chat.id)), wiredDeps),
+    );
+    const relationshipId = requireDefined(
+      (connected.body as GitChangeScopeBody).scope,
+      "connect scope",
+    ).relationshipId;
+
+    const refreshed = asRouteResult(
+      await refreshHandler(
+        makeCtx({ schemaVersion: "1", chatId: chat.id, relationshipId }),
+        wiredDeps,
+      ),
+    );
+    expect((refreshed.body as GitChangeScopeBody).status).toBe("stale");
+
+    const refreshedChat = requireDefined(chatStore.findChatById(chat.id), "refreshed chat");
+    const denial = admitGitChangeScopedTurn(wiredDeps, refreshedChat, "corr-turn-3");
+    expect(denial).toBeUndefined();
   });
 });
 
