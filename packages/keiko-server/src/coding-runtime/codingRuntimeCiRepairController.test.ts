@@ -19,6 +19,7 @@ import { CodingRuntimeCiRepairController } from "./codingRuntimeCiRepairControll
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { redactLogFields } from "../observability/log-redaction.js";
 import { reservePromptWithCiRepair } from "./ciRepairPromptReservation.js";
+import type { RuntimeCapabilityResolution } from "./runtimeCapabilityStore.js";
 
 const databases: DatabaseSync[] = [];
 afterEach(() => {
@@ -289,17 +290,25 @@ describe("CI repair accounting around admitted model work", () => {
     // b2-3: `reservePromptWithCiRepair` now resolves the run identity through the side-effect-free
     // `authenticateCapability` before ever calling `reservePromptTokens`, so the fake authority here
     // needs both.
-    const authenticateCapability = (): {
-      readonly ok: true;
-      readonly binding: { readonly runId: string };
-    } => ({ ok: true, binding: { runId: "run-1" } });
+    const authenticateCapability = (): RuntimeCapabilityResolution => ({
+      ok: true,
+      binding: {
+        runId: "run-1",
+        workspaceRootDigest: "a".repeat(64),
+        envelopeDigest: "b".repeat(64),
+        adapterKind: "model-gateway-sidecar",
+        audience: "model-gateway",
+        expiresAtMs: Date.parse("2026-09-05T12:00:00.000Z"),
+      },
+    });
     const authority = { reservePromptTokens, authenticateCapability };
-    expect(
-      reservePromptWithCiRepair(authority, () => test.controller, "capability", 9).ok,
-    ).toBe(true);
-    expect(
-      reservePromptWithCiRepair(authority, () => test.controller, "capability", 2),
-    ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
+    expect(reservePromptWithCiRepair(authority, () => test.controller, "capability", 9).ok).toBe(
+      true,
+    );
+    expect(reservePromptWithCiRepair(authority, () => test.controller, "capability", 2)).toEqual({
+      ok: false,
+      reason: "authority-budget-exceeded",
+    });
     expect(test.controller.chargeDelegatedRead("child-1", "read-1")).toBe(true);
     expect(test.controller.chargeDelegatedRead("child-2", "read-2")).toBe(false);
     expect(test.store.read(test.context).record).toMatchObject({ toolCalls: 2, promptTokens: 9 });

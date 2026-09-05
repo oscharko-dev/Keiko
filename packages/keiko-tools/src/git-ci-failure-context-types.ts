@@ -1,7 +1,5 @@
 import type {
-  BoundedGitCiFailureContext,
   GitCiFailureContextEntry,
-  GitCiFailureContextResult,
   GitDeliveryObservationFailure,
 } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import type { GitCiProviderFacts } from "./git-ci-facts.js";
@@ -15,7 +13,11 @@ export interface GitCiFailureContextInput {
   /** Optional existing credential-aware redactor; the shared baseline redactor always also runs. */
   readonly redactText?: (text: string) => string;
 }
-export type { BoundedGitCiFailureContext, GitCiFailureContextEntry, GitCiFailureContextResult };
+export type {
+  BoundedGitCiFailureContext,
+  GitCiFailureContextEntry,
+  GitCiFailureContextResult,
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 export interface GitCiFailureSource {
   readonly kind: "check-run" | "workflow-run";
   readonly id: number;

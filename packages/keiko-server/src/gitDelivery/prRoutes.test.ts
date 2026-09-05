@@ -45,6 +45,7 @@ import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import { matchRoute, type RouteContext } from "../routes.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 
 // Spies on the default PR-adapter factory the F1 fix threads runCommand termination-evidence
 // through (executeGovernedPullRequest's `prAdapterFor`, exercised below via direct calls to
@@ -1428,6 +1429,35 @@ describe("pr mark-ready routes (#3389)", () => {
     expect(adapter.calls()).toHaveLength(0);
   });
 
+  it("emits a correlation-keyed diagnostic when the live CI read throws", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = await mintMarkReadyApproval(approvalStore);
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const diagnosticSink: ServerDiagnosticSink = {
+      record: (record): void => void diagnostics.push(record),
+    };
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      now: () => 1_700_000_000_001,
+      ciReaderFactory: () => ({
+        readFacts: (): Promise<GitCiFactsResult> =>
+          Promise.reject(new Error("provider response contained a secret")),
+      }),
+    })(
+      { ...ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), correlationId: "corr-ci-read" },
+      deps({ diagnostics: diagnosticSink }),
+    );
+    expect(res).toMatchObject({ status: 200, body: { status: "failed" } });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      correlationId: "corr-ci-read",
+      operation: "POST /api/git-delivery/pr/mark-ready/execute",
+      source: "pr-mark-ready-ci-read",
+      message: "The bounded status read was unavailable.",
+    });
+    expect(JSON.stringify(diagnostics[0])).not.toContain("provider response contained a secret");
+  });
+
   it.each([
     { headSha: "not-a-sha" },
     { baseSha: "0".repeat(39) },
@@ -1631,9 +1661,11 @@ describe("pr mark-ready routes (#3389)", () => {
   it("resolves the pr-description, journey, and mark-ready patterns through the real API_ROUTES (b2-19)", () => {
     const postOnly = [
       "/api/git-delivery/pr-description/preview",
+      "/api/git-delivery/pr-description/review",
       "/api/git-delivery/pr-description/approve",
       "/api/git-delivery/pr-description/apply",
       "/api/git-delivery/pr-description/status",
+      "/api/git-change/review-description",
       "/api/git-delivery/journey/refresh",
       "/api/git-delivery/pr/mark-ready/approve",
       "/api/git-delivery/pr/mark-ready/execute",

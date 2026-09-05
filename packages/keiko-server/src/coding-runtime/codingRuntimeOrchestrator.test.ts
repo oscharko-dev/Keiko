@@ -2729,6 +2729,55 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     });
   });
 
+  it("durably demotes a generated status when the exact held proposal is lost after restart", async () => {
+    let retained = true;
+    const dispatcher: WorkbenchDescriptionDispatcher = {
+      generate: () =>
+        Promise.resolve({
+          reason: "generated",
+          snapshotDigest: "a".repeat(64),
+          draftDigest: "b".repeat(64),
+          artifactOutcome: "complete",
+          proposalId: "pr-description-1",
+        }),
+      hasProposal: () => retained,
+    };
+    const captured = captureActivityLog();
+    const verifiedCommits = new Map<string, VerifiedCommitResult>();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      captured.activityLog,
+      undefined,
+      { jobs: jobStore(), dispatcher },
+      verifiedCommits,
+    );
+    await settleRun(f, verifiedCommits);
+    await vi.waitFor(() => {
+      expect(f.orchestrator.status().descriptionStatus).toMatchObject({
+        state: "current",
+        proposalId: "pr-description-1",
+      });
+    });
+
+    retained = false;
+    expect(f.orchestrator.status().descriptionStatus).toMatchObject({
+      state: "stale",
+      reason: "stale-snapshot",
+    });
+    expect(f.orchestrator.status().descriptionStatus).not.toHaveProperty("proposalId");
+    expect(
+      captured.records.filter(
+        (event) =>
+          event.op === "coding-runtime.description" &&
+          event.extra?.event === "stale" &&
+          event.extra.proposalRetained === false,
+      ),
+    ).toHaveLength(1);
+  });
+
   it("marks a late generated result stale after the accepted authority changes", async () => {
     let finish: ((outcome: WorkbenchDescriptionDispatchOutcome) => void) | undefined;
     const dispatcher: WorkbenchDescriptionDispatcher = {

@@ -4,6 +4,8 @@
 //       generates a validated description artifact through the Model Gateway, and reconciles it
 //       into the one versioned managed region — never mutating the remote PR. Returns the exact
 //       rendered preview and a bounded proposal id.
+//   * POST /api/git-delivery/pr-description/review  — Returns that exact server-held preview for a
+//       proposal id without regenerating or reconstructing its body.
 //   * POST /api/git-delivery/pr-description/approve  — Mints the one-use description-apply approval
 //       claim `apply` consumes, bound to this exact proposal (repository, PR, base/head, current-body
 //       and outside-region digests, draft version, final-body digest) — mirrors createHandleCommitApprove
@@ -425,16 +427,27 @@ interface PreparedPrDescriptionRequest<V extends BaseFields> {
 // `current()`/`stillAuthorized()` checks on the very next call — never a value cached from the
 // moment the route first admitted the request. Extracted purely to keep `prepare` under the
 // repo's max-lines-per-function bar (AGENTS.md §6) — no behavioral seam of its own.
-function descriptionContextProvider(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-  request: BaseFields,
-  workspace: WorkspaceInfo,
-  correlationId: string,
-  logSink: ServerLogSink,
-  key: string,
-  authorityScope?: GitDeliveryDescriptionAuthorityScope,
-): () => PrDescriptionContext | undefined {
+interface DescriptionContextProviderOptions {
+  readonly ctx: RouteContext;
+  readonly deps: UiHandlerDeps;
+  readonly request: BaseFields;
+  readonly workspace: WorkspaceInfo;
+  readonly correlationId: string;
+  readonly logSink: ServerLogSink;
+  readonly key: string;
+  readonly authorityScope?: GitDeliveryDescriptionAuthorityScope;
+}
+
+function descriptionContextProvider({
+  ctx,
+  deps,
+  request,
+  workspace,
+  correlationId,
+  logSink,
+  key,
+  authorityScope,
+}: DescriptionContextProviderOptions): () => PrDescriptionContext | undefined {
   // ONE object for this provider's whole lifetime (one prepared request), never rebuilt per call.
   // `PrDescriptionApplicationService.preview()`/`apply()` call `context()` more than once per
   // operation (`admittedContext()` then `current(context)`'s own re-fetch) and `sameDescriptionContext`
@@ -573,7 +586,7 @@ export function resolvePrDescriptionApplicationServiceForRequest(
   if (!admitted.allowed) return { ok: false, result: admitted.result };
   const authorityIdentity = `${admitted.scope.runId ?? "description-authority"}:${admitted.scope.authorityDigest}`;
   const key = cacheKey(request, authorityIdentity);
-  const contextProvider = descriptionContextProvider(
+  const contextProvider = descriptionContextProvider({
     ctx,
     deps,
     request,
@@ -581,8 +594,8 @@ export function resolvePrDescriptionApplicationServiceForRequest(
     correlationId,
     logSink,
     key,
-    authorityScope,
-  );
+    ...(authorityScope === undefined ? {} : { authorityScope }),
+  });
   const service = serviceFor(options, deps, seams, workspace, key, contextProvider);
   return service === undefined
     ? { ok: false, result: unavailableService() }
@@ -618,7 +631,7 @@ async function prepare<V extends BaseFields>(
   if (!admitted.allowed) return { ok: false, result: admitted.result };
   const authorityIdentity = `${admitted.scope.runId ?? "description-authority"}:${admitted.scope.authorityDigest}`;
   const key = cacheKey(request, authorityIdentity);
-  const contextProvider = descriptionContextProvider(
+  const contextProvider = descriptionContextProvider({
     ctx,
     deps,
     request,
@@ -626,7 +639,7 @@ async function prepare<V extends BaseFields>(
     correlationId,
     logSink,
     key,
-  );
+  });
   const service = serviceFor(options, deps, seams, workspace, key, contextProvider);
   if (service === undefined) return { ok: false, result: unavailableService() };
   return { ok: true, value: { value: request, workspace, service, context: contextProvider } };
@@ -749,6 +762,21 @@ export const createHandlePrDescriptionApprove = (
   };
 };
 
+export const createHandlePrDescriptionReview = (
+  options: PrDescriptionRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    const prepared = await prepare(ctx, deps, options, correlationId, validateProposal);
+    if (!prepared.ok) return prepared.result;
+    const { value, service } = prepared.value;
+    const review = service.review(value.proposalId);
+    return review === undefined
+      ? errResult(409, "GIT_DELIVERY_PR_DESCRIPTION_UNKNOWN_PROPOSAL")
+      : { status: 200, body: deps.redactor({ outcome: "preview", preview: review }) };
+  };
+};
+
 export const createHandlePrDescriptionApply = (
   options: PrDescriptionRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
@@ -799,6 +827,11 @@ export const createGitDeliveryPrDescriptionRouteGroup = (
     method: "POST",
     pattern: "/api/git-delivery/pr-description/preview",
     handler: createHandlePrDescriptionPreview(options),
+  },
+  {
+    method: "POST",
+    pattern: "/api/git-delivery/pr-description/review",
+    handler: createHandlePrDescriptionReview(options),
   },
   {
     method: "POST",

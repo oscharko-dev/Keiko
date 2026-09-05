@@ -48,6 +48,7 @@ import {
   createHandlePrDescriptionApply,
   createHandlePrDescriptionApprove,
   createHandlePrDescriptionPreview,
+  createHandlePrDescriptionReview,
   createHandlePrDescriptionStatus,
   resolvePrDescriptionApplicationServiceForRequest,
   type PrDescriptionRouteOptions,
@@ -56,6 +57,7 @@ import { DescriptionFixture } from "./prDescriptionTestSupport.js";
 import type { PrDescriptionApplicationService } from "./prDescriptionTypes.js";
 
 const PREVIEW = "/api/git-delivery/pr-description/preview";
+const REVIEW = "/api/git-delivery/pr-description/review";
 const APPROVE = "/api/git-delivery/pr-description/approve";
 const APPLY = "/api/git-delivery/pr-description/apply";
 const STATUS = "/api/git-delivery/pr-description/status";
@@ -172,9 +174,37 @@ function optionsWithFixtureService(
 }
 
 describe("pr-description routes — mount (#3399)", () => {
-  it("the route group did not exist before this change and now exposes exactly the four patterns", () => {
+  it("exposes the five governed description lifecycle patterns", () => {
     const patterns = createGitDeliveryPrDescriptionRouteGroup().map((route) => route.pattern);
-    expect(patterns).toEqual([PREVIEW, APPROVE, APPLY, STATUS]);
+    expect(patterns).toEqual([PREVIEW, REVIEW, APPROVE, APPLY, STATUS]);
+  });
+
+  it("reviews the exact held preview without invoking generation again", async () => {
+    const wiredDeps = deps();
+    const options = optionsWithFixtureService();
+    const preview = await createHandlePrDescriptionPreview(options)(
+      ctxFor(PREVIEW, body({ language: "en" })),
+      wiredDeps,
+    );
+    const held = (preview.body as { preview: { proposalId: string } }).preview;
+
+    const review = await createHandlePrDescriptionReview(options)(
+      ctxFor(REVIEW, body({ proposalId: held.proposalId })),
+      wiredDeps,
+    );
+
+    expect(review).toEqual({ status: 200, body: { outcome: "preview", preview: held } });
+  });
+
+  it("returns the closed unknown-proposal result when no matching preview is held", async () => {
+    const review = await createHandlePrDescriptionReview(optionsWithFixtureService())(
+      ctxFor(REVIEW, body({ proposalId: "missing" })),
+      deps(),
+    );
+    expect(review).toMatchObject({
+      status: 409,
+      body: { error: { code: "GIT_DELIVERY_PR_DESCRIPTION_UNKNOWN_PROPOSAL" } },
+    });
   });
 
   it("isolates proposal holders by dependency scope and immutable snapshot", () => {

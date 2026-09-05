@@ -14,7 +14,7 @@
 // closed blocked reason — rendered here via the same vocabulary as GitChangeScopePill.
 
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, FormEventHandler, ReactNode, RefObject } from "react";
+import type { CSSProperties, SubmitEventHandler, ReactNode, RefObject } from "react";
 import { createPortal } from "react-dom";
 import { connectGitChangeToChat, fetchChats } from "@/lib/api";
 import type { ConnectGitChangeInput } from "@/lib/api";
@@ -403,7 +403,7 @@ function DialogChrome({
   readonly dialogRef: RefObject<HTMLDialogElement | null>;
   readonly title: string;
   readonly onClose: () => void;
-  readonly onSubmit: FormEventHandler<HTMLFormElement>;
+  readonly onSubmit: SubmitEventHandler<HTMLFormElement>;
   readonly children: ReactNode;
 }): ReactNode {
   return (

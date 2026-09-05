@@ -107,11 +107,13 @@ import {
   proposeCommit,
   proposePush,
   fetchGitDeliveryPrDescriptionPreview,
+  fetchGitDeliveryPrDescriptionReview,
   fetchGitDeliveryPrDescriptionApprove,
   fetchGitDeliveryPrDescriptionApply,
   fetchGitDeliveryPrDescriptionStatus,
   applyGitChangeChatDescription,
   approveGitChangeChatDescription,
+  reviewGitChangeChatDescription,
   type GitHubIssuePreviewResponseWire,
 } from "./api";
 import {
@@ -4313,6 +4315,32 @@ describe("Governed PR-description application API (#3399)", () => {
     });
   });
 
+  it("retrieves the exact held preview through the proposal-bound review route", async () => {
+    const preview = {
+      proposalId: "prop-1",
+      expiresAt: "2026-01-01T00:00:30.000Z",
+      status: statusFixture(),
+      finalBody: "<!-- keiko:managed:v1:start -->generated<!-- keiko:managed:v1:end -->",
+      managedRegion: "generated",
+      concurrencyLimitation: "GitHub cannot lock the PR body during this update.",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk({ outcome: "preview", preview }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchGitDeliveryPrDescriptionReview({ ...TARGET, proposalId: "prop-1" }),
+    ).resolves.toEqual({ outcome: "preview", preview });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-delivery/pr-description/review");
+    expect(JSON.parse(init.body as string)).toEqual({
+      schemaVersion: "1",
+      projectId: "/repo",
+      ownerAndRepo: "oscharko-dev/Keiko",
+      prNumber: 1499,
+      proposalId: "prop-1",
+    });
+  });
+
   it("returns the observed status on a successful apply", async () => {
     vi.stubGlobal(
       "fetch",
@@ -4454,6 +4482,27 @@ describe("Chat's git-change apply-description action (#3400 final-audit F5)", ()
     expect(JSON.parse(init.body as string)).toEqual({ schemaVersion: "1", ...INPUT });
   });
 
+  it("reviews the exact server-held Chat proposal without repository identity", async () => {
+    const preview = {
+      proposalId: "prop-1",
+      expiresAt: "2026-01-01T00:00:30.000Z",
+      status: statusFixture(),
+      finalBody: "exact held body",
+      managedRegion: "exact held body",
+      concurrencyLimitation: "GitHub cannot lock the PR body during this update.",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk({ outcome: "preview", preview }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(reviewGitChangeChatDescription(INPUT)).resolves.toEqual({
+      outcome: "preview",
+      preview,
+    });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-change/review-description");
+    expect(JSON.parse(init.body as string)).toEqual({ schemaVersion: "1", ...INPUT });
+  });
+
   it("posts exactly chatId, relationshipId and proposalId — never ownerAndRepo", async () => {
     const fetchMock = vi
       .fn()
@@ -4532,10 +4581,22 @@ describe("Chat's git-change apply-description action (#3400 final-audit F5)", ()
   });
 
   it("rejects an unknown outcome discriminant", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonOk({ outcome: "unknown" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ outcome: "unknown" }), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            [CORRELATION_HEADER]: "corr-malformed-apply",
+          },
+        }),
+      ),
+    );
 
     await expect(applyGitChangeChatDescription(INPUT)).rejects.toMatchObject({
       code: "CONTRACT_VALIDATION_FAILED",
+      correlationId: "corr-malformed-apply",
     });
   });
 });

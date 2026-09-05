@@ -3,7 +3,7 @@
   "ownerIssue": 3406,
   "closeoutIssue": 3415,
   "sourceContract": "docs/architecture/governed-tool-contract.v1.json",
-  "sourceContractDigest": "8d8203d05c42112c085c740b107a8060de70f63cb0bbe31cd3d6dbff597b182a",
+  "sourceContractDigest": "b3a8a2a0b0c46d0a2324c2959e4c60055fa96f9e56b6d1dcb6960b90e51fe24f",
   "inventory": [
     {
       "id": "generic-gateway",
@@ -239,7 +239,7 @@
     },
     "prerequisiteMerge": {
       "issue": 3411,
-      "contractDigest": "8d8203d05c42112c085c740b107a8060de70f63cb0bbe31cd3d6dbff597b182a"
+      "contractDigest": "b3a8a2a0b0c46d0a2324c2959e4c60055fa96f9e56b6d1dcb6960b90e51fe24f"
     },
     "removalIssue": 3414,
     "landedDevCommit": null,

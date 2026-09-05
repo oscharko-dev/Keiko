@@ -48,7 +48,7 @@ export function codingPerformanceEnvironment(root = ROOT) {
   if (process.versions.node !== EXPECTED_NODE_BASELINE || npmVersion !== EXPECTED_NPM_ENGINE) {
     throw new Error("pinned-node-npm-toolchain-required");
   }
-  const git = /[0-9]+(?:\.[0-9]+){2}/u.exec(
+  const git = /\d+(?:\.\d+){2}/u.exec(
     execFileSync(resolveHostExecutable("git"), ["--version"], { encoding: "utf8" }),
   )?.[0];
   if (git === undefined) throw new Error("git-version-unavailable");

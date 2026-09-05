@@ -1069,7 +1069,7 @@ describe("CodingToolAuthorityPort", () => {
       expect((settled?.extra as Record<string, unknown> | undefined)?.status).toBe("denied");
     });
 
-    it("records handler-failed and releases the budget reservation when the governed delegate throws", async () => {
+    it("records handler-failed and charges started governed work when the delegate throws", async () => {
       const log = createBufferedServerLogSink();
       const repositoryDiscover = vi.fn(() => Promise.reject(new Error("discover blew up")));
       const runtime = createRuntimeCodingToolFacade(
@@ -1099,7 +1099,9 @@ describe("CodingToolAuthorityPort", () => {
       const fields = settled?.extra as Record<string, unknown> | undefined;
       expect(fields?.status).toBe("failed");
       expect(fields?.reason).toBe("handler-failed");
-      expect(fields?.budgetDisposition).toBe("released");
+      // ADR-0175 D6: started work consumes its reservation even when its result fails.
+      expect(fields?.effectStarted).toBe(true);
+      expect(fields?.budgetDisposition).toBe("committed");
       expect(JSON.stringify(settled)).not.toContain("discover blew up");
     });
 
@@ -1218,7 +1220,7 @@ describe("CodingToolAuthorityPort", () => {
       expect((settled?.extra as Record<string, unknown> | undefined)?.status).toBe("denied");
     });
 
-    it("records handler-failed and releases budget when the staged-edit delegate throws", async () => {
+    it("records handler-failed and charges started staged-edit work when the delegate throws", async () => {
       const log = createBufferedServerLogSink();
       const registry = createCodingToolInvocationRegistry({ now: () => 0 });
       const editorChangeset = vi.fn(() => Promise.reject(new Error("editor blew up")));
@@ -1251,7 +1253,9 @@ describe("CodingToolAuthorityPort", () => {
       const fields = settled?.extra as Record<string, unknown> | undefined;
       expect(fields?.status).toBe("failed");
       expect(fields?.reason).toBe("handler-failed");
-      expect(fields?.budgetDisposition).toBe("released");
+      // ADR-0175 D6: started work consumes its reservation even when its result fails.
+      expect(fields?.effectStarted).toBe(true);
+      expect(fields?.budgetDisposition).toBe("committed");
       expect(JSON.stringify(settled)).not.toContain("editor blew up");
     });
 

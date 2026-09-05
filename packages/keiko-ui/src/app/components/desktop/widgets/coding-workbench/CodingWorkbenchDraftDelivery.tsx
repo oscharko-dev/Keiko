@@ -15,8 +15,10 @@ import styles from "./CodingWorkbenchWindow.module.css";
 /** Durable facts only. A restored proposal does not restore approval authority. */
 export function CodingWorkbenchDraftDelivery({
   snapshot,
+  onReviewDescription,
 }: {
   readonly snapshot: CodingWorkbenchRuntimeSnapshot | undefined;
+  readonly onReviewDescription?: ((target: WorkbenchDescriptionReviewTarget) => void) | undefined;
 }): ReactNode {
   const parsed = validateCodingWorkbenchRuntimeSnapshot(snapshot);
   const delivery = parsed.ok ? parsed.value.draftDelivery : undefined;
@@ -26,7 +28,11 @@ export function CodingWorkbenchDraftDelivery({
   return (
     <>
       <DraftDeliveryCard delivery={delivery} />
-      <WorkbenchDescriptionCard status={descriptionStatus} />
+      <WorkbenchDescriptionCard
+        status={descriptionStatus}
+        delivery={delivery}
+        onReview={onReviewDescription}
+      />
     </>
   );
 }
@@ -91,16 +97,48 @@ function DraftDeliveryCard({
   );
 }
 
-// #3401: read-only status/preview for the automatically generated description draft. No apply
-// affordance exists here (epic correction 1) — applying a draft stays #3399's existing PR preview,
-// policy and one-use approval once that surface consumes this status.
+export interface WorkbenchDescriptionReviewTarget {
+  readonly ownerAndRepo: string;
+  readonly prNumber: number;
+  readonly proposalId: string;
+  readonly snapshotDigest: string;
+}
+
+function descriptionReviewTarget(
+  status: WorkbenchDescriptionStatus,
+  delivery: DraftDeliveryRecord | undefined,
+): WorkbenchDescriptionReviewTarget | undefined {
+  const pullRequest = delivery?.pullRequest;
+  if (
+    status.proposalId === undefined ||
+    status.snapshotDigest === null ||
+    pullRequest === undefined ||
+    pullRequest.state !== "open"
+  ) {
+    return undefined;
+  }
+  return {
+    ownerAndRepo: pullRequest.repository,
+    prNumber: pullRequest.number,
+    proposalId: status.proposalId,
+    snapshotDigest: status.snapshotDigest,
+  };
+}
+
+// #3401: content-free status for the automatically generated description draft. Reviewing opens
+// #3399's existing exact-proposal surface; approval and apply remain exclusively in that surface.
 function WorkbenchDescriptionCard({
   status,
+  delivery,
+  onReview,
 }: {
   readonly status: WorkbenchDescriptionStatus | undefined;
+  readonly delivery: DraftDeliveryRecord | undefined;
+  readonly onReview: ((target: WorkbenchDescriptionReviewTarget) => void) | undefined;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   if (status === undefined) return null;
+  const reviewTarget = descriptionReviewTarget(status, delivery);
   return (
     <section className={styles.card} aria-label={t("codingWorkbench.descriptionStatus.title")}>
       <h3 className={styles.approvalResearchTitle}>
@@ -122,6 +160,16 @@ function WorkbenchDescriptionCard({
           },
         ]}
       />
+      {reviewTarget !== undefined && onReview !== undefined ? (
+        <button
+          type="button"
+          className={styles.button}
+          onClick={() => onReview(reviewTarget)}
+          data-testid="cwb-description-review"
+        >
+          {t("codingWorkbench.descriptionStatus.review")}
+        </button>
+      ) : null}
     </section>
   );
 }

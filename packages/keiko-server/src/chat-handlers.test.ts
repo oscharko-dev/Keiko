@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
@@ -17,6 +17,7 @@ import {
   captureDesktopChatExecutionAdmission,
   createHandleGitChangeApproveDescription,
   createHandleGitChangeApplyDescription,
+  createHandleGitChangeReviewDescription,
   handleCreateDesktopChat,
   handleSendDesktopChat,
   parseClientTurnId,
@@ -939,8 +940,9 @@ vi.mock("./gitDelivery/prExecution.js", async () => {
 // suite); stubbed here — mirroring gitChangeRoutes.test.ts's own convention for this exact module —
 // so this file's F5 tests isolate what THEY must prove: admission, service reuse, and the one-use
 // approval reaching `executeApproved`.
+const gitHubReaderAuthorized = vi.hoisted(() => vi.fn((): boolean => true));
 vi.mock("./coding-context/githubIssueReaderAuthorization.js", () => ({
-  isGitHubIssueReaderAuthorized: (): boolean => true,
+  isGitHubIssueReaderAuthorized: gitHubReaderAuthorized,
   githubRemoteOwnerAndRepoFor: (): Promise<string> => Promise.resolve("owner/repo"),
 }));
 
@@ -988,6 +990,7 @@ describe("createHandleGitChangeApplyDescription — the real handler Chat reache
     store = createInMemoryUiStore();
     projectId = store.createProject(fixture.root).path;
     executeGovernedPullRequestSpy.mockClear();
+    gitHubReaderAuthorized.mockReturnValue(true);
   });
   afterEach(() => {
     fixture.close();
@@ -1098,6 +1101,80 @@ describe("createHandleGitChangeApplyDescription — the real handler Chat reache
       body: { schemaVersion: "1", proposalId: preview.preview.proposalId },
     });
     expect(fixture.service.consumeApproval(preview.preview.proposalId)).toBeDefined();
+  });
+
+  it("reviews the exact Chat-held proposal without a browser-authored repository identity", async () => {
+    const deps = fixtureDeps();
+    const chat = store.createChat(projectId, "t", "m");
+    const relationshipId = "rel-chat-review";
+    store.updateChat(chat.id, { gitChangeScopes: [connectedScope(relationshipId)] });
+    const artifact = await fixture.generateArtifact();
+    const preview = await fixture.service.previewArtifact(artifact);
+    if (preview.outcome !== "preview") throw new Error("expected held Chat artifact");
+
+    const reviewed = await createHandleGitChangeReviewDescription(fixtureOptions())(
+      requestContext({
+        schemaVersion: "1",
+        chatId: chat.id,
+        relationshipId,
+        proposalId: preview.preview.proposalId,
+      }),
+      deps,
+    );
+
+    expect(reviewed).toEqual({ status: 200, body: preview });
+  });
+
+  it("distinguishes a withdrawn repository-reader grant from a comparison-only scope", async () => {
+    gitHubReaderAuthorized.mockReturnValue(false);
+    const events: {
+      readonly op: string;
+      readonly correlationId?: string;
+      readonly errorKind?: string;
+    }[] = [];
+    const deps = {
+      ...fixtureDeps(),
+      activityLog: {
+        write: (event: { op: string; correlationId?: string; errorKind?: string }): void =>
+          events.push(event),
+      },
+    } as UiHandlerDeps;
+    const chat = store.createChat(projectId, "t", "m");
+    const relationshipId = "rel-reader-denied";
+    store.updateChat(chat.id, { gitChangeScopes: [connectedScope(relationshipId)] });
+
+    const result = await createHandleGitChangeApplyDescription(fixtureOptions())(
+      requestContext(
+        { schemaVersion: "1", chatId: chat.id, relationshipId, proposalId: "proposal" },
+        "corr-reader-denied",
+      ),
+      deps,
+    );
+
+    expect(result).toMatchObject({
+      status: 403,
+      body: { error: { code: "GIT_CHANGE_APPLY_READER_UNAUTHORIZED" } },
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "git-change.chat.description-target.denied",
+        correlationId: "corr-reader-denied",
+        errorKind: "reader-unauthorized",
+      }),
+    );
+  });
+
+  it("returns 499 when apply request-body reading is cancelled", async () => {
+    const request = new PassThrough();
+    const ctx = { ...requestContext({}), req: request as unknown as IncomingMessage };
+    const pending = createHandleGitChangeApplyDescription(fixtureOptions())(ctx, fixtureDeps());
+
+    request.emit("aborted");
+
+    await expect(pending).resolves.toMatchObject({
+      status: 499,
+      body: { error: { code: "REQUEST_CANCELLED" } },
+    });
   });
 
   it("reaches executeApproved with a one-use approval and applies the real body-only PATCH", async () => {

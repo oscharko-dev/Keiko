@@ -53,6 +53,7 @@ import { WORKSPACE_MANIFEST_ROUTE_GROUP } from "./workspace-manifest-routes.js";
 import {
   createHandleGitChangeApproveDescription,
   createHandleGitChangeApplyDescription,
+  createHandleGitChangeReviewDescription,
   handleCreateDesktopChat,
   handleRegenerateDesktopChat,
   handleSendDesktopChat,
@@ -453,6 +454,8 @@ let gitChangeApplyDescriptionHandler:
   ReturnType<typeof createHandleGitChangeApplyDescription> | undefined;
 let gitChangeApproveDescriptionHandler:
   ReturnType<typeof createHandleGitChangeApproveDescription> | undefined;
+let gitChangeReviewDescriptionHandler:
+  ReturnType<typeof createHandleGitChangeReviewDescription> | undefined;
 
 function dispatchGitChangeApproveDescription(
   ctx: RouteContext,
@@ -460,6 +463,14 @@ function dispatchGitChangeApproveDescription(
 ): Promise<RouteResult> {
   gitChangeApproveDescriptionHandler ??= createHandleGitChangeApproveDescription();
   return gitChangeApproveDescriptionHandler(ctx, deps);
+}
+
+function dispatchGitChangeReviewDescription(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  gitChangeReviewDescriptionHandler ??= createHandleGitChangeReviewDescription();
+  return gitChangeReviewDescriptionHandler(ctx, deps);
 }
 
 function dispatchGitChangeApplyDescription(
@@ -512,6 +523,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/git-change/approve-description",
     handler: dispatchGitChangeApproveDescription,
+  },
+  {
+    method: "POST",
+    pattern: "/api/git-change/review-description",
+    handler: dispatchGitChangeReviewDescription,
   },
   {
     method: "POST",

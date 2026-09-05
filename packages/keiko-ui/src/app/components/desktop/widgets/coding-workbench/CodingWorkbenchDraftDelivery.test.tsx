@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodingWorkbenchDraftDelivery } from "./CodingWorkbenchDraftDelivery";
@@ -171,6 +171,30 @@ describe("durable repository delivery in the Code task", () => {
     ).toBeInTheDocument();
   });
 
+  it("opens the exact retained proposal only when a live PR target is available", () => {
+    const onReviewDescription = vi.fn();
+    const delivery = draftDeliverySnapshot();
+    const snapshot = {
+      ...delivery,
+      descriptionStatus: descriptionStatusSnapshot({
+        proposalId: "pr-description-1",
+      }).descriptionStatus,
+    };
+    render(
+      <CodingWorkbenchDraftDelivery
+        snapshot={snapshot}
+        onReviewDescription={onReviewDescription}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Review exact draft" }));
+    expect(onReviewDescription).toHaveBeenCalledExactlyOnceWith({
+      ownerAndRepo: "owner/repository",
+      prNumber: 7,
+      proposalId: "pr-description-1",
+      snapshotDigest: "b".repeat(64),
+    });
+  });
+
   it("renders nothing for the description status when it is absent, without a diagnostic", () => {
     const { container } = render(
       <CodingWorkbenchDraftDelivery
@@ -198,6 +222,9 @@ describe("durable repository delivery in the Code task", () => {
     );
     expect(translateCodingWorkbench("de", "codingWorkbench.descriptionStatus.state.blocked")).toBe(
       "Entwurf blockiert",
+    );
+    expect(translateCodingWorkbench("de", "codingWorkbench.descriptionStatus.review")).toBe(
+      "Exakten Entwurf prüfen",
     );
     expect(
       translateCodingWorkbench("de", "codingWorkbench.draftDelivery.pendingApprovalHint"),

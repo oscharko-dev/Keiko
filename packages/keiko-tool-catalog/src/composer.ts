@@ -49,7 +49,7 @@ export interface CatalogRegistrationSet {
 export function createKeikoToolCatalog(
   sets: readonly CatalogRegistrationSet[],
   compatibility: readonly CatalogCompatibility[] = [],
-  context: CatalogCompilationContext = { referenceTimeMs: Date.now() },
+  context?: CatalogCompilationContext,
 ): ToolCatalog {
   const descriptors = sets.flatMap((set) => set.entries.map((entry) => entry.descriptor));
   const profiles = sets.map((set) => ({
@@ -63,5 +63,8 @@ export function createKeikoToolCatalog(
     adapterRuntime: set.adapterRuntime,
     compatibility: set.compatibility ?? [],
   }));
-  return createToolCatalog({ descriptors, profiles, compatibility }, context);
+  return createToolCatalog(
+    { descriptors, profiles, compatibility },
+    context ?? { referenceTimeMs: Date.now() },
+  );
 }

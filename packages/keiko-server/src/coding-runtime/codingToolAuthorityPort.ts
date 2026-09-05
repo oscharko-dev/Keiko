@@ -179,16 +179,7 @@ export function createCodingToolAuthorityPort(
 ): CodingToolAuthorityPort {
   return {
     admit: (capability, request): ReturnType<CodingToolAuthorityPort["admit"]> =>
-      admit(
-        authority,
-        context,
-        capability,
-        request,
-        options.approvalProofVerifier,
-        options.requireProducerBinding === true,
-        options.reserveEditDelegation === true,
-        options.activityLog,
-      ),
+      admit(authority, context, capability, request, options),
   };
 }
 
@@ -200,11 +191,10 @@ function admit(
   context: CodingToolAuthorityContextProvider,
   capability: string | undefined,
   request: CodingToolActionRequest,
-  approvalProofVerifier: CodingToolApprovalProofVerifier | undefined,
-  requireProducerBinding: boolean,
-  reserveEditDelegation: boolean,
-  activityLog: ServerLogSink | undefined,
+  options: CodingToolAuthorityPortOptions,
 ): ReturnType<CodingToolAuthorityPort["admit"]> {
+  const { approvalProofVerifier, requireProducerBinding, reserveEditDelegation, activityLog } =
+    options;
   if (capability === undefined) return { ok: false, reason: "capability-missing" };
   const preflight = admissionPreflight(
     authority,
@@ -212,7 +202,7 @@ function admit(
     capability,
     request,
     approvalProofVerifier,
-    requireProducerBinding,
+    requireProducerBinding === true,
     activityLog,
   );
   if (!preflight.ok) return { ok: false, reason: preflight.reason };

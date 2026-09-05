@@ -21,6 +21,7 @@ import type { CodingRuntimeIssueAttachment } from "./codingRuntimeIssueIntake.js
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import type {
+  PrDescriptionArtifact,
   PrDescriptionOutcome,
   PrDescriptionReason,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
@@ -635,6 +636,20 @@ export interface ProductionWorkbenchDescriptionDeps {
     nowIso: string,
   ) => void;
   readonly now: () => number;
+  readonly artifactRetention?: ProductionWorkbenchArtifactRetention;
+}
+
+export interface ProductionWorkbenchArtifactRetention {
+  readonly retain: (
+    scope: WorkbenchDescriptionScope,
+    artifact: PrDescriptionArtifact,
+    signal: AbortSignal,
+  ) => Promise<string | undefined>;
+  readonly hasProposal: (
+    scope: WorkbenchDescriptionScope,
+    proposalId: string,
+    snapshotDigest: string,
+  ) => boolean;
 }
 
 export interface ProductionWorkbenchDescriptionOutcome {
@@ -642,6 +657,7 @@ export interface ProductionWorkbenchDescriptionOutcome {
   readonly snapshotDigest?: string;
   readonly draftDigest?: string;
   readonly artifactOutcome?: PrDescriptionOutcome;
+  readonly proposalId?: string;
 }
 
 export interface ProductionWorkbenchDescriptionDispatcher {
@@ -649,12 +665,21 @@ export interface ProductionWorkbenchDescriptionDispatcher {
     scope: WorkbenchDescriptionScope,
     signal: AbortSignal,
   ) => Promise<ProductionWorkbenchDescriptionOutcome>;
+  readonly hasProposal: (
+    scope: WorkbenchDescriptionScope,
+    proposalId: string,
+    snapshotDigest: string,
+  ) => boolean;
 }
 
 export function createProductionWorkbenchDescriptionDispatcher(
   deps: ProductionWorkbenchDescriptionDeps,
 ): ProductionWorkbenchDescriptionDispatcher {
-  return { generate: (scope, signal) => dispatchWorkbenchDescription(deps, scope, signal) };
+  return {
+    generate: (scope, signal) => dispatchWorkbenchDescription(deps, scope, signal),
+    hasProposal: (scope, proposalId, snapshotDigest): boolean =>
+      deps.artifactRetention?.hasProposal(scope, proposalId, snapshotDigest) ?? false,
+  };
 }
 
 function minimalWorkspaceInfo(root: string): WorkspaceInfo {
@@ -758,12 +783,9 @@ async function recheckWorkbenchDescription(
 ): Promise<ProductionWorkbenchDescriptionOutcome> {
   if (result.status !== "generated") return workbenchDescriptionOutcome(result);
   const current = await deps.snapshots.recheck(reference, input);
-  if (
-    input.signal?.aborted ||
-    current.state !== "current" ||
-    deps.activeWorkspaceRoot() !== input.workspace.root
-  )
+  if (!workbenchSnapshotStillCurrent(deps, input, current.state)) {
     return { reason: "stale-snapshot" };
+  }
   const denied = modelEgressDenialReason(
     deps.descriptionAuthority,
     authorityScope,
@@ -773,7 +795,25 @@ async function recheckWorkbenchDescription(
     logWorkbenchModelEgressDenied(scope.runId, denied);
     return { reason: denied };
   }
-  return workbenchDescriptionOutcome(result);
+  if (scope.applicationTarget === undefined) return workbenchDescriptionOutcome(result);
+  if (deps.artifactRetention === undefined) return { reason: "generation-unavailable" };
+  if (input.signal === undefined) return { reason: "stale-snapshot" };
+  const proposalId = await deps.artifactRetention.retain(scope, result.artifact, input.signal);
+  return proposalId === undefined
+    ? { reason: "stale-snapshot" }
+    : workbenchDescriptionOutcome(result, proposalId);
+}
+
+function workbenchSnapshotStillCurrent(
+  deps: ProductionWorkbenchDescriptionDeps,
+  input: GitChangeSnapshotCaptureInput,
+  state: "current" | "stale" | "unavailable" | "failed",
+): boolean {
+  return (
+    input.signal?.aborted !== true &&
+    state === "current" &&
+    deps.activeWorkspaceRoot() === input.workspace.root
+  );
 }
 
 // #3400/#3401 final-audit F1: reports `undefined` (admitted) once a live description-authority
@@ -851,6 +891,7 @@ const UNAVAILABLE_REASON: Record<PrDescriptionReason, WorkbenchDescriptionReason
 
 function workbenchDescriptionOutcome(
   result: PrDescription.PrDescriptionGenerationResult,
+  proposalId?: string,
 ): ProductionWorkbenchDescriptionOutcome {
   if (result.status !== "generated") return { reason: UNAVAILABLE_REASON[result.reason] };
   const { artifact } = result;
@@ -859,5 +900,6 @@ function workbenchDescriptionOutcome(
     snapshotDigest: artifact.binding.snapshotDigest,
     draftDigest: artifact.artifactDigest,
     artifactOutcome: artifact.outcome,
+    ...(proposalId === undefined ? {} : { proposalId }),
   };
 }

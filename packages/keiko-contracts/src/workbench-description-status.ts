@@ -79,6 +79,11 @@ export interface WorkbenchDescriptionStatus {
   readonly draftDigest: string | null;
   /** #3398's own artifact outcome for the rendered draft; null exactly when none was rendered. */
   readonly artifactOutcome: PrDescriptionOutcome | null;
+  /**
+   * Server-held #3399 proposal for this exact artifact. Absent for generic runs without a PR and
+   * removed when restart reconciliation proves the in-memory proposal is no longer available.
+   */
+  readonly proposalId?: string;
   readonly observedAt: string;
 }
 
@@ -111,7 +116,10 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 function keys(value: Record<string, unknown>): boolean {
-  const count = KEYS.length + (Object.hasOwn(value, "generationBinding") ? 1 : 0);
+  const count =
+    KEYS.length +
+    (Object.hasOwn(value, "generationBinding") ? 1 : 0) +
+    (Object.hasOwn(value, "proposalId") ? 1 : 0);
   return Reflect.ownKeys(value).length === count && KEYS.every((key) => Object.hasOwn(value, key));
 }
 
@@ -154,6 +162,17 @@ function validArtifact(value: Record<string, unknown>): boolean {
   );
 }
 
+function validProposal(value: Record<string, unknown>): boolean {
+  if (!Object.hasOwn(value, "proposalId")) return true;
+  return (
+    typeof value.proposalId === "string" &&
+    RUN_ID.test(value.proposalId) &&
+    value.snapshotDigest !== null &&
+    value.artifactOutcome !== null &&
+    (value.state === "current" || value.state === "partial" || value.state === "fallback")
+  );
+}
+
 function validIdentity(value: Record<string, unknown>): boolean {
   return (
     value.schemaVersion === WORKBENCH_DESCRIPTION_STATUS_SCHEMA_VERSION &&
@@ -183,6 +202,7 @@ export function isWorkbenchDescriptionStatus(value: unknown): value is Workbench
     (!Object.hasOwn(value, "generationBinding") ||
       isWorkbenchDescriptionGenerationBinding(value.generationBinding)) &&
     validReasonState(value) &&
-    validArtifact(value)
+    validArtifact(value) &&
+    validProposal(value)
   );
 }

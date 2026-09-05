@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const DIST_ROOT = resolve(import.meta.dirname, "../../dist/gitDelivery");
@@ -23,7 +24,11 @@ describe("Git delivery route cold imports", () => {
     const modulePath = resolve(DIST_ROOT, moduleName);
     const result = spawnSync(
       process.execPath,
-      ["--input-type=module", "-e", `await import(${JSON.stringify(modulePath)})`],
+      [
+        "--input-type=module",
+        "-e",
+        `await import(${JSON.stringify(pathToFileURL(modulePath).href)})`,
+      ],
       { encoding: "utf8", timeout: 10_000 },
     );
     expect(result.status, result.stderr).toBe(0);

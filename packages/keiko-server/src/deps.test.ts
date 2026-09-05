@@ -95,7 +95,7 @@ import {
   setServerLogger,
 } from "./observability/index.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
-import { applyGitChangeDescription } from "./chat-handlers.js";
+import { resolvePrDescriptionApplicationServiceForContext } from "./gitDelivery/prDescriptionRoutes.js";
 
 const tmpDirs: string[] = [];
 
@@ -1244,15 +1244,14 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     void deps.dispose?.();
   });
 
-  // Final-audit F7 (#3399/#3400 production-wiring): `createPrDescriptionApplicationService` had
-  // zero non-test importers, so Chat-driven description apply (#3400) was permanently unavailable
-  // in production — `chat-handlers.ts`'s `applyGitChangeDescription` always returned `undefined`
-  // because `deps.prDescriptionApplicationService` did not exist. Before this fix,
-  // `deps.prDescriptionApplicationService` is not a field on `UiHandlerDeps` at all, so this test
-  // fails to compile; after it, a real, composed service is reachable end to end.
-  it("composes a real PrDescriptionApplicationService that applyGitChangeDescription reaches (F7)", async () => {
+  // Final-audit F7, relocated to the actual shared resolver after the dead global service was
+  // removed: both a background Workbench producer and HTTP review/approve/apply must receive the
+  // same stateful service from the exact composed deps identity.
+  it("resolves one shared PrDescriptionApplicationService from the composed deps identity (F7)", () => {
     const store = createInMemoryUiStore();
     const evidenceDir = tmp("ev-pr-description-service-");
+    const root = tmp("pr-description-project-");
+    store.createProject(root);
     const deps = buildUiHandlerDeps({
       // A fake env-only Gateway profile — never a real network target — so
       // `createProductionPrDescriptionGeneration` composes a real generation deps object over a
@@ -1268,20 +1267,51 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     });
 
     expect(deps.prDescriptionGeneration).toBeDefined();
-    expect(deps.prDescriptionApplicationService).toBeDefined();
-
-    // Reaches the REAL service's `executeApproved` (which checks its own held-proposal map and
-    // returns a closed `blocked`/`approval-invalid` outcome for an unknown id) rather than staying
-    // `undefined` — the exact "apply unavailable" symptom F7 reported.
-    const result = await applyGitChangeDescription(deps, "unknown-proposal-id", {});
-    expect(result).toEqual({ outcome: "blocked", reason: "approval-invalid" });
+    const workspace: WorkspaceInfo = {
+      root,
+      selectedRoot: root,
+      name: undefined,
+      version: undefined,
+      testFramework: "unknown",
+      sourceDirs: [],
+      testDirs: [],
+      languages: [],
+      ignoreLines: [],
+    };
+    const accessScope = {};
+    const context = (): {
+      readonly workspace: WorkspaceInfo;
+      readonly repository: string;
+      readonly prNumber: number;
+      readonly accessScope: object;
+      readonly authorityDigest: string;
+      readonly correlationId: string;
+      readonly stillAuthorized: () => boolean;
+    } => ({
+      workspace,
+      repository: "octo/repo",
+      prNumber: 17,
+      accessScope,
+      authorityDigest: "a".repeat(64),
+      correlationId: "description-test",
+      stillAuthorized: (): boolean => true,
+    });
+    const request = { projectId: root, ownerAndRepo: "octo/repo", prNumber: 17 };
+    const first = resolvePrDescriptionApplicationServiceForContext(deps, request, context);
+    const repeated = resolvePrDescriptionApplicationServiceForContext(deps, request, context);
+    expect(first.ok).toBe(true);
+    expect(repeated.ok).toBe(true);
+    if (!first.ok || !repeated.ok) throw new Error("expected shared description service");
+    expect(repeated.service).toBe(first.service);
 
     void deps.dispose?.();
     store.close();
   });
 
-  it("leaves prDescriptionApplicationService unavailable when no model profile is configured (F7)", async () => {
+  it("leaves the shared description service unavailable when no model profile is configured (F7)", () => {
     const store = createInMemoryUiStore();
+    const root = tmp("pr-description-unavailable-project-");
+    store.createProject(root);
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("ev-pr-description-service-unavailable-"),
@@ -1290,8 +1320,32 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     });
 
     expect(deps.prDescriptionGeneration).toBeUndefined();
-    expect(deps.prDescriptionApplicationService).toBeUndefined();
-    expect(await applyGitChangeDescription(deps, "unknown-proposal-id", {})).toBeUndefined();
+    const workspace: WorkspaceInfo = {
+      root,
+      selectedRoot: root,
+      name: undefined,
+      version: undefined,
+      testFramework: "unknown",
+      sourceDirs: [],
+      testDirs: [],
+      languages: [],
+      ignoreLines: [],
+    };
+    const accessScope = {};
+    const result = resolvePrDescriptionApplicationServiceForContext(
+      deps,
+      { projectId: root, ownerAndRepo: "octo/repo", prNumber: 17 },
+      () => ({
+        workspace,
+        repository: "octo/repo",
+        prNumber: 17,
+        accessScope,
+        authorityDigest: "a".repeat(64),
+        correlationId: "description-test",
+        stillAuthorized: (): boolean => true,
+      }),
+    );
+    expect(result.ok).toBe(false);
 
     void deps.dispose?.();
     store.close();

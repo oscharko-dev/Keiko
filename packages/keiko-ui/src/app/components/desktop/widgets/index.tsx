@@ -211,6 +211,11 @@ function str(cfg: Record<string, unknown>, key: string): string | undefined {
   return typeof v === "string" ? v : undefined;
 }
 
+function num(cfg: Record<string, unknown>, key: string): number | undefined {
+  const value = cfg[key];
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : undefined;
+}
+
 const CODING_REPOSITORY_BINDING = "coding-repository";
 
 function isCodingRepositoryBinding(
@@ -594,7 +599,17 @@ registerWindowRender("runtime", (cfg, ctx) => {
 registerWindowRender("coding", (cfg, ctx) => (
   <CodingWorkbenchWindow
     selectedRoot={str(cfg, "repositoryPath") ?? ctx.selectedRoot ?? undefined}
-    onOpenGit={({ root, binding, repositoryDialog }) => {
+    onOpenGit={({ root, binding, repositoryDialog, descriptionReview }) => {
+      if (root !== null && descriptionReview !== undefined) {
+        ctx.openWindow("governedPullRequest", {
+          projectPath: root,
+          descriptionOwnerAndRepo: descriptionReview.ownerAndRepo,
+          descriptionPrNumber: descriptionReview.prNumber,
+          descriptionProposalId: descriptionReview.proposalId,
+          descriptionSnapshotDigest: descriptionReview.snapshotDigest,
+        });
+        return;
+      }
       ctx.openWindow(
         "governedGit",
         repositoryDialog === undefined && root === null
@@ -664,6 +679,23 @@ registerWindowRender("governedGit", (cfg, ctx) => {
 registerWindowRender("governedPullRequest", (cfg, ctx) => {
   const configuredRoot = str(cfg, "projectPath") ?? str(cfg, "workspaceRoot");
   const headBranchName = str(cfg, "headBranchName") ?? undefined;
+  const descriptionOwnerAndRepo = str(cfg, "descriptionOwnerAndRepo");
+  const descriptionPrNumber = num(cfg, "descriptionPrNumber");
+  const descriptionProposalId = str(cfg, "descriptionProposalId");
+  const descriptionSnapshotDigest = str(cfg, "descriptionSnapshotDigest");
+  const descriptionProposal =
+    descriptionOwnerAndRepo === undefined ||
+    descriptionPrNumber === undefined ||
+    descriptionProposalId === undefined ||
+    descriptionSnapshotDigest === undefined
+      ? undefined
+      : {
+          projectId: configuredRoot ?? "",
+          ownerAndRepo: descriptionOwnerAndRepo,
+          prNumber: descriptionPrNumber,
+          proposalId: descriptionProposalId,
+          snapshotDigest: descriptionSnapshotDigest,
+        };
   return (
     <BoundRootSurface
       ctx={ctx}
@@ -672,7 +704,12 @@ registerWindowRender("governedPullRequest", (cfg, ctx) => {
       onSelect={(root) => ctx.updateCfg({ projectPath: root })}
     >
       {(projectId) => (
-        <GovernedPullRequestCard projectId={projectId} headBranchName={headBranchName} />
+        <GovernedPullRequestCard
+          projectId={projectId}
+          headBranchName={headBranchName}
+          ownerAndRepo={descriptionOwnerAndRepo}
+          descriptionProposal={descriptionProposal}
+        />
       )}
     </BoundRootSurface>
   );

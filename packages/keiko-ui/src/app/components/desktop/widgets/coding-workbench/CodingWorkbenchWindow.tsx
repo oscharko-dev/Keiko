@@ -40,7 +40,10 @@ import {
 import { isCodingWorkbenchModel } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { useTranslate } from "@/lib/i18n";
 import { CodingWorkbenchCiReadiness } from "./CodingWorkbenchCiReadiness";
-import { CodingWorkbenchDraftDelivery } from "./CodingWorkbenchDraftDelivery";
+import {
+  CodingWorkbenchDraftDelivery,
+  type WorkbenchDescriptionReviewTarget,
+} from "./CodingWorkbenchDraftDelivery";
 import {
   CodingWorkbenchJourneyOutcome,
   createPrMarkReadyProposeHandler,
@@ -390,9 +393,20 @@ export interface CodingWorkbenchGitTarget {
   readonly root: string | null;
   readonly binding: "repository" | "task-workspace";
   readonly repositoryDialog?: "clone" | "open" | undefined;
+  readonly descriptionReview?: WorkbenchDescriptionReviewTarget | undefined;
 }
 
 function noopOpenGit(_target: CodingWorkbenchGitTarget): void {}
+
+function workbenchRepositoryRoot(
+  runIsActive: boolean,
+  runBoundRoot: string | null,
+  activeWorkspace: WorkbenchWorkspaceApi,
+  selectedRoot: string | undefined,
+): string | null {
+  if (!runIsActive) return activeWorkspace.activeInstance?.repositoryRoot ?? selectedRoot ?? null;
+  return runBoundRoot ?? activeWorkspace.activeBinding?.activeRoot ?? selectedRoot ?? null;
+}
 
 type WorkbenchWorkspaceApi = UseCodingWorkbenchRuntimeInput["workspace"];
 
@@ -776,9 +790,12 @@ function WorkbenchColumns({
   // During a run those chips — and the Git target they open — name the RUN's workspace, which the
   // server still holds authority over, not the live pointer: labelling a run in A with B's root and
   // branch, and opening B's Git, invited the operator to act on the wrong tree (#3381 review).
-  const repositoryRoot = runIsActive
-    ? (runBoundRoot ?? activeWorkspace.activeBinding?.activeRoot ?? selectedRoot ?? null)
-    : (activeWorkspace.activeInstance?.repositoryRoot ?? selectedRoot ?? null);
+  const repositoryRoot = workbenchRepositoryRoot(
+    runIsActive,
+    runBoundRoot,
+    activeWorkspace,
+    selectedRoot,
+  );
   const onProposeReady = useMarkReadyPropose(journey.outcome, repositoryRoot);
   const taskComposer = (
     <TaskStartSection
@@ -882,7 +899,17 @@ function WorkbenchColumns({
         >
           <PermissionPrompt state={state} research={research} onDecision={onDecision} />
           <CodingWorkbenchCiReadiness snapshot={state.run.value ?? undefined} />
-          <CodingWorkbenchDraftDelivery snapshot={state.run.value ?? undefined} />
+          <CodingWorkbenchDraftDelivery
+            snapshot={state.run.value ?? undefined}
+            onReviewDescription={(descriptionReview): void => {
+              if (repositoryRoot === null) return;
+              onOpenGit({
+                root: repositoryRoot,
+                binding: "task-workspace",
+                descriptionReview,
+              });
+            }}
+          />
           <CodingWorkbenchJourneyOutcome
             snapshot={state.run.value ?? undefined}
             outcome={journey.outcome}

@@ -2320,14 +2320,17 @@ async function holdChatDescriptionProposal(
   if (scope.pullRequestNumber === undefined) {
     return { status: artifact.outcome === "complete" ? "current" : artifact.outcome };
   }
-  const ownerAndRepo = await resolveGitChangeApplyOwnerAndRepo(deps, chat, correlationId);
-  if (ownerAndRepo === undefined) return { status: "blocked" };
+  const repository = await resolveGitChangeApplyOwnerAndRepo(deps, chat, correlationId);
+  if (!repository.ok) {
+    gitChangeDescriptionTargetUnavailable(deps, correlationId, repository.reason);
+    return { status: "blocked" };
+  }
   const resolution = resolvePrDescriptionApplicationServiceForRequest(
     deps,
     ctx,
     {
       projectId: chat.projectPath,
-      ownerAndRepo,
+      ownerAndRepo: repository.ownerAndRepo,
       prNumber: scope.pullRequestNumber,
       snapshotDigest: scope.snapshotDigest,
     },
@@ -2895,7 +2898,7 @@ function logGitChangeTurnAuthority(
 // several treats the most-recently-connected one as the active turn scope.
 export function activeGitChangeScope(chat: Chat): ChatGitChangeScope | undefined {
   const scopes = chat.gitChangeScopes;
-  return scopes === undefined || scopes.length === 0 ? undefined : scopes[scopes.length - 1];
+  return scopes?.at(-1);
 }
 
 /**
@@ -2960,11 +2963,8 @@ export function applyGitChangeDescription(
 // (`resolveChatRepository`) and the SAME GitHub-reader authorization gate every other git-change
 // route reuses -- never a fresh, browser-authored identity.
 //
-// NOT YET REGISTERED as a live route (routes.ts is outside this item's write scope) -- exported so
-// the route table's owner can wire `{ method: "POST", pattern: "/api/git-change/apply-description",
-// handler: createHandleGitChangeApplyDescription() }` in one line. Every test below drives this
-// exact exported handler with a synthetic `RouteContext`, the same pattern every other route test
-// file in this package already uses.
+// routes.ts registers the approve/review/apply handlers lazily to avoid the existing ESM cycle;
+// every request names only the server-held Chat scope and proposal.
 interface GitChangeApplyDescriptionRequest {
   readonly chatId: string;
   readonly relationshipId: string;
@@ -3022,24 +3022,37 @@ function findConnectedGitChangeScope(
 // stores it -- only its `remoteDigest`, contract correction 6): the SAME resolution the connect
 // flow performs for pull-request mode, so a live apply always checks the repository's CURRENT
 // GitHub-reader grant rather than trusting one observed at connect time.
+type GitChangeRepositoryResolution =
+  | { readonly ok: true; readonly ownerAndRepo: string }
+  | {
+      readonly ok: false;
+      readonly reason: "repository-unavailable" | "reader-unauthorized" | "remote-unresolved";
+    };
+
 async function resolveGitChangeApplyOwnerAndRepo(
   deps: UiHandlerDeps,
   chat: Chat,
   correlationId: string,
-): Promise<string | undefined> {
+): Promise<GitChangeRepositoryResolution> {
   const runner = observedGitRunner(
     defaultGitProcessRunner,
     deps.activityLog ?? processServerLogSink(),
     correlationId,
   );
   const repository = await resolveChatRepository(chat.projectPath, runner, 30_000);
-  if (repository === undefined) return undefined;
+  if (repository === undefined) return { ok: false, reason: "repository-unavailable" };
   if (!isGitHubIssueReaderAuthorized(deps, repository.repositoryRoot, { correlationId })) {
-    return undefined;
+    return { ok: false, reason: "reader-unauthorized" };
   }
-  return githubRemoteOwnerAndRepoFor(repository.repositoryRoot, deps.env, undefined, {
-    correlationId,
-  });
+  const ownerAndRepo = await githubRemoteOwnerAndRepoFor(
+    repository.repositoryRoot,
+    deps.env,
+    undefined,
+    { correlationId },
+  );
+  return ownerAndRepo === undefined
+    ? { ok: false, reason: "remote-unresolved" }
+    : { ok: true, ownerAndRepo };
 }
 
 function gitChangeApplyUnavailableResult(): RouteResult {
@@ -3048,6 +3061,34 @@ function gitChangeApplyUnavailableResult(): RouteResult {
     body: errorBody(
       "GIT_CHANGE_APPLY_UNAVAILABLE",
       "This connected Git change has no pull request to apply a description to.",
+    ),
+  };
+}
+
+function gitChangeDescriptionTargetUnavailable(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  reason: Exclude<GitChangeRepositoryResolution, { readonly ok: true }>["reason"],
+): RouteResult {
+  (deps.activityLog ?? processServerLogSink()).write({
+    category: "security",
+    op: "git-change.chat.description-target.denied",
+    correlationId,
+    level: "warn",
+    errorKind: reason,
+  });
+  const unauthorized = reason === "reader-unauthorized";
+  return {
+    status: unauthorized ? 403 : 409,
+    body: errorBody(
+      unauthorized
+        ? "GIT_CHANGE_APPLY_READER_UNAUTHORIZED"
+        : reason === "repository-unavailable"
+          ? "GIT_CHANGE_APPLY_REPOSITORY_UNAVAILABLE"
+          : "GIT_CHANGE_APPLY_REMOTE_UNRESOLVED",
+      unauthorized
+        ? "Repository-reader authority is required for this connected Git change."
+        : "The connected Git repository identity is unavailable.",
     ),
   };
 }
@@ -3068,14 +3109,16 @@ async function resolveGitChangeApplyTarget(
     return { status: 404, body: errorBody("GIT_CHANGE_SCOPE_NOT_FOUND", "Scope not found.") };
   }
   if (found.scope.pullRequestNumber === undefined) return gitChangeApplyUnavailableResult();
-  const ownerAndRepo = await resolveGitChangeApplyOwnerAndRepo(deps, found.chat, correlationId);
-  if (ownerAndRepo === undefined) return gitChangeApplyUnavailableResult();
+  const repository = await resolveGitChangeApplyOwnerAndRepo(deps, found.chat, correlationId);
+  if (!repository.ok) {
+    return gitChangeDescriptionTargetUnavailable(deps, correlationId, repository.reason);
+  }
   return {
     request,
     scope: found.scope,
     baseFields: {
       projectId: found.chat.projectPath,
-      ownerAndRepo,
+      ownerAndRepo: repository.ownerAndRepo,
       prNumber: found.scope.pullRequestNumber,
       snapshotDigest: found.scope.snapshotDigest,
     },
@@ -3106,7 +3149,8 @@ export const createHandleGitChangeApplyDescription = (
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   return async (ctx, deps): Promise<RouteResult> => {
     const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-    const parsed = await readJsonObject(ctx.req);
+    const cancellation = createRequestCancellation(ctx, "git-change description apply cancelled");
+    const parsed = await readJsonObject(ctx.req, cancellation.signal).finally(cancellation.dispose);
     if (isRouteResult(parsed)) return parsed;
     const request = parseGitChangeApplyDescriptionRequest(parsed);
     if (request === undefined) {
@@ -3150,7 +3194,11 @@ export const createHandleGitChangeApproveDescription = (
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   return async (ctx, deps): Promise<RouteResult> => {
     const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-    const parsed = await readJsonObject(ctx.req);
+    const cancellation = createRequestCancellation(
+      ctx,
+      "git-change description approval cancelled",
+    );
+    const parsed = await readJsonObject(ctx.req, cancellation.signal).finally(cancellation.dispose);
     if (isRouteResult(parsed)) return parsed;
     const request = parseGitChangeApplyDescriptionRequest(parsed);
     if (request === undefined) {
@@ -3185,6 +3233,40 @@ export const createHandleGitChangeApproveDescription = (
         expiresAt: new Date(issued.expiresAtMs).toISOString(),
       }),
     };
+  };
+};
+
+/** Returns the exact Chat-held proposal body without invoking description generation again. */
+export const createHandleGitChangeReviewDescription = (
+  options: PrDescriptionRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    const cancellation = createRequestCancellation(ctx, "git-change description review cancelled");
+    const parsed = await readJsonObject(ctx.req, cancellation.signal).finally(cancellation.dispose);
+    if (isRouteResult(parsed)) return parsed;
+    const request = parseGitChangeApplyDescriptionRequest(parsed);
+    if (request === undefined) {
+      return { status: 400, body: errorBody("BAD_REQUEST", "Invalid review-description request.") };
+    }
+    const target = await resolveGitChangeApplyTarget(deps, request, correlationId);
+    if (!("baseFields" in target)) return target;
+    const resolution = resolvePrDescriptionApplicationServiceForRequest(
+      deps,
+      ctx,
+      target.baseFields,
+      correlationId,
+      options,
+      gitChangeDescriptionAuthorityScopeFor(target.scope),
+    );
+    if (!resolution.ok) return resolution.result;
+    const review = resolution.service.review(request.proposalId);
+    return review === undefined
+      ? {
+          status: 409,
+          body: errorBody("GIT_CHANGE_REVIEW_UNKNOWN_PROPOSAL", "Proposal is unknown or expired."),
+        }
+      : { status: 200, body: deps.redactor({ outcome: "preview", preview: review }) };
   };
 };
 

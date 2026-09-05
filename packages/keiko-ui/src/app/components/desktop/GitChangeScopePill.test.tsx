@@ -4,14 +4,14 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
-import { GitChangeScopePill } from "./GitChangeScopePill";
+import { GitChangeScopePill, type ReviewGitChangeDescriptionFn } from "./GitChangeScopePill";
 import type {
   Chat,
   ChatGitChangeDescriptionStatus,
   ChatGitChangeScope,
   ChatResponse,
 } from "@/lib/types";
-import type { GitChangeRefreshResponse } from "@/lib/api";
+import type { GitChangeRefreshResponse, PrDescriptionApplicationResultWire } from "@/lib/api";
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -410,6 +410,24 @@ describe("GitChangeScopePill — description apply affordance (#3400 final-audit
     });
   }
 
+  function reviewResult(): PrDescriptionApplicationResultWire {
+    return {
+      outcome: "preview",
+      preview: {
+        proposalId: "prop-1",
+        expiresAt: "2026-01-01T00:00:30.000Z",
+        status: applicationStatusFixture() as never,
+        finalBody: "<!-- keiko:managed:v1:start -->exact held body<!-- keiko:managed:v1:end -->",
+        managedRegion: "exact held body",
+        concurrencyLimitation: "GitHub cannot lock the PR body during this update.",
+      },
+    };
+  }
+
+  function reviewDescription(): ReviewGitChangeDescriptionFn {
+    return vi.fn<ReviewGitChangeDescriptionFn>().mockResolvedValue(reviewResult());
+  }
+
   it("renders no description controls for a comparison-only scope (no pull request)", () => {
     const chat = makeChat({ gitChangeScopes: [makeGitChangeScope()] });
     render(<GitChangeScopePill chat={chat} updateScopes={vi.fn()} refreshScope={vi.fn()} />);
@@ -424,6 +442,7 @@ describe("GitChangeScopePill — description apply affordance (#3400 final-audit
     const applyDescription = vi
       .fn()
       .mockResolvedValue({ outcome: "observed", status: applicationStatusFixture() });
+    const review = reviewDescription();
     const user = userEvent.setup();
     render(
       <GitChangeScopePill
@@ -432,11 +451,19 @@ describe("GitChangeScopePill — description apply affordance (#3400 final-audit
         refreshScope={vi.fn()}
         approveDescription={approveDescription}
         applyDescription={applyDescription}
+        reviewDescription={review}
       />,
     );
 
+    await user.click(screen.getByTestId("git-change-description-preview"));
+    expect(await screen.findByTestId("git-change-description-preview-body")).toHaveTextContent(
+      "exact held body",
+    );
+    expect(review).toHaveBeenCalledWith(chat, "rel-1", "prop-1");
     await user.click(screen.getByTestId("git-change-description-approve"));
     await waitFor(() => expect(approveDescription).toHaveBeenCalledWith(chat, prScope(), "prop-1"));
+    await user.click(screen.getByTestId("git-change-description-approve"));
+    expect(approveDescription).toHaveBeenCalledTimes(1);
 
     await user.click(screen.getByTestId("git-change-description-apply"));
     await waitFor(() => expect(applyDescription).toHaveBeenCalledWith(chat, "rel-1", "prop-1"));
@@ -449,6 +476,7 @@ describe("GitChangeScopePill — description apply affordance (#3400 final-audit
   it("disables approve when a Chat-held proposal becomes stale", async () => {
     const chat = makeChat({ gitChangeScopes: [prScope({ descriptionStatus: "current" })] });
     const approveDescription = vi.fn();
+    const review = reviewDescription();
     const user = userEvent.setup();
     const { rerender } = render(
       <GitChangeScopePill
@@ -456,8 +484,11 @@ describe("GitChangeScopePill — description apply affordance (#3400 final-audit
         updateScopes={vi.fn()}
         refreshScope={vi.fn()}
         approveDescription={approveDescription}
+        reviewDescription={review}
       />,
     );
+    await user.click(screen.getByTestId("git-change-description-preview"));
+    await screen.findByTestId("git-change-description-preview-body");
     expect(screen.getByTestId("git-change-description-approve")).not.toHaveAttribute(
       "aria-disabled",
       "true",
@@ -469,6 +500,7 @@ describe("GitChangeScopePill — description apply affordance (#3400 final-audit
         updateScopes={vi.fn()}
         refreshScope={vi.fn()}
         approveDescription={approveDescription}
+        reviewDescription={review}
       />,
     );
     expect(screen.getByTestId("git-change-description-approve")).toHaveAttribute(
@@ -488,6 +520,7 @@ describe("GitChangeScopePill — description apply affordance (#3400 final-audit
       .fn()
       .mockResolvedValue({ schemaVersion: "1", proposalId: "prop-1", expiresAt: "x" });
     const applyDescription = vi.fn();
+    const review = reviewDescription();
     const user = userEvent.setup();
     const { rerender } = render(
       <GitChangeScopePill
@@ -496,8 +529,11 @@ describe("GitChangeScopePill — description apply affordance (#3400 final-audit
         refreshScope={vi.fn()}
         approveDescription={approveDescription}
         applyDescription={applyDescription}
+        reviewDescription={review}
       />,
     );
+    await user.click(screen.getByTestId("git-change-description-preview"));
+    await screen.findByTestId("git-change-description-preview-body");
     await user.click(screen.getByTestId("git-change-description-approve"));
     await waitFor(() => expect(approveDescription).toHaveBeenCalled());
     expect(screen.getByTestId("git-change-description-apply")).not.toHaveAttribute(
@@ -512,6 +548,7 @@ describe("GitChangeScopePill — description apply affordance (#3400 final-audit
         refreshScope={vi.fn()}
         approveDescription={approveDescription}
         applyDescription={applyDescription}
+        reviewDescription={review}
       />,
     );
     expect(screen.getByTestId("git-change-description-apply")).toHaveAttribute(
@@ -533,6 +570,7 @@ describe("GitChangeScopePill — description apply affordance (#3400 final-audit
       outcome: "blocked",
       reason: "authority-denied",
     });
+    const review = reviewDescription();
     const user = userEvent.setup();
     render(
       <GitChangeScopePill
@@ -541,9 +579,12 @@ describe("GitChangeScopePill — description apply affordance (#3400 final-audit
         refreshScope={vi.fn()}
         approveDescription={approveDescription}
         applyDescription={applyDescription}
+        reviewDescription={review}
       />,
     );
 
+    await user.click(screen.getByTestId("git-change-description-preview"));
+    await screen.findByTestId("git-change-description-preview-body");
     await user.click(screen.getByTestId("git-change-description-approve"));
     await user.click(screen.getByTestId("git-change-description-apply"));
     await waitFor(() =>
@@ -556,6 +597,7 @@ describe("GitChangeScopePill — description apply affordance (#3400 final-audit
   it("surfaces an approval wire error via role=alert", async () => {
     const chat = makeChat({ gitChangeScopes: [prScope()] });
     const approveDescription = vi.fn().mockRejectedValue(new Error("offline"));
+    const review = reviewDescription();
     const user = userEvent.setup();
     render(
       <GitChangeScopePill
@@ -563,9 +605,12 @@ describe("GitChangeScopePill — description apply affordance (#3400 final-audit
         updateScopes={vi.fn()}
         refreshScope={vi.fn()}
         approveDescription={approveDescription}
+        reviewDescription={review}
       />,
     );
 
+    await user.click(screen.getByTestId("git-change-description-preview"));
+    await screen.findByTestId("git-change-description-preview-body");
     await user.click(screen.getByTestId("git-change-description-approve"));
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("offline"));
   });

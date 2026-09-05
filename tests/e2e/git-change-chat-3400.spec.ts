@@ -80,17 +80,11 @@ test("connects the Git window's current branch to a Chat and shows the scope pil
   await expect(chatWindow.getByText("Current")).toBeVisible();
 });
 
-// #3400 final-audit F5 — "refined over multiple turns and applied through the same governed
-// service": once a Chat is connected to a PULL REQUEST (not a bare comparison), its scope pill
-// gains a Preview -> Approve -> Apply to PR affordance reusing the SAME #3399 governed
-// preview/approve/apply lifecycle GovernedPullRequestCard already proves — never a second
-// free-text composer (Frozen Decision 5) and never a second write path (Frozen Product
-// Decision 6). A real PR resolution and a real Model-Gateway-backed preview/apply both need live
-// network access this hermetic journey never has, so the connect (pull-request mode only),
-// preview, approve and apply-description calls are scripted in the real wire shape those routes
-// answer with (see support/git-change-chat-3400.ts); the click-through UI wiring itself — which
-// endpoint each button reaches, with which payload, and what it renders — is real.
-test("previews, approves and applies a refined description through the connected pull request", async ({
+// #3400 browser wiring proof. Server tests exercise both real Chat transports, shared generation,
+// exact snapshot binding, held-proposal approval, and the body-only apply effect. This hermetic
+// browser test scripts only the provider-dependent PR connect/review/apply responses and proves
+// the operator can read the exact held body before the guarded approve/apply actions are enabled.
+test("reviews, approves and applies the held description through the connected pull request", async ({
   page,
   request,
 }) => {
@@ -127,6 +121,9 @@ test("previews, approves and applies a refined description through the connected
   await expect(chatWindow.getByText("PR #42")).toBeVisible();
 
   await chatWindow.getByTestId("git-change-description-preview").click();
+  await expect(chatWindow.getByTestId("git-change-description-preview-body")).toContainText(
+    "refined over chat",
+  );
   await expect(chatWindow.getByTestId("git-change-description-state")).toHaveText("Current");
 
   await chatWindow.getByTestId("git-change-description-approve").click();

@@ -31,6 +31,12 @@ export interface WorkbenchDescriptionScope {
   readonly baseRef?: string;
   readonly headRef?: string;
   readonly generationBinding?: WorkbenchDescriptionGenerationBinding;
+  /** Exact existing PR that may retain this artifact in #3399's shared proposal service. */
+  readonly applicationTarget?: {
+    readonly projectId: string;
+    readonly ownerAndRepo: string;
+    readonly prNumber: number;
+  };
 }
 
 export type WorkbenchDescriptionDispatchDecision =
@@ -79,6 +85,12 @@ export interface CodingRuntimeDescriptionJobStore {
    */
   readonly recordBudgetExhausted: (scope: WorkbenchDescriptionScope, nowIso: string) => void;
   readonly current: (runId: string) => WorkbenchDescriptionStatus | undefined;
+  /** Durably demotes a status whose process-local #3399 proposal disappeared after restart. */
+  readonly markProposalLost: (
+    runId: string,
+    proposalId: string,
+    nowIso: string,
+  ) => WorkbenchDescriptionStatus | undefined;
   /** Startup-only containment: an attempt still in flight from a prior process is never resumed. */
   readonly reconcileInterrupted: (nowIso: string) => readonly string[];
 }
@@ -201,6 +213,7 @@ interface Statements {
   readonly settleRow: ReturnType<DatabaseSync["prepare"]>;
   readonly insertSettled: ReturnType<DatabaseSync["prepare"]>;
   readonly upsertSettled: ReturnType<DatabaseSync["prepare"]>;
+  readonly markProposalLost: ReturnType<DatabaseSync["prepare"]>;
   readonly interrupted: ReturnType<DatabaseSync["prepare"]>;
 }
 
@@ -236,6 +249,9 @@ function prepareStatements(db: DatabaseSync): Statements {
     ),
     upsertSettled: db.prepare(
       "UPDATE coding_runtime_description_jobs SET remote_digest = ?, base_sha = ?, head_sha = ?, generation_binding = ?, generation_version = ?, phase = 'settled', status_json = ?, updated_at = ? WHERE run_id = ?",
+    ),
+    markProposalLost: db.prepare(
+      "UPDATE coding_runtime_description_jobs SET status_json = ?, updated_at = ? WHERE run_id = ? AND phase = 'settled' AND status_json = ?",
     ),
     interrupted: db.prepare(
       `SELECT ${ROW_COLUMNS} FROM coding_runtime_description_jobs WHERE phase = 'dispatched'`,
@@ -371,6 +387,31 @@ function reconcileInterrupted(statements: Statements, nowIso: string): readonly 
   return recovered;
 }
 
+function markProposalLost(
+  statements: Statements,
+  runId: string,
+  proposalId: string,
+  nowIso: string,
+): WorkbenchDescriptionStatus | undefined {
+  const row = readRow(statements, runId);
+  if (row === undefined) return undefined;
+  const current = settledStatus(row);
+  if (current?.proposalId !== proposalId) return current;
+  const { proposalId: lostProposalId, ...retained } = current;
+  if (lostProposalId !== proposalId) return current;
+  const stale: WorkbenchDescriptionStatus = {
+    ...retained,
+    state: "stale",
+    reason: "stale-snapshot",
+    observedAt: nowIso,
+  };
+  const prior = JSON.stringify(current);
+  const result = statements.markProposalLost.run(JSON.stringify(stale), nowIso, runId, prior);
+  if (Number(result.changes) === 1) return stale;
+  const latest = readRow(statements, runId);
+  return latest === undefined ? undefined : settledStatus(latest);
+}
+
 export function createCodingRuntimeDescriptionJobStore(
   db: DatabaseSync,
   maxConcurrentDispatches = DEFAULT_MAX_CONCURRENT_DESCRIPTION_DISPATCHES,
@@ -399,6 +440,8 @@ export function createCodingRuntimeDescriptionJobStore(
       const row = readRow(statements, runId);
       return row === undefined ? undefined : settledStatus(row);
     },
+    markProposalLost: (runId, proposalId, nowIso): WorkbenchDescriptionStatus | undefined =>
+      markProposalLost(statements, runId, proposalId, nowIso),
     reconcileInterrupted: (nowIso): readonly string[] => reconcileInterrupted(statements, nowIso),
   };
 }

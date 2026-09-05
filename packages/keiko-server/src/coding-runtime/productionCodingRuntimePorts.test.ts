@@ -786,6 +786,14 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
     baseSha: BASE_SHA,
     headSha: HEAD_SHA,
   };
+  const PR_SCOPE: WorkbenchDescriptionScope = {
+    ...SCOPE,
+    applicationTarget: {
+      projectId: "/workspace",
+      ownerAndRepo: "octo/repo",
+      prNumber: 17,
+    },
+  };
 
   function snapshotFixture(overrides: Partial<GitChangeSnapshot> = {}): GitChangeSnapshot {
     return {
@@ -1123,5 +1131,67 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
       artifactOutcome: "complete",
     });
     expect(generatePrDescriptionMock).toHaveBeenCalledOnce();
+  });
+
+  it("retains the exact generated artifact once and exposes that same proposal", async () => {
+    const generated = generatedDescription();
+    generatePrDescriptionMock.mockResolvedValueOnce(generated);
+    const retain = vi.fn(() => Promise.resolve("pr-description-1"));
+    const hasProposal = vi.fn(() => true);
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: {
+          ...fakeSnapshots(() =>
+            Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+          ),
+          recheck: () => Promise.resolve({ state: "current", snapshot: snapshotFixture() }),
+        },
+        descriptionAuthority: admittingPort(),
+        generation: {
+          gateway: { chat: vi.fn() },
+          config: {} as PrDescription.PrDescriptionDeps["config"],
+          log: { write: () => undefined },
+        },
+        artifactRetention: { retain, hasProposal },
+      }),
+    );
+    const signal = new AbortController().signal;
+
+    await expect(dispatcher.generate(PR_SCOPE, signal)).resolves.toMatchObject({
+      reason: "generated",
+      proposalId: "pr-description-1",
+    });
+    expect(retain).toHaveBeenCalledExactlyOnceWith(PR_SCOPE, generated.artifact, signal);
+    expect(dispatcher.hasProposal(PR_SCOPE, "pr-description-1", "a".repeat(64))).toBe(true);
+    expect(hasProposal).toHaveBeenCalledExactlyOnceWith(
+      PR_SCOPE,
+      "pr-description-1",
+      "a".repeat(64),
+    );
+    expect(generatePrDescriptionMock).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when a PR-targeted artifact cannot be retained", async () => {
+    generatePrDescriptionMock.mockResolvedValueOnce(generatedDescription());
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: {
+          ...fakeSnapshots(() =>
+            Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+          ),
+          recheck: () => Promise.resolve({ state: "current", snapshot: snapshotFixture() }),
+        },
+        descriptionAuthority: admittingPort(),
+        generation: {
+          gateway: { chat: vi.fn() },
+          config: {} as PrDescription.PrDescriptionDeps["config"],
+          log: { write: () => undefined },
+        },
+      }),
+    );
+
+    await expect(dispatcher.generate(PR_SCOPE, new AbortController().signal)).resolves.toEqual({
+      reason: "generation-unavailable",
+    });
   });
 });

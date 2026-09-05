@@ -12,7 +12,7 @@
 // AA). Styling uses inline styles backed by existing CSS custom properties so globals.css is untouched
 // (ADR-0051 gate).
 
-import { useCallback, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { CSSProperties, Dispatch, ReactNode, SetStateAction } from "react";
 import {
   ApiError,
@@ -22,6 +22,8 @@ import {
   fetchGitDeliveryPrDescriptionApply,
   fetchGitDeliveryPrDescriptionApprove,
   fetchGitDeliveryPrDescriptionPreview,
+  fetchGitDeliveryPrDescriptionReview,
+  type GitDeliveryPrDescriptionProposalInput,
   type GitDeliveryPrDescriptionPreviewInput,
   type GitDeliveryPrDescriptionTarget,
   type GitDeliveryPrExecuteResponse,
@@ -63,6 +65,7 @@ export interface GovernedPullRequestClient {
   // #3399: the governed PR-description preview -> approve -> apply lifecycle. Optional for the same
   // reason as `prApprove` above — the panel renders nothing when a caller's client omits any of them.
   readonly prDescriptionPreview?: typeof fetchGitDeliveryPrDescriptionPreview | undefined;
+  readonly prDescriptionReview?: typeof fetchGitDeliveryPrDescriptionReview | undefined;
   readonly prDescriptionApprove?: typeof fetchGitDeliveryPrDescriptionApprove | undefined;
   readonly prDescriptionApply?: typeof fetchGitDeliveryPrDescriptionApply | undefined;
 }
@@ -72,6 +75,7 @@ const DEFAULT_CLIENT: GovernedPullRequestClient = {
   prApprove: fetchGitDeliveryPrApprove,
   prExecute: fetchGitDeliveryPrExecute,
   prDescriptionPreview: fetchGitDeliveryPrDescriptionPreview,
+  prDescriptionReview: fetchGitDeliveryPrDescriptionReview,
   prDescriptionApprove: fetchGitDeliveryPrDescriptionApprove,
   prDescriptionApply: fetchGitDeliveryPrDescriptionApply,
 };
@@ -658,8 +662,15 @@ interface DescriptionForm {
   readonly language: PrDescriptionLanguage;
 }
 
-function initialDescriptionForm(ownerAndRepo: string | undefined): DescriptionForm {
-  return { ownerAndRepo: ownerAndRepo ?? "", prNumber: "", language: "en" };
+function initialDescriptionForm(
+  ownerAndRepo: string | undefined,
+  retained: GitDeliveryPrDescriptionProposalInput | undefined,
+): DescriptionForm {
+  return {
+    ownerAndRepo: retained?.ownerAndRepo ?? ownerAndRepo ?? "",
+    prNumber: retained === undefined ? "" : String(retained.prNumber),
+    language: "en",
+  };
 }
 
 function isValidDescriptionPrNumber(value: string): boolean {
@@ -689,6 +700,7 @@ interface DescriptionAsyncState {
 
 interface DescriptionAsync extends DescriptionAsyncState {
   readonly runPreview: (input: GitDeliveryPrDescriptionPreviewInput) => void;
+  readonly runReview: (input: GitDeliveryPrDescriptionProposalInput) => void;
   readonly runApprove: () => void;
   readonly runApply: () => void;
 }
@@ -700,6 +712,7 @@ interface RequiredPrDescriptionClient {
   readonly prDescriptionPreview: typeof fetchGitDeliveryPrDescriptionPreview;
   readonly prDescriptionApprove: typeof fetchGitDeliveryPrDescriptionApprove;
   readonly prDescriptionApply: typeof fetchGitDeliveryPrDescriptionApply;
+  readonly prDescriptionReview?: typeof fetchGitDeliveryPrDescriptionReview | undefined;
 }
 
 // Shared sequencing for the three description actions below: increments the guard token, marks
@@ -733,6 +746,7 @@ function descriptionPreviewAction(
     projectId: input.projectId,
     ownerAndRepo: input.ownerAndRepo,
     prNumber: input.prNumber,
+    ...(input.snapshotDigest === undefined ? {} : { snapshotDigest: input.snapshotDigest }),
   };
   dispatchDescriptionAction(
     seq,
@@ -762,6 +776,30 @@ function descriptionApproveAction(
     handleError,
     () => client.prDescriptionApprove({ ...target, proposalId }),
     () => ({ approved: true }),
+  );
+}
+
+function descriptionReviewAction(
+  client: RequiredPrDescriptionClient,
+  seq: { current: number },
+  setState: (updater: (s: DescriptionAsyncState) => DescriptionAsyncState) => void,
+  handleError: (err: unknown, token: number) => void,
+  input: GitDeliveryPrDescriptionProposalInput,
+): void {
+  const review = client.prDescriptionReview;
+  if (review === undefined) return;
+  const { proposalId, ...target } = input;
+  dispatchDescriptionAction(
+    seq,
+    setState,
+    handleError,
+    () => review(input),
+    (result) => ({
+      result,
+      target,
+      proposalId: result.outcome === "preview" ? proposalId : null,
+      approved: false,
+    }),
   );
 }
 
@@ -810,6 +848,11 @@ function useGovernedPrDescriptionActions(
     descriptionPreviewAction(client, seq, setState, handleError, input);
   };
 
+  const runReview = (input: GitDeliveryPrDescriptionProposalInput): void => {
+    if (client === undefined) return;
+    descriptionReviewAction(client, seq, setState, handleError, input);
+  };
+
   const runApprove = (): void => {
     if (client === undefined || state.proposalId === null || state.target === null) return;
     descriptionApproveAction(client, seq, setState, handleError, state.target, state.proposalId);
@@ -827,7 +870,7 @@ function useGovernedPrDescriptionActions(
     descriptionApplyAction(client, seq, setState, handleError, state.target, state.proposalId);
   };
 
-  return { ...state, runPreview, runApprove, runApply };
+  return { ...state, runPreview, runReview, runApprove, runApply };
 }
 
 function descriptionStateOf(
@@ -1092,7 +1135,14 @@ function requiredPrDescriptionClient(
   ) {
     return undefined;
   }
-  return { prDescriptionPreview, prDescriptionApprove, prDescriptionApply };
+  return {
+    prDescriptionPreview,
+    prDescriptionApprove,
+    prDescriptionApply,
+    ...(client.prDescriptionReview === undefined
+      ? {}
+      : { prDescriptionReview: client.prDescriptionReview }),
+  };
 }
 
 interface DescriptionPanelFlags {
@@ -1186,16 +1236,39 @@ function usePrDescriptionPreviewHandler(
   }, [async, flags.canPreview, form.language, form.ownerAndRepo, form.prNumber, projectId]);
 }
 
+function useRetainedDescriptionProposal(
+  async: DescriptionAsync,
+  projectId: string,
+  retainedProposal: GitDeliveryPrDescriptionProposalInput | undefined,
+): void {
+  const loadedProposal = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      retainedProposal === undefined ||
+      retainedProposal.projectId !== projectId ||
+      loadedProposal.current === retainedProposal.proposalId
+    ) {
+      return;
+    }
+    loadedProposal.current = retainedProposal.proposalId;
+    async.runReview(retainedProposal);
+  }, [async, projectId, retainedProposal]);
+}
+
 function PrDescriptionPanel({
   client,
   projectId,
   ownerAndRepo,
+  retainedProposal,
 }: {
   readonly client: GovernedPullRequestClient;
   readonly projectId: string;
   readonly ownerAndRepo: string | undefined;
+  readonly retainedProposal: GitDeliveryPrDescriptionProposalInput | undefined;
 }): ReactNode {
-  const [form, setForm] = useState<DescriptionForm>(() => initialDescriptionForm(ownerAndRepo));
+  const [form, setForm] = useState<DescriptionForm>(() =>
+    initialDescriptionForm(ownerAndRepo, retainedProposal),
+  );
   const onChange = useCallback(
     <K extends keyof DescriptionForm>(key: K, value: DescriptionForm[K]): void => {
       setForm((f) => ({ ...f, [key]: value }));
@@ -1205,6 +1278,7 @@ function PrDescriptionPanel({
   const t = useTranslate();
   const descriptionClient = requiredPrDescriptionClient(client);
   const async = useGovernedPrDescriptionActions(descriptionClient);
+  useRetainedDescriptionProposal(async, projectId, retainedProposal);
   const flags = derivePrDescriptionPanelFlags(form, async);
   const onPreview = usePrDescriptionPreviewHandler(form, flags, async, projectId);
 
@@ -1252,6 +1326,7 @@ interface GovernedPullRequestBodyProps {
   readonly headBranchName: string | undefined;
   readonly ownerAndRepo?: string | undefined;
   readonly baseBranchName?: string | undefined;
+  readonly descriptionProposal?: GitDeliveryPrDescriptionProposalInput | undefined;
   readonly titleId: string;
   readonly liveId: string;
 }
@@ -1440,6 +1515,7 @@ function GovernedPullRequestBody({
   headBranchName,
   ownerAndRepo,
   baseBranchName,
+  descriptionProposal,
   titleId,
   liveId,
 }: GovernedPullRequestBodyProps): ReactNode {
@@ -1464,6 +1540,7 @@ function GovernedPullRequestBody({
   );
   const { canPreview, canExecute, visiblePreview, visibleOutcome, visibleError, liveText } =
     derivePrRenderState(form, async, previewedKey, actionKey);
+  const descriptionPanel = { client, projectId, ownerAndRepo, retainedProposal: descriptionProposal };
 
   return (
     <div style={CARD_BODY_STYLE} aria-labelledby={titleId}>
@@ -1479,7 +1556,7 @@ function GovernedPullRequestBody({
         onExecute={onExecute}
       />
       <PrOutcome outcome={visibleOutcome} error={visibleError} />
-      <PrDescriptionPanel client={client} projectId={projectId} ownerAndRepo={ownerAndRepo} />
+      <PrDescriptionPanel {...descriptionPanel} />
     </div>
   );
 }
@@ -1493,6 +1570,8 @@ export interface GovernedPullRequestCardProps {
   readonly ownerAndRepo?: string | undefined;
   /** Optional base branch inferred from upstream/current branch metadata. */
   readonly baseBranchName?: string | undefined;
+  /** Exact server-held Workbench proposal to review without a second model generation. */
+  readonly descriptionProposal?: GitDeliveryPrDescriptionProposalInput | undefined;
   /** DI seam; defaults to the real BFF client. */
   readonly client?: GovernedPullRequestClient;
 }
@@ -1502,6 +1581,7 @@ export function GovernedPullRequestCard({
   headBranchName,
   ownerAndRepo,
   baseBranchName,
+  descriptionProposal,
   client = DEFAULT_CLIENT,
 }: GovernedPullRequestCardProps): ReactNode {
   const titleId = useId();
@@ -1525,6 +1605,7 @@ export function GovernedPullRequestCard({
       headBranchName={headBranchName}
       ownerAndRepo={ownerAndRepo}
       baseBranchName={baseBranchName}
+      descriptionProposal={descriptionProposal}
       titleId={titleId}
       liveId={liveId}
     />

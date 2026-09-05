@@ -7,6 +7,7 @@ import type {
   ToolRef,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import type { CodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
 import { CatalogDispatchFault, requireDispatch } from "./catalogToolRuntimeAuthority.js";
@@ -96,7 +97,7 @@ function identityFields(value: CatalogJsonObject): void {
   createToolRef(ref.canonicalId, ref.contractVersion);
   const profile = object(value.profile);
   requireDispatch(
-    Object.keys(profile).sort().join() === "id,version" &&
+    Object.keys(profile).sort(compareStrings).join() === "id,version" &&
       typeof profile.id === "string" &&
       /^[a-z][a-z0-9.-]{0,63}$/u.test(profile.id) &&
       typeof profile.version === "number" &&

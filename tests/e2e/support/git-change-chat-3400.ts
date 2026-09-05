@@ -66,6 +66,15 @@ export async function createChatForFixture(
   request: APIRequestContext,
   projectPath: string,
 ): Promise<CreatedChat> {
+  const projectResponse = await request.post("/api/projects", {
+    headers: MUTATION_HEADERS,
+    data: { path: projectPath, name: "git-change-chat-3400" },
+  });
+  if (!projectResponse.ok()) {
+    throw new Error(
+      `Project setup failed (${String(projectResponse.status())}): ${await projectResponse.text()}`,
+    );
+  }
   const response = await request.post("/api/chats", {
     headers: MUTATION_HEADERS,
     data: {
@@ -201,6 +210,7 @@ export async function interceptGitChangePullRequestConnect(
           mergeBaseSha: "a".repeat(40),
           snapshotDigest: "c".repeat(64),
           pullRequestNumber: scope.pullRequestNumber,
+          descriptionProposalId: "e2e-proposal-1",
           fileCount: 1,
           totalFiles: 1,
           omittedFiles: 0,
@@ -246,9 +256,31 @@ function prDescriptionApplicationStatusFixture(): Record<string, unknown> {
   };
 }
 
+const CHAT_DESCRIPTION_REQUEST_KEYS = new Set([
+  "schemaVersion",
+  "chatId",
+  "relationshipId",
+  "proposalId",
+]);
+
+function assertChatDescriptionRequest(request: Record<string, unknown>): void {
+  if (
+    request.schemaVersion !== "1" ||
+    typeof request.chatId !== "string" ||
+    request.chatId.length === 0 ||
+    request.relationshipId !== "e2e-pr-scope-1" ||
+    request.proposalId !== "e2e-proposal-1" ||
+    Object.keys(request).some((key) => !CHAT_DESCRIPTION_REQUEST_KEYS.has(key))
+  ) {
+    throw new Error("description request did not preserve the server-held Chat binding");
+  }
+}
+
 export async function interceptPrDescriptionLifecycle(page: Page): Promise<void> {
   const status = prDescriptionApplicationStatusFixture();
-  await page.route("**/api/git-delivery/pr-description/preview", async (route) => {
+  await page.route("**/api/git-change/review-description", async (route) => {
+    const request = route.request().postDataJSON() as Record<string, unknown>;
+    assertChatDescriptionRequest(request);
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -266,7 +298,8 @@ export async function interceptPrDescriptionLifecycle(page: Page): Promise<void>
       }),
     });
   });
-  await page.route("**/api/git-delivery/pr-description/approve", async (route) => {
+  await page.route("**/api/git-change/approve-description", async (route) => {
+    assertChatDescriptionRequest(route.request().postDataJSON() as Record<string, unknown>);
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -278,6 +311,7 @@ export async function interceptPrDescriptionLifecycle(page: Page): Promise<void>
     });
   });
   await page.route("**/api/git-change/apply-description", async (route) => {
+    assertChatDescriptionRequest(route.request().postDataJSON() as Record<string, unknown>);
     await route.fulfill({
       status: 200,
       contentType: "application/json",

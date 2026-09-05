@@ -149,14 +149,16 @@ describe("forward migrations v21-v27, v29, v30 (Owner audit finding b1-20)", () 
       VALUES ('repo-1', 1, 0, '2026-01-01T00:00:00.000Z');
     `);
     const row = db
-      .prepare("SELECT authorized FROM github_issue_reader_authorization WHERE repository_id = 'repo-1'")
+      .prepare(
+        "SELECT authorized FROM github_issue_reader_authorization WHERE repository_id = 'repo-1'",
+      )
       .get() as { authorized: number };
     expect(row.authorized).toBe(1);
-    expect(() =>
+    expect(() => {
       db.exec(
         "INSERT INTO github_issue_reader_authorization (repository_id, authorized, revision, updated_at) VALUES ('repo-2', 2, 0, 'x')",
-      ),
-    ).toThrow(/CHECK constraint failed/);
+      );
+    }).toThrow(/CHECK constraint failed/);
   });
 
   it("v22 adds the seven issue_* columns to coding_runtime_snapshots, existing rows NULL", () => {
@@ -165,7 +167,9 @@ describe("forward migrations v21-v27, v29, v30 (Owner audit finding b1-20)", () 
     insertMinimalCodingRuntimeSnapshot(db, "run-v22");
     runMigrations(db);
     const row = db
-      .prepare("SELECT issue_repository_id, issue_number FROM coding_runtime_snapshots WHERE run_id = 'run-v22'")
+      .prepare(
+        "SELECT issue_repository_id, issue_number FROM coding_runtime_snapshots WHERE run_id = 'run-v22'",
+      )
       .get() as { issue_repository_id: string | null; issue_number: number | null };
     expect(row.issue_repository_id).toBeNull();
     expect(row.issue_number).toBeNull();
@@ -176,16 +180,18 @@ describe("forward migrations v21-v27, v29, v30 (Owner audit finding b1-20)", () 
     applyMigrationsUpTo(db, 22);
     insertMinimalCodingRuntimeSnapshot(db, "run-v23");
     runMigrations(db);
-    expect(() =>
+    expect(() => {
       db.exec(
         "UPDATE coding_runtime_snapshots SET verified_commit_result = 'not-json' WHERE run_id = 'run-v23'",
-      ),
-    ).toThrow(/CHECK constraint failed/);
+      );
+    }).toThrow(/CHECK constraint failed/);
     db.exec(
       `UPDATE coding_runtime_snapshots SET verified_commit_result = '{"ok":true}' WHERE run_id = 'run-v23'`,
     );
     const row = db
-      .prepare("SELECT verified_commit_result FROM coding_runtime_snapshots WHERE run_id = 'run-v23'")
+      .prepare(
+        "SELECT verified_commit_result FROM coding_runtime_snapshots WHERE run_id = 'run-v23'",
+      )
       .get() as { verified_commit_result: string };
     expect(row.verified_commit_result).toBe('{"ok":true}');
   });
@@ -233,7 +239,9 @@ describe("forward migrations v21-v27, v29, v30 (Owner audit finding b1-20)", () 
       ) VALUES ('${DIGEST_64}', '${DIGEST_64}', 1, 0, '{}');
     `);
     const row = db
-      .prepare(`SELECT pr_number FROM coding_runtime_ci_repair_budgets WHERE task_digest = '${DIGEST_64}'`)
+      .prepare(
+        `SELECT pr_number FROM coding_runtime_ci_repair_budgets WHERE task_digest = '${DIGEST_64}'`,
+      )
       .get() as { pr_number: number };
     expect(row.pr_number).toBe(1);
   });
@@ -269,12 +277,14 @@ describe("forward migrations v21-v27, v29, v30 (Owner audit finding b1-20)", () 
         '2026-01-01T00:00:00.000Z'
       );
     `);
-    expect(() =>
+    expect(() => {
       db.exec(
         `UPDATE coding_runtime_description_jobs SET status_json = '{}' WHERE run_id = 'run-v29'`,
-      ),
-    ).toThrow(/CHECK constraint failed/);
-    db.exec(`UPDATE coding_runtime_description_jobs SET phase = 'settled', status_json = '{}' WHERE run_id = 'run-v29'`);
+      );
+    }).toThrow(/CHECK constraint failed/);
+    db.exec(
+      `UPDATE coding_runtime_description_jobs SET phase = 'settled', status_json = '{}' WHERE run_id = 'run-v29'`,
+    );
     const row = db
       .prepare("SELECT phase FROM coding_runtime_description_jobs WHERE run_id = 'run-v29'")
       .get() as { phase: string };
@@ -285,11 +295,11 @@ describe("forward migrations v21-v27, v29, v30 (Owner audit finding b1-20)", () 
     const db = openWithForeignKeys();
     applyMigrationsUpTo(db, 29);
     insertMinimalCodingRuntimeSnapshot(db, "run-v30");
-    expect(() =>
+    expect(() => {
       db.exec(
         "UPDATE coding_runtime_snapshots SET failure_code = 'question-answer-rejected' WHERE run_id = 'run-v30'",
-      ),
-    ).toThrow(/CHECK constraint failed/);
+      );
+    }).toThrow(/CHECK constraint failed/);
 
     runMigrations(db);
 

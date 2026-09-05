@@ -3,9 +3,8 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultChatCapability, PrDescription } from "@oscharko-dev/keiko-model-gateway";
-import type { PrDescriptionArtifact } from "@oscharko-dev/keiko-contracts";
+import type { NormalizedResponse, PrDescriptionArtifact } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
-import type { NormalizedResponse } from "@oscharko-dev/keiko-contracts";
 import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import type {
   GitPrBody,
@@ -20,6 +19,9 @@ import type { ServerLogEvent } from "../observability/server-log.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import { createPrDescriptionApplicationService } from "./prDescriptionService.js";
 import type { PrDescriptionContext, PrDescriptionServiceOptions } from "./prDescriptionTypes.js";
+
+const GIT_EXECUTABLE =
+  process.platform === "win32" ? String.raw`C:\Program Files\Git\cmd\git.exe` : "/usr/bin/git";
 
 export class DescriptionFixture {
   public readonly root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-description-")));
@@ -146,12 +148,11 @@ export class DescriptionFixture {
     return result.artifact;
   }
   private git(args: string[]): string {
-    return execFileSync("git", args, {
+    return execFileSync(GIT_EXECUTABLE, args, {
       cwd: this.root,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       env: {
-        PATH: process.platform === "win32" ? "C:\\Windows\\System32" : "/usr/bin:/bin",
         GIT_CONFIG_NOSYSTEM: "1",
         GIT_CONFIG_GLOBAL: "/dev/null",
       },

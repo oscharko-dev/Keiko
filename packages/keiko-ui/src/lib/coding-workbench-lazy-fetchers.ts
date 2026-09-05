@@ -302,7 +302,9 @@ function isPrDescriptionPreviewWire(value: unknown): value is PrDescriptionPrevi
  * reaches a component (client-side enforcement of the same closed vocabulary prDescriptionRoutes.ts
  * validates server-side).
  */
-function validatePrDescriptionApplicationResultWire(value: unknown): GitRepositoryValidation {
+export function validatePrDescriptionApplicationResultWire(
+  value: unknown,
+): GitRepositoryValidation {
   if (!isRecordValue(value)) {
     return { ok: false, reasons: ["pr-description response must be an object"] };
   }
@@ -326,6 +328,14 @@ function validatePrDescriptionApplicationResultWire(value: unknown): GitReposito
     ok: false,
     reasons: ["pr-description response.outcome must be preview, observed, or blocked"],
   };
+}
+
+export function validateGitChangeApplyDescriptionResponse(value: unknown): GitRepositoryValidation {
+  const validation = validatePrDescriptionApplicationResultWire(value);
+  if (!validation.ok) return validation;
+  return isRecordValue(value) && value.outcome !== "preview"
+    ? { ok: true }
+    : { ok: false, reasons: ["response.outcome must be observed or blocked"] };
 }
 
 function gitDeliveryPrDescriptionTargetBody(
@@ -353,6 +363,25 @@ export async function fetchGitDeliveryPrDescriptionPreview(
         ...gitDeliveryPrDescriptionTargetBody(input),
         language: input.language,
         ...(input.refinement === undefined ? {} : { refinement: input.refinement }),
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    validatePrDescriptionApplicationResultWire,
+  );
+}
+
+export async function fetchGitDeliveryPrDescriptionReview(
+  fetchJson: ApiFetchJson,
+  input: GitDeliveryPrDescriptionProposalInput,
+  signal?: AbortSignal,
+): Promise<PrDescriptionApplicationResultWire> {
+  return fetchJson<PrDescriptionApplicationResultWire>(
+    "/api/git-delivery/pr-description/review",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        ...gitDeliveryPrDescriptionTargetBody(input),
+        proposalId: input.proposalId,
       }),
       ...(signal === undefined ? {} : { signal }),
     },

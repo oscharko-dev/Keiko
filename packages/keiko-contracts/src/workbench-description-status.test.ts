@@ -75,6 +75,20 @@ describe("isWorkbenchDescriptionStatus", () => {
     }
   });
 
+  it("accepts only a body-free server-held proposal on an artifact-bearing current status", () => {
+    expect(isWorkbenchDescriptionStatus(valid({ proposalId: "pr-description-1" }))).toBe(true);
+    expect(isWorkbenchDescriptionStatus(valid({ proposalId: "contains/path" }))).toBe(false);
+    expect(
+      isWorkbenchDescriptionStatus(
+        valid({
+          proposalId: "pr-description-1",
+          reason: "stale-snapshot",
+          state: "stale",
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it.each([
     ["not an object", "hostile"],
     ["null", null],

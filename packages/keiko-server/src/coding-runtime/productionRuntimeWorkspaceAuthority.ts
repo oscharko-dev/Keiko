@@ -27,7 +27,6 @@ import {
   codingRuntimeConnectorScopesForMode,
   codingRuntimeFactDigest,
   codingRuntimeNetworkPolicyForMode,
-  DELIVERY_CONNECTOR_SCOPES,
   type CodingRuntimeTrustedContext,
 } from "./runtimeAuthorityService.js";
 import { projectRuntimeAuthorityValue } from "./runtimeAuthorityProjection.js";
@@ -65,7 +64,7 @@ export interface ProductionWorkspaceAuthorityInput {
 // outside a minted context (epic #3384 correction 7: coding-context/codingRuntimeIssueIntake.ts's
 // issue-context attachment) reuses this single rule rather than restating which scopes a mode
 // grants.
-export { DELIVERY_CONNECTOR_SCOPES };
+export { DELIVERY_CONNECTOR_SCOPES } from "./runtimeAuthorityService.js";
 
 export interface ProductionGitDeliveryModeGrants {
   readonly actionClasses: readonly CodingWorkbenchActionClass[];

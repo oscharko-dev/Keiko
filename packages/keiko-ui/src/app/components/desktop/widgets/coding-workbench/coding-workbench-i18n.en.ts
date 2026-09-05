@@ -621,6 +621,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The description provider failed while generating this draft.",
   "codingWorkbench.descriptionStatus.head": "Head commit",
   "codingWorkbench.descriptionStatus.generation": "Generation",
+  "codingWorkbench.descriptionStatus.review": "Review exact draft",
   "codingWorkbench.commitResult.title": "Commit result",
   "codingWorkbench.commitResult.head": "Created commit",
   "codingWorkbench.commitResult.findings": "Git checks",

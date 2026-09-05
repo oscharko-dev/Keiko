@@ -261,12 +261,13 @@ export class CatalogInvocation {
     this.stopWatching();
     const initialTerminal = result ?? this.envelope(status, reason);
     let terminal = initialTerminal;
+    let failure = error;
     try {
       this.account();
     } catch (error_) {
       this.accountingUncertain = true;
       terminal = this.envelope("failed", "budget-port-failed");
-      error = error_;
+      failure = error_;
     }
     this.continuation?.discardUnless(terminal.page?.cursor ?? null);
     const receipt = this.receipt(terminal.status);
@@ -283,9 +284,9 @@ export class CatalogInvocation {
     // on a promise that never settles (b3-10). The failure itself still gets a body-free
     // diagnostic instead of vanishing as an unhandled rejection.
     try {
-      this.emitSettlement(terminal, receipt, error);
-    } catch (emitFailure) {
-      this.settlementEmitFailure(emitFailure);
+      this.emitSettlement(terminal, receipt, failure);
+    } catch (error_) {
+      this.settlementEmitFailure(error_);
     } finally {
       this.resolve(outcome);
     }

@@ -190,10 +190,7 @@ import {
   createRelationshipStorePort,
   type RelationshipHandlerDeps,
 } from "./relationship-handlers.js";
-import {
-  createNodeGitPullRequestAdapter,
-  createNodeGitWorktreeAdapter,
-} from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 // Deps-level termination-evidence port for every managed-worktree git lane composed here
 // (PR #3354 review, comment 3887021650): a worktree operation that times out or is aborted leaves
 // its verified Windows tree-kill disposition in the activity log.
@@ -328,6 +325,7 @@ import {
 } from "./coding-runtime/productionCodingRuntimeHost.js";
 import {
   createProductionWorkbenchDescriptionDispatcher,
+  type ProductionWorkbenchArtifactRetention,
   type ProductionWorkbenchDescriptionDispatcher,
 } from "./coding-runtime/productionCodingRuntimePorts.js";
 import type {
@@ -341,9 +339,14 @@ import {
 } from "./gitDelivery/prDescriptionReceiptStore.js";
 import type { PrDescriptionReceiptStatusHooks } from "./gitDelivery/prDescriptionReceiptTypes.js";
 import { createProductionPrDescriptionGeneration } from "./gitDelivery/prDescriptionGeneration.js";
-import { createPrDescriptionApplicationService } from "./gitDelivery/prDescriptionService.js";
 import type { PrDescriptionApplicationService } from "./gitDelivery/prDescriptionTypes.js";
-import type { GitDeliveryMutationDeps } from "./gitDelivery/execution.js";
+import type { PrDescriptionContext } from "./gitDelivery/prDescriptionTypes.js";
+import { resolveProjectWorkspace } from "./gitDelivery/execution.js";
+import {
+  resolvePrDescriptionApplicationServiceForContext,
+  type BaseFields as PrDescriptionBaseFields,
+} from "./gitDelivery/prDescriptionRoutes.js";
+import { descriptionAuthorityEnvelopeDigest } from "./gitDelivery/runBoundAuthority.js";
 import { createProductionVerifiedCommitDependencies } from "./coding-runtime/productionVerifiedCommitDependencies.js";
 import { createProductionDraftDeliveryDependencies } from "./coding-runtime/productionDraftDeliveryDependencies.js";
 import {
@@ -3893,6 +3896,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     prDescriptionRecordStatus: prDescriptionReceiptStatus.recordStatus,
     prDescriptionReadStatus: prDescriptionReceiptStatus.readStatus,
     ...(prDescriptionGeneration === undefined ? {} : { prDescriptionGeneration }),
+    voiceRecapContentAttestations: createVoiceRecapContentAttestationStore(),
     dispose: createUiHandlerDispose(
       args,
       services,
@@ -3900,48 +3904,14 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       codingAppSessionDenialWindows,
     ),
   };
-  // Final-audit F7: composed from the exact same generation + receipt-store pieces already set on
-  // `deps` above (one composed value, two consumers — prDescriptionRoutes.ts's own per-request
-  // composition receives the same `deps` fields; this is the Chat-facing consumer #3400 needs).
-  // Absent under the exact same closed condition `prDescriptionGeneration` is absent under.
-  const prDescriptionApplicationService = productionPrDescriptionApplicationService(
-    deps,
+  attachWorkbenchDescriptionSupport(
+    args,
+    services.codingRuntimeControlPlane,
     services.gitChangeSnapshotService,
     prDescriptionGeneration,
-    prDescriptionReceiptStatus,
+    deps,
   );
-  return {
-    ...deps,
-    ...(prDescriptionApplicationService === undefined ? {} : { prDescriptionApplicationService }),
-  };
-}
-
-// Final-audit F7 (#3399/#3400 production-wiring): builds the Chat-facing `PrDescriptionApplicationService`
-// from the SAME already-composed pieces `prDescriptionRoutes.ts` receives via `deps` (generation,
-// receipt-store hooks, snapshots, mutation deps) — never a second, independently-wired copy.
-// `context()` fails closed to `undefined`: Chat's only call into this instance is `executeApproved`
-// (applyGitChangeDescription in chat-handlers.ts), which never invokes `context()` unless a
-// proposal is already held from THIS instance's own `preview()` — Chat never calls `preview()`
-// (Frozen Product Decision 6: apply-only) — so there is no single global "current" (repository, PR)
-// this composition root could fabricate one from, and failing closed is the correct default.
-function productionPrDescriptionApplicationService(
-  deps: GitDeliveryMutationDeps,
-  snapshots: GitChangeSnapshotService,
-  generation: Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot"> | undefined,
-  receiptStatus: PrDescriptionReceiptStatusHooks,
-): PrDescriptionApplicationService | undefined {
-  if (generation === undefined) return undefined;
-  return createPrDescriptionApplicationService({
-    context: () => undefined,
-    snapshots,
-    generation,
-    adapter: (context) =>
-      createNodeGitPullRequestAdapter({ workspace: context.workspace, processEnv: process.env }),
-    mutationDeps: deps,
-    execution: {},
-    recordStatus: receiptStatus.recordStatus,
-    readStatus: receiptStatus.readStatus,
-  });
+  return deps;
 }
 
 function createDapRuntimeReference(options: BuildHandlerDepsOptions): DapRuntimeReference {
@@ -3979,7 +3949,6 @@ function assembleUiHandlerRuntimeServices(
   const gitChangeSnapshotService = createGitChangeSnapshotService({
     logSink: processServerLogSink(),
   });
-  attachWorkbenchDescriptionSupport(args, codingRuntimeControlPlane, gitChangeSnapshotService);
   const codingAppSessionChannel = buildAssemblyCodingAppSessionChannel(
     args,
     codingRuntimeControlPlane,
@@ -4079,6 +4048,8 @@ function attachWorkbenchDescriptionSupport(
   args: UiHandlerDepsAssemblyArgs,
   codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
   gitChangeSnapshotService: GitChangeSnapshotService,
+  generation: Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot"> | undefined,
+  deps: UiHandlerDeps,
 ): void {
   const jobs = args.bundle.codingRuntimeDescriptionJobStore;
   if (codingRuntimeControlPlane === undefined || jobs === undefined) return;
@@ -4097,7 +4068,7 @@ function attachWorkbenchDescriptionSupport(
         }
       },
       snapshots: gitChangeSnapshotService,
-      generation: createProductionPrDescriptionGeneration(args.runtimeConfig),
+      generation,
       descriptionAuthority: codingRuntimeControlPlane.gitDeliveryDescriptionAuthority,
       // #3401 (epic #3384 closeout, description-composition-closeout): the mint capability
       // threaded through `productionCodingRuntimeResolver.ts` ->
@@ -4106,9 +4077,116 @@ function attachWorkbenchDescriptionSupport(
       ...(codingRuntimeControlPlane.mintDescriptionAuthority === undefined
         ? {}
         : { mintDescriptionAuthority: codingRuntimeControlPlane.mintDescriptionAuthority }),
+      artifactRetention: createWorkbenchArtifactRetention(
+        deps,
+        codingRuntimeControlPlane,
+        (): string | undefined => {
+          try {
+            return args.bundle.workspaceLifecycle?.getActive()?.binding.activeRoot;
+          } catch (error) {
+            if (isIdentityProofFailure(error)) return undefined;
+            throw error;
+          }
+        },
+      ),
       now: (): number => Date.now(),
     });
   codingRuntimeControlPlane.orchestrator.attachDescriptionSupport({ jobs, dispatcher });
+}
+
+interface WorkbenchRetentionBinding {
+  readonly request: PrDescriptionBaseFields;
+  readonly authorityScope: GitDeliveryDescriptionAuthorityScope;
+}
+
+function workbenchRetentionBinding(
+  scope: Parameters<ProductionWorkbenchArtifactRetention["hasProposal"]>[0],
+  snapshotDigest: string,
+): WorkbenchRetentionBinding | undefined {
+  const target = scope.applicationTarget;
+  if (target === undefined) return undefined;
+  return {
+    request: { ...target, snapshotDigest },
+    authorityScope: {
+      remoteDigest: scope.remoteDigest,
+      pr: { ownerAndRepo: target.ownerAndRepo, prNumber: target.prNumber },
+      snapshotDigest,
+    },
+  };
+}
+
+function workbenchDescriptionContextProvider(
+  deps: UiHandlerDeps,
+  binding: WorkbenchRetentionBinding,
+  runId: string,
+  activeWorkspaceRoot: () => string | undefined,
+  signal?: AbortSignal,
+): () => PrDescriptionContext | undefined {
+  const accessScope = {};
+  const current = (): boolean =>
+    signal?.aborted !== true &&
+    activeWorkspaceRoot() === binding.request.projectId &&
+    deps.gitDeliveryDescriptionAuthority?.current(
+      binding.authorityScope,
+      new Date().toISOString(),
+    ) !== undefined;
+  return (): PrDescriptionContext | undefined => {
+    const workspace = resolveProjectWorkspace(deps, binding.request.projectId);
+    if (workspace === undefined || !current()) return undefined;
+    return {
+      workspace,
+      repository: binding.request.ownerAndRepo,
+      prNumber: binding.request.prNumber,
+      accessScope,
+      authorityDigest: descriptionAuthorityEnvelopeDigest(binding.authorityScope),
+      correlationId: runId,
+      ...(signal === undefined ? {} : { signal }),
+      stillAuthorized: current,
+    };
+  };
+}
+
+function createWorkbenchArtifactRetention(
+  deps: UiHandlerDeps,
+  controlPlane: NonNullable<ReturnType<typeof createCodingRuntimeControlPlane>>,
+  activeWorkspaceRoot: () => string | undefined,
+): ProductionWorkbenchArtifactRetention {
+  const resolve = (
+    scope: Parameters<ProductionWorkbenchArtifactRetention["hasProposal"]>[0],
+    snapshotDigest: string,
+    signal?: AbortSignal,
+  ): PrDescriptionApplicationService | undefined => {
+    const binding = workbenchRetentionBinding(scope, snapshotDigest);
+    if (binding === undefined) return undefined;
+    const context = workbenchDescriptionContextProvider(
+      deps,
+      binding,
+      scope.runId,
+      activeWorkspaceRoot,
+      signal,
+    );
+    const resolution = resolvePrDescriptionApplicationServiceForContext(
+      deps,
+      binding.request,
+      context,
+    );
+    return resolution.ok ? resolution.service : undefined;
+  };
+  return {
+    async retain(scope, artifact, signal): Promise<string | undefined> {
+      const binding = workbenchRetentionBinding(scope, artifact.binding.snapshotDigest);
+      if (binding === undefined || signal.aborted) return undefined;
+      controlPlane.mintDescriptionAuthority?.(binding.authorityScope, new Date().toISOString());
+      const result = await resolve(scope, artifact.binding.snapshotDigest, signal)?.previewArtifact(
+        artifact,
+      );
+      return result?.outcome === "preview" ? result.preview.proposalId : undefined;
+    },
+    hasProposal(scope, proposalId, snapshotDigest): boolean {
+      const review = resolve(scope, snapshotDigest)?.review(proposalId);
+      return review?.status.binding.snapshotDigest === snapshotDigest;
+    },
+  };
 }
 
 type BaseUiHandlerDeps = ReturnType<typeof gatewayConfigFields> &
@@ -4798,10 +4876,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     bundle,
     contextProfileForModel,
   });
-  return {
-    ...deps,
-    voiceRecapContentAttestations: createVoiceRecapContentAttestationStore(),
-  };
+  return deps;
 }
 
 /**

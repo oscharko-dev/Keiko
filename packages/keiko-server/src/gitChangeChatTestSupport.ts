@@ -13,13 +13,14 @@ import type { ChatGitChangeScope } from "./store/index.js";
 import { codingWorkbenchRemoteDigest } from "./coding-context/githubIssueResolution.js";
 
 const FIXTURE_NOW = Date.parse("2026-09-05T12:00:00.000Z");
+const GIT_EXECUTABLE =
+  process.platform === "win32" ? String.raw`C:\Program Files\Git\cmd\git.exe` : "/usr/bin/git";
 
 function git(root: string, args: readonly string[]): string {
-  return execFileSync("git", args, {
+  return execFileSync(GIT_EXECUTABLE, args, {
     cwd: root,
     encoding: "utf8",
     env: {
-      PATH: process.platform === "win32" ? "C:\\Windows\\System32" : "/usr/bin:/bin",
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: "/dev/null",
     },

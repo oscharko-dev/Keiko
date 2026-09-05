@@ -29,6 +29,8 @@ import type { DraftDeliveryRunContext, DraftDeliveryServiceOptions } from "./dra
 
 const DIGEST = "a".repeat(64);
 const REPOSITORY = "owner/repository";
+const GIT_EXECUTABLE =
+  process.platform === "win32" ? String.raw`C:\Program Files\Git\cmd\git.exe` : "/usr/bin/git";
 export class DraftDeliveryFixture {
   public readonly root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-draft-service-")));
   public readonly remote = realpathSync(mkdtempSync(join(tmpdir(), "keiko-draft-remote-")));
@@ -68,12 +70,11 @@ export class DraftDeliveryFixture {
     this.service = new DraftDeliveryController(this.options);
   }
   public git(args: readonly string[], cwd = this.root): string {
-    return execFileSync("git", [...args], {
+    return execFileSync(GIT_EXECUTABLE, [...args], {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       env: {
-        PATH: process.platform === "win32" ? "C:\\Windows\\System32" : "/usr/bin:/bin",
         GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
         GIT_CONFIG_NOSYSTEM: "1",
       },

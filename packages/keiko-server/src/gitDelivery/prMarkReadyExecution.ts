@@ -47,6 +47,11 @@ import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerLogSink } from "../observability/server-log.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
 import { gitDeliveryTerminationHandler, logGitDeliveryNoSpawnRefusal } from "./execution.js";
@@ -290,13 +295,18 @@ function ciReaderFor(
 // a head/base mismatch does — the digest is never merely trusted from the client. Reuses the same
 // read-only `GitCiProviderReader` port the CI observation service and the journey read already use;
 // no second formula, no new provider read shape.
+interface LiveReadinessCheck {
+  readonly drifted: boolean;
+  readonly readFailure?: { readonly error: unknown };
+}
+
 async function liveReadinessDrifted(
   workspace: WorkspaceInfo,
   options: GitDeliveryPrMarkReadyRouteOptions,
   correlationId: string,
   command: PrMarkReadyCommand,
   stillAuthorized: () => boolean,
-): Promise<boolean> {
+): Promise<LiveReadinessCheck> {
   const reader = ciReaderFor(workspace, options, correlationId, stillAuthorized);
   let facts: GitCiFactsResult;
   try {
@@ -306,16 +316,17 @@ async function liveReadinessDrifted(
       baseBranchName: command.baseRef,
       headSha: command.headSha,
     });
-  } catch {
-    return true;
+  } catch (error) {
+    return { drifted: true, readFailure: { error } };
   }
-  if (facts.status !== "observed") return true;
+  if (facts.status !== "observed") return { drifted: true };
   const assessment = assessGitCiFacts(facts);
-  return (
-    !assessment.complete ||
-    assessment.requirementsDigest !== command.readinessDigest ||
-    assessment.pullRequest.conflict === "conflicting"
-  );
+  return {
+    drifted:
+      !assessment.complete ||
+      assessment.requirementsDigest !== command.readinessDigest ||
+      assessment.pullRequest.conflict === "conflicting",
+  };
 }
 
 // ─── Logging ────────────────────────────────────────────────────────────────────────────────────
@@ -434,6 +445,8 @@ interface GovernedMarkReadyDispatch {
   readonly options: GitDeliveryPrMarkReadyRouteOptions;
   readonly correlationId: string;
   readonly continuityGuard: () => boolean;
+  readonly diagnostics: ServerDiagnosticSink | undefined;
+  readonly redact: (value: string) => string;
 }
 
 // #3389 (AC3): the continuity guard runs immediately before the actual `gh` dispatch, mirroring the
@@ -451,7 +464,27 @@ async function dispatchGovernedMarkReady(
     );
     return { schemaVersion: "1", outcome: "aborted", durationMs: 0 };
   }
-  if (await liveReadinessDrifted(workspace, options, correlationId, command, continuityGuard)) {
+  const readiness = await liveReadinessDrifted(
+    workspace,
+    options,
+    correlationId,
+    command,
+    continuityGuard,
+  );
+  if (readiness.readFailure !== undefined) {
+    emitServerDiagnostic(
+      input.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "POST /api/git-delivery/pr/mark-ready/execute",
+        source: "pr-mark-ready-ci-read",
+        error: readiness.readFailure.error,
+        summary: "The bounded status read was unavailable.",
+        redact: input.redact,
+      }),
+    );
+  }
+  if (readiness.drifted) {
     return {
       schemaVersion: "1",
       outcome: "failed",
@@ -520,6 +553,8 @@ async function dispatchOrBlock(
       options,
       correlationId,
       continuityGuard,
+      diagnostics: deps.diagnostics,
+      redact: (value): string => String(deps.redactor(value)),
     });
     if (denialCapture.result !== undefined) return denialCapture.result;
     logMarkReadyOutcome(options, correlationId, command, result);

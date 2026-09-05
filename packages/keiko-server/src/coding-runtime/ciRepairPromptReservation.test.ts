@@ -4,7 +4,10 @@ import { reservePromptWithCiRepair } from "./ciRepairPromptReservation.js";
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
 
-type Authority = Pick<CodingRuntimeAuthorityService, "reservePromptTokens" | "authenticateCapability">;
+type Authority = Pick<
+  CodingRuntimeAuthorityService,
+  "reservePromptTokens" | "authenticateCapability"
+>;
 
 function fakeBudget(chargePrompt: (promptTokens: number) => boolean): CiRepairExecutionBudget {
   return {
@@ -33,9 +36,9 @@ describe("reservePromptWithCiRepair", () => {
                 runId: "run-1",
                 workspaceRootDigest: "a".repeat(64),
                 envelopeDigest: "b".repeat(64),
-                adapterKind: "keiko-sidecar",
+                adapterKind: "model-gateway-sidecar",
                 audience: "model-gateway",
-                expiresAtMs: Date.now() + 60_000,
+                expiresAtMs: Date.parse("2026-09-05T12:00:00.000Z"),
               },
             }
           : { ok: false, reason: "invalid" },
@@ -63,9 +66,9 @@ describe("reservePromptWithCiRepair", () => {
           runId: "run-2",
           workspaceRootDigest: "a".repeat(64),
           envelopeDigest: "b".repeat(64),
-          adapterKind: "keiko-sidecar",
+          adapterKind: "model-gateway-sidecar",
           audience: "model-gateway",
-          expiresAtMs: Date.now() + 60_000,
+          expiresAtMs: Date.parse("2026-09-05T12:00:00.000Z"),
         },
       }),
       reservePromptTokens: (_capability, promptTokens) => {
@@ -93,9 +96,9 @@ describe("reservePromptWithCiRepair", () => {
           runId: "run-3",
           workspaceRootDigest: "a".repeat(64),
           envelopeDigest: "b".repeat(64),
-          adapterKind: "keiko-sidecar",
+          adapterKind: "model-gateway-sidecar",
           audience: "model-gateway",
-          expiresAtMs: Date.now() + 60_000,
+          expiresAtMs: Date.parse("2026-09-05T12:00:00.000Z"),
         },
       }),
       reservePromptTokens: () => ({ ok: true, runId: "run-3" }),

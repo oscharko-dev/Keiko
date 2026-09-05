@@ -103,6 +103,43 @@ function descriptionComparisonRefs(
   };
 }
 
+function descriptionApplicationTarget(
+  snapshot: CodingRuntimeSnapshot,
+  workspace: ActiveWorkspaceView | undefined,
+  headSha: string,
+): WorkbenchDescriptionScope["applicationTarget"] {
+  const delivery = snapshot.draftDelivery;
+  const pullRequest = delivery?.pullRequest;
+  const repository = delivery?.binding.repository;
+  if (
+    workspace === undefined ||
+    pullRequest?.state !== "open" ||
+    repository === undefined ||
+    pullRequest.headSha !== headSha ||
+    pullRequest.repository.toLowerCase() !== repository.toLowerCase()
+  ) {
+    return undefined;
+  }
+  return {
+    projectId: workspace.binding.activeRoot,
+    ownerAndRepo: pullRequest.repository,
+    prNumber: pullRequest.number,
+  };
+}
+
+function sameDescriptionStatusScope(
+  status: WorkbenchDescriptionStatus,
+  scope: WorkbenchDescriptionScope,
+): boolean {
+  return (
+    status.runId === scope.runId &&
+    status.remoteDigest === scope.remoteDigest &&
+    status.baseSha === scope.baseSha &&
+    status.headSha === scope.headSha &&
+    canonicalise(status.generationBinding) === canonicalise(scope.generationBinding)
+  );
+}
+
 // #3401: the outcome a wired generator reports for one dispatched scope. `snapshotDigest` and
 // `draftDigest` are present only for the reasons that produce them (see
 // `WORKBENCH_DESCRIPTION_REASON_STATES`); the caller never invents a digest a reason does not use.
@@ -111,6 +148,7 @@ export interface WorkbenchDescriptionDispatchOutcome {
   readonly snapshotDigest?: string;
   readonly draftDigest?: string;
   readonly artifactOutcome?: "complete" | "partial" | "fallback" | "failed";
+  readonly proposalId?: string;
 }
 
 /**
@@ -125,12 +163,31 @@ export interface WorkbenchDescriptionDispatcher {
     scope: WorkbenchDescriptionScope,
     signal: AbortSignal,
   ) => Promise<WorkbenchDescriptionDispatchOutcome>;
+  readonly hasProposal?: (
+    scope: WorkbenchDescriptionScope,
+    proposalId: string,
+    snapshotDigest: string,
+  ) => boolean;
 }
 
 /** Optional support the terminal-run hook consumes; absent means the feature is not yet wired. */
 export interface CodingRuntimeDescriptionSupport {
   readonly jobs: CodingRuntimeDescriptionJobStore;
   readonly dispatcher?: WorkbenchDescriptionDispatcher;
+}
+
+function isRetainedDescriptionProposal(
+  support: CodingRuntimeDescriptionSupport | undefined,
+  scope: WorkbenchDescriptionScope | undefined,
+  status: WorkbenchDescriptionStatus,
+  proposalId: string,
+  snapshotDigest: string,
+): boolean {
+  const hasProposal = support?.dispatcher?.hasProposal;
+  if (hasProposal === undefined || scope === undefined) return false;
+  return (
+    sameDescriptionStatusScope(status, scope) && hasProposal(scope, proposalId, snapshotDigest)
+  );
 }
 
 function runtimePauseFailureCode(
@@ -1546,9 +1603,45 @@ export class CodingRuntimeOrchestrator {
     snapshot: CodingRuntimeSnapshot | undefined,
   ): PublicSnapshot {
     const base = this.projection.publicSnapshot(snapshot);
-    const status =
+    const persisted =
       snapshot === undefined ? undefined : this.description?.jobs.current(snapshot.runId);
+    const status =
+      snapshot === undefined || persisted === undefined
+        ? persisted
+        : this.reconcileDescriptionProposal(snapshot, persisted);
     return status === undefined ? base : { ...base, descriptionStatus: status };
+  }
+
+  private reconcileDescriptionProposal(
+    snapshot: CodingRuntimeSnapshot,
+    status: WorkbenchDescriptionStatus,
+  ): WorkbenchDescriptionStatus {
+    if (status.proposalId === undefined || status.snapshotDigest === null) return status;
+    const support = this.description;
+    const scope = this.descriptionScope(snapshot);
+    if (
+      isRetainedDescriptionProposal(
+        support,
+        scope,
+        status,
+        status.proposalId,
+        status.snapshotDigest,
+      )
+    ) {
+      return status;
+    }
+    const stale = support?.jobs.markProposalLost(
+      snapshot.runId,
+      status.proposalId,
+      this.now().toISOString(),
+    );
+    if (stale?.reason === "stale-snapshot" && stale.proposalId === undefined) {
+      this.logDescriptionEvent(scope ?? { runId: snapshot.runId }, "stale", {
+        reason: "stale-snapshot",
+        proposalRetained: false,
+      });
+    }
+    return stale ?? status;
   }
 
   /**
@@ -1592,21 +1685,9 @@ export class CodingRuntimeOrchestrator {
   // or a still-in-flight attempt for the same head coalesces, and a new head supersedes.
   private dispatchDescriptionIfEligible(next: CodingRuntimeSnapshot): void {
     const support = this.description;
-    if (support === undefined || next.state !== "succeeded") return;
-    const commit = this.deps.snapshots.getLastSuccessfulVerifiedCommit?.(next.runId);
-    if (commit?.headSha === undefined) return;
-    const workspace = this.activeWorkspaceOrUndefined();
-    const scope: WorkbenchDescriptionScope = {
-      runId: next.runId,
-      remoteDigest: commit.repositoryDigest,
-      baseSha: commit.baseSha,
-      headSha: commit.headSha,
-      ...descriptionComparisonRefs(next, workspace, {
-        baseRef: commit.baseSha,
-        headRef: commit.headSha,
-      }),
-      generationBinding: descriptionGenerationBinding(next),
-    };
+    if (support === undefined) return;
+    const scope = this.descriptionScope(next);
+    if (scope === undefined) return;
     const nowIso = this.now().toISOString();
     const decision = support.jobs.beginDispatch(scope, nowIso);
     if (decision.kind === "coalesced") {
@@ -1628,6 +1709,26 @@ export class CodingRuntimeOrchestrator {
       decision.revision,
       nowIso,
     );
+  }
+
+  private descriptionScope(next: CodingRuntimeSnapshot): WorkbenchDescriptionScope | undefined {
+    if (next.state !== "succeeded") return undefined;
+    const commit = this.deps.snapshots.getLastSuccessfulVerifiedCommit?.(next.runId);
+    if (commit?.headSha === undefined) return undefined;
+    const workspace = this.activeWorkspaceOrUndefined();
+    const applicationTarget = descriptionApplicationTarget(next, workspace, commit.headSha);
+    return {
+      runId: next.runId,
+      remoteDigest: commit.repositoryDigest,
+      baseSha: commit.baseSha,
+      headSha: commit.headSha,
+      ...descriptionComparisonRefs(next, workspace, {
+        baseRef: commit.baseSha,
+        headRef: commit.headSha,
+      }),
+      generationBinding: descriptionGenerationBinding(next),
+      ...(applicationTarget === undefined ? {} : { applicationTarget }),
+    };
   }
 
   private runDescriptionDispatch(
@@ -1710,6 +1811,9 @@ export class CodingRuntimeOrchestrator {
       snapshotDigest: outcome.snapshotDigest ?? null,
       draftDigest: outcome.draftDigest ?? null,
       artifactOutcome: outcome.artifactOutcome ?? null,
+      ...(reason === outcome.reason && outcome.proposalId !== undefined
+        ? { proposalId: outcome.proposalId }
+        : {}),
       observedAt,
     };
     const accepted = support.jobs.settle(scope, generationVersion, revision, status, observedAt);

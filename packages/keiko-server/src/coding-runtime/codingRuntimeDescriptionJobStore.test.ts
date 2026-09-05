@@ -41,6 +41,7 @@ function scope(overrides: Partial<WorkbenchDescriptionScope> = {}): WorkbenchDes
 function generatedStatus(
   target: WorkbenchDescriptionScope,
   generationVersion: number,
+  proposalId?: string,
 ): WorkbenchDescriptionStatus {
   return {
     schemaVersion: "1",
@@ -57,6 +58,7 @@ function generatedStatus(
     snapshotDigest: "b".repeat(64),
     draftDigest: "c".repeat(64),
     artifactOutcome: "complete",
+    ...(proposalId === undefined ? {} : { proposalId }),
     observedAt: NOW,
   };
 }
@@ -131,6 +133,24 @@ describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supers
     expect(store.settle(scope(), first.generationVersion, first.revision, status, NOW)).toBe(true);
     const second = store.beginDispatch(scope(), LATER);
     expect(second).toEqual({ kind: "coalesced", status });
+  });
+
+  it("durably marks a generated status stale when its process-local proposal is lost", () => {
+    const store = openStore();
+    const attempt = store.beginDispatch(scope(), NOW);
+    if (attempt.kind !== "dispatch") throw new Error("expected a dispatch decision");
+    const status = generatedStatus(scope(), attempt.generationVersion, "pr-description-1");
+    store.settle(scope(), attempt.generationVersion, attempt.revision, status, NOW);
+
+    expect(store.markProposalLost(scope().runId, "pr-description-1", LATER)).toMatchObject({
+      state: "stale",
+      reason: "stale-snapshot",
+      observedAt: LATER,
+    });
+    expect(store.current(scope().runId)).not.toHaveProperty("proposalId");
+    expect(store.markProposalLost(scope().runId, "different-proposal", LATER)).toEqual(
+      store.current(scope().runId),
+    );
   });
 
   it("supersedes the prior attempt when a new head arrives and bumps the generation version", () => {

@@ -3909,6 +3909,14 @@ export async function fetchGitDeliveryPrDescriptionPreview(
   return adapter.fetchGitDeliveryPrDescriptionPreview(fetchJson, input, signal);
 }
 
+export async function fetchGitDeliveryPrDescriptionReview(
+  input: GitDeliveryPrDescriptionProposalInput,
+  signal?: AbortSignal,
+): Promise<PrDescriptionApplicationResultWire> {
+  const adapter = await import("./coding-workbench-lazy-fetchers");
+  return adapter.fetchGitDeliveryPrDescriptionReview(fetchJson, input, signal);
+}
+
 export async function fetchGitDeliveryPrDescriptionApprove(
   input: GitDeliveryPrDescriptionProposalInput,
   signal?: AbortSignal,
@@ -3960,30 +3968,20 @@ export async function approveGitChangeChatDescription(
   });
 }
 
-/**
- * Rejects any wire body the shared contract does not sanction, the SAME closed vocabulary
- * `coding-workbench-lazy-fetchers.ts`'s `validatePrDescriptionApplicationResultWire` enforces for
- * the sibling preview/approve/apply/status fetchers above -- never a second, looser vocabulary.
- * The contract module is imported lazily here too (not `preview`, which this action never
- * produces), so it costs nothing on the desktop shell's first-load chunk until a user applies.
- */
-async function validateGitChangeApplyDescriptionResponse(
-  value: unknown,
-): Promise<GitRepositoryValidation> {
-  if (!isRecordValue(value)) return { ok: false, reasons: ["response must be an object"] };
-  const contract = await import("@oscharko-dev/keiko-contracts/runtime/pr-description-application");
-  if (value.outcome === "observed") {
-    return contract.isPrDescriptionApplicationStatus(value.status)
-      ? { ok: true }
-      : { ok: false, reasons: ["observed status failed contract validation"] };
-  }
-  if (value.outcome === "blocked") {
-    return typeof value.reason === "string" &&
-      Object.hasOwn(contract.PR_DESCRIPTION_APPLICATION_REASON_STATES, value.reason)
-      ? { ok: true }
-      : { ok: false, reasons: ["blocked reason is not in the closed vocabulary"] };
-  }
-  return { ok: false, reasons: ["response.outcome must be observed or blocked"] };
+export async function reviewGitChangeChatDescription(
+  input: ApplyGitChangeChatDescriptionInput,
+  signal?: AbortSignal,
+): Promise<PrDescriptionApplicationResultWire> {
+  const adapter = await import("./coding-workbench-lazy-fetchers");
+  return fetchJson<PrDescriptionApplicationResultWire>(
+    "/api/git-change/review-description",
+    {
+      method: "POST",
+      body: JSON.stringify({ schemaVersion: "1", ...input }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    adapter.validatePrDescriptionApplicationResultWire,
+  );
 }
 
 /**
@@ -3994,19 +3992,14 @@ export async function applyGitChangeChatDescription(
   input: ApplyGitChangeChatDescriptionInput,
   signal?: AbortSignal,
 ): Promise<PrDescriptionApplicationResultWire> {
-  const value = await fetchJson<unknown>("/api/git-change/apply-description", {
-    method: "POST",
-    body: JSON.stringify({ schemaVersion: "1", ...input }),
-    ...(signal === undefined ? {} : { signal }),
-  });
-  const validation = await validateGitChangeApplyDescriptionResponse(value);
-  if (!validation.ok) {
-    const reason = validation.reasons[0] ?? "unknown validation failure";
-    throw new ApiError(
-      "CONTRACT_VALIDATION_FAILED",
-      `BFF response for /api/git-change/apply-description failed contract validation: ${reason}`,
-      502,
-    );
-  }
-  return value as PrDescriptionApplicationResultWire;
+  const adapter = await import("./coding-workbench-lazy-fetchers");
+  return fetchJson<PrDescriptionApplicationResultWire>(
+    "/api/git-change/apply-description",
+    {
+      method: "POST",
+      body: JSON.stringify({ schemaVersion: "1", ...input }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    adapter.validateGitChangeApplyDescriptionResponse,
+  );
 }

@@ -124,8 +124,8 @@ function availabilityGuard(input: AvailabilityInput): () => boolean {
         knownScope(snapshots, binding, input.allowConfirmed)
       )
         return true;
-    } catch (errorValue) {
-      error = errorValue;
+    } catch (error_) {
+      error = error_;
     }
     log.write({
       category: "process",

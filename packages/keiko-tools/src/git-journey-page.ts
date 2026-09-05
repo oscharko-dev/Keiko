@@ -61,12 +61,7 @@ function identity(
   pr: Record<string, unknown>,
   target: GitJourneyReadTarget,
 ): GitJourneyHeader["identity"] {
-  const state =
-    pr.state === "MERGED"
-      ? "closed"
-      : typeof pr.state === "string"
-        ? pr.state.toLowerCase()
-        : pr.state;
+  const state = pullRequestState(pr.state);
   const value = parseGitPrIdentity(
     {
       number: pr.number,
@@ -85,6 +80,11 @@ function identity(
   );
   if (value?.number !== target.prNumber || value.externalId !== target.prNodeId)
     throw new GitJourneyReadError("revision-changed");
+  return value;
+}
+function pullRequestState(value: unknown): unknown {
+  if (value === "MERGED") return "closed";
+  if (typeof value === "string") return value.toLowerCase();
   return value;
 }
 function merge(pr: Record<string, unknown>): Pick<GitJourneyHeader, "mergedAt" | "mergeCommitSha"> {
