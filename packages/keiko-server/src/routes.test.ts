@@ -388,6 +388,14 @@ describe("API route contract", () => {
     ).toBeDefined();
   });
 
+  // #3390 (ADR-0043 D11-D14): the governed tool bridge rides the SAME attested loopback port as
+  // the routes above instead of a second listener the Seatbelt egress profile denies.
+  it("includes the coding-sidecar tool-facade route", () => {
+    expect(matchRoute("POST", "/api/coding-sidecar/tool")).toMatchObject({
+      definition: { method: "POST", pattern: "/api/coding-sidecar/tool" },
+    });
+  });
+
   it("includes the coding-workbench Codex subscription profile and setup routes", () => {
     expect(
       API_ROUTES.find(

@@ -1124,23 +1124,10 @@ export class CodingRuntimeOrchestrator {
   ): Promise<CodingRuntimeOrchestratorResult> {
     const ready = this.transitionActive("ready");
     if (!ready.ok) return ready;
-    // #3390: this used to dispatch the initial turn while still "ready" and only transition to
-    // "running" once the sidecar accepted it. The sidecar's very first model call can reach the
-    // gateway before that later transition lands, so the run's own public projection showed
-    // "ready" for a request that was already being prompted -- and, independently, left the
-    // run's prompt-reservation admission (runtimeAuthorityService.reservePromptTokens) racing a
-    // stale state for that same window. Committing "running" here, before dispatch, keeps the
-    // projection truthful (a run whose model is already being prompted is "running", never
-    // "ready") and closes the window at its source instead of chasing it downstream. "ready" ->
-    // "running" is a legal transition (see LEGAL_TRANSITIONS in keiko-contracts), and every
-    // failure branch below settles back to "failed"/"recovery-required" from "running" exactly as
-    // it already did from a rejected dispatch.
-    const running = this.transitionActive("running");
-    if (!running.ok) return running;
     const initialTurn = await this.operations.startInitialTurn({
       runId,
       requestId: request.requestId,
-      expectedRevision: running.snapshot.revision,
+      expectedRevision: ready.snapshot.revision,
       taskIntent: request.taskIntent,
       ...(attachment === undefined ? {} : { initialContext: renderInitialTurnContext(attachment) }),
     });
@@ -1157,7 +1144,7 @@ export class CodingRuntimeOrchestrator {
         },
       });
     }
-    if (initialTurn === "accepted") return running;
+    if (initialTurn === "accepted") return this.transitionActive("running");
     if (initialTurn === "failed") {
       recordRuntimeStartFailure(this.deps.diagnostics, runId, "initial-turn-dispatch");
       return this.transitionActive("failed", "runtime-failed");
