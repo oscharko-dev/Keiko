@@ -364,6 +364,7 @@ beforeEach(() => {
     approve: vi.fn(),
     deny: vi.fn(),
     retry: vi.fn(),
+    bridgeUnavailable: false,
   });
   autonomyHookMock.mockReturnValue({
     requestedMode: "supervised-coding",
@@ -2687,6 +2688,110 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
 
     const lastCall = editorBridgeHookMock.mock.calls.at(-1) as [{ submittedRoot: string | null }];
     expect(lastCall[0].submittedRoot).toBe(WORKSPACE_A.root);
+  });
+});
+
+// Epic #3384 cascade, end-to-end run 2026-09-05: the activity feed used to show "Reconnect
+// activity" and stay disconnected even once a different run started, until the operator clicked
+// Reconnect (or reloaded the page). `useCodingWorkbenchSafeActivity` is fully mocked in this file
+// (its own reconnect/resync behaviour is pinned at the hook level), so these tests prove the ONE
+// thing this window itself owns: calling `activity.retry()` exactly when a new run id appears.
+describe("CodingWorkbenchWindow reconnects activity on a newly observed run (#3384 cascade)", () => {
+  function runningState(runId: string): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: { status: "ready", value: snapshot({ state: "running", runId }), error: null },
+    });
+  }
+
+  it("reconnects the activity stream once a new run id appears, without a manual click", async () => {
+    const retry = vi.fn();
+    activityHookMock.mockReturnValue({
+      status: "disconnected",
+      feed: null,
+      errorCode: null,
+      retry,
+    });
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: actions() });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    expect(retry).not.toHaveBeenCalled();
+
+    runtimeHookMock.mockReturnValue({ state: runningState("run-1"), actions: actions() });
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    await waitFor(() => {
+      expect(retry).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("does not reconnect again while the same run id stays current", () => {
+    const retry = vi.fn();
+    activityHookMock.mockReturnValue({ status: "live", feed: null, errorCode: null, retry });
+    runtimeHookMock.mockReturnValue({ state: runningState("run-1"), actions: actions() });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    expect(retry).not.toHaveBeenCalled();
+
+    // An unrelated re-render (e.g. a runtime event) that keeps the SAME run id must not retry.
+    runtimeHookMock.mockReturnValue({ state: runningState("run-1"), actions: actions() });
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it("reconnects again for a second new run id after a run stops", async () => {
+    const retry = vi.fn();
+    activityHookMock.mockReturnValue({ status: "ended", feed: null, errorCode: null, retry });
+    runtimeHookMock.mockReturnValue({ state: runningState("run-1"), actions: actions() });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    runtimeHookMock.mockReturnValue({ state: runningState("run-2"), actions: actions() });
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    await waitFor(() => {
+      expect(retry).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+// Epic #3384 cascade, end-to-end run 2026-09-05: a refused edit used to leave the operator with
+// nothing but the model asking "how would you like to proceed?" while every edit kept failing
+// NO_ACTIVE_SESSION. `useCodingWorkbenchEditorBridge` is fully mocked here (its own retry behaviour
+// is pinned at the hook level); this proves the window actually surfaces `bridgeUnavailable`.
+describe("CodingWorkbenchWindow editor bridge unavailable notice (#3384 cascade)", () => {
+  it("shows the reconnecting notice while the editor bridge cannot register", () => {
+    editorBridgeHookMock.mockReturnValue({
+      pendingReview: null,
+      approve: vi.fn(),
+      deny: vi.fn(),
+      retry: vi.fn(),
+      bridgeUnavailable: true,
+    });
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          value: snapshot({ state: "running", runId: "run-1" }),
+          error: null,
+        },
+      }),
+    );
+
+    expect(
+      screen.getByText("Edits are paused: reconnecting the editor bridge."),
+    ).toBeInTheDocument();
+  });
+
+  it("stays silent while the editor bridge is registered", () => {
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          value: snapshot({ state: "running", runId: "run-1" }),
+          error: null,
+        },
+      }),
+    );
+
+    expect(screen.queryByText("Edits are paused: reconnecting the editor bridge.")).toBeNull();
   });
 });
 

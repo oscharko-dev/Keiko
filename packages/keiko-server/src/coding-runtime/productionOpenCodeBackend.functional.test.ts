@@ -953,7 +953,10 @@ async function waitForQuestion(
         requestId: `${tag}-${String(questionPollSequence)}`,
         expectedRevision: snapshot?.revision ?? -1,
       });
-      expect(listed.ok, `question listing failed for ${tag}`).toBe(true);
+      expect(
+        listed.ok,
+        `question listing failed for ${tag}: ${listed.ok ? "ok" : listed.failureCode}`,
+      ).toBe(true);
       if (listed.ok) found = listed.questions.questions;
       expect(found).toHaveLength(1);
     },
