@@ -84,9 +84,28 @@ describe("ConnectToChatDialog", () => {
   });
 
   it("connects an exact comparison using the default base branch", async () => {
+    const onConnected = vi.fn();
+    const scope = {
+      kind: "git-change",
+      relationshipId: "relationship-1",
+      remoteDigest: "d".repeat(64),
+      comparisonLabel: "main...feature/x",
+      baseRef: "main",
+      headRef: "feature/x",
+      baseSha: "a".repeat(40),
+      headSha: "b".repeat(40),
+      mergeBaseSha: "a".repeat(40),
+      snapshotDigest: "c".repeat(64),
+      fileCount: 1,
+      totalFiles: 1,
+      omittedFiles: 0,
+      truncatedFiles: 0,
+      descriptionStatus: "current",
+      connectedAtMs: 3,
+    } as const;
     const connect = vi.fn(async (): Promise<GitChangeConnectResponse> => ({
       status: "connected",
-      scope: {} as never,
+      scope,
     }));
     const onClose = vi.fn();
     const listChats = vi.fn(async (): Promise<ChatsResponse> => oneChat());
@@ -95,6 +114,7 @@ describe("ConnectToChatDialog", () => {
       <ConnectToChatDialog
         {...baseProps()}
         onClose={onClose}
+        onConnected={onConnected}
         listChats={listChats}
         connect={connect}
       />,
@@ -110,6 +130,9 @@ describe("ConnectToChatDialog", () => {
         baseRef: "main",
       } satisfies ConnectGitChangeInput);
     });
+    expect(onConnected).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "chat-1", gitChangeScopes: [scope] }),
+    );
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 

@@ -2711,6 +2711,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
         remoteDigest: REMOTE,
         baseSha: BASE_SHA,
         headSha: HEAD_SHA,
+        acceptedMode: "supervised-coding",
         baseRef: "dev",
         headRef: HEAD_SHA,
         generationBinding: {
@@ -2727,6 +2728,49 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
         descriptionStatus: { state: "current", reason: "generated", generationVersion: 1 },
       });
     });
+  });
+
+  it("carries the run's narrowed accepted mode into post-terminal generation", async () => {
+    const jobs = jobStore();
+    const dispatcher = fakeDispatcher({ reason: "generated" });
+    const verifiedCommits = new Map<string, VerifiedCommitResult>();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      { jobs, dispatcher },
+      verifiedCommits,
+    );
+    let resolveCompletion: ((outcome: "succeeded") => void) | undefined;
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: new Promise<"succeeded">((resolve) => {
+        resolveCompletion = resolve;
+      }),
+    });
+    f.manager.resume.mockReturnValue({
+      ok: true,
+      paused: false,
+      effectiveMode: "governed-assist",
+    });
+
+    await f.orchestrator.start(start);
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    await f.orchestrator.resume("run-1", {
+      requestId: "run-1",
+      requestedMode: "governed-assist",
+    });
+    verifiedCommits.set("run-1", verifiedCommit());
+    resolveCompletion?.("succeeded");
+
+    await vi.waitFor(() => expect(dispatcher.generate).toHaveBeenCalledOnce());
+    expect(dispatcher.generate).toHaveBeenCalledWith(
+      expect.objectContaining({ acceptedMode: "governed-assist" }),
+      expect.any(AbortSignal),
+    );
   });
 
   it("durably demotes a generated status when the exact held proposal is lost after restart", async () => {

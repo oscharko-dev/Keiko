@@ -93,6 +93,7 @@ function readDescriptionStatus(
   repository: string,
   prNumber: number,
   correlationId: string,
+  stillAuthorized: () => boolean,
 ): PrDescriptionApplicationStatus | null {
   const store = createPrDescriptionReceiptStore({
     evidenceStore: deps.evidenceStore,
@@ -119,7 +120,7 @@ function readDescriptionStatus(
       canonicalise({ domain: "keiko-journey-description-read-v1", repository, prNumber }),
     ),
     correlationId,
-    stillAuthorized: (): boolean => true,
+    stillAuthorized,
   };
   const read = store.readStatus(context);
   return read.ok && read.status !== undefined ? read.status : null;
@@ -226,6 +227,7 @@ function descriptionFor(
         repository,
         prNumber,
         context.correlationId,
+        context.stillAuthorized,
       ),
     );
   };
@@ -244,7 +246,22 @@ function recordJourneyOutcome(
   correlationId: string,
   outcome: JourneyOutcome,
 ): boolean {
-  if (outcomes === undefined) return true;
+  if (outcomes === undefined) {
+    (deps.activityLog ?? processServerLogSink()).write({
+      category: "process",
+      op: "git.journey-outcome.recorded",
+      correlationId,
+      level: "warn",
+      extra: {
+        runId: outcome.binding.runId,
+        state: outcome.state,
+        reason: outcome.reason,
+        recorded: false,
+        store: "unavailable",
+      },
+    });
+    return true;
+  }
   const recorded = outcomes.record(outcome);
   (deps.activityLog ?? processServerLogSink()).write({
     category: "process",

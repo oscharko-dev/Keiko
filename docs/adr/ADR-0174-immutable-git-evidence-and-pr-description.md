@@ -17,6 +17,14 @@ approval registry or evidence store.
 
 ## Decision
 
+Description authority is bounded to one immutable scope and a maximum ten-minute lifetime. A
+same-scope remint cannot widen a still-live mode or extend its expiry. Invalid clocks and lifetimes
+are rejected before changing the registry. Expired records remain available for an expired-versus-
+absent diagnosis until the 256-record capacity is reached; capacity eviction removes expired
+records before live grants. Mint, narrowing and rejection report scope digests, modes, expiry and
+capacity counts through the existing activity log, with the caller's correlation and structured
+failure evidence.
+
 ### D1 — One immutable producer, two data projections
 
 `GitChangeSnapshot` in `keiko-contracts` owns revision identity, entry kinds, limits, completeness,

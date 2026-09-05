@@ -146,6 +146,7 @@ export async function runDraftDeliveryRequest(
     (result.record.phase === "push-proposed" || result.record.phase === "pr-proposed")
   )
     input.requestDraftDeliveryApproval?.(result.record.proposalId);
+  if (result.status === "unavailable") return { status: "failed", reasonCode: result.reason };
   return { status: "completed", draftDelivery: result };
 }
 function dispatchDraft(

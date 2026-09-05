@@ -414,6 +414,8 @@ export class CodingRuntimeOrchestrator {
    */
   private settledRunId: string | undefined;
   private activeEffectiveMode: CodingWorkbenchMode | undefined;
+  /** Last accepted mode retained only for same-process post-terminal description work. */
+  private readonly settledEffectiveModes = new Map<string, CodingWorkbenchMode>();
   private readonly approvals = new Map<string, ApprovalChallenge>();
   private readonly operations: CodingRuntimeOperationCoordinator;
   private readonly projection: CodingRuntimeOrchestratorState;
@@ -1717,11 +1719,13 @@ export class CodingRuntimeOrchestrator {
     if (commit?.headSha === undefined) return undefined;
     const workspace = this.activeWorkspaceOrUndefined();
     const applicationTarget = descriptionApplicationTarget(next, workspace, commit.headSha);
+    const acceptedMode = this.settledEffectiveModes.get(next.runId);
     return {
       runId: next.runId,
       remoteDigest: commit.repositoryDigest,
       baseSha: commit.baseSha,
       headSha: commit.headSha,
+      ...(acceptedMode === undefined ? {} : { acceptedMode }),
       ...descriptionComparisonRefs(next, workspace, {
         baseRef: commit.baseSha,
         headRef: commit.headSha,
@@ -1883,6 +1887,9 @@ export class CodingRuntimeOrchestrator {
       provenanceDigest: next.provenanceDigest,
     });
     if (TERMINAL_STATES.has(state)) {
+      if (this.activeEffectiveMode !== undefined) {
+        this.settledEffectiveModes.set(next.runId, this.activeEffectiveMode);
+      }
       this.activeRunId = undefined;
       this.settledRunId = next.runId;
     }
@@ -1907,6 +1914,7 @@ export class CodingRuntimeOrchestrator {
       for (const runId of pruned) {
         this.descriptionDispatchAbort.get(runId)?.abort();
         this.descriptionDispatchAbort.delete(runId);
+        this.settledEffectiveModes.delete(runId);
       }
     }
   }

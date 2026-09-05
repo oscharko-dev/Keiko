@@ -58,6 +58,8 @@ test("connects the Git window's current branch to a Chat and shows the scope pil
   await expect(dialog).toBeVisible();
   await expect(dialog.getByLabel("Head branch")).toHaveValue(fixture.headRef);
 
+  await dialog.getByRole("combobox", { name: "Base branch" }).click();
+  await page.getByRole("option", { name: fixture.baseRef }).click();
   await dialog.getByRole("combobox", { name: "Chat" }).click();
   await page.getByRole("option", { name: chat.title }).click();
   await dialog.getByRole("button", { name: "Connect" }).click();

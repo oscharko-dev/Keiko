@@ -12,6 +12,8 @@
 // never overwritten.
 
 import type { DatabaseSync } from "node:sqlite";
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   isWorkbenchDescriptionStatus,
   isWorkbenchDescriptionGenerationBinding,
@@ -27,6 +29,8 @@ export interface WorkbenchDescriptionScope {
   readonly remoteDigest: string;
   readonly baseSha: string;
   readonly headSha: string;
+  /** The mode accepted for the run after every resume narrowing; absent fails minting closed. */
+  readonly acceptedMode?: CodingWorkbenchMode | undefined;
   /** Live server-resolved refs; durable identity remains the exact revision and generation binding. */
   readonly baseRef?: string;
   readonly headRef?: string;
@@ -127,6 +131,7 @@ function assertScope(scope: WorkbenchDescriptionScope): void {
     !DIGEST.test(scope.remoteDigest) ||
     !OBJECT_ID.test(scope.baseSha) ||
     !OBJECT_ID.test(scope.headSha) ||
+    (scope.acceptedMode !== undefined && !isCodingWorkbenchMode(scope.acceptedMode)) ||
     (scope.generationBinding !== undefined &&
       !isWorkbenchDescriptionGenerationBinding(scope.generationBinding))
   ) {

@@ -312,6 +312,32 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
     }
   });
 
+  it("logs when the optional durable outcome store is unavailable", async () => {
+    const h = harness();
+    try {
+      const snapshots = h.deps.codingRuntimeSnapshotStore;
+      if (snapshots === undefined) throw new Error("snapshot store fixture missing");
+      const group = createGitDeliveryJourneyRouteGroup({
+        reader: (): GitJourneyReader => fakeReader(OBSERVED_FACTS),
+        readiness: () => Promise.resolve(readySnapshot()),
+        description: () => Promise.resolve(null),
+      });
+      const result = (await group[0]?.handler(ctxFor({ schemaVersion: "1", runId: "run-1" }), {
+        ...h.deps,
+        codingRuntimeSnapshotStore: { ...snapshots, journeyOutcomes: undefined },
+      })) as RouteResult;
+      expect(result.body).toMatchObject({ status: "observed" });
+      const recorded = h.events.find((event) => event.op === "git.journey-outcome.recorded");
+      expect(recorded).toMatchObject({
+        op: "git.journey-outcome.recorded",
+        level: "warn",
+        extra: { runId: "run-1", recorded: false, store: "unavailable" },
+      });
+    } finally {
+      h.cleanup();
+    }
+  });
+
   it("never lets a description read failure surface as the finished, described outcome (AC9)", async () => {
     const h = harness();
     try {

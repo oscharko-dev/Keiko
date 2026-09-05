@@ -36,10 +36,6 @@ import type { GitProcessRunner } from "@oscharko-dev/keiko-git";
 import { createNodeGitPullRequestAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 import type { UiHandlerDeps } from "./deps.js";
-// Final-audit F4 (#3400): mints the Chat-turn description authority under the EXACT scope shape
-// chat-handlers.ts's own admission check derives -- the one formula, imported rather than
-// restated (AGENTS.md §7's fixture/formula rule applies to a mint key exactly like a fixture).
-import { gitChangeDescriptionAuthorityScopeFor } from "./gitChangeChatContext.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
@@ -389,27 +385,6 @@ function logGitChangeEvent(
   });
 }
 
-// Final-audit F4 (#3400): a Chat-connected git-change scope is only ever admitted for a real turn
-// (chat-handlers.ts's `admitGitChangeScopedTurn`) when a live description authority record exists
-// for its EXACT (remoteDigest, base/head, snapshotDigest) key. Before this fix nothing ever minted
-// one for a Chat-originated scope, so every turn on a connected chat denied closed in production
-// regardless of mode or approval. Mints on every fresh connect and on a refreshed (stale) scope --
-// never on an unchanged "current" refresh, whose snapshot digest (and therefore scope key) has not
-// moved. `deps.mintDescriptionAuthority` absent (an unqualified runtime host) is a no-op exactly
-// like the read port being absent: the resulting turn denies closed, never open.
-function mintGitChangeDescriptionAuthority(
-  deps: UiHandlerDeps,
-  scope: ChatGitChangeScope,
-  nowMs: number,
-): boolean {
-  if (deps.mintDescriptionAuthority === undefined) return false;
-  deps.mintDescriptionAuthority(
-    gitChangeDescriptionAuthorityScopeFor(scope),
-    new Date(nowMs).toISOString(),
-  );
-  return true;
-}
-
 // ─── Connect handler ────────────────────────────────────────────────────────────────────────────
 
 async function resolveConnectComparison(
@@ -513,7 +488,6 @@ function persistConnectedScope(
     captured.prNumber,
     now,
   );
-  const minted = mintGitChangeDescriptionAuthority(deps, scope, now);
   try {
     deps.store.updateChat(chatId, { gitChangeScopes: [...existingScopes, scope] });
   } catch (error) {
@@ -528,7 +502,6 @@ function persistConnectedScope(
     remoteDigestPrefix: scope.remoteDigest.slice(0, 8),
     fileCount: scope.fileCount,
     hasPullRequest: scope.pullRequestNumber !== undefined,
-    descriptionAuthorityMinted: minted,
   });
   const result: GitChangeConnectResult = { status: "connected", scope };
   return { status: 200, body: result };
@@ -668,14 +641,10 @@ function persistStaleScope(
     archiveGitChangeRelationship(deps, workspaceId, staleScope.relationshipId);
     throw error;
   }
-  // Final-audit F4: re-mints under the NEW snapshot digest only after the replacement scope is
-  // durable. A failed Chat write therefore leaves neither an active replacement edge nor grant.
-  const minted = mintGitChangeDescriptionAuthority(deps, staleScope, Date.now());
   archiveGitChangeRelationship(deps, workspaceId, found.scope.relationshipId);
   logGitChangeEvent(deps, "git-change.chat.stale", correlationId, {
     relationshipId: staleScope.relationshipId,
     remoteDigestPrefix: staleScope.remoteDigest.slice(0, 8),
-    descriptionAuthorityMinted: minted,
   });
   const result: GitChangeRefreshResult = { status: "stale", scope: staleScope };
   return { status: 200, body: result };

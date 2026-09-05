@@ -2912,11 +2912,30 @@ export function activeGitChangeScope(chat: Chat): ChatGitChangeScope | undefined
 export function admitGitChangeScopedTurn(
   deps: UiHandlerDeps,
   chat: Chat,
-  correlationId: string | undefined,
+  acceptedMode: CodingWorkbenchMode | undefined,
+  correlationId: string,
 ): RouteResult | undefined {
   const scope = activeGitChangeScope(chat);
   if (scope === undefined) return undefined;
-  const admission = admitGitChangeDescriptionTurn(deps, scope, new Date().toISOString());
+  if (acceptedMode === undefined || deps.mintDescriptionAuthority === undefined) {
+    const admission = { admitted: false, reason: "model-egress-denied" } as const;
+    logGitChangeTurnAuthority(correlationId, admission, scope.relationshipId);
+    return {
+      status: 409,
+      body: errorBody(
+        "GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED",
+        "The description authority for this connected Git change is missing or has expired.",
+      ),
+    };
+  }
+  const nowIso = new Date().toISOString();
+  deps.mintDescriptionAuthority({
+    scope: gitChangeDescriptionAuthorityScopeFor(scope),
+    requestedMode: acceptedMode,
+    nowIso,
+    correlationId,
+  });
+  const admission = admitGitChangeDescriptionTurn(deps, scope, nowIso);
   logGitChangeTurnAuthority(correlationId, admission, scope.relationshipId);
   if (admission.admitted) return undefined;
   return {
@@ -2926,6 +2945,16 @@ export function admitGitChangeScopedTurn(
       "The description authority for this connected Git change is missing or has expired.",
     ),
   };
+}
+
+export function acceptedGitChangeChatMode(
+  deps: UiHandlerDeps,
+  request: Pick<SendDesktopChatRequest, "memory">,
+): CodingWorkbenchMode | undefined {
+  const requestedMode = request.memory?.mode;
+  return requestedMode === undefined
+    ? undefined
+    : resolveMemoryCaptureAutonomyMode(deps, requestedMode);
 }
 
 // ─── Issue #3400 — apply routes only through the description application service (#3399) ────────
@@ -3284,7 +3313,12 @@ export async function handleSendDesktopChat(
     if (activeGitChangeScope(prepared.chat) === undefined) {
       await ensureOnDemandConversationReadiness(deps, prepared.modelId);
     }
-    const gitChangeDenial = admitGitChangeScopedTurn(deps, prepared.chat, ctx.correlationId);
+    const gitChangeDenial = admitGitChangeScopedTurn(
+      deps,
+      prepared.chat,
+      acceptedGitChangeChatMode(deps, prepared.request),
+      ctx.correlationId,
+    );
     if (gitChangeDenial !== undefined) return gitChangeDenial;
     const inspection = inspectDesktopChatTurn(deps, prepared);
     if (inspection.kind === "replay") return { status: 200, body: inspection.response };
@@ -3298,7 +3332,12 @@ export async function handleSendDesktopChat(
         if (isRouteResult(current)) return current;
         // Re-derived immediately before dispatch (not only at the earlier fast-fail check above):
         // a queued turn may wait long enough for the authority to expire in between.
-        const gitChangeDenial = admitGitChangeScopedTurn(deps, current.chat, ctx.correlationId);
+        const gitChangeDenial = admitGitChangeScopedTurn(
+          deps,
+          current.chat,
+          acceptedGitChangeChatMode(deps, current.request),
+          ctx.correlationId,
+        );
         if (gitChangeDenial !== undefined) return gitChangeDenial;
         return activeGitChangeScope(current.chat) === undefined
           ? persistModelChatTurn(deps, current, cancellation.signal, ctx.correlationId)

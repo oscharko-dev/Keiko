@@ -6,7 +6,7 @@ import type {
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
 import type {
   GitDeliveryDescriptionAuthorityPort,
-  GitDeliveryDescriptionAuthorityScope,
+  GitDeliveryDescriptionAuthorityMintRequest,
   GitDeliveryRunAuthorityPort,
 } from "../gitDelivery/runBoundAuthority.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
@@ -69,7 +69,7 @@ export interface CodingRuntimeHost {
   // automatic-description dispatcher can mint a scope before checking it, exactly the way the
   // Chat-turn admission check and the pull-request route already only READ.
   readonly mintDescriptionAuthority?:
-    ((scope: GitDeliveryDescriptionAuthorityScope, nowIso: string) => void) | undefined;
+    ((request: GitDeliveryDescriptionAuthorityMintRequest) => void) | undefined;
   // #3401 CI-repair notify: called exactly once, right after this control plane builds its
   // orchestrator, so a per-run CI-repair controller minted deep inside the runtime resolver (long
   // before the orchestrator exists) can still reach `CodingRuntimeOrchestrator

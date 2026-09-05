@@ -147,7 +147,7 @@ describe("production coding runtime resolver", () => {
   // `createProductionWorkbenchDescriptionDispatcher` deterministically denied every scope
   // (`model-egress-denied`) in production regardless of what `gitDeliveryDescriptionAuthority`
   // would have found, because nothing ever minted a record for it to find.
-  it("mints a live description authority clamped to the deployment ceiling through the real production chain", () => {
+  it("mints a live description authority from the accepted mode through the real production chain", () => {
     const fixture = workspaceFixture();
     const confirmations = confirmationFixture();
     const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
@@ -164,14 +164,26 @@ describe("production coding runtime resolver", () => {
       snapshotDigest: "b".repeat(64),
     };
     const nowIso = new Date(fixture.nowMs()).toISOString();
-    host.mintDescriptionAuthority?.(scope, nowIso);
+    host.mintDescriptionAuthority?.({
+      scope,
+      requestedMode: "governed-assist",
+      nowIso,
+      correlationId: "description-test",
+    });
     expect(host.gitDeliveryDescriptionAuthority?.current(scope, nowIso)).toMatchObject({
       scope,
-      // The fixture's deployment ceiling ("supervised-coding") is the SAME clamp
-      // `resolveEffectiveCodingWorkbenchMode` applies to every other minted authority in this
-      // file -- a mint outside a live run never assumes the ceiling is a widening default.
-      effectiveMode: "supervised-coding",
+      // The accepted action mode reaches the owning mint and stays narrower than the fixture's
+      // supervised deployment ceiling. The ceiling is never used as a requested-mode default.
+      effectiveMode: "governed-assist",
     });
+
+    const unknownModeScope = { ...scope, snapshotDigest: "c".repeat(64) };
+    host.mintDescriptionAuthority?.({
+      scope: unknownModeScope,
+      requestedMode: undefined,
+      nowIso,
+    } as never);
+    expect(host.gitDeliveryDescriptionAuthority?.current(unknownModeScope, nowIso)).toBeUndefined();
   });
 
   // #3401 CI-repair notify: the orchestrator that owns `notifyVerifiedHeadAdvanced` is built by

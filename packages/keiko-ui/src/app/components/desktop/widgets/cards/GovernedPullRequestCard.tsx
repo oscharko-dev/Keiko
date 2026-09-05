@@ -159,6 +159,7 @@ interface PrForm {
   readonly prExternalId: string;
   readonly draftTransition: "none" | "to-draft";
 }
+type PrFormChange = <K extends keyof PrForm>(key: K, value: PrForm[K]) => void;
 
 function initialForm({
   headBranchName,
@@ -661,6 +662,10 @@ interface DescriptionForm {
   readonly prNumber: string;
   readonly language: PrDescriptionLanguage;
 }
+type DescriptionFormChange = <K extends keyof DescriptionForm>(
+  key: K,
+  value: DescriptionForm[K],
+) => void;
 
 function initialDescriptionForm(
   ownerAndRepo: string | undefined,
@@ -1255,6 +1260,22 @@ function useRetainedDescriptionProposal(
   }, [async, projectId, retainedProposal]);
 }
 
+function useDescriptionForm(
+  ownerAndRepo: string | undefined,
+  retainedProposal: GitDeliveryPrDescriptionProposalInput | undefined,
+): { readonly form: DescriptionForm; readonly onChange: DescriptionFormChange } {
+  const [form, setForm] = useState<DescriptionForm>(() =>
+    initialDescriptionForm(ownerAndRepo, retainedProposal),
+  );
+  const onChange = useCallback(
+    <K extends keyof DescriptionForm>(key: K, value: DescriptionForm[K]): void => {
+      setForm((current) => ({ ...current, [key]: value }));
+    },
+    [],
+  );
+  return { form, onChange };
+}
+
 function PrDescriptionPanel({
   client,
   projectId,
@@ -1266,15 +1287,7 @@ function PrDescriptionPanel({
   readonly ownerAndRepo: string | undefined;
   readonly retainedProposal: GitDeliveryPrDescriptionProposalInput | undefined;
 }): ReactNode {
-  const [form, setForm] = useState<DescriptionForm>(() =>
-    initialDescriptionForm(ownerAndRepo, retainedProposal),
-  );
-  const onChange = useCallback(
-    <K extends keyof DescriptionForm>(key: K, value: DescriptionForm[K]): void => {
-      setForm((f) => ({ ...f, [key]: value }));
-    },
-    [],
-  );
+  const { form, onChange } = useDescriptionForm(ownerAndRepo, retainedProposal);
   const t = useTranslate();
   const descriptionClient = requiredPrDescriptionClient(client);
   const async = useGovernedPrDescriptionActions(descriptionClient);
@@ -1509,6 +1522,40 @@ function usePrFormActionHandlers(
   return { onPreview, onExecute };
 }
 
+function usePullRequestForm(
+  headBranchName: string | undefined,
+  ownerAndRepo: string | undefined,
+  baseBranchName: string | undefined,
+): {
+  readonly form: PrForm;
+  readonly setForm: Dispatch<SetStateAction<PrForm>>;
+  readonly onChange: PrFormChange;
+} {
+  const [form, setForm] = useState<PrForm>(() =>
+    initialForm({ headBranchName, ownerAndRepo, baseBranchName }),
+  );
+  const onChange = useCallback(<K extends keyof PrForm>(key: K, value: PrForm[K]): void => {
+    setForm((current) => ({ ...current, [key]: value }));
+  }, []);
+  return { form, setForm, onChange };
+}
+
+function renderPrDescriptionPanel(
+  client: GovernedPullRequestClient,
+  projectId: string,
+  ownerAndRepo: string | undefined,
+  retainedProposal: GitDeliveryPrDescriptionProposalInput | undefined,
+): ReactNode {
+  return (
+    <PrDescriptionPanel
+      client={client}
+      projectId={projectId}
+      ownerAndRepo={ownerAndRepo}
+      retainedProposal={retainedProposal}
+    />
+  );
+}
+
 function GovernedPullRequestBody({
   client,
   projectId,
@@ -1519,17 +1566,16 @@ function GovernedPullRequestBody({
   titleId,
   liveId,
 }: GovernedPullRequestBodyProps): ReactNode {
-  const [form, setForm] = useState<PrForm>(() =>
-    initialForm({ headBranchName, ownerAndRepo, baseBranchName }),
+  const { form, setForm, onChange } = usePullRequestForm(
+    headBranchName,
+    ownerAndRepo,
+    baseBranchName,
   );
   // Target keys the loaded preview / last started action are valid for. A preview, outcome, or
   // error is rendered only while the form still names the exact target it was produced for.
   const [previewedKey, setPreviewedKey] = useState("");
   const [actionKey, setActionKey] = useState("");
   const async = useGovernedPrActions(client);
-  const onChange = useCallback(<K extends keyof PrForm>(key: K, value: PrForm[K]): void => {
-    setForm((f) => ({ ...f, [key]: value }));
-  }, []);
   const { onPreview, onExecute } = usePrFormActionHandlers(
     form,
     setForm,
@@ -1540,8 +1586,6 @@ function GovernedPullRequestBody({
   );
   const { canPreview, canExecute, visiblePreview, visibleOutcome, visibleError, liveText } =
     derivePrRenderState(form, async, previewedKey, actionKey);
-  const descriptionPanel = { client, projectId, ownerAndRepo, retainedProposal: descriptionProposal };
-
   return (
     <div style={CARD_BODY_STYLE} aria-labelledby={titleId}>
       <PrBodyHeader titleId={titleId} liveId={liveId} liveText={liveText} />
@@ -1556,7 +1600,7 @@ function GovernedPullRequestBody({
         onExecute={onExecute}
       />
       <PrOutcome outcome={visibleOutcome} error={visibleError} />
-      <PrDescriptionPanel {...descriptionPanel} />
+      {renderPrDescriptionPanel(client, projectId, ownerAndRepo, descriptionProposal)}
     </div>
   );
 }

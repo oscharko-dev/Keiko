@@ -7,7 +7,7 @@ import type {
   DraftDeliveryService,
 } from "../gitDelivery/draftDeliveryTypes.js";
 import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
-import type { GitDeliveryDescriptionAuthorityScope } from "../gitDelivery/runBoundAuthority.js";
+import type { GitDeliveryDescriptionAuthorityMintRequest } from "../gitDelivery/runBoundAuthority.js";
 import { createProductionCiObservationService } from "./productionCiObservationRuntime.js";
 import { createProductionCiRepairBudget } from "./productionCiRepairRuntime.js";
 import { reservePromptWithCiRepair } from "./ciRepairPromptReservation.js";
@@ -31,6 +31,7 @@ import type {
   CodingWorkbenchRuntimeIntent,
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 import {
   EditorAgentAuthorityRegistry,
@@ -311,10 +312,9 @@ function composeRuntime(
     // #3401 (epic #3384 closeout, description-composition-closeout): the MINT capability the
     // comment above named as the still-missing half. `gitDeliveryDescriptionAuthority` only reads
     // an existing record; nothing minted one, so the automatic-description dispatcher
-    // (`productionCodingRuntimePorts.ts`) admitted every scope closed in production. Clamped by
-    // the SAME deployment ceiling every other authority-minting path in this file uses -- a mint
-    // outside a live run (the terminal-dispatch and Chat-turn callers both run after the run's own
-    // envelope may already be gone) never assumes the ceiling is a widening default.
+    // (`productionCodingRuntimePorts.ts`) admitted every scope closed in production. The caller's
+    // action-specific accepted mode reaches the owner here and is clamped by the deployment
+    // ceiling; an absent or invalid mode mints nothing.
     mintDescriptionAuthority: mintDescriptionAuthorityFor(authority, input),
     // #3401 CI-repair notify: the setter half of the `notifyVerifiedHeadAdvanced` slot above.
     // Called exactly once by `codingRuntimeControlPlane.ts` right after it builds the orchestrator
@@ -370,20 +370,21 @@ function runtimeCapabilityAuthenticatorFor(
 }
 
 // #3401 (epic #3384 closeout, description-composition-closeout): the MINT capability
-// `gitDeliveryDescriptionAuthority`'s READ port needs a producer for. Clamped by the SAME
-// deployment ceiling every other authority-minting path in this file uses -- a mint outside a live
-// run (the terminal-dispatch and Chat-turn callers both run after the run's own envelope may
-// already be gone) never assumes the ceiling is a widening default.
+// `gitDeliveryDescriptionAuthority`'s READ port needs a producer for. It receives the actual mode
+// accepted for the calling action and clamps that mode to the deployment ceiling. An invalid or
+// unavailable accepted mode mints nothing; the subsequent authority read therefore denies closed.
 function mintDescriptionAuthorityFor(
   authority: CodingRuntimeAuthorityService,
   input: ProductionCodingRuntimeResolverInput,
-): (scope: GitDeliveryDescriptionAuthorityScope, nowIso: string) => void {
-  return (scope, nowIso): void => {
+): (request: GitDeliveryDescriptionAuthorityMintRequest) => void {
+  return (request): void => {
+    if (!isCodingWorkbenchMode(request.requestedMode)) return;
     authority.mintGitDeliveryDescriptionAuthority({
-      scope,
-      requestedMode: input.workspaceAuthority.deploymentCeiling,
+      scope: request.scope,
+      requestedMode: request.requestedMode,
       deploymentCeiling: input.workspaceAuthority.deploymentCeiling,
-      nowIso,
+      nowIso: request.nowIso,
+      ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
     });
   };
 }

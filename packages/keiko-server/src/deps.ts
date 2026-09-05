@@ -330,6 +330,7 @@ import {
 } from "./coding-runtime/productionCodingRuntimePorts.js";
 import type {
   GitDeliveryDescriptionAuthorityPort,
+  GitDeliveryDescriptionAuthorityMintRequest,
   GitDeliveryDescriptionAuthorityScope,
   GitDeliveryRunAuthorityPort,
 } from "./gitDelivery/runBoundAuthority.js";
@@ -596,7 +597,7 @@ export interface UiHandlerDeps {
   // the git-change connect route (gitChangeRoutes.ts) cannot mint a Chat-turn authority, so every
   // subsequent turn on that connected scope denies closed exactly like a missing read port.
   readonly mintDescriptionAuthority?:
-    ((scope: GitDeliveryDescriptionAuthorityScope, nowIso: string) => void) | undefined;
+    ((request: GitDeliveryDescriptionAuthorityMintRequest) => void) | undefined;
   readonly openCodeGatewayReadinessRegistry?:
     | {
         readonly claim: (runId: string) => boolean;
@@ -4176,7 +4177,13 @@ function createWorkbenchArtifactRetention(
     async retain(scope, artifact, signal): Promise<string | undefined> {
       const binding = workbenchRetentionBinding(scope, artifact.binding.snapshotDigest);
       if (binding === undefined || signal.aborted) return undefined;
-      controlPlane.mintDescriptionAuthority?.(binding.authorityScope, new Date().toISOString());
+      if (scope.acceptedMode === undefined) return undefined;
+      controlPlane.mintDescriptionAuthority?.({
+        scope: binding.authorityScope,
+        requestedMode: scope.acceptedMode,
+        nowIso: new Date().toISOString(),
+        correlationId: scope.runId,
+      });
       const result = await resolve(scope, artifact.binding.snapshotDigest, signal)?.previewArtifact(
         artifact,
       );

@@ -50,6 +50,13 @@ export interface GitDeliveryDescriptionAuthorityScope {
   readonly pr: GitDeliveryDescriptionAuthorityPrIdentity | GitDeliveryDescriptionAuthorityBaseHead;
   readonly snapshotDigest: string;
 }
+/** Server-private mint request. The caller must supply the mode accepted for this exact action. */
+export interface GitDeliveryDescriptionAuthorityMintRequest {
+  readonly scope: GitDeliveryDescriptionAuthorityScope;
+  readonly requestedMode: CodingWorkbenchMode;
+  readonly nowIso: string;
+  readonly correlationId?: string | undefined;
+}
 export interface ActiveGitDeliveryDescriptionAuthority {
   readonly scope: GitDeliveryDescriptionAuthorityScope;
   readonly effectiveMode: CodingWorkbenchMode;

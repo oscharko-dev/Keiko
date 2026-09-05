@@ -17,12 +17,13 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, SubmitEventHandler, ReactNode, RefObject } from "react";
 import { createPortal } from "react-dom";
 import { connectGitChangeToChat, fetchChats } from "@/lib/api";
-import type { ConnectGitChangeInput } from "@/lib/api";
+import type { ConnectGitChangeInput, GitChangeConnectResponse } from "@/lib/api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { Chat } from "@/lib/types";
 import { gitChangeBlockedReasonMessage } from "../../../GitChangeScopePill";
 import { useDialogTabTrap } from "../../../hooks/useDialogTabTrap";
 import { useModalInteractionLock } from "../../../hooks/useModalInteractionLock";
+import { notifyChatUpsert } from "../../../hooks/useChatSession";
 import { Icons } from "../../../Icons";
 import KeikoSelect from "../../../KeikoSelect";
 import { formatUserError } from "../../../format-error";
@@ -75,6 +76,7 @@ export interface ConnectToChatDialogProps {
   readonly baseBranchName: string | undefined;
   readonly baseBranchChoices: readonly string[];
   readonly onClose: () => void;
+  readonly onConnected?: ((chat: Chat) => void) | undefined;
   /** Injectable wire seams for tests. Default to the real BFF helpers. */
   readonly listChats?: typeof fetchChats;
   readonly connect?: typeof connectGitChangeToChat;
@@ -351,6 +353,7 @@ function useSubmit(
   currentBranch: string | undefined,
   baseRef: string,
   connect: typeof connectGitChangeToChat,
+  onConnected: (chatId: string, result: GitChangeConnectResponse) => void,
   onClose: () => void,
   t: I18nTranslate,
 ): SubmitState {
@@ -372,6 +375,7 @@ function useSubmit(
         setError(gitChangeBlockedReasonMessage(result.reason, t));
         return;
       }
+      onConnected(chatId, result);
       onClose();
     } catch (error_) {
       setError(blockedOrNetworkError(error_, t));
@@ -448,6 +452,7 @@ function useConnectDialogState(
   currentBranch: string | undefined,
   baseBranchName: string | undefined,
   connect: typeof connectGitChangeToChat,
+  onConnected: (chatId: string, result: GitChangeConnectResponse) => void,
   onClose: () => void,
   t: I18nTranslate,
 ): ConnectDialogState {
@@ -460,29 +465,46 @@ function useConnectDialogState(
     currentBranch,
     baseRef,
     connect,
+    onConnected,
     onClose,
     t,
   );
   return { chatId, setChatId, mode, setMode, baseRef, setBaseRef, busy, error, canSubmit, submit };
 }
 
-export function ConnectToChatDialog({
-  projectId,
+function projectConnectedChat(
+  chats: readonly Chat[],
+  chatId: string,
+  result: GitChangeConnectResponse,
+): Chat | undefined {
+  if (result.status !== "connected") return undefined;
+  const chat = chats.find((candidate) => candidate.id === chatId);
+  if (chat === undefined) return undefined;
+  return {
+    ...chat,
+    gitChangeScopes: [...(chat.gitChangeScopes ?? []), result.scope],
+    updatedAt: Date.now(),
+  };
+}
+
+function ConnectDialogForm({
+  dialogRef,
+  state,
+  catalog,
   currentBranch,
-  baseBranchName,
   baseBranchChoices,
   onClose,
-  listChats = fetchChats,
-  connect = connectGitChangeToChat,
-}: ConnectToChatDialogProps): ReactNode {
-  const t = useTranslate();
-  const catalog = useChatCatalog(projectId, listChats, t);
-  const state = useConnectDialogState(currentBranch, baseBranchName, connect, onClose, t);
-  const dialogRef = useRef<HTMLDialogElement | null>(null);
-  useDialogTabTrap(dialogRef);
-  useModalInteractionLock({ initialFocusRef: dialogRef });
-
-  const dialog = (
+  t,
+}: {
+  readonly dialogRef: RefObject<HTMLDialogElement | null>;
+  readonly state: ConnectDialogState;
+  readonly catalog: ReturnType<typeof useChatCatalog>;
+  readonly currentBranch: string | undefined;
+  readonly baseBranchChoices: ConnectToChatDialogProps["baseBranchChoices"];
+  readonly onClose: () => void;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  return (
     <DialogChrome
       dialogRef={dialogRef}
       title={t("gitChangeScope.connect.title")}
@@ -509,6 +531,47 @@ export function ConnectToChatDialog({
         t={t}
       />
     </DialogChrome>
+  );
+}
+
+export function ConnectToChatDialog({
+  projectId,
+  currentBranch,
+  baseBranchName,
+  baseBranchChoices,
+  onClose,
+  onConnected = notifyChatUpsert,
+  listChats = fetchChats,
+  connect = connectGitChangeToChat,
+}: ConnectToChatDialogProps): ReactNode {
+  const t = useTranslate();
+  const catalog = useChatCatalog(projectId, listChats, t);
+  const recordConnection = (chatId: string, result: GitChangeConnectResponse): void => {
+    const connected = projectConnectedChat(catalog.chats, chatId, result);
+    if (connected !== undefined) onConnected(connected);
+  };
+  const state = useConnectDialogState(
+    currentBranch,
+    baseBranchName,
+    connect,
+    recordConnection,
+    onClose,
+    t,
+  );
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
+  useDialogTabTrap(dialogRef);
+  useModalInteractionLock({ initialFocusRef: dialogRef });
+
+  const dialog = (
+    <ConnectDialogForm
+      dialogRef={dialogRef}
+      state={state}
+      catalog={catalog}
+      currentBranch={currentBranch}
+      baseBranchChoices={baseBranchChoices}
+      onClose={onClose}
+      t={t}
+    />
   );
 
   return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);

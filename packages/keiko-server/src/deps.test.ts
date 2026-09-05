@@ -1239,7 +1239,12 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       snapshotDigest: "b".repeat(64),
     };
     const nowIso = new Date().toISOString();
-    deps.mintDescriptionAuthority?.(scope, nowIso);
+    deps.mintDescriptionAuthority?.({
+      scope,
+      requestedMode: "governed-assist",
+      nowIso,
+      correlationId: "description-test",
+    });
     expect(deps.gitChangeDescriptionAuthorityPort?.current(scope, nowIso)).toBeDefined();
     void deps.dispose?.();
   });

@@ -1,4 +1,8 @@
 import { randomBytes } from "node:crypto";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 // KEIKO-0577: replace the file-local digest()/canonicalJson() with the shared, architecturally
 // correct helpers from @oscharko-dev/keiko-security so a second silently-diverging
 // implementation of a security-relevant hashing primitive cannot drift further.
@@ -282,10 +286,30 @@ export interface MintGitDeliveryDescriptionAuthorityInput {
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly nowIso: string;
   readonly ttlMs?: number;
+  readonly correlationId?: string;
 }
 
 const DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS = 10 * 60 * 1000;
 const MAX_DESCRIPTION_AUTHORITIES = 256;
+
+function descriptionAuthorityLifetime(input: MintGitDeliveryDescriptionAuthorityInput): {
+  readonly nowMs: number;
+  readonly expiresAtMs: number;
+} {
+  const nowMs = Date.parse(input.nowIso);
+  const ttlMs = input.ttlMs ?? DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS;
+  const expiresAtMs = nowMs + ttlMs;
+  if (
+    !Number.isFinite(nowMs) ||
+    !Number.isSafeInteger(ttlMs) ||
+    ttlMs <= 0 ||
+    ttlMs > DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS ||
+    !Number.isFinite(new Date(expiresAtMs).getTime())
+  ) {
+    throw new TypeError("Invalid description authority lifetime.");
+  }
+  return { nowMs, expiresAtMs };
+}
 
 export function descriptionAuthorityScopeDigest(
   scope: GitDeliveryDescriptionAuthorityScope,
@@ -313,6 +337,7 @@ export class CodingRuntimeAuthorityService {
     private readonly newNonce: () => string = () => randomBytes(32).toString("hex"),
     private readonly approvals: SupervisedCodingApprovalStore = createInMemorySupervisedCodingApprovalStore(),
     private readonly capabilities: RuntimeCapabilityStore = createInMemoryRuntimeCapabilityStore(),
+    private readonly activityLog?: ServerLogSink,
   ) {}
 
   public confirmStart(
@@ -483,28 +508,65 @@ export class CodingRuntimeAuthorityService {
     };
   }
 
-  // Mints a bounded, server-owned description authority for exactly one (remoteDigest, PR
-  // identity or base/head pair, snapshotDigest) scope. `effectiveMode` is clamped by the SAME
-  // producer every runtime envelope uses, never by the caller's requested mode alone. Minting the
-  // SAME scope again while a live record exists replaces it (a fresh mint always narrows or
-  // matches the prior grant; it never widens an unrelated live record).
+  // A same-scope remint can only narrow a live grant's mode and expiry. An expired grant may
+  // be replaced only by a newly admitted caller; it cannot become live through a read.
   public mintGitDeliveryDescriptionAuthority(
     input: MintGitDeliveryDescriptionAuthorityInput,
   ): ActiveGitDeliveryDescriptionAuthority {
-    const effectiveMode = resolveEffectiveCodingWorkbenchMode(
+    let lifetime: ReturnType<typeof descriptionAuthorityLifetime>;
+    try {
+      lifetime = descriptionAuthorityLifetime(input);
+    } catch (error) {
+      this.logDescriptionAuthority(input, "rejected", {}, error);
+      throw error;
+    }
+    const digest = descriptionAuthorityScopeDigest(input.scope);
+    const prior = this.descriptionAuthorities.get(digest);
+    const live = prior !== undefined && prior.expiresAtMs > lifetime.nowMs ? prior : undefined;
+    const requested = resolveEffectiveCodingWorkbenchMode(
       input.requestedMode,
       input.deploymentCeiling,
     );
-    const nowMs = Date.parse(input.nowIso);
-    const expiresAtMs = nowMs + (input.ttlMs ?? DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS);
-    this.pruneDescriptionAuthorities();
-    const digest = descriptionAuthorityScopeDigest(input.scope);
+    const effectiveMode = resolveEffectiveCodingWorkbenchMode(
+      requested,
+      live?.effectiveMode ?? requested,
+    );
+    const expiresAtMs = Math.min(lifetime.expiresAtMs, live?.expiresAtMs ?? lifetime.expiresAtMs);
+    const expiresAt = new Date(expiresAtMs).toISOString();
     this.descriptionAuthorities.set(digest, { scope: input.scope, effectiveMode, expiresAtMs });
-    return {
-      scope: input.scope,
+    const evictedCount = this.pruneDescriptionAuthorities(lifetime.nowMs);
+    this.logDescriptionAuthority(input, live === undefined ? "minted" : "narrowed", {
       effectiveMode,
-      expiresAt: new Date(expiresAtMs).toISOString(),
-    };
+      expiresAtMs,
+      evictedCount,
+      retainedCount: this.descriptionAuthorities.size,
+    });
+    return { scope: input.scope, effectiveMode, expiresAt };
+  }
+
+  private logDescriptionAuthority(
+    input: MintGitDeliveryDescriptionAuthorityInput,
+    event: "minted" | "narrowed" | "rejected",
+    extra: Readonly<Record<string, string | number>>,
+    error?: unknown,
+  ): void {
+    (this.activityLog ?? processServerLogSink()).write({
+      category: "security",
+      op: "coding-runtime.description-authority",
+      correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
+      level: event === "rejected" ? "warn" : "info",
+      ...(error === undefined ? {} : { errorKind: errorKindOf(error) }),
+      extra: {
+        event,
+        scopeDigest: descriptionAuthorityScopeDigest(input.scope),
+        requestedMode: input.requestedMode,
+        deploymentCeiling: input.deploymentCeiling,
+        ...extra,
+        ...(error === undefined
+          ? {}
+          : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
+      },
+    });
   }
 
   /**
@@ -558,20 +620,20 @@ export class CodingRuntimeAuthorityService {
     return stored !== undefined && !Number.isNaN(nowMs) && stored.expiresAtMs <= nowMs;
   }
 
-  // #3400/#3401 final-audit F1 repair: this used to also sweep every entry whose TTL had passed,
-  // on every mint, for any scope. That made the expired-vs-absent discriminant `expired()` exists
-  // to provide non-durable: an unrelated mint for a different scope would erase the very record
-  // that answers "this scope had an authority that expired", collapsing it back into the
-  // indistinguishable "never minted" case. The size cap alone already bounds memory (a fresh
-  // scope evicts the oldest one once the map exceeds `MAX_DESCRIPTION_AUTHORITIES`), so an expired
-  // record now survives — and stays truthfully readable by `current()`/`expired()` — until it
-  // ages out of that bound, never because some other scope happened to be minted.
-  private pruneDescriptionAuthorities(): void {
+  // Retain expired-vs-absent evidence until the bounded map needs space. At capacity, evict
+  // expired records before still-live grants, and enforce the cap after inserting the new scope.
+  private pruneDescriptionAuthorities(nowMs: number): number {
+    let evictedCount = 0;
     while (this.descriptionAuthorities.size > MAX_DESCRIPTION_AUTHORITIES) {
-      const first = this.descriptionAuthorities.keys().next().value;
-      if (first === undefined) break;
-      this.descriptionAuthorities.delete(first);
+      const expired = [...this.descriptionAuthorities].find(
+        ([, value]) => value.expiresAtMs <= nowMs,
+      );
+      const oldest = expired?.[0] ?? this.descriptionAuthorities.keys().next().value;
+      if (oldest === undefined) break;
+      this.descriptionAuthorities.delete(oldest);
+      evictedCount += 1;
     }
+    return evictedCount;
   }
 
   /** Authenticates and atomically reserves estimated prompt tokens before provider dispatch. */

@@ -35,6 +35,7 @@ import type { GitChangeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/gi
 import {
   authorizeGitDeliveryModelEgress,
   type GitDeliveryDescriptionAuthorityPort,
+  type GitDeliveryDescriptionAuthorityMintRequest,
   type GitDeliveryDescriptionAuthorityScope,
 } from "../gitDelivery/runBoundAuthority.js";
 import type { WorkbenchDescriptionScope } from "./codingRuntimeDescriptionJobStore.js";
@@ -631,10 +632,7 @@ export interface ProductionWorkbenchDescriptionDeps {
   /** `undefined` -- no configured model profile for this deployment (#3399's own closed reason). */
   readonly generation: Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot"> | undefined;
   readonly descriptionAuthority: GitDeliveryDescriptionAuthorityPort | undefined;
-  readonly mintDescriptionAuthority?: (
-    scope: GitDeliveryDescriptionAuthorityScope,
-    nowIso: string,
-  ) => void;
+  readonly mintDescriptionAuthority?: (request: GitDeliveryDescriptionAuthorityMintRequest) => void;
   readonly now: () => number;
   readonly artifactRetention?: ProductionWorkbenchArtifactRetention;
 }
@@ -740,7 +738,14 @@ async function admitAndGenerate(
     snapshotDigest: captured.snapshotDigest,
   };
   const nowIso = new Date(deps.now()).toISOString();
-  deps.mintDescriptionAuthority?.(authorityScope, nowIso);
+  if (scope.acceptedMode !== undefined) {
+    deps.mintDescriptionAuthority?.({
+      scope: authorityScope,
+      requestedMode: scope.acceptedMode,
+      nowIso,
+      correlationId: scope.runId,
+    });
+  }
   const denialReason = modelEgressDenialReason(deps.descriptionAuthority, authorityScope, nowIso);
   if (denialReason !== undefined) {
     logWorkbenchModelEgressDenied(scope.runId, denialReason);

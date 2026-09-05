@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
+import { createBufferedServerLogSink, type ServerLogSink } from "../observability/server-log.js";
 import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 
 const NOW = "2026-07-11T12:00:00.000Z";
@@ -16,8 +17,15 @@ const INPUT = {
   nowIso: NOW,
 };
 
-function service(): CodingRuntimeAuthorityService {
-  return new CodingRuntimeAuthorityService(new EditorAgentAuthorityRegistry());
+function service(log?: ServerLogSink): CodingRuntimeAuthorityService {
+  return new CodingRuntimeAuthorityService(
+    new EditorAgentAuthorityRegistry(),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    log,
+  );
 }
 
 describe("description authority lifetime and capacity", () => {
@@ -33,7 +41,7 @@ describe("description authority lifetime and capacity", () => {
     expect(authority.gitDeliveryDescriptionAuthorityPort().current(SCOPE, LATER)).toEqual(original);
   });
 
-  it.each([Number.NaN, Number.POSITIVE_INFINITY, 0, -1, Number.MAX_VALUE])(
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, 0, -1, 600_001, Number.MAX_VALUE])(
     "rejects invalid TTL %s without retaining a record",
     (ttlMs) => {
       const authority = service();
@@ -71,5 +79,37 @@ describe("description authority lifetime and capacity", () => {
     expect(port.current(SCOPE, LATER)).toBeDefined();
     expect(port.expired?.({ ...SCOPE, pr: { ...SCOPE.pr, prNumber: 2 } }, LATER)).toBe(false);
     expect(port.expired?.({ ...SCOPE, pr: { ...SCOPE.pr, prNumber: 3 } }, LATER)).toBe(true);
+  });
+  it("records grants, narrowing and rejection with correlation and no scope bodies", () => {
+    const log = createBufferedServerLogSink();
+    const authority = service(log);
+    const input = { ...INPUT, correlationId: "authority-lifetime-test" };
+    authority.mintGitDeliveryDescriptionAuthority(input);
+    authority.mintGitDeliveryDescriptionAuthority({
+      ...input,
+      requestedMode: "autonomous-delivery",
+    });
+    expect(() =>
+      authority.mintGitDeliveryDescriptionAuthority({ ...input, nowIso: "invalid" }),
+    ).toThrow();
+    expect(log.events).toHaveLength(3);
+    expect(log.events.map((event) => event.extra?.event)).toEqual([
+      "minted",
+      "narrowed",
+      "rejected",
+    ]);
+    for (const event of log.events) {
+      expect(event.op).toBe("coding-runtime.description-authority");
+      expect(event.correlationId).toBe(input.correlationId);
+      expect(event.extra?.scopeDigest).toMatch(/^[a-f\d]{64}$/u);
+    }
+    expect(log.events[1]?.extra?.effectiveMode).toBe("governed-assist");
+    expect(log.events[2]).toMatchObject({
+      errorKind: "TypeError",
+      extra: { causeChain: [] },
+    });
+    expect(log.events[2]?.extra?.frames).toBeInstanceOf(Array);
+    expect(JSON.stringify(log.events)).not.toContain(SCOPE.pr.ownerAndRepo);
+    expect(JSON.stringify(log.events)).not.toContain("invalid");
   });
 });

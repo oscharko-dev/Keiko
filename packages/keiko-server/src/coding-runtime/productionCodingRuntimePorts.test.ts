@@ -785,6 +785,7 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
     remoteDigest: REMOTE,
     baseSha: BASE_SHA,
     headSha: HEAD_SHA,
+    acceptedMode: "supervised-coding",
   };
   const PR_SCOPE: WorkbenchDescriptionScope = {
     ...SCOPE,
@@ -1033,14 +1034,36 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
       }),
     );
     await dispatcher.generate(SCOPE, new AbortController().signal);
-    expect(mint).toHaveBeenCalledExactlyOnceWith(
-      {
+    expect(mint).toHaveBeenCalledExactlyOnceWith({
+      scope: {
         remoteDigest: REMOTE,
         pr: { baseRef: BASE_SHA, headRef: HEAD_SHA },
         snapshotDigest: "a".repeat(64),
       },
-      "2026-01-01T00:00:00.000Z",
+      requestedMode: "supervised-coding",
+      nowIso: "2026-01-01T00:00:00.000Z",
+      correlationId: "run-1",
+    });
+  });
+
+  it("does not mint when the accepted mode is unavailable", async () => {
+    const mint = vi.fn();
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: fakeSnapshots(() =>
+          Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+        ),
+        descriptionAuthority: denyingPort(),
+        mintDescriptionAuthority: mint,
+      }),
     );
+    const { acceptedMode: _acceptedMode, ...unknownModeScope } = SCOPE;
+
+    await expect(
+      dispatcher.generate(unknownModeScope, new AbortController().signal),
+    ).resolves.toEqual({ reason: "model-egress-denied" });
+    expect(mint).not.toHaveBeenCalled();
+    expect(generatePrDescriptionMock).not.toHaveBeenCalled();
   });
 
   function generatedDescription(): PrDescription.PrDescriptionGenerationResult {
