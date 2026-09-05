@@ -170,22 +170,29 @@ function cachedPromisorRisk(runner: GitProcessRunner, options: GitProcessOptions
   return probe;
 }
 
-// Applies the `--no-lazy-fetch --no-replace-objects` guard ONLY when it can matter and ONLY when
-// the installed git actually enforces it: an ordinary (non-promisor) repository gets the plain
-// command with no risk of an old git's "unknown option" exit, and an at-risk repository whose git
-// cannot enforce the guard is refused outright rather than read unprotected.
+// `--no-replace-objects` is an ancient global option (git 1.6.6, the replace-refs feature itself)
+// that every git this product supports recognises, so it is applied UNCONDITIONALLY — an ordinary
+// `git init` repository can carry a local `refs/replace/*` object substitution with no promisor
+// remote in sight, and this evidence must ignore it regardless of git version or promisor status.
+// `--no-lazy-fetch` is the newer flag (git 2.45, alongside the environment-variable handling that
+// makes it enforceable at all) and the ONLY one gated below: applied only when it can matter (a
+// promisor/partial-clone repository) and only when the installed git actually enforces it; an
+// at-risk repository whose git cannot enforce it is refused outright rather than read unprotected.
 function immutableLocalRunner(runner: GitProcessRunner): GitProcessRunner {
   return async (args, options) => {
+    const replaceObjectsGuardedArgs = ["--no-replace-objects", ...args];
     // Already cancelled: let the real call resolve on its own (aborted/timed-out CommandResult,
     // classified downstream exactly as before) rather than spend a guard probe — whose own result
     // would carry the identical cancellation and could otherwise be misread as "guard unsupported".
-    if (options.abortSignal?.aborted === true) return await runner(args, options);
+    if (options.abortSignal?.aborted === true) {
+      return await runner(replaceObjectsGuardedArgs, options);
+    }
     const atRisk = await cachedPromisorRisk(runner, options);
-    if (!atRisk) return await runner(args, options);
+    if (!atRisk) return await runner(replaceObjectsGuardedArgs, options);
     if (!(await versionGuardSupported(runner, options))) {
       throw new GitSnapshotReadError("git-error");
     }
-    return await runner(["--no-lazy-fetch", "--no-replace-objects", ...args], options);
+    return await runner(["--no-lazy-fetch", ...replaceObjectsGuardedArgs], options);
   };
 }
 

@@ -143,17 +143,20 @@ export function codingRuntimeNetworkPolicyForMode(
   mode: CodingWorkbenchMode,
   researchEgressEnabled: boolean | undefined,
 ): CodingWorkbenchNetworkPolicy {
-  // Mirrors codingRuntimeConnectorScopesForMode: the connector scopes a mode carries are a
-  // function of deliveryScopeGranted alone, never of the network egress posture, so an approved
-  // connector-scoped request (git ci, "connector") has the right scope to check regardless of
-  // which networkPolicy.mode this envelope carries.
+  // The connector scopes a mode carries follow deliveryScopeGranted (see
+  // codingRuntimeConnectorScopesForMode), but the envelope contract
+  // (validateNetworkPolicyConnectorScopesConsistency / validateNetworkPolicyActionClassConsistency)
+  // requires networkPolicy.connectorScopes to be empty while the policy is deny-all. Below
+  // autonomous-delivery without research egress the mint therefore stays deny-all with no scopes;
+  // an approved connector-scoped request (git ci, "connector") is redeemed through the approval
+  // proof, never through a scope smuggled onto a deny-all policy.
   const connectorScopes = codingRuntimeConnectorScopesForMode(mode);
   if (mode === "autonomous-delivery") {
     return { mode: "connector-scoped-egress", allowLoopback: false, connectorScopes };
   }
   return researchEgressEnabled === true
     ? { mode: "governed-egress", allowLoopback: false, connectorScopes }
-    : { mode: "deny-all", allowLoopback: false, connectorScopes };
+    : { mode: "deny-all", allowLoopback: false, connectorScopes: [] };
 }
 
 export function codingRuntimeCommandPolicyForMode(

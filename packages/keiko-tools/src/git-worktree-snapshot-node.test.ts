@@ -13,6 +13,7 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { recordingSpawn } from "./_support.js";
 import {
   GIT_WORKTREE_READ_COMMAND_RULES,
+  GitLazyFetchGuardUnsupportedError,
   GitWorktreeReadError,
   readGitRemoteAliases,
   readGitRemoteUrl,
@@ -58,10 +59,15 @@ async function captureRemoteUrlReadEnv(
     { workspace: info, processEnv, now: () => Date.now(), spawn: spawn.fn },
     "origin",
   );
+  // First spawn: the lazy-fetch guard's own promisor-remote probe (reviewer 3941836280) — exit 1
+  // with no stdout means "no promisor remote configured", so the guard admits the real remote-url
+  // read that follows without a version probe of its own.
+  spawn.child.emit("close", 1, null);
+  await expect.poll(() => spawn.calls()).toHaveLength(2);
   spawn.child.stdout.emit("data", Buffer.from(`${CONFIGURED_REMOTE_URL}\n`, "utf8"));
   spawn.child.emit("close", 0, null);
   await pending;
-  return spawn.calls()[0]?.options.env ?? {};
+  return spawn.calls()[1]?.options.env ?? {};
 }
 
 function workspaceInfo(rootPath: string): WorkspaceInfo {
@@ -111,7 +117,9 @@ describe("read-only allowlist", () => {
 
 describe("read-only lane git-version compatibility", () => {
   // Regression pin: this lane used to prepend `--no-lazy-fetch --no-replace-objects` as CLI flags
-  // to every read (git-mutation-node.ts's write lane still does, correctly, for its own reason).
+  // to every read (git-mutation-node.ts's write lane no longer does either, for the same reason —
+  // both lanes now pin the env-var form and gate `--no-lazy-fetch`'s protection on the version
+  // check below rather than the incompatible CLI flag).
   // `--no-lazy-fetch` is a newer global option — absent on the git 2.43 that `ubuntu-latest` ships
   // — so on CI every read here exited 129 ("unknown option: --no-lazy-fetch") while the identical
   // read stayed green on a workstation with a newer git (#3384 CI: git-raw-worktree-node.test.ts
@@ -127,13 +135,60 @@ describe("read-only lane git-version compatibility", () => {
       spawn: spawn.fn,
       now: () => Date.now(),
     });
+    // First spawn: the lazy-fetch guard's own promisor-remote probe (reviewer 3941836280) — exit 1
+    // with no stdout means "no promisor remote configured", so the guard admits the real `remote`
+    // read that follows without a version probe of its own.
+    spawn.child.emit("close", 1, null);
+    await expect.poll(() => spawn.calls()).toHaveLength(2);
     spawn.child.stdout.emit("data", Buffer.from("origin\n", "utf8"));
     spawn.child.emit("close", 0, null);
     await pending;
-    const call = spawn.calls()[0];
+    const call = spawn.calls()[1];
     expect(call?.args).toEqual(["remote"]);
     expect(call?.options.env.GIT_NO_LAZY_FETCH).toBe("1");
     expect(call?.options.env.GIT_NO_REPLACE_OBJECTS).toBe("1");
+  });
+});
+
+// Reviewer 3941836280: Git 2.43 (`ubuntu-latest`'s pinned git) silently IGNORES GIT_NO_LAZY_FETCH —
+// its environment.c gained that check only in Git 2.45, the same release that added the CLI flag —
+// so the env var pinned above protects nothing there. That gap only matters for a PROMISOR (partial)
+// clone; these pins exercise both halves of the resulting gate directly against a scripted spawn.
+describe("lazy-fetch guard: version-gated, fail-closed for an at-risk (promisor) repository", () => {
+  function answerPromisorProbe(spawn: ReturnType<typeof recordingSpawn>, promisor: boolean): void {
+    if (promisor) {
+      spawn.child.stdout.emit("data", Buffer.from("remote.origin.promisor true\n", "utf8"));
+      spawn.child.emit("close", 0, null);
+    } else {
+      spawn.child.emit("close", 1, null);
+    }
+  }
+
+  it("refuses the read outright when the repository is a promisor clone and the installed git cannot enforce the guard", async () => {
+    const spawn = recordingSpawn();
+    const pending = readGitRemoteAliases({ workspace: info, spawn: spawn.fn, now: () => Date.now() });
+    answerPromisorProbe(spawn, true);
+    await expect.poll(() => spawn.calls()).toHaveLength(2);
+    // The version probe: git 2.43 — too old to enforce GIT_NO_LAZY_FETCH.
+    spawn.child.stdout.emit("data", Buffer.from("git version 2.43.0\n", "utf8"));
+    spawn.child.emit("close", 0, null);
+    await expect(pending).rejects.toBeInstanceOf(GitLazyFetchGuardUnsupportedError);
+    // The real `remote` read must never have been reached — refused, not read unprotected.
+    expect(spawn.calls()).toHaveLength(2);
+  });
+
+  it("admits the read once the installed git is new enough to enforce the guard", async () => {
+    const spawn = recordingSpawn();
+    const pending = readGitRemoteAliases({ workspace: info, spawn: spawn.fn, now: () => Date.now() });
+    answerPromisorProbe(spawn, true);
+    await expect.poll(() => spawn.calls()).toHaveLength(2);
+    spawn.child.stdout.emit("data", Buffer.from("git version 2.45.0\n", "utf8"));
+    spawn.child.emit("close", 0, null);
+    await expect.poll(() => spawn.calls()).toHaveLength(3);
+    spawn.child.stdout.emit("data", Buffer.from("origin\n", "utf8"));
+    spawn.child.emit("close", 0, null);
+    expect(await pending).toEqual(["origin"]);
+    expect(spawn.calls()[2]?.args).toEqual(["remote"]);
   });
 });
 
