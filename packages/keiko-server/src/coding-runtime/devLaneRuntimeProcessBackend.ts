@@ -31,8 +31,11 @@ import type {
  * Development-lane process backend for macOS dev checkouts (#2475, ADR-0140).
  *
  * The existing dev/evaluation backend wraps the runtime in a deny-by-default network profile.
- * Fork and service-based process escapes are denied; only the exact gateway TCP family/port is
- * reachable. Release signatures and platform qualification remain separate requirements.
+ * Service-based process escapes (mach-lookup, Apple Events, LSOpen) are denied; process-fork is
+ * allowed because the sidecar forks `git` for its own session/history endpoints (#3390), and a
+ * macOS Seatbelt profile is inherited by every descendant process, so a forked child stays bound
+ * by the same network denial. Only the exact gateway TCP family/port is reachable. Release
+ * signatures and platform qualification remain separate requirements.
  */
 export interface DevLaneRuntimeBackendIdentity {
   readonly platform: "darwin";
@@ -158,7 +161,7 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
         modelProfileDigest: policy.modelProfileDigest,
         treeBindingId: policy.treeBindingId,
         profile: policy.profile,
-        childProcessesAllowed: false,
+        childProcessesAllowed: true,
       },
     });
     const tree = ownTree(`dev-lane-opencode-${String(this.nextTreeId++)}`, child, (error) => {

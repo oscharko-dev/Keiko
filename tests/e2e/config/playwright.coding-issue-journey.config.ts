@@ -14,7 +14,20 @@ import { join } from "node:path";
 
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "4390");
-const stateDir = join(root, ".keiko-e2e-state", "coding-issue-journey");
+// Live-run bug: `runUiCli`'s `--ui-db` argument goes through the SAME workspace-containment guard
+// production enforces (`packages/keiko-server/src/store/paths.ts`'s `resolveUiDbPath` ->
+// `resolveConfiguredPath`), which checks the REAL Node process's `process.cwd()` -- not the
+// `cwd` option `coding-issue-journey-server.mts` hands `runUiCli` for the connected project, and
+// not overridable by it, since that option is a value threaded through the CLI, never an actual
+// `process.chdir()`. Because Playwright's `webServer.cwd` is this repository's root, ANY
+// `--ui-db` path under `<root>/.keiko-e2e-state/...` fails closed as "must not be inside the
+// current workspace" (the ONLY exemption the guard grants is the literal `<cwd>/.keiko`
+// directory). Every scripted sibling harness in `tests/e2e/servers/` builds `UiHandlerDeps`
+// directly and never goes through this CLI-level guard, so this is the only lane that hits it.
+// Nesting the state dir under `.keiko` (already the default runtime-state directory name and
+// already `.gitignore`d) satisfies the SAME exemption `resolveConfiguredPath` grants its own
+// default `.keiko` runtime state root, without weakening or bypassing the guard itself.
+const stateDir = join(root, ".keiko", "coding-issue-journey-e2e");
 
 // Live-run pairing fix: `coding-issue-journey-server.mts` and `coding-issue-journey.spec.ts` run
 // in SEPARATE processes (the webServer's launched `keiko ui` process, and this test runner's own

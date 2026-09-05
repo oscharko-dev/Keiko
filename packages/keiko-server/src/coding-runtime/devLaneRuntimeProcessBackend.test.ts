@@ -225,6 +225,36 @@ describe("dev-lane runtime process backend", () => {
     expect(observed).toBe(0);
   });
 
+  // Regression pin (#3390 live run): the spawned-confinement log line must reflect that
+  // process-fork is allowed (the sidecar forks `git` for its own session/history endpoints), never
+  // restate the old "no children at all" posture. Failing-before: this asserted
+  // `childProcessesAllowed: false`, which was inaccurate once the fork denial was removed from the
+  // Seatbelt profile the same launch is wrapped under.
+  it("records childProcessesAllowed: true on the spawned confinement line (#3390)", () => {
+    const fixture = stageFixture();
+    const activityLog = createBufferedServerLogSink();
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
+      runtimeRoot: fixture.runtimeRoot,
+      activityLog,
+      spawnRuntime: () => fakeChild(4711),
+      killProcessGroup: () => undefined,
+    });
+    backend.spawnOwnedTree(launchRequest(fixture));
+    expect(activityLog.events).toContainEqual(
+      expect.objectContaining({
+        category: "process",
+        op: "runtime.confinement.spawned",
+        correlationId: "run-2475",
+        extra: expect.objectContaining({
+          profile: "keiko-gateway",
+          childProcessesAllowed: true,
+        }) as unknown,
+      }),
+    );
+  });
+
   it("refuses executables outside the runtime root and unsafe paths, fail closed", () => {
     const fixture = stageFixture();
     const backend = createDevLaneRuntimeProcessBackend({

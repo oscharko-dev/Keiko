@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  buildGatewaySeatbeltCommand,
   buildWrappedCommand,
   DEFAULT_CONTAINER_IMAGE,
   EXECUTION_ROOT_MOUNT,
@@ -7,7 +8,7 @@ import {
   SEATBELT_DENY_EGRESS_PROFILE,
   type WrappedCommand,
 } from "./backends.js";
-import type { IsolatedRunPlan } from "./types.js";
+import type { IsolatedRunPlan, NetworkGatewayPolicy } from "./types.js";
 
 const plan: IsolatedRunPlan = {
   command: "node",
@@ -251,5 +252,22 @@ describe("buildWrappedCommand", () => {
       buildWrappedCommand("seatbelt", { ...plan, args: [], command: "true" }),
     );
     expect(wrapped.args).toEqual(["-p", SEATBELT_DENY_EGRESS_PROFILE, "true"]);
+  });
+});
+
+describe("buildGatewaySeatbeltCommand fork policy (#3390 live run)", () => {
+  const gateway: NetworkGatewayPolicy = { mode: "gateway", host: "127.0.0.1", port: 1983 };
+
+  // Regression pin: `(deny process-fork)` broke every dev-lane coding run at the OpenCode
+  // handshake, because the pinned sidecar shells out to `git` for its own session/history
+  // endpoints. Fork must stay allowed here; the other service-escape denials are unaffected and
+  // stay pinned. If this test starts failing because `process-fork` reappears in the profile, do
+  // not "fix" it by re-adding the denial — OpenCode needs fork for git (#3390).
+  it("never re-adds a process-fork denial to the gateway profile", () => {
+    const wrapped = buildGatewaySeatbeltCommand(gateway, "/trusted/opencode", ["serve"]);
+    const profile = wrapped.args[1];
+    expect(profile).not.toContain("process-fork");
+    for (const denied of ["network*", "mach-lookup", "appleevent-send", "lsopen"])
+      expect(profile).toContain(`(deny ${denied})`);
   });
 });

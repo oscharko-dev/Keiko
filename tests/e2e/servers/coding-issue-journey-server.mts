@@ -60,8 +60,14 @@ export function defaultUiStaticRoot(repoRoot: string): string {
   return resolve(repoRoot, "dist", "ui", "static");
 }
 
-function defaultStateDir(repoRoot: string): string {
-  return resolve(repoRoot, ".keiko-coding-issue-journey-e2e");
+// Live-run bug: `keiko ui`'s own `--ui-db` CLI validation
+// (`packages/keiko-server/src/store/paths.ts`'s `resolveUiDbPath`) rejects a path "inside the
+// current workspace" unless it sits under the literal `<process.cwd()>/.keiko` exemption --
+// `playwright.coding-issue-journey.config.ts`'s `KEIKO_E2E_STATE_DIR` nests under `.keiko` for
+// exactly this reason, so this fallback (only reached when this server is launched WITHOUT that
+// config, e.g. directly) matches it rather than reintroducing the same failure standalone.
+export function defaultStateDir(repoRoot: string): string {
+  return resolve(repoRoot, ".keiko", "coding-issue-journey-e2e");
 }
 
 function processIo(): CliIo {

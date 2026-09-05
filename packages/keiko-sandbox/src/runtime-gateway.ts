@@ -82,7 +82,7 @@ function policyDigest(policy: Omit<RuntimeGatewayConfinement, "policyDigest">): 
         policy.envelopeDigest,
         policy.runtimeArtifactDigest,
         policy.modelProfileDigest,
-        "no-fork-no-mach-lookup-no-appleevents-no-lsopen",
+        "fork-allowed-no-mach-lookup-no-appleevents-no-lsopen",
       ]),
     )
     .digest("hex");

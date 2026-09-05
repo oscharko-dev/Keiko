@@ -1,5 +1,8 @@
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildRuntimeGatewaySeatbeltCommand,
@@ -34,13 +37,13 @@ describe("long-lived gateway network confinement", () => {
     expect(reads).toBe(0);
   });
 
-  it("permits only the authenticated gateway's TCP family/port and denies process/service escapes", () => {
+  it("permits only the authenticated gateway's TCP family/port and denies service escapes", () => {
     const policy = createRuntimeGatewayConfinement(input);
     const wrapped = buildRuntimeGatewaySeatbeltCommand(policy, "/trusted/opencode", ["serve"]);
     expect(wrapped.command).toBe("/usr/bin/sandbox-exec");
     expect(wrapped.args).toEqual(["-p", expect.any(String), "/trusted/opencode", "serve"]);
     const profile = wrapped.args[1];
-    for (const denied of ["network*", "process-fork", "mach-lookup", "appleevent-send", "lsopen"])
+    for (const denied of ["network*", "mach-lookup", "appleevent-send", "lsopen"])
       expect(profile).toContain(`(deny ${denied})`);
     expect(profile).toContain('(remote tcp4 "localhost:1983")');
     expect(profile).toContain('(local tcp4 "localhost:*")');
@@ -49,6 +52,21 @@ describe("long-lived gateway network confinement", () => {
     expect(profile).not.toContain('remote tcp4 "localhost:*"');
     expect(Object.isFrozen(policy)).toBe(true);
     expect(JSON.stringify(policy)).not.toContain(input.gatewayUrl);
+  });
+
+  // Regression pin (#3390 live run): the pinned OpenCode sidecar shells out to `git` for its own
+  // session/history endpoints, so a fork denial in this profile broke every dev-lane coding run at
+  // the handshake (`POST /sync/history` / `GET /session` both answered HTTP 500). This pin moved
+  // here, strengthened, from the old "denies process-fork" assertion above: fork must stay ALLOWED,
+  // and the other service-escape denials this incident did NOT touch must stay exactly as strict.
+  it("allows process-fork so the sidecar can spawn git, while still denying every other escape (#3390)", () => {
+    const policy = createRuntimeGatewayConfinement(input);
+    const profile = buildRuntimeGatewaySeatbeltCommand(policy, "/trusted/opencode", ["serve"])
+      .args[1];
+    expect(profile).not.toContain("process-fork");
+    expect(profile).not.toContain("(deny process*)");
+    for (const denied of ["network*", "mach-lookup", "appleevent-send", "lsopen"])
+      expect(profile).toContain(`(deny ${denied})`);
   });
 
   it("keeps IPv6 destinations separate from IPv4 and preserves the exact boundary ports", () => {
@@ -156,6 +174,24 @@ function connectSnippet(port: number): string {
   ].join("");
 }
 
+// Writes the connect probe to a file so it can be run as a genuinely FORKED grandchild (a shell's
+// `-c` script forking a separate `node` program) without shell-quoting the script text itself.
+function writeForkConnectScript(dir: string, port: number): string {
+  const path = join(dir, "fork-connect.cjs");
+  writeFileSync(
+    path,
+    [
+      "const net = require('net');",
+      `const s = net.connect({ host: '127.0.0.1', port: ${String(port)} });`,
+      "s.setTimeout(3000);",
+      "s.on('connect', () => { process.stdout.write('CONNECTED'); s.destroy(); process.exit(0); });",
+      "s.on('error', () => { process.stdout.write('BLOCKED'); process.exit(3); });",
+      "s.on('timeout', () => { process.stdout.write('TIMEOUT'); s.destroy(); process.exit(3); });",
+    ].join("\n"),
+  );
+  return path;
+}
+
 async function listenEphemeral(): Promise<{ server: Server; port: number }> {
   return new Promise((resolve, reject) => {
     const server = createServer((socket) => socket.end());
@@ -210,6 +246,49 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
       } finally {
         gateway.server.close();
         hostile.server.close();
+      }
+    },
+    20_000,
+  );
+
+  // Real OS-level proof that removing `(deny process-fork)` (#3390: OpenCode forks `git` for its
+  // own session/history endpoints) does not weaken egress confinement: on macOS a Seatbelt profile
+  // is inherited by every descendant process, so a FORKED grandchild (a shell script's `node`
+  // subprocess, not the top-level wrapped command itself) must still be denied a hostile loopback
+  // destination and permitted only the configured gateway port.
+  it.skipIf(!canProveOnThisHost)(
+    "denies a hostile loopback destination from a forked grandchild while permitting the gateway port",
+    async () => {
+      const gateway = await listenEphemeral();
+      const hostile = await listenEphemeral();
+      const scriptDir = mkdtempSync(join(tmpdir(), "keiko-fork-inherit-"));
+      try {
+        const policy = createRuntimeGatewayConfinement({
+          ...input,
+          gatewayUrl: `http://127.0.0.1:${String(gateway.port)}/gateway`,
+        });
+
+        const hostileScript = writeForkConnectScript(scriptDir, hostile.port);
+        const hostileWrapped = buildRuntimeGatewaySeatbeltCommand(policy, "/bin/sh", [
+          "-c",
+          `'${process.execPath}' '${hostileScript}'`,
+        ]);
+        const denied = run(hostileWrapped.command, hostileWrapped.args);
+        expect(["BLOCKED", "TIMEOUT"]).toContain(denied.stdout);
+        expect(denied.stdout).not.toBe("CONNECTED");
+
+        const gatewayScript = writeForkConnectScript(scriptDir, gateway.port);
+        const gatewayWrapped = buildRuntimeGatewaySeatbeltCommand(policy, "/bin/sh", [
+          "-c",
+          `'${process.execPath}' '${gatewayScript}'`,
+        ]);
+        const allowed = run(gatewayWrapped.command, gatewayWrapped.args);
+        expect(allowed.stdout).toBe("CONNECTED");
+        expect(allowed.status).toBe(0);
+      } finally {
+        gateway.server.close();
+        hostile.server.close();
+        rmSync(scriptDir, { recursive: true, force: true });
       }
     },
     20_000,

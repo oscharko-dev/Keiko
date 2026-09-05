@@ -4,11 +4,12 @@
 // proves the resolved, already-validated spend budget is threaded into the launched process env
 // as the exact validated number, not a re-parse of the original (possibly differently formatted)
 // environment string.
-import { resolve } from "node:path";
+import { resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SESSION_PAIRING_LAUNCHER_SECRET_ENV } from "@oscharko-dev/keiko-server";
 
 import {
+  defaultStateDir,
   defaultUiStaticRoot,
   launchedEnv,
   resolveLauncherSecret,
@@ -99,5 +100,23 @@ describe("defaultUiStaticRoot", () => {
     expect(defaultUiStaticRoot(correctRepoRoot)).not.toBe(
       resolve(buggyRepoRootFromCompiledFile, "dist", "ui", "static"),
     );
+  });
+});
+
+describe("defaultStateDir", () => {
+  // Live-run bug, discovered by actually running `test:e2e:coding-issue-journey:live`: `keiko
+  // ui`'s own `--ui-db` CLI validation (`packages/keiko-server/src/store/paths.ts`'s
+  // `resolveUiDbPath`) fails closed with "UI database path must not be inside the current
+  // workspace" for ANY path under the real process's `process.cwd()` unless that path sits under
+  // the literal `<cwd>/.keiko` exemption -- Playwright's `webServer.cwd` is always the repo root,
+  // so a state dir nested under a differently-named top-level directory (the previous
+  // `.keiko-coding-issue-journey-e2e`) always failed this guard the moment the server actually
+  // tried to launch `keiko ui` with a `--ui-db` under it.
+  it("nests under .keiko so the resolved ui-db path satisfies keiko ui's own workspace guard", () => {
+    const repoRoot = "/Users/example/keiko-checkout";
+    const stateDir = defaultStateDir(repoRoot);
+    expect(stateDir).toBe(resolve(repoRoot, ".keiko", "coding-issue-journey-e2e"));
+    const uiDbPath = resolve(stateDir, "ui-db", "keiko-ui.db");
+    expect(uiDbPath.startsWith(`${resolve(repoRoot, ".keiko")}${sep}`)).toBe(true);
   });
 });
