@@ -24,21 +24,12 @@ export interface LineMatcher {
   readonly match: (line: string, sourceLine?: RepositorySourceLine) => number;
 }
 
-/** Trusted workspace callers can request literal substring matching for an exact-text query. */
-export interface LiteralQueryInterpretation {
-  readonly kind: "literal";
-}
-
-export function fingerprintFor(
-  query: RetrievalQuery,
-  interpretation?: LiteralQueryInterpretation,
-): string {
+export function fingerprintFor(query: RetrievalQuery): string {
   const canonical = JSON.stringify({
     kind: query.kind,
     text: query.text,
     caseSensitive: query.caseSensitive,
     maxResults: query.maxResults,
-    ...(interpretation === undefined ? {} : { interpretation: interpretation.kind }),
   });
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
 }
@@ -713,10 +704,6 @@ function buildExactSymbolMatcher(query: RetrievalQuery): LineMatcher {
   if (/\s/.test(query.text)) {
     throw new RepoSearchInvalidQueryError("exact-symbol query must not contain whitespace");
   }
-  return buildLiteralMatcher(query);
-}
-
-function buildLiteralMatcher(query: RetrievalQuery): LineMatcher {
   const needle = query.caseSensitive ? query.text : query.text.toLowerCase();
   return {
     match: (line: string): number => {
@@ -756,15 +743,7 @@ function regexLineMatcher(regex: RegExp): LineMatcher {
   };
 }
 
-export function buildMatcher(
-  query: RetrievalQuery,
-  interpretation?: LiteralQueryInterpretation,
-): LineMatcher {
-  if (interpretation?.kind === "literal") {
-    if (query.kind !== "exact-symbol")
-      throw new RepoSearchInvalidQueryError("literal interpretation requires exact-text query");
-    return buildLiteralMatcher(query);
-  }
+export function buildMatcher(query: RetrievalQuery): LineMatcher {
   if (query.kind === "natural-language") {
     return buildNaturalLanguageMatcher(query);
   }

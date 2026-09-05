@@ -131,7 +131,6 @@ describe("checkArchitectureImportPolicy", () => {
     );
 
     expect(Object.fromEntries([...counts.entries()].sort())).toEqual({
-      "adr-0165-raw-coordinate-owner": 1,
       "adr-0005-owned-root-authority-implementation-private": 1,
       "adr-0005-owned-root-containment-allowed-callers": 1,
       "adr-0005-owned-root-lookup-allowed-callers": 1,

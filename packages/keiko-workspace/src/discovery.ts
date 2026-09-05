@@ -515,11 +515,8 @@ async function runWalkAsync(
   workspace: WorkspaceInfo,
   opts: DiscoveryOptions,
   fs: WorkspaceFs,
-  failOnReadError = false,
-  executionControl?: StructuralExecutionControl,
-  entryLimit?: number,
 ): Promise<Walk> {
-  const walk = createWalk(workspace, opts, fs, failOnReadError, executionControl, entryLimit);
+  const walk = createWalk(workspace, opts, fs, false);
   if (walk.realRoot !== undefined) {
     await descendAsync(walk, { entriesSinceYield: 0 }, walk.realRoot, "", 0);
   }
@@ -574,22 +571,6 @@ export function discoverCandidateInventory(
 ): CandidateDiscoveryResult {
   const entryLimit = Math.max(opts.maxFiles * 2, opts.maxFiles + opts.maxDepth + 1);
   const walk = runWalk(workspace, opts, fs, true, executionControl, entryLimit);
-  return candidateDiscoveryResult(walk);
-}
-
-/** The candidate inventory's existing guard chain with cooperative 32-entry scheduling. */
-export async function discoverCandidateInventoryAsync(
-  workspace: WorkspaceInfo,
-  opts: DiscoveryOptions,
-  fs: WorkspaceFs = nodeWorkspaceFs,
-  executionControl?: StructuralExecutionControl,
-): Promise<CandidateDiscoveryResult> {
-  const entryLimit = Math.max(opts.maxFiles * 2, opts.maxFiles + opts.maxDepth + 1);
-  const walk = await runWalkAsync(workspace, opts, fs, true, executionControl, entryLimit);
-  return candidateDiscoveryResult(walk);
-}
-
-function candidateDiscoveryResult(walk: Walk): CandidateDiscoveryResult {
   return {
     ...discoveryResult(walk),
     skippedSymbolicLinks: [...new Set(walk.skippedSymbolicLinks)].sort(compareStrings),

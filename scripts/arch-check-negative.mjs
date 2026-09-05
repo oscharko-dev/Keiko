@@ -25,7 +25,6 @@ import {
   checkArchitectureImportPolicy,
   countImportPolicyViolationsByRule,
 } from "./check-import-policy.mjs";
-import { checkGovernedToolContractNegatives } from "./check-governed-tool-contract.mjs";
 import { runBareSpecifierVisibilityProbe } from "./lib/bare-specifier-visibility-probe.mjs";
 
 const RULES_FILE = ".dependency-cruiser.cjs";
@@ -160,7 +159,6 @@ function assertProductionIncludeOnlyIsCovered() {
 }
 
 const EXPECTED_IMPORT_POLICY_RULE_COUNTS = {
-  "adr-0165-raw-coordinate-owner": 1,
   "adr-0005-owned-root-authority-implementation-private": 1,
   "adr-0005-owned-root-containment-allowed-callers": 1,
   "adr-0005-owned-root-lookup-allowed-callers": 1,
@@ -191,12 +189,6 @@ if (missingDist.length > 0) {
   for (const entrypoint of missingDist) {
     console.error(`  - ${entrypoint}`);
   }
-  process.exit(1);
-}
-
-const contractNegativeErrors = checkGovernedToolContractNegatives(process.cwd());
-if (contractNegativeErrors.length > 0) {
-  for (const error of contractNegativeErrors) console.error(`arch-check-negative: ${error}`);
   process.exit(1);
 }
 

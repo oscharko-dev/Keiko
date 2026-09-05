@@ -3,25 +3,9 @@ import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-con
 
 import {
   buildMatcher,
-  fingerprintFor,
   lineLooksLikeSymbolDefinition,
   normalizeNaturalLanguageToken,
 } from "./repoSearchMatchers.js";
-
-describe("trusted literal query interpretation", () => {
-  it("matches spaces and punctuation literally without regex expansion", () => {
-    const query = { ...nlq("( ".repeat(100)), kind: "exact-symbol" as const };
-    expect(buildMatcher(query, { kind: "literal" }).match(query.text)).toBe(1);
-    expect(() => buildMatcher(query)).toThrow("whitespace");
-    expect(fingerprintFor(query, { kind: "literal" })).not.toBe(fingerprintFor(query));
-  });
-  it("cannot turn the regex lane into a bypass of its canonical safety gate", () => {
-    const query = { ...nlq("(a+)+"), kind: "regex" as const };
-    expect(() => buildMatcher(query)).toThrow("unsafe");
-    expect(() => buildMatcher(query, { kind: "literal" })).toThrow("exact-text");
-    expect(() => buildMatcher({ ...query, text: "x".repeat(201) })).toThrow("too long");
-  });
-});
 
 function nlq(text: string): RetrievalQuery {
   return {

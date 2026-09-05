@@ -195,7 +195,7 @@
     "check:workflow-branch-parity": "node scripts/check-workflow-branch-parity.mjs",
     "check:native:macos": "./scripts/check-macos-native-quality.sh",
     "check:native:windows": "pwsh -NoProfile -NonInteractive -File scripts/check-windows-native-quality.ps1",
-    "arch:check": "depcruise --validate .dependency-cruiser.cjs src \"packages/*/src\" && node scripts/check-import-policy.mjs && node scripts/check-contract-boundaries.mjs && node scripts/check-vector-index-architecture.mjs && npm run check:governed-tool-contract",
+    "arch:check": "depcruise --validate .dependency-cruiser.cjs src \"packages/*/src\" && node scripts/check-import-policy.mjs && node scripts/check-contract-boundaries.mjs && node scripts/check-vector-index-architecture.mjs",
     "arch:check:negative": "node scripts/arch-check-negative.mjs",
     "conversation:release-check": "npm run check:runtime-toolchain && npm run typecheck && npm run lint && npm run arch:check && npm run arch:check:negative && npm test && node node_modules/@typescript/native/bin/tsc -p tsconfig.build.json && node dist/cli/index.js --version",
     "prepack": "npm run check:runtime-toolchain && npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run check:editor-release-evidence && npm run prune:package-build-artifacts && npm run prune:package-native-optionals && npm run check:shell-spawn-guardrails && npm run check:security-regression-matrix && npm run arch:check && npm run arch:check:negative && npm run check:workspace-supply-chain && npm run check:package-surface && npm run check:version-consistency && npm run check:publish-manifests && npm run check:portable-manifest && npm run check:release-impact && npm run check:qi-supply-chain",
@@ -221,8 +221,7 @@
     "report:settlement-latency": "node scripts/report-settlement-latency.mjs",
     "report:infra-failure-observation": "node scripts/report-infra-failure-observation.mjs",
     "check:sonar-rules": "node scripts/check-sonar-rules.mjs",
-    "check:osv-waiver-scope": "node scripts/check-osv-waiver-scope.mjs",
-    "check:governed-tool-contract": "node scripts/check-governed-tool-contract.mjs"
+    "check:osv-waiver-scope": "node scripts/check-osv-waiver-scope.mjs"
   },
   "overrides": {
     "aria-query": "5.3.2",

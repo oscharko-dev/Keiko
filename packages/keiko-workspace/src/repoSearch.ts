@@ -40,12 +40,7 @@ import {
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import { containedRealPathInfo, isCanonicalAllowedContainedPath } from "./realpath.js";
-import {
-  buildMatcher,
-  compileGlob,
-  fingerprintFor,
-  type LiteralQueryInterpretation,
-} from "./repoSearchMatchers.js";
+import { buildMatcher, compileGlob, fingerprintFor } from "./repoSearchMatchers.js";
 import {
   cachedLexicalRecordRequiresLiveMatch,
   prepareCachedLexicalQuery,
@@ -173,7 +168,6 @@ export interface ReadExcerptResult {
 }
 
 interface FacadeDeps {
-  readonly queryInterpretation?: LiteralQueryInterpretation | undefined;
   readonly fs?: WorkspaceFs;
   readonly nowMs?: () => number;
   // Internal absolute request ceiling. Public callers normally use elapsedMsMax; the request-local
@@ -471,7 +465,7 @@ function mergeSearchAtoms(
 // cannot block the event loop for multiple seconds. discoverFiles() itself remains synchronous
 // (sync walk is load-bearing for importGraph/testSourcePairing callers); the yield here covers
 // the already-async per-file scan pass where the loop overhead is measurable.
-const SCAN_YIELD_INTERVAL = 32;
+const SCAN_YIELD_INTERVAL = 64;
 const PROJECT_METADATA_SCAN_MIN_FILES = 256;
 const PROJECT_METADATA_SCAN_MAX_FILES = 512;
 
@@ -509,7 +503,6 @@ type SearchTextRunnerDeps = Required<Pick<FacadeDeps, "fs" | "nowMs">> &
     | "contentLane"
     | "deadlineAtMs"
     | "candidateContentFor"
-    | "queryInterpretation"
   >;
 
 function buildSearchTextRunner(
@@ -530,8 +523,8 @@ function buildSearchTextRunner(
     startMs: deps.nowMs(),
     ...(deps.deadlineAtMs === undefined ? {} : { deadlineAtMs: deps.deadlineAtMs }),
     signal: deps.signal,
-    matcher: buildMatcher(query, deps.queryInterpretation),
-    fingerprint: fingerprintFor(query, deps.queryInterpretation),
+    matcher: buildMatcher(query),
+    fingerprint: fingerprintFor(query),
     policy: resolveSearchPolicy(scope.relativePaths.length > 0, deps.searchHints),
     query,
     contentLane: deps.contentLane ?? "evidence",
@@ -2057,7 +2050,6 @@ function completedSearchResult(inputs: CompletedSearchResultInputs): SearchResul
 
 function buildSearchTextDeps(deps: FacadeDeps): SearchTextRunnerDeps {
   return {
-    queryInterpretation: deps.queryInterpretation,
     fs: deps.fs ?? nodeWorkspaceFs,
     nowMs: deps.nowMs ?? Date.now,
     ...(deps.candidatePathGlobs === undefined
