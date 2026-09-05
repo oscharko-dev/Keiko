@@ -6,6 +6,7 @@ import {
   OPENCODE_APPROVED_ENDPOINTS,
   createOpenCodeSseDecoder,
   classifyOpenCodeLiveControl,
+  isOpenCodeFacadeDispatchedTool,
   parseOpenCodeHistory,
   parseOpenCodeSse,
   projectOpenCodePermissionEvent,
@@ -1030,6 +1031,15 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     ]);
     expect(parsed).toMatchObject({ ok: true, value: [{ kind: "question" }] });
     expect(JSON.stringify(parsed)).not.toContain(sentinel);
+  });
+
+  it("classifies keiko_* tools as facade-dispatched and question/todowrite/unknown tools as not (#3390)", () => {
+    expect(isOpenCodeFacadeDispatchedTool("keiko_workspace_discover")).toBe(true);
+    expect(isOpenCodeFacadeDispatchedTool("keiko_workspace_read")).toBe(true);
+    expect(isOpenCodeFacadeDispatchedTool("question")).toBe(false);
+    expect(isOpenCodeFacadeDispatchedTool("todowrite")).toBe(false);
+    expect(isOpenCodeFacadeDispatchedTool("not-a-real-tool")).toBe(false);
+    expect(isOpenCodeFacadeDispatchedTool("")).toBe(false);
   });
 });
 

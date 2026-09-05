@@ -105,6 +105,17 @@ const ASSISTANT_MESSAGE_FIELDS = [
 const APPROVED_PRODUCTIVE_TOOLS = new Set<string>(
   OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name }) => name),
 );
+
+/**
+ * True for a tool the Keiko facade dispatches and settles itself (`keiko_*`, per
+ * `OPENCODE_TOOL_SOURCE_DEFINITIONS`). The single source of truth for "does something else
+ * already own this tool's terminal state" (#3390) -- callers must not restate the productive-tool
+ * list.
+ */
+export function isOpenCodeFacadeDispatchedTool(tool: string): boolean {
+  return APPROVED_PRODUCTIVE_TOOLS.has(tool);
+}
+
 const APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS = new Set<string>([
   "question",
   // #2480: plan carrier only — its admitted parts feed the governed plan projection and it

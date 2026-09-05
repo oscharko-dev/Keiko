@@ -35,6 +35,10 @@ import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 const dirs: string[] = [];
 const MODEL_CAPABILITY = "m".repeat(43);
 const TOOL_CAPABILITY = "t".repeat(43);
+// ADR-0043 D11-D14 (#3390): the fixed test double of the ONE attested loopback origin the tool
+// facade rides -- the same origin `productionOpenCodeActivation.ts` derives `gatewayUrl` and
+// `toolFacadeUrl` from in production, fixed here since this suite never binds a real BFF port.
+const TOOL_FACADE_ORIGIN = "http://127.0.0.1:4391/api/coding-sidecar/tool";
 const FIXTURE_RUN_ID = "run-2254";
 const OPENCODE_VERSION = "1.17.17";
 const FIXED_SESSION_TITLE = "Keiko governed runtime";
@@ -263,6 +267,9 @@ interface OpenCodeRuntimeCompositionModule {
       readonly requestDeadlineMs: number;
       readonly maxInFlight: number;
     };
+    // ADR-0043 D11-D14 (#3390): mirrors `OpenCodeRuntimeCompositionInput.toolFacadeOrigin` --
+    // the SAME single attested loopback origin the model gateway rides, never a second listener.
+    readonly toolFacadeOrigin: string;
     readonly toolFacade: CodingToolFacade;
     readonly governedEventSink: {
       readonly execute: (
@@ -706,6 +713,7 @@ async function startBridgeFixture(
       toolFacadeCapability: TOOL_CAPABILITY,
     },
     toolBridge,
+    toolFacadeOrigin: TOOL_FACADE_ORIGIN,
     toolFacade: readinessAwareFacade,
     governedEventSink: {
       execute: (_identityKey, event): Promise<"applied"> => {
@@ -1043,6 +1051,7 @@ describe("unmounted OpenCode runtime composition", () => {
         modelGatewayCapability: MODEL_CAPABILITY,
         toolFacadeCapability: TOOL_CAPABILITY,
       },
+      toolFacadeOrigin: TOOL_FACADE_ORIGIN,
       toolFacade: facade,
       governedEventSink: {
         execute: (_identityKey, event): Promise<"applied"> => {
@@ -1154,7 +1163,10 @@ describe("unmounted OpenCode runtime composition", () => {
     const paths = fetchMock.mock.calls.map(([url]) => requestPath(url));
     expect(paths.indexOf("/session")).toBeLessThan(paths.lastIndexOf("/session"));
     expect(paths.indexOf("/sync/history")).toBeGreaterThan(paths.indexOf("/session"));
-    expect(new URL(runtime.toolBridge.url).hostname).toBe("127.0.0.1");
+    // ADR-0043 D11-D14 (#3390): the bridge's public `url` is the SAME attested loopback origin
+    // supplied at composition -- relocated from asserting a self-issued ephemeral listener port
+    // (retired) to asserting the bridge never fabricates a second one of its own.
+    expect(runtime.toolBridge.url).toBe(TOOL_FACADE_ORIGIN);
     await expect(
       runtime.toolBridge.handle({
         method: "POST",

@@ -244,13 +244,14 @@ describe("OpenCode safe-activity normalization", () => {
     expect(serialized).not.toContain("error");
   });
 
-  it("treats a native tool's completed part the same documented no-op as a facade tool's (#3390)", () => {
-    // "question" is the one model-visible tool that is neither the plan carrier nor dispatched
-    // through the productive tool facade (opencodeRuntimeComposition.ts's settleTool only
-    // settles facade-executed keiko_* calls). Its completion is not observed here either: the
-    // safe-activity feed never infers a terminal *success* from upstream output for any tool, so
-    // a "completed" part stays a silent no-op regardless of which tool it names, and drops
-    // nothing.
+  it("projects a native tool's completed part as succeeded -- it has no other terminal source (#3390)", () => {
+    // "question" is the one model-visible tool that reaches toolPartSignal and is neither the
+    // plan carrier ("todowrite" is projected as a plan by partSignal before reaching here) nor
+    // dispatched through the productive tool facade (opencodeRuntimeComposition.ts's settleTool
+    // only ever settles facade-executed keiko_* calls). Leaving its completed part a no-op would
+    // reproduce the #3390 symptom via the success path instead of the error path: the calledTool
+    // "running" row would never receive a terminal state and the Workbench timeline would read
+    // "Running" forever for a question the user already answered.
     const normalized = normalizeOpenCodeSafeActivityHistory([
       row(1, "message.part.updated.1", {
         sessionID: "ses_safe",
@@ -266,6 +267,49 @@ describe("OpenCode safe-activity normalization", () => {
             input: {},
             output: "answered",
             title: "question",
+            metadata: {},
+            time: { start: 1_788_611_600_000, end: 1_788_611_600_001 },
+          },
+        },
+        time: 1_788_611_600_001,
+      }),
+    ]);
+
+    expect(normalized.dropped).toBe(0);
+    expect(normalized.signals).toMatchObject([
+      {
+        signal: {
+          kind: "tool",
+          state: "succeeded",
+          tool: "question",
+          callId: "call_question",
+          messageId: "msg_assistant",
+        },
+      },
+    ]);
+    const serialized = JSON.stringify(normalized);
+    expect(serialized).not.toContain("answered");
+  });
+
+  it("keeps a facade-dispatched (keiko_*) tool's completed part a silent no-op (#3390)", () => {
+    // The Keiko tool facade supplies "succeeded" once its own closed result is known
+    // (opencodeRuntimeComposition.ts settleTool). Projecting a second "succeeded" signal here
+    // from the upstream part would race that value instead of deferring to it.
+    const normalized = normalizeOpenCodeSafeActivityHistory([
+      row(1, "message.part.updated.1", {
+        sessionID: "ses_safe",
+        part: {
+          id: "prt_facade_completed",
+          sessionID: "ses_safe",
+          messageID: "msg_assistant",
+          type: "tool",
+          callID: "call_facade",
+          tool: "keiko_workspace_discover",
+          state: {
+            status: "completed",
+            input: { maxResults: 20, query: "issue" },
+            output: "found",
+            title: "keiko_workspace_discover",
             metadata: {},
             time: { start: 1_788_611_600_000, end: 1_788_611_600_001 },
           },

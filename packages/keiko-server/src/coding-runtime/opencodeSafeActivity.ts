@@ -7,7 +7,7 @@ import type {
   CodingSafeActivityPlanStepInput,
   CodingSafeActivitySignal,
 } from "./codingSafeActivityProjection.js";
-import { parseOpenCodeHistory } from "./opencodeProtocol.js";
+import { isOpenCodeFacadeDispatchedTool, parseOpenCodeHistory } from "./opencodeProtocol.js";
 
 const PLAN_TOOL = "todowrite";
 /** Closed upstream-status vocabulary (#2480); anything else fails the whole plan update closed. */
@@ -206,15 +206,21 @@ function toolPartSignal(
   occurredAt: string,
 ): CodingSafeActivitySignalOutcome {
   const state = record(part.state)?.status;
-  // A completed part is a silent no-op: the Keiko tool facade supplies "succeeded" once its
-  // closed result for a facade-dispatched (keiko_*) tool is known
-  // (opencodeRuntimeComposition.ts settleTool), so inferring it again here would race a value
-  // the facade already owns.
-  if (state === "completed") return undefined;
-  const normalizedState = toolPartState(state);
+  const tool = string(part.tool);
+  // A completed part is a silent no-op for a facade-dispatched (keiko_*) tool: the Keiko tool
+  // facade supplies "succeeded" once its closed result is known (opencodeRuntimeComposition.ts
+  // settleTool), so inferring it again here would race a value the facade already owns. The only
+  // native tool that ever reaches this function is "question" ("todowrite" is projected as a plan
+  // by partSignal before reaching here, and never as productive tool activity, #2480); it has no
+  // other terminal source, so for a non-facade tool the completed part IS the terminal signal
+  // (#3390) -- fed through the same idempotent running->succeeded transition the facade path
+  // relies on (codingSafeActivityProjection.ts allowedToolTransition).
+  if (state === "completed" && (tool === undefined || isOpenCodeFacadeDispatchedTool(tool)))
+    return undefined;
+  const normalizedState: CodingSafeActivityToolState | undefined =
+    state === "completed" ? "succeeded" : toolPartState(state);
   const messageId = string(part.messageID);
   const callId = string(part.callID);
-  const tool = string(part.tool);
   if (
     normalizedState === undefined ||
     messageId === undefined ||
