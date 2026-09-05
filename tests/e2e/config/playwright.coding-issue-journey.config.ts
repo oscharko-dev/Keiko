@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 import { randomBytes } from "node:crypto";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { e2eStateDir } from "../support/e2e-state-dir.js";
 
 // Issue #3390: the real-model production-composition harness. Unlike every sibling
@@ -42,6 +42,26 @@ const stateDir = e2eStateDir("coding-issue-journey-e2e", root, ".keiko");
 const launcherSecret =
   process.env.KEIKO_QUALIFICATION_LAUNCHER_SECRET ?? randomBytes(32).toString("hex");
 process.env.KEIKO_QUALIFICATION_LAUNCHER_SECRET = launcherSecret;
+
+// Runbook gap 6: a bare `npm run test:e2e:coding-issue-journey:live` otherwise launches the server
+// clamped to the `governed-assist` default ceiling (`deps.ts`'s `resolveDeploymentCeiling`), so
+// the spec's own "Full access" mode selection would fail against that ceiling rather than
+// degrading visibly. ADR-0138 D2 makes the effective mode independently selectable at or below the
+// ceiling through the Settings -> Security radios, so setting the ceiling to the highest value
+// here still lets the spec drive every ADR-0138 mode from ONE server process.
+const deploymentCeiling = process.env.KEIKO_CODING_DEPLOYMENT_CEILING ?? "autonomous-delivery";
+
+// The receipts directory every scenario `test()` writes its `<scenarioId>.receipt.json` +
+// `.artifact` pair into (`recordScenarioReceipt`, `support/coding-issue-journey-scenarios.ts`).
+// Resolved once here (operator override honoured, defaulted otherwise) and written back into
+// `process.env` BEFORE `defineConfig` returns, mirroring the launcher-secret pattern above, so the
+// spec's own worker process reads the SAME value. Defaults to the exact path this evidence is
+// committed under (Part 3.4 of the qualification runbook) so an operator invocation with no
+// override still lands the receipts where `check:coding-issue-journey-evidence:3390` reads them.
+const receiptsDir =
+  process.env.KEIKO_QUALIFICATION_RECEIPTS_DIR ??
+  resolve(root, "docs", "qa", "evidence", "coding-issue-journey", "3390", "receipts");
+process.env.KEIKO_QUALIFICATION_RECEIPTS_DIR = receiptsDir;
 const serverEntry = join(
   "tests",
   "e2e",
@@ -58,7 +78,12 @@ export default defineConfig({
   testMatch: "coding-issue-journey.spec.ts",
   fullyParallel: false,
   workers: 1,
-  timeout: 600_000,
+  // Each scenario test waits on a real model's own tool-call sequence (implement, verify, commit,
+  // push, draft PR, and for the CI-repair/mark-ready scenarios also CI observation and repair) --
+  // generously bounded per internal wait (up to 25 minutes, see
+  // `support/coding-issue-journey-live.ts`), so the outer Playwright test timeout must exceed the
+  // longest of those, not the sibling scripted specs' much shorter fixture-driven timeout.
+  timeout: 30 * 60_000,
   expect: { timeout: 30_000 },
   reporter: process.env.CI ? [["github"], ["line"]] : "line",
   use: {
@@ -98,6 +123,8 @@ export default defineConfig({
       KEIKO_STATE_DIR: join(stateDir, "state"),
       KEIKO_LOG_LEVEL: "debug",
       KEIKO_QUALIFICATION_LAUNCHER_SECRET: launcherSecret,
+      KEIKO_CODING_DEPLOYMENT_CEILING: deploymentCeiling,
+      KEIKO_QUALIFICATION_RECEIPTS_DIR: receiptsDir,
     },
   },
 });

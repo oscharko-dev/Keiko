@@ -784,4 +784,68 @@ describe("productive runtime status/diff/stage lane", () => {
       expect(gitService.review(id)).toBeUndefined();
     },
   );
+
+  // Owner audit batch 5, item 4 / today's security review (head 02785dbd): `executeOne` used to
+  // consume the one-use commit approval BEFORE the unresolved-conflict-marker check that can
+  // legitimately block the commit, so a legitimate block burned the approval and the operator had
+  // to re-propose and re-approve. Mirrors commitRoutes.ts's own ordering (message policy, THEN
+  // conflict markers, THEN `resolveGitDeliveryApprovalRequirement` consumes) — every pre-commit
+  // validation that can block runs before the approval is spent.
+  it("keeps the one-use commit approval intact when unresolved conflict markers legitimately block execute()", async () => {
+    let blocking = true;
+    service = createVerifiedCommitService({
+      ...options,
+      execution: {
+        ...options.execution,
+        conflictMarkerReader: (): Promise<number> => Promise.resolve(blocking ? 1 : 0),
+      },
+    });
+    const id = await verifiedProposal();
+    const approval = await claim(id);
+    const blocked = await service.execute(id, approval);
+    expect(blocked).toMatchObject({ status: "blocked", reason: "conflict-markers" });
+    expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("0");
+    // The approval was never spent by the legitimate block: the SAME one-use claim still redeems
+    // the SAME proposal once the conflict is resolved, with no re-propose/re-approve round trip.
+    expect(service.matchesApproval(id, approval)).toBe(true);
+    blocking = false;
+    const result = await service.execute(id, approval);
+    expect(result?.status).toBe("succeeded");
+    expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("1");
+  });
+
+  // Owner audit batch 5, item 5 / today's security review: a frozen runtime-authority/workspace
+  // binding captured at propose time can make a later persistence attempt throw for a stale
+  // proposal; `record()`'s own recovery-path call was unguarded, so a persistence rejection could
+  // cascade into an uncaught rejection out of execute()/executeApproved() instead of a closed
+  // result. Latent today (nothing mutates the frozen binding columns post-insert), fixed proactively.
+  it("fails closed with a recovery-required result and a body-free log line when persisting the outcome throws", async () => {
+    let rejectPersist = false;
+    const realSnapshots = options.snapshots;
+    service = createVerifiedCommitService({
+      ...options,
+      snapshots: {
+        ...realSnapshots,
+        recordVerifiedCommit: (result): ReturnType<typeof realSnapshots.recordVerifiedCommit> => {
+          if (rejectPersist) throw new Error("snapshot store unavailable");
+          return realSnapshots.recordVerifiedCommit(result);
+        },
+      },
+    });
+    const id = await verifiedProposal();
+    const approval = await claim(id);
+    rejectPersist = true;
+    await expect(service.execute(id, approval)).resolves.toMatchObject({
+      status: "recovery-required",
+      reason: "execution-uncertain",
+    });
+    const failure = events.find((event) => event.extra?.phase === "persist-failed");
+    expect(failure).toMatchObject({
+      op: "git.verified-commit",
+      level: "warn",
+      errorKind: "internal",
+      correlationId: "verified-commit-test",
+    });
+    expect(JSON.stringify(events)).not.toContain("snapshot store unavailable");
+  });
 });

@@ -484,13 +484,36 @@ class VerifiedCommitController implements VerifiedCommitService {
       : this.record(proposal.context, proposal.binding, "blocked", "authority-denied");
   }
 
+  // #3384 audit batch 5 item 4 / security review (head 02785dbd): every pre-commit validation that
+  // can legitimately BLOCK the commit (staged-tree digest match/drift, unresolved conflict
+  // markers) must run before the one-use commit approval is spent — mirrors commitRoutes.ts's own
+  // HTTP execute route (message policy, then `conflictMarkerBlockResult`, only THEN
+  // `resolveGitDeliveryApprovalRequirement` consumes). A block found here leaves the approval, and
+  // the proposal, untouched so the SAME approval can still redeem the SAME proposal once the
+  // legitimate blocker clears — no forced re-propose/re-approve round trip for a false block.
+  private async preflightBlock(
+    proposal: VerifiedCommitProposal,
+  ): Promise<VerifiedCommitResult | undefined> {
+    const { context, binding } = proposal;
+    if (!(await this.current(proposal)))
+      return this.record(context, binding, "drift", "candidate-drift");
+    const seams = this.options.execution ?? {};
+    const markers = await readStagedConflictMarkerFileCountFor(
+      context.workspace,
+      seams,
+      () => this.now(),
+      context.correlationId,
+    );
+    return markers > 0 ? this.record(context, binding, "blocked", "conflict-markers") : undefined;
+  }
+
   private async executeOne(
     proposal: VerifiedCommitProposal,
     approval: GitDeliveryApprovalClaim,
   ): Promise<VerifiedCommitResult> {
     const { context, binding } = proposal;
-    if (!(await this.current(proposal)))
-      return this.record(context, binding, "drift", "candidate-drift");
+    const blocked = await this.preflightBlock(proposal);
+    if (blocked !== undefined) return blocked;
     const lease = this.consumeApproval(binding.proposalId, approval);
     const claim = lease === undefined ? undefined : this.executionLeases.get(lease)?.claim;
     if (lease !== undefined) this.executionLeases.delete(lease);
@@ -503,18 +526,13 @@ class VerifiedCommitController implements VerifiedCommitService {
     claim: GitDeliveryApprovalRequirement,
   ): Promise<VerifiedCommitResult> {
     const { context, binding } = proposal;
-    if (!(await this.current(proposal)))
-      return this.record(context, binding, "drift", "candidate-drift");
+    // Re-checked here (not only in executeOne) because executeApproved's already-consumed lease
+    // reaches this method directly — this is that path's only preflight, and a race between the
+    // caller's own checks and this call still gets one last live look before the effect.
+    const blocked = await this.preflightBlock(proposal);
+    if (blocked !== undefined) return blocked;
     this.proposals.delete(binding.proposalId);
     this.proof = undefined;
-    const seams = this.options.execution ?? {};
-    const markers = await readStagedConflictMarkerFileCountFor(
-      context.workspace,
-      seams,
-      () => this.now(),
-      context.correlationId,
-    );
-    if (markers > 0) return this.record(context, binding, "blocked", "conflict-markers");
     this.record(context, binding, "recovery-required", "execution-uncertain");
     return await this.mutate(proposal, claim);
   }
@@ -573,7 +591,8 @@ class VerifiedCommitController implements VerifiedCommitService {
     details: Pick<VerifiedCommitResult, "blockReason" | "preflightFindings" | "violations"> = {},
   ): VerifiedCommitResult {
     const result = this.result(binding, status, reason, headSha, details);
-    this.options.snapshots.recordVerifiedCommit(result);
+    if (!this.persist(context, binding, status, reason, result))
+      return this.result(binding, "recovery-required", "execution-uncertain");
     this.log(context, "result", {
       state: status,
       reason,
@@ -584,6 +603,41 @@ class VerifiedCommitController implements VerifiedCommitService {
         : { violations: result.violations, violationCount: result.violations.length }),
     });
     return result;
+  }
+
+  // #3384 audit batch 5 item 5 / security review (head 02785dbd): a `VerifiedCommitBinding` is
+  // frozen at propose time (runtime-authority/workspace digests captured once); today nothing
+  // mutates those columns post-insert, so a stale-proposal persistence failure is latent, but a
+  // throw from `snapshots.recordVerifiedCommit` must never escape `record()` uncaught — every
+  // caller (including the recovery path inside `mutate`'s catch block and `admissionFailure`)
+  // relies on `record()` never throwing. Fails closed to a recovery-required result instead of an
+  // unhandled rejection out of execute()/executeApproved(), with a body-free diagnostic line
+  // (existing catalogued `op`, closed `errorKind`, the run's correlationId) an operator can read
+  // from the activity log per AGENTS.md §8.
+  private persist(
+    context: VerifiedCommitRunContext,
+    binding: VerifiedCommitBinding,
+    status: VerifiedCommitStatus,
+    reason: VerifiedCommitReason,
+    result: VerifiedCommitResult,
+  ): boolean {
+    try {
+      this.options.snapshots.recordVerifiedCommit(result);
+      return true;
+    } catch (error) {
+      this.log(
+        context,
+        "persist-failed",
+        {
+          proposalId: binding.proposalId,
+          attemptedStatus: status,
+          attemptedReason: reason,
+          ...describeError(error),
+        },
+        true,
+      );
+      return false;
+    }
   }
 
   private result(

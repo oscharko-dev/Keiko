@@ -1,7 +1,19 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
-import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
-import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
-import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
+import { test, type Page } from "@playwright/test";
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import {
+  isScenarioSelected,
+  recordScenarioReceipt,
+  type CodingIssueJourneyScenarioId,
+} from "./support/coding-issue-journey-scenarios.js";
+import {
+  runCiRepairScenario,
+  runDescriptionScenario,
+  runGitChatNegativeScenario,
+  runGitToChatScenario,
+  runIssueToPrScenario,
+  runMarkReadyScenario,
+  type ScenarioRunResult,
+} from "./support/coding-issue-journey-live-runners.js";
 
 // Issue #3390: the real-model production-composition journey. This spec is deliberately the only
 // one in `tests/e2e/` that installs NO `page.route()` interception and imports NO scripted server
@@ -12,230 +24,123 @@ import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 // OpenCode adapter against a real model. A scripted model, a mocked tool-result stream, or an
 // alternative runtime cannot substitute here: there is no seam left for one to attach to.
 //
-// The UI surface, button names, and endpoints below are the same real, unmocked ones
-// `coding-issue-intake.spec.ts` (#3385) exercises against its scripted fixture server -- this file
-// drives the identical product flow against the real one instead of reimplementing it.
+// Every scenario `test()` below writes its own `<scenarioId>.receipt.json` + `.artifact` pair
+// (`recordScenarioReceipt`) under `KEIKO_QUALIFICATION_RECEIPTS_DIR`, in the exact shape
+// `scripts/check-coding-issue-journey-evidence.mjs` reads, using the SAME writer the packaged
+// macOS/Windows qualification drivers already use (`scripts/lib/qualification-evidence-receipt.mjs`).
 //
-// This test qualifies the observable journey shape (issue intake through a visible, causally
-// linked tool-call effect). The full issue-to-PR-to-merge-to-closure journey, the ADR-0138
-// per-mode matrix, and the Git-to-Chat journey are qualified by the manifest and validator this
-// issue also ships (`scripts/check-coding-issue-journey-evidence.mjs`) against operator-recorded
-// evidence, not solely by this Playwright run -- per the issue's own text, live execution requires
-// operator-provided credentials, an approved model profile and spend budget, and the mandated
-// human merge/close checkpoint, none of which this repository can supply on its own.
+// Each scenario is independently selectable with `KEIKO_QUALIFICATION_SCENARIOS=<comma list>`
+// (`isScenarioSelected`) so an orchestrator can run one scenario at a time within the operator's
+// USD spend budget, rather than every registered scenario on every invocation.
+//
+// `human-merge-and-closure` is intentionally NOT among the ids this file drives: issue #3390 AC5
+// requires that transition to stay a real, separate human GitHub action, and no receipt is ever
+// minted for it here (see `support/coding-issue-journey-scenarios.ts`'s own comment).
 
-const SURFACE = 'section[aria-label="Coding Workbench"][data-state]';
-const REPOSITORY_FIELD = "Repository path";
-const ISSUE_FIELD = "Issue URL or #number";
-const AUTH_ENDPOINT = "/api/coding-workbench/github-authorization";
-const MODELS_ENDPOINT = "/api/models";
-const GATEWAY_SETUP_ENDPOINT = "/api/gateway/setup";
-const READINESS_ENDPOINT = "/api/coding-workbench/runtime/readiness";
-const CSRF = { "X-Keiko-CSRF": "1" };
+test.describe.configure({ mode: "serial" });
 
-function workbench(page: Page): Locator {
-  return page.locator(SURFACE);
+async function observedToolCallEvents(page: Page): Promise<number> {
+  return page.locator('[data-timeline-kind="tool"]').count().catch(() => 0);
 }
 
-// Live-run blocker (A): unlike every scripted `coding-issue-*.spec.ts` sibling, this file drives
-// the REAL `keiko ui` production composition, which starts every browser session unpaired. An
-// unpaired session gets no app-session read authority at all (`appSessionReadAuthority.ts`), so
-// the issue-preview route -- and every other content-bearing route -- answers 403
-// `authority-denied` no matter what the caller does next; that is the observed "Workbench is not
-// paired" narration and the reported preview 403 in one. The fix mints the SAME single-use
-// launcher pairing attestation `coding-issue-intake.spec.ts` (#3385) mints against its scripted
-// server's fixed fixture secret -- here against the real launched server's own secret, resolved
-// identically on both sides from `KEIKO_QUALIFICATION_LAUNCHER_SECRET`
-// (`playwright.coding-issue-journey.config.ts` resolves it once and hands it to both the launched
-// server and this spec process; `coding-issue-journey-server.mts`'s `resolveLauncherSecret` reads
-// it server-side). Pairing MUST happen before any authority-gated call -- see `grantGithubAccess`
-// and the issue-preview flow below, which is exactly what previously 403'd.
-async function pair(page: Page): Promise<void> {
-  const launcherSecret = process.env.KEIKO_QUALIFICATION_LAUNCHER_SECRET;
-  expect(
-    launcherSecret,
-    "KEIKO_QUALIFICATION_LAUNCHER_SECRET must be resolved by the Playwright config and handed " +
-      "to both this process and the launched server",
-  ).toBeTruthy();
-  if (launcherSecret === undefined) return;
-  const fragment = encodeCodingAppSessionPairingFragment(
-    mintLauncherPairingAttestation({
-      secret: launcherSecret,
-      requestId: `coding-issue-journey-${String(Date.now())}`,
-      issuedAtMs: Date.now(),
-    }),
-  );
-  await page.goto(`/${fragment}`);
-  await expect.poll(() => page.url()).not.toContain("keiko-app-session");
+function toError(value: unknown): Error {
+  if (value instanceof Error) return value;
+  return new Error(typeof value === "string" ? value : "non-error value thrown");
 }
 
-async function openWorkbench(page: Page, repositoryRoot: string): Promise<void> {
-  await page.addInitScript(
-    ({ root }) => {
-      localStorage.setItem("keiko.theme", "dark");
-      localStorage.setItem(
-        "keiko.workspace.v4",
-        JSON.stringify([
-          {
-            id: "coding-issue-journey-live",
-            type: "coding",
-            x: 40,
-            y: 48,
-            w: 1120,
-            h: 1400,
-            z: 10,
-            zoom: 1,
-            cfg: { repositoryPath: root },
-            max: false,
-          },
-        ]),
-      );
-      localStorage.removeItem("keiko.conns.v1");
+/** Runs one scenario, always recording an honest receipt (passed or failed) from what was
+ * actually observed -- never fabricating a passing result when the real run did not reach the
+ * asserted effect, and never silently swallowing the failure either (it is rethrown after the
+ * receipt is written, so Playwright still reports the scenario red). */
+async function recordOutcome(
+  page: Page,
+  scenarioId: CodingIssueJourneyScenarioId,
+  run: () => Promise<ScenarioRunResult>,
+): Promise<void> {
+  const startedAt = Date.now();
+  let outcome: ScenarioRunResult | undefined;
+  let failure: unknown;
+  try {
+    outcome = await run();
+  } catch (error) {
+    failure = error;
+  }
+  recordScenarioReceipt({
+    scenarioId,
+    result: failure === undefined ? "passed" : "failed",
+    assertions: outcome?.assertions ?? [`error:${toError(failure).message}`],
+    usage: {
+      spendObservability: "unknown",
+      observedToolCallEvents: await observedToolCallEvents(page),
+      observedRunDurationMs: Date.now() - startedAt,
     },
-    { root: repositoryRoot },
-  );
-  await pair(page);
-  await expect(workbench(page)).toBeVisible();
-  await expect(page.getByLabel(REPOSITORY_FIELD)).toHaveValue(repositoryRoot);
-}
-
-// Live-run blocker (B): the real gateway config may hold a chat model that is tool-calling capable
-// but not yet marked workflow-eligible ("The tool-calling chat model is not workflow-eligible.
-// Enable workflow eligibility in Settings -> Models."). This performs the SAME real route the
-// product's own Settings -> Models "workflow eligible" toggle calls
-// (`packages/keiko-ui/src/app/components/desktop/modals/GatewaySetupDialog.tsx` submits
-// `workflowEligibleModelIds` to this endpoint), discovering the candidate model id from the real
-// `/api/models` capability list -- never a hardcoded model id, since the configured deployment
-// name varies by operator profile. `preserveExisting: true` updates only the workflow-eligible
-// selection, exactly the production "update an existing gateway config" path
-// (`gateway-setup.test.ts`'s "coding-update"/"coding-unknown" cases pin this same minimal body).
-async function ensureWorkflowEligibleModel(page: Page): Promise<void> {
-  const modelsResponse = await page.request.get(MODELS_ENDPOINT);
-  expect(modelsResponse.ok()).toBe(true);
-  const { models } = (await modelsResponse.json()) as {
-    readonly models: readonly ModelCapability[];
-  };
-  const toolCallingChatModels = models.filter(
-    (model) => model.kind === "chat" && model.toolCalling,
-  );
-  expect(
-    toolCallingChatModels.length,
-    "the configured Model Gateway must expose at least one tool-calling chat model",
-  ).toBeGreaterThan(0);
-  if (toolCallingChatModels.some((model) => model.workflowEligible)) return;
-  const modelId = toolCallingChatModels[0]?.id;
-  const setupResponse = await page.request.post(GATEWAY_SETUP_ENDPOINT, {
-    headers: CSRF,
-    data: { preserveExisting: true, workflowEligibleModelIds: [modelId] },
   });
-  expect(setupResponse.ok()).toBe(true);
-  // The browser's own source/profile projection is fetched once on mount, not polled -- reload so
-  // the Workbench observes the just-enabled eligibility the same way a real operator's refresh
-  // after a Settings change would.
-  await page.reload();
-  await expect(workbench(page)).toBeVisible();
+  if (failure !== undefined) throw toError(failure);
 }
 
-async function assertRuntimeReady(page: Page): Promise<void> {
-  await expect
-    .poll(
-      async () => {
-        const response = await page.request.get(
-          `${READINESS_ENDPOINT}?${new URLSearchParams({ requestedMode: "autonomous-delivery" }).toString()}`,
-        );
-        if (!response.ok()) return false;
-        const body = (await response.json()) as { readonly runtimeAvailable: boolean };
-        return body.runtimeAvailable;
-      },
-      { timeout: 60_000, message: "coding runtime must report ready before a run may start" },
-    )
-    .toBe(true);
-}
+const ISSUE_TO_PR_MODES = ["governed-assist", "supervised-coding", "autonomous-delivery"] as const;
+const MODE_SCENARIO_IDS: Record<CodingWorkbenchMode, CodingIssueJourneyScenarioId> = {
+  "governed-assist": "issue-to-pr-governed-assist",
+  "supervised-coding": "issue-to-pr-supervised-coding",
+  "autonomous-delivery": "issue-to-pr-autonomous-delivery",
+};
 
-// The real, generic per-repository read-authorization route (not a fixture): the same consent a
-// real user grants once through the product's own GitHub-access prompt before the model may read
-// issue content for this checkout.
-async function grantGithubAccess(page: Page, repositoryRoot: string): Promise<void> {
-  const observed = await page.request.get(
-    `${AUTH_ENDPOINT}?${new URLSearchParams({ repositoryPath: repositoryRoot }).toString()}`,
-  );
-  expect(observed.ok()).toBe(true);
-  const { revision } = (await observed.json()) as { readonly revision: number };
-  const updated = await page.request.put(AUTH_ENDPOINT, {
-    headers: CSRF,
-    data: { repositoryPath: repositoryRoot, authorized: true, expectedRevision: revision },
+for (const mode of ISSUE_TO_PR_MODES) {
+  const scenarioId = MODE_SCENARIO_IDS[mode];
+  test(`#3390 @coding-issue-journey a real model resolves the controlled issue to a draft PR in ${mode}`, async ({
+    page,
+  }) => {
+    test.skip(!isScenarioSelected(scenarioId), `scenario ${scenarioId} not selected`);
+    await recordOutcome(page, scenarioId, () => runIssueToPrScenario(page, mode));
   });
-  expect(updated.ok()).toBe(true);
 }
 
-async function enableFullAccess(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  const settings = page.getByRole("region", { name: /^Settings/u });
-  await settings.getByRole("button", { name: "Security", exact: true }).click();
-  await page.getByRole("radio", { name: /Full access/u }).click();
-  await expect(page.getByRole("radio", { name: /Full access/u })).toBeChecked();
-  await page.getByRole("button", { name: "Close Settings window", exact: true }).click();
-}
-
-test("a real model resolves the controlled issue through visible, causally linked tool calls", async ({
+test("#3390 @coding-issue-journey ci-repair-loop observes and repairs real CI", async ({
   page,
 }) => {
-  const controlledRepositoryRoot = process.env.KEIKO_QUALIFICATION_CONTROLLED_REPOSITORY_ROOT;
-  const controlledIssueReference = process.env.KEIKO_QUALIFICATION_CONTROLLED_ISSUE_REFERENCE;
-  // The webServer already refused to start without a real gateway and controlled repository
-  // (see the file header), so both variables are present whenever this test actually runs;
-  // narrowing here gives a precise failure if that ever stops being true instead of a confusing
-  // downstream selector timeout.
-  expect(
-    controlledRepositoryRoot,
-    "KEIKO_QUALIFICATION_CONTROLLED_REPOSITORY_ROOT must be resolved by webServer",
-  ).toBeTruthy();
-  expect(
-    controlledIssueReference,
-    "KEIKO_QUALIFICATION_CONTROLLED_ISSUE_REFERENCE must name the seeded failing issue",
-  ).toBeTruthy();
-  if (controlledRepositoryRoot === undefined || controlledIssueReference === undefined) return;
+  test.skip(!isScenarioSelected("ci-repair-loop"), "scenario ci-repair-loop not selected");
+  await recordOutcome(page, "ci-repair-loop", () => runCiRepairScenario(page));
+});
 
-  // Pairing (blocker A) must land before any authority-gated call -- `grantGithubAccess` isn't
-  // authority-gated, but the issue-preview route right after it is, so pairing is established
-  // inside `openWorkbench` first regardless. Model eligibility (blocker B) and runtime host
-  // readiness are real preconditions the product itself checks before a run may start, so they
-  // are asserted here too rather than discovered as a timeout on "Start coding run".
-  await openWorkbench(page, controlledRepositoryRoot);
-  await ensureWorkflowEligibleModel(page);
-  await grantGithubAccess(page, controlledRepositoryRoot);
-  await assertRuntimeReady(page);
+test("#3390 @coding-issue-journey description-auto-draft-and-apply through the governed PR card", async ({
+  page,
+}) => {
+  test.skip(
+    !isScenarioSelected("description-auto-draft-and-apply"),
+    "scenario description-auto-draft-and-apply not selected",
+  );
+  await recordOutcome(page, "description-auto-draft-and-apply", () => runDescriptionScenario(page));
+});
 
-  await page.getByLabel(ISSUE_FIELD).fill(controlledIssueReference);
-  await page.getByRole("button", { name: "Preview issue", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Issue preview", exact: true })).toBeVisible({
-    timeout: 60_000,
-  });
-  await page.getByRole("button", { name: "Use this issue", exact: true }).click();
-  await page.getByRole("button", { name: "Bind workspace", exact: true }).click();
+test("#3390 @coding-issue-journey mark-ready-intent proposes ready without merging", async ({
+  page,
+}) => {
+  test.skip(!isScenarioSelected("mark-ready-intent"), "scenario mark-ready-intent not selected");
+  await recordOutcome(page, "mark-ready-intent", () => runMarkReadyScenario(page));
+});
 
-  await enableFullAccess(page);
-  await page
-    .getByLabel("Task instructions")
-    .fill(
-      "Resolve the linked issue: implement the required change across the affected modules, add " +
-        "regression coverage for it, and leave the workspace clean.",
-    );
-  await page.getByRole("button", { name: "Start coding run", exact: true }).click();
-  await expect(workbench(page)).toHaveAttribute("data-state", "running", { timeout: 60_000 });
+test("#3390 @coding-issue-journey git-to-chat-connect-refine-apply on the external PR", async ({
+  page,
+  request,
+}) => {
+  test.skip(
+    !isScenarioSelected("git-to-chat-connect-refine-apply"),
+    "scenario git-to-chat-connect-refine-apply not selected",
+  );
+  await recordOutcome(page, "git-to-chat-connect-refine-apply", () =>
+    runGitToChatScenario(page, request),
+  );
+});
 
-  // A real model's tool-call sequence is nondeterministic by design (issue #3390: "Do not require
-  // one hardcoded tool sequence from a nondeterministic model"); assert the observable effect --
-  // at least one governed tool call actually ran -- rather than any specific tool or order.
-  await expect(page.locator('[data-timeline-kind="tool"]').first()).toBeVisible({
-    timeout: 300_000,
-  });
-
-  const status = await page.request.get("/api/coding-workbench/runtime/status");
-  expect(status.ok()).toBe(true);
-  const runtimeSnapshot = (await status.json()) as { readonly runId?: string };
-  expect(
-    runtimeSnapshot.runId,
-    "a real run must be recorded once the model has acted",
-  ).toBeTruthy();
+test("#3390 @coding-issue-journey git-chat-negative-effects exposes no mutating affordance", async ({
+  page,
+  request,
+}) => {
+  test.skip(
+    !isScenarioSelected("git-chat-negative-effects"),
+    "scenario git-chat-negative-effects not selected",
+  );
+  await recordOutcome(page, "git-chat-negative-effects", () =>
+    runGitChatNegativeScenario(page, request),
+  );
 });
