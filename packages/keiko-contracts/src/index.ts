@@ -3851,6 +3851,7 @@ export type {
   GitDeliveryActionEnvelopeFor,
   GitDeliveryActionEnvelope,
   GitDeliveryParseResult,
+  GitDeliveryPrMarkReadyInputs,
 } from "./git-delivery.js";
 export type {
   GIT_DELIVERY_SCHEMA_VERSION,

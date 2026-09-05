@@ -4,7 +4,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
-import type { GitDeliveryRunAuthorityPort } from "../gitDelivery/runBoundAuthority.js";
+import type {
+  GitDeliveryDescriptionAuthorityPort,
+  GitDeliveryRunAuthorityPort,
+} from "../gitDelivery/runBoundAuthority.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
@@ -56,6 +59,10 @@ export interface CodingRuntimeHost {
     | undefined;
   /** Live server-private delivery authority for the currently accepted runtime run. */
   readonly gitDeliveryAuthority?: GitDeliveryRunAuthorityPort | undefined;
+  // #3399 (epic #3384 correction 4): the server-minted, bounded description authority that admits
+  // description generation and the "pull-request" body-only apply outside a running Code task —
+  // threaded through the exact same chain as `gitDeliveryAuthority` above.
+  readonly gitDeliveryDescriptionAuthority?: GitDeliveryDescriptionAuthorityPort | undefined;
   readonly openCodeGatewayReadinessRegistry?:
     | {
         readonly claim: (runId: string) => boolean;
@@ -94,6 +101,7 @@ export interface CodingRuntimeControlPlane {
   readonly cancellationRegistry?: CodingRuntimeHost["cancellationRegistry"];
   readonly runtimeCapabilityAuthenticator?: CodingRuntimeHost["runtimeCapabilityAuthenticator"];
   readonly gitDeliveryAuthority?: CodingRuntimeHost["gitDeliveryAuthority"];
+  readonly gitDeliveryDescriptionAuthority?: CodingRuntimeHost["gitDeliveryDescriptionAuthority"];
   readonly openCodeGatewayReadinessRegistry?: CodingRuntimeHost["openCodeGatewayReadinessRegistry"];
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
 }
@@ -203,6 +211,7 @@ function runtimeHostCapabilities(
   | "cancellationRegistry"
   | "runtimeCapabilityAuthenticator"
   | "gitDeliveryAuthority"
+  | "gitDeliveryDescriptionAuthority"
   | "openCodeGatewayReadinessRegistry"
 > {
   return {
@@ -214,6 +223,9 @@ function runtimeHostCapabilities(
       : {}),
     ...(runtimeHost?.gitDeliveryAuthority
       ? { gitDeliveryAuthority: runtimeHost.gitDeliveryAuthority }
+      : {}),
+    ...(runtimeHost?.gitDeliveryDescriptionAuthority
+      ? { gitDeliveryDescriptionAuthority: runtimeHost.gitDeliveryDescriptionAuthority }
       : {}),
     ...(runtimeHost?.openCodeGatewayReadinessRegistry
       ? { openCodeGatewayReadinessRegistry: runtimeHost.openCodeGatewayReadinessRegistry }

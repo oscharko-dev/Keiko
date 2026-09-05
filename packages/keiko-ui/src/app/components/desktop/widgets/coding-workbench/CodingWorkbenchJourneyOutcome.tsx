@@ -98,16 +98,20 @@ function ChangedFilesSummary({
     </p>
   );
 }
-function JourneyControls(
+interface JourneyProposeState {
+  readonly canPropose: boolean;
+  readonly pending: boolean;
+  readonly propose: () => void;
+}
+
+function useJourneyProposeState(
   props: CodingWorkbenchJourneyOutcomeProps & {
     readonly outcome: JourneyOutcome;
     readonly ready: boolean;
   },
-): ReactNode {
-  const t = useCodingWorkbenchTranslate();
-  const action = useJourneyActions(props.outcome.binding.runId);
-  const busy = props.busy === true || action.busy;
-  const refresh = props.onRefresh;
+  busy: boolean,
+  invoke: ReturnType<typeof useJourneyActions>["invoke"],
+): JourneyProposeState {
   const ready = props.onProposeReady;
   const markReadyAvailable = props.markReadyAvailable === true;
   const canPropose = props.ready && ready !== undefined && markReadyAvailable;
@@ -119,40 +123,75 @@ function JourneyControls(
       !canProposeJourneyReady(props.outcome, props.snapshot?.state, Date.now())
     )
       return;
-    if (ready !== undefined) void action.invoke("propose-ready", ready);
+    if (ready !== undefined) void invoke("propose-ready", ready);
   };
+  return { canPropose, pending, propose };
+}
+
+function RefreshButton({
+  onClick,
+  busy,
+}: {
+  readonly onClick: () => void;
+  readonly busy: boolean;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  return (
+    <button type="button" className={common.button} disabled={busy} onClick={onClick}>
+      {t("codingWorkbench.journey.refresh")}
+    </button>
+  );
+}
+
+function ProposeReadyButton({
+  busy,
+  state,
+}: {
+  readonly busy: boolean;
+  readonly state: JourneyProposeState;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  return (
+    <button
+      type="button"
+      className={common.button}
+      disabled={busy || !state.canPropose}
+      aria-describedby={state.pending ? "journey-propose-ready-pending" : undefined}
+      onClick={state.propose}
+    >
+      {t("codingWorkbench.journey.proposeReady")}
+    </button>
+  );
+}
+
+function JourneyControls(
+  props: CodingWorkbenchJourneyOutcomeProps & {
+    readonly outcome: JourneyOutcome;
+    readonly ready: boolean;
+  },
+): ReactNode {
+  const action = useJourneyActions(props.outcome.binding.runId);
+  const busy = props.busy === true || action.busy;
+  const refresh = props.onRefresh;
+  const state = useJourneyProposeState(props, busy, action.invoke);
   return (
     <div aria-busy={busy}>
       <div className={styles["cmp-journey-actions"]}>
         {refresh !== undefined && (
-          <button
-            type="button"
-            className={common.button}
-            disabled={busy}
+          <RefreshButton
+            busy={busy}
             onClick={() => {
               if (!busy) void action.invoke("refresh", refresh);
             }}
-          >
-            {t("codingWorkbench.journey.refresh")}
-          </button>
+          />
         )}
-        {props.ready && (
-          <button
-            type="button"
-            className={common.button}
-            disabled={busy || !canPropose}
-            aria-describedby={pending ? "journey-propose-ready-pending" : undefined}
-            onClick={propose}
-          >
-            {t("codingWorkbench.journey.proposeReady")}
-          </button>
-        )}
+        {props.ready && <ProposeReadyButton busy={busy} state={state} />}
       </div>
       <JourneyActionFeedback
         busy={busy}
         failure={action.failure}
-        ready={canPropose}
-        pending={pending}
+        ready={state.canPropose}
+        pending={state.pending}
       />
     </div>
   );

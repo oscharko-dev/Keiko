@@ -22,7 +22,10 @@ import {
   handleCodingSidecarGatewayProfile,
 } from "./coding-sidecar-gateway.js";
 import { mockRequest, mockResponse, probeVerifiedGatewayConfig } from "./_support.js";
-import { createOpenCodeGatewayToolCatalogAdvertisement } from "./coding-runtime/opencodeToolSchemas.js";
+import {
+  createOpenCodeGatewayToolCatalogAdvertisement,
+  OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
+} from "./coding-runtime/opencodeToolSchemas.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { STREAMING, type RouteContext, type RouteResult } from "./routes.js";
@@ -630,19 +633,79 @@ describe("coding-sidecar gateway", () => {
       expect(requestBody?.tools).toBeDefined();
       const sentTools = requestBody?.tools ?? [];
       const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(Date.now());
-      const projectedByAlias = new Map(
-        advertisement.projection.tools.map((tool) => [tool.alias, tool]),
-      );
-      // Native extensions (question/todowrite) are not yet part of this advertisement -- see
-      // opencodeToolSchemas.ts's createOpenCodeGatewayToolCatalogAdvertisement doc comment.
+      // The forwarded set is the seven catalog-representable tools plus the two native
+      // extensions (question/todowrite), merged by the model-gateway bridge (#3414 follow-up) --
+      // canonically the full pinned OpenCode 1.17.17 model-visible set.
+      const expectedParametersByName = new Map<string, unknown>([
+        ...advertisement.projection.tools.map((tool): [string, unknown] => [
+          tool.alias,
+          tool.inputSchema,
+        ]),
+        ...PINNED_MODEL_VISIBLE_TOOLS.filter((tool) =>
+          advertisement.projection.nativeExtensions.some(
+            (extension) => extension.alias === tool.name,
+          ),
+        ).map((tool): [string, unknown] => [tool.name, tool.parameters]),
+      ]);
       expect(new Set(sentTools.map((tool) => tool.function.name))).toEqual(
-        new Set(projectedByAlias.keys()),
+        new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES),
       );
       for (const tool of sentTools) {
-        expect(tool.function.parameters).toEqual(
-          projectedByAlias.get(tool.function.name)?.inputSchema,
-        );
+        expect(tool.function.parameters).toEqual(expectedParametersByName.get(tool.function.name));
       }
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
+  it("passes a native extension tool call ('question') through unbound instead of rejecting it (#3414 follow-up)", async () => {
+    resetGatewayInstanceCacheForTests();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((): Promise<Response> =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  finish_reason: "tool_calls",
+                  message: {
+                    content: "",
+                    tool_calls: [
+                      {
+                        id: "call-1",
+                        type: "function",
+                        function: {
+                          name: "question",
+                          arguments: JSON.stringify({ questions: [] }),
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        ),
+      ),
+    );
+    const deps = runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-question" } }));
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "continue" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+      assertRouteResult(result);
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({
+        choices: [{ message: { tool_calls: [{ function: { name: "question" } }] } }],
+      });
     } finally {
       vi.unstubAllGlobals();
       resetGatewayInstanceCacheForTests();

@@ -39,8 +39,12 @@ import {
   gitPrRejectionToErrorCode,
   type GitPrCreateExecRequest,
   type GitPrExecResult,
+  type GitPrMarkReadyExecRequest,
+  type GitPrMarkReadyExecResult,
+  type GitPrReadRequest,
   type GitPrUpdateExecRequest,
   type GitPullRequestInspectionAdapter,
+  type GitPullRequestMarkReadyAdapter,
   type GitPrInspectionResult,
 } from "./git-pr-gateway.js";
 import {

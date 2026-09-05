@@ -192,7 +192,10 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
         ctxFor({ schemaVersion: "1", runId: "run-1" }),
         h.deps,
       )) as RouteResult;
-      expect(result.body).toMatchObject({ status: "unavailable", reason: "observation-superseded" });
+      expect(result.body).toMatchObject({
+        status: "unavailable",
+        reason: "observation-superseded",
+      });
       const recorded = h.events.find((event) => event.op === "git.journey-outcome.recorded");
       expect(recorded).toMatchObject({
         op: "git.journey-outcome.recorded",

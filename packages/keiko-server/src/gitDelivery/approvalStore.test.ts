@@ -386,3 +386,123 @@ describe("git delivery approval store — pr-description-apply (#3399)", () => {
     ).toBeUndefined();
   });
 });
+
+// #3389: negative coverage for the "pr-mark-ready" operation, deliberately separate from "pr" so the
+// generic pr-update admission can never redeem a mark-ready claim (epic #3384 correction 1/7).
+describe("git delivery approval store — pr-mark-ready (#3389)", () => {
+  const MARK_READY_BINDING: GitDeliveryApprovalBinding = {
+    projectId: "repo_abc123",
+    operation: "pr-mark-ready",
+    runId: "run-a",
+    envelopeDigest: "a".repeat(64),
+    command: {
+      kind: "pr-mark-ready",
+      ownerAndRepo: "owner/repo",
+      remoteDigest: "b".repeat(64),
+      prExternalId: "123",
+      headSha: "c".repeat(40),
+      baseSha: "d".repeat(40),
+      readinessDigest: "e".repeat(64),
+      currentDraftState: true,
+      transitionPayloadDigest: "f".repeat(64),
+    },
+  };
+
+  it("mints a claim redeemable exactly once for the exact bound transition", () => {
+    const store = createInMemoryGitDeliveryApprovalStore();
+    const issued = store.issue({
+      binding: MARK_READY_BINDING,
+      approvedByUserId: "u-1",
+      nowMs: NOW,
+      ttlMs: 60_000,
+    });
+    const parsed = parseGitDeliveryApprovalRequest(issued.approval);
+    if (parsed?.kind !== "claim") throw new Error("expected claim");
+    expect(
+      resolveGitDeliveryApprovalRequirement(parsed, {
+        store,
+        binding: MARK_READY_BINDING,
+        nowMs: NOW + 1,
+      }),
+    ).toMatchObject({ required: true });
+    // Redeemed: a second attempt against the identical binding no longer matches.
+    expect(
+      resolveGitDeliveryApprovalRequirement(parsed, {
+        store,
+        binding: MARK_READY_BINDING,
+        nowMs: NOW + 2,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("a claim minted for the generic pr-update operation never redeems a pr-mark-ready binding, and vice versa (closes the approval-less convertFromDraft path)", () => {
+    const store = createInMemoryGitDeliveryApprovalStore();
+    const genericPrBinding: GitDeliveryApprovalBinding = {
+      projectId: MARK_READY_BINDING.projectId,
+      operation: "pr",
+      runId: MARK_READY_BINDING.runId,
+      envelopeDigest: MARK_READY_BINDING.envelopeDigest,
+      command: MARK_READY_BINDING.command,
+    };
+    const issued = store.issue({
+      binding: genericPrBinding,
+      approvedByUserId: "u-1",
+      nowMs: NOW,
+      ttlMs: 60_000,
+    });
+    const parsed = parseGitDeliveryApprovalRequest(issued.approval);
+    if (parsed?.kind !== "claim") throw new Error("expected claim");
+    expect(
+      resolveGitDeliveryApprovalRequirement(parsed, {
+        store,
+        binding: MARK_READY_BINDING,
+        nowMs: NOW + 1,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("drift: a binding whose baseSha/headSha differ from the minted claim never redeems", () => {
+    const store = createInMemoryGitDeliveryApprovalStore();
+    const issued = store.issue({
+      binding: MARK_READY_BINDING,
+      approvedByUserId: "u-1",
+      nowMs: NOW,
+      ttlMs: 60_000,
+    });
+    const parsed = parseGitDeliveryApprovalRequest(issued.approval);
+    if (parsed?.kind !== "claim") throw new Error("expected claim");
+    const drifted: GitDeliveryApprovalBinding = {
+      ...MARK_READY_BINDING,
+      command: {
+        ...(MARK_READY_BINDING.command as Record<string, unknown>),
+        headSha: "0".repeat(40),
+      },
+    };
+    expect(
+      resolveGitDeliveryApprovalRequirement(parsed, { store, binding: drifted, nowMs: NOW + 1 }),
+    ).toBeUndefined();
+  });
+
+  it("rejects a binding that smuggles a merge or issue-close field before any match can succeed", () => {
+    const store = createInMemoryGitDeliveryApprovalStore();
+    const issued = store.issue({
+      binding: MARK_READY_BINDING,
+      approvedByUserId: "u-1",
+      nowMs: NOW,
+      ttlMs: 60_000,
+    });
+    const parsed = parseGitDeliveryApprovalRequest(issued.approval);
+    if (parsed?.kind !== "claim") throw new Error("expected claim");
+    const smuggled: GitDeliveryApprovalBinding = {
+      ...MARK_READY_BINDING,
+      command: {
+        ...(MARK_READY_BINDING.command as Record<string, unknown>),
+        mergeMethod: "squash",
+        closeIssue: true,
+      },
+    };
+    expect(
+      resolveGitDeliveryApprovalRequirement(parsed, { store, binding: smuggled, nowMs: NOW + 1 }),
+    ).toBeUndefined();
+  });
+});

@@ -281,6 +281,12 @@ function composeRuntime(
         ),
     },
     gitDeliveryAuthority: authority.gitDeliveryAuthorityPort(),
+    // #3399 (epic #3384 correction 4): threaded through the exact same chain as
+    // `gitDeliveryAuthority` above (-> productionCodingRuntimeHost.ts ->
+    // codingRuntimeControlPlane.ts -> deps.ts) so the server-minted description authority is
+    // reachable from a live server for the Chat and post-terminal generation paths, not only from
+    // a running Code task.
+    gitDeliveryDescriptionAuthority: authority.gitDeliveryDescriptionAuthorityPort(),
     ...(input.backend.safeActivityProjection
       ? { safeActivityProjection: input.backend.safeActivityProjection }
       : {}),

@@ -134,6 +134,31 @@ export interface GitPullRequestAdapter {
   readBranchHead?: GitPullRequestInspectionAdapter["readBranchHead"];
 }
 
+// #3389: the draft->ready transition, deliberately isolated from `updatePullRequest` — no title/body/
+// base PATCH is ever bundled with it. `expectedHeadSha`/`expectedBaseSha` are the facts the governed
+// caller's one-use approval was minted against; the adapter re-reads the live PR identity immediately
+// before AND after the mutation and refuses (a `precondition-failed` result, never a spawn) on any
+// mismatch — a mint-time approval can never be redeemed against a PR that has since moved.
+export interface GitPrMarkReadyExecRequest {
+  readonly ownerAndRepo: string;
+  readonly prExternalId: string;
+  readonly expectedHeadSha: string;
+  readonly expectedBaseSha: string;
+}
+
+export interface GitPrMarkReadyExecResult extends GitDeliveryExecutionResult {
+  readonly rejectionReason?: GitPullRequestRejectionReason | undefined;
+  // The identity observed by the immediately-preceding or immediately-following re-read, present on
+  // every outcome that reached a read (absent only when the read itself failed outright).
+  readonly observedIdentity?: GitPullRequestIdentity | undefined;
+}
+
+/** A separate, narrower port from `GitPullRequestAdapter` (AC3/AC4: no merge, no issue-close, and the
+ * transition never widens to accept title/body/base — see git-pr-node.ts for the sole implementation). */
+export interface GitPullRequestMarkReadyAdapter {
+  markPullRequestReady(req: GitPrMarkReadyExecRequest): Promise<GitPrMarkReadyExecResult>;
+}
+
 export type GitPrInspectionResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly reason: GitPullRequestRejectionReason | "invalid-response" };

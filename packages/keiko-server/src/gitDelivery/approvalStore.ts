@@ -19,6 +19,10 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 // requestPreparation.ts. Distinct from the operation-specific bindings above: it carries no command
 // shape of its own, only the operation attempted, because it stands for "this run may attempt this
 // operation right now" rather than approval of one exact command.
+// "pr-mark-ready" (#3389, epic #3384 correction 7): the draft->ready transition, deliberately a
+// SEPARATE operation from "pr" so the generic pr-update admission (convertFromDraft) can never
+// redeem it — the bound command carries the exact facts (repository, PR identity, base/head SHAs,
+// readiness digest, transition-payload digest) re-verified immediately before execution.
 export type GitDeliveryApprovalOperation =
   | "local-mutation"
   | "commit"
@@ -26,6 +30,7 @@ export type GitDeliveryApprovalOperation =
   | "pr"
   | "merge"
   | "pr-description-apply"
+  | "pr-mark-ready"
   | "authority-admission";
 
 export interface GitDeliveryApprovalBinding {

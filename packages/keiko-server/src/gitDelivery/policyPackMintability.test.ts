@@ -55,6 +55,17 @@ describe("assertPolicyPackMintable", () => {
     },
   );
 
+  // #3389: pr-mark-ready joined once its dedicated /pr/mark-ready/approve mint route existed —
+  // deliberately separate from pr-update so a mark-ready approval can never redeem the generic
+  // pr-update admission (epic #3384 correction 1/7).
+  it("accepts approval-gated for pr-mark-ready now that its mint route exists", () => {
+    expect(() => {
+      assertPolicyPackMintable(
+        repoPack({ rules: [{ actionKind: "pr-mark-ready", decision: "approval-gated" }] }),
+      );
+    }).not.toThrow();
+  });
+
   it.each(["fetch", "pull", "branch-create"] as const)(
     "still throws for approval-gated %s: no mint route exists for it yet",
     (actionKind) => {

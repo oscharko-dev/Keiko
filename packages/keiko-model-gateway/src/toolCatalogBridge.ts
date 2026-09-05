@@ -99,7 +99,9 @@ function definitions(normalizer: ToolInvocationNormalizer, now: number): readonl
 }
 /** A native extension is transport data (ADR-0175 D2): no binder invocation, no handler call. */
 function isNativeExtensionAlias(normalizer: ToolInvocationNormalizer, alias: string): boolean {
-  return normalizer.binding.projection.nativeExtensions.some((extension) => extension.alias === alias);
+  return normalizer.binding.projection.nativeExtensions.some(
+    (extension) => extension.alias === alias,
+  );
 }
 
 function normalizerFor(advertisement: GatewayToolCatalogAdvertisement): ToolInvocationNormalizer {

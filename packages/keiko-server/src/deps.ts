@@ -326,6 +326,7 @@ import {
   createPrDescriptionReceiptStore,
 } from "./gitDelivery/prDescriptionReceiptStore.js";
 import type { PrDescriptionReceiptStatusHooks } from "./gitDelivery/prDescriptionReceiptTypes.js";
+import { createProductionPrDescriptionGeneration } from "./gitDelivery/prDescriptionGeneration.js";
 import { createProductionVerifiedCommitDependencies } from "./coding-runtime/productionVerifiedCommitDependencies.js";
 import { createProductionDraftDeliveryDependencies } from "./coding-runtime/productionDraftDeliveryDependencies.js";
 import {
@@ -751,8 +752,10 @@ export interface UiHandlerDeps {
   // test-only override cannot record or read status and treats the service as unavailable.
   readonly prDescriptionRecordStatus?: PrDescriptionReceiptStatusHooks["recordStatus"] | undefined;
   readonly prDescriptionReadStatus?: PrDescriptionReceiptStatusHooks["readStatus"] | undefined;
-  // #3398 owns real production composition (Model Gateway config + chat capability); absent means
-  // PR-description generation is unavailable, never a fabricated or unvalidated description.
+  // #3399 mounts #3398's real production composition (createProductionPrDescriptionGeneration,
+  // reusing the process-wide Model Gateway); absent — a deployment with no configured model
+  // profile — means PR-description generation is unavailable, never a fabricated or unvalidated
+  // description.
   readonly prDescriptionGeneration?:
     Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot"> | undefined;
   // Runtime gateway config supports first-run UI onboarding. It starts from the CLI/env/local config
@@ -3810,6 +3813,12 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   // so createUiHandlerDispose can reset the SAME instance this graph's deps object exposes --
   // see denialWindows.ts for why this must not be a module singleton.
   const codingAppSessionDenialWindows = new CodingAppSessionDenialWindows();
+  // #3399 mounts #3398's real production Model Gateway composition (epic #3384 Frozen Product
+  // Decision 8): reuses the SAME process-wide gateway config source `gatewayConfig` and
+  // `modelPortFactory` already read, never a second gateway. `undefined` here — a deployment with
+  // no configured model profile — is the ONE closed reason prDescriptionRoutes.ts's "unavailable"
+  // fallback exists for.
+  const prDescriptionGeneration = createProductionPrDescriptionGeneration(args.runtimeConfig);
   return {
     ...buildBaseUiHandlerDeps(args),
     ...buildRuntimeUiHandlerDeps(args, services),
@@ -3819,10 +3828,10 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     codingAppSessionDenialWindows,
     gitChangeSnapshotService: services.gitChangeSnapshotService,
     // #3399: the durable PR-description status bridge over the SAME node evidence store every
-    // other durable surface in this graph shares. `prDescriptionGeneration` is intentionally not
-    // composed here — #3398 owns real production Model Gateway wiring for it.
+    // other durable surface in this graph shares.
     prDescriptionRecordStatus: prDescriptionReceiptStatus.recordStatus,
     prDescriptionReadStatus: prDescriptionReceiptStatus.readStatus,
+    ...(prDescriptionGeneration === undefined ? {} : { prDescriptionGeneration }),
     dispose: createUiHandlerDispose(
       args,
       services,
@@ -4183,6 +4192,7 @@ interface CodingRuntimeControlPlaneDeps {
   codingSidecarGatewayCancellationRegistry?: UiHandlerDeps["codingSidecarGatewayCancellationRegistry"];
   runtimeCapabilityAuthenticator?: UiHandlerDeps["runtimeCapabilityAuthenticator"];
   gitDeliveryAuthority?: UiHandlerDeps["gitDeliveryAuthority"];
+  gitDeliveryDescriptionAuthority?: UiHandlerDeps["gitDeliveryDescriptionAuthority"];
   openCodeGatewayReadinessRegistry?: UiHandlerDeps["openCodeGatewayReadinessRegistry"];
 }
 
@@ -4212,6 +4222,9 @@ function buildCodingRuntimeControlPlaneDeps(
       : {}),
     ...(controlPlane.gitDeliveryAuthority !== undefined
       ? { gitDeliveryAuthority: controlPlane.gitDeliveryAuthority }
+      : {}),
+    ...(controlPlane.gitDeliveryDescriptionAuthority !== undefined
+      ? { gitDeliveryDescriptionAuthority: controlPlane.gitDeliveryDescriptionAuthority }
       : {}),
     ...(controlPlane.openCodeGatewayReadinessRegistry !== undefined
       ? {

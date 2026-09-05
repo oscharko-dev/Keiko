@@ -30,6 +30,7 @@ import {
   analyzeLogText,
   buildReproductionSeed,
   findTimeline,
+  hasIssueToPrJourneyOps,
   renderGatewayReplayScriptFixture,
   renderHumanAllTimelines,
   renderHumanClusters,
@@ -778,21 +779,25 @@ function runSeedAndFixture(
   return 0;
 }
 
+function needsToolLifecycleValidator(result: AnalyzeAllResult): boolean {
+  return result.timelines.some((timeline) =>
+    timeline.lines.some(
+      (line) =>
+        line.toolCatalog?.kind === "unavailable" ||
+        (line.toolCatalog?.kind === "sink-failure" &&
+          line.toolCatalog.diagnostics === "unavailable"),
+    ),
+  );
+}
+
+// The tool-lifecycle validator and the redaction re-verifier `hasIssueToPrJourneyOps` needs (epic
+// #3384) both live in the same lazily-loaded subpath (`loadToolLifecycle`, GEN-PERF-CLI-001), so
+// either need loads it — one module load, not two, for two unrelated consumers of the same seam.
 async function loadToolAnalysisOptions(
   result: AnalyzeAllResult,
   io: CliIo,
 ): Promise<SupportAnalyzeOptions> {
-  if (
-    !result.timelines.some((timeline) =>
-      timeline.lines.some(
-        (line) =>
-          line.toolCatalog?.kind === "unavailable" ||
-          (line.toolCatalog?.kind === "sink-failure" &&
-            line.toolCatalog.diagnostics === "unavailable"),
-      ),
-    )
-  )
-    return {};
+  if (!needsToolLifecycleValidator(result) && !hasIssueToPrJourneyOps(result)) return {};
   try {
     const { validateToolLifecycleEvent, redactLogFields } = await loadToolLifecycle();
     return {

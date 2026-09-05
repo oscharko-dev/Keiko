@@ -89,14 +89,19 @@ describe("git-delivery action-kind / risk-class guards", () => {
   // #3399 (epic #3384 correction 4): relocated from 11 to 12 members — "pr-description-apply"
   // joined as a distinct action kind, deliberately separate from "pr-update" so the policy-pack
   // layer can hold a decision for it that never widens to title/base/draft-state mutations.
+  // #3389 (epic #3384 correction 7): relocated from 12 to 13 members — "pr-mark-ready" joined as a
+  // distinct action kind so the draft->ready transition is approval-gated on its own claim, never
+  // reachable through the generic "pr-update" admission.
   it("GIT_DELIVERY_ACTION_KINDS pins the cardinality and includes branch-switch", () => {
-    expect(GIT_DELIVERY_ACTION_KINDS).toHaveLength(12);
+    expect(GIT_DELIVERY_ACTION_KINDS).toHaveLength(13);
     expect(GIT_DELIVERY_ACTION_KINDS).toContain("branch-switch");
     expect(GIT_DELIVERY_ACTION_KINDS).toContain("pr-description-apply");
+    expect(GIT_DELIVERY_ACTION_KINDS).toContain("pr-mark-ready");
     expect(new Set(GIT_DELIVERY_ACTION_KINDS).size).toBe(GIT_DELIVERY_ACTION_KINDS.length);
     // The risk-default table is exhaustive over the kinds (one entry per kind).
-    expect(Object.keys(GIT_DELIVERY_ACTION_RISK_DEFAULTS)).toHaveLength(12);
+    expect(Object.keys(GIT_DELIVERY_ACTION_RISK_DEFAULTS)).toHaveLength(13);
     expect(GIT_DELIVERY_ACTION_RISK_DEFAULTS["branch-switch"]).toBe("local-mutation");
+    expect(GIT_DELIVERY_ACTION_RISK_DEFAULTS["pr-mark-ready"]).toBe("protected-or-merge");
   });
 
   it("isGitDeliveryRiskClass discriminates the four classes", () => {
@@ -392,6 +397,15 @@ describe("parseGitDeliveryResolvedInputs", () => {
         convertFromDraft: true,
       },
       {
+        kind: "pr-mark-ready",
+        prExternalId: "42",
+        headSha: "a".repeat(40),
+        baseSha: "b".repeat(40),
+        readinessDigest: "c".repeat(64),
+        currentDraftState: true,
+        transitionPayloadDigest: "d".repeat(64),
+      },
+      {
         kind: "merge",
         prExternalId: "42",
         mergeStrategyHint: "squash",
@@ -494,6 +508,40 @@ describe("parseGitDeliveryResolvedInputs", () => {
       convertFromDraft: false,
     });
     expect(neitherDraftFlag.ok).toBe(true);
+  });
+
+  it("rejects a pr-mark-ready whose SHAs are not valid git object ids", () => {
+    const base = {
+      kind: "pr-mark-ready",
+      prExternalId: "42",
+      readinessDigest: "c".repeat(64),
+      currentDraftState: true,
+      transitionPayloadDigest: "d".repeat(64),
+    };
+    const invalidHead = parseGitDeliveryResolvedInputs({
+      ...base,
+      headSha: "not-a-sha",
+      baseSha: "b".repeat(40),
+    });
+    expect(invalidHead.ok).toBe(false);
+    if (!invalidHead.ok) {
+      expect(invalidHead.errors[0]).toContain('kind "pr-mark-ready"');
+    }
+    const missingBase = parseGitDeliveryResolvedInputs({ ...base, headSha: "a".repeat(40) });
+    expect(missingBase.ok).toBe(false);
+  });
+
+  it("rejects a pr-mark-ready with a non-boolean currentDraftState", () => {
+    const result = parseGitDeliveryResolvedInputs({
+      kind: "pr-mark-ready",
+      prExternalId: "42",
+      headSha: "a".repeat(40),
+      baseSha: "b".repeat(40),
+      readinessDigest: "c".repeat(64),
+      currentDraftState: "yes",
+      transitionPayloadDigest: "d".repeat(64),
+    });
+    expect(result.ok).toBe(false);
   });
 });
 

@@ -23,7 +23,8 @@ export const OPENCODE_GOVERNED_ACTION_PERMISSION = "keiko_governed_action";
  */
 function nativeExtensionSchema(alias: "question" | "todowrite"): Readonly<Record<string, unknown>> {
   const definition = OPENCODE_NATIVE_EXTENSION_DEFINITIONS.find((entry) => entry.alias === alias);
-  if (definition === undefined) throw new TypeError(`Missing native extension definition: ${alias}`);
+  if (definition === undefined)
+    throw new TypeError(`Missing native extension definition: ${alias}`);
   return definition.inputSchema;
 }
 

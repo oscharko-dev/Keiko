@@ -22,8 +22,22 @@ import { startHandoffDraft, handoffControl } from "./support/coding-issue-handof
 test.describe.configure({ mode: "serial" });
 const stateDir = handoffStateDir();
 
-const MUTATION_PATTERN = /\/api\/git-delivery\/merge\/|issue.*close|close.*issue/iu;
+// Split into two independent checks — a mounted-route prefix and a name-based pattern — rather
+// than one combined regex literal: a single alternation spanning both reads, to a source-level
+// route scanner, as one `/api/...` reference and silently drags the unrelated issue-close
+// alternative along with it (scripts/check-e2e-suite-wiring.mjs's ROUTED invariant). Kept apart,
+// each half names exactly the family it checks.
+const MUTATION_PATH_PREFIXES: readonly string[] = ["/api/git-delivery/merge/"];
+const ISSUE_CLOSE_PATTERN = /issue.*close|close.*issue/iu;
 const requestedUrls: string[] = [];
+
+function isMutationEndpointCall(url: string): boolean {
+  const path = new URL(url).pathname;
+  return (
+    MUTATION_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
+    ISSUE_CLOSE_PATTERN.test(path)
+  );
+}
 
 test.beforeEach(({ page }) => {
   page.on("request", (request) => {
@@ -31,7 +45,7 @@ test.beforeEach(({ page }) => {
   });
 });
 test.afterAll(() => {
-  const offenders = requestedUrls.filter((url) => MUTATION_PATTERN.test(url));
+  const offenders = requestedUrls.filter((url) => isMutationEndpointCall(url));
   expect(offenders, "the coding runtime must never call a merge or issue-close endpoint").toEqual(
     [],
   );

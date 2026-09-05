@@ -31,6 +31,13 @@ import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 // description apply, distinct from the generic `pr-update` action kind so the policy-pack layer can
 // hold a decision for it that never widens to title/base/draft-state mutations.
 //
+// #3389 (epic #3384 correction 7): `pr-mark-ready` joined once `POST
+// /api/git-delivery/pr/mark-ready/approve` existed (prMarkReadyExecution.ts) — the draft->ready
+// transition, distinct from the generic `pr-update` action kind (correction 1) so the convertFromDraft
+// transition is never reachable under the generic `pr` admission: the mark-ready execute path
+// unconditionally requires a consumed `pr-mark-ready` claim, independent of any repo/org pack's own
+// decision (see handleMarkReadyExecute in prMarkReadyExecution.ts).
+//
 // This module is deliberately dependency-free within gitDelivery/ (only contract types) so every
 // pack-resolution site -- including defaultPolicyPacks.ts, which itself imports each action kind's
 // KEIKO_DEFAULT_*_POLICY_PACK constant from its owning *Execution.ts module -- can import the guard
@@ -42,6 +49,7 @@ const MINTABLE_ACTION_KINDS: ReadonlySet<GitDeliveryActionKind> = new Set([
   "pr-create",
   "pr-update",
   "pr-description-apply",
+  "pr-mark-ready",
 ]);
 
 /**
@@ -58,7 +66,7 @@ export function assertPolicyPackMintable(
       throw new Error(
         `git-delivery policy pack names approval-gated for '${rule.actionKind}' ` +
           "but no mint route exists for it (only 'merge', 'commit', 'push', 'pr-create', " +
-          "'pr-update', and 'pr-description-apply' currently expose /approve)",
+          "'pr-update', 'pr-description-apply', and 'pr-mark-ready' currently expose /approve)",
       );
     }
   }

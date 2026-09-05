@@ -27,6 +27,7 @@ export type GitDeliveryActionKind =
   | "pr-create"
   | "pr-update"
   | "pr-description-apply"
+  | "pr-mark-ready"
   | "merge"
   | "abort"
   | "recovery";
@@ -41,6 +42,7 @@ export const GIT_DELIVERY_ACTION_KINDS: readonly GitDeliveryActionKind[] = [
   "pr-create",
   "pr-update",
   "pr-description-apply",
+  "pr-mark-ready",
   "merge",
   "abort",
   "recovery",
@@ -86,6 +88,7 @@ export const GIT_DELIVERY_ACTION_RISK_DEFAULTS: Readonly<
   "pr-create": "protected-or-merge",
   "pr-update": "protected-or-merge",
   "pr-description-apply": "protected-or-merge",
+  "pr-mark-ready": "protected-or-merge",
   merge: "protected-or-merge",
   abort: "local-mutation",
   recovery: "recovery-or-rewrite",
@@ -169,6 +172,23 @@ export interface GitDeliveryPrDescriptionApplyInputs {
   readonly finalBodyByteLength: number;
 }
 
+// #3389 (epic #3384 correction 7): the draft->ready transition, deliberately a separate action kind
+// from "pr-update" so the transition is approval-gated to a dedicated `pr-mark-ready` claim and never
+// widened to a title/body/base mutation. The bound facts are exactly the ones re-checked immediately
+// before the transition executes: the exact commit SHAs the approval was minted against (a mismatch
+// against the live PR is drift), a digest over the readiness snapshot that justified the proposal, the
+// invariant that the PR was observed as a draft at mint time, and a digest over the transition payload
+// itself so a claim minted for one PR revision can never be redeemed against a different one.
+export interface GitDeliveryPrMarkReadyInputs {
+  readonly kind: "pr-mark-ready";
+  readonly prExternalId: string; // opaque provider-assigned ID
+  readonly headSha: string; // opaque commit SHA, re-verified immediately before execution
+  readonly baseSha: string; // opaque commit SHA, re-verified immediately before execution
+  readonly readinessDigest: string;
+  readonly currentDraftState: boolean; // must be true (still draft) for the transition to apply
+  readonly transitionPayloadDigest: string;
+}
+
 export type GitDeliveryMergeStrategyHint =
   "squash" | "rebase" | "merge-commit" | "provider-default";
 
@@ -233,6 +253,7 @@ export type GitDeliveryResolvedInputs =
   | GitDeliveryPrCreateInputs
   | GitDeliveryPrUpdateInputs
   | GitDeliveryPrDescriptionApplyInputs
+  | GitDeliveryPrMarkReadyInputs
   | GitDeliveryMergeInputs
   | GitDeliveryAbortInputs
   | GitDeliveryRecoveryInputs;
@@ -802,6 +823,17 @@ function isPrDescriptionApplyInputs(value: Record<string, unknown>): boolean {
   );
 }
 
+function isPrMarkReadyInputs(value: Record<string, unknown>): boolean {
+  return (
+    isNonEmptyString(value.prExternalId) &&
+    isGitObjectId(value.headSha) &&
+    isGitObjectId(value.baseSha) &&
+    isNonEmptyString(value.readinessDigest) &&
+    isBoolean(value.currentDraftState) &&
+    isNonEmptyString(value.transitionPayloadDigest)
+  );
+}
+
 function isMergeInputs(value: Record<string, unknown>): boolean {
   return (
     isNonEmptyString(value.prExternalId) &&
@@ -836,6 +868,7 @@ const RESOLVED_INPUT_GUARDS: Readonly<
   "pr-create": isPrCreateInputs,
   "pr-update": isPrUpdateInputs,
   "pr-description-apply": isPrDescriptionApplyInputs,
+  "pr-mark-ready": isPrMarkReadyInputs,
   merge: isMergeInputs,
   abort: isAbortInputs,
   recovery: isRecoveryInputs,

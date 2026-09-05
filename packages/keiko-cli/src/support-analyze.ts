@@ -873,14 +873,7 @@ function buildIndexingJobSeed(lines: readonly ServerLogLineView[]): IndexingJobS
 // populated, rather than falling back to trusting the raw line (AGENTS.md §4).
 
 export type IssueToPrJourneyPhase =
-  | "intake"
-  | "authority"
-  | "commit"
-  | "push"
-  | "pr"
-  | "readiness"
-  | "description"
-  | "outcome";
+  "intake" | "authority" | "commit" | "push" | "pr" | "readiness" | "description" | "outcome";
 
 // Ops whose phase does not depend on their own `extra` — a straight lookup.
 const JOURNEY_OP_PHASE = new Map<string, IssueToPrJourneyPhase>([
@@ -933,7 +926,9 @@ const ALL_JOURNEY_OPS: ReadonlySet<string> = new Set([
   ...JOURNEY_ACTION_KIND_OPS,
 ]);
 
-function actionKindPhase(source: Readonly<Record<string, unknown>>): IssueToPrJourneyPhase | undefined {
+function actionKindPhase(
+  source: Readonly<Record<string, unknown>>,
+): IssueToPrJourneyPhase | undefined {
   const kind = optionalString(source, "actionKind") ?? optionalString(source, "operation");
   return kind === undefined ? undefined : JOURNEY_ACTION_KIND_PHASE[kind];
 }
@@ -1235,6 +1230,70 @@ function toolCatalogSeed(
   return toolCatalog.length === 0 ? {} : { toolCatalog };
 }
 
+interface SeedComputedFields {
+  readonly gatewayScript: GatewayReplayScript | undefined;
+  readonly httpRequest: HttpRequestSeed | undefined;
+  readonly storeFingerprint: readonly StoreFingerprint[] | undefined;
+  readonly indexingJob: IndexingJobSeed | undefined;
+  readonly issueToPrJourney: IssueToPrJourneyView | undefined;
+  readonly stackFrames: readonly string[];
+  readonly causeChain: readonly string[];
+}
+
+// Split out of `buildReproductionSeed` purely to stay under the repository's per-function
+// complexity ceiling (AGENTS.md §6) — no behavioural seam of its own.
+function optionalSeedFields(
+  fields: SeedComputedFields,
+): Pick<
+  ReproductionSeed,
+  | "gatewayScript"
+  | "httpRequest"
+  | "storeFingerprint"
+  | "indexingJob"
+  | "issueToPrJourney"
+  | "stackFrames"
+  | "causeChain"
+> {
+  return {
+    ...(fields.gatewayScript === undefined ? {} : { gatewayScript: fields.gatewayScript }),
+    ...(fields.httpRequest === undefined ? {} : { httpRequest: fields.httpRequest }),
+    ...(fields.storeFingerprint === undefined ? {} : { storeFingerprint: fields.storeFingerprint }),
+    ...(fields.indexingJob === undefined ? {} : { indexingJob: fields.indexingJob }),
+    ...(fields.issueToPrJourney === undefined ? {} : { issueToPrJourney: fields.issueToPrJourney }),
+    ...(fields.stackFrames.length === 0 ? {} : { stackFrames: fields.stackFrames }),
+    ...(fields.causeChain.length === 0 ? {} : { causeChain: fields.causeChain }),
+  };
+}
+
+interface SeedComputation extends SeedComputedFields {
+  readonly kind: SourceKind;
+  readonly toolCatalog: readonly ToolCatalogLogEvidence[];
+}
+
+// Every derived field a `ReproductionSeed` assembles from one timeline, computed once — split out
+// of `buildReproductionSeed` purely to stay under the repository's per-function line/complexity
+// ceilings (AGENTS.md §6), no behavioural seam of its own.
+function computeSeedFields(
+  text: string,
+  timeline: LogTimeline,
+  options: SupportAnalyzeOptions,
+): SeedComputation {
+  const toolCatalog = timeline.lines.flatMap((line) =>
+    line.toolCatalog === undefined ? [] : [line.toolCatalog],
+  );
+  return {
+    kind: detectSourceKind(splitLines(text)[0]),
+    gatewayScript: buildGatewayReplayScript(timeline.lines),
+    httpRequest: buildHttpRequestSeed(timeline.lines),
+    indexingJob: buildIndexingJobSeed(timeline.lines),
+    storeFingerprint: extractManifestStoreFingerprints(text),
+    stackFrames: timeline.frames ?? [],
+    causeChain: aggregateCauseChain(timeline.lines),
+    toolCatalog,
+    issueToPrJourney: buildIssueToPrJourneyView(timeline.lines, options.toolDiagnosticRedactor),
+  };
+}
+
 // Assembles a full `ReproductionSeed` for one correlationId out of `text` (a raw server.log or a
 // support bundle — auto-detected, same as `analyzeLogText`). Undefined when no timeline exists for
 // `correlationId`, mirroring `findTimeline`. `generatedAt` is caller-supplied (never `new Date()`
@@ -1247,45 +1306,29 @@ export function buildReproductionSeed(
 ): ReproductionSeed | undefined {
   const timeline = findTimeline(analyzeLogText(text, options), correlationId);
   if (timeline === undefined) return undefined;
-
-  const kind = detectSourceKind(splitLines(text)[0]);
-  const gatewayScript = buildGatewayReplayScript(timeline.lines);
-  const httpRequest = buildHttpRequestSeed(timeline.lines);
-  const indexingJob = buildIndexingJobSeed(timeline.lines);
-  const storeFingerprint = extractManifestStoreFingerprints(text);
-  const stackFrames = timeline.frames ?? [];
-  const causeChain = aggregateCauseChain(timeline.lines);
-  const toolCatalog = timeline.lines.flatMap((line) =>
-    line.toolCatalog === undefined ? [] : [line.toolCatalog],
-  );
-  const issueToPrJourney = buildIssueToPrJourneyView(
-    timeline.lines,
-    options.toolDiagnosticRedactor,
-  );
+  const fields = computeSeedFields(text, timeline, options);
 
   return {
     schemaVersion: REPRODUCTION_SEED_SCHEMA_VERSION,
     generatedAt: generatedAt.toISOString(),
-    sourceArtifact: { kind, lineCount: splitLines(text).length, sha256: sha256Hex(text) },
+    sourceArtifact: {
+      kind: fields.kind,
+      lineCount: splitLines(text).length,
+      sha256: sha256Hex(text),
+    },
     correlationId,
     timeline: timeline.lines,
-    ...(gatewayScript === undefined ? {} : { gatewayScript }),
-    ...toolCatalogSeed(toolCatalog),
-    ...(httpRequest === undefined ? {} : { httpRequest }),
-    ...(storeFingerprint === undefined ? {} : { storeFingerprint }),
-    ...(indexingJob === undefined ? {} : { indexingJob }),
-    ...(issueToPrJourney === undefined ? {} : { issueToPrJourney }),
-    ...(stackFrames.length === 0 ? {} : { stackFrames }),
-    ...(causeChain.length === 0 ? {} : { causeChain }),
+    ...optionalSeedFields(fields),
+    ...toolCatalogSeed(fields.toolCatalog),
     warnings: [
-      ...toolCatalogWarnings(toolCatalog),
+      ...toolCatalogWarnings(fields.toolCatalog),
       ...buildSeedWarnings({
-        kind,
-        frames: stackFrames,
-        gatewayScript,
-        httpRequest,
-        storeFingerprint,
-        issueToPrJourney,
+        kind: fields.kind,
+        frames: fields.stackFrames,
+        gatewayScript: fields.gatewayScript,
+        httpRequest: fields.httpRequest,
+        storeFingerprint: fields.storeFingerprint,
+        issueToPrJourney: fields.issueToPrJourney,
       }),
     ],
   };
@@ -1373,29 +1416,34 @@ export function renderGatewayReplayScriptFixture(script: GatewayReplayScript): s
 // is printed as its own compact JSON line rather than a hand-formatted table — a seed's whole
 // point is to be read back by an agent, so the human view stays a thin, honest read of the exact
 // same data `--json` emits, never a second formula computing something new from it (AGENTS.md §7).
+// One compact JSON line per structured sub-field that is either present or absent (never a length
+// check) — split out of `renderHumanReproductionSeed` purely to stay under the repository's
+// per-function complexity ceiling (AGENTS.md §6), no behavioural seam of its own.
+function renderOptionalSeedSections(seed: ReproductionSeed): readonly string[] {
+  const sections: (string | undefined)[] = [
+    seed.gatewayScript === undefined
+      ? undefined
+      : `gatewayScript: ${JSON.stringify(seed.gatewayScript)}`,
+    seed.toolCatalog === undefined ? undefined : `toolCatalog: ${JSON.stringify(seed.toolCatalog)}`,
+    seed.httpRequest === undefined ? undefined : `httpRequest: ${JSON.stringify(seed.httpRequest)}`,
+    seed.indexingJob === undefined ? undefined : `indexingJob: ${JSON.stringify(seed.indexingJob)}`,
+    seed.storeFingerprint === undefined
+      ? undefined
+      : `storeFingerprint: ${JSON.stringify(seed.storeFingerprint)}`,
+    seed.issueToPrJourney === undefined
+      ? undefined
+      : `issueToPrJourney: ${JSON.stringify(seed.issueToPrJourney)}`,
+  ];
+  return sections.filter((section): section is string => section !== undefined);
+}
+
 export function renderHumanReproductionSeed(seed: ReproductionSeed): string {
   const lines = [
     `correlationId=${seed.correlationId} schemaVersion=${String(seed.schemaVersion)}`,
     `source: kind=${seed.sourceArtifact.kind} lines=${String(seed.sourceArtifact.lineCount)} ` +
       `sha256=${seed.sourceArtifact.sha256}`,
+    ...renderOptionalSeedSections(seed),
   ];
-  if (seed.gatewayScript !== undefined) {
-    lines.push(`gatewayScript: ${JSON.stringify(seed.gatewayScript)}`);
-  }
-  if (seed.toolCatalog !== undefined)
-    lines.push(`toolCatalog: ${JSON.stringify(seed.toolCatalog)}`);
-  if (seed.httpRequest !== undefined) {
-    lines.push(`httpRequest: ${JSON.stringify(seed.httpRequest)}`);
-  }
-  if (seed.indexingJob !== undefined) {
-    lines.push(`indexingJob: ${JSON.stringify(seed.indexingJob)}`);
-  }
-  if (seed.storeFingerprint !== undefined) {
-    lines.push(`storeFingerprint: ${JSON.stringify(seed.storeFingerprint)}`);
-  }
-  if (seed.issueToPrJourney !== undefined) {
-    lines.push(`issueToPrJourney: ${JSON.stringify(seed.issueToPrJourney)}`);
-  }
   if (seed.stackFrames !== undefined && seed.stackFrames.length > 0) {
     const frameLines = seed.stackFrames.map((frame) => `  ${frame}`).join("\n");
     lines.push(`stackFrames:\n${frameLines}`);

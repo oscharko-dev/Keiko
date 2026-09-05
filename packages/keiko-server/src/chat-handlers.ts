@@ -2561,6 +2561,107 @@ export function validateCurrentDesktopChatSend(
   );
 }
 
+// ─── Issue #3400 (epic #3384) — git-change description-authority admission ─────────────────────
+//
+// A chat's connected git-change scope is not model-egress authority by itself (Architecture
+// Invariants: "Connecting context is not model-egress authority"). Every turn on a git-change-
+// scoped chat re-derives the server-minted description authority (#3399, contract correction 4)
+// before any snapshot content reaches the Model Gateway. Production composition (deps.ts) does
+// not yet expose the authority port (#3399's own production-wiring item), so it is read here via
+// the same optional-cast seam `relationship-handlers.ts` used for `deps.relationship` before that
+// became an official field — `undefined` means "not yet wired", and admission fails CLOSED, never
+// open: no port to consult is exactly the same as no live authority record.
+interface GitChangeDescriptionAuthorityDeps {
+  readonly gitChangeDescriptionAuthorityPort?: GitDeliveryDescriptionAuthorityPort | undefined;
+}
+
+function gitChangeDescriptionAuthorityPortFor(
+  deps: UiHandlerDeps,
+): GitDeliveryDescriptionAuthorityPort | undefined {
+  return (deps as UiHandlerDeps & GitChangeDescriptionAuthorityDeps)
+    .gitChangeDescriptionAuthorityPort;
+}
+
+// The scope always keys on the immutable base/head pair rather than a PR identity: `remoteDigest`
+// (correction 6) plus `baseRef`/`headRef` are present on every connected git-change scope whether
+// or not a pull request was resolved, while the PR-identity variant of
+// `GitDeliveryDescriptionAuthorityScope` needs an `ownerAndRepo` slug this wire shape deliberately
+// does not carry (correction 2 admits only safe, server-issued facts). Whichever module mints this
+// authority for a Chat-originated scope (#3399/#3401) must mint it under the SAME
+// (remoteDigest, {baseRef, headRef}, snapshotDigest) key for this admission check to find it.
+function gitChangeDescriptionAuthorityScopeFor(
+  scope: ChatGitChangeScope,
+): GitDeliveryDescriptionAuthorityScope {
+  return {
+    remoteDigest: scope.remoteDigest,
+    pr: { baseRef: scope.baseRef, headRef: scope.headRef },
+    snapshotDigest: scope.snapshotDigest,
+  };
+}
+
+/**
+ * True only when a live, unexpired description authority record exists for the EXACT scope
+ * (remoteDigest, base/head, snapshotDigest) the caller re-derived just now — never a cached or
+ * assumed admission.
+ */
+export function admitGitChangeDescriptionTurn(
+  deps: UiHandlerDeps,
+  scope: ChatGitChangeScope,
+  nowIso: string,
+): boolean {
+  const port = gitChangeDescriptionAuthorityPortFor(deps);
+  if (port === undefined) return false;
+  return (
+    authorizeGitDeliveryModelEgress(port, gitChangeDescriptionAuthorityScopeFor(scope), nowIso) !==
+    undefined
+  );
+}
+
+function logGitChangeTurnAuthority(
+  correlationId: string | undefined,
+  admitted: boolean,
+  relationshipId: string,
+): void {
+  getServerLogger()[admitted ? "info" : "warn"]({
+    category: "security",
+    op: admitted ? "pr-description.chat.turn.admitted" : "pr-description.chat.turn.denied",
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    ...(admitted ? {} : { errorKind: "authority-denied" }),
+    extra: { relationshipId },
+  });
+}
+
+// V1 connects at most one git-change comparison per chat in practice; a chat that somehow carries
+// several treats the most-recently-connected one as the active turn scope.
+function activeGitChangeScope(chat: Chat): ChatGitChangeScope | undefined {
+  const scopes = chat.gitChangeScopes;
+  return scopes === undefined || scopes.length === 0 ? undefined : scopes[scopes.length - 1];
+}
+
+/**
+ * Denies a normal Chat turn on a git-change-connected chat BEFORE the Model Gateway is reached
+ * when the description authority for its active scope is missing or expired. Returns `undefined`
+ * (proceed) for a chat with no connected git-change scope at all.
+ */
+function admitGitChangeScopedTurn(
+  deps: UiHandlerDeps,
+  chat: Chat,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  const scope = activeGitChangeScope(chat);
+  if (scope === undefined) return undefined;
+  const admitted = admitGitChangeDescriptionTurn(deps, scope, new Date().toISOString());
+  logGitChangeTurnAuthority(correlationId, admitted, scope.relationshipId);
+  if (admitted) return undefined;
+  return {
+    status: 409,
+    body: errorBody(
+      "GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED",
+      "The description authority for this connected Git change is missing or has expired.",
+    ),
+  };
+}
+
 export async function handleSendDesktopChat(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -2576,6 +2677,8 @@ export async function handleSendDesktopChat(
     );
     const prepared = validateDesktopChatSend(parsed, deps);
     if (isRouteResult(prepared)) return prepared;
+    const gitChangeDenial = admitGitChangeScopedTurn(deps, prepared.chat, ctx.correlationId);
+    if (gitChangeDenial !== undefined) return gitChangeDenial;
     const inspection = inspectDesktopChatTurn(deps, prepared);
     if (inspection.kind === "replay") return { status: 200, body: inspection.response };
     if (inspection.kind === "rejected") return inspection.result;
@@ -2586,6 +2689,10 @@ export async function handleSendDesktopChat(
       () => {
         const current = validateCurrentDesktopChatSend(parsed, deps);
         if (isRouteResult(current)) return current;
+        // Re-derived immediately before dispatch (not only at the earlier fast-fail check above):
+        // a queued turn may wait long enough for the authority to expire in between.
+        const gitChangeDenial = admitGitChangeScopedTurn(deps, current.chat, ctx.correlationId);
+        if (gitChangeDenial !== undefined) return gitChangeDenial;
         return persistModelChatTurn(deps, current, cancellation.signal, ctx.correlationId);
       },
     );

@@ -12,6 +12,7 @@ import {
   type ServerLogCategory,
   type ServerLogSink,
 } from "@oscharko-dev/keiko-server";
+import { redactLogFields } from "@oscharko-dev/keiko-server/runtime/tool-catalog-lifecycle";
 
 import {
   analyzeLogText,
@@ -19,12 +20,14 @@ import {
   buildReproductionSeed,
   detectSourceKind,
   findTimeline,
+  hasIssueToPrJourneyOps,
   renderGatewayReplayScriptFixture,
   renderHumanAllTimelines,
   renderHumanClusters,
   renderHumanReproductionSeed,
   renderHumanTimeline,
   type GatewayReplayScript,
+  type IssueToPrJourneyView,
   type LogTimeline,
   type OpCluster,
   type ReproductionSeed,

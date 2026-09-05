@@ -134,22 +134,20 @@ const TODO_WRITE_EXTENSION_SCHEMA: CatalogJsonObject = {
  * packages/keiko-model-gateway/src/toolCatalogBridge.ts both import this constant rather than
  * each holding their own copy.
  */
-export const OPENCODE_NATIVE_EXTENSION_DEFINITIONS: readonly OpenCodeNativeExtensionDefinition[] =
-  [
-    {
-      alias: "question",
-      contractVersion: 1,
-      description:
-        "Ask the operator one or more structured clarifying questions before proceeding.",
-      inputSchema: QUESTION_EXTENSION_SCHEMA,
-    },
-    {
-      alias: "todowrite",
-      contractVersion: 1,
-      description: "Record or update the governed run's todo list.",
-      inputSchema: TODO_WRITE_EXTENSION_SCHEMA,
-    },
-  ];
+export const OPENCODE_NATIVE_EXTENSION_DEFINITIONS: readonly OpenCodeNativeExtensionDefinition[] = [
+  {
+    alias: "question",
+    contractVersion: 1,
+    description: "Ask the operator one or more structured clarifying questions before proceeding.",
+    inputSchema: QUESTION_EXTENSION_SCHEMA,
+  },
+  {
+    alias: "todowrite",
+    contractVersion: 1,
+    description: "Record or update the governed run's todo list.",
+    inputSchema: TODO_WRITE_EXTENSION_SCHEMA,
+  },
+];
 
 function managedObjectSchema(
   properties: CatalogJsonObject,

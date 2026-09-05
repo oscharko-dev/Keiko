@@ -282,7 +282,12 @@ function buildJourneyObservationOptions(
   correlationId: string,
   draftDelivery: DraftDeliveryReaderModule,
 ): JourneyObservationOptions {
-  const reader = readerFor(deps, options, repositoryId, draftDelivery.createProductionJourneyReader);
+  const reader = readerFor(
+    deps,
+    options,
+    repositoryId,
+    draftDelivery.createProductionJourneyReader,
+  );
   const context = journeyContext(draft, correlationId, reader);
   return {
     context: () => context,

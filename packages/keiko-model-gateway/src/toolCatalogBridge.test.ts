@@ -2,8 +2,12 @@ import {
   createToolCatalog,
   createToolDescriptor,
   compileToolProjection,
+  OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
 } from "@oscharko-dev/keiko-tool-catalog";
-import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
+import {
+  gatewayCatalogAdvertisement,
+  openCodeGatewayCatalogAdvertisement,
+} from "./__fixtures__/toolCatalog.js";
 import { describe, expect, it, vi } from "vitest";
 import { createInitialToolCatalog, gatewayToolDefinitions } from "@oscharko-dev/keiko-tool-catalog";
 import type {
@@ -394,6 +398,57 @@ describe("representable gateway schemas", () => {
       ),
     ).rejects.toMatchObject({ status: "invalid", reason: "unsupported-capability" });
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("native extensions (question/todowrite, #3414 follow-up)", () => {
+  it("merges a bound advertisement's native extensions into the model-visible tool list", () => {
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
+      (): number => NOW,
+    );
+    expect(bridge.tools).toHaveLength(9);
+    for (const definition of OPENCODE_NATIVE_EXTENSION_DEFINITIONS) {
+      expect(bridge.tools).toContainEqual({
+        name: definition.alias,
+        description: definition.description,
+        parameters: definition.inputSchema,
+      });
+    }
+  });
+
+  it("passes a native extension call through unbound: no catalog invocation, arguments untouched", () => {
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
+      (): number => NOW,
+    );
+    const call = { id: "call-1", name: "question", arguments: { questions: [] } };
+    const bound = bridge.bind(call);
+    expect(bound).toEqual(call);
+    expect(bound).not.toHaveProperty("invocation");
+  });
+
+  it("logs a body-free passthrough event instead of a catalog bind for a native extension call", () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
+      (): number => NOW,
+      { write: (event): void => events.push(event) },
+    );
+    bridge.bind({ id: "call-1", name: "todowrite", arguments: { todos: [] } });
+    expect(events.map((event) => event.op)).toEqual([
+      "gateway.tool-catalog.projected",
+      "gateway.tool-catalog.native-passthrough",
+    ]);
+    expect(JSON.stringify(events)).not.toContain("todos");
+  });
+
+  it("still rejects an unoffered, non-extension alias against an opencode advertisement", () => {
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
+      (): number => NOW,
+    );
+    expect(() => bridge.bind({ id: "call-1", name: "not_a_real_tool", arguments: {} })).toThrow();
   });
 });
 

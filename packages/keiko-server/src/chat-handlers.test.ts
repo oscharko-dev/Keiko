@@ -706,6 +706,142 @@ describe("desktopChatErrorResult gateway diagnostic symmetry", () => {
   });
 });
 
+// Issue #3400 (epic #3384, contract correction 4) — a Chat turn on a git-change-connected chat
+// must re-derive the server-minted description authority before any snapshot content reaches the
+// Model Gateway. Before this admission gate existed, a chat carrying `gitChangeScopes` sent its
+// turn straight to the gateway like any other chat; these tests prove the gate now denies it
+// closed (no authority port is wired in `buildUiHandlerDeps` yet — #3399's own production-wiring
+// item — so "no port" must mean "no admission", never a silent bypass) and never reaches the
+// network to do so.
+describe("git-change description-authority admission (#3400)", () => {
+  function attachGitChangeScope(deps: UiHandlerDeps, chatId: string): void {
+    deps.store.updateChat(chatId, {
+      gitChangeScopes: [
+        {
+          kind: "git-change",
+          relationshipId: "rel-1",
+          remoteDigest: "d".repeat(64),
+          comparisonLabel: "main...feature/x",
+          baseRef: "main",
+          headRef: "feature/x",
+          baseSha: "a".repeat(40),
+          headSha: "b".repeat(40),
+          mergeBaseSha: "c".repeat(40),
+          snapshotDigest: "e".repeat(64),
+          fileCount: 1,
+          totalFiles: 1,
+          omittedFiles: 0,
+          truncatedFiles: 0,
+          descriptionStatus: "current",
+          connectedAtMs: 10,
+        },
+      ],
+    });
+  }
+
+  it("denies the turn before any network call when no description authority port is wired", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const fetchSpy = vi.fn(() => {
+      throw new Error("must not reach the network");
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      attachGitChangeScope(fixture.deps, fixture.chatId);
+      const result = await sendBreakerChat(fixture, "refine the description", "corr-git-change-1");
+
+      expect(result.status).toBe(409);
+      expect(result.body).toMatchObject({
+        error: { code: "GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED" },
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "security",
+          op: "pr-description.chat.turn.denied",
+          correlationId: "corr-git-change-1",
+          errorKind: "authority-denied",
+          extra: { relationshipId: "rel-1" },
+        }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      resetServerLogger();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
+  it("admits the turn once a live description authority record exists for the exact scope", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      attachGitChangeScope(fixture.deps, fixture.chatId);
+      const admittingDeps = {
+        ...fixture.deps,
+        gitChangeDescriptionAuthorityPort: {
+          current: (): { readonly effectiveMode: string } => ({ effectiveMode: "governed-assist" }),
+        },
+      } as unknown as UiHandlerDeps;
+      const fetchSpy = vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ error: { message: "still no real provider" } }), {
+            status: 429,
+            headers: { "content-type": "application/json", "retry-after": "1" },
+          }),
+        ),
+      );
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const result = await handleSendDesktopChat(
+        requestContext(
+          {
+            chatId: fixture.chatId,
+            projectPath: fixture.projectPath,
+            modelId: "breaker-chat",
+            content: "refine the description",
+          },
+          "corr-git-change-2",
+        ),
+        admittingDeps,
+      );
+
+      // Admitted past the gate, so execution proceeds to the real gateway path (and fails there
+      // for the unrelated reason that no provider is actually configured) rather than being
+      // denied by the git-change gate itself.
+      expect(result.body).not.toMatchObject({
+        error: { code: "GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED" },
+      });
+      expect(fetchSpy).toHaveBeenCalled();
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "security",
+          op: "pr-description.chat.turn.admitted",
+          correlationId: "corr-git-change-2",
+          extra: { relationshipId: "rel-1" },
+        }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      resetServerLogger();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
+  it("never gates a normal chat with no connected git-change scope", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    try {
+      const result = await sendBreakerChat(fixture, "hello", "corr-no-git-change");
+      expect(result.body).not.toMatchObject({
+        error: { code: "GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED" },
+      });
+    } finally {
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+});
+
 // ADR-0173 D5 g25 — scheduling wrapper around `enrichChatCompactionWithModelSummary`
 // (`chat-handlers.ts`'s own `logCompactionSummaryFailure`, mirroring `recordPostCommitMemoryFailure`
 // at chat-handlers.ts:1444-1452). `enrichChatCompactionWithModelSummary` already absorbs every

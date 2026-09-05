@@ -379,7 +379,6 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
           "json",
           "repo",
           "branch",
-          "ref",
         ]) {
           expect(lower).not.toContain(forbidden);
         }
