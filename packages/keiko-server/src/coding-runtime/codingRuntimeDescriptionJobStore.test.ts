@@ -29,7 +29,13 @@ function openStore(
 }
 
 function scope(overrides: Partial<WorkbenchDescriptionScope> = {}): WorkbenchDescriptionScope {
-  return { runId: "run-00000001", remoteDigest: REMOTE, baseSha: BASE, headSha: HEAD_1, ...overrides };
+  return {
+    runId: "run-00000001",
+    remoteDigest: REMOTE,
+    baseSha: BASE,
+    headSha: HEAD_1,
+    ...overrides,
+  };
 }
 
 function generatedStatus(
@@ -196,7 +202,10 @@ describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supers
       NOW,
     );
     expect(accepted).toBe(true);
-    expect(store.current("run-00000001")).toMatchObject({ state: "blocked", reason: "authority-expired" });
+    expect(store.current("run-00000001")).toMatchObject({
+      state: "blocked",
+      reason: "authority-expired",
+    });
   });
 
   // #3401 review finding 15: the orchestrator's async provider-failure branch must be able to tell
@@ -248,7 +257,10 @@ describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supers
     expect(store.current("run-00000001")).toBeUndefined();
     const recovered = store.reconcileInterrupted(LATER);
     expect(recovered).toEqual(["run-00000001"]);
-    expect(store.current("run-00000001")).toMatchObject({ state: "blocked", reason: "interrupted" });
+    expect(store.current("run-00000001")).toMatchObject({
+      state: "blocked",
+      reason: "interrupted",
+    });
   });
 
   it("never loses or re-dispatches a reconciled job on a later identical signal", () => {
@@ -279,9 +291,9 @@ describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supers
     const decision = store.beginDispatch(scope(), NOW);
     if (decision.kind !== "dispatch") throw new Error("expected a dispatch decision");
     const first = generatedStatus(scope(), decision.generationVersion);
-    expect(
-      store.settle(scope(), decision.generationVersion, decision.revision, first, NOW),
-    ).toBe(true);
+    expect(store.settle(scope(), decision.generationVersion, decision.revision, first, NOW)).toBe(
+      true,
+    );
     const duplicate = generatedStatus(scope(), decision.generationVersion);
     const accepted = store.settle(
       scope(),

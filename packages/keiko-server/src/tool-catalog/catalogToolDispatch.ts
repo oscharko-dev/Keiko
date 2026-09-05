@@ -163,7 +163,9 @@ function dispatchCatalogInvocation(
     context = catalogDispatchContext(state);
   } catch (error) {
     dispatchContextFailure(state, error);
-    return Promise.reject(error);
+    // Matches `createCatalogBinding`/`createCatalogOffer` in `catalogToolBinder.ts`: an unknown
+    // caught value never leaves this module unwrapped.
+    return Promise.reject(new TypeError("Invalid catalog dispatch context", { cause: error }));
   }
   const invocation = new CatalogInvocation(state, context, Object.freeze({ ...identity }));
   try {

@@ -572,13 +572,28 @@ function logApplyLifecycle(
 ): void {
   switch (phase) {
     case "started":
-      activityLog.write({ category: "process", op: "pr-description.apply.started", correlationId, extra });
+      activityLog.write({
+        category: "process",
+        op: "pr-description.apply.started",
+        correlationId,
+        extra,
+      });
       return;
     case "succeeded":
-      activityLog.write({ category: "process", op: "pr-description.apply.succeeded", correlationId, extra });
+      activityLog.write({
+        category: "process",
+        op: "pr-description.apply.succeeded",
+        correlationId,
+        extra,
+      });
       return;
     case "blocked":
-      activityLog.write({ category: "process", op: "pr-description.apply.blocked", correlationId, extra });
+      activityLog.write({
+        category: "process",
+        op: "pr-description.apply.blocked",
+        correlationId,
+        extra,
+      });
       return;
     case "failed":
       activityLog.write({

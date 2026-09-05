@@ -66,8 +66,19 @@ const REMOTE_MERGED: GitJourneyRemoteFacts = {
   issue: { number: 7, state: "closed", closedAt: AT },
 };
 
-/** The blocked/cancelled/recovery-required family: the only states a remote-absent outcome may declare. */
-const REMOTE_ABSENT_STATES = new Set(["blocked", "cancelled", "recovery-required"]);
+// Owner audit finding b1-25: the closed vocabulary of reasons a remote-absent outcome may declare
+// is a REASON allowlist, not a STATE allowlist — most "blocked"-state reasons (closed-unmerged,
+// issue-closed-without-merge, retargeted, head-changed, every readiness-/description-* reason)
+// describe a specific fact that can only come from an actually observed remote
+// (`journeyOutcome.ts`'s `reason()`: those are reached only once `facts.status === "observed"`).
+// Only these five reasons are ever produced WITHOUT an observed remote.
+const REMOTE_ABSENT_REASONS = new Set([
+  "provider-unavailable",
+  "authority-denied",
+  "observation-superseded",
+  "cancelled",
+  "ready-effect-uncertain",
+]);
 
 function outcomeBase(reason: GitJourneyReason): JourneyOutcome {
   return {
@@ -151,10 +162,20 @@ describe("bounded canonical provider facts", () => {
 
 describe("closed reason/state vocabulary consumed at the wire boundary", () => {
   it.each(Object.keys(GIT_JOURNEY_REASON_STATES) as GitJourneyReason[])(
-    "admits a remote-absent outcome for %s only when its state belongs to the fail-closed family",
+    "admits a remote-absent outcome for %s only when the reason itself never requires an observed remote",
     (reason) => {
-      const expected = REMOTE_ABSENT_STATES.has(GIT_JOURNEY_REASON_STATES[reason]);
+      const expected = REMOTE_ABSENT_REASONS.has(reason);
       expect(isJourneyOutcome(outcomeBase(reason))).toBe(expected);
+    },
+  );
+  // The precise regression this vocabulary test now pins: three "blocked"-state reasons that DO
+  // require an observed remote, each rejected with `remote: null` even though every one of them
+  // shares its collapsed state with a genuinely remote-absent reason.
+  it.each(["closed-unmerged", "retargeted", "head-changed"] as GitJourneyReason[])(
+    "rejects %s with remote: null even though it shares the blocked state with provider-unavailable",
+    (reason) => {
+      expect(GIT_JOURNEY_REASON_STATES[reason]).toBe("blocked");
+      expect(isJourneyOutcome(outcomeBase(reason))).toBe(false);
     },
   );
   it("rejects a reason whose declared state contradicts the closed vocabulary", () => {

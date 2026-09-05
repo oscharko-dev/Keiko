@@ -246,11 +246,27 @@ function subSnapshots(value: Record<string, unknown>, binding: GitJourneyBinding
     (value.observationFailure === null || isGitDeliveryObservationFailure(value.observationFailure))
   );
 }
+// Owner audit finding b1-25: `remote: null` must be accepted only for a `reason` that can be
+// reached WITHOUT ever observing the remote — every one of these collapses (via
+// GIT_JOURNEY_REASON_STATES) to the "blocked"/"cancelled"/"recovery-required" state family, but
+// most of that family's OTHER reasons (closed-unmerged, issue-closed-without-merge, retargeted,
+// head-changed, and every readiness-/description-* reason) describe a specific fact that can only
+// come from an actually observed remote (`journeyOutcome.ts`'s `reason()`: `lifecycleReason` and
+// `openReason` are reached only once `facts.status === "observed"`). Checking the collapsed STATE
+// let any of those remote-dependent reasons through with `remote: null` as long as they happened
+// to share the "blocked" state with a genuinely remote-absent reason.
+const NULL_REMOTE_REASONS: ReadonlySet<GitJourneyReason> = new Set([
+  "provider-unavailable",
+  "authority-denied",
+  "observation-superseded",
+  "cancelled",
+  "ready-effect-uncertain",
+]);
 function outcomeRemote(value: Record<string, unknown>, binding: GitJourneyBinding): boolean {
   if (value.remote === null)
     return (
       !value.keikoDescriptionApplied &&
-      new Set(["blocked", "cancelled", "recovery-required"]).has(String(value.state))
+      NULL_REMOTE_REASONS.has(value.reason as GitJourneyReason)
     );
   return (
     value.observationFailure === null &&

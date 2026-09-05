@@ -25,6 +25,7 @@ import {
 } from "@/lib/coding-workbench-live-state";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { CodingWorkbenchWindow, type CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import styles from "./CodingWorkbenchWindow.module.css";
 import { GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT } from "../shared/gatewaySetupBus";
 import {
@@ -2748,6 +2749,67 @@ describe("CodingWorkbenchWindow reconnects activity on a newly observed run (#33
 
     await waitFor(() => {
       expect(retry).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+// Owner audit b1-14 — the journey initial-load catch reported `correlationId: runId`, discarding
+// the failed request's own `ApiError.correlationId`, so the diagnostic could not be joined to
+// server.log. `_useJourneyActions.ts`'s own failure report is the pattern to mirror: prefer
+// `correlationIdOf(error)`, falling back to `runId` only when the error carries none.
+describe("CodingWorkbenchWindow journey initial-load diagnostic correlation (b1-14)", () => {
+  afterEach(() => {
+    resetClientDiagnosticWriter();
+  });
+
+  // Failing-before: with the old unconditional `correlationId: runId`, this asserted
+  // `correlationId: "server-corr-7"` failed — the diagnostic carried `"run-1"` instead.
+  it("prefers the failed request's own correlation id over the run id", async () => {
+    const diagnostics: { message: string; correlationId?: string | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      diagnostics.push({ message, correlationId: meta?.correlationId });
+    });
+    const failure = Object.assign(new Error("journey refresh failed"), {
+      correlationId: "server-corr-7",
+    });
+    journeyRefreshMock.mockReset().mockRejectedValueOnce(failure);
+    runtimeHookMock.mockReturnValue({
+      // A journey refresh only fires when the run's snapshot carries a draftDelivery pull request
+      // (CodingWorkbenchWindow.tsx gates `useCodingWorkbenchJourney`'s runId on exactly that).
+      state: liveState({
+        run: { status: "ready", value: journeyFixture().snapshot, error: null },
+      }),
+      actions: actions(),
+    });
+    render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    await waitFor(() => {
+      expect(diagnostics).toContainEqual({
+        message: "[keiko] journey initial refresh failed",
+        correlationId: "server-corr-7",
+      });
+    });
+  });
+
+  it("falls back to the run id when the failure carries no correlation id of its own", async () => {
+    const diagnostics: { message: string; correlationId?: string | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      diagnostics.push({ message, correlationId: meta?.correlationId });
+    });
+    journeyRefreshMock.mockReset().mockRejectedValueOnce(new Error("journey refresh failed"));
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        run: { status: "ready", value: journeyFixture().snapshot, error: null },
+      }),
+      actions: actions(),
+    });
+    render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    await waitFor(() => {
+      expect(diagnostics).toContainEqual({
+        message: "[keiko] journey initial refresh failed",
+        correlationId: "run-1",
+      });
     });
   });
 });
