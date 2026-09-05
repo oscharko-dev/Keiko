@@ -12,8 +12,11 @@ no silent failures, fail closed).
 The controlled repository and a real gateway profile now exist on the orchestrator's machine (a
 private repository the operator controls, seeded with a real issue and an external branch/PR for
 the Git-to-Chat journey) — nothing about them is secret, and the sections below describe the
-current, factual state rather than an unmet precondition. The signed-platform and audit-process
-inputs remain genuinely external and are covered further down.
+current, factual state rather than an unmet precondition. The signed-platform, cross-platform
+egress-enforcement, and audit-process inputs remain genuinely external and are covered further
+down; the operator's 2026-09-05 scope clarification (issue #3384, comment `5553579963`) also keeps
+coding-runtime confinement and coding-runtime performance qualification in this task's scope even
+though Apple/Windows signing (#2198) and the Atlassian half of #2952 are excluded.
 
 1. ~~**Operator-authorized controlled-repository credentials.**~~ Resolved on the orchestrator's
    machine: `KEIKO_QUALIFICATION_CONTROLLED_REPOSITORY_ROOT` points at a real local checkout of an
@@ -25,21 +28,32 @@ inputs remain genuinely external and are covered further down.
    resolves this through the same configuration surface production already reads —
    `KEIKO_MODEL_<id>_API_KEY`/`_BASE_URL` or a `keiko.config.json`-shaped file — plus
    `KEIKO_QUALIFICATION_SPEND_BUDGET_USD`, a positive bounded evaluation budget. This agent sandbox
-   still has neither configured, which is why the harness still fails closed here.
-3. **Signed platform artifacts.** Issue #3390 correction 1 (verified 2026-09-04 against
-   `epic/3384-issue-to-pr@a711d21f`) records that the signed/notarized macOS reference installation
-   (#2198), the coding-runtime performance budgets (#2952), and the attested sidecar egress policy
-   (#2951) are all open external prerequisites — #2951/#2952/#2198 are `OPEN` on GitHub as of that
-   date. Every manifest row that depends on one of them (a packaged macOS arm64/x64 or Windows x64
-   reference run, an egress/confinement proof, a startup/latency/output/backpressure/cleanup
-   measurement) is `blocked` with the blocking issue number as its closed reason. The real-binary
-   lane's `ps`/`lsof` egress sampling stays a `functional-not-platform-qualified` observation, never
-   an attestation, and its evidence class is deliberately not added to the shared
-   `CODE_TASK_EVIDENCE_CLASSES` vocabulary (see the comment on that constant in
-   `packages/keiko-contracts/src/code-task-acceptance.ts`) — a `CodeTaskQualificationScenarioV1` row
-   produced by that lane is recorded as `outcome: "blocked"` with a `blockedReason` naming the gap
-   instead.
-4. **The `keiko-issue-audit` reviewer reference.** Issue #3390 correction 7 records that
+   still has neither configured, which is why the harness still fails closed here. See "Budget
+   note" under Operator sequence for exactly what this variable does and does not enforce.
+3. **Signed platform artifacts and cross-platform egress enforcement.** The signed/notarized macOS
+   reference installation (#2198) is excluded from this task by the operator's scope
+   clarification, and the attested sidecar egress policy (#2951) still has no Linux
+   network-namespace bridge or Windows-native enforcement (ADR-0043 D14 addendum). Every manifest
+   row that depends on one of them — a packaged Windows x64 or macOS x64 reference run, or the
+   Linux/Windows half of the egress-confinement proof — is `blocked`, with the blocking issue
+   number, and for the confinement row the ADR-0043 D14 gap it names, as its closed reason. The
+   real-binary lane's `ps`/`lsof` egress sampling stays a `functional-not-platform-qualified`
+   observation, never an attestation, and its evidence class is deliberately not added to the
+   shared `CODE_TASK_EVIDENCE_CLASSES` vocabulary (see the comment on that constant in
+   `packages/keiko-contracts/src/code-task-acceptance.ts`) — a `CodeTaskQualificationScenarioV1`
+   row produced by that lane is recorded as `outcome: "blocked"` with a `blockedReason` naming the
+   gap instead.
+4. **Coding-runtime performance budgets and macOS gateway confinement are in scope, not blocked.**
+   `coding-runtime-performance-budgets` is an active scenario: its receipt is derived from
+   `scripts/coding-runtime-performance-gate.mjs`'s deterministic judgement over the native
+   macOS-arm64 measurement `scripts/coding-runtime-performance-producer.mjs` produces (see
+   "Operator sequence" below) — it no longer cites #2952 wholesale, since only that issue's
+   Atlassian half is excluded. `egress-confinement-macos-arm64` is its sibling active scenario: the
+   macOS Seatbelt/gateway confinement enforcement `packages/keiko-sandbox`'s tests already cover,
+   backed on a live run by the `runtime.confinement.spawned` activity-log evidence
+   (`packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts`). Only the
+   Linux/Windows half of that same confinement proof stays blocked (item 3 above).
+5. **The `keiko-issue-audit` reviewer reference.** Issue #3390 correction 7 records that
    `keiko-issue-audit` is an operator-run process outside this repository (`git grep -i
    "issue-audit" HEAD` returns no hits). The qualification manifest carries an opaque
    `auditReference`/`auditDigest` binding for it; the validator checks that binding and reports its
@@ -64,8 +78,8 @@ inputs remain genuinely external and are covered further down.
 - **The manifest producer.** `scripts/generate-coding-issue-journey-manifest.mjs` (CLI) and
   `scripts/lib/coding-issue-journey-manifest.mjs` (pure descriptor+receipts join) mirror
   `scripts/generate-code-task-acceptance.mjs`'s pipeline for this versioned sibling schema:
-  `docs/acceptance/coding-issue-journey-3390.json` declares the registered scenarios (nine active
-  journey scenarios plus seven blocked-external rows carrying their own closed reason) and the
+  `docs/acceptance/coding-issue-journey-3390.json` declares the registered scenarios (eleven active
+  journey scenarios plus six blocked-external rows carrying their own closed reason) and the
   generator derives each scenario's outcome/receiptDigest from a receipts directory, validating the
   assembled manifest against the contract before writing it. See
   [`docs/acceptance/README.md`](../../../acceptance/README.md#3390-qualification-manifest-a-versioned-sibling-pipeline)
@@ -92,6 +106,18 @@ inputs remain genuinely external and are covered further down.
   lands. While that prerequisite stays open the mode is simply never invoked for the
   packaged-reference scenarios; their manifest rows carry the descriptor's own closed `blocked`
   reason instead of a fabricated receipt.
+- **The coding-runtime performance and macOS confinement producers.** These reuse the exact same
+  shared writer (`scripts/lib/qualification-evidence-receipt.mjs`), fed from a different real
+  result instead of a platform driver's own receipt.
+  `scripts/coding-runtime-performance-producer.mjs` measures the native macOS-arm64 reference
+  (`npm run perf:evidence:coding-runtime`) and `scripts/coding-runtime-performance-gate.mjs` judges
+  it deterministically (`npm run check:perf-evidence:coding-runtime -- --enforce-source-freshness`);
+  the gate's pass/fail result, together with the measurement's bound source commit and
+  `darwin`/`arm64` environment, becomes `coding-runtime-performance-budgets`'s receipt.
+  `egress-confinement-macos-arm64`'s receipt is the same translation applied to
+  `packages/keiko-sandbox`'s Seatbelt/gateway confinement tests passing, cross-referenced against
+  the live run's own `runtime.confinement.spawned` activity-log evidence. See "Operator sequence"
+  below for the exact commands.
 - **The real-model harness skeleton.** `tests/e2e/coding-issue-journey.spec.ts`,
   `tests/e2e/config/playwright.coding-issue-journey.config.ts`, and
   `tests/e2e/servers/coding-issue-journey-server.mts` compose the actual production factory
@@ -120,37 +146,94 @@ inputs remain genuinely external and are covered further down.
 ## Operator sequence
 
 Once the orchestrator's controlled repository and gateway profile are configured (the resolved
-inputs in section 1/2 above), a qualification run follows this sequence:
+inputs in section 1/2 above), a qualification run follows this sequence.
 
-1. **Configure the environment.** Set `KEIKO_QUALIFICATION_CONTROLLED_REPOSITORY_ROOT` (a local
-   checkout with a GitHub `origin`), a real model profile
-   (`KEIKO_MODEL_<id>_API_KEY`/`_BASE_URL` or `KEIKO_QUALIFICATION_GATEWAY_CONFIG_PATH`), and
-   `KEIKO_QUALIFICATION_SPEND_BUDGET_USD` (a positive, bounded evaluation budget — threaded into the
-   launched production process's own env by `tests/e2e/servers/coding-issue-journey-server.mts` so
-   it is available for gateway-side enforcement, and always recorded on the manifest so the
-   validator can flag overspend after the fact even when the gateway does not enforce it).
-2. **Run the journey.** `npm run test:e2e:coding-issue-journey:live` drives the real production
-   composition end to end and, for each registered active scenario, produce a
-   `<scenarioId>.receipt.json` (`{ scenarioId, commitSha, platform, testStatus, recordedAt,
-   provenance }`) and a `<scenarioId>.artifact` file under a receipts directory (for example
-   `docs/qa/evidence/coding-issue-journey/3390/receipts/`). The platform launch drivers
-   (`scripts/qualify-macos-runtime-release.mjs --qualification-receipts <dir> --scenario-id <id>`,
-   and the Windows sibling) bridge a real packaged-qualification receipt into the same shape.
-3. **Generate the manifest.** `npm run qualify:coding-issue-journey:manifest -- --descriptor
+1. **Configure the environment.** Set:
+   - `KEIKO_QUALIFICATION_CONTROLLED_REPOSITORY_ROOT` — a local checkout with a GitHub `origin`.
+   - `KEIKO_QUALIFICATION_CONTROLLED_ISSUE_REFERENCE` — the seeded controlled issue (for example
+     `#1`), read directly by the Playwright spec.
+   - A real model profile: either `KEIKO_MODEL_<id>_API_KEY` and `_BASE_URL` together, or
+     `KEIKO_QUALIFICATION_GATEWAY_CONFIG_PATH` naming a `keiko.config.json`-shaped file.
+   - `KEIKO_QUALIFICATION_SPEND_BUDGET_USD` — a positive, bounded evaluation budget. It is threaded
+     into the launched production process's own environment
+     (`tests/e2e/servers/coding-issue-journey-server.mts`) and always recorded on the manifest, but
+     see "Budget note" below for exactly what it does and does not enforce.
+   - `KEIKO_CODING_DEPLOYMENT_CEILING=autonomous-delivery` — the server reads its deployment
+     ceiling once at process start (`packages/keiko-server/src/deps.ts`) and defaults to
+     `governed-assist` when this is unset; the checked-in Playwright config's own `webServer.env`
+     block does not set it, so an operator who skips this gets a server clamped below the mode the
+     "Full access" journey scenarios need. Setting the highest ceiling here does not force the
+     effective mode: ADR-0138 still lets the actual mode be selected independently, at or below the
+     ceiling, through the Settings → Security UI radios — one server process covers every mode row
+     without a restart.
+2. **Run the journey scenarios.** `npm run test:e2e:coding-issue-journey:live`, scoped to one or
+   more scenario ids via `KEIKO_QUALIFICATION_SCENARIOS` (comma-separated) and pointed at a
+   receipts directory via `KEIKO_QUALIFICATION_RECEIPTS_DIR`, drives the real production
+   composition end to end and writes a `<scenarioId>.receipt.json` (`{ scenarioId, commitSha,
+   platform, testStatus, recordedAt, provenance }`) plus a `<scenarioId>.artifact` file per selected
+   scenario into that directory — for example
+   `docs/qa/evidence/coding-issue-journey/3390/receipts/`. This produces the eight
+   fully-harness-owned `playwright-journey` scenarios (`issue-to-pr-governed-assist`,
+   `issue-to-pr-supervised-coding`, `issue-to-pr-autonomous-delivery`, `ci-repair-loop`,
+   `description-auto-draft-and-apply`, `mark-ready-intent`, `git-to-chat-connect-refine-apply`,
+   `git-chat-negative-effects`), each scoped to the ADR-0138 mode or journey stage its scenario id
+   names. `human-merge-and-closure` is the one exception: the harness records the journey's own
+   outcome, but its receipt can only be completed after the human merge checkpoint in step 5.
+3. **Produce the coding-runtime performance receipt.** From the native macOS-arm64 reference
+   machine: `npm run perf:evidence:coding-runtime` (append `-- --calibrate` the first time only, if
+   `docs/release/2952-coding-runtime-calibration.json` does not yet exist — calibration is
+   immutable once written) followed by
+   `npm run check:perf-evidence:coding-runtime -- --enforce-source-freshness`. The gate's pass/fail
+   judgement, together with the measurement's own bound source commit and `darwin`/`arm64`
+   environment, is translated into `coding-runtime-performance-budgets`'s
+   `<scenarioId>.receipt.json` + `.artifact` pair through the same shared writer the platform
+   launch drivers use (`scripts/lib/qualification-evidence-receipt.mjs`), written into the same
+   receipts directory as step 2.
+4. **Produce the macOS egress-confinement receipt.** `egress-confinement-macos-arm64`'s receipt is
+   the same translation applied to a different real result: `packages/keiko-sandbox`'s
+   Seatbelt/gateway confinement tests passing, cross-referenced against the live run's own
+   `runtime.confinement.spawned` activity-log evidence from step 2. The Linux/Windows half of this
+   same proof has no producer and stays `blocked` (see "Qualification inputs" above); this step
+   never fabricates one in its place.
+5. **The human merge checkpoint — performed by the operator, never by an agent.** Issue #3390 AC5
+   requires a separate, explicit human review and merge in the controlled repository; the harness
+   must not bypass this with agent merge/close permissions, and no automated step above performs
+   it. The operator reviews and merges the controlled repository's pull request by hand, then
+   supplies the resulting merge fact through `--human-merge-attestation <path-to-digest>` on the
+   manifest generator (step 6) so `human-merge-and-closure` can complete. No script or harness step
+   in this pipeline ever merges or closes on the operator's behalf.
+6. **Generate the manifest.** `npm run qualify:coding-issue-journey:manifest -- --descriptor
    docs/acceptance/coding-issue-journey-3390.json --receipts <receipts-dir> --commit <head sha>
    --tree <head tree sha> --runtime-identity <id> --model-identity <id> --fixture-revision <id>
-   --rubric <rubric file> --required-tools <catalog tool names> --spend-budget-usd <budget> [the
-   opaque references and digests as they become available] --output
-   docs/qa/evidence/coding-issue-journey/3390/manifest.json`. The descriptor's `blocked` rows (the
-   seven external-dependency scenarios) need no receipt — their closed reason is carried in the
-   descriptor itself, never fabricated by this step.
-4. **Validate.** `npm run check:coding-issue-journey-evidence:3390` SHA-binds the manifest to the
+   --rubric docs/qa/evidence/coding-issue-journey/3390/rubric.md --required-tools <catalog tool
+   names> --spend-budget-usd <budget> [--issue-ref <opaque>] [--pr-ref <opaque>] [--run-ref
+   <opaque>] [--readiness-digest <sha256>] [--journey-outcome-digest <sha256>]
+   [--human-merge-attestation <path-to-digest>] [--audit-ref <opaque>] [--audit-digest <sha256>]
+   [--observed-spend-usd <number>] --output
+   docs/qa/evidence/coding-issue-journey/3390/manifest.json`. The descriptor's six `blocked` rows
+   need no receipt; their closed reason is carried in the descriptor itself, never fabricated by
+   this step.
+7. **Validate.** `npm run check:coding-issue-journey-evidence:3390` SHA-binds the manifest to the
    current git head, cross-references every scenario against the receipts directory, and prints the
    derived verdict (`qualified` / `blocked` / `failed`) with every failure named. A `blocked` row is
    never a skipped-green row: it names the external issue or process that still gates it (`#2198`,
-   `#2951`, `#2952`, `#3421`, the red real-binary lane, or the operator-run `keiko-issue-audit`
-   process) so a reader can see exactly what remains outside this repository's control, and the
-   manifest-level verdict can never reach `qualified` while one is outstanding.
+   `#2951` — including, on the egress row, the ADR-0043 D14 Linux/Windows confinement-enforcement
+   gap — the red real-binary lane, or the operator-run `keiko-issue-audit` process), so a reader can
+   see exactly what remains outside this repository's control, and the manifest-level verdict can
+   never reach `qualified` while one is outstanding.
+
+### Budget note
+
+`KEIKO_QUALIFICATION_SPEND_BUDGET_USD` is validated as a positive-number start precondition and
+recorded on the manifest; it is not a running, pre-call monetary ceiling. Nothing in the Model
+Gateway converts token usage into a dollar figure to compare against it while a run is in
+progress — the product records token usage, not live monetary spend. The USD ceiling the operator
+approves for the run (or for the aggregate of all real-model attempts and retries) is enforced
+procedurally: the operator watches actual provider billing during the run and stops it manually if
+the ceiling is reached, then records the real figure through `--observed-spend-usd <number>` on the
+manifest generator (step 6) so the validator can flag an overage after the fact. Omitting that flag
+records `{ outcome: "unknown" }` on the manifest and skips the overspend check silently — always
+supply it for a run that spent anything.
 
 ## Reading this alongside the epic
 

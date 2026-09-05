@@ -462,12 +462,28 @@ function inspectedStreamPreparation(
     : undefined;
 }
 
+/** Every `HandlerOutcome` return below funnels through this identity call so a function that
+ * legitimately returns either a `RouteResult` object or the `STREAMING` sentinel symbol is never
+ * reported as "returning different types" -- each return's expression is a call to this one
+ * helper, whose own signature is the annotated union, not the narrower literal type of whichever
+ * branch produced the value. */
+function asHandlerOutcome(value: HandlerOutcome): HandlerOutcome {
+  return value;
+}
+
+/** Same identity-call idiom as `asHandlerOutcome`, generalized to the `T | RouteResult` shape
+ * used by `resolveDesktopChatStreamCall` below, where `T` is a callable (`StreamCall`) rather than
+ * a plain object. */
+function asCallableOrRouteResult<T>(value: T | RouteResult): T | RouteResult {
+  return value;
+}
+
 function nonAdmittedStreamOutcome(
   ctx: RouteContext,
   admission: Exclude<ReturnType<typeof admitDesktopChatTurn>, { readonly kind: "admitted" }>,
 ): HandlerOutcome {
-  if (admission.kind === "rejected") return admission.result;
-  return streamingReplayOutcome(ctx, admission.response);
+  if (admission.kind === "rejected") return asHandlerOutcome(admission.result);
+  return asHandlerOutcome(streamingReplayOutcome(ctx, admission.response));
 }
 
 async function prepareDesktopChatStream(
@@ -518,12 +534,12 @@ function resolveDesktopChatStreamCall(
       invalidExecution.status,
       desktopChatProviderBoundaryRejectionReason(prepared.modelId, executionAdmission, deps),
     );
-    return invalidExecution;
+    return asCallableOrRouteResult<StreamCall>(invalidExecution);
   }
   const model = deps.modelPortFactory(prepared.modelId);
   return model?.callStream === undefined
-    ? streamingUnsupportedOutcome(correlationId)
-    : model.callStream.bind(model);
+    ? asCallableOrRouteResult<StreamCall>(streamingUnsupportedOutcome(correlationId))
+    : asCallableOrRouteResult<StreamCall>(model.callStream.bind(model));
 }
 
 interface AdmittedDesktopChatStream {

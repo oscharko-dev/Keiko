@@ -474,7 +474,7 @@ export function CodingWorkbenchWindow({
   onOpenGit = noopOpenGit,
 }: {
   readonly selectedRoot?: string | undefined;
-  readonly onOpenGit?: (target: CodingWorkbenchGitTarget) => void;
+  readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
 }): ReactNode {
   const activeWorkspace = useOptionalActiveWorkspace() ?? EMPTY_WORKSPACE;
   const chatCatalog = useOptionalChatSessionCatalog();

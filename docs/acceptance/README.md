@@ -112,14 +112,20 @@ opaque refs, digests, required tools, spend budget ── CLI arguments         
 
 The descriptor lists two kinds of registered scenario: `scenarios` that actually ran (a receipt is
 required; its absence is a pipeline error) and `blocked` rows that carry their closed reason
-directly (issue #3390 contract-correction 1: #2951/#2952/#2198 stay open) — a blocked row never
-needs a receipt, matching the evidence gate's own rule
-(`scripts/lib/coding-issue-journey-evidence.mjs`). The blocked disposition's source of truth is the
-descriptor, not a receipts-directory marker: keeping one place that says "this row is blocked and
-why" avoids two disagreeing answers to the same question. The platform launch drivers
-(`scripts/qualify-macos-runtime-release.mjs`, `scripts/qualify-windows-runtime-release.mjs`) can
-still bridge a real, passing qualification into the same receipts-directory shape via their own
-`--qualification-receipts <dir> --scenario-id <id>` mode, so a scenario that is blocked today
+directly — issue #3390 contract-correction 1 keeps a row `blocked` only while its external
+prerequisite (#2198 signing/notarization, or #2951 sidecar egress/confinement enforcement) is
+genuinely open on the qualified head; the operator's 2026-09-05 scope clarification additionally
+excludes only #2952's Atlassian half, so a row whose dependency is the coding-runtime half of that
+issue moves to `scenarios` once its own producer exists, rather than staying blocked on an
+exclusion that does not apply to it. A blocked row never needs a receipt, matching the evidence
+gate's own rule (`scripts/lib/coding-issue-journey-evidence.mjs`). The blocked disposition's source
+of truth is the descriptor, not a receipts-directory marker: keeping one place that says "this row
+is blocked and why" avoids two disagreeing answers to the same question. The platform launch
+drivers (`scripts/qualify-macos-runtime-release.mjs`, `scripts/qualify-windows-runtime-release.mjs`)
+and the coding-runtime performance/confinement producers
+(`scripts/coding-runtime-performance-gate.mjs`, `packages/keiko-sandbox`'s confinement tests) all
+bridge a real, passing result into the same receipts-directory shape via the shared
+`scripts/lib/qualification-evidence-receipt.mjs` writer, so a scenario that is blocked today
 becomes real evidence with no separate translation step once its external prerequisite lands.
 
 Generator invocation:

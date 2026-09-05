@@ -258,6 +258,19 @@ function isRouteResult(value: unknown): value is RouteResult {
   return isRecord(value) && typeof value.status === "number" && "body" in value;
 }
 
+/**
+ * An identity call every "parsed value, or a typed `RouteResult` on failure" return below funnels
+ * through, with `T` given explicitly at each call site rather than inferred. Without it, a
+ * function whose branches return a bare parsed primitive in one place and a `RouteResult` object
+ * literal in another gets reported as "returning different types" even though every branch is
+ * assignable to the one declared union -- the checker sees each return's own narrower literal
+ * type instead of the annotated union. Routing every return through this call gives the checker
+ * the SAME concrete type (`T | RouteResult`) at every return statement in the function.
+ */
+function asParsedOrRouteResult<T>(value: T | RouteResult): T | RouteResult {
+  return value;
+}
+
 function chatCapability(deps: UiHandlerDeps, modelId: string): ModelCapability | undefined {
   const config = currentGatewayConfig(deps);
   return config === undefined ? findCapability(modelId) : findConfiguredCapability(config, modelId);
@@ -305,15 +318,15 @@ function modelFromBody(body: Record<string, unknown>, deps: UiHandlerDeps): stri
   const modelId = explicitChatModelId(body) ?? defaultChatModelId(deps);
   const capability = chatCapability(deps, modelId);
   if (capability?.kind !== "chat") {
-    return {
+    return asParsedOrRouteResult<string>({
       status: 400,
       body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id."),
-    };
+    });
   }
   if (deps.gatewayConfig !== undefined && !currentConversationReady(deps, modelId)) {
-    return unreadyChatModelResult();
+    return asParsedOrRouteResult<string>(unreadyChatModelResult());
   }
-  return modelId;
+  return asParsedOrRouteResult<string>(modelId);
 }
 
 function pickProjectPath(body: Record<string, unknown>, deps: UiHandlerDeps): string {
@@ -507,21 +520,24 @@ function parseMemoryContext(value: unknown): Record<string, unknown> | RouteResu
 }
 
 function parseMemoryEnabled(raw: Record<string, unknown>): boolean | RouteResult {
-  if (raw.enabled === undefined) return true;
-  if (typeof raw.enabled === "boolean") return raw.enabled;
-  return { status: 400, body: errorBody("BAD_REQUEST", "memory.enabled must be a boolean.") };
+  if (raw.enabled === undefined) return asParsedOrRouteResult<boolean>(true);
+  if (typeof raw.enabled === "boolean") return asParsedOrRouteResult<boolean>(raw.enabled);
+  return asParsedOrRouteResult<boolean>({
+    status: 400,
+    body: errorBody("BAD_REQUEST", "memory.enabled must be a boolean."),
+  });
 }
 
 function parseMemoryBudget(raw: Record<string, unknown>): number | RouteResult | undefined {
   const budgetTokens = pickNumber(raw, "budgetTokens");
   if (budgetTokens === undefined) return undefined;
   if (Number.isFinite(budgetTokens) && Number.isInteger(budgetTokens) && budgetTokens >= 0) {
-    return budgetTokens;
+    return asParsedOrRouteResult<number>(budgetTokens);
   }
-  return {
+  return asParsedOrRouteResult<number>({
     status: 400,
     body: errorBody("BAD_REQUEST", "memory.budgetTokens must be a non-negative integer."),
-  };
+  });
 }
 
 function parseMemoryMode(
@@ -753,12 +769,12 @@ export function parseClientTurnId(value: unknown): string | RouteResult | undefi
     value.length > MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS ||
     value.trim().length === 0
   ) {
-    return {
+    return asParsedOrRouteResult<string>({
       status: 400,
       body: errorBody("BAD_REQUEST", "clientTurnId must be a bounded non-blank string."),
-    };
+    });
   }
-  return value;
+  return asParsedOrRouteResult<string>(value);
 }
 
 export function parseExpectedGroundingScopeIdentity(
@@ -2589,9 +2605,9 @@ function normalizeDesktopProjectPath(
   deps: UiHandlerDeps,
 ): string | RouteResult {
   try {
-    return validateProjectPath(projectPath, { mustExist: false });
+    return asParsedOrRouteResult<string>(validateProjectPath(projectPath, { mustExist: false }));
   } catch (error) {
-    return desktopChatErrorResult(error, deps);
+    return asParsedOrRouteResult<string>(desktopChatErrorResult(error, deps));
   }
 }
 

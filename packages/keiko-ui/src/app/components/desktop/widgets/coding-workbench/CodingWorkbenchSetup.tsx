@@ -212,7 +212,7 @@ async function settleBoundWorkspace(
 interface BindInput {
   readonly root: string;
   readonly baseBranch: string;
-  readonly issue: AcceptedWorkbenchIssue | null | undefined;
+  readonly issue?: AcceptedWorkbenchIssue | null | undefined;
   readonly refreshWorkspace: () => Promise<boolean>;
   readonly onPhase: (phase: SetupPhase) => void;
 }
