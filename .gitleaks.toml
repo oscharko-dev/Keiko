@@ -15,6 +15,7 @@ useDefault = true
 
 [[allowlists]]
 description = "Epic #3384: synthetic secret-shaped test fixtures in two immutable history commits (draftDeliveryTemplate.test.ts, codingRepositorySearch.test.ts); rewritten at runtime afterwards"
+matchCondition = "AND"
 commits = [
   "93a328952b5507fd63cd7c542ec730f0b1828b6d",
   "1fbd1173f3db50faf1988ad0e17a72b00e5f0273",

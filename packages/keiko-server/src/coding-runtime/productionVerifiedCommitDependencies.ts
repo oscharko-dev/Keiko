@@ -7,7 +7,6 @@ import { editorAgentRegistry } from "../editor/agentSessionRegistry.js";
 import { resolveGovernedCommitMessagePolicy } from "../gitDelivery/commitPolicySettings.js";
 import { resolveProjectWorkspace } from "../gitDelivery/execution.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import type { VerifiedCommitRuntimeDependencies } from "./productionVerifiedCommitRuntime.js";
 
 export type VerifiedCommitCompositionDeps = Pick<
@@ -25,7 +24,9 @@ export type VerifiedCommitCompositionDeps = Pick<
 /** Reuses the registered workspace, settings, editor and delivery owners of the composed server. */
 export function createProductionVerifiedCommitDependencies(
   deps: VerifiedCommitCompositionDeps,
-  snapshots: CodingRuntimeSnapshotStore | undefined,
+  // Only the members the verified-commit service reads (verifiedCommitTypes.ts) are required, so a
+  // caller may pass the full store or a narrower port without a cast.
+  snapshots: VerifiedCommitRuntimeDependencies["snapshots"] | undefined,
 ): VerifiedCommitRuntimeDependencies | undefined {
   if (snapshots === undefined) return undefined;
   return {
