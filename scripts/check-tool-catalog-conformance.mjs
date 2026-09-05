@@ -55,6 +55,18 @@ export async function toolCatalogManifestBytes(root = process.cwd()) {
     tabWidth: 2,
   });
 }
+const sortedByName = (values) =>
+  [...values].sort((left, right) => compareStrings(left.name, right.name));
+/**
+ * Pure comparator extracted so the "legacy table reintroduction" attack class can be exercised
+ * directly (feed a deliberately mutated/reintroduced legacy table and prove drift is caught)
+ * without duplicating this formula in a test-owned copy (AGENTS.md §7 fixture rule).
+ */
+export function legacyProjectionDiffers(definitions, legacyDefinitions) {
+  return (
+    canonicalise(sortedByName(definitions)) !== canonicalise(sortedByName(legacyDefinitions))
+  );
+}
 export async function checkToolCatalogConformance(root = process.cwd()) {
   const errors = checkToolCatalogInventory(root);
   const producer = await loadToolCatalogProducer(root);
@@ -63,9 +75,7 @@ export async function checkToolCatalogConformance(root = process.cwd()) {
   );
   const catalog = producer.createInitialToolCatalog();
   const definitions = producer.gatewayToolDefinitions(catalog, { id: "legacy-native", version: 1 });
-  const sorted = (values) =>
-    [...values].sort((left, right) => compareStrings(left.name, right.name));
-  if (canonicalise(sorted(definitions)) !== canonicalise(sorted(legacy.TOOL_DEFINITIONS)))
+  if (legacyProjectionDiffers(definitions, legacy.TOOL_DEFINITIONS))
     errors.push("legacy tool projection differs from existing owner");
   if (
     readFileSync(join(root, TOOL_CATALOG_MANIFEST_PATH), "utf8") !==
@@ -78,6 +88,21 @@ export async function checkToolCatalogConformance(root = process.cwd()) {
   )
     errors.push("generated tool catalog migration drift");
   return errors;
+}
+/**
+ * #3415 closeout enforcement: the finite migration inventory must have shrunk to zero rows.
+ * Deliberately NOT part of the default `checkToolCatalogConformance` result — the default PR
+ * lane keeps accepting a non-empty, in-progress inventory until every owning issue has actually
+ * landed its migration and #3415 itself closes out. Callers opt in with `--closeout` (main below)
+ * or by calling this directly once every owning migration issue is done.
+ */
+export async function checkToolCatalogMigrationCloseout(root = process.cwd()) {
+  const migration = JSON.parse(await toolCatalogMigrationBytes(root));
+  return migration.inventory.length === 0
+    ? []
+    : [
+        `migration inventory not empty at closeout: ${String(migration.inventory.length)} row(s) remain`,
+      ];
 }
 export function checkToolCatalogConformanceNegatives() {
   const outside = "packages/keiko-server/src/unregistered-tools.ts";
@@ -103,13 +128,16 @@ if (isMainModule(import.meta.url)) {
       await toolCatalogMigrationBytes(),
     );
   }
+  const closeout = process.argv.includes("--closeout");
   const errors = [
     ...(await checkToolCatalogConformance()),
     ...checkToolCatalogConformanceNegatives(),
+    ...(closeout ? await checkToolCatalogMigrationCloseout() : []),
   ];
   for (const error of errors) console.error(`tool-catalog-conformance: ${error}`);
   console.log(
-    `tool-catalog-conformance: ${errors.length === 0 ? "PASS" : "FAIL"} — compiler and finite migration inventory; no runtime qualification`,
+    `tool-catalog-conformance: ${errors.length === 0 ? "PASS" : "FAIL"} — compiler and finite migration inventory` +
+      `${closeout ? " (closeout: zero rows required)" : ""}; no runtime qualification`,
   );
   process.exitCode = errors.length === 0 ? 0 : 1;
 }

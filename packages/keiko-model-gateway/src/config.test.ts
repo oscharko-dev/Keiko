@@ -18,6 +18,7 @@ import {
   parseGatewayConfig,
   parseModelCapability,
   resolveOutboundHttpEgressConfig,
+  resolvePrDescriptionBrandingFromConfig,
   toolCallingConfigurationFingerprint,
   toSafeObject,
   type ParseGatewayConfigOptions,
@@ -243,6 +244,34 @@ describe("parseGatewayConfig", () => {
       expect((error as Error).message).toContain("figma.accessToken");
       expect((error as Error).message).not.toContain("figd_bad-token");
     }
+  });
+
+  it("parses an optional server-owned PR-description branding logo URL (#3398)", () => {
+    const immutable = `https://cdn.example.org/${"a".repeat(40)}/keiko-logo.svg`;
+    const config = parseGatewayConfig({
+      ...(validRaw() as Record<string, unknown>),
+      branding: { logoUrl: `  ${immutable}  ` },
+    });
+
+    expect(config.branding?.logoUrl).toBe(immutable);
+  });
+
+  it("accepts a branding block with no logoUrl, present but empty", () => {
+    const config = parseGatewayConfig({
+      ...(validRaw() as Record<string, unknown>),
+      branding: {},
+    });
+
+    expect(config.branding).toEqual({});
+  });
+
+  it("rejects a non-object branding block", () => {
+    expect(() =>
+      parseGatewayConfig({
+        ...(validRaw() as Record<string, unknown>),
+        branding: "https://cdn.example.org/logo.svg",
+      }),
+    ).toThrow(/branding must be an object/);
   });
 
   it("parses an optional self-hosted LiteLLM reranker block", () => {
@@ -1393,6 +1422,41 @@ describe("parseGatewayConfig", () => {
       }));
       expect(() => parseGatewayConfig(raw)).toThrow(/providers\[0\]\.circuitBreaker\.cooldownMs/u);
     });
+  });
+});
+
+// Issue #3398 (child correction 8): the config-level key never fails config load — only
+// `resolvePrDescriptionBrandingFromConfig`'s reuse of `validatedPrDescriptionLogoUrl` decides
+// whether the operator's declared logo actually renders. Every branch here proves the fallback
+// to text-only "by Keiko" attribution is real, not merely the absence of a throw.
+describe("resolvePrDescriptionBrandingFromConfig (#3398)", () => {
+  const immutable = `https://cdn.example.org/${"a".repeat(40)}/keiko-logo.svg`;
+
+  function configWithBranding(logoUrl: string | undefined): ReturnType<typeof parseGatewayConfig> {
+    return parseGatewayConfig({
+      ...(validRaw() as Record<string, unknown>),
+      ...(logoUrl === undefined ? {} : { branding: { logoUrl } }),
+    });
+  }
+
+  it("resolves an immutable public HTTPS SVG logo URL to a renderable branding fact", () => {
+    expect(resolvePrDescriptionBrandingFromConfig(configWithBranding(immutable))).toEqual({
+      immutableLogoUrl: immutable,
+      availability: "public",
+    });
+  });
+
+  it("falls back to no branding when the key is absent", () => {
+    expect(resolvePrDescriptionBrandingFromConfig(configWithBranding(undefined))).toEqual({});
+  });
+
+  it.each([
+    "http://cdn.example.org/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/keiko-logo.svg", // not https
+    `https://cdn.example.org/${"a".repeat(40)}/keiko-logo.png`, // not .svg
+    "https://cdn.example.org/keiko-logo.svg", // no content-hash path segment
+    `https://user:pw@cdn.example.org/${"a".repeat(40)}/keiko-logo.svg`, // embedded credentials
+  ])("falls back to no branding for an invalid configured logo URL: %s", (logoUrl) => {
+    expect(resolvePrDescriptionBrandingFromConfig(configWithBranding(logoUrl))).toEqual({});
   });
 });
 

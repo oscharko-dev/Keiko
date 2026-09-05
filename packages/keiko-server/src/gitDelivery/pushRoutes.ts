@@ -4,23 +4,39 @@
 //       target, the risk class, would-create-remote-branch / force-blocked flags, the preflight findings
 //       (incl. non-fast-forward and missing-upstream), and the policy decision. Never mutates, never
 //       records evidence.
+//   * POST /api/git-delivery/push/approve  — Mints the server-issued approval claim an issue-bound push
+//       requires before execute may proceed (#3387, ADR-0138 D2/D4, epic #3384 correction 5: a delivery
+//       effect is approval-required in every mode, including Full access — never mode-denied merely
+//       because the mode is lower). Mirrors createHandleCommitApprove/createHandleMergeApprove exactly:
+//       rebuilds the EXACT typed GitPushCommand the execute route would build from the identical request
+//       body (the shared `validate()` below) and binds the mint to it plus the admitted run's
+//       runId/envelopeDigest, so the claim this returns is redeemable by execute for that exact push
+//       only — a claim minted for a different command, run, or operation never matches.
 //   * POST /api/git-delivery/push/execute  — Governed. Drives the #476 publish gateway end-to-end through
 //       executeGovernedPublish (preflight + policy + approval + the dedicated push-only adapter) and
 //       appends content-free evidence for the allowed AND blocked outcome alike. Returns the typed
 //       publish-rejection reason + reused recovery hint so a rejected push can be recovered without
-//       guessing.
+//       guessing. An accepted run's push now requires an actually consumed, server-issued claim — a
+//       request that supplies no claim (or an unredeemed `{ required: false }`) is refused with
+//       `approval-required`, mirroring the commit route's unapproved-mutation closure (#3386).
 //
 // Content-free throughout: counts, flags, typed codes, branch/remote NAMES only — never command output,
 // diff content, secrets, or credentials. CSRF + JSON content type are enforced centrally by server.ts.
 
+import type { GitDeliveryApprovalClaim } from "@oscharko-dev/keiko-contracts";
 import type { GitPushCommand } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { ServerLogSink } from "../observability/server-log.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import {
+  DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
+  GIT_DELIVERY_LOCAL_OPERATOR_ID,
   parseGitDeliveryApprovalRequest,
   resolveGitDeliveryApprovalRequirement,
+  type GitDeliveryApprovalBinding,
   type ParsedGitDeliveryApprovalRequest,
 } from "./approvalStore.js";
 import { gitDeliveryTerminationHandler, readWorktreeSnapshotFor } from "./execution.js";
@@ -219,6 +235,20 @@ export const createHandlePushPreview = (
 
 // ─── Execute handler (governed) ───────────────────────────────────────────────────────────────
 
+function pushApprovalBinding(
+  projectId: string,
+  command: GitPushCommand,
+  authority: GitDeliveryAuthorityIdentity,
+): GitDeliveryApprovalBinding {
+  return {
+    projectId,
+    operation: "push",
+    command,
+    runId: authority.runId,
+    envelopeDigest: authority.envelopeDigest,
+  };
+}
+
 interface PushMutationInput {
   readonly ctx: RouteContext;
   readonly deps: UiHandlerDeps;
@@ -232,6 +262,38 @@ interface PushMutationInput {
   readonly correlationId: string;
 }
 
+// #3387 (ADR-0138 D2): mirrors commitApprovalRequiredBlock (commitRoutes.ts) exactly — an accepted
+// run's push requires an actually consumed, server-issued claim regardless of what the repo/org
+// policy pack decides; a pack that never names "approval-gated" for push must not silently
+// substitute for the human approval this closes. Reuses the kernel's own shared outcome vocabulary
+// (GitPublishOutcome["status"] already carries "approval-required" for the pack-driven
+// approval-gated path — see gitDeliveryPublishExecuteResponse in pushExecution.ts) rather than
+// inventing a second, parallel status for the identical governance outcome.
+function pushApprovalRequiredBlock(deps: Pick<UiHandlerDeps, "redactor">): RouteResult {
+  return {
+    status: 200,
+    body: deps.redactor({
+      schemaVersion: "1",
+      status: "approval-required",
+      actionKind: "push",
+    }),
+  };
+}
+
+function logPushApprovalRequired(
+  activityLog: ServerLogSink,
+  correlationId: string,
+  runId: string,
+): void {
+  activityLog.write({
+    category: "security",
+    op: "git.delivery.push.approval.required",
+    correlationId,
+    status: 200,
+    extra: { operation: "push", runId },
+  });
+}
+
 // Resolves the approval requirement, arms the continuity guard, drives the publish gateway, and
 // projects the content-free response. Extracted from createHandlePushExecute's returned handler
 // purely to stay under the function-length budget (AGENTS.md §6) — no behavioral seam of its own.
@@ -239,16 +301,18 @@ async function runPushMutation(input: PushMutationInput): Promise<RouteResult> {
   const { ctx, deps, seams, projectId, workspace, command, approval, authority, target } = input;
   const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
     store: seams.approvalStore,
-    binding: {
-      projectId,
-      operation: "push",
-      command,
-      runId: authority.runId,
-      envelopeDigest: authority.envelopeDigest,
-    },
+    binding: pushApprovalBinding(projectId, command, authority),
     nowMs: (seams.now ?? Date.now)(),
   });
   if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_PUSH_BAD_REQUEST");
+  if (!verifiedApproval.required) {
+    logPushApprovalRequired(
+      seams.activityLog ?? processServerLogSink(),
+      input.correlationId,
+      authority.runId,
+    );
+    return pushApprovalRequiredBlock(deps);
+  }
   const denialCapture: GitDeliveryAuthorityContinuityDenialCapture = {};
   const beforeRemoteDispatch = gitDeliveryAuthorityContinuityGuard({
     ctx,
@@ -315,6 +379,65 @@ export const createHandlePushExecute = (
   };
 };
 
+// ─── Approve handler (mints the server-issued approval claim execute consumes) ────────────────────
+
+export interface GitDeliveryPushApproveResponseBody {
+  readonly schemaVersion: "1";
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAt: string;
+}
+
+function logPushApprovalMinted(
+  activityLog: ServerLogSink,
+  correlationId: string,
+  runId: string,
+): void {
+  activityLog.write({
+    category: "security",
+    op: "git.delivery.push.approval.minted",
+    correlationId,
+    status: 200,
+    extra: { operation: "push", runId },
+  });
+}
+
+export const createHandlePushApprove = (
+  options: GitDeliveryPushRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  const seams = options.execution ?? {};
+  return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    // Reuses the IDENTICAL `validate()` the preview/execute handlers use, so the GitPushCommand this
+    // mints against is byte-for-byte the same typed value execute will rebuild from the same request
+    // body — the binding-hash consume() already enforces then matches by construction.
+    const prepared = await prepareGitDeliveryRequest(ctx, deps, PUSH_REQUEST_ERRORS, validate);
+    if (!prepared.ok) return prepared.result;
+    const { workspace } = prepared;
+    const { projectId, command } = prepared.value;
+    const target = {
+      headBranchName: command.sourceBranchName,
+      remoteBranchName: command.remoteBranchName,
+    };
+    const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "push", target, {
+      logSink: seams.activityLog,
+    });
+    if (!authority.allowed) return authority.result;
+    const store = seams.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;
+    const issued = store.issue({
+      binding: pushApprovalBinding(projectId, command, authority),
+      approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
+      nowMs: (seams.now ?? Date.now)(),
+    });
+    logPushApprovalMinted(seams.activityLog ?? processServerLogSink(), correlationId, authority.runId);
+    const body: GitDeliveryPushApproveResponseBody = {
+      schemaVersion: "1",
+      approval: issued.approval,
+      expiresAt: new Date(issued.expiresAtMs).toISOString(),
+    };
+    return { status: 200, body: deps.redactor(body) };
+  };
+};
+
 // ─── Route group ───────────────────────────────────────────────────────────────────────────────
 
 export const createGitDeliveryPushRouteGroup = (
@@ -324,6 +447,11 @@ export const createGitDeliveryPushRouteGroup = (
     method: "POST",
     pattern: "/api/git-delivery/push/preview",
     handler: createHandlePushPreview(options),
+  },
+  {
+    method: "POST",
+    pattern: "/api/git-delivery/push/approve",
+    handler: createHandlePushApprove(options),
   },
   {
     method: "POST",

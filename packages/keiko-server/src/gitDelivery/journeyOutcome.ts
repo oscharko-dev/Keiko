@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import {
   GIT_JOURNEY_REASON_STATES,
@@ -178,4 +179,103 @@ export function produceJourneyOutcome(source: JourneyOutcomeInput): JourneyOutco
   const outcome = { ...fields, evidenceRef: `journey-${sha256Hex(canonicalise(fields))}` };
   if (!isJourneyOutcome(outcome)) throw new TypeError("Invalid generated journey outcome");
   return Object.freeze(outcome);
+}
+
+const JOURNEY_OUTCOME_MAX_BYTES = 8192;
+
+/**
+ * Durable JourneyOutcome projection for restart/refresh (#3389 AC6). Independent of the run-bound
+ * coding_runtime_snapshots row: keyed by the same-repository identity (`remoteDigest`) and PR
+ * number, never by `repositoryId` or a run's live/terminal state, so a restarted process or a
+ * terminated run still reconstructs the last observed outcome without resuming mutation authority.
+ * CAS by `observedAt`: a write for an outcome no newer than the stored one is rejected rather than
+ * silently republishing an older fact.
+ */
+export interface GitJourneyOutcomeStore {
+  get(remoteDigest: string, prNumber: number): JourneyOutcome | undefined;
+  record(outcome: JourneyOutcome): boolean;
+}
+
+interface JourneyOutcomeRow {
+  readonly revision: number;
+  readonly outcome_json: string;
+  readonly observed_at: string;
+}
+
+function journeyOutcomeRow(
+  db: DatabaseSync,
+  remoteDigest: string,
+  prNumber: number,
+): JourneyOutcomeRow | undefined {
+  return db
+    .prepare(
+      "SELECT revision, outcome_json, observed_at FROM git_journey_outcomes WHERE remote_digest = ? AND pr_number = ?",
+    )
+    .get(remoteDigest, prNumber) as JourneyOutcomeRow | undefined;
+}
+
+function parseStoredJourneyOutcome(json: string): JourneyOutcome {
+  const value: unknown = JSON.parse(json);
+  if (!isJourneyOutcome(value)) throw new TypeError("Invalid persisted journey outcome");
+  return value;
+}
+
+function insertJourneyOutcome(db: DatabaseSync, outcome: JourneyOutcome, json: string): boolean {
+  const { runId, remoteDigest, prNumber } = outcome.binding;
+  const result = db
+    .prepare(
+      `INSERT INTO git_journey_outcomes
+        (remote_digest, pr_number, run_id, revision, state, reason, observed_at, outcome_json, updated_at)
+        VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+    )
+    .run(remoteDigest, prNumber, runId, outcome.state, outcome.reason, outcome.observedAt, json, outcome.observedAt);
+  return Number(result.changes) === 1;
+}
+
+function updateJourneyOutcome(
+  db: DatabaseSync,
+  outcome: JourneyOutcome,
+  json: string,
+  existing: JourneyOutcomeRow,
+): boolean {
+  if (Date.parse(outcome.observedAt) <= Date.parse(existing.observed_at)) return false;
+  const { runId, remoteDigest, prNumber } = outcome.binding;
+  const result = db
+    .prepare(
+      `UPDATE git_journey_outcomes
+        SET run_id = ?, revision = revision + 1, state = ?, reason = ?, observed_at = ?,
+            outcome_json = ?, updated_at = ?
+        WHERE remote_digest = ? AND pr_number = ? AND revision = ?`,
+    )
+    .run(
+      runId,
+      outcome.state,
+      outcome.reason,
+      outcome.observedAt,
+      json,
+      outcome.observedAt,
+      remoteDigest,
+      prNumber,
+      existing.revision,
+    );
+  return Number(result.changes) === 1;
+}
+
+export function createGitJourneyOutcomeStore(db: DatabaseSync): GitJourneyOutcomeStore {
+  return {
+    get(remoteDigest, prNumber) {
+      const row = journeyOutcomeRow(db, remoteDigest, prNumber);
+      return row === undefined ? undefined : parseStoredJourneyOutcome(row.outcome_json);
+    },
+    record(outcome) {
+      if (!isJourneyOutcome(outcome)) return false;
+      const json = JSON.stringify(outcome);
+      if (Buffer.byteLength(json, "utf8") > JOURNEY_OUTCOME_MAX_BYTES) return false;
+      const { remoteDigest, prNumber } = outcome.binding;
+      const existing = journeyOutcomeRow(db, remoteDigest, prNumber);
+      return existing === undefined
+        ? insertJourneyOutcome(db, outcome, json)
+        : updateJourneyOutcome(db, outcome, json, existing);
+    },
+  };
 }

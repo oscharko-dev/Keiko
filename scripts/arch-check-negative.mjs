@@ -162,7 +162,11 @@ function assertProductionIncludeOnlyIsCovered() {
 }
 
 const EXPECTED_IMPORT_POLICY_RULE_COUNTS = {
-  "adr-0175-tool-catalog-pure-imports": 1,
+  // Two distinct violations: bad-import.ts (a Node core-module import) and
+  // forbidden-package-dependency.ts (a third-party provider SDK import) — the #3415
+  // negative-fixture matrix's "forbidden package dependency" attack class, added alongside the
+  // existing Node-builtin fixture rather than replacing it.
+  "adr-0175-tool-catalog-pure-imports": 2,
   "adr-0165-raw-coordinate-owner": 1,
   "adr-0005-owned-root-authority-implementation-private": 1,
   "adr-0005-owned-root-containment-allowed-callers": 1,

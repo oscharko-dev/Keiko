@@ -99,6 +99,72 @@ export function createProductionDraftDeliveryDependencies(
   };
 }
 
+export type JourneyReadCompositionDeps = Pick<
+  UiHandlerDeps,
+  "store" | "env" | "managedTaskWorkspaceRoot" | "workspaceProvisioning" | "activityLog"
+>;
+
+export interface ProductionJourneyReadRequest {
+  readonly repositoryId: string;
+  readonly correlationId: string;
+  readonly signal?: AbortSignal;
+}
+
+function journeyReaderWorkspace(root: string): WorkspaceInfo {
+  return {
+    root,
+    selectedRoot: root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
+}
+
+function journeyReaderRoot(deps: JourneyReadCompositionDeps, repositoryId: string): string | undefined {
+  for (const project of deps.store.listProjects()) {
+    const resolved = resolveProjectWorkspace(deps, project.path);
+    if (resolved !== undefined && githubIssueReaderRepositoryId(resolved.root) === repositoryId) {
+      return resolved.root;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Builds a read-only journey reader admitted by the per-checkout GitHub-reader grant alone — never
+ * the run-bound mutation authority `DraftDeliveryFactory.journeyReader` above wires for an active
+ * draft-delivery run. The journey observation route (#3389 AC5/AC6) uses this so refresh and
+ * reconciliation keep working after the originating run has terminated, been recovered or the
+ * process restarted: a live run's active workspace and snapshot state are never resolved or
+ * required, only the same persisted per-checkout read grant `isGitHubIssueReaderAuthorized` already
+ * consults per read.
+ */
+export function createProductionJourneyReader(
+  deps: JourneyReadCompositionDeps,
+  request: ProductionJourneyReadRequest,
+): ReturnType<typeof createNodeGitJourneyReader> | undefined {
+  const root = journeyReaderRoot(deps, request.repositoryId);
+  if (root === undefined) return undefined;
+  const stillAuthorized = (): boolean =>
+    journeyReaderRoot(deps, request.repositoryId) === root &&
+    isGitHubIssueReaderAuthorized(deps, root, { correlationId: request.correlationId });
+  if (!stillAuthorized()) return undefined;
+  return createNodeGitJourneyReader({
+    workspace: journeyReaderWorkspace(root),
+    processEnv: deps.env,
+    signal: request.signal,
+    onTerminated: gitDeliveryTerminationHandler(
+      { activityLog: deps.activityLog ?? processServerLogSink() },
+      request.correlationId,
+    ),
+    stillAuthorized,
+  });
+}
+
 function activeMatches(active: ActiveWorkspaceView, context: DraftDeliveryRunContext): boolean {
   const { instance, binding, pointer } = active;
   return (

@@ -178,6 +178,7 @@ const EXPECTED_TABLES = new Set([
   "chats",
   "coding_runtime_snapshots",
   "coding_runtime_ci_repair_budgets",
+  "git_journey_outcomes",
   "github_issue_reader_authorization",
   "memory_autonomy_policy",
   "projects",
@@ -333,6 +334,34 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
         "revision",
         "record_json",
       ]);
+    } finally {
+      inspector.close();
+    }
+  });
+
+  // V27 (#3389) journey-outcome projection: only identity digests/ids, a closed state/reason pair,
+  // a monotonic revision, and one bounded validated JSON outcome record — never a title, body,
+  // diff or provider URL, and never keyed by a run's live/terminal state.
+  it("V27 journey outcome projection has only bounded identity and a closed outcome column", () => {
+    const inspector = openMigratedSchema(join(tmpDir, "journey.db"));
+    try {
+      expect(columnNames(inspector, "git_journey_outcomes")).toEqual([
+        "remote_digest",
+        "pr_number",
+        "run_id",
+        "revision",
+        "state",
+        "reason",
+        "observed_at",
+        "outcome_json",
+        "updated_at",
+      ]);
+      for (const col of columnNames(inspector, "git_journey_outcomes")) {
+        const lower = col.toLowerCase();
+        for (const forbidden of [...FORBIDDEN_SUBSTRINGS, "title", "body", "diff", "url", "owner"]) {
+          expect(lower).not.toContain(forbidden);
+        }
+      }
     } finally {
       inspector.close();
     }

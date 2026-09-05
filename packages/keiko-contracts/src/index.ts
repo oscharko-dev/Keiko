@@ -960,6 +960,23 @@ export type {
   isCodeTaskSha256Digest,
   validateCodeTaskAcceptanceContribution,
 } from "./code-task-acceptance.js";
+// #3390 qualification manifest: a versioned sibling of the #2384 acceptance contribution above,
+// reusing its closed vocabularies. See code-task-acceptance.ts's "Qualification manifest" section.
+export type {
+  CodeTaskQualificationManifestV1,
+  CodeTaskQualificationProvenance,
+  CodeTaskQualificationScenarioV1,
+  CodeTaskQualificationVerdict,
+} from "./code-task-acceptance.js";
+export type {
+  CODE_TASK_QUALIFICATION_MANIFEST_KIND,
+  CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION,
+  CODE_TASK_QUALIFICATION_PROVENANCES,
+  CODE_TASK_QUALIFICATION_VERDICTS,
+  codeTaskQualificationManifestFailures,
+  codeTaskQualificationVerdictFor,
+  validateCodeTaskQualificationManifest,
+} from "./code-task-acceptance.js";
 
 // ─── Code-task governance contracts (Issue #2386, Epic #2384) ──────────────────────
 // Grant scope, the produced GovernedActionV1 (#2387), and the consumed CodeTaskExecutionV1

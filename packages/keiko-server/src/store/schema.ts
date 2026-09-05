@@ -8,7 +8,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 26;
+export const SCHEMA_VERSION = 27;
 
 interface Migration {
   readonly version: number;
@@ -722,6 +722,26 @@ CREATE TABLE coding_runtime_ci_repair_budgets (
 ) STRICT;
 `;
 
+// #3389: the durable JourneyOutcome projection, independent of the run-bound coding_runtime_snapshots
+// row so refresh/reconciliation survives the originating run's termination or recovery (AC6). Keyed
+// by the same-repository identity (remote_digest) and PR number, never repositoryId or a run state.
+// Content-free: identity digests/ids, a closed state/reason pair, a monotonic revision and the bounded
+// validated JSON outcome record — no title, body, diff or provider URL.
+const V27_SQL = `
+CREATE TABLE git_journey_outcomes (
+  remote_digest TEXT NOT NULL CHECK (length(remote_digest) = 64),
+  pr_number INTEGER NOT NULL CHECK (pr_number BETWEEN 1 AND 1000000000),
+  run_id TEXT NOT NULL CHECK (length(run_id) BETWEEN 1 AND 128),
+  revision INTEGER NOT NULL CHECK (revision >= 0),
+  state TEXT NOT NULL CHECK (length(state) BETWEEN 1 AND 64),
+  reason TEXT NOT NULL CHECK (length(reason) BETWEEN 1 AND 64),
+  observed_at TEXT NOT NULL,
+  outcome_json TEXT NOT NULL CHECK (length(outcome_json) <= 8192 AND json_valid(outcome_json)),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (remote_digest, pr_number)
+) STRICT;
+`;
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
 // change.
@@ -752,6 +772,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 24, sql: V24_SQL },
   { version: 25, sql: V25_SQL },
   { version: 26, sql: V26_SQL },
+  { version: 27, sql: V27_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

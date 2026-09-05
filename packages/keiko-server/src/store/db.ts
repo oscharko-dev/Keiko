@@ -828,6 +828,7 @@ export const UI_STORE_FINGERPRINT_TABLES = [
   "task_workspace_active_pointer",
   "coding_runtime_snapshots",
   "coding_runtime_ci_repair_budgets",
+  "git_journey_outcomes",
   "memory_autonomy_policy",
   "github_issue_reader_authorization",
   "workspace_trust_records",

@@ -20,6 +20,7 @@ export function restoreV13SchemaFixture(db: DatabaseSync): void {
   }
 
   db.exec(`
+    DROP TABLE git_journey_outcomes;
     DROP TABLE coding_runtime_ci_repair_budgets;
     ALTER TABLE coding_runtime_snapshots DROP COLUMN ci_observation_revision;
     ALTER TABLE coding_runtime_snapshots DROP COLUMN ci_readiness_record;

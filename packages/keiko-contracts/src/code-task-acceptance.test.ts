@@ -5,14 +5,20 @@ import {
   CODE_TASK_ACCEPTANCE_SCHEMA_VERSION,
   CODE_TASK_EVIDENCE_CLASSES,
   CODE_TASK_EVIDENCE_PLATFORMS,
+  CODE_TASK_QUALIFICATION_MANIFEST_KIND,
+  CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION,
   codeTaskAcceptanceQualificationFailures,
+  codeTaskQualificationManifestFailures,
+  codeTaskQualificationVerdictFor,
   hasInheritedEnumerableProperty,
   isCodeTaskContentFreeNote,
   isCodeTaskIsoInstant,
   isCodeTaskRepoRelativePath,
   validateCodeTaskAcceptanceContribution,
+  validateCodeTaskQualificationManifest,
   type CodeTaskAcceptanceBinding,
   type CodeTaskAcceptanceContributionV1,
+  type CodeTaskQualificationManifestV1,
 } from "./code-task-acceptance.js";
 import { withPollutedPrototype } from "./code-task-pollution-test-support.js";
 
@@ -565,5 +571,234 @@ describe("factErrors collects every violation instead of stopping at the first (
     if (result.ok) return;
     expect(result.errors.some((error) => error.includes("value is invalid"))).toBe(true);
     expect(result.errors.some((error) => error.includes("promptText"))).toBe(true);
+  });
+});
+
+// #3390 qualification manifest -- a versioned sibling of the acceptance contribution above.
+const RUBRIC_DIGEST = "e".repeat(64);
+const READINESS_DIGEST = "f".repeat(64);
+const OUTCOME_DIGEST = "1".repeat(64);
+const AUDIT_DIGEST = "2".repeat(64);
+
+function validQualificationManifest(): CodeTaskQualificationManifestV1 {
+  const parsed: unknown = JSON.parse(
+    JSON.stringify({
+      kind: CODE_TASK_QUALIFICATION_MANIFEST_KIND,
+      schemaVersion: CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION,
+      epicIssue: 3384,
+      childIssue: 3390,
+      sourceCommitSha: COMMIT_SHA,
+      sourceTreeSha: TREE_SHA,
+      runtimeIdentity: "opencode-1.17.17",
+      modelIdentity: "gateway-profile:coding-issue-journey",
+      fixtureRevision: "controlled-fixture-rev-1",
+      rubricDigest: RUBRIC_DIGEST,
+      issueReference: { outcome: "known", value: "controlled/repo#101" },
+      pullRequestReference: { outcome: "known", value: "controlled/repo#102" },
+      runReference: { outcome: "known", value: "run-20260904-01" },
+      readinessSnapshotDigest: { outcome: "known", value: READINESS_DIGEST },
+      journeyOutcomeDigest: { outcome: "known", value: OUTCOME_DIGEST },
+      auditReference: { outcome: "known", value: "keiko-issue-audit-20260904" },
+      auditDigest: { outcome: "known", value: AUDIT_DIGEST },
+      scenarios: [
+        {
+          scenarioId: "issue-to-pr-full-access",
+          evidenceClass: "playwright-journey",
+          platform: "macos-arm64",
+          provenance: "real-model",
+          outcome: "passed",
+          recordedAt: "2026-09-04T12:00:00Z",
+          blockedReason: { outcome: "absent" },
+          artifactDigests: [DIGEST],
+          receiptDigest: { outcome: "known", value: DIGEST },
+        },
+      ],
+      knownLimitations: ["packaged Windows x64 reference run is a documented external dependency"],
+    }),
+  );
+  const result = validateCodeTaskQualificationManifest(parsed);
+  if (!result.ok) throw new Error(result.errors.join("; "));
+  return result.value;
+}
+
+function mutatedManifest(patch: Record<string, unknown>): unknown {
+  return { ...validQualificationManifest(), ...patch };
+}
+
+describe("validateCodeTaskQualificationManifest", () => {
+  it("accepts a complete JSON-round-tripped manifest", () => {
+    expect(validateCodeTaskQualificationManifest(validQualificationManifest()).ok).toBe(true);
+  });
+
+  it("rejects a manifest missing provenance, runtime identity, and rubric digest", () => {
+    const base = validQualificationManifest();
+    const scenario = base.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const scenarioWithoutProvenance: Record<string, unknown> = { ...scenario };
+    delete scenarioWithoutProvenance.provenance;
+    const manifestWithoutIdentity: Record<string, unknown> = { ...base };
+    delete manifestWithoutIdentity.runtimeIdentity;
+    delete manifestWithoutIdentity.rubricDigest;
+    const result = validateCodeTaskQualificationManifest({
+      ...manifestWithoutIdentity,
+      scenarios: [scenarioWithoutProvenance],
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toContain("runtimeIdentity must be a bounded content-free reference");
+    expect(result.errors).toContain("rubricDigest is invalid");
+    expect(result.errors.some((error) => error.includes("provenance must be real-model"))).toBe(
+      true,
+    );
+  });
+
+  it("rejects a wrong kind and a non-literal schema version", () => {
+    expect(validateCodeTaskQualificationManifest(mutatedManifest({ kind: "other" })).ok).toBe(
+      false,
+    );
+    expect(validateCodeTaskQualificationManifest(mutatedManifest({ schemaVersion: 2 })).ok).toBe(
+      false,
+    );
+  });
+
+  it("requires a blocked scenario to carry a known blockedReason, and no other outcome to", () => {
+    const base = validQualificationManifest();
+    const scenario = base.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const blockedWithoutReason = validateCodeTaskQualificationManifest({
+      ...base,
+      scenarios: [{ ...scenario, outcome: "blocked", receiptDigest: { outcome: "absent" } }],
+    });
+    expect(blockedWithoutReason.ok).toBe(false);
+    const passedWithReason = validateCodeTaskQualificationManifest({
+      ...base,
+      scenarios: [{ ...scenario, blockedReason: { outcome: "known", value: "#2951" } }],
+    });
+    expect(passedWithReason.ok).toBe(false);
+    const blockedWithReason = validateCodeTaskQualificationManifest({
+      ...base,
+      scenarios: [
+        {
+          ...scenario,
+          outcome: "blocked",
+          receiptDigest: { outcome: "absent" },
+          blockedReason: { outcome: "known", value: "functional-not-platform-qualified: #2951" },
+        },
+      ],
+    });
+    expect(blockedWithReason.ok).toBe(true);
+  });
+
+  it("rejects an evidenceClass outside the shared vocabulary (functional-not-platform-qualified excluded)", () => {
+    const base = validQualificationManifest();
+    const scenario = base.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const result = validateCodeTaskQualificationManifest({
+      ...base,
+      scenarios: [{ ...scenario, evidenceClass: "functional-not-platform-qualified" }],
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((error) => error.includes("not a registered evidence class"))).toBe(
+      true,
+    );
+  });
+});
+
+describe("codeTaskQualificationManifestFailures and codeTaskQualificationVerdictFor", () => {
+  const binding: CodeTaskAcceptanceBinding = {
+    epicIssue: 3384,
+    childIssue: 3390,
+    sourceCommitSha: COMMIT_SHA,
+    registeredScenarioIds: ["issue-to-pr-full-access"],
+  };
+
+  it("qualifies a bound manifest whose scenarios are all passed and real-model", () => {
+    const manifest = validQualificationManifest();
+    expect(codeTaskQualificationManifestFailures(manifest, binding)).toEqual([]);
+    expect(codeTaskQualificationVerdictFor(manifest, binding)).toBe("qualified");
+  });
+
+  it("fails an empty manifest and reports blocked, never qualified", () => {
+    const empty: CodeTaskQualificationManifestV1 = {
+      ...validQualificationManifest(),
+      scenarios: [],
+    };
+    expect(codeTaskQualificationManifestFailures(empty, binding)).toContain(
+      "empty manifest: at least one scenario is required",
+    );
+    expect(codeTaskQualificationVerdictFor(empty, binding)).toBe("blocked");
+  });
+
+  it("fails foreign issue bindings and stale SHA bindings, verdict blocked", () => {
+    const manifest = validQualificationManifest();
+    expect(
+      codeTaskQualificationManifestFailures(manifest, { ...binding, epicIssue: 1982 }),
+    ).toContain("foreign epic issue binding");
+    expect(codeTaskQualificationVerdictFor(manifest, { ...binding, epicIssue: 1982 })).toBe(
+      "blocked",
+    );
+    expect(
+      codeTaskQualificationManifestFailures(manifest, { ...binding, sourceCommitSha: TREE_SHA }),
+    ).toContain("stale or foreign source SHA binding");
+  });
+
+  it("fails unregistered scenarios", () => {
+    const manifest = validQualificationManifest();
+    expect(
+      codeTaskQualificationManifestFailures(manifest, { ...binding, registeredScenarioIds: [] }),
+    ).toContain("unregistered scenario: issue-to-pr-full-access");
+  });
+
+  it("a scenario that failed outright yields verdict failed, even alongside other problems", () => {
+    const manifest = validQualificationManifest();
+    const scenario = manifest.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const failedScenario: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      scenarios: [{ ...scenario, outcome: "failed", receiptDigest: { outcome: "absent" } }],
+    };
+    expect(codeTaskQualificationVerdictFor(failedScenario, { ...binding, epicIssue: 1982 })).toBe(
+      "failed",
+    );
+  });
+
+  it("a passed scenario resting on scripted provenance cannot qualify, and names the scenario", () => {
+    const manifest = validQualificationManifest();
+    const scenario = manifest.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const scripted: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      scenarios: [{ ...scenario, provenance: "scripted" }],
+    };
+    expect(codeTaskQualificationManifestFailures(scripted, binding)).toContain(
+      "scripted-model provenance cannot establish qualification: issue-to-pr-full-access",
+    );
+    expect(codeTaskQualificationVerdictFor(scripted, binding)).toBe("blocked");
+  });
+
+  it("an outstanding blocked scenario with a reason yields verdict blocked, not qualified", () => {
+    const manifest = validQualificationManifest();
+    const scenario = manifest.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const blocked: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      scenarios: [
+        {
+          ...scenario,
+          outcome: "blocked",
+          receiptDigest: { outcome: "absent" },
+          blockedReason: { outcome: "known", value: "functional-not-platform-qualified: #2951" },
+        },
+      ],
+    };
+    expect(codeTaskQualificationManifestFailures(blocked, binding)).toEqual([]);
+    expect(codeTaskQualificationVerdictFor(blocked, binding)).toBe("blocked");
   });
 });

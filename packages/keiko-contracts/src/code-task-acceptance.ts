@@ -524,3 +524,354 @@ export function codeTaskAcceptanceQualificationFailures(
   }
   return failures;
 }
+
+// ─── Qualification manifest (#3390) ────────────────────────────────────────────────
+// Versioned sibling of CodeTaskAcceptanceContributionV1 above (issue #3390 correction 6): it
+// reuses this file's closed vocabularies (evidence classes, platforms, scenario outcomes) and
+// hardened validation primitives (isRecord, ownField, unknownKeys, factErrors) rather than
+// standing up a second schema file. #3390 qualifies the real-model issue-to-PR and Git-to-Chat
+// journeys; unlike the #2384 acceptance contribution, a qualification scenario also carries the
+// provenance that produced it -- a scripted double can establish regression coverage but never
+// qualification -- and, when blocked, the closed reason that names the missing external input.
+//
+// The real-binary lane's ps/lsof egress sampling (scripts/run-code-task-real-binary.mjs) emits a
+// `functional-not-platform-qualified` observation that is deliberately NOT added to
+// CODE_TASK_EVIDENCE_CLASSES above: that vocabulary is shared with the #2384 acceptance
+// contribution, and its length is pinned at packages/keiko-contracts/src/index.test.ts:839. A
+// qualification scenario produced by that lane is instead recorded with `outcome: "blocked"` and a
+// `blockedReason` naming the platform gap (e.g. "functional-not-platform-qualified: #2951"), never
+// as a distinct evidence class value; `isOneOf` already rejects it as an `evidenceClass`.
+//
+// The manifest carries no `qualified`/`blocked`/`failed` field of its own: issue #3390 correction 6
+// is explicit that the manifest-level verdict is derived by the validator, never producer-supplied.
+// `codeTaskQualificationVerdictFor` below is that derivation, reused by
+// scripts/check-coding-issue-journey-evidence.mjs so the rule lives in exactly one place.
+
+export const CODE_TASK_QUALIFICATION_MANIFEST_KIND = "code-task-qualification-manifest";
+
+export const CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION = 1;
+
+export const CODE_TASK_QUALIFICATION_PROVENANCES = Object.freeze([
+  "real-model",
+  "scripted",
+] as const satisfies readonly string[]);
+
+export const CODE_TASK_QUALIFICATION_VERDICTS = Object.freeze([
+  "qualified",
+  "blocked",
+  "failed",
+] as const satisfies readonly string[]);
+
+export type CodeTaskQualificationProvenance = (typeof CODE_TASK_QUALIFICATION_PROVENANCES)[number];
+export type CodeTaskQualificationVerdict = (typeof CODE_TASK_QUALIFICATION_VERDICTS)[number];
+
+export interface CodeTaskQualificationScenarioV1 {
+  readonly scenarioId: CodeTaskScenarioId;
+  readonly evidenceClass: CodeTaskEvidenceClass;
+  readonly platform: CodeTaskEvidencePlatform;
+  readonly provenance: CodeTaskQualificationProvenance;
+  readonly outcome: CodeTaskScenarioOutcome;
+  readonly recordedAt: CodeTaskIsoInstant;
+  /** Known exactly when `outcome` is "blocked"; absent for every other outcome. */
+  readonly blockedReason: CodeTaskFact<string>;
+  /** Digests of the produced evidence artifacts; content stays outside the manifest. */
+  readonly artifactDigests: readonly CodeTaskSha256Digest[];
+  readonly receiptDigest: CodeTaskFact<CodeTaskSha256Digest>;
+}
+
+export interface CodeTaskQualificationManifestV1 {
+  readonly kind: typeof CODE_TASK_QUALIFICATION_MANIFEST_KIND;
+  readonly schemaVersion: typeof CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION;
+  readonly epicIssue: number;
+  readonly childIssue: number;
+  readonly sourceCommitSha: CodeTaskGitCommitSha;
+  readonly sourceTreeSha: CodeTaskGitTreeSha;
+  /** Bounded content-free identifiers; never a prompt, endpoint, or credential. */
+  readonly runtimeIdentity: string;
+  readonly modelIdentity: string;
+  readonly fixtureRevision: string;
+  readonly rubricDigest: CodeTaskSha256Digest;
+  /** Opaque GitHub facts; unknown/absent before the corresponding effect exists. */
+  readonly issueReference: CodeTaskFact<string>;
+  readonly pullRequestReference: CodeTaskFact<string>;
+  readonly runReference: CodeTaskFact<string>;
+  /** #3388's exact-head readiness snapshot, referenced by digest, never reimplemented here. */
+  readonly readinessSnapshotDigest: CodeTaskFact<CodeTaskSha256Digest>;
+  /** #3389's merge/closure reconciliation record, referenced by digest, never reimplemented here. */
+  readonly journeyOutcomeDigest: CodeTaskFact<CodeTaskSha256Digest>;
+  /** keiko-issue-audit runs outside this repository (issue #3390 correction 7); only its binding
+   * is carried here -- the validator checks the binding and never executes or reproduces it. */
+  readonly auditReference: CodeTaskFact<string>;
+  readonly auditDigest: CodeTaskFact<CodeTaskSha256Digest>;
+  readonly scenarios: readonly CodeTaskQualificationScenarioV1[];
+  readonly knownLimitations: readonly string[];
+}
+
+const QUALIFICATION_SCENARIO_KEYS = [
+  "scenarioId",
+  "evidenceClass",
+  "platform",
+  "provenance",
+  "outcome",
+  "recordedAt",
+  "blockedReason",
+  "artifactDigests",
+  "receiptDigest",
+] as const;
+
+const QUALIFICATION_MANIFEST_KEYS = [
+  "kind",
+  "schemaVersion",
+  "epicIssue",
+  "childIssue",
+  "sourceCommitSha",
+  "sourceTreeSha",
+  "runtimeIdentity",
+  "modelIdentity",
+  "fixtureRevision",
+  "rubricDigest",
+  "issueReference",
+  "pullRequestReference",
+  "runReference",
+  "readinessSnapshotDigest",
+  "journeyOutcomeDigest",
+  "auditReference",
+  "auditDigest",
+  "scenarios",
+  "knownLimitations",
+] as const;
+
+// Split out of qualificationScenarioErrors to keep that function's cyclomatic complexity under
+// the repository ceiling: the blockedReason field has two cross-field rules of its own (known
+// exactly when outcome is "blocked") on top of factErrors' own tagged-fact shape check.
+function qualificationScenarioBlockedReasonErrors(
+  outcome: unknown,
+  blockedReason: unknown,
+  path: string,
+): readonly string[] {
+  const errors: string[] = [
+    ...factErrors(blockedReason, `${path}.blockedReason`, isCodeTaskContentFreeNote),
+  ];
+  if (!isRecord(blockedReason)) return errors;
+  const reasonOutcome = ownField(blockedReason, "outcome");
+  if (outcome === "blocked" && reasonOutcome !== "known") {
+    errors.push(`${path}.blockedReason must be known when outcome is blocked`);
+  }
+  if (outcome !== "blocked" && reasonOutcome === "known") {
+    errors.push(`${path}.blockedReason must not be known when outcome is not blocked`);
+  }
+  return errors;
+}
+
+function qualificationScenarioErrors(value: unknown, path: string): readonly string[] {
+  if (!isRecord(value)) return [`${path} must be an object`];
+  const errors: string[] = [...unknownKeys(value, QUALIFICATION_SCENARIO_KEYS, path)];
+  if (!isCodeTaskScenarioId(ownField(value, "scenarioId"))) {
+    errors.push(`${path}.scenarioId is invalid`);
+  }
+  if (!isOneOf(ownField(value, "evidenceClass"), CODE_TASK_EVIDENCE_CLASSES)) {
+    errors.push(`${path}.evidenceClass is not a registered evidence class`);
+  }
+  if (!isOneOf(ownField(value, "platform"), CODE_TASK_EVIDENCE_PLATFORMS)) {
+    errors.push(`${path}.platform is not a supported evidence platform`);
+  }
+  if (!isOneOf(ownField(value, "provenance"), CODE_TASK_QUALIFICATION_PROVENANCES)) {
+    errors.push(`${path}.provenance must be real-model or scripted`);
+  }
+  const outcome = ownField(value, "outcome");
+  if (!isOneOf(outcome, CODE_TASK_SCENARIO_OUTCOMES)) {
+    errors.push(`${path}.outcome must be passed, failed, or blocked`);
+  }
+  if (!isCodeTaskIsoInstant(ownField(value, "recordedAt"))) {
+    errors.push(`${path}.recordedAt must be an ISO-8601 UTC instant`);
+  }
+  errors.push(
+    ...qualificationScenarioBlockedReasonErrors(outcome, ownField(value, "blockedReason"), path),
+  );
+  const artifactDigests = ownField(value, "artifactDigests");
+  if (
+    !Array.isArray(artifactDigests) ||
+    !artifactDigests.every((digest) => isCodeTaskSha256Digest(digest))
+  ) {
+    errors.push(`${path}.artifactDigests must be an array of sha256 digests`);
+  }
+  errors.push(
+    ...factErrors(
+      ownField(value, "receiptDigest"),
+      `${path}.receiptDigest`,
+      isCodeTaskSha256Digest,
+    ),
+  );
+  return errors;
+}
+
+function qualificationManifestHeaderErrors(value: Record<string, unknown>): readonly string[] {
+  const errors: string[] = [];
+  if (ownField(value, "kind") !== CODE_TASK_QUALIFICATION_MANIFEST_KIND) {
+    errors.push(`kind must be ${CODE_TASK_QUALIFICATION_MANIFEST_KIND}`);
+  }
+  if (ownField(value, "schemaVersion") !== CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION) {
+    errors.push("schemaVersion must be the literal 1");
+  }
+  if (!isPositiveInteger(ownField(value, "epicIssue"))) {
+    errors.push("epicIssue must be a positive integer");
+  }
+  if (!isPositiveInteger(ownField(value, "childIssue"))) {
+    errors.push("childIssue must be a positive integer");
+  }
+  if (!isCodeTaskGitCommitSha(ownField(value, "sourceCommitSha"))) {
+    errors.push("sourceCommitSha is invalid");
+  }
+  if (!isCodeTaskGitTreeSha(ownField(value, "sourceTreeSha"))) {
+    errors.push("sourceTreeSha is invalid");
+  }
+  return errors;
+}
+
+// Split out of qualificationManifestBodyErrors to keep both functions under the repository's
+// per-function line ceiling: this half owns the scalar identity/reference fields, the other half
+// owns the scenarios array and knownLimitations.
+function qualificationManifestReferenceErrors(value: Record<string, unknown>): readonly string[] {
+  const errors: string[] = [];
+  if (!isCodeTaskContentFreeNote(ownField(value, "runtimeIdentity"))) {
+    errors.push("runtimeIdentity must be a bounded content-free reference");
+  }
+  if (!isCodeTaskContentFreeNote(ownField(value, "modelIdentity"))) {
+    errors.push("modelIdentity must be a bounded content-free reference");
+  }
+  if (!isCodeTaskContentFreeNote(ownField(value, "fixtureRevision"))) {
+    errors.push("fixtureRevision must be a bounded content-free reference");
+  }
+  if (!isCodeTaskSha256Digest(ownField(value, "rubricDigest"))) {
+    errors.push("rubricDigest is invalid");
+  }
+  errors.push(
+    ...factErrors(ownField(value, "issueReference"), "issueReference", isCodeTaskContentFreeNote),
+    ...factErrors(
+      ownField(value, "pullRequestReference"),
+      "pullRequestReference",
+      isCodeTaskContentFreeNote,
+    ),
+    ...factErrors(ownField(value, "runReference"), "runReference", isCodeTaskContentFreeNote),
+    ...factErrors(
+      ownField(value, "readinessSnapshotDigest"),
+      "readinessSnapshotDigest",
+      isCodeTaskSha256Digest,
+    ),
+    ...factErrors(
+      ownField(value, "journeyOutcomeDigest"),
+      "journeyOutcomeDigest",
+      isCodeTaskSha256Digest,
+    ),
+    ...factErrors(ownField(value, "auditReference"), "auditReference", isCodeTaskContentFreeNote),
+    ...factErrors(ownField(value, "auditDigest"), "auditDigest", isCodeTaskSha256Digest),
+  );
+  return errors;
+}
+
+function qualificationManifestBodyErrors(value: Record<string, unknown>): readonly string[] {
+  const errors: string[] = [...qualificationManifestReferenceErrors(value)];
+  const scenarios = ownField(value, "scenarios");
+  if (Array.isArray(scenarios)) {
+    scenarios.forEach((scenario, index) => {
+      errors.push(...qualificationScenarioErrors(scenario, `scenarios[${String(index)}]`));
+    });
+  } else {
+    errors.push("scenarios must be an array");
+  }
+  const knownLimitations = ownField(value, "knownLimitations");
+  if (
+    !Array.isArray(knownLimitations) ||
+    !knownLimitations.every((note) => isCodeTaskContentFreeNote(note))
+  ) {
+    errors.push("knownLimitations must be an array of bounded content-free notes");
+  }
+  return errors;
+}
+
+export function validateCodeTaskQualificationManifest(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodeTaskQualificationManifestV1> {
+  if (!isRecord(value)) return { ok: false, errors: ["manifest must be an object"] };
+  const errors = [
+    ...unknownKeys(value, QUALIFICATION_MANIFEST_KEYS, "manifest"),
+    ...qualificationManifestHeaderErrors(value),
+    ...qualificationManifestBodyErrors(value),
+  ];
+  return errors.length > 0
+    ? { ok: false, errors }
+    : { ok: true, value: value as unknown as CodeTaskQualificationManifestV1 };
+}
+
+// Split out of codeTaskQualificationManifestFailures to keep that function's cyclomatic
+// complexity under the repository ceiling: these are the three per-scenario rules, evaluated once
+// per entry in the loop below.
+function scenarioQualificationFailures(
+  scenario: CodeTaskQualificationScenarioV1,
+  registeredScenarioIds: ReadonlySet<string>,
+): readonly string[] {
+  const failures: string[] = [];
+  if (!registeredScenarioIds.has(scenario.scenarioId)) {
+    failures.push(`unregistered scenario: ${scenario.scenarioId}`);
+  }
+  if (scenario.outcome === "blocked" && scenario.blockedReason.outcome !== "known") {
+    failures.push(`blocked scenario missing reason: ${scenario.scenarioId}`);
+  }
+  if (scenario.outcome === "passed" && scenario.provenance === "scripted") {
+    failures.push(
+      `scripted-model provenance cannot establish qualification: ${scenario.scenarioId}`,
+    );
+  }
+  return failures;
+}
+
+/**
+ * Consumer-side qualification rules for #3390: a structurally valid manifest still fails to
+ * qualify when it is empty, bound to a foreign or stale SHA, references an unregistered scenario,
+ * a blocked scenario carries no reason, or a "passed" scenario is scripted rather than real-model
+ * -- a scripted double can only ever produce regression coverage, never qualification evidence.
+ * Failures are content-free strings; the manifest itself carries no producer-supplied verdict.
+ */
+export function codeTaskQualificationManifestFailures(
+  manifest: CodeTaskQualificationManifestV1,
+  binding: CodeTaskAcceptanceBinding,
+): readonly string[] {
+  const failures: string[] = [];
+  if (manifest.scenarios.length === 0) {
+    failures.push("empty manifest: at least one scenario is required");
+  }
+  if (manifest.epicIssue !== binding.epicIssue) failures.push("foreign epic issue binding");
+  if (manifest.childIssue !== binding.childIssue) failures.push("foreign child issue binding");
+  if (manifest.sourceCommitSha !== binding.sourceCommitSha) {
+    failures.push("stale or foreign source SHA binding");
+  }
+  const registered = new Set(binding.registeredScenarioIds);
+  for (const scenario of manifest.scenarios) {
+    failures.push(...scenarioQualificationFailures(scenario, registered));
+  }
+  return failures;
+}
+
+/**
+ * Derives the manifest-level verdict; never a row value and never producer-supplied (issue #3390
+ * correction 6). "failed" when any scenario failed outright; otherwise "blocked" when the binding
+ * does not hold or the scenario set does not yet establish qualification (a missing/foreign
+ * binding, an outstanding blocked scenario, or a "passed" claim resting on scripted provenance);
+ * "qualified" only when the binding matches and every registered scenario is "passed" with
+ * real-model provenance.
+ */
+export function codeTaskQualificationVerdictFor(
+  manifest: CodeTaskQualificationManifestV1,
+  binding: CodeTaskAcceptanceBinding,
+): CodeTaskQualificationVerdict {
+  if (manifest.scenarios.some((scenario) => scenario.outcome === "failed")) {
+    return "failed";
+  }
+  if (codeTaskQualificationManifestFailures(manifest, binding).length > 0) {
+    return "blocked";
+  }
+  const allQualified = manifest.scenarios.every(
+    (scenario) => scenario.outcome === "passed" && scenario.provenance === "real-model",
+  );
+  return allQualified ? "qualified" : "blocked";
+}

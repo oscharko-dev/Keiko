@@ -26,6 +26,7 @@ import { buildWorkspaceInstanceStoreOverDatabase } from "../task-workspace/store
 import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import {
   createProductionDraftDeliveryDependencies,
+  createProductionJourneyReader,
   type DraftDeliveryCompositionDeps,
 } from "./productionDraftDeliveryDependencies.js";
 
@@ -599,5 +600,46 @@ describe("production draft delivery dependencies", () => {
     expect(f.factory.inspectionAdapter(f.context)).toBeUndefined();
     expect(() => push.publishAdapterFactory?.(f.context.workspace)).toThrow("authority-denied");
     expect(f.readJson).not.toHaveBeenCalled();
+  });
+});
+
+describe("production journey reader (#3389 AC5/AC6)", () => {
+  it("builds a read-only reader from the per-checkout grant alone, independent of any run", async () => {
+    const f = await fixture();
+    const repositoryId = githubIssueReaderRepositoryId(f.root);
+    if (repositoryId === undefined) throw new Error("Fixture repository required");
+    expect(
+      createProductionJourneyReader(f.deps, { repositoryId, correlationId: "journey-1" }),
+    ).toBeDefined();
+  });
+  it("denies for an unregistered or never-granted repository id", async () => {
+    const f = await fixture();
+    expect(
+      createProductionJourneyReader(f.deps, {
+        repositoryId: "repo_0000000000000000",
+        correlationId: "journey-1",
+      }),
+    ).toBeUndefined();
+  });
+  it("denies once the per-checkout grant is revoked, without needing a live run or workspace", async () => {
+    const f = await fixture();
+    const repositoryId = githubIssueReaderRepositoryId(f.root);
+    if (repositoryId === undefined) throw new Error("Fixture repository required");
+    f.store.updateGitHubIssueReaderAuthorization(repositoryId, false, 1);
+    expect(
+      createProductionJourneyReader(f.deps, { repositoryId, correlationId: "journey-1" }),
+    ).toBeUndefined();
+  });
+  it("re-checks the grant per call rather than caching the answer the reader was built with", async () => {
+    const f = await fixture();
+    const repositoryId = githubIssueReaderRepositoryId(f.root);
+    if (repositoryId === undefined) throw new Error("Fixture repository required");
+    expect(
+      createProductionJourneyReader(f.deps, { repositoryId, correlationId: "journey-1" }),
+    ).toBeDefined();
+    f.store.updateGitHubIssueReaderAuthorization(repositoryId, false, 1);
+    expect(
+      createProductionJourneyReader(f.deps, { repositoryId, correlationId: "journey-1" }),
+    ).toBeUndefined();
   });
 });

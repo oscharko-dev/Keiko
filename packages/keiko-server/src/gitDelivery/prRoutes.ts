@@ -4,22 +4,38 @@
 //       user-editable metadata draft (title/body/risk narrative), the readiness summary (objectExists vs
 //       reviewReady) with structured blockers, the draft-vs-ready recommendation, the reviewer/label/
 //       linkage suggestions, and the effective policy decision. Never mutates, never records evidence.
+//   * POST /api/git-delivery/pr/approve  — Mints the server-issued approval claim an issue-bound draft
+//       PR requires before execute may proceed (#3387, ADR-0138 D2/D4, epic #3384 correction 5: a
+//       delivery effect is approval-required in every mode, including Full access — never mode-denied
+//       merely because the mode is lower). Mirrors createHandleCommitApprove/createHandleMergeApprove
+//       exactly: rebuilds the EXACT typed GitPullRequestCommand the execute route would build from the
+//       identical request body (the shared `validate()` below) and binds the mint to it plus the
+//       admitted run's runId/envelopeDigest, so the claim this returns is redeemable by execute for
+//       that exact create/update proposal only — a claim minted for a different command, run, or
+//       operation never matches.
 //   * POST /api/git-delivery/pr/execute  — Governed. Drives the #477 PR gateway end-to-end through
 //       executeGovernedPullRequest (preflight + policy + approval + the dedicated `gh api` adapter) and
 //       appends content-free evidence for the allowed AND blocked outcome alike. Returns the typed
 //       provider-rejection reason + reused recovery hint so a rejected operation recovers without
-//       guessing, and the provider-assigned PR number on a successful create.
+//       guessing, and the provider-assigned PR number on a successful create. An accepted run's PR
+//       create/update now requires an actually consumed, server-issued claim — a request that supplies
+//       no claim (or an unredeemed `{ required: false }`) is refused with `approval-required`,
+//       mirroring the commit route's unapproved-mutation closure (#3386).
 //
 // Content-free in evidence: title/body strings flow to the provider but only their byte lengths enter
 // the ledger. CSRF + JSON content type are enforced centrally by server.ts.
 
-import type { GitDeliveryApprovalRequirement } from "@oscharko-dev/keiko-contracts";
+import type { GitDeliveryApprovalClaim, GitDeliveryApprovalRequirement } from "@oscharko-dev/keiko-contracts";
 import type { GitPullRequestCommand } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { ServerLogSink } from "../observability/server-log.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import {
+  DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
+  GIT_DELIVERY_LOCAL_OPERATOR_ID,
   parseGitDeliveryApprovalRequest,
   resolveGitDeliveryApprovalRequirement,
   type GitDeliveryApprovalBinding,
@@ -287,6 +303,41 @@ function prApprovalBinding(
 
 type PrAuthorityTarget = ReturnType<typeof prAuthorityTarget>;
 
+// #3387 (ADR-0138 D2): mirrors commitApprovalRequiredBlock (commitRoutes.ts) exactly — an accepted
+// run's PR create/update requires an actually consumed, server-issued claim regardless of what the
+// repo/org policy pack decides; a pack that never names "approval-gated" for pr-create/pr-update
+// must not silently substitute for the human approval this closes. Reuses the kernel's own shared
+// outcome vocabulary (GitPullRequestOutcome["status"] already carries "approval-required" for the
+// pack-driven approval-gated path — see gitDeliveryPrExecuteResponse in prExecution.ts) rather than
+// inventing a second, parallel status for the identical governance outcome.
+function prApprovalRequiredBlock(
+  deps: Pick<UiHandlerDeps, "redactor">,
+  command: GitPullRequestCommand,
+): RouteResult {
+  return {
+    status: 200,
+    body: deps.redactor({
+      schemaVersion: "1",
+      status: "approval-required",
+      actionKind: command.kind,
+    }),
+  };
+}
+
+function logPrApprovalRequired(
+  activityLog: ServerLogSink,
+  correlationId: string,
+  runId: string,
+): void {
+  activityLog.write({
+    category: "security",
+    op: "git.delivery.pr.approval.required",
+    correlationId,
+    status: 200,
+    extra: { operation: "pr", runId },
+  });
+}
+
 interface GovernedPrDispatch {
   readonly ctx: RouteContext;
   readonly deps: UiHandlerDeps;
@@ -376,6 +427,14 @@ async function handlePrExecute(
     nowMs: (seams.now ?? Date.now)(),
   });
   if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_PR_BAD_REQUEST");
+  if (!verifiedApproval.required) {
+    logPrApprovalRequired(
+      seams.activityLog ?? processServerLogSink(),
+      correlationId,
+      authority.runId,
+    );
+    return prApprovalRequiredBlock(deps, command);
+  }
   return dispatchGovernedPr({
     ctx,
     deps,
@@ -397,6 +456,69 @@ export const createHandlePrExecute = (
   return (ctx, deps) => handlePrExecute(ctx, deps, seams);
 };
 
+// ─── Approve handler (mints the server-issued approval claim execute consumes) ────────────────────
+
+export interface GitDeliveryPrApproveResponseBody {
+  readonly schemaVersion: "1";
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAt: string;
+}
+
+function logPrApprovalMinted(
+  activityLog: ServerLogSink,
+  correlationId: string,
+  runId: string,
+): void {
+  activityLog.write({
+    category: "security",
+    op: "git.delivery.pr.approval.minted",
+    correlationId,
+    status: 200,
+    extra: { operation: "pr", runId },
+  });
+}
+
+export const createHandlePrApprove = (
+  options: GitDeliveryPrRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  const seams = options.execution ?? {};
+  return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    // Reuses the IDENTICAL `validate()` the preview/execute handlers use, so the
+    // GitPullRequestCommand this mints against is byte-for-byte the same typed value execute will
+    // rebuild from the same request body — the binding-hash consume() already enforces then matches
+    // by construction.
+    const prepared = await prepareGitDeliveryRequest(ctx, deps, PR_REQUEST_ERRORS, validate);
+    if (!prepared.ok) return prepared.result;
+    const { workspace } = prepared;
+    const { projectId, command } = prepared.value;
+    const target = prAuthorityTarget(command);
+    const authority = gitDeliveryAuthorityGate(
+      ctx,
+      deps,
+      projectId,
+      workspace,
+      "pull-request",
+      target,
+      { logSink: seams.activityLog },
+    );
+    if (!authority.allowed) return authority.result;
+    const store = seams.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;
+    const issued = store.issue({
+      binding: prApprovalBinding(projectId, command, authority),
+      approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
+      nowMs: (seams.now ?? Date.now)(),
+    });
+    logPrApprovalMinted(seams.activityLog ?? processServerLogSink(), correlationId, authority.runId);
+    const body: GitDeliveryPrApproveResponseBody = {
+      schemaVersion: "1",
+      approval: issued.approval,
+      expiresAt: new Date(issued.expiresAtMs).toISOString(),
+    };
+    return { status: 200, body: deps.redactor(body) };
+  };
+};
+
 // ─── Route group ───────────────────────────────────────────────────────────────────────────────
 
 export const createGitDeliveryPrRouteGroup = (
@@ -406,6 +528,11 @@ export const createGitDeliveryPrRouteGroup = (
     method: "POST",
     pattern: "/api/git-delivery/pr/preview",
     handler: createHandlePrPreview(options),
+  },
+  {
+    method: "POST",
+    pattern: "/api/git-delivery/pr/approve",
+    handler: createHandlePrApprove(options),
   },
   {
     method: "POST",

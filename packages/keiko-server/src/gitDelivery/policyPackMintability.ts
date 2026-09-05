@@ -16,14 +16,33 @@ import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 // /api/git-delivery/commit/approve` existed (commitRoutes.ts, mirroring merge's approve handler) —
 // the commit execute path now unconditionally requires a consumed claim whenever the request is
 // bound to a run's Authority Envelope, independent of any repo/org pack's own decision (see
-// runCommitMutation in commitRoutes.ts). `push`/`pull-request` stay out of this set: no mint route
-// exists for them yet (#3387 owns that work).
+// runCommitMutation in commitRoutes.ts).
+//
+// #3387 (ADR-0138 D2/D4, epic #3384 correction 5): `push` and `pr-create`/`pr-update` joined once
+// `POST /api/git-delivery/push/approve` and `POST /api/git-delivery/pr/approve` existed (pushRoutes.ts
+// / prRoutes.ts, mirroring the same pattern) — both execute paths now unconditionally require a
+// consumed claim, independent of any repo/org pack's own decision (see runPushMutation in
+// pushRoutes.ts and handlePrExecute in prRoutes.ts). One `/api/git-delivery/pr/approve` mint route
+// serves both `pr-create` and `pr-update`, since the same `validate()` builds either typed command
+// from the identical request shape.
+//
+// #3399 (epic #3384 correction 4): `pr-description-apply` joined once `POST
+// /api/git-delivery/pr-description/approve` existed (prDescriptionRoutes.ts) — a body-only governed
+// description apply, distinct from the generic `pr-update` action kind so the policy-pack layer can
+// hold a decision for it that never widens to title/base/draft-state mutations.
 //
 // This module is deliberately dependency-free within gitDelivery/ (only contract types) so every
 // pack-resolution site -- including defaultPolicyPacks.ts, which itself imports each action kind's
 // KEIKO_DEFAULT_*_POLICY_PACK constant from its owning *Execution.ts module -- can import the guard
 // without creating an import cycle back through those same execution modules.
-const MINTABLE_ACTION_KINDS: ReadonlySet<GitDeliveryActionKind> = new Set(["merge", "commit"]);
+const MINTABLE_ACTION_KINDS: ReadonlySet<GitDeliveryActionKind> = new Set([
+  "merge",
+  "commit",
+  "push",
+  "pr-create",
+  "pr-update",
+  "pr-description-apply",
+]);
 
 /**
  * Fails loudly at pack-resolution time when a policy pack names `approval-gated` for an action kind
@@ -38,7 +57,8 @@ export function assertPolicyPackMintable(
     if (rule.decision === "approval-gated" && !MINTABLE_ACTION_KINDS.has(rule.actionKind)) {
       throw new Error(
         `git-delivery policy pack names approval-gated for '${rule.actionKind}' ` +
-          "but no mint route exists for it (only 'merge' and 'commit' currently expose /approve)",
+          "but no mint route exists for it (only 'merge', 'commit', 'push', 'pr-create', " +
+            "'pr-update', and 'pr-description-apply' currently expose /approve)",
       );
     }
   }

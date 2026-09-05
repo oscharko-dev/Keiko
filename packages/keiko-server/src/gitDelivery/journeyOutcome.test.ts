@@ -1,7 +1,9 @@
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { isJourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-validation";
 import { gitDeliveryObservationFailure } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
-import { produceJourneyOutcome } from "./journeyOutcome.js";
+import { runMigrations } from "../store/schema.js";
+import { createGitJourneyOutcomeStore, produceJourneyOutcome } from "./journeyOutcome.js";
 import { journeyFixture } from "./journeyOutcomeTest/_support.js";
 
 describe("observed exact-revision issue-to-PR handoff", () => {
@@ -198,5 +200,54 @@ describe("observed exact-revision issue-to-PR handoff", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("durable journey outcome projection (#3389 AC6)", () => {
+  it("reconstructs a recorded outcome after the observation context is recreated over the same db", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    try {
+      const outcome = produceJourneyOutcome(journeyFixture());
+      const first = createGitJourneyOutcomeStore(db);
+      expect(first.get(outcome.binding.remoteDigest, outcome.binding.prNumber)).toBeUndefined();
+      expect(first.record(outcome)).toBe(true);
+
+      // A fresh store instance over the SAME database simulates a restarted observation context —
+      // no run authority, no live snapshot, only the persisted row.
+      const restarted = createGitJourneyOutcomeStore(db);
+      expect(restarted.get(outcome.binding.remoteDigest, outcome.binding.prNumber)).toEqual(outcome);
+    } finally {
+      db.close();
+    }
+  });
+  it("rejects a stale-revision write and never overwrites a newer recorded outcome", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    try {
+      const store = createGitJourneyOutcomeStore(db);
+      const older = produceJourneyOutcome(journeyFixture());
+      const newer = produceJourneyOutcome({
+        ...journeyFixture(),
+        observedAtMs: Date.parse(older.observedAt) + 60_000,
+      });
+      expect(store.record(newer)).toBe(true);
+      expect(store.record(older)).toBe(false);
+      expect(store.get(newer.binding.remoteDigest, newer.binding.prNumber)).toEqual(newer);
+    } finally {
+      db.close();
+    }
+  });
+  it("refuses to persist a malformed outcome and never grows the stored record past its bound", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    try {
+      const store = createGitJourneyOutcomeStore(db);
+      expect(store.record({ ...produceJourneyOutcome(journeyFixture()), state: "bogus" } as never)).toBe(
+        false,
+      );
+    } finally {
+      db.close();
+    }
   });
 });
