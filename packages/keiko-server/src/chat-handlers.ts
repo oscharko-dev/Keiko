@@ -3114,14 +3114,16 @@ function gitChangeDescriptionTargetUnavailable(
     errorKind: reason,
   });
   const unauthorized = reason === "reader-unauthorized";
+  let errorCode = "GIT_CHANGE_APPLY_REMOTE_UNRESOLVED";
+  if (unauthorized) {
+    errorCode = "GIT_CHANGE_APPLY_READER_UNAUTHORIZED";
+  } else if (reason === "repository-unavailable") {
+    errorCode = "GIT_CHANGE_APPLY_REPOSITORY_UNAVAILABLE";
+  }
   return {
     status: unauthorized ? 403 : 409,
     body: errorBody(
-      unauthorized
-        ? "GIT_CHANGE_APPLY_READER_UNAUTHORIZED"
-        : reason === "repository-unavailable"
-          ? "GIT_CHANGE_APPLY_REPOSITORY_UNAVAILABLE"
-          : "GIT_CHANGE_APPLY_REMOTE_UNRESOLVED",
+      errorCode,
       unauthorized
         ? "Repository-reader authority is required for this connected Git change."
         : "The connected Git repository identity is unavailable.",

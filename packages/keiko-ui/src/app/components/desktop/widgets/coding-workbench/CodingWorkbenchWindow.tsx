@@ -278,9 +278,9 @@ function useMarkReadyPropose(
   }, [outcome, projectId]);
 }
 
-function optionalMarkReadyHandler(
-  handler: (() => Promise<void>) | undefined,
-): { readonly onProposeReady?: () => Promise<void> } {
+function optionalMarkReadyHandler(handler: (() => Promise<void>) | undefined): {
+  readonly onProposeReady?: () => Promise<void>;
+} {
   if (handler === undefined) return {};
   return { onProposeReady: handler };
 }

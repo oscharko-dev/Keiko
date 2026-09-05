@@ -25,6 +25,7 @@ import {
   DELIVERY_REPOSITORY,
   DELIVERY_TEMPLATE,
   DELIVERY_TITLE,
+  deliveryDescriptionModelState,
   deliveryProviderState,
   deliveryRemote,
   deliveryRepository,
@@ -33,6 +34,7 @@ import {
   type DeliveryFixtureOperation,
 } from "./support/coding-issue-delivery.js";
 import type { DeliveryProviderState } from "./servers/coding-issue-delivery-transport.mjs";
+import type { DeliveryDescriptionModelState } from "./servers/coding-issue-description-model.mjs";
 
 const stateDir = deliveryStateDir();
 const repository = deliveryRepository(stateDir);
@@ -63,6 +65,11 @@ function observe(): Observation {
 }
 function provider(): DeliveryProviderState {
   return JSON.parse(readFileSync(deliveryProviderState(stateDir), "utf8")) as DeliveryProviderState;
+}
+function descriptionModel(): DeliveryDescriptionModelState {
+  return JSON.parse(
+    readFileSync(deliveryDescriptionModelState(stateDir), "utf8"),
+  ) as DeliveryDescriptionModelState;
 }
 async function control(
   operation: CommitFixtureOperation | DeliveryFixtureOperation,
@@ -281,6 +288,62 @@ async function expectDenied(operation: DeliveryFixtureOperation): Promise<void> 
   expect((await control(operation)).result?.status).toBe("denied");
 }
 
+async function expectGeneratedDescription(
+  page: Page,
+  root: string,
+  prNumber: number,
+  beforeRequests: number,
+): Promise<void> {
+  await expect
+    .poll(async () => (await snapshot(page)).descriptionStatus?.reason, { timeout: 10_000 })
+    .toBe("generated");
+  const status = (await snapshot(page)).descriptionStatus;
+  if (
+    status?.proposalId === undefined ||
+    status.snapshotDigest === null ||
+    status.draftDigest === null
+  ) {
+    throw new Error("Expected a retained generated description");
+  }
+  expect(status).toMatchObject({
+    state: "current",
+    reason: "generated",
+    generationVersion: 1,
+    artifactOutcome: "complete",
+  });
+  expect(status.snapshotDigest).toMatch(/^[a-f0-9]{64}$/u);
+  expect(status.draftDigest).toMatch(/^[a-f0-9]{64}$/u);
+  expect(descriptionModel()).toMatchObject({
+    requests: beforeRequests + 1,
+    rejections: 0,
+    lastEvidenceCount: 1,
+  });
+  const generatedReview = await page.request.post("/api/git-delivery/pr-description/review", {
+    headers: CSRF,
+    data: {
+      schemaVersion: "1",
+      projectId: root,
+      ownerAndRepo: DELIVERY_REPOSITORY,
+      prNumber,
+      snapshotDigest: status.snapshotDigest,
+      proposalId: status.proposalId,
+    },
+  });
+  expect(generatedReview.ok(), await generatedReview.text()).toBe(true);
+  const generated = (await generatedReview.json()) as {
+    readonly outcome: string;
+    readonly preview: {
+      readonly managedRegion: string;
+      readonly status: { readonly binding: { readonly draftDigest: string } };
+    };
+  };
+  expect(generated.outcome).toBe("preview");
+  expect(generated.preview.managedRegion).toContain(
+    "Updates the accepted implementation and its verification fixture.",
+  );
+  expect(generated.preview.status.binding.draftDigest).toBe(status.draftDigest);
+}
+
 for (const [index, mode] of (
   ["autonomous-delivery", "supervised-coding", "governed-assist"] as const
 ).entries()) {
@@ -348,18 +411,13 @@ for (const [index, mode] of (
       page.getByRole("region", { name: "Reviewed pull request description" }),
     ).toHaveCount(0);
     expect((await snapshot(page)).draftDelivery).toEqual(createdRecord);
+    const beforeDescriptions = descriptionModel().requests;
     await finish(page);
-    // #3401: the terminal "succeeded" transition dispatches through the production description
-    // dispatcher wired by deps.ts. This hermetic fixture has no configured provider, so the
-    // admitted request settles closed as generation-unavailable instead of fabricating a draft.
-    await expect
-      .poll(async () => (await snapshot(page)).descriptionStatus?.reason, { timeout: 10_000 })
-      .toBe("generation-unavailable");
-    expect((await snapshot(page)).descriptionStatus).toMatchObject({
-      state: "blocked",
-      reason: "generation-unavailable",
-      generationVersion: 1,
-    });
+    // #3401: the terminal transition dispatches through deps.ts's real production dispatcher and
+    // Model Gateway. The lower loopback provider derives its citations from the captured snapshot's
+    // actual evidence ids; the retained proposal below proves this is a reviewable bound artifact.
+    if (number === undefined) throw new Error("Expected created pull request number");
+    await expectGeneratedDescription(page, root, number, beforeDescriptions);
   });
 }
 

@@ -1,11 +1,19 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
-import type { WorkbenchDescriptionStatus } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
+import type {
+  WorkbenchDescriptionDraftReview,
+  WorkbenchDescriptionStatus,
+} from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
 import { validateCodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { correlationIdOf } from "@/lib/client-error-summary";
+import {
+  getCodingWorkbenchRuntimeDescriptionDraft,
+  type CodingWorkbenchDescriptionDraftResult,
+} from "@/lib/coding-workbench-runtime-api";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -16,9 +24,11 @@ import styles from "./CodingWorkbenchWindow.module.css";
 export function CodingWorkbenchDraftDelivery({
   snapshot,
   onReviewDescription,
+  reviewDraft = getCodingWorkbenchRuntimeDescriptionDraft,
 }: {
   readonly snapshot: CodingWorkbenchRuntimeSnapshot | undefined;
   readonly onReviewDescription?: ((target: WorkbenchDescriptionReviewTarget) => void) | undefined;
+  readonly reviewDraft?: WorkbenchDescriptionDraftReader | undefined;
 }): ReactNode {
   const parsed = validateCodingWorkbenchRuntimeSnapshot(snapshot);
   const delivery = parsed.ok ? parsed.value.draftDelivery : undefined;
@@ -31,7 +41,9 @@ export function CodingWorkbenchDraftDelivery({
       <WorkbenchDescriptionCard
         status={descriptionStatus}
         delivery={delivery}
+        runId={snapshot?.runId}
         onReview={onReviewDescription}
+        reviewDraft={reviewDraft}
       />
     </>
   );
@@ -104,6 +116,19 @@ export interface WorkbenchDescriptionReviewTarget {
   readonly snapshotDigest: string;
 }
 
+interface WorkbenchDescriptionDraftTarget {
+  readonly runId: string;
+  readonly proposalId: string;
+  readonly snapshotDigest: string;
+}
+
+type WorkbenchDescriptionDraftReader = (
+  runId: string,
+  proposalId: string,
+  snapshotDigest: string,
+  signal?: AbortSignal,
+) => Promise<CodingWorkbenchDescriptionDraftResult>;
+
 function descriptionReviewTarget(
   status: WorkbenchDescriptionStatus,
   delivery: DraftDeliveryRecord | undefined,
@@ -124,20 +149,41 @@ function descriptionReviewTarget(
   };
 }
 
+function descriptionDraftTarget(
+  status: WorkbenchDescriptionStatus,
+  delivery: DraftDeliveryRecord | undefined,
+  runId: string | undefined,
+): WorkbenchDescriptionDraftTarget | undefined {
+  if (
+    runId === undefined ||
+    status.proposalId === undefined ||
+    status.snapshotDigest === null ||
+    delivery?.pullRequest !== undefined
+  ) {
+    return undefined;
+  }
+  return { runId, proposalId: status.proposalId, snapshotDigest: status.snapshotDigest };
+}
+
 // #3401: content-free status for the automatically generated description draft. Reviewing opens
 // #3399's existing exact-proposal surface; approval and apply remain exclusively in that surface.
 function WorkbenchDescriptionCard({
   status,
   delivery,
+  runId,
   onReview,
+  reviewDraft,
 }: {
   readonly status: WorkbenchDescriptionStatus | undefined;
   readonly delivery: DraftDeliveryRecord | undefined;
+  readonly runId: string | undefined;
   readonly onReview: ((target: WorkbenchDescriptionReviewTarget) => void) | undefined;
+  readonly reviewDraft: WorkbenchDescriptionDraftReader;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   if (status === undefined) return null;
   const reviewTarget = descriptionReviewTarget(status, delivery);
+  const draftTarget = descriptionDraftTarget(status, delivery, runId);
   return (
     <section className={styles.card} aria-label={t("codingWorkbench.descriptionStatus.title")}>
       <h3 className={styles.approvalResearchTitle}>
@@ -159,17 +205,75 @@ function WorkbenchDescriptionCard({
           },
         ]}
       />
-      {reviewTarget !== undefined && onReview !== undefined ? (
-        <button
-          type="button"
-          className={styles.button}
-          onClick={() => onReview(reviewTarget)}
-          data-testid="cwb-description-review"
-        >
-          {t("codingWorkbench.descriptionStatus.review")}
-        </button>
-      ) : null}
+      <WorkbenchDescriptionReview
+        applicationTarget={reviewTarget}
+        draftTarget={draftTarget}
+        onReview={onReview}
+        reviewDraft={reviewDraft}
+      />
     </section>
+  );
+}
+
+function WorkbenchDescriptionReview({
+  applicationTarget,
+  draftTarget,
+  onReview,
+  reviewDraft,
+}: {
+  readonly applicationTarget: WorkbenchDescriptionReviewTarget | undefined;
+  readonly draftTarget: WorkbenchDescriptionDraftTarget | undefined;
+  readonly onReview: ((target: WorkbenchDescriptionReviewTarget) => void) | undefined;
+  readonly reviewDraft: WorkbenchDescriptionDraftReader;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const [draft, setDraft] = useState<WorkbenchDescriptionDraftReview>();
+  const [unavailable, setUnavailable] = useState(false);
+  useEffect(() => {
+    setDraft(undefined);
+    setUnavailable(false);
+  }, [draftTarget?.proposalId]);
+  const openDraft = useCallback((): void => {
+    if (draftTarget === undefined) return;
+    reviewDraft(draftTarget.runId, draftTarget.proposalId, draftTarget.snapshotDigest)
+      .then((result) => setDraft(result.draft))
+      .catch((error: unknown) => {
+        setUnavailable(true);
+        reportClientDiagnostic("[keiko] workbench description draft review failed", {
+          correlationId: correlationIdOf(error) ?? draftTarget.runId,
+        });
+      });
+  }, [draftTarget, reviewDraft]);
+  if (applicationTarget !== undefined && onReview !== undefined) {
+    return <DescriptionReviewButton onClick={() => onReview(applicationTarget)} />;
+  }
+  if (draftTarget === undefined) return null;
+  return (
+    <>
+      <DescriptionReviewButton onClick={openDraft} />
+      {draft === undefined ? null : (
+        <pre className={styles.descriptionDraft} data-testid="cwb-description-draft">
+          {draft.artifact.markdown}
+        </pre>
+      )}
+      {unavailable ? (
+        <p className={styles.helpText}>{t("codingWorkbench.descriptionStatus.unavailable")}</p>
+      ) : null}
+    </>
+  );
+}
+
+function DescriptionReviewButton({ onClick }: { readonly onClick: () => void }): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  return (
+    <button
+      type="button"
+      className={styles.button}
+      onClick={onClick}
+      data-testid="cwb-description-review"
+    >
+      {t("codingWorkbench.descriptionStatus.review")}
+    </button>
   );
 }
 

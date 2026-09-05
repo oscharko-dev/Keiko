@@ -1,10 +1,64 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { PrDescriptionArtifact } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodingWorkbenchDraftDelivery } from "./CodingWorkbenchDraftDelivery";
 import { draftDeliverySnapshot } from "./_draftDeliveryTestSupport";
 import { descriptionStatusSnapshot } from "./_workbenchDescriptionStatusTestSupport";
 import { translateCodingWorkbench } from "./coding-workbench-i18n";
+
+function genericDescriptionArtifact(): PrDescriptionArtifact {
+  const evidenceId = "e".repeat(64);
+  return {
+    schemaVersion: "1",
+    renderingVersion: "1",
+    binding: {
+      repositoryId: "repository-1",
+      baseRef: "dev",
+      baseSha: "1".repeat(40),
+      headRef: "feature",
+      headSha: "2".repeat(40),
+      mergeBaseSha: "1".repeat(40),
+      snapshotDigest: "b".repeat(64),
+    },
+    language: "en",
+    outcome: "complete",
+    reason: "none",
+    coverage: {
+      snapshot: {
+        totalFiles: 1,
+        files: 1,
+        hunks: 1,
+        bytes: 10,
+        omittedFiles: 0,
+        omittedHunks: 0,
+        truncatedFiles: 0,
+        kinds: {
+          add: 0,
+          modify: 1,
+          delete: 0,
+          rename: 0,
+          copy: 0,
+          "mode-change": 0,
+          binary: 0,
+          submodule: 0,
+        },
+        omissions: [],
+      },
+      suppliedEvidenceCount: 1,
+      processedEvidenceCount: 1,
+      omittedEvidenceCount: 0,
+    },
+    candidate: {
+      summary: [{ text: "Generic Workbench draft", evidenceIds: [evidenceId] }],
+      keyChanges: [{ text: "One bounded change", evidenceIds: [evidenceId] }],
+      risks: [],
+      reviewerFocus: [],
+    },
+    markdown: "## Summary\n\nGeneric Workbench draft",
+    artifactDigest: "c".repeat(64),
+  };
+}
 
 describe("durable repository delivery in the Code task", () => {
   beforeEach(() => {
@@ -193,6 +247,31 @@ describe("durable repository delivery in the Code task", () => {
       proposalId: "pr-description-1",
       snapshotDigest: "b".repeat(64),
     });
+  });
+
+  it("reviews the exact retained generic draft without inventing a pull-request target", async () => {
+    const artifact = genericDescriptionArtifact();
+    const reviewDraft = vi.fn(async () => ({
+      outcome: "draft" as const,
+      draft: {
+        schemaVersion: "1" as const,
+        proposalId: "generic-description-1",
+        expiresAt: "2026-09-05T18:00:00.000Z",
+        artifact,
+      },
+    }));
+    const snapshot = descriptionStatusSnapshot({ proposalId: "generic-description-1" });
+    render(<CodingWorkbenchDraftDelivery snapshot={snapshot} reviewDraft={reviewDraft} />);
+    fireEvent.click(screen.getByRole("button", { name: "Review exact draft" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("cwb-description-draft").textContent).toBe(artifact.markdown),
+    );
+    expect(reviewDraft).toHaveBeenCalledExactlyOnceWith(
+      snapshot.runId,
+      "generic-description-1",
+      "b".repeat(64),
+    );
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
   it("renders nothing for the description status when it is absent, without a diagnostic", () => {

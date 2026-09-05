@@ -28,6 +28,7 @@ import {
   validateCodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { validateCodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research";
+import type { WorkbenchDescriptionDraftReview } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
 import { createSameOriginApiEventSource } from "./safe-event-source";
@@ -124,6 +125,42 @@ function approvalReviewChannelValidator(
   value: unknown,
 ): CodingWorkbenchRuntimeApprovalReviewChannelPayload {
   return validated(path, value, validateCodingWorkbenchRuntimeApprovalReviewChannelPayload);
+}
+
+export interface CodingWorkbenchDescriptionDraftResult {
+  readonly outcome: "draft";
+  readonly draft: WorkbenchDescriptionDraftReview;
+}
+
+function isDescriptionDraftResult(value: unknown): value is CodingWorkbenchDescriptionDraftResult {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const result = value as Record<string, unknown>;
+  const draft = result.draft;
+  if (result.outcome !== "draft" || typeof draft !== "object" || draft === null) return false;
+  const review = draft as Record<string, unknown>;
+  const artifact = review.artifact;
+  return (
+    review.schemaVersion === "1" &&
+    typeof review.proposalId === "string" &&
+    review.proposalId.length > 0 &&
+    typeof review.expiresAt === "string" &&
+    Number.isFinite(Date.parse(review.expiresAt)) &&
+    typeof artifact === "object" &&
+    artifact !== null &&
+    typeof (artifact as Record<string, unknown>).markdown === "string"
+  );
+}
+
+function descriptionDraftValidator(
+  path: string,
+  value: unknown,
+): CodingWorkbenchDescriptionDraftResult {
+  if (isDescriptionDraftResult(value)) return value;
+  throw new ApiError(
+    "CONTRACT_VALIDATION_FAILED",
+    `BFF response for ${path} failed contract validation.`,
+    502,
+  );
 }
 
 function runPath(runId: string, suffix = ""): string {
@@ -304,6 +341,22 @@ export function getCodingWorkbenchRuntimeApprovalReview(
     runPath(runId, "/approval-review"),
     { cache: "no-store", ...(signal ? { signal } : {}) },
     { validator: approvalReviewChannelValidator },
+  );
+}
+
+/** Reads the exact transient server-held draft for a generic run with no pull-request target. */
+export function getCodingWorkbenchRuntimeDescriptionDraft(
+  runId: string,
+  proposalId: string,
+  snapshotDigest: string,
+  signal?: AbortSignal,
+): Promise<CodingWorkbenchDescriptionDraftResult> {
+  const query = new URLSearchParams({ proposalId, snapshotDigest });
+  const path = `${runPath(runId, "/description-draft")}?${query.toString()}`;
+  return bffFetchJson(
+    path,
+    { cache: "no-store", ...(signal ? { signal } : {}) },
+    { validator: descriptionDraftValidator },
   );
 }
 

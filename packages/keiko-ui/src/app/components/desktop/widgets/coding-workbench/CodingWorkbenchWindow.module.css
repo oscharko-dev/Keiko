@@ -452,6 +452,19 @@
   outline-offset: var(--space-1);
 }
 
+.descriptionDraft {
+  max-height: 220px;
+  margin: 0;
+  padding: var(--space-3);
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--fg-primary);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font: var(--text-body-sm);
+}
+
 .button:disabled {
   color: var(--text-disabled);
   opacity: var(--opacity-disabled);

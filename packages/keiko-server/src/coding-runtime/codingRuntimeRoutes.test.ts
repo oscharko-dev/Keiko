@@ -27,6 +27,7 @@ import {
   CODING_RUNTIME_ROUTE_GROUP,
   handleCodingRuntimeApproval,
   handleCodingRuntimeApprovalReview,
+  handleCodingRuntimeDescriptionDraft,
   handleCodingRuntimeEvents,
   handleCodingRuntimeFollowUp,
   handleCodingRuntimePause,
@@ -171,6 +172,15 @@ function runtime(
             deletedLines: 4,
           }
         : undefined,
+    reviewDescriptionDraft: (runId: string, proposalId: string, snapshotDigest: string) =>
+      runId === "run-1" && proposalId === "proposal-1" && snapshotDigest === "b".repeat(64)
+        ? {
+            schemaVersion: "1",
+            proposalId,
+            expiresAt: "2026-09-05T18:00:00.000Z",
+            artifact: { markdown: "## Exact generic draft" },
+          }
+        : undefined,
   };
   const eventHub = {
     subscribe: (
@@ -223,6 +233,7 @@ describe("coding runtime routes", () => {
         "GET /api/coding-workbench/runtime/runs/:runId/events",
         "GET /api/coding-workbench/runtime/runs/:runId/research",
         "GET /api/coding-workbench/runtime/runs/:runId/approval-review",
+        "GET /api/coding-workbench/runtime/runs/:runId/description-draft",
         "POST /api/coding-workbench/runtime/runs/:runId/approvals",
         "POST /api/coding-workbench/runtime/runs/:runId/stop",
         "POST /api/coding-workbench/runtime/runs/:runId/takeover",
@@ -527,6 +538,25 @@ describe("coding runtime routes", () => {
 
     expect(result.status).toBe(404);
     expect(JSON.stringify(result.body)).not.toContain("src/alpha.ts");
+  });
+
+  it("serves an exact generic description proposal only over the paired run channel", () => {
+    const session = pairedAppSession();
+    const path = `/api/coding-workbench/runtime/runs/run-1/description-draft?proposalId=proposal-1&snapshotDigest=${"b".repeat(64)}`;
+    const reviewed = handleCodingRuntimeDescriptionDraft(
+      context("", { runId: "run-1" }, path, session.cookie),
+      runtime({ codingAppSessionChannel: session.channel }),
+    );
+    expect(reviewed).toMatchObject({
+      status: 200,
+      body: {
+        outcome: "draft",
+        draft: { proposalId: "proposal-1", artifact: { markdown: "## Exact generic draft" } },
+      },
+    });
+    expect(
+      handleCodingRuntimeDescriptionDraft(context("", { runId: "run-1" }, path), runtime()),
+    ).toEqual({ status: 404, body: expect.any(Object) });
   });
 
   it("#2802: the content-free status and run projections never carry a reviewable path", () => {

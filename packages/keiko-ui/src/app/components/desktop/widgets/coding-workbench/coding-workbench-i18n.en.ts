@@ -622,6 +622,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.descriptionStatus.head": "Head commit",
   "codingWorkbench.descriptionStatus.generation": "Generation",
   "codingWorkbench.descriptionStatus.review": "Review exact draft",
+  "codingWorkbench.descriptionStatus.unavailable":
+    "This retained draft is no longer available. Refresh the run status to continue.",
   "codingWorkbench.commitResult.title": "Commit result",
   "codingWorkbench.commitResult.head": "Created commit",
   "codingWorkbench.commitResult.findings": "Git checks",

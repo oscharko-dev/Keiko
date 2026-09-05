@@ -347,6 +347,17 @@ interface SubmitState {
   readonly submit: () => void;
 }
 
+interface SubmitInput {
+  readonly chatId: string;
+  readonly mode: ConnectMode;
+  readonly currentBranch: string | undefined;
+  readonly baseRef: string;
+  readonly connect: typeof connectGitChangeToChat;
+  readonly onConnected: (chatId: string, result: GitChangeConnectResponse) => void;
+  readonly onClose: () => void;
+  readonly t: I18nTranslate;
+}
+
 function useSubmit({
   chatId,
   mode,
@@ -356,16 +367,7 @@ function useSubmit({
   onConnected,
   onClose,
   t,
-}: {
-  readonly chatId: string;
-  readonly mode: ConnectMode;
-  readonly currentBranch: string | undefined;
-  readonly baseRef: string;
-  readonly connect: typeof connectGitChangeToChat;
-  readonly onConnected: (chatId: string, result: GitChangeConnectResponse) => void;
-  readonly onClose: () => void;
-  readonly t: I18nTranslate;
-}): SubmitState {
+}: SubmitInput): SubmitState {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const canSubmit =

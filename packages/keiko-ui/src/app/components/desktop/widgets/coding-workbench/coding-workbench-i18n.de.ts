@@ -645,6 +645,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.descriptionStatus.head": "Head-Commit",
   "codingWorkbench.descriptionStatus.generation": "Generation",
   "codingWorkbench.descriptionStatus.review": "Exakten Entwurf prüfen",
+  "codingWorkbench.descriptionStatus.unavailable":
+    "Dieser gespeicherte Entwurf ist nicht mehr verfügbar. Aktualisieren Sie den Laufstatus.",
   "codingWorkbench.commitResult.title": "Commit-Ergebnis",
   "codingWorkbench.commitResult.head": "Erstellter Commit",
   "codingWorkbench.commitResult.findings": "Git-Prüfungen",

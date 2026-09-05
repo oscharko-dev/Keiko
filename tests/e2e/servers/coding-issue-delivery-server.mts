@@ -19,6 +19,10 @@ import {
   initializeDeliveryRemote,
   installDeliveryTransport,
 } from "./coding-issue-delivery-transport.mjs";
+import {
+  deliveryDescriptionGatewayConfig,
+  startDeliveryDescriptionModel,
+} from "./coding-issue-description-model.mjs";
 import { runCodingRuntimeJourneyServer } from "./coding-runtime-server-shared.mjs";
 
 export async function runIssueDeliveryServer(
@@ -30,12 +34,22 @@ export async function runIssueDeliveryServer(
   const stateDir = deliveryStateDir();
   mkdirSync(stateDir, { recursive: true });
   const transport = installDeliveryTransport(stateDir);
+  const port = options.port ?? DELIVERY_PORT;
+  const modelPort = port - 1;
+  await startDeliveryDescriptionModel(stateDir, modelPort);
+  const bffStateRoot = join(stateDir, "bff-state");
+  mkdirSync(join(bffStateRoot, "ui-db"), { recursive: true, mode: 0o700 });
+  writeFileSync(
+    join(bffStateRoot, "ui-db", "keiko.config.json"),
+    `${JSON.stringify(deliveryDescriptionGatewayConfig(modelPort), null, 2)}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
   await runCodingRuntimeJourneyServer({
     fixtureId: "draft-delivery-3387",
     fixtureLabel: "Draft delivery 3387",
     runtime: "scripted",
     includeQuestion: false,
-    defaultPort: options.port ?? DELIVERY_PORT,
+    defaultPort: port,
     ...(options.ciReader === undefined ? {} : { ciReader: options.ciReader }),
     originalContent: COMMIT_ORIGINAL,
     editedContent: COMMIT_EDITED,

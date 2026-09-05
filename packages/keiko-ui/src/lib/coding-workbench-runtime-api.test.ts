@@ -9,6 +9,7 @@ import {
   createCodingWorkbenchRuntimeEventSource,
   decideCodingWorkbenchRuntimeApproval,
   getCodingWorkbenchRuntimeReadiness,
+  getCodingWorkbenchRuntimeDescriptionDraft,
   getCodingWorkbenchRuntimeSnapshot,
   getCodingWorkbenchRuntimeStatus,
   listCodingWorkbenchRuntimeQuestions,
@@ -311,6 +312,26 @@ describe("Coding Workbench runtime API endpoints", () => {
     expect(fetchMock).toHaveBeenLastCalledWith(
       "/api/coding-workbench/runtime/runs/run-1/recovery-ack",
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("reads the exact generic description proposal from the run-scoped review route", async () => {
+    const response = {
+      outcome: "draft",
+      draft: {
+        schemaVersion: "1",
+        proposalId: "proposal-1",
+        expiresAt: "2026-09-05T18:00:00.000Z",
+        artifact: { markdown: "## Exact draft" },
+      },
+    };
+    const fetchMock = stubFetch(response);
+    await expect(
+      getCodingWorkbenchRuntimeDescriptionDraft("run/1", "proposal 1", "b".repeat(64)),
+    ).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `/api/coding-workbench/runtime/runs/run%2F1/description-draft?proposalId=proposal+1&snapshotDigest=${"b".repeat(64)}`,
+      expect.objectContaining({ cache: "no-store" }),
     );
   });
 
