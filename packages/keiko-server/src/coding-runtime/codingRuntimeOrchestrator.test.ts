@@ -2546,6 +2546,47 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     expect(dispatcher.generate).not.toHaveBeenCalled();
   });
 
+  // #3401 review finding 4: the AbortController the dispatch code allocates for exactly this
+  // purpose (`descriptionDispatchAbort`) had no test proving a superseding head actually aborts
+  // the signal a still-running `generate()` call was given.
+  it("aborts an in-flight generation attempt when a new head supersedes it", async () => {
+    const jobs = jobStore();
+    const signals: AbortSignal[] = [];
+    const dispatcher: WorkbenchDescriptionDispatcher = {
+      generate: vi.fn((_scope, signal: AbortSignal) => {
+        signals.push(signal);
+        return signals.length === 1
+          ? new Promise<WorkbenchDescriptionDispatchOutcome>(() => undefined)
+          : Promise.resolve<WorkbenchDescriptionDispatchOutcome>({ reason: "generated" });
+      }),
+    };
+    const verifiedCommits = new Map<string, VerifiedCommitResult>();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      { jobs, dispatcher },
+      verifiedCommits,
+    );
+
+    await settleRun(f, verifiedCommits);
+    await vi.waitFor(() => {
+      expect(dispatcher.generate).toHaveBeenCalledTimes(1);
+    });
+    expect(signals[0]?.aborted).toBe(false);
+
+    verifiedCommits.set("run-1", verifiedCommit({ headSha: "3".repeat(40) }));
+    f.orchestrator.notifyVerifiedHeadAdvanced("run-1");
+
+    await vi.waitFor(() => {
+      expect(dispatcher.generate).toHaveBeenCalledTimes(2);
+    });
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
   it("records a closed blocked status without calling the model when authority is denied", async () => {
     const jobs = jobStore();
     const dispatcher = fakeDispatcher({ reason: "authority-expired" });

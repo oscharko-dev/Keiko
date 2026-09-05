@@ -49,7 +49,7 @@ export interface CodingRuntimeDescriptionJobStore {
     status: WorkbenchDescriptionStatus,
     nowIso: string,
   ) => boolean;
-  /** Records a closed blocked outcome without ever dispatching (e.g. an exhausted budget). */
+  /** Records a closed blocked outcome for an attempt that WAS dispatched (a settle path). */
   readonly recordBlocked: (
     scope: WorkbenchDescriptionScope,
     reason: WorkbenchDescriptionReason,
@@ -57,6 +57,14 @@ export interface CodingRuntimeDescriptionJobStore {
     revision: number,
     nowIso: string,
   ) => void;
+  /**
+   * Records a closed "budget-exhausted" outcome for a `beginDispatch` call that was rejected
+   * BEFORE any attempt was allocated — no generationVersion/revision exists to settle against, so
+   * this makes the run's current head visible as blocked directly, without ever touching `phase`
+   * (`beginDispatch`'s own budget guard proves no row here is ever `'dispatched'`, so this can
+   * never race a still-in-flight attempt for the same run).
+   */
+  readonly recordBudgetExhausted: (scope: WorkbenchDescriptionScope, nowIso: string) => void;
   readonly current: (runId: string) => WorkbenchDescriptionStatus | undefined;
   /** Startup-only containment: an attempt still in flight from a prior process is never resumed. */
   readonly reconcileInterrupted: (nowIso: string) => readonly string[];
@@ -134,6 +142,8 @@ interface Statements {
   readonly insert: ReturnType<DatabaseSync["prepare"]>;
   readonly upsertDispatch: ReturnType<DatabaseSync["prepare"]>;
   readonly settleRow: ReturnType<DatabaseSync["prepare"]>;
+  readonly insertSettled: ReturnType<DatabaseSync["prepare"]>;
+  readonly upsertSettled: ReturnType<DatabaseSync["prepare"]>;
   readonly interrupted: ReturnType<DatabaseSync["prepare"]>;
 }
 
@@ -157,6 +167,15 @@ function prepareStatements(db: DatabaseSync): Statements {
     settleRow: db.prepare(
       "UPDATE coding_runtime_description_jobs SET phase = 'settled', status_json = ?, updated_at = ? WHERE run_id = ? AND revision = ?",
     ),
+    // Budget-exhausted is rejected before any `dispatched` row is allocated, so there is nothing
+    // to settle: these two make the run's current head visible as blocked directly, choosing
+    // insert vs. update by whether a row for the run already exists.
+    insertSettled: db.prepare(
+      "INSERT INTO coding_runtime_description_jobs (run_id, remote_digest, base_sha, head_sha, generation_version, revision, phase, status_json, updated_at) VALUES (?, ?, ?, ?, ?, 0, 'settled', ?, ?)",
+    ),
+    upsertSettled: db.prepare(
+      "UPDATE coding_runtime_description_jobs SET remote_digest = ?, base_sha = ?, head_sha = ?, generation_version = ?, phase = 'settled', status_json = ?, updated_at = ? WHERE run_id = ?",
+    ),
     interrupted: db.prepare(
       `SELECT ${ROW_COLUMNS} FROM coding_runtime_description_jobs WHERE phase = 'dispatched'`,
     ),
@@ -178,8 +197,13 @@ function beginDispatch(
   if (row !== undefined && sameHead(row, scope)) {
     return { kind: "coalesced", status: settledStatus(row) };
   }
+  // A row already `dispatched` for THIS run already occupies one of the counted slots (this is a
+  // supersede, not a new claim on the budget); a `settled` row (or no row) claims a fresh slot, so
+  // only that case is checked against the cap. Without this, a repaired-head regeneration for an
+  // already-settled run could exceed `maxConcurrentDispatches` unconditionally (#3401 review).
+  const alreadyInFlight = row !== undefined && row.phase === "dispatched";
   const inFlight = (statements.countInFlight.get() as { count: number }).count;
-  if (row === undefined && inFlight >= maxConcurrentDispatches) {
+  if (!alreadyInFlight && inFlight >= maxConcurrentDispatches) {
     return { kind: "budget-exhausted" };
   }
   const generationVersion = (row?.generation_version ?? 0) + 1;
@@ -236,6 +260,38 @@ function settle(
   return Number(result.changes) === 1;
 }
 
+function recordBudgetExhausted(
+  statements: Statements,
+  scope: WorkbenchDescriptionScope,
+  nowIso: string,
+): void {
+  assertScope(scope);
+  const row = readRow(statements, scope.runId);
+  const generationVersion = (row?.generation_version ?? 0) + 1;
+  const status = blockedStatus(scope, "budget-exhausted", generationVersion, nowIso);
+  if (row === undefined) {
+    statements.insertSettled.run(
+      scope.runId,
+      scope.remoteDigest,
+      scope.baseSha,
+      scope.headSha,
+      generationVersion,
+      JSON.stringify(status),
+      nowIso,
+    );
+    return;
+  }
+  statements.upsertSettled.run(
+    scope.remoteDigest,
+    scope.baseSha,
+    scope.headSha,
+    generationVersion,
+    JSON.stringify(status),
+    nowIso,
+    scope.runId,
+  );
+}
+
 function reconcileInterrupted(statements: Statements, nowIso: string): readonly string[] {
   const rows = statements.interrupted.all() as unknown as Row[];
   const recovered: string[] = [];
@@ -267,6 +323,8 @@ export function createCodingRuntimeDescriptionJobStore(
       const status = blockedStatus(scope, reason, generationVersion, nowIso);
       statements.settleRow.run(JSON.stringify(status), nowIso, scope.runId, revision);
     },
+    recordBudgetExhausted: (scope, nowIso): void =>
+      recordBudgetExhausted(statements, scope, nowIso),
     current(runId): WorkbenchDescriptionStatus | undefined {
       const row = readRow(statements, runId);
       return row === undefined ? undefined : settledStatus(row);

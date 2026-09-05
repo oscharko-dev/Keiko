@@ -110,7 +110,11 @@ describe("createProductionPrDescriptionGeneration (#3399)", () => {
 
   it("emits the pr-description.generation.* ops through the composed log port end to end", () => {
     const generation = createProductionPrDescriptionGeneration(source(config()));
-    generation?.log.write({ category: "gateway", op: "pr-description.generation.started", extra: {} });
+    generation?.log.write({
+      category: "gateway",
+      op: "pr-description.generation.started",
+      extra: {},
+    });
     const ops = logs.events.map((event) => event.op);
     expect(ops).toContain("pr-description.generation.started");
   });

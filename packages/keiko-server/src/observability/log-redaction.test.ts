@@ -936,3 +936,159 @@ describe("closed issue journey client diagnostics", () => {
       expect(redactLogFields({ clientNote })).not.toEqual({ clientNote });
   });
 });
+
+// ─── Epic #3384: new field-name coverage for keiko support analyze reconstruction ──────────────
+//
+// Proves that every NEW `extra` field name the issue-to-PR journey ops introduced (tool-catalog
+// lifecycle events, `git.pr-description`/`git.pr-description.receipt`, `git.journey-observation`/
+// `git.journey-outcome.recorded`, `git.delivery.readiness.observed`, `git-change.chat.*`) is
+// either an allowed body-free scalar (survives `redactLogFields` unchanged) or is genuinely
+// redacted — never silently dropped as a false-positive name-collision, and never a raw value that
+// slips through as a false-negative. Field names and shapes are read off the real producers
+// (`packages/keiko-contracts/src/governed-tool-lifecycle.ts`,
+// `packages/keiko-server/src/gitDelivery/prDescriptionProjection.ts`/`prDescriptionReceiptStore.ts`,
+// `journeyObservationService.ts`/`journeyRoutes.ts`, `mergeExecution.ts`, `gitChangeRoutes.ts`),
+// never guessed.
+describe("epic #3384 — tool-catalog lifecycle field names survive as body-free evidence", () => {
+  it("keeps every tool-catalog invocation/settlement id, disposition and count intact", () => {
+    const fields = {
+      invocationId: "9f2c1b0e3a4d5e6f7a8b9c0d1e2f3a4b",
+      reservationId: "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      settlementId: "0011223344556677889900112233445",
+      budgetDisposition: "committed",
+      effectStarted: true,
+      inputBytes: 512,
+      outputBytes: 2048,
+      resultCount: 3,
+      truncated: false,
+      status: "completed",
+      reason: "none",
+    };
+    expect(redactLogFields(fields)).toStrictEqual(fields);
+  });
+
+  // `null` is not on the value-type allowlist (module header: "Errors, Buffers, Maps, class
+  // instances, functions, symbols, bigints and null are dropped"), so the not-reserved terminal
+  // shape's `reservationId: null`/`toolRef: null` are dropped, not preserved — this is exactly WHY
+  // `support-tool-catalog.ts`'s `restoreTerminalFields` exists: it re-adds the closed-contract
+  // `null` this redaction step cannot itself carry, for the two shapes that provably imply it
+  // (`budgetDisposition === "not-reserved"` and a failed/non-completed status). Asserted here so a
+  // future relaxation of the null rule is caught at its own layer rather than only downstream.
+  it("drops a null reservationId/toolRef entirely rather than passing null through", () => {
+    expect(redactLogFields({ reservationId: null, toolRef: null })).toBeUndefined();
+    expect(redactLogFields({ reservationId: null, invocationId: "keep-me" })).toStrictEqual({
+      invocationId: "keep-me",
+    });
+  });
+
+  it("keeps a nested toolRef object's canonicalId/contractVersion intact", () => {
+    const toolRef = { canonicalId: "fs.read-file", contractVersion: 1 };
+    expect(redactLogFields({ toolRef })).toStrictEqual({ toolRef });
+  });
+
+  it("keeps handlerSetDigest/projectionDigest and a nested profile ref intact", () => {
+    const fields = {
+      handlerSetDigest: "b".repeat(64),
+      projectionDigest: "c".repeat(64),
+      profile: { id: "coding-workbench", version: 3 },
+    };
+    expect(redactLogFields(fields)).toStrictEqual(fields);
+  });
+
+  it("keeps the failure-diagnostics shape (errorKind + frames + causeChain) intact together", () => {
+    const fields = {
+      errorKind: "TOOL_INVOCATION_FAILED",
+      frames: ["packages/keiko-tools/dist/dispatch.js:42:7"],
+      causeChain: ["TypeError"],
+    };
+    expect(redactLogFields(fields)).toStrictEqual(fields);
+  });
+});
+
+describe("epic #3384 — git.pr-description(.receipt) field names survive as body-free evidence", () => {
+  it("keeps phase/reason/state/effect and every binding digest intact, never the description body", () => {
+    const fields = {
+      phase: "apply",
+      reason: "applied",
+      state: "current",
+      effect: "confirmed",
+      snapshotDigest: "d".repeat(64),
+      artifactDigest: "e".repeat(64),
+      bodyDigest: "f".repeat(64),
+    };
+    expect(redactLogFields(fields)).toStrictEqual(fields);
+  });
+
+  it("keeps the receipt store's revision and scopeDigest intact", () => {
+    const fields = { phase: "record", revision: 4, state: "current", scopeDigest: "a".repeat(64) };
+    expect(redactLogFields(fields)).toStrictEqual(fields);
+  });
+
+  // Regression pin, not a hypothetical: this is exactly the shape a hostile or buggy caller could
+  // produce by accidentally forwarding the generated PR title/body alongside the digest evidence
+  // this op is meant to carry. `title`/`body` are denylisted BY NAME (`log-redaction.ts`'s
+  // `DENIED_FIELD_NAMES`), so they must never survive next to the legitimate digest fields above.
+  it("still redacts a title/body accidentally placed alongside legitimate digest fields", () => {
+    const fields = redactLogFields({
+      phase: "apply",
+      state: "current",
+      snapshotDigest: "d".repeat(64),
+      title: "Fix the login crash after retrying twice",
+      body: "This PR fixes a race condition in the retry loop.",
+    });
+    expect(fields).toMatchObject({
+      phase: "apply",
+      state: "current",
+      snapshotDigest: "d".repeat(64),
+    });
+    expect(fields?.title).toBe(REDACTED_KEY);
+    expect(fields?.body).toBe(REDACTED_KEY);
+  });
+});
+
+describe("epic #3384 — git.journey-observation/git.journey-outcome.recorded field names survive as body-free evidence", () => {
+  it("keeps every journey binding/outcome id, digest, count and boolean intact", () => {
+    const fields = {
+      phase: "observed",
+      runId: "run-42",
+      headSha: "abc123def456abc123def456abc123def456abc",
+      remoteDigest: "1".repeat(64),
+      reason: "human-review-ready",
+      state: "ready-for-human-review",
+      evidenceRef: "journey-" + "2".repeat(64),
+      merged: false,
+      unresolvedCount: 0,
+      issueState: "open",
+      descriptionState: "current",
+      complete: true,
+    };
+    expect(redactLogFields(fields)).toStrictEqual(fields);
+  });
+
+  it("keeps the recorded-outcome shape intact", () => {
+    const fields = {
+      runId: "run-42",
+      state: "blocked",
+      reason: "checks-not-ready",
+      recorded: true,
+    };
+    expect(redactLogFields(fields)).toStrictEqual(fields);
+  });
+});
+
+describe("epic #3384 — readiness/git-change.chat field names survive as body-free evidence", () => {
+  it("keeps git.delivery.readiness.observed's state/providerError/count intact", () => {
+    const fields = { state: "observed", providerError: false, count: 5 };
+    expect(redactLogFields(fields)).toStrictEqual(fields);
+  });
+
+  it("keeps git-change.chat's relationshipId/remoteDigestPrefix/fileCount/hasPullRequest intact", () => {
+    const fields = {
+      relationshipId: "rel-1",
+      remoteDigestPrefix: "abcd1234",
+      fileCount: 3,
+      hasPullRequest: false,
+    };
+    expect(redactLogFields(fields)).toStrictEqual(fields);
+  });
+});

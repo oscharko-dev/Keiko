@@ -1482,6 +1482,7 @@ export class CodingRuntimeOrchestrator {
       return;
     }
     if (decision.kind === "budget-exhausted") {
+      support.jobs.recordBudgetExhausted(scope, nowIso);
       this.logDescriptionEvent(scope, "blocked", { reason: "budget-exhausted" as const });
       return;
     }
@@ -1616,6 +1617,9 @@ export class CodingRuntimeOrchestrator {
       this.deps.evidence.deletePruned(pruned);
       this.deps.eventHub.deleteRuns(pruned);
       this.deps.snapshots.deletePruned(pruned);
+      // #3401 review: descriptionDispatchAbort is per-run bookkeeping like the three stores above
+      // and must not outlive a pruned run.
+      for (const runId of pruned) this.descriptionDispatchAbort.delete(runId);
     }
   }
   private current(): CodingRuntimeSnapshot | undefined {

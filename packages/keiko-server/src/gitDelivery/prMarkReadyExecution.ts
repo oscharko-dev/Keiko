@@ -1,0 +1,506 @@
+// Governed GitHub pull request "mark ready" (draft->ready) execution (#3389, epic #3384, ADR-0086).
+//
+//   * POST /api/git-delivery/pr/mark-ready/approve — Mints the one-use approval claim the draft->ready
+//       transition requires. The claim binds the canonical repository (remoteDigest), the exact PR
+//       identity, the base/head SHAs the caller currently observes, a digest over the readiness
+//       snapshot that justified the proposal, and a digest over the transition payload itself — never
+//       a title/body/base PATCH, which this intent never carries.
+//   * POST /api/git-delivery/pr/mark-ready/execute — Governed. Re-reads the live PR identity
+//       IMMEDIATELY BEFORE the mutation and refuses (drift, no spawn) unless it still matches the
+//       claim's bound head/base SHA and the PR is still a draft; runs ONLY the existing
+//       `buildPrMarkReadyGraphqlArgv` GraphQL mutation (git-pr-node.ts) — no PATCH; then re-reads the
+//       PR identity again and reports success only when the read-back confirms `isDraft === false` on
+//       the same head. Any mismatch at either read revokes the claim's effect and performs nothing
+//       further. The transition is reachable ONLY through this route (correction 1): the generic
+//       `pr-update` command rejects `convertFromDraft` unconditionally (prRoutes.ts).
+//
+// The coding runtime exposes neither merge, auto-merge scheduling, nor issue-close mutations: the only
+// spawn this execute path can ever produce is a PR-identity read or the fixed
+// `markPullRequestReadyForReview` GraphQL mutation (git-pr-node.test.ts pins this structurally).
+//
+// Content-free in evidence: only ids, digests, states and counts leave this module on the activity
+// log — never a title, body, or raw provider payload.
+
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { GitDeliveryApprovalClaim } from "@oscharko-dev/keiko-contracts";
+import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import type {
+  GitPrMarkReadyExecResult,
+  GitPullRequestMarkReadyAdapter,
+} from "@oscharko-dev/keiko-tools";
+import { createNodeGitPullRequestAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
+import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { ServerLogSink } from "../observability/server-log.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
+import { gitDeliveryTerminationHandler, logGitDeliveryNoSpawnRefusal } from "./execution.js";
+import {
+  DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
+  GIT_DELIVERY_LOCAL_OPERATOR_ID,
+  parseGitDeliveryApprovalRequest,
+  resolveGitDeliveryApprovalRequirement,
+  type GitDeliveryApprovalBinding,
+  type GitDeliveryApprovalStore,
+  type ParsedGitDeliveryApprovalRequest,
+} from "./approvalStore.js";
+import {
+  hasOnlyAllowedKeys,
+  isNonEmptyString,
+  isOwnerAndRepo,
+  isPlainObject,
+  isPrNumberString,
+  scanForbiddenStrings,
+  scanUnsafeFormatChars,
+} from "./requestGuards.js";
+import {
+  gitDeliveryAuthorityContinuityGuard,
+  gitDeliveryAuthorityGate,
+  prepareGitDeliveryRequest,
+  type GitDeliveryAuthorityContinuityDenialCapture,
+  type GitDeliveryAuthorityIdentity,
+  type GitDeliveryRequestErrors,
+} from "./requestPreparation.js";
+
+// ─── Error envelope ───────────────────────────────────────────────────────────────────────────
+
+type GitDeliveryPrMarkReadyErrorCode =
+  | "GIT_DELIVERY_PR_MARK_READY_BAD_REQUEST"
+  | "GIT_DELIVERY_PR_MARK_READY_PAYLOAD_TOO_LARGE"
+  | "GIT_DELIVERY_PR_MARK_READY_FORBIDDEN_PAYLOAD"
+  | "GIT_DELIVERY_PR_MARK_READY_UNKNOWN_PROJECT"
+  | "GIT_DELIVERY_PR_MARK_READY_WORKTREE_UNAVAILABLE";
+
+const SAFE_MESSAGES: Readonly<Record<GitDeliveryPrMarkReadyErrorCode, string>> = {
+  GIT_DELIVERY_PR_MARK_READY_BAD_REQUEST: "The request body is not a valid mark-ready proposal.",
+  GIT_DELIVERY_PR_MARK_READY_PAYLOAD_TOO_LARGE: "The mark-ready request exceeds the maximum size.",
+  GIT_DELIVERY_PR_MARK_READY_FORBIDDEN_PAYLOAD:
+    "The request contained a forbidden field. Requests may not carry credentials or auth headers.",
+  GIT_DELIVERY_PR_MARK_READY_UNKNOWN_PROJECT: "The requested project is not a known workspace.",
+  GIT_DELIVERY_PR_MARK_READY_WORKTREE_UNAVAILABLE:
+    "The repository worktree could not be inspected. Confirm the project is a Git repository.",
+};
+
+const errResult = (status: number, code: GitDeliveryPrMarkReadyErrorCode): RouteResult => ({
+  status,
+  body: { error: { code, message: SAFE_MESSAGES[code] } },
+});
+
+const MARK_READY_REQUEST_ERRORS: GitDeliveryRequestErrors = {
+  tooLarge: errResult(413, "GIT_DELIVERY_PR_MARK_READY_PAYLOAD_TOO_LARGE"),
+  badRequest: errResult(400, "GIT_DELIVERY_PR_MARK_READY_BAD_REQUEST"),
+  unknownProject: errResult(404, "GIT_DELIVERY_PR_MARK_READY_UNKNOWN_PROJECT"),
+};
+
+// ─── Request parsing ────────────────────────────────────────────────────────────────────────────
+
+const READINESS_DIGEST_RE = /^[a-f0-9]{64}$/u;
+
+function isReadinessDigest(value: unknown): value is string {
+  return typeof value === "string" && READINESS_DIGEST_RE.test(value);
+}
+
+const ALLOWED_KEYS: ReadonlySet<string> = new Set([
+  "schemaVersion",
+  "projectId",
+  "ownerAndRepo",
+  "prExternalId",
+  "headSha",
+  "baseSha",
+  "readinessDigest",
+  "approval",
+]);
+
+/** The proposal facts the mint binds and the execute re-verifies. Never carries title/body/base. */
+export interface PrMarkReadyCommand {
+  readonly kind: "pr-mark-ready";
+  readonly ownerAndRepo: string;
+  readonly remoteDigest: string;
+  readonly prExternalId: string;
+  readonly headSha: string;
+  readonly baseSha: string;
+  readonly readinessDigest: string;
+  readonly currentDraftState: true;
+  readonly transitionPayloadDigest: string;
+}
+
+interface ValidatedMarkReadyRequest {
+  readonly projectId: string;
+  readonly command: PrMarkReadyCommand;
+  readonly approval: ParsedGitDeliveryApprovalRequest;
+}
+
+type Validation =
+  | { readonly kind: "ok"; readonly value: ValidatedMarkReadyRequest }
+  | { readonly kind: "err"; readonly result: RouteResult };
+
+// The transition performs no title/body/base mutation of its own, so its "payload" is the fixed
+// GraphQL mutation identity (git-pr-node.ts's buildPrMarkReadyGraphqlArgv) scoped to this exact PR —
+// a digest, not a client input, so a claim can never be minted against a different transition shape.
+function transitionPayloadDigest(ownerAndRepo: string, prExternalId: string): string {
+  return sha256Hex(
+    canonicalise({ domain: "keiko-pr-mark-ready-transition-v1", ownerAndRepo, prExternalId }),
+  );
+}
+
+function buildMarkReadyCommand(parsed: Record<string, unknown>): PrMarkReadyCommand | undefined {
+  if (
+    !isOwnerAndRepo(parsed.ownerAndRepo) ||
+    !isPrNumberString(parsed.prExternalId) ||
+    !isGitObjectId(parsed.headSha) ||
+    !isGitObjectId(parsed.baseSha) ||
+    !isReadinessDigest(parsed.readinessDigest)
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "pr-mark-ready",
+    ownerAndRepo: parsed.ownerAndRepo,
+    remoteDigest: codingWorkbenchRemoteDigest(parsed.ownerAndRepo),
+    prExternalId: parsed.prExternalId,
+    headSha: parsed.headSha,
+    baseSha: parsed.baseSha,
+    readinessDigest: parsed.readinessDigest,
+    currentDraftState: true,
+    transitionPayloadDigest: transitionPayloadDigest(parsed.ownerAndRepo, parsed.prExternalId),
+  };
+}
+
+function scanError(parsed: Record<string, unknown>): RouteResult | undefined {
+  if (scanForbiddenStrings(parsed)) {
+    return errResult(400, "GIT_DELIVERY_PR_MARK_READY_FORBIDDEN_PAYLOAD");
+  }
+  if (scanUnsafeFormatChars(parsed)) {
+    return errResult(400, "GIT_DELIVERY_PR_MARK_READY_BAD_REQUEST");
+  }
+  return undefined;
+}
+
+function validate(parsed: unknown): Validation {
+  const bad: Validation = {
+    kind: "err",
+    result: errResult(400, "GIT_DELIVERY_PR_MARK_READY_BAD_REQUEST"),
+  };
+  if (!isPlainObject(parsed) || !hasOnlyAllowedKeys(parsed, ALLOWED_KEYS)) return bad;
+  if (parsed.schemaVersion !== "1" || !isNonEmptyString(parsed.projectId)) return bad;
+  const scanErr = scanError(parsed);
+  if (scanErr !== undefined) return { kind: "err", result: scanErr };
+  const command = buildMarkReadyCommand(parsed);
+  const approval = parseGitDeliveryApprovalRequest(parsed.approval);
+  if (command === undefined || approval === undefined) return bad;
+  return { kind: "ok", value: { projectId: parsed.projectId, command, approval } };
+}
+
+// ─── Approval binding ───────────────────────────────────────────────────────────────────────────
+
+function markReadyApprovalBinding(
+  projectId: string,
+  command: PrMarkReadyCommand,
+  authority: GitDeliveryAuthorityIdentity,
+): GitDeliveryApprovalBinding {
+  return {
+    projectId,
+    operation: "pr-mark-ready",
+    command,
+    runId: authority.runId,
+    envelopeDigest: authority.envelopeDigest,
+  };
+}
+
+// ─── Options (test-only override seam, mirrors GitDeliveryPrRouteOptions) ─────────────────────
+
+export interface GitDeliveryPrMarkReadyRouteOptions {
+  readonly adapterFactory?:
+    ((workspace: WorkspaceInfo) => GitPullRequestMarkReadyAdapter) | undefined;
+  readonly approvalStore?: GitDeliveryApprovalStore | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
+  readonly now?: (() => number) | undefined;
+  readonly beforeRemoteDispatch?: (() => boolean) | undefined;
+}
+
+function markReadyAdapterFor(
+  workspace: WorkspaceInfo,
+  options: GitDeliveryPrMarkReadyRouteOptions,
+  correlationId: string | undefined,
+): GitPullRequestMarkReadyAdapter {
+  if (options.adapterFactory !== undefined) return options.adapterFactory(workspace);
+  return createNodeGitPullRequestAdapter({
+    workspace,
+    processEnv: process.env,
+    now: options.now ?? Date.now,
+    onTerminated: gitDeliveryTerminationHandler(options, correlationId),
+  });
+}
+
+// ─── Logging ────────────────────────────────────────────────────────────────────────────────────
+
+function log(
+  activityLog: ServerLogSink | undefined,
+  op: string,
+  correlationId: string,
+  status: number,
+  extra: Record<string, unknown>,
+): void {
+  (activityLog ?? processServerLogSink()).write({
+    category: "security",
+    op,
+    correlationId,
+    status,
+    extra,
+  });
+}
+
+// ─── Approve handler (mints the server-issued approval claim execute consumes) ────────────────────
+
+export interface GitDeliveryPrMarkReadyApproveResponseBody {
+  readonly schemaVersion: "1";
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAt: string;
+}
+
+export const createHandlePrMarkReadyApprove = (
+  options: GitDeliveryPrMarkReadyRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    const prepared = await prepareGitDeliveryRequest(
+      ctx,
+      deps,
+      MARK_READY_REQUEST_ERRORS,
+      validate,
+    );
+    if (!prepared.ok) return prepared.result;
+    const { workspace } = prepared;
+    const { projectId, command } = prepared.value;
+    const authority = gitDeliveryAuthorityGate(
+      ctx,
+      deps,
+      projectId,
+      workspace,
+      "pull-request",
+      {},
+      {
+        logSink: options.activityLog,
+      },
+    );
+    if (!authority.allowed) return authority.result;
+    const store = options.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;
+    const issued = store.issue({
+      binding: markReadyApprovalBinding(projectId, command, authority),
+      approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
+      nowMs: (options.now ?? Date.now)(),
+    });
+    log(options.activityLog, "git.delivery.pr-mark-ready.approval.minted", correlationId, 200, {
+      runId: authority.runId,
+      prExternalId: command.prExternalId,
+    });
+    const body: GitDeliveryPrMarkReadyApproveResponseBody = {
+      schemaVersion: "1",
+      approval: issued.approval,
+      expiresAt: new Date(issued.expiresAtMs).toISOString(),
+    };
+    return { status: 200, body: deps.redactor(body) };
+  };
+};
+
+// ─── Execute handler (governed) ───────────────────────────────────────────────────────────────
+
+export interface GitDeliveryPrMarkReadyExecuteResponseBody {
+  readonly schemaVersion: "1";
+  readonly actionKind: "pr-mark-ready";
+  readonly status: "succeeded" | "failed" | "aborted" | "approval-required";
+  readonly executionErrorCode?: string;
+  readonly rejectionReason?: string;
+}
+
+function markReadyExecuteResponse(
+  result: GitPrMarkReadyExecResult,
+): GitDeliveryPrMarkReadyExecuteResponseBody {
+  const base = { schemaVersion: "1" as const, actionKind: "pr-mark-ready" as const };
+  if (result.outcome === "succeeded") return { ...base, status: "succeeded" };
+  if (result.outcome === "aborted") return { ...base, status: "aborted" };
+  return {
+    ...base,
+    status: "failed",
+    ...(result.errorCode !== undefined ? { executionErrorCode: result.errorCode } : {}),
+    ...(result.rejectionReason !== undefined ? { rejectionReason: result.rejectionReason } : {}),
+  };
+}
+
+function markReadyApprovalRequiredBlock(deps: Pick<UiHandlerDeps, "redactor">): RouteResult {
+  return {
+    status: 200,
+    body: deps.redactor({
+      schemaVersion: "1",
+      status: "approval-required",
+      actionKind: "pr-mark-ready",
+    }),
+  };
+}
+
+interface GovernedMarkReadyDispatch {
+  readonly command: PrMarkReadyCommand;
+  readonly workspace: WorkspaceInfo;
+  readonly options: GitDeliveryPrMarkReadyRouteOptions;
+  readonly correlationId: string;
+  readonly continuityGuard: () => boolean;
+}
+
+// #3389 (AC3): the continuity guard runs immediately before the actual `gh` dispatch, mirroring the
+// generic PR/push/merge routes — a run whose authority was revoked or replaced between admission and
+// this attempt never reaches the adapter (F4: logged, never a real spawn).
+async function dispatchGovernedMarkReady(
+  input: GovernedMarkReadyDispatch,
+): Promise<GitPrMarkReadyExecResult> {
+  const { command, workspace, options, correlationId, continuityGuard } = input;
+  if (!continuityGuard()) {
+    logGitDeliveryNoSpawnRefusal(
+      options.activityLog ?? processServerLogSink(),
+      "pr-mark-ready",
+      correlationId,
+    );
+    return { schemaVersion: "1", outcome: "aborted", durationMs: 0 };
+  }
+  const adapter = markReadyAdapterFor(workspace, options, correlationId);
+  return adapter.markPullRequestReady({
+    ownerAndRepo: command.ownerAndRepo,
+    prExternalId: command.prExternalId,
+    expectedHeadSha: command.headSha,
+    expectedBaseSha: command.baseSha,
+  });
+}
+
+function logMarkReadyOutcome(
+  options: GitDeliveryPrMarkReadyRouteOptions,
+  correlationId: string,
+  command: PrMarkReadyCommand,
+  result: GitPrMarkReadyExecResult,
+): void {
+  const isDrift = result.outcome === "failed" && result.errorCode === "precondition-failed";
+  log(
+    options.activityLog,
+    isDrift ? "git.delivery.pr-mark-ready.drift" : "git.delivery.pr-mark-ready.executed",
+    correlationId,
+    200,
+    { prExternalId: command.prExternalId, outcome: result.outcome },
+  );
+}
+
+interface MarkReadyDispatchContext {
+  readonly projectId: string;
+  readonly workspace: WorkspaceInfo;
+  readonly command: PrMarkReadyCommand;
+  readonly authority: GitDeliveryAuthorityIdentity;
+  readonly options: GitDeliveryPrMarkReadyRouteOptions;
+  readonly correlationId: string;
+}
+
+// Builds the continuity guard, runs the governed dispatch, and projects the outcome to a RouteResult
+// — split out of the handler purely to keep it under the repo's max-lines-per-function bar.
+async function dispatchOrBlock(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  input: MarkReadyDispatchContext,
+): Promise<RouteResult> {
+  const { projectId, workspace, command, authority, options, correlationId } = input;
+  const denialCapture: GitDeliveryAuthorityContinuityDenialCapture = {};
+  const continuityGuard = gitDeliveryAuthorityContinuityGuard({
+    ctx,
+    deps,
+    projectId,
+    workspace,
+    operation: "pull-request",
+    admitted: authority,
+    next: options.beforeRemoteDispatch,
+    denialCapture,
+    audit: { logSink: options.activityLog },
+  });
+  try {
+    const result = await dispatchGovernedMarkReady({
+      command,
+      workspace,
+      options,
+      correlationId,
+      continuityGuard,
+    });
+    if (denialCapture.result !== undefined) return denialCapture.result;
+    logMarkReadyOutcome(options, correlationId, command, result);
+    return { status: 200, body: deps.redactor(markReadyExecuteResponse(result)) };
+  } catch {
+    return errResult(409, "GIT_DELIVERY_PR_MARK_READY_WORKTREE_UNAVAILABLE");
+  }
+}
+
+async function handleMarkReadyExecute(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  options: GitDeliveryPrMarkReadyRouteOptions,
+): Promise<RouteResult> {
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+  const prepared = await prepareGitDeliveryRequest(ctx, deps, MARK_READY_REQUEST_ERRORS, validate);
+  if (!prepared.ok) return prepared.result;
+  const { workspace } = prepared;
+  const { projectId, command, approval } = prepared.value;
+  const authority = gitDeliveryAuthorityGate(
+    ctx,
+    deps,
+    projectId,
+    workspace,
+    "pull-request",
+    {},
+    {
+      logSink: options.activityLog,
+    },
+  );
+  if (!authority.allowed) return authority.result;
+  const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
+    store: options.approvalStore,
+    binding: markReadyApprovalBinding(projectId, command, authority),
+    nowMs: (options.now ?? Date.now)(),
+  });
+  if (verifiedApproval === undefined)
+    return errResult(400, "GIT_DELIVERY_PR_MARK_READY_BAD_REQUEST");
+  if (!verifiedApproval.required) {
+    log(options.activityLog, "git.delivery.pr-mark-ready.approval.required", correlationId, 200, {
+      runId: authority.runId,
+      prExternalId: command.prExternalId,
+    });
+    return markReadyApprovalRequiredBlock(deps);
+  }
+  return dispatchOrBlock(ctx, deps, {
+    projectId,
+    workspace,
+    command,
+    authority,
+    options,
+    correlationId,
+  });
+}
+
+export const createHandlePrMarkReadyExecute = (
+  options: GitDeliveryPrMarkReadyRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  return (ctx, deps) => handleMarkReadyExecute(ctx, deps, options);
+};
+
+// ─── Route group ───────────────────────────────────────────────────────────────────────────────
+
+export const createGitDeliveryPrMarkReadyRouteGroup = (
+  options: GitDeliveryPrMarkReadyRouteOptions = {},
+): readonly RouteDefinition[] => [
+  {
+    method: "POST",
+    pattern: "/api/git-delivery/pr/mark-ready/approve",
+    handler: createHandlePrMarkReadyApprove(options),
+  },
+  {
+    method: "POST",
+    pattern: "/api/git-delivery/pr/mark-ready/execute",
+    handler: createHandlePrMarkReadyExecute(options),
+  },
+];
+
+export const GIT_DELIVERY_PR_MARK_READY_ROUTE_GROUP: readonly RouteDefinition[] =
+  createGitDeliveryPrMarkReadyRouteGroup();

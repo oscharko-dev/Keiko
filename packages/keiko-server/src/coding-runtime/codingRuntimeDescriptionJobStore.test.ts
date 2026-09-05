@@ -133,6 +133,57 @@ describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supers
     expect(admitted).toMatchObject({ kind: "dispatch" });
   });
 
+  // #3401 review finding 1: a budget-exhausted decision was never persisted, leaving the run
+  // permanently without a descriptionStatus. Before this test's fix, `recordBudgetExhausted` did
+  // not exist on the store at all — this call would fail to compile / throw "not a function".
+  it("makes a budget-exhausted decision visible as a blocked status", () => {
+    const store = openStore(1);
+    store.beginDispatch(scope({ runId: "run-1" }), NOW);
+    const blocked = store.beginDispatch(scope({ runId: "run-2" }), NOW);
+    expect(blocked).toEqual({ kind: "budget-exhausted" });
+
+    store.recordBudgetExhausted(scope({ runId: "run-2" }), NOW);
+
+    expect(store.current("run-2")).toEqual({
+      schemaVersion: "1",
+      runId: "run-2",
+      remoteDigest: REMOTE,
+      baseSha: BASE,
+      headSha: HEAD_1,
+      generationVersion: 1,
+      state: "blocked",
+      reason: "budget-exhausted",
+      snapshotDigest: null,
+      draftDigest: null,
+      artifactOutcome: null,
+      observedAt: NOW,
+    });
+  });
+
+  // #3401 review finding 2: the budget cap applied only to a brand-new run (`row === undefined`),
+  // so a repaired-head regeneration for an already-settled run bypassed it entirely. Before the
+  // fix this second `beginDispatch` returned `{ kind: "dispatch" }` even though the sole
+  // concurrent slot was already occupied by "run-2".
+  it("still applies the budget cap to a repaired head on an already-settled run", () => {
+    const store = openStore(1);
+    const first = store.beginDispatch(scope({ runId: "run-1" }), NOW);
+    if (first.kind !== "dispatch") throw new Error("expected a dispatch decision");
+    store.settle(
+      scope({ runId: "run-1" }),
+      first.generationVersion,
+      first.revision,
+      generatedStatus(scope({ runId: "run-1" }), first.generationVersion),
+      NOW,
+    );
+    // "run-2" now occupies the sole concurrent slot.
+    const second = store.beginDispatch(scope({ runId: "run-2" }), NOW);
+    expect(second).toMatchObject({ kind: "dispatch" });
+
+    // "run-1" is settled (not in flight), so its repaired head must still respect the cap.
+    const repaired = store.beginDispatch(scope({ runId: "run-1", headSha: HEAD_2 }), LATER);
+    expect(repaired).toEqual({ kind: "budget-exhausted" });
+  });
+
   it("records a closed blocked status without ever dispatching a generation attempt", () => {
     const store = openStore();
     const decision = store.beginDispatch(scope(), NOW);

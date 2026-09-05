@@ -23,6 +23,13 @@ import type {
   GitDeliveryDescriptionAuthorityPort,
   GitDeliveryDescriptionAuthorityScope,
 } from "./runBoundAuthority.js";
+import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
+import { CodingRuntimeAuthorityService } from "../coding-runtime/runtimeAuthorityService.js";
+import {
+  createCodingRuntimeControlPlane,
+  type CodingRuntimeHost,
+} from "../coding-runtime/codingRuntimeControlPlane.js";
+import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
 import {
   clearPrDescriptionServiceCache,
   createGitDeliveryPrDescriptionRouteGroup,
@@ -102,6 +109,42 @@ function body(overrides: Record<string, unknown> = {}): Record<string, unknown> 
     ownerAndRepo: "owner/repo",
     prNumber: 123,
     ...overrides,
+  };
+}
+
+// Minimal server-owned lifecycle surface for a `CodingRuntimeControlPlane` composition test that
+// never exercises the manager/launch resolver itself — only `gitDeliveryDescriptionAuthority`'s
+// threading through `createCodingRuntimeControlPlane` matters here (the manager/lifecycle wiring
+// is proven by codingRuntimeControlPlane.test.ts's own fixtures).
+function unqualifiedControlPlaneRuntimeHost(
+  gitDeliveryDescriptionAuthority: CodingRuntimeHost["gitDeliveryDescriptionAuthority"],
+): CodingRuntimeHost {
+  const stopped = (): ReturnType<
+    ReturnType<CodingRuntimeHost["createManager"]>["stop"]
+  > => Promise.resolve({ ok: false, failureCode: "runtime-run-mismatch", retryable: false });
+  return {
+    createManager: () => ({
+      start: () => ({ ok: false, failureCode: "runtime-unqualified", retryable: false }),
+      issueApproval: () => ({ ok: false, failureCode: "runtime-stopped", retryable: false }),
+      pause: () => ({ ok: false, failureCode: "runtime-run-mismatch", retryable: false }),
+      resume: () => ({ ok: false, failureCode: "runtime-run-mismatch", retryable: false }),
+      stop: stopped,
+      takeover: stopped,
+      reconcile: stopped,
+      health: () => ({ status: "stopped" }),
+      pendingApprovalReview: () => undefined,
+      result: () => undefined,
+    }),
+    launchResolver: {
+      resolve: (): never => {
+        throw new Error("not exercised by this test");
+      },
+    },
+    approvalAuthority: {
+      issue: () => ({ ok: false, failureCode: "runtime-stopped", retryable: false }),
+    },
+    cancellationRegistry: { signalFor: () => undefined },
+    gitDeliveryDescriptionAuthority,
   };
 }
 
@@ -196,6 +239,79 @@ describe("pr-description routes — admission (#3399)", () => {
       deps({ gitDeliveryAuthority: undefined, gitDeliveryDescriptionAuthority: port }),
     );
     expect(res.status).toBe(403);
+  });
+
+  // #3399 (epic #3384 correction 4): a production-composition test spanning the FULL chain a live
+  // server actually uses — mints through a real `CodingRuntimeAuthorityService`, threads the port
+  // through a real `createCodingRuntimeControlPlane` (never a hand-rolled port passed straight into
+  // `deps`, since that would prove nothing about the wiring in `codingRuntimeControlPlane.ts` /
+  // `productionCodingRuntimeHost.ts` / `productionCodingRuntimeResolver.ts` this change adds), and
+  // only then reaches `deps.gitDeliveryDescriptionAuthority`. Before this change,
+  // `CodingRuntimeControlPlane` exposed no `gitDeliveryDescriptionAuthority` field at all: the value
+  // handed to `deps` below would be `undefined`, and every apply from a Chat/post-terminal caller
+  // with no running run answered `GIT_DELIVERY_AUTHORITY_DENIED` (403) rather than admitting.
+  it("admits a full preview -> approve -> apply round trip through the REAL composed control-plane chain", async () => {
+    const authority = new CodingRuntimeAuthorityService(new EditorAgentAuthorityRegistry());
+    const snapshotDigest = "e".repeat(64);
+    const scope: GitDeliveryDescriptionAuthorityScope = {
+      remoteDigest: codingWorkbenchRemoteDigest("owner/repo"),
+      pr: { ownerAndRepo: "owner/repo", prNumber: 123 },
+      snapshotDigest,
+    };
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope,
+      requestedMode: "supervised-coding",
+      deploymentCeiling: "autonomous-delivery",
+      nowIso: new Date().toISOString(),
+    });
+    const controlPlane = createCodingRuntimeControlPlane({
+      snapshots: {
+        create: vi.fn(),
+        recordVerifiedCommit: vi.fn(),
+        recordDraftDelivery: vi.fn(),
+        adoptDraftDeliveryFromPredecessor: vi.fn(),
+        transition: vi.fn(),
+        get: vi.fn(),
+        listRecentActive: vi.fn(() => []),
+        listAll: vi.fn(() => []),
+        markNonterminalRecoveryRequired: vi.fn(() => []),
+        acknowledgeRecovery: vi.fn(),
+        releaseRecoveryForRetry: vi.fn(),
+        delete: vi.fn(),
+        listPrunableSettled: vi.fn(() => []),
+        deletePruned: vi.fn(),
+      },
+      evidence: { observe: vi.fn(), settle: vi.fn(), deletePruned: vi.fn() },
+      workspaceLifecycle: { getActive: () => undefined } as never,
+      serverPrincipal: () => "local-operator",
+      runtimeHost: unqualifiedControlPlaneRuntimeHost(
+        authority.gitDeliveryDescriptionAuthorityPort(),
+      ),
+    });
+    const noRun = deps({
+      gitDeliveryAuthority: undefined,
+      gitDeliveryDescriptionAuthority: controlPlane.gitDeliveryDescriptionAuthority,
+    });
+    const previewHandler = createHandlePrDescriptionPreview(optionsWithFixtureService());
+    const approveHandler = createHandlePrDescriptionApprove(optionsWithFixtureService());
+    const applyHandler = createHandlePrDescriptionApply(optionsWithFixtureService());
+
+    const previewRes = await previewHandler(
+      ctxFor(PREVIEW, body({ language: "en", snapshotDigest })),
+      noRun,
+    );
+    expect(previewRes.status).toBe(200);
+    const proposalId = (previewRes.body as { preview: { proposalId: string } }).preview.proposalId;
+
+    const approveRes = await approveHandler(
+      ctxFor(APPROVE, body({ proposalId, snapshotDigest })),
+      noRun,
+    );
+    expect(approveRes.status).toBe(200);
+
+    const applyRes = await applyHandler(ctxFor(APPLY, body({ proposalId, snapshotDigest })), noRun);
+    expect(applyRes.status).toBe(200);
+    expect((applyRes.body as { outcome: string }).outcome).toBe("observed");
   });
 });
 

@@ -7,6 +7,7 @@
 import type {
   BffError,
   ChatConnectedScope,
+  ChatGitChangeScope,
   ChatLocalKnowledgeScope,
   ChatResponse,
   ChatsResponse,
@@ -1141,6 +1142,8 @@ export interface UpdateChatInput {
   connectedScopes?: readonly ChatConnectedScope[] | null;
   localKnowledgeScope?: ChatLocalKnowledgeScope | null;
   localKnowledgeScopes?: readonly ChatLocalKnowledgeScope[] | null;
+  // Issue #3400 — the third, sibling Git-change scope list. No legacy single-source field.
+  gitChangeScopes?: readonly ChatGitChangeScope[] | null;
 }
 
 export async function updateChat(id: string, patch: UpdateChatInput): Promise<ChatResponse> {
@@ -1184,6 +1187,20 @@ export async function updateChatLocalKnowledgeScopes(
   return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
     method: "PATCH",
     body: JSON.stringify({ localKnowledgeScopes: scopes }),
+  });
+}
+
+// Issue #3400 — disconnects a git-change scope by removing it from the chat's list (or clearing
+// the field entirely with `null`). Every entry is server-issued (see connectGitChangeToChat /
+// refreshGitChangeScope at the end of this file); this helper never accepts browser-authored
+// scope content, only the resulting list to persist.
+export async function updateChatGitChangeScopes(
+  chatId: string,
+  scopes: readonly ChatGitChangeScope[] | null,
+): Promise<ChatResponse> {
+  return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ gitChangeScopes: scopes }),
   });
 }
 
@@ -3601,5 +3618,170 @@ export async function updateGitHubIssueReaderAuthorization(
       ...(signal === undefined ? {} : { signal }),
     },
     validateGitHubIssueReaderAuthorization,
+  );
+}
+
+// ─── Issue #3400 — Git-to-Chat connect/refresh (server-resolved comparison, never a browser root)
+
+const GIT_CHANGE_BLOCKED_REASONS: ReadonlySet<string> = new Set([
+  "detached-head",
+  "unborn-head",
+  "missing-ref",
+  "no-pull-request",
+  "ambiguous-pull-request",
+  "reader-unauthorized",
+  "remote-unresolved",
+  "repository-unavailable",
+  "snapshot-unavailable",
+  "snapshot-failed",
+  "chat-project-unavailable",
+]);
+
+export type GitChangeBlockedReason =
+  | "detached-head"
+  | "unborn-head"
+  | "missing-ref"
+  | "no-pull-request"
+  | "ambiguous-pull-request"
+  | "reader-unauthorized"
+  | "remote-unresolved"
+  | "repository-unavailable"
+  | "snapshot-unavailable"
+  | "snapshot-failed"
+  | "chat-project-unavailable";
+
+export type GitChangeConnectResponse =
+  | { readonly status: "connected"; readonly scope: ChatGitChangeScope }
+  | { readonly status: "blocked"; readonly reason: GitChangeBlockedReason };
+
+export type GitChangeRefreshResponse =
+  | { readonly status: "current"; readonly scope: ChatGitChangeScope }
+  | { readonly status: "stale"; readonly scope: ChatGitChangeScope }
+  | { readonly status: "blocked"; readonly reason: GitChangeBlockedReason };
+
+const GIT_COMMIT_SHA_HEX = /^[0-9a-f]{40}$/u;
+
+function isSha256Hex(value: unknown): value is string {
+  return typeof value === "string" && SHA256_HEX.test(value);
+}
+
+function isGitCommitShaHex(value: unknown): value is string {
+  return typeof value === "string" && GIT_COMMIT_SHA_HEX.test(value);
+}
+
+function hasChatGitChangeScopeTextFields(value: Record<string, unknown>): boolean {
+  return (
+    isBoundedText(value.relationshipId, 256) &&
+    isSha256Hex(value.remoteDigest) &&
+    isBoundedText(value.comparisonLabel, 240) &&
+    isBoundedText(value.baseRef, 512) &&
+    isBoundedText(value.headRef, 512) &&
+    isGitCommitShaHex(value.baseSha) &&
+    isGitCommitShaHex(value.headSha) &&
+    isGitCommitShaHex(value.mergeBaseSha) &&
+    isSha256Hex(value.snapshotDigest) &&
+    isBoundedText(value.descriptionStatus, 16)
+  );
+}
+
+function hasChatGitChangeScopeCountFields(value: Record<string, unknown>): boolean {
+  return (
+    Number.isSafeInteger(value.fileCount) &&
+    Number.isSafeInteger(value.totalFiles) &&
+    Number.isSafeInteger(value.omittedFiles) &&
+    Number.isSafeInteger(value.truncatedFiles) &&
+    Number.isSafeInteger(value.connectedAtMs)
+  );
+}
+
+function isChatGitChangeScope(value: unknown): value is ChatGitChangeScope {
+  if (!isRecordValue(value) || value.kind !== "git-change") return false;
+  return hasChatGitChangeScopeTextFields(value) && hasChatGitChangeScopeCountFields(value);
+}
+
+function validateGitChangeConnectResponse(value: unknown): GitRepositoryValidation {
+  if (!isRecordValue(value)) return { ok: false, reasons: ["response must be an object"] };
+  if (value.status === "blocked") {
+    return GIT_CHANGE_BLOCKED_REASONS.has(value.reason as string)
+      ? { ok: true }
+      : { ok: false, reasons: ["response.reason is not a known blocked reason"] };
+  }
+  if (value.status === "connected" && isChatGitChangeScope(value.scope)) {
+    return { ok: true };
+  }
+  return { ok: false, reasons: ["response does not match GitChangeConnectResponse"] };
+}
+
+function validateGitChangeRefreshResponse(value: unknown): GitRepositoryValidation {
+  if (!isRecordValue(value)) return { ok: false, reasons: ["response must be an object"] };
+  if (value.status === "blocked") {
+    return GIT_CHANGE_BLOCKED_REASONS.has(value.reason as string)
+      ? { ok: true }
+      : { ok: false, reasons: ["response.reason is not a known blocked reason"] };
+  }
+  if (
+    (value.status === "current" || value.status === "stale") &&
+    isChatGitChangeScope(value.scope)
+  ) {
+    return { ok: true };
+  }
+  return { ok: false, reasons: ["response does not match GitChangeRefreshResponse"] };
+}
+
+export interface ConnectGitChangeComparisonInput {
+  readonly chatId: string;
+  readonly mode: "comparison";
+  readonly headRef: string;
+  readonly baseRef: string;
+}
+
+export interface ConnectGitChangePullRequestInput {
+  readonly chatId: string;
+  readonly mode: "pull-request";
+  readonly headRef: string;
+}
+
+export type ConnectGitChangeInput =
+  ConnectGitChangeComparisonInput | ConnectGitChangePullRequestInput;
+
+/**
+ * Connects the Git window's selected comparison (an exact local base/head, or one open
+ * same-repository pull request) to a Chat. The browser sends only the chat id and a ref/mode
+ * selection — the server resolves the trusted repository, captures the immutable snapshot and
+ * records the relationship; the response carries only server-issued facts.
+ */
+export async function connectGitChangeToChat(
+  input: ConnectGitChangeInput,
+  signal?: AbortSignal,
+): Promise<GitChangeConnectResponse> {
+  return fetchJson(
+    "/api/git-change/connect",
+    {
+      method: "POST",
+      body: JSON.stringify({ schemaVersion: "1", ...input }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    validateGitChangeConnectResponse,
+  );
+}
+
+/**
+ * Re-checks a connected git-change scope against the live repository. `reads-context` is
+ * immutable and non-reconnectable, so a drifted comparison archives the existing relationship and
+ * creates a new one server-side; the chat's scope list is updated in the same call.
+ */
+export async function refreshGitChangeScope(
+  chatId: string,
+  relationshipId: string,
+  signal?: AbortSignal,
+): Promise<GitChangeRefreshResponse> {
+  return fetchJson(
+    "/api/git-change/refresh",
+    {
+      method: "POST",
+      body: JSON.stringify({ schemaVersion: "1", chatId, relationshipId }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    validateGitChangeRefreshResponse,
   );
 }

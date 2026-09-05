@@ -204,33 +204,34 @@ function unavailablePermissionPort(): CodingRuntimePermissionPort {
   return { resolve: () => Promise.resolve(false) };
 }
 
+// Every one of these is an OPTIONAL pass-through: present on `CodingRuntimeHost` only when the
+// production composition supplied it, forwarded onto `CodingRuntimeControlPlane` unchanged. A
+// per-field ternary here would grow this function's cyclomatic complexity by one per capability
+// (AGENTS.md §6's complexity <=10 ceiling), so the ONE decision — "was it supplied?" — is a single
+// loop over the closed key list instead of N branches.
+const RUNTIME_HOST_CAPABILITY_KEYS = [
+  "cancellationRegistry",
+  "runtimeCapabilityAuthenticator",
+  "gitDeliveryAuthority",
+  "gitDeliveryDescriptionAuthority",
+  "openCodeGatewayReadinessRegistry",
+] as const;
+
+type RuntimeHostCapabilities = Pick<
+  CodingRuntimeControlPlane,
+  (typeof RUNTIME_HOST_CAPABILITY_KEYS)[number]
+>;
+
 function runtimeHostCapabilities(
   runtimeHost: CodingRuntimeHost | undefined,
-): Pick<
-  CodingRuntimeControlPlane,
-  | "cancellationRegistry"
-  | "runtimeCapabilityAuthenticator"
-  | "gitDeliveryAuthority"
-  | "gitDeliveryDescriptionAuthority"
-  | "openCodeGatewayReadinessRegistry"
-> {
-  return {
-    ...(runtimeHost?.cancellationRegistry
-      ? { cancellationRegistry: runtimeHost.cancellationRegistry }
-      : {}),
-    ...(runtimeHost?.runtimeCapabilityAuthenticator
-      ? { runtimeCapabilityAuthenticator: runtimeHost.runtimeCapabilityAuthenticator }
-      : {}),
-    ...(runtimeHost?.gitDeliveryAuthority
-      ? { gitDeliveryAuthority: runtimeHost.gitDeliveryAuthority }
-      : {}),
-    ...(runtimeHost?.gitDeliveryDescriptionAuthority
-      ? { gitDeliveryDescriptionAuthority: runtimeHost.gitDeliveryDescriptionAuthority }
-      : {}),
-    ...(runtimeHost?.openCodeGatewayReadinessRegistry
-      ? { openCodeGatewayReadinessRegistry: runtimeHost.openCodeGatewayReadinessRegistry }
-      : {}),
-  };
+): RuntimeHostCapabilities {
+  const capabilities: Partial<RuntimeHostCapabilities> = {};
+  if (runtimeHost === undefined) return capabilities;
+  for (const key of RUNTIME_HOST_CAPABILITY_KEYS) {
+    const value = runtimeHost[key];
+    if (value !== undefined) Object.assign(capabilities, { [key]: value });
+  }
+  return capabilities;
 }
 
 function unavailableLaunchResolver(): CodingRuntimeLaunchResolver {

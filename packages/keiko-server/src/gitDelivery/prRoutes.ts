@@ -54,9 +54,16 @@ import {
   type GitDeliveryPullRequestSeams,
 } from "./prExecution.js";
 import {
+  createHandlePrMarkReadyApprove,
+  createHandlePrMarkReadyExecute,
+  type GitDeliveryPrMarkReadyRouteOptions,
+} from "./prMarkReadyExecution.js";
+import {
   hasOnlyAllowedKeys,
   isNonEmptyString,
+  isOwnerAndRepo,
   isPlainObject,
+  isPrNumberString,
   isSafeGitRef,
   scanForbiddenStrings,
   scanUnsafeFormatChars,
@@ -104,15 +111,11 @@ const PR_REQUEST_ERRORS: GitDeliveryRequestErrors = {
 
 export interface GitDeliveryPrRouteOptions {
   readonly execution?: GitDeliveryPullRequestSeams;
-}
-
-const OWNER_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
-const PR_NUMBER_RE = /^[1-9]\d{0,9}$/;
-
-// Exported so prMarkReadyExecution.ts (#3389) validates the same "owner/repo" and PR-number shapes
-// rather than restating the patterns — one implementation, shared by every PR-lifecycle route.
-export function isOwnerAndRepo(value: unknown): value is string {
-  return typeof value === "string" && OWNER_REPO_RE.test(value);
+  // #3389: the mark-ready mint/execute routes are mounted alongside create/update/preview on this
+  // same route group (routes.ts imports the GIT_DELIVERY_PR_ROUTE_GROUP const, never a second group)
+  // — this seam lets tests inject a fake mark-ready adapter/approval-store independently of the
+  // generic PR execution seams above.
+  readonly markReady?: GitDeliveryPrMarkReadyRouteOptions;
 }
 
 const ALLOWED_KEYS: ReadonlySet<string> = new Set([
@@ -182,10 +185,6 @@ function buildCreateCommand(parsed: Record<string, unknown>): GitPullRequestComm
     body: parsed.body,
     isDraft,
   };
-}
-
-export function isPrNumberString(value: unknown): value is string {
-  return typeof value === "string" && PR_NUMBER_RE.test(value);
 }
 
 // Narrowing guard: when true, the shared string operands are all valid strings on `parsed`.
@@ -555,6 +554,16 @@ export const createGitDeliveryPrRouteGroup = (
     method: "POST",
     pattern: "/api/git-delivery/pr/execute",
     handler: createHandlePrExecute(options),
+  },
+  {
+    method: "POST",
+    pattern: "/api/git-delivery/pr/mark-ready/approve",
+    handler: createHandlePrMarkReadyApprove(options.markReady),
+  },
+  {
+    method: "POST",
+    pattern: "/api/git-delivery/pr/mark-ready/execute",
+    handler: createHandlePrMarkReadyExecute(options.markReady),
   },
 ];
 

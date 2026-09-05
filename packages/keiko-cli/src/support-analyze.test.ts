@@ -1719,16 +1719,16 @@ describe("issueToPrJourney — epic #3384 reconstruction", () => {
 
     it("carries the journey in the human rendering and the seed's warnings never flag it as missing or unverified", () => {
       const seed = buildReproductionSeed(TEXT, CORRELATION_ID, GENERATED, OPTIONS);
-      expect(seed).toBeDefined();
+      if (seed === undefined) throw new Error("expected a seed for a known correlationId");
 
-      const rendered = renderHumanReproductionSeed(seed as ReproductionSeed);
+      const rendered = renderHumanReproductionSeed(seed);
 
       expect(rendered).toContain("issueToPrJourney:");
-      expect(seed?.warnings.some((warning) => warning.includes("no redaction verifier"))).toBe(
+      expect(seed.warnings.some((warning) => warning.includes("no redaction verifier"))).toBe(
         false,
       );
       expect(
-        seed?.warnings.some((warning) => warning.includes("issue-to-PR journey evidence")),
+        seed.warnings.some((warning) => warning.includes("issue-to-PR journey evidence")),
       ).toBe(false);
     });
   });
@@ -1813,7 +1813,11 @@ describe("issueToPrJourney — epic #3384 reconstruction", () => {
         errorKind: "WORKSPACE_UNAVAILABLE",
       });
       expect(steps[3]).toMatchObject({ phase: "push", op: "git.delivery.dispatch.no-spawn" });
-      expect(steps[4]).toMatchObject({ phase: "readiness", status: "unknown", errorKind: "internal" });
+      expect(steps[4]).toMatchObject({
+        phase: "readiness",
+        status: "unknown",
+        errorKind: "internal",
+      });
       expect(steps[5]).toMatchObject({
         phase: "description",
         status: "blocked",
@@ -1888,8 +1892,15 @@ describe("issueToPrJourney — epic #3384 reconstruction", () => {
         true,
       );
 
-      const rendered = renderHumanReproductionSeed(seed as ReproductionSeed);
-      expect(JSON.stringify(seed)).not.toContain(leakedTitle);
+      // Scoped to `issueToPrJourney` — this reconstruction's own surface — not the whole seed:
+      // `seed.timeline` is a faithful transcript of whatever the log actually said (trusting the
+      // activity-log SINK's own redaction at write time, exactly like every other line in this
+      // file's timelines), so a line hand-constructed to simulate a hostile/corrupted log still
+      // carries the raw field there. `issueToPrJourney` is the one surface this feature adds that
+      // re-verifies before rendering, and it is what must never carry the leaked text.
+      if (seed === undefined) throw new Error("expected a seed for a known correlationId");
+      const rendered = renderHumanReproductionSeed(seed);
+      expect(JSON.stringify(seed.issueToPrJourney)).not.toContain(leakedTitle);
       expect(rendered).not.toContain(leakedTitle);
     });
   });
@@ -1901,8 +1912,8 @@ describe("issueToPrJourney — epic #3384 reconstruction", () => {
     const seed = buildReproductionSeed(text, correlationId, GENERATED, OPTIONS);
 
     expect(seed?.issueToPrJourney).toBeUndefined();
-    expect(
-      seed?.warnings.some((warning) => warning.includes("issue-to-PR journey evidence")),
-    ).toBe(true);
+    expect(seed?.warnings.some((warning) => warning.includes("issue-to-PR journey evidence"))).toBe(
+      true,
+    );
   });
 });

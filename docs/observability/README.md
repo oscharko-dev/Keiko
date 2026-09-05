@@ -133,6 +133,24 @@ It is never dropped or misordered; it is ordered by its own file position, count
 that warning as an instruction to read the file position ordering with less confidence for those
 specific lines, not as a defect.
 
+Epic #3384's repository-delivery journey (intake, mutation authority, verified commit, push, draft
+PR, CI readiness, description generation/apply, and the recorded journey outcome) reconstructs on
+the same per-correlation timeline as every other operation — `git.delivery.*`,
+`git.pr-description`/`git.pr-description.receipt`, `git.journey-observation`/
+`git.journey-outcome.recorded`, `coding-context.github*` and `git-change.chat.*` lines simply
+appear on it like any other line, and `--clusters` groups them the same way. `keiko support
+analyze --seed --correlation-id <id>` additionally assembles an `issueToPrJourney` view onto the
+`ReproductionSeed`: one step per recognised line, tagged with a closed `phase`
+(`intake`/`authority`/`commit`/`push`/`pr`/`readiness`/`description`/`outcome`) and carrying the
+emitter's own `status`/`reason` and the digest/id fields (`runId`, `headSha`, `evidenceRef`,
+`snapshotDigest`, …) a replay needs — every value copied verbatim off the producer's own
+closed-vocabulary `extra`, never invented. Each step's fields are read back through the SAME
+`redactLogFields` choke point the activity-log sink itself writes through; a line whose `extra`
+carries a body-bearing value under an otherwise-innocuous name is reported by field name under that
+step's `redactionViolations` and withheld from the seed instead of rendered, and a `redactionVerified:
+false` step (no redactor supplied) carries no content fields at all rather than trusting an
+unverified line.
+
 ## See also
 
 - [ADR-0173](../adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md) — the full

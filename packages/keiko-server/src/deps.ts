@@ -4196,6 +4196,34 @@ interface CodingRuntimeControlPlaneDeps {
   openCodeGatewayReadinessRegistry?: UiHandlerDeps["openCodeGatewayReadinessRegistry"];
 }
 
+// Same-named pass-throughs from `CodingRuntimeControlPlane` onto `CodingRuntimeControlPlaneDeps`:
+// present only when the production runtime host supplied them. A per-field ternary here would
+// grow `buildCodingRuntimeControlPlaneDeps`'s cyclomatic complexity by one per capability
+// (AGENTS.md §6's complexity <=10 ceiling), so the ONE decision — "was it supplied?" — is a single
+// loop over the closed key list instead of N branches.
+const CODING_RUNTIME_CONTROL_PLANE_PASSTHROUGH_KEYS = [
+  "runtimeCapabilityAuthenticator",
+  "gitDeliveryAuthority",
+  "gitDeliveryDescriptionAuthority",
+  "openCodeGatewayReadinessRegistry",
+] as const;
+
+type CodingRuntimeControlPlanePassthroughDeps = Pick<
+  CodingRuntimeControlPlaneDeps,
+  (typeof CODING_RUNTIME_CONTROL_PLANE_PASSTHROUGH_KEYS)[number]
+>;
+
+function codingRuntimeControlPlanePassthroughDeps(
+  controlPlane: ReturnType<typeof createCodingRuntimeControlPlane>,
+): CodingRuntimeControlPlanePassthroughDeps {
+  const deps: Partial<CodingRuntimeControlPlanePassthroughDeps> = {};
+  for (const key of CODING_RUNTIME_CONTROL_PLANE_PASSTHROUGH_KEYS) {
+    const value = controlPlane[key];
+    if (value !== undefined) Object.assign(deps, { [key]: value });
+  }
+  return deps;
+}
+
 function buildCodingRuntimeControlPlaneDeps(
   controlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
   unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined,
@@ -4217,20 +4245,7 @@ function buildCodingRuntimeControlPlaneDeps(
           codingSidecarGatewayCancellationRegistry: controlPlane.cancellationRegistry,
         }
       : {}),
-    ...(controlPlane.runtimeCapabilityAuthenticator !== undefined
-      ? { runtimeCapabilityAuthenticator: controlPlane.runtimeCapabilityAuthenticator }
-      : {}),
-    ...(controlPlane.gitDeliveryAuthority !== undefined
-      ? { gitDeliveryAuthority: controlPlane.gitDeliveryAuthority }
-      : {}),
-    ...(controlPlane.gitDeliveryDescriptionAuthority !== undefined
-      ? { gitDeliveryDescriptionAuthority: controlPlane.gitDeliveryDescriptionAuthority }
-      : {}),
-    ...(controlPlane.openCodeGatewayReadinessRegistry !== undefined
-      ? {
-          openCodeGatewayReadinessRegistry: controlPlane.openCodeGatewayReadinessRegistry,
-        }
-      : {}),
+    ...codingRuntimeControlPlanePassthroughDeps(controlPlane),
   };
 }
 

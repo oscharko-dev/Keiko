@@ -95,6 +95,8 @@ import {
   fetchGitHubIssueReaderAuthorization,
   updateGitHubIssueReaderAuthorization,
   fetchCodingWorkbenchJourneyRefresh,
+  connectGitChangeToChat,
+  refreshGitChangeScope,
   type GitHubIssuePreviewResponseWire,
 } from "./api";
 import {
@@ -3532,5 +3534,132 @@ describe("Coding Workbench journey observation API (#3389)", () => {
       code: "CONTRACT_VALIDATION_FAILED",
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// Issue #3400 (epic #3384) — connect/refresh clients. The browser sends only a chat id and a
+// ref/mode selection; the server resolves the trusted repository and returns only server-issued
+// facts. These tests pin the request shape and the response-validation fail-closed behavior.
+describe("Git-to-Chat connect/refresh API (#3400)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function jsonOk(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  function gitChangeScopeFixture(): Record<string, unknown> {
+    return {
+      kind: "git-change",
+      relationshipId: "rel-1",
+      remoteDigest: "d".repeat(64),
+      comparisonLabel: "main...feature/x",
+      baseRef: "main",
+      headRef: "feature/x",
+      baseSha: "a".repeat(40),
+      headSha: "b".repeat(40),
+      mergeBaseSha: "c".repeat(40),
+      snapshotDigest: "e".repeat(64),
+      fileCount: 1,
+      totalFiles: 1,
+      omittedFiles: 0,
+      truncatedFiles: 0,
+      descriptionStatus: "current",
+      connectedAtMs: 10,
+    };
+  }
+
+  it("posts the exact comparison request and returns the validated connected scope", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonOk({ status: "connected", scope: gitChangeScopeFixture() }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await connectGitChangeToChat({
+      chatId: "chat-1",
+      mode: "comparison",
+      headRef: "feature/x",
+      baseRef: "main",
+    });
+
+    expect(result).toEqual({ status: "connected", scope: gitChangeScopeFixture() });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-change/connect");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({
+      schemaVersion: "1",
+      chatId: "chat-1",
+      mode: "comparison",
+      headRef: "feature/x",
+      baseRef: "main",
+    });
+  });
+
+  it("returns a blocked result for a known closed reason without throwing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonOk({ status: "blocked", reason: "detached-head" })),
+    );
+
+    const result = await connectGitChangeToChat({
+      chatId: "chat-1",
+      mode: "comparison",
+      headRef: "feature/x",
+      baseRef: "main",
+    });
+
+    expect(result).toEqual({ status: "blocked", reason: "detached-head" });
+  });
+
+  it("rejects a response claiming an unknown blocked reason", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonOk({ status: "blocked", reason: "not-a-real-reason" })),
+    );
+
+    await expect(
+      connectGitChangeToChat({
+        chatId: "chat-1",
+        mode: "pull-request",
+        headRef: "feature/x",
+      }),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED" });
+  });
+
+  it("rejects a connected response whose scope is malformed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonOk({
+          status: "connected",
+          scope: { ...gitChangeScopeFixture(), remoteDigest: "not-a-digest" },
+        }),
+      ),
+    );
+
+    await expect(
+      connectGitChangeToChat({ chatId: "chat-1", mode: "pull-request", headRef: "feature/x" }),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED" });
+  });
+
+  it("posts the refresh request with only chatId and relationshipId", async () => {
+    const staleScope = { ...gitChangeScopeFixture(), descriptionStatus: "stale" };
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk({ status: "stale", scope: staleScope }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await refreshGitChangeScope("chat-1", "rel-1");
+
+    expect(result).toEqual({ status: "stale", scope: staleScope });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-change/refresh");
+    expect(JSON.parse(init.body as string)).toEqual({
+      schemaVersion: "1",
+      chatId: "chat-1",
+      relationshipId: "rel-1",
+    });
   });
 });

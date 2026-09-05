@@ -280,7 +280,8 @@ function unqualifiedManager(): ReturnType<CodingRuntimeHost["createManager"]> {
     issueApproval: () => ({ ok: false, failureCode: "runtime-stopped", retryable: false }),
     pause: () => ({ ok: false, failureCode: "runtime-run-mismatch", retryable: false }),
     resume: () => ({ ok: false, failureCode: "runtime-run-mismatch", retryable: false }),
-    stop: () => Promise.resolve({ ok: false, failureCode: "runtime-run-mismatch", retryable: false }),
+    stop: () =>
+      Promise.resolve({ ok: false, failureCode: "runtime-run-mismatch", retryable: false }),
     takeover: () =>
       Promise.resolve({ ok: false, failureCode: "runtime-run-mismatch", retryable: false }),
     reconcile: () =>
