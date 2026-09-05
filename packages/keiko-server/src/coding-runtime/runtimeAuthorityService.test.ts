@@ -620,9 +620,10 @@ describe("CodingRuntimeAuthorityService", () => {
     if (!resolution.ok) throw new Error("expected narrowed resolution");
     // ADR-0138 D2: Ask for approval's workspace-contained/internet effects are approval-required,
     // never denied outright, so a narrowed authority retains "command-execution" (gated by
-    // commandPolicy.requirePerCommandApproval, not stripped) and the connector scopes an approved
-    // request would need (gated by commandAllowed/connectorAllowed's approvalVerified check, not
-    // by an empty scope list) -- see B3-1/authority-matrix-1/B3-2/authority-matrix-2.
+    // commandPolicy.requirePerCommandApproval, not stripped) and the authority-level connector
+    // scopes an approved request would need. The network policy itself stays deny-all with no
+    // scopes: the envelope contract forbids scopes on a deny-all policy, and an approved
+    // connector-scoped request is redeemed through its approval proof, not through the policy.
     expect(resolution.envelope.authority).toMatchObject({
       effectiveMode: "governed-assist",
       actionClasses: [
@@ -635,11 +636,7 @@ describe("CodingRuntimeAuthorityService", () => {
       ],
       connectorScopes: ["source-control.read", "source-control.write"],
       commandPolicy: { mode: "governed", requirePerCommandApproval: true },
-      networkPolicy: {
-        mode: "deny-all",
-        allowLoopback: false,
-        connectorScopes: ["source-control.read", "source-control.write"],
-      },
+      networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
     });
     expect(authority.gitDeliveryAuthorityPort().current(NOW)?.authority).toMatchObject({
       effectiveMode: "governed-assist",
@@ -653,11 +650,7 @@ describe("CodingRuntimeAuthorityService", () => {
       ],
       connectorScopes: ["source-control.read", "source-control.write"],
       commandPolicy: { mode: "governed", requirePerCommandApproval: true },
-      networkPolicy: {
-        mode: "deny-all",
-        allowLoopback: false,
-        connectorScopes: ["source-control.read", "source-control.write"],
-      },
+      networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
     });
   });
 
@@ -1608,26 +1601,25 @@ describe("codingRuntimeCommandPolicyForMode / codingRuntimeActionClassesForMode"
   });
 });
 
-// B3-2 / authority-matrix-2: a mode's networkPolicy.connectorScopes must mirror the same
-// deliveryScopeGranted posture codingRuntimeConnectorScopesForMode already uses for
-// authority.connectorScopes, so a connector-scoped read (git ci, "connector") has a real scope to
-// check once gated behind approval -- not an unconditionally empty array that fails closed
-// regardless of any approval proof.
+// B3-2 / authority-matrix-2: the authority-level connector scopes follow deliveryScopeGranted at
+// every mode (codingRuntimeConnectorScopesForMode), but the envelope contract
+// (validateNetworkPolicyConnectorScopesConsistency) forbids scopes on a deny-all network policy.
+// A deny-all mint therefore carries none; the policies that admit egress carry the delivery scopes.
 describe("codingRuntimeNetworkPolicyForMode", () => {
-  it("carries the delivery connector scopes at every mode, not only autonomous-delivery", () => {
+  it("carries the delivery connector scopes only on policies that admit egress", () => {
     expect(codingRuntimeNetworkPolicyForMode("governed-assist", undefined).connectorScopes).toEqual(
-      codingRuntimeConnectorScopesForMode("governed-assist"),
+      [],
     );
-    expect(codingRuntimeNetworkPolicyForMode("governed-assist", undefined).connectorScopes).toEqual(
-      ["source-control.read", "source-control.write"],
+    expect(
+      codingRuntimeNetworkPolicyForMode("supervised-coding", undefined).connectorScopes,
+    ).toEqual([]);
+    expect(codingRuntimeNetworkPolicyForMode("governed-assist", true).connectorScopes).toEqual(
+      codingRuntimeConnectorScopesForMode("governed-assist"),
     );
     expect(codingRuntimeNetworkPolicyForMode("governed-assist", true).connectorScopes).toEqual([
       "source-control.read",
       "source-control.write",
     ]);
-    expect(
-      codingRuntimeNetworkPolicyForMode("supervised-coding", undefined).connectorScopes,
-    ).toEqual(["source-control.read", "source-control.write"]);
     expect(
       codingRuntimeNetworkPolicyForMode("autonomous-delivery", undefined).connectorScopes,
     ).toEqual(["source-control.read", "source-control.write"]);

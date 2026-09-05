@@ -274,7 +274,13 @@ async function runGuardProbe(ctx: ReadContext, argv: readonly string[]): Promise
     onTerminated: ctx.runDeps.onTerminated,
   };
   return runCommand(
-    { command: "git", args: [...argv], cwd: undefined, timeoutMs: ctx.timeoutMs, signal: ctx.signal },
+    {
+      command: "git",
+      args: [...argv],
+      cwd: undefined,
+      timeoutMs: ctx.timeoutMs,
+      signal: ctx.signal,
+    },
     runDeps,
   );
 }

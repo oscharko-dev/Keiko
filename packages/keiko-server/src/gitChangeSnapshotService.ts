@@ -22,7 +22,11 @@ import {
   resolveGitMembership,
   comparablePath,
 } from "@oscharko-dev/keiko-git";
-import type { GitProcessOptions, GitProcessResult, GitProcessRunner } from "@oscharko-dev/keiko-git";
+import type {
+  GitProcessOptions,
+  GitProcessResult,
+  GitProcessRunner,
+} from "@oscharko-dev/keiko-git";
 import { gitLazyFetchGuardSupportedForVersion } from "@oscharko-dev/keiko-tools/internal/git-worktree-snapshot-node";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { AbortDeadlineRaceError, raceAbortDeadline } from "./abort-race.js";

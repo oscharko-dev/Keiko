@@ -166,7 +166,11 @@ describe("lazy-fetch guard: version-gated, fail-closed for an at-risk (promisor)
 
   it("refuses the read outright when the repository is a promisor clone and the installed git cannot enforce the guard", async () => {
     const spawn = recordingSpawn();
-    const pending = readGitRemoteAliases({ workspace: info, spawn: spawn.fn, now: () => Date.now() });
+    const pending = readGitRemoteAliases({
+      workspace: info,
+      spawn: spawn.fn,
+      now: () => Date.now(),
+    });
     answerPromisorProbe(spawn, true);
     await expect.poll(() => spawn.calls()).toHaveLength(2);
     // The version probe: git 2.43 — too old to enforce GIT_NO_LAZY_FETCH.
@@ -179,7 +183,11 @@ describe("lazy-fetch guard: version-gated, fail-closed for an at-risk (promisor)
 
   it("admits the read once the installed git is new enough to enforce the guard", async () => {
     const spawn = recordingSpawn();
-    const pending = readGitRemoteAliases({ workspace: info, spawn: spawn.fn, now: () => Date.now() });
+    const pending = readGitRemoteAliases({
+      workspace: info,
+      spawn: spawn.fn,
+      now: () => Date.now(),
+    });
     answerPromisorProbe(spawn, true);
     await expect.poll(() => spawn.calls()).toHaveLength(2);
     spawn.child.stdout.emit("data", Buffer.from("git version 2.45.0\n", "utf8"));
