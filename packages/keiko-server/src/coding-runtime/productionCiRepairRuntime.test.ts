@@ -3,10 +3,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import { isDraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
-import { createDraftRun, readySnapshot, AT, DIGEST } from "../gitDelivery/ciObservationTest/_support.js";
+import {
+  createDraftRun,
+  readySnapshot,
+  AT,
+  COMMIT,
+  DIGEST,
+} from "../gitDelivery/ciObservationTest/_support.js";
 import type { DraftDeliveryDependencies } from "../gitDelivery/draftDeliveryTypes.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { redactLogFields } from "../observability/log-redaction.js";
+import { createCodingRuntimeCiReadinessStore } from "./codingRuntimeCiReadinessStore.js";
 import { createCodingRuntimeCiRepairBudgetStore } from "./codingRuntimeCiRepairBudgetStore.js";
 import type {
   CodingRuntimeSnapshot,
@@ -376,8 +383,24 @@ describe("production CI repair accounting availability", () => {
   it("forwards a caller-supplied notifier so a repaired head observed CI-green regenerates the run's description", () => {
     const db = new DatabaseSync(":memory:");
     databases.push(db);
-    const snapshots = createDraftRun(db);
+    const rawSnapshots = createDraftRun(db);
     const events: ServerLogEvent[] = [];
+    const nowMs = Date.parse(AT);
+    // Both readiness and budget accounting need the SAME controlled clock `dependencies()`'s
+    // `execution.now` uses below -- `createDraftRun`'s own auto-attached stores stamp records
+    // with real wall-clock time, which would race `receiptWithinBudget`'s `now` window.
+    const readiness = createCodingRuntimeCiReadinessStore(db, rawSnapshots);
+    const repairBudgetStore = createCodingRuntimeCiRepairBudgetStore({
+      db,
+      snapshots: rawSnapshots,
+      now: () => nowMs,
+      activityLog: { write: (event): void => events.push(event) },
+    });
+    const snapshots: CodingRuntimeSnapshotStore = {
+      ...rawSnapshots,
+      ciReadiness: readiness,
+      ciRepairBudget: repairBudgetStore,
+    };
     const { deps, verified } = dependencies(snapshots, events);
     const initial = snapshots.get("run-1");
     if (initial === undefined) throw new Error("missing initial snapshot");
@@ -390,9 +413,7 @@ describe("production CI repair accounting availability", () => {
       reason: "required-checks-failed",
       requiredChecks: { total: 1, passed: 0, failed: 1, pending: 0, blocked: 0, unknown: 0 },
     };
-    expect(snapshots.ciReadiness?.complete(snapshots.ciReadiness.begin("run-1"), failedReadiness)).toBe(
-      true,
-    );
+    expect(readiness.complete(readiness.begin("run-1"), failedReadiness)).toBe(true);
     expect(budget?.admitTool(request)?.check()).toBe(true);
     // Simulate the CI-repair loop (#3388) pushing a new commit for the SAME draft PR: the draft
     // binding's head advances to a repaired commit before CI reports that repaired head green.
@@ -402,7 +423,10 @@ describe("production CI repair accounting availability", () => {
       .get("run-1") as { draft_delivery_record: string };
     const draft: unknown = JSON.parse(row.draft_delivery_record);
     if (!isDraftDeliveryRecord(draft)) throw new Error("expected a valid draft delivery record");
-    db.prepare("UPDATE coding_runtime_snapshots SET draft_delivery_record = ? WHERE run_id = ?").run(
+    const repairedCommit = JSON.stringify({ ...COMMIT, headSha: repairedHeadSha });
+    db.prepare(
+      "UPDATE coding_runtime_snapshots SET draft_delivery_record = ?, verified_commit_result = ?, draft_delivery_source_receipt = ? WHERE run_id = ?",
+    ).run(
       JSON.stringify({
         ...draft,
         binding: { ...draft.binding, headSha: repairedHeadSha },
@@ -411,13 +435,36 @@ describe("production CI repair accounting availability", () => {
             ? undefined
             : { ...draft.pullRequest, headSha: repairedHeadSha },
       }),
+      repairedCommit,
+      repairedCommit,
       "run-1",
     );
     const repaired: ReadinessSnapshot = { ...readySnapshot(), headSha: repairedHeadSha };
-    expect(snapshots.ciReadiness?.complete(snapshots.ciReadiness.begin("run-1"), repaired)).toBe(
-      true,
+    expect(readiness.complete(readiness.begin("run-1"), repaired)).toBe(true);
+    console.log(
+      "DEBUG readiness.get evidenceRef",
+      readiness.get("run-1")?.evidenceRef,
+      "repaired evidenceRef",
+      repaired.evidenceRef,
+      "repaired.state",
+      repaired.state,
     );
     budget?.observed(repaired);
+    console.log(
+      "DEBUG record after observed",
+      JSON.stringify(
+        repairBudgetStore.read({
+          runId: "run-1",
+          remoteDigest: DIGEST,
+          prNumber: 17,
+          correlationId: "run-1",
+          stillAuthorized: () => true,
+          limits: { maxRuntimeMs: 60000, maxToolCalls: 20, maxPromptTokens: 1000 },
+        }),
+        null,
+        2,
+      ),
+    );
     expect(notify).toHaveBeenCalledExactlyOnceWith("run-1");
   });
 });
