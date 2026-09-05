@@ -920,8 +920,8 @@ describe("CodingToolAuthorityPort", () => {
             reserve: () => {
               throw new Error("must not reserve when unavailable");
             },
-            commit: () => {},
-            release: () => {},
+            commit: () => undefined,
+            release: () => undefined,
           },
         },
       );

@@ -10,7 +10,10 @@ import { launchedEnv } from "./coding-issue-journey-server.mjs";
 
 describe("launchedEnv", () => {
   it("threads the resolved spend budget into the launched process env", () => {
-    const result = launchedEnv({ PATH: "/usr/bin", KEIKO_QUALIFICATION_SPEND_BUDGET_USD: "bogus" }, 25);
+    const result = launchedEnv(
+      { PATH: "/usr/bin", KEIKO_QUALIFICATION_SPEND_BUDGET_USD: "bogus" },
+      25,
+    );
     expect(result.KEIKO_QUALIFICATION_SPEND_BUDGET_USD).toBe("25");
     expect(result.PATH).toBe("/usr/bin");
   });

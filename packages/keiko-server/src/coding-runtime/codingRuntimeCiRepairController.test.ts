@@ -10,7 +10,11 @@ import {
 } from "../gitDelivery/ciObservationTest/_support.js";
 import { createCodingRuntimeCiReadinessStore } from "./codingRuntimeCiReadinessStore.js";
 import { createCodingRuntimeCiRepairBudgetStore } from "./codingRuntimeCiRepairBudgetStore.js";
-import type { CiRepairBudgetContext, CiRepairLimits } from "./codingRuntimeCiRepairBudgetTypes.js";
+import type {
+  CiRepairBudgetContext,
+  CiRepairBudgetRecord,
+  CiRepairLimits,
+} from "./codingRuntimeCiRepairBudgetTypes.js";
 import { CodingRuntimeCiRepairController } from "./codingRuntimeCiRepairController.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { redactLogFields } from "../observability/log-redaction.js";
@@ -75,6 +79,11 @@ function fixture(
     ...(notifyVerifiedHeadAdvanced === undefined ? {} : { notifyVerifiedHeadAdvanced }),
   });
   return { db, controller, context, store, readiness, clock, logs };
+}
+function firstAttempt(
+  test: Pick<ReturnType<typeof fixture>, "store" | "context">,
+): CiRepairBudgetRecord["attempts"][number] | undefined {
+  return test.store.read(test.context).record?.attempts[0];
 }
 const verify = (
   id: string,
@@ -398,32 +407,30 @@ describe("CI repair accounting around admitted model work", () => {
     const notify = vi.fn();
     const test = fixture({}, notify);
     const lease = test.controller.admitTool(verify("verify-1"));
-    const admitted = test.store.read(test.context).record;
-    const attemptId = admitted?.attempts[0]?.attemptId;
+    const attemptId = firstAttempt(test)?.attemptId;
     if (attemptId === undefined) throw new Error("expected an active repair attempt");
-    expect(admitted?.attempts[0]?.status).toBe("active");
+    expect(firstAttempt(test)?.status).toBe("active");
 
     // Closes the attempt as "failed" -- exactly the lease callback path admitTool() wires up.
     lease?.settle({ status: "failed" });
-    const closed = test.store.read(test.context).record;
-    expect(closed?.attempts[0]?.status).toBe("failed");
+    expect(firstAttempt(test)?.status).toBe("failed");
 
     // The late, out-of-order settle for the SAME attemptId, reporting the opposite outcome: the
     // real store's CAS guard must reject it rather than treat it as a fresh settlement.
+    const revision = test.store.read(test.context).record?.revision ?? 0;
     const late = test.store.settle(test.context, {
       attemptId,
       outcome: "succeeded",
-      expectedRevision: closed?.revision ?? 0,
+      expectedRevision: revision,
     });
-    expect(late.status).toBe("blocked");
-    expect(late.status === "blocked" && late.reason).toBe("attempt-replayed");
-    expect(test.store.read(test.context).record?.attempts[0]?.status).toBe("failed");
+    expect(late).toMatchObject({ status: "blocked", reason: "attempt-replayed" });
+    expect(firstAttempt(test)?.status).toBe("failed");
 
     // The same race arriving through the controller's own `observed()` path (a stale CI snapshot
     // for a repaired head, delivered after the tool failure already closed the attempt) must
     // neither resurrect the attempt nor notify.
     test.controller.observed({ ...readySnapshot(), headSha: "4".repeat(40) });
     expect(notify).not.toHaveBeenCalled();
-    expect(test.store.read(test.context).record?.attempts[0]?.status).toBe("failed");
+    expect(firstAttempt(test)?.status).toBe("failed");
   });
 });

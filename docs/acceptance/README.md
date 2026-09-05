@@ -94,3 +94,56 @@ Until the aggregator lands:
 [projection]: ../../scripts/lib/code-task-acceptance.mjs
 [projection-test]: ../../scripts/__tests__/code-task-acceptance.test.mjs
 [contract]: ../../packages/keiko-contracts/src/code-task-acceptance.ts
+
+## #3390 qualification manifest (a versioned sibling pipeline)
+
+Issue #3390 (release-qualification of the issue-to-PR and Git-to-Chat journeys) reuses this exact
+descriptor-plus-receipts pattern for a versioned sibling schema, `CodeTaskQualificationManifestV1`
+(same file as the contract above, "Qualification manifest" section) — it is not a second pipeline:
+
+```text
+docs/acceptance/coding-issue-journey-3390.json  ── descriptor (scenarios + blocked rows)  ┐
+<receipts dir>/<scenarioId>.receipt.json+.artifact  ── per-scenario receipts             ┼─▶ scripts/generate-coding-issue-journey-manifest.mjs
+git rev-parse HEAD / HEAD^{tree}                ── sha inputs                             ┤          │
+opaque refs, digests, required tools, spend budget ── CLI arguments                       ┘          ▼
+                                                                            CodeTaskQualificationManifestV1
+                                                                            (contract-validated JSON)
+```
+
+The descriptor lists two kinds of registered scenario: `scenarios` that actually ran (a receipt is
+required; its absence is a pipeline error) and `blocked` rows that carry their closed reason
+directly (issue #3390 contract-correction 1: #2951/#2952/#2198 stay open) — a blocked row never
+needs a receipt, matching the evidence gate's own rule
+(`scripts/lib/coding-issue-journey-evidence.mjs`). The blocked disposition's source of truth is the
+descriptor, not a receipts-directory marker: keeping one place that says "this row is blocked and
+why" avoids two disagreeing answers to the same question. The platform launch drivers
+(`scripts/qualify-macos-runtime-release.mjs`, `scripts/qualify-windows-runtime-release.mjs`) can
+still bridge a real, passing qualification into the same receipts-directory shape via their own
+`--qualification-receipts <dir> --scenario-id <id>` mode, so a scenario that is blocked today
+becomes real evidence with no separate translation step once its external prerequisite lands.
+
+Generator invocation:
+
+```sh
+node scripts/generate-coding-issue-journey-manifest.mjs \
+  --descriptor docs/acceptance/coding-issue-journey-3390.json \
+  --receipts <receipts-dir> \
+  --commit <40-hex source commit sha> --tree <40-hex source tree sha> \
+  --runtime-identity <bounded id> --model-identity <bounded id> \
+  --fixture-revision <bounded id> --rubric <path-to-digest> \
+  --required-tools <comma-separated catalog tool names> \
+  --spend-budget-usd <positive number> \
+  [--issue-ref <opaque>] [--pr-ref <opaque>] [--run-ref <opaque>] \
+  [--readiness-digest <sha256>] [--journey-outcome-digest <sha256>] \
+  [--human-merge-attestation <path-to-digest>] \
+  [--audit-ref <opaque>] [--audit-digest <sha256>] [--observed-spend-usd <number>] \
+  --output <path>/manifest.json
+```
+
+The manifest is validated against `validateCodeTaskQualificationManifest` before it is written, the
+same contract-first pattern as the acceptance contribution above. The machine validator,
+`npm run check:coding-issue-journey-evidence:3390`, cross-references it against the qualified git
+head and the receipts directory; see
+[`docs/design-system/evidence/3390/README.md`](../design-system/evidence/3390/README.md) for the
+full operator sequence, including what a `blocked` row means and why it is never a skipped-green
+row.

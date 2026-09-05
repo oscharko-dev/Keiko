@@ -3011,7 +3011,9 @@ describe("circuit breaker defaults stay pinned to the contracts-owned value", ()
 describe("hasConfiguredEnvModelProvider", () => {
   it("is false when only the API key half of the pair is set", () => {
     expect(
-      hasConfiguredEnvModelProvider({ KEIKO_MODEL_EXAMPLE_API_KEY: "sk-fixture-not-a-real-secret" }),
+      hasConfiguredEnvModelProvider({
+        KEIKO_MODEL_EXAMPLE_API_KEY: "sk-fixture-not-a-real-secret",
+      }),
     ).toBe(false);
   });
 

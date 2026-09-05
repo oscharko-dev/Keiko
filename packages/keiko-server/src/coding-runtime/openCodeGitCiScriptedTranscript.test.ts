@@ -35,6 +35,7 @@ import { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
 import { commitFacadeFixture } from "../gitDelivery/verifiedCommitFacadeTestSupport.js";
 import type { CiObservationService } from "../gitDelivery/ciObservationService.js";
 import { createDraftRun } from "../gitDelivery/ciObservationTest/_support.js";
+import { DraftDeliveryFixture } from "../gitDelivery/draftDeliveryServiceTestSupport.js";
 import type { VerifiedCommitRunContext } from "../gitDelivery/verifiedCommitTypes.js";
 import {
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,

@@ -205,6 +205,19 @@ async function executeAdmitted(
     return executeStagedEdit(ports, input, request, admission, invocationRegistry);
   }
   if (request.action === "edit" && requireInvocationRegistryForEdits) return empty("denied");
+  return executePlainAction(ports, input, request, admission, catalogBridge);
+}
+
+// F8 (#3413): every non-edit action's delegate call, optionally resolved as a catalog binding and
+// settled by `catalogBridge` around the exact same call -- split out so `executeAdmitted` stays
+// under the file's own complexity ceiling.
+async function executePlainAction(
+  ports: CodingToolFacadePorts,
+  input: CodingToolFacadeInput,
+  request: CodingToolActionRequest,
+  admission: Extract<CodingToolAdmission, { readonly ok: true }>,
+  catalogBridge: CatalogFacadeBridge | undefined,
+): Promise<CodingToolResult> {
   const runDelegate = (): Promise<unknown> =>
     ports.delegate.execute(request, input.signal, admission.mutationGuard);
   try {

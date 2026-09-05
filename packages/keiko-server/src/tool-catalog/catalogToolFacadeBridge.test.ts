@@ -40,7 +40,10 @@ function bridgeFixture(budget: CatalogFacadeBudgetPort = createInMemoryCatalogFa
     now: () => 1_000,
     mintId: (() => {
       let count = 0;
-      return () => `id-${(count += 1)}`;
+      return (): string => {
+        count += 1;
+        return `id-${String(count)}`;
+      };
     })(),
   });
   return { log, bridge };

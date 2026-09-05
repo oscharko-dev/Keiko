@@ -3896,9 +3896,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   );
   return {
     ...deps,
-    ...(prDescriptionApplicationService === undefined
-      ? {}
-      : { prDescriptionApplicationService }),
+    ...(prDescriptionApplicationService === undefined ? {} : { prDescriptionApplicationService }),
   };
 }
 

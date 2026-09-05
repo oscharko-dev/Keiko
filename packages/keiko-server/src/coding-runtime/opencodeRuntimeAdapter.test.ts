@@ -1260,10 +1260,10 @@ describe("keiko_repository_search generated tool dispatch", () => {
 
   it("nests the model's arguments under repositoryRequest so the real production parser accepts the request, and returns the bounded result", async () => {
     let capturedBody: string | undefined;
-    const tool = loadRepositorySearchTool(((_input: unknown, init?: RequestInit) => {
+    const tool = loadRepositorySearchTool((_input: unknown, init?: RequestInit) => {
       capturedBody = typeof init?.body === "string" ? init.body : undefined;
       return Promise.resolve(boundedCompletedSearchResponse());
-    }));
+    });
 
     const result = await tool.execute(
       {

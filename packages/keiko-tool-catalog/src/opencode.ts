@@ -11,7 +11,7 @@
 // enforcement of its own).
 //
 // `OPENCODE_NATIVE_EXTENSION_DEFINITIONS` below is the single source for the two native
-// extensions' exact pinned wire schemas. Unlike the fifteen managed tools, a native extension is
+// extensions' exact pinned wire schemas. Unlike the sixteen managed tools, a native extension is
 // never compiled through the catalog dialect (no descriptor, no `pattern`-keyword gap: these are
 // plain literal JSON Schema objects, carried verbatim). packages/keiko-server/src/coding-runtime/
 // opencodeToolSchemas.ts imports them back to build `OPENCODE_MODEL_VISIBLE_TOOLS`, and

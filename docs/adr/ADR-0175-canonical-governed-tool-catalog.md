@@ -260,6 +260,29 @@ result data. Its replay eligibility checks current authority without consuming a
 Exactly-one logical settlement does not promise exactly-once external effects across a crash.
 An uncertain effect fails closed. No retry may hide that uncertainty.
 
+**Production mounting (F8, #3413 closeout).** `createCatalogToolBinder`'s public `offer`/`dispatch`
+pair is shaped for a model that first receives a compiled projection and dispatches back a
+catalog-schema `{toolRef, projectionDigest, offerId, arguments}` invocation -- it is not, by
+itself, a drop-in wrapper for `codingToolFacade.ts`'s existing dispatch path, which already
+receives a validated, IPC-shaped `CodingToolActionRequest` with no catalog offer in front of it.
+`packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts` is the composition-owned
+bridge that actually mounts the real production catalog (the same
+`createOpenCodeGatewayToolCatalogAdvertisement` catalog the model-visible schema is compiled from)
+onto that path: `createRuntimeCodingToolFacade` (`codingToolAuthorityPort.ts`) resolves a real
+catalog descriptor for each dispatched action covered by `CATALOG_FACADE_TOOL_IDS`, and settles
+success/denied/handler-failed around the existing governed delegate call using the same
+`tool-catalog.invocation-started` / `tool-catalog.invocation-settled` operations, receipt shape and
+body-free redaction this section describes -- without a second authority check (the existing
+`CodingToolAuthorityPort` admission is reused verbatim as the dispatch's authority disposition,
+never re-derived) and without moving the existing admission boundary. Coverage is deliberately the
+reachable subset: `discover` (`keiko.workspace.discover`) today, because its IPC shape carries no
+optional fields and needs no approval, so it settles without inventing IPC<->catalog argument
+translation. Widening this bridge to `read` (once its optional `startLine`/`maxLines` defaults are
+reconciled with the catalog's required-field schema), `edit`, `verification`, `egress`, `skill` and
+`child-agent`, and to the full offer/dispatch cursor and idempotency-registry machinery the rest of
+this section describes, remains open follow-up work; `git`, `delivery`, `search`, `command` and
+`connector` have no canonical catalog descriptor yet and stay uncovered until one exists.
+
 ### D7 — Phase-valid activity evidence
 
 The `phases` table freezes operation names for #3412's existing generator; it is not a second

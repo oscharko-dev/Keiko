@@ -1540,7 +1540,14 @@ describe("coding-sidecar gateway", () => {
           {
             name: "keiko_repository_search",
             parameters: {
-              required: ["mode", "query", "caseSensitive", "includeGlobs", "excludeGlobs", "maxResults"],
+              required: [
+                "mode",
+                "query",
+                "caseSensitive",
+                "includeGlobs",
+                "excludeGlobs",
+                "maxResults",
+              ],
               properties: { ...REPOSITORY_SEARCH_SCHEMA.properties },
               type: "object",
             },

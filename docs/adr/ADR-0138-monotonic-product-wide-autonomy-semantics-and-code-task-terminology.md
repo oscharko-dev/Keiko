@@ -178,14 +178,33 @@ is:
    `workspace-contained`. `denied` maps to the pre-existing `mode-denied` reason (a hard denial;
    the matrix never actually returns `denied` for either scope, so this is a closed fallback, not
    a live path); `approval-required` maps to a dedicated `approval-required` denial reason,
-   redeemable by the caller through a one-use claim bound to the accepted run's identity
-   (`GitDeliveryApprovalRedemption`); `allowed` proceeds. `autonomous-delivery` is resolved
-   outright at this layer per the **capability-availability clarification** above: Full access's
-   `delivery` cells are `approval-required` in the shared matrix, but this coarse admission layer
-   is not the execution path that redeems them for an operation whose own execute path already
-   carries mandatory, mode-independent approval (`merge`, via its pre-existing approval-gated
-   pack and `/merge/approve` route; `commit`, via the unconditional consumed-claim check its
-   execute route now applies regardless of mode, added by #3386). The scope check that precedes
+   redeemable through `GitDeliveryApprovalRedemption`; `allowed` proceeds.
+   **Redemption mechanism, corrected by the final-audit repair (#3390, closing the gap the rest of
+   this item's original text described as "redeemable" without any production caller ever
+   redeeming it):** two mechanisms, never combined for one admission attempt.
+   `deliveryApprovalDeferred` covers every `delivery`-scope operation whose OWN execute path
+   already enforces a mandatory, mode-independent consumed claim regardless of the repo/org policy
+   pack — by the time of this repair that is every Git delivery operation with a mounted
+   `/approve` route (`commit`, `push`, `pr` create/update, `merge`, `pr-mark-ready`,
+   `pr-description-apply`; see `policyPackMintability.ts`) — and simply defers the coarse layer's
+   own "approval-required" disposition to that downstream enforcement, exactly mirroring how
+   `autonomous-delivery` already bypasses the same matrix cell; it must be set at both the mint and
+   execute admission calls for such an operation (and at the continuity re-check before remote
+   dispatch), since minting produces no delivery effect of its own. A non-consuming peek
+   (`GitDeliveryApprovalStore.matches`) against the caller's already-parsed, already-bound claim
+   covers the remaining `workspace-contained` local mutations (branch-create/switch, stage/
+   unstage), which have no such operation-independent enforcement — the repo/org pack decides
+   per command whether a claim is even required, so deferring unconditionally there would let a
+   routine local edit skip human confirmation entirely in `governed-assist`. The now-superseded
+   "authority-admission" claim operation this item originally described — a coarse, run-identity-
+   bound token with no HTTP mint route anywhere — has been removed from
+   `GitDeliveryApprovalOperation`. `autonomous-delivery` is resolved outright at this layer per the
+   **capability-availability clarification** above: Full access's `delivery` cells are
+   `approval-required` in the shared matrix, but this coarse admission layer is not the execution
+   path that redeems them for an operation whose own execute path already carries mandatory,
+   mode-independent approval (`merge`, via its pre-existing approval-gated pack and
+   `/merge/approve` route; `commit`, via the unconditional consumed-claim check its execute route
+   now applies regardless of mode, added by #3386). The scope check that precedes
    this matrix lookup (`hasRequiredScopes`) now genuinely passes for a `delivery`-scoped operation
    in every mode: `productionRuntimeWorkspaceAuthority.ts` mints `source-control.read` /
    `source-control.write` and `delivery-substrate` (with the paired `connector-access` action class
@@ -199,12 +218,19 @@ is:
    the scope it would otherwise gate on is already present — and it is kept only so a future, more
    permissive edit to `hasRequiredScopes` cannot silently reopen the earlier gap. The network-policy
    leg of the same check stays intentionally mode-gated: `runtimeNetworkPolicy` mints a
-   connector-scoped egress policy only at `autonomous-delivery`, because `fetch`/`pull`/`push`/
-   `pull-request` need it and, unlike `commit` and `merge`, carry no execute-path approval
-   enforcement of their own yet — a lower mode's approval-required delivery effect for one of those
-   operations still fails `hasRequiredScopes` on that leg until #3387 wires their mint routes and
-   redeemable claims; nothing in this record, `runBoundAuthority.ts`, or #3386 admits them unapproved
-   in any mode, including Full access. The coding-runtime tool port (`codingToolAuthorityPort.ts`) is
+   connector-scoped egress policy only at `autonomous-delivery`. #3387 has since landed `push`'s and
+   `pr` create/update's own mint routes and unconditional execute-path approval enforcement
+   (mirroring `commit`/`merge`), and the final-audit repair (#3390) made the coarse admission
+   layer defer to that enforcement for every one of those operations — so this network-policy leg
+   no longer determines the outcome for `push`/`pull-request`/`merge`/`commit` below
+   `autonomous-delivery` either (`deliveryScopeCheckDeferredToModeDecision` already skips it, and
+   the mode/approval matrix resolves before this leg would matter). `fetch`/`pull` remain the
+   exception: no HTTP mint route exists for either, and their execute path carries no approval
+   enforcement, so a lower mode's `accepted-run-unavailable`/`approval-required` disposition for
+   them is not yet redeemable by any production caller — a real, tracked gap (final-audit
+   out-of-scope note), not a silent allow: nothing in this record, `runBoundAuthority.ts`, #3386,
+   #3387, or #3390 admits an unapproved delivery effect in any mode, including Full access. The
+   coding-runtime tool port (`codingToolAuthorityPort.ts`) is
    the second enforcement point named by epic #3384 correction 5 and reads the same matrix for its
    `workspace-contained`/medium path already; its `git`/`delivery` branches converging onto the
    identical evaluator is tracked by that correction, not restated here.

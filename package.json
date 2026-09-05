@@ -153,6 +153,8 @@
     "check:typescript-toolchain": "node scripts/check-typescript-toolchain.mjs",
     "check:git-delivery-evidence": "node scripts/check-git-delivery-evidence.mjs",
     "check:coding-issue-journey-evidence": "node scripts/check-coding-issue-journey-evidence.mjs",
+    "check:coding-issue-journey-evidence:3390": "node scripts/check-coding-issue-journey-evidence.mjs --manifest docs/qa/evidence/coding-issue-journey/3390/manifest.json --receipts docs/qa/evidence/coding-issue-journey/3390/receipts --epic 3384 --child 3390 --registered issue-to-pr-governed-assist,issue-to-pr-supervised-coding,issue-to-pr-autonomous-delivery,ci-repair-loop,description-auto-draft-and-apply,mark-ready-intent,human-merge-and-closure,git-to-chat-connect-refine-apply,git-chat-negative-effects,packaged-macos-arm64-reference,packaged-windows-x64,packaged-macos-x64,egress-confinement-linux-windows,coding-runtime-performance-budgets,real-binary-lane,keiko-issue-audit",
+    "qualify:coding-issue-journey:manifest": "node scripts/generate-coding-issue-journey-manifest.mjs",
     "check:git-client-evidence": "node scripts/check-git-client-evidence.mjs",
     "check:ui-i18n": "node scripts/check-ui-i18n-guard.mjs",
     "check:ui-i18n:all": "node scripts/check-ui-i18n-guard.mjs --all",

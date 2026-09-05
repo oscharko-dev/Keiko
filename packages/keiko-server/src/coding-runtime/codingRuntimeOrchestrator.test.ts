@@ -2726,7 +2726,10 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     // three-way mapping (`descriptionSettleOp`) that collapses `generated`, `partial-generated`
     // and `fallback-generated` onto the same op-event name. Using a non-"generated" reason here
     // proves the outcome vocabulary itself — not just the coarse bucket — survives into the log.
-    const dispatcher = fakeDispatcher({ reason: "partial-generated", snapshotDigest: "a".repeat(64) });
+    const dispatcher = fakeDispatcher({
+      reason: "partial-generated",
+      snapshotDigest: "a".repeat(64),
+    });
     const verifiedCommits = new Map<string, VerifiedCommitResult>();
     const f = fixture(
       undefined,
