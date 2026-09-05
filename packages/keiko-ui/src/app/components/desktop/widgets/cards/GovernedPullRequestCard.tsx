@@ -22,7 +22,6 @@ import {
   fetchGitDeliveryPrDescriptionApply,
   fetchGitDeliveryPrDescriptionApprove,
   fetchGitDeliveryPrDescriptionPreview,
-  PR_DESCRIPTION_LANGUAGES,
   type GitDeliveryPrDescriptionPreviewInput,
   type GitDeliveryPrDescriptionTarget,
   type GitDeliveryPrExecuteResponse,
@@ -33,6 +32,12 @@ import {
   type PrDescriptionApplicationStatus,
   type PrDescriptionLanguage,
 } from "@/lib/api";
+// `PR_DESCRIPTION_LANGUAGES` is a real value, not a type, so it stays a genuine runtime import.
+// Sourced from the contract's own runtime subpath directly (never re-exported through `./api`,
+// which is first-load-reachable from the desktop shell) so this small enum-of-languages value never
+// drags `pr-description`'s validator module into the eager chunk (epic #3384 final-audit F18) —
+// this card is already behind the `next/dynamic({ ssr: false })` boundary in widgets/index.tsx.
+import { PR_DESCRIPTION_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
 import { Icons } from "../../Icons";

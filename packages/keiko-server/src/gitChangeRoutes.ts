@@ -165,11 +165,14 @@ function parseRefreshRequest(value: unknown): RefreshRequest | undefined {
 // every generic Git route uses. Mirrors gitChangeSnapshotService.ts's own internal
 // `repositoryReader` safety check (the snapshot capture below re-validates this independently;
 // the duplication is intentional defense-in-depth, not a second trust boundary).
-interface ResolvedChatRepository {
+export interface ResolvedChatRepository {
   readonly repositoryRoot: string;
 }
 
-async function resolveChatRepository(
+// Exported (final-audit F5, #3400) so the git-change apply path (chat-handlers.ts) re-derives the
+// SAME trusted repository root through the SAME git-membership check, rather than a second,
+// independently-drifting copy of this trust-boundary logic (AGENTS.md §5/§7).
+export async function resolveChatRepository(
   projectPath: string,
   runner: GitProcessRunner,
   timeoutMs: number,
@@ -425,7 +428,7 @@ function mintGitChangeDescriptionAuthority(
   scope: ChatGitChangeScope,
   nowMs: number,
 ): boolean {
-  return false; // TEMP-DISABLED-FOR-PROOF
+  if (deps.mintDescriptionAuthority === undefined) return false;
   deps.mintDescriptionAuthority(
     gitChangeDescriptionAuthorityScopeFor(scope),
     new Date(nowMs).toISOString(),

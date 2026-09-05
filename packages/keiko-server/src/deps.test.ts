@@ -1204,6 +1204,46 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     void deps.dispose?.();
   });
 
+  // Final-audit F4 (#3400 Chat-connected git-change): `deps.mintDescriptionAuthority` must reach
+  // production composition too, or gitChangeRoutes.ts's connect flow has no mint capability to call
+  // and every Chat turn on a connected chat denies closed regardless of the read port above being
+  // wired. Proven end to end: mint a scope through the composed function, then read it back
+  // through the composed read port under the SAME key.
+  it("threads a real mint capability onto deps.mintDescriptionAuthority (F4)", () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-runtime-description-authority-mint-"),
+      env: {},
+      uiDbPath: join(tmp("ui-runtime-description-authority-mint-"), "keiko-ui.db"),
+      codingRuntimeStartConfirmationConsumer: { consume: () => undefined },
+      codingRuntimeProductionPorts: {
+        backend: {
+          createRun: (): never => {
+            throw new Error("backend must not be reached");
+          },
+        },
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        },
+        editorAgentClient: {
+          action: () => Promise.reject(new Error("editor must not be reached")),
+        },
+      },
+    });
+
+    expect(deps.mintDescriptionAuthority).toBeDefined();
+    expect(deps.gitChangeDescriptionAuthorityPort).toBeDefined();
+    const scope = {
+      remoteDigest: "a".repeat(64),
+      pr: { baseRef: "main", headRef: "feature/x" },
+      snapshotDigest: "b".repeat(64),
+    };
+    const nowIso = new Date().toISOString();
+    deps.mintDescriptionAuthority?.(scope, nowIso);
+    expect(deps.gitChangeDescriptionAuthorityPort?.current(scope, nowIso)).toBeDefined();
+    void deps.dispose?.();
+  });
+
   // Final-audit F7 (#3399/#3400 production-wiring): `createPrDescriptionApplicationService` had
   // zero non-test importers, so Chat-driven description apply (#3400) was permanently unavailable
   // in production — `chat-handlers.ts`'s `applyGitChangeDescription` always returned `undefined`

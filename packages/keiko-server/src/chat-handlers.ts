@@ -107,6 +107,20 @@ import {
 // through `executeGovernedPullRequest`'s coupled title+body+base update path. Read-only
 // consumption of the existing owning module — never redefined here.
 import type { PrDescriptionApplicationResult } from "./gitDelivery/prDescriptionTypes.js";
+// Final-audit F5 (#3400): reuses the SAME admitted, per-(project, repository, PR) service factory
+// this route group's own preview/approve/apply handlers already run through — never a second,
+// independently-composed service surface (AGENTS.md §5).
+import {
+  resolvePrDescriptionApplicationServiceForRequest,
+  type BaseFields as PrDescriptionBaseFields,
+  type PrDescriptionRouteOptions,
+} from "./gitDelivery/prDescriptionRoutes.js";
+// Re-derives the SAME trusted repository root the connect flow resolved, through the SAME
+// git-membership check -- never a second, independently-drifting copy of that trust boundary.
+import { resolveChatRepository } from "./gitChangeRoutes.js";
+import { observedGitRunner } from "./gitProcessActivity.js";
+import { defaultGitProcessRunner } from "@oscharko-dev/keiko-git";
+import { githubRemoteOwnerAndRepoFor } from "./coding-context/githubIssueReaderAuthorization.js";
 import {
   currentAuditRedactString,
   currentConversationReady,
@@ -2686,6 +2700,195 @@ export function applyGitChangeDescription(
 ): Promise<PrDescriptionApplicationResult> | undefined {
   return deps.prDescriptionApplicationService?.executeApproved(proposalId, lease);
 }
+
+// ─── Issue #3400 — the real handler Chat reaches for the apply action (final-audit F5) ──────────
+//
+// Before this fix, `applyGitChangeDescription` above had zero production callers: nothing ever
+// invoked it from a route, so the apply effect was reachable only in tests. This handler is that
+// caller. A Chat-connected git-change scope only ever names a repository via `remoteDigest`
+// (contract correction 6) and only carries a `pullRequestNumber` once a PR was resolved at connect
+// time, so `ownerAndRepo` (the raw slug #3399's admission needs) is re-derived live from the SAME
+// trusted repository root the connect flow used, through the SAME git-membership check
+// (`resolveChatRepository`) and the SAME GitHub-reader authorization gate every other git-change
+// route reuses -- never a fresh, browser-authored identity.
+//
+// NOT YET REGISTERED as a live route (routes.ts is outside this item's write scope) -- exported so
+// the route table's owner can wire `{ method: "POST", pattern: "/api/git-change/apply-description",
+// handler: createHandleGitChangeApplyDescription() }` in one line. Every test below drives this
+// exact exported handler with a synthetic `RouteContext`, the same pattern every other route test
+// file in this package already uses.
+interface GitChangeApplyDescriptionRequest {
+  readonly chatId: string;
+  readonly relationshipId: string;
+  readonly proposalId: string;
+}
+
+const GIT_CHANGE_APPLY_DESCRIPTION_KEYS: ReadonlySet<string> = new Set([
+  "schemaVersion",
+  "chatId",
+  "relationshipId",
+  "proposalId",
+]);
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+// Every field beyond this closed set is rejected before any lookup runs -- the same
+// "binding smuggling" guard prDescriptionRoutes.ts's own `baseFields` applies: a request that adds
+// `ownerAndRepo`, `prNumber`, or any other field this action never accepts is refused at
+// validation, never silently ignored.
+function parseGitChangeApplyDescriptionRequest(
+  value: unknown,
+): GitChangeApplyDescriptionRequest | undefined {
+  if (!isRecord(value) || !hasOnlyAllowedKeys(value, GIT_CHANGE_APPLY_DESCRIPTION_KEYS)) {
+    return undefined;
+  }
+  if (value.schemaVersion !== "1") return undefined;
+  const { chatId, relationshipId, proposalId } = value;
+  if (!nonEmptyString(chatId) || !nonEmptyString(relationshipId) || !nonEmptyString(proposalId)) {
+    return undefined;
+  }
+  return { chatId, relationshipId, proposalId };
+}
+
+interface FoundGitChangeApplyScope {
+  readonly chat: Chat;
+  readonly scope: ChatGitChangeScope;
+}
+
+function findConnectedGitChangeScope(
+  deps: UiHandlerDeps,
+  chatId: string,
+  relationshipId: string,
+): FoundGitChangeApplyScope | undefined {
+  const chat = deps.store.findChatById(chatId);
+  if (chat === undefined) return undefined;
+  const scope = (chat.gitChangeScopes ?? []).find(
+    (entry) => entry.relationshipId === relationshipId,
+  );
+  return scope === undefined ? undefined : { chat, scope };
+}
+
+// Re-derives `ownerAndRepo` live rather than reading it from the persisted scope (which never
+// stores it -- only its `remoteDigest`, contract correction 6): the SAME resolution the connect
+// flow performs for pull-request mode, so a live apply always checks the repository's CURRENT
+// GitHub-reader grant rather than trusting one observed at connect time.
+async function resolveGitChangeApplyOwnerAndRepo(
+  deps: UiHandlerDeps,
+  chat: Chat,
+  correlationId: string,
+): Promise<string | undefined> {
+  const runner = observedGitRunner(
+    defaultGitProcessRunner,
+    deps.activityLog ?? processServerLogSink(),
+    correlationId,
+  );
+  const repository = await resolveChatRepository(chat.projectPath, runner, 30_000);
+  if (repository === undefined) return undefined;
+  if (!isGitHubIssueReaderAuthorized(deps, repository.repositoryRoot, { correlationId })) {
+    return undefined;
+  }
+  return githubRemoteOwnerAndRepoFor(repository.repositoryRoot, deps.env, undefined, {
+    correlationId,
+  });
+}
+
+function gitChangeApplyUnavailableResult(): RouteResult {
+  return {
+    status: 409,
+    body: errorBody(
+      "GIT_CHANGE_APPLY_UNAVAILABLE",
+      "This connected Git change has no pull request to apply a description to.",
+    ),
+  };
+}
+
+interface GitChangeApplyDescriptionTarget {
+  readonly request: GitChangeApplyDescriptionRequest;
+  readonly baseFields: PrDescriptionBaseFields;
+}
+
+async function resolveGitChangeApplyTarget(
+  deps: UiHandlerDeps,
+  request: GitChangeApplyDescriptionRequest,
+  correlationId: string,
+): Promise<GitChangeApplyDescriptionTarget | RouteResult> {
+  const found = findConnectedGitChangeScope(deps, request.chatId, request.relationshipId);
+  if (found === undefined) {
+    return { status: 404, body: errorBody("GIT_CHANGE_SCOPE_NOT_FOUND", "Scope not found.") };
+  }
+  if (found.scope.pullRequestNumber === undefined) return gitChangeApplyUnavailableResult();
+  const ownerAndRepo = await resolveGitChangeApplyOwnerAndRepo(deps, found.chat, correlationId);
+  if (ownerAndRepo === undefined) return gitChangeApplyUnavailableResult();
+  return {
+    request,
+    baseFields: {
+      projectId: found.chat.projectPath,
+      ownerAndRepo,
+      prNumber: found.scope.pullRequestNumber,
+      snapshotDigest: found.scope.snapshotDigest,
+    },
+  };
+}
+
+function logGitChangeApplyOutcome(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  outcome: PrDescriptionApplicationResult["outcome"],
+): void {
+  (deps.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    op: "git-change.chat.apply",
+    correlationId,
+    extra: { outcome },
+  });
+}
+
+/**
+ * Final-audit F5: the real handler Chat reaches for the apply action. Resolves the connected
+ * git-change scope, reuses #3399's own admitted service factory for the exact (project,
+ * repository, PR) the scope now names, consumes the one-use approval, and executes through
+ * `applyGitChangeDescription` above -- the SAME narrow gateway, never a second write path.
+ */
+export const createHandleGitChangeApplyDescription = (
+  options: PrDescriptionRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    const parsed = await readJsonObject(ctx.req, ctx.signal);
+    if (isRouteResult(parsed)) return parsed;
+    const request = parseGitChangeApplyDescriptionRequest(parsed);
+    if (request === undefined) {
+      return { status: 400, body: errorBody("BAD_REQUEST", "Invalid apply-description request.") };
+    }
+    const target = await resolveGitChangeApplyTarget(deps, request, correlationId);
+    if (!("baseFields" in target)) return target;
+    const resolution = resolvePrDescriptionApplicationServiceForRequest(
+      deps,
+      ctx,
+      target.baseFields,
+      correlationId,
+      options,
+    );
+    if (!resolution.ok) return resolution.result;
+    const lease = resolution.service.consumeApproval(request.proposalId);
+    if (lease === undefined) {
+      return {
+        status: 409,
+        body: errorBody("GIT_CHANGE_APPLY_UNKNOWN_PROPOSAL", "Proposal is unknown or expired."),
+      };
+    }
+    const applied = await applyGitChangeDescription(
+      { ...deps, prDescriptionApplicationService: resolution.service },
+      request.proposalId,
+      lease,
+    );
+    if (applied === undefined) return gitChangeApplyUnavailableResult();
+    logGitChangeApplyOutcome(deps, correlationId, applied.outcome);
+    return { status: 200, body: deps.redactor(applied) };
+  };
+};
 
 export async function handleSendDesktopChat(
   ctx: RouteContext,

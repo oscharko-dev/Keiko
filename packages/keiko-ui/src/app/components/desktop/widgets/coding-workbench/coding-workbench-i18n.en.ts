@@ -610,8 +610,6 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The model was not authorized for this attempt.",
   "codingWorkbench.descriptionStatus.reason.budget-exhausted":
     "Too many description drafts are in progress right now.",
-  "codingWorkbench.descriptionStatus.reason.pull-request-unavailable":
-    "No pull request is available for this draft yet.",
   "codingWorkbench.descriptionStatus.reason.generation-unavailable":
     "Automatic draft generation is not available yet.",
   "codingWorkbench.descriptionStatus.reason.interrupted":

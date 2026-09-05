@@ -632,8 +632,6 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Das Modell war für diesen Versuch nicht autorisiert.",
   "codingWorkbench.descriptionStatus.reason.budget-exhausted":
     "Derzeit laufen zu viele Entwurfserstellungen gleichzeitig.",
-  "codingWorkbench.descriptionStatus.reason.pull-request-unavailable":
-    "Für diesen Entwurf ist noch kein Pull Request verfügbar.",
   "codingWorkbench.descriptionStatus.reason.generation-unavailable":
     "Die automatische Entwurfserstellung ist noch nicht verfügbar.",
   "codingWorkbench.descriptionStatus.reason.interrupted":

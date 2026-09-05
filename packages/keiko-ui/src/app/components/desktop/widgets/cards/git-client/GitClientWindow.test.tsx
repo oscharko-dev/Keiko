@@ -496,7 +496,7 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       actionKind: "push",
     })),
     prPreview: vi.fn<GitClientSeam["prPreview"]>(async () => makePrPreview()),
-    prApprove: vi.fn<NonNullable<GitClientSeam["prApprove"]>>(async () => ({
+    prApprove: vi.fn<GitClientSeam["prApprove"]>(async () => ({
       schemaVersion: "1",
       approval: { schemaVersion: "1", approvalId: "gda_gcw_pr", approvalToken: "token-gcw-pr" },
       expiresAt: "2026-01-01T00:00:00.000Z",
@@ -507,20 +507,20 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       actionKind: "pr-create",
       createdPrExternalId: "1577",
     })),
-    prDescriptionPreview: vi.fn<NonNullable<GitClientSeam["prDescriptionPreview"]>>(async () => ({
+    prDescriptionPreview: vi.fn<GitClientSeam["prDescriptionPreview"]>(async () => ({
       outcome: "blocked",
       reason: "approval-required",
     })),
-    prDescriptionApprove: vi.fn<NonNullable<GitClientSeam["prDescriptionApprove"]>>(async () => ({
+    prDescriptionApprove: vi.fn<GitClientSeam["prDescriptionApprove"]>(async () => ({
       schemaVersion: "1",
       proposalId: "prop-gcw",
       expiresAt: "2026-01-01T00:00:00.000Z",
     })),
-    prDescriptionApply: vi.fn<NonNullable<GitClientSeam["prDescriptionApply"]>>(async () => ({
+    prDescriptionApply: vi.fn<GitClientSeam["prDescriptionApply"]>(async () => ({
       outcome: "blocked",
       reason: "approval-required",
     })),
-    prDescriptionStatus: vi.fn<NonNullable<GitClientSeam["prDescriptionStatus"]>>(async () => ({
+    prDescriptionStatus: vi.fn<GitClientSeam["prDescriptionStatus"]>(async () => ({
       outcome: "blocked",
       reason: "approval-required",
     })),

@@ -3350,36 +3350,29 @@ export async function fetchCodingWorkbenchJourneyRefresh(
 export type GitHubIssuePreviewResponseWire = CodingWorkbenchIssuePreviewResponseWire;
 export type CodingWorkbenchIssuePreviewRequest = CodingWorkbenchIssuePreviewRequestWire;
 
-// Bounds imported from the contract's runtime subpath, never restated: a client cap that drifts
-// from the server's own (CodingWorkbenchIssueBinding.issueNumber, the issue-preview title/excerpt
-// caps, and the owner/repo shape) would let the client accept input the server always rejects,
-// and vice versa (same restated-formula class as #2285).
-export const GITHUB_ISSUE_PREVIEW_TITLE_MAX_CHARS = CODING_WORKBENCH_ISSUE_PREVIEW_TITLE_MAX_CHARS;
-export const GITHUB_ISSUE_PREVIEW_EXCERPT_MAX_CHARS =
-  CODING_WORKBENCH_ISSUE_PREVIEW_EXCERPT_MAX_CHARS;
+// Bound imported from the contract's runtime subpath, never restated: a client cap that drifts
+// from the server's own would let the client accept input the server always rejects, and vice
+// versa (same restated-formula class as #2285). The issue-preview title/excerpt bounds and the
+// owner/repo shape check live with the rest of the issue-preview validator in
+// `./coding-workbench-lazy-fetchers.ts` (epic #3384 final-audit F18) -- this is the one binding
+// from that contract module CodingWorkbenchIssueIntake.tsx still needs synchronously (a
+// `maxLength` prop outside the dynamic() boundary), so it stays an eager re-export here.
 export const GITHUB_ISSUE_REFERENCE_MAX_CHARS = CONTRACT_GITHUB_ISSUE_REFERENCE_MAX_CHARS;
-const GITHUB_ISSUE_PROVENANCE_REPO_MAX_CHARS = 256;
-const GITHUB_ISSUE_PROVENANCE_URL_MAX_CHARS = 2_048;
-const GITHUB_ISSUE_BINDING_ID_MAX_CHARS = 128;
-const GITHUB_ISSUE_NUMBER_MAX = CONTRACT_GITHUB_ISSUE_NUMBER_MAX;
-const SHA256_HEX = /^[0-9a-f]{64}$/u;
-const ISSUE_BINDING_KEYS: ReadonlySet<string> = new Set([
-  "repositoryId",
-  "remoteDigest",
-  "issueNumber",
-  "issueIdDigest",
-  "defaultBaseRef",
-  "bindingDigest",
-]);
+export const GITHUB_ISSUE_BINDING_ID_MAX_CHARS = 128;
+export const SHA256_HEX = /^[0-9a-f]{64}$/u;
 
-function isRecordValue(value: unknown): value is Record<string, unknown> {
+export function isRecordValue(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // eslint-disable-next-line no-control-regex -- the class IS the control range being refused
 const CONTROL_CHARACTER = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/u;
 
-function isBoundedText(value: unknown, maxChars: number, allowEmpty = false): value is string {
+export function isBoundedText(
+  value: unknown,
+  maxChars: number,
+  allowEmpty = false,
+): value is string {
   return (
     typeof value === "string" &&
     (allowEmpty || value.trim().length > 0) &&
@@ -3388,149 +3381,21 @@ function isBoundedText(value: unknown, maxChars: number, allowEmpty = false): va
   );
 }
 
-function isIssueNumber(value: unknown): value is number {
-  return (
-    Number.isSafeInteger(value) && Number(value) > 0 && Number(value) <= GITHUB_ISSUE_NUMBER_MAX
-  );
-}
-
-function issuePreviewProvenanceReasons(value: unknown): readonly string[] {
-  if (!isRecordValue(value)) return ["preview.provenance must be an object"];
-  const reasons: string[] = [];
-  if (
-    !isBoundedText(value.ownerAndRepo, GITHUB_ISSUE_PROVENANCE_REPO_MAX_CHARS) ||
-    !isGitHubOwnerAndRepo(value.ownerAndRepo)
-  ) {
-    reasons.push("preview.provenance.ownerAndRepo must be owner/repo");
-  }
-  if (!isIssueNumber(value.issueNumber)) {
-    reasons.push("preview.provenance.issueNumber must be a bounded positive integer");
-  }
-  if (
-    !isBoundedText(value.url, GITHUB_ISSUE_PROVENANCE_URL_MAX_CHARS) ||
-    !value.url.startsWith("https://")
-  ) {
-    reasons.push("preview.provenance.url must be a bounded https URL");
-  }
-  return reasons;
-}
-
-function issueCommentReasons(value: Record<string, unknown>): readonly string[] {
-  const comments = value.comments;
-  const reasons: string[] = [];
-  if (
-    comments !== undefined &&
-    (!Array.isArray(comments) ||
-      comments.length > 8 ||
-      !comments.every((comment: unknown) => isBoundedText(comment, 1024, true)))
-  )
-    reasons.push("preview.comments must be bounded text excerpts");
-  if (value.commentsTruncated !== undefined && typeof value.commentsTruncated !== "boolean")
-    reasons.push("preview.commentsTruncated must be boolean");
-  if (typeof value.bodyExcerptTruncated !== "boolean")
-    reasons.push("preview.bodyExcerptTruncated must be boolean");
-  return reasons;
-}
-
-function issuePreviewReasons(value: unknown): readonly string[] {
-  if (!isRecordValue(value)) return ["preview must be an object"];
-  const reasons: string[] = [];
-  if (!isBoundedText(value.title, GITHUB_ISSUE_PREVIEW_TITLE_MAX_CHARS)) {
-    reasons.push("preview.title must be bounded text");
-  }
-  if (!isBoundedText(value.bodyExcerpt, GITHUB_ISSUE_PREVIEW_EXCERPT_MAX_CHARS, true)) {
-    reasons.push("preview.bodyExcerpt must be bounded text");
-  }
-  if (!Number.isSafeInteger(value.commentCount) || Number(value.commentCount) < 0) {
-    reasons.push("preview.commentCount must be a non-negative integer");
-  }
-  if (value.state !== "open" && value.state !== "closed")
-    reasons.push("preview.state must be open or closed");
-  if (value.untrusted !== true) reasons.push("preview.untrusted must be true");
-  reasons.push(...issuePreviewProvenanceReasons(value.provenance), ...issueCommentReasons(value));
-  return reasons;
-}
-
-const ISSUE_BINDING_DIGEST_FIELDS = ["remoteDigest", "issueIdDigest", "bindingDigest"] as const;
-
-function issueBindingDigestReasons(value: Record<string, unknown>): readonly string[] {
-  const reasons: string[] = [];
-  for (const field of ISSUE_BINDING_DIGEST_FIELDS) {
-    const digest = value[field];
-    if (typeof digest !== "string" || !SHA256_HEX.test(digest)) {
-      reasons.push(`binding.${field} must be a sha256 digest`);
-    }
-  }
-  return reasons;
-}
-
-function issueBindingIdentityReasons(value: Record<string, unknown>): readonly string[] {
-  const reasons: string[] = [];
-  if (!isBoundedText(value.repositoryId, GITHUB_ISSUE_BINDING_ID_MAX_CHARS)) {
-    reasons.push("binding.repositoryId must be a bounded id");
-  }
-  if (!isIssueNumber(value.issueNumber)) {
-    reasons.push("binding.issueNumber must be a bounded positive integer");
-  }
-  if (typeof value.defaultBaseRef !== "string" || !isSafeGitRefName(value.defaultBaseRef)) {
-    reasons.push("binding.defaultBaseRef must be a safe git ref");
-  }
-  return reasons;
-}
-
-// Exact keys: a binding that carries anything beyond its content-free fields — a title, a body —
-// is refused, so issue text can never ride along inside the value the UI echoes back.
-function issueBindingReasons(value: unknown): readonly string[] {
-  if (!isRecordValue(value)) return ["binding must be an object"];
-  const extra = Object.keys(value)
-    .filter((key) => !ISSUE_BINDING_KEYS.has(key))
-    .map((key) => `binding.${key} is not a binding field`);
-  return [...extra, ...issueBindingIdentityReasons(value), ...issueBindingDigestReasons(value)];
-}
-
-// The preview and the binding describe the same issue: a response whose two halves name different
-// numbers would let the renderer show one issue while the run binds another.
-function issuePreviewCoherenceReasons(value: Record<string, unknown>): readonly string[] {
-  const preview = value.preview;
-  const binding = value.binding;
-  if (!isRecordValue(preview) || !isRecordValue(binding)) return [];
-  const provenance = preview.provenance;
-  if (!isRecordValue(provenance)) return [];
-  return provenance.issueNumber === binding.issueNumber
-    ? []
-    : ["binding.issueNumber must equal preview.provenance.issueNumber"];
-}
-
-export function validateGitHubIssuePreviewResponse(value: unknown): GitRepositoryValidation {
-  if (!isRecordValue(value)) return { ok: false, reasons: ["issue preview must be an object"] };
-  const reasons = [
-    ...issuePreviewReasons(value.preview),
-    ...issueBindingReasons(value.binding),
-    ...issuePreviewCoherenceReasons(value),
-  ];
-  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
-}
-
 /**
- * Resolve and preview a GitHub issue for the repository at `repositoryPath` (#3385). The server
- * parses the reference, checks the per-checkout grant, reads the issue through the `gh` boundary
- * and answers with the bounded preview plus the content-free binding, or a 4xx whose `error.code`
- * is a `CodingWorkbenchIssueBindingFailure` member. Both inputs are intent only: the path must be
- * a registered project and the reference is re-parsed server-side.
+ * Resolve and preview a GitHub issue for the repository at `input.repositoryPath` (#3385). The
+ * validator + request live in `./coding-workbench-lazy-fetchers.ts` (epic #3384 final-audit F18):
+ * `isGitHubOwnerAndRepo` and the issue-preview bounds pull in the rest of
+ * `coding-workbench-runtime`, weight the desktop shell's first-load chunk never needs since every
+ * caller (CodingWorkbenchIssueIntake, via `useCodingWorkbenchIssueIntake`) is already behind a
+ * `next/dynamic({ ssr: false })` boundary. This function keeps its name and signature so no caller
+ * needs to change.
  */
 export async function previewCodingWorkbenchIssue(
   input: CodingWorkbenchIssuePreviewRequest,
   signal?: AbortSignal,
 ): Promise<GitHubIssuePreviewResponseWire> {
-  return fetchJson(
-    "/api/coding-workbench/issue/preview",
-    {
-      method: "POST",
-      body: JSON.stringify({ repositoryPath: input.repositoryPath, issueRef: input.issueRef }),
-      ...(signal === undefined ? {} : { signal }),
-    },
-    validateGitHubIssuePreviewResponse,
-  );
+  const adapter = await import("./coding-workbench-lazy-fetchers");
+  return adapter.previewCodingWorkbenchIssue(fetchJson, input, signal);
 }
 
 export function validateGitHubIssueReaderAuthorization(value: unknown): GitRepositoryValidation {
@@ -4001,133 +3866,47 @@ export interface GitDeliveryPrDescriptionApproveResponse {
   readonly expiresAt: string;
 }
 
-export { PR_DESCRIPTION_LANGUAGES };
 export type {
   PrDescriptionLanguage,
   PrDescriptionApplicationStatus,
   PrDescriptionApplicationReason,
 };
 
-function isPrDescriptionPreviewWire(value: unknown): value is PrDescriptionPreviewWire {
-  if (!isRecordValue(value)) return false;
-  return (
-    isBoundedText(value.proposalId, 128) &&
-    typeof value.expiresAt === "string" &&
-    isPrDescriptionApplicationStatus(value.status) &&
-    typeof value.finalBody === "string" &&
-    typeof value.managedRegion === "string" &&
-    typeof value.concurrencyLimitation === "string"
-  );
-}
-
-/**
- * Rejects any wire body the shared contract does not sanction — a malformed status, an unknown
- * blocked reason, or a preview envelope missing the server-rendered final body — before it ever
- * reaches a component (client-side enforcement of the same closed vocabulary prDescriptionRoutes.ts
- * validates server-side).
- */
-export function validatePrDescriptionApplicationResultWire(
-  value: unknown,
-): GitRepositoryValidation {
-  if (!isRecordValue(value)) {
-    return { ok: false, reasons: ["pr-description response must be an object"] };
-  }
-  if (value.outcome === "preview") {
-    return isPrDescriptionPreviewWire(value.preview)
-      ? { ok: true }
-      : { ok: false, reasons: ["pr-description preview envelope failed contract validation"] };
-  }
-  if (value.outcome === "observed") {
-    return isPrDescriptionApplicationStatus(value.status)
-      ? { ok: true }
-      : { ok: false, reasons: ["pr-description observed status failed contract validation"] };
-  }
-  if (value.outcome === "blocked") {
-    return typeof value.reason === "string" &&
-      Object.hasOwn(PR_DESCRIPTION_APPLICATION_REASON_STATES, value.reason)
-      ? { ok: true }
-      : { ok: false, reasons: ["pr-description blocked reason is not in the closed vocabulary"] };
-  }
-  return {
-    ok: false,
-    reasons: ["pr-description response.outcome must be preview, observed, or blocked"],
-  };
-}
-
-function gitDeliveryPrDescriptionTargetBody(
-  input: GitDeliveryPrDescriptionTarget,
-): Record<string, unknown> {
-  return {
-    schemaVersion: "1",
-    projectId: input.projectId,
-    ownerAndRepo: input.ownerAndRepo,
-    prNumber: input.prNumber,
-    ...(input.snapshotDigest === undefined ? {} : { snapshotDigest: input.snapshotDigest }),
-  };
-}
+// The validators + fetchers live in `./coding-workbench-lazy-fetchers.ts` (epic #3384 final-audit
+// F18): `isPrDescriptionApplicationStatus`/`PR_DESCRIPTION_APPLICATION_REASON_STATES` pull in
+// `pr-description-application`, and `PR_DESCRIPTION_LANGUAGES` pulls in `pr-description` -- weight
+// the desktop shell's first-load chunk never needs since every caller (GovernedPullRequestCard,
+// GitClientWindow) is already behind a `next/dynamic({ ssr: false })` boundary. These functions keep
+// their names and signatures so no caller needs to change.
 
 export async function fetchGitDeliveryPrDescriptionPreview(
   input: GitDeliveryPrDescriptionPreviewInput,
   signal?: AbortSignal,
 ): Promise<PrDescriptionApplicationResultWire> {
-  return fetchJson(
-    "/api/git-delivery/pr-description/preview",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        ...gitDeliveryPrDescriptionTargetBody(input),
-        language: input.language,
-        ...(input.refinement === undefined ? {} : { refinement: input.refinement }),
-      }),
-      ...(signal === undefined ? {} : { signal }),
-    },
-    validatePrDescriptionApplicationResultWire,
-  );
+  const adapter = await import("./coding-workbench-lazy-fetchers");
+  return adapter.fetchGitDeliveryPrDescriptionPreview(fetchJson, input, signal);
 }
 
 export async function fetchGitDeliveryPrDescriptionApprove(
   input: GitDeliveryPrDescriptionProposalInput,
   signal?: AbortSignal,
 ): Promise<GitDeliveryPrDescriptionApproveResponse> {
-  return fetchJson("/api/git-delivery/pr-description/approve", {
-    method: "POST",
-    body: JSON.stringify({
-      ...gitDeliveryPrDescriptionTargetBody(input),
-      proposalId: input.proposalId,
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const adapter = await import("./coding-workbench-lazy-fetchers");
+  return adapter.fetchGitDeliveryPrDescriptionApprove(fetchJson, input, signal);
 }
 
 export async function fetchGitDeliveryPrDescriptionApply(
   input: GitDeliveryPrDescriptionProposalInput,
   signal?: AbortSignal,
 ): Promise<PrDescriptionApplicationResultWire> {
-  return fetchJson(
-    "/api/git-delivery/pr-description/apply",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        ...gitDeliveryPrDescriptionTargetBody(input),
-        proposalId: input.proposalId,
-      }),
-      ...(signal === undefined ? {} : { signal }),
-    },
-    validatePrDescriptionApplicationResultWire,
-  );
+  const adapter = await import("./coding-workbench-lazy-fetchers");
+  return adapter.fetchGitDeliveryPrDescriptionApply(fetchJson, input, signal);
 }
 
 export async function fetchGitDeliveryPrDescriptionStatus(
   input: GitDeliveryPrDescriptionTarget,
   signal?: AbortSignal,
 ): Promise<PrDescriptionApplicationResultWire> {
-  return fetchJson(
-    "/api/git-delivery/pr-description/status",
-    {
-      method: "POST",
-      body: JSON.stringify(gitDeliveryPrDescriptionTargetBody(input)),
-      ...(signal === undefined ? {} : { signal }),
-    },
-    validatePrDescriptionApplicationResultWire,
-  );
+  const adapter = await import("./coding-workbench-lazy-fetchers");
+  return adapter.fetchGitDeliveryPrDescriptionStatus(fetchJson, input, signal);
 }

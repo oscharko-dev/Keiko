@@ -105,7 +105,10 @@ function isSnapshotDigest(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
 }
 
-interface BaseFields {
+// Exported (final-audit F5, #3400) so a caller outside this route group -- chat-handlers.ts's
+// git-change apply path -- can request the SAME admitted, per-(project, repository, PR) service
+// instance this file's own routes use, rather than composing a second one (AGENTS.md §5).
+export interface BaseFields {
   readonly projectId: string;
   readonly ownerAndRepo: string;
   readonly prNumber: number;
@@ -457,6 +460,46 @@ function createServiceFromDeps(
   return serviceOptions === undefined
     ? undefined
     : createPrDescriptionApplicationService(serviceOptions);
+}
+
+export type PrDescriptionServiceResolution =
+  | { readonly ok: true; readonly service: PrDescriptionApplicationService }
+  | { readonly ok: false; readonly result: RouteResult };
+
+// Final-audit F5 (#3400): the ONE reusable admission + service-cache path this route group's own
+// handlers run through `prepare()` below, exposed for chat-handlers.ts's git-change apply path so
+// a Chat-originated apply reaches the SAME cached, per-(project, repository, PR) service instance
+// -- never a second, independently-composed surface (AGENTS.md §5's reuse-first rule). Reuses
+// `resolveProjectWorkspace`, `admitDescription` and `serviceFor` unchanged: a Chat caller is
+// admitted through the identical `gitDeliveryAuthorityGate` / description-authority fallback every
+// other Git delivery mutation and this route group's own preview/approve/apply already are.
+export function resolvePrDescriptionApplicationServiceForRequest(
+  deps: UiHandlerDeps,
+  ctx: RouteContext,
+  request: BaseFields,
+  correlationId: string,
+  options: PrDescriptionRouteOptions = {},
+): PrDescriptionServiceResolution {
+  const workspace = resolveProjectWorkspace(deps, request.projectId);
+  if (workspace === undefined) {
+    return { ok: false, result: errResult(404, "GIT_DELIVERY_PR_DESCRIPTION_UNKNOWN_PROJECT") };
+  }
+  const seams = options.execution ?? {};
+  const logSink = seams.activityLog ?? processServerLogSink();
+  const admitted = admitDescription(ctx, deps, request, workspace, logSink);
+  if (!admitted.allowed) return { ok: false, result: admitted.result };
+  const key = cacheKey(request.projectId, request.ownerAndRepo, request.prNumber);
+  const contextProvider = descriptionContextProvider(
+    ctx,
+    deps,
+    request,
+    workspace,
+    correlationId,
+    logSink,
+    key,
+  );
+  const service = serviceFor(options, deps, seams, workspace, key, contextProvider);
+  return service === undefined ? { ok: false, result: unavailableService() } : { ok: true, service };
 }
 
 async function prepare<V extends BaseFields>(

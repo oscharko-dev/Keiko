@@ -28,10 +28,20 @@ export const WORKBENCH_DESCRIPTION_REASON_STATES = {
   "partial-generated": "partial",
   "fallback-generated": "fallback",
   "stale-snapshot": "stale",
+  // #3400/#3401 final-audit F1: `authority-expired` has no producer today — the description
+  // authority's read port (runtimeAuthorityService.ts's `currentGitDeliveryDescriptionAuthority`)
+  // deliberately collapses "no record" and "expired record" into the SAME `undefined` return (its
+  // own doc comment: "a changed scope simply finds no record, which is the fail-closed default"),
+  // so `admitAndGenerate` (productionCodingRuntimePorts.ts) can only ever observe
+  // "model-egress-denied", never this more specific reason. Giving it a real producer needs an
+  // expired-vs-absent discriminant on that read port — a change to the authority store itself, out
+  // of this item's write scope and actively owned by a concurrent change in this epic. Kept
+  // (unlike `pull-request-unavailable` below) because `codingRuntimeDescriptionJobStore.test.ts`
+  // already persists it as a valid `WorkbenchDescriptionReason` through `recordBlocked`, ahead of
+  // that discriminant landing.
   "authority-expired": "blocked",
   "model-egress-denied": "blocked",
   "budget-exhausted": "blocked",
-  "pull-request-unavailable": "blocked",
   "generation-unavailable": "blocked",
   interrupted: "blocked",
   "provider-failed": "failed",
