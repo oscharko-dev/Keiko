@@ -14,6 +14,7 @@ import {
 import { createCodingAppSessionChannel } from "../coding-app-session/sessionChannel.js";
 import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js";
 import { createSessionRegistry } from "../coding-app-session/sessionRegistry.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   API_ROUTES,
   STREAMING,
@@ -325,6 +326,10 @@ describe("coding runtime routes", () => {
         level: "warn",
         category: "process",
         op: "coding-runtime.operation.refused",
+        // The fixture's context() carries no correlation id; the log line must still fall back to
+        // the sanctioned UNKNOWN_CORRELATION_ID rather than silently omitting the field
+        // (AGENTS.md §8 rule 1).
+        correlationId: UNKNOWN_CORRELATION_ID,
         extra: { operation: "answer", runId: "run-1", reason: "invalid-intent" },
       }),
     ]);
@@ -364,6 +369,7 @@ describe("coding runtime routes", () => {
     expect(records).toEqual([
       expect.objectContaining({
         op: "coding-runtime.operation.refused",
+        correlationId: UNKNOWN_CORRELATION_ID,
         extra: { operation: "answer", runId: "run-1", reason: "replay-cap-exhausted" },
       }),
     ]);

@@ -77,7 +77,7 @@ function harness(): Harness {
   const deps = baseDeps({
     codingRuntimeSnapshotStore: snapshots,
     evidenceStore: createNodeEvidenceStore(dir),
-    redactor: (value: string): string => value,
+    redactor: (value: unknown): unknown => value,
     activityLog: {
       write: (event: ServerLogEvent): void => {
         events.push(event);
@@ -265,7 +265,7 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
       const deps = baseDeps({
         codingRuntimeSnapshotStore: snapshots,
         evidenceStore: createNodeEvidenceStore(evidenceDir),
-        redactor: (value: string): string => value,
+        redactor: (value: unknown): unknown => value,
       });
       // No `outcomes` override: exercises the same default wiring the mounted production route
       // group (`GIT_DELIVERY_JOURNEY_ROUTE_GROUP`) uses.

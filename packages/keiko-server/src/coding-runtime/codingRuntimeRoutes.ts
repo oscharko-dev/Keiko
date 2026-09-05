@@ -19,6 +19,7 @@ import { unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@osc
 import { unpairedCodingWorkbenchRuntimeQuestionsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import { unpairedCodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
@@ -130,7 +131,7 @@ function logRuntimeOperationRefusal(
     level: "warn",
     category: "process",
     op: "coding-runtime.operation.refused",
-    correlationId,
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
     extra: { operation, reason, ...(runId === undefined ? {} : { runId }) },
   });
 }

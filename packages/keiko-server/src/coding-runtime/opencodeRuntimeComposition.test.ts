@@ -214,6 +214,7 @@ interface OpenCodeRuntimeComposition {
       readonly method: "POST";
       readonly headers: Headers;
       readonly body: string;
+      readonly signal?: AbortSignal;
     }): Promise<{ readonly status: number; readonly body: string }>;
   };
   readonly runPort: {

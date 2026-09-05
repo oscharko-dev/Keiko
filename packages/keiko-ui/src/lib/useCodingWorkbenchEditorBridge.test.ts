@@ -582,3 +582,106 @@ describe("useCodingWorkbenchEditorBridge — run-bound root", () => {
     expect(latestSnapshot.workspaceRoot).toBe("/repo/other-workspace");
   });
 });
+
+// Epic #3384 cascade, end-to-end run 2026-09-05: after a stop, the same long-lived Workbench
+// window never re-registered a bridge for a run it observed becoming active again (a status poll
+// or stream catching up, or a run started from another paired client) — `keiko_changeset_edit`
+// was refused NO_ACTIVE_SESSION until the operator reloaded the page. These tests hold the hook to
+// forcing a genuinely fresh subscribe on every activation AFTER its first, while proving the very
+// first (ordinary) activation pays none of that extra cost.
+describe("useCodingWorkbenchEditorBridge — reconnect on a newly observed run", () => {
+  it("does not force an extra reconnect cycle on the hook's very first activation", async () => {
+    renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
+    );
+    await flushMicrotasks();
+    expect(createSourceSpy).toHaveBeenCalledTimes(1);
+    // Give any (wrongly triggered) forced-reconnect cycle every chance to run — it must not.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+    expect(createSourceSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("forces a fresh reconnect when a running run is observed again after this window went inactive", async () => {
+    const { rerender } = renderHook(
+      (props: { runId: string; active: boolean }) =>
+        useCodingWorkbenchEditorBridge({ root: "/repo/task-1", ...props }),
+      { initialProps: { runId: "run-1", active: true } },
+    );
+    await flushMicrotasks();
+    expect(createSourceSpy).toHaveBeenCalledTimes(1);
+
+    // The run stops; this window goes inactive without unmounting the hook.
+    rerender({ runId: "run-1", active: false });
+    await flushMicrotasks();
+
+    // A DIFFERENT run is observed active — this hook instance's SECOND activation. The plain
+    // sessionId-driven subscribe fires once; the forced reconnect then tears it down and
+    // re-establishes it, so at least one MORE EventSource is opened than the ordinary path alone
+    // would produce.
+    rerender({ runId: "run-2", active: true });
+    await waitFor(
+      () => {
+        expect(createSourceSpy.mock.calls.length).toBeGreaterThanOrEqual(3);
+      },
+      { timeout: 2_000 },
+    );
+    const latestUrl = (createSourceSpy.mock.results.at(-1)?.value as { url: string }).url;
+    expect(new URL(latestUrl, "https://example.test").searchParams.get("sessionId")).toBe(
+      "coding-workbench-edit-run-2",
+    );
+
+    // The re-established session still registers the run's own workspace root.
+    await waitFor(() => {
+      const [latestSnapshot] = postSnapshotSpy.mock.calls.at(-1) as [{ workspaceRoot: string }];
+      expect(latestSnapshot.workspaceRoot).toBe("/repo/task-1");
+    });
+  });
+});
+
+describe("useCodingWorkbenchEditorBridge — bridgeUnavailable", () => {
+  it("reports bridgeUnavailable while the run is active but registration keeps failing, and clears once it succeeds", async () => {
+    postSnapshotSpy.mockRejectedValue(new Error("network unreachable"));
+    const { result } = renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
+    );
+    expect(result.current.bridgeUnavailable).toBe(false);
+
+    await waitFor(() => {
+      expect(result.current.bridgeUnavailable).toBe(true);
+    });
+
+    postSnapshotSpy.mockResolvedValue({ snapshot: null, bridgeDecisionCapability: "A".repeat(43) });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+    await waitFor(() => {
+      expect(result.current.bridgeUnavailable).toBe(false);
+    });
+  });
+
+  it("never reports bridgeUnavailable while the run is not active", async () => {
+    postSnapshotSpy.mockRejectedValue(new Error("network unreachable"));
+    const { result } = renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: false }),
+    );
+    await flushMicrotasks();
+    expect(result.current.bridgeUnavailable).toBe(false);
+  });
+
+  it("clears a stale registration failure for a new run rather than carrying the prior session's outcome", async () => {
+    postSnapshotSpy.mockRejectedValue(new Error("network unreachable"));
+    const { result, rerender } = renderHook(
+      (props: { runId: string }) => useCodingWorkbenchEditorBridge({ root: "/repo/task-1", ...props, active: true }),
+      { initialProps: { runId: "run-1" } },
+    );
+    await waitFor(() => {
+      expect(result.current.bridgeUnavailable).toBe(true);
+    });
+
+    postSnapshotSpy.mockResolvedValue({ snapshot: null, bridgeDecisionCapability: "A".repeat(43) });
+    rerender({ runId: "run-2" });
+    expect(result.current.bridgeUnavailable).toBe(false);
+  });
+});

@@ -353,13 +353,17 @@ export function useCodingWorkbenchEditorBridge(
     await wait(FORCE_RECONNECT_SETTLE_MS);
   }, []);
 
-  // Epic #3384 cascade: a run this window only just observed as active — a status poll or stream
-  // catching up after a stop, or a run started from another paired client — must always get a
-  // genuinely live bridge, never one that merely LOOKS enabled because `shouldBeEnabled` flipped
-  // true. The shared bridge registry has no signal of its own for "connected but no longer
-  // actually live" (see `forceReconnect` above), so the first time this specific session becomes
-  // eligible, force one clean unsubscribe/resubscribe cycle rather than trusting the ordinary
-  // prop-driven (re)subscribe alone. Keyed per `sessionId` so it fires exactly once per run.
+  // Epic #3384 cascade: a run this long-lived window only just observed as active — a status poll
+  // or stream catching up after a stop, or a run started from another paired client — must always
+  // get a genuinely live bridge, never one that merely LOOKS enabled because `shouldBeEnabled`
+  // flipped true. The shared bridge registry has no signal of its own for "connected but no longer
+  // actually live" (see `forceReconnect` above), so every eligibility transition AFTER this hook
+  // instance's very first one forces one clean unsubscribe/resubscribe cycle instead of trusting
+  // the ordinary prop-driven (re)subscribe alone. The very first transition is deliberately exempt
+  // — a hook instance that has never registered anything yet has no stale connection to clear, and
+  // forcing the extra ~240ms suspend/resume cycle on every ordinary run start would only delay the
+  // common case for no benefit. Keyed per `sessionId` so a given run is reconnected at most once.
+  const everEnabledRef = useRef(false);
   const reconnectedSessionRef = useRef<string | null>(null);
   useEffect(() => {
     if (!shouldBeEnabled) {
@@ -368,7 +372,11 @@ export function useCodingWorkbenchEditorBridge(
     }
     if (reconnectedSessionRef.current === sessionId) return;
     reconnectedSessionRef.current = sessionId;
-    void forceReconnect();
+    if (everEnabledRef.current) {
+      void forceReconnect();
+    } else {
+      everEnabledRef.current = true;
+    }
   }, [shouldBeEnabled, sessionId, forceReconnect]);
 
   // `lastDecisionRef` remembers which decision to retry: a failed Approve must resurface as a
