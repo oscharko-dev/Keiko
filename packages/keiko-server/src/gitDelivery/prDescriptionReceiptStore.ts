@@ -21,7 +21,8 @@ import { validDescriptionContext } from "./prDescriptionPreparation.js";
 const PREFIX = "git-pr-description-";
 const MAX_BYTES = 8192;
 const MAX_REVISION = 1_000_000;
-const MAX_DOCUMENTS = 512;
+/** Shared ceiling for both the durable receipt document count and the in-process version cache. */
+export const MAX_DOCUMENTS = 512;
 interface ReceiptDocument {
   readonly schemaVersion: "1";
   readonly scopeDigest: string;
@@ -278,6 +279,25 @@ function hookScopeKey(context: PrDescriptionContext): string | undefined {
     return undefined;
   }
 }
+/**
+ * Bounds the in-process version cache the same way approvalStore.ts bounds its map: once the
+ * cache exceeds MAX_DOCUMENTS distinct repo+PR scopes, the oldest entry by insertion order is
+ * evicted (Map iteration order is insertion order, and `set` on an existing key never moves it).
+ * A dropped entry is not silently unsafe — a subsequent write for it is a cache miss, which
+ * `expectedVersionFor` recovers with one fresh read of the underlying store before writing.
+ */
+function setCachedVersion(
+  versions: Map<string, string | null>,
+  key: string,
+  version: string | null,
+): void {
+  versions.set(key, version);
+  while (versions.size > MAX_DOCUMENTS) {
+    const oldest = versions.keys().next().value;
+    if (oldest === undefined) break;
+    versions.delete(oldest);
+  }
+}
 function expectedVersionFor(
   store: PrDescriptionReceiptStore,
   versions: Map<string, string | null>,
@@ -288,7 +308,7 @@ function expectedVersionFor(
   if (cached !== undefined) return cached;
   const read = store.readStatus(context);
   if (!read.ok) return undefined;
-  versions.set(key, read.version);
+  setCachedVersion(versions, key, read.version);
   return read.version;
 }
 function readHookStatus(
@@ -299,7 +319,7 @@ function readHookStatus(
   const read = store.readStatus(context);
   if (!read.ok) return undefined;
   const key = hookScopeKey(context);
-  if (key !== undefined) versions.set(key, read.version);
+  if (key !== undefined) setCachedVersion(versions, key, read.version);
   return read.version === null ? undefined : structuredClone(read.status);
 }
 function recordHookStatus(
@@ -324,6 +344,6 @@ function recordHookStatus(
     versions.delete(key);
     return false;
   }
-  versions.set(key, result.version);
+  setCachedVersion(versions, key, result.version);
   return true;
 }

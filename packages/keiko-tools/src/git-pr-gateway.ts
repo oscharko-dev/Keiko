@@ -50,6 +50,8 @@ import { gitPrRejectionToDisposition } from "@oscharko-dev/keiko-contracts/runti
 import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 import { isGitHubOwnerAndRepo } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+import { validGitPrBodyText } from "./git-pr-body.js";
+import { buildGitHubApiGetArgv } from "./git-provider-value.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { evaluateGitPreflight } from "./git-mutation-preflight.js";
 import type {
@@ -193,13 +195,9 @@ function inspectionBranch(value: string): string {
   return value;
 }
 
-function inspectionArgv(endpoint: string, projection: string): readonly string[] {
-  return ["api", "--hostname", "github.com", "--method", "GET", endpoint, "--jq", projection];
-}
-
 export function buildPrReadArgv(req: GitPrReadRequest): readonly string[] {
   const repo = inspectionRepository(req.ownerAndRepo);
-  return inspectionArgv(
+  return buildGitHubApiGetArgv(
     `/repos/${repo}/pulls/${assertPrNumber(req.prExternalId)}`,
     GIT_PR_IDENTITY_JQ,
   );
@@ -211,13 +209,13 @@ export function buildPrReadByHeadArgv(req: GitPrReadHeadRequest): readonly strin
   const owner = repo.split("/")[0] ?? "";
   // Two results already prove ambiguity. Omitting base ensures retargeted PRs remain visible.
   const query = `state=all&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=2&page=1`;
-  return inspectionArgv(`/repos/${repo}/pulls?${query}`, `[.[] | ${GIT_PR_IDENTITY_JQ}]`);
+  return buildGitHubApiGetArgv(`/repos/${repo}/pulls?${query}`, `[.[] | ${GIT_PR_IDENTITY_JQ}]`);
 }
 
 export function buildPrReadBranchHeadArgv(req: GitPrReadHeadRequest): readonly string[] {
   const repo = inspectionRepository(req.ownerAndRepo);
   const branch = inspectionBranch(req.headBranchName);
-  return inspectionArgv(
+  return buildGitHubApiGetArgv(
     `/repos/${repo}/git/ref/heads/${encodeURIComponent(branch)}`,
     "{ref,sha:.object.sha,type:.object.type}",
   );
@@ -271,10 +269,6 @@ const REF_CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
 // Title is a single line: reject the whole control range.
 // eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
 const TITLE_CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
-// Body permits TAB (09), LF (0a), CR (0d); every other control char + NUL + DEL is rejected.
-// eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
-const BODY_CONTROL_CHAR = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
-const OWNER_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const PR_NUMBER_RE = /^[1-9]\d{0,9}$/;
 
 function assertRef(value: string, label: string): string {
@@ -297,7 +291,7 @@ function assertRef(value: string, label: string): string {
 }
 
 function assertOwnerAndRepo(value: string): string {
-  if (!OWNER_REPO_RE.test(value)) {
+  if (!isGitHubOwnerAndRepo(value)) {
     throw new GitPrArgvError('ownerAndRepo must match "owner/repo"');
   }
   return value;
@@ -321,8 +315,10 @@ function assertTitle(value: string): string {
 }
 
 function assertBody(value: string): string {
-  if (BODY_CONTROL_CHAR.test(value)) {
-    throw new GitPrArgvError("body must not contain disallowed control characters");
+  if (!validGitPrBodyText(value)) {
+    throw new GitPrArgvError(
+      "body must not exceed the size limit, contain disallowed control characters, or contain invalid UTF-8",
+    );
   }
   return value;
 }
@@ -387,8 +383,14 @@ export function buildPrUpdateArgv(req: GitPrUpdateExecRequest): readonly string[
 
 const GITHUB_NODE_ID_RE = /^[A-Za-z0-9_=-]+$/;
 
+/** The single owner of the GitHub GraphQL node-id format; reused by git-pr-node.ts's own parsing of
+ * the id `gh api … --jq .node_id` returns, so the format is tightened in exactly one place. */
+export function isGithubNodeId(value: string): boolean {
+  return value.length > 0 && GITHUB_NODE_ID_RE.test(value);
+}
+
 function assertNodeId(value: string): string {
-  if (value.length === 0 || !GITHUB_NODE_ID_RE.test(value)) {
+  if (!isGithubNodeId(value)) {
     throw new GitPrArgvError("pull request node id is malformed");
   }
   return value;

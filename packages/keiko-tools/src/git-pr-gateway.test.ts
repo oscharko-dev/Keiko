@@ -22,6 +22,7 @@ import {
   gitPrArgvIsGoverned,
   GitPrArgvError,
   gitPullRequestRejectionFor,
+  isGithubNodeId,
   runGitPullRequest,
   type GitPrCreateCommand,
   type GitPrExecResult,
@@ -157,6 +158,35 @@ describe("buildPrCreateArgv", () => {
       buildPrCreateArgv({ ...createCommand(), body: `a${String.fromCharCode(0)}b` }),
     ).toThrow(GitPrArgvError);
   });
+
+  // F16 (#3384 audit): the write path's ownerAndRepo validator must be exactly as strict as the read
+  // path's isGitHubOwnerAndRepo — a dot-segment repository turns `/repos/${repo}/pulls` into a path
+  // that escapes the intended resource. The pre-fix local OWNER_REPO_RE (`[A-Za-z0-9._-]+/[A-Za-z0-9._-]+`)
+  // admitted all three of these; this pin fails on that regex and passes once buildPrCreateArgv routes
+  // through isGitHubOwnerAndRepo.
+  it("rejects a dot-segment repository and a leading-hyphen owner", () => {
+    expect(() => buildPrCreateArgv({ ...createCommand(), ownerAndRepo: "owner/.." })).toThrow(
+      GitPrArgvError,
+    );
+    expect(() => buildPrCreateArgv({ ...createCommand(), ownerAndRepo: "owner/." })).toThrow(
+      GitPrArgvError,
+    );
+    expect(() => buildPrCreateArgv({ ...createCommand(), ownerAndRepo: "-owner/repo" })).toThrow(
+      GitPrArgvError,
+    );
+  });
+
+  // F26 (#3384 audit): assertBody must delegate to the one owner of body validation
+  // (validGitPrBodyText, git-pr-body.ts) instead of a second, weaker control-char-only regex — closing
+  // the byte-size cap and U+FFFD/round-trip gaps on the create path.
+  it("rejects a body over the byte-size cap and a body containing U+FFFD", () => {
+    expect(() => buildPrCreateArgv({ ...createCommand(), body: "x".repeat(65_537) })).toThrow(
+      GitPrArgvError,
+    );
+    expect(() =>
+      buildPrCreateArgv({ ...createCommand(), body: "has a � replacement char" }),
+    ).toThrow(GitPrArgvError);
+  });
 });
 
 describe("buildPrUpdateArgv", () => {
@@ -198,6 +228,30 @@ describe("buildPrUpdateArgv", () => {
       }),
     ).toThrow(GitPrArgvError);
   });
+
+  // F16/F26 (#3384 audit): the update path shares the same ownerAndRepo/body validation gaps as
+  // create — both must close identically.
+  it("rejects a dot-segment repository, a leading-hyphen owner, an oversize body and a U+FFFD body", () => {
+    const base = {
+      prExternalId: "1499",
+      baseBranchName: "dev",
+      title: "feat: updated",
+      body: "Updated body",
+      convertToDraft: false,
+      convertFromDraft: false,
+    };
+    expect(() => buildPrUpdateArgv({ ...base, ownerAndRepo: "owner/.." })).toThrow(GitPrArgvError);
+    expect(() => buildPrUpdateArgv({ ...base, ownerAndRepo: "owner/." })).toThrow(GitPrArgvError);
+    expect(() => buildPrUpdateArgv({ ...base, ownerAndRepo: "-owner/repo" })).toThrow(
+      GitPrArgvError,
+    );
+    expect(() =>
+      buildPrUpdateArgv({ ...base, ownerAndRepo: "o/r", body: "x".repeat(65_537) }),
+    ).toThrow(GitPrArgvError);
+    expect(() =>
+      buildPrUpdateArgv({ ...base, ownerAndRepo: "o/r", body: "has a � replacement char" }),
+    ).toThrow(GitPrArgvError);
+  });
 });
 
 describe("draft-toggle graphql builders", () => {
@@ -211,6 +265,21 @@ describe("draft-toggle graphql builders", () => {
       "pullRequestId=PR_kwDO123",
     ]);
     expect(buildPrConvertDraftGraphqlArgv("PR_kwDO123")[3]).toContain("convertPullRequestToDraft");
+    expect(() => buildPrMarkReadyGraphqlArgv("bad id!")).toThrow(GitPrArgvError);
+  });
+});
+
+// F27 (#3384 audit): isGithubNodeId is the one owner of the node-id format; git-pr-node.ts's
+// parseNodeId must reuse it rather than re-declaring the regex.
+describe("isGithubNodeId — the one owner of the GitHub node-id format", () => {
+  it("accepts the same shapes assertNodeId (via buildPrMarkReadyGraphqlArgv) accepts", () => {
+    expect(isGithubNodeId("PR_kwDO123")).toBe(true);
+    expect(() => buildPrMarkReadyGraphqlArgv("PR_kwDO123")).not.toThrow();
+  });
+  it("rejects the same shapes assertNodeId rejects: empty and disallowed characters", () => {
+    expect(isGithubNodeId("")).toBe(false);
+    expect(isGithubNodeId("bad id!")).toBe(false);
+    expect(() => buildPrMarkReadyGraphqlArgv("")).toThrow(GitPrArgvError);
     expect(() => buildPrMarkReadyGraphqlArgv("bad id!")).toThrow(GitPrArgvError);
   });
 });

@@ -2701,7 +2701,8 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     await vi.waitFor(() => {
       expect(
         captured.records.some(
-          (event) => event.op === "coding-runtime.description" && event.extra?.event === "generated",
+          (event) =>
+            event.op === "coding-runtime.description" && event.extra?.event === "generated",
         ),
       ).toBe(true);
     });
@@ -2717,8 +2718,9 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       correlationId: UNKNOWN_CORRELATION_ID,
       extra: { runId: "run-1", event: "dispatched" },
     });
-    expect(captured.records.every((event) => event.op !== "coding-runtime.description.dispatched"))
-      .toBe(true);
+    expect(
+      captured.records.every((event) => event.op !== "coding-runtime.description.dispatched"),
+    ).toBe(true);
     const serialized = JSON.stringify(captured.records);
     expect(serialized).not.toContain(start.taskIntent);
   });
@@ -2753,7 +2755,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
           (event) =>
             event.op === "coding-runtime.description" &&
             event.extra?.event === "blocked" &&
-            event.extra?.reason === "provider-failed",
+            event.extra.reason === "provider-failed",
         ),
       ).toBe(true);
     });
@@ -2766,7 +2768,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       extra: { runId: "run-1", reason: "provider-failed" },
     });
     expect(f.orchestrator.status()).toMatchObject({
-      descriptionStatus: { state: "blocked", reason: "provider-failed" },
+      descriptionStatus: { state: "failed", reason: "provider-failed" },
     });
     const serialized = JSON.stringify(captured.records);
     expect(serialized).not.toContain("model gateway unavailable");

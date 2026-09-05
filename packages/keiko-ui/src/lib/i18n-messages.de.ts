@@ -1381,6 +1381,7 @@ export const DE_MESSAGES = {
   "gitChangeScope.status.fallback": "Ersatzweise",
   "gitChangeScope.status.blocked": "Blockiert",
   "gitChangeScope.status.failed": "Fehlgeschlagen",
+  "gitChangeScope.counts.file": "{count} geänderte Datei",
   "gitChangeScope.counts.files": "{count} geänderte Dateien",
   "gitChangeScope.counts.withOmitted": "{shown} von {total} Dateien angezeigt",
   "gitChangeScope.pill.accessible": "Git-Änderung: {label}",
@@ -2487,4 +2488,31 @@ export const DE_MESSAGES = {
   "manualPodRefresh.state.partial": "Handbuch mit Lücken aktualisiert; einige Seiten fehlen",
   "manualPodRefresh.state.failed":
     "Aktualisierung fehlgeschlagen; das vorherige Handbuch bleibt unverändert",
+  // GovernedPullRequestCard's Description panel (preview -> approve -> apply, epic #3384 #3399).
+  "governedPullRequestCard.description.heading": "Beschreibung",
+  "governedPullRequestCard.description.regionAria": "Pull-Request-Beschreibung",
+  "governedPullRequestCard.description.state.current": "Übernommen und bestätigt",
+  "governedPullRequestCard.description.state.stale": "Veraltet — Vorschau aktualisieren",
+  "governedPullRequestCard.description.state.partial": "Übernommen — teilweise generiert",
+  "governedPullRequestCard.description.state.fallback": "Übernommen — ohne Modell generiert",
+  "governedPullRequestCard.description.state.blocked": "Blockiert — nicht übernommen",
+  "governedPullRequestCard.description.state.failed": "Fehlgeschlagen — nicht übernommen",
+  "governedPullRequestCard.description.previewCaption":
+    "Vorschau — Repository-Vorlage und von Menschen verfasster Text außerhalb des verwalteten Bereichs bleiben erhalten",
+  "governedPullRequestCard.description.field.repository": "Repository (Besitzer/Repo)",
+  "governedPullRequestCard.description.field.repositoryAria":
+    "Beschreibung Repository (Besitzer/Repo)",
+  "governedPullRequestCard.description.field.prNumber": "Pull-Request-Nummer",
+  "governedPullRequestCard.description.field.prNumberAria": "Beschreibung Pull-Request-Nummer",
+  "governedPullRequestCard.description.field.prNumberHint":
+    "Geben Sie die numerische Pull-Request-Nummer ein, zum Beispiel 1499.",
+  "governedPullRequestCard.description.field.language": "Sprache",
+  "governedPullRequestCard.description.field.languageAria": "Beschreibung Sprache",
+  "governedPullRequestCard.description.action.preview": "Beschreibung als Vorschau anzeigen",
+  "governedPullRequestCard.description.action.approve": "Genehmigen",
+  "governedPullRequestCard.description.action.apply": "Übernehmen",
+  "governedPullRequestCard.description.refreshHint.stale":
+    "Diese Vorschau ist veraltet — der Pull Request hat sich seit der Erstellung geändert. Vorschau erneut abrufen, bevor Sie genehmigen oder übernehmen.",
+  "governedPullRequestCard.description.refreshHint.targetChanged":
+    "Das Repository oder die Pull-Request-Nummer hat sich seit der letzten Vorschau geändert. Vorschau erneut abrufen, bevor Sie genehmigen oder übernehmen.",
 } satisfies MessageCatalog;

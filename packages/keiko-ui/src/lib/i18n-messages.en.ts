@@ -1346,6 +1346,7 @@ export const EN_MESSAGES = {
   "gitChangeScope.status.fallback": "Fallback",
   "gitChangeScope.status.blocked": "Blocked",
   "gitChangeScope.status.failed": "Failed",
+  "gitChangeScope.counts.file": "{count} file changed",
   "gitChangeScope.counts.files": "{count} files changed",
   "gitChangeScope.counts.withOmitted": "{shown} of {total} files shown",
   "gitChangeScope.pill.accessible": "Git change: {label}",
@@ -2409,6 +2410,33 @@ export const EN_MESSAGES = {
   "manualPodRefresh.state.succeeded": "Manual refreshed",
   "manualPodRefresh.state.partial": "Manual refreshed with gaps; some pages are missing",
   "manualPodRefresh.state.failed": "Refresh failed; the previous manual is unchanged",
+  // GovernedPullRequestCard's Description panel (preview -> approve -> apply, epic #3384 #3399).
+  "governedPullRequestCard.description.heading": "Description",
+  "governedPullRequestCard.description.regionAria": "Pull Request description",
+  "governedPullRequestCard.description.state.current": "Applied and confirmed",
+  "governedPullRequestCard.description.state.stale": "Stale — refresh the preview",
+  "governedPullRequestCard.description.state.partial": "Applied — partially generated",
+  "governedPullRequestCard.description.state.fallback": "Applied — generated without the model",
+  "governedPullRequestCard.description.state.blocked": "Blocked — not applied",
+  "governedPullRequestCard.description.state.failed": "Failed — not applied",
+  "governedPullRequestCard.description.previewCaption":
+    "Preview — repository template and human text preserved outside the managed region",
+  "governedPullRequestCard.description.field.repository": "Repository (owner/repo)",
+  "governedPullRequestCard.description.field.repositoryAria":
+    "Description repository (owner/repo)",
+  "governedPullRequestCard.description.field.prNumber": "Pull Request number",
+  "governedPullRequestCard.description.field.prNumberAria": "Description pull request number",
+  "governedPullRequestCard.description.field.prNumberHint":
+    "Enter the numeric Pull Request number, for example 1499.",
+  "governedPullRequestCard.description.field.language": "Language",
+  "governedPullRequestCard.description.field.languageAria": "Description language",
+  "governedPullRequestCard.description.action.preview": "Preview description",
+  "governedPullRequestCard.description.action.approve": "Approve",
+  "governedPullRequestCard.description.action.apply": "Apply",
+  "governedPullRequestCard.description.refreshHint.stale":
+    "This preview is stale — the pull request changed since it was generated. Preview again before approving or applying.",
+  "governedPullRequestCard.description.refreshHint.targetChanged":
+    "The repository or Pull Request number changed since the last preview. Preview again before approving or applying.",
 } as const;
 
 export type MessageKey = keyof typeof EN_MESSAGES;

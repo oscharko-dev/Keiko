@@ -78,9 +78,14 @@ export function gitChangeBlockedReasonMessage(
 }
 
 function countsLabel(scope: ChatGitChangeScope, t: I18nTranslate): string {
-  return scope.omittedFiles > 0
-    ? t("gitChangeScope.counts.withOmitted", { shown: scope.fileCount, total: scope.totalFiles })
-    : t("gitChangeScope.counts.files", { count: scope.fileCount });
+  if (scope.omittedFiles > 0) {
+    return t("gitChangeScope.counts.withOmitted", {
+      shown: scope.fileCount,
+      total: scope.totalFiles,
+    });
+  }
+  const key = scope.fileCount === 1 ? "gitChangeScope.counts.file" : "gitChangeScope.counts.files";
+  return t(key, { count: scope.fileCount });
 }
 
 function formatDisconnectErrorMessage(error: unknown, t: I18nTranslate): string {

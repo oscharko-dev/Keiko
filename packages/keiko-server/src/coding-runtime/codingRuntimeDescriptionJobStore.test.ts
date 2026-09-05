@@ -188,14 +188,39 @@ describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supers
     const store = openStore();
     const decision = store.beginDispatch(scope(), NOW);
     if (decision.kind !== "dispatch") throw new Error("expected a dispatch decision");
-    store.recordBlocked(
+    const accepted = store.recordBlocked(
       scope(),
       "authority-expired",
       decision.generationVersion,
       decision.revision,
       NOW,
     );
+    expect(accepted).toBe(true);
     expect(store.current("run-1")).toMatchObject({ state: "blocked", reason: "authority-expired" });
+  });
+
+  // #3401 review finding 15: the orchestrator's async provider-failure branch must be able to tell
+  // "this attempt is genuinely blocked" from "a newer head already superseded it" (mirroring
+  // `settle`'s own CAS return), so a late provider rejection for an abandoned head never
+  // overwrites the status of the head that superseded it.
+  it("returns false from recordBlocked when a newer head superseded the attempt first", () => {
+    const store = openStore();
+    const first = store.beginDispatch(scope(), NOW);
+    if (first.kind !== "dispatch") throw new Error("expected a dispatch decision");
+    const superseding = store.beginDispatch(scope({ headSha: HEAD_2 }), LATER);
+    expect(superseding.kind).toBe("dispatch");
+
+    const accepted = store.recordBlocked(
+      scope(),
+      "provider-failed",
+      first.generationVersion,
+      first.revision,
+      LATER,
+    );
+
+    expect(accepted).toBe(false);
+    // The superseding head's own in-flight attempt must be left untouched by the stale write.
+    expect(store.current("run-1")).toBeUndefined();
   });
 
   it("reconciles an attempt still in flight at restart to a closed blocked status, never silently resumed", () => {

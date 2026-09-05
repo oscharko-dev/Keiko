@@ -26,6 +26,11 @@ import {
   fetchGitDeliveryMergePreview,
   fetchGitDeliveryLocalBranchCreate,
   fetchGitDeliveryLocalBranchSwitch,
+  fetchGitDeliveryPrApprove,
+  fetchGitDeliveryPrDescriptionApply,
+  fetchGitDeliveryPrDescriptionApprove,
+  fetchGitDeliveryPrDescriptionPreview,
+  fetchGitDeliveryPrDescriptionStatus,
   fetchGitDeliveryPrExecute,
   fetchGitDeliveryPrPreview,
   fetchGitDeliveryPushExecute,
@@ -80,7 +85,19 @@ export interface GitClientSeam {
   readonly pushPreview: typeof fetchGitDeliveryPushPreview;
   readonly pushExecute: typeof fetchGitDeliveryPushExecute;
   readonly prPreview: typeof fetchGitDeliveryPrPreview;
+  // #3387/#3399 (epic #3384): GovernedPullRequestCard's own client declares these five as optional
+  // (an older seam degrades to the pre-#3387 unapproved execute / a hidden Description panel) — kept
+  // optional here too, purely so an existing partial seam stub elsewhere in this directory (built
+  // before this correction) still satisfies the type without a hard TypeScript break. Real callers
+  // get every one of them: DEFAULT_GIT_CLIENT below wires all five to the real BFF clients, exactly
+  // like `mergeApprove`, so the generic Git window's PR pane always gets the real
+  // approval-before-execute path and the preview -> approve -> apply Description panel.
+  readonly prApprove?: typeof fetchGitDeliveryPrApprove | undefined;
   readonly prExecute: typeof fetchGitDeliveryPrExecute;
+  readonly prDescriptionPreview?: typeof fetchGitDeliveryPrDescriptionPreview | undefined;
+  readonly prDescriptionApprove?: typeof fetchGitDeliveryPrDescriptionApprove | undefined;
+  readonly prDescriptionApply?: typeof fetchGitDeliveryPrDescriptionApply | undefined;
+  readonly prDescriptionStatus?: typeof fetchGitDeliveryPrDescriptionStatus | undefined;
   readonly mergePreview: typeof fetchGitDeliveryMergePreview;
   readonly mergeApprove: typeof fetchGitDeliveryMergeApprove;
   readonly mergeExecute: typeof fetchGitDeliveryMergeExecute;
@@ -109,7 +126,12 @@ export const DEFAULT_GIT_CLIENT: GitClientSeam = {
   pushPreview: fetchGitDeliveryPushPreview,
   pushExecute: fetchGitDeliveryPushExecute,
   prPreview: fetchGitDeliveryPrPreview,
+  prApprove: fetchGitDeliveryPrApprove,
   prExecute: fetchGitDeliveryPrExecute,
+  prDescriptionPreview: fetchGitDeliveryPrDescriptionPreview,
+  prDescriptionApprove: fetchGitDeliveryPrDescriptionApprove,
+  prDescriptionApply: fetchGitDeliveryPrDescriptionApply,
+  prDescriptionStatus: fetchGitDeliveryPrDescriptionStatus,
   mergePreview: fetchGitDeliveryMergePreview,
   mergeApprove: fetchGitDeliveryMergeApprove,
   mergeExecute: fetchGitDeliveryMergeExecute,

@@ -1,6 +1,7 @@
 import { isGitHubOwnerAndRepo } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 import { parseGitPrIdentity, GIT_PR_IDENTITY_JQ } from "./git-pr-identity.js";
+import { buildGitHubApiGetArgv } from "./git-provider-value.js";
 import type { GitPrExecResult, GitPrInspectionResult, GitPrReadRequest } from "./git-pr-gateway.js";
 
 export const GIT_PR_BODY_MAX_BYTES = 65_536;
@@ -42,16 +43,10 @@ function endpoint(request: GitPrReadRequest, expectedKeys: readonly string[]): s
   return `/repos/${request.ownerAndRepo}/pulls/${request.prExternalId}`;
 }
 export function buildPrBodyReadArgv(request: GitPrReadRequest): readonly string[] {
-  return [
-    "api",
-    "--hostname",
-    "github.com",
-    "--method",
-    "GET",
+  return buildGitHubApiGetArgv(
     endpoint(request, ["ownerAndRepo", "prExternalId"]),
-    "--jq",
     `{identity:${GIT_PR_IDENTITY_JQ},body,updatedAt:.updated_at}`,
-  ];
+  );
 }
 export function validGitPrBodyText(body: unknown): body is string {
   return (

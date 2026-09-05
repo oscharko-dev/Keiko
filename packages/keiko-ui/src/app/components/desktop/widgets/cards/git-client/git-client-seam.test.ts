@@ -19,6 +19,11 @@ import {
   fetchGitDeliveryCommitPreview,
   fetchGitDeliveryLocalBranchCreate,
   fetchGitDeliveryLocalBranchSwitch,
+  fetchGitDeliveryPrApprove,
+  fetchGitDeliveryPrDescriptionApply,
+  fetchGitDeliveryPrDescriptionApprove,
+  fetchGitDeliveryPrDescriptionPreview,
+  fetchGitDeliveryPrDescriptionStatus,
   fetchGitDeliveryPushExecute,
   fetchGitDeliveryPushPreview,
   fetchGitDeliveryStage,
@@ -127,6 +132,30 @@ describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
 
   it("pushExecute is fetchGitDeliveryPushExecute", () => {
     expect(DEFAULT_GIT_CLIENT.pushExecute).toBe(fetchGitDeliveryPushExecute);
+  });
+
+  // #3387/#3399 (epic #3384): before this pass, DEFAULT_GIT_CLIENT had no prApprove or
+  // prDescription* fields at all, so GovernedPullRequestCard rendered through the generic Git
+  // window (GitClientWindow) always degraded to the pre-#3387 unapproved pr-execute call and never
+  // showed the preview -> approve -> apply Description panel. Wired exactly like mergeApprove.
+  it("prApprove is fetchGitDeliveryPrApprove", () => {
+    expect(DEFAULT_GIT_CLIENT.prApprove).toBe(fetchGitDeliveryPrApprove);
+  });
+
+  it("prDescriptionPreview is fetchGitDeliveryPrDescriptionPreview", () => {
+    expect(DEFAULT_GIT_CLIENT.prDescriptionPreview).toBe(fetchGitDeliveryPrDescriptionPreview);
+  });
+
+  it("prDescriptionApprove is fetchGitDeliveryPrDescriptionApprove", () => {
+    expect(DEFAULT_GIT_CLIENT.prDescriptionApprove).toBe(fetchGitDeliveryPrDescriptionApprove);
+  });
+
+  it("prDescriptionApply is fetchGitDeliveryPrDescriptionApply", () => {
+    expect(DEFAULT_GIT_CLIENT.prDescriptionApply).toBe(fetchGitDeliveryPrDescriptionApply);
+  });
+
+  it("prDescriptionStatus is fetchGitDeliveryPrDescriptionStatus", () => {
+    expect(DEFAULT_GIT_CLIENT.prDescriptionStatus).toBe(fetchGitDeliveryPrDescriptionStatus);
   });
 });
 

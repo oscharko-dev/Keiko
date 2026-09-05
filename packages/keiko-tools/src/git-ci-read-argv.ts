@@ -4,6 +4,7 @@ import {
   isSafeGitRefName,
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { GIT_PR_IDENTITY_JQ } from "./git-pr-gateway.js";
+import { buildGitHubApiGetArgv } from "./git-provider-value.js";
 
 export const GIT_CI_READ_KINDS = [
   "pull-request",
@@ -75,14 +76,5 @@ export function buildGitCiReadArgv(
 ): readonly string[] {
   assertTarget(target, page);
   if (!Object.hasOwn(PROJECTIONS, kind)) throw new TypeError("Invalid CI read surface");
-  return [
-    "api",
-    "--hostname",
-    "github.com",
-    "--method",
-    "GET",
-    endpoint(kind, target, page),
-    "--jq",
-    PROJECTIONS[kind],
-  ];
+  return buildGitHubApiGetArgv(endpoint(kind, target, page), PROJECTIONS[kind]);
 }

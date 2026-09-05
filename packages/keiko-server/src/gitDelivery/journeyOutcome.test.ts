@@ -144,10 +144,71 @@ describe("observed exact-revision issue-to-PR handoff", () => {
       }),
     ).toMatchObject({
       state: "blocked",
+      reason: "provider-unavailable",
       remote: null,
       keikoDescriptionApplied: false,
       observationFailure: { reason },
     });
+  });
+  it("returns the cancelled reason for a cancelled observation ahead of the blocked-state fallback", () => {
+    const f = journeyFixture();
+    expect(
+      produceJourneyOutcome({
+        ...f,
+        facts: { status: "unavailable", failure: gitDeliveryObservationFailure("cancelled") },
+      }),
+    ).toMatchObject({
+      state: "cancelled",
+      reason: "cancelled",
+      remote: null,
+      keikoDescriptionApplied: false,
+      observationFailure: { reason: "cancelled" },
+    });
+  });
+  it("maps a locally blocked observation failure to authority-denied", () => {
+    const f = journeyFixture();
+    expect(
+      produceJourneyOutcome({
+        ...f,
+        facts: { status: "unavailable", failure: gitDeliveryObservationFailure("invalid-binding") },
+      }),
+    ).toMatchObject({
+      state: "blocked",
+      reason: "authority-denied",
+      remote: null,
+      keikoDescriptionApplied: false,
+      observationFailure: { reason: "invalid-binding" },
+    });
+  });
+  it("declares readiness unavailable before deriving a human review reason", () => {
+    const f = journeyFixture(false);
+    expect(produceJourneyOutcome({ ...f, readiness: null })).toMatchObject({
+      state: "blocked",
+      reason: "readiness-unavailable",
+    });
+  });
+  it("separates checks-not-ready from readiness staleness", () => {
+    const f = journeyFixture(false);
+    if (f.readiness === null) throw new TypeError("Readiness missing");
+    const readiness = {
+      ...f.readiness,
+      state: "pending" as const,
+      reason: "required-checks-pending" as const,
+    };
+    expect(produceJourneyOutcome({ ...f, readiness })).toMatchObject({
+      state: "blocked",
+      reason: "checks-not-ready",
+    });
+  });
+  it("marks a stale description separately from an unapplied one", () => {
+    const f = journeyFixture();
+    if (f.description === null) throw new TypeError("Description missing");
+    expect(
+      produceJourneyOutcome({
+        ...f,
+        description: { ...f.description, state: "stale", reason: "stale-pr", effect: "none" },
+      }),
+    ).toMatchObject({ reason: "description-stale" });
   });
   it("rejects expired readiness and stale or unapplied description", () => {
     const f = journeyFixture();

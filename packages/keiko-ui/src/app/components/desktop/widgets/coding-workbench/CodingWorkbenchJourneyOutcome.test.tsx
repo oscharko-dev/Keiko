@@ -405,5 +405,13 @@ describe("pr-mark-ready proposal wiring", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Review ready-for-review request" }));
     await waitFor(() => expect(proposePrMarkReadyMock).toHaveBeenCalledTimes(1));
+    // #3389 repair: the click must send the exact request the server's mint route requires,
+    // `baseRef` included — a click that reached `proposePrMarkReady` without it would have minted
+    // successfully in every test here (all mocked) yet failed with a 400 against the real BFF.
+    const identity = fixture.outcome.remote?.identity;
+    if (identity === undefined) throw new Error("Expected fixture remote identity");
+    expect(proposePrMarkReadyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ baseRef: identity.baseRef }),
+    );
   });
 });

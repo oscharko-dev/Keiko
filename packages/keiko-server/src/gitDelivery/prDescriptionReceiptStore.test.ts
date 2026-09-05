@@ -11,6 +11,7 @@ import { applicationStatus } from "./prDescriptionProjection.js";
 import {
   createPrDescriptionReceiptStatusHooks,
   createPrDescriptionReceiptStore,
+  MAX_DOCUMENTS,
 } from "./prDescriptionReceiptStore.js";
 import type { PrDescriptionReceiptRead } from "./prDescriptionReceiptTypes.js";
 
@@ -247,5 +248,40 @@ describe("description receipt status hooks (service option bridge)", () => {
     );
     expect(unavailable.recordStatus(fixture.context, journal)).toBe(false);
     expect(unavailable.readStatus(fixture.context)).toBeUndefined();
+  });
+  it("bounds the in-process version cache and evicts the oldest scope once the cap is exceeded", () => {
+    // Insert the target scope's cache entry first, then push MAX_DOCUMENTS distinct filler scopes
+    // through the same hooks instance (a bare readStatus on an absent document never writes to the
+    // evidence store, so this never touches the store's own MAX_DOCUMENTS document-count ceiling).
+    // That crosses the cache's cap by exactly one, which must evict the target — the single oldest
+    // entry by insertion order.
+    const hooks = hooksOver();
+    expect(hooks.recordStatus(fixture.context, journal)).toBe(true);
+    for (let index = 0; index < MAX_DOCUMENTS; index += 1) {
+      hooks.readStatus({ ...fixture.context, prNumber: 10_000 + index });
+    }
+    // A second instance (sharing the same evidence store, its own empty cache) advances the
+    // target scope behind hooks' back — the observable proof that eviction actually happened.
+    const second = hooksOver();
+    const complete = applicationStatus(
+      journal.binding,
+      "complete",
+      "applied",
+      "confirmed",
+      fixture.now,
+    );
+    expect(second.recordStatus(fixture.context, complete)).toBe(true);
+    // If the target's cache entry had NOT been evicted, hooks would still expect the original
+    // version and this compare-and-swap would be rejected as a conflict against the real, now
+    // newer, stored version. Because it was evicted, the miss forces a fresh read that recovers
+    // the current version, so the write is accepted.
+    const reconciled = applicationStatus(
+      journal.binding,
+      "complete",
+      "reconciled",
+      "reconciled",
+      fixture.now,
+    );
+    expect(hooks.recordStatus(fixture.context, reconciled)).toBe(true);
   });
 });

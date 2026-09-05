@@ -37,6 +37,7 @@ import {
   GIT_PULL_REQUEST_COMMAND_RULES,
   GIT_PR_IDENTITY_JQ,
   gitPrRejectionToErrorCode,
+  isGithubNodeId,
   type GitPrCreateExecRequest,
   type GitPrExecResult,
   type GitPrMarkReadyExecRequest,
@@ -183,7 +184,7 @@ function parsePrNumber(stdout: string): string | undefined {
 
 function parseNodeId(stdout: string): string | undefined {
   const trimmed = stdout.trim();
-  return /^[A-Za-z0-9_=-]+$/.test(trimmed) ? trimmed : undefined;
+  return isGithubNodeId(trimmed) ? trimmed : undefined;
 }
 
 async function createPullRequest(

@@ -100,6 +100,9 @@ import {
   fetchGitDeliveryCommitApprove,
   fetchGitDeliveryPushApprove,
   fetchGitDeliveryPrApprove,
+  fetchGitDeliveryPrMarkReadyApprove,
+  fetchGitDeliveryPrMarkReadyExecute,
+  proposePrMarkReady,
   fetchGitDeliveryPrDescriptionPreview,
   fetchGitDeliveryPrDescriptionApprove,
   fetchGitDeliveryPrDescriptionApply,
@@ -112,6 +115,10 @@ import {
 } from "@/test-utils/managed-lsp-settings-fixture";
 import { CORRELATION_HEADER } from "./bff-correlation";
 import { journeyFixture } from "@/app/components/desktop/widgets/coding-workbench/_journeyOutcomeTestSupport";
+import {
+  isGitObjectId,
+  isSafeGitRefName,
+} from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 
 const API_SOURCE = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "api.ts"), "utf8");
 const MANAGED_LSP_VALIDATORS_SOURCE = readFileSync(
@@ -3767,6 +3774,150 @@ describe("Governed commit/push/pull-request approval mint (#3386/#3387)", () => 
       body: "body",
       isDraft: false,
     });
+  });
+});
+
+// #3389 repair: a BLOCKING review finding on the pr-mark-ready intent found that the production
+// "Propose ready" UI action was broken end-to-end — `proposePrMarkReady` never sent the `baseRef`
+// field the server's mint route (`buildMarkReadyCommand`, prMarkReadyExecution.ts) unconditionally
+// requires via `isBaseBranchName`, so every real click would have failed with a clean 400. Nothing
+// in the suite caught it because every other test mocked across this exact HTTP boundary. Failing-
+// before: with the pre-repair `GitDeliveryPrMarkReadyInput` (no `baseRef` field) and
+// `gitDeliveryPrMarkReadyBody` (which never serialized it), every `toEqual` assertion below that
+// names `baseRef` failed — the posted body simply had no such key.
+describe("Governed PR mark-ready intent client (#3389 repair)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function jsonOk(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  function markReadyInput(): {
+    projectId: string;
+    ownerAndRepo: string;
+    prExternalId: string;
+    headSha: string;
+    baseSha: string;
+    baseRef: string;
+    readinessDigest: string;
+  } {
+    return {
+      projectId: "/repos/keiko-checkout",
+      ownerAndRepo: "oscharko-dev/Keiko",
+      prExternalId: "1499",
+      headSha: "3".repeat(40),
+      baseSha: "1".repeat(40),
+      baseRef: "dev",
+      readinessDigest: "c".repeat(64),
+    };
+  }
+
+  it("mints a mark-ready approval carrying the exact base branch name the server requires", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonOk({
+        schemaVersion: "1",
+        approval: { schemaVersion: "1", approvalId: "gda_mr1", approvalToken: "t".repeat(64) },
+        expiresAt: "2026-09-05T00:05:00.000Z",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchGitDeliveryPrMarkReadyApprove(markReadyInput());
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-delivery/pr/mark-ready/approve");
+    expect(JSON.parse(init.body as string)).toEqual({
+      schemaVersion: "1",
+      ...markReadyInput(),
+    });
+  });
+
+  it("redeems a mark-ready execute carrying the exact base branch name the server requires", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonOk({ schemaVersion: "1", actionKind: "pr-mark-ready", status: "succeeded" }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const approval = {
+      schemaVersion: "1" as const,
+      approvalId: "gda_mr1",
+      approvalToken: "t".repeat(64),
+    };
+
+    await fetchGitDeliveryPrMarkReadyExecute({ ...markReadyInput(), approval });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-delivery/pr/mark-ready/execute");
+    expect(JSON.parse(init.body as string)).toEqual({
+      schemaVersion: "1",
+      ...markReadyInput(),
+      approval,
+    });
+  });
+
+  it("proposePrMarkReady sends baseRef on both the mint and the execute call, unchanged", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonOk({
+          schemaVersion: "1",
+          approval: { schemaVersion: "1", approvalId: "gda_mr2", approvalToken: "u".repeat(64) },
+          expiresAt: "2026-09-05T00:05:00.000Z",
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonOk({ schemaVersion: "1", actionKind: "pr-mark-ready", status: "succeeded" }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await proposePrMarkReady(markReadyInput());
+
+    expect(result.status).toBe("succeeded");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [approveUrl, approveInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [executeUrl, executeInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(approveUrl).toBe("/api/git-delivery/pr/mark-ready/approve");
+    expect(executeUrl).toBe("/api/git-delivery/pr/mark-ready/execute");
+    const approveBody = JSON.parse(approveInit.body as string) as Record<string, unknown>;
+    const executeBody = JSON.parse(executeInit.body as string) as Record<string, unknown>;
+    expect(approveBody.baseRef).toBe("dev");
+    expect(executeBody.baseRef).toBe("dev");
+  });
+
+  // Server-agnostic parity check (#3389 repair item 3): rather than trusting the fixture's own
+  // literal values, prove the exact object the client posts would pass the same field-shape
+  // predicates the server's mint route composes its validator from — `isGitObjectId` is the very
+  // function `buildMarkReadyCommand` (prMarkReadyExecution.ts) imports from keiko-contracts for
+  // `headSha`/`baseSha`, and `isSafeGitRefName` plus "not refs/-prefixed" is the exact composition
+  // `isBaseBranchName` (server) and `GitPullRequestIdentity`'s own `baseRef` field (contracts'
+  // `validBranch`, git-pull-request-identity.ts) both apply to a base branch name. A future drift —
+  // either side starts sending/requiring a differently-shaped value — fails this assertion without
+  // either package restating the other's parser.
+  it("posts a body whose sha/ref fields satisfy the same shared keiko-contracts predicates the server's mint parser is built from", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonOk({
+        schemaVersion: "1",
+        approval: { schemaVersion: "1", approvalId: "gda_mr3", approvalToken: "v".repeat(64) },
+        expiresAt: "2026-09-05T00:05:00.000Z",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchGitDeliveryPrMarkReadyApprove(markReadyInput());
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(isGitObjectId(body.headSha)).toBe(true);
+    expect(isGitObjectId(body.baseSha)).toBe(true);
+    expect(typeof body.baseRef).toBe("string");
+    expect(isSafeGitRefName(body.baseRef as string)).toBe(true);
+    expect((body.baseRef as string).startsWith("refs/")).toBe(false);
   });
 });
 

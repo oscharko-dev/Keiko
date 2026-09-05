@@ -19,6 +19,14 @@ function cancelled(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
 
+// The ONE owner of the GitHub REST read-argv envelope (`gh api --hostname github.com --method GET
+// <endpoint> --jq <projection>`) — every governed GET read in this package builds its argv through
+// this function so the envelope shape (host pin, method, no --paginate/--input) can never drift
+// between call sites (#3384 audit F32).
+export function buildGitHubApiGetArgv(endpoint: string, projection: string): readonly string[] {
+  return ["api", "--hostname", "github.com", "--method", "GET", endpoint, "--jq", projection];
+}
+
 /** Bounded transient JSON projection over the existing governed command result. */
 export async function readGitProviderValue(request: Input): Promise<GitProviderValueResult> {
   const input = Object.freeze({ ...request });

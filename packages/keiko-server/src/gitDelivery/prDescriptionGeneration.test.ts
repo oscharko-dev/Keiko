@@ -9,8 +9,12 @@
 //   * `errorEvidence` is body-free: dist-anchored frames/cause chain, never the error's own message.
 //   * The `pr-description.generation.*` ops fire through the composed path end to end.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseGatewayConfig, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  parseGatewayConfig,
+  PrDescription,
+  type GatewayConfig,
+} from "@oscharko-dev/keiko-model-gateway";
 import {
   gatewayForRuntimeConfig,
   resetGatewayInstanceCacheForTests,
@@ -23,6 +27,7 @@ import {
   setServerLogger,
   type BufferedServerLogSink,
 } from "../observability/index.js";
+import { DescriptionFixture } from "./prDescriptionTestSupport.js";
 import { createProductionPrDescriptionGeneration } from "./prDescriptionGeneration.js";
 
 function config(): GatewayConfig {
@@ -117,5 +122,101 @@ describe("createProductionPrDescriptionGeneration (#3399)", () => {
     });
     const ops = logs.events.map((event) => event.op);
     expect(ops).toContain("pr-description.generation.started");
+  });
+
+  // description-composition-closeout (task 5): drives the COMPOSED production value through the
+  // real `generatePrDescription` core (#3398) and a fake Model Gateway HTTP transport, rather than
+  // only inspecting the composed object's own fields as the tests above do. Reuses
+  // `DescriptionFixture`'s real git-repo-backed snapshot capture for `resolveSnapshot` instead of
+  // hand-building a `GitChangeSnapshot` — that digest formula is owned by
+  // `gitChangeSnapshotDigestFields`/`GitChangeSnapshotService`, never restated here (AGENTS.md §7).
+  it("generates a real description through the production composition and a fake Model Gateway HTTP transport", async () => {
+    const generation = createProductionPrDescriptionGeneration(source(config()));
+    if (generation === undefined) throw new Error("expected a composed generation");
+    const fixture = new DescriptionFixture();
+    try {
+      const captured = await fixture.snapshots.capture({
+        workspace: fixture.context.workspace,
+        baseRef: fixture.remote.identity.baseSha,
+        headRef: fixture.remote.identity.headSha,
+        accessScope: fixture.context.accessScope,
+        correlationId: fixture.context.correlationId,
+      });
+      if (captured.reference === undefined) throw new Error("expected a captured snapshot");
+      const reference = captured.reference;
+      const fetchSpy = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        const raw: unknown = JSON.parse(String(init?.body ?? "{}"));
+        const serialized = JSON.stringify(raw);
+        const evidenceId = /"evidenceId":"([a-f0-9]{64})"/u.exec(serialized)?.[1] ?? "";
+        const statement = { text: "Change the exported value.", evidenceIds: [evidenceId] };
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: JSON.stringify({
+                    summary: [statement],
+                    keyChanges: [statement],
+                    risks: [],
+                    reviewerFocus: [],
+                  }),
+                },
+                finish_reason: "stop",
+              },
+            ],
+            usage: { prompt_tokens: 10, completion_tokens: 20 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      });
+      vi.stubGlobal("fetch", fetchSpy);
+      const result = await PrDescription.generatePrDescription(
+        {
+          snapshotReference: reference,
+          language: "en",
+          authority: {
+            authorityDigest: fixture.context.authorityDigest,
+            correlationId: fixture.context.correlationId,
+          },
+        },
+        {
+          ...generation,
+          // The fixture's own snapshot capture is stamped with its fixed clock (`fixture.now`);
+          // matching it here avoids a spurious `invalid-snapshot` from comparing a captured/expiry
+          // timestamp against the real wall clock instead of the clock that produced it.
+          now: () => fixture.now,
+          resolveSnapshot: (supplied) => {
+            if (supplied !== reference) return Promise.resolve(undefined);
+            const content = fixture.snapshots.read(
+              reference,
+              fixture.context.accessScope,
+              fixture.context.correlationId,
+            );
+            return Promise.resolve(
+              content === undefined
+                ? undefined
+                : {
+                    snapshot: content.snapshot,
+                    evidence: content.files.map((file) => ({
+                      evidenceId: file.evidenceId,
+                      text: JSON.stringify(file),
+                    })),
+                  },
+            );
+          },
+        },
+      );
+      console.log("DEBUG result", JSON.stringify(result));
+      expect(fetchSpy).toHaveBeenCalled();
+      expect(result.status).toBe("generated");
+      if (result.status !== "generated") throw new Error("expected a generated artifact");
+      expect(result.artifact.markdown).toContain("Change the exported value.");
+      const ops = logs.events.map((event) => event.op);
+      expect(ops.some((op) => op.startsWith("pr-description.generation."))).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+      fixture.close();
+    }
   });
 });

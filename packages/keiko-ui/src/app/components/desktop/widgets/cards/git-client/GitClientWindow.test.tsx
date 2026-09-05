@@ -486,11 +486,33 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       actionKind: "push",
     })),
     prPreview: vi.fn<GitClientSeam["prPreview"]>(async () => makePrPreview()),
+    prApprove: vi.fn<GitClientSeam["prApprove"]>(async () => ({
+      schemaVersion: "1",
+      approval: { schemaVersion: "1", approvalId: "gda_gcw_pr", approvalToken: "token-gcw-pr" },
+      expiresAt: "2026-01-01T00:00:00.000Z",
+    })),
     prExecute: vi.fn<GitClientSeam["prExecute"]>(async () => ({
       schemaVersion: "1",
       status: "succeeded",
       actionKind: "pr-create",
       createdPrExternalId: "1577",
+    })),
+    prDescriptionPreview: vi.fn<GitClientSeam["prDescriptionPreview"]>(async () => ({
+      outcome: "blocked",
+      reason: "approval-required",
+    })),
+    prDescriptionApprove: vi.fn<GitClientSeam["prDescriptionApprove"]>(async () => ({
+      schemaVersion: "1",
+      proposalId: "prop-gcw",
+      expiresAt: "2026-01-01T00:00:00.000Z",
+    })),
+    prDescriptionApply: vi.fn<GitClientSeam["prDescriptionApply"]>(async () => ({
+      outcome: "blocked",
+      reason: "approval-required",
+    })),
+    prDescriptionStatus: vi.fn<GitClientSeam["prDescriptionStatus"]>(async () => ({
+      outcome: "blocked",
+      reason: "approval-required",
     })),
     mergePreview: vi.fn<GitClientSeam["mergePreview"]>(async () => makeMergePreview()),
     mergeApprove: vi.fn<GitClientSeam["mergeApprove"]>(async () => ({
@@ -1202,6 +1224,54 @@ describe("GitClientWindow — toolbar actions", () => {
           baseBranchName: "main",
         }),
       ),
+    );
+  });
+
+  // Repair for a review residual on #3399/#3400: before git-client-seam.ts carried prApprove and
+  // the four prDescription* clients, GitClientSeam only had `mergeApprove` for the sibling merge
+  // card, so the embedded PR pane's GovernedPullRequestCard always saw those fields as `undefined`
+  // and (a) the Description panel never rendered (`requiredPrDescriptionClient` returns undefined
+  // unless all three prDescription* methods are present) and (b) `runExecute` fell back to the
+  // legacy unapproved pr-execute call, which the real BFF route rejects as approval-required
+  // forever. Failing-before: with the pre-fix seam (no prApprove/prDescription* fields at all),
+  // `screen.findByTestId("gpr-description")` never resolves and `client.prExecute` is called
+  // without an `approval` field — both assertions below fail against that code.
+  it("shows the Description panel and mints a PR approval through the seam before create (#3399/#3400)", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      getSummary: vi.fn(async () => makeSummary({ branch: "feat/issue-1577" })),
+      getRemotes: vi.fn(async () => ({
+        schemaVersion: "1" as const,
+        root: REPO_A.path,
+        state: "available" as const,
+        available: true,
+        remotes: [{ name: "origin", fetchUrl: "git@github.com:oscharko-dev/Keiko.git" }],
+        truncated: false,
+      })),
+      getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+    await waitFor(() => expect(client.getRemotes).toHaveBeenCalledWith(REPO_A.path));
+
+    await user.click(screen.getByRole("button", { name: /Create pull request/ }));
+    const panel = await screen.findByRole("region", { name: "Pull Request" });
+
+    // (a) the Description panel is now reachable through the generic Git window's own client.
+    expect(await within(panel).findByTestId("gpr-description")).toBeInTheDocument();
+
+    // (b) create still mints and attaches a server-issued approval before execute.
+    const titleInput = within(panel).getByLabelText("Pull Request title");
+    fireEvent.change(titleInput, { target: { value: "feat: seam wiring" } });
+    const submit = within(panel).getByRole("button", { name: "Create Pull Request" });
+    await waitFor(() => expect(submit).toBeEnabled());
+    await user.click(submit);
+
+    await waitFor(() => expect(client.prApprove).toHaveBeenCalledTimes(1));
+    expect(client.prExecute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approval: { schemaVersion: "1", approvalId: "gda_gcw_pr", approvalToken: "token-gcw-pr" },
+      }),
     );
   });
 

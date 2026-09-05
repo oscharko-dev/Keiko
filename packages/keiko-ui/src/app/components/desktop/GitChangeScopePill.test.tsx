@@ -67,6 +67,17 @@ describe("GitChangeScopePill", () => {
     expect(screen.getByText("3 files changed")).toBeInTheDocument();
   });
 
+  // Review residual: the file-count message had no plural handling, so a single changed file
+  // rendered the grammatically wrong "1 files changed" (and the German catalog said "1 geänderte
+  // Dateien" instead of "1 geänderte Datei"). Failing-before: with the old unconditional
+  // "gitChangeScope.counts.files" key, `getByText("1 file changed")` below never matches.
+  it("uses the singular count message for exactly one changed file", () => {
+    const chat = makeChat({ gitChangeScopes: [makeGitChangeScope({ fileCount: 1, totalFiles: 1 })] });
+    render(<GitChangeScopePill chat={chat} updateScopes={vi.fn()} refreshScope={vi.fn()} />);
+    expect(screen.getByText("1 file changed")).toBeInTheDocument();
+    expect(screen.queryByText("1 files changed")).not.toBeInTheDocument();
+  });
+
   it("shows a shown/total counts label when files were omitted", () => {
     const chat = makeChat({
       gitChangeScopes: [makeGitChangeScope({ fileCount: 3, totalFiles: 5, omittedFiles: 2 })],

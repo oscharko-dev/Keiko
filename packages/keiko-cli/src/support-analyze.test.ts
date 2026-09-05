@@ -1732,6 +1732,35 @@ describe("issueToPrJourney — epic #3384 reconstruction", () => {
       });
     });
 
+    // #3401 review finding 20: the coding-runtime automatic-description dispatch lifecycle logged
+    // through a template-literal `op` (`coding-runtime.description.${event}`) that this journey's
+    // phase map could not recognise under any name. Failing before the `JOURNEY_OP_PHASE` mapping
+    // is added: `phaseForLine` returns `undefined` for the fixed `coding-runtime.description` op
+    // below and the line never becomes a step at all (`steps` stays empty).
+    it("recognises the coding-runtime.description dispatch-lifecycle op as the description phase", () => {
+      const correlationId = "journey-description-dispatch-0007";
+      const text =
+        journeyLine(1, correlationId, {
+          category: "process",
+          op: "coding-runtime.description",
+          runId: "run-42",
+          event: "blocked",
+          reason: "provider-failed",
+          errorKind: "Error",
+        }) + "\n";
+
+      const seed = buildReproductionSeed(text, correlationId, GENERATED, OPTIONS);
+      const steps = seed?.issueToPrJourney?.steps ?? [];
+
+      expect(steps).toHaveLength(1);
+      expect(steps[0]).toMatchObject({
+        phase: "description",
+        op: "coding-runtime.description",
+        reason: "provider-failed",
+        errorKind: "Error",
+      });
+    });
+
     it("reconstructs one timeline covering every phase, in order, with the closed-vocabulary values verbatim", () => {
       const seed = buildReproductionSeed(TEXT, CORRELATION_ID, GENERATED, OPTIONS);
       const journey = seed?.issueToPrJourney;

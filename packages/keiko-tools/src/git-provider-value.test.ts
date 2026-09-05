@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { readGitProviderValue } from "./git-provider-value.js";
+import { buildGitHubApiGetArgv, readGitProviderValue } from "./git-provider-value.js";
+import { buildPrReadArgv, GIT_PR_IDENTITY_JQ } from "./git-pr-gateway.js";
+import { buildPrBodyReadArgv } from "./git-pr-body.js";
+import { buildGitCiReadArgv } from "./git-ci-read-argv.js";
 import type { CommandResult } from "./types.js";
 
 function result(overrides: Partial<CommandResult> = {}): CommandResult {
@@ -67,5 +70,46 @@ describe("single provider metadata projections", () => {
       status: "unavailable",
       failure: { reason: "provider-unavailable", state: "pending" },
     });
+  });
+});
+
+// F32 (#3384 audit): one owner for the GitHub REST GET argv envelope. Every governed GET builder in
+// this package must produce EXACTLY buildGitHubApiGetArgv's output — this pins the envelope shape
+// itself and proves each of the (now three in-scope) call sites delegates to it rather than
+// reconstructing it, so the existing byte-identical argv pins on those call sites stay authoritative.
+describe("buildGitHubApiGetArgv — the one GitHub REST GET argv envelope owner", () => {
+  it("builds the exact governed envelope: api, host pin, method GET, endpoint, jq projection", () => {
+    expect(buildGitHubApiGetArgv("/repos/o/r/pulls/1", ".number")).toEqual([
+      "api",
+      "--hostname",
+      "github.com",
+      "--method",
+      "GET",
+      "/repos/o/r/pulls/1",
+      "--jq",
+      ".number",
+    ]);
+  });
+
+  it("is the exact function every in-scope GET-read call site delegates to", () => {
+    const prRead = buildPrReadArgv({ ownerAndRepo: "o/r", prExternalId: "1" });
+    expect(prRead).toEqual(buildGitHubApiGetArgv("/repos/o/r/pulls/1", GIT_PR_IDENTITY_JQ));
+
+    const bodyRead = buildPrBodyReadArgv({ ownerAndRepo: "o/r", prExternalId: "1" });
+    expect(bodyRead).toEqual(
+      buildGitHubApiGetArgv(
+        "/repos/o/r/pulls/1",
+        `{identity:${GIT_PR_IDENTITY_JQ},body,updatedAt:.updated_at}`,
+      ),
+    );
+
+    const ciRead = buildGitCiReadArgv(
+      "branch",
+      { ownerAndRepo: "o/r", prExternalId: "1", baseBranchName: "dev", headSha: "a".repeat(40) },
+      1,
+    );
+    expect(ciRead).toEqual(
+      buildGitHubApiGetArgv("/repos/o/r/branches/dev", "{name,protected,sha:.commit.sha}"),
+    );
   });
 });
