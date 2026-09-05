@@ -1,8 +1,9 @@
 import { draftDeliveryReview, draftDeliverySnapshot } from "./_draftDeliveryTestSupport";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { journeyFixture } from "./_journeyOutcomeTestSupport";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type {
   AvailableCodingSafeActivityFeed,
@@ -40,6 +41,33 @@ const chatCatalogMock = vi.hoisted(() => ({
   activeProject: undefined as ProjectWithAvailability | undefined,
   projects: [] as ProjectWithAvailability[],
 }));
+// #3389 AC3 mark-ready wiring: the mint/execute pair the propose-ready control performs, and the
+// journey-refresh read the window uses to obtain a real, matching `JourneyOutcome`. `proposePrMarkReady`
+// is replaced with a version that calls THESE mocks directly (not the real module's own approve/execute,
+// which `importOriginal` would still close over) so a click's mint-then-execute sequence is observable
+// as two separate call counts, exactly as the mark-ready client itself performs it (api.ts).
+const journeyRefreshMock = vi.hoisted(() => vi.fn());
+const markReadyApproveMock = vi.hoisted(() => vi.fn());
+const markReadyExecuteMock = vi.hoisted(() => vi.fn());
+const mergeExecuteMock = vi.hoisted(() => vi.fn());
+const prUpdateExecuteMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
+  return {
+    ...actual,
+    fetchCodingWorkbenchJourneyRefresh: journeyRefreshMock,
+    fetchGitDeliveryMergeExecute: mergeExecuteMock,
+    fetchGitDeliveryPrExecute: prUpdateExecuteMock,
+    proposePrMarkReady: async (
+      input: Parameters<typeof actual.proposePrMarkReady>[0],
+    ): ReturnType<typeof actual.proposePrMarkReady> => {
+      const minted: Awaited<ReturnType<typeof actual.fetchGitDeliveryPrMarkReadyApprove>> =
+        await markReadyApproveMock(input);
+      return markReadyExecuteMock({ ...input, approval: minted.approval });
+    },
+  };
+});
 
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
@@ -285,6 +313,15 @@ function activeWorkspaceWithBinding(
 beforeEach(() => {
   chatCatalogMock.activeProject = undefined;
   chatCatalogMock.projects = [];
+  // Every other suite in this file leaves the journey read unmocked-in-spirit: it never sets up an
+  // observed outcome, so it must keep resolving to a valid "nothing observed" envelope rather than
+  // silently reusing whatever a mark-ready test configured last (AGENTS.md §7: hermetic tests, no
+  // shared mutable global state between them).
+  journeyRefreshMock.mockReset().mockResolvedValue({ status: "unavailable", reason: "not-tested" });
+  markReadyApproveMock.mockReset();
+  markReadyExecuteMock.mockReset();
+  mergeExecuteMock.mockReset();
+  prUpdateExecuteMock.mockReset();
   questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
   activityHookMock.mockReturnValue(IDLE_ACTIVITY);
   approvalReviewHookMock.mockReturnValue({ status: "idle", review: null, retry: vi.fn() });
@@ -2517,5 +2554,68 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
 
     const lastCall = editorBridgeHookMock.mock.calls.at(-1) as [{ submittedRoot: string | null }];
     expect(lastCall[0].submittedRoot).toBe(WORKSPACE_A.root);
+  });
+});
+
+// #3389 AC3: the Workbench window builds `onProposeReady`/`markReadyAvailable` from
+// `createPrMarkReadyProposeHandler` (CodingWorkbenchJourneyOutcome.tsx), computed from the same
+// observed `JourneyOutcome` the journey card renders — never a re-derived request shape.
+describe("CodingWorkbenchWindow #3389 mark-ready propose control", () => {
+  // The fixture's readiness/description observations carry fixed timestamps (`_ciReadinessTestSupport`,
+  // 2026-09-05T00:00:00Z + a 60s freshness window); pinning `Date.now()` inside that window is what
+  // keeps the journey card's "ready" state (not "stale") reproducible independent of wall-clock time.
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(new Date("2026-09-05T00:00:05.000Z").getTime());
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function renderWithJourney(snapshotValue: CodingWorkbenchRuntimeSnapshot): void {
+    renderWorkbench(
+      liveState({ run: { status: "ready", error: null, value: snapshotValue } }),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko-checkout", "/repos/keiko-checkout"),
+    );
+  }
+
+  it("keeps the control closed and calls no mutation endpoint while the mark-ready path is unavailable", async () => {
+    journeyRefreshMock.mockResolvedValue({ status: "unavailable", reason: "no-observation" });
+    renderWithJourney(journeyFixture().snapshot);
+
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Issue handoff" })).not.toBeInTheDocument(),
+    );
+    expect(markReadyApproveMock).not.toHaveBeenCalled();
+    expect(markReadyExecuteMock).not.toHaveBeenCalled();
+  });
+
+  it("clicking the available control mints then executes exactly once each, never a merge/close endpoint", async () => {
+    const { outcome, snapshot: snapshotValue } = journeyFixture();
+    journeyRefreshMock.mockResolvedValue({ status: "observed", outcome });
+    markReadyApproveMock.mockResolvedValueOnce({
+      schemaVersion: "1",
+      approval: { schemaVersion: "1", approvalId: "approval-1", approvalToken: "token-1" },
+      expiresAt: "2026-09-05T00:05:00.000Z",
+    });
+    markReadyExecuteMock.mockResolvedValueOnce({
+      schemaVersion: "1",
+      actionKind: "pr-mark-ready",
+      status: "succeeded",
+    });
+    renderWithJourney(snapshotValue);
+
+    const button = await screen.findByRole("button", { name: "Review ready-for-review request" });
+    expect(button).toBeEnabled();
+
+    await userEvent.setup().click(button);
+
+    await waitFor(() => expect(markReadyExecuteMock).toHaveBeenCalledTimes(1));
+    expect(markReadyApproveMock).toHaveBeenCalledTimes(1);
+    expect(markReadyExecuteMock).toHaveBeenCalledTimes(1);
+    expect(mergeExecuteMock).not.toHaveBeenCalled();
+    expect(prUpdateExecuteMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /merge|close issue/iu })).not.toBeInTheDocument();
   });
 });

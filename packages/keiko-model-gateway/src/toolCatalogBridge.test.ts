@@ -3,6 +3,7 @@ import {
   createToolDescriptor,
   compileToolProjection,
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
+  opencodeRegistrationSet,
 } from "@oscharko-dev/keiko-tool-catalog";
 import {
   gatewayCatalogAdvertisement,
@@ -407,7 +408,11 @@ describe("native extensions (question/todowrite, #3414 follow-up)", () => {
       { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
       (): number => NOW,
     );
-    expect(bridge.tools).toHaveLength(9);
+    // Derived from the producer, never a restated count: every catalog entry of the OpenCode
+    // registration set plus its declared native extensions is model-visible.
+    expect(bridge.tools).toHaveLength(
+      opencodeRegistrationSet().entries.length + OPENCODE_NATIVE_EXTENSION_DEFINITIONS.length,
+    );
     for (const definition of OPENCODE_NATIVE_EXTENSION_DEFINITIONS) {
       expect(bridge.tools).toContainEqual({
         name: definition.alias,

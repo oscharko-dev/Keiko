@@ -22,6 +22,7 @@ import type {
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
+import { createCodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntimeSnapshotStore.js";
 import { createDraftRun, readySnapshot } from "./ciObservationTest/_support.js";
 import { createGitDeliveryJourneyRouteGroup } from "./journeyRoutes.js";
 
@@ -227,6 +228,58 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
       });
     } finally {
       h.cleanup();
+    }
+  });
+
+  // Before this wiring, `codingRuntimeSnapshotStore.ts` exposed no `journeyOutcomes` sub-store, so
+  // `GitDeliveryJourneyRouteOptions.outcomes` had no production default and this route's CAS write
+  // always recorded successfully against nothing: restart reconstruction was proven only at the
+  // store's own unit level, never through the live, mounted route (failing-before: dropping the
+  // `outcomesFor` default and passing `outcomes: undefined` here reproduces that — the persisted
+  // read below then finds nothing after "restart", because the write never reached the projection).
+  it("persists the CAS outcome through the real, unmounted-override production route wiring, surviving a db close/reopen (#3389 AC6)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-journey-restart-"));
+    const evidenceDir = mkdtempSync(join(tmpdir(), "keiko-journey-restart-evidence-"));
+    const dbPath = join(dir, "keiko.db");
+    try {
+      const db = new DatabaseSync(dbPath);
+      const snapshots = createDraftRun(db);
+      const deps = {
+        codingRuntimeSnapshotStore: snapshots,
+        evidenceStore: createNodeEvidenceStore(evidenceDir),
+        redactor: (value: string): string => value,
+      } as UiHandlerDeps;
+      // No `outcomes` override: exercises the same default wiring the mounted production route
+      // group (`GIT_DELIVERY_JOURNEY_ROUTE_GROUP`) uses.
+      const group = createGitDeliveryJourneyRouteGroup({
+        reader: (): GitJourneyReader => fakeReader(OBSERVED_FACTS),
+        readiness: () => Promise.resolve(readySnapshot()),
+        description: () => Promise.resolve(null),
+      });
+      const result = (await group[0]?.handler(
+        ctxFor({ schemaVersion: "1", runId: "run-1" }),
+        deps,
+      )) as RouteResult;
+      expect(result.body).toMatchObject({ status: "observed" });
+      db.close();
+
+      // Simulate a process restart: a brand-new connection and a brand-new store instance over the
+      // SAME on-disk file, carrying no in-process state from the handler call above.
+      const reopened = new DatabaseSync(dbPath);
+      try {
+        const restarted = createCodingRuntimeSnapshotStore(reopened);
+        const persisted = restarted.journeyOutcomes?.get("a".repeat(64), 17);
+        expect(persisted).toMatchObject({
+          runId: "run-1",
+          revision: 0,
+          headSha: "3".repeat(40),
+        });
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(evidenceDir, { recursive: true, force: true });
     }
   });
 });

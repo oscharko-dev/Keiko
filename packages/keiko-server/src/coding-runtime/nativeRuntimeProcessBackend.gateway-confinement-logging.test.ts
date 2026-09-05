@@ -104,6 +104,35 @@ describe("native runtime process backend gateway-confinement refusal logging", (
   // Failing-before: before this change, NativeRuntimeProcessBackendOptions had no `activityLog`
   // field and the refusal threw with no write to any sink, so `activityLog.events` stayed empty
   // for a refusal that should have produced exactly one `runtime.confinement.failed` line.
+  it("records a body-free runtime.confinement.unavailable line when no confinement is requested", () => {
+    const paths = fixture();
+    const spawn = vi.fn<NativeRuntimeHelperSpawn>(() => new FakeHelper());
+    const activityLog = createBufferedServerLogSink();
+    const backend = createNativeRuntimeProcessBackend({
+      helperPath: paths.helper,
+      runtimeRoots: [join(paths.runtime, "..")],
+      workspaceRoot: paths.workspace,
+      activityLog,
+      spawnHelper: spawn,
+    });
+
+    backend.spawnOwnedTree(request(paths.runtime, paths.workspace));
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(activityLog.events).toContainEqual(
+      expect.objectContaining({
+        category: "process",
+        level: "info",
+        op: "runtime.confinement.unavailable",
+        correlationId: "run-2951-log",
+        extra: { platform: "win32", arch: "x64", backend: "windows-job-object" },
+      }),
+    );
+    // Body-free: no path, no helper/runtime executable location anywhere in the line.
+    expect(JSON.stringify(activityLog.events)).not.toContain(paths.helper);
+    expect(JSON.stringify(activityLog.events)).not.toContain(paths.workspace);
+  });
+
   it("records a body-free runtime.confinement.failed line before throwing the closed refusal", () => {
     const paths = fixture();
     const spawn = vi.fn<NativeRuntimeHelperSpawn>(() => new FakeHelper());
@@ -174,6 +203,11 @@ describe("native runtime process backend gateway-confinement refusal logging", (
     backend.spawnOwnedTree(request(paths.runtime, paths.workspace));
 
     expect(spawn).toHaveBeenCalledOnce();
-    expect(activityLog.events).toHaveLength(0);
+    // The unconfined launch records its own informational `runtime.confinement.unavailable` line
+    // (ADR-0043 D14); the invariant here is that no FAILURE line is written for a launch that never
+    // requested confinement.
+    expect(
+      activityLog.events.filter((event) => event.op === "runtime.confinement.failed"),
+    ).toHaveLength(0);
   });
 });

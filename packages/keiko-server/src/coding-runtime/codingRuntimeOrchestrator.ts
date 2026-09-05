@@ -1470,7 +1470,9 @@ export class CodingRuntimeOrchestrator {
     this.reconcileInterruptedDescriptionJobs(support);
   }
 
-  private reconcileInterruptedDescriptionJobs(support: CodingRuntimeDescriptionSupport | undefined): void {
+  private reconcileInterruptedDescriptionJobs(
+    support: CodingRuntimeDescriptionSupport | undefined,
+  ): void {
     for (const runId of support?.jobs.reconcileInterrupted(this.now().toISOString()) ?? []) {
       this.logDescriptionEvent({ runId }, "blocked", { reason: "interrupted" });
     }

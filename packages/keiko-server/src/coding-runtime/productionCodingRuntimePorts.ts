@@ -15,6 +15,18 @@ import type {
 } from "./productionCodingRuntimeHost.js";
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import type { CodingRuntimeIssueAttachment } from "./codingRuntimeIssueIntake.js";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import type { PrDescriptionOutcome } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
+import type { WorkbenchDescriptionReason } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
+import { PrDescription } from "@oscharko-dev/keiko-model-gateway";
+import type { GitChangeSnapshotService } from "../gitChangeSnapshotService.js";
+import {
+  authorizeGitDeliveryModelEgress,
+  type GitDeliveryDescriptionAuthorityPort,
+  type GitDeliveryDescriptionAuthorityScope,
+} from "../gitDelivery/runBoundAuthority.js";
+import type { WorkbenchDescriptionScope } from "./codingRuntimeDescriptionJobStore.js";
 
 /** Render transient untrusted context separately from the human's task intent. */
 export function renderInitialTurnContext(attachment: CodingRuntimeIssueAttachment): string {

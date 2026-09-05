@@ -184,6 +184,16 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import { isJourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-validation";
+import {
+  PR_DESCRIPTION_LANGUAGES,
+  type PrDescriptionLanguage,
+} from "@oscharko-dev/keiko-contracts/runtime/pr-description";
+import {
+  isPrDescriptionApplicationStatus,
+  PR_DESCRIPTION_APPLICATION_REASON_STATES,
+  type PrDescriptionApplicationReason,
+  type PrDescriptionApplicationStatus,
+} from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
 import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
@@ -3864,4 +3874,249 @@ export async function proposePrMarkReady(
 ): Promise<GitDeliveryPrMarkReadyExecuteResponse> {
   const minted = await fetchGitDeliveryPrMarkReadyApprove(input, signal);
   return fetchGitDeliveryPrMarkReadyExecute({ ...input, approval: minted.approval }, signal);
+}
+
+// ─── Governed commit/push/pull-request approval mint (#3386 commit, #3387 push and pull request) ──
+//
+// An accepted run's commit/push/pr-create/pr-update mutation now requires an actually consumed,
+// server-issued approval claim regardless of what the repository policy pack decides (epic #3384
+// correction 5, ADR-0138 D2/D4) — never mode-denied merely because the mode is lower. These mirror
+// fetchGitDeliveryMergeApprove exactly: the caller passes the EXACT SAME input it will subsequently
+// pass to the matching execute call (commitRoutes.ts/pushRoutes.ts/prRoutes.ts `createHandle*Approve`
+// rebuild the identical typed command from the identical request body and bind the mint to it), so a
+// claim minted for a different command, run, or operation is never redeemable by execute.
+
+export interface GitDeliveryCommitApproveResponse {
+  readonly schemaVersion: "1";
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAt: string;
+}
+
+export async function fetchGitDeliveryCommitApprove(
+  input: GitDeliveryCommitExecuteInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryCommitApproveResponse> {
+  return fetchJson("/api/git-delivery/commit/approve", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      message: input.message,
+      ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export interface GitDeliveryPushApproveResponse {
+  readonly schemaVersion: "1";
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAt: string;
+}
+
+export async function fetchGitDeliveryPushApprove(
+  input: GitDeliveryPushInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPushApproveResponse> {
+  return fetchJson("/api/git-delivery/push/approve", {
+    method: "POST",
+    body: gitDeliveryPushBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export interface GitDeliveryPrApproveResponse {
+  readonly schemaVersion: "1";
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAt: string;
+}
+
+export async function fetchGitDeliveryPrApprove(
+  input: GitDeliveryPrInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrApproveResponse> {
+  return fetchJson("/api/git-delivery/pr/approve", {
+    method: "POST",
+    body: gitDeliveryPrBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+// ─── Governed PR-description application (#3399, epic #3384 correction 4, ADR-0086) ───────────────
+//
+// Reviewed Keiko-generated description text placed into the actual pull-request body while
+// preserving repository templates and human-authored content outside one versioned managed region.
+// Preview NEVER mutates the remote PR; approve mints the one-use description-apply approval bound
+// server-side to the exact proposal (repository, PR, base/head, current-body and outside-region
+// digests, draft version, final-body digest — prDescriptionRoutes.ts); apply re-reads current PR
+// base/head/body immediately before the effect and sends a body-only PATCH on an exact match. The
+// server retains the proposal between calls, so only the bounded `proposalId` — never a bearer
+// claim — travels with approve/apply. `finalBody`/`managedRegion` are rendered by trusted server
+// code (branding, template preservation) and must be shown byte-for-byte, never recomposed here.
+
+export interface GitDeliveryPrDescriptionTarget {
+  readonly projectId: string;
+  readonly ownerAndRepo: string;
+  readonly prNumber: number;
+  readonly snapshotDigest?: string | undefined;
+}
+
+export interface GitDeliveryPrDescriptionPreviewInput extends GitDeliveryPrDescriptionTarget {
+  readonly language: PrDescriptionLanguage;
+  readonly refinement?: string | undefined;
+}
+
+export interface GitDeliveryPrDescriptionProposalInput extends GitDeliveryPrDescriptionTarget {
+  readonly proposalId: string;
+}
+
+export interface PrDescriptionPreviewWire {
+  readonly proposalId: string;
+  readonly expiresAt: string;
+  readonly status: PrDescriptionApplicationStatus;
+  readonly finalBody: string;
+  readonly managedRegion: string;
+  readonly concurrencyLimitation: string;
+}
+
+export type PrDescriptionApplicationResultWire =
+  | { readonly outcome: "preview"; readonly preview: PrDescriptionPreviewWire }
+  | { readonly outcome: "observed"; readonly status: PrDescriptionApplicationStatus }
+  | { readonly outcome: "blocked"; readonly reason: PrDescriptionApplicationReason };
+
+export interface GitDeliveryPrDescriptionApproveResponse {
+  readonly schemaVersion: "1";
+  readonly proposalId: string;
+  readonly expiresAt: string;
+}
+
+export { PR_DESCRIPTION_LANGUAGES };
+export type {
+  PrDescriptionLanguage,
+  PrDescriptionApplicationStatus,
+  PrDescriptionApplicationReason,
+};
+
+function isPrDescriptionPreviewWire(value: unknown): value is PrDescriptionPreviewWire {
+  if (!isRecordValue(value)) return false;
+  return (
+    isBoundedText(value.proposalId, 128) &&
+    typeof value.expiresAt === "string" &&
+    isPrDescriptionApplicationStatus(value.status) &&
+    typeof value.finalBody === "string" &&
+    typeof value.managedRegion === "string" &&
+    typeof value.concurrencyLimitation === "string"
+  );
+}
+
+/**
+ * Rejects any wire body the shared contract does not sanction — a malformed status, an unknown
+ * blocked reason, or a preview envelope missing the server-rendered final body — before it ever
+ * reaches a component (client-side enforcement of the same closed vocabulary prDescriptionRoutes.ts
+ * validates server-side).
+ */
+export function validatePrDescriptionApplicationResultWire(
+  value: unknown,
+): GitRepositoryValidation {
+  if (!isRecordValue(value)) {
+    return { ok: false, reasons: ["pr-description response must be an object"] };
+  }
+  if (value.outcome === "preview") {
+    return isPrDescriptionPreviewWire(value.preview)
+      ? { ok: true }
+      : { ok: false, reasons: ["pr-description preview envelope failed contract validation"] };
+  }
+  if (value.outcome === "observed") {
+    return isPrDescriptionApplicationStatus(value.status)
+      ? { ok: true }
+      : { ok: false, reasons: ["pr-description observed status failed contract validation"] };
+  }
+  if (value.outcome === "blocked") {
+    return typeof value.reason === "string" &&
+      Object.hasOwn(PR_DESCRIPTION_APPLICATION_REASON_STATES, value.reason)
+      ? { ok: true }
+      : { ok: false, reasons: ["pr-description blocked reason is not in the closed vocabulary"] };
+  }
+  return {
+    ok: false,
+    reasons: ["pr-description response.outcome must be preview, observed, or blocked"],
+  };
+}
+
+function gitDeliveryPrDescriptionTargetBody(
+  input: GitDeliveryPrDescriptionTarget,
+): Record<string, unknown> {
+  return {
+    schemaVersion: "1",
+    projectId: input.projectId,
+    ownerAndRepo: input.ownerAndRepo,
+    prNumber: input.prNumber,
+    ...(input.snapshotDigest === undefined ? {} : { snapshotDigest: input.snapshotDigest }),
+  };
+}
+
+export async function fetchGitDeliveryPrDescriptionPreview(
+  input: GitDeliveryPrDescriptionPreviewInput,
+  signal?: AbortSignal,
+): Promise<PrDescriptionApplicationResultWire> {
+  return fetchJson(
+    "/api/git-delivery/pr-description/preview",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        ...gitDeliveryPrDescriptionTargetBody(input),
+        language: input.language,
+        ...(input.refinement === undefined ? {} : { refinement: input.refinement }),
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    validatePrDescriptionApplicationResultWire,
+  );
+}
+
+export async function fetchGitDeliveryPrDescriptionApprove(
+  input: GitDeliveryPrDescriptionProposalInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrDescriptionApproveResponse> {
+  return fetchJson("/api/git-delivery/pr-description/approve", {
+    method: "POST",
+    body: JSON.stringify({
+      ...gitDeliveryPrDescriptionTargetBody(input),
+      proposalId: input.proposalId,
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryPrDescriptionApply(
+  input: GitDeliveryPrDescriptionProposalInput,
+  signal?: AbortSignal,
+): Promise<PrDescriptionApplicationResultWire> {
+  return fetchJson(
+    "/api/git-delivery/pr-description/apply",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        ...gitDeliveryPrDescriptionTargetBody(input),
+        proposalId: input.proposalId,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    validatePrDescriptionApplicationResultWire,
+  );
+}
+
+export async function fetchGitDeliveryPrDescriptionStatus(
+  input: GitDeliveryPrDescriptionTarget,
+  signal?: AbortSignal,
+): Promise<PrDescriptionApplicationResultWire> {
+  return fetchJson(
+    "/api/git-delivery/pr-description/status",
+    {
+      method: "POST",
+      body: JSON.stringify(gitDeliveryPrDescriptionTargetBody(input)),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    validatePrDescriptionApplicationResultWire,
+  );
 }

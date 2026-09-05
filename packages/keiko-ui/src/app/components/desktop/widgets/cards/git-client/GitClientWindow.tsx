@@ -47,6 +47,7 @@ import { GovernedPullRequestCard } from "../GovernedPullRequestCard";
 import { Icons } from "../../../Icons";
 import { RepositoryToolbar } from "./RepositoryToolbar";
 import { ConnectPanel } from "./ConnectPanel";
+import { ConnectToChatDialog } from "./ConnectToChatDialog";
 import { AddRepositoryDialog } from "./AddRepositoryDialog";
 import { ChangesPane } from "./ChangesPane";
 import type { ChangesTab } from "./ChangesPane";
@@ -820,6 +821,8 @@ export function GitClientWindow({
     reportClientDiagnostic(`[keiko] git repository dialog handoff: ${initialRepositoryDialog}`);
   }, [initialRepositoryDialog, updateCfg]);
   const [newBranchOpen, setNewBranchOpen] = useState(false);
+  // Issue #3400 — "Connect to Chat" dialog for the active repository comparison.
+  const [connectToChatOpen, setConnectToChatOpen] = useState(false);
   const [worktreeConfirmation, setWorktreeConfirmation] =
     useState<WorktreeMutationConfirmation | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
@@ -1621,6 +1624,7 @@ export function GitClientWindow({
         onRunSync={requestSync}
         onOpenEditor={onOpenEditor}
         onOpenFiles={onOpenFiles}
+        onConnectToChat={() => setConnectToChatOpen(true)}
       />
       {/* A rejected branch switch must never render as silent success: the New Branch dialog
           shows its own copy of this outcome while it is open (the create-then-switch chain runs
@@ -1767,6 +1771,15 @@ export function GitClientWindow({
           onConfirm={confirmWorktreeMutation}
         />
       )}
+      {connectToChatOpen && selectedPath !== null ? (
+        <ConnectToChatDialog
+          projectId={selectedPath}
+          currentBranch={currentBranch}
+          baseBranchName={inferredBaseBranch}
+          baseBranchChoices={activeBranches.map((branch) => branch.name)}
+          onClose={() => setConnectToChatOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

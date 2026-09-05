@@ -1387,6 +1387,7 @@ export const EN_MESSAGES = {
   "gitChangeScope.connect.cancel": "Cancel",
   "gitChangeScope.connect.openButton": "Connect to Chat",
   "gitChangeScope.connect.noChats": "No chats are open for this repository yet.",
+  "gitChangeScope.connect.chatLoadError": "Unable to load chats for this repository.",
   "gitChangeScope.connect.error": "Unable to connect this Git change to the chat.",
   "scope.budget.pressure.low": "Low",
   "scope.budget.pressure.moderate": "Moderate",

@@ -291,8 +291,11 @@ describe("CI repair accounting around admitted model work", () => {
       .get("run-1") as { draft_delivery_record: string };
     const draft: unknown = JSON.parse(row.draft_delivery_record);
     if (!isDraftDeliveryRecord(draft)) throw new Error("expected a valid draft delivery record");
+    const repairedCommit = JSON.stringify({ ...COMMIT, headSha: repairedHeadSha });
     test.db
-      .prepare("UPDATE coding_runtime_snapshots SET draft_delivery_record = ? WHERE run_id = ?")
+      .prepare(
+        "UPDATE coding_runtime_snapshots SET draft_delivery_record = ?, verified_commit_result = ?, draft_delivery_source_receipt = ? WHERE run_id = ?",
+      )
       .run(
         JSON.stringify({
           ...draft,
@@ -302,6 +305,8 @@ describe("CI repair accounting around admitted model work", () => {
               ? undefined
               : { ...draft.pullRequest, headSha: repairedHeadSha },
         }),
+        repairedCommit,
+        repairedCommit,
         "run-1",
       );
     const repaired = { ...readySnapshot(), headSha: repairedHeadSha };

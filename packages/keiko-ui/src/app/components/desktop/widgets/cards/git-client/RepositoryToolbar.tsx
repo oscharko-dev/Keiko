@@ -25,6 +25,7 @@ const FolderIcon = Icons.folder;
 const BranchIcon = Icons.branch;
 const CodeIcon = Icons.code;
 const FilesIcon = Icons.files;
+const ChatIcon = Icons.newChat;
 
 interface RepositoryToolbarProps {
   readonly repositories: readonly ProjectWithAvailability[];
@@ -43,6 +44,8 @@ interface RepositoryToolbarProps {
   readonly onRunSync: () => void;
   readonly onOpenEditor?: ((root: string) => void) | undefined;
   readonly onOpenFiles?: ((root: string) => void) | undefined;
+  /** Issue #3400 — opens the "Connect to Chat" dialog for the active repository comparison. */
+  readonly onConnectToChat?: (() => void) | undefined;
 }
 
 function currentBranchName(
@@ -101,6 +104,7 @@ export function RepositoryToolbar({
   onRunSync,
   onOpenEditor,
   onOpenFiles,
+  onConnectToChat,
 }: RepositoryToolbarProps): ReactNode {
   const t = useTranslate();
   const hasRepository = selectedPath !== null;
@@ -191,8 +195,21 @@ export function RepositoryToolbar({
 
       <span style={{ flex: 1 }} />
 
-      {onOpenEditor !== undefined || onOpenFiles !== undefined ? (
+      {onOpenEditor !== undefined || onOpenFiles !== undefined || onConnectToChat !== undefined ? (
         <div style={TOOLBAR_ACTIONS_STYLE}>
+          {onConnectToChat !== undefined ? (
+            <button
+              type="button"
+              style={TOOLBAR_ICON_BTN}
+              aria-label={t("gitChangeScope.connect.openButton")}
+              title={t("gitChangeScope.connect.openButton")}
+              onClick={onConnectToChat}
+            >
+              <span style={{ color: "var(--fg-dim)" }}>
+                <ChatIcon size={15} />
+              </span>
+            </button>
+          ) : null}
           {onOpenEditor !== undefined ? (
             <button
               type="button"

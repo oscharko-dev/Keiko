@@ -3293,6 +3293,163 @@ describe("desktop chat SSE streaming handler", () => {
   });
 });
 
+// Issue #3400 (epic #3384, contract correction 4) — the SSE streaming send is the transport the
+// desktop client actually uses (packages/keiko-ui/src/lib/api.ts posts to
+// /api/desktop/chat/stream, not the buffered /api/desktop/chat), so the git-change
+// description-authority gate proven against the buffered path in chat-handlers.test.ts must ALSO
+// gate this path. Before admitGitChangeScopedTurn was wired into prepareDesktopChatStream /
+// runAdmittedDesktopChatStream, a git-change-connected chat sent over the stream endpoint reached
+// the Model Gateway (callStream invoked) with no re-derivation of the description authority at all.
+describe("git-change description-authority admission on the streaming send path (#3400)", () => {
+  function attachGitChangeScope(chatId: string): void {
+    store.updateChat(chatId, {
+      gitChangeScopes: [
+        {
+          kind: "git-change",
+          relationshipId: "rel-stream-1",
+          remoteDigest: "d".repeat(64),
+          comparisonLabel: "main...feature/stream",
+          baseRef: "main",
+          headRef: "feature/stream",
+          baseSha: "a".repeat(40),
+          headSha: "b".repeat(40),
+          mergeBaseSha: "c".repeat(40),
+          snapshotDigest: "e".repeat(64),
+          fileCount: 1,
+          totalFiles: 1,
+          omittedFiles: 0,
+          truncatedFiles: 0,
+          descriptionStatus: "current",
+          connectedAtMs: 10,
+        },
+      ],
+    });
+  }
+
+  it("denies the streamed turn before any callStream when no description authority port is wired", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    attachGitChangeScope(chatId);
+    let streamCalls = 0;
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("must not run")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        streamCalls += 1;
+        await Promise.resolve();
+        yield { type: "done", response: normalizedResponse("must not run") };
+      },
+    };
+    const captured = captureRes();
+
+    const result = await handleSendDesktopChatStream(
+      {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            modelId: CHAT_MODEL,
+            content: "refine the description",
+          }),
+          captured.res,
+        ),
+        correlationId: "corr-stream-git-change-1",
+      },
+      deps(model),
+    );
+
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: { code: "GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED" } },
+    });
+    expect(captured.status).toBeUndefined();
+    expect(captured.writes).toEqual([]);
+    expect(streamCalls).toBe(0);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        category: "security",
+        op: "pr-description.chat.turn.denied",
+        correlationId: "corr-stream-git-change-1",
+        errorKind: "authority-denied",
+        extra: { relationshipId: "rel-stream-1" },
+      }),
+    );
+  });
+
+  it("admits the streamed turn once a live description authority record exists for the exact scope", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    attachGitChangeScope(chatId);
+    let streamCalls = 0;
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("unused")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        streamCalls += 1;
+        await Promise.resolve();
+        yield { type: "done", response: normalizedResponse("streamed description turn") };
+      },
+    };
+    const admittingDeps = {
+      ...deps(model),
+      gitChangeDescriptionAuthorityPort: {
+        current: (): { readonly effectiveMode: string } => ({ effectiveMode: "governed-assist" }),
+      },
+    } as unknown as UiHandlerDeps;
+    const captured = captureRes();
+
+    const result = await handleSendDesktopChatStream(
+      {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            modelId: CHAT_MODEL,
+            content: "refine the description",
+          }),
+          captured.res,
+        ),
+        correlationId: "corr-stream-git-change-2",
+      },
+      admittingDeps,
+    );
+
+    expect(result).toBe(STREAMING);
+    expect(streamCalls).toBe(1);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        category: "security",
+        op: "pr-description.chat.turn.admitted",
+        correlationId: "corr-stream-git-change-2",
+        extra: { relationshipId: "rel-stream-1" },
+      }),
+    );
+  });
+
+  it("never gates a streamed turn on a chat with no connected git-change scope", async () => {
+    const chatId = seedChat();
+    let streamCalls = 0;
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("unused")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        streamCalls += 1;
+        await Promise.resolve();
+        yield { type: "done", response: normalizedResponse("ordinary streamed turn") };
+      },
+    };
+    const result = await handleSendDesktopChatStream(
+      routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+        captureRes().res,
+      ),
+      deps(model),
+    );
+
+    expect(result).toBe(STREAMING);
+    expect(streamCalls).toBe(1);
+  });
+});
+
 // GEN-PERF-CHATSTREAM-001 — the chat SSE route was the only stream type without a
 // concurrency bulkhead (agent runs cap at 16, QI at 2, voice at 64). Above the cap the
 // route must reject with a JSON 429 BEFORE any SSE header (so the client degrades to the

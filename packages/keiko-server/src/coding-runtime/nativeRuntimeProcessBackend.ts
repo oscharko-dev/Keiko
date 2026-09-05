@@ -120,6 +120,7 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
       recordNativeConfinementFailure(this.options.activityLog, request.runId, error);
       throw error;
     }
+    recordNativeConfinementUnavailable(this.options.activityLog, request.runId, this.identity);
     const paths = validateLaunchPacketRequest(request, {
       ...this.options,
       safeRealFile,
@@ -200,6 +201,27 @@ function recordNativeConfinementFailure(sink: ServerLogSink, runId: string, erro
     correlationId: runId,
     errorKind: errorKindOf(error),
     extra: { frames: keikoStackFrames(error), causeChain: causeChain(error) },
+  });
+}
+
+/**
+ * Body-free evidence that a native launch runs WITHOUT gateway confinement (ADR-0043 D14, #2951):
+ * this backend has no OS-level enforcement on any platform yet, and the release-qualified lanes
+ * deliberately launch unconfined rather than refuse (a refusal would disable the coding runtime on
+ * every Windows/Linux release). A support bundle must show that exposure per run, so the gap is
+ * never silent while #2951 stays open. Reaches this line only when no confinement was requested.
+ */
+function recordNativeConfinementUnavailable(
+  sink: ServerLogSink,
+  runId: string,
+  identity: NativeRuntimeProcessBackend["identity"],
+): void {
+  sink.write({
+    category: "process",
+    level: "info",
+    op: "runtime.confinement.unavailable",
+    correlationId: runId,
+    extra: { platform: identity.platform, arch: identity.arch, backend: identity.backend },
   });
 }
 

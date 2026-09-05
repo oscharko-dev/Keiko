@@ -649,6 +649,30 @@ async function prepareDesktopChatProviderStream(
   return callStream;
 }
 
+interface StreamedChatPreflight {
+  readonly prepared: PreparedDesktopChatSend;
+  readonly preflight: DesktopChatStreamExecutionPreflight;
+}
+
+// Re-derives the git-change description authority immediately before dispatch (not only at the
+// earlier fast-fail check in prepareDesktopChatStream): a queued turn may wait long enough for the
+// authority to expire in between, exactly as the buffered path re-checks inside its
+// serialized-turn callback. Extracted so runAdmittedDesktopChatStream stays under the function
+// line budget.
+function resolveStreamedChatPreflight(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  start: PreparedDesktopChatStream,
+): StreamedChatPreflight | RouteResult {
+  const prepared = validateCurrentDesktopChatSend(start.parsed, deps);
+  if ("status" in prepared) return prepared;
+  const gitChangeDenial = admitGitChangeScopedTurn(deps, prepared.chat, ctx.correlationId);
+  if (gitChangeDenial !== undefined) return gitChangeDenial;
+  const preflight = preflightDesktopChatStreamExecution(prepared, deps, ctx.correlationId);
+  if ("status" in preflight) return preflight;
+  return { prepared, preflight };
+}
+
 async function runAdmittedDesktopChatStream(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -656,15 +680,9 @@ async function runAdmittedDesktopChatStream(
   controller: AbortController,
   markStreamStarted: () => void,
 ): Promise<HandlerOutcome> {
-  const prepared = validateCurrentDesktopChatSend(start.parsed, deps);
-  if ("status" in prepared) return prepared;
-  // Re-derived immediately before dispatch (not only at the earlier fast-fail check in
-  // prepareDesktopChatStream): a queued turn may wait long enough for the authority to expire
-  // in between, exactly as the buffered path re-checks inside its serialized-turn callback.
-  const gitChangeDenial = admitGitChangeScopedTurn(deps, prepared.chat, ctx.correlationId);
-  if (gitChangeDenial !== undefined) return gitChangeDenial;
-  const preflight = preflightDesktopChatStreamExecution(prepared, deps, ctx.correlationId);
-  if ("status" in preflight) return preflight;
+  const resolved = resolveStreamedChatPreflight(ctx, deps, start);
+  if ("status" in resolved) return resolved;
+  const { prepared, preflight } = resolved;
   const messageCountBeforeTurn = deps.store.countMessages(prepared.request.chatId);
   const admission = admitDesktopChatTurn(deps, prepared);
   if (admission.kind !== "admitted") return nonAdmittedStreamOutcome(ctx, admission);

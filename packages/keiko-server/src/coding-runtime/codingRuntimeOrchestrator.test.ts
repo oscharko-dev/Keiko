@@ -2678,7 +2678,16 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       const jobs = jobStore();
       const dispatcher = fakeDispatcher({ reason: "generated" });
       const verifiedCommits = new Map<string, VerifiedCommitResult>();
-      const f = fixture(undefined, undefined, [], undefined, undefined, undefined, undefined, verifiedCommits);
+      const f = fixture(
+        undefined,
+        undefined,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        verifiedCommits,
+      );
 
       f.orchestrator.attachDescriptionSupport({ jobs, dispatcher });
 
