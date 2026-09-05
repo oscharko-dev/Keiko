@@ -407,18 +407,20 @@ function validDescriptionCoverage(value: unknown): boolean {
   );
 }
 
+function statementEvidenceIds(value: unknown): readonly string[] {
+  if (!isPlainRecord(value) || !Array.isArray(value.evidenceIds)) return [];
+  return value.evidenceIds.filter((id): id is string => typeof id === "string");
+}
+
+function sectionEvidenceIds(candidate: Record<string, unknown>, key: string): readonly string[] {
+  const statements = candidate[key];
+  return Array.isArray(statements) ? statements.flatMap(statementEvidenceIds) : [];
+}
+
 function candidateEvidenceIds(value: unknown): readonly string[] {
-  if (!isPlainRecord(value)) return [];
-  const ids: string[] = [];
-  for (const key of PR_DESCRIPTION_SECTION_KEYS) {
-    const statements = value[key];
-    if (!Array.isArray(statements)) continue;
-    for (const statement of statements) {
-      if (!isPlainRecord(statement) || !Array.isArray(statement.evidenceIds)) continue;
-      for (const id of statement.evidenceIds) if (typeof id === "string") ids.push(id);
-    }
-  }
-  return ids;
+  return isPlainRecord(value)
+    ? PR_DESCRIPTION_SECTION_KEYS.flatMap((key) => sectionEvidenceIds(value, key))
+    : [];
 }
 
 function validArtifactVocabulary(value: Record<string, unknown>): boolean {

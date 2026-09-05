@@ -192,8 +192,7 @@ function questionStatusMessage(
 ): string {
   if (failure !== null) {
     const rejectedAnswer =
-      failure.action === "answer" &&
-      failure.code === "CODING_RUNTIME_QUESTION_ANSWER_REJECTED";
+      failure.action === "answer" && failure.code === "CODING_RUNTIME_QUESTION_ANSWER_REJECTED";
     return actionFailureAlert(
       rejectedAnswer
         ? "codingWorkbench.questions.answerRejected"

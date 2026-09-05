@@ -2793,6 +2793,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "store.journey-outcomes.migration",
+      "category": "setup",
+      "site": "packages/keiko-server/src/store/journeyOutcomeMigration.ts:68",
+      "package": "keiko-server"
+    },
+    {
       "op": "store.messages.grounded-preview-citations.read",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/store/messages.ts:142",
@@ -3442,6 +3448,7 @@
     "sse.stream.closed",
     "store.encryption-checkpoint-degraded",
     "store.encryption-migrated",
+    "store.journey-outcomes.migration",
     "store.messages.grounded-preview-citations.read",
     "store.opened",
     "task-workspace.identity.creation-time-probe",

@@ -3,12 +3,13 @@
 // runner applies migrations whose 1-based index > current user_version.
 
 import type { DatabaseSync } from "node:sqlite";
+import { migrateJourneyOutcomeProjection } from "./journeyOutcomeMigration.js";
 import {
   migrateLegacyProjectManifests,
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 31;
+export const SCHEMA_VERSION = 32;
 
 interface Migration {
   readonly version: number;
@@ -722,18 +723,7 @@ CREATE TABLE coding_runtime_ci_repair_budgets (
 ) STRICT;
 `;
 
-// #3389: the durable JourneyOutcome projection, independent of the run-bound coding_runtime_snapshots
-// row so refresh/reconciliation survives the originating run's termination or recovery (AC6). Keyed
-// by the same-repository identity (remote_digest) and PR number, never repositoryId or a run state.
-// Content-free BY COLUMN, not by a serialized blob: only bounded identity ids/digests/shas, a closed
-// state/reason pair, a monotonic revision and two timestamps are persisted — never a title, body,
-// diff, repository/owner name or provider URL. The full JourneyOutcome (remote facts, readiness,
-// description) is never made durable here: it carries plaintext repository identity and a PR URL
-// (GitJourneyBinding.repository, GitJourneyRemoteFacts.identity/defaultBranchRef), so AC6's restart
-// continuity is met by re-deriving the outcome from a fresh provider/readiness/description read each
-// time, not by caching that content at rest. This table exists only so a CAS write can detect
-// staleness (by observed_at) across a process restart — never to answer "what was the outcome"
-// without a fresh read.
+// Original V27 is immutable. V32 upgrades its blob to the bounded, content-free projection.
 const V27_SQL = `
 CREATE TABLE git_journey_outcomes (
   remote_digest TEXT NOT NULL CHECK (length(remote_digest) = 64),
@@ -742,9 +732,8 @@ CREATE TABLE git_journey_outcomes (
   revision INTEGER NOT NULL CHECK (revision >= 0),
   state TEXT NOT NULL CHECK (length(state) BETWEEN 1 AND 64),
   reason TEXT NOT NULL CHECK (length(reason) BETWEEN 1 AND 64),
-  head_sha TEXT NOT NULL CHECK (length(head_sha) BETWEEN 7 AND 64),
-  evidence_ref TEXT NOT NULL CHECK (length(evidence_ref) BETWEEN 1 AND 128),
   observed_at TEXT NOT NULL,
+  outcome_json TEXT NOT NULL CHECK (length(outcome_json) <= 8192 AND json_valid(outcome_json)),
   updated_at TEXT NOT NULL,
   PRIMARY KEY (remote_digest, pr_number)
 ) STRICT;
@@ -1111,6 +1100,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 29, sql: V29_SQL },
   { version: 30, sql: V30_SQL },
   { version: 31, sql: V31_SQL },
+  { version: 32, sql: "", apply: migrateJourneyOutcomeProjection },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

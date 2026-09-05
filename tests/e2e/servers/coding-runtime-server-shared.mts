@@ -314,6 +314,7 @@ function scriptedModelDeps(
   // reaches the model without being complied with; productive/discovery/out-of-scope modes ignore
   // the transcript, so passing it always is behaviour-preserving.
   const chat = async (request?: GatewayRequest): Promise<NormalizedResponse> => {
+    process.stderr.write(`[debug-gateway] calls=${String(script.calls)}\n`);
     if (request !== undefined) observeGatewayRequest?.(request);
     const response = nextScriptedTurn(script, includeQuestion, scriptedTranscript(request));
     await commit?.beforeResponse(response);
@@ -443,6 +444,21 @@ function scriptedUiHandlerDepsOptions(
   };
 }
 
+function scriptedRuntimeDeps(
+  options: Parameters<typeof buildUiHandlerDeps>[0],
+  runtimeMutationLeaseBroker: ReturnType<typeof createCodingRuntimeEditorMutationLeaseBroker>,
+): UiHandlerDeps {
+  const assembled = buildUiHandlerDeps(options);
+  return {
+    ...assembled,
+    runtimeMutationLease: runtimeMutationLeaseBroker,
+    dispose: async (): Promise<void> => {
+      await assembled.dispose?.();
+      runtimeMutationLeaseBroker.dispose();
+    },
+  };
+}
+
 function scriptedComposition(
   config: CodingRuntimeJourneyServerConfig,
   stateDir: string,
@@ -476,17 +492,10 @@ function scriptedComposition(
     },
   );
   const env = scriptedEnvironment(config, bffStateRoot);
-  const assembledDeps = buildUiHandlerDeps(
+  const deps = scriptedRuntimeDeps(
     scriptedUiHandlerDepsOptions(config, services, bffStateRoot, env, resolver),
+    runtimeMutationLeaseBroker,
   );
-  const deps: UiHandlerDeps = {
-    ...assembledDeps,
-    runtimeMutationLease: runtimeMutationLeaseBroker,
-    dispose: async (): Promise<void> => {
-      await assembledDeps.dispose?.();
-      runtimeMutationLeaseBroker.dispose();
-    },
-  };
   const observe =
     config.issue === undefined
       ? undefined

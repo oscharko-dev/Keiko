@@ -73,9 +73,7 @@ type QuestionMutationOutcome =
   | {
       readonly ok: false;
       readonly reason:
-        | "invalid-intent"
-        | "authority-resolution-failed"
-        | "question-answer-rejected";
+        "invalid-intent" | "authority-resolution-failed" | "question-answer-rejected";
     };
 
 const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([

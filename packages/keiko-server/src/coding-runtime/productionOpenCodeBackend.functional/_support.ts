@@ -471,9 +471,16 @@ function functionalEditorAgentClient(
         return Promise.resolve(editorDenied("RUNTIME_EDIT_CHANGESET_INVALID"));
       }
       const leaseRequest = functionalMutationLeaseRequest(action, root);
+      process.stderr.write(
+        `[debug-lease] present=${String(leaseRequest !== undefined)} broker=${String(runtimeMutationLeaseBroker !== undefined)}\n`,
+      );
+      const claimed =
+        runtimeMutationLeaseBroker === undefined ||
+        (leaseRequest !== undefined && runtimeMutationLeaseBroker.claim(leaseRequest));
+      process.stderr.write(`[debug-lease-claim] claimed=${String(claimed)}\n`);
       if (
         runtimeMutationLeaseBroker !== undefined &&
-        (leaseRequest === undefined || !runtimeMutationLeaseBroker.claim(leaseRequest))
+        !claimed
       ) {
         return Promise.resolve(editorDenied("RUNTIME_EDIT_AUTHORITY_INVALID"));
       }
@@ -487,8 +494,12 @@ function functionalEditorAgentClient(
       } catch {
         return Promise.resolve(editorDenied("RUNTIME_EDIT_APPLY_FAILED"));
       } finally {
-        if (leaseRequest !== undefined)
-          runtimeMutationLeaseBroker?.complete(leaseRequest, succeeded);
+        if (leaseRequest !== undefined) {
+          const completed = runtimeMutationLeaseBroker?.complete(leaseRequest, succeeded);
+          process.stderr.write(
+            `[debug-lease-complete] succeeded=${String(succeeded)} completed=${String(completed)}\n`,
+          );
+        }
       }
       return Promise.resolve({
         ok: true as const,
