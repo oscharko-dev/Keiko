@@ -109,6 +109,72 @@ describe("bounded coding safe-activity projection", () => {
     );
   });
 
+  it("accepts running-to-failed as a monotonic tool transition and settles idempotently on a repeat (#3390)", () => {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      diagnostics: { record: (): void => undefined },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
+    const running: CodingSafeActivitySignal = {
+      kind: "tool",
+      messageId: "msg_assistant",
+      callId: "call_1",
+      tool: "keiko_workspace_discover",
+      state: "running",
+      occurredAt: "2026-07-18T17:00:00.002Z",
+    };
+    const failed: CodingSafeActivitySignal = {
+      kind: "tool",
+      messageId: "msg_assistant",
+      callId: "call_1",
+      state: "failed",
+      occurredAt: "2026-07-18T17:00:00.003Z",
+    };
+    // Same failed state observed a second time (e.g. the part-level projection and a later
+    // facade settlement both resolving to "failed") is idempotent, never a duplicate tool entry.
+    const repeatedFailed: CodingSafeActivitySignal = {
+      ...failed,
+      occurredAt: "2026-07-18T17:00:00.004Z",
+    };
+
+    expect(projection.ingest(RUN_ID, running)).toBe(true);
+    expect(projection.ingest(RUN_ID, failed)).toBe(true);
+    expect(projection.ingest(RUN_ID, repeatedFailed)).toBe(true);
+
+    const content = projection.currentContent();
+    expect(content).toMatchObject({
+      kind: "safe-activity",
+      feed: {
+        turns: [
+          {
+            tools: [
+              {
+                callId: "call_1",
+                tool: "keiko_workspace_discover",
+                state: "failed",
+                occurredAt: "2026-07-18T17:00:00.004Z",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const feed =
+      content?.kind === "safe-activity" && content.feed.availability === "available"
+        ? content.feed
+        : undefined;
+    expect(feed?.turns.flatMap((turn) => turn.tools)).toHaveLength(1);
+    // Body-free: no upstream error text ever reaches the projected feed.
+    expect(JSON.stringify(content)).not.toMatch(/typo|url or port/u);
+  });
+
   it("marks over-limit text and evicted turns explicitly instead of silently clipping", () => {
     const projection = createCodingSafeActivityProjection({
       now: () => 1_721_323_200_000,

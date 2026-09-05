@@ -92,8 +92,9 @@ function signalFor(
   if (type === "message.updated.1") return messageSignal(data);
   if (type === "message.part.updated.1") return partSignal(data);
   if (type === "session.next.tool.called") return calledToolSignal(data);
-  // Terminal outcomes are deliberately not inferred from upstream output. The Keiko tool facade
-  // supplies succeeded/failed/denied/cancelled after its closed result is known.
+  // These top-level terminal event types carry no part to project (see toolPartSignal for the
+  // part-level "error" status, which IS projected): the Keiko tool facade supplies
+  // succeeded/denied/cancelled after its closed result is known.
   return undefined;
 }
 
@@ -240,8 +241,14 @@ function calledToolSignal(data: Record<string, unknown>): CodingSafeActivitySign
 
 function toolPartState(
   value: unknown,
-): Extract<CodingSafeActivityToolState, "pending" | "running"> | undefined {
-  return value === "pending" || value === "running" ? value : undefined;
+): Extract<CodingSafeActivityToolState, "pending" | "running" | "failed"> | undefined {
+  if (value === "pending" || value === "running") return value;
+  // A terminal "error" part must still be projected even for a facade-dispatched tool: the
+  // facade only settles once its HTTP tool-bridge round trip completes, so a fault the OpenCode
+  // child hits before or without reaching the facade (e.g. a network fault dialing the bridge)
+  // never calls settleTool and would otherwise leave the timeline reading "Running" forever
+  // (#3390). The upstream error string is untrusted and deliberately dropped, never read here.
+  return value === "error" ? "failed" : undefined;
 }
 
 function activityEventType(value: string | undefined): boolean {
