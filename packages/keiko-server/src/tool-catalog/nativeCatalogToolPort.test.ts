@@ -248,10 +248,12 @@ describe("native server port boundaries", () => {
   it("rejects a forged offered identity and revoked authority before the real host", async () => {
     const f = standaloneNative();
     const execute = vi.spyOn(f.host, "executeCatalog");
-    if (f.request.invocation.kind !== "bound") throw new TypeError("Expected bound request");
+    // `f.request.invocation` is already `BoundToolInvocation`, whose `kind` is the single literal
+    // "bound" -- a `kind !== "bound"` narrowing guard here would be unreachable by construction
+    // (sonarjs/no-unnecessary-condition), so the spread below carries `kind` through unchanged.
     const forged = await f.port.execute({
       ...f.request,
-      invocation: { ...f.request.invocation, kind: "bound", offerId: "forged-offer" },
+      invocation: { ...f.request.invocation, offerId: "forged-offer" },
     });
     expect(forged.kind === "settled" && forged.result).toMatchObject({
       status: "invalid",

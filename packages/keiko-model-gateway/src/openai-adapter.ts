@@ -142,12 +142,11 @@ interface ChatRequestBody {
   readonly stream_options?: { readonly include_usage: boolean };
 }
 
-type ChatRequestMessageContent =
-  | string
-  | readonly (
-      | { readonly type: "text"; readonly text: string }
-      | { readonly type: "image_url"; readonly image_url: { readonly url: string } }
-    )[];
+type ChatRequestMessageContentParts = readonly (
+  | { readonly type: "text"; readonly text: string }
+  | { readonly type: "image_url"; readonly image_url: { readonly url: string } }
+)[];
+type ChatRequestMessageContent = string | ChatRequestMessageContentParts;
 
 // GEN-AI-GATEWAY-002 (RB-4): honor Azure deployment routing for chat providers instead of silently
 // misrouting an Azure-configured provider to the OpenAI-compatible path. Mirrors the voice adapters'
@@ -166,11 +165,11 @@ function chatCompletionsUrl(config: ModelProviderConfig): string {
   return `${trimmed}/chat/completions`;
 }
 
-function buildMessageContent(
-  content: string,
-  parts: readonly ChatMessageContentPart[] | undefined,
-): ChatRequestMessageContent {
-  if (parts === undefined) return content;
+// Always returns the array shape: the plain-string case is handled at the call site so this
+// helper itself never mixes return types (sonarjs/function-return-type).
+function messageContentParts(
+  parts: readonly ChatMessageContentPart[],
+): ChatRequestMessageContentParts {
   return parts.map((part) =>
     part.type === "text"
       ? { type: "text" as const, text: part.text }
@@ -191,7 +190,9 @@ function buildMessage(
     content:
       message.role === "assistant" && toolCalls !== undefined && toolCalls.length > 0
         ? null
-        : buildMessageContent(message.content, message.contentParts),
+        : message.contentParts === undefined
+          ? message.content
+          : messageContentParts(message.contentParts),
     ...(message.role === "tool" && message.toolCallId !== undefined
       ? { tool_call_id: message.toolCallId }
       : {}),
@@ -216,45 +217,58 @@ function outputTokenLimit(
     : { max_tokens: request.maxOutputTokens };
 }
 
-// eslint-disable-next-line complexity
 type ProviderGatewayRequest = GatewayRequest & {
   readonly tools?: readonly ToolDefinition[] | undefined;
 };
 
-function buildBody(request: ProviderGatewayRequest, config: ModelProviderConfig): ChatRequestBody {
-  assertValidGatewaySamplingParameters(request);
-  const messages = request.messages.map(buildMessage);
-  const base: ChatRequestBody = { model: request.modelId, messages };
-  const tools =
-    request.tools === undefined
-      ? undefined
-      : request.tools.map((t) => ({
-          type: "function",
-          function: { name: t.name, description: t.description, parameters: t.parameters },
-        }));
-  const responseFormat =
-    request.responseFormat?.type === "json_schema"
-      ? {
-          type: "json_schema",
-          json_schema: {
-            schema: request.responseFormat.schema,
-            ...(request.responseFormat.name !== undefined
-              ? { name: request.responseFormat.name }
-              : {}),
-            ...(request.responseFormat.strict !== undefined
-              ? { strict: request.responseFormat.strict }
-              : {}),
-          },
-        }
-      : undefined;
+function toolsField(tools: readonly ToolDefinition[] | undefined): Pick<ChatRequestBody, "tools"> {
+  if (tools === undefined) return {};
   return {
-    ...base,
-    ...(tools ? { tools } : {}),
-    ...(responseFormat ? { response_format: responseFormat } : {}),
+    tools: tools.map((t) => ({
+      type: "function",
+      function: { name: t.name, description: t.description, parameters: t.parameters },
+    })),
+  };
+}
+
+function responseFormatField(
+  request: ProviderGatewayRequest,
+): Pick<ChatRequestBody, "response_format"> {
+  const format = request.responseFormat;
+  if (format?.type !== "json_schema") return {};
+  return {
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        schema: format.schema,
+        ...(format.name !== undefined ? { name: format.name } : {}),
+        ...(format.strict !== undefined ? { strict: format.strict } : {}),
+      },
+    },
+  };
+}
+
+// The four scalar sampling knobs the provider accepts unchanged from the gateway request; grouped
+// so buildBody's own complexity stays under the repository ceiling (AGENTS.md §6).
+function samplingFields(
+  request: GatewayRequest,
+): Pick<ChatRequestBody, "temperature" | "top_p" | "seed" | "reasoning_effort"> {
+  return {
     ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     ...(request.topP !== undefined ? { top_p: request.topP } : {}),
     ...(request.seed !== undefined ? { seed: request.seed } : {}),
     ...(request.reasoningEffort !== undefined ? { reasoning_effort: request.reasoningEffort } : {}),
+  };
+}
+
+function buildBody(request: ProviderGatewayRequest, config: ModelProviderConfig): ChatRequestBody {
+  assertValidGatewaySamplingParameters(request);
+  return {
+    model: request.modelId,
+    messages: request.messages.map(buildMessage),
+    ...toolsField(request.tools),
+    ...responseFormatField(request),
+    ...samplingFields(request),
     ...outputTokenLimit(request, config),
   };
 }

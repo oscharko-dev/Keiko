@@ -162,8 +162,13 @@ function acceptReceipt(
     return;
   }
   const charge = charges.get(receipt.invocationId);
+  // Compares against `charge` explicitly instead of `charge?.reservation...` (sonarjs
+  // different-types-comparison): the reservation's `reservationId` is always a `string`, while a
+  // missing charge previously surfaced as `undefined` compared against the receipt's
+  // `string | null` field. No charge for this invocationId is itself a mismatch.
   if (
-    charge?.reservation.reservationId !== receipt.reservationId ||
+    charge === undefined ||
+    charge.reservation.reservationId !== receipt.reservationId ||
     charge.descriptorDigest !== verifyToolDescriptor(descriptor).descriptorDigest ||
     charge.state !== receipt.budgetDisposition
   )

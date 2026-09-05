@@ -660,15 +660,20 @@ function emitClusters(clusters: readonly OpCluster[], json: boolean, io: CliIo):
   return 0;
 }
 
+// Single return statement by design (sonarjs/function-return-type): both arms assign the same
+// declared `string | number` union before one trailing return, rather than returning from inside
+// each branch, so the function's return shape reads as one type instead of two.
 function readAnalyzeSource(filePath: string, io: CliIo): string | number {
+  let result: string | number;
   try {
-    return readFileSync(filePath, "utf8");
+    result = readFileSync(filePath, "utf8");
   } catch (error) {
     // Content-free: an fs error's message can quote the path it was reading (AGENTS.md §7).
     const kind = error instanceof Error ? error.constructor.name : "Error";
     io.err(`keiko support analyze: could not read ${filePath} — ${kind}\n`);
-    return 1;
+    result = 1;
   }
+  return result;
 }
 
 function resolveFixturePath(cwd: string, path: string): string {

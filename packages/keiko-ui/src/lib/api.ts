@@ -598,19 +598,19 @@ export interface VoiceTranscriptionRequest {
   // are stripped server-side before the allowlist check.
   readonly mimeType: string;
   // Optional declared clip length in milliseconds (positive integer within the dictation limit).
-  readonly durationMs?: number | undefined;
+  readonly durationMs?: number;
   // Optional BCP-47 language tag hint for the provider.
-  readonly language?: string | undefined;
+  readonly language?: string;
   // Optional short domain-keyword prompt (length-bounded server-side) to bias transcription toward
   // in-domain proper nouns / identifiers. Omitted lets the BFF apply its language-neutral default.
-  readonly prompt?: string | undefined;
+  readonly prompt?: string;
 }
 
 export interface VoiceTranscriptionResult {
   readonly transcript: string;
-  readonly confidence?: number | undefined;
-  readonly language?: string | undefined;
-  readonly durationMs?: number | undefined;
+  readonly confidence?: number;
+  readonly language?: string;
+  readonly durationMs?: number;
 }
 
 export async function transcribeDictation(
@@ -694,49 +694,49 @@ export interface GatewaySetupInput {
   readonly baseUrl?: string | undefined;
   readonly apiKey?: string | undefined;
   readonly apiKeyHeaderName?: string | undefined;
-  readonly timeoutMs?: number | undefined;
-  readonly deploymentNames?: readonly string[] | undefined;
-  readonly imageInputModelIds?: readonly string[] | undefined;
+  readonly timeoutMs?: number;
+  readonly deploymentNames?: readonly string[];
+  readonly imageInputModelIds?: readonly string[];
   /** Embedding-kind ids a config upload asserts so a fresh setup never chat-probes them. */
-  readonly embeddingModelIds?: readonly string[] | undefined;
-  readonly workflowEligibleModelIds?: readonly string[] | undefined;
-  readonly voiceBaseUrl?: string | undefined;
-  readonly voiceApiKey?: string | undefined;
-  readonly voiceApiKeyHeaderName?: string | undefined;
+  readonly embeddingModelIds?: readonly string[];
+  readonly workflowEligibleModelIds?: readonly string[];
+  readonly voiceBaseUrl?: string;
+  readonly voiceApiKey?: string;
+  readonly voiceApiKeyHeaderName?: string;
   /** Generic endpoint protocol, persisted verbatim on rebuilt providers (#3042). */
-  readonly endpointStyle?: string | undefined;
-  readonly apiVersion?: string | undefined;
-  readonly voiceModelId?: string | undefined;
-  readonly voiceSpeechToTextModelId?: string | undefined;
-  readonly voiceRealtimeModelId?: string | undefined;
-  readonly voiceRealtimeTranscriptionModelId?: string | undefined;
-  readonly voiceSupportsSemanticTurnDetection?: boolean | undefined;
-  readonly voiceSupportsSpeechSynthesisInstructions?: boolean | undefined;
-  readonly voiceSpeechOutputModelId?: string | undefined;
-  readonly voiceOutputVoiceId?: string | undefined;
-  readonly voiceProviderLocality?: string | undefined;
-  readonly voiceTimeoutMs?: number | undefined;
+  readonly endpointStyle?: string;
+  readonly apiVersion?: string;
+  readonly voiceModelId?: string;
+  readonly voiceSpeechToTextModelId?: string;
+  readonly voiceRealtimeModelId?: string;
+  readonly voiceRealtimeTranscriptionModelId?: string;
+  readonly voiceSupportsSemanticTurnDetection?: boolean;
+  readonly voiceSupportsSpeechSynthesisInstructions?: boolean;
+  readonly voiceSpeechOutputModelId?: string;
+  readonly voiceOutputVoiceId?: string;
+  readonly voiceProviderLocality?: string;
+  readonly voiceTimeoutMs?: number;
   /** Voice endpoint protocol imported from a config upload, persisted verbatim (#3037). */
-  readonly voiceEndpointStyle?: string | undefined;
-  readonly voiceApiVersion?: string | undefined;
-  readonly voiceRealtimeAuthMode?: string | undefined;
-  readonly figmaAccessToken?: string | undefined;
-  readonly preserveExisting?: boolean | undefined;
+  readonly voiceEndpointStyle?: string;
+  readonly voiceApiVersion?: string;
+  readonly voiceRealtimeAuthMode?: string;
+  readonly figmaAccessToken?: string;
+  readonly preserveExisting?: boolean;
 }
 
 export interface GatewaySetupResponse {
   readonly ok: true;
   readonly testedModelId: string;
   readonly testedModelIds: readonly string[];
-  readonly skippedModelIds?: readonly string[] | undefined;
+  readonly skippedModelIds?: readonly string[];
   // Models the gateway offered that setup will not use, with the reason it declared, plus embedding
   // models that failed their setup probe (kept when their role was asserted, dropped when it was
   // only inferred). Absent when there is nothing to report.
-  readonly unsupportedModels?: readonly GatewayUnsupportedDiscoveredModel[] | undefined;
-  readonly unverifiedEmbeddingModelIds?: readonly string[] | undefined;
-  readonly droppedEmbeddingModelIds?: readonly string[] | undefined;
+  readonly unsupportedModels?: readonly GatewayUnsupportedDiscoveredModel[];
+  readonly unverifiedEmbeddingModelIds?: readonly string[];
+  readonly droppedEmbeddingModelIds?: readonly string[];
   /** Chat models retained after a transient setup failure; they need a successful re-check. */
-  readonly unverifiedChatModelIds?: readonly string[] | undefined;
+  readonly unverifiedChatModelIds?: readonly string[];
   readonly providerCount: number;
   readonly models: ModelCapability[];
   readonly config: SafeGatewayConfig;
@@ -837,7 +837,7 @@ export interface StartRunInput {
     readonly source: string;
     readonly committedSegments: number;
     readonly committedText: string;
-    readonly confirmationDigest?: string | undefined;
+    readonly confirmationDigest?: string;
   };
 }
 
@@ -1653,11 +1653,11 @@ export async function saveFilesContent(input: {
   readonly root: string;
   readonly path: string;
   readonly content: string;
-  readonly expectedModifiedAt?: number | undefined;
+  readonly expectedModifiedAt?: number;
   // Issue #1197: version-aware optimistic-concurrency token. Supersedes expectedModifiedAt.
   readonly baseVersion?: EditorDocumentVersion | undefined;
   /** ADR-0147 D7: restore saves checkpoint the previous on-disk state before writing. */
-  readonly historyOrigin?: "pre-restore" | undefined;
+  readonly historyOrigin?: "pre-restore";
 }): Promise<FilesContentResponse> {
   return fetchJson("/api/files/content", {
     method: "PATCH",
@@ -1778,7 +1778,7 @@ export async function renameFilesEntry(input: {
   readonly path: string;
   readonly newPath: string;
   // Issue 2.6: optional version-aware precondition; only an editor/agent holding the open buffer sets it.
-  readonly baseVersion?: EditorDocumentVersion | undefined;
+  readonly baseVersion?: EditorDocumentVersion;
 }): Promise<FilesMutationResponse> {
   return fetchJson("/api/files/rename", { method: "POST", body: JSON.stringify(input) });
 }
@@ -1786,7 +1786,7 @@ export async function renameFilesEntry(input: {
 export async function deleteFilesEntry(input: {
   readonly root: string;
   readonly path: string;
-  readonly baseVersion?: EditorDocumentVersion | undefined;
+  readonly baseVersion?: EditorDocumentVersion;
 }): Promise<FilesMutationResponse> {
   return fetchJson("/api/files/delete", { method: "POST", body: JSON.stringify(input) });
 }
@@ -1801,7 +1801,7 @@ export async function copyFilesEntry(input: {
 
 export async function fetchGitStatus(
   root: string,
-  options?: { readonly includeIgnored?: boolean | undefined },
+  options?: { readonly includeIgnored?: boolean },
 ): Promise<GitRepositoryStatusResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
@@ -1824,7 +1824,7 @@ export async function fetchGitStatus(
 export async function fetchGitStructuredDiff(
   input: {
     readonly root: string;
-    readonly path?: string | undefined;
+    readonly path?: string;
     readonly scope: GitEditorDiffScope;
   },
   signal?: AbortSignal,
@@ -1875,11 +1875,11 @@ export interface GitBranchListEntry {
 export interface GitBranchListResponse {
   readonly schemaVersion: "1";
   readonly root: string;
-  readonly repositoryRoot?: string | undefined;
+  readonly repositoryRoot?: string;
   readonly available: boolean;
   readonly state: "available" | "unavailable" | "unsafe";
-  readonly reason?: string | undefined;
-  readonly message?: string | undefined;
+  readonly reason?: string;
+  readonly message?: string;
   readonly branches: readonly GitBranchListEntry[];
   readonly truncated: boolean;
 }
@@ -1902,8 +1902,8 @@ export async function fetchGitSummary(root: string): Promise<GitRepositorySummar
 
 export async function fetchGitHistory(input: {
   readonly root: string;
-  readonly limit?: number | undefined;
-  readonly skip?: number | undefined;
+  readonly limit?: number;
+  readonly skip?: number;
 }): Promise<GitHistoryResponse> {
   const params = new URLSearchParams();
   params.set("root", input.root);
@@ -1920,8 +1920,8 @@ export async function fetchGitRemotes(root: string): Promise<GitRemotesResponse>
 
 export async function fetchGitDiff(input: {
   readonly root: string;
-  readonly path?: string | undefined;
-  readonly scope?: GitDiffScope | undefined;
+  readonly path?: string;
+  readonly scope?: GitDiffScope;
 }): Promise<GitRepositoryDiffResponse> {
   const params = new URLSearchParams();
   params.set("root", input.root);
@@ -1940,16 +1940,16 @@ export async function fetchGitDiff(input: {
 // editor cancel a superseded request.
 export interface EditorCompletionRequestInput {
   readonly root: string;
-  readonly editorSessionId?: string | undefined;
+  readonly editorSessionId?: string;
   readonly path: string;
   readonly languageId: string;
   readonly text: string;
   readonly position: { readonly line: number; readonly character: number };
   readonly triggerKind: EditorCompletionWireTriggerKind;
-  readonly triggerCharacter?: string | undefined;
+  readonly triggerCharacter?: string;
   readonly contextBudgetBytes: number;
   readonly context?: EditorCompletionContextSelectors | undefined;
-  readonly maxCostClass?: CostClass | undefined;
+  readonly maxCostClass?: CostClass;
 }
 
 export async function requestEditorCompletion(
@@ -1981,7 +1981,7 @@ export async function requestEditorCompletion(
 // never reaches a model directly. `signal` lets the editor cancel a superseded request.
 export interface EditorInlineCompletionRequestInput {
   readonly root: string;
-  readonly editorSessionId?: string | undefined;
+  readonly editorSessionId?: string;
   readonly path: string;
   readonly languageId: string;
   readonly text: string;
@@ -1989,8 +1989,8 @@ export interface EditorInlineCompletionRequestInput {
   readonly triggerKind: EditorInlineCompletionWireTriggerKind;
   readonly contextBudgetBytes: number;
   readonly context?: EditorCompletionContextSelectors | undefined;
-  readonly maxCostClass?: CostClass | undefined;
-  readonly maxOutputTokens?: number | undefined;
+  readonly maxCostClass?: CostClass;
+  readonly maxOutputTokens?: number;
 }
 
 export async function requestEditorInlineCompletion(
@@ -2059,10 +2059,10 @@ export async function reportEditorInlineCompletionTelemetry(
 // a reviewable candidate patch. The browser never reaches a model directly. `signal` cancels a run.
 export interface EditorTestGenerationRequestInput {
   readonly root: string;
-  readonly editorSessionId?: string | undefined;
+  readonly editorSessionId?: string;
   readonly target: EditorTestGenerationWireTarget;
   readonly contextBudgetBytes: number;
-  readonly context?: EditorCompletionContextSelectors | undefined;
+  readonly context?: EditorCompletionContextSelectors;
 }
 
 export async function requestEditorTestGeneration(
@@ -2094,7 +2094,7 @@ export interface EditorPatchApplyRequestInput {
   readonly patchId: string;
   readonly decision: EditorPatchApplyDecision;
   readonly diff: string;
-  readonly allowOverwrite?: boolean | undefined;
+  readonly allowOverwrite?: boolean;
 }
 
 export async function requestEditorPatchApply(
@@ -2363,7 +2363,7 @@ export async function requestEditorSymbols(
 }
 
 export async function requestEditorFormatting(
-  input: EditorLanguageRequestInput & { readonly options?: LanguageFormattingOptions | undefined },
+  input: EditorLanguageRequestInput & { readonly options?: LanguageFormattingOptions },
   signal?: AbortSignal,
 ): Promise<LanguageFormattingResult> {
   const envelope = await fetchJson<LanguageOperationEnvelope<LanguageFormattingResult>>(
@@ -2819,7 +2819,7 @@ export interface GitDeliveryLocalBranchCreateInput {
   readonly branchName: string;
   readonly baseBranchName: string;
   readonly startPointRefHash: string;
-  readonly approval?: GitDeliveryApprovalClaim | undefined;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 export async function fetchGitDeliveryLocalBranchCreate(
@@ -2843,7 +2843,7 @@ export async function fetchGitDeliveryLocalBranchCreate(
 export interface GitDeliveryLocalBranchSwitchInput {
   readonly projectId: string;
   readonly branchName: string;
-  readonly approval?: GitDeliveryApprovalClaim | undefined;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 export async function fetchGitDeliveryLocalBranchSwitch(
@@ -2866,7 +2866,7 @@ export interface GitDeliveryStageInput {
   readonly projectId: string;
   readonly pathspecs: readonly string[];
   readonly includeUntracked: boolean;
-  readonly approval?: GitDeliveryApprovalClaim | undefined;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 export async function fetchGitDeliveryStage(
@@ -2889,7 +2889,7 @@ export async function fetchGitDeliveryStage(
 export interface GitDeliveryUnstageInput {
   readonly projectId: string;
   readonly pathspecs: readonly string[];
-  readonly approval?: GitDeliveryApprovalClaim | undefined;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 export async function fetchGitDeliveryUnstage(
@@ -2921,7 +2921,7 @@ export interface GitDeliveryCommitPreviewResponse {
 }
 
 export async function fetchGitDeliveryCommitPreview(
-  input: { readonly projectId: string; readonly messageDraft?: string | undefined },
+  input: { readonly projectId: string; readonly messageDraft?: string },
   signal?: AbortSignal,
 ): Promise<GitDeliveryCommitPreviewResponse> {
   return fetchJson("/api/git-delivery/commit/preview", {
@@ -2938,8 +2938,8 @@ export async function fetchGitDeliveryCommitPreview(
 export interface GitDeliveryCommitExecuteInput {
   readonly projectId: string;
   readonly message: string;
-  readonly allowEmpty?: boolean | undefined;
-  readonly approval?: GitDeliveryApprovalClaim | undefined;
+  readonly allowEmpty?: boolean;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 export async function fetchGitDeliveryCommitExecute(
@@ -2966,9 +2966,9 @@ export interface GitDeliveryPushInput {
   readonly remoteAlias: string;
   readonly remoteBranchName: string;
   readonly sourceBranchName: string;
-  readonly forcePush?: boolean | undefined;
-  readonly setUpstreamTracking?: boolean | undefined;
-  readonly approval?: GitDeliveryApprovalClaim | undefined;
+  readonly forcePush?: boolean;
+  readonly setUpstreamTracking?: boolean;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 export interface GitDeliveryPushPreviewResponse {
@@ -3036,7 +3036,7 @@ export interface GitDeliverySyncInput {
   readonly operation: GitSyncOperation;
   readonly projectId: string;
   readonly remote?: string | undefined;
-  readonly approval?: GitDeliveryApprovalClaim | undefined;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 function gitDeliverySyncBody(input: GitDeliverySyncInput): string {
@@ -3128,11 +3128,11 @@ export interface GitDeliveryPrInput {
   readonly baseBranchName: string;
   readonly title: string;
   readonly body: string;
-  readonly isDraft?: boolean | undefined;
-  readonly prExternalId?: string | undefined;
-  readonly convertToDraft?: boolean | undefined;
-  readonly convertFromDraft?: boolean | undefined;
-  readonly approval?: GitDeliveryApprovalClaim | undefined;
+  readonly isDraft?: boolean;
+  readonly prExternalId?: string;
+  readonly convertToDraft?: boolean;
+  readonly convertFromDraft?: boolean;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 export interface GitDeliveryPrReadiness {
@@ -3223,8 +3223,8 @@ export interface GitDeliveryMergeInput {
   readonly headBranchName: string;
   readonly mergeStrategy: GitDeliveryMergeStrategy;
   readonly deleteBranchAfterMerge: boolean;
-  readonly expectedHeadRefHash?: string | undefined;
-  readonly approval?: GitDeliveryApprovalClaim | undefined;
+  readonly expectedHeadRefHash?: string;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 // A per-blocker readiness view carrying the precise code AND its recovery information (remediation class
@@ -3638,7 +3638,7 @@ export interface GitDeliveryPrMarkReadyInput {
   readonly baseSha: string;
   readonly baseRef: string;
   readonly readinessDigest: string;
-  readonly approval?: GitDeliveryApprovalClaim | undefined;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 export interface GitDeliveryPrMarkReadyApproveResponse {
@@ -3816,12 +3816,12 @@ export interface GitDeliveryPrDescriptionTarget {
   readonly projectId: string;
   readonly ownerAndRepo: string;
   readonly prNumber: number;
-  readonly snapshotDigest?: string | undefined;
+  readonly snapshotDigest?: string;
 }
 
 export interface GitDeliveryPrDescriptionPreviewInput extends GitDeliveryPrDescriptionTarget {
   readonly language: PrDescriptionLanguage;
-  readonly refinement?: string | undefined;
+  readonly refinement?: string;
 }
 
 export interface GitDeliveryPrDescriptionProposalInput extends GitDeliveryPrDescriptionTarget {

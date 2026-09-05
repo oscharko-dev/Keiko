@@ -10,6 +10,7 @@ import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
 import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.js";
 import { createProductionRuntimeQuestionPort } from "./productionCodingRuntimeQuestionPort.js";
 import { createProductionRuntimeOperationGuard } from "./productionCodingRuntimePorts.js";
+import { createBufferedServerLogSink, type ServerLogSink } from "../observability/server-log.js";
 
 type CodingRuntimePublicSnapshot = Extract<
   CodingRuntimeOrchestratorResult,
@@ -91,9 +92,11 @@ function coordinator(input: {
   readonly port?: CodingRuntimeQuestionPort;
   readonly stop?: CodingRuntimeManager["stop"];
   readonly settleTask?: (runId: string, outcome: "cancelled" | "failed" | "succeeded") => void;
+  readonly activityLog?: ServerLogSink;
+  readonly current?: () => CodingRuntimeSnapshot | undefined;
 }): CodingRuntimeOperationCoordinator {
   return new CodingRuntimeOperationCoordinator({
-    current: () => runningSnapshot(),
+    current: input.current ?? ((): CodingRuntimeSnapshot => runningSnapshot()),
     serial: (work) => work(),
     advanceRevision: () => ({ ok: true, snapshot: publicSnapshot() }),
     publicSnapshot: (current) => ({
@@ -109,6 +112,7 @@ function coordinator(input: {
     manager: manager(
       input.stop ?? vi.fn(() => Promise.resolve({ ok: true as const, status: "stopped" as const })),
     ),
+    activityLog: input.activityLog,
   });
 }
 
@@ -331,6 +335,104 @@ describe("CodingRuntimeOperationCoordinator", () => {
       expectedRevision: 3,
       questionId: "que_1",
     });
+  });
+
+  // T50 (review, PR #3394): a non-validation exception on the answer/reject path used to be
+  // discarded into the generic authority-resolution-failed outcome with nothing in the activity
+  // log. It must now leave structured, body-free evidence -- errorKind, dist-anchored frames, and
+  // the run as the correlation key -- behind on the existing activity log.
+  it("logs structured evidence for a genuine transport failure on answer, not free text", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const port = questionPort({
+      answer: () => Promise.reject(new Error("protocol failure")),
+    });
+    const subject = coordinator({ port, activityLog });
+    await expect(
+      subject.answerQuestion("run-1", {
+        requestId: "req-1",
+        expectedRevision: 3,
+        questionId: "que_1",
+        answers: [["Yes"]],
+      }),
+    ).resolves.toEqual({ ok: false, failureCode: "authority-resolution-failed" });
+    expect(activityLog.events).toHaveLength(1);
+    const [event] = activityLog.events;
+    expect(event).toMatchObject({
+      level: "warn",
+      op: "coding-runtime.question.authority-resolution-failed",
+      // "run-1" is shorter than the 8-character correlation-id floor, so it fails closed to the
+      // sanctioned UNKNOWN_CORRELATION_ID marker rather than being used verbatim (AGENTS.md §8: "the
+      // only sanctioned fallback ... never an ad-hoc string, never a silently missing id"). A
+      // production run id (`run-<decimal projection of a UUID>`) is well past that floor and is
+      // used as-is; see the reject test below.
+      correlationId: "unknown-correlation-id",
+      // A plain `new Error(...)` classifies as the generic "Error" class (contentFreeErrorClass) --
+      // asserted directly rather than via `expect.any(String)`, whose vitest/jest typings are `any`
+      // and trip `@typescript-eslint/no-unsafe-assignment` when inlined into a typed object literal.
+      errorKind: "Error",
+    });
+    expect(event?.extra).toMatchObject({ runId: "run-1", operation: "answer" });
+    expect(Array.isArray(event?.extra?.frames)).toBe(true);
+    expect(Array.isArray(event?.extra?.causeChain)).toBe(true);
+    // Body-free: the underlying message text never reaches the log.
+    expect(JSON.stringify(event)).not.toContain("protocol failure");
+  });
+
+  it("uses a well-formed run id verbatim as the correlation key", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const longRunId = "run-340282366920938463463374607431768211455";
+    const port = questionPort({
+      answer: () => Promise.reject(new Error("protocol failure")),
+    });
+    const subject = coordinator({
+      port,
+      activityLog,
+      current: (): CodingRuntimeSnapshot => ({ ...runningSnapshot(), runId: longRunId }),
+    });
+    await expect(
+      subject.answerQuestion(longRunId, {
+        requestId: "req-1",
+        expectedRevision: 3,
+        questionId: "que_1",
+        answers: [["Yes"]],
+      }),
+    ).resolves.toEqual({ ok: false, failureCode: "authority-resolution-failed" });
+    expect(activityLog.events).toMatchObject([{ correlationId: longRunId }]);
+  });
+
+  it("logs structured evidence for a genuine transport failure on reject", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const port = questionPort({
+      reject: () => Promise.reject(new Error("protocol failure")),
+    });
+    const subject = coordinator({ port, activityLog });
+    await expect(
+      subject.rejectQuestion("run-1", {
+        requestId: "req-1",
+        expectedRevision: 3,
+        questionId: "que_1",
+      }),
+    ).resolves.toEqual({ ok: false, failureCode: "authority-resolution-failed" });
+    expect(activityLog.events).toMatchObject([
+      { op: "coding-runtime.question.authority-resolution-failed", extra: { operation: "reject" } },
+    ]);
+  });
+
+  it("does not log the typed incompatible-answer rejection as a transport failure", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const port = questionPort({
+      answer: () => Promise.reject(new CodingRuntimeQuestionAnswerRejectedError()),
+    });
+    const subject = coordinator({ port, activityLog });
+    await expect(
+      subject.answerQuestion("run-1", {
+        requestId: "req-1",
+        expectedRevision: 3,
+        questionId: "que_1",
+        answers: [["Continue"]],
+      }),
+    ).resolves.toEqual({ ok: false, failureCode: "question-answer-rejected" });
+    expect(activityLog.events).toHaveLength(0);
   });
 
   it("stops the run when the initial turn cannot be dispatched", async () => {

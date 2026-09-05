@@ -81,10 +81,15 @@ export function createLegacyPortCatalogFactory(
     return {
       kind: "catalog",
       offer: (): GatewayToolCatalogAdvertisement => advertisement,
-      execute: (request): Promise<CatalogToolDispatchOutcome> => {
-        if (request.invocation.kind !== "bound")
-          throw new TypeError("Legacy-port catalog requires a bound invocation");
-        return dispatch(
+      // `request.invocation` is `BoundToolInvocation`, whose `kind` field is the single literal
+      // "bound" (governed-tool-lifecycle.ts) -- the only value ever constructed by the
+      // invocation normalizer's trust-boundary validation (keiko-tool-catalog/src/invocation.ts).
+      // A per-call `kind !== "bound"` guard here would be unreachable by construction (confirmed:
+      // the sibling native port implementation, nativeCatalogToolPort.ts, dispatches
+      // `request.invocation` with no such check), so this adapter trusts the type instead of
+      // re-deriving a check the normalizer already owns.
+      execute: (request): Promise<CatalogToolDispatchOutcome> =>
+        dispatch(
           catalog,
           projection,
           port,
@@ -92,8 +97,7 @@ export function createLegacyPortCatalogFactory(
           request.toolCallId,
           request.invocation,
           nextInvocationId(),
-        );
-      },
+        ),
     };
   };
 }

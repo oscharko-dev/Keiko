@@ -424,6 +424,7 @@ interface StartBridgeControl {
     readonly abortSessions: string[];
     readonly statusResponses: unknown[];
     readonly questionResponses?: unknown[];
+    readonly onQuestionListFetch?: () => Promise<void> | void;
     readonly permissionResponses?: unknown[];
     readonly questionRequests?: {
       readonly method: string;
@@ -615,11 +616,14 @@ async function startBridgeFixture(
     if (path === "/question") {
       const responses = control?.runControl?.questionResponses;
       const value = responses?.length === 1 ? responses[0] : responses?.shift();
-      return Promise.resolve(
+      const respond = (): Response =>
         new Response(JSON.stringify(value ?? []), {
           headers: { "content-type": "application/json" },
-        }),
-      );
+        });
+      // Lets a test race a concurrent dispose to completion WHILE this listQuestions() round
+      // trip is still in flight, then observe the caller's post-await readiness re-check.
+      const raced = control?.runControl?.onQuestionListFetch?.();
+      return raced instanceof Promise ? raced.then(respond) : Promise.resolve(respond());
     }
     if (path.startsWith("/question/")) {
       control?.runControl?.questionRequests?.push({
@@ -1609,6 +1613,61 @@ describe("private OpenCode run control", () => {
         { method: "POST", path: "/question/que_fixed/reject" },
       ]);
       expect(JSON.stringify(questionRequests)).not.toContain("Approve the bounded edit?");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // Pins the post-await readiness re-check in answerQuestion (opencodeRuntimeComposition.ts):
+  // `readyRun` hands back a live reference into the SAME mutable run record kept in the
+  // composition's internal map, so a concurrent dispose that completes while the run's own
+  // listQuestions() round trip is still in flight is visible on that reference the instant it
+  // resolves, even though nothing re-fetches the run from the map. Before #3384 batch-6 fixed
+  // `ReadyRun.ready`'s type from the literal `true` to `boolean`, TypeScript treated that
+  // re-check as provably always false, which made `@typescript-eslint/no-unnecessary-condition`
+  // flag it as dead code -- a lint-driven "cleanup" that deleted it would have let an
+  // already-disposed run answer a question it no longer owns.
+  it("fails closed when the run is disposed while its question list is still in flight", async () => {
+    const questionRequests: {
+      readonly method: string;
+      readonly path: string;
+      readonly body?: string;
+    }[] = [];
+    const pending = [
+      {
+        id: "que_fixed",
+        sessionID: "ses_tool",
+        questions: [
+          {
+            question: "Approve the bounded edit?",
+            header: "Approval",
+            options: [{ label: "Approve", description: "Continue" }],
+          },
+        ],
+      },
+    ];
+    const runtimeRef: { current?: OpenCodeRuntimeComposition } = {};
+    let disposedOnce = false;
+    const fixture = await startBridgeFixture(facade, undefined, {
+      runControl: {
+        promptBodies: [],
+        abortSessions: [],
+        statusResponses: [{}],
+        questionResponses: [pending],
+        questionRequests,
+        onQuestionListFetch: async (): Promise<void> => {
+          if (disposedOnce) return;
+          disposedOnce = true;
+          await runtimeRef.current?.manager.stop(FIXTURE_RUN_ID);
+        },
+      },
+    });
+    runtimeRef.current = fixture.runtime;
+    try {
+      await expect(
+        fixture.runtime.runPort.answerQuestion(FIXTURE_RUN_ID, "que_fixed", [["Approve"]]),
+      ).resolves.toBe(false);
+      expect(questionRequests).toEqual([]);
     } finally {
       await fixture.stop();
     }

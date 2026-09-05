@@ -116,6 +116,24 @@ describe("harness counter owner catalog reservations", () => {
       g.budget.acceptReceipt(receipt(), g.read);
     }).toThrow();
   });
+  it("rejects a settled receipt whose charge was never reserved on this run", () => {
+    const f = fixture();
+    // No reserve() call: `charges` is empty, so this receipt is a settled disposition with no
+    // matching tracked charge -- distinct from the "not-reserved" early-return path above, this
+    // exercises the `charge === undefined` arm of the settlement identity check.
+    expect(() => {
+      f.budget.acceptReceipt(receipt(), f.command);
+    }).toThrow();
+  });
+  it("rejects a settled receipt claiming a reservationId that does not match the tracked charge", () => {
+    const f = fixture();
+    const reservation = f.budget.port.reserve(f.command, f.context, "invocation-1");
+    if (reservation === undefined) throw new TypeError("Expected reservation");
+    f.budget.port.commit(reservation);
+    expect(() => {
+      f.budget.acceptReceipt(receipt({ reservationId: "forged-reservation" }), f.command);
+    }).toThrow();
+  });
   it.each(["abort", "expiry", "wrong-run", "external-exhaustion"])(
     "rechecks %s at the live effect boundary",
     (kind) => {

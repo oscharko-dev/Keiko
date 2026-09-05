@@ -94,16 +94,23 @@ function copyObject(value: object, budget: CopyBudget, depth: number): CatalogJs
   return copy;
 }
 
+// Single return statement by design (sonarjs/function-return-type): the scalar and
+// array/object arms both assign the same declared `CatalogJsonValue` union before one trailing
+// return, rather than returning from inside each branch.
 function copyValue(value: unknown, budget: CopyBudget, depth: number): CatalogJsonValue {
   requireCatalog(depth <= TOOL_CATALOG_LIMITS.maxSchemaDepth, "input-bound");
-  if (typeof value !== "object" || value === null) return scalar(value, budget);
-  requireCatalog(!budget.ancestors.has(value), "invalid-shape");
-  budget.ancestors.add(value);
-  const copied = Array.isArray(value)
-    ? copyArray(value, budget, depth)
-    : copyObject(value, budget, depth);
-  budget.ancestors.delete(value);
-  return copied;
+  let result: CatalogJsonValue;
+  if (typeof value !== "object" || value === null) {
+    result = scalar(value, budget);
+  } else {
+    requireCatalog(!budget.ancestors.has(value), "invalid-shape");
+    budget.ancestors.add(value);
+    result = Array.isArray(value)
+      ? copyArray(value, budget, depth)
+      : copyObject(value, budget, depth);
+    budget.ancestors.delete(value);
+  }
+  return result;
 }
 
 /** Validate and detach before canonicalization, freezing, hashing, or schema interpretation. */

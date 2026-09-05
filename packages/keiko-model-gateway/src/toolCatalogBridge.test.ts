@@ -217,9 +217,7 @@ describe("gateway bridge trust and compatibility boundaries", () => {
         tools: [{ name: "read_file", description: "read", parameters: {} }],
       },
     ])
-      await expect(subject.call(input as GatewayRequest, CONFIG)).rejects.toBeInstanceOf(
-        GatewayToolCatalogError,
-      );
+      await expect(subject.call(input, CONFIG)).rejects.toBeInstanceOf(GatewayToolCatalogError);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
   it("binds a streamed tool call, assembled from SSE deltas, at the done chunk", async () => {

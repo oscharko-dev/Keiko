@@ -609,11 +609,27 @@ function resolveEventCursor(
   return queryCursor === null || queryCursor.length === 0 ? undefined : queryCursor;
 }
 
+// Sonar function-return-type (PR #3394 review): the previous shape returned RouteResult from two
+// early guards and the disjoint `typeof STREAMING` sentinel from a third, later return statement --
+// one function, three return statements, two incompatible result shapes. Folding the guards into a
+// single typed outcome expression and moving the sentinel-producing side effect into its own
+// single-return helper gives this function exactly one return statement, so its return type reads as
+// one thing at the point of return instead of drifting per branch.
 export function handleCodingRuntimeEvents(ctx: RouteContext, deps: UiHandlerDeps): HandlerOutcome {
   const required = requireRuntime(deps, ctx.correlationId);
   if (isRouteResult(required)) return required;
   const runId = ctx.params.runId ?? "";
-  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
+  const outcome: HandlerOutcome = required.orchestrator.getSnapshot(runId)
+    ? subscribeCodingRuntimeEvents(ctx, required, runId)
+    : notFound(ctx.correlationId);
+  return outcome;
+}
+
+function subscribeCodingRuntimeEvents(
+  ctx: RouteContext,
+  required: RuntimeDeps,
+  runId: string,
+): typeof STREAMING {
   const lastEventId = ctx.req.headers["last-event-id"];
   const queryCursor = ctx.url.searchParams.get("cursor");
   const cursor = resolveEventCursor(lastEventId, queryCursor);
