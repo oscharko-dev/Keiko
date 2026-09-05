@@ -12,6 +12,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { captureToolInvocationReceipt } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { errorKindOf } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import type {
@@ -25,22 +26,84 @@ import { CatalogDispatchFault, catalogBudgetOperation } from "./catalogToolRunti
 
 /**
  * Confidently-matched facade actions this bridge routes through the real catalog lifecycle and
- * settlement primitives (#3413, F8). Every entry is an unambiguous 1:1 mapping from the IPC
- * action shape to a real production catalog canonical tool id (OPENCODE_GATEWAY_CATALOG,
- * opencodeToolSchemas.ts). An action absent from this map is uncovered: `dispatch` below runs the
- * existing handler unchanged, with no log line and no behaviour change.
+ * settlement primitives (#3413, F8). Every canonical id below is an unambiguous mapping from the
+ * IPC action shape (as `opencodeRuntimeAdapter.ts`'s `wireRequestFor`/`parseDraftToolRequest`
+ * actually produce it for a model tool call) to a real production catalog canonical tool id
+ * (OPENCODE_GATEWAY_CATALOG, opencodeToolSchemas.ts / opencode.ts). A request shape absent from
+ * `catalogIdFor` is uncovered: `dispatch` below runs the existing handler unchanged and records one
+ * body-free `tool-catalog.dispatch-unbound` line instead of a lifecycle pair -- never zero evidence.
  *
- * Coverage is deliberately narrow for this change: `discover` never carries optional fields and
- * never needs approval, so it round-trips through settlement without inventing IPC<->catalog
- * argument translation for the other actions. Widening coverage (read's optional startLine/
- * maxLines defaults, edit, verification, egress, skill, child-agent, and the git/delivery/search/
- * command actions the production catalog does not model at all yet) is tracked as follow-up work
- * -- see this change's report for exact file:line pointers.
+ * `read` is the one action with a real 1:1 catalog tool (`keiko.workspace.read`) that is
+ * deliberately left OUT of `catalogIdFor`: the catalog's model-facing schema requires `startLine`
+ * and `maxLines` (opencode.ts's `readSpec`, mirrored by the real wire schema in
+ * opencodeToolSchemas.ts, which already requires both today) while `CodingToolActionRequest`'s
+ * `read` variant keeps them optional for internal callers this bridge's write scope may not touch
+ * (codingToolIpc.ts's `readRequest` parser, opencodeRuntimeAdapter.ts, both outside/forbidden for
+ * this change). Binding it without knowing every internal caller's expectation would risk silently
+ * changing read-window bounds; left uncovered and reported rather than guessed.
+ *
+ * `command` and `connector` have no catalog descriptor at all yet (no `opencode.ts` spec models
+ * them), so both stay structurally uncovered here, not merely unmapped.
  */
-const CATALOG_FACADE_TOOL_IDS: Partial<Record<CodingToolActionRequest["action"], string>> =
+function gitCatalogId(
+  request: Extract<CodingToolActionRequest, { readonly action: "git" }>,
+): string | undefined {
+  switch (request.operation) {
+    case "status":
+      return "keiko.git.status";
+    case "diff":
+      return "keiko.git.diff";
+    case "ci":
+      return "keiko.ci.status";
+    case "stage":
+      return request.phase === "propose"
+        ? "keiko.git.stage"
+        : request.phase === "execute"
+          ? "keiko.git.execute"
+          : undefined;
+    default:
+      // "read" | "write": the lower-level git port, never produced by a model tool call today.
+      return undefined;
+  }
+}
+
+// `keiko.git.execute` redeems ANY approved stage/commit/push/pull-request proposal (one shared
+// tool, opencode.ts's `gitExecuteSpec`) -- `intent` only distinguishes which proposal kind at the
+// `delivery` layer, so every execute-phase intent except "merge" (which no tool models) resolves to
+// the same canonical id.
+function deliveryCatalogId(
+  request: Extract<CodingToolActionRequest, { readonly action: "delivery" }>,
+): string | undefined {
+  if (request.phase === "execute") return request.intent === "merge" ? undefined : "keiko.git.execute";
+  if (request.phase !== "propose") return undefined; // "reconcile" or no phase: not model-facing
+  switch (request.intent) {
+    case "commit":
+      return "keiko.git.commit";
+    case "push":
+      return "keiko.git.push";
+    case "pull-request":
+      return "keiko.git.pullrequest";
+    default:
+      return undefined; // "merge": no proposal tool models it
+  }
+}
+
+const SIMPLE_CATALOG_TOOL_IDS: Partial<Record<CodingToolActionRequest["action"], string>> =
   Object.freeze({
     discover: "keiko.workspace.discover",
+    search: "keiko.repo.search",
+    edit: "keiko.changeset.edit",
+    verification: "keiko.verification.run",
+    egress: "keiko.research.fetch",
+    skill: "keiko.skill.invoke",
+    "child-agent": "keiko.child.run",
   });
+
+function catalogIdFor(request: CodingToolActionRequest): string | undefined {
+  if (request.action === "git") return gitCatalogId(request);
+  if (request.action === "delivery") return deliveryCatalogId(request);
+  return SIMPLE_CATALOG_TOOL_IDS[request.action];
+}
 
 export interface CatalogFacadeBudgetReservation {
   readonly reservationId: string;
@@ -114,9 +177,16 @@ function resolveDescriptor(
   catalog: ToolCatalog,
   request: CodingToolActionRequest,
 ): ToolDescriptor | undefined {
-  const canonicalId = CATALOG_FACADE_TOOL_IDS[request.action];
+  const canonicalId = catalogIdFor(request);
   if (canonicalId === undefined) return undefined;
   return lookupCatalogTool(catalog, createToolRef(canonicalId, 1));
+}
+
+function correlationIdFor(runtime: BridgeRuntime): string {
+  const ctx = runtime.input.context();
+  return typeof ctx.correlationId === "string" && isValidCorrelationId(ctx.correlationId)
+    ? ctx.correlationId
+    : UNKNOWN_CORRELATION_ID;
 }
 
 function identityFields(runtime: BridgeRuntime): {
@@ -127,12 +197,8 @@ function identityFields(runtime: BridgeRuntime): {
   readonly parentCorrelationId?: string;
 } {
   const ctx = runtime.input.context();
-  const correlationId =
-    typeof ctx.correlationId === "string" && isValidCorrelationId(ctx.correlationId)
-      ? ctx.correlationId
-      : UNKNOWN_CORRELATION_ID;
   return {
-    correlationId,
+    correlationId: correlationIdFor(runtime),
     catalogRevision: runtime.projection.catalogRevision,
     profile: runtime.projection.profile,
     projectionDigest: runtime.projection.projectionDigest,
@@ -140,6 +206,36 @@ function identityFields(runtime: BridgeRuntime): {
       ? {}
       : { parentCorrelationId: ctx.parentCorrelationId }),
   };
+}
+
+/**
+ * A request the catalog does not (yet) cover keeps its exact prior dispatch behaviour, but must
+ * never run with zero evidence: a single body-free line records which action ran unbound, so an
+ * operator reading the activity log can distinguish "not catalog-covered" from "the catalog silently
+ * dropped this call" (#3413 F8 review). `action` alone is logged -- one of twelve closed literal
+ * values (`CodingToolAction`), never request content.
+ */
+function emitUnbound(runtime: BridgeRuntime, request: CodingToolActionRequest): void {
+  const correlationId = correlationIdFor(runtime);
+  try {
+    runtime.input.logPort.primary.write({
+      category: "security",
+      op: "tool-catalog.dispatch-unbound",
+      correlationId,
+      extra: { action: request.action },
+    });
+  } catch (error) {
+    emitServerDiagnostic(
+      runtime.input.logPort.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "tool-catalog.lifecycle-sink-failed",
+        source: "tool-catalog-dispatch-unbound",
+        error,
+        redact: () => "server-operation-failed",
+      }),
+    );
+  }
 }
 
 function emitSettlement(runtime: BridgeRuntime, fields: TerminalFields): void {
@@ -304,6 +400,46 @@ async function runReserved<T>(
   return settleSuccess(runtime, meta, reservation, result);
 }
 
+/**
+ * Resolves availability and reserves budget, settling (and throwing) BEFORE the handler ever runs
+ * if either budget-port call itself throws or reports unavailable -- mirroring
+ * `CatalogInvocation`'s own guarantee (catalogToolDispatch.ts's `executeInvocation`, one try/catch
+ * around the whole pre-reservation sequence) that a pre-reservation failure is never silently
+ * unlogged. Before this, `available()`/`reserve()` throwing propagated straight out of `dispatch()`
+ * with zero `tool-catalog.*` evidence even though the call still failed closed to the caller
+ * (#3413 F8 review, latent because the wired in-memory budget port never throws).
+ */
+function reserveOrSettleDenied(
+  runtime: BridgeRuntime,
+  meta: InvocationMeta,
+): CatalogFacadeBudgetReservation {
+  try {
+    const available = catalogBudgetOperation(() => runtime.input.budget.available());
+    if (!available) denyBudgetExhausted(runtime, meta);
+    return catalogBudgetOperation(() => runtime.input.budget.reserve());
+  } catch (error) {
+    // `denyBudgetExhausted` already emitted its own "denied" settlement before throwing -- only a
+    // budget-port exception (classified `CatalogDispatchFault("failed","budget-port-failed", ...)`
+    // by `catalogBudgetOperation`) reaches here still unsettled.
+    if (error instanceof CatalogDispatchFault && error.status === "denied") throw error;
+    settleUnreserved(runtime, meta, error);
+    throw error;
+  }
+}
+
+function settleUnreserved(runtime: BridgeRuntime, meta: InvocationMeta, error: unknown): void {
+  const classified = classifyFailure(error);
+  emitSettlement(runtime, {
+    ...meta,
+    status: classified.status,
+    reason: classified.reason,
+    reservationId: null,
+    effectStarted: false,
+    budgetDisposition: "not-reserved",
+    error,
+  });
+}
+
 async function dispatchCovered<T>(
   runtime: BridgeRuntime,
   descriptor: ToolDescriptor,
@@ -315,9 +451,7 @@ async function dispatchCovered<T>(
     settlementId: runtime.mintId(),
     startedAt: runtime.now(),
   };
-  const available = catalogBudgetOperation(() => runtime.input.budget.available());
-  if (!available) denyBudgetExhausted(runtime, meta);
-  const reservation = catalogBudgetOperation(() => runtime.input.budget.reserve());
+  const reservation = reserveOrSettleDenied(runtime, meta);
   emitStarted(runtime, meta, reservation);
   return runReserved(runtime, meta, reservation, run);
 }
@@ -334,7 +468,11 @@ export function createCatalogFacadeBridge(input: CatalogFacadeBridgeInput): Cata
       resolveDescriptor(input.catalog, request),
     dispatch: <T>(request: CodingToolActionRequest, run: () => Promise<T>): Promise<T> => {
       const descriptor = resolveDescriptor(input.catalog, request);
-      return descriptor === undefined ? run() : dispatchCovered(runtime, descriptor, run);
+      if (descriptor === undefined) {
+        emitUnbound(runtime, request);
+        return run();
+      }
+      return dispatchCovered(runtime, descriptor, run);
     },
   });
 }

@@ -134,6 +134,11 @@ export function createProductionManagedWorktreeToolFacade(
       runId: input.authorityRef.runId,
       envelopeDigest: input.authorityRef.envelopeDigest,
       authorityExpiresAt: input.authorityExpiresAt,
+      // F8 (#3413): the run's own correlation id (the same value `buildRepositorySearchPort`
+      // already threads into its H1 search-handler invocation below), so the catalog facade
+      // bridge's tool-catalog.* lifecycle lines join the rest of this run's activity log instead
+      // of falling back to UNKNOWN_CORRELATION_ID.
+      correlationId: input.authorityRef.runId,
     }),
     governedPorts(input, readEdit),
     {
@@ -143,6 +148,12 @@ export function createProductionManagedWorktreeToolFacade(
       ...(input.approvalProofVerifier === undefined
         ? {}
         : { approvalProofVerifier: input.approvalProofVerifier }),
+      // Reuses this composition root's own activity-log/diagnostics sinks (the same ones
+      // `buildRepositorySearchPort`/`repositorySearchHandler` already use below) rather than the
+      // bridge's process-wide default, so a caller observing `input.activityLog` sees catalog
+      // lifecycle evidence too.
+      ...(input.activityLog === undefined ? {} : { catalogActivityLog: input.activityLog }),
+      ...(input.diagnostics === undefined ? {} : { catalogDiagnostics: input.diagnostics }),
     },
   );
 }

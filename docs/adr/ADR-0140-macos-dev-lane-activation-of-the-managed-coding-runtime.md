@@ -104,8 +104,11 @@ The macOS dev-lane backend (`devLaneRuntimeProcessBackend.ts`) never spawns the 
 Every launch is wrapped in a `RuntimeGatewayConfinement` (ADR-0043 D11–D13,
 `packages/keiko-sandbox/src/runtime-gateway.ts`): a Seatbelt profile that denies all network egress
 by default and carves out exactly one outbound allowance — the loopback gateway/BFF port the caller
-attests — plus denies process-fork, mach-lookup, Apple Event, and `LSOpen` escapes. The backend
-refuses to spawn at all when no confinement is attached, or when the policy's `runId`/`treeBindingId`
+attests — plus denies mach-lookup, Apple Event, and `LSOpen` escapes. `process-fork` is allowed
+(#3390): the pinned OpenCode sidecar forks `git` for its own session/history endpoints, and denying
+fork broke that handshake outright; a forked child inherits the same Seatbelt profile, so the
+network denial above still applies to it. The backend refuses to spawn at all when no confinement is
+attached, or when the policy's `runId`/`treeBindingId`
 does not match the launch request, before any process exists (fail-closed, consistent with D5's
 kill-switch precedence).
 

@@ -11,19 +11,133 @@ import {
 import { CatalogDispatchFault } from "./catalogToolRuntimeAuthority.js";
 import type { CodingToolActionRequest } from "../coding-runtime/codingToolIpc.js";
 
+const identity = { actionId: "action-1", idempotencyKey: "key-1" } as const;
 const discoverRequest: CodingToolActionRequest = {
+  ...identity,
   action: "discover",
-  actionId: "action-1",
-  idempotencyKey: "key-1",
   query: "governed",
   maxResults: 10,
 };
 const readRequest: CodingToolActionRequest = {
+  ...identity,
   action: "read",
-  actionId: "action-2",
-  idempotencyKey: "key-2",
   relativePath: "src/a.ts",
 };
+
+// One representative request per catalog-covered action family (#3413 F8), plus the request
+// shapes that are structurally uncovered on purpose (read's schema gap, command/connector with no
+// descriptor at all, git's low-level read/write operations, delivery's merge intent and undeclared
+// phase). Table-driven so every family gets its own assertion (AGENTS.md: cover the input space).
+const COVERAGE_TABLE: readonly (readonly [string, CodingToolActionRequest, string | undefined])[] =
+  [
+    ["discover", discoverRequest, "keiko.workspace.discover"],
+    ["read (schema gap, reported not bound)", readRequest, undefined],
+    [
+      "search",
+      {
+        ...identity,
+        action: "search",
+        repositoryRequest: {
+          kind: "search",
+          mode: "lexical",
+          query: "needle",
+          caseSensitive: false,
+          includeGlobs: [],
+          excludeGlobs: [],
+          maxResults: 10,
+        },
+      },
+      "keiko.repo.search",
+    ],
+    [
+      "edit",
+      {
+        ...identity,
+        action: "edit",
+        changeset: { patch: "diff", files: [{ file: "a.ts" }] },
+      },
+      "keiko.changeset.edit",
+    ],
+    [
+      "verification",
+      { ...identity, action: "verification", verifierId: "test" },
+      "keiko.verification.run",
+    ],
+    ["egress", { ...identity, action: "egress", target: "https://example.com" }, "keiko.research.fetch"],
+    ["skill", { ...identity, action: "skill", skillId: "skill-1" }, "keiko.skill.invoke"],
+    [
+      "child-agent",
+      { ...identity, action: "child-agent", objective: "x", maxToolCalls: 1 },
+      "keiko.child.run",
+    ],
+    ["git status", { ...identity, action: "git", operation: "status" }, "keiko.git.status"],
+    [
+      "git diff",
+      { ...identity, action: "git", operation: "diff", scope: "working-tree", paths: ["a.ts"] },
+      "keiko.git.diff",
+    ],
+    [
+      "git stage propose",
+      { ...identity, action: "git", operation: "stage", phase: "propose", paths: ["a.ts"] },
+      "keiko.git.stage",
+    ],
+    [
+      "git stage execute",
+      { ...identity, action: "git", operation: "stage", phase: "execute", proposalId: "p-1" },
+      "keiko.git.execute",
+    ],
+    ["git ci", { ...identity, action: "git", operation: "ci" }, "keiko.ci.status"],
+    ["git read (no descriptor)", { ...identity, action: "git", operation: "read" }, undefined],
+    ["git write (no descriptor)", { ...identity, action: "git", operation: "write" }, undefined],
+    [
+      "delivery commit propose",
+      { ...identity, action: "delivery", intent: "commit", phase: "propose", message: "m" },
+      "keiko.git.commit",
+    ],
+    [
+      "delivery commit execute",
+      { ...identity, action: "delivery", intent: "commit", phase: "execute", proposalId: "delivery-1" },
+      "keiko.git.execute",
+    ],
+    [
+      "delivery push propose",
+      { ...identity, action: "delivery", intent: "push", phase: "propose" },
+      "keiko.git.push",
+    ],
+    [
+      "delivery push execute",
+      { ...identity, action: "delivery", intent: "push", phase: "execute", proposalId: "delivery-1" },
+      "keiko.git.execute",
+    ],
+    [
+      "delivery pull-request propose",
+      { ...identity, action: "delivery", intent: "pull-request", phase: "propose", title: "t" },
+      "keiko.git.pullrequest",
+    ],
+    [
+      "delivery pull-request execute",
+      {
+        ...identity,
+        action: "delivery",
+        intent: "pull-request",
+        phase: "execute",
+        proposalId: "delivery-1",
+      },
+      "keiko.git.execute",
+    ],
+    [
+      "delivery merge (no tool models it)",
+      { ...identity, action: "delivery", intent: "merge", phase: "execute", proposalId: "delivery-1" },
+      undefined,
+    ],
+    [
+      "delivery with no phase (not model-facing)",
+      { ...identity, action: "delivery", intent: "push" },
+      undefined,
+    ],
+    ["command (no descriptor)", { ...identity, action: "command", commandId: "x" }, undefined],
+    ["connector (no descriptor)", { ...identity, action: "connector", scope: "x" }, undefined],
+  ] as const;
 
 function bridgeFixture(budget: CatalogFacadeBudgetPort = createInMemoryCatalogFacadeBudgetPort()): {
   readonly log: ReturnType<typeof createBufferedServerLogSink>;
@@ -50,20 +164,39 @@ function bridgeFixture(budget: CatalogFacadeBudgetPort = createInMemoryCatalogFa
 }
 
 describe("CatalogFacadeBridge (#3413 F8)", () => {
-  it("resolves keiko.workspace.discover and passes uncovered actions straight through", () => {
-    const { bridge } = bridgeFixture();
-    expect(bridge.resolve(discoverRequest)?.toolRef.canonicalId).toBe("keiko.workspace.discover");
-    expect(bridge.resolve(readRequest)).toBeUndefined();
-  });
+  it.each(COVERAGE_TABLE)(
+    "resolves %s to its exact catalog descriptor (or stays uncovered)",
+    (_name, request, expectedCanonicalId) => {
+      const { bridge } = bridgeFixture();
+      expect(bridge.resolve(request)?.toolRef.canonicalId).toBe(expectedCanonicalId);
+    },
+  );
 
-  it("runs the uncovered action unwrapped: zero lifecycle log lines, unchanged result", async () => {
+  it("runs an uncovered action unwrapped and records one body-free dispatch-unbound line", async () => {
     const { bridge, log } = bridgeFixture();
     const run = vi.fn(() => Promise.resolve({ status: "completed" as const }));
 
     await expect(bridge.dispatch(readRequest, run)).resolves.toEqual({ status: "completed" });
 
     expect(run).toHaveBeenCalledOnce();
-    expect(log.events).toHaveLength(0);
+    expect(log.events).toHaveLength(1);
+    expect(log.events[0]?.op).toBe("tool-catalog.dispatch-unbound");
+    expect(log.events[0]?.correlationId).toBe("a".repeat(36));
+    expect(log.events[0]?.extra).toEqual({ action: "read" });
+  });
+
+  it("settles a covered action from a second action family (search), not only discover", async () => {
+    const { bridge, log } = bridgeFixture();
+    const searchRequest = COVERAGE_TABLE.find(([name]) => name === "search")?.[1];
+    if (searchRequest === undefined) throw new Error("fixture missing");
+    const run = vi.fn(() => Promise.resolve({ status: "completed" as const }));
+
+    await expect(bridge.dispatch(searchRequest, run)).resolves.toEqual({ status: "completed" });
+
+    const ops = log.events.map((event) => event.op);
+    expect(ops).toEqual(["tool-catalog.invocation-started", "tool-catalog.invocation-settled"]);
+    const started = log.events[0]?.extra as Record<string, unknown>;
+    expect((started.toolRef as { canonicalId: string }).canonicalId).toBe("keiko.repo.search");
   });
 
   it("emits a real tool-catalog.* binding-started and settled pair with a correlation id and no bodies", async () => {
@@ -175,5 +308,105 @@ describe("CatalogFacadeBridge (#3413 F8)", () => {
     expect(settled.budgetDisposition).toBe("commit-uncertain");
     expect(settled.effectStarted).toBe(true);
     expect(JSON.stringify(settled)).not.toContain("ledger unavailable");
+  });
+
+  // Review finding on #3413 F8: a budget-port exception BEFORE reservation (available() or
+  // reserve() itself throwing) used to propagate straight out of dispatch() with zero
+  // tool-catalog.* evidence, even though the call still failed closed to the caller -- an evidence
+  // gap in exactly the surface F8/#3413 exists to close. Fails before this change: log.events was
+  // empty.
+  it("settles budget-port-failed with no reservation when available() itself throws", async () => {
+    const portFailure = new Error("budget backend unreachable");
+    const budget: CatalogFacadeBudgetPort = {
+      available: () => {
+        throw portFailure;
+      },
+      reserve: vi.fn(),
+      commit: vi.fn(),
+      release: vi.fn(),
+    };
+    const { bridge, log } = bridgeFixture(budget);
+    const run = vi.fn(() => Promise.resolve({ status: "completed" as const }));
+
+    const rejection: unknown = await bridge
+      .dispatch(discoverRequest, run)
+      .catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(CatalogDispatchFault);
+    expect((rejection as CatalogDispatchFault).status).toBe("failed");
+    expect((rejection as CatalogDispatchFault).reason).toBe("budget-port-failed");
+    expect(run).not.toHaveBeenCalled();
+    expect(log.events).toHaveLength(1);
+    expect(log.events[0]?.op).toBe("tool-catalog.invocation-settled");
+    const settled = log.events[0]?.extra as Record<string, unknown>;
+    expect(settled.status).toBe("failed");
+    expect(settled.reason).toBe("budget-port-failed");
+    expect(settled.reservationId).toBeNull();
+    expect(settled.budgetDisposition).toBe("not-reserved");
+    expect(JSON.stringify(settled)).not.toContain("budget backend unreachable");
+  });
+
+  it("settles budget-port-failed with no reservation when reserve() itself throws", async () => {
+    const reserveFailure = new Error("ledger locked");
+    const budget: CatalogFacadeBudgetPort = {
+      available: () => true,
+      reserve: () => {
+        throw reserveFailure;
+      },
+      commit: vi.fn(),
+      release: vi.fn(),
+    };
+    const { bridge, log } = bridgeFixture(budget);
+    const run = vi.fn(() => Promise.resolve({ status: "completed" as const }));
+
+    const rejection: unknown = await bridge
+      .dispatch(discoverRequest, run)
+      .catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(CatalogDispatchFault);
+    expect(run).not.toHaveBeenCalled();
+    const settled = log.events[0]?.extra as Record<string, unknown>;
+    expect(settled.status).toBe("failed");
+    expect(settled.reason).toBe("budget-port-failed");
+    expect(settled.reservationId).toBeNull();
+    expect(settled.budgetDisposition).toBe("not-reserved");
+  });
+
+  // Symmetric to the commit()-throws pin above: release() throwing while settling a handler
+  // FAILURE must take the same fail-closed, exactly-once-accounting path, not merely the commit
+  // (success) side of settleReservation().
+  it("fails closed as budget-port-failed without a second accounting call when release itself throws", async () => {
+    const releaseFailure = new Error("ledger unavailable");
+    const commit = vi.fn();
+    const budget: CatalogFacadeBudgetPort = {
+      available: () => true,
+      reserve: () => ({ reservationId: "reservation-3" }),
+      commit,
+      release: () => {
+        throw releaseFailure;
+      },
+    };
+    const { bridge, log } = bridgeFixture(budget);
+    const handlerFailure = new Error("handler exploded");
+    const run = vi.fn(() => Promise.reject(handlerFailure));
+
+    // The caller still sees the ORIGINAL handler failure (the actual reason this call failed);
+    // only the settlement's own bookkeeping fields report the release accounting could not be
+    // confirmed, exactly mirroring the (tested) commit-throws branch's "the log knows more than
+    // the exception" split.
+    const rejection: unknown = await bridge
+      .dispatch(discoverRequest, run)
+      .catch((error: unknown) => error);
+
+    expect(rejection).toBe(handlerFailure);
+    expect(run).toHaveBeenCalledOnce();
+    expect(commit).not.toHaveBeenCalled();
+    const settled = log.events[1]?.extra as Record<string, unknown>;
+    expect(settled.status).toBe("failed");
+    expect(settled.reason).toBe("budget-port-failed");
+    expect(settled.budgetDisposition).toBe("release-uncertain");
+    expect(settled.effectStarted).toBe(false);
+    expect(JSON.stringify(settled)).not.toContain("ledger unavailable");
+    expect(JSON.stringify(settled)).not.toContain("handler exploded");
   });
 });

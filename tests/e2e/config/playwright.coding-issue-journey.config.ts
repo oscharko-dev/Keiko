@@ -70,7 +70,16 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 1100 } },
+      // Live-run bug: a real GitHub issue body has unpredictable, often much longer, content than
+      // `coding-issue-intake.spec.ts`'s small scripted fixture -- the Coding Workbench window's
+      // stored layout is a fixed 1120x1400 (see `coding-issue-journey.spec.ts`'s
+      // `keiko.workspace.v4` init script), so a long real issue body pushes "Use this issue" past
+      // the bottom of a 1100px viewport with no further internal scroll room, and Playwright
+      // refuses to click a target outside the viewport no matter how long it retries. That same
+      // spec (`captureModes`) already established the fix for exactly this class of content in
+      // this codebase: grow the viewport tall enough to contain the whole window, never guess a
+      // content-dependent height.
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 2200 } },
     },
   ],
   webServer: {

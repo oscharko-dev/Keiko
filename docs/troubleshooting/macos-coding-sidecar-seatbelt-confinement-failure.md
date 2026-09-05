@@ -27,8 +27,13 @@ run, with an `errorKind` and (when the failure happened before spawn) no process
 
 Every macOS-activated long-lived sidecar (`devLaneRuntimeProcessBackend.ts`) is spawned only inside
 a Seatbelt wrapper that denies all network egress except the exact configured Keiko gateway
-loopback port, and denies process-fork, mach-lookup, Apple Event, and `LSOpen` (ADR-0043 D11). The
-backend refuses to spawn at all — never falling back to an unconfined launch — in three cases:
+loopback port, and denies mach-lookup, Apple Event, and `LSOpen` (ADR-0043 D11). `process-fork` is
+allowed: the pinned OpenCode sidecar forks `git` for its own session/history endpoints, and a fork
+denial there is a distinct, non-spawn-failure symptom — the sidecar starts and answers `/health`,
+but `POST /sync/history` and `GET /session` return HTTP 500 (surfaced upstream as an OpenCode
+handshake/protocol error, not as `runtime.confinement.failed`) — never re-add a fork denial to
+"harden" this profile (#3390). The backend refuses to spawn at all — never falling back to an
+unconfined launch — in three cases:
 
 1. **No confinement policy was attached to this backend at all**
    (`runtime-gateway-confinement-required`). In production composition a policy is always

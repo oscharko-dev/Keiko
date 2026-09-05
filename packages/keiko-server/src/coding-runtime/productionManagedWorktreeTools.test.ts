@@ -957,11 +957,18 @@ describe("H1 repository search mounted into production composition (#3386)", () 
       snippet: "export const parseConfig = true;",
     });
     expect(JSON.stringify(result)).not.toContain("private-credential-value");
-    // Body-free evidence reaches the activity log through the real production path.
+    // Body-free evidence reaches the activity log through the real production path. "search" is
+    // now a catalog-covered action (#3413 F8): its tool-catalog.* lifecycle pair wraps the H1
+    // search handler's own started/settled pair, both threaded with this run's correlation id.
     expect(events.map((event) => event.op)).toEqual([
+      "tool-catalog.invocation-started",
       "coding-repository-handler.started",
       "coding-repository-handler.settled",
+      "tool-catalog.invocation-settled",
     ]);
+    for (const event of events) {
+      if (event.op.startsWith("tool-catalog.")) expect(event.correlationId).toBe("run-h1-search");
+    }
     expect(JSON.stringify(events)).not.toContain("parseConfig");
   });
 
