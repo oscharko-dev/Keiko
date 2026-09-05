@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_COMMAND_RULES, isValidNetworkGatewayPolicy } from "./tools.js";
+import {
+  DEFAULT_COMMAND_RULES,
+  DEFAULT_SANDBOX_POLICY,
+  isValidNetworkGatewayPolicy,
+  type NetworkGatewayPolicy,
+  type SandboxPolicy,
+} from "./tools.js";
 
 // Codex-sweep finding (same bug class as command-runner.ts's COMMAND_TASK_RULES, KEIKO-0139):
 // Object.freeze on the DEFAULT_COMMAND_RULES array only freezes the array's own indices, not the
@@ -76,5 +82,27 @@ describe("isValidNetworkGatewayPolicy", () => {
   it("rejects non-object and malformed inputs", () => {
     for (const hostile of [null, undefined, "gateway", 42, [], []])
       expect(isValidNetworkGatewayPolicy(hostile)).toBe(false);
+  });
+});
+
+// Review finding on #2951: `NetworkGatewayPolicy` must never widen `SandboxPolicy.network` (the
+// general keiko-tools spawn-boundary type). keiko-tools' exec.ts exhaustively branches on
+// `deps.policy.network !== "none"` to choose the INHERITED (unconfined) spawn path; if a gateway
+// object were ever assignable there, `!== "none"` would be true for it too (it's an object, not
+// the string "none") and a gateway-confined command would silently spawn unconfined instead. The
+// fix keeps `NetworkPolicy` (SandboxPolicy's field type) at exactly two string literals, and gives
+// the gateway shape its own keiko-sandbox-scoped union (`IsolatedRunNetworkPolicy`) instead of
+// folding it into this shared type. This is a compile-time guard: proven by asserting the
+// gateway shape is a type error here, not a runtime check (there is nothing to run — the whole
+// point is that the assignment never type-checks).
+describe("NetworkPolicy — gateway shape is excluded from SandboxPolicy.network", () => {
+  it("never accepts a NetworkGatewayPolicy value (compile-time pin)", () => {
+    const gateway: NetworkGatewayPolicy = { mode: "gateway", host: "127.0.0.1", port: 1983 };
+    // @ts-expect-error — SandboxPolicy.network is "inherit" | "none" only. Before this fix,
+    // NetworkPolicy included NetworkGatewayPolicy and this assignment type-checked, which let
+    // keiko-tools/exec.ts's `!== "none"` exhaustiveness check silently treat a gateway policy as
+    // "inherited" (unconfined) network — a fail-open widening of a trust boundary.
+    const widened: SandboxPolicy = { ...DEFAULT_SANDBOX_POLICY, network: gateway };
+    expect(widened.network).toBe(gateway);
   });
 });

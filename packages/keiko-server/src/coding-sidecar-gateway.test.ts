@@ -605,7 +605,8 @@ describe("coding-sidecar gateway", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-        requestBody = JSON.parse(String(init?.body)) as typeof requestBody;
+        const body = typeof init?.body === "string" ? init.body : "{}";
+        requestBody = JSON.parse(body) as typeof requestBody;
         return Promise.resolve(
           new Response(
             JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),

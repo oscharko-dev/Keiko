@@ -336,19 +336,46 @@ function toolCallDeltasFromChunk(chunk: unknown): readonly unknown[] | undefined
   return Array.isArray(raw) ? raw : undefined;
 }
 
+function stringOrUndefined(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function nonEmptyOrFallback(value: string | undefined, fallback: string): string {
+  return value === undefined || value.length === 0 ? fallback : value;
+}
+
+function toolCallDeltaFields(raw: unknown): {
+  id: string | undefined;
+  name: string | undefined;
+  argumentsText: string | undefined;
+} {
+  const record = isRecord(raw) ? raw : {};
+  const fn = isRecord(record.function) ? record.function : undefined;
+  return {
+    id: stringOrUndefined(record.id),
+    name: stringOrUndefined(fn?.name),
+    argumentsText: stringOrUndefined(fn?.arguments),
+  };
+}
+
+function mergedToolCallDelta(
+  existing: ToolCallDeltaEntry | undefined,
+  raw: unknown,
+): ToolCallDeltaEntry {
+  const delta = toolCallDeltaFields(raw);
+  return {
+    id: nonEmptyOrFallback(delta.id, existing?.id ?? ""),
+    name: nonEmptyOrFallback(delta.name, existing?.name ?? ""),
+    argumentsText: (existing?.argumentsText ?? "") + nonEmptyOrFallback(delta.argumentsText, ""),
+  };
+}
+
 function applyToolCallDelta(accumulator: ToolCallAccumulator, chunk: unknown): void {
   const deltas = toolCallDeltasFromChunk(chunk);
   if (deltas === undefined) return;
   for (const raw of deltas) {
     if (!isRecord(raw) || typeof raw.index !== "number") continue;
-    const existing = accumulator.get(raw.index);
-    const fn = isRecord(raw.function) ? raw.function : undefined;
-    accumulator.set(raw.index, {
-      id: typeof raw.id === "string" && raw.id.length > 0 ? raw.id : (existing?.id ?? ""),
-      name: typeof fn?.name === "string" && fn.name.length > 0 ? fn.name : (existing?.name ?? ""),
-      argumentsText:
-        (existing?.argumentsText ?? "") + (typeof fn?.arguments === "string" ? fn.arguments : ""),
-    });
+    accumulator.set(raw.index, mergedToolCallDelta(accumulator.get(raw.index), raw));
   }
 }
 

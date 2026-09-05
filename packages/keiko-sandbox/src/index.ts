@@ -53,6 +53,7 @@ export type {
 export type {
   BackendAvailability,
   IsolatedRunDecision,
+  IsolatedRunNetworkPolicy,
   IsolatedRunPlan,
   NetworkGatewayPolicy,
   NetworkPolicy,

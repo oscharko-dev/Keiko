@@ -23,6 +23,7 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
+import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -254,6 +255,79 @@ function recordJourneyOutcome(
 
 // ─── Handler ────────────────────────────────────────────────────────────────────────────────────
 
+type ConfirmedDraftDeliveryRecord = Omit<DraftDeliveryRecord, "pullRequest"> & {
+  readonly pullRequest: NonNullable<DraftDeliveryRecord["pullRequest"]>;
+};
+
+function journeyContext(
+  draft: ConfirmedDraftDeliveryRecord,
+  correlationId: string,
+  reader: JourneyObservationOptions["reader"],
+): JourneyObservationContext {
+  const context: JourneyObservationContext = {
+    draft,
+    accessScope: {},
+    correlationId,
+    stillAuthorized: (): boolean => reader(context) !== undefined,
+  };
+  return context;
+}
+
+function buildJourneyObservationOptions(
+  deps: UiHandlerDeps,
+  options: GitDeliveryJourneyRouteOptions,
+  repositoryId: string,
+  draft: ConfirmedDraftDeliveryRecord,
+  ciReadiness: ReadinessSnapshot | undefined,
+  correlationId: string,
+  draftDelivery: DraftDeliveryReaderModule,
+): JourneyObservationOptions {
+  const reader = readerFor(deps, options, repositoryId, draftDelivery.createProductionJourneyReader);
+  const context = journeyContext(draft, correlationId, reader);
+  return {
+    context: () => context,
+    reader,
+    readiness: readinessFor(options, ciReadiness),
+    description: descriptionFor(
+      deps,
+      options,
+      repositoryId,
+      draft.binding.repository,
+      draft.pullRequest.number,
+      draftDelivery.resolveJourneyCheckoutRoot,
+    ),
+    recordOutcome: (observeContext, outcome): boolean =>
+      recordJourneyOutcome(deps, options.outcomes, observeContext.correlationId, outcome),
+    ...(deps.activityLog === undefined ? {} : { activityLog: deps.activityLog }),
+  };
+}
+
+interface ConfirmedJourneySubject {
+  readonly draft: ConfirmedDraftDeliveryRecord;
+  readonly repositoryId: string;
+  readonly ciReadiness: ReadinessSnapshot | undefined;
+}
+
+/** The persisted, run-independent facts a journey observation needs: the confirmed accepted draft
+ * PR and the checkout identity to admit reads against — read straight from the durable
+ * `coding_runtime_snapshots` row, so this resolves the same after the originating run terminates. */
+function confirmedJourneySubject(
+  deps: UiHandlerDeps,
+  runId: string,
+): ConfirmedJourneySubject | undefined {
+  const snapshot = deps.codingRuntimeSnapshotStore?.get(runId);
+  const draft = snapshot?.draftDelivery;
+  const issueBinding = snapshot?.issueBinding;
+  if (snapshot === undefined || draft?.pullRequest === undefined || issueBinding === undefined) {
+    return undefined;
+  }
+  return {
+    draft: draft as ConfirmedDraftDeliveryRecord,
+    repositoryId: issueBinding.repositoryId,
+    ciReadiness: snapshot.ciReadiness,
+  };
+}
+
 async function handleJourneyRefresh(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -268,45 +342,20 @@ async function handleJourneyRefresh(
   const runId = parseRunId(parsed.value);
   if (runId === undefined) return errResult(400, "GIT_DELIVERY_JOURNEY_BAD_REQUEST");
 
-  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-  const snapshot = deps.codingRuntimeSnapshotStore?.get(runId);
-  const draft = snapshot?.draftDelivery;
-  const issueBinding = snapshot?.issueBinding;
-  if (snapshot === undefined || draft?.pullRequest === undefined || issueBinding === undefined) {
-    return unavailableResult("draft-unavailable");
-  }
+  const subject = confirmedJourneySubject(deps, runId);
+  if (subject === undefined) return unavailableResult("draft-unavailable");
 
-  const repositoryId = issueBinding.repositoryId;
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
   const draftDelivery = await loadDraftDeliveryReaderModule();
-  let context: JourneyObservationContext;
-  const reader = readerFor(
+  const observationOptions = buildJourneyObservationOptions(
     deps,
     options,
-    repositoryId,
-    draftDelivery.createProductionJourneyReader,
-  );
-  context = {
-    draft,
-    accessScope: {},
+    subject.repositoryId,
+    subject.draft,
+    subject.ciReadiness,
     correlationId,
-    stillAuthorized: (): boolean => reader(context) !== undefined,
-  };
-  const observationOptions: JourneyObservationOptions = {
-    context: () => context,
-    reader,
-    readiness: readinessFor(options, snapshot.ciReadiness),
-    description: descriptionFor(
-      deps,
-      options,
-      repositoryId,
-      draft.binding.repository,
-      draft.pullRequest.number,
-      draftDelivery.resolveJourneyCheckoutRoot,
-    ),
-    recordOutcome: (observeContext, outcome): boolean =>
-      recordJourneyOutcome(deps, options.outcomes, observeContext.correlationId, outcome),
-    ...(deps.activityLog === undefined ? {} : { activityLog: deps.activityLog }),
-  };
+    draftDelivery,
+  );
   const result = await new JourneyObservationController(observationOptions).observe();
   return { status: 200, body: result };
 }

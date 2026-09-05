@@ -8,7 +8,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 27;
+export const SCHEMA_VERSION = 28;
 
 interface Migration {
   readonly version: number;
@@ -742,6 +742,141 @@ CREATE TABLE git_journey_outcomes (
 ) STRICT;
 `;
 
+// V28 (issue #3400, epic #3384, contract correction 3) — widens the `relationships` table-level
+// CHECK to admit the new `git-change` object kind (source AND target), and adds the git-change
+// Chat scope column. This is the first migration to widen the V5 CHECK, so it follows the v20
+// table-rebuild precedent for a table-level CHECK SQLite cannot ALTER — but `relationships` has a
+// child with a live foreign key (`relationship_lifecycle_history.relationship_id REFERENCES
+// relationships(id) ON DELETE CASCADE`), which V20's rebuild target (coding_runtime_snapshots)
+// does not. Migrations run inside one transaction (runMigrations, "BEGIN"), so
+// `PRAGMA foreign_keys` cannot be toggled here (SQLite silently no-ops a pragma write mid-
+// transaction) and stays ON throughout. A plain `DROP TABLE relationships` under FK enforcement
+// therefore cascades and deletes every `relationship_lifecycle_history` row (ADR-0031, verified
+// empirically against node:sqlite before this migration was written). The sequence below avoids
+// that by construction:
+//   1. RENAME relationships -> relationships_v27. SQLite's ALTER TABLE RENAME rewrites the
+//      REFERENCES clause TEXT of every other table's schema that names the renamed table, so
+//      relationship_lifecycle_history's foreign key now reads "REFERENCES relationships_v27(id)".
+//   2. CREATE the new `relationships` table (already under its final name) with the widened CHECK,
+//      copy every row across, and recreate its indexes. No table currently has a foreign key
+//      naming "relationships", so this step is inert for constraints.
+//   3. Rebuild relationship_lifecycle_history under a fresh `REFERENCES relationships(id)` clause
+//      (a straight copy — its own CHECK and columns are unchanged) so its foreign key re-points at
+//      the LIVE table by name, then swap it in.
+//   4. Only now is `relationships_v27` unreferenced by any foreign key, so DROP TABLE is safe: no
+//      history row is cascaded away. `relationship_audit_entries.relationship_id` carries no
+//      REFERENCES clause (schema.ts V5), so it needs no rebuild.
+// restoreV13SchemaFixture, UI_STORE_FINGERPRINT_TABLES and the forbidden-fields pin are updated in
+// the same commit (epic correction 2, seam (a)).
+const V28_SQL = `
+ALTER TABLE relationships RENAME TO relationships_v27;
+
+CREATE TABLE relationships (
+  id                  TEXT NOT NULL PRIMARY KEY,
+  schema_version      TEXT NOT NULL,
+  workspace_scope_id  TEXT NOT NULL,
+  scope_kind          TEXT NOT NULL,
+  scope_coordinate    TEXT NOT NULL,
+  type                TEXT NOT NULL,
+  source_kind         TEXT NOT NULL,
+  source_id           TEXT NOT NULL,
+  target_kind         TEXT NOT NULL,
+  target_id           TEXT NOT NULL,
+  lifecycle           TEXT NOT NULL,
+  created_at          INTEGER NOT NULL,
+  updated_at          INTEGER NOT NULL,
+  etag                TEXT NOT NULL,
+  confidence          REAL,
+  summary             TEXT,
+  CHECK (
+    schema_version IN ('1')
+    AND type IN (
+      'reads-context','proposes-patch','uses-tool','starts-workflow',
+      'produces-evidence','references-document','depends-on'
+    )
+    AND lifecycle IN (
+      'draft','active','archived','superseded','revoked','blocked','stale'
+    )
+    AND scope_kind IN ('user','workspace','project','workflow','global')
+    AND source_kind IN (
+      'memory','capsule','capsule-set','workflow-run','evidence-run',
+      'workspace-path','chat','tool','patch-proposal',
+      'agent','connector','data-source','skill','mcp-tool','git-change'
+    )
+    AND target_kind IN (
+      'memory','capsule','capsule-set','workflow-run','evidence-run',
+      'workspace-path','chat','tool','patch-proposal',
+      'agent','connector','data-source','skill','mcp-tool','git-change'
+    )
+    AND created_at >= 0
+    AND updated_at >= created_at
+    AND (confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0))
+    AND (summary IS NULL OR length(summary) <= 240)
+  )
+) STRICT;
+
+INSERT INTO relationships (
+  id, schema_version, workspace_scope_id, scope_kind, scope_coordinate, type,
+  source_kind, source_id, target_kind, target_id, lifecycle, created_at, updated_at,
+  etag, confidence, summary
+)
+SELECT
+  id, schema_version, workspace_scope_id, scope_kind, scope_coordinate, type,
+  source_kind, source_id, target_kind, target_id, lifecycle, created_at, updated_at,
+  etag, confidence, summary
+FROM relationships_v27;
+
+CREATE INDEX idx_relationships_source
+  ON relationships(workspace_scope_id, source_kind, source_id);
+CREATE INDEX idx_relationships_target
+  ON relationships(workspace_scope_id, target_kind, target_id);
+CREATE INDEX idx_relationships_type
+  ON relationships(workspace_scope_id, type, lifecycle);
+CREATE INDEX idx_relationships_lifecycle
+  ON relationships(workspace_scope_id, lifecycle, updated_at);
+
+CREATE UNIQUE INDEX uniq_relationships_produces_evidence_source
+  ON relationships(workspace_scope_id, source_kind, source_id)
+  WHERE type = 'produces-evidence' AND lifecycle IN ('draft','active','archived');
+
+CREATE UNIQUE INDEX uniq_relationships_starts_workflow_target
+  ON relationships(workspace_scope_id, target_kind, target_id)
+  WHERE type = 'starts-workflow' AND lifecycle IN ('draft','active','archived');
+
+CREATE TABLE relationship_lifecycle_history_v28 (
+  id              TEXT NOT NULL PRIMARY KEY,
+  relationship_id TEXT NOT NULL REFERENCES relationships(id) ON DELETE CASCADE,
+  from_state      TEXT NOT NULL,
+  to_state        TEXT NOT NULL,
+  occurred_at     INTEGER NOT NULL,
+  summary         TEXT,
+  CHECK (
+    from_state IN ('draft','active','archived','superseded','revoked','blocked','stale')
+    AND to_state IN ('draft','active','archived','superseded','revoked','blocked','stale')
+    AND occurred_at >= 0
+    AND (summary IS NULL OR length(summary) <= 240)
+  )
+) STRICT;
+
+INSERT INTO relationship_lifecycle_history_v28 (
+  id, relationship_id, from_state, to_state, occurred_at, summary
+)
+SELECT id, relationship_id, from_state, to_state, occurred_at, summary
+FROM relationship_lifecycle_history;
+
+DROP TABLE relationship_lifecycle_history;
+
+ALTER TABLE relationship_lifecycle_history_v28 RENAME TO relationship_lifecycle_history;
+
+CREATE INDEX idx_relationship_lifecycle_relationship
+  ON relationship_lifecycle_history(relationship_id, occurred_at);
+
+DROP TABLE relationships_v27;
+
+ALTER TABLE chats ADD COLUMN git_change_scope_json TEXT
+  CHECK (git_change_scope_json IS NULL OR (length(git_change_scope_json) <= 32768 AND json_valid(git_change_scope_json)));
+`;
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
 // change.
@@ -773,6 +908,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 25, sql: V25_SQL },
   { version: 26, sql: V26_SQL },
   { version: 27, sql: V27_SQL },
+  { version: 28, sql: V28_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

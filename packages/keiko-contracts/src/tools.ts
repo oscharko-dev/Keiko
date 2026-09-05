@@ -22,6 +22,16 @@ import { deepFreeze } from "./deep-freeze.js";
 // general allowlist: a single loopback host and a single port, nothing else is expressible. A host
 // with no backend that can bind a child to exactly that destination fails the run closed rather than
 // silently widening to "inherit" or narrowing to the unusable "none".
+//
+// `NetworkGatewayPolicy` is deliberately NOT folded into `NetworkPolicy` below. `NetworkPolicy` is
+// `SandboxPolicy.network` — the general keiko-tools spawn-boundary type that every command-execution
+// caller (keiko-verification, the git/registry tool lanes, …) reads with an exhaustive `=== "none"` /
+// `!== "none"` check (see keiko-tools/src/exec.ts's resolveSpawnTarget). Widening that union to
+// include an object variant would make `!== "none"` true for a gateway policy too and silently spawn
+// it on the INHERITED (unconfined) path — a fail-open hole in a trust boundary this type does not
+// otherwise reach. Only the keiko-sandbox planning layer (`IsolatedRunPlan.network`, exported there as
+// `IsolatedRunNetworkPolicy`) accepts the gateway shape; it is a long-lived coding-sidecar concept,
+// never constructed by a `SandboxPolicy`.
 export interface NetworkGatewayPolicy {
   readonly mode: "gateway";
   readonly host: "127.0.0.1" | "::1";

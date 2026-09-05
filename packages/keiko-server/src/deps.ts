@@ -316,7 +316,10 @@ import {
   createProductionCodingRuntimeHost,
   type ProductionCodingRuntimeResolver,
 } from "./coding-runtime/productionCodingRuntimeHost.js";
-import type { GitDeliveryRunAuthorityPort } from "./gitDelivery/runBoundAuthority.js";
+import type {
+  GitDeliveryDescriptionAuthorityPort,
+  GitDeliveryRunAuthorityPort,
+} from "./gitDelivery/runBoundAuthority.js";
 import {
   createPrDescriptionReceiptStatusHooks,
   createPrDescriptionReceiptStore,
@@ -552,6 +555,10 @@ export interface UiHandlerDeps {
     | undefined;
   /** Current server-owned delivery authority; absent means Git delivery executes fail closed. */
   readonly gitDeliveryAuthority?: GitDeliveryRunAuthorityPort | undefined;
+  // #3399 (epic #3384 correction 4): the server-minted, bounded description authority that admits
+  // description generation and the "pull-request" body-only apply outside a running Code task.
+  // Absent means those two effects execute fail closed exactly like a missing `gitDeliveryAuthority`.
+  readonly gitDeliveryDescriptionAuthority?: GitDeliveryDescriptionAuthorityPort | undefined;
   readonly openCodeGatewayReadinessRegistry?:
     | {
         readonly claim: (runId: string) => boolean;

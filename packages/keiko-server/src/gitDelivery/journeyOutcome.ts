@@ -272,11 +272,11 @@ function updateJourneyOutcome(
 
 export function createGitJourneyOutcomeStore(db: DatabaseSync): GitJourneyOutcomeStore {
   return {
-    get(remoteDigest, prNumber) {
+    get(remoteDigest, prNumber): JourneyOutcome | undefined {
       const row = journeyOutcomeRow(db, remoteDigest, prNumber);
       return row === undefined ? undefined : parseStoredJourneyOutcome(row.outcome_json);
     },
-    record(outcome) {
+    record(outcome): boolean {
       if (!isJourneyOutcome(outcome)) return false;
       const json = JSON.stringify(outcome);
       if (Buffer.byteLength(json, "utf8") > JOURNEY_OUTCOME_MAX_BYTES) return false;

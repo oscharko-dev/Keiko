@@ -8,14 +8,19 @@ import {
   type SelectedScopeKind,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
+  CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
   DEFAULT_GROUNDING_LIMITS,
   GROUNDING_LIMIT_CEILINGS,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { isCodeTaskGitCommitSha, isCodeTaskSha256Digest } from "@oscharko-dev/keiko-contracts";
+import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { redact } from "@oscharko-dev/keiko-security";
 import { pathIsDenied } from "../files-deny.js";
 import type {
   Chat,
   ChatConnectedScope,
+  ChatGitChangeDescriptionStatus,
+  ChatGitChangeScope,
   ChatLocalKnowledgeScope,
   CreateChatOptions,
   UpdateChatOptions,
@@ -23,6 +28,13 @@ import type {
 } from "./types.js";
 import { invalidRequest, notFound } from "./errors.js";
 import { deriveChatGroundingScopeIdentity } from "./chat-grounding-scope-identity.js";
+
+// Issue #3400 (epic #3384) — a chat rarely connects more than one Git comparison at a time; this
+// cap is deliberately far below the combined-source cap (`combinedSourceCap`, which does not
+// include this list — git-change scopes are not folder/connector "grounding sources").
+const MAX_GIT_CHANGE_SCOPES = 8;
+const CHAT_GIT_CHANGE_DESCRIPTION_STATUS_SET: ReadonlySet<ChatGitChangeDescriptionStatus> =
+  new Set(CHAT_GIT_CHANGE_DESCRIPTION_STATUSES);
 
 const MAX_CONNECTED_SCOPE_PATHS = 50;
 const SELECTED_SCOPE_KIND_SET: ReadonlySet<SelectedScopeKind> = new Set(SELECTED_SCOPE_KINDS);
@@ -56,6 +68,7 @@ interface ChatRow {
   readonly connected_scope_paths: string | null;
   readonly connected_scope_at: number | null;
   readonly local_knowledge_scope_json: string | null;
+  readonly git_change_scope_json: string | null;
   readonly created_at: number;
   readonly updated_at: number;
 }
@@ -311,10 +324,121 @@ function decodeLocalKnowledgeScopePayload(
   return undefined;
 }
 
+// Issue #3400 (epic #3384) — the git_change_scope_json column holds a JSON array of server-issued
+// Git-change scope entries (contract correction 2). Unlike connected/local-knowledge scopes there
+// is no legacy single-object form: this scope kind was never overloaded onto an earlier shape, so
+// only the array form is ever decoded. A tampered or malformed entry collapses the WHOLE decode to
+// undefined, matching the sibling decoders' "never widen on read" invariant.
+function isBoundedNonEmptyString(value: unknown, maxLength: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= maxLength;
+}
+
+function decodePullRequestNumber(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 1_000_000_000
+    ? (value as number)
+    : undefined;
+}
+
+function decodeGitChangeCount(value: unknown): number | undefined {
+  return Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 1_000_000
+    ? (value as number)
+    : undefined;
+}
+
+function isChatGitChangeDescriptionStatus(
+  value: unknown,
+): value is ChatGitChangeDescriptionStatus {
+  return (
+    typeof value === "string" &&
+    CHAT_GIT_CHANGE_DESCRIPTION_STATUS_SET.has(value as ChatGitChangeDescriptionStatus)
+  );
+}
+
+// eslint-disable-next-line complexity -- every field is an independent, flat shape guard; the
+// closed-set/regex checks below cannot share branches without hiding which field failed.
+function decodeGitChangeScopeObject(raw: unknown): ChatGitChangeScope | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const scope = raw as Record<string, unknown>;
+  if (scope.kind !== "git-change") return undefined;
+  const relationshipId = scope.relationshipId;
+  const remoteDigest = scope.remoteDigest;
+  const comparisonLabel = scope.comparisonLabel;
+  const baseRef = scope.baseRef;
+  const headRef = scope.headRef;
+  const snapshotDigest = scope.snapshotDigest;
+  const connectedAtMs = decodeNonNegativeInteger(scope.connectedAtMs);
+  const fileCount = decodeGitChangeCount(scope.fileCount);
+  const totalFiles = decodeGitChangeCount(scope.totalFiles);
+  const omittedFiles = decodeGitChangeCount(scope.omittedFiles);
+  const truncatedFiles = decodeGitChangeCount(scope.truncatedFiles);
+  const pullRequestNumber = decodePullRequestNumber(scope.pullRequestNumber);
+  if (
+    !isBoundedNonEmptyString(relationshipId, 256) ||
+    !isCodeTaskSha256Digest(remoteDigest) ||
+    !isBoundedNonEmptyString(comparisonLabel, 240) ||
+    !isSafeGitRefName(baseRef) ||
+    !isSafeGitRefName(headRef) ||
+    !isCodeTaskGitCommitSha(scope.baseSha) ||
+    !isCodeTaskGitCommitSha(scope.headSha) ||
+    !isCodeTaskGitCommitSha(scope.mergeBaseSha) ||
+    !isCodeTaskSha256Digest(snapshotDigest) ||
+    connectedAtMs === undefined ||
+    fileCount === undefined ||
+    totalFiles === undefined ||
+    omittedFiles === undefined ||
+    truncatedFiles === undefined ||
+    !isChatGitChangeDescriptionStatus(scope.descriptionStatus) ||
+    (scope.pullRequestNumber !== undefined && pullRequestNumber === undefined)
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "git-change",
+    relationshipId,
+    remoteDigest,
+    comparisonLabel,
+    baseRef,
+    headRef,
+    baseSha: scope.baseSha,
+    headSha: scope.headSha,
+    mergeBaseSha: scope.mergeBaseSha,
+    snapshotDigest,
+    ...(pullRequestNumber === undefined ? {} : { pullRequestNumber }),
+    fileCount,
+    totalFiles,
+    omittedFiles,
+    truncatedFiles,
+    descriptionStatus: scope.descriptionStatus,
+    connectedAtMs,
+  };
+}
+
+function decodeGitChangeScopes(raw: string | null): readonly ChatGitChangeScope[] | undefined {
+  if (raw === null) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.length > MAX_GIT_CHANGE_SCOPES) {
+    return undefined;
+  }
+  const scopes: ChatGitChangeScope[] = [];
+  for (const entry of parsed) {
+    const decoded = decodeGitChangeScopeObject(entry);
+    if (decoded === undefined) return undefined;
+    scopes.push(decoded);
+  }
+  return scopes;
+}
+
 function rowToChat(row: ChatRow): Chat {
   const status = row.status === null ? undefined : (row.status as "open" | "closed");
   const connectedScopes = decodeConnectedScopes(row.connected_scope_paths, row.connected_scope_at);
   const localKnowledgeScopes = decodeLocalKnowledgeScopes(row.local_knowledge_scope_json);
+  const gitChangeScopes = decodeGitChangeScopes(row.git_change_scope_json);
   const chat: Chat = {
     id: row.id,
     projectPath: row.project_path,
@@ -332,6 +456,8 @@ function rowToChat(row: ChatRow): Chat {
     ...(localKnowledgeScopes !== undefined && localKnowledgeScopes.length > 0
       ? { localKnowledgeScopes, localKnowledgeScope: localKnowledgeScopes[0] }
       : { localKnowledgeScope: undefined }),
+    // Issue #3400 — no legacy single-object field for this scope kind.
+    ...(gitChangeScopes !== undefined && gitChangeScopes.length > 0 ? { gitChangeScopes } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -340,7 +466,8 @@ function rowToChat(row: ChatRow): Chat {
 
 const SELECT_COLUMNS =
   "id, project_path, title, selected_model, branch_label, status, " +
-  "connected_scope_paths, connected_scope_at, local_knowledge_scope_json, created_at, updated_at";
+  "connected_scope_paths, connected_scope_at, local_knowledge_scope_json, " +
+  "git_change_scope_json, created_at, updated_at";
 
 const SQL_LIST = `SELECT ${SELECT_COLUMNS} FROM chats WHERE project_path = ? ORDER BY created_at ASC`;
 // 0.3.0 release audit — the LIMITED page decides which conversations the product can show and
@@ -360,8 +487,9 @@ const SQL_LIST_LIMITED =
 const SQL_FIND_BY_ID = `SELECT ${SELECT_COLUMNS} FROM chats WHERE id = ? LIMIT 1`;
 const SQL_INSERT = `
 INSERT INTO chats (id, project_path, title, selected_model, branch_label, status,
-  connected_scope_paths, connected_scope_at, local_knowledge_scope_json, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?)
+  connected_scope_paths, connected_scope_at, local_knowledge_scope_json, git_change_scope_json,
+  created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)
 RETURNING ${SELECT_COLUMNS}
 `;
 // Issue #184 — the trailing CASE WHEN ? = 1 ... ELSE col END pattern lets the caller signal three
@@ -369,10 +497,11 @@ RETURNING ${SELECT_COLUMNS}
 // scope columns untouched (patch.connectedScope === undefined); apply_scope = 1 → write the two
 // scope parameters verbatim (writing NULL into both clears the binding when patch.connectedScope
 // === null; writing JSON+ms sets it). The statement contains TWO separate `CASE WHEN ? = 1`
-// guards (one per column) so the same apply_scope value is passed twice. The local-knowledge
-// scope uses the same 3-state encoding against a single JSON column. Parameter order:
-// title, model, branch, status, updated_at, apply_scope, scope_paths, apply_scope, scope_at,
-// apply_local_scope, local_scope_json, id.
+// guards (one per column) so the same apply_scope value is passed twice. The local-knowledge and
+// (Issue #3400) git-change scopes use the same 3-state encoding against a single JSON column.
+// Parameter order: title, model, branch, status, updated_at, apply_scope, scope_paths,
+// apply_scope, scope_at, apply_local_scope, local_scope_json, apply_git_change_scope,
+// git_change_scope_json, id.
 const SQL_UPDATE = `
 UPDATE chats SET
   title = COALESCE(?, title),
@@ -382,7 +511,8 @@ UPDATE chats SET
   updated_at = ?,
   connected_scope_paths = CASE WHEN ? = 1 THEN ? ELSE connected_scope_paths END,
   connected_scope_at    = CASE WHEN ? = 1 THEN ? ELSE connected_scope_at END,
-  local_knowledge_scope_json = CASE WHEN ? = 1 THEN ? ELSE local_knowledge_scope_json END
+  local_knowledge_scope_json = CASE WHEN ? = 1 THEN ? ELSE local_knowledge_scope_json END,
+  git_change_scope_json = CASE WHEN ? = 1 THEN ? ELSE git_change_scope_json END
 WHERE id = ?
 RETURNING ${SELECT_COLUMNS}
 `;
@@ -619,6 +749,24 @@ function validateChatPatch(patch: UpdateChatPatch, limits?: UpdateChatOptions): 
   validatePatchScopes(patch.connectedScopes, limits?.maxConnectedSources);
   validatePatchLocalKnowledgeScope(patch.localKnowledgeScope);
   validatePatchLocalKnowledgeScopes(patch.localKnowledgeScopes, limits?.maxLocalKnowledgeSources);
+  validatePatchGitChangeScopes(patch.gitChangeScopes);
+}
+
+// Issue #3400 — every entry is server-issued by gitChangeRoutes.ts; this is defense-in-depth
+// against a tampered or hand-crafted PATCH body, mirroring validatePatchLocalKnowledgeScopes.
+function validatePatchGitChangeScopes(scopes: readonly ChatGitChangeScope[] | null | undefined): void {
+  if (scopes === undefined || scopes === null) return;
+  if (!Array.isArray(scopes)) {
+    throw invalidRequest("gitChangeScopes must be an array or null.");
+  }
+  if (scopes.length > MAX_GIT_CHANGE_SCOPES) {
+    throw invalidRequest(`gitChangeScopes must contain at most ${String(MAX_GIT_CHANGE_SCOPES)} entries.`);
+  }
+  for (const scope of scopes) {
+    if (decodeGitChangeScopeObject(scope) === undefined) {
+      throw invalidRequest("gitChangeScopes entries must be well-formed git-change scope objects.");
+    }
+  }
 }
 
 // Epic #532 — resolve the effective scope-patch intent. `connectedScopes` SUPERSEDES the legacy
@@ -729,6 +877,52 @@ function localKnowledgeScopesUpdateParams(
   return { apply: 1, json: JSON.stringify(value.map(encodeLocalKnowledgeScopeObject)) };
 }
 
+// Issue #3400 — resolve the effective git-change scope-patch intent. No legacy single field
+// exists for this scope kind (mirrors resolveLocalKnowledgeScopePatch's plural-list shape, minus
+// the singular back-compat branch).
+function resolveGitChangeScopePatch(
+  patch: UpdateChatPatch,
+): readonly ChatGitChangeScope[] | null | undefined {
+  if (patch.gitChangeScopes === undefined) return undefined;
+  if (patch.gitChangeScopes === null || patch.gitChangeScopes.length === 0) return null;
+  return patch.gitChangeScopes;
+}
+
+function encodeGitChangeScopeObject(value: ChatGitChangeScope): Record<string, unknown> {
+  return {
+    kind: "git-change",
+    relationshipId: value.relationshipId,
+    remoteDigest: value.remoteDigest,
+    comparisonLabel: value.comparisonLabel,
+    baseRef: value.baseRef,
+    headRef: value.headRef,
+    baseSha: value.baseSha,
+    headSha: value.headSha,
+    mergeBaseSha: value.mergeBaseSha,
+    snapshotDigest: value.snapshotDigest,
+    ...(value.pullRequestNumber === undefined ? {} : { pullRequestNumber: value.pullRequestNumber }),
+    fileCount: value.fileCount,
+    totalFiles: value.totalFiles,
+    omittedFiles: value.omittedFiles,
+    truncatedFiles: value.truncatedFiles,
+    descriptionStatus: value.descriptionStatus,
+    connectedAtMs: value.connectedAtMs,
+  };
+}
+
+interface GitChangeScopeUpdateParams {
+  readonly apply: 0 | 1;
+  readonly json: string | null;
+}
+
+function gitChangeScopesUpdateParams(
+  value: readonly ChatGitChangeScope[] | null | undefined,
+): GitChangeScopeUpdateParams {
+  if (value === undefined) return { apply: 0, json: null };
+  if (value === null || value.length === 0) return { apply: 1, json: null };
+  return { apply: 1, json: JSON.stringify(value.map(encodeGitChangeScopeObject)) };
+}
+
 // Release 0.2.0 — combined source cap. "Up to 16 sources" is a TOTAL across both lists
 // (folders/files/repos in connectedScopes + knowledge connectors in localKnowledgeScopes),
 // mirroring the QI ingestion total cap (MAX_QI_SOURCES = 16) so "16 sources" means the same
@@ -794,6 +988,7 @@ export function updateChat(
   const statusParam = patch.status ?? null;
   const scope = scopeUpdateParams(resolveScopePatch(patch));
   const localScope = localKnowledgeScopesUpdateParams(resolveLocalKnowledgeScopePatch(patch));
+  const gitChangeScope = gitChangeScopesUpdateParams(resolveGitChangeScopePatch(patch));
   const row = db
     .prepare(SQL_UPDATE)
     .get(
@@ -808,6 +1003,8 @@ export function updateChat(
       scope.connectedAtMs,
       localScope.apply,
       localScope.json,
+      gitChangeScope.apply,
+      gitChangeScope.json,
       id,
     ) as unknown as ChatRow | undefined;
   if (row === undefined) throw notFound("Chat");
