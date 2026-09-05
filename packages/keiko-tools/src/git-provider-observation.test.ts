@@ -50,6 +50,22 @@ describe("governed provider read failures", () => {
       reason: "timeout",
     });
   });
+  // Owner audit finding b2-17: `classifyGitProviderReadFailure` must never return `undefined` for
+  // an `Error` — `localFailure`'s final branch is an unconditional "provider-unavailable" — which
+  // is exactly the invariant that made the removed `instanceof Error` fallback in
+  // `evaluateResponse` unreachable dead code.
+  it("is total over every Error subtype: never undefined", () => {
+    class CustomProviderError extends Error {}
+    for (const error of [
+      new Error("plain"),
+      new CommandDeniedError("denied", "gh"),
+      new CommandCancelledError("stopped"),
+      new CommandTimeoutError("deadline", 1),
+      new CustomProviderError("unrecognized subtype"),
+    ]) {
+      expect(classifyGitProviderReadFailure(error)).not.toBeUndefined();
+    }
+  });
   it("treats truncated successful JSON and terminated processes as incomplete", () => {
     expect(classifyGitProviderReadFailure(response([], { truncated: true }))).toMatchObject({
       reason: "output-truncated",
@@ -201,5 +217,22 @@ describe("explicit finite provider pagination", () => {
     });
     expect(result.completeness).toMatchObject({ failure: { reason: "cancelled" } });
     expect(run).not.toHaveBeenCalled();
+  });
+  // Owner audit finding b2-17: a local Error surfacing through the read runner (rather than a
+  // provider CommandResult) must still stop pagination with a classified, non-"unknown" failure —
+  // proving the direct `localFailure` call in `evaluateResponse` still routes an Error correctly
+  // after the unreachable `instanceof Error` fallback was removed.
+  it("stops pagination on a local Error, classified through the same local-failure vocabulary", async () => {
+    const result = await readGitProviderPages({
+      run: () => Promise.resolve(new Error("plain local failure, no HTTP status")),
+      argv: () => [],
+      pageSize: 2,
+      maxPages: 2,
+      maxBytes: 100,
+    });
+    expect(result.completeness).toMatchObject({
+      complete: false,
+      failure: { reason: "provider-unavailable", state: "pending" },
+    });
   });
 });

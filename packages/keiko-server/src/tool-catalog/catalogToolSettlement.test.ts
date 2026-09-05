@@ -386,7 +386,10 @@ describe("catalog invocation settlement lifecycle-emit failure (b3-10)", () => {
     const fixture = catalogToolFixture();
     const diagnosticsRecord = vi.fn<ServerDiagnosticSink["record"]>();
     const binder = createCatalogToolBinder(
-      { ...fixture.input, logPort: { primary: fixture.primary, diagnostics: { record: diagnosticsRecord } } },
+      {
+        ...fixture.input,
+        logPort: { primary: fixture.primary, diagnostics: { record: diagnosticsRecord } },
+      },
       fixture.options,
     );
     const offer = binder.offer();

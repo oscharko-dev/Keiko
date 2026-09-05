@@ -477,13 +477,6 @@ async function runProductiveScenario(
     "/api/coding-workbench/runtime/runs",
     startBody("productive"),
   );
-  if (started.status !== 200) {
-    const body = await started.clone().text();
-    require("node:fs").writeFileSync(
-      "/tmp/debug-start-body.json",
-      JSON.stringify({ status: started.status, body }),
-    );
-  }
   expect(started.status).toBe(200);
   const run = (await started.json()) as { runId: string; state: string };
   expect(run.state).toBe("running");

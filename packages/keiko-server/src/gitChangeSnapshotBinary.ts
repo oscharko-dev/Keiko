@@ -63,9 +63,10 @@ function sectionLineStatistics(lines: readonly string[]): {
   return { additions, deletions };
 }
 
-function repairedCounts(
-  patch: { readonly stdout: string; readonly truncated: boolean },
-): ReadonlyMap<string, { readonly additions: number; readonly deletions: number }> {
+function repairedCounts(patch: {
+  readonly stdout: string;
+  readonly truncated: boolean;
+}): ReadonlyMap<string, { readonly additions: number; readonly deletions: number }> {
   const counts = new Map<string, { readonly additions: number; readonly deletions: number }>();
   const sections = splitUnifiedDiffSections(patch.stdout);
   sections.forEach((section, index) => {

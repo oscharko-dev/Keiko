@@ -3462,9 +3462,7 @@ function isGitCommitShaHex(value: unknown): value is string {
 // Owner audit b1-12 — the sibling `blocked` reason is checked against the closed set below; this
 // mirrors it for `descriptionStatus` instead of accepting any bounded string, so an unrecognised
 // value is rejected here rather than reaching the pill's status-badge lookup and throwing.
-function isChatGitChangeDescriptionStatus(
-  value: unknown,
-): value is ChatGitChangeDescriptionStatus {
+function isChatGitChangeDescriptionStatus(value: unknown): value is ChatGitChangeDescriptionStatus {
   return typeof value === "string" && CHAT_GIT_CHANGE_DESCRIPTION_STATUS_SET.has(value);
 }
 

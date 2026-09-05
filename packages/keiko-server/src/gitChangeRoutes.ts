@@ -80,7 +80,8 @@ const SAFE_MESSAGES: Readonly<Record<GitChangeErrorCode, string>> = {
   GIT_CHANGE_CHAT_NOT_FOUND: "The chat does not exist.",
   GIT_CHANGE_SCOPE_NOT_FOUND: "No connected git-change scope matches this relationship.",
   GIT_CHANGE_ENGINE_UNAVAILABLE: "The relationship engine is not available.",
-  GIT_CHANGE_SCOPE_LIMIT_REACHED: "This chat already has the maximum number of connected git-change scopes.",
+  GIT_CHANGE_SCOPE_LIMIT_REACHED:
+    "This chat already has the maximum number of connected git-change scopes.",
 };
 
 function errResult(status: number, code: GitChangeErrorCode): RouteResult {

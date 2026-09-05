@@ -531,11 +531,54 @@ interface GitChangePillItemProps {
   readonly t: I18nTranslate;
 }
 
+// Owner audit b1-6 — mirrors `value` on every render (not only at effect time), so an async
+// callback started from an earlier render can still read the LATEST value once it resolves,
+// instead of the one closed over when it started.
+function useLatestRef<T>(value: T): RefObject<T> {
+  const ref = useRef(value);
+  ref.current = value;
+  return ref;
+}
+
 function otherScopes(
   allScopes: readonly ChatGitChangeScope[],
   relationshipId: string,
 ): readonly ChatGitChangeScope[] {
   return allScopes.filter((entry) => entry.relationshipId !== relationshipId);
+}
+
+// Shared busy/error bracketing for both pill actions below — keeps `useGitChangePillActions`
+// itself under the max-lines-per-function bar and removes the duplicated try/setBusy/setError
+// scaffolding the two actions used to repeat.
+async function runGuardedPillAction(
+  setBusy: (busy: boolean) => void,
+  setError: (error: string | null) => void,
+  formatError: (error: unknown, t: I18nTranslate) => string,
+  t: I18nTranslate,
+  action: () => Promise<void>,
+): Promise<void> {
+  setError(null);
+  setBusy(true);
+  try {
+    await action();
+  } catch (error_) {
+    setError(formatError(error_, t));
+  } finally {
+    setBusy(false);
+  }
+}
+
+// Owner audit b1-6 — merges onto the freshest chat, not the one captured when the refresh button
+// was clicked: every field the refresh itself did not change survives whatever landed (a title
+// rename, a connector disconnect, a model switch) while the round trip was in flight.
+function mergeRefreshedChat(
+  latestChat: Chat,
+  allScopes: readonly ChatGitChangeScope[],
+  relationshipId: string,
+  resultScope: ChatGitChangeScope,
+): Chat {
+  const remaining = otherScopes(latestChat.gitChangeScopes ?? allScopes, relationshipId);
+  return { ...latestChat, gitChangeScopes: [...remaining, resultScope] };
 }
 
 interface GitChangePillActions {
@@ -554,52 +597,30 @@ function useGitChangePillActions(props: GitChangePillItemProps): GitChangePillAc
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const disconnectRef = useRef<HTMLButtonElement | null>(null);
-  // Owner audit b1-6 — `chat`/`allScopes` are the render's props, closed over when `runRefresh`
-  // starts. A refresh is a round trip; if the chat changes underneath it (title rename, connector
-  // disconnect, model switch) before the response lands, building the merged chat from those
-  // stale closures would revert every field the in-flight refresh did not itself touch. This ref
-  // is kept current on every render (not only at click time), so the merge below always starts
-  // from the latest committed chat instead of the one captured when the button was pressed.
-  const latestChatRef = useRef(chat);
-  latestChatRef.current = chat;
+  const latestChatRef = useLatestRef(chat);
 
   async function runDisconnect(): Promise<void> {
-    setError(null);
-    setBusy(true);
-    // Capture the stable header ancestor before this pill unmounts (mirrors ConnectedScopePill).
-    const header = disconnectRef.current?.closest(".chat-scope-header");
-    try {
+    await runGuardedPillAction(setBusy, setError, formatDisconnectErrorMessage, t, async () => {
+      // Capture the stable header ancestor before this pill unmounts (mirrors ConnectedScopePill).
+      const header = disconnectRef.current?.closest(".chat-scope-header");
       const remaining = otherScopes(allScopes, scope.relationshipId);
       const response = await updateScopes(chat.id, remaining.length > 0 ? remaining : null);
       onDisconnect?.(response.chat);
       restoreScopeHeaderFocus(header);
-    } catch (error_) {
-      setError(formatDisconnectErrorMessage(error_, t));
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   async function runRefresh(): Promise<void> {
-    setError(null);
-    setBusy(true);
-    try {
+    await runGuardedPillAction(setBusy, setError, formatRefreshErrorMessage, t, async () => {
       const result = await refreshScope(chat.id, scope.relationshipId);
       if (result.status === "blocked") {
         setError(gitChangeBlockedReasonMessage(result.reason, t));
         return;
       }
-      // Merge onto the freshest chat, not the one captured when the button was clicked (b1-6):
-      // every field the refresh itself did not change survives whatever landed while it was in
-      // flight.
-      const latestChat = latestChatRef.current;
-      const remaining = otherScopes(latestChat.gitChangeScopes ?? allScopes, scope.relationshipId);
-      onRefreshed?.({ ...latestChat, gitChangeScopes: [...remaining, result.scope] });
-    } catch (error_) {
-      setError(formatRefreshErrorMessage(error_, t));
-    } finally {
-      setBusy(false);
-    }
+      onRefreshed?.(
+        mergeRefreshedChat(latestChatRef.current, allScopes, scope.relationshipId, result.scope),
+      );
+    });
   }
 
   return {

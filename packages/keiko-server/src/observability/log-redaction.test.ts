@@ -736,12 +736,12 @@ describe("issue intake client diagnostic redaction", () => {
 // marker. Failing-before: `redactLogFields({ clientNote })` returned `{ clientNote: "[redacted:shape]" }`
 // instead of preserving the closed "clone"/"open" note.
 describe("git repository dialog handoff client diagnostic redaction (b3-21)", () => {
-  it.each(["[keiko] git repository dialog handoff: clone", "[keiko] git repository dialog handoff: open"])(
-    "preserves the closed dialog-handoff note %s",
-    (clientNote) => {
-      expect(redactLogFields({ clientNote })).toEqual({ clientNote });
-    },
-  );
+  it.each([
+    "[keiko] git repository dialog handoff: clone",
+    "[keiko] git repository dialog handoff: open",
+  ])("preserves the closed dialog-handoff note %s", (clientNote) => {
+    expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+  });
 
   it.each([
     "[keiko] git repository dialog handoff: /private/customer.txt",

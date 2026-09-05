@@ -162,7 +162,10 @@ describe("bound catalog dispatch", () => {
     const contextFailure = new Error("context-source-unavailable");
     const diagnosticsRecord = vi.fn<ServerDiagnosticSink["record"]>();
     const binder = createCatalogToolBinder(
-      { ...fixture.input, logPort: { primary: fixture.primary, diagnostics: { record: diagnosticsRecord } } },
+      {
+        ...fixture.input,
+        logPort: { primary: fixture.primary, diagnostics: { record: diagnosticsRecord } },
+      },
       {
         ...fixture.options,
         context: () => {

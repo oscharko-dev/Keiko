@@ -1177,7 +1177,7 @@ export class CodingRuntimeOrchestrator {
     // authority-resolution-failed, from the moment the initial turn was accepted onward (epic
     // #3384). Advancing here restores the same one-bump-per-accepted-dispatch invariant every
     // other guarded mutation already provides.
-    if (initialTurn === "accepted") return this.transitionActive("running");
+    if (initialTurn === "accepted") return this.advanceRevision(runningInternal, "task-submitted");
     if (initialTurn === "failed") {
       recordRuntimeStartFailure(this.deps.diagnostics, runId, "initial-turn-dispatch");
       return this.transitionActive("failed", "runtime-failed");

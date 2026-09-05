@@ -943,6 +943,14 @@
       "count": 4
     }
   },
+  "src/app/components/desktop/widgets/cards/GovernedPullRequestCard.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
   "src/app/components/desktop/widgets/cards/MultiRootFilesWidget.a11y.test.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
       "count": 1
@@ -1102,12 +1110,22 @@
       "count": 2
     }
   },
+  "src/app/components/desktop/widgets/cards/git-client/DiffPane.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
   "src/app/components/desktop/widgets/cards/git-client/DiffPane.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
       "count": 1
     },
     "max-lines-per-function": {
       "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/GitClientWindow.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 3
     }
   },
   "src/app/components/desktop/widgets/cards/git-client/GitClientWindow.tsx": {
@@ -1154,6 +1172,11 @@
     "@typescript-eslint/explicit-function-return-type": {
       "count": 1
     },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/git-client-seam.ts": {
     "max-lines-per-function": {
       "count": 1
     }
