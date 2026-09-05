@@ -5,8 +5,11 @@ import { CodingRuntimeOperationCoordinator } from "./codingRuntimeOperationCoord
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import type { CodingRuntimeOrchestratorResult } from "./codingRuntimeOrchestratorTypes.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
+import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
 import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
 import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.js";
+import { createProductionRuntimeQuestionPort } from "./productionCodingRuntimeQuestionPort.js";
+import { createProductionRuntimeOperationGuard } from "./productionCodingRuntimePorts.js";
 
 type CodingRuntimePublicSnapshot = Extract<
   CodingRuntimeOrchestratorResult,
@@ -205,6 +208,42 @@ describe("CodingRuntimeOperationCoordinator", () => {
     ).resolves.toEqual({ ok: false, failureCode: "authority-resolution-failed" });
   });
 
+  it.each(["missing-run", "missing-port", "revoked", "runtime-refusal", "runtime-error"])(
+    "preserves authority failure for a production question %s",
+    async (condition) => {
+      const runs = new Map([
+        [
+          "run-1",
+          {
+            questionPort:
+              condition === "missing-port"
+                ? undefined
+                : questionPort({
+                    answer: () =>
+                      condition === "runtime-error"
+                        ? Promise.reject(new Error("protocol unavailable"))
+                        : Promise.resolve(false),
+                  }),
+            operationGuard: createProductionRuntimeOperationGuard(
+              "run-1",
+              () => condition !== "revoked",
+            ),
+          },
+        ],
+      ]);
+      if (condition === "missing-run") runs.clear();
+      const subject = coordinator({ port: createProductionRuntimeQuestionPort(runs) });
+      await expect(
+        subject.answerQuestion("run-1", {
+          requestId: "req-valid-answer",
+          expectedRevision: 3,
+          questionId: "que_1",
+          answers: [["Continue"]],
+        }),
+      ).resolves.toEqual({ ok: false, failureCode: "authority-resolution-failed" });
+    },
+  );
+
   it("rejects malformed answers before touching the question surface", async () => {
     const port = questionPort();
     const subject = coordinator({ port });
@@ -243,10 +282,13 @@ describe("CodingRuntimeOperationCoordinator", () => {
     });
   });
 
-  it("reports a runtime-refused answer as question-answer-rejected and leaves its request id retryable", async () => {
+  it("reports a typed incompatible answer as question-answer-rejected and leaves its request id retryable", async () => {
     let calls = 0;
     const port = questionPort({
-      answer: () => Promise.resolve(++calls > 1),
+      answer: () =>
+        ++calls > 1
+          ? Promise.resolve(true)
+          : Promise.reject(new CodingRuntimeQuestionAnswerRejectedError()),
     });
     const subject = coordinator({ port });
     const answer = {

@@ -1592,6 +1592,10 @@ describe("private OpenCode run control", () => {
         fixture.runtime.runPort.answerQuestion(FIXTURE_RUN_ID, "que_other", [["Approve"]]),
       ).resolves.toBe(false);
       await expect(
+        fixture.runtime.runPort.answerQuestion(FIXTURE_RUN_ID, "que_fixed", []),
+      ).rejects.toThrow("question-answer-rejected");
+      expect(questionRequests).toEqual([]);
+      await expect(
         fixture.runtime.runPort.rejectQuestion("unknown-run", "que_fixed"),
       ).resolves.toBe(false);
       await expect(

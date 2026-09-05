@@ -8,6 +8,7 @@ import { journeyFixture } from "../gitDelivery/journeyOutcomeTest/_support.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { MIGRATIONS, runMigrations } from "./schema.js";
+import { rewindSchemaFixture } from "./legacySchemaTestFixture.js";
 
 // Exact V27 table shipped in 9219079e, before its in-place rewrite in 799c4900.
 const ORIGINAL_V27 = `CREATE TABLE git_journey_outcomes (
@@ -52,6 +53,44 @@ function seedLegacy(db: DatabaseSync): ReturnType<typeof produceJourneyOutcome> 
 }
 
 describe("V32 upgrades the original journey outcome table", () => {
+  it("rewinds to the actual V31 blob shape before exercising the forward migration", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      runMigrations(db);
+      rewindSchemaFixture(db, 31);
+      const columns = db.prepare("PRAGMA table_info(git_journey_outcomes)").all();
+      expect(columns.map((column) => column.name)).toContain("outcome_json");
+      expect(columns.map((column) => column.name)).not.toContain("head_sha");
+      const outcome = seedLegacy(db);
+      runMigrations(db);
+      expect(
+        createGitJourneyOutcomeStore(db).get(
+          outcome.binding.remoteDigest,
+          outcome.binding.prNumber,
+        ),
+      ).toMatchObject({
+        revision: 7,
+        headSha: outcome.binding.headSha,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("refuses to invent legacy outcome facts from an existing bounded row", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      runMigrations(db);
+      const outcome = produceJourneyOutcome(journeyFixture());
+      expect(createGitJourneyOutcomeStore(db).record(outcome)).toBe(true);
+      expect(() => rewindSchemaFixture(db, 31)).toThrow("Seed legacy journey rows after rewinding");
+      expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(32);
+      expect(db.prepare("SELECT COUNT(*) AS count FROM git_journey_outcomes").get()?.count).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
   it("keeps an already-upgraded projection unchanged", () => {
     const db = new DatabaseSync(":memory:");
     try {

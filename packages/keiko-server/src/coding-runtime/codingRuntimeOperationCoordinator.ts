@@ -7,6 +7,7 @@ import type { CodingWorkbenchRuntimeQuestionAnswerRequest } from "@oscharko-dev/
 import { parseCodingWorkbenchRuntimeQuestionAnswerRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
+import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
 import type {
@@ -255,9 +256,15 @@ export class CodingRuntimeOperationCoordinator {
         questionId: operation.value.questionId,
         answers: operation.value.answers,
       });
-      return accepted ? { ok: true } : { ok: false, reason: "question-answer-rejected" };
-    } catch {
-      return { ok: false, reason: "authority-resolution-failed" };
+      return accepted ? { ok: true } : { ok: false, reason: "authority-resolution-failed" };
+    } catch (error) {
+      return {
+        ok: false,
+        reason:
+          error instanceof CodingRuntimeQuestionAnswerRejectedError
+            ? "question-answer-rejected"
+            : "authority-resolution-failed",
+      };
     }
   }
 

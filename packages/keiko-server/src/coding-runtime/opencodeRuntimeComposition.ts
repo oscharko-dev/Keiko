@@ -70,6 +70,7 @@ import {
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeToolSchemas.js";
+import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
 
 const PINNED_RAW_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
 const DIGEST = /^[a-f0-9]{64}$/u;
@@ -486,9 +487,12 @@ function createQuestionRunPort(readyRun: ReadyRunLookup): QuestionRunPort {
         const pending = (await run.client.listQuestions()).find(
           (request) => request.id === requestId && request.sessionID === run.sessionId,
         );
-        if (pending === undefined || !answersMatchQuestions(pending, answers)) return false;
+        if (pending === undefined || !run.ready) return false;
+        if (!answersMatchQuestions(pending, answers))
+          throw new CodingRuntimeQuestionAnswerRejectedError();
         return (await run.client.answerQuestion(requestId, answers)) && run.ready;
-      } catch {
+      } catch (error) {
+        if (error instanceof CodingRuntimeQuestionAnswerRejectedError) throw error;
         return false;
       }
     },

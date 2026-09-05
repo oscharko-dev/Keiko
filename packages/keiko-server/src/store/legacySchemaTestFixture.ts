@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { SCHEMA_VERSION } from "./schema.js";
+import { MIGRATIONS, SCHEMA_VERSION } from "./schema.js";
 
 const V13_SCHEMA_VERSION = 13;
 
@@ -13,7 +13,7 @@ interface VersionRollback {
   readonly sql: string;
 }
 
-// One rollback fragment per forward migration (V14..V29), each undoing EXACTLY what that
+// One rollback fragment per structural forward migration (V14..V32), undoing what that
 // migration's own `V<n>_SQL` in schema.ts added to reach it — never more, never less — so a rewind
 // can stop at any intermediate version and leave every earlier version's data and shape untouched.
 // Declared newest-first (descending): dropping the newest objects before older ones is always safe
@@ -22,9 +22,14 @@ interface VersionRollback {
 // both compose from this ONE list — neither restates a migration's DDL of its own, and a future
 // migration is covered the moment its own rollback fragment is appended here.
 //
-// V20 has no fragment: it only widens a `failure_code` CHECK on `coding_runtime_snapshots` (no
+// V20/V30 have no fragments: they only widen a `failure_code` CHECK on `coding_runtime_snapshots` (no
 // column added), so there is nothing to structurally undo at fixture granularity.
 const ROLLBACKS: readonly VersionRollback[] = [
+  { version: 32, sql: `DROP TABLE git_journey_outcomes;\n${originalJourneyTableSql()}` },
+  {
+    version: 31,
+    sql: `ALTER TABLE coding_runtime_description_jobs DROP COLUMN generation_binding;`,
+  },
   { version: 29, sql: `DROP TABLE coding_runtime_description_jobs;` },
   {
     version: 28,
@@ -193,6 +198,20 @@ const ROLLBACKS: readonly VersionRollback[] = [
   { version: 14, sql: `DROP TABLE workspace_trust_records;` },
 ];
 
+function originalJourneyTableSql(): string {
+  const migration = MIGRATIONS.find((entry) => entry.version === 27);
+  if (migration === undefined) throw new Error("Missing original journey table migration");
+  return migration.sql;
+}
+
+function assertJourneyRewindIsLossless(db: DatabaseSync, targetVersion: number): void {
+  if (targetVersion < 27 || targetVersion >= 32) return;
+  const row = db.prepare("SELECT COUNT(*) AS count FROM git_journey_outcomes").get();
+  // V32 deliberately discards the full outcome. It cannot be reconstructed from the bounded
+  // projection. Seed historical journey rows after rewinding instead of inventing lost facts.
+  if (row?.count !== 0) throw new Error("Seed legacy journey rows after rewinding the schema");
+}
+
 /** Every rollback fragment for a migration strictly newer than `targetVersion`, newest first. */
 function rollbackSqlAbove(targetVersion: number): string {
   return ROLLBACKS.filter((step) => step.version > targetVersion)
@@ -233,6 +252,7 @@ export function rewindSchemaFixture(db: DatabaseSync, targetVersion: number): vo
     );
   }
   if (targetVersion < SCHEMA_VERSION) {
+    assertJourneyRewindIsLossless(db, targetVersion);
     db.exec(`${rollbackSqlAbove(targetVersion)}\nPRAGMA user_version = ${String(targetVersion)};`);
   }
   if (userVersion(db) !== targetVersion) {
