@@ -226,6 +226,24 @@ interface PrAsync extends PrAsyncState {
   readonly runExecute: (input: GitDeliveryPrInput) => void;
 }
 
+// #3387: mints the approval the create/update mutation now requires unconditionally FIRST, from the
+// EXACT SAME input, then attaches the returned claim to the identical input before execute — the
+// mint route binds to that exact typed command, so the claim it returns is redeemable only for this
+// same target/title/body combination (mirrors GovernedMergeCard's runExecute). `prApprove` is
+// optional on the client (see GovernedPullRequestClient) — when absent, execute runs unapproved,
+// exactly as it did before #3387 (the BFF route itself is the fail-closed backstop).
+function withMintedPrApproval(
+  client: GovernedPullRequestClient,
+  input: GitDeliveryPrInput,
+): Promise<GitDeliveryPrInput> {
+  const prApprove = client.prApprove;
+  if (prApprove === undefined) return Promise.resolve(input);
+  return prApprove(input).then((approved): GitDeliveryPrInput => ({
+    ...input,
+    approval: approved.approval,
+  }));
+}
+
 function useGovernedPrActions(client: GovernedPullRequestClient): PrAsync {
   const [state, setState] = useState<PrAsyncState>({
     preview: null,
@@ -261,22 +279,11 @@ function useGovernedPrActions(client: GovernedPullRequestClient): PrAsync {
     [client, handleError],
   );
 
-  // #3387: mints the approval the create/update mutation now requires unconditionally FIRST, from
-  // the EXACT SAME input, then attaches the returned claim to the identical input before execute —
-  // the mint route binds to that exact typed command, so the claim it returns is redeemable only
-  // for this same target/title/body combination (mirrors GovernedMergeCard's runExecute).
   const runExecute = useCallback(
     (input: GitDeliveryPrInput): void => {
       const token = (seq.current += 1);
       setState((s) => ({ ...s, busy: true, error: null, outcome: null }));
-      const prApprove = client.prApprove;
-      const readyToExecute: Promise<GitDeliveryPrInput> =
-        prApprove === undefined
-          ? Promise.resolve(input)
-          : prApprove(input).then(
-              (approved): GitDeliveryPrInput => ({ ...input, approval: approved.approval }),
-            );
-      void readyToExecute
+      void withMintedPrApproval(client, input)
         .then((executeInput) => client.prExecute(executeInput))
         .then((outcome) => {
           if (token !== seq.current) return;
@@ -619,6 +626,54 @@ interface RequiredPrDescriptionClient {
   readonly prDescriptionApply: typeof fetchGitDeliveryPrDescriptionApply;
 }
 
+// Shared sequencing for the three description actions below: increments the guard token, marks
+// busy, dispatches `run()`, and on the still-current response applies `onSettled`'s state patch — a
+// stale (superseded) response is silently dropped, mirroring useGovernedPrActions' own seq guard.
+function dispatchDescriptionAction<T>(
+  seq: { current: number },
+  setState: (updater: (s: DescriptionAsyncState) => DescriptionAsyncState) => void,
+  handleError: (err: unknown, token: number) => void,
+  run: () => Promise<T>,
+  onSettled: (value: T) => Partial<DescriptionAsyncState>,
+): void {
+  const token = (seq.current += 1);
+  setState((s) => ({ ...s, busy: true, error: null }));
+  void run()
+    .then((value) => {
+      if (token !== seq.current) return;
+      setState((s) => ({ ...s, ...onSettled(value) }));
+    })
+    .catch((err: unknown) => handleError(err, token));
+}
+
+function descriptionPreviewAction(
+  client: RequiredPrDescriptionClient,
+  seq: { current: number },
+  setState: (updater: (s: DescriptionAsyncState) => DescriptionAsyncState) => void,
+  handleError: (err: unknown, token: number) => void,
+  input: GitDeliveryPrDescriptionPreviewInput,
+): void {
+  const target: GitDeliveryPrDescriptionTarget = {
+    projectId: input.projectId,
+    ownerAndRepo: input.ownerAndRepo,
+    prNumber: input.prNumber,
+  };
+  dispatchDescriptionAction(
+    seq,
+    setState,
+    handleError,
+    () => client.prDescriptionPreview(input),
+    (result) => ({
+      result,
+      target,
+      proposalId: result.outcome === "preview" ? result.preview.proposalId : null,
+      approved: false,
+    }),
+  );
+}
+
+// The returned object is rebuilt every render regardless (it spreads `state`), so wrapping these in
+// `useCallback` would buy no referential stability — plain closures keep the hook itself short.
 function useGovernedPrDescriptionActions(
   client: RequiredPrDescriptionClient | undefined,
 ): DescriptionAsync {
@@ -632,62 +687,47 @@ function useGovernedPrDescriptionActions(
   });
   const seq = useRef(0);
 
-  const handleError = useCallback((err: unknown, token: number): void => {
+  const handleError = (err: unknown, token: number): void => {
     if (token !== seq.current) return;
     setState((s) => ({ ...s, busy: false, error: formatError(err) }));
-  }, []);
+  };
 
-  const runPreview = useCallback(
-    (input: GitDeliveryPrDescriptionPreviewInput): void => {
-      if (client === undefined) return;
-      const token = (seq.current += 1);
-      const target: GitDeliveryPrDescriptionTarget = {
-        projectId: input.projectId,
-        ownerAndRepo: input.ownerAndRepo,
-        prNumber: input.prNumber,
-      };
-      setState((s) => ({ ...s, busy: true, error: null }));
-      void client
-        .prDescriptionPreview(input)
-        .then((result) => {
-          if (token !== seq.current) return;
-          const proposalId = result.outcome === "preview" ? result.preview.proposalId : null;
-          setState({ result, target, proposalId, approved: false, error: null, busy: false });
-        })
-        .catch((err: unknown) => handleError(err, token));
-    },
-    [client, handleError],
-  );
+  const runPreview = (input: GitDeliveryPrDescriptionPreviewInput): void => {
+    if (client === undefined) return;
+    descriptionPreviewAction(client, seq, setState, handleError, input);
+  };
 
-  const runApprove = useCallback((): void => {
+  const runApprove = (): void => {
     if (client === undefined || state.proposalId === null || state.target === null) return;
-    const token = (seq.current += 1);
     const { target, proposalId } = state;
-    setState((s) => ({ ...s, busy: true, error: null }));
-    void client
-      .prDescriptionApprove({ ...target, proposalId })
-      .then(() => {
-        if (token !== seq.current) return;
-        setState((s) => ({ ...s, busy: false, approved: true }));
-      })
-      .catch((err: unknown) => handleError(err, token));
-  }, [client, handleError, state]);
+    dispatchDescriptionAction(
+      seq,
+      setState,
+      handleError,
+      () => client.prDescriptionApprove({ ...target, proposalId }),
+      () => ({ approved: true }),
+    );
+  };
 
-  const runApply = useCallback((): void => {
-    if (client === undefined || state.proposalId === null || state.target === null || !state.approved)
+  const runApply = (): void => {
+    if (
+      client === undefined ||
+      state.proposalId === null ||
+      state.target === null ||
+      !state.approved
+    ) {
       return;
-    const token = (seq.current += 1);
+    }
     const { target, proposalId } = state;
-    setState((s) => ({ ...s, busy: true, error: null }));
-    void client
-      .prDescriptionApply({ ...target, proposalId })
-      .then((result) => {
-        if (token !== seq.current) return;
-        // One-use: a spent approval never carries forward to a second apply of the same preview.
-        setState({ result, target: null, proposalId: null, approved: false, error: null, busy: false });
-      })
-      .catch((err: unknown) => handleError(err, token));
-  }, [client, handleError, state]);
+    dispatchDescriptionAction(
+      seq,
+      setState,
+      handleError,
+      () => client.prDescriptionApply({ ...target, proposalId }),
+      // One-use: a spent approval never carries forward to a second apply of the same preview.
+      (result) => ({ result, target: null, proposalId: null, approved: false }),
+    );
+  };
 
   return { ...state, runPreview, runApprove, runApply };
 }
@@ -701,7 +741,9 @@ function descriptionStateOf(
   return "blocked";
 }
 
-function descriptionReasonOf(result: PrDescriptionApplicationResultWire | null): string | undefined {
+function descriptionReasonOf(
+  result: PrDescriptionApplicationResultWire | null,
+): string | undefined {
   if (result === null) return undefined;
   if (result.outcome === "preview") return result.preview.status.reason;
   if (result.outcome === "observed") return result.status.reason;
@@ -765,17 +807,63 @@ function PrDescriptionPreviewBody({
   );
 }
 
-function PrDescriptionFields({
-  form,
-  busy,
-  onChange,
-}: {
+interface DescriptionFieldsProps {
   readonly form: DescriptionForm;
   readonly busy: boolean;
   readonly onChange: <K extends keyof DescriptionForm>(key: K, value: DescriptionForm[K]) => void;
-}): ReactNode {
+}
+
+function PrDescriptionPrNumberField({ form, busy, onChange }: DescriptionFieldsProps): ReactNode {
   const prNumberHintId = useId();
   const prNumberInvalid = form.prNumber !== "" && !isValidDescriptionPrNumber(form.prNumber);
+  return (
+    <label style={{ ...LABEL_STYLE, flex: 1 }}>
+      Pull Request number{" "}
+      <input
+        style={FIELD_STYLE}
+        inputMode="numeric"
+        value={form.prNumber}
+        disabled={busy}
+        onChange={(e) => onChange("prNumber", e.target.value)}
+        aria-label="Description pull request number"
+        aria-invalid={prNumberInvalid}
+        aria-describedby={prNumberInvalid ? prNumberHintId : undefined}
+      />
+      {prNumberInvalid ? (
+        <p
+          id={prNumberHintId}
+          style={{ font: "var(--text-caption)", color: "var(--feedback-danger)", margin: 0 }}
+        >
+          Enter the numeric Pull Request number, for example 1499.
+        </p>
+      ) : null}
+    </label>
+  );
+}
+
+function PrDescriptionLanguageField({ form, busy, onChange }: DescriptionFieldsProps): ReactNode {
+  return (
+    <label style={{ ...LABEL_STYLE, flex: 1 }}>
+      Language{" "}
+      <select
+        style={FIELD_STYLE}
+        value={form.language}
+        disabled={busy}
+        onChange={(e) => onChange("language", e.target.value as PrDescriptionLanguage)}
+        aria-label="Description language"
+      >
+        {PR_DESCRIPTION_LANGUAGES.map((language) => (
+          <option key={language} value={language}>
+            {language.toUpperCase()}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function PrDescriptionFields(props: DescriptionFieldsProps): ReactNode {
+  const { form, busy, onChange } = props;
   return (
     <div style={ROW_STYLE}>
       <label style={{ ...LABEL_STYLE, flex: 1 }}>
@@ -788,43 +876,8 @@ function PrDescriptionFields({
           aria-label="Description repository (owner/repo)"
         />
       </label>
-      <label style={{ ...LABEL_STYLE, flex: 1 }}>
-        Pull Request number{" "}
-        <input
-          style={FIELD_STYLE}
-          inputMode="numeric"
-          value={form.prNumber}
-          disabled={busy}
-          onChange={(e) => onChange("prNumber", e.target.value)}
-          aria-label="Description pull request number"
-          aria-invalid={prNumberInvalid}
-          aria-describedby={prNumberInvalid ? prNumberHintId : undefined}
-        />
-        {prNumberInvalid ? (
-          <p
-            id={prNumberHintId}
-            style={{ font: "var(--text-caption)", color: "var(--feedback-danger)", margin: 0 }}
-          >
-            Enter the numeric Pull Request number, for example 1499.
-          </p>
-        ) : null}
-      </label>
-      <label style={{ ...LABEL_STYLE, flex: 1 }}>
-        Language{" "}
-        <select
-          style={FIELD_STYLE}
-          value={form.language}
-          disabled={busy}
-          onChange={(e) => onChange("language", e.target.value as PrDescriptionLanguage)}
-          aria-label="Description language"
-        >
-          {PR_DESCRIPTION_LANGUAGES.map((language) => (
-            <option key={language} value={language}>
-              {language.toUpperCase()}
-            </option>
-          ))}
-        </select>
-      </label>
+      <PrDescriptionPrNumberField {...props} />
+      <PrDescriptionLanguageField {...props} />
     </div>
   );
 }
@@ -901,6 +954,70 @@ function descriptionRefreshHint(
   );
 }
 
+// Present only once ALL three description methods are on the injected client (Frozen Decision 7:
+// the whole preview -> approve -> apply lifecycle or none of it) — never a partially wired panel.
+function requiredPrDescriptionClient(
+  client: GovernedPullRequestClient,
+): RequiredPrDescriptionClient | undefined {
+  const { prDescriptionPreview, prDescriptionApprove, prDescriptionApply } = client;
+  if (
+    prDescriptionPreview === undefined ||
+    prDescriptionApprove === undefined ||
+    prDescriptionApply === undefined
+  ) {
+    return undefined;
+  }
+  return { prDescriptionPreview, prDescriptionApprove, prDescriptionApply };
+}
+
+interface DescriptionPanelFlags {
+  readonly stillValid: boolean;
+  readonly hasPreviewed: boolean;
+  readonly visibleResult: PrDescriptionApplicationResultWire | null;
+  readonly state: PrDescriptionApplicationStatus["state"] | undefined;
+  readonly canPreview: boolean;
+  readonly canApprove: boolean;
+  readonly canApply: boolean;
+}
+
+type DescriptionVisibility = Pick<
+  DescriptionPanelFlags,
+  "stillValid" | "hasPreviewed" | "visibleResult" | "state"
+>;
+
+// A preview/approval is shown only while the form still names the exact target it was produced for
+// — mirrors GovernedPullRequestBody's previewedKey/targetKey gate for the create/update form above,
+// applied to the description lifecycle's own (ownerAndRepo, prNumber) target.
+function derivePrDescriptionVisibility(form: DescriptionForm, async: DescriptionAsync): DescriptionVisibility {
+  const targetKey = descriptionTargetKeyOf(form.ownerAndRepo, form.prNumber);
+  const previewedKey =
+    async.target === null
+      ? ""
+      : descriptionTargetKeyOf(async.target.ownerAndRepo, String(async.target.prNumber));
+  const stillValid = previewedKey !== "" && previewedKey === targetKey;
+  const visibleResult = stillValid ? async.result : null;
+  return {
+    stillValid,
+    hasPreviewed: async.target !== null,
+    visibleResult,
+    state: stillValid ? descriptionStateOf(visibleResult) : undefined,
+  };
+}
+
+function derivePrDescriptionPanelFlags(
+  form: DescriptionForm,
+  async: DescriptionAsync,
+): DescriptionPanelFlags {
+  const visibility = derivePrDescriptionVisibility(form, async);
+  const { stillValid, state } = visibility;
+  return {
+    ...visibility,
+    canPreview: form.ownerAndRepo !== "" && isValidDescriptionPrNumber(form.prNumber),
+    canApprove: stillValid && async.proposalId !== null && !async.approved && state !== "stale",
+    canApply: stillValid && async.proposalId !== null && async.approved && state !== "stale",
+  };
+}
+
 function PrDescriptionPanel({
   client,
   projectId,
@@ -917,33 +1034,12 @@ function PrDescriptionPanel({
     },
     [],
   );
-  // Present only once ALL three description methods are on the injected client (Frozen Decision 7:
-  // the whole preview -> approve -> apply lifecycle or none of it) — never a partially wired panel.
-  const descriptionClient: RequiredPrDescriptionClient | undefined =
-    client.prDescriptionPreview === undefined ||
-    client.prDescriptionApprove === undefined ||
-    client.prDescriptionApply === undefined
-      ? undefined
-      : {
-          prDescriptionPreview: client.prDescriptionPreview,
-          prDescriptionApprove: client.prDescriptionApprove,
-          prDescriptionApply: client.prDescriptionApply,
-        };
+  const descriptionClient = requiredPrDescriptionClient(client);
   const async = useGovernedPrDescriptionActions(descriptionClient);
-
-  const targetKey = descriptionTargetKeyOf(form.ownerAndRepo, form.prNumber);
-  const previewedKey =
-    async.target === null ? "" : descriptionTargetKeyOf(async.target.ownerAndRepo, String(async.target.prNumber));
-  const stillValid = previewedKey !== "" && previewedKey === targetKey;
-  const visibleResult = stillValid ? async.result : null;
-  const state = stillValid ? descriptionStateOf(visibleResult) : undefined;
-
-  const canPreview = form.ownerAndRepo !== "" && isValidDescriptionPrNumber(form.prNumber);
-  const canApprove = stillValid && async.proposalId !== null && !async.approved && state !== "stale";
-  const canApply = stillValid && async.proposalId !== null && async.approved && state !== "stale";
+  const flags = derivePrDescriptionPanelFlags(form, async);
 
   const onPreview = useCallback((): void => {
-    if (!canPreview) return;
+    if (!flags.canPreview) return;
     async.runPreview({
       projectId,
       ownerAndRepo: form.ownerAndRepo,
@@ -951,7 +1047,15 @@ function PrDescriptionPanel({
       language: form.language,
       ...(form.refinement === "" ? {} : { refinement: form.refinement }),
     });
-  }, [async, canPreview, form.language, form.ownerAndRepo, form.prNumber, form.refinement, projectId]);
+  }, [
+    async,
+    flags.canPreview,
+    form.language,
+    form.ownerAndRepo,
+    form.prNumber,
+    form.refinement,
+    projectId,
+  ]);
 
   if (descriptionClient === undefined) return null;
 
@@ -977,16 +1081,16 @@ function PrDescriptionPanel({
       </label>
       <PrDescriptionButtons
         busy={async.busy}
-        canPreview={canPreview}
-        canApprove={canApprove}
-        canApply={canApply}
+        canPreview={flags.canPreview}
+        canApprove={flags.canApprove}
+        canApply={flags.canApply}
         onPreview={onPreview}
         onApprove={async.runApprove}
         onApply={async.runApply}
       />
-      {descriptionRefreshHint(async.target !== null, stillValid, state)}
-      <PrDescriptionStatusBadge result={visibleResult} />
-      <PrDescriptionPreviewBody result={visibleResult} />
+      {descriptionRefreshHint(flags.hasPreviewed, flags.stillValid, flags.state)}
+      <PrDescriptionStatusBadge result={flags.visibleResult} />
+      <PrDescriptionPreviewBody result={flags.visibleResult} />
       {async.error !== null ? (
         <p role="alert" style={{ font: "var(--text-body-sm)", color: "var(--feedback-danger)" }}>
           <InfoIcon size={12} /> {async.error}

@@ -5,18 +5,25 @@
 //       identity, the base/head SHAs the caller currently observes, a digest over the readiness
 //       snapshot that justified the proposal, and a digest over the transition payload itself — never
 //       a title/body/base PATCH, which this intent never carries.
-//   * POST /api/git-delivery/pr/mark-ready/execute — Governed. Re-reads the live PR identity
-//       IMMEDIATELY BEFORE the mutation and refuses (drift, no spawn) unless it still matches the
-//       claim's bound head/base SHA and the PR is still a draft; runs ONLY the existing
-//       `buildPrMarkReadyGraphqlArgv` GraphQL mutation (git-pr-node.ts) — no PATCH; then re-reads the
-//       PR identity again and reports success only when the read-back confirms `isDraft === false` on
-//       the same head. Any mismatch at either read revokes the claim's effect and performs nothing
-//       further. The transition is reachable ONLY through this route (correction 1): the generic
-//       `pr-update` command rejects `convertFromDraft` unconditionally (prRoutes.ts).
+//   * POST /api/git-delivery/pr/mark-ready/execute — Governed. Immediately before the mutation,
+//       re-reads the live PR identity (refuses, no spawn, on any head/base/draft mismatch against the
+//       claim) AND independently re-derives the live requirements/conflict facts (the SAME
+//       `assessGitCiFacts` requirements digest the journey read's `ReadinessSnapshot` carries) and
+//       refuses on a digest mismatch, an incomplete read, or a live merge conflict — a readinessDigest
+//       is never merely trusted from the client, mint or otherwise (#3389 repair, correction 2). It
+//       then runs ONLY the existing `buildPrMarkReadyGraphqlArgv` GraphQL mutation (git-pr-node.ts) —
+//       no PATCH; then re-reads the PR identity again and reports success only when the read-back
+//       confirms `isDraft === false` on the same head. Any mismatch at any read revokes the claim's
+//       effect and performs nothing further. The transition is reachable ONLY through this route
+//       (correction 1): the generic `pr-update` command rejects `convertFromDraft` unconditionally
+//       (prRoutes.ts).
 //
-// The coding runtime exposes neither merge, auto-merge scheduling, nor issue-close mutations: the only
-// spawn this execute path can ever produce is a PR-identity read or the fixed
-// `markPullRequestReadyForReview` GraphQL mutation (git-pr-node.test.ts pins this structurally).
+// The coding runtime exposes neither merge, auto-merge scheduling, nor issue-close mutations: every
+// spawn this execute path can ever produce is a PR-identity read, a bounded read-only CI-facts read
+// (`createNodeGitCiReader` — the same read-only port the CI observation service and the journey read
+// already use), or the fixed `markPullRequestReadyForReview` GraphQL mutation (git-pr-node.test.ts
+// pins the mutation's own adapter structurally; none of these reads reference a merge or issue-close
+// endpoint).
 //
 // Content-free in evidence: only ids, digests, states and counts leave this module on the activity
 // log — never a title, body, or raw provider payload.
@@ -29,7 +36,13 @@ import type {
   GitPrMarkReadyExecResult,
   GitPullRequestMarkReadyAdapter,
 } from "@oscharko-dev/keiko-tools";
-import { createNodeGitPullRequestAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import {
+  assessGitCiFacts,
+  createNodeGitCiReader,
+  createNodeGitPullRequestAdapter,
+  type GitCiFactsResult,
+  type GitCiProviderReader,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -52,6 +65,7 @@ import {
   isOwnerAndRepo,
   isPlainObject,
   isPrNumberString,
+  isSafeGitRef,
   scanForbiddenStrings,
   scanUnsafeFormatChars,
 } from "./requestGuards.js";
@@ -109,6 +123,7 @@ const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   "prExternalId",
   "headSha",
   "baseSha",
+  "baseRef",
   "readinessDigest",
   "approval",
 ]);
@@ -121,6 +136,11 @@ export interface PrMarkReadyCommand {
   readonly prExternalId: string;
   readonly headSha: string;
   readonly baseSha: string;
+  // The PR's base branch NAME (not a SHA) — carried alongside baseSha purely so the live
+  // requirements/conflict re-read (#3389 repair, correction 2) can address the branch-protection and
+  // required-checks endpoints, which GitHub keys by branch name. Bound like every other field: a
+  // mismatch against the live PR fails the same way a headSha/baseSha mismatch already does.
+  readonly baseRef: string;
   readonly readinessDigest: string;
   readonly currentDraftState: true;
   readonly transitionPayloadDigest: string;
@@ -145,12 +165,20 @@ function transitionPayloadDigest(ownerAndRepo: string, prExternalId: string): st
   );
 }
 
+// A base branch NAME operand (not a SHA): the shared ref guard plus the same "no refs/ prefix"
+// requirement `GitCiReadTarget`'s own builder enforces (git-ci-read-argv.ts), so a malformed value
+// fails this parse with a clean 400 rather than surfacing as a live-read internal error later.
+function isBaseBranchName(value: unknown): value is string {
+  return isSafeGitRef(value) && !value.startsWith("refs/");
+}
+
 function buildMarkReadyCommand(parsed: Record<string, unknown>): PrMarkReadyCommand | undefined {
   if (
     !isOwnerAndRepo(parsed.ownerAndRepo) ||
     !isPrNumberString(parsed.prExternalId) ||
     !isGitObjectId(parsed.headSha) ||
     !isGitObjectId(parsed.baseSha) ||
+    !isBaseBranchName(parsed.baseRef) ||
     !isReadinessDigest(parsed.readinessDigest)
   ) {
     return undefined;
@@ -162,6 +190,7 @@ function buildMarkReadyCommand(parsed: Record<string, unknown>): PrMarkReadyComm
     prExternalId: parsed.prExternalId,
     headSha: parsed.headSha,
     baseSha: parsed.baseSha,
+    baseRef: parsed.baseRef,
     readinessDigest: parsed.readinessDigest,
     currentDraftState: true,
     transitionPayloadDigest: transitionPayloadDigest(parsed.ownerAndRepo, parsed.prExternalId),
@@ -214,6 +243,9 @@ function markReadyApprovalBinding(
 export interface GitDeliveryPrMarkReadyRouteOptions {
   readonly adapterFactory?:
     ((workspace: WorkspaceInfo) => GitPullRequestMarkReadyAdapter) | undefined;
+  // Test-only override seam for the live requirements/conflict re-read (mirrors adapterFactory);
+  // production composition never sets this — it defaults to the real `createNodeGitCiReader`.
+  readonly ciReaderFactory?: ((workspace: WorkspaceInfo) => GitCiProviderReader) | undefined;
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   readonly now?: (() => number) | undefined;
@@ -232,6 +264,58 @@ function markReadyAdapterFor(
     now: options.now ?? Date.now,
     onTerminated: gitDeliveryTerminationHandler(options, correlationId),
   });
+}
+
+function ciReaderFor(
+  workspace: WorkspaceInfo,
+  options: GitDeliveryPrMarkReadyRouteOptions,
+  correlationId: string | undefined,
+  stillAuthorized: () => boolean,
+): GitCiProviderReader {
+  if (options.ciReaderFactory !== undefined) return options.ciReaderFactory(workspace);
+  return createNodeGitCiReader({
+    workspace,
+    processEnv: process.env,
+    now: options.now ?? Date.now,
+    onTerminated: gitDeliveryTerminationHandler(options, correlationId),
+    stillAuthorized,
+  });
+}
+
+// #3389 repair (review finding, correction 2): "re-reading requirements/conflict immediately before
+// execution" — a live, independent re-derivation of the SAME requirements digest the claim's
+// readinessDigest is bound to (assessGitCiFacts's requirementsDigest — the exact value the journey
+// read's ReadinessSnapshot carries), plus the live merge-conflict fact. An incomplete read, a digest
+// mismatch (including one that was never real), or a live conflict all revoke the claim the same way
+// a head/base mismatch does — the digest is never merely trusted from the client. Reuses the same
+// read-only `GitCiProviderReader` port the CI observation service and the journey read already use;
+// no second formula, no new provider read shape.
+async function liveReadinessDrifted(
+  workspace: WorkspaceInfo,
+  options: GitDeliveryPrMarkReadyRouteOptions,
+  correlationId: string,
+  command: PrMarkReadyCommand,
+  stillAuthorized: () => boolean,
+): Promise<boolean> {
+  const reader = ciReaderFor(workspace, options, correlationId, stillAuthorized);
+  let facts: GitCiFactsResult;
+  try {
+    facts = await reader.readFacts({
+      ownerAndRepo: command.ownerAndRepo,
+      prExternalId: command.prExternalId,
+      baseBranchName: command.baseRef,
+      headSha: command.headSha,
+    });
+  } catch {
+    return true;
+  }
+  if (facts.status !== "observed") return true;
+  const assessment = assessGitCiFacts(facts);
+  return (
+    !assessment.complete ||
+    assessment.requirementsDigest !== command.readinessDigest ||
+    assessment.pullRequest.conflict === "conflicting"
+  );
 }
 
 // ─── Logging ────────────────────────────────────────────────────────────────────────────────────
@@ -362,6 +446,9 @@ async function dispatchGovernedMarkReady(
       correlationId,
     );
     return { schemaVersion: "1", outcome: "aborted", durationMs: 0 };
+  }
+  if (await liveReadinessDrifted(workspace, options, correlationId, command, continuityGuard)) {
+    return { schemaVersion: "1", outcome: "failed", durationMs: 0, errorCode: "precondition-failed" };
   }
   const adapter = markReadyAdapterFor(workspace, options, correlationId);
   return adapter.markPullRequestReady({

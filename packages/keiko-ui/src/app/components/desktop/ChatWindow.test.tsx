@@ -474,7 +474,14 @@ describe("ChatWindow cancel button", () => {
     expect(cancelSend).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps connected resource details out of the chat header", () => {
+  // Issue #982 originally pinned this header to the grounding dropdown alone, with no
+  // `.scope-pill` and no `.chat-ctx` blob. Epic #3384 (#3400) reverses the first half: the
+  // desktop connection/relationship engine's ConnectedScopePill is now mounted next to the
+  // grounding control precisely so a connected source is visible with its own disconnect
+  // action (this repo's #184/#532 UI has existed since #982 but was never wired in — a gap
+  // the epic closes). The narrower invariant survives unrelaxed: no raw path or excerpt blob
+  // (`.chat-ctx`) ever renders here — only the pill's basename label and disconnect control.
+  it("shows the connected resource as a named, disconnectable scope pill in the chat header", () => {
     const chat = makeChat({
       connectedScopes: [{ kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 }],
     });
@@ -488,7 +495,13 @@ describe("ChatWindow cancel button", () => {
       "Live Files context",
     );
     expect(container.querySelector(".scope-grounding")).toHaveAttribute("data-connected", "true");
-    expect(container.querySelector(".scope-pill")).toBeNull();
+    expect(document.querySelector(".chat-scope-header")).toContainElement(
+      container.querySelector(".scope-pill"),
+    );
+    expect(screen.getByText("File: a.ts")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Disconnect File: a.ts (src/a.ts) from chat" }),
+    ).toBeInTheDocument();
     expect(container.querySelector(".chat-ctx")).toBeNull();
   });
 

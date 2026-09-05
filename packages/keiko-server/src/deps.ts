@@ -1032,7 +1032,8 @@ export interface BuildHandlerDepsOptions {
   // response in tests/e2e, or a real production one built elsewhere). When absent, production
   // composes `createProductionWorkbenchDescriptionDispatcher` from this graph's own snapshot
   // service, Model Gateway generation, and description-authority read port.
-  readonly codingRuntimeDescriptionDispatcher?: ProductionWorkbenchDescriptionDispatcher | undefined;
+  readonly codingRuntimeDescriptionDispatcher?:
+    ProductionWorkbenchDescriptionDispatcher | undefined;
   // Optional injected governed update session manager (tests); production creates the real
   // state-dir-backed updater session manager.
   readonly updateSession?: UpdateSessionManager | undefined;
@@ -3378,8 +3379,7 @@ function buildPersistenceBundle(
     options.env,
     options.diagnostics,
   );
-  const { store, dispose, relationship, codingRuntimeSnapshotStore, codingRuntimeDescriptionJobStore } =
-    persistence;
+  const { store, dispose, relationship } = persistence;
   try {
     const { workspaceScriptTrust, services } = composePersistenceTaskWorkspaceServices(
       options,
@@ -3398,8 +3398,8 @@ function buildPersistenceBundle(
       workspaceScriptTrust,
       dispose,
       relationship,
-      codingRuntimeSnapshotStore,
-      codingRuntimeDescriptionJobStore,
+      codingRuntimeSnapshotStore: persistence.codingRuntimeSnapshotStore,
+      codingRuntimeDescriptionJobStore: persistence.codingRuntimeDescriptionJobStore,
       ...services,
       managedTaskWorkspaceRoot,
       preferredProjectPath: seedInitialProject(store, resolvedUiDbPath, options.initialProjectPath),
@@ -3909,7 +3909,37 @@ function assembleUiHandlerRuntimeServices(
     codingRuntimeEvidenceAggregator,
     codingRuntimeHost,
   );
-  const codingAppSessionChannel = createCodingAppSessionChannel({
+  const gitChangeSnapshotService = createGitChangeSnapshotService({
+    logSink: processServerLogSink(),
+  });
+  attachWorkbenchDescriptionSupport(args, codingRuntimeControlPlane, gitChangeSnapshotService);
+  const codingAppSessionChannel = buildAssemblyCodingAppSessionChannel(
+    args,
+    codingRuntimeControlPlane,
+  );
+  const workspaceLifecycle = activityAwareWorkspaceLifecycle(
+    args.bundle.workspaceLifecycle,
+    codingRuntimeControlPlane?.safeActivityProjection,
+  );
+  return {
+    dapRuntime,
+    gitChangeSnapshotService,
+    codingRuntimeEvidenceAggregator,
+    peripherals,
+    dapProduction,
+    codingRuntimeCeiling,
+    runtimeComposition,
+    codingRuntimeControlPlane,
+    codingAppSessionChannel,
+    workspaceLifecycle,
+  };
+}
+
+function buildAssemblyCodingAppSessionChannel(
+  args: UiHandlerDepsAssemblyArgs,
+  codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
+): ReturnType<typeof createCodingAppSessionChannel> {
+  return createCodingAppSessionChannel({
     registry: createSessionRegistry(),
     pairingPort:
       args.options.sessionPairingPort ?? resolveLauncherSessionPairingPort(args.options.env),
@@ -3924,22 +3954,6 @@ function assembleUiHandlerRuntimeServices(
     // failures instead of silently no-op'ing recordSseFailure().
     diagnostics: args.options.diagnostics ?? defaultServerDiagnosticSink,
   });
-  const workspaceLifecycle = activityAwareWorkspaceLifecycle(
-    args.bundle.workspaceLifecycle,
-    codingRuntimeControlPlane?.safeActivityProjection,
-  );
-  return {
-    dapRuntime,
-    gitChangeSnapshotService: createGitChangeSnapshotService({ logSink: processServerLogSink() }),
-    codingRuntimeEvidenceAggregator,
-    peripherals,
-    dapProduction,
-    codingRuntimeCeiling,
-    runtimeComposition,
-    codingRuntimeControlPlane,
-    codingAppSessionChannel,
-    workspaceLifecycle,
-  };
 }
 
 function resolveAssemblyCodingRuntimeHost(
@@ -3983,6 +3997,42 @@ function buildUiCodingRuntimeControlPlane(
     diagnostics: args.options.diagnostics ?? defaultServerDiagnosticSink,
     activityLog: processServerLogSink(),
   });
+}
+
+// #3401: attaches the automatic-description job store and dispatcher to the just-built control
+// plane's orchestrator. `createCodingRuntimeOrchestrator` is constructed inside
+// `createCodingRuntimeControlPlane` itself, before this graph's snapshot service, PR-description
+// generation, and description-authority read port exist to compose the real dispatcher with — so
+// `attachDescriptionSupport` (codingRuntimeOrchestrator.ts) is the seam that supplies them right
+// after, exactly once per composed deps graph. A missing control plane or job-store companion
+// (an injected UiStore without one, mirroring `codingRuntimeSnapshotStore`'s own contract) leaves
+// the feature unattached — the orchestrator already treats an absent `description` as "not yet
+// wired", never a crash.
+function attachWorkbenchDescriptionSupport(
+  args: UiHandlerDepsAssemblyArgs,
+  codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
+  gitChangeSnapshotService: GitChangeSnapshotService,
+): void {
+  const jobs = args.bundle.codingRuntimeDescriptionJobStore;
+  if (codingRuntimeControlPlane === undefined || jobs === undefined) return;
+  const dispatcher =
+    args.options.codingRuntimeDescriptionDispatcher ??
+    createProductionWorkbenchDescriptionDispatcher({
+      activeWorkspaceRoot: (): string | undefined =>
+        args.bundle.workspaceLifecycle?.getActive()?.binding.activeRoot,
+      snapshots: gitChangeSnapshotService,
+      generation: createProductionPrDescriptionGeneration(args.runtimeConfig),
+      descriptionAuthority: codingRuntimeControlPlane.gitDeliveryDescriptionAuthority,
+      // #3401 open item: no production caller mints the description authority yet -- threading
+      // that capability needs `productionCodingRuntimeResolver.ts` (where it is minted),
+      // `productionCodingRuntimeHost.ts`, and `codingRuntimeControlPlane.ts` (its two existing
+      // OPTIONAL_RUNTIME_CAPABILITY_KEYS / RUNTIME_HOST_CAPABILITY_KEYS lists) to forward a mint
+      // capability the SAME way `gitDeliveryDescriptionAuthority`'s READ port already is. Until
+      // that lands every scope admits closed (`model-egress-denied`), matching
+      // chat-handlers.ts's own `admitGitChangeDescriptionTurn` comment on the same gap.
+      now: (): number => Date.now(),
+    });
+  codingRuntimeControlPlane.orchestrator.attachDescriptionSupport({ jobs, dispatcher });
 }
 
 type BaseUiHandlerDeps = ReturnType<typeof gatewayConfigFields> &

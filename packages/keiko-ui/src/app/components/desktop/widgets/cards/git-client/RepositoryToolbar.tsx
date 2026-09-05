@@ -27,7 +27,7 @@ const CodeIcon = Icons.code;
 const FilesIcon = Icons.files;
 const ChatIcon = Icons.newChat;
 
-interface RepositoryToolbarProps {
+export interface RepositoryToolbarProps {
   readonly repositories: readonly ProjectWithAvailability[];
   readonly selectedPath: string | null;
   readonly branches: readonly GitBranchListEntry[];
