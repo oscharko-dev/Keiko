@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
+import { OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES } from "@oscharko-dev/keiko-tool-catalog";
 import {
   createOpenCodeGatewayToolCatalogAdvertisement,
   hasExactOpenCodeVisibleToolContract,
@@ -95,6 +96,54 @@ describe("OpenCode visible tool contract", () => {
       expect(hasExactOpenCodeVisibleToolContract(tools)).toBe(false);
     },
   );
+
+  it("accepts the exact projected surface including the eight new Git/CI tools", () => {
+    expect(hasExactOpenCodeVisibleToolContract(projectedTools())).toBe(true);
+    expect(OPENCODE_MODEL_VISIBLE_TOOLS).toHaveLength(17);
+  });
+
+  it("bounds keiko_git_diff to CODING_RUNTIME_GIT_MAX_PATHS paths", () => {
+    const diff = OPENCODE_MODEL_VISIBLE_TOOLS.find((tool) => tool.name === "keiko_git_diff");
+    const paths = diff?.parameters.properties.paths;
+    if (paths === undefined) throw new TypeError("Expected keiko_git_diff paths schema.");
+    expect(diff?.parameters.required).toContain("paths");
+    expect(paths.maxItems).toBe(50);
+  });
+
+  it("requires kind and proposalId for keiko_git_execute, bounding proposalId to the two server-issued prefixes", () => {
+    const execute = OPENCODE_MODEL_VISIBLE_TOOLS.find((tool) => tool.name === "keiko_git_execute");
+    const pattern = execute?.parameters.properties.proposalId.pattern;
+    if (pattern === undefined) throw new TypeError("Expected keiko_git_execute proposalId schema.");
+    expect(execute?.parameters.required).toEqual(["kind", "proposalId"]);
+    expect(execute?.parameters.properties.kind.enum).toEqual([
+      "stage",
+      "commit",
+      "push",
+      "pull-request",
+    ]);
+    const accepted = new RegExp(pattern, "u");
+    expect(accepted.test("stage-1")).toBe(true);
+    expect(accepted.test("delivery-1")).toBe(true);
+    expect(accepted.test("other-1")).toBe(false);
+  });
+
+  it("requires forceFresh as a boolean for keiko_ci_status", () => {
+    const ci = OPENCODE_MODEL_VISIBLE_TOOLS.find((tool) => tool.name === "keiko_ci_status");
+    expect(ci?.parameters.required).toEqual(["forceFresh"]);
+    expect(ci?.parameters.properties.forceFresh.type).toBe("boolean");
+  });
+
+  it("rejects a control-character pull-request title", () => {
+    const pullRequest = OPENCODE_MODEL_VISIBLE_TOOLS.find(
+      (tool) => tool.name === "keiko_pull_request",
+    );
+    const pattern = pullRequest?.parameters.properties.title.pattern;
+    if (pattern === undefined) throw new TypeError("Expected keiko_pull_request title schema.");
+    const accepted = new RegExp(pattern, "u");
+    expect(accepted.test("Fix the flaky retry loop")).toBe(true);
+    expect(accepted.test("bad\ntitle")).toBe(false);
+    expect(accepted.test("bad\0title")).toBe(false);
+  });
 });
 
 describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
@@ -122,13 +171,23 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
     expect(advertisement.offered.binding.readiness).toBe("ready");
   });
 
-  it("names all nine OpenCode 1.17.17 model-visible tools once native extensions are included", () => {
+  // Every model-visible tool is accounted for by exactly one of two sources: the catalog
+  // projection (plus its native extensions), or the #3386/#3387/#3388 reserved Git/CI aliases
+  // that are hand-authored here pending #3414's catalog-driven generation (opencode.ts's own
+  // "never registers a reserved Git/CI identity" test pins the other half of this partition).
+  it("names every model-visible tool via the catalog projection or the reserved Git/CI aliases, with no overlap", () => {
     const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0);
-    const modelVisibleNames = new Set([
+    const catalogNames = new Set([
       ...advertisement.projection.tools.map((tool) => tool.alias),
       ...advertisement.projection.nativeExtensions.map((extension) => extension.alias),
     ]);
-    expect(modelVisibleNames).toEqual(new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES));
+    const reservedNames = new Set(
+      OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES.map((entry) => entry.alias),
+    );
+    for (const name of catalogNames) expect(reservedNames.has(name)).toBe(false);
+    expect(new Set([...catalogNames, ...reservedNames])).toEqual(
+      new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES),
+    );
   });
 
   it("issues a distinct offer identity and expiry per call", () => {

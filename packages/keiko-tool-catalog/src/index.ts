@@ -16,8 +16,12 @@ export type { ToolResultValidationBinding } from "./result.js";
 
 export { createInitialToolCatalog, legacyNativeRegistrationSet } from "./legacy.js";
 export { childRegistrationSet, CHILD_WORKSPACE_READ_ALIAS } from "./child.js";
-export { opencodeRegistrationSet, OPENCODE_NATIVE_EXTENSION_DEFINITIONS } from "./opencode.js";
-export type { OpenCodeNativeExtensionDefinition } from "./opencode.js";
+export {
+  opencodeRegistrationSet,
+  OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
+  OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES,
+} from "./opencode.js";
+export type { OpenCodeNativeExtensionDefinition, OpenCodeReservedIdentity } from "./opencode.js";
 export { createKeikoToolCatalog } from "./composer.js";
 export type { CatalogRegistrationSet, CatalogSetEntry } from "./composer.js";
 export { assertIdentityCompatibility, assertCompatibilityTime } from "./compatibility.js";

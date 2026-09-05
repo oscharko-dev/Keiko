@@ -358,64 +358,91 @@ function isChatGitChangeDescriptionStatus(
   );
 }
 
-// eslint-disable-next-line complexity -- every field is an independent, flat shape guard; the
-// closed-set/regex checks below cannot share branches without hiding which field failed.
-function decodeGitChangeScopeObject(raw: unknown): ChatGitChangeScope | undefined {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
-  const scope = raw as Record<string, unknown>;
-  if (scope.kind !== "git-change") return undefined;
-  const relationshipId = scope.relationshipId;
-  const remoteDigest = scope.remoteDigest;
-  const comparisonLabel = scope.comparisonLabel;
-  const baseRef = scope.baseRef;
-  const headRef = scope.headRef;
-  const snapshotDigest = scope.snapshotDigest;
+interface DecodedGitChangeCounts {
+  readonly connectedAtMs: number;
+  readonly fileCount: number;
+  readonly totalFiles: number;
+  readonly omittedFiles: number;
+  readonly truncatedFiles: number;
+}
+
+function decodeGitChangeScopeCounts(
+  scope: Record<string, unknown>,
+): DecodedGitChangeCounts | undefined {
   const connectedAtMs = decodeNonNegativeInteger(scope.connectedAtMs);
   const fileCount = decodeGitChangeCount(scope.fileCount);
   const totalFiles = decodeGitChangeCount(scope.totalFiles);
   const omittedFiles = decodeGitChangeCount(scope.omittedFiles);
   const truncatedFiles = decodeGitChangeCount(scope.truncatedFiles);
-  const pullRequestNumber = decodePullRequestNumber(scope.pullRequestNumber);
   if (
-    !isBoundedNonEmptyString(relationshipId, 256) ||
-    !isCodeTaskSha256Digest(remoteDigest) ||
-    !isBoundedNonEmptyString(comparisonLabel, 240) ||
-    !isBoundedNonEmptyString(baseRef, 512) ||
-    !isBoundedNonEmptyString(headRef, 512) ||
-    !isSafeGitRefName(baseRef) ||
-    !isSafeGitRefName(headRef) ||
-    !isCodeTaskGitCommitSha(scope.baseSha) ||
-    !isCodeTaskGitCommitSha(scope.headSha) ||
-    !isCodeTaskGitCommitSha(scope.mergeBaseSha) ||
-    !isCodeTaskSha256Digest(snapshotDigest) ||
     connectedAtMs === undefined ||
     fileCount === undefined ||
     totalFiles === undefined ||
     omittedFiles === undefined ||
-    truncatedFiles === undefined ||
-    !isChatGitChangeDescriptionStatus(scope.descriptionStatus) ||
-    (scope.pullRequestNumber !== undefined && pullRequestNumber === undefined)
+    truncatedFiles === undefined
   ) {
     return undefined;
   }
+  return { connectedAtMs, fileCount, totalFiles, omittedFiles, truncatedFiles };
+}
+
+interface GitChangeIdentityFields {
+  readonly relationshipId: string;
+  readonly remoteDigest: string;
+  readonly comparisonLabel: string;
+  readonly baseRef: string;
+  readonly headRef: string;
+  readonly baseSha: string;
+  readonly headSha: string;
+  readonly mergeBaseSha: string;
+  readonly snapshotDigest: string;
+  readonly descriptionStatus: ChatGitChangeDescriptionStatus;
+}
+
+// Every field is an independent, flat shape guard against a hostile or corrupted row; a single
+// failure collapses the whole decode (never a partially-trusted scope). A genuine type predicate
+// (not a plain boolean) so the caller narrows `scope` instead of re-casting each field below.
+function hasValidGitChangeIdentityFields(
+  scope: Record<string, unknown>,
+): scope is Record<string, unknown> & GitChangeIdentityFields {
+  return (
+    isBoundedNonEmptyString(scope.relationshipId, 256) &&
+    isCodeTaskSha256Digest(scope.remoteDigest) &&
+    isBoundedNonEmptyString(scope.comparisonLabel, 240) &&
+    isBoundedNonEmptyString(scope.baseRef, 512) &&
+    isBoundedNonEmptyString(scope.headRef, 512) &&
+    isSafeGitRefName(scope.baseRef) &&
+    isSafeGitRefName(scope.headRef) &&
+    isCodeTaskGitCommitSha(scope.baseSha) &&
+    isCodeTaskGitCommitSha(scope.headSha) &&
+    isCodeTaskGitCommitSha(scope.mergeBaseSha) &&
+    isCodeTaskSha256Digest(scope.snapshotDigest) &&
+    isChatGitChangeDescriptionStatus(scope.descriptionStatus)
+  );
+}
+
+function decodeGitChangeScopeObject(raw: unknown): ChatGitChangeScope | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const scope = raw as Record<string, unknown>;
+  if (scope.kind !== "git-change" || !hasValidGitChangeIdentityFields(scope)) return undefined;
+  const counts = decodeGitChangeScopeCounts(scope);
+  if (counts === undefined) return undefined;
+  const pullRequestNumber = decodePullRequestNumber(scope.pullRequestNumber);
+  if (scope.pullRequestNumber !== undefined && pullRequestNumber === undefined) return undefined;
   return {
     kind: "git-change",
-    relationshipId,
-    remoteDigest,
-    comparisonLabel,
-    baseRef,
-    headRef,
+    relationshipId: scope.relationshipId,
+    remoteDigest: scope.remoteDigest,
+    comparisonLabel: scope.comparisonLabel,
+    baseRef: scope.baseRef,
+    headRef: scope.headRef,
     baseSha: scope.baseSha,
     headSha: scope.headSha,
     mergeBaseSha: scope.mergeBaseSha,
-    snapshotDigest,
+    snapshotDigest: scope.snapshotDigest,
     ...(pullRequestNumber === undefined ? {} : { pullRequestNumber }),
-    fileCount,
-    totalFiles,
-    omittedFiles,
-    truncatedFiles,
+    ...counts,
     descriptionStatus: scope.descriptionStatus,
-    connectedAtMs,
   };
 }
 

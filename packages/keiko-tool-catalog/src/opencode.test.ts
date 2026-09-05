@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { opencodeRegistrationSet, OPENCODE_NATIVE_EXTENSION_DEFINITIONS } from "./opencode.js";
+import {
+  opencodeRegistrationSet,
+  OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
+  OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES,
+} from "./opencode.js";
 import { createKeikoToolCatalog } from "./composer.js";
 import { compileToolProjection, gatewayToolDefinitions } from "./projection.js";
 
@@ -57,6 +61,21 @@ describe("opencode registration set", () => {
     expect(projection.tools.map((tool) => tool.alias)).not.toContain("keiko_repository_search");
   });
 
+  // #3386/#3387/#3388: the Git/CI tool surface is reserved (OPENCODE_RESERVED_GIT_DELIVERY_
+  // IDENTITIES) but not yet catalog-registered, mirroring the repository-search precedent above --
+  // its schemas and wire dispatch are hand-authored in keiko-server's opencodeToolSchemas.ts /
+  // opencodeRuntimeAdapter.ts pending #3414's catalog-driven generation.
+  it("never registers a reserved Git/CI identity (hand-authored pending #3414)", () => {
+    const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
+    const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
+    const canonicalIds = projection.tools.map((tool) => tool.toolRef.canonicalId);
+    const aliases = projection.tools.map((tool) => tool.alias);
+    for (const reserved of OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES) {
+      expect(canonicalIds).not.toContain(reserved.canonicalId);
+      expect(aliases).not.toContain(reserved.alias);
+    }
+  });
+
   it("declares question and todowrite as native extensions, never as tool descriptors", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
@@ -112,6 +131,22 @@ describe("OPENCODE_NATIVE_EXTENSION_DEFINITIONS", () => {
       expect(entry.contractVersion).toBe(1);
       expect(entry.description.length).toBeGreaterThan(0);
       expect(entry.inputSchema.type).toBe("object");
+    }
+  });
+});
+
+describe("OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES", () => {
+  it("declares eight unique keiko.<area>.<verb> identities with unique keiko_* aliases", () => {
+    expect(OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES).toHaveLength(8);
+    const canonicalIds = OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES.map(
+      (entry) => entry.canonicalId,
+    );
+    const aliases = OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES.map((entry) => entry.alias);
+    expect(new Set(canonicalIds).size).toBe(canonicalIds.length);
+    expect(new Set(aliases).size).toBe(aliases.length);
+    for (const entry of OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES) {
+      expect(entry.canonicalId).toMatch(/^keiko\.[a-z]+\.[a-z-]+$/u);
+      expect(entry.alias).toMatch(/^keiko_[a-z_]+$/u);
     }
   });
 });

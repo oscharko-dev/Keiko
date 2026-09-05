@@ -360,6 +360,35 @@ function childRunSpec(): OpenCodeToolSpec {
  * native extensions on its advertisement composes its own catalog from these same entries with
  * `nativeExtensions: []`.
  */
+export interface OpenCodeReservedIdentity {
+  readonly canonicalId: string;
+  readonly alias: string;
+}
+
+/**
+ * Reserved canonical identities for the #3386/#3387/#3388 Git status/diff/stage/commit,
+ * push/pull-request and CI-observation tool surface (ADR-0175 D2's `keiko.<area>.<verb>` naming
+ * convention). These are declarations, not catalog registrations: unlike the seven entries
+ * `opencodeRegistrationSet()` returns, none of them has a compiled descriptor, an effect/bounds
+ * declaration or a projection through this package yet. The real, currently-authoritative schemas
+ * and wire dispatch for these eight tools are hand-authored in packages/keiko-server/src/
+ * coding-runtime/opencodeToolSchemas.ts and opencodeRuntimeAdapter.ts -- the same precedent this
+ * file's header comment already documents for every one of the seven registered tools (duplicated
+ * there rather than sourced from this catalog, pending #3414's catalog-driven generation).
+ * Reserving the identities here ahead of that work keeps a future migration from picking a
+ * colliding canonical id; `opencodeToolSchemas.test.ts` asserts every alias below is model-visible.
+ */
+export const OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES: readonly OpenCodeReservedIdentity[] = [
+  { canonicalId: "keiko.git.status", alias: "keiko_git_status" },
+  { canonicalId: "keiko.git.diff", alias: "keiko_git_diff" },
+  { canonicalId: "keiko.git.stage", alias: "keiko_git_stage" },
+  { canonicalId: "keiko.git.commit", alias: "keiko_git_commit" },
+  { canonicalId: "keiko.git.push", alias: "keiko_git_push" },
+  { canonicalId: "keiko.git.pull-request", alias: "keiko_pull_request" },
+  { canonicalId: "keiko.git.execute", alias: "keiko_git_execute" },
+  { canonicalId: "keiko.ci.status", alias: "keiko_ci_status" },
+];
+
 export function opencodeRegistrationSet(): CatalogRegistrationSet {
   return {
     profile: OPENCODE_PROFILE,

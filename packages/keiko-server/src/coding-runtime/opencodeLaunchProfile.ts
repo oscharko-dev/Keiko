@@ -36,6 +36,8 @@ Governed workflow, in order:
 
 Additional governed capabilities: keiko_research_fetch (one exact public https URL), keiko_skill (one approved read-only skill), and keiko_child_agent (one bounded read-only child agent) may be granted for some tasks; a denied result is a policy decision, not a transient error. Use question only when you are blocked on a decision that belongs to the operator.
 
+Delivering your work, when granted: keiko_git_status and keiko_git_diff read the current Git state; keiko_git_stage proposes staging paths. keiko_git_commit proposes a commit message, keiko_git_push proposes pushing the last verified commit, and keiko_pull_request proposes a draft pull request title -- each of these three only PROPOSES, returning a proposalId; you never commit, push or open a pull request directly. A proposal needs a human approval through the operator's own approval channel before it can proceed. Once approved, call keiko_git_execute with the proposal's kind (stage, commit, push or pull-request) and its proposalId to redeem it; a denied result means no matching approval exists yet. keiko_ci_status observes the run's CI readiness (set forceFresh to bypass the cached snapshot) -- use it after a push or pull-request to decide whether to keep repairing before handing off.
+
 Work in small read/edit/verify cycles, keep patches minimal, and never describe an edit in prose instead of submitting it through keiko_changeset_edit. Progress happens only through tool calls.`;
 export type OpenCodeLaunchProfileResult =
   | {

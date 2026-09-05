@@ -376,6 +376,41 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
       maxToolCalls: CHILD_AGENT_SCHEMA.properties.maxToolCalls,
     },
   },
+  { name: "keiko_git_status", action: "git-status", arguments: {} },
+  {
+    name: "keiko_git_diff",
+    action: "git-diff",
+    arguments: { scope: GIT_DIFF_SCHEMA.properties.scope, paths: GIT_DIFF_SCHEMA.properties.paths },
+  },
+  {
+    name: "keiko_git_stage",
+    action: "git-stage",
+    arguments: { paths: GIT_STAGE_SCHEMA.properties.paths },
+  },
+  {
+    name: "keiko_git_commit",
+    action: "git-commit",
+    arguments: { message: GIT_COMMIT_SCHEMA.properties.message },
+  },
+  { name: "keiko_git_push", action: "git-push", arguments: {} },
+  {
+    name: "keiko_pull_request",
+    action: "git-pull-request",
+    arguments: { title: GIT_PULL_REQUEST_SCHEMA.properties.title },
+  },
+  {
+    name: "keiko_git_execute",
+    action: "git-execute",
+    arguments: {
+      kind: GIT_EXECUTE_SCHEMA.properties.kind,
+      proposalId: GIT_EXECUTE_SCHEMA.properties.proposalId,
+    },
+  },
+  {
+    name: "keiko_ci_status",
+    action: "git-ci",
+    arguments: { forceFresh: GIT_CI_STATUS_SCHEMA.properties.forceFresh },
+  },
 ] as const;
 
 // `todowrite` left this deny list for OPENCODE_MODEL_VISIBLE_TOOLS (#2480 plan projection).

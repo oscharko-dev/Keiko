@@ -31,10 +31,14 @@ export interface DeliveryProviderState {
   };
 }
 
-function readState(stateDir: string): DeliveryProviderState {
+// Exported so a lane-specific shim layered on top of this transport (e.g. the #3389 handoff shim,
+// which answers its own journey/mark-ready GraphQL shapes and falls through to this fixture for
+// everything else) can read and persist the SAME provider state rather than re-deriving its own
+// copy — one fixture state, one set of accessors.
+export function readState(stateDir: string): DeliveryProviderState {
   return JSON.parse(readFileSync(deliveryProviderState(stateDir), "utf8")) as DeliveryProviderState;
 }
-function writeState(stateDir: string, state: DeliveryProviderState): void {
+export function writeState(stateDir: string, state: DeliveryProviderState): void {
   const path = deliveryProviderState(stateDir);
   writeFileSync(`${path}.next`, JSON.stringify(state));
   renameSync(`${path}.next`, path);

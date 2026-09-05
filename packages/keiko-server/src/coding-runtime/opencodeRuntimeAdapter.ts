@@ -893,10 +893,89 @@ export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
   };
 }
 
+// #3386/#3387/#3388: git-status/git-diff/git-stage/git-commit/git-push/git-pull-request/git-ci are
+// each a fixed wire shape onto codingToolIpc.ts's existing "git"/"delivery" actions (see
+// `wireRequestFor` below); git-execute is the one shared redemption tool that turns any pending
+// stage/commit/push/pull-request proposalId into the matching execute-phase request once a human
+// has approved it through the existing Workbench approval channel -- the model never commits,
+// pushes or opens a pull request directly.
 type GeneratedToolAction =
-  "read" | "discover" | "edit" | "verification" | "egress" | "skill" | "child-agent";
+  | "read"
+  | "discover"
+  | "edit"
+  | "verification"
+  | "egress"
+  | "skill"
+  | "child-agent"
+  | "git-status"
+  | "git-diff"
+  | "git-stage"
+  | "git-commit"
+  | "git-push"
+  | "git-pull-request"
+  | "git-ci"
+  | "git-execute";
+
+/**
+ * The fixed wire `action` and literal (non-model-supplied) fields for every git/delivery action.
+ * `git-execute` builds its request entirely at runtime from the model-supplied `kind` instead (see
+ * `toolSource`), so it is deliberately absent here.
+ */
+function wireRequestFor(
+  action: GeneratedToolAction,
+): { readonly action: string; readonly literal: Readonly<Record<string, unknown>> } | undefined {
+  switch (action) {
+    case "git-status":
+      return { action: "git", literal: { operation: "status" } };
+    case "git-diff":
+      return { action: "git", literal: { operation: "diff" } };
+    case "git-stage":
+      return { action: "git", literal: { operation: "stage", phase: "propose" } };
+    case "git-ci":
+      return { action: "git", literal: { operation: "ci" } };
+    case "git-commit":
+      return { action: "delivery", literal: { intent: "commit", phase: "propose" } };
+    case "git-push":
+      return { action: "delivery", literal: { intent: "push", phase: "propose" } };
+    case "git-pull-request":
+      return { action: "delivery", literal: { intent: "pull-request", phase: "propose" } };
+    default:
+      return undefined;
+  }
+}
+
+// Data, not branching logic: keeping the git/delivery descriptions in a table (rather than more
+// `if` arms in `toolDescription`) is what keeps that function under the repository's complexity
+// and line-count ceilings while still documenting all eight actions individually.
+const GIT_ACTION_DESCRIPTIONS: Readonly<Partial<Record<GeneratedToolAction, string>>> = {
+  "git-status": "Read the workspace's current Git status through Keiko governance.",
+  "git-diff":
+    "Read one bounded Git diff (working-tree or staged) for the given workspace-relative paths.",
+  "git-stage":
+    "Propose staging one or more workspace-relative paths. This proposes only; redeem the " +
+    "returned proposalId with keiko_git_execute once approved.",
+  "git-commit":
+    "Propose a commit with the given message over the currently staged changes. This proposes " +
+    "only -- the model never commits directly. A human must approve the proposal through the " +
+    "existing approval channel before keiko_git_execute can redeem it.",
+  "git-push":
+    "Propose pushing the last verified commit by its exact SHA. This proposes only -- a human " +
+    "must approve before keiko_git_execute can redeem it.",
+  "git-pull-request":
+    "Propose opening a draft pull request with the given title. This proposes only -- a human " +
+    "must approve before keiko_git_execute can redeem it.",
+  "git-execute":
+    "Redeem one previously proposed and now-approved stage, commit, push or pull-request " +
+    "proposal by its kind and the proposalId returned by the matching propose call. Denied when " +
+    "no matching approval exists.",
+  "git-ci":
+    "Observe the accepted run's CI readiness (required checks, review/merge state). Set " +
+    "forceFresh to bypass the cached snapshot.",
+};
 
 function toolDescription(action: GeneratedToolAction): string {
+  const gitDescription = GIT_ACTION_DESCRIPTIONS[action];
+  if (gitDescription !== undefined) return gitDescription;
   if (action === "discover") {
     return (
       "Find exact workspace-relative file paths through Keiko's bounded repository discovery. " +
@@ -984,10 +1063,17 @@ function toolSource(
   schemas: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
 ): string {
   const argumentNames = Object.keys(schemas);
+  // The literal (non-model-supplied) wire fields for a fixed-shape git/delivery action, e.g.
+  // `{ operation: "stage", phase: "propose" }`. `git-execute` builds its wire `action` and these
+  // fields entirely from the model-supplied `kind` at call time instead (see the `wireAction`
+  // override below), so it deliberately keeps the descriptive `action` literal here.
+  const wire = wireRequestFor(action) ?? { action, literal: {} };
   return [
     "const MAX_RESPONSE_BYTES = 262144;",
     `const TIMEOUT_MS = ${String(OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS)};`,
     `const action = ${JSON.stringify(action)};`,
+    `const wireAction = ${JSON.stringify(wire.action)};`,
+    `const literalFields = ${JSON.stringify(wire.literal)};`,
     `const argumentNames = ${JSON.stringify(argumentNames)};`,
     `const inputSchemas = ${JSON.stringify(schemas)};`,
     "function validResult(value) {",
@@ -1008,8 +1094,19 @@ function toolSource(
     "    const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
     '    if (!endpoint || !capability) throw new Error("keiko-tool-unavailable");',
     "    const identity = `${context.sessionID}:${context.callID || context.messageID}`;",
-    "    const request = { action, actionId: identity, idempotencyKey: identity };",
+    "    const request = { action: wireAction, actionId: identity, idempotencyKey: identity, ...literalFields };",
     "    for (const name of argumentNames) request[name] = args[name];",
+    // git-execute is the one action whose wire shape depends on a model-supplied argument
+    // (`kind`): redeeming a stage proposal posts `{action:"git",operation:"stage",...}` while
+    // redeeming a commit/push/pull-request proposal posts `{action:"delivery",intent:kind,...}`.
+    // `kind` itself is never a wire field -- codingToolIpc.ts's exact-key parsers would reject it.
+    '    if (action === "git-execute") {',
+    '      request.action = args.kind === "stage" ? "git" : "delivery";',
+    '      request.phase = "execute";',
+    '      if (args.kind === "stage") request.operation = "stage";',
+    "      else request.intent = args.kind;",
+    "      delete request.kind;",
+    "    }",
     "    const approvalProof = await toolApprovalProof(request);",
     "    await askForGovernedPermission(args, context, approvalProof);",
     "    if (approvalProof) request.approvalProof = { approvalId: approvalProof.approvalId, approvalDigest: approvalProof.approvalDigest };",

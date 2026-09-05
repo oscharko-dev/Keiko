@@ -15,6 +15,14 @@ const KEIKO_PRODUCER_TOOLS = [
   "keiko_research_fetch",
   "keiko_skill",
   "keiko_child_agent",
+  "keiko_git_status",
+  "keiko_git_diff",
+  "keiko_git_stage",
+  "keiko_git_commit",
+  "keiko_git_push",
+  "keiko_pull_request",
+  "keiko_git_execute",
+  "keiko_ci_status",
 ] as const;
 const MODEL_VISIBLE_TOOLS = ["question", "todowrite", ...KEIKO_PRODUCER_TOOLS] as const;
 const READY_LINE = "opencode server listening on http://127.0.0.1:43123\n";
@@ -406,6 +414,26 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(bundle.toolSources.keiko_workspace_read).toContain("totalLines");
     expect(bundle.toolSources.keiko_workspace_read).toContain("nextStartLine");
     expect(Object.values(bundle.toolSources).join("\n")).toMatch(/changeset/u);
+    // #3386/#3387/#3388: each propose-phase Git/delivery tool posts its fixed wire action/intent
+    // literal, never a model-supplied one; the model never commits, pushes or opens a pull
+    // request directly, it only proposes.
+    expect(bundle.toolSources.keiko_git_status).toContain('"action":"git"');
+    expect(bundle.toolSources.keiko_git_status).toContain('"operation":"status"');
+    expect(bundle.toolSources.keiko_git_diff).toContain('"operation":"diff"');
+    expect(bundle.toolSources.keiko_git_stage).toContain('"operation":"stage","phase":"propose"');
+    expect(bundle.toolSources.keiko_git_commit).toContain('"intent":"commit","phase":"propose"');
+    expect(bundle.toolSources.keiko_git_commit).toContain('"action":"delivery"');
+    expect(bundle.toolSources.keiko_git_push).toContain('"intent":"push","phase":"propose"');
+    expect(bundle.toolSources.keiko_pull_request).toContain(
+      '"intent":"pull-request","phase":"propose"',
+    );
+    expect(bundle.toolSources.keiko_ci_status).toContain('"operation":"ci"');
+    // keiko_git_execute is the one tool whose wire action/operation/intent is computed from the
+    // model-supplied `kind` at call time, never a fixed literal.
+    const execute = bundle.toolSources.keiko_git_execute;
+    if (execute === undefined) throw new TypeError("keiko_git_execute source missing");
+    expect(execute).toContain('args.kind === "stage" ? "git" : "delivery"');
+    expect(execute).toContain("delete request.kind;");
     expect(JSON.stringify(harness.materialized)).toContain("{env:");
     expect(
       JSON.stringify({ result: await adapter.reconcile(), effects: harness.effects }),

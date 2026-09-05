@@ -30,7 +30,6 @@ import {
   parseUpdateMemoryAutonomyPolicyWire,
   resolveGroundingLimits,
   type Chat,
-  type ChatGitChangeDescriptionStatus,
   type ChatGitChangeScope,
   type ChatLocalKnowledgeScope,
   type DesktopChatSendRequestWire,
@@ -857,7 +856,7 @@ describe("git-change Chat scope contract (#3400)", () => {
 
   it("every description status is a valid ChatGitChangeDescriptionStatus", () => {
     for (const status of CHAT_GIT_CHANGE_DESCRIPTION_STATUSES) {
-      const scope = gitChangeScope({ descriptionStatus: status as ChatGitChangeDescriptionStatus });
+      const scope = gitChangeScope({ descriptionStatus: status });
       expect(scope.descriptionStatus).toBe(status);
     }
   });
