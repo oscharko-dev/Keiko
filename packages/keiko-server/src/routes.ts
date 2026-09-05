@@ -104,6 +104,7 @@ import {
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
 } from "./coding-sidecar-gateway.js";
+import { handleCodingSidecarToolFacade } from "./coding-sidecar-tool-facade.js";
 import {
   handleCodingCodexSubscriptionProfile,
   handleCodingCodexSubscriptionSetup,
@@ -514,6 +515,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/coding-sidecar/gateway/chat/completions",
     handler: handleCodingSidecarGatewayChatCompletions,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-sidecar/tool",
+    handler: handleCodingSidecarToolFacade,
   },
   {
     method: "GET",
