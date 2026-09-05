@@ -3,9 +3,8 @@ import {
   type CodingRepositoryResult,
   type CodingRepositoryTruncationReason,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
-import type { SearchResult } from "./repoSearch.js";
+import { clampToBytes, type SearchResult } from "./repoSearch.js";
 import type { CandidateSet } from "./repoSearchScan.js";
-import { clampCodingRepositoryText } from "./codingRepositorySearchProjection.js";
 
 function outputBytes(result: CodingRepositoryResult): number {
   return new TextEncoder().encode(JSON.stringify(result)).length;
@@ -34,10 +33,10 @@ export function boundCodingRepositoryResult(
     if (excerpt.snippet.length === 0) return { ok: false, reason: "failed" };
     excerpt = {
       ...excerpt,
-      snippet: clampCodingRepositoryText(
+      snippet: clampToBytes(
         excerpt.snippet,
         Math.floor(new TextEncoder().encode(excerpt.snippet).length / 2),
-      ),
+      ).excerpt,
     };
   }
   return { ...result, excerpt, truncationReasons };

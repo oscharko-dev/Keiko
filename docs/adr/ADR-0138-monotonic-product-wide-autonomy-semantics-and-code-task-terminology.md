@@ -170,6 +170,39 @@ is:
    sensitive-path-gated exactly as today. This preserves the Ask for approval meaning "reads and
    planning are allowed" without a special-case matrix row.
 
+5. **Git Delivery admission (#3386, epic #3384 correction 5 — added after initial adoption).**
+   `runBoundAuthority.authorizeGitDelivery` (`packages/keiko-server/src/gitDelivery/`) reads this
+   matrix directly: a network-reaching operation (fetch/pull/push/pull-request/merge/commit)
+   carries the `delivery` resource scope; every other Git operation
+   (status/diff/branch-list/branch-create/branch-switch/stage/unstage) carries
+   `workspace-contained`. `denied` maps to the pre-existing `mode-denied` reason (a hard denial;
+   the matrix never actually returns `denied` for either scope, so this is a closed fallback, not
+   a live path); `approval-required` maps to a dedicated `approval-required` denial reason,
+   redeemable by the caller through a one-use claim bound to the accepted run's identity
+   (`GitDeliveryApprovalRedemption`); `allowed` proceeds. `autonomous-delivery` is resolved
+   outright at this layer per the **capability-availability clarification** above: Full access's
+   `delivery` cells are `approval-required` in the shared matrix, but this coarse admission layer
+   is not the execution path that redeems them for an operation whose own execute path already
+   carries mandatory, mode-independent approval (`merge`, via its pre-existing approval-gated
+   pack and `/merge/approve` route; `commit`, via the unconditional consumed-claim check its
+   execute route now applies regardless of mode, added by #3386). The scope and network-policy
+   check that precedes this matrix lookup (`hasRequiredScopes`) is deferred, never used as the mode
+   signal, for a `delivery`-scoped operation below `autonomous-delivery`:
+   `productionRuntimeWorkspaceAuthority.ts` mints `source-control.write`, `delivery-substrate` and a
+   connector-scoped network policy only at `autonomous-delivery`, so a lower mode's approval-eligible
+   delivery effect can never satisfy that check by design — gating on it ahead of the matrix would
+   make the `approval-required`/redemption path in this item unreachable for every real authority
+   envelope below Full access, not only in a test fixture. That deferral applies only to the
+   `delivery` scope; `autonomous-delivery` and every `workspace-contained` operation keep the
+   scope/network check as a genuine, stricter-wins gate. `push`/`pull-request`/`fetch`
+   carry no such execute-path enforcement yet — their `approval-required` disposition in a lower
+   mode fails closed with that same reason until #3387 wires their mint routes and redeemable
+   claims; nothing in this record, `runBoundAuthority.ts`, or #3386 admits them unapproved in any
+   mode, including Full access. The coding-runtime tool port (`codingToolAuthorityPort.ts`) is the
+   second enforcement point named by epic #3384 correction 5 and reads the same matrix for its
+   `workspace-contained`/medium path already; its `git`/`delivery` branches converging onto the
+   identical evaluator is tracked by that correction, not restated here.
+
 Every existing policy consumer named above must be enumerated and regression-tested in the
 implementing child (#2385) before merge; no surface may keep a local copy of the old matrix or
 introduce a Code-local parallel matrix.

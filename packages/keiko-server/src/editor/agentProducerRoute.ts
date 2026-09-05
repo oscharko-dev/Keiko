@@ -10,6 +10,7 @@
 
 import { randomUUID } from "node:crypto";
 import {
+  createEditorAgentCatalogFactory,
   createSession,
   MemoryEventSink,
   type HarnessEvent,
@@ -30,11 +31,14 @@ import {
   isEditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { readJsonObject } from "../files.js";
 import {
   logHarnessContextCompactionEvents,
   serverHarnessContextCompactor,
 } from "../harness-context-compactor.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { editorAgentAuthorityRegistry } from "./agentAuthorityRegistry.js";
@@ -282,14 +286,22 @@ async function runProducerTurn(
   model: ModelPort,
   host: EditorAgentToolHost,
   requestCorrelationId: string | undefined,
+  activityLog: ServerLogSink = processServerLogSink(),
 ): Promise<ProducerTurnResult> {
   const outcomes: ProducerToolOutcome[] = [];
+  // The SAME scoped port both feeds the (now dispatch-inert) legacy `tools` field and binds the
+  // mandatory catalog: dispatch still executes through scopedProducerToolPort.execute(), which is
+  // the one place PRODUCER_TOOL_NAMES is enforced -- the catalog advertises all nine Editor tools
+  // (ADR-0175 D2), but every call still resolves through this same allowlist, unmodified, before
+  // it can reach EditorAgentToolHost -> EditorAgentHttpClient -> agentRoutes.ts.
+  const scopedTools = scopedProducerToolPort(host, outcomes);
   const session = createSession(
     { taskType: "editor-agent-turn", input: { goal: request.goal, sessionId: request.sessionId } },
-    { model: request.modelId, workingDirectory: workspaceRoot },
+    { model: request.modelId, workingDirectory: workspaceRoot, dryRun: false },
     {
       model,
-      tools: scopedProducerToolPort(host, outcomes),
+      tools: scopedTools,
+      bindToolCatalog: createEditorAgentCatalogFactory(scopedTools),
       sink: new MemoryEventSink(),
       // KEIKO-0726 (#3323): a real, tool-using production call site — unlike explain-plan's
       // single-shot read-only path, an editor-agent-turn producer run can loop through several
@@ -303,12 +315,28 @@ async function runProducerTurn(
     ...(requestCorrelationId === undefined ? {} : { parentCorrelationId: requestCorrelationId }),
   });
   const toolCompletions = result.events.filter(isToolCallCompleted);
+  const toolNames = [...new Set(toolCompletions.map((event) => event.toolName))];
+  // Every editor-agent turn now actually dispatches through the mandatory catalog (#3407/#3408)
+  // instead of failing closed on every tool call, so this line is the only activity-log evidence
+  // of what a producer turn actually did: outcome, tool identifiers, and a bounded count -- never
+  // the goal text, tool arguments, or tool output (AGENTS.md §8 body-free rule).
+  activityLog.write({
+    category: "process",
+    op: "editor.producer-turn.completed",
+    correlationId: requestCorrelationId ?? UNKNOWN_CORRELATION_ID,
+    extra: {
+      runId: session.runId,
+      outcome: result.outcome,
+      toolCallCount: toolCompletions.length,
+      toolNames,
+    },
+  });
   return {
     schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
     runId: session.runId,
     outcome: result.outcome,
     toolCallCount: toolCompletions.length,
-    toolNames: [...new Set(toolCompletions.map((event) => event.toolName))],
+    toolNames,
     toolOutcomes: outcomes,
   };
 }
@@ -411,6 +439,7 @@ export async function handleEditorAgentProducerTurn(
     model,
     hostOutcome.host,
     ctx.correlationId,
+    deps.activityLog,
   );
   return { status: 200, body: summary };
 }

@@ -1,5 +1,11 @@
 import { canonicalise } from "@oscharko-dev/keiko-security";
+import type { CodingWorkbenchConnectorScope } from "@oscharko-dev/keiko-contracts";
 import type { CodingRuntimeIssueIntake } from "../coding-runtime/codingRuntimeIssueIntake.js";
+// The real connector-scope entitlement for the run's effective mode, reused from its one producer
+// (epic #3384 correction 7) rather than restated here — a restated `["source-control.read"]`
+// admitted a GitHub read regardless of mode, so a run below `autonomous-delivery` got issue
+// context the connector-scope model never actually granted it.
+import { DELIVERY_CONNECTOR_SCOPES } from "../coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import {
   buildCodeContextPack,
   type CodeContextConnector,
@@ -48,6 +54,12 @@ async function buildContext(
   };
 }
 
+function connectorScopesFor(
+  effectiveMode: ContextInput["effectiveMode"],
+): readonly CodingWorkbenchConnectorScope[] {
+  return effectiveMode === "autonomous-delivery" ? DELIVERY_CONNECTOR_SCOPES : [];
+}
+
 async function buildPack(
   input: ContextInput,
   resolution: ResolvedIssue,
@@ -60,7 +72,7 @@ async function buildPack(
     {
       runId: input.runId,
       effectiveMode: input.effectiveMode,
-      connectorScopes: ["source-control.read"],
+      connectorScopes: connectorScopesFor(input.effectiveMode),
       maxBodyBytes: 16_384,
       refs: [
         {

@@ -18,7 +18,18 @@ import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/index.js";
 import { resolveProjectWorkspace } from "./execution.js";
 import { readParsedGitDeliveryBody } from "./requestGuards.js";
-import { authorizeGitDelivery, type GitDeliveryAuthorityDenial } from "./runBoundAuthority.js";
+import {
+  authorizeGitDelivery,
+  type ActiveGitDeliveryRunAuthority,
+  type GitDeliveryApprovalRedemption,
+  type GitDeliveryAuthorityDenial,
+  type GitDeliveryAuthorityRequest,
+} from "./runBoundAuthority.js";
+import {
+  resolveGitDeliveryApprovalRequirement,
+  type GitDeliveryApprovalStore,
+  type ParsedGitDeliveryApprovalRequest,
+} from "./approvalStore.js";
 
 // The validator each route already exposes: it maps an unknown parsed body to either a typed request
 // value (carrying the projectId) or a ready-to-return error result.
@@ -49,6 +60,13 @@ export interface GitDeliveryAuthorityAuditSeams {
   readonly logSink?: ServerLogSink | undefined;
   readonly expectedAuthority?: GitDeliveryAuthorityIdentity | undefined;
   readonly phase?: GitDeliveryAuthorityPhase | undefined;
+  // ADR-0138 D2: when the mode/resource-scope/risk matrix resolves "approval-required" for a lower
+  // mode (governed-assist, supervised-coding), the caller may offer a one-use claim to redeem it
+  // instead of failing closed outright. Both must be supplied together to have any effect; either
+  // omitted leaves "approval-required" a hard refusal (today's behaviour for every mounted route,
+  // since none yet threads a claim through this seam — #3387/#3390 are the producers that will).
+  readonly approval?: ParsedGitDeliveryApprovalRequest | undefined;
+  readonly approvalStore?: GitDeliveryApprovalStore | undefined;
 }
 
 export type GitDeliveryAuthorityPhase = "admission" | "continuity";
@@ -179,6 +197,37 @@ function admittedAuthorityGate(
   return { allowed: true, runId: decision.runId, envelopeDigest: decision.envelopeDigest };
 }
 
+// Builds the caller-side redemption hook `authorizeGitDelivery` consults only when its own
+// mode/resource-scope/risk matrix resolves "approval-required" for a lower mode. The claim is bound
+// to the run's own identity and the operation attempted — never to a route-specific command shape,
+// since this coarse admission layer redeems a distinct "this run may attempt this operation right
+// now" fact, not the operation's own execute-time approval (commit's, for instance, which binds the
+// exact message and is consumed separately by the commit route itself). Returns undefined when the
+// caller supplied neither an approval request nor a store, so every existing route that does not yet
+// thread this seam (all of them, until #3387/#3390 land) is unaffected: "approval-required" stays a
+// hard refusal, exactly today's fail-closed posture for what was previously "mode-denied".
+function gitDeliveryApprovalRedemption(
+  projectId: string,
+  audit: GitDeliveryAuthorityAuditSeams,
+): GitDeliveryApprovalRedemption | undefined {
+  if (audit.approval === undefined) return undefined;
+  const approval = audit.approval;
+  return (active: ActiveGitDeliveryRunAuthority, request: GitDeliveryAuthorityRequest): boolean => {
+    const requirement = resolveGitDeliveryApprovalRequirement(approval, {
+      store: audit.approvalStore,
+      binding: {
+        projectId,
+        operation: "authority-admission",
+        command: { operation: request.operation },
+        runId: active.runId,
+        envelopeDigest: active.envelopeDigest,
+      },
+      nowMs: Date.parse(audit.nowIso ?? new Date().toISOString()),
+    });
+    return requirement?.required === true;
+  };
+}
+
 /**
  * Applies the sole delivery-write admission decision after a project workspace has been resolved.
  * This intentionally consumes only the live server-owned runtime authority; headers, browser state,
@@ -197,6 +246,7 @@ export function gitDeliveryAuthorityGate(
     deps.gitDeliveryAuthority,
     { projectId, workspaceRoot: workspace.root, operation, ...target },
     audit.nowIso ?? new Date().toISOString(),
+    gitDeliveryApprovalRedemption(projectId, audit),
   );
   const logSink = audit.logSink ?? processServerLogSink();
   const phase = authorityPhaseFor(audit);

@@ -1,7 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AutonomySettings } from "./AutonomySettings";
 
@@ -76,6 +76,13 @@ describe("AutonomySettings", () => {
       error: null,
       change,
     });
+  });
+
+  // Hermetic even when an assertion inside a test throws before its own cleanup line runs: only
+  // one test in this file stubs `globalThis.fetch` (the real-hook PUT test below), but a stub left
+  // in place by a mid-test throw would otherwise leak into every test that runs after it.
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("owns all three product modes and persists a full-access selection", async (): Promise<void> => {
@@ -282,6 +289,62 @@ describe("AutonomySettings", () => {
 
       const alerts = screen.getAllByRole("alert");
       expect(alerts.some((alert) => alert.textContent?.includes(message) === true)).toBe(true);
+    });
+
+    // Every test above mocks the hook itself, so `changeGrant` proves only that the component calls
+    // whatever `useGitHubIssueReaderAuthorization` returns — never that the hook's own PUT request
+    // carries the fields the server contract requires. This test drives the REAL hook against a
+    // mocked `fetch`, so a regression in the wire shape (a dropped field, a wrong method, a stale
+    // revision) fails here even though every hook-mocked test above stays green.
+    it("PUTs the real grant shape through fetch and reflects the server-confirmed response", async () => {
+      const real = await vi.importActual<
+        typeof import("../../hooks/useGitHubIssueReaderAuthorization")
+      >("../../hooks/useGitHubIssueReaderAuthorization");
+      githubGrantMock.mockImplementation(real.useGitHubIssueReaderAuthorization);
+
+      const fetchMock = vi.fn((_input: unknown, init?: RequestInit): Promise<Response> => {
+        if (init?.method === "PUT") {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ repositoryId: "f".repeat(64), authorized: true, revision: 2 }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ repositoryId: "f".repeat(64), authorized: false, revision: 1 }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const user = userEvent.setup();
+      render(<AutonomySettings />);
+
+      const toggle = await screen.findByRole("checkbox", { name: /Allow reading GitHub issues/u });
+      await waitFor(() => {
+        expect(toggle).toBeEnabled();
+      });
+      expect(toggle).not.toBeChecked();
+
+      await user.click(toggle);
+
+      const putCall = fetchMock.mock.calls.find(
+        (call) => (call[1] as RequestInit | undefined)?.method === "PUT",
+      );
+      expect(putCall).toBeDefined();
+      expect(String(putCall?.[0])).toBe("/api/coding-workbench/github-authorization");
+      expect(JSON.parse(String((putCall?.[1] as RequestInit).body))).toEqual({
+        repositoryPath: "/repos/keiko",
+        authorized: true,
+        expectedRevision: 1,
+      });
+
+      expect(
+        await screen.findByRole("checkbox", { name: /Allow reading GitHub issues/u }),
+      ).toBeChecked();
     });
 
     it("has no serious or critical axe violations in the granted, pending, and failed states", async () => {

@@ -1,5 +1,11 @@
 // Accepted version-1 architecture invariants, independent of the editable document.
 // Preserve historical rows; pinned migrations require verified current owners and retired-source absence.
+// Sanctioned exception: a row whose probe moved within a file that SURVIVES its refactor (not a
+// deletion) cannot use `inventoryMigrations` — checkActiveInventoryProbe requires the retired
+// source path to be absent. Such a row is instead repointed in place (path/probe/disposition) to
+// its live probe, and the retired mapping is recorded in the row's `scope` text. See
+// "harness-executor": moved from executor.ts RUN_COMMAND_TOOL to catalog-budget.ts
+// descriptorRunsCommand (#3409/#3411); documented in docs/architecture/governed-tool-migration.md.
 export const GOVERNED_TOOL_CONTRACT_PINS = {
   owners: {
     genericTypes: "keiko-contracts",
@@ -365,16 +371,16 @@ export const GOVERNED_TOOL_CONTRACT_PINS = {
     {
       id: "child-host",
       path: "packages/keiko-server/src/coding-runtime/productionReadOnlyChildRunner.ts",
-      probe: "READ_FILE_TOOL",
+      probe: "childRegistrationSet",
       ownerIssue: 3407,
-      disposition: "migrate/delete",
+      disposition: "derive projection",
     },
     {
       id: "harness-executor",
-      path: "packages/keiko-harness/src/executor.ts",
-      probe: "RUN_COMMAND_TOOL",
+      path: "packages/keiko-harness/src/catalog-budget.ts",
+      probe: "descriptorRunsCommand",
       ownerIssue: 3409,
-      disposition: "migrate/delete",
+      disposition: "derive projection",
     },
     {
       id: "gateway-openai",

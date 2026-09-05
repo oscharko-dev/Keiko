@@ -79,7 +79,11 @@ function runtimeActionClasses(
   return actionClasses;
 }
 
-const DELIVERY_CONNECTOR_SCOPES: readonly CodingWorkbenchConnectorScope[] = [
+// Exported so a caller that needs to project the SAME run-context connector-scope entitlement
+// outside a minted context (epic #3384 correction 7: coding-context/codingRuntimeIssueIntake.ts's
+// issue-context attachment) reuses this single rule rather than restating which scopes a mode
+// grants.
+export const DELIVERY_CONNECTOR_SCOPES: readonly CodingWorkbenchConnectorScope[] = [
   "source-control.read",
   "source-control.write",
 ];
@@ -288,7 +292,6 @@ export function productionRuntimeAuthorityFacts(
       workspaceRootDigest: digest(context.workspaceRoot),
       branchRef: projectRuntimeAuthorityValue("branch", context.branchRef),
       branchHeadDigest: context.branchHeadDigest,
-      ...(context.issueBinding === undefined ? {} : { issueBinding: context.issueBinding }),
     },
     actionClasses: context.actionClasses,
     connectorScopes: context.connectorScopes,
@@ -300,6 +303,7 @@ export function productionRuntimeAuthorityFacts(
     gatesDigest: codingRuntimeFactDigest(context.gates),
     branchConstraintsDigest: codingRuntimeFactDigest(branch),
     modelProfileDigest: codingRuntimeFactDigest(modelProfile),
+    issueBindingDigest: context.issueBinding?.bindingDigest,
   };
 }
 

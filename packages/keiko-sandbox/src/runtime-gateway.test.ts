@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { createServer, type Server } from "node:net";
 import { describe, expect, it } from "vitest";
 import {
   buildRuntimeGatewaySeatbeltCommand,
@@ -5,6 +7,7 @@ import {
   isRuntimeGatewayConfinement,
   type RuntimeGatewayConfinementInput,
 } from "./runtime-gateway.js";
+import { currentPlatform, probeBackends } from "./probe.js";
 
 const input: RuntimeGatewayConfinementInput = {
   gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
@@ -118,5 +121,112 @@ describe("long-lived gateway network confinement", () => {
     expect(() =>
       buildRuntimeGatewaySeatbeltCommand({ ...policy, port: 80 }, "/runtime", []),
     ).toThrow();
+  });
+});
+
+// LIVE OS-level proof (#2951, ADR-0043/ADR-0140 macOS-only scope). This is NOT an argv-string
+// assertion: it actually spawns a trivial child under the real /usr/bin/sandbox-exec wrapper and
+// proves the kernel denies a hostile loopback destination while it permits the exact configured
+// gateway port. Both destinations are real, listening loopback servers on ephemeral ports -- never
+// the internet -- so the proof is hermetic. It self-skips with a loud, recorded closed reason (never
+// a silent green) on non-macOS hosts and where sandbox-exec is unavailable.
+interface ChildRun {
+  readonly status: number | null;
+  readonly stdout: string;
+}
+
+function run(command: string, args: readonly string[]): ChildRun {
+  const result = spawnSync(command, [...args], { timeout: 10_000 });
+  if (result.error !== undefined) return { status: null, stdout: "" };
+  return { status: result.status, stdout: result.stdout.toString("utf8").trim() };
+}
+
+function note(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
+function connectSnippet(port: number): string {
+  return [
+    "const net = require('net');",
+    `const s = net.connect({ host: '127.0.0.1', port: ${String(port)} });`,
+    "s.setTimeout(3000);",
+    "s.on('connect', () => { process.stdout.write('CONNECTED'); s.destroy(); process.exit(0); });",
+    "s.on('error', () => { process.stdout.write('BLOCKED'); process.exit(3); });",
+    "s.on('timeout', () => { process.stdout.write('TIMEOUT'); s.destroy(); process.exit(3); });",
+  ].join("");
+}
+
+async function listenEphemeral(): Promise<{ server: Server; port: number }> {
+  return new Promise((resolve, reject) => {
+    const server = createServer((socket) => socket.end());
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        reject(new Error("ephemeral-listen-failed"));
+        return;
+      }
+      resolve({ server, port: address.port });
+    });
+  });
+}
+
+describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
+  const seatbeltAvailable = probeBackends().seatbelt;
+  const platformIsDarwin = currentPlatform() === "darwin";
+  const canProveOnThisHost = platformIsDarwin && seatbeltAvailable;
+
+  it.skipIf(!canProveOnThisHost)(
+    "denies a hostile loopback destination while permitting only the configured gateway port",
+    async () => {
+      const gateway = await listenEphemeral();
+      const hostile = await listenEphemeral();
+      try {
+        const policy = createRuntimeGatewayConfinement({
+          ...input,
+          gatewayUrl: `http://127.0.0.1:${String(gateway.port)}/gateway`,
+        });
+
+        // Failing-before proof: with no seatbelt wrapper at all, the hostile destination is
+        // reachable. The confinement assertions below are meaningful only because this succeeds.
+        const unconfined = run(process.execPath, ["-e", connectSnippet(hostile.port)]);
+        expect(unconfined.stdout).toBe("CONNECTED");
+
+        const hostileWrapped = buildRuntimeGatewaySeatbeltCommand(policy, process.execPath, [
+          "-e",
+          connectSnippet(hostile.port),
+        ]);
+        const denied = run(hostileWrapped.command, hostileWrapped.args);
+        expect(["BLOCKED", "TIMEOUT"]).toContain(denied.stdout);
+        expect(denied.stdout).not.toBe("CONNECTED");
+
+        const gatewayWrapped = buildRuntimeGatewaySeatbeltCommand(policy, process.execPath, [
+          "-e",
+          connectSnippet(gateway.port),
+        ]);
+        const allowed = run(gatewayWrapped.command, gatewayWrapped.args);
+        expect(allowed.stdout).toBe("CONNECTED");
+        expect(allowed.status).toBe(0);
+      } finally {
+        gateway.server.close();
+        hostile.server.close();
+      }
+    },
+    20_000,
+  );
+
+  it("records a closed skip reason when the real OS proof cannot run on this host", () => {
+    if (canProveOnThisHost) {
+      expect(canProveOnThisHost).toBe(true);
+      return;
+    }
+    const reason = !platformIsDarwin
+      ? `non-darwin platform (${currentPlatform()})`
+      : "sandbox-exec is not on PATH";
+    note(
+      `[gateway-confinement-proof] skipped: ${reason}. The real seatbelt OS-level proof runs on ` +
+        "macOS hosts only (ADR-0043/ADR-0140 macOS-only scope; Linux/Windows tracked separately).",
+    );
+    expect(canProveOnThisHost).toBe(false);
   });
 });

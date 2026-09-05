@@ -7,6 +7,7 @@ import {
   type GitCiReadKind,
   type GitCiReadTarget,
 } from "./git-ci-read-argv.js";
+import { confirmUnprotectedBranchOnNotFound } from "./git-merge-node.js";
 import { parseGitPrIdentity } from "./git-pr-identity.js";
 import {
   readGitProviderPages,
@@ -157,13 +158,15 @@ async function protection(input: Input, baseSha: string): Promise<GitCiProtectio
     return validProtection(detail.value)
       ? { outcome: "protected", value: detail.value }
       : { outcome: "unknown", failure: gitDeliveryObservationFailure("malformed-response") };
-  if (
-    detail.failure.reason === "provider-not-found" &&
-    branch.status === "observed" &&
-    unprotectedBranch(branch.value, input.target, baseSha)
-  )
-    return { outcome: "unprotected" };
-  return { outcome: "unknown", failure: detail.failure };
+  if (detail.failure.reason !== "provider-not-found")
+    return { outcome: "unknown", failure: detail.failure };
+  const confirmation = await confirmUnprotectedBranchOnNotFound({
+    fetchBranch: () => Promise.resolve(branch.status === "observed" ? branch.value : undefined),
+    isConfirmedUnprotected: (value) => unprotectedBranch(value, input.target, baseSha),
+  });
+  return confirmation === "unprotected"
+    ? { outcome: "unprotected" }
+    : { outcome: "unknown", failure: detail.failure };
 }
 
 function readList(input: Input, kind: ListKind): Promise<GitProviderPageResult> {

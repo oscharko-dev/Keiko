@@ -14,7 +14,10 @@ export { CATALOG_DIALECTS } from "./dialect.js";
 export { validateToolResultEnvelope } from "./result.js";
 export type { ToolResultValidationBinding } from "./result.js";
 
-export { createInitialToolCatalog } from "./legacy.js";
+export { createInitialToolCatalog, legacyNativeRegistrationSet } from "./legacy.js";
+export { childRegistrationSet, CHILD_WORKSPACE_READ_ALIAS } from "./child.js";
+export { createKeikoToolCatalog } from "./composer.js";
+export type { CatalogRegistrationSet, CatalogSetEntry } from "./composer.js";
 export { assertIdentityCompatibility, assertCompatibilityTime } from "./compatibility.js";
 export { validateToolArguments } from "./arguments.js";
 export { copyCatalogJson as captureCatalogJson, catalogBytes as catalogJsonBytes } from "./json.js";

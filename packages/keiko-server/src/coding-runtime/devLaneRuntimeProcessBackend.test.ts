@@ -1,11 +1,16 @@
 import { EventEmitter } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { afterEach, describe, expect, it } from "vitest";
-import { createRuntimeGatewayConfinement } from "@oscharko-dev/keiko-sandbox";
+import {
+  createRuntimeGatewayConfinement,
+  currentPlatform,
+  probeBackends,
+} from "@oscharko-dev/keiko-sandbox";
 import { createBufferedServerLogSink } from "../observability/index.js";
 
 import {
@@ -15,6 +20,7 @@ import {
 } from "./devLaneRuntimeProcessBackend.js";
 import {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
+  type RuntimeProcessTree,
   type RuntimeSupervisorLaunchRequest,
 } from "./runtimeProcessSupervisor.js";
 
@@ -351,5 +357,124 @@ describe("dev-lane runtime process backend", () => {
     const tree = backend.spawnOwnedTree(launchRequest(fixture));
     await expect(backend.waitForCompleteTreeExit(tree, 10_000)).resolves.toBe(true);
     await expect(backend.reconcileTreeExit(tree)).resolves.toBe(true);
+  });
+});
+
+// LIVE OS-level proof through the production backend (#2951). runtime-gateway.test.ts proves the
+// wrapper builder in isolation; this proves createDevLaneRuntimeProcessBackend's real
+// spawnOwnedTree path actually applies it when spawning a real process, not only that it exits 0.
+// Both destinations are real, listening loopback servers on ephemeral ports -- never the internet.
+// It self-skips with a loud, recorded closed reason (never a silent green) off macOS or without
+// sandbox-exec on PATH.
+// The shebang names the absolute node binary rather than "/usr/bin/env node": the launch request's
+// env carries only the fixed keys the production caller sets (never a bare PATH), so a PATH-based
+// lookup inside the sandboxed child would fail closed for the wrong reason.
+function connectProbeScript(): string {
+  return [
+    `#!${process.execPath}`,
+    "const net = require('net');",
+    "const port = parseInt(process.argv[2], 10);",
+    "const s = net.connect({ host: '127.0.0.1', port });",
+    "s.setTimeout(3000);",
+    "s.on('connect', () => { process.stdout.write('CONNECTED'); s.destroy(); process.exit(0); });",
+    "s.on('error', () => { process.stdout.write('BLOCKED'); process.exit(3); });",
+    "s.on('timeout', () => { process.stdout.write('TIMEOUT'); s.destroy(); process.exit(3); });",
+    "",
+  ].join("\n");
+}
+
+function stageProbeFixture(): Fixture {
+  const fixture = stageFixture();
+  writeFileSync(fixture.executable, connectProbeScript());
+  chmodSync(fixture.executable, 0o755);
+  return fixture;
+}
+
+async function listenEphemeral(): Promise<{ server: Server; port: number }> {
+  return new Promise((resolve, reject) => {
+    const server = createServer((socket) => socket.end());
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        reject(new Error("ephemeral-listen-failed"));
+        return;
+      }
+      resolve({ server, port: address.port });
+    });
+  });
+}
+
+// Waits on the stdout pipe's own "end" (EOF), not the process "exit" event: exit can fire before
+// the last buffered chunk is delivered to a listener, which would otherwise race an empty read.
+function collectStdout(tree: RuntimeProcessTree): Promise<string> {
+  return new Promise((resolve) => {
+    let out = "";
+    tree.stdout.on("data", (chunk: Buffer) => {
+      out += chunk.toString("utf8");
+    });
+    tree.stdout.on("end", () => {
+      resolve(out);
+    });
+  });
+}
+
+describe("real OS-level gateway confinement through the production backend (#2951)", () => {
+  const canProveOnThisHost = currentPlatform() === "darwin" && probeBackends().seatbelt;
+
+  it.skipIf(!canProveOnThisHost)(
+    "denies a hostile loopback destination while permitting the gateway port via spawnOwnedTree",
+    async () => {
+      const fixture = stageProbeFixture();
+      const gateway = await listenEphemeral();
+      const hostile = await listenEphemeral();
+      try {
+        const backend = createDevLaneRuntimeProcessBackend({
+          identity: IDENTITY,
+          runtimeRoot: fixture.runtimeRoot,
+          gatewayConfinement: createRuntimeGatewayConfinement({
+            gatewayUrl: `http://127.0.0.1:${String(gateway.port)}/gateway`,
+            runId: "run-2951-os",
+            treeBindingId: "f".repeat(64),
+            envelopeDigest: "a".repeat(64),
+            runtimeArtifactDigest: "b".repeat(64),
+            modelProfileDigest: "c".repeat(64),
+          }),
+        });
+        const deniedTree = backend.spawnOwnedTree({
+          ...launchRequest(fixture),
+          runId: "run-2951-os",
+          args: [String(hostile.port)],
+        });
+        expect(["BLOCKED", "TIMEOUT"]).toContain(await collectStdout(deniedTree));
+
+        const allowedTree = backend.spawnOwnedTree({
+          ...launchRequest(fixture),
+          runId: "run-2951-os",
+          args: [String(gateway.port)],
+        });
+        expect(await collectStdout(allowedTree)).toBe("CONNECTED");
+      } finally {
+        gateway.server.close();
+        hostile.server.close();
+      }
+    },
+    20_000,
+  );
+
+  it("records a closed skip reason when the real OS proof cannot run on this host", () => {
+    if (canProveOnThisHost) {
+      expect(canProveOnThisHost).toBe(true);
+      return;
+    }
+    const reason =
+      currentPlatform() !== "darwin"
+        ? `non-darwin platform (${currentPlatform()})`
+        : "sandbox-exec is not on PATH";
+    process.stderr.write(
+      `[gateway-confinement-proof] skipped: ${reason}. The real seatbelt OS-level proof runs on ` +
+        "macOS hosts only (ADR-0043/ADR-0140 macOS-only scope; Linux/Windows tracked separately).\n",
+    );
+    expect(canProveOnThisHost).toBe(false);
   });
 });

@@ -492,7 +492,15 @@ describe("CodingRuntimeAuthorityService", () => {
     );
   });
 
-  it("binds admitted issue identity in the retained envelope and rejects rebinding on delegation", () => {
+  // Relocated for epic #3384 correction 8 (the execution binding never carries `issueBinding` —
+  // only the run's public snapshot does). The invariant this pin encodes is unchanged and must
+  // stay exactly as strict: a run minted while bound to one issue must reject a delegation that
+  // reports a different bound issue as `task-drift`. What moved is the comparison's data shape:
+  // the registry now compares the content-free `issueBindingDigest` fingerprint retained at mint
+  // time (`AuthorityRecord.runtimeIssueBindingDigest`) against the live fingerprint, never the
+  // binding object itself — so this pin is strengthened, not relaxed, with an explicit assertion
+  // that the retained envelope's binding carries no `issueBinding` at all.
+  it("binds admitted issue identity at mint time and rejects rebinding on delegation (epic #3384 correction 8)", () => {
     const authority = service();
     const issueBinding = {
       schemaVersion: "1" as const,
@@ -510,16 +518,18 @@ describe("CodingRuntimeAuthorityService", () => {
     if (!minted.ok) throw new Error("expected mint");
     authority.transition(minted.authorityRef.runId, "ready", NOW);
     authority.transition(minted.authorityRef.runId, "running", NOW);
-    const binding = { ...facts().binding, issueBinding };
-    expect(resolve(authority, minted.authorityRef, facts({ binding }))).toMatchObject({
-      ok: true,
-      envelope: { binding: { issueBinding } },
-    });
+    const admitted = resolve(
+      authority,
+      minted.authorityRef,
+      facts({ issueBindingDigest: issueBinding.bindingDigest }),
+    );
+    expect(admitted).toMatchObject({ ok: true });
+    expect(JSON.stringify(admitted)).not.toContain("issueBinding");
     expect(
       resolve(
         authority,
         minted.authorityRef,
-        facts({ binding: { ...binding, issueBinding: { ...issueBinding, issueNumber: 43 } } }),
+        facts({ issueBindingDigest: "e".repeat(64) }),
         "changed-issue",
       ),
     ).toMatchObject({

@@ -544,6 +544,28 @@ function isNotFound(result: CommandResult): boolean {
   return result.exitCode !== 0 && /\bHTTP\s+404\b/u.test(result.stderr);
 }
 
+export type BranchProtectionNotFoundConfirmation = "unprotected" | "unknown";
+
+/**
+ * Shared branch-protection-vs-404 disambiguation (#3388). A branch-protection DETAIL read that
+ * 404s is NOT authoritative for "unprotected" — GitHub also 404s that read for reasons unrelated
+ * to protection state (token scope, ruleset visibility). The only authoritative signal is the
+ * branch's OWN `protected` field, read via a second, dedicated call. Both the merge gateway
+ * (`confirmUnprotectedBranch` below) and the CI-readiness observer (git-ci-facts.ts `protection`)
+ * hit exactly this sequencing once their own not-found detection fires; each supplies its own
+ * branch fetch (own jq projection / transport) and its own "is this branch the confirmed-
+ * unprotected shape" predicate, since those differ by caller (raw `gh` exec vs. the bounded
+ * provider-read port, and a stricter shape check on the CI-readiness side).
+ */
+export async function confirmUnprotectedBranchOnNotFound<TBranch>(params: {
+  readonly fetchBranch: () => Promise<TBranch | undefined>;
+  readonly isConfirmedUnprotected: (branch: TBranch) => boolean;
+}): Promise<BranchProtectionNotFoundConfirmation> {
+  const branch = await params.fetchBranch();
+  if (branch === undefined) return "unknown";
+  return params.isConfirmedUnprotected(branch) ? "unprotected" : "unknown";
+}
+
 async function readBranchProtection(
   ctx: RunContext,
   req: GitBranchProtectionRequest,
@@ -567,13 +589,17 @@ async function confirmUnprotectedBranch(
   ctx: RunContext,
   req: GitBranchProtectionRequest,
 ): Promise<BranchProtectionRead> {
-  const result = await runGh(ctx, buildBranchMetadataArgv(req));
-  if (result instanceof Error || result.exitCode !== 0 || result.truncated || result.timedOut)
-    return { outcome: "unknown" };
-  const branch = parseJsonObject(result.stdout);
-  return branch?.name === req.baseBranchName && branch.protected === false
-    ? { outcome: "unprotected" }
-    : { outcome: "unknown" };
+  const outcome = await confirmUnprotectedBranchOnNotFound({
+    fetchBranch: async () => {
+      const result = await runGh(ctx, buildBranchMetadataArgv(req));
+      if (result instanceof Error || result.exitCode !== 0 || result.truncated || result.timedOut)
+        return undefined;
+      return parseJsonObject(result.stdout);
+    },
+    isConfirmedUnprotected: (branch) =>
+      branch.name === req.baseBranchName && branch.protected === false,
+  });
+  return { outcome };
 }
 
 export type GitBranchProtectionReadResult =

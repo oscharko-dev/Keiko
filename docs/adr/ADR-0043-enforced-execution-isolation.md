@@ -154,3 +154,60 @@ By explicit owner decision for this delivery (mirroring D7), the #1204 PR may be
 the epic integration branch `feat/keiko-editor` once the required `ci` check is green and review has
 settled. This is the same scoped departure from ADR-0042 D8's owner-gated merge for the editor
 integration line; it does not authorise autonomous merge into the protected release line.
+
+## Amendment — Issue #2951 adds long-lived gateway-only egress confinement (2026-09-05)
+
+Authored for Issue [#2951](https://github.com/oscharko-dev/Keiko/issues/2951) (Audit KEIKO-0061,
+Parent Epic #2886) under the accepted decision to sandbox every long-lived coding sidecar with an
+attested OS-level egress policy. D1–D10 confine a **disposable, short-lived** command run
+(`network: "none"`, egress denied outright). The coding-runtime sidecar (managed OpenCode) is a
+different shape: it is a **long-lived process** that must reach exactly one loopback destination —
+Keiko's own authenticated gateway/BFF endpoint — for the run's whole lifetime, never the public
+network and never any other local port. Denying all egress (D3's `network:"none"`) is too strong for
+this shape; the existing per-platform backends in `backends.ts` had no "deny everything except this
+one loopback port" tier. This amendment records the mechanism built to close that gap and its actual,
+current platform coverage.
+
+### D11 — `RuntimeGatewayConfinement`: an attested, gateway-allowlist policy
+
+`packages/keiko-sandbox/src/runtime-gateway.ts` adds a policy shape distinct from
+`IsolatedRunPlan`/`SandboxBackend` (D1): `createRuntimeGatewayConfinement` binds the exact loopback
+gateway address/port together with the run's identity (`runId`, `treeBindingId`) and attestation
+digests (`envelopeDigest`, `runtimeArtifactDigest`, `modelProfileDigest`) into one frozen,
+tamper-evident `RuntimeGatewayConfinement` record, closed over a `policyDigest` that a hostile
+accessor cannot influence (`copyRuntimeGatewayConfinement` reads own data descriptors only, never a
+caller-supplied getter). The gateway URL must be `http://127.0.0.1` or `http://[::1]` with no
+credentials, query, or fragment — any other shape is rejected before a policy is even constructed
+(fail-closed, D3's principle applied to this narrower boundary). `buildRuntimeGatewaySeatbeltCommand`
+compiles that policy into a macOS Seatbelt profile: `(deny network*)` by default, with exactly one
+`(allow network-outbound (remote tcp4|tcp6 "localhost:<port>"))` carved out for the attested gateway
+port, plus `(deny process-fork)`, `(deny mach-lookup)`, `(deny appleevent-send)`, and `(deny
+lsopen)` to close the process- and service-escape surface a long-lived interactive sidecar would
+otherwise have. `packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts` is the
+sole caller: it refuses to spawn the sidecar at all when no confinement policy is attached, or when
+the policy's `runId`/`treeBindingId` drift from the launch request, before any process exists.
+
+### D12 — Current scope is macOS-only; Linux and Windows are an explicit, tracked gap
+
+`buildRuntimeGatewaySeatbeltCommand` hardcodes `/usr/bin/sandbox-exec` and is invoked only from the
+macOS dev-lane backend (ADR-0140). **No equivalent OS-level network policy exists today for Linux
+or Windows.** `packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts` — the
+backend used for the Windows dev lane and every release-qualified platform — carries no network
+policy of any kind; a sidecar launched through it is not confined to the gateway port by the OS. This
+is a real gap in the acceptance criterion ("every long-lived coding sidecar runs behind an attested
+OS/process-level sandbox … on macOS, Linux, and Windows"), not a documentation omission: closing it
+requires extending `backends.ts`'s existing per-platform `IsolatedRunPlan`/`SandboxBackend`
+abstraction with a gateway-allowlist variant (bubblewrap/`unshare` network-namespace plumbing for
+Linux, a Windows-native equivalent), which is materially harder than the disposable-run case because
+`--unshare-net` isolates the child into a fresh network namespace that cannot reach the host's
+loopback gateway port without additional bridging. That generalisation is out of scope for this
+delivery and is tracked as remaining work; this record deliberately does not claim cross-platform
+coverage the code does not have. Until it lands, non-macOS long-lived sidecars rely on the process
+supervisor's identity/path checks (§ D11) but not on kernel-enforced network denial.
+
+### D13 — Does not relax D1–D10
+
+This confinement mechanism is additive: it does not change `network: "none"`, the disposable-run
+backends, or the CI-proven egress denial in D5. It is a second, narrower policy shape for a shape of
+execution (long-lived, one-endpoint-allowed) that D1–D10 did not address, scoped today to the one
+platform (macOS) that has a production long-lived sidecar activation path (ADR-0140).

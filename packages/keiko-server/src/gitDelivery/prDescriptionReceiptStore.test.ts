@@ -8,7 +8,10 @@ import {
 import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { DescriptionFixture } from "./prDescriptionTestSupport.js";
 import { applicationStatus } from "./prDescriptionProjection.js";
-import { createPrDescriptionReceiptStore } from "./prDescriptionReceiptStore.js";
+import {
+  createPrDescriptionReceiptStatusHooks,
+  createPrDescriptionReceiptStore,
+} from "./prDescriptionReceiptStore.js";
 import type { PrDescriptionReceiptRead } from "./prDescriptionReceiptTypes.js";
 
 function version(read: PrDescriptionReceiptRead): string | null {
@@ -163,3 +166,86 @@ describe.each(["memory", "file"] as const)(
     });
   },
 );
+describe("description receipt status hooks (service option bridge)", () => {
+  let fixture: DescriptionFixture;
+  let evidence: EvidenceStore;
+  let journal: PrDescriptionApplicationStatus;
+  beforeEach(async () => {
+    fixture = new DescriptionFixture();
+    const preview = await fixture.service.preview({ language: "en" });
+    if (preview.outcome !== "preview") throw new TypeError("Missing actual preview");
+    journal = applicationStatus(
+      preview.preview.status.binding,
+      "complete",
+      "recovery-required",
+      "uncertain",
+      fixture.now,
+    );
+    evidence = createInMemoryEvidenceStore();
+  });
+  afterEach(() => {
+    fixture.close();
+  });
+  function hooksOver(): ReturnType<typeof createPrDescriptionReceiptStatusHooks> {
+    return createPrDescriptionReceiptStatusHooks(
+      createPrDescriptionReceiptStore({
+        evidenceStore: evidence,
+        now: () => fixture.now,
+        redact: (value) => value,
+      }),
+    );
+  }
+  it("persists a recorded status across a recreated service instance sharing the same evidence store", () => {
+    const before = hooksOver();
+    expect(before.readStatus(fixture.context)).toBeUndefined();
+    expect(before.recordStatus(fixture.context, journal)).toBe(true);
+    const afterRestart = hooksOver();
+    expect(afterRestart.readStatus(fixture.context)).toEqual(journal);
+  });
+  it("rejects a write from an instance whose cached expected version has gone stale", () => {
+    const first = hooksOver();
+    expect(first.recordStatus(fixture.context, journal)).toBe(true);
+    const second = hooksOver();
+    expect(second.readStatus(fixture.context)).toEqual(journal);
+    const complete = applicationStatus(
+      journal.binding,
+      "complete",
+      "applied",
+      "confirmed",
+      fixture.now,
+    );
+    expect(second.recordStatus(fixture.context, complete)).toBe(true);
+    expect(first.recordStatus(fixture.context, complete)).toBe(false);
+    expect(first.readStatus(fixture.context)).toEqual(complete);
+  });
+  it("logs the store's own failure when recordStatus is called through an invalid context", () => {
+    const hooks = createPrDescriptionReceiptStatusHooks(
+      createPrDescriptionReceiptStore({
+        evidenceStore: evidence,
+        now: () => fixture.now,
+        redact: (value) => value,
+        log: { write: (event) => fixture.events.push(event) },
+      }),
+    );
+    fixture.live = false;
+    expect(hooks.recordStatus(fixture.context, journal)).toBe(false);
+    expect(
+      fixture.events.some(
+        (event) => event.op === "git.pr-description.receipt" && event.extra?.phase === "record",
+      ),
+    ).toBe(true);
+  });
+  it("stays closed when the evidence store cannot serve the durable update port", () => {
+    const { update, ...withoutUpdate } = evidence;
+    expect(update).toBeDefined();
+    const unavailable = createPrDescriptionReceiptStatusHooks(
+      createPrDescriptionReceiptStore({
+        evidenceStore: withoutUpdate,
+        now: () => fixture.now,
+        redact: (value) => value,
+      }),
+    );
+    expect(unavailable.recordStatus(fixture.context, journal)).toBe(false);
+    expect(unavailable.readStatus(fixture.context)).toBeUndefined();
+  });
+});

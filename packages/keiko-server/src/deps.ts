@@ -317,6 +317,11 @@ import {
   type ProductionCodingRuntimeResolver,
 } from "./coding-runtime/productionCodingRuntimeHost.js";
 import type { GitDeliveryRunAuthorityPort } from "./gitDelivery/runBoundAuthority.js";
+import {
+  createPrDescriptionReceiptStatusHooks,
+  createPrDescriptionReceiptStore,
+} from "./gitDelivery/prDescriptionReceiptStore.js";
+import type { PrDescriptionReceiptStatusHooks } from "./gitDelivery/prDescriptionReceiptTypes.js";
 import { createProductionVerifiedCommitDependencies } from "./coding-runtime/productionVerifiedCommitDependencies.js";
 import { createProductionDraftDeliveryDependencies } from "./coding-runtime/productionDraftDeliveryDependencies.js";
 import {
@@ -4565,4 +4570,21 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     ...deps,
     voiceRecapContentAttestations: createVoiceRecapContentAttestationStore(),
   };
+}
+
+/**
+ * Composes the durable PR-description application-status bridge over the same node evidence
+ * store every other durable surface in this module shares (`createNodeEvidenceStore`), so the
+ * PR-description application service persists its status across restarts instead of the
+ * process-local field the fixture uses. Returns the plain `recordStatus`/`readStatus` hook shape
+ * `PrDescriptionServiceOptions` expects — the wiring of a live `PrDescriptionApplicationService`
+ * onto this bridge is done at the call site that owns that service's other options.
+ */
+export function createPrDescriptionReceiptStatusBridge(
+  evidenceStore: EvidenceStore,
+  log?: ServerLogSink,
+): PrDescriptionReceiptStatusHooks {
+  return createPrDescriptionReceiptStatusHooks(
+    createPrDescriptionReceiptStore({ evidenceStore, redact, ...(log !== undefined && { log }) }),
+  );
 }

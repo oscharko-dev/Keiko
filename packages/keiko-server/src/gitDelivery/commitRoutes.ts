@@ -27,6 +27,7 @@ import type {
   GitCommitIntentAnalysis,
   GitCommitMessagePolicy,
   GitCommitMessageValidation,
+  GitDeliveryApprovalClaim,
   GitDeliveryResolvedInputs,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -50,8 +51,13 @@ import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { gitDeliveryAuthorityDenial } from "./requestPreparation.js";
 import {
+  gitDeliveryAuthorityGate,
+  type GitDeliveryAuthorityIdentity,
+} from "./requestPreparation.js";
+import {
+  DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
+  GIT_DELIVERY_LOCAL_OPERATOR_ID,
   parseGitDeliveryApprovalRequest,
   resolveGitDeliveryApprovalRequirement,
   type ParsedGitDeliveryApprovalRequest,
@@ -771,6 +777,45 @@ async function conflictMarkerBlockResult(
   };
 }
 
+// ADR-0138 D2 / #3386: a commit executed under a run's Authority Envelope requires a consumed
+// approval claim regardless of what the repo/org policy pack decides — the pack's own
+// approval-gated path stays available (KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK is unchanged), but a
+// pack that never names "approval-gated" for commit must not silently substitute for the human
+// approval AC3 requires. Every request that reaches this route has already cleared
+// `gitDeliveryAuthorityGate` (an accepted run is always active — see runBoundAuthority.ts), so
+// this check is unconditional here; it is never reached for a "human Git-client without a run"
+// request, which is refused earlier as `accepted-run-unavailable` (today's unchanged behaviour).
+// Reuses the kernel's own shared outcome vocabulary (GitMutationOutcome["status"] already carries
+// "approval-required" for the pack-driven approval-gated path — see gitDeliveryMutationResponse in
+// execution.ts) rather than inventing a second, parallel status for the identical governance
+// outcome. A caller cannot tell "the pack demanded approval" from "the route demanded it
+// unconditionally" from this field alone, which is correct: both mean the same thing to the client
+// — commit nothing, mint an approval, retry.
+function commitApprovalRequiredBlock(deps: Pick<UiHandlerDeps, "redactor">): RouteResult {
+  return {
+    status: 200,
+    body: deps.redactor({
+      schemaVersion: "1",
+      status: "approval-required",
+      actionKind: "commit",
+    }),
+  };
+}
+
+function logCommitApprovalRequired(
+  activityLog: ServerLogSink,
+  correlationId: string,
+  runId: string,
+): void {
+  activityLog.write({
+    category: "security",
+    op: "git.delivery.commit.approval.required",
+    correlationId,
+    status: 200,
+    extra: { operation: "commit", runId },
+  });
+}
+
 // Builds the typed commit command, resolves the approval requirement, drives the kernel, and
 // projects the content-free response. Extracted from createHandleCommitExecute's returned handler
 // purely to stay under the function-length budget (AGENTS.md §6) — no behavioral seam of its own.
@@ -780,14 +825,29 @@ async function runCommitMutation(
   seams: GitDeliveryExecutionSeams,
   correlationId: string,
   deps: UiHandlerDeps,
+  authority: GitDeliveryAuthorityIdentity,
 ): Promise<RouteResult> {
   const command = { kind: "commit" as const, message: req.message, allowEmpty: req.allowEmpty };
   const verifiedApproval = resolveGitDeliveryApprovalRequirement(req.approval, {
     store: seams.approvalStore,
-    binding: { projectId: req.projectId, operation: "commit", command },
+    binding: {
+      projectId: req.projectId,
+      operation: "commit",
+      command,
+      runId: authority.runId,
+      envelopeDigest: authority.envelopeDigest,
+    },
     nowMs: (seams.now ?? Date.now)(),
   });
   if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST");
+  if (!verifiedApproval.required) {
+    logCommitApprovalRequired(
+      seams.activityLog ?? processServerLogSink(),
+      correlationId,
+      authority.runId,
+    );
+    return commitApprovalRequiredBlock(deps);
+  }
   try {
     const result = await executeGovernedMutation(
       command,
@@ -818,14 +878,18 @@ export const createHandleCommitExecute = (
     const prepared = await prepareCommitExecution(ctx, deps, options.messagePolicy);
     if (!prepared.ok) return prepared.result;
     const { request: req, workspace, policy } = prepared.value;
-    const authorityDenial = gitDeliveryAuthorityDenial(
+    const authority = gitDeliveryAuthorityGate(
       ctx,
       deps,
       req.projectId,
       workspace,
       "commit",
+      {},
+      {
+        logSink: seams.activityLog,
+      },
     );
-    if (authorityDenial !== undefined) return authorityDenial;
+    if (!authority.allowed) return authority.result;
 
     const messageBlock = messagePolicyBlockResult(req.message, policy, deps);
     if (messageBlock !== undefined) return messageBlock;
@@ -841,7 +905,83 @@ export const createHandleCommitExecute = (
     );
     if (conflictBlock !== undefined) return conflictBlock;
 
-    return runCommitMutation(req, workspace, seams, correlationId, deps);
+    return runCommitMutation(req, workspace, seams, correlationId, deps, authority);
+  };
+};
+
+// ─── Approve (mints the server-issued approval claim execute consumes) ──────────────────────────
+//
+// #3386 (ADR-0138 D2): mirrors createHandleMergeApprove (mergeRoutes.ts) exactly — reuses the
+// IDENTICAL prepare/validate path the execute handler uses, so the GitMutationCommand this mints
+// against is byte-for-byte the same typed value execute rebuilds from the same request body, and
+// binds runId/envelopeDigest from the SAME admitted authority the execute route re-derives. The
+// binding-hash consume() already enforces the match; this route only ever ISSUES a claim, never
+// executes a mutation.
+
+export interface GitDeliveryCommitApproveResponseBody {
+  readonly schemaVersion: "1";
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAt: string;
+}
+
+function logCommitApprovalMinted(
+  activityLog: ServerLogSink,
+  correlationId: string,
+  runId: string,
+): void {
+  activityLog.write({
+    category: "security",
+    op: "git.delivery.commit.approval.minted",
+    correlationId,
+    status: 200,
+    extra: { operation: "commit", runId },
+  });
+}
+
+export const createHandleCommitApprove = (
+  options: GitDeliveryCommitRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  const seams = {
+    ...options.execution,
+    activityLog: options.execution?.activityLog ?? options.activityLog ?? processServerLogSink(),
+  };
+  return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    const prepared = await prepareCommitExecution(ctx, deps, options.messagePolicy);
+    if (!prepared.ok) return prepared.result;
+    const { request: req, workspace } = prepared.value;
+    const authority = gitDeliveryAuthorityGate(
+      ctx,
+      deps,
+      req.projectId,
+      workspace,
+      "commit",
+      {},
+      {
+        logSink: seams.activityLog,
+      },
+    );
+    if (!authority.allowed) return authority.result;
+    const command = { kind: "commit" as const, message: req.message, allowEmpty: req.allowEmpty };
+    const store = seams.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;
+    const issued = store.issue({
+      binding: {
+        projectId: req.projectId,
+        operation: "commit",
+        command,
+        runId: authority.runId,
+        envelopeDigest: authority.envelopeDigest,
+      },
+      approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
+      nowMs: (seams.now ?? Date.now)(),
+    });
+    logCommitApprovalMinted(seams.activityLog, correlationId, authority.runId);
+    const body: GitDeliveryCommitApproveResponseBody = {
+      schemaVersion: "1",
+      approval: issued.approval,
+      expiresAt: new Date(issued.expiresAtMs).toISOString(),
+    };
+    return { status: 200, body: deps.redactor(body) };
   };
 };
 
@@ -854,6 +994,11 @@ export const createGitDeliveryCommitRouteGroup = (
     method: "POST",
     pattern: "/api/git-delivery/commit/preview",
     handler: createHandleCommitPreview(options),
+  },
+  {
+    method: "POST",
+    pattern: "/api/git-delivery/commit/approve",
+    handler: createHandleCommitApprove(options),
   },
   {
     method: "POST",

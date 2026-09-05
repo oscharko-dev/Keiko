@@ -185,4 +185,46 @@ describe("git delivery approval store", () => {
       }),
     ).toBeUndefined();
   });
+
+  // #3386 (ADR-0138 D2): "authority-admission" is the coarse, run-identity-bound claim
+  // `runBoundAuthority.authorizeGitDelivery`'s redemption hook consumes for a lower mode's
+  // approval-required disposition (see requestPreparation.ts's `gitDeliveryApprovalRedemption`).
+  // It carries no command shape of its own beyond the attempted operation — proven here through the
+  // SAME generic issue/consume path every other operation kind already uses, so this is additive,
+  // not a parallel mechanism.
+  it("mints and redeems an authority-admission claim bound to a run's identity and the attempted operation", () => {
+    const store = createInMemoryGitDeliveryApprovalStore();
+    const binding: GitDeliveryApprovalBinding = {
+      projectId: "/workspace/repo",
+      operation: "authority-admission",
+      command: { operation: "push" },
+      runId: "run-a",
+      envelopeDigest: "a".repeat(64),
+    };
+    const issued = store.issue({ binding, approvedByUserId: "u-1", nowMs: NOW, ttlMs: 60_000 });
+    const parsed = parseGitDeliveryApprovalRequest(issued.approval);
+    if (parsed?.kind !== "claim") throw new Error("expected claim");
+
+    expect(
+      resolveGitDeliveryApprovalRequirement(parsed, { store, binding, nowMs: NOW + 1 }),
+    ).toMatchObject({ required: true });
+
+    // Bound to the specific operation attempted: a claim minted for "push" does not redeem "pull".
+    const other = createInMemoryGitDeliveryApprovalStore();
+    const issuedForPush = other.issue({
+      binding,
+      approvedByUserId: "u-1",
+      nowMs: NOW,
+      ttlMs: 60_000,
+    });
+    const parsedForPush = parseGitDeliveryApprovalRequest(issuedForPush.approval);
+    if (parsedForPush?.kind !== "claim") throw new Error("expected claim");
+    expect(
+      resolveGitDeliveryApprovalRequirement(parsedForPush, {
+        store: other,
+        binding: { ...binding, command: { operation: "pull" } },
+        nowMs: NOW + 1,
+      }),
+    ).toBeUndefined();
+  });
 });

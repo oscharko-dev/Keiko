@@ -13,8 +13,20 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 // approval-gated (actionSheetRoutes.ts always sets `approvalRequirement: { required: false }`
 // and never touches the approval store), so the member was pure type-noise that suggested a
 // non-existent binding could be constructed.
+// "authority-admission" (#3386, ADR-0138 D2): a coarse, run-identity-bound claim redeemed by
+// `runBoundAuthority.authorizeGitDelivery`'s own "approval-required" disposition for a lower mode
+// (governed-assist, supervised-coding) — see `gitDeliveryApprovalRedemption` in
+// requestPreparation.ts. Distinct from the operation-specific bindings above: it carries no command
+// shape of its own, only the operation attempted, because it stands for "this run may attempt this
+// operation right now" rather than approval of one exact command.
 export type GitDeliveryApprovalOperation =
-  "local-mutation" | "commit" | "push" | "pr" | "merge" | "pr-description-apply";
+  | "local-mutation"
+  | "commit"
+  | "push"
+  | "pr"
+  | "merge"
+  | "pr-description-apply"
+  | "authority-admission";
 
 export interface GitDeliveryApprovalBinding {
   readonly projectId: string;

@@ -3,7 +3,7 @@
   "ownerIssue": 3406,
   "closeoutIssue": 3415,
   "sourceContract": "docs/architecture/governed-tool-contract.v1.json",
-  "sourceContractDigest": "ea685778b46bfd9d87e8c3d00d5a3d9c3b86e98b1a58e8a81ba4a335315d3bf6",
+  "sourceContractDigest": "4ab109489c318edf14d822a2b72c01ed4aa6efe96e37e8258e9809ae72a8e48a",
   "inventory": [
     {
       "id": "generic-gateway",
@@ -93,12 +93,12 @@
     {
       "id": "child-host",
       "ownerIssue": 3407,
-      "disposition": "migrate/delete"
+      "disposition": "derive projection"
     },
     {
       "id": "harness-executor",
       "ownerIssue": 3409,
-      "disposition": "migrate/delete"
+      "disposition": "derive projection"
     },
     {
       "id": "gateway-openai",

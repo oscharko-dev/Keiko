@@ -59,16 +59,36 @@ function routeAfterModel(ctx: RunContext, response: NormalizedResponse): StateSt
   return { to: "reporting", reason: "model produced final content; read-only task" };
 }
 
+// A HarnessCatalogError raised before the model call completes (captureModelToolCalls rejects a
+// tool_calls response when no catalog is bound, or when the provider's bound invocation fails
+// cross-validation) carries its own closed category -- classify by that category, exactly as
+// runOneTool's catch already does for a tool-execution failure, instead of collapsing every such
+// failure into the generic non-retryable HARNESS_MODEL_ERROR.
+function onCatalogDispatchError(ctx: RunContext, error: HarnessCatalogError): StateStep {
+  ctx.failure = toFailure(error.category, error.message);
+  return {
+    to: error.category.startsWith("HARNESS_LIMIT_") ? "limit-exceeded" : "failed",
+    reason: "catalog dispatch failed before the model call completed",
+  };
+}
+
+function onModelCallAborted(ctx: RunContext): StateStep {
+  if (ctx.failure?.category === HARNESS_CODES.LIMIT_WALL_TIME) {
+    return { to: "limit-exceeded", reason: "maxWallTimeMs exceeded during model call" };
+  }
+  return { to: "cancelled", reason: "abort detected during model call" };
+}
+
 function onModelError(ctx: RunContext, error: unknown): StateStep {
   if (ctx.signal.aborted || error instanceof CancelledError) {
-    if (ctx.failure?.category === HARNESS_CODES.LIMIT_WALL_TIME) {
-      return { to: "limit-exceeded", reason: "maxWallTimeMs exceeded during model call" };
-    }
-    return { to: "cancelled", reason: "abort detected during model call" };
+    return onModelCallAborted(ctx);
   }
   const code = error instanceof GatewayError ? error.code : "UNKNOWN";
   const message = error instanceof Error ? error.message : "model call failed";
   ctx.emitter.emit({ type: "model:call:failed", modelId: ctx.modelId, errorCode: code, message });
+  if (error instanceof HarnessCatalogError) {
+    return onCatalogDispatchError(ctx, error);
+  }
   const retryable = error instanceof GatewayError && error.retryable;
   if (!retryable) {
     ctx.failure = toFailure(HARNESS_CODES.MODEL_ERROR, message);

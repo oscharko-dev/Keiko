@@ -121,6 +121,22 @@ describe("workspace-owned coding repository handler", () => {
       snippet: "[REDACTED]",
     });
   });
+  it("clamps a redacted read at a UTF-8 boundary using the shared byte-clamp reader", async () => {
+    const multibyteSource = [...secret, "界界"].join("\n");
+    const result = await executeCodingRepositoryRequest(
+      workspace(),
+      { kind: "read", path: "src/example.ts", startLine: 4, endLine: 5, maxBytes: 15 },
+      { fs: memFs("/ws", { "src/example.ts": multibyteSource }) },
+    );
+    expect(result.ok && result.kind === "read" && result.excerpt).toMatchObject({
+      startLine: 4,
+      endLine: 5,
+      redacted: true,
+      snippetTruncated: true,
+      snippet: "[REDACTED]\n界",
+    });
+    expect(result.ok && result.kind === "read" && result.excerpt.snippet).not.toContain("�");
+  });
   it("applies include/exclude globs through existing candidate ranking", async () => {
     const result = await executeCodingRepositoryRequest(
       workspace(),

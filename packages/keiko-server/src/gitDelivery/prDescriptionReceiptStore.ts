@@ -13,6 +13,7 @@ import type { ServerLogSink } from "../observability/server-log.js";
 import type { PrDescriptionContext } from "./prDescriptionTypes.js";
 import type {
   PrDescriptionReceiptRead,
+  PrDescriptionReceiptStatusHooks,
   PrDescriptionReceiptStore,
 } from "./prDescriptionReceiptTypes.js";
 import { validDescriptionContext } from "./prDescriptionPreparation.js";
@@ -248,4 +249,81 @@ function recordReceipt(
   } catch (error) {
     return failure(options, context, "record", error);
   }
+}
+/**
+ * Bridges the durable, expected-version CAS receipt store into the plain boolean/undefined
+ * `recordStatus`/`readStatus` hook shape `PrDescriptionServiceOptions` expects, so the
+ * application service persists across restarts instead of the fixture-only in-memory field it
+ * previously depended on. The expected version for a write is served from an in-process cache
+ * (populated by the last read or write this instance observed) rather than a fresh read on every
+ * call, so a write made through a stale cache — another instance having advanced the receipt in
+ * the meantime — surfaces as a rejected compare-and-swap instead of silently overwriting it. A
+ * cache miss (a fresh instance, e.g. after a restart) falls back to one read of the underlying
+ * store to recover the current version before writing; a failed read leaves the write refused
+ * (fail closed) rather than guessing "absent".
+ */
+export function createPrDescriptionReceiptStatusHooks(
+  store: PrDescriptionReceiptStore,
+): PrDescriptionReceiptStatusHooks {
+  const versions = new Map<string, string | null>();
+  return {
+    readStatus: (context) => readHookStatus(store, versions, context),
+    recordStatus: (context, status) => recordHookStatus(store, versions, context, status),
+  };
+}
+function hookScopeKey(context: PrDescriptionContext): string | undefined {
+  try {
+    return scopeFor(context).digest;
+  } catch {
+    return undefined;
+  }
+}
+function expectedVersionFor(
+  store: PrDescriptionReceiptStore,
+  versions: Map<string, string | null>,
+  key: string,
+  context: PrDescriptionContext,
+): string | null | undefined {
+  const cached = versions.get(key);
+  if (cached !== undefined) return cached;
+  const read = store.readStatus(context);
+  if (!read.ok) return undefined;
+  versions.set(key, read.version);
+  return read.version;
+}
+function readHookStatus(
+  store: PrDescriptionReceiptStore,
+  versions: Map<string, string | null>,
+  context: PrDescriptionContext,
+): PrDescriptionApplicationStatus | undefined {
+  const read = store.readStatus(context);
+  if (!read.ok) return undefined;
+  const key = hookScopeKey(context);
+  if (key !== undefined) versions.set(key, read.version);
+  return read.version === null ? undefined : structuredClone(read.status);
+}
+function recordHookStatus(
+  store: PrDescriptionReceiptStore,
+  versions: Map<string, string | null>,
+  context: PrDescriptionContext,
+  status: PrDescriptionApplicationStatus,
+): boolean {
+  const key = hookScopeKey(context);
+  if (key === undefined) {
+    // The scope digest could not be derived (e.g. an invalid/revoked context). Forward to the
+    // store anyway — its own scopeFor validation rejects the same context and logs the failure
+    // via failure(), the same way readHookStatus always calls store.readStatus first. Without
+    // this, an invalid context short-circuited here and never reached the store's logging.
+    store.recordStatus(context, status, null);
+    return false;
+  }
+  const expected = expectedVersionFor(store, versions, key, context);
+  if (expected === undefined) return false;
+  const result = store.recordStatus(context, status, expected);
+  if (!result.ok) {
+    versions.delete(key);
+    return false;
+  }
+  versions.set(key, result.version);
+  return true;
 }

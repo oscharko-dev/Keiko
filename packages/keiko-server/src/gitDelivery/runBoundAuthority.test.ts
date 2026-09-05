@@ -10,7 +10,14 @@ import { describe, expect, it } from "vitest";
 import { CORRELATION_RESPONSE_HEADER, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { gitDeliveryAuthorityDenial, gitDeliveryAuthorityGate } from "./requestPreparation.js";
 import { authorizeGitDelivery } from "./runBoundAuthority.js";
-import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
+import {
+  permittedGitDeliveryAuthority,
+  productionScopedGitDeliveryAuthority,
+} from "./runBoundAuthority.test-support.js";
+import {
+  createInMemoryGitDeliveryApprovalStore,
+  GIT_DELIVERY_LOCAL_OPERATOR_ID,
+} from "./approvalStore.js";
 
 const NOW = "2026-08-28T12:00:00.000Z";
 const PROJECT_ID = "project-1";
@@ -57,13 +64,18 @@ const AUTHORITY_DENIAL_CASES: readonly AuthorityDenialCase[] = [
     REQUEST,
     "workspace-out-of-envelope",
   ],
+  // ADR-0138 D2 (epic #3384 correction 5 / #3386 contract correction 1): a delivery effect is
+  // approval-required in every mode, never mode-denied merely because the mode is governed-assist.
+  // Relocated from "mode-denied" — this pin still enforces that governed-assist cannot commit,
+  // push, fetch, pull, propose, or merge without an approval; only the closed reason changed to
+  // one that is actually redeemable (see "redeems an approval-required disposition" below).
   [
     authorityPort((active) => ({
       ...active,
       authority: { ...active.authority, effectiveMode: "governed-assist" },
     })),
     REQUEST,
-    "mode-denied",
+    "approval-required",
   ],
   [
     authorityPort((active) => ({
@@ -246,8 +258,14 @@ describe("authorizeGitDelivery per operation", () => {
     },
   );
 
+  // ADR-0138 D2 (epic #3384 correction 5 / #3386 contract correction 1): relocated from
+  // "mode-denied" to "approval-required" — supervised-coding still refuses to reach a remote
+  // without an approval; only the closed reason changed to one a caller can actually redeem via a
+  // one-use claim (see "redeems an approval-required disposition" below). #3387 owns the push/PR
+  // mint routes that make redemption reachable in production; until then this reason is a fail-
+  // closed refusal, never a silent allow.
   it.each(["fetch", "pull", "push", "pull-request", "merge"] as const)(
-    "denies %s below autonomous-delivery, because it reaches a remote",
+    "requires approval for %s below autonomous-delivery, because it reaches a remote",
     (operation) => {
       expect(
         authorizeGitDelivery(
@@ -259,9 +277,125 @@ describe("authorizeGitDelivery per operation", () => {
           { ...REQUEST, operation },
           NOW,
         ),
-      ).toEqual({ allowed: false, reason: "mode-denied" });
+      ).toEqual({ allowed: false, reason: "approval-required" });
     },
   );
+
+  // Reviewer repair (#3386 blocking finding): `permittedGitDeliveryAuthority` above grants full
+  // connector scopes and actionClasses regardless of `effectiveMode`, which never happens in
+  // production (`productionRuntimeWorkspaceAuthority.ts` mints `source-control.write` /
+  // `delivery-substrate` / a connector-scoped network policy only for `autonomous-delivery`). That
+  // made the "requires approval for %s below autonomous-delivery" case above pass even before the
+  // scope-deferral fix in `runBoundAuthority.ts`, because `hasRequiredScopes` never actually ran
+  // into the missing scope. These cases drive `productionScopedGitDeliveryAuthority`, which
+  // withholds exactly what production withholds below `autonomous-delivery`, and would have failed
+  // with "permission-scope-missing" (never reaching the matrix or the redemption hook) before this
+  // repair.
+  it.each(["commit", "fetch", "pull", "push", "pull-request", "merge"] as const)(
+    "requires approval for %s at supervised-coding under a production-scoped envelope with no delivery grant",
+    (operation) => {
+      expect(
+        authorizeGitDelivery(
+          productionScopedGitDeliveryAuthority(
+            () => PROJECT_ID,
+            () => WORKSPACE_ROOT,
+            "supervised-coding",
+          ),
+          { ...REQUEST, operation },
+          NOW,
+        ),
+      ).toEqual({ allowed: false, reason: "approval-required" });
+    },
+  );
+
+  it("redeems a supervised-coding push's approval-required disposition against a production-scoped envelope that never grants source-control.write or network egress", () => {
+    const decision = authorizeGitDelivery(
+      productionScopedGitDeliveryAuthority(
+        () => PROJECT_ID,
+        () => WORKSPACE_ROOT,
+        "supervised-coding",
+      ),
+      { ...REQUEST, operation: "push" },
+      NOW,
+      () => true,
+    );
+    expect(decision).toEqual({
+      allowed: true,
+      runId: "test-run",
+      envelopeDigest: "c".repeat(64),
+    });
+  });
+
+  // `autonomous-delivery` keeps the scope/network gate as a genuine, stricter-wins check: even
+  // under the production-realistic fixture (which grants full delivery scope only at this mode),
+  // an explicitly under-scoped envelope is still refused before the matrix, never waved through.
+  it("still refuses commit at autonomous-delivery when a production-scoped envelope is explicitly stripped of source-control.write", () => {
+    const port = productionScopedGitDeliveryAuthority(
+      () => PROJECT_ID,
+      () => WORKSPACE_ROOT,
+      "autonomous-delivery",
+    );
+    const stripped: GitDeliveryRunAuthorityPort = {
+      current: (nowIso) => {
+        const active = port.current(nowIso);
+        if (active === undefined) throw new Error("test authority was not available");
+        return { ...active, authority: { ...active.authority, connectorScopes: [] } };
+      },
+    };
+    expect(
+      authorizeGitDelivery(stripped, { ...REQUEST, operation: "commit" }, NOW, () => true),
+    ).toEqual({ allowed: false, reason: "permission-scope-missing" });
+  });
+
+  it("redeems an approval-required disposition via a caller-supplied claim, admitting the run", () => {
+    const decision = authorizeGitDelivery(
+      permittedGitDeliveryAuthority(
+        () => PROJECT_ID,
+        () => WORKSPACE_ROOT,
+        "supervised-coding",
+      ),
+      { ...REQUEST, operation: "push" },
+      NOW,
+      () => true,
+    );
+    expect(decision).toEqual({
+      allowed: true,
+      runId: "test-run",
+      envelopeDigest: "c".repeat(64),
+    });
+  });
+
+  it("does not redeem an approval-required disposition when the caller's claim is rejected", () => {
+    const decision = authorizeGitDelivery(
+      permittedGitDeliveryAuthority(
+        () => PROJECT_ID,
+        () => WORKSPACE_ROOT,
+        "supervised-coding",
+      ),
+      { ...REQUEST, operation: "push" },
+      NOW,
+      () => false,
+    );
+    expect(decision).toEqual({ allowed: false, reason: "approval-required" });
+  });
+
+  it("never asks the caller to redeem a hard denial (permission-scope-missing)", () => {
+    let calls = 0;
+    const decision = authorizeGitDelivery(
+      authorityPort((active) => ({
+        ...active,
+        authority: { ...active.authority, connectorScopes: ["source-control.read"] },
+      })),
+      REQUEST,
+      NOW,
+      () => {
+        calls += 1;
+        return true;
+      },
+    );
+    expect(decision).toEqual({ allowed: false, reason: "permission-scope-missing" });
+    expect(calls).toBe(0);
+  });
 });
 
 describe("authorizeGitDelivery", () => {
@@ -387,6 +521,83 @@ describe("authorizeGitDelivery", () => {
         correlationId: "correlation-2",
         status: 403,
         extra: { operation: "push", phase: "continuity", reason: "authority-changed" },
+      }),
+    ]);
+  });
+
+  // ADR-0138 D2 / #3386 contract correction 1: proves the redemption end-to-end through the
+  // composed gate `gitDeliveryAuthorityGate` actually mounts, not only the raw predicate
+  // `authorizeGitDelivery` accepts. Before this change, a supervised-coding push was hard-denied
+  // as "mode-denied" with no approval channel at all; a minted "authority-admission" claim, bound
+  // to this exact run's identity and the attempted operation, now admits it.
+  it("admits a supervised-coding push once its approval-required disposition is redeemed by a minted claim", () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const workspace = { root: WORKSPACE_ROOT } as WorkspaceInfo;
+    const deps = {
+      gitDeliveryAuthority: permittedGitDeliveryAuthority(
+        () => PROJECT_ID,
+        () => WORKSPACE_ROOT,
+        "supervised-coding",
+      ),
+    };
+    const issued = approvalStore.issue({
+      binding: {
+        projectId: PROJECT_ID,
+        operation: "authority-admission",
+        command: { operation: "push" },
+        runId: "test-run",
+        envelopeDigest: "c".repeat(64),
+      },
+      approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
+      nowMs: Date.parse(NOW),
+    });
+
+    const result = gitDeliveryAuthorityGate(
+      { correlationId: "correlation-3" } as never,
+      deps,
+      PROJECT_ID,
+      workspace,
+      "push",
+      { headBranchName: "feature/test", remoteBranchName: "feature/test" },
+      {
+        nowIso: NOW,
+        approval: { kind: "claim", claim: issued.approval },
+        approvalStore,
+      },
+    );
+
+    expect(result).toEqual({ allowed: true, runId: "test-run", envelopeDigest: "c".repeat(64) });
+  });
+
+  it("still refuses a supervised-coding push when no claim is offered to redeem it, and logs the approval-required reason", () => {
+    const workspace = { root: WORKSPACE_ROOT } as WorkspaceInfo;
+    const deps = {
+      gitDeliveryAuthority: permittedGitDeliveryAuthority(
+        () => PROJECT_ID,
+        () => WORKSPACE_ROOT,
+        "supervised-coding",
+      ),
+    };
+    const events: ServerLogEvent[] = [];
+
+    const result = gitDeliveryAuthorityGate(
+      { correlationId: "correlation-4" } as never,
+      deps,
+      PROJECT_ID,
+      workspace,
+      "push",
+      { headBranchName: "feature/test", remoteBranchName: "feature/test" },
+      { nowIso: NOW, logSink: { write: (event) => events.push(event) } },
+    );
+
+    expect(result.allowed).toBe(false);
+    expect(result.allowed ? undefined : result.reason).toBe("approval-required");
+    expect(events).toEqual([
+      expect.objectContaining({
+        op: "git.delivery.authority.denied",
+        correlationId: "correlation-4",
+        status: 403,
+        extra: { operation: "push", phase: "admission", reason: "approval-required" },
       }),
     ]);
   });

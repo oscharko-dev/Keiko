@@ -6,17 +6,24 @@ import type {
 
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 
-// KEIKO-0526: only `merge` currently exposes an /approve mint route. If a future policy pack ever
-// declared `approval-gated` for a different action kind, no HTTP surface could satisfy the resulting
-// approval claim and the action would silently fail closed with no diagnostic pointer to the
+// KEIKO-0526: originally only `merge` exposed an /approve mint route. If a policy pack declared
+// `approval-gated` for a different action kind, no HTTP surface could satisfy the resulting approval
+// claim and the action would silently fail closed with no diagnostic pointer to the
 // misconfiguration. This set makes that ceiling explicit; extending it requires wiring the matching
 // mint route first.
+//
+// #3386 (ADR-0138 D2, epic #3384 correction 5): `commit` joined once `POST
+// /api/git-delivery/commit/approve` existed (commitRoutes.ts, mirroring merge's approve handler) —
+// the commit execute path now unconditionally requires a consumed claim whenever the request is
+// bound to a run's Authority Envelope, independent of any repo/org pack's own decision (see
+// runCommitMutation in commitRoutes.ts). `push`/`pull-request` stay out of this set: no mint route
+// exists for them yet (#3387 owns that work).
 //
 // This module is deliberately dependency-free within gitDelivery/ (only contract types) so every
 // pack-resolution site -- including defaultPolicyPacks.ts, which itself imports each action kind's
 // KEIKO_DEFAULT_*_POLICY_PACK constant from its owning *Execution.ts module -- can import the guard
 // without creating an import cycle back through those same execution modules.
-const MINTABLE_ACTION_KINDS: ReadonlySet<GitDeliveryActionKind> = new Set(["merge"]);
+const MINTABLE_ACTION_KINDS: ReadonlySet<GitDeliveryActionKind> = new Set(["merge", "commit"]);
 
 /**
  * Fails loudly at pack-resolution time when a policy pack names `approval-gated` for an action kind
@@ -31,7 +38,7 @@ export function assertPolicyPackMintable(
     if (rule.decision === "approval-gated" && !MINTABLE_ACTION_KINDS.has(rule.actionKind)) {
       throw new Error(
         `git-delivery policy pack names approval-gated for '${rule.actionKind}' ` +
-          "but no mint route exists for it (only 'merge' currently exposes /approve)",
+          "but no mint route exists for it (only 'merge' and 'commit' currently expose /approve)",
       );
     }
   }

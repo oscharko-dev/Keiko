@@ -37,7 +37,8 @@ import {
 import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
 import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type { GatewayCallRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import { createToolInvocationNormalizer } from "@oscharko-dev/keiko-tool-catalog";
 import {
   createFetchEditorAgentHttpTransport,
   DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS,
@@ -45,7 +46,12 @@ import {
   EditorAgentToolHost,
   type EditorAgentToolOutput,
 } from "@oscharko-dev/keiko-tools";
-import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../index.js";
+import {
+  buildRedactor,
+  createInMemoryUiStore,
+  type ServerLogEvent,
+  type UiHandlerDeps,
+} from "../index.js";
 import { createRunRegistry } from "../runs.js";
 import { createUiServer, UI_HOST } from "../server.js";
 import type { VerificationRunInput, VerificationRunnerManager } from "./verificationRunner.js";
@@ -232,18 +238,36 @@ class FakeVerificationRunnerManager implements VerificationRunnerManager {
 }
 
 // One scripted tool_calls turn followed by a final stop turn -- exactly the two-message shape the
-// harness executor drives (model-call -> tool-call -> model-call -> reporting).
+// harness executor drives (model-call -> tool-call -> model-call -> reporting). Binds the provider
+// tool call to the harness's advertised catalog exactly the way a real provider adapter now must
+// (mirrors packages/keiko-harness/src/_support.ts's scriptedModel) -- the mandatory catalog
+// dispatch path (catalog-runtime.ts) rejects a toolCall with no bound `invocation`.
 function toolCallThenStop(toolName: string, args: Record<string, unknown>): ModelPort {
   let call = 0;
   return {
-    call: (): Promise<NormalizedResponse> => {
+    call: (request: GatewayCallRequest): Promise<NormalizedResponse> => {
       call += 1;
       if (call === 1) {
+        const invocation =
+          request.toolCatalog === undefined
+            ? undefined
+            : createToolInvocationNormalizer({
+                catalog: request.toolCatalog.catalog,
+                projection: request.toolCatalog.projection,
+                offered: request.toolCatalog.offered,
+              }).bindAlias(toolName, args, 0);
         return Promise.resolve({
           modelId: "producer-test-model",
           content: "",
           finishReason: "tool_calls",
-          toolCalls: [{ id: "call-1", name: toolName, arguments: args }],
+          toolCalls: [
+            {
+              id: "call-1",
+              name: toolName,
+              arguments: args,
+              ...(invocation === undefined ? {} : { invocation }),
+            },
+          ],
           structuredOutput: null,
           usage: {
             requestId: "r1",
@@ -279,6 +303,7 @@ interface Fixture {
   readonly authorityRef: EditorAgentGovernedAuthorityReference;
   readonly verificationRunner: FakeVerificationRunnerManager;
   readonly disconnectBridge: () => void;
+  readonly activityLogEvents: readonly ServerLogEvent[];
   setModel: (model: ModelPort) => void;
 }
 
@@ -301,11 +326,13 @@ async function createFixture(): Promise<Fixture> {
   const authorityRef = authority(root);
   const verificationRunner = new FakeVerificationRunnerManager();
   let model: ModelPort = { call: () => Promise.reject(new Error("no script configured")) };
+  const activityLogEvents: ServerLogEvent[] = [];
   const deps = {
     autonomousDeliveryDeploymentCeiling: CEILING,
     env: {},
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
+    activityLog: { write: (event: ServerLogEvent): void => void activityLogEvents.push(event) },
     store,
     modelPortFactory: (modelId: string): ModelPort | undefined =>
       modelId === "producer-test-model" ? model : undefined,
@@ -342,6 +369,7 @@ async function createFixture(): Promise<Fixture> {
     authorityRef,
     verificationRunner,
     disconnectBridge,
+    activityLogEvents,
     setModel: (next: ModelPort): void => {
       model = next;
     },
@@ -451,6 +479,19 @@ describe("editor-agent producer turn reachability (#2489 Findings 1/2)", () => {
     );
     const response = await postProducerTurn(current.port);
     expectSucceededToolOutcome(response, "editor_navigate_symbol", "succeeded");
+
+    // #3407/#3408 repair: this turn now actually dispatches through the mandatory catalog instead
+    // of failing closed on every tool call -- AGENTS.md §8 requires that new runtime behaviour ship
+    // its own body-free activity-log evidence. One line, counts/identifiers only.
+    const completed = current.activityLogEvents.find(
+      (event) => event.op === "editor.producer-turn.completed",
+    );
+    expect(completed).toMatchObject({
+      category: "process",
+      op: "editor.producer-turn.completed",
+      extra: { outcome: "completed", toolCallCount: 1, toolNames: ["editor_navigate_symbol"] },
+    });
+    expect(JSON.stringify(completed)).not.toContain("reachability probe");
   });
 
   it("drives editor_search_workspace to real production dispatch", async () => {

@@ -214,7 +214,13 @@ type CandidateSetProvider = (
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-function clampToBytes(text: string, maxBytes: number): { excerpt: string; truncated: boolean } {
+// Exported so callers that must clamp a byte budget outside the searchText/readExcerpt facade
+// (e.g. the coding-repository H1 excerpt projection, which redacts before this final clamp) reuse
+// this exact UTF-8-boundary-safe truncation instead of re-deriving it.
+export function clampToBytes(
+  text: string,
+  maxBytes: number,
+): { excerpt: string; truncated: boolean } {
   if (maxBytes <= 0) {
     return { excerpt: "", truncated: true };
   }

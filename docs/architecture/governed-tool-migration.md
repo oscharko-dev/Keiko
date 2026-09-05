@@ -6,12 +6,23 @@ contract, not evidence that catalog runtime or H1 exists. `npm run check:governe
 checks the historical `inventory.path` / `inventory.probe` mappings in the
 [normative table](governed-tool-contract.v1.json) against their verified active owners. The 43
 audited IDs, paths, probes, owners and dispositions remain frozen as the historical ownership
-baseline. `inventoryMigrations` records the already-reviewed #2958 removal at commit
+baseline, with one narrow, checker-shaped exception: a row whose own owning issue verifiably moves
+its probe within a file that survives the refactor (not a deletion) is repointed in place to the
+live probe, and the retired mapping is preserved in that row's `scope` text instead of via
+`inventoryMigrations` — `inventoryMigrations` requires the retired source path to be absent
+(`checkActiveInventoryProbe` in `governed-tool-contract.mjs`), which does not hold when the file
+survives with an unrelated, retained counter. `harness-executor` is the first such row: its
+`RUN_COMMAND_TOOL` probe in `packages/keiko-harness/src/executor.ts` moved to
+`descriptorRunsCommand` in `packages/keiko-harness/src/catalog-budget.ts` (#3409/#3411); the row
+was repointed to that live probe with disposition `derive projection`, and the retired
+`executor.ts`/`RUN_COMMAND_TOOL`/`migrate/delete` mapping is recorded in the row's `scope` text.
+`inventoryMigrations` records the already-reviewed #2958 removal at commit
 `f60e7bc230e06cd0e58fde0e89904e330b97cf05`: the obsolete `autonomousDeliveryPolicy.ts` must remain
 absent, while live authority admission in `codingToolAuthorityPort.ts`, the shared monotonic
 `codingWorkbenchPolicyEffectFor` contract and mounted `authorizeGitDelivery` owner must all exist.
 Negative tests reject restored scaffolding, a missing replacement or altered migration identity.
-The original historical row is neither rewritten nor removed.
+The original historical row is neither rewritten nor removed; a repointed row keeps its id, owner and
+retired mapping, so the 43-row ownership baseline stays auditable in both shapes.
 
 This is the first verified migration disposition in the existing inventory gate, not a new
 runtime registry. #3406 extends this same migration/conformance mechanism when actual catalog
@@ -25,23 +36,23 @@ The machine table gives each production definition a unique ID, exact path, sour
 disposition and one issue owner. These probes can also be reproduced with
 `rg -n --fixed-strings '<probe>' '<path>'`; no line number survives refactoring by assumption.
 
-| Group                                                     | Inventory IDs                                                          | Observed disposition                                                                                                 |
-| --------------------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Generic gateway and tool wire types                       | generic-gateway, generic-tool-port                                     | #3409 replaces name-only truth with the one additive bound bridge                                                    |
-| Six legacy definitions/parser/dispatch                    | legacy-schema, legacy-host                                             | #3409 derives catalog projection, retains execution, deletes duplicates                                              |
-| Editor nine descriptors, host and active producer subset  | editor-schema, editor-host, editor-route                               | #3408 reconciles exact schema/host support and governed active subset; counts mean different things                  |
-| Managed OpenCode schemas, names, descriptions and actions | opencode-schema                                                        | #3414 derives seven existing Keiko tools plus conditional repository search; native question/todowrite stay explicit |
-| OpenCode prompt/config/source/protocol/IPC/digest         | opencode-launch, opencode-source, opencode-protocol, opencode-ipc      | #3414 derives all semantics from one compiled profile                                                                |
-| Runtime-supplied arbitrary definitions                    | sidecar-transport                                                      | Retain transport parsing; #3414 prevents entry into governed dispatch                                                |
-| Live policy, ports and handler readiness                  | live-authority, governed-delegate, handler-composition                 | #3413 binds existing authority; #3386 owns operational handlers, including optional backend availability             |
-| Child read alias/parser and transient sink                | child-host                                                             | #3407 assigns unique alias, exact result/input validation and real durable event composition                         |
-| Native provider projection and Realtime compatibility     | gateway-openai, realtime-compatibility                                 | #3409 derives supported projections and rejects unsupported Realtime tools before session startup                    |
-| Harness and dry-run CLI/server/SDK composition            | harness-executor, cli-composition, server-composition, sdk-composition | #3409 removes name-based charge; dry-run stays nonproductive, bound backend required                                 |
-| Run and invocation event durability                       | harness-sink, diagnostic-sink, activity-redaction                      | #3413 owns invocation settlement and primary write; #3409 ensures run sink is not mistaken for tool durability       |
-| Workspace search, scan, raw reader and Editor selector    | workspace-search, workspace-scan, workspace-raw-read, editor-raw-lane  | Retain owner; #3386 adds H1 after the verified ADR-0165 gate checkpoint; #3408 resolves private Editor search routes |
-| Catalog digest primitive                                  | digest-primitives                                                      | Existing security owner retained; #3406 adds validated domain-separated semantic inputs                              |
-| Diagnostic operation vocabulary                           | diagnostic-generator                                                   | #3412 extends existing generator; does not own runtime log emission                                                  |
-| Browser boundary                                          | browser-contract                                                       | #3413 emits a safe BFF-only projection; no authority, raw root or executable references                              |
+| Group                                                     | Inventory IDs                                                          | Observed disposition                                                                                                                                                                                                                   |
+| --------------------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Generic gateway and tool wire types                       | generic-gateway, generic-tool-port                                     | #3409 replaces name-only truth with the one additive bound bridge                                                                                                                                                                      |
+| Six legacy definitions/parser/dispatch                    | legacy-schema, legacy-host                                             | #3409 derives catalog projection, retains execution, deletes duplicates                                                                                                                                                                |
+| Editor nine descriptors, host and active producer subset  | editor-schema, editor-host, editor-route                               | #3408 reconciles exact schema/host support and governed active subset; counts mean different things                                                                                                                                    |
+| Managed OpenCode schemas, names, descriptions and actions | opencode-schema                                                        | #3414 derives seven existing Keiko tools plus conditional repository search; native question/todowrite stay explicit                                                                                                                   |
+| OpenCode prompt/config/source/protocol/IPC/digest         | opencode-launch, opencode-source, opencode-protocol, opencode-ipc      | #3414 derives all semantics from one compiled profile                                                                                                                                                                                  |
+| Runtime-supplied arbitrary definitions                    | sidecar-transport                                                      | Retain transport parsing; #3414 prevents entry into governed dispatch                                                                                                                                                                  |
+| Live policy, ports and handler readiness                  | live-authority, governed-delegate, handler-composition                 | #3413 binds existing authority; #3386 owns operational handlers, including optional backend availability                                                                                                                               |
+| Child read alias/parser and transient sink                | child-host                                                             | #3407 assigns unique alias, exact result/input validation and real durable event composition                                                                                                                                           |
+| Native provider projection and Realtime compatibility     | gateway-openai, realtime-compatibility                                 | #3409 derives supported projections and rejects unsupported Realtime tools before session startup                                                                                                                                      |
+| Harness and dry-run CLI/server/SDK composition            | harness-executor, cli-composition, server-composition, sdk-composition | #3409 removes name-based charge; dry-run stays nonproductive, bound backend required; harness-executor repointed in place to its surviving `descriptorRunsCommand` probe (disposition `derive projection`; retired mapping in `scope`) |
+| Run and invocation event durability                       | harness-sink, diagnostic-sink, activity-redaction                      | #3413 owns invocation settlement and primary write; #3409 ensures run sink is not mistaken for tool durability                                                                                                                         |
+| Workspace search, scan, raw reader and Editor selector    | workspace-search, workspace-scan, workspace-raw-read, editor-raw-lane  | Retain owner; #3386 adds H1 after the verified ADR-0165 gate checkpoint; #3408 resolves private Editor search routes                                                                                                                   |
+| Catalog digest primitive                                  | digest-primitives                                                      | Existing security owner retained; #3406 adds validated domain-separated semantic inputs                                                                                                                                                |
+| Diagnostic operation vocabulary                           | diagnostic-generator                                                   | #3412 extends existing generator; does not own runtime log emission                                                                                                                                                                    |
+| Browser boundary                                          | browser-contract                                                       | #3413 emits a safe BFF-only projection; no authority, raw root or executable references                                                                                                                                                |
 
 The legacy aliases are `read_file`, `list_files`, `inspect_package_scripts`, `run_command`,
 `propose_patch`, `apply_patch`. The Editor source declares `editor_list_sessions`, `editor_snapshot`,

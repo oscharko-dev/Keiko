@@ -13,3 +13,18 @@ export interface PrDescriptionReceiptStore {
     expectedVersion: string | null,
   ): PrDescriptionReceiptRead;
 }
+/**
+ * Adapts a `PrDescriptionReceiptStore` (expected-version compare-and-swap) to the plain
+ * `recordStatus`/`readStatus` hook shape `PrDescriptionServiceOptions` accepts, so the durable
+ * receipt store can back the application service without either side depending on the other's
+ * full type. Matches `PrDescriptionServiceOptions["recordStatus"]`/`["readStatus"]` structurally.
+ */
+export interface PrDescriptionReceiptStatusHooks {
+  readonly recordStatus: (
+    context: PrDescriptionContext,
+    status: PrDescriptionApplicationStatus,
+  ) => boolean;
+  readonly readStatus: (
+    context: PrDescriptionContext,
+  ) => PrDescriptionApplicationStatus | undefined;
+}

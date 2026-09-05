@@ -36,8 +36,10 @@ import type { ServerLogEvent } from "../observability/server-log.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { RouteContext } from "../routes.js";
 import {
+  createHandleCommitApprove,
   createHandleCommitExecute,
   createHandleCommitPreview,
+  type GitDeliveryCommitApproveResponseBody,
   type GitDeliveryCommitPreviewBody,
 } from "./commitRoutes.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
@@ -288,6 +290,11 @@ async function repositoryNativeSettings(): Promise<
   return control;
 }
 
+// #3386: the execute route now binds the consumed claim to the admitted run's identity
+// (runId/envelopeDigest), exactly as the merge route already does — a claim minted without them no
+// longer matches. "test-run" / "c".repeat(64) are `permittedGitDeliveryAuthority`'s fixed values
+// (runBoundAuthority.test-support.ts), the authority every test in this file admits through by
+// default.
 function issueCommitApproval(
   approvalStore: ReturnType<typeof createInMemoryGitDeliveryApprovalStore>,
   message: string,
@@ -298,6 +305,8 @@ function issueCommitApproval(
       projectId,
       operation: "commit",
       command: { kind: "commit", message, allowEmpty },
+      runId: "test-run",
+      envelopeDigest: "c".repeat(64),
     },
     approvedByUserId: "u-1",
     nowMs: 1_700_000_000_000,
@@ -645,7 +654,8 @@ describe("commit preview — read-only verification context (AC3)", () => {
   it("uses one persisted Repository Native selection for preview and execute", async () => {
     const editorSettingsControl = await repositoryNativeSettings();
     const adapter = recordingAdapter();
-    const routeSeams = seams({ adapterFactory: () => adapter.adapter });
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const routeSeams = seams({ adapterFactory: () => adapter.adapter, approvalStore });
     const preview = await createHandleCommitPreview({ execution: routeSeams })(
       ctxFor(PREVIEW, {
         schemaVersion: "1",
@@ -656,11 +666,13 @@ describe("commit preview — read-only verification context (AC3)", () => {
     );
     expect((preview.body as GitDeliveryCommitPreviewBody).messageValidation).toEqual({ ok: true });
 
+    const message = "repository native subject";
     const execute = await createHandleCommitExecute({ execution: routeSeams })(
       ctxFor(EXECUTE, {
         schemaVersion: "1",
         projectId,
-        message: "repository native subject",
+        message,
+        approval: issueCommitApproval(approvalStore, message),
       }),
       deps({ editorSettingsControl }),
     );
@@ -774,11 +786,18 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
   it("executes a valid conventional commit and records evidence (AC4)", async () => {
     const adapter = recordingAdapter();
     const cap = capturingEvidenceStore();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandleCommitExecute({
-      execution: seams({ adapterFactory: () => adapter.adapter }),
+      execution: seams({ adapterFactory: () => adapter.adapter, approvalStore }),
     });
+    const message = "feat(ui): add governed flow";
     const res = await handler(
-      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add governed flow" }),
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message,
+        approval: issueCommitApproval(approvalStore, message),
+      }),
       deps({ evidenceStore: cap.store }),
     );
     expect((res.body as { status: string }).status).toBe("succeeded");
@@ -786,16 +805,27 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
     expect(cap.count()).toBe(1);
   });
 
+  // #3386: proves the mandatory-approval check runs before the message-policy/conflict/branch
+  // guards but AFTER those, the kernel's OWN preflight/policy still runs unbypassed — a granted
+  // approval is not itself authority to skip preflight, policy, or branch protection.
   it("cannot bypass the kernel: a valid message is still policy-blocked, executing nothing (AC5)", async () => {
     const adapter = recordingAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandleCommitExecute({
       execution: seams({
         adapterFactory: () => adapter.adapter,
         policyPacks: { repoPack: BLOCK_ALL_PACK },
+        approvalStore,
       }),
     });
+    const message = "feat(ui): add governed flow";
     const res = await handler(
-      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add governed flow" }),
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message,
+        approval: issueCommitApproval(approvalStore, message),
+      }),
       deps(),
     );
     expect((res.body as { status: string }).status).toBe("blocked");
@@ -805,14 +835,22 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
 
   it("cannot bypass preflight: nothing staged blocks the commit (AC5)", async () => {
     const adapter = recordingAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandleCommitExecute({
       execution: seams({
         adapterFactory: () => adapter.adapter,
         snapshotReader: () => Promise.resolve({ ...SNAPSHOT, stagedFileCount: 0 }),
+        approvalStore,
       }),
     });
+    const message = "feat(ui): add governed flow";
     const res = await handler(
-      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add governed flow" }),
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message,
+        approval: issueCommitApproval(approvalStore, message),
+      }),
       deps(),
     );
     expect((res.body as { status: string }).status).toBe("blocked");
@@ -824,15 +862,23 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
 
   it("blocks direct commits to dev under the default local policy", async () => {
     const adapter = recordingAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandleCommitExecute({
       execution: seams({
         adapterFactory: () => adapter.adapter,
         snapshotReader: () => Promise.resolve({ ...SNAPSHOT, currentBranchName: "dev" }),
         policyPacks: undefined,
+        approvalStore,
       }),
     });
+    const message = "chore: update staged changes";
     const res = await handler(
-      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "chore: update staged changes" }),
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message,
+        approval: issueCommitApproval(approvalStore, message),
+      }),
       deps(),
     );
     expect((res.body as { status: string }).status).toBe("blocked");
@@ -840,24 +886,59 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
     expect(adapter.calls()).toEqual([]);
   });
 
-  it("commits with allowEmpty and honours a granted approval object", async () => {
+  // #3386: previously "honoured" `{ required: false }` — a request-supplied claim of NO approval —
+  // as sufficient to commit. That was exactly the unapproved-commit bypass this change closes: an
+  // active run's commit now requires an actually consumed, server-issued claim, never a
+  // browser-asserted "not required".
+  it("commits with allowEmpty once a real server-issued claim is consumed", async () => {
     const adapter = recordingAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandleCommitExecute({
-      execution: seams({ adapterFactory: () => adapter.adapter }),
+      execution: seams({ adapterFactory: () => adapter.adapter, approvalStore }),
     });
+    const message = "chore: empty";
     const res = await handler(
       ctxFor(EXECUTE, {
         schemaVersion: "1",
         projectId,
-        message: "chore: empty",
+        message,
         allowEmpty: true,
-        approval: { required: false },
+        approval: issueCommitApproval(approvalStore, message, true),
       }),
       deps(),
     );
     expect((res.body as { status: string }).status).toBe("succeeded");
     expect(adapter.calls()).toEqual(["commit"]);
   });
+
+  // Pins the actual bypass this change closes (#3386, ADR-0138 D2): an accepted autonomous-delivery
+  // run plus a direct HTTP commit carrying no approval at all must NOT commit. Before this change,
+  // BOTH an entirely absent `approval` field and an explicit `{ required: false }` executed
+  // unconditionally.
+  it.each([
+    ["an absent approval field", undefined],
+    ["an explicit { required: false }", { required: false }],
+  ] as const)(
+    "does not commit an accepted run's direct HTTP request that carries %s",
+    async (_label, approval) => {
+      const adapter = recordingAdapter();
+      const handler = createHandleCommitExecute({
+        execution: seams({ adapterFactory: () => adapter.adapter }),
+      });
+      const res = await handler(
+        ctxFor(EXECUTE, {
+          schemaVersion: "1",
+          projectId,
+          message: "chore: empty",
+          allowEmpty: true,
+          ...(approval === undefined ? {} : { approval }),
+        }),
+        deps(),
+      );
+      expect((res.body as { status: string }).status).toBe("approval-required");
+      expect(adapter.calls()).toEqual([]);
+    },
+  );
 
   it("holds for approval when the trusted pack is approval-gated", async () => {
     const adapter = recordingAdapter();
@@ -979,11 +1060,21 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
 
   it("returns 409 worktree-unavailable when the live snapshot cannot be read", async () => {
     const records: ServerDiagnosticRecord[] = [];
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandleCommitExecute({
-      execution: seams({ snapshotReader: () => Promise.reject(new Error("not a git repo")) }),
+      execution: seams({
+        snapshotReader: () => Promise.reject(new Error("not a git repo")),
+        approvalStore,
+      }),
     });
+    const message = "feat(ui): add flow";
     const res = await handler(
-      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add flow" }),
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message,
+        approval: issueCommitApproval(approvalStore, message),
+      }),
       deps({
         diagnostics: {
           record: (record): void => {
@@ -1015,6 +1106,134 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
       deps(),
     );
     expect(bad.status).toBe(400);
+  });
+});
+
+describe("commit approve (mints the approval execute consumes) — #3386, ADR-0138 D2", () => {
+  // Before this route existed, MINTABLE_ACTION_KINDS excluded "commit" and no HTTP surface could
+  // ever satisfy a commit's approval requirement — mirrors mergeRoutes.test.ts's own "previously
+  // unreachable" framing for the identical gap on merge.
+  it("mints a claim that execute accepts for the exact same commit, letting an approval-required commit proceed", async () => {
+    const adapter = recordingAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approveHandler = createHandleCommitApprove({
+      execution: seams({ adapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const message = "feat(ui): add governed flow";
+    const approveRes = await approveHandler(
+      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message }),
+      deps(),
+    );
+    expect(approveRes.status).toBe(200);
+    const approveBody = approveRes.body as GitDeliveryCommitApproveResponseBody;
+    expect(approveBody.approval.approvalId).toBeTruthy();
+    expect(approveBody.approval.approvalToken).toBeTruthy();
+    expect(new Date(approveBody.expiresAt).getTime()).toBeGreaterThan(1_700_000_000_000);
+
+    const executeHandler = createHandleCommitExecute({
+      execution: seams({ adapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const executeRes = await executeHandler(
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message,
+        approval: approveBody.approval,
+      }),
+      deps(),
+    );
+    expect((executeRes.body as { status: string }).status).toBe("succeeded");
+    expect(adapter.calls()).toEqual(["commit"]);
+  });
+
+  it("mints a claim redeemable only for the exact message it was issued against", async () => {
+    const adapter = recordingAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approveHandler = createHandleCommitApprove({ execution: seams({ approvalStore }) });
+    const approveRes = await approveHandler(
+      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add flow" }),
+      deps(),
+    );
+    const approveBody = approveRes.body as GitDeliveryCommitApproveResponseBody;
+
+    const executeHandler = createHandleCommitExecute({
+      execution: seams({ adapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const executeRes = await executeHandler(
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message: "feat(ui): a different message entirely",
+        approval: approveBody.approval,
+      }),
+      deps(),
+    );
+    expect(executeRes.status).toBe(400);
+    expect(adapter.calls()).toEqual([]);
+  });
+
+  it("404s for an unknown project instead of minting an approval", async () => {
+    const approveHandler = createHandleCommitApprove({ execution: seams() });
+    const res = await approveHandler(
+      ctxFor(EXECUTE, { schemaVersion: "1", projectId: "/no/such/project", message: "feat: x" }),
+      deps(),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("denies the mint itself when no accepted run authority is active", async () => {
+    const approveHandler = createHandleCommitApprove({ execution: seams() });
+    const res = await approveHandler(
+      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat: x" }),
+      deps({ gitDeliveryAuthority: { current: () => undefined } }),
+    );
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("commit approval evidence — body-free activity-log lines (#3386)", () => {
+  it("logs a body-free line when the mint issues a claim", async () => {
+    const events: ServerLogEvent[] = [];
+    const approveHandler = createHandleCommitApprove({
+      execution: seams({ activityLog: { write: (event) => events.push(event) } }),
+    });
+    await approveHandler(
+      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add flow" }),
+      deps(),
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: "security",
+          op: "git.delivery.commit.approval.minted",
+          status: 200,
+          extra: { operation: "commit", runId: "test-run" },
+        }),
+      ]),
+    );
+    expect(JSON.stringify(events)).not.toContain("feat(ui): add flow");
+  });
+
+  it("logs a body-free line when an active run's commit is refused for lacking a consumed approval", async () => {
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitExecute({
+      execution: seams({ activityLog: { write: (event) => events.push(event) } }),
+    });
+    await handler(
+      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add flow" }),
+      deps(),
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: "security",
+          op: "git.delivery.commit.approval.required",
+          status: 200,
+          extra: { operation: "commit", runId: "test-run" },
+        }),
+      ]),
+    );
+    expect(JSON.stringify(events)).not.toContain("feat(ui): add flow");
   });
 });
 

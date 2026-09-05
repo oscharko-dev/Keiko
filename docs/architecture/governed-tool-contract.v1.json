@@ -713,18 +713,18 @@
     {
       "id": "child-host",
       "path": "packages/keiko-server/src/coding-runtime/productionReadOnlyChildRunner.ts",
-      "probe": "READ_FILE_TOOL",
-      "disposition": "migrate/delete",
+      "probe": "childRegistrationSet",
+      "disposition": "derive projection",
       "ownerIssue": 3407,
-      "scope": "colliding read_file alias, exact parser, inherited budget, transient sink"
+      "scope": "moved from the hand-typed READ_FILE_TOOL definition (#3407): the child tool is now keiko.child.workspace.read@1 bound through childRegistrationSet()/createKeikoToolCatalog; retired mapping: probe READ_FILE_TOOL, disposition migrate/delete; exact parser, inherited budget and transient sink retained"
     },
     {
       "id": "harness-executor",
-      "path": "packages/keiko-harness/src/executor.ts",
-      "probe": "RUN_COMMAND_TOOL",
-      "disposition": "migrate/delete",
+      "path": "packages/keiko-harness/src/catalog-budget.ts",
+      "probe": "descriptorRunsCommand",
+      "disposition": "derive projection",
       "ownerIssue": 3409,
-      "scope": "remove name-based command charge; retain outer run counters"
+      "scope": "moved from executor.ts RUN_COMMAND_TOOL (#3409/#3411); command charge now derives from effects.includes(\"command-execution\"); outer counter retained in catalog-runtime.ts"
     },
     {
       "id": "gateway-openai",

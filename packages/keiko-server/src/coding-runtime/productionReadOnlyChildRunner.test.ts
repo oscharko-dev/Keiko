@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { CodeTaskChildRunId } from "@oscharko-dev/keiko-contracts";
-import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type { GatewayCallRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import {
+  CHILD_WORKSPACE_READ_ALIAS,
+  createToolInvocationNormalizer,
+} from "@oscharko-dev/keiko-tool-catalog";
 
 import { createProductionReadOnlyChildRunner } from "./productionReadOnlyChildRunner.js";
 import type { ReadOnlyChildGateDecision } from "./readOnlyChildOrchestrator.js";
@@ -25,29 +29,48 @@ function response(overrides: Partial<NormalizedResponse> = {}): NormalizedRespon
   };
 }
 
-/** One tool-calling turn, then a plain finish — the shape a real child session actually takes. */
+/**
+ * One tool-calling turn, then a plain finish — the shape a real child session actually takes.
+ * Binds the call to the harness's advertised catalog exactly the way a real provider adapter now
+ * must (mirrors packages/keiko-harness/src/_support.ts's scriptedModel) -- the mandatory catalog
+ * dispatch path (catalog-runtime.ts) rejects a toolCall with no bound `invocation`.
+ */
 function toolThenFinish(
   name: string,
   args: Record<string, unknown>,
-): () => Promise<NormalizedResponse> {
+): (request: GatewayCallRequest) => Promise<NormalizedResponse> {
   let turn = 0;
-  return (): Promise<NormalizedResponse> => {
+  return (request): Promise<NormalizedResponse> => {
     turn += 1;
+    if (turn !== 1) return Promise.resolve(response());
+    const invocation =
+      request.toolCatalog === undefined
+        ? undefined
+        : createToolInvocationNormalizer({
+            catalog: request.toolCatalog.catalog,
+            projection: request.toolCatalog.projection,
+            offered: request.toolCatalog.offered,
+          }).bindAlias(name, args, 0);
     return Promise.resolve(
-      turn === 1
-        ? response({
-            content: "",
-            finishReason: "tool_calls",
-            toolCalls: [{ id: `call-${String(turn)}`, name, arguments: args }],
-          })
-        : response(),
+      response({
+        content: "",
+        finishReason: "tool_calls",
+        toolCalls: [
+          {
+            id: `call-${String(turn)}`,
+            name,
+            arguments: args,
+            ...(invocation === undefined ? {} : { invocation }),
+          },
+        ],
+      }),
     );
   };
 }
 
 interface RunInput {
   readonly read?: SecureWorkspaceTextReadPort | undefined;
-  readonly call?: (() => Promise<NormalizedResponse>) | undefined;
+  readonly call?: ((request: GatewayCallRequest) => Promise<NormalizedResponse>) | undefined;
   readonly gate?: (() => ReadOnlyChildGateDecision) | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly reservePromptTokens?: ((promptTokens: number) => boolean) | undefined;
@@ -93,11 +116,11 @@ describe("createProductionReadOnlyChildRunner", () => {
     expect(outcome.resultDigest.outcome).toBe("known");
   });
 
-  it("executes an approved read_file call through the parent's secure read port", async () => {
+  it("executes an approved keiko_child_workspace_read call through the parent's secure read port", async () => {
     const requested: string[] = [];
 
     const outcome = await runChild({
-      call: toolThenFinish("read_file", { relativePath: "src/index.ts" }),
+      call: toolThenFinish(CHILD_WORKSPACE_READ_ALIAS, { relativePath: "src/index.ts" }),
       read: {
         readText: (request) => {
           requested.push(request.relativePath);
@@ -114,11 +137,12 @@ describe("createProductionReadOnlyChildRunner", () => {
     const reservations: number[] = [];
     let providerCalls = 0;
 
+    const scripted = toolThenFinish(CHILD_WORKSPACE_READ_ALIAS, { relativePath: "src/index.ts" });
     await expect(
       runChild({
-        call: (): Promise<NormalizedResponse> => {
+        call: (request): Promise<NormalizedResponse> => {
           providerCalls += 1;
-          return toolThenFinish("read_file", { relativePath: "src/index.ts" })();
+          return scripted(request);
         },
         reservePromptTokens: (promptTokens): boolean => {
           reservations.push(promptTokens);
@@ -132,21 +156,29 @@ describe("createProductionReadOnlyChildRunner", () => {
     expect(providerCalls).toBe(1);
   });
 
-  it("denies a tool the child was never given, without touching the workspace", async () => {
+  // Pre-catalog, an unoffered tool name reached executeRead()'s own anomaly check, which cancels
+  // the session and answers "denied" without touching the workspace. The mandatory catalog path
+  // (#3407) now closes this earlier and harder: a name outside the child's one-tool "child"
+  // profile can never bind to an invocation at all (ADR-0175 D2 -- catalog membership is the only
+  // source of dispatchable identity), so the run fails closed before any tool executes. This is a
+  // strengthening of the same invariant ("the child cannot act outside its one offered tool"), not
+  // a relaxation: the workspace is still never touched, and the run now stops even sooner.
+  it("fails closed when the model calls a tool it was never given, without touching the workspace", async () => {
     let reads = 0;
 
-    const outcome = await runChild({
-      call: toolThenFinish("write_file", { relativePath: "src/index.ts", text: "mutated" }),
-      read: {
-        readText: () => {
-          reads += 1;
-          return Promise.resolve({ ok: true as const, text: "unreachable" });
+    await expect(
+      runChild({
+        call: toolThenFinish("write_file", { relativePath: "src/index.ts", text: "mutated" }),
+        read: {
+          readText: () => {
+            reads += 1;
+            return Promise.resolve({ ok: true as const, text: "unreachable" });
+          },
         },
-      },
-    });
+      }),
+    ).rejects.toThrow("child-session-failed");
 
     expect(reads).toBe(0);
-    expect(outcome.resultCount).toBe(0);
   });
 
   it("stops the child session when the parent authority gate denies, not just the one call", async () => {
@@ -155,21 +187,12 @@ describe("createProductionReadOnlyChildRunner", () => {
     // its authority was already revoked.
     let reads = 0;
     let modelCalls = 0;
+    const scripted = toolThenFinish(CHILD_WORKSPACE_READ_ALIAS, { relativePath: "src/index.ts" });
 
     const outcome = await runChild({
-      call: (): Promise<NormalizedResponse> => {
+      call: (request): Promise<NormalizedResponse> => {
         modelCalls += 1;
-        return Promise.resolve(
-          modelCalls === 1
-            ? response({
-                content: "",
-                finishReason: "tool_calls",
-                toolCalls: [
-                  { id: "call-1", name: "read_file", arguments: { relativePath: "src/index.ts" } },
-                ],
-              })
-            : response(),
-        );
+        return scripted(request);
       },
       gate: (): ReadOnlyChildGateDecision => ({
         ok: false,
@@ -194,7 +217,7 @@ describe("createProductionReadOnlyChildRunner", () => {
     const attempts: string[] = [];
 
     await runChild({
-      call: toolThenFinish("read_file", { relativePath: "src/index.ts" }),
+      call: toolThenFinish(CHILD_WORKSPACE_READ_ALIAS, { relativePath: "src/index.ts" }),
       gate: (): ReadOnlyChildGateDecision => {
         attempts.push("gated");
         return { ok: true };
@@ -204,26 +227,32 @@ describe("createProductionReadOnlyChildRunner", () => {
     expect(attempts).toEqual(["gated"]);
   });
 
-  it("rejects a non-string relativePath instead of forwarding it to the read port", async () => {
+  // Pre-catalog, a non-string relativePath reached executeRead()'s own guard. The catalog's own
+  // descriptor schema (relativePath: string) now rejects this shape at bind time instead --
+  // strictly earlier than before, never forwarding it to the read port either way.
+  it("fails closed on a non-string relativePath instead of forwarding it to the read port", async () => {
     let reads = 0;
 
-    const outcome = await runChild({
-      call: toolThenFinish("read_file", { relativePath: { nested: "../../etc/passwd" } }),
-      read: {
-        readText: () => {
-          reads += 1;
-          return Promise.resolve({ ok: true as const, text: "unreachable" });
+    await expect(
+      runChild({
+        call: toolThenFinish(CHILD_WORKSPACE_READ_ALIAS, {
+          relativePath: { nested: "../../etc/passwd" },
+        }),
+        read: {
+          readText: () => {
+            reads += 1;
+            return Promise.resolve({ ok: true as const, text: "unreachable" });
+          },
         },
-      },
-    });
+      }),
+    ).rejects.toThrow("child-session-failed");
 
     expect(reads).toBe(0);
-    expect(outcome.resultCount).toBe(0);
   });
 
   it("does not count a denied read from the secure port as a result", async () => {
     const outcome = await runChild({
-      call: toolThenFinish("read_file", { relativePath: "../outside" }),
+      call: toolThenFinish(CHILD_WORKSPACE_READ_ALIAS, { relativePath: "../outside" }),
       read: { readText: () => Promise.resolve({ ok: false as const, reason: "denied" as const }) },
     });
 

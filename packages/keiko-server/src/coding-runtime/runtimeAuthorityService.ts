@@ -244,7 +244,12 @@ export class CodingRuntimeAuthorityService {
     if (!validateCodingWorkbenchRuntimeAuthorityEnvelope(envelope).ok) {
       return { ok: false, reason: "authority-resolution-failed" };
     }
-    const registered = this.registry.registerRuntime(envelope, context.deploymentCeiling, nowIso);
+    const registered = this.registry.registerRuntime(
+      envelope,
+      context.deploymentCeiling,
+      nowIso,
+      context.issueBinding?.bindingDigest,
+    );
     if (!registered.ok) return { ok: false, reason: "authority-resolution-failed" };
     const capabilities = this.issueCapabilities(
       envelope,
@@ -937,7 +942,6 @@ function projectedIdentity(
       workspaceRootDigest: rootDigest,
       branchRef: projectRuntimeAuthorityValue("branch", context.branchRef),
       branchHeadDigest: context.branchHeadDigest,
-      ...(context.issueBinding === undefined ? {} : { issueBinding: context.issueBinding }),
     },
   };
 }

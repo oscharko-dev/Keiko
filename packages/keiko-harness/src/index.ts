@@ -107,3 +107,8 @@ export type {
   HarnessToolExecutionEvidence,
 } from "./catalog-runtime.js";
 export type { HarnessBudgetContext } from "./catalog-budget.js";
+export { createLegacyPortCatalogFactory } from "./legacy-port-catalog.js";
+export {
+  createEditorAgentCatalogFactory,
+  editorAgentRegistrationSet,
+} from "./editor-agent-catalog.js";

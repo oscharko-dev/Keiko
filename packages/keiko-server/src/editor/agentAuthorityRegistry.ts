@@ -81,6 +81,13 @@ interface AuthorityRecord {
   readonly runtimeEnvelope?: CodingWorkbenchRuntimeAuthorityEnvelope | undefined;
   readonly runtimeDelegations?: Map<string, RuntimeDelegationReservation> | undefined;
   readonly runtimeIdempotencyKeys?: Set<string> | undefined;
+  /**
+   * The issue-binding fingerprint the run was minted with (epic #3384 correction 8: the execution
+   * binding never carries `issueBinding`, so this is the registry's own bookkeeping copy — never
+   * projected to the envelope, a snapshot, or evidence — used only to detect a mid-run rebind to a
+   * different issue in `runtimeDrift`).
+   */
+  readonly runtimeIssueBindingDigest?: string | undefined;
   revoked: boolean;
 }
 
@@ -213,6 +220,7 @@ export class EditorAgentAuthorityRegistry {
     envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
     deploymentCeiling: CodingWorkbenchMode,
     nowIso: string,
+    issueBindingDigest?: string,
   ): EditorAgentAuthorityRegistration {
     if (!validateCodingWorkbenchRuntimeAuthorityEnvelope(envelope).ok) {
       return { ok: false, reason: "invalid" };
@@ -232,6 +240,7 @@ export class EditorAgentAuthorityRegistry {
       runtimeEnvelope: envelope,
       runtimeDelegations: new Map(),
       runtimeIdempotencyKeys: new Set(),
+      runtimeIssueBindingDigest: issueBindingDigest,
     });
     return registration;
   }
@@ -279,7 +288,10 @@ export class EditorAgentAuthorityRegistry {
     if (!resolved.ok) return resolved;
     const envelope = resolved.record.runtimeEnvelope;
     if (envelope === undefined) return { ok: false, reason: "authority-resolution-failed" };
-    const drift = runtimeDrift(runtimeFacts(envelope), liveFacts);
+    const drift = runtimeDrift(
+      runtimeFacts(envelope, resolved.record.runtimeIssueBindingDigest),
+      liveFacts,
+    );
     return drift === undefined ? { ok: true, envelope } : { ok: false, reason: drift };
   }
 
@@ -585,7 +597,10 @@ function admitRuntimeDelegation(
     record.runtimeIdempotencyKeys.has(idempotencyKey)
   )
     return { ok: false, reason: "authority-replayed" };
-  const drift = runtimeDrift(runtimeFacts(record.runtimeEnvelope), liveFacts);
+  const drift = runtimeDrift(
+    runtimeFacts(record.runtimeEnvelope, record.runtimeIssueBindingDigest),
+    liveFacts,
+  );
   if (drift !== undefined) return { ok: false, reason: drift };
   if (!reserveUsage(record, usage)) return { ok: false, reason: "authority-budget-exceeded" };
   record.runtimeDelegations.set(delegationId, {
@@ -623,6 +638,7 @@ function validUsageCount(value: number): boolean {
 
 function runtimeFacts(
   envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+  issueBindingDigest?: string,
 ): CodingWorkbenchRuntimeAuthorityFacts {
   return {
     binding: envelope.binding,
@@ -638,6 +654,7 @@ function runtimeFacts(
     gatesDigest: digestCanonical(envelope.authority.gates),
     branchConstraintsDigest: digestCanonical(envelope.authority.branch),
     modelProfileDigest: digestCanonical(envelope.authority.modelProfile),
+    issueBindingDigest,
   };
 }
 
@@ -703,10 +720,11 @@ function issueBindingDiffers(
   expected: CodingWorkbenchRuntimeAuthorityFacts,
   actual: CodingWorkbenchRuntimeAuthorityFacts,
 ): boolean {
-  return (
-    canonicalJson(expected.binding.issueBinding ?? null) !==
-    canonicalJson(actual.binding.issueBinding ?? null)
-  );
+  // The execution binding never carries `issueBinding` (epic #3384 correction 8), so drift is
+  // detected off the content-free fingerprint the registry retained at mint time
+  // (`AuthorityRecord.runtimeIssueBindingDigest`, threaded through `runtimeFacts`) against the
+  // live fingerprint the caller reports now — never off the binding object itself.
+  return (expected.issueBindingDigest ?? null) !== (actual.issueBindingDigest ?? null);
 }
 
 function localBridgeAuthorityEnvelope(

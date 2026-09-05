@@ -7,7 +7,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { createToolRef } from "./identity.js";
 import { createToolDescriptor } from "./descriptor.js";
-import { createToolCatalog, type ToolCatalog } from "./catalog.js";
+import type { ToolCatalog } from "./catalog.js";
+import { createKeikoToolCatalog, type CatalogRegistrationSet } from "./composer.js";
 
 interface LegacyRegistration {
   readonly alias: string;
@@ -129,27 +130,20 @@ function patches(): readonly LegacyRegistration[] {
     ),
   ];
 }
+/** The "legacy-native" registration set: the six existing implemented legacy handlers. */
+export function legacyNativeRegistrationSet(): CatalogRegistrationSet {
+  const entries = [...reads(), command(), ...patches()];
+  return {
+    profile: { id: "legacy-native", version: 1 },
+    adapterDialect: { id: "legacy-json-schema", version: 1 },
+    adapterRuntime: { id: "keiko", version: "0.3.17" },
+    nativeExtensions: [],
+    compatibility: [],
+    entries,
+  };
+}
+
 /** Version-bound metadata for implemented legacy handlers. Binding still decides readiness and authority. */
 export function createInitialToolCatalog(): ToolCatalog {
-  const entries = [...reads(), command(), ...patches()];
-  return createToolCatalog(
-    {
-      descriptors: entries.map((entry) => entry.descriptor),
-      profiles: [
-        {
-          profile: { id: "legacy-native", version: 1 },
-          toolRefs: entries.map((entry) => ({
-            toolRef: entry.descriptor.toolRef,
-            alias: entry.alias,
-          })),
-          nativeExtensions: [],
-          adapterDialect: { id: "legacy-json-schema", version: 1 },
-          adapterRuntime: { id: "keiko", version: "0.3.17" },
-          compatibility: [],
-        },
-      ],
-      compatibility: [],
-    },
-    { referenceTimeMs: 0 },
-  );
+  return createKeikoToolCatalog([legacyNativeRegistrationSet()]);
 }

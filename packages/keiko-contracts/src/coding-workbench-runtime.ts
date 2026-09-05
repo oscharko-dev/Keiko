@@ -44,7 +44,9 @@ import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
 // the preview request names a repository the same way, so it takes the same bound rather than a
 // second number that could drift from it.
 import { MAX_GITHUB_ISSUE_READER_REPOSITORY_PATH_CHARS } from "./bff-wire.js";
-import { validateCodingWorkbenchIssueBinding } from "./coding-workbench-issue-binding.js";
+// No longer imported as a value here: the execution binding never carries `issueBinding` (epic
+// #3384 correction 8), so this module has nothing left to validate it against. Still re-exported
+// for existing consumers of this subpath.
 export { validateCodingWorkbenchIssueBinding } from "./coding-workbench-issue-binding.js";
 
 export {
@@ -107,6 +109,10 @@ export interface CodingWorkbenchRuntimeState {
   readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
 }
 
+// Deliberately carries no `issueBinding`: the issue binding is a fact of the run's public
+// snapshot only (`CodingWorkbenchRuntimeSnapshot.issueBinding`), never of the execution binding or
+// the authority envelope/facts that embed it — restating it here would create a second source of
+// truth for the same fact (epic #3384 correction 8).
 export interface CodingWorkbenchRuntimeExecutionBinding {
   readonly taskId: string;
   readonly projectId: string;
@@ -115,7 +121,6 @@ export interface CodingWorkbenchRuntimeExecutionBinding {
   readonly workspaceRootDigest: string;
   readonly branchRef: string;
   readonly branchHeadDigest: string;
-  readonly issueBinding?: CodingWorkbenchIssueBinding | undefined;
 }
 
 /**
@@ -305,6 +310,17 @@ export interface CodingWorkbenchRuntimeAuthorityFacts {
   readonly gatesDigest: string;
   readonly branchConstraintsDigest: string;
   readonly modelProfileDigest: string;
+  /**
+   * Content-free fingerprint of the issue bound to this run (`CodingWorkbenchIssueBinding.bindingDigest`),
+   * absent when no issue is bound. This is NOT the execution binding restated: the binding never
+   * carries `issueBinding` (epic #3384 correction 8 — the issue binding is a fact of the run's public
+   * snapshot only, `CodingWorkbenchRuntimeSnapshot.issueBinding`). This digest exists solely so the
+   * runtime-authority drift check can still detect a mid-run rebind to a different issue without a
+   * second copy of the binding itself, the same content-free-fingerprint pattern already used by
+   * `CodingWorkbenchDraftDeliveryBinding.issueBindingDigest` (draft-delivery.ts) and
+   * `CodingWorkbenchVerifiedCommitRecord.issueBindingDigest` (verified-commit.ts).
+   */
+  readonly issueBindingDigest?: string | undefined;
 }
 
 export interface CodingWorkbenchRuntimeDelegationUsage {
@@ -489,11 +505,14 @@ export function validateCodingWorkbenchRuntimeAuthorityFacts(
     "gatesDigest",
     "branchConstraintsDigest",
     "modelProfileDigest",
+    "issueBindingDigest",
   ];
   const errors = exactKeys(value, keys, "authorityFacts");
   validateBinding(value.binding, errors);
-  for (const key of keys.filter((key) => key.endsWith("Digest")))
+  for (const key of keys.filter((key) => key.endsWith("Digest") && key !== "issueBindingDigest"))
     validateDigest(value[key], key, errors);
+  if (value.issueBindingDigest !== undefined)
+    validateDigest(value.issueBindingDigest, "issueBindingDigest", errors);
   if (!Array.isArray(value.actionClasses) || !Array.isArray(value.connectorScopes))
     errors.push("authority scopes must be arrays");
   else {
@@ -684,7 +703,6 @@ function validateBinding(value: unknown, errors: string[]): void {
         "workspaceRootDigest",
         "branchRef",
         "branchHeadDigest",
-        "issueBinding",
       ],
       "binding",
     ),
@@ -694,10 +712,6 @@ function validateBinding(value: unknown, errors: string[]): void {
   }
   for (const key of ["projectDigest", "workspaceRootDigest", "branchHeadDigest"] as const) {
     validateDigest(value[key], `binding.${key}`, errors);
-  }
-  if (value.issueBinding !== undefined) {
-    const issue = validateCodingWorkbenchIssueBinding(value.issueBinding);
-    if (!issue.ok) errors.push(...issue.errors);
   }
 }
 

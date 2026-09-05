@@ -1,7 +1,14 @@
+import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { describe, expect, it, vi, type Mock } from "vitest";
 import type { CommandResult } from "./types.js";
 import { readGitCiFacts } from "./git-ci-facts.js";
 import { buildGitCiReadArgv, type GitCiReadKind } from "./git-ci-read-argv.js";
+import { makeFakeChild, makeWorkspace } from "./_support.js";
+import type { HomeProvider, SpawnFn } from "./exec.js";
+import {
+  confirmUnprotectedBranchOnNotFound,
+  readNodeGitBranchProtection,
+} from "./git-merge-node.js";
 
 const TARGET = {
   ownerAndRepo: "owner/repo",
@@ -199,5 +206,138 @@ describe("composed bounded Git provider facts", () => {
       await readGitCiFacts({ target: TARGET, run, signal: AbortSignal.abort() }),
     ).toMatchObject({ failure: { reason: "cancelled" } });
     expect(run).not.toHaveBeenCalled();
+  });
+});
+
+// Shared branch-protection-vs-404 disambiguation (#3388). git-merge-node.ts's
+// `readNodeGitBranchProtection` and this file's `readGitCiFacts` independently hit a
+// branch-protection detail 404 and must NOT treat it as authoritative "unprotected" without
+// confirming via the branch's own `protected` field — both now route that confirmation through
+// the single `confirmUnprotectedBranchOnNotFound` helper co-located in git-merge-node.ts. This
+// suite is parameterized over both call sites: a regression in either consumer's own fetch or
+// predicate (e.g. dropping git-merge-node's name check, or git-ci-facts's sha check) fails it.
+const FAKE_HOME: HomeProvider = {
+  make: () => "/tmp/keiko-ci-facts-fake-home",
+  cleanup: () => undefined,
+};
+
+interface MergeNodeSpawnStep {
+  readonly stdout?: string;
+  readonly stderr?: string;
+  readonly exit?: number;
+}
+
+function mergeNodeScriptedSpawn(steps: readonly MergeNodeSpawnStep[]): SpawnFn {
+  let i = 0;
+  return (_command, _args, _options: SpawnOptions): ChildProcess => {
+    const step = steps[i] ?? {};
+    i += 1;
+    const child = makeFakeChild();
+    setImmediate(() => {
+      if (step.stdout !== undefined) child.stdout.emit("data", Buffer.from(step.stdout));
+      if (step.stderr !== undefined) child.stderr.emit("data", Buffer.from(step.stderr));
+      child.emit("close", step.exit ?? 0, null);
+    });
+    return child as unknown as ChildProcess;
+  };
+}
+
+function readMergeNodeProtectionOutcome(confirmStep: MergeNodeSpawnStep): Promise<string> {
+  const { info } = makeWorkspace();
+  return readNodeGitBranchProtection(
+    {
+      workspace: info,
+      processEnv: { PATH: "/usr/bin" },
+      now: () => 0,
+      spawn: mergeNodeScriptedSpawn([{ exit: 1, stderr: "HTTP 404: Not Found" }, confirmStep]),
+      home: FAKE_HOME,
+      resolveExecutable: () => "gh",
+    },
+    { ownerAndRepo: "owner/repo", baseBranchName: "dev" },
+  ).then((result) => result.outcome);
+}
+
+function readCiFactsProtectionOutcome(
+  branch: unknown,
+  options: { readonly branchFails?: boolean } = {},
+): Promise<string> {
+  const base = reader({ branch });
+  const run = (argv: readonly string[]): Promise<CommandResult> => {
+    if (argv[5]?.endsWith("/protection") === true)
+      return Promise.resolve(response(null, { exitCode: 1, stderr: "gh: Not Found (HTTP 404)" }));
+    if (options.branchFails === true && argv[5] === buildGitCiReadArgv("branch", TARGET, 1)[5])
+      return Promise.resolve(response(null, { exitCode: 1, stderr: "HTTP 500" }));
+    return base(argv);
+  };
+  return readGitCiFacts({ target: TARGET, run }).then((facts) =>
+    facts.status === "observed" ? facts.protection.outcome : "unavailable",
+  );
+}
+
+describe("shared branch-protection-not-found confirmation (#3388)", () => {
+  it("resolves purely from the caller-supplied fetch and predicate", async () => {
+    await expect(
+      confirmUnprotectedBranchOnNotFound({
+        fetchBranch: () => Promise.resolve(undefined),
+        isConfirmedUnprotected: () => true,
+      }),
+    ).resolves.toBe("unknown");
+    await expect(
+      confirmUnprotectedBranchOnNotFound<{ ok: boolean }>({
+        fetchBranch: () => Promise.resolve({ ok: true }),
+        isConfirmedUnprotected: (branch) => branch.ok,
+      }),
+    ).resolves.toBe("unprotected");
+    await expect(
+      confirmUnprotectedBranchOnNotFound<{ ok: boolean }>({
+        fetchBranch: () => Promise.resolve({ ok: false }),
+        isConfirmedUnprotected: (branch) => branch.ok,
+      }),
+    ).resolves.toBe("unknown");
+  });
+
+  it.each([
+    {
+      scenario: "an exact branch match confirms unprotected",
+      confirmStep: { stdout: JSON.stringify({ name: "dev", protected: false }) },
+      ciBranch: { name: "dev", protected: false, sha: IDENTITY.baseSha },
+      ciBranchFails: false,
+      expected: "unprotected",
+    },
+    {
+      scenario: "a wrong branch name never confirms unprotected",
+      confirmStep: { stdout: JSON.stringify({ name: "other", protected: false }) },
+      ciBranch: { name: "other", protected: false, sha: IDENTITY.baseSha },
+      ciBranchFails: false,
+      expected: "unknown",
+    },
+    {
+      scenario: "a still-protected confirmation branch never confirms unprotected",
+      confirmStep: { stdout: JSON.stringify({ name: "dev", protected: true }) },
+      ciBranch: { name: "dev", protected: true, sha: IDENTITY.baseSha },
+      ciBranchFails: false,
+      expected: "unknown",
+    },
+    {
+      scenario: "a failed confirmation read never confirms unprotected",
+      confirmStep: { exit: 1, stderr: "HTTP 500" },
+      ciBranch: { name: "dev", protected: false, sha: IDENTITY.baseSha },
+      ciBranchFails: true,
+      expected: "unknown",
+    },
+  ])("$scenario", async ({ confirmStep, ciBranch, ciBranchFails, expected }) => {
+    await expect(readMergeNodeProtectionOutcome(confirmStep)).resolves.toBe(expected);
+    await expect(
+      readCiFactsProtectionOutcome(ciBranch, { branchFails: ciBranchFails }),
+    ).resolves.toBe(expected);
+  });
+
+  it("only git-ci-facts's confirmation additionally pins the branch's base sha", async () => {
+    // git-merge-node's confirmation has no sha field to check at all (buildBranchMetadataArgv
+    // never projects one) — this is the one place the two callers' predicates genuinely diverge,
+    // so it is asserted directly against the ci-facts site rather than shared across both.
+    await expect(
+      readCiFactsProtectionOutcome({ name: "dev", protected: false, sha: "f".repeat(40) }),
+    ).resolves.toBe("unknown");
   });
 });

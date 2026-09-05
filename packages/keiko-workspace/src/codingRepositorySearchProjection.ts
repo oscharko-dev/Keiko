@@ -1,12 +1,7 @@
 import { redact } from "@oscharko-dev/keiko-security";
 import type { CodingRepositoryHit } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { RepoSearchInvalidRangeError } from "./errors.js";
-
-export function clampCodingRepositoryText(text: string, maxBytes: number): string {
-  const bytes = new TextEncoder().encode(text);
-  if (bytes.length <= maxBytes) return text;
-  return new TextDecoder().decode(bytes.subarray(0, maxBytes)).replace(/\uFFFD$/u, "");
-}
+import { clampToBytes } from "./repoSearch.js";
 
 interface SourceWindow {
   readonly start: number;
@@ -53,6 +48,16 @@ function safeSourceWindow(raw: string, safe: string, window: SourceWindow): stri
   );
 }
 
+// The H1 read/search coordinate contract (Epic #532) needs the window bounds and startLine/endLine
+// reported to callers to stay pinned to the RAW source, even when the canonical redact() collapses
+// a multiline secret into a single "[REDACTED]" marker. repoSearch.ts's own excerpt path
+// (readExcerpt/excerptWindow) redacts a lane's full text (readWorkspaceFile) or not at all
+// (readWorkspaceFileForEditing) BEFORE windowing by line index — right for its own callers, but it
+// would shift every line after a collapsed secret and break that pin here. sourceWindow/
+// changedSourceInterval/safeSourceWindow above compose the RAW-coordinate window with a
+// full-source-context redaction diff that repoSearch.ts has no equivalent for; only the final byte
+// clamp (clampToBytes) is genuinely the same operation as repoSearch.ts's own excerptWindow clamp,
+// so that step is reused directly instead of re-implemented.
 export function codingRepositoryExcerpt(
   path: string,
   raw: string,
@@ -63,13 +68,13 @@ export function codingRepositoryExcerpt(
   const window = sourceWindow(raw, startLine, endLine);
   const safe = redact(raw);
   const projected = safeSourceWindow(raw, safe, window);
-  const snippet = clampCodingRepositoryText(projected, maxBytes);
+  const { excerpt: snippet, truncated: snippetTruncated } = clampToBytes(projected, maxBytes);
   return {
     path,
     startLine,
     endLine: window.endLine,
     snippet,
     redacted: projected !== raw.slice(window.start, window.end),
-    snippetTruncated: snippet !== projected,
+    snippetTruncated,
   };
 }

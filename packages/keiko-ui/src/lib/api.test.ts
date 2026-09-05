@@ -3291,6 +3291,26 @@ describe("Coding Workbench issue intake API (#3385)", () => {
       "a binding whose issue number disagrees with the provenance",
       { binding: { ...previewResponse().binding, issueNumber: 12 } },
     ],
+    // Cursor review threads PRRT_kwDOSqilAM6fbGbS / PRRT_kwDOSqilAM6ff6k0: the client used to
+    // restate its own, wider bounds (issue number up to 2_147_483_647, title up to 512 chars)
+    // instead of importing the contract's CODING_WORKBENCH_ISSUE_NUMBER_MAX (1_000_000_000) and
+    // CODING_WORKBENCH_ISSUE_PREVIEW_TITLE_MAX_CHARS (256) — an input the server always rejects
+    // used to pass client-side validation. Both binding and provenance carry the same number so
+    // the failure below is the bound, not the preview/binding coherence check.
+    [
+      "an issue number beyond the contract's bound",
+      {
+        preview: {
+          ...previewResponse().preview,
+          provenance: { ...previewResponse().preview.provenance, issueNumber: 1_000_000_001 },
+        },
+        binding: { ...previewResponse().binding, issueNumber: 1_000_000_001 },
+      },
+    ],
+    [
+      "a title beyond the contract's bound",
+      { preview: { ...previewResponse().preview, title: "x".repeat(300) } },
+    ],
   ] as const)("fails closed on %s", async (_label, patch) => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonOk({ ...previewResponse(), ...patch })));
 

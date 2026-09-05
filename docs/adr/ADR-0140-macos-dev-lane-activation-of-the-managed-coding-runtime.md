@@ -98,7 +98,26 @@ unrecognized values are ignored fail-closed. Enabling the dev lane never widens 
 readiness projection reports the same ceiling the mint clamp enforces; the previously reported
 autonomous-delivery ceiling was a separate authority knob and could diverge from enforcement.
 
-### D6 — Development stop owns bounded runtime teardown
+### D6 — Long-lived gateway-only network confinement on macOS (Issue #2951)
+
+The macOS dev-lane backend (`devLaneRuntimeProcessBackend.ts`) never spawns the sidecar directly.
+Every launch is wrapped in a `RuntimeGatewayConfinement` (ADR-0043 D11–D13,
+`packages/keiko-sandbox/src/runtime-gateway.ts`): a Seatbelt profile that denies all network egress
+by default and carves out exactly one outbound allowance — the loopback gateway/BFF port the caller
+attests — plus denies process-fork, mach-lookup, Apple Event, and `LSOpen` escapes. The backend
+refuses to spawn at all when no confinement is attached, or when the policy's `runId`/`treeBindingId`
+does not match the launch request, before any process exists (fail-closed, consistent with D5's
+kill-switch precedence).
+
+This closes the network side of the dev lane's confinement for macOS only. It does **not** extend to
+the Windows dev lane or to `nativeRuntimeProcessBackend.ts` (the backend this ADR also names in its
+title and D3 for Windows process-group supervision): neither carries an OS-level network policy
+today. A Windows-activated sidecar is confined by D2's structural checkout confinement and D3's
+digest-pinned payload trust, but not by a kernel-enforced egress boundary. Closing that gap requires
+a Windows-native equivalent of the Seatbelt allowlist and is tracked as remaining work (Issue #2951),
+not claimed here as done.
+
+### D7 — Development stop owns bounded runtime teardown
 
 `npm run dev:stop` signals the trusted development runner first. The runner gives the BFF longer
 than the BFF's complete bounded runtime-disposal window before escalating, so the coding

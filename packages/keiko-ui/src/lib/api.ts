@@ -174,6 +174,13 @@ import {
   validateGitSyncExecuteResponse,
   validateGitSyncPreview,
 } from "@oscharko-dev/keiko-contracts/runtime/git-sync";
+import {
+  CODING_WORKBENCH_ISSUE_PREVIEW_EXCERPT_MAX_CHARS,
+  CODING_WORKBENCH_ISSUE_PREVIEW_TITLE_MAX_CHARS,
+  GITHUB_ISSUE_NUMBER_MAX as CONTRACT_GITHUB_ISSUE_NUMBER_MAX,
+  GITHUB_ISSUE_REFERENCE_MAX_CHARS as CONTRACT_GITHUB_ISSUE_REFERENCE_MAX_CHARS,
+  isGitHubOwnerAndRepo,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
 import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
@@ -3294,17 +3301,19 @@ export async function fetchGitDeliveryMergeExecute(
 export type GitHubIssuePreviewResponseWire = CodingWorkbenchIssuePreviewResponseWire;
 export type CodingWorkbenchIssuePreviewRequest = CodingWorkbenchIssuePreviewRequestWire;
 
-export const GITHUB_ISSUE_PREVIEW_TITLE_MAX_CHARS = 512;
-export const GITHUB_ISSUE_PREVIEW_EXCERPT_MAX_CHARS = 8_192;
-export const GITHUB_ISSUE_REFERENCE_MAX_CHARS = 512;
+// Bounds imported from the contract's runtime subpath, never restated: a client cap that drifts
+// from the server's own (CodingWorkbenchIssueBinding.issueNumber, the issue-preview title/excerpt
+// caps, and the owner/repo shape) would let the client accept input the server always rejects,
+// and vice versa (same restated-formula class as #2285).
+export const GITHUB_ISSUE_PREVIEW_TITLE_MAX_CHARS = CODING_WORKBENCH_ISSUE_PREVIEW_TITLE_MAX_CHARS;
+export const GITHUB_ISSUE_PREVIEW_EXCERPT_MAX_CHARS =
+  CODING_WORKBENCH_ISSUE_PREVIEW_EXCERPT_MAX_CHARS;
+export const GITHUB_ISSUE_REFERENCE_MAX_CHARS = CONTRACT_GITHUB_ISSUE_REFERENCE_MAX_CHARS;
 const GITHUB_ISSUE_PROVENANCE_REPO_MAX_CHARS = 256;
 const GITHUB_ISSUE_PROVENANCE_URL_MAX_CHARS = 2_048;
 const GITHUB_ISSUE_BINDING_ID_MAX_CHARS = 128;
-// The provider's positive integer range, mirrored from CODING_WORKBENCH_ISSUE_NUMBER_MAX without a
-// value import (this module is first-load reachable, #2639).
-const GITHUB_ISSUE_NUMBER_MAX = 2_147_483_647;
+const GITHUB_ISSUE_NUMBER_MAX = CONTRACT_GITHUB_ISSUE_NUMBER_MAX;
 const SHA256_HEX = /^[0-9a-f]{64}$/u;
-const OWNER_AND_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const ISSUE_BINDING_KEYS: ReadonlySet<string> = new Set([
   "repositoryId",
   "remoteDigest",
@@ -3341,7 +3350,7 @@ function issuePreviewProvenanceReasons(value: unknown): readonly string[] {
   const reasons: string[] = [];
   if (
     !isBoundedText(value.ownerAndRepo, GITHUB_ISSUE_PROVENANCE_REPO_MAX_CHARS) ||
-    !OWNER_AND_REPO.test(value.ownerAndRepo)
+    !isGitHubOwnerAndRepo(value.ownerAndRepo)
   ) {
     reasons.push("preview.provenance.ownerAndRepo must be owner/repo");
   }

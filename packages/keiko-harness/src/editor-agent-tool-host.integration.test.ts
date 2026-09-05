@@ -7,6 +7,7 @@ import {
   type EditorAgentHttpTransport,
 } from "@oscharko-dev/keiko-tools";
 import { createSession } from "./session.js";
+import { createEditorAgentCatalogFactory } from "./editor-agent-catalog.js";
 import { counterIdSource } from "./fingerprint.js";
 import { MemoryEventSink } from "./sinks.js";
 import { response, scriptedModel, stubClock } from "./_support.js";
@@ -60,10 +61,11 @@ describe("EditorAgentToolHost harness invocation", () => {
     ]);
     const session = createSession(
       { taskType: "investigate-bug", input: { description: "Inspect editor sessions" } },
-      { model: "m", workingDirectory: "/repo" },
+      { model: "m", workingDirectory: "/repo", dryRun: false },
       {
         model: model.port,
         tools,
+        bindToolCatalog: createEditorAgentCatalogFactory(tools),
         sink: new MemoryEventSink(),
         clock: stubClock().clock,
         idSource: counterIdSource(),
