@@ -72,15 +72,23 @@ const OPERATOR_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> =
   "running",
   "paused",
 ]);
-// #3390: "ready" and "running" share the same treeBound precondition (see transitionAllowed
-// below) and "ready" -> "running" is the only legal step out of "ready" other than a terminal
-// failure -- "ready" is not a state a reservation can be replayed into from anywhere else. The
-// orchestrator's initial-turn dispatch (codingRuntimeOrchestrator.runInitialTurn) can legitimately
-// reach the sidecar while the run is still settling into "running", and the sidecar's very first
-// model call must not be refused just because it raced that settling instead of a real admission
-// failure. Every other reservePromptTokens clause (audience, runId, envelopeDigest match) stays
-// exactly as strict; only the running-only state gate widens to also admit "ready".
+// #3390: the real race is not in the orchestrator's own local dispatch ordering -- production
+// wiring (productionCodingRuntimePorts.ts's startProductionRuntime) already awaits the managed
+// runtime's start() to completion, including both its "ready" and "running" authority
+// transitions, before the orchestrator ever calls startInitialTurn. The actual window is earlier:
+// mint() (activateMintedRuntime / stateForMint) sets runtimeState to "starting" -- with the
+// authority ref, capability and tree binding already issued -- and that "starting" state
+// persists for the full duration of the managed runtime's own start() call. If the underlying
+// process becomes reachable and issues its own first model call before that start() promise
+// settles, the reservation lands while runtimeState.state is still "starting", not "ready" or
+// "running", and gets refused as an authority-resolution failure even though every other
+// admission fact (audience, runId, envelopeDigest) already matches. "starting" is a legal
+// interior state (LEGAL_TRANSITIONS.idle -> "starting" -> "ready" -> ...) and not a state a
+// reservation could be replayed into from anywhere else, so it is safe to admit alongside
+// "ready" and "running". Every other reservePromptTokens clause (audience, runId, envelopeDigest
+// match, paused-state refusal) stays exactly as strict; only the running-only state gate widens.
 const PROMPT_RESERVATION_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
+  "starting",
   "ready",
   "running",
 ]);

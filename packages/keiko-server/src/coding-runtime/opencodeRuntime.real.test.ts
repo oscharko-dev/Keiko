@@ -40,7 +40,12 @@ import { createInMemoryUiStore } from "../store/index.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
 import type { CodingToolResult } from "./codingToolIpc.js";
-import { createOpenCodeRuntimeComposition } from "./opencodeRuntimeComposition.js";
+import {
+  createOpenCodeRuntimeComposition,
+  incomingHeaders,
+  readBoundedBody,
+  type OpenCodeToolBridge,
+} from "./opencodeRuntimeComposition.js";
 import { hasExactOpenCodeVisibleToolContract } from "./opencodeToolSchemas.js";
 import {
   createRuntimeProcessSupervisor,
@@ -587,6 +592,67 @@ async function createGatewayHarness(
   };
 }
 
+interface ToolFacadeHarness {
+  readonly endpoint: string;
+  /** Binds the composition's real bridge once `createOpenCodeRuntimeComposition` has returned it
+   * -- the harness must bind and listen on a port BEFORE the composition exists, so requests that
+   * arrive before `bind` is called are refused 503, the same "no run active" shape `handle()`
+   * itself returns before a run starts. */
+  bind(handle: OpenCodeToolBridge["handle"]): void;
+  close(): Promise<void>;
+}
+
+/**
+ * ADR-0043 D11-D14 (#3390): production never opens a second loopback listener for the tool
+ * facade -- the sandboxed sidecar reaches it through the BFF's `/api/coding-sidecar/tool` route,
+ * which dispatches directly to the run's bridge (`OpenCodeToolBridge.handle`). This real-binary
+ * suite spawns an ACTUAL OpenCode child that only speaks HTTP, so it needs a real socket to POST
+ * to; unlike production it owns that socket itself (mirroring `createGatewayHarness` above for
+ * the model gateway) instead of routing through the full BFF route stack, and wraps the SAME
+ * `handle` the production route calls -- never a second facade implementation.
+ */
+async function createToolFacadeHarness(): Promise<ToolFacadeHarness> {
+  let handle: OpenCodeToolBridge["handle"] | undefined;
+  const server = createServer((req, res) => {
+    void (async (): Promise<void> => {
+      if (handle === undefined) {
+        res.writeHead(503).end();
+        return;
+      }
+      // Reuses the SAME byte-budget-bounded body reader `handle()`'s own retired listener used
+      // (see opencodeRuntimeComposition.ts's comment on `readBoundedBody`) -- never a second body
+      // reader for this one still-allowed real HTTP endpoint around `handle`.
+      const body = await readBoundedBody(req, new AbortController().signal);
+      const result = await handle({
+        method: "POST",
+        headers: incomingHeaders(req.headers),
+        body: body.toString("utf8"),
+      });
+      res.writeHead(result.status, { "Content-Type": "application/json" }).end(result.body);
+    })();
+  });
+  await new Promise<void>((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    server.listen(0, "127.0.0.1", resolveListen);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string")
+    throw new Error("functional-tool-facade-bind-failed");
+  return {
+    endpoint: `http://127.0.0.1:${String(address.port)}/api/coding-sidecar/tool`,
+    bind: (boundHandle): void => {
+      handle = boundHandle;
+    },
+    close: (): Promise<void> =>
+      new Promise((resolveClose, rejectClose) => {
+        server.close((error) => {
+          if (error === undefined) resolveClose();
+          else rejectClose(error);
+        });
+      }),
+  };
+}
+
 async function serveGatewayRequest(
   req: import("node:http").IncomingMessage,
   res: import("node:http").ServerResponse,
@@ -860,6 +926,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
       const portable = realPortableRuntime(root);
       const responseControl = scriptedProductiveResponse();
       const gateway = await createGatewayHarness(responseControl.script);
+      const toolFacade = await createToolFacadeHarness();
       const productiveActions: string[] = [];
       const toolStatuses: string[] = [];
       const sessionStatuses: string[] = [];
@@ -878,6 +945,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
           modelGatewayCapability: MODEL_CAPABILITY,
           toolFacadeCapability: TOOL_CAPABILITY,
         },
+        toolFacadeOrigin: toolFacade.endpoint,
         toolFacade: functionalToolFacade(productiveActions, toolStatuses),
         governedEventSink: {
           execute: (identityKey): Promise<"applied"> => {
@@ -896,6 +964,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
           releaseRuntimeAfterReap: () => true,
         },
       });
+      toolFacade.bind(runtime.toolBridge.handle);
       const runRoot = join(stateBaseRoot, RUN_ID);
       try {
         const started = await Promise.resolve(
@@ -1041,6 +1110,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         responseControl.release();
         await runtime.manager.stop(RUN_ID);
         await gateway.close();
+        await toolFacade.close();
         diagnostic.mockRestore();
         rmSync(root, { recursive: true, force: true });
       }

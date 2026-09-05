@@ -10,7 +10,6 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { request as httpRequest, type ClientRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -395,46 +394,6 @@ function portableFixture(resourceRoot: string): {
       protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v1",
     },
   };
-}
-
-interface HttpResult {
-  readonly status: number;
-  readonly body: Buffer;
-}
-
-function openHttpRequest(
-  url: string,
-  options: { readonly method?: string; readonly headers?: Readonly<Record<string, string>> } = {},
-): { readonly client: ClientRequest; readonly response: Promise<HttpResult> } {
-  let settle = (_result: HttpResult): void => undefined;
-  const response = new Promise<HttpResult>((resolve) => {
-    settle = resolve;
-  });
-  const client = httpRequest(
-    url,
-    { method: options.method ?? "POST", headers: options.headers, agent: false },
-    (result) => {
-      const chunks: Buffer[] = [];
-      result.on("data", (chunk: Buffer) => chunks.push(chunk));
-      result.on("end", () => {
-        settle({ status: result.statusCode ?? 0, body: Buffer.concat(chunks) });
-      });
-    },
-  );
-  // Disconnects are expected in cancellation tests; the assertion is on the facade signal.
-  client.on("error", () => {
-    settle({ status: 0, body: Buffer.alloc(0) });
-  });
-  return { client, response };
-}
-
-async function responseBeforeEof(response: Promise<HttpResult>): Promise<HttpResult | undefined> {
-  return await Promise.race([
-    response,
-    new Promise<undefined>((resolve) => {
-      setTimeout(resolve, 250);
-    }),
-  ]);
 }
 
 type FixtureSafeActivity = NonNullable<
@@ -1826,102 +1785,82 @@ describe("private OpenCode tool bridge", () => {
     await fixture.stop();
   });
 
-  it("rejects an unauthorized chunked request before EOF or any facade call", async () => {
+  // #3390 (ADR-0043 D11-D14): the raw-listener framing pins below (chunked-before-EOF, declared
+  // Content-Length, non-POST/wrong-path routing, and the fatal UTF-8 decode) tested the RETIRED
+  // `createServer` listener's own request parsing. That framing is gone -- `handle()` is now the
+  // ONE dispatch surface, reached by the BFF's real route dispatcher (coding-sidecar-tool-facade.ts)
+  // which reads the body itself before calling `handle()`. Each invariant that still applies to
+  // `handle()` is relocated below, called directly instead of over a socket; the two that moved to
+  // a different owning layer are relocated there instead (never silently dropped):
+  //  - non-POST / wrong-path routing is now the router's job, not this bridge's -- covered by
+  //    routes.test.ts's generic `matchRoute` method-not-allowed coverage, strengthened with an
+  //    explicit pin for this route's pattern.
+  //  - "reject bytes that fail to decode as UTF-8" is now the BFF body reader's job
+  //    (coding-sidecar-tool-facade.ts's `readJsonObject`, over the real `IncomingMessage`) -- see
+  //    coding-sidecar-tool-facade.test.ts's own malformed-encoding pin.
+  it("rejects an unauthorized request before any facade call", async () => {
     const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
     const fixture = await startBridgeFixture(facade);
-    const request = openHttpRequest(fixture.runtime.toolBridge.url, {
-      headers: { "transfer-encoding": "chunked" },
-    });
     try {
-      request.client.write('{"action":"read"');
-      await expect(responseBeforeEof(request.response)).resolves.toMatchObject({ status: 401 });
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(),
+          body: '{"action":"read"}',
+        }),
+      ).resolves.toMatchObject({ status: 401 });
       expect(facade.execute).not.toHaveBeenCalled();
     } finally {
-      request.client.end();
       await fixture.stop();
     }
   });
 
-  it("rejects Origin, non-POST paths, and oversized declared bodies before reading them", async () => {
+  it("rejects an Origin header before invoking the facade", async () => {
     const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
     const fixture = await startBridgeFixture(facade);
-    const origin = openHttpRequest(fixture.runtime.toolBridge.url, {
-      headers: {
-        ...authorized,
-        origin: "http://untrusted.invalid",
-        "transfer-encoding": "chunked",
-      },
-    });
-    const wrongMethod = openHttpRequest(fixture.runtime.toolBridge.url, {
-      method: "GET",
-      headers: { ...authorized, "transfer-encoding": "chunked" },
-    });
-    const wrongPath = openHttpRequest(
-      fixture.runtime.toolBridge.url.replace(/\/tool$/u, "/other"),
-      {
-        headers: { ...authorized, "transfer-encoding": "chunked" },
-      },
-    );
-    const oversized = openHttpRequest(fixture.runtime.toolBridge.url, {
-      headers: {
-        ...authorized,
-        "content-length": String(CODING_TOOL_MAX_BODY_BYTES + 1),
-      },
-    });
     try {
-      origin.client.write("{");
-      wrongMethod.client.write("{");
-      wrongPath.client.write("{");
-      oversized.client.flushHeaders();
-      await expect(responseBeforeEof(origin.response)).resolves.toMatchObject({ status: 403 });
-      await expect(responseBeforeEof(wrongMethod.response)).resolves.toMatchObject({ status: 404 });
-      await expect(responseBeforeEof(wrongPath.response)).resolves.toMatchObject({ status: 404 });
-      await expect(responseBeforeEof(oversized.response)).resolves.toMatchObject({ status: 413 });
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers({ ...authorized, origin: "http://untrusted.invalid" }),
+          body: '{"action":"read"}',
+        }),
+      ).resolves.toMatchObject({ status: 403 });
       expect(facade.execute).not.toHaveBeenCalled();
     } finally {
-      origin.client.end();
-      wrongMethod.client.end();
-      wrongPath.client.end();
-      oversized.client.end(Buffer.alloc(CODING_TOOL_MAX_BODY_BYTES + 1));
       await fixture.stop();
     }
   });
 
-  it("uses a fatal UTF-8 decoder and preserves the exact ingress byte boundary", async () => {
+  it("admits a body at exactly the byte budget and rejects one over it, before invoking the facade for the oversized one", async () => {
     const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
     const fixture = await startBridgeFixture(facade);
-    const exact = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
-    const invalidUtf8 = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
+    // Padding with ASCII spaces keeps `Buffer.byteLength(body, "utf8")` equal to `body.length`,
+    // so the body constructed for N bytes is EXACTLY N bytes -- the same off-by-one-sensitive
+    // boundary `preflightToolRequest`'s `Buffer.byteLength(body, "utf8") > CODING_TOOL_MAX_BODY_BYTES`
+    // check guards.
+    const paddedObjectOfSize = (bytes: number): string => `{${" ".repeat(bytes - 2)}}`;
     try {
-      exact.client.end(
-        Buffer.concat([
-          Buffer.from("{}", "utf8"),
-          Buffer.alloc(CODING_TOOL_MAX_BODY_BYTES - 2, 0x20),
-        ]),
-      );
-      await expect(exact.response).resolves.toMatchObject({ status: 200 });
-      invalidUtf8.client.end(Buffer.from([0x7b, 0xc3, 0x28, 0x7d]));
-      await expect(invalidUtf8.response).resolves.toMatchObject({ status: 400 });
+      const exact = paddedObjectOfSize(CODING_TOOL_MAX_BODY_BYTES);
+      expect(Buffer.byteLength(exact, "utf8")).toBe(CODING_TOOL_MAX_BODY_BYTES);
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: exact,
+        }),
+      ).resolves.toMatchObject({ status: 200 });
+      expect(facade.execute).toHaveBeenCalledOnce();
+      const oversized = paddedObjectOfSize(CODING_TOOL_MAX_BODY_BYTES + 1);
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: oversized,
+        }),
+      ).resolves.toMatchObject({ status: 413 });
       expect(facade.execute).toHaveBeenCalledOnce();
     } finally {
-      exact.client.destroy();
-      invalidUtf8.client.destroy();
-      await fixture.stop();
-    }
-  });
-
-  it("applies one absolute deadline while reading an authorized body", async () => {
-    const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
-    const fixture = await startBridgeFixture(facade, { requestDeadlineMs: 30, maxInFlight: 1 });
-    const request = openHttpRequest(fixture.runtime.toolBridge.url, {
-      headers: { ...authorized, "transfer-encoding": "chunked" },
-    });
-    try {
-      request.client.write('{"action":"read"');
-      await expect(responseBeforeEof(request.response)).resolves.toMatchObject({ status: 408 });
-      expect(facade.execute).not.toHaveBeenCalled();
-    } finally {
-      request.client.end();
       await fixture.stop();
     }
   });
@@ -1939,20 +1878,23 @@ describe("private OpenCode tool bridge", () => {
       ),
     };
     const fixture = await startBridgeFixture(facade, { requestDeadlineMs: 1_000, maxInFlight: 1 });
-    const first = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
-    const second = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
+    const request = (): Promise<{ readonly status: number; readonly body: string }> =>
+      fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: '{"action":"read"}',
+      });
     try {
-      first.client.end('{"action":"read"}');
+      const first = request();
       await vi.waitFor(() => {
         expect(facade.execute).toHaveBeenCalledOnce();
       });
-      second.client.end('{"action":"read"}');
-      await expect(responseBeforeEof(second.response)).resolves.toMatchObject({ status: 429 });
+      await expect(request()).resolves.toMatchObject({ status: 429 });
       expect(facade.execute).toHaveBeenCalledOnce();
+      for (const release of releases) release();
+      await expect(first).resolves.toMatchObject({ status: 200 });
     } finally {
       for (const release of releases) release();
-      first.client.destroy();
-      second.client.destroy();
       await fixture.stop();
     }
   });
@@ -2133,12 +2075,22 @@ describe("private OpenCode tool bridge", () => {
       { requestDeadlineMs: 1_000, maxInFlight: 1 },
       { safeActivity: activity.safeActivity },
     );
-    const request = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
+    // #3390 (ADR-0043 D11-D14): a raw TCP disconnect no longer reaches this bridge directly --
+    // the ROUTE (coding-sidecar-tool-facade.ts's `bindRouteDisconnect`) observes its own
+    // request/response and turns that into exactly this `signal`, merged with the admission
+    // gate's own deadline abort by `bindExternalAbort`. Driving that same `signal` here proves
+    // the merge point directly instead of simulating a socket close this bridge never sees again.
+    const disconnect = new AbortController();
+    const handled = fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers(authorized),
+      body: toolBody("call_disconnect"),
+      signal: disconnect.signal,
+    });
     try {
-      request.client.end(toolBody("call_disconnect"));
       await invoked;
       expect(observedSignal).toBeInstanceOf(AbortSignal);
-      request.client.destroy();
+      disconnect.abort();
       await vi.waitFor(() => {
         expect(observedSignal?.aborted).toBe(true);
       });
@@ -2147,8 +2099,9 @@ describe("private OpenCode tool bridge", () => {
           expect.objectContaining({ actionId: "tool:call_disconnect", state: "cancelled" }),
         ]);
       });
+      await expect(handled).resolves.toMatchObject({ status: 502 });
     } finally {
-      request.client.destroy();
+      disconnect.abort();
       await fixture.stop();
     }
   });
@@ -2181,20 +2134,22 @@ describe("private OpenCode tool bridge", () => {
       { requestDeadlineMs: 30, maxInFlight: 1 },
       { safeActivity: activity.safeActivity },
     );
-    const request = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
+    const handled = fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers(authorized),
+      body: toolBody("call_timeout"),
+    });
     try {
-      request.client.end(toolBody("call_timeout"));
       await invoked;
       expect(observedSignal).toBeInstanceOf(AbortSignal);
       await vi.waitFor(() => {
         expect(observedSignal?.aborted).toBe(true);
       });
-      await expect(request.response).resolves.toMatchObject({ status: 408 });
+      await expect(handled).resolves.toMatchObject({ status: 408 });
       expect(activity.settlements).toEqual([
         expect.objectContaining({ actionId: "tool:call_timeout", state: "cancelled" }),
       ]);
     } finally {
-      request.client.destroy();
       await fixture.stop();
     }
   });

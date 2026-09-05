@@ -4,7 +4,13 @@
 // banner (created PR / blocked / normalized rejection), and readable API errors.
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  I18N_STORAGE_KEY,
+  I18nProvider,
+  loadLocaleMessages,
+  resetLoadedMessageCatalogs,
+} from "@/lib/i18n";
 import { GovernedPullRequestCard, type GovernedPullRequestClient } from "./GovernedPullRequestCard";
 import {
   ApiError,
@@ -628,5 +634,109 @@ describe("GovernedPullRequestCard — PR description application (#3399)", () =>
       ).toBeInTheDocument(),
     );
     expect(client.prDescriptionApply).not.toHaveBeenCalled();
+  });
+});
+
+// Locale review residual: the Description panel was 100% hardcoded English (no i18n hook at all)
+// even though the task brief for this surface lists EN/DE strings as a deliverable. Every string is
+// now routed through the site-wide i18n mechanism (@/lib/i18n + i18n-messages.en/de.ts) that this
+// card's siblings in the git-client widget family already use (GitChangeScopePill.tsx,
+// GitClientWindow.tsx) — asserting the DE rendering for the state labels and the action buttons.
+describe("GovernedPullRequestCard — Description panel localization (DE)", () => {
+  afterEach(() => {
+    window.localStorage.clear();
+    resetLoadedMessageCatalogs();
+  });
+
+  function renderDescriptionPanelInGerman(
+    client: GovernedPullRequestClient,
+  ): ReturnType<typeof render> {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    return render(
+      <I18nProvider>
+        <GovernedPullRequestCard projectId={PROJECT} client={client} />
+      </I18nProvider>,
+    );
+  }
+
+  it("renders the action buttons in German", async () => {
+    await loadLocaleMessages("de");
+    renderDescriptionPanelInGerman(makeDescriptionClient());
+
+    expect(
+      await screen.findByRole("button", { name: "Beschreibung als Vorschau anzeigen" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Genehmigen" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Übernehmen" })).toBeInTheDocument();
+    // The EN wording must not leak through once German is selected.
+    expect(screen.queryByRole("button", { name: "Preview description" })).not.toBeInTheDocument();
+  });
+
+  it("renders the 'current' state label in German after preview -> approve -> apply", async () => {
+    await loadLocaleMessages("de");
+    const client = makeDescriptionClient();
+    renderDescriptionPanelInGerman(client);
+
+    fireEvent.change(await screen.findByLabelText("Beschreibung Repository (Besitzer/Repo)"), {
+      target: { value: "oscharko-dev/Keiko" },
+    });
+    fireEvent.change(screen.getByLabelText("Beschreibung Pull-Request-Nummer"), {
+      target: { value: "1499" },
+    });
+
+    fireEvent.click(screen.getByTestId("gpr-description-preview-button"));
+    await screen.findByTestId("gpr-description-preview");
+    fireEvent.click(screen.getByTestId("gpr-description-approve-button"));
+    await waitFor(() =>
+      expect(screen.getByTestId("gpr-description-apply-button")).not.toBeDisabled(),
+    );
+    fireEvent.click(screen.getByTestId("gpr-description-apply-button"));
+
+    expect(await screen.findByTestId("gpr-description-state")).toHaveTextContent(
+      "Übernommen und bestätigt",
+    );
+  });
+
+  it.each([
+    ["stale", "Veraltet — Vorschau aktualisieren"],
+    ["partial", "Übernommen — teilweise generiert"],
+    ["fallback", "Übernommen — ohne Modell generiert"],
+    ["failed", "Fehlgeschlagen — nicht übernommen"],
+  ] as const)("renders the distinct '%s' status label in German", async (state, label) => {
+    await loadLocaleMessages("de");
+    const client = makeDescriptionClient({
+      prDescriptionApply: vi.fn(async () =>
+        descriptionObservedResult({
+          state,
+          reason:
+            state === "stale"
+              ? "stale-pr"
+              : state === "partial"
+                ? "partial-applied"
+                : state === "fallback"
+                  ? "fallback-applied"
+                  : "provider-failed",
+          completeness: state === "partial" || state === "fallback" ? state : "complete",
+          effect: state === "partial" || state === "fallback" ? "confirmed" : "none",
+        }),
+      ),
+    });
+    renderDescriptionPanelInGerman(client);
+
+    fireEvent.change(await screen.findByLabelText("Beschreibung Repository (Besitzer/Repo)"), {
+      target: { value: "oscharko-dev/Keiko" },
+    });
+    fireEvent.change(screen.getByLabelText("Beschreibung Pull-Request-Nummer"), {
+      target: { value: "1499" },
+    });
+    fireEvent.click(screen.getByTestId("gpr-description-preview-button"));
+    await screen.findByTestId("gpr-description-preview");
+    fireEvent.click(screen.getByTestId("gpr-description-approve-button"));
+    await waitFor(() =>
+      expect(screen.getByTestId("gpr-description-apply-button")).not.toBeDisabled(),
+    );
+    fireEvent.click(screen.getByTestId("gpr-description-apply-button"));
+
+    expect(await screen.findByTestId("gpr-description-state")).toHaveTextContent(label);
   });
 });

@@ -1124,12 +1124,15 @@ export class CodingRuntimeOrchestrator {
   ): Promise<CodingRuntimeOrchestratorResult> {
     const ready = this.transitionActive("ready");
     if (!ready.ok) return ready;
-    // #3390: the sidecar's first model call -- admitted by runtimeAuthorityService
-    // .reservePromptTokens -- can reach the model gateway before this dispatch even resolves.
-    // Settling into "running" BEFORE dispatch, instead of only after the sidecar accepts, keeps
-    // the run's own public projection truthful for the entire in-flight window (an operator never
-    // observes "ready" while a model call is already outstanding) and closes the state race a
-    // provider without OpenCode's ~500ms retry would have failed the run on. "running" is a legal
+    // #3390: this orchestrator-local snapshot is a separate object from runtimeAuthorityService's
+    // runtimeState (synced independently by productionCodingRuntimePorts.ts's
+    // startProductionRuntime, well before this method runs) -- moving this transition earlier
+    // does NOT itself admit the reservePromptTokens race; that race is closed in
+    // runtimeAuthorityService.ts (PROMPT_RESERVATION_ADMISSIBLE_STATES, which now also admits
+    // "starting", the actual runtimeState during the managed runtime's own start()). What this
+    // move does fix is the run's own public projection: settling into "running" BEFORE dispatch,
+    // instead of only after the sidecar accepts, means an operator never observes "ready" while
+    // this orchestrator has already asked the sidecar to run a model turn. "running" is a legal
     // target out of "ready" (LEGAL_TRANSITIONS), and "running" itself still has legal "failed" /
     // "recovery-required" exits, so the dispatch-failure branches below are unaffected.
     const running = this.transitionActive("running");
