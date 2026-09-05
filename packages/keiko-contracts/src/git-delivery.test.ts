@@ -697,21 +697,30 @@ describe("parseGitDeliveryActionEnvelope (soundness: kind === resolvedInputs.kin
       currentDraftState: true,
       transitionPayloadDigest: "d".repeat(64),
     };
-    const result = parseGitDeliveryActionEnvelope({
-      ...baseEnvelope(),
+    // A DIRECT structural assignment to the union type — never a cast, never routed through
+    // `parseGitDeliveryActionEnvelope`'s own `as unknown as GitDeliveryActionEnvelope` (which
+    // bypasses excess/missing-member checking and would accept this regardless of the union's
+    // completeness). This is the actual compile-time proof the finding calls for: before the fix,
+    // this assignment failed with "Type '{ ...; kind: \"pr-mark-ready\"; ... }' is not assignable to
+    // type 'GitDeliveryActionEnvelope'" because no union member's `kind` literal was "pr-mark-ready"
+    // — `tsc -p packages/keiko-contracts/tsconfig.json --noEmit` on this file is the failing-before
+    // evidence, not vitest (a runtime test cannot observe a type-only regression: switching on
+    // `envelope.kind` still dispatches correctly at runtime even when TypeScript narrows the
+    // "pr-mark-ready" case's `envelope` to `never`, since property access on `never` is permitted).
+    const envelope: GitDeliveryActionEnvelope = {
+      schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
+      actionId: "act-mark-ready-1",
       kind: "pr-mark-ready",
       resolvedInputs: validMarkReadyInputs,
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    const envelope: GitDeliveryActionEnvelope = result.value;
-    switch (envelope.kind) {
-      case "pr-mark-ready":
-        expect(envelope.resolvedInputs.readinessDigest).toBe("c".repeat(64));
-        break;
-      default:
-        throw new Error("expected the pr-mark-ready branch to be reachable and exhaustive");
-    }
+      policyDecision: { outcome: "allowed" },
+      approvalRequirement: { required: false },
+    };
+    expect(envelope.resolvedInputs.readinessDigest).toBe("c".repeat(64));
+    // The runtime parser accepts the identical shape too (unaffected by the type-level gap above —
+    // parseGitDeliveryActionEnvelope never switches on `.kind`, it delegates to
+    // parseGitDeliveryResolvedInputs).
+    const result = parseGitDeliveryActionEnvelope(envelope);
+    expect(result).toEqual({ ok: true, value: envelope });
   });
 });
 

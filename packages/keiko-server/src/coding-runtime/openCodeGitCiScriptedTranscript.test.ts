@@ -7,16 +7,12 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { VerificationReport } from "@oscharko-dev/keiko-contracts";
-import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { runMigrations } from "../store/schema.js";
 import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
-import {
-  CodingRuntimeCiRepairController,
-  type CiRepairExecutionBudget,
-} from "./codingRuntimeCiRepairController.js";
+import { CodingRuntimeCiRepairController } from "./codingRuntimeCiRepairController.js";
 import { createProductionManagedWorktreeToolFacade } from "./productionManagedWorktreeTools.js";
 import { createInMemoryGitDeliveryApprovalStore } from "../gitDelivery/approvalStore.js";
 import { createVerifiedCommitService } from "../gitDelivery/verifiedCommitService.js";
@@ -31,7 +27,10 @@ import {
   OPENCODE_MODEL_VISIBLE_TOOLS,
 } from "./opencodeToolSchemas.js";
 import { createGeneratedOpenCodeBundle } from "./opencodeRuntimeAdapter.js";
-import { ScriptedGovernedTools, type ScriptedToolPhase } from "./opencodeFunctionalHarness/_governedTools.js";
+import {
+  ScriptedGovernedTools,
+  type ScriptedToolPhase,
+} from "./opencodeFunctionalHarness/_governedTools.js";
 
 const DIGEST = "a".repeat(64);
 const roots: string[] = [];
@@ -106,6 +105,11 @@ function failingReport(root: string): VerificationReport {
     counts: { ...passingReport(root).counts, passed: 0, failed: 1 },
     results: [{ ...passingReport(root).results[0], status: "failed", exitCode: 1 }],
   };
+}
+
+/** The generated tool source always serializes its request as a JSON string body. */
+function requestBodyText(body: unknown): string {
+  return typeof body === "string" ? body : "";
 }
 
 /** A scripted "model" call: the exact tool-call shape a real OpenCode transcript hands the server. */
@@ -238,7 +242,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
     const service = createVerifiedCommitService(options);
     const gitService = new RuntimeGitService({
       ...options,
-      mode: () => "autonomous-delivery",
+      mode: (): "autonomous-delivery" => "autonomous-delivery",
       invalidateVerification: (): void => undefined,
     });
     const { facade, bridge } = commitFacadeFixture({
@@ -251,7 +255,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
     });
     const fetch = async (_url: unknown, init: { readonly body?: unknown }): Promise<Response> => {
       const result = await facade.execute({
-        body: String(init.body ?? ""),
+        body: requestBodyText(init.body),
         capability: "scripted-fixture-capability",
       });
       return new Response(JSON.stringify(result));
@@ -356,23 +360,40 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
     // the existing gitDelivery test-support fixture (a verified commit + a completed push/PR
     // draft delivery record for run-1) instead of re-deriving that precondition by hand.
     const snapshots = createDraftRun(db);
-    let nowMs = 1_000_000;
+    // The production budget store timestamps its own rows against the real wall clock
+    // (`Date.now()`); the controller's `now()` must stay on that same clock or every freshness and
+    // receipt check compares two unrelated timelines and fails closed for the wrong reason.
+    let nowMs = Date.now();
+    const repairContext = (): {
+      readonly runId: string;
+      readonly remoteDigest: string;
+      readonly prNumber: number;
+      readonly correlationId: string;
+      readonly limits: {
+        readonly maxRuntimeMs: number;
+        readonly maxToolCalls: number;
+        readonly maxPromptTokens: number;
+      };
+      readonly stillAuthorized: () => boolean;
+    } => ({
+      runId: "run-1",
+      remoteDigest: DIGEST,
+      prNumber: 17,
+      correlationId: "scripted-ci-repair-3388",
+      limits: { maxRuntimeMs: 600_000, maxToolCalls: 100, maxPromptTokens: 100_000 },
+      stillAuthorized: (): boolean => true,
+    });
     const repairController = new CodingRuntimeCiRepairController({
       store: snapshots.ciRepairBudget,
       readiness: snapshots.ciReadiness,
-      context: () => ({
-        runId: "run-1",
-        remoteDigest: DIGEST,
-        prNumber: 17,
-        correlationId: "scripted-ci-repair-3388",
-        limits: { maxRuntimeMs: 600_000, maxToolCalls: 100, maxPromptTokens: 100_000 },
-        stillAuthorized: () => true,
-      }),
-      now: () => nowMs,
+      context: repairContext,
+      now: (): number => nowMs,
     });
     let observation = 0;
     const ciObservationService: CiObservationService = {
-      observe: (): Promise<import("@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci").CodingRuntimeCiResult> => {
+      observe: (): Promise<
+        import("@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci").CodingRuntimeCiResult
+      > => {
         observation += 1;
         nowMs += 1_000;
         const snapshot = {
@@ -419,7 +440,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
 
     const facade = createProductionManagedWorktreeToolFacade({
       ciObservationService,
-      ciRepairBudget: repairController as unknown as CiRepairExecutionBudget,
+      ciRepairBudget: repairController,
       authority: {
         resolveCapabilityForDelegation: () => ({ ok: true, envelope: ciRepairEnvelope() }),
         revalidateCapabilityForMutation: () => ({ ok: true, envelope: ciRepairEnvelope() }),
@@ -456,10 +477,15 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
         branchConstraintsDigest: DIGEST,
         modelProfileDigest: DIGEST,
       }),
-      secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: false, reason: "not-found" }) },
+      secureWorkspaceTextRead: {
+        readText: () => Promise.resolve({ ok: false, reason: "not-found" }),
+      },
       editorAgentClient: {
         action: () =>
-          Promise.resolve({ ok: false, error: { kind: "route", code: "denied", message: "denied" } }),
+          Promise.resolve({
+            ok: false,
+            error: { kind: "route", code: "denied", message: "denied" },
+          }),
       },
       invocationRegistry: createCodingToolInvocationRegistry(),
       verificationRunner: { runToReport: () => Promise.resolve(failingReport(root)) },
@@ -467,11 +493,9 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
     });
     const fetch = async (_url: unknown, init: { readonly body?: unknown }): Promise<Response> => {
       const result = await facade.execute({
-        body: String(init.body ?? ""),
+        body: requestBodyText(init.body),
         capability: "scripted-fixture-capability",
       });
-      // eslint-disable-next-line no-console
-      console.log("DEBUG ci facade result", JSON.stringify(result));
       return new Response(JSON.stringify(result));
     };
     const tools = new ScriptedGovernedTools({
@@ -489,7 +513,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
     // Three observe-then-repair cycles: the model calls keiko_ci_status (a fresh failed
     // readiness observation), then keiko_verification in response -- each verification attempt
     // fails, charging the SAME cumulative CI repair budget CI_REPAIR_MAX_FAILED_ATTEMPTS bounds.
-    const outcomes: string[] = [];
+    const reasonCodes: unknown[] = [];
     for (let cycle = 0; cycle < 4; cycle += 1) {
       const ci = await jsonResult(tools, "keiko_ci_status", {}, `call-ci-${String(cycle)}`);
       expect(ci.status).toBe("completed");
@@ -500,21 +524,29 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
         { verifierId: "typecheck" },
         `call-verify-${String(cycle)}`,
       );
-      outcomes.push(verify.status as string);
+      expect(verify.status).toBe("failed");
+      reasonCodes.push(verify.reasonCode);
     }
     // The first CI_REPAIR_MAX_FAILED_ATTEMPTS (3) failing repair attempts are admitted and
-    // executed (they fail on their own verification merits); the loop does not run unbounded --
-    // the fourth is denied by the budget itself, fail-closed, before verification ever runs again.
-    expect(outcomes.slice(0, 3)).toEqual(["failed", "failed", "failed"]);
-    expect(outcomes[3]).not.toBe("failed");
+    // executed -- each fails on its own verification merits (VERIFICATION_FAILED). The loop does
+    // not run unbounded: by the fourth cycle the cumulative budget is already exhausted, and the
+    // SAME keiko_verification call is denied fail-closed by the budget itself
+    // ("ci-repair-budget-blocked") before the verifier ever runs again -- a materially different
+    // reason than the verifier's own failure, proving the bound is enforced, not merely repeated.
+    expect(reasonCodes.slice(0, 3)).toEqual([
+      "VERIFICATION_FAILED",
+      "VERIFICATION_FAILED",
+      "VERIFICATION_FAILED",
+    ]);
+    expect(reasonCodes[3]).toBe("ci-repair-budget-blocked");
+    // The bound holds for any further call, not just the one that tripped it.
     const denied = await jsonResult(
       tools,
       "keiko_verification",
       { verifierId: "typecheck" },
       "call-verify-exhausted",
     );
-    expect(denied.status).toBe("failed");
-    expect(JSON.stringify(denied)).toContain("ci-repair-budget-blocked");
+    expect(denied).toMatchObject({ status: "failed", reasonCode: "ci-repair-budget-blocked" });
   });
 });
 
@@ -555,9 +587,9 @@ describe("removing a tool from the advertised OpenCode schema fails closed", () 
 
   it("throws a closed error instead of silently succeeding when a scripted transcript calls an unknown tool", async () => {
     expect(OPENCODE_MODEL_VISIBLE_TOOL_NAMES).not.toContain("keiko_git_status_removed");
-    expect(Object.hasOwn(createGeneratedOpenCodeBundle().toolSources, "keiko_git_status_removed")).toBe(
-      false,
-    );
+    expect(
+      Object.hasOwn(createGeneratedOpenCodeBundle().toolSources, "keiko_git_status_removed"),
+    ).toBe(false);
     const phases: ScriptedToolPhase[] = [];
     const tools = new ScriptedGovernedTools({
       env: { KEIKO_CODING_RUN_ID: "run-negative-3388" },

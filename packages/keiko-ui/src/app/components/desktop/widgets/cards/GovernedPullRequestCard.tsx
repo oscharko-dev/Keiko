@@ -584,11 +584,10 @@ interface DescriptionForm {
   readonly ownerAndRepo: string;
   readonly prNumber: string;
   readonly language: PrDescriptionLanguage;
-  readonly refinement: string;
 }
 
 function initialDescriptionForm(ownerAndRepo: string | undefined): DescriptionForm {
-  return { ownerAndRepo: ownerAndRepo ?? "", prNumber: "", language: "en", refinement: "" };
+  return { ownerAndRepo: ownerAndRepo ?? "", prNumber: "", language: "en" };
 }
 
 function isValidDescriptionPrNumber(value: string): boolean {
@@ -1043,21 +1042,6 @@ function derivePrDescriptionPanelFlags(
   };
 }
 
-function PrDescriptionRefinementField({ form, busy, onChange }: DescriptionFieldsProps): ReactNode {
-  return (
-    <label style={LABEL_STYLE}>
-      Refinement (optional){" "}
-      <textarea
-        style={{ ...FIELD_STYLE, minHeight: 60, resize: "vertical" }}
-        value={form.refinement}
-        disabled={busy}
-        onChange={(e) => onChange("refinement", e.target.value)}
-        aria-label="Description refinement"
-      />
-    </label>
-  );
-}
-
 function PrDescriptionPanelStatus({
   flags,
   error,
@@ -1092,17 +1076,8 @@ function usePrDescriptionPreviewHandler(
       ownerAndRepo: form.ownerAndRepo,
       prNumber: Number(form.prNumber),
       language: form.language,
-      ...(form.refinement === "" ? {} : { refinement: form.refinement }),
     });
-  }, [
-    async,
-    flags.canPreview,
-    form.language,
-    form.ownerAndRepo,
-    form.prNumber,
-    form.refinement,
-    projectId,
-  ]);
+  }, [async, flags.canPreview, form.language, form.ownerAndRepo, form.prNumber, projectId]);
 }
 
 function PrDescriptionPanel({
@@ -1138,7 +1113,6 @@ function PrDescriptionPanel({
         <GitIcon size={12} /> Description
       </h3>
       <PrDescriptionFields form={form} busy={async.busy} onChange={onChange} />
-      <PrDescriptionRefinementField form={form} busy={async.busy} onChange={onChange} />
       <PrDescriptionButtons
         busy={async.busy}
         canPreview={flags.canPreview}

@@ -2420,10 +2420,10 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     };
   }
 
-  function jobStore(): CodingRuntimeDescriptionJobStore {
+  function jobStore(maxConcurrentDispatches?: number): CodingRuntimeDescriptionJobStore {
     const db = new DatabaseSync(":memory:");
     runMigrations(db);
-    return createCodingRuntimeDescriptionJobStore(db);
+    return createCodingRuntimeDescriptionJobStore(db, maxConcurrentDispatches);
   }
 
   function fakeDispatcher(
@@ -2627,6 +2627,57 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     await settleRun(f, verifiedCommits);
     expect(f.orchestrator.status()).toMatchObject({
       descriptionStatus: { state: "blocked", reason: "generation-unavailable" },
+    });
+  });
+
+  // #3401 review finding 1: a budget-exhausted dispatch decision was never persisted, so the run
+  // permanently showed no `descriptionStatus` at all for that head instead of the required
+  // visible `blocked` state. Reproduced at the orchestrator/snapshot boundary (not only the store):
+  // "run-1"'s generation attempt never resolves, holding the sole concurrent slot open, while
+  // "run-2" also succeeds and must be visibly blocked rather than silently absent.
+  it("makes a budget-exhausted dispatch visible as a blocked descriptionStatus on the snapshot", async () => {
+    const jobs = jobStore(1);
+    const dispatcher: WorkbenchDescriptionDispatcher = {
+      generate: vi.fn(() => new Promise<WorkbenchDescriptionDispatchOutcome>(() => undefined)),
+    };
+    const verifiedCommits = new Map<string, VerifiedCommitResult>();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      { jobs, dispatcher },
+      verifiedCommits,
+    );
+
+    await settleRun(f, verifiedCommits);
+    await vi.waitFor(() => {
+      expect(dispatcher.generate).toHaveBeenCalledTimes(1);
+    });
+
+    let resolveCompletion: ((outcome: "succeeded") => void) | undefined;
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: new Promise<"succeeded">((resolve) => {
+        resolveCompletion = resolve;
+      }),
+    });
+    expect(
+      successfulSnapshot(await f.orchestrator.start({ ...start, requestId: "request-2" })),
+    ).toMatchObject({ state: "running", runId: "run-2" });
+    verifiedCommits.set("run-2", verifiedCommit({ runId: "run-2" }));
+    resolveCompletion?.("succeeded");
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-2")?.state).toBe("succeeded");
+    });
+
+    // The sole concurrent slot is still occupied by "run-1"'s never-resolving attempt, so "run-2"
+    // must never reach the dispatcher and must instead be visibly blocked.
+    expect(dispatcher.generate).toHaveBeenCalledTimes(1);
+    expect(f.orchestrator.getSnapshot("run-2")).toMatchObject({
+      descriptionStatus: { state: "blocked", reason: "budget-exhausted" },
     });
   });
 
