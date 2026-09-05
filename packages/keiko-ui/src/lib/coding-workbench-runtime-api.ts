@@ -5,6 +5,7 @@ import type {
   CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
+  CodingWorkbenchRuntimeQuestionAnswerRequest,
   CodingWorkbenchRuntimeQuestionsChannelPayload,
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
@@ -155,11 +156,6 @@ function postSnapshot<T>(
 export interface CodingWorkbenchRuntimeOperationRequest {
   readonly requestId: string;
   readonly expectedRevision: number;
-}
-
-export interface CodingWorkbenchRuntimeQuestionAnswerBody extends CodingWorkbenchRuntimeOperationRequest {
-  readonly questionId: string;
-  readonly answers: readonly (readonly string[])[];
 }
 
 export interface CodingWorkbenchRuntimeQuestionRejectBody extends CodingWorkbenchRuntimeOperationRequest {

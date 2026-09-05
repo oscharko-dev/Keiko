@@ -134,6 +134,20 @@ describe("Coding Workbench translations", () => {
     expect(de).not.toBe(en);
   });
 
+  // #3390 wave: the trust affordance's three strings — restated in both catalogs, not copied
+  // verbatim from one to the other.
+  it.each([
+    "codingWorkbench.trust.restrictedNotice",
+    "codingWorkbench.trust.allow",
+    "codingWorkbench.trust.allowing",
+  ] as const)("localizes %s in both catalogs", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en.length).toBeGreaterThan(0);
+    expect(de.length).toBeGreaterThan(0);
+    expect(de).not.toBe(en);
+  });
+
   it("keeps every Coding Workbench key out of eager locale catalogs", () => {
     expect(Object.keys(EN_MESSAGES)).not.toContainEqual(
       expect.stringMatching(/^codingWorkbench\./u),

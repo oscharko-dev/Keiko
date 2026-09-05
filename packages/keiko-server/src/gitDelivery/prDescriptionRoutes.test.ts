@@ -17,6 +17,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultChatCapability } from "@oscharko-dev/keiko-model-gateway";
+import type { GitPullRequestBodyAdapter } from "@oscharko-dev/keiko-tools";
 import type { ServerLogEvent } from "../observability/index.js";
 import {
   buildRedactor,
@@ -451,8 +452,17 @@ describe("pr-description routes — real composition through deps.prDescriptionG
         activityLog: { write: (): undefined => undefined },
         now: () => fixture.now,
         // The fixture's fake GitHub adapter, not the real git/network-backed default — every other
-        // piece of the composition (`generation`, `snapshots`) is real.
-        adapterFactory: () => fixture.options.adapter(),
+        // piece of the composition (`generation`, `snapshots`) is real. `options.adapter` ignores
+        // the context it is given (see prDescriptionTestSupport.ts's `adapter: () => this.adapter()`)
+        // and always returns the fixture's fake adapter, so passing `fixture.context` here — rather
+        // than the `workspace` this seam is actually invoked with in production — is safe.
+        adapterFactory: (): GitPullRequestBodyAdapter => {
+          const adapter = fixture.options.adapter(fixture.context);
+          if (adapter === undefined) {
+            throw new Error("expected the fixture's fake adapter to be defined");
+          }
+          return adapter;
+        },
       },
     };
   }
@@ -539,6 +549,10 @@ describe("pr-description routes — real composition through deps.prDescriptionG
     });
     try {
       expect(composed.prDescriptionGeneration).toBeDefined();
+      const composedGeneration = composed.prDescriptionGeneration;
+      if (composedGeneration === undefined) {
+        throw new Error("expected buildUiHandlerDeps to compose prDescriptionGeneration");
+      }
       const fetchSpy = vi.fn((_url: string | URL | Request, init?: RequestInit) => {
         const rawBody = typeof init?.body === "string" ? init.body : "{}";
         const serialized = JSON.stringify(JSON.parse(rawBody));
@@ -576,7 +590,7 @@ describe("pr-description routes — real composition through deps.prDescriptionG
         // The clock override is test-only plumbing (`fixture.snapshots` stamps captures with its
         // own fixed clock, and `createProductionPrDescriptionGeneration` composes no `now` of its
         // own) -- gateway, config, branding and log all come from the REAL composition unchanged.
-        prDescriptionGeneration: { ...composed.prDescriptionGeneration, now: () => fixture.now },
+        prDescriptionGeneration: { ...composedGeneration, now: () => fixture.now },
       });
       const previewHandler = createHandlePrDescriptionPreview(productionCompositionOptions());
       const res = await previewHandler(ctxFor(PREVIEW, body({ language: "en" })), composedDeps);

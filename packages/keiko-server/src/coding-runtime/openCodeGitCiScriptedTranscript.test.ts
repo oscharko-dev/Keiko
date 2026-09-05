@@ -16,6 +16,7 @@ import type {
   CodingWorkbenchRuntimeEvent,
   VerificationReport,
 } from "@oscharko-dev/keiko-contracts";
+import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import type {
   GatewayConfig,
   ModelCapability,
@@ -481,6 +482,14 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
     // the existing gitDelivery test-support fixture (a verified commit + a completed push/PR
     // draft delivery record for run-1) instead of re-deriving that precondition by hand.
     const snapshots = createDraftRun(db);
+    // `createDraftRun` always attaches both stores (they back the CI-repair budget and readiness
+    // machinery this test exercises); the store type only declares them optional for
+    // implementations that omit them.
+    const ciRepairBudget = snapshots.ciRepairBudget;
+    const ciReadiness = snapshots.ciReadiness;
+    if (ciRepairBudget === undefined || ciReadiness === undefined) {
+      throw new Error("expected ciRepairBudget and ciReadiness stores from createDraftRun");
+    }
     // The production budget store timestamps its own rows against the real wall clock
     // (`Date.now()`); the controller's `now()` must stay on that same clock or every freshness and
     // receipt check compares two unrelated timelines and fails closed for the wrong reason.
@@ -505,8 +514,8 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       stillAuthorized: (): boolean => true,
     });
     const repairController = new CodingRuntimeCiRepairController({
-      store: snapshots.ciRepairBudget,
-      readiness: snapshots.ciReadiness,
+      store: ciRepairBudget,
+      readiness: ciReadiness,
       context: repairContext,
       now: (): number => nowMs,
     });
@@ -517,7 +526,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       > => {
         observation += 1;
         nowMs += 1_000;
-        const snapshot = {
+        const snapshot: ReadinessSnapshot = {
           schemaVersion: "1" as const,
           runId: "run-1",
           remoteDigest: DIGEST,
@@ -552,8 +561,8 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
             changesRequestedCount: 0,
           },
         };
-        const ticket = snapshots.ciReadiness.begin("run-1");
-        snapshots.ciReadiness.complete(ticket, snapshot);
+        const ticket = ciReadiness.begin("run-1");
+        ciReadiness.complete(ticket, snapshot);
         repairController.observed(snapshot);
         return Promise.resolve({ status: "observed" as const, snapshot, retryAfterMs: 0 });
       },

@@ -847,6 +847,95 @@ describe("production managed worktree tools", () => {
       });
     },
   );
+  // #3390: the tool-result projection is a transparent pass-through of the verified-commit
+  // record, so the closed violation codes the pure message-policy validator computed reach the
+  // model on the SAME "completed" tool result that told the model its commit was blocked --
+  // proving the model can self-correct instead of asking the operator which format to use.
+  it("carries message-policy violation codes on the commit tool-result projection", async () => {
+    const blockedResult = {
+      schemaVersion: "1" as const,
+      proposalId: "commit-3390",
+      runId: "run-1",
+      envelopeDigest: DIGEST,
+      runtimeAuthorityDigest: DIGEST,
+      workspaceDigest: DIGEST,
+      repositoryDigest: DIGEST,
+      baseSha: "1".repeat(40),
+      parentSha: "2".repeat(40),
+      stagedTreeDigest: DIGEST,
+      verificationEvidenceId: "verification-1",
+      messageDigest: DIGEST,
+      status: "blocked" as const,
+      reason: "message-policy" as const,
+      recordedAt: "2026-09-05T13:24:40.039Z",
+      violations: ["missing-conventional-prefix" as const],
+    };
+    const service = {
+      ...verificationService(),
+      propose: vi.fn(() => Promise.resolve(blockedResult)),
+    };
+    const facade = createProductionManagedWorktreeToolFacade({
+      verifiedCommitService: service,
+      authority: {
+        revalidateCapabilityForMutation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(true),
+        }),
+        resolveCapabilityForDelegation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(true),
+        }),
+      },
+      authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+      workspaceRoot: "/managed/worktree",
+      resolveWorkspaceRootAccess,
+      authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+      effectiveMode: "autonomous-delivery",
+      deploymentCeiling: "autonomous-delivery",
+      liveFacts: () => ({
+        ...FACTS,
+        actionClasses: [
+          "workspace-read",
+          "workspace-write",
+          "verification",
+          "delivery-substrate",
+          "connector-access",
+        ],
+        connectorScopes: ["source-control.read", "source-control.write"],
+      }),
+      secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: false, reason: "denied" }) },
+      editorAgentClient: {
+        action: () =>
+          Promise.resolve({
+            ok: false as const,
+            error: { kind: "route" as const, code: "denied", message: "denied" },
+          }),
+      },
+      invocationRegistry: createCodingToolInvocationRegistry(),
+      verificationRunner: { runToReport: vi.fn() },
+      onRuntimeEvent: vi.fn(),
+    });
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "delivery",
+          actionId: "delivery-1",
+          idempotencyKey: "delivery-key",
+          intent: "commit",
+          phase: "propose",
+          message: "rejected commit message",
+        }),
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      verifiedCommit: {
+        status: "blocked",
+        reason: "message-policy",
+        violations: blockedResult.violations,
+      },
+    });
+  });
 });
 
 describe("H1 repository search mounted into production composition (#3386)", () => {

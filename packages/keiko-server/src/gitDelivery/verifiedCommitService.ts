@@ -7,6 +7,7 @@ import type {
   VerificationReport,
   GitDeliveryApprovalClaim,
   GitDeliveryApprovalRequirement,
+  GitCommitMessageValidation,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   VerifiedCommitBinding,
@@ -114,6 +115,19 @@ function kernelDetails(
   return result.outcome.category === "policy-block"
     ? { blockReason: result.outcome.blockReason }
     : { preflightFindings: result.outcome.findings };
+}
+
+// #3390: `messageAllowed` accepts a plain boolean (existing wiring) or the full validation the
+// pure git-commit-policy validator already computes; only the latter carries closed violation
+// codes the model can self-correct against instead of asking the operator.
+function messagePolicyAllowed(value: boolean | GitCommitMessageValidation): boolean {
+  return typeof value === "boolean" ? value : value.ok;
+}
+
+function messagePolicyViolationDetails(
+  value: boolean | GitCommitMessageValidation,
+): Pick<VerifiedCommitResult, "violations"> {
+  return typeof value === "boolean" || value.ok ? {} : { violations: value.violations };
 }
 
 function guardedProposal(
@@ -278,8 +292,16 @@ class VerifiedCommitController implements VerifiedCommitService {
       this.now() - verification.startedAtMs >= TTL_MS
     )
       return this.record(context, binding, "drift", "verification-stale");
-    if (!(await this.options.messageAllowed(message, context.workspace)))
-      return this.record(context, binding, "blocked", "message-policy");
+    const messagePolicy = await this.options.messageAllowed(message, context.workspace);
+    if (!messagePolicyAllowed(messagePolicy))
+      return this.record(
+        context,
+        binding,
+        "blocked",
+        "message-policy",
+        undefined,
+        messagePolicyViolationDetails(messagePolicy),
+      );
     if (hasIssueClosingDirective(message))
       return this.record(context, binding, "blocked", "issue-directive");
     return this.prepareProposal(context, facts, binding, message);
@@ -548,7 +570,7 @@ class VerifiedCommitController implements VerifiedCommitService {
     status: VerifiedCommitStatus,
     reason: VerifiedCommitReason,
     headSha?: string,
-    details: Pick<VerifiedCommitResult, "blockReason" | "preflightFindings"> = {},
+    details: Pick<VerifiedCommitResult, "blockReason" | "preflightFindings" | "violations"> = {},
   ): VerifiedCommitResult {
     const result = this.result(binding, status, reason, headSha, details);
     this.options.snapshots.recordVerifiedCommit(result);
@@ -557,6 +579,9 @@ class VerifiedCommitController implements VerifiedCommitService {
       reason,
       proposalId: binding.proposalId,
       stagedTreeDigest: binding.stagedTreeDigest,
+      ...(result.violations === undefined
+        ? {}
+        : { violations: result.violations, violationCount: result.violations.length }),
     });
     return result;
   }
@@ -566,7 +591,7 @@ class VerifiedCommitController implements VerifiedCommitService {
     status: VerifiedCommitStatus,
     reason: VerifiedCommitReason,
     headSha?: string,
-    details: Pick<VerifiedCommitResult, "blockReason" | "preflightFindings"> = {},
+    details: Pick<VerifiedCommitResult, "blockReason" | "preflightFindings" | "violations"> = {},
   ): VerifiedCommitResult {
     return {
       schemaVersion: "1",

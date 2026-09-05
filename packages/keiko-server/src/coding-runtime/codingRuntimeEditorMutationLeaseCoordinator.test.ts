@@ -126,7 +126,7 @@ describe("coding-runtime editor mutation lease coordinator (Issue #2332)", () =>
     expect(coordinator.lease.claim(request())).toBe(true);
     expect(coordinator.lease.matches(request())).toBe(true);
     expect(coordinator.lease.complete(request(), true)).toBe(true);
-    await expect(idle).resolves.toBe(true);
+    await expect(idle).resolves.toBe("idle-succeeded");
     expect(mutationGuard).toHaveBeenCalledTimes(1);
     expect(coordinator.lease.claim(request())).toBe(false);
     expect(mutationGuard).toHaveBeenCalledTimes(1);
@@ -141,14 +141,45 @@ describe("coding-runtime editor mutation lease coordinator (Issue #2332)", () =>
     expect(coordinator.register(registration())).toBe(true);
     const rejected = coordinator.waitForIdle(new AbortController().signal);
     expect(coordinator.lease.discard(request())).toBe(true);
-    await expect(rejected).resolves.toBe(false);
+    await expect(rejected).resolves.toBe("idle-failed");
 
     expect(coordinator.register(registration())).toBe(true);
     const controller = new AbortController();
     const cancelled = coordinator.waitForIdle(controller.signal);
     controller.abort();
-    await expect(cancelled).resolves.toBe(false);
+    await expect(cancelled).resolves.toBe("not-idle");
     expect(coordinator.lease.matches(request())).toBe(true);
+  });
+
+  // Epic #3384 cascade: a REFUSED edit that never reached the editor route (no live Workbench
+  // bridge -- codingToolReadEditPorts.ts's NO_ACTIVE_SESSION/WORKSPACE_ACCESS_LOST refusals) used
+  // to fail the whole run with "pending-mutations-unsettled" even though nothing was pending or
+  // ever touched the tree. The coordinator's OWN `discard` (as opposed to `lease.discard` above,
+  // pinned to keep marking the outcome failed) must not do that for an UNCLAIMED lease.
+  it("does not fail the run's mutation outcome when its own discard abandons an unclaimed lease before the commit boundary", async () => {
+    const coordinator = createCodingRuntimeEditorMutationLeaseCoordinator({
+      invocationRegistry: createCodingToolInvocationRegistry(),
+      cancelPendingByAuthorityRun: (): number => 0,
+    });
+    expect(coordinator.register(registration())).toBe(true);
+    const idle = coordinator.waitForIdle(new AbortController().signal);
+    expect(coordinator.discard(request())).toBe(true);
+    // Unclaimed + never touched the tree -> the turn's mutation outcome stays clean.
+    await expect(idle).resolves.toBe("idle-succeeded");
+    // Discarding an already-discarded (now unregistered) lease is a harmless no-op.
+    expect(coordinator.discard(request())).toBe(false);
+  });
+
+  it("still fails the run's mutation outcome when its own discard abandons an already-CLAIMED lease", async () => {
+    const coordinator = createCodingRuntimeEditorMutationLeaseCoordinator({
+      invocationRegistry: createCodingToolInvocationRegistry(),
+      cancelPendingByAuthorityRun: (): number => 0,
+    });
+    expect(coordinator.register(registration())).toBe(true);
+    expect(coordinator.lease.claim(request())).toBe(true);
+    const idle = coordinator.waitForIdle(new AbortController().signal);
+    expect(coordinator.discard(request())).toBe(true);
+    await expect(idle).resolves.toBe("idle-failed");
   });
 
   it("revokes a run atomically: it closes staging, aborts raw reads, cancels pending browser work, and rejects a late result", () => {

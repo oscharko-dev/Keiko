@@ -175,18 +175,45 @@ function validFinding(value: unknown): boolean {
     finding.remediation === "user-actionable" || finding.remediation === "internal",
   ].every(Boolean);
 }
+function validMessagePolicyViolations(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= GIT_COMMIT_MESSAGE_VIOLATION_CODES.length &&
+    value.every(isGitCommitMessageViolationCode)
+  );
+}
+
 function validBlockedDetails(value: Record<string, unknown>): boolean {
   if (value.reason === "policy-block")
-    return isGitDeliveryBlockReason(value.blockReason) && value.preflightFindings === undefined;
+    return (
+      isGitDeliveryBlockReason(value.blockReason) &&
+      value.preflightFindings === undefined &&
+      value.violations === undefined
+    );
   if (value.reason === "preflight-block")
     return (
       value.blockReason === undefined &&
       Array.isArray(value.preflightFindings) &&
       value.preflightFindings.length > 0 &&
       value.preflightFindings.length <= 32 &&
-      value.preflightFindings.every(validFinding)
+      value.preflightFindings.every(validFinding) &&
+      value.violations === undefined
     );
-  return value.blockReason === undefined && value.preflightFindings === undefined;
+  if (value.reason === "message-policy")
+    return (
+      value.blockReason === undefined &&
+      value.preflightFindings === undefined &&
+      // Optional, not required: a caller may still resolve `messageAllowed` to a plain boolean
+      // (#3390 keeps that wiring compiling), in which case no violation codes are available yet.
+      // When present, the codes must be the closed, non-empty, content-free vocabulary.
+      (value.violations === undefined || validMessagePolicyViolations(value.violations))
+    );
+  return (
+    value.blockReason === undefined &&
+    value.preflightFindings === undefined &&
+    value.violations === undefined
+  );
 }
 
 /** Strict persisted/wire validator: unknown fields (including live claims) fail closed. */

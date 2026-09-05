@@ -113,6 +113,7 @@ import {
   type CodingWorkbenchRunWorkspaceBinding,
 } from "./useCodingWorkbenchRunWorkspace";
 import { ResearchGrantChip } from "./CodingWorkbenchResearchGrant";
+import { CodingWorkbenchTrustAffordance } from "./CodingWorkbenchTrustAffordance";
 import { requestGatewayModelCatalogRefresh } from "../shared/gatewaySetupBus";
 import {
   activeRunState,
@@ -588,7 +589,7 @@ function WorkbenchContent({
   workbenchLabel,
   ...columns
 }: WorkbenchContentProps): ReactNode {
-  const { research, runWorkspace, state } = columns;
+  const { research, runWorkspace, state, activeWorkspace } = columns;
   return (
     <section
       className={styles.shell}
@@ -601,6 +602,10 @@ function WorkbenchContent({
         state={state}
         workspace={sessionWorkspaceProjection(state, runWorkspace)}
       />
+      {/* #3390 wave: the same live root the editor bridge and changes panel already key on
+          (`liveWorkspaceRootOf`), so a run refused WORKSPACE_TRUST_REQUIRED has one visible, explicit
+          exit here instead of requiring the operator to already know the Editor's own command. */}
+      <CodingWorkbenchTrustAffordance root={liveWorkspaceRootOf(activeWorkspace)} />
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {lifecycleAnnouncement(state, t, research.grant)}
       </p>

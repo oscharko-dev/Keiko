@@ -305,6 +305,70 @@ describe("coding runtime routes", () => {
     expect(JSON.stringify(answered.body)).not.toContain("untrusted-answer-text");
   });
 
+  // Epic #3384 defect B: every refused mutation used to return its 400/403 with nothing in the
+  // activity log. Before this fix neither case below wrote a line; the mutation() funnel now emits
+  // exactly one body-free warn line per refusal, naming which operation and which closed reason.
+  it("#3384 defect B: logs a body-free refusal when a mutation body is malformed", async () => {
+    const session = pairedAppSession();
+    const records: unknown[] = [];
+    const deps = runtime({
+      codingAppSessionChannel: session.channel,
+      activityLog: { write: (event: unknown) => void records.push(event) },
+    });
+    const refused = await handleCodingRuntimeQuestionAnswer(
+      context("not-json", { runId: "run-1" }, "/api/coding-workbench/runtime/runs", session.cookie),
+      deps,
+    );
+    expect(refused).toMatchObject({ status: 400 });
+    expect(records).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        category: "process",
+        op: "coding-runtime.operation.refused",
+        extra: { operation: "answer", runId: "run-1", reason: "invalid-intent" },
+      }),
+    ]);
+  });
+
+  it("#3384 defect B: logs the closed failure code the runtime returned, e.g. replay-cap-exhausted", async () => {
+    const session = pairedAppSession();
+    const records: unknown[] = [];
+    const deps = runtime({
+      codingAppSessionChannel: session.channel,
+      activityLog: { write: (event: unknown) => void records.push(event) },
+    });
+    (
+      deps.codingRuntimeOrchestrator as unknown as {
+        answerQuestion: (
+          runId: string,
+          body: unknown,
+        ) => Promise<{ readonly ok: false; readonly failureCode: string }>;
+      }
+    ).answerQuestion = () =>
+      Promise.resolve({ ok: false as const, failureCode: "replay-cap-exhausted" });
+    const refused = await handleCodingRuntimeQuestionAnswer(
+      context(
+        JSON.stringify({
+          requestId: "req-1",
+          expectedRevision: 2,
+          questionId: "que_1",
+          answers: [["ok"]],
+        }),
+        { runId: "run-1" },
+        "/api/coding-workbench/runtime/runs",
+        session.cookie,
+      ),
+      deps,
+    );
+    expect(refused).toMatchObject({ status: 400 });
+    expect(records).toEqual([
+      expect.objectContaining({
+        op: "coding-runtime.operation.refused",
+        extra: { operation: "answer", runId: "run-1", reason: "replay-cap-exhausted" },
+      }),
+    ]);
+  });
+
   it("#2478: serves the paired question list as the channel payload with the active session facet", async () => {
     const session = pairedAppSession();
     const listed = await handleCodingRuntimeQuestionList(

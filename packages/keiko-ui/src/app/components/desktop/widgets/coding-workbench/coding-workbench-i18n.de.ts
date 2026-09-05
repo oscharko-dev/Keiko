@@ -964,4 +964,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Der GitHub-Issue-Zugriff wurde an anderer Stelle geändert. Der aktuelle Serverzustand wurde neu geladen; prüfe ihn und versuche es erneut.",
   "codingWorkbench.githubAccess.error.unknown-repository":
     "Dieser Pfad ist kein geöffnetes Projekt. Öffne das Repository als Projekt, bevor du seinen GitHub-Issue-Zugriff änderst.",
+  "codingWorkbench.trust.restrictedNotice":
+    "Die Verifizierung muss die Paket-Skripte dieses Repositorys ausführen, sie sind aber noch nicht freigegeben.",
+  "codingWorkbench.trust.allow": "Paket-Skripte für die Verifizierung zulassen",
+  "codingWorkbench.trust.allowing": "Wird zugelassen…",
 } satisfies CodingWorkbenchMessageCatalog;

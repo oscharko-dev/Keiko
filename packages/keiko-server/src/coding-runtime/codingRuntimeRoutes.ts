@@ -20,6 +20,7 @@ import { unpairedCodingWorkbenchRuntimeQuestionsChannelPayload } from "@oscharko
 import { unpairedCodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import {
   errorBody,
   STREAMING,
@@ -94,6 +95,44 @@ function notFound(correlationId?: string): RouteResult {
     status: 404,
     body: errorBody("CODING_RUNTIME_RUN_NOT_FOUND", "Runtime run was not found.", correlationId),
   };
+}
+
+// Every state-changing coding-runtime route the `mutation()` funnel below serves. Named after the
+// route it backs so a log line names exactly which mutation was refused.
+type RuntimeMutationOperationName =
+  | "start"
+  | "approval"
+  | "stop"
+  | "takeover"
+  | "retry"
+  | "recovery-ack"
+  | "pause"
+  | "resume"
+  | "research-revoke"
+  | "follow-up"
+  | "answer"
+  | "reject";
+
+// AGENTS.md §8 rule 1 / epic #3384 defect B: a refused runtime operation (a malformed body, a
+// replay-cap exhaustion, a question answer the runtime rejected, ...) used to return its 400/403
+// with NOTHING in the activity log -- an operator-visible refusal an agent replaying the log could
+// never reconstruct. ONE body-free warn line, closed op, from the single mutation() funnel so no
+// route can forget it. `reason` is always a closed CodingWorkbenchRuntimeFailureCode value, never
+// free text; `runId` is absent for the run-creating `start` mutation, which names none.
+function logRuntimeOperationRefusal(
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+  operation: RuntimeMutationOperationName,
+  runId: string | undefined,
+  reason: CodingWorkbenchRuntimeFailureCode,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write({
+    level: "warn",
+    category: "process",
+    op: "coding-runtime.operation.refused",
+    correlationId,
+    extra: { operation, reason, ...(runId === undefined ? {} : { runId }) },
+  });
 }
 
 function readBody(req: IncomingMessage): Promise<unknown> {
@@ -189,7 +228,8 @@ async function mutation(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string | undefined,
-  operation: (
+  operationName: RuntimeMutationOperationName,
+  invoke: (
     runtime: CodingRuntimeOrchestrator,
     body: unknown,
   ) => ReturnType<CodingRuntimeOrchestrator["start"]>,
@@ -202,11 +242,14 @@ async function mutation(
     return notFound(ctx.correlationId);
   return withBody(async () => {
     const body = await readBody(ctx.req);
-    if (body === undefined) return failureResult("invalid-intent", ctx.correlationId);
-    const result = await operation(required.orchestrator, body);
-    return result.ok
-      ? { status: 200, body: result.snapshot }
-      : failureResult(result.failureCode, ctx.correlationId, result.issueBindingFailure);
+    if (body === undefined) {
+      logRuntimeOperationRefusal(deps, ctx.correlationId, operationName, runId, "invalid-intent");
+      return failureResult("invalid-intent", ctx.correlationId);
+    }
+    const result = await invoke(required.orchestrator, body);
+    if (result.ok) return { status: 200, body: result.snapshot };
+    logRuntimeOperationRefusal(deps, ctx.correlationId, operationName, runId, result.failureCode);
+    return failureResult(result.failureCode, ctx.correlationId, result.issueBindingFailure);
   }, ctx.correlationId);
 }
 
@@ -214,7 +257,7 @@ export function handleCreateCodingRuntimeRun(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return mutation(ctx, deps, undefined, (runtime, body) => runtime.start(body));
+  return mutation(ctx, deps, undefined, "start", (runtime, body) => runtime.start(body));
 }
 
 export function handleCodingRuntimeStatus(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
@@ -316,7 +359,9 @@ export function handleCodingRuntimeApproval(
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound(ctx.correlationId))
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.decideApproval(runId, body));
+    : mutation(ctx, deps, runId, "approval", (runtime, body) =>
+        runtime.decideApproval(runId, body),
+      );
 }
 export function handleCodingRuntimeStop(
   ctx: RouteContext,
@@ -325,7 +370,7 @@ export function handleCodingRuntimeStop(
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound(ctx.correlationId))
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.stop(runId, body));
+    : mutation(ctx, deps, runId, "stop", (runtime, body) => runtime.stop(runId, body));
 }
 export function handleCodingRuntimeTakeover(
   ctx: RouteContext,
@@ -334,7 +379,7 @@ export function handleCodingRuntimeTakeover(
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound(ctx.correlationId))
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.takeover(runId, body));
+    : mutation(ctx, deps, runId, "takeover", (runtime, body) => runtime.takeover(runId, body));
 }
 export function handleCodingRuntimeRetry(
   ctx: RouteContext,
@@ -343,7 +388,7 @@ export function handleCodingRuntimeRetry(
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound(ctx.correlationId))
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.retry(runId, body));
+    : mutation(ctx, deps, runId, "retry", (runtime, body) => runtime.retry(runId, body));
 }
 export function handleCodingRuntimeRecoveryAcknowledgement(
   ctx: RouteContext,
@@ -352,7 +397,9 @@ export function handleCodingRuntimeRecoveryAcknowledgement(
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound(ctx.correlationId))
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.acknowledgeRecovery(runId, body));
+    : mutation(ctx, deps, runId, "recovery-ack", (runtime, body) =>
+        runtime.acknowledgeRecovery(runId, body),
+      );
 }
 
 export function handleCodingRuntimePause(
@@ -362,7 +409,7 @@ export function handleCodingRuntimePause(
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound(ctx.correlationId))
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.pause(runId, body));
+    : mutation(ctx, deps, runId, "pause", (runtime, body) => runtime.pause(runId, body));
 }
 
 export function handleCodingRuntimeResume(
@@ -372,7 +419,7 @@ export function handleCodingRuntimeResume(
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound(ctx.correlationId))
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.resume(runId, body));
+    : mutation(ctx, deps, runId, "resume", (runtime, body) => runtime.resume(runId, body));
 }
 
 // Revoking the #2387 internet research grant drops it for the parent run and every child in one
@@ -385,7 +432,9 @@ export function handleCodingRuntimeResearchRevoke(
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound(ctx.correlationId))
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.revokeResearch(runId, body));
+    : mutation(ctx, deps, runId, "research-revoke", (runtime, body) =>
+        runtime.revokeResearch(runId, body),
+      );
 }
 
 // Inline follow-up: a drafted message is admitted only while the run is running; the
@@ -398,7 +447,9 @@ export function handleCodingRuntimeFollowUp(
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound(ctx.correlationId))
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.submitFollowUp(runId, body));
+    : mutation(ctx, deps, runId, "follow-up", (runtime, body) =>
+        runtime.submitFollowUp(runId, body),
+      );
 }
 
 // Required-question surface. Question text is browser-rendered untrusted content: it never enters
@@ -421,7 +472,7 @@ export function handleCodingRuntimeQuestionAnswer(
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound(ctx.correlationId))
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.answerQuestion(runId, body));
+    : mutation(ctx, deps, runId, "answer", (runtime, body) => runtime.answerQuestion(runId, body));
 }
 
 export function handleCodingRuntimeQuestionReject(
@@ -434,7 +485,7 @@ export function handleCodingRuntimeQuestionReject(
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound(ctx.correlationId))
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.rejectQuestion(runId, body));
+    : mutation(ctx, deps, runId, "reject", (runtime, body) => runtime.rejectQuestion(runId, body));
 }
 
 export function handleCodingRuntimeQuestionList(

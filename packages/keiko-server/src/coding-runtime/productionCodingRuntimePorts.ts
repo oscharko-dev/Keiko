@@ -1,6 +1,7 @@
 import type { CodexRuntimeControl } from "./codexRuntimeComposition.js";
 import type { OpenCodeRunPort } from "./opencodeRuntimeComposition.js";
 import type { CodingRuntimeManager, CodingRuntimeStartResult } from "./codingRuntimeManager.js";
+import type { CodingRuntimeMutationIdleOutcome } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import {
   contentFreeErrorClass,
   emitServerDiagnostic,
@@ -61,7 +62,8 @@ export interface ProductionRuntimeRunRecord {
   readonly turnPort: ProductionRuntimeTurnPort;
   readonly controller: AbortController;
   readonly operationGuard: ProductionRuntimeOperationGuard;
-  readonly waitForPendingMutations?: ((signal: AbortSignal) => Promise<boolean>) | undefined;
+  readonly waitForPendingMutations?:
+    ((signal: AbortSignal) => Promise<CodingRuntimeMutationIdleOutcome>) | undefined;
   readonly dispose?: (() => void | Promise<void>) | undefined;
 }
 
@@ -528,12 +530,21 @@ async function terminalCompletion(
     const outcome = await record.turnPort.waitForTerminal(runId, record.controller.signal);
     if (outcome === "failed") recordRuntimeDispatchFailure(diagnostics, runId, "terminal-failed");
     if (outcome !== "succeeded" || record.waitForPendingMutations === undefined) return outcome;
-    const settled = await record.waitForPendingMutations(record.controller.signal);
-    if (settled) return "succeeded";
-    if (!record.controller.signal.aborted) {
-      recordRuntimeDispatchFailure(diagnostics, runId, "pending-mutations-unsettled");
-    }
-    return record.controller.signal.aborted ? "cancelled" : "failed";
+    const idle = await record.waitForPendingMutations(record.controller.signal);
+    if (idle === "idle-succeeded") return "succeeded";
+    if (record.controller.signal.aborted) return "cancelled";
+    // "idle-failed" (every lease settled, but a CLAIMED mutation did not succeed) and "not-idle"
+    // (a lease was still outstanding when the wait was abandoned) are reported under distinct
+    // reasons: a REFUSED edit that never reached the commit boundary (NO_ACTIVE_SESSION,
+    // WORKSPACE_ACCESS_LOST -- codingToolReadEditPorts.ts) resolves "idle-succeeded" and never
+    // reaches here at all, so "pending-mutations-unsettled" is reserved for a coordinator that
+    // genuinely never went idle (epic #3384 cascade).
+    recordRuntimeDispatchFailure(
+      diagnostics,
+      runId,
+      idle === "idle-failed" ? "mutation-failed" : "pending-mutations-unsettled",
+    );
+    return "failed";
   } catch (error) {
     recordRuntimeDispatchFailure(diagnostics, runId, "terminal-exception", error);
     // Consumers treat an unprovable terminal outcome as a failed turn; never leave it unhandled.
@@ -546,6 +557,7 @@ type RuntimeDispatchFailureReason =
   | "adapter-rejected"
   | "commit-rejected"
   | "exception"
+  | "mutation-failed"
   | "no-record"
   | "no-reservation"
   | "pending-mutations-unsettled"

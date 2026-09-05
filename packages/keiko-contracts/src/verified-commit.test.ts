@@ -67,6 +67,50 @@ describe("closed verified commit receipt", () => {
   });
 });
 
+describe("message-policy violation codes on a blocked receipt (#3390)", () => {
+  const blocked = {
+    ...receipt,
+    status: "blocked",
+    reason: "message-policy",
+    violations: ["missing-conventional-prefix", "subject-too-long"],
+  };
+  it("accepts a closed, non-empty violation-code list", () => {
+    expect(isVerifiedCommitResult(blocked)).toBe(true);
+    expect(
+      isVerifiedCommitResult({
+        ...receipt,
+        status: "blocked",
+        reason: "message-policy",
+        violations: ["empty-subject"],
+      }),
+    ).toBe(true);
+  });
+  it.each([
+    { violations: [] }, // never zero: even "empty-subject" alone short-circuits to one code
+    { violations: Array.from({ length: 7 }, () => "missing-conventional-prefix") }, // exceeds the closed vocabulary size (6)
+    { violations: ["not-a-real-code"] },
+    { violations: ["empty-subject", "not-a-real-code"] },
+  ])("rejects a malformed violation list $violations", ({ violations }) => {
+    expect(isVerifiedCommitResult({ ...blocked, violations })).toBe(false);
+  });
+  it("rejects violations on any reason other than message-policy", () => {
+    expect(isVerifiedCommitResult({ ...receipt, violations: ["empty-subject"] })).toBe(false);
+    expect(
+      isVerifiedCommitResult({
+        ...receipt,
+        status: "blocked",
+        reason: "issue-directive",
+        violations: ["empty-subject"],
+      }),
+    ).toBe(false);
+  });
+  it("still accepts a message-policy block without violations (boolean-only messageAllowed)", () => {
+    expect(
+      isVerifiedCommitResult({ ...receipt, status: "blocked", reason: "message-policy" }),
+    ).toBe(true);
+  });
+});
+
 describe("transient verified commit review", () => {
   const review = {
     session: "active",

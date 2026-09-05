@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
+import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import type {
   AvailableCodingSafeActivityFeed,
   CodingWorkbenchMode,
@@ -13,6 +14,7 @@ import type {
   CodingWorkbenchRuntimeSseEvent,
   WorkspaceBinding,
   WorkspaceInstance,
+  WorkspaceTrustStatus,
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchRuntimeActions } from "@/lib/useCodingWorkbenchRuntime";
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
@@ -51,6 +53,13 @@ const markReadyApproveMock = vi.hoisted(() => vi.fn());
 const markReadyExecuteMock = vi.hoisted(() => vi.fn());
 const mergeExecuteMock = vi.hoisted(() => vi.fn());
 const prUpdateExecuteMock = vi.hoisted(() => vi.fn());
+// #3390 wave: the header's trust affordance (`CodingWorkbenchTrustAffordance`) reads live workspace
+// trust through the SAME client the Editor uses (`useWorkspaceTrust` → workspace-trust-api). Every
+// suite in this file that binds an active workspace would otherwise reach this real fetch; the
+// `beforeEach` below resolves it "trusted" by default so the affordance stays invisible and every
+// pre-existing assertion in this file is unaffected. The dedicated suite further down overrides it.
+const trustStatusMock = vi.hoisted(() => vi.fn());
+const trustMutateMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -91,6 +100,12 @@ vi.mock("@/lib/useCodingWorkbenchApprovalReview", () => ({
 
 vi.mock("../../hooks/useAutonomyModePolicy", () => ({
   useAutonomyModePolicy: autonomyHookMock,
+}));
+
+vi.mock("@/lib/workspace-trust-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/workspace-trust-api")>()),
+  fetchWorkspaceTrustStatus: trustStatusMock,
+  mutateWorkspaceTrust: trustMutateMock,
 }));
 
 vi.mock("@/lib/useCodingWorkbenchEditorBridge", () => ({
@@ -303,6 +318,21 @@ function activeWorkspaceWithBinding(
   };
 }
 
+function trustStatus(
+  projectId: string,
+  trust: "trusted" | "restricted" = "trusted",
+): WorkspaceTrustStatus {
+  return {
+    kind: "workspace-trust-status",
+    schemaVersion: WORKSPACE_TRUST_SCHEMA_VERSION,
+    projectId,
+    trust,
+    decidedBy: "server",
+    reason: trust === "trusted" ? "human-grant" : "human-revocation",
+    revision: 1,
+  };
+}
+
 // FILE scope, not one describe's: three top-level suites in this file render
 // `CodingWorkbenchWindow`, which reads `research.grant` and `editorBridge.pendingReview` on every
 // render. While these defaults lived inside the first describe, the other two saw them only because
@@ -322,6 +352,8 @@ beforeEach(() => {
   markReadyExecuteMock.mockReset();
   mergeExecuteMock.mockReset();
   prUpdateExecuteMock.mockReset();
+  trustStatusMock.mockReset().mockResolvedValue(trustStatus("unused", "trusted"));
+  trustMutateMock.mockReset();
   questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
   activityHookMock.mockReturnValue(IDLE_ACTIVITY);
   approvalReviewHookMock.mockReturnValue({ status: "idle", review: null, retry: vi.fn() });

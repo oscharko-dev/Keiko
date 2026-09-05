@@ -45,9 +45,28 @@ type EditorChangesetRequest = CodingToolActionOf<"edit">;
 // EditorAgentFailureCode, plus this port's own transport/no-session markers) — never raw command
 // output — so, unlike the other governed ports, it is safe for `codingToolFacade.ts` to forward
 // verbatim instead of collapsing it to the bare status.
+//
+// `message`, where present, is a fixed, content-free, actionable ONE-SENTENCE explanation of the
+// closed `reasonCode` above it — never raw command output, never anything from the changeset or
+// the workspace. It exists because a bare reason code such as NO_ACTIVE_SESSION reads to the model
+// as an opaque failure it can only ask the operator about, instead of the actionable condition it
+// names (epic #3384 cascade, end-to-end run 2026-09-05: the model asked "how would you like to
+// proceed?" instead of telling the operator to open the Workbench). The activity-log diagnostic
+// for a refusal stays reason-code-only regardless (`emitEditRefusedDiagnostic` never reads this
+// field) — `message` is carried only on the outcome returned to the caller, never logged.
 type EditOutcome =
   | { readonly status: "completed" }
-  | { readonly status: "failed"; readonly reasonCode?: string | undefined };
+  | {
+      readonly status: "failed";
+      readonly reasonCode?: string | undefined;
+      readonly message?: string | undefined;
+    };
+
+// NO_ACTIVE_SESSION means the bounded wait for a live Workbench editor bridge
+// (bindLiveEditorSession) never found one for this run's workspace — the model's edit was refused
+// before it ever reached the editor route, so nothing was attempted against the tree.
+export const NO_ACTIVE_SESSION_MESSAGE =
+  "no Coding Workbench is connected for this workspace; keep the Workbench open and retry";
 
 type EditorAgentActionClient = Pick<EditorAgentHttpClient, "action"> &
   Partial<Pick<EditorAgentHttpClient, "listSessions">>;
@@ -422,7 +441,7 @@ async function executeEdit(
     );
     if (action === undefined) {
       discardMutationLease(deps, prepared.leaseRequest);
-      return editRefused(deps, correlationId, "NO_ACTIVE_SESSION");
+      return editRefused(deps, correlationId, "NO_ACTIVE_SESSION", NO_ACTIVE_SESSION_MESSAGE);
     }
     if (!hasLiveWorkspaceAccess(deps)) {
       discardMutationLease(deps, prepared.leaseRequest);
@@ -445,9 +464,14 @@ function editRefused(
   deps: CodingToolReadEditPortDeps,
   correlationId: string,
   reasonCode: string | undefined,
+  message?: string,
 ): EditOutcome {
+  // The diagnostic stays reason-code-only (body-free, AGENTS.md §8) — `message` never reaches the
+  // activity log, only the outcome returned to the caller.
   emitEditRefusedDiagnostic(deps.diagnostics, correlationId, reasonCode);
-  return { status: "failed", reasonCode };
+  return message === undefined
+    ? { status: "failed", reasonCode }
+    : { status: "failed", reasonCode, message };
 }
 
 // The closed vocabulary a rejected edit can name (EditorAgentConflictCode/EditorAgentFailureCode

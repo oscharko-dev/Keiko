@@ -617,10 +617,12 @@ describe("turn port terminal semantics", () => {
   });
 
   it("keeps a successful turn live until its pending editor mutation is terminal", async () => {
-    let settleMutation: ((settled: boolean) => void) | undefined;
-    const mutationSettlement = new Promise<boolean>((resolve) => {
-      settleMutation = resolve;
-    });
+    let settleMutation: ((idle: "idle-succeeded" | "idle-failed" | "not-idle") => void) | undefined;
+    const mutationSettlement = new Promise<"idle-succeeded" | "idle-failed" | "not-idle">(
+      (resolve) => {
+        settleMutation = resolve;
+      },
+    );
     const run = record("run-open", {
       submitTurn: () => Promise.resolve(true),
       abortTurn: () => Promise.resolve(true),
@@ -642,8 +644,61 @@ describe("turn port terminal semantics", () => {
     });
     expect(terminal).toBe(false);
 
-    settleMutation?.(true);
+    settleMutation?.("idle-succeeded");
     await expect(dispatched.completion).resolves.toBe("succeeded");
+  });
+
+  // Epic #3384 cascade: a REFUSED edit that never reached the commit boundary (no live Workbench
+  // bridge) used to fail the whole run under "pending-mutations-unsettled" even though nothing was
+  // pending. The coordinator now distinguishes "idle but a CLAIMED mutation failed" from "never
+  // went idle at all" (codingRuntimeEditorMutationLeaseCoordinator.ts), and this dispatcher must
+  // report each under its own closed reason.
+  it("reports mutation-failed (not pending-mutations-unsettled) when the coordinator went idle but the latest claimed mutation failed", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const run = record("run-open", {
+      submitTurn: () => Promise.resolve(true),
+      abortTurn: () => Promise.resolve(true),
+      waitForTerminal: () => Promise.resolve("succeeded" as const),
+    });
+    const waitForPendingMutations = vi.fn(() => Promise.resolve("idle-failed" as const));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([["run-open", { ...run, waitForPendingMutations }]]),
+      { record: (diagnostic): void => void records.push(diagnostic) },
+    );
+
+    const dispatched = await dispatcher.dispatch(operation("run-open", "req-1", 1, "task"));
+    if (!dispatched.ok) throw new Error("expected accepted task");
+    await expect(dispatched.completion).resolves.toBe("failed");
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        correlationId: "run-open",
+        code: "stage=dispatch:reason=mutation-failed",
+      }),
+    );
+  });
+
+  it("reports pending-mutations-unsettled only when the coordinator never went idle", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const run = record("run-open", {
+      submitTurn: () => Promise.resolve(true),
+      abortTurn: () => Promise.resolve(true),
+      waitForTerminal: () => Promise.resolve("succeeded" as const),
+    });
+    const waitForPendingMutations = vi.fn(() => Promise.resolve("not-idle" as const));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([["run-open", { ...run, waitForPendingMutations }]]),
+      { record: (diagnostic): void => void records.push(diagnostic) },
+    );
+
+    const dispatched = await dispatcher.dispatch(operation("run-open", "req-1", 1, "task"));
+    if (!dispatched.ok) throw new Error("expected accepted task");
+    await expect(dispatched.completion).resolves.toBe("failed");
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        correlationId: "run-open",
+        code: "stage=dispatch:reason=pending-mutations-unsettled",
+      }),
+    );
   });
 
   it("aborts a task only when the adapter accepts the interruption", async () => {

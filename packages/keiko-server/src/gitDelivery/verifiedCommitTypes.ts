@@ -1,5 +1,9 @@
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import type { VerificationReport, GitDeliveryApprovalClaim } from "@oscharko-dev/keiko-contracts";
+import type {
+  VerificationReport,
+  GitDeliveryApprovalClaim,
+  GitCommitMessageValidation,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   VerifiedCommitBinding,
   VerifiedCommitResult,
@@ -50,7 +54,14 @@ export interface VerifiedCommitServiceOptions {
   >;
   readonly mutationDeps: GitDeliveryMutationDeps;
   readonly execution?: GitDeliveryExecutionSeams;
-  readonly messageAllowed: (message: string, workspace: WorkspaceInfo) => Promise<boolean>;
+  // A plain `boolean` stays accepted (existing wiring keeps compiling unchanged), but a caller
+  // SHOULD return the full `GitCommitMessageValidation` so a "blocked"/"message-policy" result can
+  // carry the closed violation codes the pure validator already computed (#3390) instead of only
+  // the boolean the kernel gate needs — see VerifiedCommitResult["violations"].
+  readonly messageAllowed: (
+    message: string,
+    workspace: WorkspaceInfo,
+  ) => Promise<boolean | GitCommitMessageValidation>;
 }
 
 export interface VerifiedCommitService {

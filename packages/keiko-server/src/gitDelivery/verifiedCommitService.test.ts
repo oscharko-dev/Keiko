@@ -8,7 +8,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { VerificationReport, GitDeliveryApprovalClaim } from "@oscharko-dev/keiko-contracts";
+import type {
+  VerificationReport,
+  GitDeliveryApprovalClaim,
+  GitCommitMessageValidation,
+} from "@oscharko-dev/keiko-contracts";
 import { isVerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { createCodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntimeSnapshotStore.js";
 import { runMigrations } from "../store/schema.js";
@@ -488,6 +492,42 @@ describe("verified Code-task commit service", () => {
   it("rejects issue-closing message injection even after verification", async () => {
     await verifiedProposal();
     expect((await service.propose("feat: change\n\nCloses #123"))?.reason).toBe("issue-directive");
+  });
+  it("carries closed violation codes on a message-policy block instead of only a boolean (#3390)", async () => {
+    service = createVerifiedCommitService({
+      ...options,
+      messageAllowed: (message): Promise<GitCommitMessageValidation> =>
+        Promise.resolve(
+          message.startsWith("feat:")
+            ? { ok: true }
+            : { ok: false, violations: ["missing-conventional-prefix", "subject-too-long"] },
+        ),
+    });
+    await verifiedProposal();
+    const result = await service.propose("rejected commit message without a prefix");
+    expect(result).toMatchObject({
+      status: "blocked",
+      reason: "message-policy",
+      violations: ["missing-conventional-prefix", "subject-too-long"],
+    });
+    expect(isVerifiedCommitResult(result)).toBe(true);
+    const logged = events.find((event) => event.extra?.reason === "message-policy");
+    expect(logged).toMatchObject({
+      op: "git.verified-commit",
+      extra: {
+        phase: "result",
+        reason: "message-policy",
+        violations: ["missing-conventional-prefix", "subject-too-long"],
+        violationCount: 2,
+      },
+    });
+  });
+  it("still blocks on a message-policy violation when messageAllowed returns only a boolean", async () => {
+    await verifiedProposal();
+    const result = await service.propose("rejected");
+    expect(result).toMatchObject({ status: "blocked", reason: "message-policy" });
+    expect(result?.violations).toBeUndefined();
+    expect(isVerifiedCommitResult(result)).toBe(true);
   });
 });
 

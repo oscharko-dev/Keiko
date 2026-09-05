@@ -925,6 +925,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "GitHub issue access changed elsewhere. The current server state was reloaded; review it and try again.",
   "codingWorkbench.githubAccess.error.unknown-repository":
     "This path is not an opened project. Open the repository as a project before changing its GitHub issue access.",
+  "codingWorkbench.trust.restrictedNotice":
+    "Verification needs to run this repository's package scripts, and they are not yet trusted.",
+  "codingWorkbench.trust.allow": "Allow package scripts for verification",
+  "codingWorkbench.trust.allowing": "Allowing…",
 } as const;
 
 export type CodingWorkbenchMessageKey = keyof typeof EN_CODING_WORKBENCH_MESSAGES;
