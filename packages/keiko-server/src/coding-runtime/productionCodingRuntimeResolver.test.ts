@@ -114,6 +114,33 @@ describe("production coding runtime resolver", () => {
     ]);
   });
 
+  // #3399 (epic #3384 correction 4): threaded through the exact same chain
+  // `gitDeliveryAuthority` already uses. Before this change the resolver's composed runtime
+  // carried no `gitDeliveryDescriptionAuthority` field at all, so it never reached the host.
+  it("exposes a live, callable description-authority port from the real production chain", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    expect(host.gitDeliveryDescriptionAuthority).toBeDefined();
+    // Fail-closed default: nothing was minted, so a re-check for any scope finds no record.
+    expect(
+      host.gitDeliveryDescriptionAuthority?.current(
+        {
+          remoteDigest: "a".repeat(64),
+          pr: { ownerAndRepo: "owner/repo", prNumber: 1 },
+          snapshotDigest: "b".repeat(64),
+        },
+        new Date().toISOString(),
+      ),
+    ).toBeUndefined();
+  });
+
   it("is unavailable without a trusted confirmation consumer and causes no backend side effects", () => {
     const fixture = workspaceFixture();
     const createRun = vi.fn();

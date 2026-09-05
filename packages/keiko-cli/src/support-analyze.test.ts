@@ -27,7 +27,6 @@ import {
   renderHumanReproductionSeed,
   renderHumanTimeline,
   type GatewayReplayScript,
-  type IssueToPrJourneyView,
   type LogTimeline,
   type OpCluster,
   type ReproductionSeed,
@@ -771,6 +770,50 @@ describe("analyzeLogText — extra fields and frames", () => {
     expect(extra).toBeDefined();
     expect(JSON.stringify(extra)).toBe('{"__proto__":{"polluted":true}}');
   });
+
+  // Regression (epic #3384): `KNOWN_ENVELOPE_KEYS` reserves "status" for the envelope's own
+  // NUMERIC HTTP-like status (`ServerLogEvent.status`, applied by `applyEnvelopeFields`). Several
+  // real emitters (e.g. `logGitDeliveryMutation` in `gitDelivery/execution.ts`) instead put a
+  // closed-vocabulary STRING under `extra.status` (`GitMutationOutcome["status"]`, e.g.
+  // "completed"/"blocked"/"failed") with no numeric envelope `status` on the same line at all.
+  // Before the fix, `extraFields` excluded ANY key named "status" unconditionally, so that string
+  // was silently dropped from every timeline and seed — reconstructing exactly nothing about
+  // whether the mutation completed, was blocked, or failed. The numeric case (asserted second)
+  // must keep behaving exactly as before: still excluded from `extra`, still the typed
+  // `ServerLogLineView.status` field.
+  it("keeps a STRING extra.status (no numeric envelope status on the line) inside extra, never dropping it", () => {
+    const withStringStatus = line({
+      ts: T0,
+      category: "diagnostic",
+      op: "git.delivery.mutation.completed",
+      correlationId: "req-string-status",
+      actionKind: "commit",
+      status: "blocked",
+    });
+
+    const result = analyzeLogText(`${withStringStatus}\n`);
+
+    const view = findTimeline(result, "req-string-status")?.lines[0];
+    expect(view?.status).toBeUndefined();
+    expect(view?.extra).toEqual({ actionKind: "commit", status: "blocked" });
+  });
+
+  it("still excludes a NUMERIC status from extra, reading it as the typed envelope field instead", () => {
+    const withNumericStatus = line({
+      ts: T0,
+      category: "security",
+      op: "git.delivery.commit.approval.minted",
+      correlationId: "req-numeric-status",
+      status: 200,
+      operation: "commit",
+    });
+
+    const result = analyzeLogText(`${withNumericStatus}\n`);
+
+    const view = findTimeline(result, "req-numeric-status")?.lines[0];
+    expect(view?.status).toBe(200);
+    expect(view?.extra).toEqual({ operation: "commit" });
+  });
 });
 
 const PROC_STARTED = line({
@@ -1427,5 +1470,439 @@ describe("renderGatewayReplayScriptFixture — attempt field fallbacks", () => {
 
     expect(entries[0]?.status).toBe(429);
     expect(entries[0]?.headers).toEqual({ "retry-after": "2" });
+  });
+});
+
+// ─── Epic #3384: issue-to-PR journey reconstruction ────────────────────────────────────────────
+//
+// Every line below is hand-constructed JSON (the `line()` helper), matching the on-disk envelope
+// shape (`extra` flattened onto the top level) the real production emitters listed in
+// `support-analyze.ts`'s own header comment actually write — the exact op/field names were read
+// off those emitters (`gitDelivery/execution.ts`, `commitRoutes.ts`/`pushRoutes.ts`/`prRoutes.ts`,
+// `mergeExecution.ts`, `prDescriptionProjection.ts`/`prDescriptionReceiptStore.ts`,
+// `journeyObservationService.ts`/`journeyRoutes.ts`, `githubIssueReaderAuthorization.ts`,
+// `gitChangeRoutes.ts`), never guessed. The redactor under test is the REAL
+// `@oscharko-dev/keiko-server/runtime/tool-catalog-lifecycle` `redactLogFields` — the exact
+// choke point `keiko support analyze` wires in production (`support.ts`'s `loadToolAnalysisOptions`).
+describe("issueToPrJourney — epic #3384 reconstruction", () => {
+  const OPTIONS = { toolDiagnosticRedactor: redactLogFields };
+  const GENERATED = new Date("2026-09-05T00:00:00.000Z");
+
+  function journeyLine(
+    seq: number,
+    correlationId: string,
+    fields: Record<string, unknown>,
+  ): string {
+    return line({ ts: T0, pid: 9001, instanceId: "journey1", seq, correlationId, ...fields });
+  }
+
+  describe("a successful journey across every phase", () => {
+    const CORRELATION_ID = "journey-success-0001";
+    const SUCCESS_LINES: readonly string[] = [
+      journeyLine(1, CORRELATION_ID, {
+        category: "security",
+        op: "coding-context.github-remote.evaluated",
+        outcome: "clean",
+      }),
+      journeyLine(2, CORRELATION_ID, {
+        category: "process",
+        op: "git-change.chat.connected",
+        relationshipId: "rel-1",
+        remoteDigestPrefix: "abcd1234",
+        fileCount: 3,
+        hasPullRequest: false,
+      }),
+      journeyLine(3, CORRELATION_ID, {
+        category: "security",
+        op: "coding-context.github-authorization.evaluated",
+        decision: "authorized",
+        authorized: true,
+        repositoryId: "repo-1",
+        revision: 3,
+      }),
+      journeyLine(4, CORRELATION_ID, {
+        category: "security",
+        op: "git.delivery.authority.admitted",
+        status: 200,
+        operation: "commit",
+        phase: "admission",
+        runId: "run-42",
+      }),
+      journeyLine(5, CORRELATION_ID, {
+        category: "security",
+        op: "git.delivery.buffers.checked",
+        state: "clean",
+        editorSessionCount: 0,
+        dirtySessionCount: 0,
+      }),
+      journeyLine(6, CORRELATION_ID, {
+        category: "security",
+        op: "git.delivery.commit.approval.minted",
+        status: 200,
+        operation: "commit",
+        runId: "run-42",
+      }),
+      journeyLine(7, CORRELATION_ID, {
+        category: "diagnostic",
+        op: "git.delivery.mutation.completed",
+        actionId: "action-1",
+        actionKind: "commit",
+        status: "completed",
+        phaseReached: "committed",
+        policyOutcome: "allow",
+        preflightFindingCount: 0,
+        preflightBlockingCount: 0,
+        requiredApproverCount: 0,
+      }),
+      journeyLine(8, CORRELATION_ID, {
+        category: "security",
+        op: "git.delivery.push.approval.minted",
+        status: 200,
+        operation: "push",
+        runId: "run-42",
+      }),
+      journeyLine(9, CORRELATION_ID, {
+        category: "diagnostic",
+        op: "git.delivery.mutation.completed",
+        actionId: "action-2",
+        actionKind: "push",
+        status: "completed",
+        phaseReached: "pushed",
+        policyOutcome: "allow",
+        preflightFindingCount: 0,
+        preflightBlockingCount: 0,
+        requiredApproverCount: 0,
+      }),
+      journeyLine(10, CORRELATION_ID, {
+        category: "security",
+        op: "git.delivery.pr.approval.minted",
+        status: 200,
+        operation: "pr",
+        runId: "run-42",
+      }),
+      journeyLine(11, CORRELATION_ID, {
+        category: "diagnostic",
+        op: "git.delivery.mutation.completed",
+        actionId: "action-3",
+        actionKind: "pr-create",
+        status: "completed",
+        phaseReached: "pr-created",
+        policyOutcome: "allow",
+        preflightFindingCount: 0,
+        preflightBlockingCount: 0,
+        requiredApproverCount: 0,
+      }),
+      journeyLine(12, CORRELATION_ID, {
+        category: "process",
+        op: "git.delivery.readiness.observed",
+        state: "observed",
+        providerError: false,
+        count: 5,
+      }),
+      journeyLine(13, CORRELATION_ID, {
+        category: "process",
+        op: "git.pr-description",
+        phase: "apply",
+        reason: "applied",
+        state: "current",
+        effect: "confirmed",
+        snapshotDigest: "sha256:snap1",
+        artifactDigest: "sha256:art1",
+        bodyDigest: "sha256:body1",
+      }),
+      journeyLine(14, CORRELATION_ID, {
+        category: "process",
+        op: "git.pr-description.receipt",
+        phase: "record",
+        revision: 1,
+        state: "current",
+        scopeDigest: "sha256:scope1",
+      }),
+      journeyLine(15, CORRELATION_ID, {
+        category: "process",
+        op: "git.journey-observation",
+        phase: "observed",
+        runId: "run-42",
+        reason: "human-review-ready",
+        state: "ready-for-human-review",
+        evidenceRef: "journey-abc123",
+        headSha: "abc123def456",
+        merged: false,
+        unresolvedCount: 0,
+        issueState: "open",
+        descriptionState: "current",
+        complete: true,
+      }),
+      journeyLine(16, CORRELATION_ID, {
+        category: "process",
+        op: "git.journey-outcome.recorded",
+        runId: "run-42",
+        state: "ready-for-human-review",
+        reason: "human-review-ready",
+        recorded: true,
+      }),
+    ];
+    const TEXT = `${SUCCESS_LINES.join("\n")}\n`;
+
+    it("has clusters recognising every issue-to-PR journey op, and hasIssueToPrJourneyOps reports it", () => {
+      const basic = analyzeLogText(TEXT);
+      expect(hasIssueToPrJourneyOps(basic)).toBe(true);
+      const mutationCluster = basic.clusters.find(
+        (cluster) => cluster.op === "git.delivery.mutation.completed",
+      );
+      expect(mutationCluster?.count).toBe(3);
+      expect(mutationCluster?.sampleCorrelationIds).toEqual([CORRELATION_ID]);
+    });
+
+    it("reports no journey ops for a log that carries none", () => {
+      expect(hasIssueToPrJourneyOps(analyzeLogText(FIXTURE_TEXT))).toBe(false);
+    });
+
+    it("reconstructs one timeline covering every phase, in order, with the closed-vocabulary values verbatim", () => {
+      const seed = buildReproductionSeed(TEXT, CORRELATION_ID, GENERATED, OPTIONS);
+      const journey = seed?.issueToPrJourney;
+
+      expect(journey?.steps).toHaveLength(16);
+      expect(journey?.phasesObserved).toEqual([
+        "intake",
+        "authority",
+        "commit",
+        "push",
+        "pr",
+        "readiness",
+        "description",
+        "outcome",
+      ]);
+      expect(journey?.redactionViolationCount).toBe(0);
+      expect(journey?.steps.every((step) => step.redactionVerified)).toBe(true);
+    });
+
+    it("maps each step's status/reason/digests off the real emitter's own extra fields, never inventing one", () => {
+      const seed = buildReproductionSeed(TEXT, CORRELATION_ID, GENERATED, OPTIONS);
+      const steps = seed?.issueToPrJourney?.steps ?? [];
+
+      expect(steps[6]).toMatchObject({
+        phase: "commit",
+        op: "git.delivery.mutation.completed",
+        status: "completed",
+      });
+      expect(steps[12]).toMatchObject({
+        phase: "description",
+        op: "git.pr-description",
+        status: "current",
+        reason: "applied",
+        digests: {
+          snapshotDigest: "sha256:snap1",
+          artifactDigest: "sha256:art1",
+          bodyDigest: "sha256:body1",
+        },
+      });
+      expect(steps[14]).toMatchObject({
+        phase: "outcome",
+        op: "git.journey-observation",
+        status: "ready-for-human-review",
+        reason: "human-review-ready",
+        digests: {
+          runId: "run-42",
+          evidenceRef: "journey-abc123",
+          headSha: "abc123def456",
+        },
+      });
+      expect(steps[15]).toMatchObject({
+        phase: "outcome",
+        op: "git.journey-outcome.recorded",
+        status: "ready-for-human-review",
+        reason: "human-review-ready",
+        digests: { runId: "run-42" },
+      });
+    });
+
+    it("carries the journey in the human rendering and the seed's warnings never flag it as missing or unverified", () => {
+      const seed = buildReproductionSeed(TEXT, CORRELATION_ID, GENERATED, OPTIONS);
+      expect(seed).toBeDefined();
+
+      const rendered = renderHumanReproductionSeed(seed as ReproductionSeed);
+
+      expect(rendered).toContain("issueToPrJourney:");
+      expect(seed?.warnings.some((warning) => warning.includes("no redaction verifier"))).toBe(
+        false,
+      );
+      expect(
+        seed?.warnings.some((warning) => warning.includes("issue-to-PR journey evidence")),
+      ).toBe(false);
+    });
+  });
+
+  describe("a blocked and failed journey", () => {
+    const CORRELATION_ID = "journey-blocked-0002";
+    const BLOCKED_LINES: readonly string[] = [
+      journeyLine(1, CORRELATION_ID, {
+        category: "security",
+        op: "git.delivery.authority.denied",
+        status: 403,
+        operation: "push",
+        phase: "admission",
+        reason: "authority-changed",
+      }),
+      journeyLine(2, CORRELATION_ID, {
+        category: "security",
+        op: "git.delivery.commit.approval.required",
+        status: 200,
+        operation: "commit",
+        runId: "run-99",
+      }),
+      journeyLine(3, CORRELATION_ID, {
+        category: "diagnostic",
+        op: "git.delivery.mutation.failed",
+        errorKind: "WORKSPACE_UNAVAILABLE",
+        actionKind: "commit",
+        phaseReached: "snapshot",
+      }),
+      journeyLine(4, CORRELATION_ID, {
+        category: "security",
+        op: "git.delivery.dispatch.no-spawn",
+        status: 403,
+        operation: "push",
+      }),
+      journeyLine(5, CORRELATION_ID, {
+        category: "process",
+        op: "git.delivery.readiness.observed",
+        level: "warn",
+        errorKind: "internal",
+        state: "unknown",
+        providerError: true,
+        count: 0,
+      }),
+      journeyLine(6, CORRELATION_ID, {
+        category: "process",
+        op: "git.pr-description",
+        level: "warn",
+        errorKind: "internal",
+        phase: "approval",
+        reason: "approval-required",
+        state: "blocked",
+        effect: "none",
+      }),
+      journeyLine(7, CORRELATION_ID, {
+        category: "process",
+        op: "git.journey-observation",
+        phase: "unavailable",
+        runId: "run-99",
+        reason: "authority-denied",
+      }),
+    ];
+    const TEXT = `${BLOCKED_LINES.join("\n")}\n`;
+
+    it("reconstructs the blocked/failed phases with the emitter's own reasons, never a happy-path label", () => {
+      const seed = buildReproductionSeed(TEXT, CORRELATION_ID, GENERATED, OPTIONS);
+      const steps = seed?.issueToPrJourney?.steps ?? [];
+
+      expect(seed?.issueToPrJourney?.phasesObserved).toEqual([
+        "authority",
+        "commit",
+        "push",
+        "readiness",
+        "description",
+        "outcome",
+      ]);
+      expect(steps[0]).toMatchObject({ phase: "authority", reason: "authority-changed" });
+      expect(steps[1]).toMatchObject({ phase: "commit", digests: { runId: "run-99" } });
+      expect(steps[2]).toMatchObject({
+        phase: "commit",
+        op: "git.delivery.mutation.failed",
+        errorKind: "WORKSPACE_UNAVAILABLE",
+      });
+      expect(steps[3]).toMatchObject({ phase: "push", op: "git.delivery.dispatch.no-spawn" });
+      expect(steps[4]).toMatchObject({ phase: "readiness", status: "unknown", errorKind: "internal" });
+      expect(steps[5]).toMatchObject({
+        phase: "description",
+        status: "blocked",
+        reason: "approval-required",
+      });
+      expect(steps[6]).toMatchObject({
+        phase: "outcome",
+        status: "unavailable",
+        reason: "authority-denied",
+        digests: { runId: "run-99" },
+      });
+    });
+  });
+
+  describe("redaction re-verification", () => {
+    it("withholds a step's content and reports it unverified when no redactor is supplied at all", () => {
+      const correlationId = "journey-unverified-0003";
+      const text = `${journeyLine(1, correlationId, {
+        category: "security",
+        op: "git.delivery.commit.approval.minted",
+        status: 200,
+        operation: "commit",
+        runId: "run-1",
+      })}\n`;
+
+      const seed = buildReproductionSeed(text, correlationId, GENERATED);
+      const steps = seed?.issueToPrJourney?.steps ?? [];
+
+      expect(steps).toHaveLength(1);
+      expect(steps[0]).toEqual({
+        phase: "commit",
+        op: "git.delivery.commit.approval.minted",
+        ts: T0,
+        redactionVerified: false,
+      });
+      expect(seed?.warnings.some((warning) => warning.includes("no redaction verifier"))).toBe(
+        true,
+      );
+    });
+
+    // The negative case this reconstruction exists to fail closed against: a line whose `extra`
+    // carries a body-bearing field (here, a denylisted "title" holding actual PR-description
+    // prose) under a name this reconstruction never asked for. `redactLogFields` — the SAME choke
+    // point the activity-log sink itself writes through — catches it exactly as it would at write
+    // time: the raw value differs from its re-verified value, so it is reported as a violation
+    // and withheld, never rendered, in either the machine seed or the human text.
+    it("reports a body-bearing extra field as a redaction violation instead of rendering it", () => {
+      const correlationId = "journey-violation-0004";
+      const leakedTitle = "Fix the login crash that happens after retrying twice";
+      const text = `${journeyLine(1, correlationId, {
+        category: "process",
+        op: "git.pr-description",
+        phase: "apply",
+        reason: "applied",
+        state: "current",
+        effect: "confirmed",
+        snapshotDigest: "sha256:snap1",
+        title: leakedTitle,
+      })}\n`;
+
+      const seed = buildReproductionSeed(text, correlationId, GENERATED, {
+        toolDiagnosticRedactor: redactLogFields,
+      });
+      const step = seed?.issueToPrJourney?.steps[0];
+
+      expect(step?.redactionViolations).toEqual(["title"]);
+      expect(seed?.issueToPrJourney?.redactionViolationCount).toBe(1);
+      // The rest of the line's legitimate fields still reconstruct normally — one violating field
+      // never blocks the rest of the evidence.
+      expect(step).toMatchObject({ status: "current", reason: "applied" });
+      expect(seed?.warnings.some((warning) => warning.includes("1 issueToPrJourney step"))).toBe(
+        true,
+      );
+
+      const rendered = renderHumanReproductionSeed(seed as ReproductionSeed);
+      expect(JSON.stringify(seed)).not.toContain(leakedTitle);
+      expect(rendered).not.toContain(leakedTitle);
+    });
+  });
+
+  it("names the standing gap when a timeline carries none of these ops at all", () => {
+    const correlationId = "no-journey-ops-0005";
+    const text = `${journeyLine(1, correlationId, { category: "http", op: "a" })}\n`;
+
+    const seed = buildReproductionSeed(text, correlationId, GENERATED, OPTIONS);
+
+    expect(seed?.issueToPrJourney).toBeUndefined();
+    expect(
+      seed?.warnings.some((warning) => warning.includes("issue-to-PR journey evidence")),
+    ).toBe(true);
   });
 });

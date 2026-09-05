@@ -409,6 +409,110 @@ describe("node PR adapter — updatePullRequest", () => {
   });
 });
 
+// #3389: the draft->ready transition, isolated from updatePullRequest — no title/body/base PATCH is
+// ever bundled with it, and the live PR identity is re-read immediately before AND after the
+// mutation. Corrections 1/2/7 (epic #3384): this is the ONLY execution path for the transition.
+describe("node PR adapter — markPullRequestReady (#3389)", () => {
+  const MARK_READY_REQ = {
+    ownerAndRepo: CREATE.ownerAndRepo,
+    prExternalId: "1499",
+    expectedHeadSha: PR_IDENTITY.headSha,
+    expectedBaseSha: PR_IDENTITY.baseSha,
+  };
+  const READY_IDENTITY = { ...PR_IDENTITY, isDraft: false };
+
+  it("succeeds: re-read (draft) -> node-id GET -> mutation -> re-read (ready), no PATCH", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: JSON.stringify(PR_IDENTITY) }, // pre-read: still draft, matching SHAs
+      { stdout: "PR_kwDO123\n", exit: 0 }, // node-id GET
+      { exit: 0 }, // graphql mutation
+      { stdout: JSON.stringify(READY_IDENTITY) }, // post-read: no longer draft, same head
+    ]);
+    const result = await makeAdapter(spawn).markPullRequestReady(MARK_READY_REQ);
+    expect(result.outcome).toBe("succeeded");
+    expect(result.observedIdentity).toEqual(READY_IDENTITY);
+    expect(spawn.calls()).toHaveLength(4);
+    // Never a PATCH: every call is a GET or the fixed GraphQL mutation.
+    expect(spawn.calls().some((c) => c.args.includes("PATCH"))).toBe(false);
+    const mutation = spawn.calls()[2];
+    expect(mutation?.args[0]).toBe("api");
+    expect(mutation?.args[1]).toBe("graphql");
+    expect(mutation?.args.some((a) => a.includes("markPullRequestReadyForReview"))).toBe(true);
+  });
+
+  it("drift: refuses (no spawn beyond the pre-read) when the live head SHA no longer matches the claim", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: JSON.stringify({ ...PR_IDENTITY, headSha: "9".repeat(40) }) },
+    ]);
+    const result = await makeAdapter(spawn).markPullRequestReady(MARK_READY_REQ);
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("precondition-failed");
+    expect(spawn.calls()).toHaveLength(1);
+  });
+
+  it("drift: refuses when the PR is no longer a draft at the pre-read", async () => {
+    const spawn = scriptedSpawn([{ stdout: JSON.stringify(READY_IDENTITY) }]);
+    const result = await makeAdapter(spawn).markPullRequestReady(MARK_READY_REQ);
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("precondition-failed");
+    expect(spawn.calls()).toHaveLength(1);
+  });
+
+  it("drift: reports failure when the mutation appears to succeed but the post-read still shows a draft", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: JSON.stringify(PR_IDENTITY) },
+      { stdout: "PR_kwDO123\n", exit: 0 },
+      { exit: 0 },
+      { stdout: JSON.stringify(PR_IDENTITY) }, // post-read: still a draft
+    ]);
+    const result = await makeAdapter(spawn).markPullRequestReady(MARK_READY_REQ);
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("precondition-failed");
+  });
+
+  it("propagates a rejected node-id lookup without ever reaching the mutation", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: JSON.stringify(PR_IDENTITY) },
+      { stderr: "gh: Not Found (HTTP 404)", exit: 1 },
+    ]);
+    const result = await makeAdapter(spawn).markPullRequestReady(MARK_READY_REQ);
+    expect(result.outcome).toBe("failed");
+    expect(result.rejectionReason).toBe("not-found");
+    expect(spawn.calls()).toHaveLength(2);
+  });
+
+  it("propagates a rejected GraphQL mutation", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: JSON.stringify(PR_IDENTITY) },
+      { stdout: "PR_kwDO123\n", exit: 0 },
+      { stderr: "gh: HTTP 422: Unprocessable", exit: 1 },
+    ]);
+    const result = await makeAdapter(spawn).markPullRequestReady(MARK_READY_REQ);
+    expect(result.outcome).toBe("failed");
+    expect(result.rejectionReason).toBe("validation-error");
+    expect(spawn.calls()).toHaveLength(3);
+  });
+
+  // AC4 (epic #3384): the coding runtime exposes neither merge nor issue-close mutations — every
+  // spawn this adapter method can ever produce is one of the four fixed shapes above (a read GET,
+  // the node-id GET, or the fixed markPullRequestReadyForReview mutation); none references a merge
+  // endpoint or an issue-close mutation.
+  it("never spawns a merge or issue-close call across every branch", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: JSON.stringify(PR_IDENTITY) },
+      { stdout: "PR_kwDO123\n", exit: 0 },
+      { exit: 0 },
+      { stdout: JSON.stringify(READY_IDENTITY) },
+    ]);
+    await makeAdapter(spawn).markPullRequestReady(MARK_READY_REQ);
+    for (const call of spawn.calls()) {
+      const joined = call.args.join(" ").toLowerCase();
+      expect(joined).not.toContain("merge");
+      expect(joined).not.toMatch(/close.*issue|issues\/\d+/u);
+    }
+  });
+});
+
 describe("node PR adapter — output parsing edge cases", () => {
   it("fails the create when exit is 0 but stdout is not a PR number", async () => {
     // A "created" PR the caller cannot reference is a contract breach, not a success: `--jq

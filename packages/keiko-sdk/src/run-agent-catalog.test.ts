@@ -6,9 +6,7 @@ import { runAgent } from "./run-agent.js";
 describe("SDK native catalog readiness", () => {
   it("keeps the real default session unavailable and advertises no productive tools", async () => {
     const requests: GatewayRequest[] = [];
-    const tools = new DryRunToolPort([
-      { name: "run_command", description: "legacy", parameters: {} },
-    ]);
+    const tools = new DryRunToolPort();
     const execute = vi.spyOn(tools, "execute");
     const bindToolCatalog = vi.fn((): never => {
       throw new TypeError("Productive factory must not run in dry-run");

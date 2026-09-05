@@ -109,7 +109,9 @@ export interface GitDeliveryPrRouteOptions {
 const OWNER_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const PR_NUMBER_RE = /^[1-9]\d{0,9}$/;
 
-function isOwnerAndRepo(value: unknown): value is string {
+// Exported so prMarkReadyExecution.ts (#3389) validates the same "owner/repo" and PR-number shapes
+// rather than restating the patterns — one implementation, shared by every PR-lifecycle route.
+export function isOwnerAndRepo(value: unknown): value is string {
   return typeof value === "string" && OWNER_REPO_RE.test(value);
 }
 
@@ -182,7 +184,7 @@ function buildCreateCommand(parsed: Record<string, unknown>): GitPullRequestComm
   };
 }
 
-function isPrNumberString(value: unknown): value is string {
+export function isPrNumberString(value: unknown): value is string {
   return typeof value === "string" && PR_NUMBER_RE.test(value);
 }
 
@@ -210,14 +212,22 @@ function hasValidUpdateFields(
 }
 
 // Exactly one of convert-to-draft / convert-from-draft may be set; both default to false.
+//
+// #3389 (epic #3384 correction 1): `convertFromDraft` (draft->ready) is REJECTED here unconditionally
+// — it is never a valid field on the generic `pr-update` command. Before this change the transition
+// executed under the run-bound authority gate alone, with no one-use approval bound to the exact
+// PR/head/base facts (the approval-less path AC3 requires closed). The transition is reachable ONLY
+// through the dedicated `pr-mark-ready` intent (prMarkReadyExecution.ts), whose approval binds
+// exactly those facts and re-verifies them immediately before and after the mutation. `convertToDraft`
+// (ready->draft) is unaffected: it is not the transition this correction closes.
 function parseConvertFlags(
   parsed: Record<string, unknown>,
 ): { convertToDraft: boolean; convertFromDraft: boolean } | undefined {
   const convertToDraft = optionalBool(parsed.convertToDraft);
   const convertFromDraft = optionalBool(parsed.convertFromDraft);
   if (convertToDraft === undefined || convertFromDraft === undefined) return undefined;
-  if (convertToDraft && convertFromDraft) return undefined;
-  return { convertToDraft, convertFromDraft };
+  if (convertFromDraft) return undefined;
+  return { convertToDraft, convertFromDraft: false };
 }
 
 function buildUpdateCommand(parsed: Record<string, unknown>): GitPullRequestCommand | undefined {

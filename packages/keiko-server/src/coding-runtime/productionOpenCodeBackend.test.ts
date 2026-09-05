@@ -74,10 +74,11 @@ describe("production OpenCode backend composition", () => {
     }
   });
 
-  // #2951 residual finding: the release-qualified/evaluation native (non-dev-lane) branch of
-  // `runtimeSupervisor` never attached a `gatewayConfinement`, unlike the macOS dev/evaluation
-  // lane's `appSandboxSupervisor`. This composes fine — proving the wiring does not disturb a
-  // normal launch — while the next test proves the wiring is actually load-bearing.
+  // #2951 recorded gap (ADR-0043 D14): the release-qualified/evaluation native (non-dev-lane)
+  // branch of `runtimeSupervisor` launches WITHOUT a gateway confinement, because
+  // `nativeRuntimeProcessBackend.ts` has no OS-level enforcement to attach one to and a refusal
+  // would disable the coding runtime on every Windows/Linux release. This pins that the launch
+  // still composes; the OS-level bridge stays tracked under #2951, never claimed here.
   it("composes a release-qualified Windows native run", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-production-opencode-native-release-"));
     try {
@@ -91,31 +92,6 @@ describe("production OpenCode backend composition", () => {
         arch: "x64",
         backend: "windows-job-object",
       });
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  // Failing-before: before this change, `runtimeSupervisor`'s native branch never called
-  // `createRuntimeGatewayConfinement`, so an authority digest malformed in a way ONLY that
-  // constructor rejects (see `runtime-gateway.ts`'s `DIGEST` guard) had no observable effect —
-  // `createRun` succeeded regardless of `envelopeDigest`'s shape. It now fails closed at
-  // composition time, before any process exists.
-  it("fails closed at composition when the minted authority digest cannot form a gateway policy", () => {
-    const root = mkdtempSync(join(tmpdir(), "keiko-production-opencode-native-release-invalid-"));
-    try {
-      const portable = releaseQualifiedNativeRuntime(root);
-      const backend = createProductionOpenCodeBackend(backendInput(root, portable));
-      const baseRun = runInput(root);
-      const malformedRun: ProductionRuntimeBackendInput = {
-        ...baseRun,
-        minted: {
-          ...baseRun.minted,
-          authorityRef: { ...baseRun.minted.authorityRef, envelopeDigest: "not-a-digest" },
-        },
-      };
-
-      expect(() => backend.createRun(malformedRun)).toThrow(TypeError);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

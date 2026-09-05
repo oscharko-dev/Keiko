@@ -12,6 +12,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
+  applyGitChangeDescription,
   chatTurnShapeFields,
   captureDesktopChatExecutionAdmission,
   handleCreateDesktopChat,
@@ -839,6 +840,46 @@ describe("git-change description-authority admission (#3400)", () => {
     } finally {
       await disposeGatewayBreakerFixture(fixture);
     }
+  });
+});
+
+// Frozen Product Decision 6 / issue correction 1 — the apply action is a body-only description
+// application (#3399's service), never the coupled title+body+base `executeGovernedPullRequest`
+// path. `executeGovernedPullRequestSpy` below mocks the ENTIRE module chat-handlers.ts would have
+// to import to reach that path, so a call through it during `applyGitChangeDescription` would be
+// directly observable — proving the absence is not merely "no import happens to exist today".
+const executeGovernedPullRequestSpy = vi.hoisted(() => vi.fn());
+vi.mock("./gitDelivery/prExecution.js", () => ({
+  executeGovernedPullRequest: executeGovernedPullRequestSpy,
+  KEIKO_DEFAULT_PR_POLICY_PACK: {},
+}));
+
+describe("applyGitChangeDescription routes only through the description application service (#3400)", () => {
+  afterEach(() => {
+    executeGovernedPullRequestSpy.mockClear();
+  });
+
+  it("returns undefined and calls no PR-update adapter when the service is not yet composed", () => {
+    const result = applyGitChangeDescription({} as UiHandlerDeps, "proposal-1", {});
+    expect(result).toBeUndefined();
+    expect(executeGovernedPullRequestSpy).not.toHaveBeenCalled();
+  });
+
+  it("calls the port's executeApproved and never executeGovernedPullRequest", async () => {
+    const executeApproved = vi.fn((): Promise<{ readonly outcome: string }> =>
+      Promise.resolve({ outcome: "applied" }),
+    );
+    const deps = {
+      prDescriptionApplicationService: { executeApproved },
+    } as unknown as UiHandlerDeps;
+    const lease = { token: "lease-1" };
+
+    const result = await applyGitChangeDescription(deps, "proposal-1", lease);
+
+    expect(result).toEqual({ outcome: "applied" });
+    expect(executeApproved).toHaveBeenCalledWith("proposal-1", lease);
+    expect(executeApproved).toHaveBeenCalledTimes(1);
+    expect(executeGovernedPullRequestSpy).not.toHaveBeenCalled();
   });
 });
 

@@ -248,14 +248,12 @@ refuses the launch outright with the identical `GATEWAY_UNSUPPORTED_ON_HOST_REAS
 protocol has no field for a network policy and cannot enforce one; the refusal is also recorded as a
 body-free `runtime.confinement.failed` activity-log line, matching the macOS dev-lane path, so a
 Windows refusal leaves the same evidence a support bundle can reconstruct. Production composition
-(`productionOpenCodeBackend.ts`) now attaches a confinement to every native launch this function
-resolves EXCEPT the Windows dev lane — release-qualified Windows/macOS/Linux and Windows-evaluation
-launches all request it and, since no platform behind this backend can enforce it yet, all fail
-closed rather than spawn unconfined; the Windows dev lane keeps its existing, already-accepted
-best-effort posture (ADR-0140 D3) unconfined, matching the reduced-assurance bar it already accepts
-elsewhere. This closes the *expressibility, refusal, and production-wiring* gap for every native
-launch that requests it, not D12's platform-coverage gap itself: no release-qualified sidecar can
-run unconfined and silent any more, but none can run confined either, because the OS-level
-enforcement this backend would need still does not exist. Building the actual Linux
-network-namespace bridge and a Windows-native enforcement equivalent remain out of scope and
-tracked as before.
+(`productionOpenCodeBackend.ts`) attaches a gateway confinement only where a backend can enforce
+it today: the macOS app-sandbox and dev lanes. The release-qualified native lanes (Windows and
+Linux, and macOS outside the app-sandbox lane) still launch **without** a gateway confinement,
+because the only alternative this backend can offer is a refusal, and refusing would disable the
+coding runtime on every release platform rather than confine it. That gap is recorded here and in
+#2951, which stays open until the Linux network-namespace bridge and a Windows-native
+enforcement equivalent exist; it is not a containment claim. The refusal path and its
+`runtime.confinement.failed` evidence apply to any lane that does request a confinement on a host
+that cannot enforce it.

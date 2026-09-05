@@ -103,6 +103,14 @@ import {
   type GitDeliveryDescriptionAuthorityPort,
   type GitDeliveryDescriptionAuthorityScope,
 } from "./gitDelivery/runBoundAuthority.js";
+// Issue #3400 (epic #3384, Frozen Product Decision 6 / issue correction 1): the apply action
+// routes ONLY through the existing body-only description application service (#3399), never
+// through `executeGovernedPullRequest`'s coupled title+body+base update path. Read-only
+// consumption of the existing owning module — never redefined here.
+import type {
+  PrDescriptionApplicationResult,
+  PrDescriptionApplicationService,
+} from "./gitDelivery/prDescriptionTypes.js";
 import {
   currentAuditRedactString,
   currentConversationReady,
@@ -2660,6 +2668,40 @@ function admitGitChangeScopedTurn(
       "The description authority for this connected Git change is missing or has expired.",
     ),
   };
+}
+
+// ─── Issue #3400 — apply routes only through the description application service (#3399) ────────
+//
+// Frozen Product Decision 6 / issue correction 1: the ONLY admitted write from a git-change-
+// connected Chat is a body-only description apply through the existing #3399 service. Production
+// composition does not yet reach a Chat handler with a composed `PrDescriptionApplicationService`
+// (#3399's own production-wiring item is unmounted — createPrDescriptionApplicationService has
+// zero non-test importers at the time of writing), so it is read via the same optional-cast seam
+// as the description-authority port above. Absent, apply is unavailable — it NEVER falls back to
+// `executeGovernedPullRequest` (prExecution.ts), which is the only other PR-update path and is
+// coupled title+body+base, not body-only.
+interface PrDescriptionApplyDeps {
+  readonly prDescriptionApplicationService?: PrDescriptionApplicationService | undefined;
+}
+
+function prDescriptionApplicationServiceFor(
+  deps: UiHandlerDeps,
+): PrDescriptionApplicationService | undefined {
+  return (deps as UiHandlerDeps & PrDescriptionApplyDeps).prDescriptionApplicationService;
+}
+
+/**
+ * Applies an already-approved PR-description proposal through the existing body-only service.
+ * Returns `undefined` when the service is not yet composed (apply unavailable) rather than
+ * substituting any other write path.
+ */
+export function applyGitChangeDescription(
+  deps: UiHandlerDeps,
+  proposalId: string,
+  lease: object,
+): Promise<PrDescriptionApplicationResult> | undefined {
+  const service = prDescriptionApplicationServiceFor(deps);
+  return service?.executeApproved(proposalId, lease);
 }
 
 export async function handleSendDesktopChat(

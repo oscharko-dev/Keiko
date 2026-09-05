@@ -183,6 +183,17 @@ function optionalStringArray(value: unknown): readonly string[] | undefined {
   return isStringArray(value) ? value : undefined;
 }
 
+// `status` is reserved ONLY when it actually carries the envelope's own numeric HTTP-like status
+// (`ServerLogEvent.status`, applied by `applyEnvelopeFields` in `server-log.ts`) — several real
+// emitters (epic #3384's `logGitDeliveryMutation` among them) instead put a closed-vocabulary
+// STRING under their OWN `extra.status` (`GitMutationOutcome["status"]`) with no numeric envelope
+// status on the same line at all. Excluding the name unconditionally silently dropped that string
+// from every timeline and seed; a value's actual type, not its field name alone, decides here.
+function isReservedEnvelopeKey(key: string, value: unknown): boolean {
+  if (key === "status") return typeof value === "number";
+  return KNOWN_ENVELOPE_KEYS.has(key);
+}
+
 // Bucketing every OTHER top-level key on the parsed record: `formatServerLogLine` flattens an
 // event's `extra` object onto the top level of the written JSON (there is no nested `.extra` key
 // on disk), so reconstructing a display-only `extra` bucket means collecting whatever survived
@@ -199,7 +210,7 @@ function extraFields(
   const extra: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   let hasAny = false;
   for (const key of Object.keys(record)) {
-    if (KNOWN_ENVELOPE_KEYS.has(key)) continue;
+    if (isReservedEnvelopeKey(key, record[key])) continue;
     extra[key] = record[key];
     hasAny = true;
   }

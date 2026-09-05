@@ -82,6 +82,8 @@ const SAFE_MESSAGES: Readonly<Record<GitDeliveryPrDescriptionErrorCode, string>>
     "The PR-description application service is not configured for this deployment.",
   GIT_DELIVERY_PR_DESCRIPTION_UNKNOWN_PROPOSAL:
     "The referenced proposal is unknown, expired, or no longer current.",
+  GIT_DELIVERY_PR_DESCRIPTION_MODEL_EGRESS_DENIED:
+    "Model egress for PR-description generation is not currently authorized.",
 };
 
 const errResult = (status: number, code: GitDeliveryPrDescriptionErrorCode): RouteResult => ({
@@ -514,6 +516,15 @@ export const createHandlePrDescriptionPreview = (
     const prepared = await prepare(ctx, deps, options, correlationId, validatePreview);
     if (!prepared.ok) return prepared.result;
     const { value, service } = prepared.value;
+    // #3399 (epic #3384 correction 4): the description authority's SECOND admitted effect. The
+    // "pull-request" admission `prepare()` already ran covers only the eventual body-only apply;
+    // snapshot content is about to reach the Model Gateway (service.preview -> generatePrDescription),
+    // so model egress is admitted separately and BEFORE that call — never after.
+    const seams = options.execution ?? {};
+    const nowIso = new Date((seams.now ?? Date.now)()).toISOString();
+    if (!admitDescriptionModelEgress(deps, value, nowIso)) {
+      return errResult(403, "GIT_DELIVERY_PR_DESCRIPTION_MODEL_EGRESS_DENIED");
+    }
     const result = await service.preview({
       language: value.language,
       refinement: value.refinement,

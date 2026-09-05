@@ -230,6 +230,39 @@ function canonicalCreateResult(
       });
 }
 
+// Looks up a PR's GraphQL node id — the shared first step of every draft-state transition (the REST
+// update endpoint cannot toggle it). Returns the node id, or the failed exec result to propagate as-is.
+type NodeIdLookup =
+  | { readonly ok: true; readonly nodeId: string }
+  | { readonly ok: false; readonly failure: GitPrExecResult };
+
+async function fetchPrNodeId(
+  ctx: RunContext,
+  ownerAndRepo: string,
+  prExternalId: string,
+): Promise<NodeIdLookup> {
+  const idResult = await runGh(ctx, [
+    "api",
+    `/repos/${ownerAndRepo}/pulls/${prExternalId}`,
+    "--jq",
+    ".node_id",
+  ]);
+  if (idResult instanceof Error) {
+    return { ok: false, failure: failureFromThrow(idResult, 0) };
+  }
+  if (idResult.exitCode !== 0) {
+    return { ok: false, failure: rejectionFromExit(idResult) };
+  }
+  const nodeId = parseNodeId(idResult.stdout);
+  if (nodeId === undefined) {
+    return {
+      ok: false,
+      failure: executionResult("failed", idResult.durationMs, { errorCode: "internal-error" }),
+    };
+  }
+  return { ok: true, nodeId };
+}
+
 // Performs the draft↔ready transition the REST update endpoint cannot: looks up the PR's GraphQL node
 // id, then runs the appropriate mutation. Returns undefined on success, or the failed exec result.
 async function runDraftTransition(
@@ -240,30 +273,139 @@ async function runDraftTransition(
   if (!req.convertToDraft && !req.convertFromDraft) {
     return undefined;
   }
-  const idResult = await runGh(ctx, [
-    "api",
-    `/repos/${req.ownerAndRepo}/pulls/${req.prExternalId}`,
-    "--jq",
-    ".node_id",
-  ]);
-  if (idResult instanceof Error) {
-    return failureFromThrow(idResult, totalDuration);
-  }
-  if (idResult.exitCode !== 0) {
-    return rejectionFromExit(idResult);
-  }
-  const nodeId = parseNodeId(idResult.stdout);
-  if (nodeId === undefined) {
-    return executionResult("failed", totalDuration, { errorCode: "internal-error" });
+  const node = await fetchPrNodeId(ctx, req.ownerAndRepo, req.prExternalId);
+  if (!node.ok) {
+    return node.failure;
   }
   const mutation = req.convertToDraft
-    ? buildPrConvertDraftGraphqlArgv(nodeId)
-    : buildPrMarkReadyGraphqlArgv(nodeId);
+    ? buildPrConvertDraftGraphqlArgv(node.nodeId)
+    : buildPrMarkReadyGraphqlArgv(node.nodeId);
   const mutationResult = await runGh(ctx, mutation);
   if (mutationResult instanceof Error) {
     return failureFromThrow(mutationResult, totalDuration);
   }
   return mutationResult.exitCode === 0 ? undefined : rejectionFromExit(mutationResult);
+}
+
+// #3389: reads the live PR identity (head/base SHA, draft state) through the SAME governed read used
+// by the public `readPullRequest` adapter method — factored out so `markPullRequestReady` can re-read
+// the identical facts immediately before and after the mutation without a second implementation.
+function readPrIdentity(
+  ctx: RunContext,
+  req: GitPrReadRequest,
+): Promise<GitPrInspectionResult<GitPullRequestIdentity>> {
+  const input = { ...req };
+  return inspectRemote(
+    ctx,
+    () => buildPrReadArgv(input),
+    (value) => {
+      const identity = parseGitPrIdentity(value, input.ownerAndRepo);
+      return String(identity?.number) === input.prExternalId ? identity : undefined;
+    },
+  );
+}
+
+function markReadyResult(
+  outcome: GitDeliveryExecutionResult["outcome"],
+  durationMs: number,
+  extra?: Partial<GitPrMarkReadyExecResult>,
+): GitPrMarkReadyExecResult {
+  return {
+    schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
+    outcome,
+    durationMs: Math.max(0, Math.trunc(durationMs)),
+    ...extra,
+  };
+}
+
+// Projects a `GitPrExecResult` failure (from `fetchPrNodeId` / `runGh`) onto the narrower mark-ready
+// result shape — never carries the create-specific `createdPrExternalId`/`createdPrIdentity` fields.
+function asMarkReadyFailure(result: GitPrExecResult): GitPrMarkReadyExecResult {
+  return markReadyResult(result.outcome, result.durationMs, {
+    ...(result.errorCode !== undefined ? { errorCode: result.errorCode } : {}),
+    ...(result.rejectionReason !== undefined ? { rejectionReason: result.rejectionReason } : {}),
+  });
+}
+
+// #3389 (epic #3384 corrections 1/2/7): the draft->ready transition, deliberately isolated from
+// `updatePullRequest` — no title/body/base PATCH is ever bundled with it. Re-reads the live PR
+// identity immediately before AND after the mutation and refuses (never spawns the mutation, or
+// reports the observed drift) on any mismatch against the caller's expected head/base SHA — the
+// governed caller's one-use approval binds exactly those facts, so a claim minted against a PR that
+// has since moved can never be redeemed.
+// True when the live PR facts no longer match what the mark-ready claim was minted against — the
+// PR must still be exactly the draft the approval bound (same head/base SHA).
+function isPreMutationDrift(
+  identity: GitPullRequestIdentity,
+  req: GitPrMarkReadyExecRequest,
+): boolean {
+  return (
+    identity.headSha !== req.expectedHeadSha ||
+    identity.baseSha !== req.expectedBaseSha ||
+    !identity.isDraft
+  );
+}
+
+// True when the mutation reported success but the read-back does not confirm it: still a draft, or
+// the head moved during the call. A `mutationResult.exitCode === 0` alone never proves the transition.
+function isPostMutationDrift(
+  identity: GitPullRequestIdentity,
+  req: GitPrMarkReadyExecRequest,
+): boolean {
+  return identity.isDraft || identity.headSha !== req.expectedHeadSha;
+}
+
+type MarkReadyMutationOutcome =
+  | { readonly ok: true; readonly durationMs: number }
+  | { readonly ok: false; readonly failure: GitPrMarkReadyExecResult };
+
+async function runMarkReadyMutation(
+  ctx: RunContext,
+  req: GitPrMarkReadyExecRequest,
+): Promise<MarkReadyMutationOutcome> {
+  const node = await fetchPrNodeId(ctx, req.ownerAndRepo, req.prExternalId);
+  if (!node.ok) {
+    return { ok: false, failure: asMarkReadyFailure(node.failure) };
+  }
+  const mutationResult = await runGh(ctx, buildPrMarkReadyGraphqlArgv(node.nodeId));
+  if (mutationResult instanceof Error) {
+    return { ok: false, failure: asMarkReadyFailure(failureFromThrow(mutationResult, 0)) };
+  }
+  if (mutationResult.exitCode !== 0) {
+    return { ok: false, failure: asMarkReadyFailure(rejectionFromExit(mutationResult)) };
+  }
+  return { ok: true, durationMs: mutationResult.durationMs };
+}
+
+async function markPullRequestReady(
+  ctx: RunContext,
+  req: GitPrMarkReadyExecRequest,
+): Promise<GitPrMarkReadyExecResult> {
+  const before = await readPrIdentity(ctx, req);
+  if (!before.ok) {
+    return markReadyResult("failed", 0, { errorCode: "precondition-failed" });
+  }
+  if (isPreMutationDrift(before.value, req)) {
+    return markReadyResult("failed", 0, {
+      errorCode: "precondition-failed",
+      observedIdentity: before.value,
+    });
+  }
+  const mutation = await runMarkReadyMutation(ctx, req);
+  if (!mutation.ok) {
+    return mutation.failure;
+  }
+  const after = await readPrIdentity(ctx, req);
+  if (!after.ok) {
+    return markReadyResult("failed", mutation.durationMs, { errorCode: "precondition-failed" });
+  }
+  if (isPostMutationDrift(after.value, req)) {
+    return markReadyResult("failed", mutation.durationMs, {
+      errorCode: "precondition-failed",
+      observedIdentity: after.value,
+    });
+  }
+  return markReadyResult("succeeded", mutation.durationMs, { observedIdentity: after.value });
 }
 
 async function updatePullRequest(
@@ -292,7 +434,7 @@ async function updatePullRequest(
 
 export function createNodeGitPullRequestAdapter(
   deps: NodeGitPullRequestAdapterDeps,
-): GitPullRequestInspectionAdapter & GitPullRequestBodyAdapter {
+): GitPullRequestInspectionAdapter & GitPullRequestBodyAdapter & GitPullRequestMarkReadyAdapter {
   const ctx = buildRunContext(deps);
   return {
     ...bodyAdapter(ctx),
@@ -300,17 +442,10 @@ export function createNodeGitPullRequestAdapter(
       createPullRequest(ctx, { ...req }),
     updatePullRequest: (req: GitPrUpdateExecRequest): Promise<GitPrExecResult> =>
       updatePullRequest(ctx, req),
-    readPullRequest: (req): Promise<GitPrInspectionResult<GitPullRequestIdentity>> => {
-      const input = { ...req };
-      return inspectRemote(
-        ctx,
-        () => buildPrReadArgv(input),
-        (value) => {
-          const identity = parseGitPrIdentity(value, input.ownerAndRepo);
-          return String(identity?.number) === input.prExternalId ? identity : undefined;
-        },
-      );
-    },
+    markPullRequestReady: (req: GitPrMarkReadyExecRequest): Promise<GitPrMarkReadyExecResult> =>
+      markPullRequestReady(ctx, { ...req }),
+    readPullRequest: (req): Promise<GitPrInspectionResult<GitPullRequestIdentity>> =>
+      readPrIdentity(ctx, { ...req }),
     findPullRequestsByHead: (
       req,
     ): Promise<GitPrInspectionResult<readonly GitPullRequestIdentity[]>> => {

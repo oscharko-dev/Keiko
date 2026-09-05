@@ -322,6 +322,15 @@ const PREFLIGHT_DISPATCH: PreflightDispatch = {
   recovery: preflightRecovery,
   "pr-create": preflightNoLocalPrecondition,
   "pr-update": preflightNoLocalPrecondition,
+  // #3399: pre-existing gap closed in passing — "pr-description-apply" joined
+  // GitDeliveryActionKind without a PREFLIGHT_DISPATCH entry, which is a compile error against
+  // this mapped type's exhaustiveness guarantee, not a runtime one (evaluateGitPreflight is never
+  // called with it; the description-apply execute path has its own approval/preparation checks).
+  "pr-description-apply": preflightNoLocalPrecondition,
+  // #3389: same shape — the mark-ready transition has no snapshot-derivable local precondition of
+  // its own; its readiness (draft state, base/head SHA drift) is re-verified live by the governed
+  // execute path (prMarkReadyExecution.ts) immediately before and after the mutation.
+  "pr-mark-ready": preflightNoLocalPrecondition,
   merge: preflightNoLocalPrecondition,
 };
 

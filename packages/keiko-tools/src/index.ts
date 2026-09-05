@@ -318,6 +318,11 @@ export {
   type GitPullRequestOrchestratorDeps,
   type GitPullRequestRejection,
   type GitPullRequestRequest,
+  // #3389: the draft->ready transition port, deliberately isolated from GitPullRequestAdapter — see
+  // git-pr-gateway.ts's GitPullRequestMarkReadyAdapter doc.
+  type GitPrMarkReadyExecRequest,
+  type GitPrMarkReadyExecResult,
+  type GitPullRequestMarkReadyAdapter,
 } from "./git-pr-gateway.js";
 
 // The SEPARATE governed merge authority (Issue #478, ADR-0087). A THIRD parallel gateway to the publish

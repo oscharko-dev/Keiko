@@ -87,6 +87,12 @@ const PR_BASE_CONSTRAINTS = [
 // approval requirement is prDescriptionService.ts's own `PrDescriptionApprovals` continuation
 // (mint via issueApproval, redeem via consumeApproval/executeApproved) — matching how commit/push/
 // pr enforce ADR-0138 D2 at their own route/service layer rather than through this pack's decision.
+// #3389 (epic #3384 correction 7): `pr-mark-ready` names the same "any approver" shape ADR-0080 D5
+// defines for `pr-description-apply` above, for documentation and pack-mintability parity. Its LIVE
+// enforcement is not this rule either: the mark-ready execute path (prMarkReadyExecution.ts)
+// unconditionally requires a consumed `pr-mark-ready` claim — independent of any repo/org pack's own
+// decision — mirroring how commit/push/pr/pr-description-apply enforce ADR-0138 D2 at their own
+// route/service layer rather than through this pack's decision.
 export const KEIKO_DEFAULT_PR_POLICY_PACK: GitDeliveryRepoPolicyPack = {
   schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   repoId: "keiko-pr-default",
@@ -94,6 +100,7 @@ export const KEIKO_DEFAULT_PR_POLICY_PACK: GitDeliveryRepoPolicyPack = {
     { actionKind: "pr-create", decision: "constrained", constraints: [...PR_BASE_CONSTRAINTS] },
     { actionKind: "pr-update", decision: "constrained", constraints: [...PR_BASE_CONSTRAINTS] },
     { actionKind: "pr-description-apply", decision: "approval-gated", requiredApprovers: [] },
+    { actionKind: "pr-mark-ready", decision: "approval-gated", requiredApprovers: [] },
   ],
   defaultRule: { decision: "blocked" },
 };
