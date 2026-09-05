@@ -24,11 +24,10 @@ import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/gi
 import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { redactEvidenceString } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import {
-  createProductionJourneyReader,
-  resolveJourneyCheckoutRoot,
+import type {
+  createProductionJourneyReader as ProductionJourneyReaderFn,
+  resolveJourneyCheckoutRoot as ResolveJourneyCheckoutRootFn,
 } from "../coding-runtime/productionDraftDeliveryDependencies.js";
 import {
   hasOnlyAllowedKeys,
@@ -93,7 +92,16 @@ function readDescriptionStatus(
 ): PrDescriptionApplicationStatus | null {
   const store = createPrDescriptionReceiptStore({
     evidenceStore: deps.evidenceStore,
-    redact: (value: string): string => redactEvidenceString(deps.redactor, value),
+    // Inlined rather than importing `redactEvidenceString` from `../deps.js`: `deps.ts` composes
+    // nearly every server subsystem, and pulling any real (non-type) binding from it into a
+    // `gitDelivery/*Routes.ts` module reintroduces the exact ESM load-order cycle `routes.ts`
+    // already breaks by importing every route group as a TYPE-ONLY dependency of `deps.js`. The
+    // guard below is the whole of `redactEvidenceString`'s body.
+    redact: (value: string): string => {
+      const redacted = deps.redactor(value);
+      if (typeof redacted !== "string") throw new TypeError("Evidence redactor returned a non-string value.");
+      return redacted;
+    },
   });
   const context: PrDescriptionContext = {
     workspace,
@@ -144,15 +152,32 @@ export interface GitDeliveryJourneyRouteOptions {
   readonly outcomes?: GitJourneyOutcomeStore;
 }
 
+// `../coding-runtime/productionDraftDeliveryDependencies.js` is loaded lazily (never as a top-level
+// value import) because `deps.ts` — a real dependency of that module — composes nearly every server
+// subsystem, and a `gitDelivery/*Routes.ts` module pulling it in as a static import reintroduces an
+// ESM load-order cycle with `routes.ts` (which imports every route group, this one included, before
+// any of them has finished initializing). A dynamic import resolves after module graph load has
+// settled, so it carries no such ordering risk; Node caches the module after the first call.
+interface DraftDeliveryReaderModule {
+  readonly createProductionJourneyReader: typeof ProductionJourneyReaderFn;
+  readonly resolveJourneyCheckoutRoot: typeof ResolveJourneyCheckoutRootFn;
+}
+let draftDeliveryReaderModule: Promise<DraftDeliveryReaderModule> | undefined;
+function loadDraftDeliveryReaderModule(): Promise<DraftDeliveryReaderModule> {
+  draftDeliveryReaderModule ??= import("../coding-runtime/productionDraftDeliveryDependencies.js");
+  return draftDeliveryReaderModule;
+}
+
 function readerFor(
   deps: UiHandlerDeps,
   options: GitDeliveryJourneyRouteOptions,
   repositoryId: string,
+  createReader: typeof ProductionJourneyReaderFn,
 ): JourneyObservationOptions["reader"] {
   return (
     options.reader ??
-    ((context): ReturnType<typeof createProductionJourneyReader> =>
-      createProductionJourneyReader(deps, {
+    ((context): ReturnType<typeof ProductionJourneyReaderFn> =>
+      createReader(deps, {
         repositoryId,
         correlationId: context.correlationId,
         ...(context.signal === undefined ? {} : { signal: context.signal }),
@@ -173,10 +198,11 @@ function descriptionFor(
   repositoryId: string,
   repository: string,
   prNumber: number,
+  resolveCheckoutRoot: typeof ResolveJourneyCheckoutRootFn,
 ): JourneyObservationOptions["description"] {
   if (options.description !== undefined) return options.description;
   return (context): Promise<PrDescriptionApplicationStatus | null> => {
-    const root = resolveJourneyCheckoutRoot(deps, repositoryId);
+    const root = resolveCheckoutRoot(deps, repositoryId);
     if (root === undefined) return Promise.resolve(null);
     return Promise.resolve(
       readDescriptionStatus(
@@ -215,8 +241,9 @@ async function handleJourneyRefresh(
   }
 
   const repositoryId = issueBinding.repositoryId;
+  const draftDelivery = await loadDraftDeliveryReaderModule();
   let context: JourneyObservationContext;
-  const reader = readerFor(deps, options, repositoryId);
+  const reader = readerFor(deps, options, repositoryId, draftDelivery.createProductionJourneyReader);
   context = {
     draft,
     accessScope: {},
@@ -233,6 +260,7 @@ async function handleJourneyRefresh(
       repositoryId,
       draft.binding.repository,
       draft.pullRequest.number,
+      draftDelivery.resolveJourneyCheckoutRoot,
     ),
     recordOutcome: (_context, outcome): boolean =>
       options.outcomes === undefined ? true : options.outcomes.record(outcome),

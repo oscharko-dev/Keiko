@@ -117,3 +117,58 @@ export function createCodingRepositorySearchHandler(
       invoke(options, request, context),
   };
 }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isCodingRepositoryHit(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.path === "string" &&
+    isFiniteNumber(value.startLine) &&
+    isFiniteNumber(value.endLine) &&
+    typeof value.snippet === "string" &&
+    typeof value.redacted === "boolean" &&
+    typeof value.snippetTruncated === "boolean"
+  );
+}
+
+function isCodingRepositoryMetrics(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isFiniteNumber(value.candidatesDiscovered) &&
+    isFiniteNumber(value.filesScanned) &&
+    isFiniteNumber(value.skippedFiles) &&
+    isFiniteNumber(value.durationMs)
+  );
+}
+
+function isCodingRepositorySuccess(value: Record<string, unknown>): boolean {
+  if (
+    !isCodingRepositoryMetrics(value.metrics) ||
+    !Array.isArray(value.truncationReasons) ||
+    !value.truncationReasons.every((reason) => typeof reason === "string")
+  ) {
+    return false;
+  }
+  return value.kind === "search"
+    ? Array.isArray(value.hits) && value.hits.every(isCodingRepositoryHit)
+    : value.kind === "read" && isCodingRepositoryHit(value.excerpt);
+}
+
+/**
+ * Re-validates a `CodingRepositoryResult` the governed delegate boundary returns as `unknown`
+ * (codingToolFacade.ts's defense-in-depth boundary, same treatment as every other governed
+ * result type). Checks shape only, never a limit already enforced by the producing handler.
+ */
+export function isCodingRepositoryResult(value: unknown): value is CodingRepositoryResult {
+  if (!isRecord(value) || typeof value.ok !== "boolean") return false;
+  return value.ok
+    ? isCodingRepositorySuccess(value)
+    : typeof value.reason === "string" && value.reason.length > 0;
+}

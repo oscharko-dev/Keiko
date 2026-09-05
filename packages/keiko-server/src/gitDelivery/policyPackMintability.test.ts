@@ -1,7 +1,7 @@
-// Unit coverage for the KEIKO-0526 mintability guard (#3386, ADR-0138 D2): a policy pack may only
-// name `approval-gated` for an action kind whose route group actually exposes an `/approve` mint
-// route. `merge` and `commit` are mintable; `push`/`pull-request` are not until #3387 wires their
-// mint routes.
+// Unit coverage for the KEIKO-0526 mintability guard (#3386/#3387, ADR-0138 D2): a policy pack may
+// only name `approval-gated` for an action kind whose route group actually exposes an `/approve`
+// mint route. `merge`, `commit`, `push`, `pr-create`, and `pr-update` are mintable; `fetch`/`pull`
+// and any other unwired kind are not.
 
 import { describe, expect, it } from "vitest";
 import type {

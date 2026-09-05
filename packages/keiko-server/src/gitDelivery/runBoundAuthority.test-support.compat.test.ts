@@ -19,7 +19,11 @@ const MODES: readonly CodingWorkbenchMode[] = [
 // "a fixture never restates a formula the code under test owns").
 describe("productionScopedGitDeliveryAuthority stays derived from productionGitDeliveryModeGrants", () => {
   it.each(MODES)("matches the production per-mode grant for %s", (mode) => {
-    const port = productionScopedGitDeliveryAuthority(() => "project", () => "project", mode);
+    const port = productionScopedGitDeliveryAuthority(
+      () => "project",
+      () => "project",
+      mode,
+    );
     const active = port.current("2026-07-13T12:00:00.000Z");
     const expected = productionGitDeliveryModeGrants(mode);
 
@@ -32,7 +36,11 @@ describe("productionScopedGitDeliveryAuthority stays derived from productionGitD
 
   it("carries no undeclared delivery-substrate or connector-access outside the production grant", () => {
     for (const mode of MODES) {
-      const port = productionScopedGitDeliveryAuthority(() => "project", () => "project", mode);
+      const port = productionScopedGitDeliveryAuthority(
+        () => "project",
+        () => "project",
+        mode,
+      );
       const active = port.current("2026-07-13T12:00:00.000Z");
       const expected = productionGitDeliveryModeGrants(mode);
       const extra = (active?.authority.actionClasses ?? []).filter(

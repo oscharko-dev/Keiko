@@ -2185,6 +2185,7 @@ export type {
 // ─── Tools ──────────────────────────────────────────────────────────────────────
 export type {
   NetworkPolicy,
+  NetworkGatewayPolicy,
   FilesystemPolicy,
   HomeIsolation,
   OutputScrubMode,
@@ -2210,6 +2211,7 @@ export type {
   ToolCallResult,
   ToolPort,
 } from "./tools.js";
+export { isValidNetworkGatewayPolicy } from "./tools.js";
 export type {
   DEFAULT_ENV_ALLOWLIST,
   DEFAULT_SANDBOX_POLICY,

@@ -3,7 +3,8 @@
 // are deterministic string functions so the security-critical argv is pinned by unit tests.
 
 import { basename, dirname, isAbsolute } from "node:path";
-import type { IsolatedRunPlan, SandboxBackend } from "./types.js";
+import { isValidNetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts";
+import type { IsolatedRunPlan, NetworkGatewayPolicy, SandboxBackend } from "./types.js";
 
 export interface WrappedCommand {
   readonly command: string;
@@ -115,6 +116,25 @@ function seatbeltArgs(plan: IsolatedRunPlan): readonly string[] {
   return ["-p", SEATBELT_DENY_EGRESS_PROFILE, plan.command, ...plan.args];
 }
 
+// The ONE gateway-allowlist Seatbelt profile builder (ADR-0043 D11/D14, #2951): deny all network
+// egress and every process/service-escape surface by default, then carve out exactly the attested
+// loopback family/port. Both the direct `runtime-gateway.ts` API and the generic
+// `buildWrappedCommand` planning path call into this single formula — there is no second copy of
+// the profile string anywhere in the package.
+export function buildGatewaySeatbeltCommand(
+  gateway: NetworkGatewayPolicy,
+  command: string,
+  args: readonly string[],
+): WrappedCommand {
+  const family = gateway.host === "127.0.0.1" ? "tcp4" : "tcp6";
+  const profile =
+    "(version 1)(allow default)(deny network*)(deny process-fork)" +
+    "(deny mach-lookup)(deny appleevent-send)(deny lsopen)" +
+    `(allow network-outbound (remote ${family} "localhost:${String(gateway.port)}"))` +
+    `(allow network-inbound (local ${family} "localhost:*"))`;
+  return { command: "/usr/bin/sandbox-exec", args: ["-p", profile, command, ...args] };
+}
+
 function containerArgs(plan: IsolatedRunPlan, image: string): readonly string[] {
   // --network=none removes all networking. The execution root is bind-mounted read-write and used as
   // the working directory so the wrapped toolchain sees the same paths it would natively. Unlike the
@@ -152,7 +172,9 @@ export function buildWrappedCommand(
     case "unshare":
       return { command: "unshare", args: unshareArgs(plan) };
     case "seatbelt":
-      return { command: "sandbox-exec", args: seatbeltArgs(plan) };
+      return isValidNetworkGatewayPolicy(plan.network)
+        ? buildGatewaySeatbeltCommand(plan.network, plan.command, plan.args)
+        : { command: "sandbox-exec", args: seatbeltArgs(plan) };
     case "container-docker":
       return { command: "docker", args: containerArgs(plan, DEFAULT_CONTAINER_IMAGE) };
     case "container-podman":

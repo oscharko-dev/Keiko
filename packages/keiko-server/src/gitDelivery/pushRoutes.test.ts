@@ -744,6 +744,105 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
   });
 });
 
+// #3387 — before this route existed, no HTTP path could mint a push approval claim: the route did
+// not exist. Proves the mint route end to end: redeemable exactly once, refused for another
+// operation or run, and reachable from a running accepted run regardless of mode (ADR-0138 D2 — a
+// delivery effect is approval-required in every mode, never mode-denied merely because the mode is
+// lower; the coarse admission gate this route's own authority check runs through already resolves
+// "approval-required" rather than "mode-denied" below autonomous-delivery, per #3386).
+describe("push approve — mints the server-issued claim execute consumes (#3387)", () => {
+  const COMMAND: GitPushCommand = {
+    kind: "push",
+    sourceBranchName: "feat/x",
+    remoteAlias: "origin",
+    remoteBranchName: "feat/x",
+    forcePush: false,
+    setUpstreamTracking: false,
+  };
+
+  it("mints a claim that execute accepts for the exact same push, letting an approval-required push proceed", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approveHandler = createHandlePushApprove({ execution: seams({ approvalStore }) });
+    const minted = await approveHandler(ctxFor("/api/git-delivery/push/approve", pushBody()), deps());
+    expect(minted.status).toBe(200);
+    const approval = (minted.body as { approval: GitDeliveryApprovalClaim }).approval;
+
+    const adapter = recordingPublishAdapter();
+    const executeHandler = createHandlePushExecute({
+      execution: seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const res = await executeHandler(ctxFor(EXECUTE, pushBody({ approval })), deps());
+    expect((res.body as GitDeliveryPushExecuteResponseBody).status).toBe("succeeded");
+    expect(adapter.calls()).toBe(1);
+  });
+
+  it("mints a claim redeemable only once", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issuePushApproval(approvalStore, COMMAND);
+    const adapter = recordingPublishAdapter();
+    const executeHandler = createHandlePushExecute({
+      execution: seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const first = await executeHandler(ctxFor(EXECUTE, pushBody({ approval })), deps());
+    expect((first.body as GitDeliveryPushExecuteResponseBody).status).toBe("succeeded");
+    // The claim was consumed by the first execute: a second redemption attempt no longer matches any
+    // stored record, so resolveGitDeliveryApprovalRequirement refuses it as a malformed/unknown claim
+    // (400), never re-honouring it as a fresh "approval-required" disposition.
+    const second = await executeHandler(ctxFor(EXECUTE, pushBody({ approval })), deps());
+    expect(second.status).toBe(400);
+    expect(adapter.calls()).toBe(1);
+  });
+
+  it("refuses a claim minted for a different push command", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issuePushApproval(approvalStore, { ...COMMAND, remoteBranchName: "other" });
+    const adapter = recordingPublishAdapter();
+    const handler = createHandlePushExecute({
+      execution: seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const res = await handler(ctxFor(EXECUTE, pushBody({ approval })), deps());
+    expect(res.status).toBe(400);
+    expect(adapter.calls()).toBe(0);
+  });
+
+  it("refuses a claim minted for a different run", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issuePushApproval(approvalStore, COMMAND, { runId: "another-run" });
+    const adapter = recordingPublishAdapter();
+    const handler = createHandlePushExecute({
+      execution: seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const res = await handler(ctxFor(EXECUTE, pushBody({ approval })), deps());
+    expect(res.status).toBe(400);
+    expect(adapter.calls()).toBe(0);
+  });
+
+  it("denies the mint itself when no accepted run authority is active", async () => {
+    const handler = createHandlePushApprove({ execution: seams() });
+    const res = await handler(
+      ctxFor("/api/git-delivery/push/approve", pushBody()),
+      deps({ gitDeliveryAuthority: { current: () => undefined } }),
+    );
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+  });
+
+  it("logs a body-free line when the mint issues a claim", async () => {
+    const activity = captureActivityLog();
+    const handler = createHandlePushApprove({
+      execution: seams({ activityLog: activity.sink }),
+    });
+    await handler(
+      { ...ctxFor("/api/git-delivery/push/approve", pushBody()), correlationId: "corr-push-mint-1" },
+      deps(),
+    );
+    const events = activity.events.filter((event) => event.op === "git.delivery.push.approval.minted");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ correlationId: "corr-push-mint-1", extra: { runId: "test-run" } });
+    expect(JSON.stringify(events[0])).not.toContain("feat/x");
+  });
+});
+
 // ─── F1: the default publish adapter (no publishAdapterFactory seam) — audit finding: this branch
 // previously hard-coded UNKNOWN_CORRELATION_ID and an uninjectable processServerLogSink(),
 // silently dropping BOTH the caller's real correlationId and its activityLog seam. Exercises

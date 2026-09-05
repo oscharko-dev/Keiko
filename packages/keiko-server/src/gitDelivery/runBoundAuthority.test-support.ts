@@ -52,25 +52,21 @@ const TEST_AUTHORITY: CodingWorkbenchAuthorityEnvelope = {
 };
 
 // Production-realistic per-mode grant, restricted to the three facts `authorizeGitDelivery` reads
-// (actionClasses, connectorScopes, networkPolicy). `actionClasses` and `connectorScopes` are the
-// exact production per-mode projection: `productionGitDeliveryModeGrants` (exported by
-// productionRuntimeWorkspaceAuthority.ts for exactly this purpose, epic #3384 correction 5 item 2) is
-// the producer both this fixture and the real minting path call, so the two can never diverge
-// silently — a change to the production formula is observed here on the next run, not restated by
-// hand. `network-egress` is not part of that shared projection (it stays a separate, intentionally
-// mode-gated concern owned by #3387) and is appended here only for `autonomous-delivery`, matching
-// `runtimeActionClasses`'s own `mode === "autonomous-delivery"` branch. This exists instead of
-// `permittedGitDeliveryAuthority`'s mode-independent full grant below, which is what let the
+// (actionClasses, connectorScopes, networkPolicy) — all three are the exact production per-mode
+// projection: `productionGitDeliveryModeGrants` (exported by productionRuntimeWorkspaceAuthority.ts
+// for exactly this purpose, epic #3384 correction 5 item 2) already includes `network-egress` for
+// `autonomous-delivery` (its `researchEgressEnabled: false` default only withholds it for the two
+// lower modes, matching `runtimeActionClasses`'s own unconditional `mode === "autonomous-delivery"`
+// branch), so nothing needs restating here. `productionGitDeliveryModeGrants` is the producer both
+// this fixture and the real minting path call, so the two can never diverge silently — a change to
+// the production formula is observed here on the next run, not restated by hand. This exists instead
+// of `permittedGitDeliveryAuthority`'s mode-independent full grant below, which is what let the
 // ADR-0138 D2 admission gap ship undetected: with a fully-permissive fixture, no test could ever
 // observe `hasRequiredScopes` short-circuiting a lower mode before the mode/approval matrix ran.
 function productionRuntimeActionClasses(
   mode: CodingWorkbenchMode,
 ): readonly CodingWorkbenchActionClass[] {
-  const actionClasses: CodingWorkbenchActionClass[] = [
-    ...productionGitDeliveryModeGrants(mode).actionClasses,
-  ];
-  if (mode === "autonomous-delivery") actionClasses.push("network-egress");
-  return actionClasses;
+  return productionGitDeliveryModeGrants(mode).actionClasses;
 }
 
 function productionRuntimeConnectorScopes(

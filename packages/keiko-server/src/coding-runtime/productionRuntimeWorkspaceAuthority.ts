@@ -112,7 +112,9 @@ export const DELIVERY_CONNECTOR_SCOPES: readonly CodingWorkbenchConnectorScope[]
 // until `autonomous-delivery`. `productionGitDeliveryModeGrants` below is the single per-mode
 // projection both this module and `gitDelivery/runBoundAuthority.test-support.ts`'s fixture derive
 // from.
-function runtimeConnectorScopes(mode: CodingWorkbenchMode): readonly CodingWorkbenchConnectorScope[] {
+function runtimeConnectorScopes(
+  mode: CodingWorkbenchMode,
+): readonly CodingWorkbenchConnectorScope[] {
   return deliveryScopeGranted(mode) ? DELIVERY_CONNECTOR_SCOPES : [];
 }
 
@@ -125,9 +127,10 @@ export interface ProductionGitDeliveryModeGrants {
 // fixture can derive the exact production shape instead of restating the formula above (AGENTS.md
 // §7 / epic #3384 correction 5, item 2: `runBoundAuthority.test-support.ts`'s
 // `productionScopedGitDeliveryAuthority` calls this rather than keeping its own copy). Holds
-// `researchEgressEnabled` at its production default (`false`) — the network-egress action class is
-// not part of the Git-delivery admission surface this projects for (network policy stays a separate,
-// intentionally mode-gated fixture concern owned by #3387).
+// `researchEgressEnabled` at its production default (`false`): `network-egress` is therefore present
+// only for `autonomous-delivery` (matching `runtimeActionClasses`'s own unconditional branch for
+// that mode) and absent for `governed-assist`/`supervised-coding`, exactly what those modes mint
+// outside an active research-egress grant.
 export function productionGitDeliveryModeGrants(
   mode: CodingWorkbenchMode,
 ): ProductionGitDeliveryModeGrants {

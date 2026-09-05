@@ -1,20 +1,50 @@
-// Epic #3384 correction 7: a run's issue-context attachment reads GitHub through the connector
-// surface, and the connector-scope model gates that read to `autonomous-delivery` (the only mode
-// `productionRuntimeWorkspaceAuthority.ts` grants `source-control.read`/`.write` for). Before this
-// change `buildPack` hard-coded `connectorScopes: ["source-control.read"]` regardless of the run's
-// actual effective mode, so a run below `autonomous-delivery` still got issue context the
-// connector-scope model never granted it — the `pack.status === "blocked"` branch in
-// `buildContext` was dead code.
+// Epic #3384 correction 7 (on #3385): a run's issue-context attachment reads GitHub through the
+// connector surface, and the per-checkout GitHub-reader grant (`isGitHubIssueReaderAuthorized`,
+// enforced by `resolveGitHubIssue` before `buildContext` ever reaches the connector) is the real
+// authorization for that read. A prior fix restated the connector-scope entitlement as
+// `DELIVERY_CONNECTOR_SCOPES`, gated to `autonomous-delivery` — the run's own live network-EGRESS
+// scopes, not a read taken under an already-verified grant — so a `governed-assist`/
+// `supervised-coding` read with a valid grant failed `authority-denied` even though ADR-0138 D1
+// admits reads and planning in every mode. `connectorScopesFor` now derives the scope from the
+// matrix's one producer (`codingWorkbenchPolicyEffectFor`, `internet`/`low`, mirroring how
+// `atlassian-connectors.ts` composes every other read-only connector action), which is never
+// `denied` for a real mode today, so a read is admitted below Full access too; the scope is
+// withheld only on an actual matrix `denied` verdict, exercised below via a mock since no mode
+// issues one today.
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import type { CodingWorkbenchPolicyEffect } from "@oscharko-dev/keiko-contracts";
+import type { ServerLogEvent } from "../observability/index.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { deriveRepositoryId } from "../task-workspace/naming.js";
 import { createProductionCodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
 import type { GitHubIssueResolutionDeps } from "./githubIssueResolution.js";
+
+// Forces the shared mode/resource/risk matrix to answer `denied` for one test only, so the
+// "connector scope withheld" branch of `connectorScopesFor` is exercised even though no mode in
+// the real, current matrix denies a read-only `internet`/`low` connector action (ADR-0138 D2).
+let forcedEffect: CodingWorkbenchPolicyEffect | undefined;
+
+vi.mock(
+  "@oscharko-dev/keiko-contracts/runtime/coding-workbench",
+  async (importOriginal): Promise<object> => {
+    const actual =
+      await importOriginal<
+        typeof import("@oscharko-dev/keiko-contracts/runtime/coding-workbench")
+      >();
+    return {
+      ...actual,
+      codingWorkbenchPolicyEffectFor: (
+        ...args: Parameters<typeof actual.codingWorkbenchPolicyEffectFor>
+      ): CodingWorkbenchPolicyEffect =>
+        forcedEffect ?? actual.codingWorkbenchPolicyEffectFor(...args),
+    };
+  },
+);
 
 let root: string;
 
@@ -31,6 +61,7 @@ function setRemoteHead(branch: string): void {
 }
 
 beforeEach(() => {
+  forcedEffect = undefined;
   root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-issue-intake-")));
   git(["init", "-q", "-b", "main"]);
   git(["config", "user.email", "test@keiko.example"]);
@@ -43,6 +74,7 @@ beforeEach(() => {
 const cleanups: (() => void)[] = [];
 
 afterEach(() => {
+  forcedEffect = undefined;
   for (const cleanup of cleanups.splice(0)) cleanup();
   rmSync(root, { recursive: true, force: true });
 });
@@ -50,6 +82,7 @@ afterEach(() => {
 interface Fixture {
   readonly deps: GitHubIssueResolutionDeps;
   readonly readJson: Mock<(argv: readonly string[]) => Promise<unknown>>;
+  readonly logged: ServerLogEvent[];
 }
 
 function fixture(): Fixture {
@@ -71,19 +104,52 @@ function fixture(): Fixture {
   const readJson = vi.fn((argv: readonly string[]): Promise<unknown> =>
     Promise.resolve(argv[1]?.includes("comments?") ? [] : object),
   );
+  const logged: ServerLogEvent[] = [];
   const deps: GitHubIssueResolutionDeps = {
     store,
     // The real `git rev-parse` spawn (readGitDefaultBranch) needs the actual PATH to find `git`.
     env: { PATH: process.env.PATH ?? "" },
     codingContextGitHubPort: { readJson },
     codingContextGitHubRemoteResolver: () => Promise.resolve("Owner/Repo"),
-    activityLog: { write: () => undefined },
+    activityLog: {
+      write: (event) => {
+        logged.push(event);
+      },
+    },
   };
-  return { deps, readJson };
+  return { deps, readJson, logged };
 }
 
 describe("production coding-runtime issue-context attachment (epic #3384 correction 7)", () => {
-  it("refuses issue-context attachment with authority-denied below autonomous-delivery", async () => {
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "attaches issue context in %s with a valid checkout grant",
+    async (effectiveMode) => {
+      const f = fixture();
+      const intake = createProductionCodingRuntimeIssueIntake(f.deps);
+      const resolved = await intake.resolve({
+        repositoryRoot: root,
+        issueRef: "#42",
+        correlationId: "run-1",
+      });
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) return;
+
+      const attached = await intake.buildContext({
+        runId: "run-1",
+        repositoryRoot: root,
+        binding: resolved.binding,
+        effectiveMode,
+        correlationId: "run-1",
+      });
+      expect(attached.ok).toBe(true);
+      if (!attached.ok) return;
+      expect(attached.attachment.issueNumber).toBe(42);
+      expect(attached.attachment.itemCount).toBe(1);
+      expect(f.logged.some((event) => event.op === "coding-context.pack")).toBe(false);
+    },
+  );
+
+  it("refuses issue-context attachment with authority-denied when the connector-read effect is denied", async () => {
     const f = fixture();
     const intake = createProductionCodingRuntimeIssueIntake(f.deps);
     const resolved = await intake.resolve({
@@ -94,46 +160,23 @@ describe("production coding-runtime issue-context attachment (epic #3384 correct
     expect(resolved.ok).toBe(true);
     if (!resolved.ok) return;
 
-    const governedAssist = await intake.buildContext({
-      runId: "run-1",
-      repositoryRoot: root,
-      binding: resolved.binding,
-      effectiveMode: "governed-assist",
-      correlationId: "run-1",
-    });
-    expect(governedAssist).toEqual({ ok: false, failure: "authority-denied" });
-
-    const supervised = await intake.buildContext({
+    forcedEffect = "denied";
+    const denied = await intake.buildContext({
       runId: "run-1",
       repositoryRoot: root,
       binding: resolved.binding,
       effectiveMode: "supervised-coding",
-      correlationId: "run-1",
+      correlationId: "run-denied",
     });
-    expect(supervised).toEqual({ ok: false, failure: "authority-denied" });
-  });
+    expect(denied).toEqual({ ok: false, failure: "authority-denied" });
 
-  it("attaches issue context once the run's effective mode carries source-control.read", async () => {
-    const f = fixture();
-    const intake = createProductionCodingRuntimeIssueIntake(f.deps);
-    const resolved = await intake.resolve({
-      repositoryRoot: root,
-      issueRef: "#42",
-      correlationId: "run-1",
-    });
-    expect(resolved.ok).toBe(true);
-    if (!resolved.ok) return;
-
-    const attached = await intake.buildContext({
-      runId: "run-1",
-      repositoryRoot: root,
-      binding: resolved.binding,
-      effectiveMode: "autonomous-delivery",
-      correlationId: "run-1",
-    });
-    expect(attached.ok).toBe(true);
-    if (!attached.ok) return;
-    expect(attached.attachment.issueNumber).toBe(42);
-    expect(attached.attachment.itemCount).toBe(1);
+    const line = f.logged.find((event) => event.op === "coding-context.pack");
+    expect(line).toBeDefined();
+    expect(line?.category).toBe("security");
+    expect(line?.correlationId).toBe("run-denied");
+    expect(line?.extra?.status).toBe("blocked");
+    expect(line?.extra?.blockedReasons).toEqual(["missing-scope"]);
+    // Body-free: never the issue title, body, or URL.
+    expect(JSON.stringify(line)).not.toContain("Issue context attachment");
   });
 });

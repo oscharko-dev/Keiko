@@ -124,9 +124,12 @@ describe("defaultMintableRepoPack (KEIKO-0526)", () => {
   });
 
   it("throws for an unmintable pack, naming the offending action kind", () => {
+    // "commit" joined MINTABLE_ACTION_KINDS with #3386 (its own execute path now unconditionally
+    // requires a consumed claim); "abort" has no mint route and none is planned, so it stays the
+    // non-mintable example.
     expect(() => {
-      defaultMintableRepoPack(unmintablePack("commit"));
-    }).toThrow(/approval-gated for 'commit'/);
+      defaultMintableRepoPack(unmintablePack("abort"));
+    }).toThrow(/approval-gated for 'abort'/);
   });
 });
 

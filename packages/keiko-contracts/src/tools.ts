@@ -15,7 +15,38 @@ import { deepFreeze } from "./deep-freeze.js";
 // default egress boundary at the keiko-tools spawn boundary (ADR-0043), and a host that cannot enforce
 // it fails the command closed. `"inherit"` stays the default for the read-only command tools; a caller
 // that executes untrusted code opts into `"none"` explicitly, WITHOUT any consumer change.
-export type NetworkPolicy = "inherit" | "none";
+//
+// A long-lived coding sidecar (ADR-0043 D11-D14, Issue #2951) is a third shape: neither fully
+// inherited nor fully denied, it must reach exactly one loopback destination — Keiko's own
+// authenticated gateway/BFF — for its whole lifetime. `NetworkGatewayPolicy` is deliberately NOT a
+// general allowlist: a single loopback host and a single port, nothing else is expressible. A host
+// with no backend that can bind a child to exactly that destination fails the run closed rather than
+// silently widening to "inherit" or narrowing to the unusable "none".
+export interface NetworkGatewayPolicy {
+  readonly mode: "gateway";
+  readonly host: "127.0.0.1" | "::1";
+  readonly port: number;
+}
+
+export type NetworkPolicy = "inherit" | "none" | NetworkGatewayPolicy;
+
+// Structural guard, not a coercion: true only for a value shaped exactly like a
+// `NetworkGatewayPolicy` — a loopback host, an in-range TCP port, and no other fields. A
+// non-loopback host, a missing/fractional/out-of-range port, or an extra field is rejected, never
+// widened or truncated into something that would look valid.
+export function isValidNetworkGatewayPolicy(value: unknown): value is NetworkGatewayPolicy {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).length === 3 &&
+    record.mode === "gateway" &&
+    (record.host === "127.0.0.1" || record.host === "::1") &&
+    Number.isSafeInteger(record.port) &&
+    (record.port as number) > 0 &&
+    (record.port as number) <= 65_535
+  );
+}
+
 export type FilesystemPolicy = "inherit" | "execution-root";
 
 // How the spawn boundary supplies HOME/USERPROFILE to the child.

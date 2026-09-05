@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  productionGitDeliveryModeGrants,
   productionRuntimeAuthorityFacts,
   productionWorkspaceMatches,
   type ProductionWorkspaceAuthorityInput,
@@ -387,16 +388,23 @@ describe("production runtime workspace authority", () => {
     ).toBe(false);
   });
 
+  // ADR-0138 D2 / epic #3384 correction 5: the "delivery" resource scope is `approval-required`,
+  // never `denied`, in every mode — so `delivery-substrate` and the `source-control.*` connector
+  // scopes must be minted in every mode too; approval (not scope absence) is what still blocks an
+  // unapproved delivery effect below `autonomous-delivery`. Withholding the scope until
+  // `autonomous-delivery` (the pre-fix shape) made `gitOperationRequirements.ts`'s
+  // `LOCAL_WRITE_REQUIREMENT` unsatisfiable for `supervised-coding`, which ADR-0138 D2 marks
+  // `workspace-contained`/`allowed` — a Supervised workspace run could never stage a file.
   it.each([
     [
       "governed-assist",
-      [],
-      ["command-execution", "delivery-substrate", "connector-access", "network-egress"],
+      ["delivery-substrate", "connector-access"],
+      ["command-execution", "network-egress"],
     ],
     [
       "supervised-coding",
-      ["command-execution"],
-      ["delivery-substrate", "connector-access", "network-egress"],
+      ["command-execution", "delivery-substrate", "connector-access"],
+      ["network-egress"],
     ],
     [
       "autonomous-delivery",
@@ -415,34 +423,40 @@ describe("production runtime workspace authority", () => {
       expect(context.actionClasses).not.toContain(actionClass);
     }
     expect(context.commandPolicy.requirePerCommandApproval).toBe(mode !== "autonomous-delivery");
+    // The delivery/source-control connector scope is granted in every mode now (never denied by the
+    // matrix); only the network policy stays mode-gated to autonomous-delivery — that dimension is
+    // #3387's territory (push/pull-request/fetch have no mint route below Full access yet).
+    expect(context.connectorScopes).toEqual(["source-control.read", "source-control.write"]);
     if (mode === "autonomous-delivery") {
-      expect(context.connectorScopes).toEqual(["source-control.read", "source-control.write"]);
       expect(context.networkPolicy).toEqual({
         mode: "connector-scoped-egress",
         allowLoopback: false,
         connectorScopes: ["source-control.read", "source-control.write"],
       });
     } else {
-      // The lower two modes were only ever asserted through their action classes. Without this the
-      // scope and network derivations were unpinned for them, which is how the clamp defect below
-      // stayed invisible.
-      expect(context.connectorScopes).toEqual([]);
-      expect(context.networkPolicy.connectorScopes).toEqual([]);
+      expect(context.networkPolicy).toEqual({
+        mode: "deny-all",
+        allowLoopback: false,
+        connectorScopes: [],
+      });
     }
   });
 
   // #3384 / #3386: every capability in the envelope is derived from the EFFECTIVE mode — the
   // fail-closed minimum of requested mode and deployment ceiling (ADR-0124 D2) — not from the
   // requested mode. Deriving from the request let a run ask for `autonomous-delivery` under a lower
-  // ceiling and receive a clamped `effectiveMode` while still carrying `delivery-substrate`,
-  // `source-control.write` and a connector-scoped network policy, which the runtime tool port and
-  // the Git-delivery route admission both accept. That is authority widening by request.
+  // ceiling and receive a clamped `effectiveMode` while still carrying `network-egress` and a
+  // connector-scoped network policy, which the runtime tool port and the Git-delivery route
+  // admission both accept. That is authority widening by request. `delivery-substrate` and the
+  // source-control connector scopes are no longer part of what clamping withholds (ADR-0138 D2:
+  // delivery is approval-required, not mode-gated, below Full access), so only the network
+  // dimension is asserted as clamped here.
   it.each([
-    ["supervised-coding", ["command-execution"], ["delivery-substrate", "connector-access"]],
-    ["governed-assist", [], ["command-execution", "delivery-substrate", "connector-access"]],
+    ["supervised-coding", ["command-execution", "delivery-substrate", "connector-access"]],
+    ["governed-assist", ["delivery-substrate", "connector-access"]],
   ] as const)(
     "clamps every derived capability to the deployment ceiling %s when a higher mode is requested",
-    (ceiling, included, excluded) => {
+    (ceiling, included) => {
       const fixture = liveFixture();
       const context = resolveProductionRuntimeContext(
         { ...fixture.input, deploymentCeiling: ceiling },
@@ -451,11 +465,11 @@ describe("production runtime workspace authority", () => {
 
       expect(context.deploymentCeiling).toBe(ceiling);
       for (const actionClass of included) expect(context.actionClasses).toContain(actionClass);
-      for (const actionClass of excluded) {
-        expect(context.actionClasses).not.toContain(actionClass);
+      if (ceiling === "governed-assist") {
+        expect(context.actionClasses).not.toContain("command-execution");
       }
       expect(context.actionClasses).not.toContain("network-egress");
-      expect(context.connectorScopes).toEqual([]);
+      expect(context.connectorScopes).toEqual(["source-control.read", "source-control.write"]);
       expect(context.networkPolicy).toEqual({
         mode: "deny-all",
         allowLoopback: false,
@@ -468,8 +482,10 @@ describe("production runtime workspace authority", () => {
 
   // ADR-0138's fail-closed rule: an unknown, missing or malformed mode value resolves to
   // `governed-assist`, the lowest posture. Asserted here on the production resolver, because a
-  // malformed value reaching it must yield the same empty envelope a governed-assist run gets —
-  // not an accidental grant from a comparison that silently fell through.
+  // malformed value reaching it must yield the same envelope a real governed-assist run gets — not
+  // an accidental grant, or an accidental withholding, from a comparison that silently fell through.
+  // Governed-assist's floor now carries the delivery/source-control scope (approval-required, never
+  // denied) alongside command-execution's absence and the deny-all network policy.
   it.each([
     ["malformed requested mode", "AUTONOMOUS-DELIVERY", "autonomous-delivery"],
     ["empty requested mode", "", "autonomous-delivery"],
@@ -483,10 +499,13 @@ describe("production runtime workspace authority", () => {
       { ...fixture.request, requestedMode: requestedMode as never },
     );
 
-    for (const actionClass of ["command-execution", "delivery-substrate", "connector-access"]) {
+    for (const actionClass of ["command-execution", "network-egress"]) {
       expect(context.actionClasses).not.toContain(actionClass);
     }
-    expect(context.connectorScopes).toEqual([]);
+    for (const actionClass of ["delivery-substrate", "connector-access"]) {
+      expect(context.actionClasses).toContain(actionClass);
+    }
+    expect(context.connectorScopes).toEqual(["source-control.read", "source-control.write"]);
     expect(context.networkPolicy).toEqual({
       mode: "deny-all",
       allowLoopback: false,
@@ -494,6 +513,58 @@ describe("production runtime workspace authority", () => {
     });
     expect(context.commandPolicy.mode).toBe("deny");
     expect(context.commandPolicy.requirePerCommandApproval).toBe(true);
+  });
+
+  // Epic #3384 correction 5, item 1: the concrete regression this record fixes. Before this change,
+  // `gitOperationRequirements.ts`'s `LOCAL_WRITE_REQUIREMENT` (stage/unstage/branch-create/
+  // branch-switch) demanded `source-control.write`, which was minted only for `autonomous-delivery`
+  // — so a `supervised-coding` run, which ADR-0138 D2 marks `workspace-contained`/`allowed`, could
+  // never satisfy `hasRequiredScopes` in `gitDelivery/runBoundAuthority.ts` and staging failed closed
+  // with `permission-scope-missing` regardless of mode or approval. The envelope now carries the
+  // scope every LOCAL_WRITE_REQUIREMENT operation demands in every mode; the mode/approval decision
+  // (allowed for supervised-coding, approval-required for governed-assist) is the only remaining
+  // gate, exactly as ADR-0138 D2 requires.
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "grants the LOCAL_WRITE_REQUIREMENT scope (workspace-write + source-control.write) for %s",
+    (mode) => {
+      const fixture = liveFixture();
+      const context = resolveProductionRuntimeContext(
+        { ...fixture.input, deploymentCeiling: mode },
+        { ...fixture.request, requestedMode: mode },
+      );
+
+      expect(context.actionClasses).toContain("workspace-write");
+      expect(context.connectorScopes).toContain("source-control.write");
+    },
+  );
+});
+
+// Epic #3384 correction 5, item 2: `productionGitDeliveryModeGrants` is the smallest pure per-mode
+// projection this module exports so `gitDelivery/runBoundAuthority.test-support.ts`'s fixture can
+// derive the production shape instead of restating it (AGENTS.md §7). Pinned directly here so the
+// exported contract itself — not only the resolver that consumes it internally — has coverage.
+describe("productionGitDeliveryModeGrants", () => {
+  it.each([
+    [
+      "governed-assist",
+      ["delivery-substrate", "connector-access"],
+      ["command-execution", "network-egress"],
+    ],
+    [
+      "supervised-coding",
+      ["command-execution", "delivery-substrate", "connector-access"],
+      ["network-egress"],
+    ],
+    [
+      "autonomous-delivery",
+      ["command-execution", "delivery-substrate", "connector-access", "network-egress"],
+      [] as const,
+    ],
+  ] as const)("grants the delivery/source-control scope for %s", (mode, included, excluded) => {
+    const grants = productionGitDeliveryModeGrants(mode);
+    for (const actionClass of included) expect(grants.actionClasses).toContain(actionClass);
+    for (const actionClass of excluded) expect(grants.actionClasses).not.toContain(actionClass);
+    expect(grants.connectorScopes).toEqual(["source-control.read", "source-control.write"]);
   });
 });
 

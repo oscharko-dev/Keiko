@@ -14,7 +14,10 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GitDeliveryRepoPolicyPack } from "@oscharko-dev/keiko-contracts";
+import type {
+  GitDeliveryApprovalClaim,
+  GitDeliveryRepoPolicyPack,
+} from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import type { GitPullRequestCommand, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type {
@@ -55,13 +58,14 @@ vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal
   };
 });
 
-import { createHandlePrExecute, createHandlePrPreview } from "./prRoutes.js";
+import { createHandlePrApprove, createHandlePrExecute, createHandlePrPreview } from "./prRoutes.js";
 import {
   executeGovernedPullRequest,
   type GitDeliveryPrExecuteResponseBody,
   type GitDeliveryPrPreviewBody,
   type GitDeliveryPullRequestSeams,
 } from "./prExecution.js";
+import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
 const PREVIEW = "/api/git-delivery/pr/preview";
@@ -209,6 +213,47 @@ function createBody(overrides: Record<string, unknown> = {}): Record<string, unk
   };
 }
 
+// #3387 (ADR-0138 D2): an accepted run's PR create/update now requires an actually consumed,
+// server-issued claim — mirrors commitRoutes.test.ts's issueCommitApproval, minting into a
+// caller-supplied store against the SAME binding handlePrExecute resolves at consume time
+// (projectId, operation "pr", the exact typed command, and the default test authority's
+// runId/envelopeDigest).
+function issuePrApproval(
+  approvalStore: ReturnType<typeof createInMemoryGitDeliveryApprovalStore>,
+  command: GitPullRequestCommand,
+  authority: { readonly runId?: string; readonly envelopeDigest?: string } = {},
+): GitDeliveryApprovalClaim {
+  return approvalStore.issue({
+    binding: {
+      projectId,
+      operation: "pr",
+      command,
+      runId: authority.runId ?? "test-run",
+      envelopeDigest: authority.envelopeDigest ?? "c".repeat(64),
+    },
+    approvedByUserId: "u-1",
+    nowMs: 1_700_000_000_000,
+    ttlMs: 60_000,
+  }).approval;
+}
+
+// Mints a real HTTP approval against the running test server's mount (the SHARED default approval
+// store the production route table falls back to, since these HTTP-level tests never inject a
+// seams.approvalStore override) and returns the request body with that claim attached — proves the
+// mint route end to end for the one HTTP-fetch-level test that needs it.
+async function approveThenBody(
+  body: Record<string, unknown>,
+  approvePath: string,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`http://${UI_HOST}:${String(port)}${approvePath}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+    body: JSON.stringify(body),
+  });
+  const approved = (await res.json()) as { approval: GitDeliveryApprovalClaim };
+  return { ...body, approval: approved.approval };
+}
+
 async function closeServer(): Promise<void> {
   await new Promise<void>((res) => {
     server.close(() => {
@@ -250,10 +295,14 @@ describe("pr routes — central enforcement", () => {
     await closeServer();
     await startBound({ env: {} });
     for (const path of [PREVIEW, EXECUTE]) {
+      const body =
+        path === EXECUTE
+          ? await approveThenBody(createBody(), "/api/git-delivery/pr/approve")
+          : createBody();
       const res = await fetch(`http://${UI_HOST}:${String(port)}${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
-        body: JSON.stringify(createBody()),
+        body: JSON.stringify(body),
       });
       expect(res.status).toBe(409);
       expect(await res.json()).toMatchObject({
@@ -368,14 +417,26 @@ describe("pr preview — read-only metadata + readiness (AC1/AC2/AC3)", () => {
   });
 });
 
+const DEFAULT_CREATE_COMMAND: GitPullRequestCommand = {
+  kind: "pr-create",
+  ownerAndRepo: "oscharko-dev/Keiko",
+  headBranchName: "claude/issue-477-github-pr-command-center",
+  baseBranchName: "dev",
+  title: "feat: governed pull request command center",
+  body: "Implements the #477 governed pull request command center.",
+  isDraft: false,
+};
+
 describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
   it("opens a permitted PR, returns the provider PR number, and records content-free evidence (AC5)", async () => {
     const adapter = recordingPrAdapter();
     const cap = capturingEvidenceStore();
     const activity: ServerLogEvent[] = [];
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandlePrExecute({
       execution: seams({
         prAdapterFactory: () => adapter.adapter,
+        approvalStore,
         activityLog: {
           write: (event): void => {
             activity.push(event);
@@ -384,7 +445,13 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
       }),
     });
     const res = await handler(
-      { ...ctxFor(EXECUTE, createBody()), correlationId: "request-correlation-pr-success" },
+      {
+        ...ctxFor(
+          EXECUTE,
+          createBody({ approval: issuePrApproval(approvalStore, DEFAULT_CREATE_COMMAND) }),
+        ),
+        correlationId: "request-correlation-pr-success",
+      },
       deps({ evidenceStore: cap.store }),
     );
     const body = res.body as GitDeliveryPrExecuteResponseBody;
@@ -432,9 +499,11 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
         return { ...active, runId: "replacement-run", envelopeDigest: "d".repeat(64) };
       },
     };
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandlePrExecute({
       execution: seams({
         prAdapterFactory: () => adapter.adapter,
+        approvalStore,
         activityLog: {
           write: (event): void => {
             activity.push(event);
@@ -445,7 +514,10 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
 
     const res = await handler(
       {
-        ...ctxFor(EXECUTE, createBody()),
+        ...ctxFor(
+          EXECUTE,
+          createBody({ approval: issuePrApproval(approvalStore, DEFAULT_CREATE_COMMAND) }),
+        ),
         correlationId: "request-correlation-pr-continuity",
       },
       deps({ gitDeliveryAuthority: authority, evidenceStore: cap.store }),
@@ -511,9 +583,11 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     });
     const cap = capturingEvidenceStore();
     const activity: ServerLogEvent[] = [];
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandlePrExecute({
       execution: seams({
         prAdapterFactory: () => adapter.adapter,
+        approvalStore,
         activityLog: {
           write: (event): void => {
             activity.push(event);
@@ -522,7 +596,13 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
       }),
     });
     const res = await handler(
-      { ...ctxFor(EXECUTE, createBody()), correlationId: "request-correlation-pr-rejected" },
+      {
+        ...ctxFor(
+          EXECUTE,
+          createBody({ approval: issuePrApproval(approvalStore, DEFAULT_CREATE_COMMAND) }),
+        ),
+        correlationId: "request-correlation-pr-rejected",
+      },
       deps({ evidenceStore: cap.store }),
     );
     const body = res.body as GitDeliveryPrExecuteResponseBody;
@@ -539,9 +619,14 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     expect(completed?.extra).toMatchObject({ status: "failed" });
   });
 
+  // #3387 (ADR-0138 D2): an accepted run's PR now requires an actually consumed, server-issued
+  // claim regardless of what the repo/org pack decides (mirrors commitRoutes.test.ts's equivalent
+  // pin for the commit route, #3386) — a request carrying no claim is refused before this
+  // approval-gated override pack is even consulted, so this now pins the SAME unconditional
+  // disposition the "carries no approval" case below pins, rather than the pack's own
+  // requiredApprovers evaluation.
   it("holds for approval under an approval-gated override pack, executing nothing", async () => {
     const adapter = recordingPrAdapter();
-    const activity: ServerLogEvent[] = [];
     const handler = createHandlePrExecute({
       execution: seams({
         prAdapterFactory: () => adapter.adapter,
@@ -555,11 +640,6 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
             defaultRule: { decision: "blocked" },
           },
         },
-        activityLog: {
-          write: (event): void => {
-            activity.push(event);
-          },
-        },
       }),
     });
     const res = await handler(
@@ -568,18 +648,16 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     );
     const body = res.body as GitDeliveryPrExecuteResponseBody;
     expect(body.status).toBe("approval-required");
-    expect(body.requiredApprovers).toContain("lead");
     expect(adapter.creates()).toBe(0);
-    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
-    expect(completed).toMatchObject({ correlationId: "request-correlation-pr-held" });
-    expect(completed?.extra).toMatchObject({ status: "approval-required" });
   });
 
   it("logs a snapshot precondition throw with the request correlation id", async () => {
     const activity: ServerLogEvent[] = [];
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandlePrExecute({
       execution: seams({
         snapshotReader: () => Promise.reject(new Error("host path must stay private")),
+        approvalStore,
         activityLog: {
           write: (event): void => {
             activity.push(event);
@@ -589,7 +667,13 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     });
 
     const res = await handler(
-      { ...ctxFor(EXECUTE, createBody()), correlationId: "request-correlation-pr-snapshot" },
+      {
+        ...ctxFor(
+          EXECUTE,
+          createBody({ approval: issuePrApproval(approvalStore, DEFAULT_CREATE_COMMAND) }),
+        ),
+        correlationId: "request-correlation-pr-snapshot",
+      },
       deps(),
     );
 
@@ -629,9 +713,21 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
 
   it("routes a pr-update through the update adapter method", async () => {
     const adapter = recordingPrAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandlePrExecute({
-      execution: seams({ prAdapterFactory: () => adapter.adapter }),
+      execution: seams({ prAdapterFactory: () => adapter.adapter, approvalStore }),
     });
+    const updateCommand: GitPullRequestCommand = {
+      kind: "pr-update",
+      ownerAndRepo: "oscharko-dev/Keiko",
+      prExternalId: "1499",
+      headBranchName: "claude/issue-477-github-pr-command-center",
+      baseBranchName: "dev",
+      title: "feat: updated title",
+      body: "Updated body",
+      convertToDraft: false,
+      convertFromDraft: true,
+    };
     const res = await handler(
       ctxFor(EXECUTE, {
         schemaVersion: "1",
@@ -644,6 +740,7 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
         title: "feat: updated title",
         body: "Updated body",
         convertFromDraft: true,
+        approval: issuePrApproval(approvalStore, updateCommand),
       }),
       deps(),
     );
@@ -651,6 +748,110 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     expect(body.status).toBe("succeeded");
     expect(adapter.updates()).toBe(1);
     expect(adapter.creates()).toBe(0);
+  });
+});
+
+// #3387 — before this route existed, no HTTP path could mint a PR approval claim: the route did not
+// exist. Proves the mint route end to end: redeemable exactly once, refused for another operation or
+// run, and reachable from a running accepted run regardless of mode (ADR-0138 D2 — a delivery effect
+// is approval-required in every mode, never mode-denied merely because the mode is lower; the coarse
+// admission gate this route's own authority check runs through already resolves "approval-required"
+// rather than "mode-denied" below autonomous-delivery, per #3386).
+describe("pr approve — mints the server-issued claim execute consumes (#3387)", () => {
+  it("mints a claim that execute accepts for the exact same PR proposal, letting an approval-required PR proceed", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approveHandler = createHandlePrApprove({ execution: seams({ approvalStore }) });
+    const minted = await approveHandler(
+      ctxFor("/api/git-delivery/pr/approve", createBody()),
+      deps(),
+    );
+    expect(minted.status).toBe(200);
+    const approval = (minted.body as { approval: GitDeliveryApprovalClaim }).approval;
+
+    const adapter = recordingPrAdapter();
+    const executeHandler = createHandlePrExecute({
+      execution: seams({ prAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const res = await executeHandler(ctxFor(EXECUTE, createBody({ approval })), deps());
+    expect((res.body as GitDeliveryPrExecuteResponseBody).status).toBe("succeeded");
+    expect(adapter.creates()).toBe(1);
+  });
+
+  it("mints a claim redeemable only once", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issuePrApproval(approvalStore, DEFAULT_CREATE_COMMAND);
+    const adapter = recordingPrAdapter();
+    const executeHandler = createHandlePrExecute({
+      execution: seams({ prAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const first = await executeHandler(ctxFor(EXECUTE, createBody({ approval })), deps());
+    expect((first.body as GitDeliveryPrExecuteResponseBody).status).toBe("succeeded");
+    // The claim was consumed by the first execute: a second redemption attempt no longer matches any
+    // stored record, so resolveGitDeliveryApprovalRequirement refuses it as a malformed/unknown claim
+    // (400), never re-honouring it as a fresh "approval-required" disposition.
+    const second = await executeHandler(ctxFor(EXECUTE, createBody({ approval })), deps());
+    expect(second.status).toBe(400);
+    expect(adapter.creates()).toBe(1);
+  });
+
+  it("refuses a claim minted for a different PR command", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issuePrApproval(approvalStore, {
+      ...DEFAULT_CREATE_COMMAND,
+      title: "a different title entirely",
+    });
+    const adapter = recordingPrAdapter();
+    const handler = createHandlePrExecute({
+      execution: seams({ prAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const res = await handler(ctxFor(EXECUTE, createBody({ approval })), deps());
+    expect(res.status).toBe(400);
+    expect(adapter.creates()).toBe(0);
+  });
+
+  it("refuses a claim minted for a different run", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issuePrApproval(approvalStore, DEFAULT_CREATE_COMMAND, {
+      runId: "another-run",
+    });
+    const adapter = recordingPrAdapter();
+    const handler = createHandlePrExecute({
+      execution: seams({ prAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const res = await handler(ctxFor(EXECUTE, createBody({ approval })), deps());
+    expect(res.status).toBe(400);
+    expect(adapter.creates()).toBe(0);
+  });
+
+  it("denies the mint itself when no accepted run authority is active", async () => {
+    const handler = createHandlePrApprove({ execution: seams() });
+    const res = await handler(
+      ctxFor("/api/git-delivery/pr/approve", createBody()),
+      deps({ gitDeliveryAuthority: { current: () => undefined } }),
+    );
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+  });
+
+  it("logs a body-free line when the mint issues a claim", async () => {
+    const activity: ServerLogEvent[] = [];
+    const handler = createHandlePrApprove({
+      execution: seams({
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
+    });
+    await handler(
+      { ...ctxFor("/api/git-delivery/pr/approve", createBody()), correlationId: "corr-pr-mint-1" },
+      deps(),
+    );
+    const events = activity.filter((event) => event.op === "git.delivery.pr.approval.minted");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ correlationId: "corr-pr-mint-1", extra: { runId: "test-run" } });
+    expect(JSON.stringify(events[0])).not.toContain("governed pull request command center");
   });
 });
 

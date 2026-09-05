@@ -5,11 +5,12 @@
 
 import type {
   FilesystemPolicy,
+  NetworkGatewayPolicy,
   NetworkPolicy,
   SandboxAttestation,
 } from "@oscharko-dev/keiko-contracts";
 
-export type { FilesystemPolicy, NetworkPolicy, SandboxAttestation };
+export type { FilesystemPolicy, NetworkGatewayPolicy, NetworkPolicy, SandboxAttestation };
 export type { SandboxBackend } from "@oscharko-dev/keiko-contracts";
 
 // Which enforcing backends a host has available. Produced by the probe, then fed into the PURE
