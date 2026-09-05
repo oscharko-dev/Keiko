@@ -488,8 +488,9 @@ const OPENCODE_GATEWAY_OFFER_LIFETIME_MS = 30_000;
 
 /**
  * The catalog used to build the sidecar gateway's OUTGOING `toolCatalog` advertisement (the
- * function-calling schema shown to the underlying model). This composes the same seven governed
- * entries plus the two native extensions `@oscharko-dev/keiko-tool-catalog`'s
+ * function-calling schema shown to the underlying model). This composes the same fifteen governed
+ * entries (the original seven workspace/verification tools plus the eight #3386/#3387/#3388
+ * Git/CI tools) plus the two native extensions `@oscharko-dev/keiko-tool-catalog`'s
  * `opencodeRegistrationSet()` declares, unmodified: `packages/keiko-model-gateway/src/
  * toolCatalogBridge.ts`'s bridge merges a bound projection's native extensions into the
  * model-visible tool list and passes a call to one of their aliases straight through to the

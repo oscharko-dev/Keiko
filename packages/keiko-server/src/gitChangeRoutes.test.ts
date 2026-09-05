@@ -275,14 +275,21 @@ vi.mock("./coding-context/githubIssueReaderAuthorization.js", () => ({
 }));
 
 vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async () => {
-  const actual = await vi.importActual<typeof import("@oscharko-dev/keiko-tools/internal/git-mutation")>(
-    "@oscharko-dev/keiko-tools/internal/git-mutation",
-  );
+  const actual = await vi.importActual<
+    typeof import("@oscharko-dev/keiko-tools/internal/git-mutation")
+  >("@oscharko-dev/keiko-tools/internal/git-mutation");
   return {
     ...actual,
-    createNodeGitPullRequestAdapter: () => ({
-      findPullRequestsByHead: () =>
-        Promise.resolve({ ok: true as const, value: pullRequestByHeadSlot.identities }),
+    createNodeGitPullRequestAdapter: (): {
+      findPullRequestsByHead: () => Promise<{
+        readonly ok: true;
+        readonly value: PullRequestByHeadSlot["identities"];
+      }>;
+    } => ({
+      findPullRequestsByHead: (): Promise<{
+        readonly ok: true;
+        readonly value: PullRequestByHeadSlot["identities"];
+      }> => Promise.resolve({ ok: true, value: pullRequestByHeadSlot.identities }),
     }),
   };
 });
@@ -376,6 +383,104 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
     expect(relationship.type).toBe("reads-context");
     expect(relationship.source).toMatchObject({ kind: "chat", id: chat.id });
     expect(relationship.target.kind).toBe("git-change");
+  });
+});
+
+function pullRequestIdentity(
+  overrides: Partial<PullRequestByHeadSlot["identities"][number]> = {},
+): PullRequestByHeadSlot["identities"][number] {
+  return {
+    number: 42,
+    externalId: "PR_1",
+    url: "https://github.com/acme/widgets/pull/42",
+    repository: "acme/widgets",
+    headRepository: "acme/widgets",
+    headRef: "feature/x",
+    headSha: "b".repeat(40),
+    baseRef: "main",
+    baseSha: "a".repeat(40),
+    state: "open",
+    isDraft: false,
+    ...overrides,
+  };
+}
+
+// Contract correction 7 — "one existing same-repository PR" resolution. Gated by the per-checkout
+// GitHub-reader grant; an ambiguous or missing match blocks rather than silently falling back to a
+// local comparison the user did not select.
+describe("POST /api/git-change/connect — pull-request mode (contract correction 7)", () => {
+  afterEach(() => {
+    pullRequestByHeadSlot.authorized = false;
+    pullRequestByHeadSlot.identities = [];
+  });
+
+  it("blocks with reader-unauthorized when the GitHub-reader grant is missing", async () => {
+    pullRequestByHeadSlot.authorized = false;
+    const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [] });
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    const ctx = makeCtx({
+      schemaVersion: "1",
+      chatId: chat.id,
+      mode: "pull-request",
+      headRef: "feature/x",
+    });
+    const result = asRouteResult(await connectHandler(ctx, deps));
+    expect(result.body).toEqual({ status: "blocked", reason: "reader-unauthorized" });
+  });
+
+  it("blocks with no-pull-request when no open PR matches the head branch", async () => {
+    pullRequestByHeadSlot.authorized = true;
+    pullRequestByHeadSlot.identities = [];
+    const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [] });
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    const ctx = makeCtx({
+      schemaVersion: "1",
+      chatId: chat.id,
+      mode: "pull-request",
+      headRef: "feature/x",
+    });
+    const result = asRouteResult(await connectHandler(ctx, deps));
+    expect(result.body).toEqual({ status: "blocked", reason: "no-pull-request" });
+  });
+
+  it("blocks with ambiguous-pull-request when more than one open PR matches the head branch", async () => {
+    pullRequestByHeadSlot.authorized = true;
+    pullRequestByHeadSlot.identities = [
+      pullRequestIdentity({ number: 42, externalId: "PR_1" }),
+      pullRequestIdentity({ number: 43, externalId: "PR_2" }),
+    ];
+    const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [] });
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    const ctx = makeCtx({
+      schemaVersion: "1",
+      chatId: chat.id,
+      mode: "pull-request",
+      headRef: "feature/x",
+    });
+    const result = asRouteResult(await connectHandler(ctx, deps));
+    expect(result.body).toEqual({ status: "blocked", reason: "ambiguous-pull-request" });
+    expect(chatStore.findChatById(chat.id)?.gitChangeScopes ?? []).toHaveLength(0);
+  });
+
+  it("connects the exactly-one matching open PR and records its number on the scope", async () => {
+    pullRequestByHeadSlot.authorized = true;
+    pullRequestByHeadSlot.identities = [pullRequestIdentity({ number: 42 })];
+    const snapshot = fixtureSnapshot();
+    const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [snapshot] });
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    const ctx = makeCtx({
+      schemaVersion: "1",
+      chatId: chat.id,
+      mode: "pull-request",
+      headRef: "feature/x",
+    });
+    const result = asRouteResult(await connectHandler(ctx, deps));
+    const body = result.body as GitChangeScopeBody & {
+      readonly scope?: { readonly pullRequestNumber?: number; readonly comparisonLabel: string };
+    };
+    expect(body.status).toBe("connected");
+    expect(body.scope?.pullRequestNumber).toBe(42);
+    expect(body.scope?.comparisonLabel).toBe("PR #42");
   });
 });
 

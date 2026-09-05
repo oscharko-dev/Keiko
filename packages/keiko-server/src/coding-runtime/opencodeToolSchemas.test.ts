@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES } from "@oscharko-dev/keiko-tool-catalog";
 import {
   createOpenCodeGatewayToolCatalogAdvertisement,
   hasExactOpenCodeVisibleToolContract,
@@ -147,7 +146,7 @@ describe("OpenCode visible tool contract", () => {
 });
 
 describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
-  it("binds the seven catalog-representable governed tools plus its two native extensions (#3414 follow-up)", () => {
+  it("binds the fifteen catalog-representable governed tools plus its two native extensions (#3414 follow-up)", () => {
     const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0);
     expect(advertisement.kind).toBe("bound");
     expect(advertisement.projection.nativeExtensions).toEqual([
@@ -163,11 +162,19 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
         "keiko_verification",
         "keiko_workspace_discover",
         "keiko_workspace_read",
+        "keiko_git_status",
+        "keiko_git_diff",
+        "keiko_git_stage",
+        "keiko_git_commit",
+        "keiko_git_push",
+        "keiko_pull_request",
+        "keiko_git_execute",
+        "keiko_ci_status",
       ].sort(),
     );
     // Catalog toolRefs never carry a native extension (ADR-0175 D2: never a Keiko tool
-    // descriptor) -- the offered set still names only the seven catalog-representable tools.
-    expect(advertisement.offered.toolRefs).toHaveLength(7);
+    // descriptor) -- the offered set still names only the fifteen catalog-representable tools.
+    expect(advertisement.offered.toolRefs).toHaveLength(15);
     expect(advertisement.offered.binding.readiness).toBe("ready");
   });
 
@@ -175,19 +182,17 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
   // projection (plus its native extensions), or the #3386/#3387/#3388 reserved Git/CI aliases
   // that are hand-authored here pending #3414's catalog-driven generation (opencode.ts's own
   // "never registers a reserved Git/CI identity" test pins the other half of this partition).
-  it("names every model-visible tool via the catalog projection or the reserved Git/CI aliases, with no overlap", () => {
+  // #3386/#3387/#3388 registered the Git/CI tools into the same catalog registration set the
+  // original seven tools already came from, so this stays one exact-equality invariant rather
+  // than a two-source partition: every model-visible tool is either a catalog-projected tool or
+  // one of its two native extensions.
+  it("names all seventeen OpenCode 1.17.17 model-visible tools once native extensions are included", () => {
     const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0);
-    const catalogNames = new Set([
+    const modelVisibleNames = new Set([
       ...advertisement.projection.tools.map((tool) => tool.alias),
       ...advertisement.projection.nativeExtensions.map((extension) => extension.alias),
     ]);
-    const reservedNames = new Set(
-      OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES.map((entry) => entry.alias),
-    );
-    for (const name of catalogNames) expect(reservedNames.has(name)).toBe(false);
-    expect(new Set([...catalogNames, ...reservedNames])).toEqual(
-      new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES),
-    );
+    expect(modelVisibleNames).toEqual(new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES));
   });
 
   it("issues a distinct offer identity and expiry per call", () => {

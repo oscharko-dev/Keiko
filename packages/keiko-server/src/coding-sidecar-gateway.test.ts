@@ -1515,6 +1515,62 @@ describe("coding-sidecar gateway", () => {
             },
           },
           {
+            name: "keiko_git_status",
+            parameters: { required: [], properties: {}, type: "object" },
+          },
+          {
+            name: "keiko_git_diff",
+            parameters: {
+              required: ["scope", "paths"],
+              properties: { ...GIT_DIFF_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_git_stage",
+            parameters: {
+              required: ["paths"],
+              properties: { ...GIT_STAGE_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_git_commit",
+            parameters: {
+              required: ["message"],
+              properties: { ...GIT_COMMIT_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_git_push",
+            parameters: { required: [], properties: {}, type: "object" },
+          },
+          {
+            name: "keiko_pull_request",
+            parameters: {
+              required: ["title"],
+              properties: { ...GIT_PULL_REQUEST_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_git_execute",
+            parameters: {
+              required: ["kind", "proposalId"],
+              properties: { ...GIT_EXECUTE_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_ci_status",
+            parameters: {
+              required: ["forceFresh"],
+              properties: { ...GIT_CI_STATUS_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
             name: "todowrite",
             parameters: {
               required: ["todos"],

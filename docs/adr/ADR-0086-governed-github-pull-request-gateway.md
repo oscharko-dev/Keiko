@@ -238,6 +238,59 @@ very next call. Full production composition of description generation (Model Gat
 capability) remains #3398's scope; until composed, the route fails closed as unavailable rather
 than degrading to a fabricated or unvalidated description.
 
+### D11 — A dedicated `pr-mark-ready` action kind and approval operation close the approval-less draft->ready transition; no title/body/base PATCH is bundled with the mutation (#3389, epic #3384 corrections 1/2/7)
+
+The generic `pr-update` command's `convertFromDraft` flag reached the draft->ready GraphQL
+mutation (`buildPrMarkReadyGraphqlArgv`) under the run-bound authority gate alone: the mint route
+that exists for `pr-create`/`pr-update` (`POST /api/git-delivery/pr/approve`, D1/D2) binds a claim
+to the exact `GitPullRequestCommand`, but that binding carries no readiness digest, no draft-state
+invariant, and no re-verified base/head SHA — it proves "this exact title/body/base/draft-flag
+combination was approved," not "the PR was observed still a draft at these exact commits when the
+human approved marking it ready." A claim minted for an ordinary metadata edit was therefore
+indistinguishable, at the approval layer, from a claim for the ready-for-review transition. Since
+D10 already established that one action kind cannot honestly carry two different blast radii under
+one policy decision, the same reasoning applies here with a sharper edge: `pr-update` is
+`constrained` by base-branch namespace (D6); `pr-mark-ready` is a one-way, human-facing readiness
+signal to the outside world that deserves its own approval-gated decision, its own bound facts, and
+its own execution path.
+
+`GitDeliveryActionKind` gains `"pr-mark-ready"`, `GitDeliveryApprovalOperation` gains a distinct
+`"pr-mark-ready"` member (never redeemable by a claim minted for the generic `"pr"` operation, and
+vice versa — a claim's binding hash covers `operation` alongside `command`), and
+`KEIKO_DEFAULT_PR_POLICY_PACK` carries an explicit `approval-gated` rule for it (`requiredApprovers:
+[]`, the same ADR-0080 D5 shape D10 uses), mirroring D10's own note that this pack rule is
+documentation and mintability parity — the real, unconditional enforcement is the mark-ready
+execute route's own claim resolution (`prMarkReadyExecution.ts`), exactly as commit, push, PR, and
+PR-description-apply enforce ADR-0138 D2 at their own route layer rather than through the pack's
+decision. `packages/keiko-server/src/gitDelivery/prRoutes.ts` closes the approval-less path at
+request validation: a `pr-update` command with `convertFromDraft: true` is rejected unconditionally
+(`GIT_DELIVERY_PR_BAD_REQUEST`), before any approval is even consulted — the transition is
+reachable only through `POST /api/git-delivery/pr/mark-ready/{approve,execute}`. `convertToDraft`
+(ready->draft) is unaffected; it remains a legitimate `pr-update` field.
+
+The mint (`/mark-ready/approve`) performs no IO: it binds the caller-supplied `ownerAndRepo`, PR
+number, base/head SHA and a readiness digest (the CI-readiness `requirementsDigest` the caller's
+most recent read produced) into the claim, plus a server-computed `remoteDigest`
+(`codingWorkbenchRemoteDigest`, epic #3384 correction 6 — every same-repository match keys on the
+canonical remote identity, never the per-checkout `repositoryId`) and a `transitionPayloadDigest`
+scoping the claim to this exact PR's fixed transition shape. The execute route
+(`GitPullRequestMarkReadyAdapter.markPullRequestReady`, `git-pr-node.ts`) is a NEW, narrower port —
+deliberately separate from `GitPullRequestAdapter` — that never PATCHes title, body or base: it
+re-reads the live `GitPullRequestIdentity` (the same canonical read D2's `readPullRequest` already
+performs) IMMEDIATELY BEFORE the mutation and refuses with `precondition-failed` (no spawn beyond
+the read) unless the observed head/base SHA match the claim and the PR is still a draft; runs ONLY
+the existing `buildPrMarkReadyGraphqlArgv` mutation; then re-reads the identity again and reports
+`succeeded` only when the read-back confirms `isDraft === false` on the same head. A `gh` exit code
+of `0` alone never proves the transition — only the read-back does. Any mismatch at either read
+revokes the claim's effect and performs nothing further; the claim itself remains exactly one-use
+via the existing approval-store `consume()` regardless of the adapter outcome, so a claim that hits
+drift can never be retried against the same or a different PR revision.
+
+The coding runtime exposes neither merge, auto-merge scheduling, nor issue-close mutations through
+this or any other route: the mark-ready adapter's only possible spawns are the canonical PR-identity
+read and the fixed `markPullRequestReadyForReview` mutation, both pinned structurally in
+`git-pr-node.test.ts`.
+
 ## Consequences
 
 ### Positive

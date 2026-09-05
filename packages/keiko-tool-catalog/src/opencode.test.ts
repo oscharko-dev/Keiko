@@ -1,13 +1,30 @@
 import { describe, expect, it } from "vitest";
-import {
-  opencodeRegistrationSet,
-  OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
-  OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES,
-} from "./opencode.js";
+import { opencodeRegistrationSet, OPENCODE_NATIVE_EXTENSION_DEFINITIONS } from "./opencode.js";
 import { createKeikoToolCatalog } from "./composer.js";
 import { compileToolProjection, gatewayToolDefinitions } from "./projection.js";
 
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
+
+const GIT_DELIVERY_CANONICAL_IDS = [
+  "keiko.git.status",
+  "keiko.git.diff",
+  "keiko.git.stage",
+  "keiko.git.commit",
+  "keiko.git.push",
+  "keiko.git.pullrequest",
+  "keiko.git.execute",
+  "keiko.ci.status",
+];
+const GIT_DELIVERY_ALIASES = [
+  "keiko_git_status",
+  "keiko_git_diff",
+  "keiko_git_stage",
+  "keiko_git_commit",
+  "keiko_git_push",
+  "keiko_pull_request",
+  "keiko_git_execute",
+  "keiko_ci_status",
+];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -26,31 +43,71 @@ function assertManagedShape(schema: unknown): void {
 }
 
 describe("opencode registration set", () => {
-  it("declares the seven representable managed tools under their reserved canonical identities", () => {
+  it("declares the seven original representable managed tools under their reserved canonical identities", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
-    expect(projection.tools.map((tool) => tool.toolRef.canonicalId).sort()).toEqual(
-      [
-        "keiko.changeset.edit",
-        "keiko.child.run",
-        "keiko.research.fetch",
-        "keiko.skill.invoke",
-        "keiko.verification.run",
-        "keiko.workspace.discover",
-        "keiko.workspace.read",
-      ].sort(),
-    );
-    expect(projection.tools.map((tool) => tool.alias).sort()).toEqual(
-      [
-        "keiko_changeset_edit",
-        "keiko_child_agent",
-        "keiko_research_fetch",
-        "keiko_skill",
-        "keiko_verification",
-        "keiko_workspace_discover",
-        "keiko_workspace_read",
-      ].sort(),
-    );
+    const canonicalIds = projection.tools.map((tool) => tool.toolRef.canonicalId);
+    const aliases = projection.tools.map((tool) => tool.alias);
+    for (const id of [
+      "keiko.changeset.edit",
+      "keiko.child.run",
+      "keiko.research.fetch",
+      "keiko.skill.invoke",
+      "keiko.verification.run",
+      "keiko.workspace.discover",
+      "keiko.workspace.read",
+    ]) {
+      expect(canonicalIds).toContain(id);
+    }
+    for (const alias of [
+      "keiko_changeset_edit",
+      "keiko_child_agent",
+      "keiko_research_fetch",
+      "keiko_skill",
+      "keiko_verification",
+      "keiko_workspace_discover",
+      "keiko_workspace_read",
+    ]) {
+      expect(aliases).toContain(alias);
+    }
+  });
+
+  // #3386/#3387/#3388: the Git status/diff/stage/commit, push/pull-request and CI-observation
+  // tools are catalog-registered so the sidecar-gateway's outgoing "toolCatalog" advertisement
+  // (built from this same registration set) actually shows them to the real underlying model --
+  // without this, a real model could never choose to call them even though the incoming wire
+  // dispatch (opencodeToolSchemas.ts / opencodeRuntimeAdapter.ts) is ready to handle a call.
+  it("declares all eight #3386/#3387/#3388 Git/CI tools under their canonical identities", () => {
+    const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
+    const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
+    const canonicalIds = projection.tools.map((tool) => tool.toolRef.canonicalId);
+    const aliases = projection.tools.map((tool) => tool.alias);
+    for (const id of GIT_DELIVERY_CANONICAL_IDS) expect(canonicalIds).toContain(id);
+    for (const alias of GIT_DELIVERY_ALIASES) expect(aliases).toContain(alias);
+  });
+
+  it("declares exactly fifteen governed tools with unique canonical identities and aliases", () => {
+    const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
+    const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
+    expect(projection.tools).toHaveLength(15);
+    const canonicalIds = projection.tools.map((tool) => tool.toolRef.canonicalId);
+    const aliases = projection.tools.map((tool) => tool.alias);
+    expect(new Set(canonicalIds).size).toBe(15);
+    expect(new Set(aliases).size).toBe(15);
+  });
+
+  it("classifies push, pull-request and CI observation as delivery-substrate with network-egress, matching gitOperationRequirements.ts", () => {
+    const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
+    const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
+    for (const alias of ["keiko_git_push", "keiko_pull_request", "keiko_ci_status"]) {
+      const tool = projection.tools.find((entry) => entry.alias === alias);
+      if (tool === undefined) throw new Error(`Missing tool: ${alias}`);
+      expect([...tool.effects].sort()).toEqual(["delivery-substrate", "network-egress"].sort());
+    }
+    const stage = projection.tools.find((entry) => entry.alias === "keiko_git_stage");
+    expect(stage?.effects).toEqual(["workspace-write"]);
+    const status = projection.tools.find((entry) => entry.alias === "keiko_git_status");
+    expect(status?.effects).toEqual(["workspace-read"]);
   });
 
   it("never registers the repository-search identity (H1 handler not yet bound)", () => {
@@ -59,21 +116,6 @@ describe("opencode registration set", () => {
     const canonicalIds = projection.tools.map((tool) => tool.toolRef.canonicalId);
     expect(canonicalIds).not.toContain("keiko.repo.search");
     expect(projection.tools.map((tool) => tool.alias)).not.toContain("keiko_repository_search");
-  });
-
-  // #3386/#3387/#3388: the Git/CI tool surface is reserved (OPENCODE_RESERVED_GIT_DELIVERY_
-  // IDENTITIES) but not yet catalog-registered, mirroring the repository-search precedent above --
-  // its schemas and wire dispatch are hand-authored in keiko-server's opencodeToolSchemas.ts /
-  // opencodeRuntimeAdapter.ts pending #3414's catalog-driven generation.
-  it("never registers a reserved Git/CI identity (hand-authored pending #3414)", () => {
-    const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
-    const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
-    const canonicalIds = projection.tools.map((tool) => tool.toolRef.canonicalId);
-    const aliases = projection.tools.map((tool) => tool.alias);
-    for (const reserved of OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES) {
-      expect(canonicalIds).not.toContain(reserved.canonicalId);
-      expect(aliases).not.toContain(reserved.alias);
-    }
   });
 
   it("declares question and todowrite as native extensions, never as tool descriptors", () => {
@@ -98,8 +140,8 @@ describe("opencode registration set", () => {
   it("is the source coding-sidecar-gateway.ts derives its outgoing gateway advertisement from", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const definitions = gatewayToolDefinitions(catalog, OPENCODE_PROFILE);
-    expect(definitions).toHaveLength(7);
-    expect(new Set(definitions.map((tool) => tool.name)).size).toBe(7);
+    expect(definitions).toHaveLength(15);
+    expect(new Set(definitions.map((tool) => tool.name)).size).toBe(15);
     for (const tool of definitions) expect(tool.description.length).toBeGreaterThan(0);
   });
 
@@ -131,22 +173,6 @@ describe("OPENCODE_NATIVE_EXTENSION_DEFINITIONS", () => {
       expect(entry.contractVersion).toBe(1);
       expect(entry.description.length).toBeGreaterThan(0);
       expect(entry.inputSchema.type).toBe("object");
-    }
-  });
-});
-
-describe("OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES", () => {
-  it("declares eight unique keiko.<area>.<verb> identities with unique keiko_* aliases", () => {
-    expect(OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES).toHaveLength(8);
-    const canonicalIds = OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES.map(
-      (entry) => entry.canonicalId,
-    );
-    const aliases = OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES.map((entry) => entry.alias);
-    expect(new Set(canonicalIds).size).toBe(canonicalIds.length);
-    expect(new Set(aliases).size).toBe(aliases.length);
-    for (const entry of OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES) {
-      expect(entry.canonicalId).toMatch(/^keiko\.[a-z]+\.[a-z-]+$/u);
-      expect(entry.alias).toMatch(/^keiko_[a-z_]+$/u);
     }
   });
 });

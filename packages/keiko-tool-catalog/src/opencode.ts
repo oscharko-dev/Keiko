@@ -1,13 +1,15 @@
-// #3414: the "opencode" registration set. ADR-0175 D2 reserves the seven managed-OpenCode
-// canonical identities below plus the two exhaustively-declared native extensions (`question`,
-// `todowrite` -- adapter-native, never Keiko tool descriptors, per D2's explicit "not Keiko tools
-// or compatibility exceptions"). packages/keiko-server/src/coding-sidecar-gateway.ts uses this set
-// to build the `toolCatalog` advertisement it forwards to the real model provider (the schema shown
-// to the underlying LLM as a function-calling interface -- advisory only; the provider performs no
-// server-side schema enforcement of its own).
+// #3414 (extended by #3386/#3387/#3388): the "opencode" registration set. ADR-0175 D2 reserves the
+// fifteen managed-OpenCode canonical identities below (the original seven workspace/verification
+// tools plus the eight Git status/diff/stage/commit, push/pull-request and CI-observation tools)
+// plus the two exhaustively-declared native extensions (`question`, `todowrite` -- adapter-native,
+// never Keiko tool descriptors, per D2's explicit "not Keiko tools or compatibility exceptions").
+// packages/keiko-server/src/coding-sidecar-gateway.ts uses this set to build the `toolCatalog`
+// advertisement it forwards to the real model provider (the schema shown to the underlying LLM as
+// a function-calling interface -- advisory only; the provider performs no server-side schema
+// enforcement of its own).
 //
 // `OPENCODE_NATIVE_EXTENSION_DEFINITIONS` below is the single source for the two native
-// extensions' exact pinned wire schemas. Unlike the seven managed tools, a native extension is
+// extensions' exact pinned wire schemas. Unlike the fifteen managed tools, a native extension is
 // never compiled through the catalog dialect (no descriptor, no `pattern`-keyword gap: these are
 // plain literal JSON Schema objects, carried verbatim). packages/keiko-server/src/coding-runtime/
 // opencodeToolSchemas.ts imports them back to build `OPENCODE_MODEL_VISIBLE_TOOLS`, and
@@ -35,6 +37,7 @@
 // source for OPENCODE_TOOL_SOURCE_DEFINITIONS too (see the #3414 report).
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import type {
   CatalogEffect,
   CatalogIdempotency,
@@ -172,7 +175,8 @@ interface OpenCodeToolSpec {
   readonly alias: string;
   readonly description: string;
   readonly inputSchema: CatalogJsonObject;
-  readonly effect: CatalogEffect;
+  /** One or more `CodingWorkbenchActionClass` effects (ties to gitOperationRequirements.ts's own classification for the same operation -- never a second formula). */
+  readonly effects: readonly CatalogEffect[];
   readonly idempotency: CatalogIdempotency;
   readonly handlerId: string;
 }
@@ -185,9 +189,9 @@ function entryFor(spec: OpenCodeToolSpec): CatalogSetEntry {
       description: spec.description,
       inputSchema: spec.inputSchema,
       resultSchema: { type: "string", maxLength: TOOL_CATALOG_LIMITS.maxStringBytes },
-      effects: [spec.effect],
-      actionMapping: [{ action: spec.alias, effects: [spec.effect] }],
-      policyReferences: [spec.effect],
+      effects: spec.effects,
+      actionMapping: [{ action: spec.alias, effects: spec.effects }],
+      policyReferences: spec.effects,
       handlerRequirement: { id: spec.handlerId, contractVersion: 1 },
       bounds: {
         maxArgumentBytes: TOOL_CATALOG_LIMITS.maxArgumentBytes,
@@ -213,7 +217,7 @@ function discoverSpec(): OpenCodeToolSpec {
       },
       ["query", "maxResults"],
     ),
-    effect: "workspace-read",
+    effects: ["workspace-read"],
     idempotency: "read-only",
     handlerId: "opencode-workspace-discover-port",
   };
@@ -232,7 +236,7 @@ function readSpec(): OpenCodeToolSpec {
       },
       ["relativePath", "startLine", "maxLines"],
     ),
-    effect: "workspace-read",
+    effects: ["workspace-read"],
     idempotency: "read-only",
     handlerId: "opencode-workspace-read-port",
   };
@@ -274,7 +278,7 @@ function changesetEditSpec(): OpenCodeToolSpec {
     alias: "keiko_changeset_edit",
     description: "Apply one validated unified-diff changeset to the workspace.",
     inputSchema: managedObjectSchema({ changeset }, ["changeset"]),
-    effect: "workspace-write",
+    effects: ["workspace-write"],
     idempotency: "server-key-required",
     handlerId: "opencode-changeset-edit-port",
   };
@@ -294,7 +298,7 @@ function verificationSpec(): OpenCodeToolSpec {
       },
       ["verifierId"],
     ),
-    effect: "verification",
+    effects: ["verification"],
     idempotency: "server-key-required",
     handlerId: "opencode-verification-port",
   };
@@ -308,7 +312,7 @@ function researchFetchSpec(): OpenCodeToolSpec {
     inputSchema: managedObjectSchema({ target: { type: "string", minLength: 9, maxLength: 512 } }, [
       "target",
     ]),
-    effect: "network-egress",
+    effects: ["network-egress"],
     idempotency: "server-key-required",
     handlerId: "opencode-research-fetch-port",
   };
@@ -320,7 +324,7 @@ function skillSpec(): OpenCodeToolSpec {
     alias: "keiko_skill",
     description: "Invoke one approved, read-only skill by its pinned identifier.",
     inputSchema: managedObjectSchema({ skillId: { type: "string", maxLength: 80 } }, ["skillId"]),
-    effect: "connector-access",
+    effects: ["connector-access"],
     idempotency: "server-key-required",
     handlerId: "opencode-skill-port",
   };
@@ -338,21 +342,161 @@ function childRunSpec(): OpenCodeToolSpec {
       },
       ["objective", "maxToolCalls"],
     ),
-    effect: "workspace-read",
+    effects: ["workspace-read"],
     idempotency: "read-only",
     handlerId: "opencode-child-agent-port",
   };
 }
 
+// #3386/#3387/#3388: the Git status/diff/stage/commit, push/pull-request and CI-observation
+// specs. Effects mirror packages/keiko-server/src/coding-runtime/gitOperationRequirements.ts's own
+// per-operation classification exactly (the live authority-envelope classification this catalog
+// must never disagree with) -- status/diff read-only, stage a local write, commit/push/pull-request
+// delivery-substrate (push/pull-request additionally network-egress), CI observation a
+// delivery-substrate network read. None of these five schemas can express the format-level regexes
+// (proposalId prefix, control-character-free title) the real OpenCode wire schemas pin in
+// packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts -- the same documented
+// `pattern`-keyword gap this file's header comment already covers for `keiko.changeset.edit`; those
+// checks stay owned by the real handler, never this advisory, model-facing schema.
+function gitStatusSpec(): OpenCodeToolSpec {
+  return {
+    canonicalId: "keiko.git.status",
+    alias: "keiko_git_status",
+    description: "Read the workspace's current Git status.",
+    inputSchema: managedObjectSchema({}, []),
+    effects: ["workspace-read"],
+    idempotency: "read-only",
+    handlerId: "opencode-git-status-port",
+  };
+}
+
+function gitDiffSpec(): OpenCodeToolSpec {
+  return {
+    canonicalId: "keiko.git.diff",
+    alias: "keiko_git_diff",
+    description: "Read one bounded Git diff (working-tree or staged) for given paths.",
+    inputSchema: managedObjectSchema(
+      {
+        scope: { type: "string", enum: ["working-tree", "index"] },
+        paths: {
+          type: "array",
+          minItems: 1,
+          maxItems: CODING_RUNTIME_GIT_MAX_PATHS,
+          items: { type: "string", minLength: 1, maxLength: 512 },
+        },
+      },
+      ["scope", "paths"],
+    ),
+    effects: ["workspace-read"],
+    idempotency: "read-only",
+    handlerId: "opencode-git-diff-port",
+  };
+}
+
+function gitStageSpec(): OpenCodeToolSpec {
+  return {
+    canonicalId: "keiko.git.stage",
+    alias: "keiko_git_stage",
+    description: "Propose staging one or more workspace-relative paths.",
+    inputSchema: managedObjectSchema(
+      {
+        paths: {
+          type: "array",
+          minItems: 1,
+          maxItems: CODING_RUNTIME_GIT_MAX_PATHS,
+          items: { type: "string", minLength: 1, maxLength: 512 },
+        },
+      },
+      ["paths"],
+    ),
+    effects: ["workspace-write"],
+    idempotency: "server-key-required",
+    handlerId: "opencode-git-stage-port",
+  };
+}
+
+function gitCommitSpec(): OpenCodeToolSpec {
+  return {
+    canonicalId: "keiko.git.commit",
+    alias: "keiko_git_commit",
+    description: "Propose a commit message over the currently staged changes.",
+    inputSchema: managedObjectSchema(
+      { message: { type: "string", minLength: 1, maxLength: 8_192 } },
+      ["message"],
+    ),
+    effects: ["delivery-substrate"],
+    idempotency: "server-key-required",
+    handlerId: "opencode-git-commit-port",
+  };
+}
+
+function gitPushSpec(): OpenCodeToolSpec {
+  return {
+    canonicalId: "keiko.git.push",
+    alias: "keiko_git_push",
+    description: "Propose pushing the last verified commit by its exact SHA.",
+    inputSchema: managedObjectSchema({}, []),
+    effects: ["delivery-substrate", "network-egress"],
+    idempotency: "server-key-required",
+    handlerId: "opencode-git-push-port",
+  };
+}
+
+function gitPullRequestSpec(): OpenCodeToolSpec {
+  return {
+    canonicalId: "keiko.git.pullrequest",
+    alias: "keiko_pull_request",
+    description: "Propose opening a draft pull request with the given title.",
+    inputSchema: managedObjectSchema(
+      { title: { type: "string", minLength: 1, maxLength: 256 } },
+      ["title"],
+    ),
+    effects: ["delivery-substrate", "network-egress"],
+    idempotency: "server-key-required",
+    handlerId: "opencode-git-pull-request-port",
+  };
+}
+
+function gitExecuteSpec(): OpenCodeToolSpec {
+  return {
+    canonicalId: "keiko.git.execute",
+    alias: "keiko_git_execute",
+    description: "Redeem one approved stage, commit, push or pull-request proposal.",
+    inputSchema: managedObjectSchema(
+      {
+        kind: { type: "string", enum: ["stage", "commit", "push", "pull-request"] },
+        proposalId: { type: "string", minLength: 1, maxLength: 64 },
+      },
+      ["kind", "proposalId"],
+    ),
+    effects: ["delivery-substrate"],
+    idempotency: "server-key-required",
+    handlerId: "opencode-git-execute-port",
+  };
+}
+
+function ciStatusSpec(): OpenCodeToolSpec {
+  return {
+    canonicalId: "keiko.ci.status",
+    alias: "keiko_ci_status",
+    description: "Observe the accepted run's CI readiness.",
+    inputSchema: managedObjectSchema({ forceFresh: { type: "boolean" } }, ["forceFresh"]),
+    effects: ["delivery-substrate", "network-egress"],
+    idempotency: "server-key-required",
+    handlerId: "opencode-ci-status-port",
+  };
+}
+
 /**
- * The canonical "opencode" registration set (ADR-0175 D2). Declares the seven managed-OpenCode
+ * The canonical "opencode" registration set (ADR-0175 D2). Declares the fifteen managed-OpenCode
  * governed tools plus the two exhaustively-declared native extensions (`nativeExtensions` is
  * derived from `OPENCODE_NATIVE_EXTENSION_DEFINITIONS` above, the same single source consumers use
  * for their pinned wire schemas). `keiko_repository_search` (H1, #3386) is not yet a member --
  * H1's handler is not implemented; see the #3414 report. `keiko.changeset.edit`'s descriptor is a
  * structurally-equivalent, strictly LOOSER projection of the real wire schema (all fields
  * required, nested `additionalProperties` stripped-as-true) -- see `changesetEditSpec` above for
- * exactly why and why that is safe for its one consumer.
+ * exactly why and why that is safe for its one consumer; the eight #3386/#3387/#3388 Git/CI specs
+ * above have the same relationship to their own hand-authored real wire schemas.
  *
  * `packages/keiko-model-gateway/src/toolCatalogBridge.ts`'s bridge merges these native extensions
  * into a bound advertisement's model-visible tool list and passes a call to one of their aliases
@@ -360,35 +504,6 @@ function childRunSpec(): OpenCodeToolSpec {
  * native extensions on its advertisement composes its own catalog from these same entries with
  * `nativeExtensions: []`.
  */
-export interface OpenCodeReservedIdentity {
-  readonly canonicalId: string;
-  readonly alias: string;
-}
-
-/**
- * Reserved canonical identities for the #3386/#3387/#3388 Git status/diff/stage/commit,
- * push/pull-request and CI-observation tool surface (ADR-0175 D2's `keiko.<area>.<verb>` naming
- * convention). These are declarations, not catalog registrations: unlike the seven entries
- * `opencodeRegistrationSet()` returns, none of them has a compiled descriptor, an effect/bounds
- * declaration or a projection through this package yet. The real, currently-authoritative schemas
- * and wire dispatch for these eight tools are hand-authored in packages/keiko-server/src/
- * coding-runtime/opencodeToolSchemas.ts and opencodeRuntimeAdapter.ts -- the same precedent this
- * file's header comment already documents for every one of the seven registered tools (duplicated
- * there rather than sourced from this catalog, pending #3414's catalog-driven generation).
- * Reserving the identities here ahead of that work keeps a future migration from picking a
- * colliding canonical id; `opencodeToolSchemas.test.ts` asserts every alias below is model-visible.
- */
-export const OPENCODE_RESERVED_GIT_DELIVERY_IDENTITIES: readonly OpenCodeReservedIdentity[] = [
-  { canonicalId: "keiko.git.status", alias: "keiko_git_status" },
-  { canonicalId: "keiko.git.diff", alias: "keiko_git_diff" },
-  { canonicalId: "keiko.git.stage", alias: "keiko_git_stage" },
-  { canonicalId: "keiko.git.commit", alias: "keiko_git_commit" },
-  { canonicalId: "keiko.git.push", alias: "keiko_git_push" },
-  { canonicalId: "keiko.git.pull-request", alias: "keiko_pull_request" },
-  { canonicalId: "keiko.git.execute", alias: "keiko_git_execute" },
-  { canonicalId: "keiko.ci.status", alias: "keiko_ci_status" },
-];
-
 export function opencodeRegistrationSet(): CatalogRegistrationSet {
   return {
     profile: OPENCODE_PROFILE,
@@ -407,6 +522,14 @@ export function opencodeRegistrationSet(): CatalogRegistrationSet {
       researchFetchSpec(),
       skillSpec(),
       childRunSpec(),
+      gitStatusSpec(),
+      gitDiffSpec(),
+      gitStageSpec(),
+      gitCommitSpec(),
+      gitPushSpec(),
+      gitPullRequestSpec(),
+      gitExecuteSpec(),
+      ciStatusSpec(),
     ].map(entryFor),
   };
 }

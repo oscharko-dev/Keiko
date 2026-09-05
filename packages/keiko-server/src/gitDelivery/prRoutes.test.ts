@@ -1228,6 +1228,85 @@ describe("pr mark-ready routes (#3389)", () => {
     expect(res.status).toBe(400);
   });
 
+  it("logs body-free git.delivery.pr-mark-ready.approval.minted and .required lines with correlation", async () => {
+    const activity: ServerLogEvent[] = [];
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const activityLog = { write: (event: ServerLogEvent): void => void activity.push(event) };
+    await createHandlePrMarkReadyApprove({ approvalStore, activityLog })(
+      { ...ctxFor(MARK_READY_APPROVE, markReadyBody()), correlationId: "corr-mark-ready-mint" },
+      deps(),
+    );
+    const minted = activity.filter(
+      (event) => event.op === "git.delivery.pr-mark-ready.approval.minted",
+    );
+    expect(minted).toHaveLength(1);
+    expect(minted[0]).toMatchObject({ correlationId: "corr-mark-ready-mint" });
+    expect(JSON.stringify(minted[0])).not.toContain("Keiko");
+
+    await createHandlePrMarkReadyExecute({ approvalStore, activityLog })(
+      { ...ctxFor(MARK_READY_EXECUTE, markReadyBody()), correlationId: "corr-mark-ready-noclaim" },
+      deps(),
+    );
+    const required = activity.filter(
+      (event) => event.op === "git.delivery.pr-mark-ready.approval.required",
+    );
+    expect(required).toHaveLength(1);
+    expect(required[0]).toMatchObject({ correlationId: "corr-mark-ready-noclaim" });
+  });
+
+  it("logs a body-free git.delivery.pr-mark-ready.executed line on success and .drift on precondition failure", async () => {
+    const activity: ServerLogEvent[] = [];
+    const activityLog = { write: (event: ServerLogEvent): void => void activity.push(event) };
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const succeeded = await mintMarkReadyApproval(approvalStore);
+    const adapter = recordingMarkReadyAdapter({
+      schemaVersion: "1",
+      outcome: "succeeded",
+      durationMs: 4,
+    });
+    await createHandlePrMarkReadyExecute({
+      approvalStore,
+      activityLog,
+      adapterFactory: () => adapter.adapter,
+    })(
+      {
+        ...ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval: succeeded })),
+        correlationId: "corr-mark-ready-exec",
+      },
+      deps(),
+    );
+    const executed = activity.filter(
+      (event) => event.op === "git.delivery.pr-mark-ready.executed",
+    );
+    expect(executed).toHaveLength(1);
+    expect(executed[0]).toMatchObject({
+      correlationId: "corr-mark-ready-exec",
+      extra: { outcome: "succeeded" },
+    });
+
+    const drifted = await mintMarkReadyApproval(approvalStore);
+    const driftAdapter = recordingMarkReadyAdapter({
+      schemaVersion: "1",
+      outcome: "failed",
+      durationMs: 2,
+      errorCode: "precondition-failed",
+    });
+    await createHandlePrMarkReadyExecute({
+      approvalStore,
+      activityLog,
+      adapterFactory: () => driftAdapter.adapter,
+    })(
+      {
+        ...ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval: drifted })),
+        correlationId: "corr-mark-ready-drift",
+      },
+      deps(),
+    );
+    const drift = activity.filter((event) => event.op === "git.delivery.pr-mark-ready.drift");
+    expect(drift).toHaveLength(1);
+    expect(drift[0]).toMatchObject({ correlationId: "corr-mark-ready-drift" });
+  });
+
   // AC4 (epic #3384): the coding runtime exposes neither merge nor auto-merge scheduling nor
   // issue-close mutations. The full PR route group (create/update/preview/mark-ready) carries no
   // such endpoint — this is a structural pin on the route table itself, independent of any single
