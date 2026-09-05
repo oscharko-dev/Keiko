@@ -67,6 +67,17 @@ function keys(value: object, allowed: readonly string[]): boolean {
   const actual = Object.keys(value);
   return actual.length === allowed.length && actual.every((key) => allowed.includes(key));
 }
+function beginRefusal(
+  scope: Scope,
+  input: CiRepairBegin,
+): Extract<CiRepairBudgetBlockReason, "invalid-input" | "invalid-binding"> | undefined {
+  if (!validBegin(input)) return "invalid-input";
+  const draft = scope.snapshot.draftDelivery;
+  const observedBase = scope.snapshot.ciReadiness?.baseSha ?? draft?.binding.baseSha;
+  if (input.headSha !== draft?.binding.headSha || input.baseSha !== observedBase)
+    return "invalid-binding";
+  return undefined;
+}
 function validBegin(value: CiRepairBegin): boolean {
   return (
     keys(value, [
@@ -256,11 +267,8 @@ class SqliteCiRepairBudgetStore implements CodingRuntimeCiRepairBudgetStore {
     });
   }
   private beginScope(scope: Scope, input: CiRepairBegin): CiRepairBudgetResult {
-    if (!validBegin(input)) return blocked("invalid-input", scope.current);
-    const draft = scope.snapshot.draftDelivery;
-    const observedBase = scope.snapshot.ciReadiness?.baseSha ?? draft?.binding.baseSha;
-    if (input.headSha !== draft?.binding.headSha || input.baseSha !== observedBase)
-      return blocked("invalid-binding", scope.current);
+    const refusal = beginRefusal(scope, input);
+    if (refusal !== undefined) return blocked(refusal, scope.current);
     const prior = scope.current?.attempts.find((attempt) => attempt.attemptId === input.attemptId);
     if (prior !== undefined) return this.replayedBegin(scope, input, prior);
     if (!expected(scope.current, input.expectedRevision))

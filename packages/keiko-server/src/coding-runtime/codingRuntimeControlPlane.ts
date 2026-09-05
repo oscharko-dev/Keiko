@@ -1,4 +1,7 @@
-import type { CodingWorkbenchRuntimeEvent, CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchRuntimeEvent,
+  CodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts";
 
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
 import type { GitDeliveryRunAuthorityPort } from "../gitDelivery/runBoundAuthority.js";

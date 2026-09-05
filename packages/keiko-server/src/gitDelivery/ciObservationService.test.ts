@@ -10,10 +10,7 @@ import { createCodingRuntimeCiReadinessStore } from "../coding-runtime/codingRun
 import { redactLogFields } from "../observability/log-redaction.js";
 import { DraftDeliveryFixture } from "./draftDeliveryServiceTestSupport.js";
 import { CiObservationController, type CiObservationOptions } from "./ciObservationService.js";
-import {
-  failureFacts,
-  CHECK,
-} from "../../../keiko-tools/src/git-ci-failure-context-test-support.js";
+import { CHECK, failureFacts } from "./ciObservationTest/_providerFacts.js";
 import type { GitCiFailureContextResult } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 
 let fixture: DraftDeliveryFixture;

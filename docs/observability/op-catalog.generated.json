@@ -6,7 +6,7 @@
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-analyze.ts:533",
+      "site": "packages/keiko-cli/src/support-analyze.ts:552",
       "package": "keiko-cli"
     },
     {
@@ -486,7 +486,7 @@
     {
       "op": "chat.request.dispatch",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:710",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:723",
       "package": "keiko-model-gateway"
     },
     {
@@ -724,6 +724,24 @@
       "package": "keiko-model-gateway"
     },
     {
+      "op": "gateway.tool-catalog.call-bound",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:132",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.tool-catalog.projected",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:207",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.tool-catalog.rejected",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:113",
+      "package": "keiko-model-gateway"
+    },
+    {
       "op": "http.gateway.egress.planned",
       "category": "http",
       "site": "packages/keiko-model-gateway/src/http.ts:1350",
@@ -913,7 +931,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:52",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:56",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -1269,6 +1287,13 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-app-session.channel.subscribe",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-app-session/sessionStreamWriter.ts:87",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-context.github-authorization.changed",
       "category": "security",
       "site": "packages/keiko-server/src/coding-context/githubAuthorizationRoutes.ts:178",
@@ -1422,7 +1447,7 @@
     {
       "op": "coding-runtime.run.issue-context-attached",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1047",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1048",
       "package": "keiko-server"
     },
     {
@@ -1482,7 +1507,7 @@
     {
       "op": "coding-runtime.task-dispatch",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:542",
+      "site": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:546",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -1494,9 +1519,15 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-runtime.tool-result",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolGovernedDelegate.ts:99",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-runtime.verification",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:497",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:540",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -1775,25 +1806,31 @@
     {
       "op": "git.ci-observation",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/ciObservationService.ts:148",
+      "site": "packages/keiko-server/src/gitDelivery/ciObservationService.ts:201",
       "package": "keiko-server"
     },
     {
       "op": "git.ci-observation",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/ciObservationService.ts:166",
+      "site": "packages/keiko-server/src/gitDelivery/ciObservationService.ts:219",
       "package": "keiko-server"
     },
     {
       "op": "git.ci-repair.budget",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeCiRepairBudgetStore.ts:187",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeCiRepairBudgetStore.ts:198",
       "package": "keiko-server"
     },
     {
       "op": "git.ci-repair.budget",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeCiRepairBudgetStore.ts:427",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeCiRepairBudgetStore.ts:436",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.ci-repair.budget",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/productionCiRepairRuntime.ts:126",
       "package": "keiko-server"
     },
     {
@@ -1893,13 +1930,13 @@
     {
       "op": "git.draft-push.preparation",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:228",
+      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:248",
       "package": "keiko-server"
     },
     {
       "op": "git.draft-target.resolved",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:338",
+      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:358",
       "package": "keiko-server"
     },
     {
@@ -1912,6 +1949,36 @@
       "op": "git.draft-template",
       "category": "process",
       "site": "packages/keiko-server/src/gitDelivery/draftDeliveryTemplate.ts:229",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.journey-observation",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/journeyObservationService.ts:165",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.journey-observation",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/journeyObservationService.ts:182",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.pr-description",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionProjection.ts:50",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.pr-description.receipt",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionReceiptStore.ts:182",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.pr-description.receipt",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionReceiptStore.ts:238",
       "package": "keiko-server"
     },
     {
@@ -1971,7 +2038,19 @@
     {
       "op": "git.verified-commit",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:532",
+      "site": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:590",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.verified-commit.authority",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeSnapshotStore.ts:460",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.verified-commit.authority",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeVerifiedCommitAuthorityStore.ts:34",
       "package": "keiko-server"
     },
     {
@@ -2722,6 +2801,7 @@
     "coding-runtime.stream-drain",
     "coding-runtime.task-dispatch",
     "coding-runtime.tool-bridge",
+    "coding-runtime.tool-result",
     "coding-runtime.verification",
     "coding-runtime.workspace-discovery",
     "coding-workbench.issue.preview",
@@ -2817,6 +2897,9 @@
     "gateway.stream.failed",
     "gateway.stream.started",
     "gateway.tool-calling.verification",
+    "gateway.tool-catalog.call-bound",
+    "gateway.tool-catalog.projected",
+    "gateway.tool-catalog.rejected",
     "git.ci-observation",
     "git.ci-repair.budget",
     "git.commit.execute.conflict-scan",
@@ -2835,6 +2918,9 @@
     "git.draft-push.preparation",
     "git.draft-target.resolved",
     "git.draft-template",
+    "git.journey-observation",
+    "git.pr-description",
+    "git.pr-description.receipt",
     "git.process.failed",
     "git.process.refused",
     "git.runtime-action",
@@ -2845,6 +2931,7 @@
     "git.snapshot.read",
     "git.snapshot.recheck",
     "git.verified-commit",
+    "git.verified-commit.authority",
     "gitDelivery.mutationEvidence.persist",
     "gitDelivery.syncEvidence.persist",
     "grounded.entailment",

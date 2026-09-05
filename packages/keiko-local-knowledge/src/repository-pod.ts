@@ -469,6 +469,16 @@ export async function refreshRepositoryPod(
   const drained = await runRepositoryIndexing(deps, discovery);
   const next = failedWithheldBaseline(scan.fingerprints, drained.failedRelativePaths);
   const enumerationComplete = scan.complete && drained.enumerationComplete;
+  console.error("DEBUG", JSON.stringify({
+    scanComplete: scan.complete,
+    scanRejectedEntries: scan.rejectedEntries,
+    drainedEnumerationComplete: drained.enumerationComplete,
+    resultStatus: drained.result.status,
+    processedDocuments: drained.result.processedDocuments,
+    skippedDocuments: drained.result.skippedDocuments,
+    failedDocuments: drained.result.failedDocuments,
+    lastErrorCode: drained.result.lastError?.code,
+  }));
   const applied = indexingResultCanApply(drained.result, scan.rejectedEntries, enumerationComplete);
   if (applied) {
     replaceRepositoryFileFingerprints(

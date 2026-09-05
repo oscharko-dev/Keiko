@@ -7,6 +7,9 @@ export type PrDescriptionReceiptRead =
   | { readonly ok: false; readonly reason: "storage-unavailable" | "receipt-conflict" };
 export interface PrDescriptionReceiptStore {
   readStatus(context: PrDescriptionContext): PrDescriptionReceiptRead;
-  recordStatus(context: PrDescriptionContext, status: PrDescriptionApplicationStatus,
-    expectedVersion: string | null): PrDescriptionReceiptRead;
+  recordStatus(
+    context: PrDescriptionContext,
+    status: PrDescriptionApplicationStatus,
+    expectedVersion: string | null,
+  ): PrDescriptionReceiptRead;
 }

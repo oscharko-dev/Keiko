@@ -115,7 +115,7 @@ describe("transient exact-head CI diagnostic context", () => {
     expect(serialized).not.toContain(secret);
     expect(serialized).not.toContain("[31m");
     expect(serialized).not.toContain("\u202e");
-    expect(serialized).not.toContain("�");
+    expect(serialized).not.toContain("\uFFFD");
     expect(result).toMatchObject({
       context: { completeness: { complete: false, failure: { reason: "output-truncated" } } },
     });

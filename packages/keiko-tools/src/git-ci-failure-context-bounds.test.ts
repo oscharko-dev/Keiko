@@ -193,7 +193,7 @@ describe("CI diagnostic pagination and content bounds", () => {
     if (result.status !== "observed") throw new Error("Missing context");
     expect(result.context.entries.length).toBeLessThanOrEqual(32);
     expect(Buffer.byteLength(JSON.stringify(result.context))).toBeLessThanOrEqual(16_384);
-    expect(JSON.stringify(result)).not.toContain("�");
+    expect(JSON.stringify(result)).not.toContain("\uFFFD");
   });
   it("returns a bounded empty context for a failed check without supplied diagnostics", async () => {
     const facts = failureFacts([{ ...CHECK, annotationCount: 0 }]);

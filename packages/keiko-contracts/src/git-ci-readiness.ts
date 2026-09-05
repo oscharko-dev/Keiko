@@ -206,7 +206,10 @@ function readyContext(value: Record<string, unknown>): boolean {
 }
 function versions(value: Record<string, unknown>): boolean {
   return (
-    keys(value, value.failureSignatureDigest === undefined ? KEYS : [...KEYS, "failureSignatureDigest"]) &&
+    keys(
+      value,
+      value.failureSignatureDigest === undefined ? KEYS : [...KEYS, "failureSignatureDigest"],
+    ) &&
     (value.failureSignatureDigest === undefined || pattern(value.failureSignatureDigest, DIGEST)) &&
     value.schemaVersion === "1" &&
     value.requirementsVersion === "1" &&

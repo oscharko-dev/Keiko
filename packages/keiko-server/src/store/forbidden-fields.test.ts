@@ -139,6 +139,12 @@ const ALLOWED_CODING_RUNTIME_SNAPSHOT_COLUMNS = new Set([
   // V26: independent read-observation CAS and closed exact-head readiness, separate from accounting.
   "ci_observation_revision",
   "ci_readiness_record",
+  // V26: the retained body-free VerifiedCommitResult (same shape as `verified_commit_result`,
+  // packages/keiko-contracts/src/verified-commit.ts) for the last successful commit, kept so a
+  // later failed/blocked proposal or recovery outcome never overwrites the run's durable HEAD
+  // provenance (codingRuntimeVerifiedCommitAuthorityStore.ts). IDs, digests, shas, a status/reason
+  // enum and a timestamp — no commit message, diff, or path.
+  "last_successful_verified_commit",
 ]);
 
 // V11 (issue #2521) persisted workspace-trust records. Content-free by construction: an opaque

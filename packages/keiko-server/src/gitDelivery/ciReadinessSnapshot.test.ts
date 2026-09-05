@@ -6,10 +6,7 @@ import { ciReadinessIsCurrent, produceCiReadinessSnapshot } from "./ciReadinessS
 import { AT, DIGEST, createDraftRun, readySnapshot } from "./ciObservationTest/_support.js";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 
-import {
-  failureFacts,
-  CHECK,
-} from "../../../keiko-tools/src/git-ci-failure-context-test-support.js";
+import { CHECK, failureFacts } from "./ciObservationTest/_providerFacts.js";
 
 const databases: DatabaseSync[] = [];
 afterEach(() => {
