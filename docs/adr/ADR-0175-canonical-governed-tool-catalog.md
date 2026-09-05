@@ -146,6 +146,11 @@ and a valid approval channel can complete the existing approval protocol; listin
 All three ADR-0138 modes preserve monotonic authority and mode-independent hard denials.
 Dry-run, unsupported and unavailable backends are readiness states, never productive availability.
 
+A descriptor redeeming multiple operation kinds declares the union of their possible effects.
+In particular, `keiko_git_execute` declares workspace-write, delivery-substrate and network-egress;
+its selected stage/commit/push/PR handler still performs the exact per-kind authority check.
+An incomplete shared effect floor cannot substitute for that conservative advertisement.
+
 Before every dispatch, validate the exact offer/tool/version/projection and untrusted arguments,
 then recheck current authority, root/revision, readiness, cancellation/deadline, budget and
 idempotency. No model/browser/adapter field may override composition-owned fields. A revoked or

@@ -47,7 +47,7 @@ async function captureMode(
   await applyCodingWorkbenchEvidenceMode(input.page, frame, mode);
   await input.page.locator(input.surface).scrollIntoViewIfNeeded();
   await settleAnimations(input.page, frame);
-  const violations = await runAxe(input.page, frame);
+  const violations = await runAxe(input.page, input.surface);
   expect(seriousOrCritical(violations), formatViolations(violations)).toEqual([]);
   const overflow = await input.page
     .locator(input.surface)

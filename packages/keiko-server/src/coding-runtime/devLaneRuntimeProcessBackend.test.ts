@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -392,14 +392,13 @@ describe("dev-lane runtime process backend", () => {
 // Both destinations are real, listening loopback servers on ephemeral ports -- never the internet.
 // It self-skips with a loud, recorded closed reason (never a silent green) off macOS or without
 // sandbox-exec on PATH.
-// The shebang names the absolute node binary rather than "/usr/bin/env node": the launch request's
-// env carries only the fixed keys the production caller sets (never a bare PATH), so a PATH-based
-// lookup inside the sandboxed child would fail closed for the wrong reason.
+// Use the real interpreter installation as the read-only runtime payload. A script shebang
+// would require a second executable and be denied before the network probe; copying Homebrew
+// Node alone also loses its relative shared-library dependencies. The workspace stays temporary.
 function connectProbeScript(): string {
   return [
-    `#!${process.execPath}`,
     "const net = require('net');",
-    "const port = parseInt(process.argv[2], 10);",
+    "const port = parseInt(process.argv[1], 10);",
     "const s = net.connect({ host: '127.0.0.1', port });",
     "s.setTimeout(3000);",
     "s.on('connect', () => { process.stdout.write('CONNECTED'); s.destroy(); process.exit(0); });",
@@ -411,9 +410,8 @@ function connectProbeScript(): string {
 
 function stageProbeFixture(): Fixture {
   const fixture = stageFixture();
-  writeFileSync(fixture.executable, connectProbeScript());
-  chmodSync(fixture.executable, 0o755);
-  return fixture;
+  const executable = realpathSync(process.execPath);
+  return { ...fixture, executable, runtimeRoot: dirname(executable) };
 }
 
 async function listenEphemeral(): Promise<{ server: Server; port: number }> {
@@ -470,14 +468,14 @@ describe("real OS-level gateway confinement through the production backend (#295
         const deniedTree = backend.spawnOwnedTree({
           ...launchRequest(fixture),
           runId: "run-2951-os",
-          args: [String(hostile.port)],
+          args: ["-e", connectProbeScript(), String(hostile.port)],
         });
         expect(["BLOCKED", "TIMEOUT"]).toContain(await collectStdout(deniedTree));
 
         const allowedTree = backend.spawnOwnedTree({
           ...launchRequest(fixture),
           runId: "run-2951-os",
-          args: [String(gateway.port)],
+          args: ["-e", connectProbeScript(), String(gateway.port)],
         });
         expect(await collectStdout(allowedTree)).toBe("CONNECTED");
       } finally {

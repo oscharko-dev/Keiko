@@ -33,6 +33,10 @@ export default defineConfig({
   reporter: process.env.CI ? [["github"], ["line"]] : "line",
   use: {
     baseURL: `http://127.0.0.1:${String(publicPort)}`,
+    // The shared browser axe runner injects the checked-in axe-core bundle after navigation.
+    // Bypass CSP inside this isolated Playwright context only; the production response retains
+    // and exercises its actual CSP in every ordinary browser context.
+    bypassCSP: true,
     trace: "off",
     video: "off",
     screenshot: "off",

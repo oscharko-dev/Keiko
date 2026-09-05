@@ -21,6 +21,23 @@ import {
   type ProductionRuntimeBackendResolver,
 } from "./productionCodingRuntimeResolver.js";
 
+const ciRepairNotifierCapture = vi.hoisted(() => ({
+  current: undefined as ((runId: string) => void) | undefined,
+}));
+
+vi.mock("./productionCiRepairRuntime.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./productionCiRepairRuntime.js")>();
+  return {
+    ...original,
+    createProductionCiRepairBudget: (
+      ...args: Parameters<typeof original.createProductionCiRepairBudget>
+    ): ReturnType<typeof original.createProductionCiRepairBudget> => {
+      ciRepairNotifierCapture.current = args[3];
+      return original.createProductionCiRepairBudget(...args);
+    },
+  };
+});
+
 const roots: string[] = [];
 
 afterEach(() => {
@@ -184,6 +201,30 @@ describe("production coding runtime resolver", () => {
       nowIso,
     } as never);
     expect(host.gitDeliveryDescriptionAuthority?.current(unknownModeScope, nowIso)).toBeUndefined();
+  });
+
+  it("routes the resolver's CI-repair settlement callback through the latest attached notifier", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const first = vi.fn();
+    const latest = vi.fn();
+    host.attachVerifiedHeadNotifier?.(first);
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+    host.launchResolver.resolve(request);
+    host.attachVerifiedHeadNotifier?.(latest);
+
+    ciRepairNotifierCapture.current?.("run-1");
+
+    expect(first).not.toHaveBeenCalled();
+    expect(latest).toHaveBeenCalledExactlyOnceWith("run-1");
   });
 
   it("is unavailable without a trusted confirmation consumer and causes no backend side effects", () => {

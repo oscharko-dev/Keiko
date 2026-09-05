@@ -18,6 +18,7 @@ import {
 
 const CHAT_VISUAL_SOURCES = [
   "tests/e2e/git-change-chat-3400.spec.ts",
+  "tests/e2e/config/playwright.git-change-chat-3400.config.ts",
   "tests/e2e/support/git-change-chat-3400.ts",
   "tests/e2e/support/pr-description-visual-evidence.ts",
   "packages/keiko-ui/src/app/components/desktop/GitChangeScopePill.tsx",
@@ -28,6 +29,7 @@ const CHAT_VISUAL_SOURCES = [
 
 const PR_CARD_VISUAL_SOURCES = [
   "tests/e2e/git-change-chat-3400.spec.ts",
+  "tests/e2e/config/playwright.git-change-chat-3400.config.ts",
   "tests/e2e/support/git-change-chat-3400.ts",
   "tests/e2e/support/pr-description-visual-evidence.ts",
   "packages/keiko-ui/src/app/components/desktop/widgets/cards/GovernedPullRequestCard.tsx",
@@ -219,9 +221,14 @@ test("qualifies the governed PR Description panel through preview, approval and 
   await page.goto("/");
 
   const gitWindow = page.locator('[data-window-id="issue-3400-git-window"]');
-  await gitWindow.getByRole("button", { name: "Create pull request" }).click();
+  const createPullRequest = gitWindow.getByRole("button", { name: "Create pull request" });
+  await createPullRequest.focus();
+  await createPullRequest.press("Enter");
   const description = gitWindow.getByTestId("gpr-description");
   await expect(description).toBeVisible();
+  await description
+    .getByLabel("Description repository (owner/repo)")
+    .fill("keiko-e2e/git-change-chat-3400");
   await description.getByLabel("Description pull request number").fill("42");
   await description.getByTestId("gpr-description-preview-button").click();
   await expect(description.getByTestId("gpr-description-preview")).toHaveText(lifecycle.finalBody, {

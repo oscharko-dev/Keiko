@@ -34,6 +34,10 @@ export interface DeliveryProviderState {
     readonly privateView: boolean;
     readonly pinnedCredentialHost: boolean;
   };
+  readonly lastLocalGitFailure?: {
+    readonly command: string;
+    readonly exitCode: number;
+  };
 }
 
 // Exported so a lane-specific shim layered on top of this transport (e.g. the #3389 handoff shim,
@@ -155,6 +159,13 @@ function gitInvocation(input: Invocation, args: readonly string[]): void {
   )
     deny(input.stateDir);
   const result = spawnSync(input.realGit, [...args], { stdio: "inherit", timeout: 30_000 });
+  if (result.status !== 0) {
+    const state = readState(input.stateDir);
+    writeState(input.stateDir, {
+      ...state,
+      lastLocalGitFailure: { command, exitCode: result.status ?? 74 },
+    });
+  }
   process.exit(result.status ?? 74);
 }
 
