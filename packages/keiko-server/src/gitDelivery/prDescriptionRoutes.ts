@@ -499,7 +499,9 @@ export function resolvePrDescriptionApplicationServiceForRequest(
     key,
   );
   const service = serviceFor(options, deps, seams, workspace, key, contextProvider);
-  return service === undefined ? { ok: false, result: unavailableService() } : { ok: true, service };
+  return service === undefined
+    ? { ok: false, result: unavailableService() }
+    : { ok: true, service };
 }
 
 async function prepare<V extends BaseFields>(

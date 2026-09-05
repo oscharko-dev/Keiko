@@ -869,10 +869,13 @@ const executeGovernedPullRequestSpy = vi.hoisted(() => vi.fn());
 // (and everything else this module exports) passes through via `importActual`, never a
 // hand-rolled `{}` stand-in that would throw inside `assertPolicyPackMintable`.
 vi.mock("./gitDelivery/prExecution.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./gitDelivery/prExecution.js")>(
-      "./gitDelivery/prExecution.js",
-    );
+  const actual = await vi.importActual<typeof import("./gitDelivery/prExecution.js")>(
+    "./gitDelivery/prExecution.js",
+  );
+  // Delegates to the REAL implementation by default -- the older tests below never reach it at
+  // all (a fully fake service), while F5's real end-to-end tests need the real body-only PATCH to
+  // actually execute; both keep full call-observability through the same spy.
+  executeGovernedPullRequestSpy.mockImplementation(actual.executeGovernedPullRequest);
   return { ...actual, executeGovernedPullRequest: executeGovernedPullRequestSpy };
 });
 
@@ -939,7 +942,12 @@ describe("createHandleGitChangeApplyDescription — the real handler Chat reache
     return {
       config: undefined,
       configPresent: false,
-      evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
       env: {},
       redactor: buildRedactor({}),
       registry: createRunRegistry(),
@@ -949,9 +957,14 @@ describe("createHandleGitChangeApplyDescription — the real handler Chat reache
         () => projectId,
         () => fixture.root,
         "autonomous-delivery",
-        { headRef: "feature", baseRef: "main", allowDetachedHead: false, allowedPrefixes: ["feature"] },
+        {
+          headRef: "feature",
+          baseRef: "main",
+          allowDetachedHead: false,
+          allowedPrefixes: ["feature"],
+        },
       ),
-    } as unknown as UiHandlerDeps;
+    };
   }
 
   function fixtureOptions(): PrDescriptionRouteOptions {
@@ -1029,7 +1042,8 @@ describe("createHandleGitChangeApplyDescription — the real handler Chat reache
     );
     expect(replay.status).toBe(409);
     expect(fixture.writes).toHaveLength(1);
-    expect(executeGovernedPullRequestSpy).not.toHaveBeenCalled();
+    // The one real effect was already counted above; the replay reaches no second execution.
+    expect(executeGovernedPullRequestSpy).toHaveBeenCalledTimes(1);
   });
 
   it("blocks with 404 when the relationship names no connected git-change scope", async () => {
@@ -1055,7 +1069,10 @@ describe("createHandleGitChangeApplyDescription — the real handler Chat reache
     const deps = fixtureDeps();
     const chat = store.createChat(projectId, "t", "m");
     const relationshipId = "rel-no-pr";
-    const scope: ChatGitChangeScope = { ...connectedScope(relationshipId), pullRequestNumber: undefined };
+    const scope: ChatGitChangeScope = {
+      ...connectedScope(relationshipId),
+      pullRequestNumber: undefined,
+    };
     store.updateChat(chat.id, { gitChangeScopes: [scope] });
 
     const applyHandler = createHandleGitChangeApplyDescription(fixtureOptions());
@@ -1073,25 +1090,50 @@ describe("createHandleGitChangeApplyDescription — the real handler Chat reache
     expect(result.body).toMatchObject({ error: { code: "GIT_CHANGE_APPLY_UNAVAILABLE" } });
   });
 
-  // Epic negative qualification: this handler's own module never imports the commit/push/PR-create/
-  // merge/close execution paths at all (only #3399's own body-only apply service), so a Chat apply —
-  // even a well-formed one carrying a held, approved proposal — can reach ONLY that one effect.
-  it("never reaches executeGovernedPullRequest (commit/push/PR-create/merge/close) through this path", async () => {
+  // Epic negative qualification: #3399's own body-only apply effect (prDescriptionEffects.ts's
+  // `applyDescription`) reuses `executeGovernedPullRequest` as its underlying git-mutation
+  // primitive -- the SAME shared function every governed PR route uses -- so "never reached" is
+  // the wrong invariant to pin (a prior version of this test asserted exactly that against a fully
+  // FAKE injected service that could never call anything, which is why it never caught this: it
+  // passed identically whether the real path was wired or not, proving nothing about production).
+  // The invariant this item's write scope can actually enforce is the CONSTRAINED shape reaching
+  // that call: `kind: "pr-update"` only (never "merge"/"commit"/"push"/"pr-create"/"pr-mark-ready"),
+  // an empty `title` (no rename), and the identical base/head the connected scope already carries
+  // (no re-target) -- so even though Chat's apply shares the primitive, it can never drive it into
+  // a branch/commit/push/PR-create/merge/close effect.
+  it("constrains the underlying git-mutation call to a body-only pr-update -- never merge/commit/push/PR-create/close", async () => {
     const deps = fixtureDeps();
     const chat = store.createChat(projectId, "t", "m");
     const relationshipId = "rel-negative";
-    store.updateChat(chat.id, { gitChangeScopes: [connectedScope(relationshipId)] });
+    const scope = connectedScope(relationshipId);
+    store.updateChat(chat.id, { gitChangeScopes: [scope] });
     const proposalId = await heldProposalId(deps);
 
     const applyHandler = createHandleGitChangeApplyDescription(fixtureOptions());
-    await applyHandler(
+    const result = await applyHandler(
       requestContext({ schemaVersion: "1", chatId: chat.id, relationshipId, proposalId }),
       deps,
     );
+    expect(result.status).toBe(200);
 
-    expect(executeGovernedPullRequestSpy).not.toHaveBeenCalled();
-    // The captured write is body-only: no title, base, or merge/close-shaped field ever reaches it.
-    expect(Object.keys(fixture.writes[0] ?? {})).toEqual(["body"]);
+    expect(executeGovernedPullRequestSpy).toHaveBeenCalledTimes(1);
+    const [request] = executeGovernedPullRequestSpy.mock.calls[0] as [Record<string, unknown>];
+    expect(request).toMatchObject({
+      kind: "pr-update",
+      title: "",
+      baseBranchName: scope.baseRef,
+      headBranchName: scope.headRef,
+      convertToDraft: false,
+      convertFromDraft: false,
+    });
+    // The captured remote write carries the PR identity plus body only -- no title, base, or
+    // merge/close-shaped field ever reaches the adapter.
+    const write = fixture.writes[0] as Record<string, unknown> | undefined;
+    expect(write).toBeDefined();
+    expect(write).toHaveProperty("body");
+    for (const forbidden of ["title", "base", "baseBranchName", "mergeMethod", "closeIssue"]) {
+      expect(write).not.toHaveProperty(forbidden);
+    }
   });
 
   // A request smuggling an operation-shaped field (mirrors prDescriptionRoutes.ts's own

@@ -592,8 +592,7 @@ export interface UiHandlerDeps {
   // the git-change connect route (gitChangeRoutes.ts) cannot mint a Chat-turn authority, so every
   // subsequent turn on that connected scope denies closed exactly like a missing read port.
   readonly mintDescriptionAuthority?:
-    | ((scope: GitDeliveryDescriptionAuthorityScope, nowIso: string) => void)
-    | undefined;
+    ((scope: GitDeliveryDescriptionAuthorityScope, nowIso: string) => void) | undefined;
   readonly openCodeGatewayReadinessRegistry?:
     | {
         readonly claim: (runId: string) => boolean;

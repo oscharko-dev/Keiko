@@ -590,7 +590,9 @@ describe("connect mints a description authority a Chat turn admits (final-audit 
     const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [snapshot] });
     const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
 
-    const connected = asRouteResult(await connectHandler(makeCtx(connectRequestBody(chat.id)), deps));
+    const connected = asRouteResult(
+      await connectHandler(makeCtx(connectRequestBody(chat.id)), deps),
+    );
     expect((connected.body as GitChangeScopeBody).status).toBe("connected");
 
     const connectedChat = requireDefined(chatStore.findChatById(chat.id), "connected chat");
