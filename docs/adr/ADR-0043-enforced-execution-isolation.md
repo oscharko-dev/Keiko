@@ -186,12 +186,14 @@ service-escape surface a long-lived interactive sidecar would otherwise have. `p
 allowed because a live run against the pinned OpenCode sidecar (#3390) showed it forks `git` for
 its own session/history endpoints (`POST /sync/history`, `GET /session`), and a fork denial made
 both fail with HTTP 500. Fork does not grant an arbitrary child executable: `process-exec` is
-deny-by-default and allows only the already verified runtime executable plus Apple's fixed
-`/usr/bin/git` launcher and standard Command Line Tools/Xcode Git implementations. A shell, curl,
-compiler, second Node binary, or any other executable is refused by Seatbelt. Descendants inherit
-that executable policy and the same `(deny network*)` with its one gateway-port carve-out. The real
-Darwin suite proves both the Apple Git spawn and an unapproved executable denial, and separately
-proves network denial remains inherited by an allowed same-runtime descendant.
+deny-by-default and allows only the already verified runtime executable plus exactly one Git
+executable, attested per-launch rather than trusted by conventional path (see D16 below — an
+earlier revision of this record allowlisted the conventional Apple/CommandLineTools/Xcode paths
+unconditionally, which a local user can replace). A shell, curl, compiler, second Node binary, or
+any other executable is refused by Seatbelt. Descendants inherit that executable policy and the
+same `(deny network*)` with its one gateway-port carve-out. The real Darwin suite proves both the
+attested Git spawn and an unapproved executable denial, and separately proves network denial
+remains inherited by an allowed same-runtime descendant.
 `packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts` is the sole caller: it
 refuses to spawn the sidecar at all when no
 confinement policy is attached, or when the policy's `runId`/`treeBindingId` drift from the launch
@@ -317,3 +319,59 @@ SAME `bridge.requestDeadlineMs` the admission gate exposes for exactly this purp
 reason `deadline`) if the body has not finished arriving in time — without destroying `ctx.req`,
 since request and response share one connection and destroying it would prevent that very 408 from
 being sent.
+
+
+## Addendum — the Git executable admitted into the process-exec allowlist is attested, not path-trusted (2026-09-05)
+
+### D16 — Do not allowlist conventional Xcode/CommandLineTools paths unconditionally
+
+Review on PR #3394 (T47) identified that D11's original `process-exec` allowlist admitted every
+conventional Apple Git path unconditionally — `/usr/bin/git`,
+`/Library/Developer/CommandLineTools/usr/bin/git`, and
+`/Applications/Xcode.app/Contents/Developer/usr/bin/git` — by a fixed, hardcoded list
+(`APPLE_GIT_EXECUTABLES` in `backends.ts`). None of those paths is an immutable system binary: a
+local user (the same actor D11's whole boundary exists to contain once inside the sandbox) can
+replace the file at any of them, and the sidecar would then execute that substitute with its
+inherited process context and the D11 gateway egress carve-out still attached. Hardcoding the
+paths meant the allowlist trusted *location* instead of *identity*.
+
+The fix, `packages/keiko-sandbox/src/darwin-git.ts`, resolves and attests the ONE Git executable
+the profile admits, at every launch, instead of trusting any fixed path:
+
+- `resolveDarwinGitExecutable` shells out to `/usr/bin/xcrun --find git` — Apple's own protected
+  resolution launcher, itself attested before it is invoked — rather than guessing among
+  conventional install locations. This lets Xcode/CommandLineTools selection (`xcode-select`)
+  determine which Git the host actually uses, without the caller choosing a path from an
+  attacker-influenced `PATH`.
+- `attestDarwinGitExecutable` then independently qualifies the resolved path before it is allowed
+  anywhere near a Seatbelt profile: the candidate must be an absolute, `\0`-free path whose
+  `realpathSync` resolution is itself (no symlink indirection), a regular file with exactly one
+  hard link, owned by `uid 0`, not group- or other-writable: and every directory from its parent up
+  to the filesystem root must be a non-symlink directory, owned by `uid 0`, and not group- or
+  other-writable either. Any failure — including any thrown `fs` error, e.g. the path not existing
+  — is caught and converted into the single closed outcome, `throw new Error(
+  "runtime-gateway-git-untrusted")`; there is no partial-trust fallback. A qualifying executable's
+  SHA-256 digest is computed and returned alongside its path (`AttestedDarwinGitExecutable`).
+- `buildGatewaySeatbeltCommand` (`backends.ts`) and `buildRuntimeGatewaySeatbeltCommand`
+  (`runtime-gateway.ts`) no longer carry any hardcoded Git path at all: both now take the attested
+  `childExecutable` as a required parameter and admit exactly `{command, childExecutable}` into the
+  `process-exec` allowlist — nothing else, ever. `devLaneRuntimeProcessBackend.ts` calls
+  `resolveDarwinGitExecutable()` once per launch (test seam:
+  `DevLaneRuntimeProcessBackendOptions.resolveGitExecutable`), passes its `path` into
+  `planIsolatedRun`'s new `gatewayChildExecutable` field, pins the resolved executable's directory
+  as the child's `PATH` (so the sidecar cannot shadow-resolve a different `git` off an inherited
+  `PATH`), and records the attested digest — never the literal path or file content — in the
+  existing `runtime.confinement.spawned` activity line's `extra.childExecutableDigest`
+  (`childExecutablePolicy: "runtime-and-attested-git-only"`). Attestation failure surfaces through
+  the same existing `spawnOwnedTree` try/catch as every other confined-launch failure: a body-free
+  `runtime.confinement.failed` line (`errorKind`, Keiko stack frames, cause chain, the run's
+  correlation id) records the refusal, and the launch fails closed with no process ever spawned.
+
+This narrows D11's process-exec allowlist without widening it: the allowed set is still exactly
+`{runtime executable, one Git executable}`, but the Git member is now qualified by ownership and
+content identity rather than assumed from its location. D13 still holds — this is not a relaxation
+of any D1–D10 denial, only a tightening of what D11 already restricted. The regression pin in
+`backends.test.ts` (`buildGatewaySeatbeltCommand child process policy`) now asserts the profile
+never contains the literal Apple paths or `Xcode.app`/`CommandLineTools` substrings, alongside
+`darwin-git.test.ts`'s coverage of the user-writable-directory rejection and (on a real Darwin
+host) `resolveDarwinGitExecutable`'s successful resolution through `xcrun`.

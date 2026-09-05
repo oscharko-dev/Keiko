@@ -144,6 +144,22 @@ function gitCommandIndex(args: readonly string[]): number {
   return -1;
 }
 
+const ALLOWED_REMOTE_SUBCOMMANDS = new Set(["", "add", "get-url", "set-url"]);
+
+// `remote` only inspects or sets local metadata; helper transport never fetches it implicitly.
+function isDeniedRemoteInvocation(
+  command: string,
+  args: readonly string[],
+  index: number,
+): boolean {
+  return command === "remote" && !ALLOWED_REMOTE_SUBCOMMANDS.has(args[index + 1] ?? "");
+}
+
+function recordLocalGitFailure(stateDir: string, command: string, status: number | null): void {
+  const state = readState(stateDir);
+  writeState(stateDir, { ...state, lastLocalGitFailure: { command, exitCode: status ?? 74 } });
+}
+
 function gitInvocation(input: Invocation, args: readonly string[]): void {
   const index = gitCommandIndex(args);
   const command = args.includes("--version") ? "version" : (args[index] ?? "");
@@ -151,21 +167,11 @@ function gitInvocation(input: Invocation, args: readonly string[]): void {
     push(input, args, index);
     return;
   }
-  if (!LOCAL_GIT.has(command)) deny(input.stateDir);
-  // `remote` only inspects or sets local metadata; helper transport never fetches it implicitly.
-  if (
-    command === "remote" &&
-    !new Set(["", "add", "get-url", "set-url"]).has(args[index + 1] ?? "")
-  )
+  if (!LOCAL_GIT.has(command) || isDeniedRemoteInvocation(command, args, index)) {
     deny(input.stateDir);
-  const result = spawnSync(input.realGit, [...args], { stdio: "inherit", timeout: 30_000 });
-  if (result.status !== 0) {
-    const state = readState(input.stateDir);
-    writeState(input.stateDir, {
-      ...state,
-      lastLocalGitFailure: { command, exitCode: result.status ?? 74 },
-    });
   }
+  const result = spawnSync(input.realGit, [...args], { stdio: "inherit", timeout: 30_000 });
+  if (result.status !== 0) recordLocalGitFailure(input.stateDir, command, result.status);
   process.exit(result.status ?? 74);
 }
 

@@ -53,7 +53,7 @@ export interface VerifiedTaskWorkspaceBindFailure {
   readonly stage: VerifiedTaskWorkspaceBindStage;
   // The server's structured task-workspace error code, when the failure carried one.
   readonly code?: string;
-  readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure | undefined;
+  readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure;
   readonly reason?: VerifiedTaskWorkspaceBindFailureReason;
   readonly failureClass?: WorkspaceFailureClass;
   readonly repair?: VerifiedTaskWorkspaceRepairOffer;
@@ -63,7 +63,7 @@ export type VerifiedTaskWorkspaceBindResult =
   { readonly ok: true } | VerifiedTaskWorkspaceBindFailure;
 
 export type VerifiedTaskWorkspaceBindInput = TaskWorkspaceProvisionInput & {
-  readonly onProvisioned?: (() => void) | undefined;
+  readonly onProvisioned?: () => void;
 };
 
 // Same bounded console idiom as GEN-STAB-WINDOW-002: the caller-visible result stays the
@@ -259,7 +259,7 @@ export interface VerifiedTaskWorkspaceRepairInput {
   readonly workspaceId: string;
   readonly strategy: WorkspaceRecoveryStrategy;
   readonly requestedBy: string;
-  readonly onRepaired?: (() => void) | undefined;
+  readonly onRepaired?: () => void;
 }
 
 /**

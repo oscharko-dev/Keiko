@@ -55,14 +55,14 @@ producer's types, digests and stale/failure vocabulary rather than recomputing t
 
 ## Cross-epic work included by the owner
 
-| Dependency                                    | Why required                                                            | Delivery constraint                                                                                                                                                   |
-| --------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| #3411                                         | Canonical governed-tool architecture and raw search-coordinate contract | Freeze ownership and checked contracts before H1                                                                                                                      |
-| #3386 H1                                      | Real bounded repository-search/read handler                             | Verified internal producer checkpoint after #3411, within PR #3394                                                                                                    |
-| #3414 and its canonical-catalog prerequisites | Model-visible search and generated OpenCode tool projection             | Consume H1's verified source identity in the same PR; no duplicate projection or absent backend                                                                       |
-| #2951                                         | Attested sidecar containment                                            | Enforce gateway-only egress through existing sandbox owners and prove hostile-socket negatives                                                                        |
-| #2952, coding-runtime portion                 | Measured startup/readiness/streaming/output budgets                     | Extend existing measurement framework; derive budgets from reference samples                                                                                          |
-| #2198, release-signing children | Excluded by the owner's 2026-09-05 scope clarification | Keep separate release-signing qualification open; make no signed/notarized artifact claim for this epic |
+| Dependency                                    | Why required                                                            | Delivery constraint                                                                                     |
+| --------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| #3411                                         | Canonical governed-tool architecture and raw search-coordinate contract | Freeze ownership and checked contracts before H1                                                        |
+| #3386 H1                                      | Real bounded repository-search/read handler                             | Verified internal producer checkpoint after #3411, within PR #3394                                      |
+| #3414 and its canonical-catalog prerequisites | Model-visible search and generated OpenCode tool projection             | Consume H1's verified source identity in the same PR; no duplicate projection or absent backend         |
+| #2951                                         | Attested sidecar containment                                            | Enforce gateway-only egress through existing sandbox owners and prove hostile-socket negatives          |
+| #2952, coding-runtime portion                 | Measured startup/readiness/streaming/output budgets                     | Extend existing measurement framework; derive budgets from reference samples                            |
+| #2198, release-signing children               | Excluded by the owner's 2026-09-05 scope clarification                  | Keep separate release-signing qualification open; make no signed/notarized artifact claim for this epic |
 
 These issues were open at audit time. Their open state alone does not prove absent implementation;
 each needs the same code-to-acceptance audit before edits. Unrelated functionality in those epics

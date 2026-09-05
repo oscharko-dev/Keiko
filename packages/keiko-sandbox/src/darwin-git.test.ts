@@ -12,9 +12,7 @@ describe("Darwin Git executable attestation", () => {
     chmodSync(executable, 0o755);
     chmodSync(root, 0o777);
     try {
-      expect(() => attestDarwinGitExecutable(executable)).toThrow(
-        "runtime-gateway-git-untrusted",
-      );
+      expect(() => attestDarwinGitExecutable(executable)).toThrow("runtime-gateway-git-untrusted");
     } finally {
       chmodSync(root, 0o700);
       rmSync(root, { recursive: true, force: true });

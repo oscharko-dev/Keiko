@@ -28,8 +28,8 @@ import { isWorkspaceFailureClass } from "@oscharko-dev/keiko-contracts/runtime/t
 // policy-denied / terminal) instead of matching raw codes; it is `undefined` when the error did not
 // originate from the structured task-workspace taxonomy.
 export type TaskWorkspaceApiError = ApiError & {
-  readonly failureClass?: WorkspaceFailureClass | undefined;
-  readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure | undefined;
+  readonly failureClass?: WorkspaceFailureClass;
+  readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure;
 };
 
 // The active view the BFF returns: the durable instance, the DERIVED binding, and the pointer

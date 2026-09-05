@@ -50,20 +50,19 @@ export interface CodingWorkbenchRuntimeApiError {
    * server-side diagnostic record — a rejected start must never be a dead button (F-09a).
    */
   readonly correlationId?: string;
-  readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure | undefined;
+  readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure;
 }
 
 export function codingWorkbenchRuntimeApiError(error: unknown): CodingWorkbenchRuntimeApiError {
   if (error instanceof ApiError) {
+    const issueBindingFailure = runtimeIssueFailure(error);
     return {
       code: error.code,
       message: error.message,
       retryable:
         error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 500,
       ...(error.correlationId === undefined ? {} : { correlationId: error.correlationId }),
-      ...(runtimeIssueFailure(error) === undefined
-        ? {}
-        : { issueBindingFailure: runtimeIssueFailure(error) }),
+      ...(issueBindingFailure === undefined ? {} : { issueBindingFailure }),
     };
   }
   return {

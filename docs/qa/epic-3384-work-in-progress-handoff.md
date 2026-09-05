@@ -45,19 +45,19 @@ configuration availability does not constitute a live qualification receipt.
 
 These are actual checkpoint results, not claims about the complete final tree:
 
-| Checkpoint / scope | Result |
-| --- | --- |
-| Package coverage at `9b617173` | 39,711 passed; 3 failed; 49 skipped. Two inventory failures and the real-OS test fixture failure were subsequently repaired in focused runs. |
-| Package coverage floors at `9b617173` | All four package metric gates, strict UI/CLI release targets, and 68 per-file floors passed. |
-| Updated coverage inventory | 66 tests passed; enforced package/per-file thresholds preserved or raised. |
-| UI coverage at `a9869962` | 444 files, 7,992 tests passed; 1 skipped. Lines 92.92%, branches 82.59%. |
-| Script coverage at `a9869962` | 196 files, 5,042 tests passed; 26 skipped. |
-| Full lint / architecture / negative architecture / format at `9b617173` | Passed. |
-| Local Sonar at `ca664db2` | Passed; rerun required for later changes. |
-| Latest catalog closeout and busy-delivery targeted run | 8 files, 263 tests passed. Active migration closeout gate passed; postmerge H1 identities remain unset. |
-| Question/migration targeted suites | 196 tests passed; additional production question/route coverage 84 passed. |
-| Latest root focused lint | Two remaining errors: an unnecessary narrowed readiness condition and a void-expression arrow in the migration test. |
-| Combined final typecheck/build | Not qualified. An intermediate complete typecheck passed during catalog migration; newer sandbox/module and review edits need a fresh run. |
+| Checkpoint / scope                                                      | Result                                                                                                                                       |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Package coverage at `9b617173`                                          | 39,711 passed; 3 failed; 49 skipped. Two inventory failures and the real-OS test fixture failure were subsequently repaired in focused runs. |
+| Package coverage floors at `9b617173`                                   | All four package metric gates, strict UI/CLI release targets, and 68 per-file floors passed.                                                 |
+| Updated coverage inventory                                              | 66 tests passed; enforced package/per-file thresholds preserved or raised.                                                                   |
+| UI coverage at `a9869962`                                               | 444 files, 7,992 tests passed; 1 skipped. Lines 92.92%, branches 82.59%.                                                                     |
+| Script coverage at `a9869962`                                           | 196 files, 5,042 tests passed; 26 skipped.                                                                                                   |
+| Full lint / architecture / negative architecture / format at `9b617173` | Passed.                                                                                                                                      |
+| Local Sonar at `ca664db2`                                               | Passed; rerun required for later changes.                                                                                                    |
+| Latest catalog closeout and busy-delivery targeted run                  | 8 files, 263 tests passed. Active migration closeout gate passed; postmerge H1 identities remain unset.                                      |
+| Question/migration targeted suites                                      | 196 tests passed; additional production question/route coverage 84 passed.                                                                   |
+| Latest root focused lint                                                | Two remaining errors: an unnecessary narrowed readiness condition and a void-expression arrow in the migration test.                         |
+| Combined final typecheck/build                                          | Not qualified. An intermediate complete typecheck passed during catalog migration; newer sandbox/module and review edits need a fresh run.   |
 
 ## Work to resume
 

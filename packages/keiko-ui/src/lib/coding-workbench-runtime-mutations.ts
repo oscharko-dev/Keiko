@@ -24,15 +24,14 @@ import type { CodingWorkbenchRuntimeState } from "./coding-workbench-live-state"
 
 export interface CodingWorkbenchMutationCommand {
   readonly requestId: string;
-  readonly expected?: { readonly runId: string; readonly revision: number } | undefined;
+  readonly expected?: { readonly runId: string; readonly revision: number };
   readonly mayInstallNewRun: boolean;
   readonly run: () => Promise<CodingWorkbenchRuntimeSnapshot>;
 }
 
 type RuntimeModelSelection = {
-  readonly modelId?: string | undefined;
-  readonly reasoningEffort?:
-    NonNullable<CodingWorkbenchRuntimeState["reasoningEffort"]> | undefined;
+  readonly modelId?: string;
+  readonly reasoningEffort?: NonNullable<CodingWorkbenchRuntimeState["reasoningEffort"]>;
 };
 
 function managedGatewayModelSelection(current: CodingWorkbenchRuntimeState): RuntimeModelSelection {

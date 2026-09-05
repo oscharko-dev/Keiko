@@ -166,14 +166,14 @@ export interface UseCodingWorkbenchEditorBridgeInput {
    * Optional so existing callers with no such transitional state default to `false` — the same
    * "already resolved" assumption `root` carried before this hook started locking it to the run.
    */
-  readonly bindingPending?: boolean | undefined;
+  readonly bindingPending?: boolean;
   /**
    * The root the run was submitted against, captured by the caller when Start was issued
    * (`useCodingWorkbenchRunWorkspace`), and forwarded to the lock's own `submittedRoot`: without
    * it, a Start whose response lands after the operator moved the workspace pointer locks this
    * session onto the WRONG workspace, and the run's real root gets no session at all (#3381).
    */
-  readonly submittedRoot?: string | null | undefined;
+  readonly submittedRoot?: string | null;
 }
 
 export interface UseCodingWorkbenchEditorBridgeResult {

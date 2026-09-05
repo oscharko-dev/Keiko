@@ -69,29 +69,37 @@ function readDeliveryLog(stateDir: string): readonly Record<string, unknown>[] {
   return lines;
 }
 
+// #3401 review finding (T42): a fixture the journey depends on for a mocked gateway turn (or its
+// production counterpart) missing from this list lets `journey-proof.json` attest reviewed
+// sources while the unlisted file drifts underneath it. `coding-issue-delivery-evidence.test.ts`
+// derives the journey's own fixture graph from its actual entry point
+// (coding-issue-delivery-server.mts) and pins that every sibling `tests/e2e/servers/` module it
+// reaches is present here — extend this list, never silently narrow it.
+export const DELIVERY_SOURCE_PATHS: readonly string[] = [
+  "tests/e2e/coding-issue-delivery.spec.ts",
+  "tests/e2e/servers/coding-issue-delivery-fixture.mts",
+  "tests/e2e/servers/coding-issue-delivery-transport.mts",
+  "tests/e2e/servers/coding-issue-delivery-server.mts",
+  "tests/e2e/servers/coding-issue-description-model.mts",
+  "tests/e2e/servers/coding-issue-commit-fixture.mts",
+  "tests/e2e/servers/coding-issue-ci-driver.mts",
+  "tests/e2e/servers/coding-runtime-server-shared.mts",
+  "packages/keiko-server/src/deps.ts",
+  "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts",
+  "packages/keiko-server/src/coding-runtime/codingRuntimeDescriptionJobStore.ts",
+  "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
+  "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts",
+  "packages/keiko-server/src/coding-runtime/productionVerifiedCommitDependencies.ts",
+  "packages/keiko-server/src/gitDelivery/draftDeliveryService.ts",
+  "packages/keiko-server/src/gitDelivery/prDescriptionGeneration.ts",
+  "packages/keiko-server/src/gitDelivery/prDescriptionPreparation.ts",
+  "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts",
+  "packages/keiko-server/src/gitDelivery/prDescriptionService.ts",
+  "packages/keiko-model-gateway/src/prDescription/render.ts",
+  "packages/keiko-tools/src/git-publish-node.ts",
+  "packages/keiko-tools/src/git-pr-node.ts",
+];
+
 function deliverySourceHashes(): Readonly<Record<string, string>> {
-  const paths = [
-    "tests/e2e/coding-issue-delivery.spec.ts",
-    "tests/e2e/servers/coding-issue-delivery-fixture.mts",
-    "tests/e2e/servers/coding-issue-delivery-transport.mts",
-    "tests/e2e/servers/coding-issue-delivery-server.mts",
-    "tests/e2e/servers/coding-issue-description-model.mts",
-    "tests/e2e/servers/coding-issue-commit-fixture.mts",
-    "tests/e2e/servers/coding-runtime-server-shared.mts",
-    "packages/keiko-server/src/deps.ts",
-    "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts",
-    "packages/keiko-server/src/coding-runtime/codingRuntimeDescriptionJobStore.ts",
-    "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
-    "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts",
-    "packages/keiko-server/src/coding-runtime/productionVerifiedCommitDependencies.ts",
-    "packages/keiko-server/src/gitDelivery/draftDeliveryService.ts",
-    "packages/keiko-server/src/gitDelivery/prDescriptionGeneration.ts",
-    "packages/keiko-server/src/gitDelivery/prDescriptionPreparation.ts",
-    "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts",
-    "packages/keiko-server/src/gitDelivery/prDescriptionService.ts",
-    "packages/keiko-model-gateway/src/prDescription/render.ts",
-    "packages/keiko-tools/src/git-publish-node.ts",
-    "packages/keiko-tools/src/git-pr-node.ts",
-  ];
-  return Object.fromEntries(paths.map((path) => [path, artifactDigest(path)]));
+  return Object.fromEntries(DELIVERY_SOURCE_PATHS.map((path) => [path, artifactDigest(path)]));
 }

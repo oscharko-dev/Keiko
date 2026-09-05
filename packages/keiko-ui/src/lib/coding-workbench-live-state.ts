@@ -59,7 +59,7 @@ export interface CodingWorkbenchSourceProjection {
   readonly modelSource: CodingWorkbenchModelSource;
   readonly runtimeSource: CodingWorkbenchRuntimeSource;
   readonly available: boolean;
-  readonly unavailableReason?: string | undefined;
+  readonly unavailableReason?: string;
   /**
    * F-01: what a live probe last said about this source. `available` answers "is a source
    * configured"; this answers "did anyone confirm it answers". A never-probed source is

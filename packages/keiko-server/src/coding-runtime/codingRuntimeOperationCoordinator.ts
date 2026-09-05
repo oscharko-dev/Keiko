@@ -19,6 +19,10 @@ import type {
   CodingRuntimeOrchestratorResult,
   CodingRuntimeQuestionOperationResult,
 } from "./codingRuntimeOrchestratorTypes.js";
+import { correlationIdOrUnknown } from "../correlation.js";
+import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { processServerLogSink } from "../process-log-sink.js";
 
 interface RuntimeOperationCoordinatorDeps {
   readonly current: () => CodingRuntimeSnapshot | undefined;
@@ -34,6 +38,7 @@ interface RuntimeOperationCoordinatorDeps {
   readonly settleTask: (runId: string, outcome: CodingRuntimeTaskOutcome) => void;
   readonly questionPort: CodingRuntimeQuestionPort;
   readonly manager: CodingRuntimeManager;
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 interface RuntimeOperationReservation {
@@ -258,13 +263,17 @@ export class CodingRuntimeOperationCoordinator {
       });
       return accepted ? { ok: true } : { ok: false, reason: "authority-resolution-failed" };
     } catch (error) {
-      return {
-        ok: false,
-        reason:
-          error instanceof CodingRuntimeQuestionAnswerRejectedError
-            ? "question-answer-rejected"
-            : "authority-resolution-failed",
-      };
+      // T50 (review, PR #3394): the typed rejection is a validated, already-meaningful outcome --
+      // only a validated pending question can throw it (see CodingRuntimeQuestionAnswerRejectedError)
+      // -- and carries no diagnostic value of its own. Every OTHER exception here is a genuine
+      // transport/runtime failure that used to be discarded into the generic authority-resolution
+      // outcome with nothing in the activity log; AGENTS.md §8 requires that non-validation error
+      // path to leave structured, body-free evidence behind instead.
+      if (error instanceof CodingRuntimeQuestionAnswerRejectedError) {
+        return { ok: false, reason: "question-answer-rejected" };
+      }
+      recordQuestionMutationAuthorityFailure(this.deps.activityLog, runId, "answer", error);
+      return { ok: false, reason: "authority-resolution-failed" };
     }
   }
 
@@ -284,7 +293,11 @@ export class CodingRuntimeOperationCoordinator {
         questionId,
       });
       return accepted ? { ok: true } : { ok: false, reason: "authority-resolution-failed" };
-    } catch {
+    } catch (error) {
+      // Same non-validation error path as applyAnswer's catch (T50): reject has no typed
+      // incompatible-answer case of its own, so every exception here is a genuine authority
+      // failure and is logged the same way.
+      recordQuestionMutationAuthorityFailure(this.deps.activityLog, runId, "reject", error);
       return { ok: false, reason: "authority-resolution-failed" };
     }
   }
@@ -451,6 +464,30 @@ class RuntimeOperationReplayCoordinator {
     this.committed.delete(runId);
     this.pending.delete(runId);
   }
+}
+
+// AGENTS.md §8 rule 1 / review T50: the non-validation error path on a question mutation (a
+// transport failure, a runtime host exception, anything that is not the typed incompatible-answer
+// rejection) must leave body-free, structured evidence behind instead of collapsing silently into
+// the generic authority-resolution-failed outcome. No per-request correlation id reaches this
+// run-scoped coordinator (the HTTP route's ctx.correlationId is not threaded past the orchestrator
+// boundary), so the run id is the correlation key -- the same convention this subsystem already
+// uses for its other run-scoped diagnostics (see codingRuntimeOrchestrator.ts's
+// runtimeDiagnosticCorrelationId, which correlationIdOrUnknown replicates here).
+function recordQuestionMutationAuthorityFailure(
+  activityLog: ServerLogSink | undefined,
+  runId: string,
+  operation: "answer" | "reject",
+  error: unknown,
+): void {
+  (activityLog ?? processServerLogSink()).write({
+    category: "process",
+    level: "warn",
+    op: "coding-runtime.question.authority-resolution-failed",
+    correlationId: correlationIdOrUnknown(runId),
+    errorKind: errorKindOf(error),
+    extra: { runId, operation, frames: keikoStackFrames(error), causeChain: causeChain(error) },
+  });
 }
 
 function operationRequest(

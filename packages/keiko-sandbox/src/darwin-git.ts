@@ -37,7 +37,11 @@ function assertTrustedRootOwnedPath(path: string): void {
 /** Attests the exact developer-tool Git path before it enters a Seatbelt allowlist. */
 export function attestDarwinGitExecutable(candidate: string): AttestedDarwinGitExecutable {
   try {
-    if (!isAbsolute(candidate) || candidate.includes("\0") || realpathSync(candidate) !== candidate) {
+    if (
+      !isAbsolute(candidate) ||
+      candidate.includes("\0") ||
+      realpathSync(candidate) !== candidate
+    ) {
       return untrustedGit();
     }
     const entry = lstatSync(candidate);

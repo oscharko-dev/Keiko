@@ -16,7 +16,6 @@
       "entry": [
         "src/**/*.ts!",
         "scripts/*.mjs!",
-        "dist/cli/index.js!",
         "tests/e2e/**/*.spec.ts!",
         "tests/e2e/**/*.mts!",
         "tests/e2e/config/**/*.ts!",

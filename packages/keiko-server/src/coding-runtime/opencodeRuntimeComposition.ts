@@ -227,7 +227,13 @@ interface ReadyRun extends PreparedRun {
   runtimeAdapter: OpenCodeRuntimeAdapter;
   client: OpenCodeHttpClient;
   sessionId: string;
-  ready: true;
+  // Deliberately NOT narrowed to the literal `true`: `isReadyRun` below only asserts `ready`
+  // was `true` at lookup time. The same mutable object stays reachable through `runs` and can
+  // flip `ready` to `false` (dispose/monitor cleanup) while an async run port call is still
+  // in flight on this reference -- a literal-`true` type would make TS (and, on top of it,
+  // ESLint's no-unnecessary-condition) treat every later `run.ready` check as dead code and
+  // invite deleting the very guard that catches that race.
+  ready: boolean;
 }
 type ReadyRunLookup = (runId: string) => ReadyRun | undefined;
 type QuestionRunPort = Pick<OpenCodeRunPort, "listQuestions" | "answerQuestion" | "rejectQuestion">;
@@ -1363,8 +1369,10 @@ function handleDirectToolRequest(
   gate: ToolBridgeAdmissionGate,
   input: Parameters<OpenCodeToolBridge["handle"]>[0],
 ): Promise<{ readonly status: number; readonly body: string }> {
-  const rejection = preflightToolRequest(active, deps.capability, input.headers, input.body);
-  if (rejection !== undefined) return Promise.resolve(rejection);
+  const preflight = preflightToolRequest(active, deps.capability, input.headers, input.body);
+  if (preflight.outcome === "rejected") {
+    return Promise.resolve({ status: preflight.status, body: preflight.body });
+  }
   const admission = gate.admit();
   if (admission === undefined) return Promise.resolve({ status: 429, body: "" });
   const detachExternalAbort = bindExternalAbort(input.signal, admission);
@@ -1449,26 +1457,30 @@ function boundedInteger(value: number | undefined, fallback: number, maximum: nu
     : Math.min(maximum, Math.max(1, Math.trunc(value)));
 }
 
+type ToolPreflightResult =
+  | { readonly outcome: "rejected"; readonly status: number; readonly body: string }
+  | { readonly outcome: "admitted" };
+
 function preflightToolRequest(
   active: boolean,
   capability: string,
   headers: Headers,
   body?: string,
-): { readonly status: number; readonly body: string } | undefined {
-  if (!active) return { status: 503, body: "" };
-  if (headers.has("origin")) return { status: 403, body: "" };
+): ToolPreflightResult {
+  if (!active) return { outcome: "rejected", status: 503, body: "" };
+  if (headers.has("origin")) return { outcome: "rejected", status: 403, body: "" };
   const bearer = headers.get("authorization");
   if (bearer === null || !safeEqual(bearer, `Bearer ${capability}`)) {
-    return { status: 401, body: "" };
+    return { outcome: "rejected", status: 401, body: "" };
   }
   const declaredLength = declaredBodyLength(headers.get("content-length"));
   if (declaredLength === "invalid" || declaredLength > CODING_TOOL_MAX_BODY_BYTES) {
-    return { status: 413, body: "" };
+    return { outcome: "rejected", status: 413, body: "" };
   }
   if (body !== undefined && Buffer.byteLength(body, "utf8") > CODING_TOOL_MAX_BODY_BYTES) {
-    return { status: 413, body: "" };
+    return { outcome: "rejected", status: 413, body: "" };
   }
-  return undefined;
+  return { outcome: "admitted" };
 }
 
 function declaredBodyLength(value: string | null): number | "invalid" {

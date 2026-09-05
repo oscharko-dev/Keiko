@@ -83,7 +83,9 @@ describe("V32 upgrades the original journey outcome table", () => {
       runMigrations(db);
       const outcome = produceJourneyOutcome(journeyFixture());
       expect(createGitJourneyOutcomeStore(db).record(outcome)).toBe(true);
-      expect(() => rewindSchemaFixture(db, 31)).toThrow("Seed legacy journey rows after rewinding");
+      expect(() => {
+        rewindSchemaFixture(db, 31);
+      }).toThrow("Seed legacy journey rows after rewinding");
       expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(32);
       expect(db.prepare("SELECT COUNT(*) AS count FROM git_journey_outcomes").get()?.count).toBe(1);
     } finally {

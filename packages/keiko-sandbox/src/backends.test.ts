@@ -260,8 +260,9 @@ describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", ()
 
   // Regression pin: `(deny process-fork)` broke the OpenCode git handshake. Fork itself therefore
   // remains available, but the executable transition is deny-by-default and admits only the
-  // verified runtime plus Apple's fixed git launcher/implementation paths.
-  it("denies arbitrary child executables while admitting only the runtime and Apple git", () => {
+  // verified runtime plus the one caller-attested Git executable (#3394 T47) — no conventional
+  // Xcode/CommandLineTools path is trusted unconditionally, since a local user can replace it.
+  it("denies arbitrary child executables while admitting only the runtime and the attested git", () => {
     const wrapped = buildGatewaySeatbeltCommand(
       gateway,
       "/trusted/opencode",
@@ -284,8 +285,6 @@ describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", ()
   it("rejects a relative runtime executable before compiling the profile", () => {
     expect(() =>
       buildGatewaySeatbeltCommand(gateway, "opencode", ["serve"], "/qualified/apple/git"),
-    ).toThrow(
-      "gateway-seatbelt-command-not-absolute",
-    );
+    ).toThrow("gateway-seatbelt-command-not-absolute");
   });
 });
