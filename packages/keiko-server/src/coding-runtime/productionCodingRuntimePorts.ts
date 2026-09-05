@@ -92,7 +92,7 @@ export function createProductionRuntimeOperationGuard(
   return {
     reserve: (request, mode = "mutation"): ProductionRuntimeOperationReservation | undefined => {
       if (
-        inadmissibleOperation(request, runId, lastRevision, mode) ||
+        inadmissibleOperation(request, runId, lastRevision) ||
         usedRequestIds.has(request.requestId) ||
         pending !== undefined
       ) {
@@ -137,24 +137,13 @@ function inadmissibleOperation(
   request: CodingRuntimeRunOperation,
   runId: string,
   lastRevision: number,
-  mode: "mutation" | "read",
 ): boolean {
-  // A read must stay repeatable at the revision most recently committed by a mutation (see the
-  // commit() comment above): a mutation that is accepted without itself advancing the run's live
-  // revision -- the initial turn's dispatch is the one case (runInitialTurn settles into "running"
-  // and dispatches in the same revision, never advancing again on acceptance) -- would otherwise
-  // set lastRevision to the run's own current live revision and permanently lock out every future
-  // read at that unchanged revision (epic #3384). A mutation still rejects a REPLAY at the exact
-  // committed revision (`<=`); only a genuinely superseded, already-evicted revision (`<`) closes a
-  // read.
-  const revisionExhausted =
-    mode === "read" ? request.expectedRevision < lastRevision : request.expectedRevision <= lastRevision;
   return (
     request.runId !== runId ||
     !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(request.requestId) ||
     !Number.isSafeInteger(request.expectedRevision) ||
     request.expectedRevision < 0 ||
-    revisionExhausted
+    request.expectedRevision <= lastRevision
   );
 }
 

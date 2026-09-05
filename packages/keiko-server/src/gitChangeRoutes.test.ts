@@ -549,6 +549,62 @@ describe("POST /api/git-change/refresh (Issue #3400)", () => {
       staleScope.relationshipId,
     );
   });
+
+  // Owner audit b3-8 — `persistStaleScope` used to archive the old relationship, THEN create the
+  // replacement; a failing create (a store-level conflict) left the chat pointing at a relationship
+  // that had already been archived out from under it. Failing-before: with the old
+  // archive-then-create order, `oldRelationship.lifecycleState` below was "archived" even though
+  // the refresh that was supposed to replace it never produced a replacement.
+  it("keeps the old relationship active when the replacement create fails (b3-8)", async () => {
+    const original = fixtureSnapshot();
+    const moved = fixtureSnapshot({ headSha: "f".repeat(40), snapshotDigest: "9".repeat(64) });
+    const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [original, moved] });
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    const connected = asRouteResult(
+      await connectHandler(makeCtx(connectRequestBody(chat.id)), deps),
+    );
+    const oldRelationshipId = requireDefined(
+      (connected.body as GitChangeScopeBody).scope,
+      "connect response scope",
+    ).relationshipId;
+
+    const relationship = requireDefined(deps.relationship, "relationship deps");
+    const realStore = relationship.store;
+    let createCalls = 0;
+    const failingStore: typeof realStore = {
+      ...realStore,
+      createRelationship: (input, audit) => {
+        createCalls += 1;
+        if (createCalls === 1) throw new Error("simulated store-level create conflict");
+        return realStore.createRelationship(input, audit);
+      },
+    };
+    const wiredDeps: UiHandlerDeps = {
+      ...deps,
+      relationship: { ...relationship, store: failingStore },
+    };
+
+    const refreshCtx = makeCtx({
+      schemaVersion: "1",
+      chatId: chat.id,
+      relationshipId: oldRelationshipId,
+    });
+    await expect(refreshHandler(refreshCtx, wiredDeps)).rejects.toThrow(
+      "simulated store-level create conflict",
+    );
+
+    const oldRelationship = requireDefined(
+      realStore.getRelationship("ws-1", oldRelationshipId),
+      "old relationship",
+    );
+    expect(oldRelationship.lifecycleState).toBe("active");
+
+    const scopes = chatStore.findChatById(chat.id)?.gitChangeScopes ?? [];
+    expect(scopes).toHaveLength(1);
+    expect(requireDefined(scopes[0], "unchanged persisted scope").relationshipId).toBe(
+      oldRelationshipId,
+    );
+  });
 });
 
 // Final-audit F4 — before this fix, nothing ever minted a description authority for a

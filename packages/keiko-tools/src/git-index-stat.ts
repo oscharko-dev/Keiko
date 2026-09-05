@@ -34,13 +34,29 @@ export function parseGitIndexStat(output: string): ReadonlyMap<string, GitIndexS
   }
   return result;
 }
-/** Stat hits avoid materializing unchanged large files; changed content always uses raw bytes. */
+/**
+ * Stat hits avoid materializing unchanged large files; changed content always uses raw bytes.
+ *
+ * Owner audit finding b2-7: a stat match alone is not sufficient. git's own `read-cache.c` treats a
+ * cached entry as "racily clean" — and re-reads its content rather than trusting the cache — when
+ * the entry's recorded mtime is not strictly older than the index file's own last-write time,
+ * because a same-length rewrite that lands within the filesystem's timestamp granularity after
+ * staging can leave size/ctime/mtime unchanged from the index's point of view while the worktree
+ * content has moved on. `indexWriteTimeNs`, when the caller can supply it, applies that identical
+ * guard here: an entry whose mtime is at or after the index's own write time is reported as NOT
+ * matching, which sends the caller back to a real content read instead of trusting the stale cache.
+ * Omitting it preserves this function's prior (pre-guard) behaviour for a caller that cannot yet
+ * supply the index's write time.
+ */
 export function indexStatMatches(
   root: string,
   path: string,
   expected: GitIndexStat | undefined,
+  indexWriteTimeNs?: string,
 ): boolean {
   if (expected === undefined) return false;
+  if (indexWriteTimeNs !== undefined && BigInt(expected.mtimeNs) >= BigInt(indexWriteTimeNs))
+    return false;
   const absolute = resolveWithinWorkspace(root, path);
   if (!nodeWorkspaceFs.exists(absolute)) return false;
   assertContainedRealPath(nodeWorkspaceFs, root, dirname(absolute), "git-raw-parent");

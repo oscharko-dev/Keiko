@@ -16,6 +16,9 @@ import {
 } from "./windows-portable-signing.mjs";
 import { assertWindowsProductionVerificationInput } from "./windows-portable-verification-input.mjs";
 import { sha256File } from "./lib/digest.mjs";
+import { writeQualificationEvidenceReceipt } from "./lib/qualification-evidence-receipt.mjs";
+
+export { writeQualificationEvidenceReceipt };
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
@@ -231,36 +234,9 @@ function required(options, name) {
 // the #3390 checker and manifest producer already read, so a real, passing Windows qualification
 // becomes evidence with no separate step. While #2198/#2951 remain open this mode is never invoked
 // for the packaged-reference scenario; its manifest row carries the descriptor's own closed
-// `blocked` reason instead -- never a fabricated receipt.
-export function writeQualificationEvidenceReceipt({
-  receiptsDir,
-  scenarioId,
-  receipt,
-  recordedAt,
-  provenance = "real-model",
-}) {
-  writeFileSync(
-    join(receiptsDir, `${scenarioId}.artifact`),
-    `${JSON.stringify(receipt, null, 2)}\n`,
-    { mode: 0o600 },
-  );
-  writeFileSync(
-    join(receiptsDir, `${scenarioId}.receipt.json`),
-    `${JSON.stringify(
-      {
-        scenarioId,
-        commitSha: receipt.sourceCommitSha,
-        platform: receipt.platformTarget,
-        testStatus: receipt.result === "passed" ? "passed" : "failed",
-        recordedAt,
-        provenance,
-      },
-      null,
-      2,
-    )}\n`,
-    { mode: 0o600 },
-  );
-}
+// `blocked` reason instead -- never a fabricated receipt. The writer itself is shared with
+// qualify-macos-runtime-release.mjs via scripts/lib/qualification-evidence-receipt.mjs; see the
+// `import`/`export` above.
 
 function maybeWriteQualificationEvidence(options, receipt) {
   const receiptsDir = options["qualification-receipts"];

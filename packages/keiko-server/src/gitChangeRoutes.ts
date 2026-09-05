@@ -62,6 +62,7 @@ import type {
   RelationshipMutationResult,
 } from "./relationship-handlers.js";
 import type { StoredRelationship } from "./store/relationships.js";
+import { UiStoreError } from "./store/errors.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
 
@@ -70,7 +71,8 @@ type GitChangeErrorCode =
   | "GIT_CHANGE_PAYLOAD_TOO_LARGE"
   | "GIT_CHANGE_CHAT_NOT_FOUND"
   | "GIT_CHANGE_SCOPE_NOT_FOUND"
-  | "GIT_CHANGE_ENGINE_UNAVAILABLE";
+  | "GIT_CHANGE_ENGINE_UNAVAILABLE"
+  | "GIT_CHANGE_SCOPE_LIMIT_REACHED";
 
 const SAFE_MESSAGES: Readonly<Record<GitChangeErrorCode, string>> = {
   GIT_CHANGE_BAD_REQUEST: "The request body is not a valid git-change request.",
@@ -78,6 +80,7 @@ const SAFE_MESSAGES: Readonly<Record<GitChangeErrorCode, string>> = {
   GIT_CHANGE_CHAT_NOT_FOUND: "The chat does not exist.",
   GIT_CHANGE_SCOPE_NOT_FOUND: "No connected git-change scope matches this relationship.",
   GIT_CHANGE_ENGINE_UNAVAILABLE: "The relationship engine is not available.",
+  GIT_CHANGE_SCOPE_LIMIT_REACHED: "This chat already has the maximum number of connected git-change scopes.",
 };
 
 function errResult(status: number, code: GitChangeErrorCode): RouteResult {
@@ -636,7 +639,11 @@ function persistStaleScope(
 ): RouteResult {
   const workspaceId = deps.relationship?.scopeResolver(ctx.req)?.workspaceId;
   if (workspaceId === undefined) return errResult(503, "GIT_CHANGE_ENGINE_UNAVAILABLE");
-  archiveGitChangeRelationship(deps, workspaceId, found.scope.relationshipId);
+  // Owner audit b3-8 — create the replacement relationship BEFORE archiving the one it replaces.
+  // `reads-context` is immutable/non-reconnectable (correction 4 above), so a drifted comparison
+  // still needs two edges (archive old, create new); creating first means a failing create (e.g. a
+  // store-level conflict) leaves the chat pointing at the still-active OLD relationship instead of
+  // one that was just archived out from under it.
   const mutation = createGitChangeRelationship(
     deps,
     workspaceId,
@@ -644,6 +651,7 @@ function persistStaleScope(
     captured.snapshot.snapshotDigest,
   );
   if (mutation === undefined) return errResult(503, "GIT_CHANGE_ENGINE_UNAVAILABLE");
+  archiveGitChangeRelationship(deps, workspaceId, found.scope.relationshipId);
   const staleScope: ChatGitChangeScope = {
     ...buildScope(
       mutation.relationship.id,

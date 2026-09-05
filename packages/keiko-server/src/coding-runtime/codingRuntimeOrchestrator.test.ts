@@ -721,7 +721,7 @@ describe("CodingRuntimeOrchestrator", () => {
 
     const request = {
       requestId: "follow-up-1",
-      expectedRevision: 3,
+      expectedRevision: 4,
       taskIntent: "continue bounded work",
     };
     const [first, raced] = await Promise.all([
@@ -729,7 +729,7 @@ describe("CodingRuntimeOrchestrator", () => {
       f.orchestrator.submitFollowUp("run-1", { ...request, requestId: "follow-up-race" }),
     ]);
 
-    expect(successfulSnapshot(first).revision).toBe(4);
+    expect(successfulSnapshot(first).revision).toBe(5);
     expect(raced).toEqual({ ok: false, failureCode: "invalid-intent" });
     expect(await f.orchestrator.submitFollowUp("run-1", request)).toEqual({
       ok: false,
@@ -739,7 +739,7 @@ describe("CodingRuntimeOrchestrator", () => {
       await f.orchestrator.submitFollowUp("stale-run", {
         ...request,
         requestId: "follow-up-stale",
-        expectedRevision: 4,
+        expectedRevision: 5,
       }),
     ).toEqual({ ok: false, failureCode: "invalid-intent" });
   });
@@ -807,18 +807,18 @@ describe("CodingRuntimeOrchestrator", () => {
     await expect(
       f.orchestrator.submitFollowUp("run-1", {
         requestId: "follow-up-refused",
-        expectedRevision: 3,
+        expectedRevision: 4,
         taskIntent: "first bounded retry",
       }),
     ).resolves.toEqual({ ok: false, failureCode: "authority-resolution-failed" });
-    expect(f.orchestrator.status().revision).toBe(3);
+    expect(f.orchestrator.status().revision).toBe(4);
     await expect(
       f.orchestrator.submitFollowUp("run-1", {
         requestId: "follow-up-retry",
-        expectedRevision: 3,
+        expectedRevision: 4,
         taskIntent: "second bounded retry",
       }),
-    ).resolves.toMatchObject({ ok: true, snapshot: { revision: 4 } });
+    ).resolves.toMatchObject({ ok: true, snapshot: { revision: 5 } });
   });
 
   it("serializes transient questions without retaining their content", async () => {
@@ -837,22 +837,22 @@ describe("CodingRuntimeOrchestrator", () => {
     // race a concurrent operator action (pause/answer/follow-up) into a revision conflict.
     const listed = await f.orchestrator.listQuestions("run-1", {
       requestId: "question-list-1",
-      expectedRevision: 3,
+      expectedRevision: 4,
     });
-    expect(listed).toMatchObject({ ok: true, snapshot: { revision: 3 } });
+    expect(listed).toMatchObject({ ok: true, snapshot: { revision: 4 } });
     expect(JSON.stringify([...f.rows.values()])).not.toContain("Private?");
     expect(
       await f.orchestrator.answerQuestion("run-1", {
         requestId: "question-answer-1",
-        expectedRevision: 3,
+        expectedRevision: 4,
         questionId: "que_1",
         answers: [["Continue"]],
       }),
-    ).toMatchObject({ ok: true, snapshot: { revision: 4 } });
+    ).toMatchObject({ ok: true, snapshot: { revision: 5 } });
     expect(
       await f.orchestrator.rejectQuestion("run-1", {
         requestId: "question-answer-1",
-        expectedRevision: 4,
+        expectedRevision: 5,
         questionId: "que_1",
       }),
     ).toEqual({ ok: false, failureCode: "invalid-intent" });
@@ -866,22 +866,22 @@ describe("CodingRuntimeOrchestrator", () => {
     await expect(
       f.orchestrator.listQuestions("run-1", {
         requestId: "question-list-refused",
-        expectedRevision: 3,
+        expectedRevision: 4,
       }),
     ).resolves.toEqual({ ok: false, failureCode: "authority-resolution-failed" });
-    expect(f.orchestrator.status().revision).toBe(3);
+    expect(f.orchestrator.status().revision).toBe(4);
     await expect(
       f.orchestrator.listQuestions("run-1", {
         requestId: "question-list-retry",
-        expectedRevision: 3,
+        expectedRevision: 4,
       }),
-    ).resolves.toMatchObject({ ok: true, snapshot: { revision: 3 } });
+    ).resolves.toMatchObject({ ok: true, snapshot: { revision: 4 } });
 
     f.questionPort.answer.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     const answer = (requestId: string) =>
       f.orchestrator.answerQuestion("run-1", {
         requestId,
-        expectedRevision: 3,
+        expectedRevision: 4,
         questionId: "que_1",
         answers: [["Continue"]],
       });
@@ -889,10 +889,10 @@ describe("CodingRuntimeOrchestrator", () => {
       ok: false,
       failureCode: "authority-resolution-failed",
     });
-    expect(f.orchestrator.status().revision).toBe(3);
+    expect(f.orchestrator.status().revision).toBe(4);
     await expect(answer("question-answer-retry")).resolves.toMatchObject({
       ok: true,
-      snapshot: { revision: 4 },
+      snapshot: { revision: 5 },
     });
   });
 
@@ -952,7 +952,7 @@ describe("CodingRuntimeOrchestrator", () => {
         await f.orchestrator.decideApproval("run-1", {
           requestId: "permission-1",
           decision: "approved",
-          expectedRevision: 4,
+          expectedRevision: 5,
           grantScope: "task",
           commandTemplateId: "verify.typecheck",
           safeArgumentClasses: ["frozen-argv"],
@@ -963,7 +963,7 @@ describe("CodingRuntimeOrchestrator", () => {
       await f.orchestrator.decideApproval("run-1", {
         requestId: "permission-1",
         decision: "approved",
-        expectedRevision: 4,
+        expectedRevision: 5,
       }),
     ).toEqual({
       ok: false,
@@ -1034,7 +1034,7 @@ describe("CodingRuntimeOrchestrator", () => {
     await f.orchestrator.decideApproval("run-1", {
       requestId: "permission-1",
       decision: "approved",
-      expectedRevision: 4,
+      expectedRevision: 5,
     });
 
     // Once the decision is taken the run is no longer awaiting approval: the review closes with it.
@@ -1072,7 +1072,7 @@ describe("CodingRuntimeOrchestrator", () => {
       await f.orchestrator.decideApproval("run-1", {
         requestId: "permission-failure",
         decision: "approved",
-        expectedRevision: 4,
+        expectedRevision: 5,
       }),
     ).toMatchObject({
       ok: true,
@@ -1120,7 +1120,7 @@ describe("CodingRuntimeOrchestrator", () => {
       await f.orchestrator.decideApproval("run-1", {
         requestId: "permission-2",
         decision: "approved",
-        expectedRevision: 4,
+        expectedRevision: 5,
       }),
     ).toMatchObject({
       ok: true,
@@ -1456,7 +1456,7 @@ describe("CodingRuntimeOrchestrator", () => {
     const result = await f.orchestrator.decideApproval("run-1", {
       requestId: "permission-3",
       decision: "approved",
-      expectedRevision: 4,
+      expectedRevision: 5,
     });
 
     expect(successfulSnapshot(result)).toMatchObject({
@@ -1665,7 +1665,7 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
       taskIntent: "continue while operator control stays paused",
     });
 
-    expect(successfulSnapshot(followUp)).toMatchObject({ state: "paused", revision: 5 });
+    expect(successfulSnapshot(followUp)).toMatchObject({ state: "paused", revision: 6 });
     expect(f.taskDispatcher.dispatch).toHaveBeenLastCalledWith({
       runId: "run-1",
       requestId: "follow-up-paused",
@@ -2049,7 +2049,7 @@ describe("approval challenge lifetime ceiling", () => {
         await f.orchestrator.decideApproval("run-1", {
           requestId: "permission-1",
           decision: "approved",
-          expectedRevision: 4,
+          expectedRevision: 5,
         })
       ).ok,
     ).toBe(true);
@@ -2070,7 +2070,7 @@ describe("approval challenge lifetime ceiling", () => {
       await f.orchestrator.decideApproval("run-1", {
         requestId: "permission-1",
         decision: "approved",
-        expectedRevision: 4,
+        expectedRevision: 5,
       }),
     ).toEqual({ ok: false, failureCode: "invalid-intent" });
     expect(f.approvalAuthority.issue).not.toHaveBeenCalled();
@@ -2085,7 +2085,7 @@ describe("approval challenge lifetime ceiling", () => {
     await f.orchestrator.decideApproval("run-1", {
       requestId: "permission-1",
       decision: "approved",
-      expectedRevision: 4,
+      expectedRevision: 5,
     });
     expect(f.approvalAuthority.issue).toHaveBeenCalledWith(
       expect.objectContaining({ ttlMs: 60_000 }),

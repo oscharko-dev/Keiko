@@ -418,12 +418,35 @@ describe("CodingToolFacade", () => {
 
   it("reports a recorded draft delivery as completed", async () => {
     const ports = facade();
+    const digest = "a".repeat(64);
     const draftDelivery = {
       status: "recorded" as const,
       record: {
+        schemaVersion: "1" as const,
+        revision: 0,
         phase: "push-proposed" as const,
-        runId: "run-1",
-        headBranch: "claude/issue-1",
+        reason: "approval-required" as const,
+        proposalId: "push-1",
+        proposalDigest: digest,
+        recordedAt: "2026-09-05T00:00:00.000Z",
+        binding: {
+          runId: "run-1",
+          workspaceDigest: digest,
+          runtimeAuthorityDigest: digest,
+          envelopeDigest: digest,
+          remoteDigest: digest,
+          issueBindingDigest: digest,
+          issueIdDigest: digest,
+          issueNumber: 1,
+          repository: "owner/repository",
+          remoteAlias: "origin" as const,
+          baseRef: "dev",
+          baseSha: "1".repeat(40),
+          headRef: "feature/issue-1",
+          headSha: "3".repeat(40),
+          verifiedCommitProposalId: "commit-1",
+          recoveryId: "delivery-1",
+        },
       },
     };
     ports.delegate.execute = vi.fn(() =>

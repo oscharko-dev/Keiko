@@ -1137,6 +1137,12 @@ export class CodingRuntimeOrchestrator {
     // "recovery-required" exits, so the dispatch-failure branches below are unaffected.
     const running = this.transitionActive("running");
     if (!running.ok) return running;
+    // Captured now, not re-read after the dispatch: this is the exact internal snapshot the
+    // dispatch below is admitted against (running.snapshot.revision), so advancing FROM it on
+    // acceptance is guaranteed to move the live revision exactly one step past what the dispatch
+    // consumed.
+    const runningInternal = this.current();
+    if (runningInternal === undefined) return this.fail("runtime-failed");
     const initialTurn = await this.operations.startInitialTurn({
       runId,
       requestId: request.requestId,
@@ -1157,7 +1163,21 @@ export class CodingRuntimeOrchestrator {
         },
       });
     }
-    if (initialTurn === "accepted") return running;
+    // Every OTHER guarded mutation (follow-up dispatch, question answer/reject) advances the live
+    // revision in the SAME call that commits its production-guard reservation
+    // (codingRuntimeOperationCoordinator.ts's submitFollowUp/applyAnswer via advanceRevision) --
+    // the per-run ProductionRuntimeOperationGuard (productionCodingRuntimePorts.ts) depends on that
+    // invariant: it marks the committed expectedRevision as consumed and admits only a STRICTLY
+    // newer revision afterward (any read or mutation included -- #2386's own regression pin
+    // spells this out: "the mutation consumed revision 3: stale reads and stale mutations both
+    // stay rejected"). The initial turn's own dispatch is a guarded mutation exactly like those,
+    // but used to return the unchanged `running` snapshot on acceptance -- the one guarded mutation
+    // that never advanced the live revision. That left every read (question listing) or write
+    // (answer/reject) issued at the run's own still-current revision permanently rejected as
+    // authority-resolution-failed, from the moment the initial turn was accepted onward (epic
+    // #3384). Advancing here restores the same one-bump-per-accepted-dispatch invariant every
+    // other guarded mutation already provides.
+    if (initialTurn === "accepted") return this.advanceRevision(runningInternal, "task-submitted");
     if (initialTurn === "failed") {
       recordRuntimeStartFailure(this.deps.diagnostics, runId, "initial-turn-dispatch");
       return this.transitionActive("failed", "runtime-failed");

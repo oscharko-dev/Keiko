@@ -823,14 +823,14 @@ async function runSupportAnalyze(
   if (typeof text === "number") return text;
 
   const basic = analyzeLogText(text);
-  if (args.clusters) return emitClusters(basic.clusters, args.json, io);
   const options = await loadToolAnalysisOptions(basic, io);
+  const result =
+    options.toolLifecycleValidator === undefined ? basic : analyzeLogText(text, options);
+  if (args.clusters) return emitClusters(result.clusters, args.json, io);
   if (args.seed || args.emitFixture !== undefined) {
     return runSeedAndFixture(text, args, cwd, io, options);
   }
 
-  const result =
-    options.toolLifecycleValidator === undefined ? basic : analyzeLogText(text, options);
   if (args.correlationId === undefined) {
     return emitAllTimelines(result, args.json, io);
   }
