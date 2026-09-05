@@ -273,11 +273,19 @@ describe("CI repair accounting around admitted model work", () => {
       ok: true,
       runId: "run-1",
     });
+    // b2-3: `reservePromptWithCiRepair` now resolves the run identity through the side-effect-free
+    // `authenticateCapability` before ever calling `reservePromptTokens`, so the fake authority here
+    // needs both.
+    const authenticateCapability = (): {
+      readonly ok: true;
+      readonly binding: { readonly runId: string };
+    } => ({ ok: true, binding: { runId: "run-1" } });
+    const authority = { reservePromptTokens, authenticateCapability };
     expect(
-      reservePromptWithCiRepair({ reservePromptTokens }, () => test.controller, "capability", 9).ok,
+      reservePromptWithCiRepair(authority, () => test.controller, "capability", 9).ok,
     ).toBe(true);
     expect(
-      reservePromptWithCiRepair({ reservePromptTokens }, () => test.controller, "capability", 2),
+      reservePromptWithCiRepair(authority, () => test.controller, "capability", 2),
     ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
     expect(test.controller.chargeDelegatedRead("child-1", "read-1")).toBe(true);
     expect(test.controller.chargeDelegatedRead("child-2", "read-2")).toBe(false);
