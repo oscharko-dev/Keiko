@@ -301,6 +301,8 @@ function stageFiveFlowEvidence(fixtureName = "valid", repairOrdinal = 1) {
     mkdirSync(receiptsDir, { recursive: true });
   }
   const manifest = JSON.parse(readFileSync(sourceFixture.manifestPath, "utf8"));
+  manifest.requiredTools = [...CODE_TASK_QUALIFICATION_REQUIRED_TOOLS];
+  if (fixtureName === "missing-required-tool") manifest.requiredTools.push("keiko_shell_execute");
   const cumulatives = [3_240_000, 5_000_000, 7_000_000, 9_000_000, 11_000_000];
   const baseArtifacts = cumulatives.map((cumulative, index) =>
     flowArtifact(

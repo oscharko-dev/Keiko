@@ -68,6 +68,8 @@ counts from this frozen inventory; a reviewer cannot omit an inconvenient criter
 - `median-immutable`: The function does not mutate its input.
 - `median-composition`: `index.js` exports the function from a dedicated median module in `lib/`.
 - `median-regressions`: Tests cover empty, odd, even, mixed, and immutability cases.
+- `median-numerical-stability`: Even medians remain finite for equal maximum values and return zero
+  for symmetric maximum-magnitude values; the retained CI regression passes without suppression.
 
 ### Issue #4 — range
 
@@ -113,6 +115,15 @@ case to the local regression suite without changing or suppressing the workflow 
 later commit is pushed, and the required `ci` check passes on that new exact head. If the first
 pushed head is already green, the ordinary delivery may continue but it does not qualify the
 CI-repair scenario.
+
+After flow 1 merges and before flow 2 is accepted, an independently authored fixture-evolution
+pull request may extend the same CI-only file with the issue #3 numerical-stability regression.
+That fixture must pass on the pre-feature base by skipping only while `median` is not exported. Once
+the API exists, it strictly requires `median([Number.MAX_VALUE, Number.MAX_VALUE])` to equal
+`Number.MAX_VALUE` and `median([-Number.MAX_VALUE, Number.MAX_VALUE])` to equal `0`. The fixture
+commit and the amended issue must predate flow 2 acceptance. A model implementation that satisfies
+both cases on its first pushed head remains an ordinary green-first delivery and does not qualify as
+a CI repair.
 
 ## Journey-level evidence
 

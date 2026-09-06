@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
@@ -314,9 +314,27 @@ interface OpenCodeRuntimeCompositionModule {
   }): OpenCodeRuntimeComposition;
 }
 
-async function compositionModule(): Promise<OpenCodeRuntimeCompositionModule> {
+let loadedCompositionModule: OpenCodeRuntimeCompositionModule | undefined;
+
+async function loadCompositionModule(): Promise<OpenCodeRuntimeCompositionModule> {
   const moduleName = "./opencodeRuntimeComposition.js";
   return (await import(moduleName)) as OpenCodeRuntimeCompositionModule;
+}
+
+function compositionModule(): Promise<OpenCodeRuntimeCompositionModule> {
+  if (loadedCompositionModule === undefined) throw new Error("Composition module was not loaded");
+  return Promise.resolve(loadedCompositionModule);
+}
+
+async function withDeterministicReadinessTimers<T>(operation: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    const pending = operation();
+    await vi.advanceTimersByTimeAsync(50);
+    return await pending;
+  } finally {
+    vi.useRealTimers();
+  }
 }
 
 function tempDir(prefix: string): string {
@@ -833,6 +851,14 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
+beforeAll(async () => {
+  loadedCompositionModule = await loadCompositionModule();
+});
+
+afterAll(() => {
+  loadedCompositionModule = undefined;
+});
+
 describe("unmounted OpenCode runtime composition", () => {
   // eslint-disable-next-line complexity -- this audit fixture keeps lifecycle evidence co-located.
   it("prepares secret-safe state before spawn, proves the private runtime, and disposes only after reap", async () => {
@@ -1049,7 +1075,7 @@ describe("unmounted OpenCode runtime composition", () => {
       authorityLifecycle,
     });
 
-    await expect(
+    const startResult = await withDeterministicReadinessTimers(() =>
       Promise.resolve(
         runtime.manager.start({
           runId: "run-1",
@@ -1079,7 +1105,8 @@ describe("unmounted OpenCode runtime composition", () => {
           },
         }),
       ),
-    ).resolves.toMatchObject({ ok: true });
+    );
+    expect(startResult).toMatchObject({ ok: true });
     expect(readinessStatusReads).toBe(5);
     const sessionCreate = fetchMock.mock.calls.find(
       ([url, init]) => requestPath(url) === "/session" && init?.method === "POST",

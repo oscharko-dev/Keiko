@@ -174,7 +174,7 @@
       }
     },
     "keiko-model-gateway": {
-      "files": 53,
+      "files": 54,
       "uncoveredFiles": 0,
       "uncoveredLines": 210,
       "totalLines": 3802,
