@@ -118,9 +118,16 @@ describe("createProductionReadOnlyChildRunner", () => {
 
   it("executes an approved keiko_child_workspace_read call through the parent's secure read port", async () => {
     const requested: string[] = [];
+    let handlerSetDigest: string | undefined;
+    let projectionDigest: string | undefined;
+    const scripted = toolThenFinish(CHILD_WORKSPACE_READ_ALIAS, { relativePath: "src/index.ts" });
 
     const outcome = await runChild({
-      call: toolThenFinish(CHILD_WORKSPACE_READ_ALIAS, { relativePath: "src/index.ts" }),
+      call: (request): Promise<NormalizedResponse> => {
+        handlerSetDigest = request.toolCatalog?.offered.binding.handlerSetDigest;
+        projectionDigest = request.toolCatalog?.projection.projectionDigest;
+        return scripted(request);
+      },
       read: {
         readText: (request) => {
           requested.push(request.relativePath);
@@ -131,6 +138,8 @@ describe("createProductionReadOnlyChildRunner", () => {
 
     expect(requested).toEqual(["src/index.ts"]);
     expect(outcome.resultCount).toBe(1);
+    expect(handlerSetDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(handlerSetDigest).not.toBe(projectionDigest);
   });
 
   it("reserves every child prompt immediately before dispatch and never calls the provider after exhaustion", async () => {

@@ -12,6 +12,7 @@ import {
 } from "@oscharko-dev/keiko-harness";
 import {
   CHILD_WORKSPACE_READ_ALIAS,
+  CHILD_WORKSPACE_READ_HANDLER_REQUIREMENT,
   childRegistrationSet,
   createKeikoToolCatalog,
   gatewayToolDefinitions,
@@ -47,6 +48,14 @@ function requireChildReadTool(): ToolDefinition {
   return tool;
 }
 const CHILD_READ_TOOL = requireChildReadTool();
+const CHILD_HANDLER_ATTESTATIONS = [
+  {
+    alias: CHILD_WORKSPACE_READ_ALIAS,
+    handlerId: CHILD_WORKSPACE_READ_HANDLER_REQUIREMENT.id,
+    handlerVersion: CHILD_WORKSPACE_READ_HANDLER_REQUIREMENT.contractVersion,
+    catalogAction: CHILD_WORKSPACE_READ_ALIAS,
+  },
+] as const;
 
 const TRANSIENT_SINK: EventSink = { emit: (): void => undefined };
 
@@ -147,7 +156,12 @@ function buildChildSession(
       // #3407: dispatch through the mandatory catalog path again, bound to the reserved
       // `child` profile. Every call still runs through readOnlyTools(...).execute() below --
       // the same parent-gate-before-read and stop-on-denial semantics, unmodified.
-      bindToolCatalog: createLegacyPortCatalogFactory(CHILD_CATALOG, CHILD_PROFILE, tools),
+      bindToolCatalog: createLegacyPortCatalogFactory(
+        CHILD_CATALOG,
+        CHILD_PROFILE,
+        tools,
+        CHILD_HANDLER_ATTESTATIONS,
+      ),
       sink: TRANSIENT_SINK,
       // KEIKO-0726 (#3323): a real, tool-using production call site — a read-only child can loop
       // through many keiko_child_workspace_read rounds against a 128KB budget and genuinely grow

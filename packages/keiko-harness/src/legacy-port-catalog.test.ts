@@ -4,12 +4,19 @@
 // counter through an unshaped throw. Exercises the real HarnessCounterBudget (catalog-budget.ts)
 // together with the legacy-port adapter, not a stand-in, so the counter refund is actually proved.
 import { describe, expect, it } from "vitest";
-import { createInitialToolCatalog, compileToolProjection } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  createInitialToolCatalog,
+  compileToolProjection,
+  lookupCatalogTool,
+} from "@oscharko-dev/keiko-tool-catalog";
 import type { BoundToolInvocation } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { createHarnessCatalogBudget } from "./catalog-budget.js";
 import { newCounters } from "./context.js";
 import { DEFAULT_LIMITS } from "./types.js";
-import { createLegacyPortCatalogFactory } from "./legacy-port-catalog.js";
+import {
+  createLegacyPortCatalogFactory,
+  type LegacyPortCatalogHandlerAttestation,
+} from "./legacy-port-catalog.js";
 import type { ToolCallResult, ToolPort } from "./ports.js";
 import type { HarnessCatalogContext, HarnessToolExecutionEvidence } from "./catalog-runtime.js";
 
@@ -65,13 +72,57 @@ function scriptedPort(behavior: () => Promise<ToolCallResult>): ToolPort {
   };
 }
 
+function handlerAttestations(f: Fixture): readonly LegacyPortCatalogHandlerAttestation[] {
+  return f.projection.tools.map((tool) => {
+    const descriptor = lookupCatalogTool(f.catalog, tool.toolRef);
+    if (descriptor === undefined) throw new TypeError("Missing fixture descriptor");
+    return {
+      alias: tool.alias,
+      handlerId: descriptor.handlerRequirement.id,
+      handlerVersion: descriptor.handlerRequirement.contractVersion,
+      catalogAction: tool.alias,
+    };
+  });
+}
+
 describe("legacy-port catalog dispatch settlement (F11)", () => {
+  it("cannot advertise ready with missing, duplicate, or mismatched handler attestations", () => {
+    const f = fixture();
+    const port = scriptedPort(() =>
+      Promise.resolve({ toolCallId: "call-1", output: "ok", durationMs: 3 }),
+    );
+    const handlers = handlerAttestations(f);
+    const [first] = handlers;
+    if (first === undefined) throw new TypeError("Missing fixture handler");
+    expect(() => createLegacyPortCatalogFactory(f.catalog, PROFILE, port, [])).toThrow(
+      "Invalid legacy-port handler attestation",
+    );
+    expect(() =>
+      createLegacyPortCatalogFactory(f.catalog, PROFILE, port, [
+        first,
+        first,
+        ...handlers.slice(2),
+      ]),
+    ).toThrow("Invalid legacy-port handler attestation");
+    expect(() =>
+      createLegacyPortCatalogFactory(f.catalog, PROFILE, port, [
+        { ...first, handlerId: "unbound-handler" },
+        ...handlers.slice(1),
+      ]),
+    ).toThrow("Invalid legacy-port handler attestation");
+  });
+
   it("commits the reservation and reports the completed outcome on the happy path", async () => {
     const f = fixture();
     const port = scriptedPort(() =>
       Promise.resolve({ toolCallId: "call-1", output: "ok", durationMs: 3 }),
     );
-    const catalogPort = createLegacyPortCatalogFactory(f.catalog, PROFILE, port)(f.context);
+    const catalogPort = createLegacyPortCatalogFactory(
+      f.catalog,
+      PROFILE,
+      port,
+      handlerAttestations(f),
+    )(f.context);
     const outcome = await catalogPort.execute({
       toolCallId: "call-1",
       invocation: f.invocation,
@@ -87,7 +138,12 @@ describe("legacy-port catalog dispatch settlement (F11)", () => {
   it("releases the reservation and returns failed/handler-failed when the ToolPort rejects", async () => {
     const f = fixture();
     const port = scriptedPort(() => Promise.reject(new Error("legacy port exploded")));
-    const catalogPort = createLegacyPortCatalogFactory(f.catalog, PROFILE, port)(f.context);
+    const catalogPort = createLegacyPortCatalogFactory(
+      f.catalog,
+      PROFILE,
+      port,
+      handlerAttestations(f),
+    )(f.context);
     const outcome = await catalogPort.execute({
       toolCallId: "call-1",
       invocation: f.invocation,
@@ -115,7 +171,12 @@ describe("legacy-port catalog dispatch settlement (F11)", () => {
       executed = true;
       return Promise.resolve({ toolCallId: "call-1", output: "ok", durationMs: 1 });
     });
-    const catalogPort = createLegacyPortCatalogFactory(f.catalog, PROFILE, port)(f.context);
+    const catalogPort = createLegacyPortCatalogFactory(
+      f.catalog,
+      PROFILE,
+      port,
+      handlerAttestations(f),
+    )(f.context);
     const outcome = await catalogPort.execute({
       toolCallId: "call-1",
       invocation: f.invocation,

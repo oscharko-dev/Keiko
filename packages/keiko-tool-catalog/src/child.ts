@@ -10,6 +10,10 @@ import { NATIVE_TOOL_CATALOG_RUNTIME } from "./dialect.js";
 import type { CatalogRegistrationSet } from "./composer.js";
 
 const CHILD_WORKSPACE_READ_ALIAS = "keiko_child_workspace_read";
+const CHILD_WORKSPACE_READ_HANDLER_REQUIREMENT = {
+  id: "child-workspace-read-port",
+  contractVersion: 1,
+} as const;
 
 /** The "child" registration set: the one read-only tool a read-only child run is offered. */
 export function childRegistrationSet(): CatalogRegistrationSet {
@@ -38,7 +42,7 @@ export function childRegistrationSet(): CatalogRegistrationSet {
           effects: ["workspace-read"],
           actionMapping: [{ action: CHILD_WORKSPACE_READ_ALIAS, effects: ["workspace-read"] }],
           policyReferences: ["workspace-read"],
-          handlerRequirement: { id: "child-workspace-read-port", contractVersion: 1 },
+          handlerRequirement: CHILD_WORKSPACE_READ_HANDLER_REQUIREMENT,
           bounds: {
             maxArgumentBytes: TOOL_CATALOG_LIMITS.maxArgumentBytes,
             maxResultBytes: TOOL_CATALOG_LIMITS.maxResultBytes,
@@ -53,4 +57,4 @@ export function childRegistrationSet(): CatalogRegistrationSet {
   };
 }
 
-export { CHILD_WORKSPACE_READ_ALIAS };
+export { CHILD_WORKSPACE_READ_ALIAS, CHILD_WORKSPACE_READ_HANDLER_REQUIREMENT };

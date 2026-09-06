@@ -1,788 +1,599 @@
 import { randomUUID } from "node:crypto";
-import {
-  compileToolProjection,
-  createToolRef,
-  lookupCatalogTool,
-  type ToolCatalog,
-} from "@oscharko-dev/keiko-tool-catalog";
 import type {
-  CatalogVersionRef,
-  CompiledToolProjection,
+  CatalogJsonValue,
   ToolDescriptor,
-  ToolResultReason,
-  ToolResultStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { captureToolInvocationReceipt } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
-import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
-import { errorKindOf } from "../observability/server-log.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
-import type { ToolBudgetDisposition } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
+import { captureCatalogJson, lookupCatalogTool } from "@oscharko-dev/keiko-tool-catalog";
+import type { CodingToolResult } from "../coding-runtime/codingToolIpc.js";
 import type { CodingToolActionRequest } from "../coding-runtime/codingToolIpc.js";
+import type {
+  CodingToolAuthorityPort,
+  CodingToolFacadeInput,
+  CodingToolMutationGuard,
+} from "../coding-runtime/codingToolFacadePorts.js";
+import type { CodingToolAuthorityPreview } from "../coding-runtime/codingToolAuthorityPort.js";
+import type { CodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
+import {
+  createOpenCodeGatewayToolCatalogAdvertisement,
+  isOpenCodeVerificationId,
+  type OpenCodeGatewayHandlerCoverage,
+} from "../coding-runtime/opencodeToolSchemas.js";
+import type { OpenCodeOptionalToolName } from "../coding-runtime/opencodeLaunchProfile.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { emitToolLifecycleEvent, type CatalogLifecycleLogPort } from "./catalogToolLifecycle.js";
-import { CatalogDispatchFault, catalogBudgetOperation } from "./catalogToolRuntimeAuthority.js";
+import {
+  catalogHandlerReadiness,
+  computeHandlerSetDigest,
+  type CatalogBoundHandler,
+} from "./catalogToolBinder.js";
+import { createCatalogToolBinder } from "./catalogToolDispatch.js";
+import type {
+  CatalogActionIdentity,
+  CatalogHandlerContext,
+  CatalogHandlerResult,
+  CatalogToolBudgetPort,
+  CatalogToolHandlerBinding,
+  CatalogTrustedContext,
+} from "./catalogToolPorts.js";
+import { CatalogDispatchFault } from "./catalogToolRuntimeAuthority.js";
 
-/**
- * Confidently-matched facade actions this bridge routes through the real catalog LIFECYCLE
- * emission (catalogToolLifecycle.ts's `emitToolLifecycleEvent`, the same op vocabulary and receipt
- * shape #3413's own settlement uses) and the shared fault-shaping primitives
- * (catalogToolRuntimeAuthority.ts's `CatalogDispatchFault`/`catalogBudgetOperation`) (#3413, F8).
- * It does NOT route through `createCatalogToolBinder`/`CatalogInvocation`
- * (catalogToolDispatch.ts/catalogToolSettlement.ts): that pair is shaped for a prior `offer()`
- * negotiating a catalog-schema `{toolRef, projectionDigest, offerId, arguments}` invocation, which
- * `codingToolFacade.ts`'s already-parsed `CodingToolActionRequest` never carries (ADR-0175 D6
- * "Production mounting" explains the shape mismatch in full).
- *
- * DECISION (#3413 F8 review, finding b1-1 -- superseding the prior "tracked as outOfScopeNeeds"
- * note): this bridge, not the offer/dispatch/cursor binder pair, is and remains the one production
- * dispatch owner. AGENTS.md section 5 forbids growing a second parallel dispatch path, and ADR-0175
- * D6 already documents the binder's shape as incompatible with an already-parsed
- * `CodingToolActionRequest` -- reshaping one to fit the other would be the wrong kind of "fix" for
- * either side. `catalogToolBinder.ts`/`catalogToolDispatch.ts`/`catalogToolSettlement.ts`/
- * `catalogToolCursor.ts`/`catalogToolContinuation.ts`/`nativeCatalogToolPort.ts` are kept, not
- * deleted: they remain a real, independently-tested reference implementation of the full
- * offer/dispatch contract (ADR-0175 D4-D6) that this bridge's own bookkeeping below deliberately
- * mirrors in miniature, and their tests continue to pin that contract in isolation. But they have
- * no production caller and this bridge does not acquire one by wiring them in. Acceptance criteria
- * that need real production behaviour are instead closed HERE, in the bridge's own construction and
- * dispatch path:
- *   - readiness rejection for a canonical id this bridge maps to but the composed catalog does not
- *     contain: `resolveAction` distinguishes "structurally uncovered" (`catalogIdFor` returns
- *     `undefined` by design) from "missing" (a canonical id was produced but `lookupCatalogTool`
- *     found no descriptor for it) and fails closed on the latter via `dispatchMissing`, emitting
- *     the real `tool-catalog.bind-unavailable` op instead of silently running the action unbound.
- *     "Duplicate handler" detection is deliberately NOT implemented at this level: `gitCatalogId`/
- *     `deliveryCatalogId` intentionally resolve several actions (stage-execute, every non-merge
- *     delivery execute intent) onto the SAME shared `keiko.git.execute` descriptor, so flagging a
- *     shared descriptor as an error would reject correct, documented behaviour. "Orphaned handler"
- *     (a descriptor whose handler requirement nothing satisfies) has no meaning at this layer
- *     either: this bridge never owns a handler set -- the handler is always the caller-supplied
- *     `run` thunk passed into `dispatch()` per call, not a binder-composed registration.
- *   - dispatch-time projection revalidation (AC3): `CatalogFacadeBridgeInput.catalog` accepts
- *     either a static `ToolCatalog` or a `() => ToolCatalog` provider. A static value cannot drift
- *     after construction (it is the same frozen object for the bridge's whole lifetime, and today's
- *     one production caller, `codingToolAuthorityPort.ts`'s `catalogFacadeBridgeFor`, passes exactly
- *     that -- a snapshot built once via `createOpenCodeGatewayToolCatalogAdvertisement`), so
- *     `projectionDrift` is a guaranteed no-op for it. A provider function lets a future composition
- *     supply a genuinely live catalog source; `dispatchCovered` then re-derives the projection
- *     identity before every dispatch and settles `invalid`/`projection-mismatch` (fail closed,
- *     before the handler ever runs) the moment the live projection digest no longer matches the one
- *     captured at construction. Wiring an actual live catalog source into `catalogFacadeBridgeFor`
- *     remains open follow-up work outside this file's write scope (tracked as outOfScopeNeeds).
- *   - authoritative deadline / timeout and late-completion quarantine (AC6, AC8 partial):
- *     `runReservedWithDeadline` races the wrapped handler against `descriptor.bounds.maxDurationMs`
- *     and settles `timeout`/`deadline-exceeded` (never `cancelled`) when the deadline wins. The
- *     handler is never abandoned unobserved: a resolution or rejection that arrives after the
- *     deadline has already settled the invocation is discarded via a real
- *     `tool-catalog.completion-discarded` line instead of an unhandled rejection or a second
- *     settlement.
- *
- * Still genuinely open, and NOT closed by this bridge (outOfScopeNeeds, precise patches reported
- * against the owning files in the #3413 F8 review rather than guessed here):
- *   - `busy` and cross-process-restart dedup (AC8) need the same idempotency-registry discipline
- *     `codingToolFacade.ts`'s `executeStagedEdit` already applies to `edit` via
- *     `CodingToolInvocationRegistry`, extended to every catalog-bridged action family -- a
- *     composition change in `codingToolFacade.ts`/`codingToolAuthorityPort.ts`, not this file.
- *   - opaque cursors (AC7) need a `CodingToolInvocationRegistry` threaded into this bridge's
- *     construction from the composition layer, plus a page/cursor-shaped return contract on the
- *     `search`/`discover` domain handlers -- both outside this file's write scope.
- *   - a result schema/size bound before `completed` (`result-contract-failed`, part of AC6) is
- *     deliberately NOT added here: `run()`'s resolved value is `unknown` in production
- *     (`codingToolFacade.ts`'s `runDelegate` returns `Promise<unknown>`, not a catalog-JSON
- *     envelope), and the real shape of every one of the ~9 covered action families' results was not
- *     individually verified in this review's time budget. A blanket `captureCatalogJson`-style
- *     bound risks turning legitimate production results into spurious `result-contract-failed`
- *     rejections; that verification belongs with whoever owns each domain handler's result
- *     contract, not a guess made here.
- * This bridge reimplements its own compact reserve/settle/account bookkeeping below
- * (`dispatchCovered`/`runReserved`/`settleSuccess`/`settleFailure`), sharing only the fault
- * vocabulary and accounting discipline with `CatalogInvocation`, never its offer/dispatch/cursor
- * state machine.
- *
- * Every canonical id below is an unambiguous mapping from the IPC action shape (as
- * `opencodeRuntimeAdapter.ts`'s `wireRequestFor`/`parseDraftToolRequest` actually produce it for a
- * model tool call) to a real production catalog canonical tool id (OPENCODE_GATEWAY_CATALOG,
- * opencodeToolSchemas.ts / opencode.ts). A request shape absent from `catalogIdFor` is uncovered:
- * `dispatch` below runs the existing handler unchanged and records one body-free
- * `tool-catalog.dispatch-unbound` line instead of a lifecycle pair -- never zero evidence.
- *
- * `read` is the one action with a real 1:1 catalog tool (`keiko.workspace.read`) that is
- * deliberately left OUT of `catalogIdFor`: the catalog's model-facing schema requires `startLine`
- * and `maxLines` (opencode.ts's `readSpec`, mirrored by the real wire schema in
- * opencodeToolSchemas.ts, which already requires both today) while `CodingToolActionRequest`'s
- * `read` variant keeps them optional for internal callers this bridge's write scope may not touch
- * (codingToolIpc.ts's `readRequest` parser, opencodeRuntimeAdapter.ts, both outside/forbidden for
- * this change). Binding it without knowing every internal caller's expectation would risk silently
- * changing read-window bounds; left uncovered and reported rather than guessed.
- *
- * `command` and `connector` have no catalog descriptor at all yet (no `opencode.ts` spec models
- * them), so both stay structurally uncovered here, not merely unmapped.
- */
-function gitCatalogId(
-  request: Extract<CodingToolActionRequest, { readonly action: "git" }>,
-): string | undefined {
-  switch (request.operation) {
-    case "status":
-      return "keiko.git.status";
-    case "diff":
-      return "keiko.git.diff";
-    case "ci":
-      return "keiko.ci.status";
-    case "stage":
-      // RuntimeGitRequest's stage variant is exhaustively "propose" | "execute" -- no third phase.
-      return request.phase === "propose" ? "keiko.git.stage" : "keiko.git.execute";
+const OPENCODE_CATALOG_ADVERTISEMENT = createOpenCodeGatewayToolCatalogAdvertisement(0);
+const OPENCODE_CATALOG_DESCRIPTORS = OPENCODE_CATALOG_ADVERTISEMENT.projection.tools.flatMap(
+  (tool) => {
+    const descriptor = lookupCatalogTool(OPENCODE_CATALOG_ADVERTISEMENT.catalog, tool.toolRef);
+    return descriptor === undefined ? [] : [descriptor];
+  },
+);
+
+export interface CanonicalCatalogContext {
+  readonly runId: string;
+  readonly correlationId: string;
+  readonly workspaceRoot: string;
+  readonly workspaceIdentity: string;
+  readonly workspaceRevision: string;
+  readonly authorityExpiresAt: string;
+  readonly now: number;
+}
+
+export interface CanonicalCatalogFacadeBridgeInput {
+  readonly authority: CodingToolAuthorityPort;
+  readonly previewAuthority: CodingToolAuthorityPreview;
+  readonly invocationRegistry: CodingToolInvocationRegistry;
+  readonly context: () => CanonicalCatalogContext | undefined;
+  readonly logPort: CatalogLifecycleLogPort;
+  readonly approvalAvailable: boolean;
+  readonly budgetPort?: CatalogToolBudgetPort | undefined;
+  readonly unavailableOptionalTools?: () => ReadonlySet<OpenCodeOptionalToolName>;
+}
+
+export interface CanonicalCatalogFacadeBridge {
+  readonly covers: (request: CodingToolActionRequest) => boolean;
+  readonly recordUnbound: (request: CodingToolActionRequest, input: CodingToolFacadeInput) => void;
+  readonly execute: (
+    request: CodingToolActionRequest,
+    input: CodingToolFacadeInput,
+    run: (signal: AbortSignal, mutationGuard: CodingToolMutationGuard) => Promise<CodingToolResult>,
+  ) => Promise<CodingToolResult>;
+}
+
+interface CatalogAction {
+  readonly toolId: string;
+  readonly arguments: CatalogJsonValue;
+}
+
+function workspaceCatalogAction(request: CodingToolActionRequest): CatalogAction | undefined {
+  if (request.action === "read")
+    return request.startLine === undefined || request.maxLines === undefined
+      ? undefined
+      : {
+          toolId: "keiko.workspace.read",
+          arguments: {
+            relativePath: request.relativePath,
+            startLine: request.startLine,
+            maxLines: request.maxLines,
+          },
+        };
+  if (request.action === "discover")
+    return {
+      toolId: "keiko.workspace.discover",
+      arguments: { query: request.query, maxResults: request.maxResults },
+    };
+  if (request.action !== "search" || request.repositoryRequest.kind !== "search") return undefined;
+  const value = request.repositoryRequest;
+  return {
+    toolId: "keiko.repo.search",
+    arguments: {
+      mode: value.mode,
+      query: value.query,
+      caseSensitive: value.caseSensitive,
+      includeGlobs: value.includeGlobs,
+      excludeGlobs: value.excludeGlobs,
+      maxResults: value.maxResults,
+    },
+  };
+}
+
+function editCatalogAction(
+  request: Extract<CodingToolActionRequest, { readonly action: "edit" }>,
+): CatalogAction {
+  return {
+    toolId: "keiko.changeset.edit",
+    arguments: captureCatalogJson({
+      changeset: {
+        ...request.changeset,
+        selectedFiles:
+          request.changeset.selectedFiles ?? request.changeset.files.map((file) => file.file),
+      },
+    }),
+  };
+}
+
+// Exhaustive translation from the closed IPC action union into canonical catalog actions.
+// eslint-disable-next-line complexity -- each branch names one contract-owned action variant
+function catalogActionFor(request: CodingToolActionRequest): CatalogAction | undefined {
+  if (request.action === "read" || request.action === "discover" || request.action === "search")
+    return workspaceCatalogAction(request);
+  if (request.action === "edit") return editCatalogAction(request);
+  switch (request.action) {
+    case "verification":
+      return isOpenCodeVerificationId(request.verifierId)
+        ? { toolId: "keiko.verification.run", arguments: { verifierId: request.verifierId } }
+        : undefined;
+    case "egress":
+      return { toolId: "keiko.research.fetch", arguments: { target: request.target } };
+    case "skill":
+      return { toolId: "keiko.skill.invoke", arguments: { skillId: request.skillId } };
+    case "child-agent":
+      return {
+        toolId: "keiko.child.run",
+        arguments: { objective: request.objective, maxToolCalls: request.maxToolCalls },
+      };
+    case "git":
+      return gitCatalogAction(request);
+    case "delivery":
+      return deliveryCatalogAction(request);
     default:
-      // "read" | "write": the lower-level git port, never produced by a model tool call today.
       return undefined;
   }
 }
 
-// `keiko.git.execute` redeems ANY approved stage/commit/push/pull-request proposal (one shared
-// tool, opencode.ts's `gitExecuteSpec`) -- `intent` only distinguishes which proposal kind at the
-// `delivery` layer, so every execute-phase intent except "merge" (which no tool models) resolves to
-// the same canonical id.
-function deliveryCatalogId(
-  request: Extract<CodingToolActionRequest, { readonly action: "delivery" }>,
-): string | undefined {
-  if (request.phase === "execute")
-    return request.intent === "merge" ? undefined : "keiko.git.execute";
-  if (request.phase !== "propose") return undefined; // "reconcile" or no phase: not model-facing
-  switch (request.intent) {
-    case "commit":
-      return "keiko.git.commit";
-    case "push":
-      return "keiko.git.push";
-    case "pull-request":
-      return "keiko.git.pullrequest";
-    default:
-      return undefined; // "merge": no proposal tool models it
-  }
-}
-
-const SIMPLE_CATALOG_TOOL_IDS: Partial<Record<CodingToolActionRequest["action"], string>> =
-  Object.freeze({
-    discover: "keiko.workspace.discover",
-    search: "keiko.repo.search",
-    edit: "keiko.changeset.edit",
-    verification: "keiko.verification.run",
-    egress: "keiko.research.fetch",
-    skill: "keiko.skill.invoke",
-    "child-agent": "keiko.child.run",
-  });
-
-function catalogIdFor(request: CodingToolActionRequest): string | undefined {
-  if (request.action === "git") return gitCatalogId(request);
-  if (request.action === "delivery") return deliveryCatalogId(request);
-  return SIMPLE_CATALOG_TOOL_IDS[request.action];
-}
-
-export interface CatalogFacadeBudgetReservation {
-  readonly reservationId: string;
-}
-export interface CatalogFacadeBudgetPort {
-  readonly available: () => boolean;
-  readonly reserve: () => CatalogFacadeBudgetReservation;
-  readonly commit: (reservation: CatalogFacadeBudgetReservation) => void;
-  readonly release: (reservation: CatalogFacadeBudgetReservation) => void;
-}
-
-/**
- * Always-available in-memory reservation bookkeeping: real reservation ids and real commit/
- * release accounting, no enforced ceiling. #3413 explicitly scopes run-level counters to its own
- * owner ("Do not create harness run/model/tool/command/wall-time counters or a second run
- * terminal"); binding this port to a real enforced ceiling is tracked as follow-up work rather
- * than invented here.
- */
-export function createInMemoryCatalogFacadeBudgetPort(
-  mintId: () => string = randomUUID,
-): CatalogFacadeBudgetPort {
-  return Object.freeze({
-    available: (): boolean => true,
-    reserve: (): CatalogFacadeBudgetReservation => Object.freeze({ reservationId: mintId() }),
-    commit: (): void => undefined,
-    release: (): void => undefined,
-  });
-}
-
-export interface CatalogFacadeBridgeContext {
-  readonly correlationId?: string | undefined;
-  readonly parentCorrelationId?: string | undefined;
-}
-export interface CatalogFacadeBridgeInput {
-  /**
-   * A static catalog cannot drift after construction, so passing one keeps `dispatchCovered`'s
-   * projection revalidation (AC3) a guaranteed no-op -- today's one production caller passes a
-   * static snapshot. A `() => ToolCatalog` provider lets a future composition supply a genuinely
-   * live source and get real per-dispatch drift detection; see the file header for the full
-   * decision record.
-   */
-  readonly catalog: ToolCatalog | (() => ToolCatalog);
-  readonly profile: CatalogVersionRef;
-  readonly budget: CatalogFacadeBudgetPort;
-  readonly logPort: CatalogLifecycleLogPort;
-  readonly context: () => CatalogFacadeBridgeContext;
-  readonly mintId?: () => string;
-  readonly now?: () => number;
-}
-export interface CatalogFacadeBridge {
-  readonly resolve: (request: CodingToolActionRequest) => ToolDescriptor | undefined;
-  /** Resolves a catalog binding for `request` and settles around `run`; uncovered actions just run. */
-  readonly dispatch: <T>(request: CodingToolActionRequest, run: () => Promise<T>) => Promise<T>;
-}
-
-interface BridgeRuntime {
-  readonly input: CatalogFacadeBridgeInput;
-  readonly projection: CompiledToolProjection;
-  readonly mintId: () => string;
-  readonly now: () => number;
-}
-interface InvocationMeta {
-  readonly descriptor: ToolDescriptor;
-  readonly invocationId: string;
-  readonly settlementId: string;
-  readonly startedAt: number;
-}
-interface TerminalFields extends InvocationMeta {
-  readonly status: ToolResultStatus;
-  readonly reason: ToolResultReason;
-  readonly reservationId: string | null;
-  readonly effectStarted: boolean;
-  readonly budgetDisposition: ToolBudgetDisposition;
-  readonly error?: unknown;
-}
-
-function currentCatalog(input: CatalogFacadeBridgeInput): ToolCatalog {
-  return typeof input.catalog === "function" ? input.catalog() : input.catalog;
-}
-
-type ResolutionOutcome =
-  | { readonly kind: "uncovered" }
-  | { readonly kind: "resolved"; readonly descriptor: ToolDescriptor }
-  | { readonly kind: "missing"; readonly canonicalId: string };
-
-/** `catalogIdFor` returning `undefined` is a designed exclusion (see the coverage tables above);
- * `catalogIdFor` returning an id `lookupCatalogTool` cannot find is a real readiness gap -- the
- * composed catalog dropped a canonical id this bridge maps to -- and must never be treated the
- * same way (#3413 F8 review, finding b1-1). */
-function resolveAction(catalog: ToolCatalog, request: CodingToolActionRequest): ResolutionOutcome {
-  const canonicalId = catalogIdFor(request);
-  if (canonicalId === undefined) return { kind: "uncovered" };
-  const descriptor = lookupCatalogTool(catalog, createToolRef(canonicalId, 1));
-  return descriptor === undefined
-    ? { kind: "missing", canonicalId }
-    : { kind: "resolved", descriptor };
-}
-
-function resolveDescriptor(
-  catalog: ToolCatalog,
-  request: CodingToolActionRequest,
-): ToolDescriptor | undefined {
-  const outcome = resolveAction(catalog, request);
-  return outcome.kind === "resolved" ? outcome.descriptor : undefined;
-}
-
-function correlationIdFor(runtime: BridgeRuntime): string {
-  const ctx = runtime.input.context();
-  return typeof ctx.correlationId === "string" && isValidCorrelationId(ctx.correlationId)
-    ? ctx.correlationId
-    : UNKNOWN_CORRELATION_ID;
-}
-
-function identityFields(runtime: BridgeRuntime): {
-  readonly correlationId: string;
-  readonly catalogRevision: CompiledToolProjection["catalogRevision"];
-  readonly profile: CompiledToolProjection["profile"];
-  readonly projectionDigest: CompiledToolProjection["projectionDigest"];
-  readonly parentCorrelationId?: string;
-} {
-  const ctx = runtime.input.context();
-  return {
-    correlationId: correlationIdFor(runtime),
-    catalogRevision: runtime.projection.catalogRevision,
-    profile: runtime.projection.profile,
-    projectionDigest: runtime.projection.projectionDigest,
-    ...(ctx.parentCorrelationId === undefined
-      ? {}
-      : { parentCorrelationId: ctx.parentCorrelationId }),
-  };
-}
-
-/**
- * A request the catalog does not (yet) cover keeps its exact prior dispatch behaviour, but must
- * never run with zero evidence: a single body-free line records which action ran unbound, so an
- * operator reading the activity log can distinguish "not catalog-covered" from "the catalog silently
- * dropped this call" (#3413 F8 review). `action` alone is logged -- one of twelve closed literal
- * values (`CodingToolAction`), never request content.
- */
-function emitUnbound(runtime: BridgeRuntime, request: CodingToolActionRequest): void {
-  const correlationId = correlationIdFor(runtime);
-  try {
-    runtime.input.logPort.primary.write({
-      category: "security",
-      op: "tool-catalog.dispatch-unbound",
-      correlationId,
-      extra: { action: request.action },
-    });
-  } catch (error) {
-    emitServerDiagnostic(
-      runtime.input.logPort.diagnostics,
-      serverDiagnosticFromError({
-        correlationId,
-        operation: "tool-catalog.lifecycle-sink-failed",
-        source: "tool-catalog-dispatch-unbound",
-        error,
-        redact: () => "server-operation-failed",
-      }),
-    );
-  }
-}
-
-/**
- * A canonical id `catalogIdFor` produced but the composed catalog does not contain is a readiness
- * failure, never silent unbound execution: the handler never runs. Emits the real
- * `tool-catalog.bind-unavailable` op (readiness `unavailable`, reason `unknown-tool`) so an operator
- * can distinguish "this composition dropped a tool the bridge expects" from every other outcome
- * (#3413 F8 review, findings b1-1/AC10/AC11 -- this op was previously reachable only from the
- * unwired binder's own tests).
- */
-function emitBindUnavailable(runtime: BridgeRuntime): void {
-  const correlationId = correlationIdFor(runtime);
-  try {
-    emitToolLifecycleEvent(runtime.input.logPort, {
-      ...identityFields(runtime),
-      op: "tool-catalog.bind-unavailable",
-      readiness: "unavailable",
-      reason: "unknown-tool",
-    });
-  } catch (error) {
-    emitServerDiagnostic(
-      runtime.input.logPort.diagnostics,
-      serverDiagnosticFromError({
-        correlationId,
-        operation: "tool-catalog.lifecycle-sink-failed",
-        source: "tool-catalog-bind-unavailable",
-        error,
-        redact: () => "server-operation-failed",
-      }),
-    );
-  }
-}
-
-function dispatchMissing<T>(runtime: BridgeRuntime): Promise<T> {
-  emitBindUnavailable(runtime);
-  return Promise.reject(new CatalogDispatchFault("invalid", "unknown-tool"));
-}
-
-function emitSettlement(runtime: BridgeRuntime, fields: TerminalFields): void {
-  const receipt = captureToolInvocationReceipt({
-    invocationId: fields.invocationId,
-    settlementId: fields.settlementId,
-    reservationId: fields.reservationId,
-    status: fields.status,
-    effectStarted: fields.effectStarted,
-    budgetDisposition: fields.budgetDisposition,
-  });
-  emitToolLifecycleEvent(runtime.input.logPort, {
-    ...identityFields(runtime),
-    op: "tool-catalog.invocation-settled",
-    ...receipt,
-    toolRef: fields.descriptor.toolRef,
-    reason: fields.reason,
-    inputBytes: 0,
-    outputBytes: 0,
-    resultCount: fields.status === "completed" ? 1 : 0,
-    durationMs: Math.max(0, runtime.now() - fields.startedAt),
-    truncated: false,
-    ...(fields.status === "failed"
-      ? {
-          errorKind: errorKindOf(fields.error),
-          frames: keikoStackFrames(fields.error),
-          causeChain: causeChain(fields.error),
-        }
-      : {}),
-  });
-}
-
-function emitStarted(
-  runtime: BridgeRuntime,
-  meta: InvocationMeta,
-  reservation: CatalogFacadeBudgetReservation,
-): void {
-  emitToolLifecycleEvent(runtime.input.logPort, {
-    ...identityFields(runtime),
-    op: "tool-catalog.invocation-started",
-    invocationId: meta.invocationId,
-    toolRef: meta.descriptor.toolRef,
-    state: "started",
-    reason: "none",
-    reservationId: reservation.reservationId,
-  });
-}
-
-/**
- * Settles a "denied" outcome and throws before the wrapped handler ever runs (fail closed). Throws
- * the shared `CatalogDispatchFault` -- the exact exception-shaping primitive
- * `CatalogInvocation.reserve()`/`.fail()` (catalogToolSettlement.ts) uses for every rejection --
- * rather than a second, bridge-local error type, so both settlement implementations attach the
- * same `status`/`reason` vocabulary to a fault and a caller can branch on one exception class
- * regardless of which path produced it.
- */
-function denyBudgetExhausted(runtime: BridgeRuntime, meta: InvocationMeta): never {
-  emitSettlement(runtime, {
-    ...meta,
-    status: "denied",
-    reason: "budget-exhausted",
-    reservationId: null,
-    effectStarted: false,
-    budgetDisposition: "not-reserved",
-  });
-  throw new CatalogDispatchFault("denied", "budget-exhausted");
-}
-
-/**
- * A live (function-provided) catalog is re-derived and compared against the projection captured at
- * construction; a static catalog cannot drift by construction, so this is a guaranteed no-op for
- * today's one production caller (#3413 F8 review, AC3 -- see the file header decision record). A
- * catalog that no longer compiles cleanly counts as drift too, rather than propagating an
- * unclassified `compileToolProjection` failure.
- */
-function projectionDrift(runtime: BridgeRuntime): boolean {
-  if (typeof runtime.input.catalog !== "function") return false;
-  try {
-    const live = compileToolProjection(runtime.input.catalog(), runtime.input.profile);
-    return live.projectionDigest !== runtime.projection.projectionDigest;
-  } catch {
-    return true;
-  }
-}
-
-/** Settles an `invalid`/`projection-mismatch` outcome and throws before the wrapped handler ever
- * runs (fail closed) -- the catalog this bridge was built from has since been revised. */
-function denyProjectionMismatch(runtime: BridgeRuntime, meta: InvocationMeta): never {
-  emitSettlement(runtime, {
-    ...meta,
-    status: "invalid",
-    reason: "projection-mismatch",
-    reservationId: null,
-    effectStarted: false,
-    budgetDisposition: "not-reserved",
-  });
-  throw new CatalogDispatchFault("invalid", "projection-mismatch");
-}
-
-/**
- * Classifies a rejection exactly the way `CatalogInvocation.fail()` does: a `CatalogDispatchFault`
- * carries its own settled `status`/`reason` (e.g. a budget port failure surfaced through
- * `catalogBudgetOperation`). A mid-flight `AbortSignal` firing (ADR-0175 D6's "Mid-flight abort"
- * row) settles `cancelled`/`parent-cancelled` exactly as `catalogToolSettlement.ts`'s
- * `checkStopped()` does for the real binder path -- detected through `errorKindOf`, the same
- * content-free classifier this bridge already uses for the settlement's `errorKind` field, rather
- * than a second abort-detection helper. Anything else is an opaque handler rejection.
- */
-function classifyFailure(error: unknown): { status: ToolResultStatus; reason: ToolResultReason } {
-  if (error instanceof CatalogDispatchFault) return { status: error.status, reason: error.reason };
-  if (errorKindOf(error) === "AbortError")
-    return { status: "cancelled", reason: "parent-cancelled" };
-  return { status: "failed", reason: "handler-failed" };
-}
-
-/**
- * Commits or releases a settled reservation, mirroring `CatalogInvocation.account()`
- * (catalogToolSettlement.ts): exactly one accounting call per reservation, never both. A failing
- * accounting call settles as the canonical `budget-port-failed`/`*-uncertain` pair instead of the
- * caller's own error, because the reservation's true state is now unknown.
- */
-function settleReservation(
-  runtime: BridgeRuntime,
-  reservation: CatalogFacadeBudgetReservation,
-  effectStarted: boolean,
-): { readonly budgetDisposition: ToolBudgetDisposition; readonly accountingFault?: Error } {
-  try {
-    if (effectStarted) runtime.input.budget.commit(reservation);
-    else runtime.input.budget.release(reservation);
-    return { budgetDisposition: effectStarted ? "committed" : "released" };
-  } catch (error_) {
+function gitCatalogAction(
+  request: Extract<CodingToolActionRequest, { readonly action: "git" }>,
+): CatalogAction | undefined {
+  if (request.operation === "status") return { toolId: "keiko.git.status", arguments: {} };
+  if (request.operation === "diff")
     return {
-      budgetDisposition: effectStarted ? "commit-uncertain" : "release-uncertain",
-      accountingFault:
-        error_ instanceof Error ? error_ : new Error("catalog-budget-accounting-failed"),
+      toolId: "keiko.git.diff",
+      arguments: { scope: request.scope, paths: [...request.paths] },
     };
-  }
+  if (request.operation === "ci")
+    return {
+      toolId: "keiko.ci.status",
+      arguments: { forceFresh: request.forceFresh ?? false },
+    };
+  if (request.operation !== "stage") return undefined;
+  return request.phase === "propose"
+    ? { toolId: "keiko.git.stage", arguments: { paths: [...request.paths] } }
+    : {
+        toolId: "keiko.git.execute",
+        arguments: { kind: "stage", proposalId: request.proposalId },
+      };
 }
 
-/** Settles the success path: commits the reservation once and fails closed if that commit itself
- * fails, instead of falling through to a second, unpaired `release()` on the same reservation. */
-function settleSuccess<T>(
-  runtime: BridgeRuntime,
-  meta: InvocationMeta,
-  reservation: CatalogFacadeBudgetReservation,
-  result: T,
-): T {
-  const accounting = settleReservation(runtime, reservation, true);
-  emitSettlement(runtime, {
-    ...meta,
-    status: accounting.accountingFault === undefined ? "completed" : "failed",
-    reason: accounting.accountingFault === undefined ? "none" : "budget-port-failed",
-    reservationId: reservation.reservationId,
-    effectStarted: true,
-    budgetDisposition: accounting.budgetDisposition,
-    error: accounting.accountingFault,
-  });
-  if (accounting.accountingFault !== undefined) throw accounting.accountingFault;
-  return result;
+function deliveryCatalogAction(
+  request: Extract<CodingToolActionRequest, { readonly action: "delivery" }>,
+): CatalogAction | undefined {
+  if (request.intent === "merge" || request.phase === undefined || request.phase === "reconcile")
+    return undefined;
+  if (request.phase === "execute")
+    return request.proposalId === undefined
+      ? undefined
+      : {
+          toolId: "keiko.git.execute",
+          arguments: { kind: request.intent, proposalId: request.proposalId },
+        };
+  if (request.intent === "commit")
+    return request.message === undefined
+      ? undefined
+      : { toolId: "keiko.git.commit", arguments: { message: request.message } };
+  if (request.intent === "push") return { toolId: "keiko.git.push", arguments: {} };
+  return request.title === undefined
+    ? undefined
+    : { toolId: "keiko.git.pullrequest", arguments: { title: request.title } };
 }
 
-/** Settles the failure path after the handler has started: conservatively commits the reservation
- * and reports the original rejection (classified through the shared `CatalogDispatchFault`
- * vocabulary), never the handler's own error masked by an unrelated accounting failure. */
-function settleFailure(
-  runtime: BridgeRuntime,
-  meta: InvocationMeta,
-  reservation: CatalogFacadeBudgetReservation,
-  error: unknown,
-): void {
-  const accounting = settleReservation(runtime, reservation, true);
-  const classified = classifyFailure(error);
-  emitSettlement(runtime, {
-    ...meta,
-    status: accounting.accountingFault === undefined ? classified.status : "failed",
-    reason: accounting.accountingFault === undefined ? classified.reason : "budget-port-failed",
-    reservationId: reservation.reservationId,
-    effectStarted: true,
-    budgetDisposition: accounting.budgetDisposition,
-    error: accounting.accountingFault ?? error,
-  });
-}
+type RequestIdentity = Readonly<{ actionId: string; idempotencyKey: string }>;
 
-/** Marker rejection for a deadline race, never surfaced to the caller: `runReservedWithDeadline`
- * always translates it into the canonical `CatalogDispatchFault("timeout","deadline-exceeded")`. */
-class CatalogFacadeDeadlineExceeded extends Error {
-  public constructor() {
-    super("catalog facade bridge deadline exceeded");
-  }
-}
-
-async function settleAfterHandler<T>(
-  runtime: BridgeRuntime,
-  meta: InvocationMeta,
-  reservation: CatalogFacadeBudgetReservation,
-  handlerPromise: Promise<T>,
-): Promise<T> {
-  let result: T;
-  try {
-    result = await handlerPromise;
-  } catch (error) {
-    settleFailure(runtime, meta, reservation, error);
-    throw error;
-  }
-  return settleSuccess(runtime, meta, reservation, result);
-}
-
-/** Settles a "timeout" outcome once the authoritative deadline has already won the race; mirrors
- * `settleFailure`'s conservative "commit, not release" accounting since an effect may already have
- * started and the handler was never actually cancelled, only abandoned. */
-function settleTimeout(
-  runtime: BridgeRuntime,
-  meta: InvocationMeta,
-  reservation: CatalogFacadeBudgetReservation,
-): void {
-  const accounting = settleReservation(runtime, reservation, true);
-  emitSettlement(runtime, {
-    ...meta,
-    status: accounting.accountingFault === undefined ? "timeout" : "failed",
-    reason: accounting.accountingFault === undefined ? "deadline-exceeded" : "budget-port-failed",
-    reservationId: reservation.reservationId,
-    effectStarted: true,
-    budgetDisposition: accounting.budgetDisposition,
-    error: accounting.accountingFault,
-  });
-}
-
-/** ADR-0175 D6's "Result/cancellation arrives after settled" row: a completion this bridge no
- * longer owns must never publish content, charge a budget again, or emit a second terminal event --
- * it is recorded as one body-free `tool-catalog.completion-discarded` line instead. */
-function emitDiscarded(runtime: BridgeRuntime, meta: InvocationMeta): void {
-  const correlationId = correlationIdFor(runtime);
-  try {
-    emitToolLifecycleEvent(runtime.input.logPort, {
-      ...identityFields(runtime),
-      op: "tool-catalog.completion-discarded",
-      invocationId: meta.invocationId,
-      toolRef: meta.descriptor.toolRef,
-      settlementId: meta.settlementId,
-      reason: "late-completion",
-    });
-  } catch (error) {
-    emitServerDiagnostic(
-      runtime.input.logPort.diagnostics,
-      serverDiagnosticFromError({
-        correlationId,
-        operation: "tool-catalog.lifecycle-sink-failed",
-        source: "tool-catalog-completion-discarded",
-        error,
-        redact: () => "server-operation-failed",
-      }),
-    );
-  }
-}
-
-/**
- * Races the wrapped handler against `descriptor.bounds.maxDurationMs`. The handler is attached to
- * immediately regardless of which side wins (never an unhandled rejection): if the deadline wins,
- * the invocation settles `timeout`/`deadline-exceeded` and any later handler resolution/rejection
- * is quarantined via `emitDiscarded` instead of double-settling or silently vanishing.
- */
-function armDeadlineTimeout(deadlineMs: number): {
-  readonly promise: Promise<never>;
-  readonly clear: () => void;
-} {
-  let timer: ReturnType<typeof setTimeout>;
-  const promise = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      reject(new CatalogFacadeDeadlineExceeded());
-    }, deadlineMs);
-    timer.unref();
-  });
+function workspaceRepresentative(
+  canonicalId: string,
+  base: RequestIdentity,
+): CodingToolActionRequest | undefined {
+  if (canonicalId === "keiko.workspace.discover")
+    return { ...base, action: "discover", query: "*", maxResults: 1 };
+  if (canonicalId === "keiko.workspace.read")
+    return { ...base, action: "read", relativePath: "README.md", startLine: 1, maxLines: 1 };
+  if (canonicalId !== "keiko.repo.search") return undefined;
   return {
-    promise,
-    clear: (): void => {
-      clearTimeout(timer);
+    ...base,
+    action: "search",
+    repositoryRequest: {
+      kind: "search",
+      mode: "literal",
+      query: "x",
+      caseSensitive: false,
+      includeGlobs: [],
+      excludeGlobs: [],
+      maxResults: 1,
     },
   };
 }
 
-function watchForLateCompletion<T>(
-  runtime: BridgeRuntime,
-  meta: InvocationMeta,
-  handlerPromise: Promise<T>,
-  timedOut: () => boolean,
-): void {
-  const tail = handlerPromise.then(
-    () => {
-      if (timedOut()) emitDiscarded(runtime, meta);
+function auxiliaryRepresentative(
+  canonicalId: string,
+  base: RequestIdentity,
+): CodingToolActionRequest | undefined {
+  if (canonicalId === "keiko.verification.run")
+    return { ...base, action: "verification", verifierId: "test" };
+  if (canonicalId === "keiko.research.fetch")
+    return { ...base, action: "egress", target: "https://example.invalid/" };
+  if (canonicalId === "keiko.skill.invoke")
+    return { ...base, action: "skill", skillId: "skl_fixture@1" };
+  if (canonicalId === "keiko.child.run")
+    return { ...base, action: "child-agent", objective: "inspect", maxToolCalls: 1 };
+  return undefined;
+}
+
+function deliveryRepresentative(
+  canonicalId: string,
+  base: RequestIdentity,
+): CodingToolActionRequest {
+  if (canonicalId === "keiko.git.status") return { ...base, action: "git", operation: "status" };
+  if (canonicalId === "keiko.git.diff")
+    return { ...base, action: "git", operation: "diff", scope: "working-tree", paths: ["a"] };
+  if (canonicalId === "keiko.git.stage")
+    return { ...base, action: "git", operation: "stage", phase: "propose", paths: ["a"] };
+  if (canonicalId === "keiko.git.commit")
+    return { ...base, action: "delivery", intent: "commit", phase: "propose", message: "change" };
+  if (canonicalId === "keiko.git.push")
+    return { ...base, action: "delivery", intent: "push", phase: "propose" };
+  if (canonicalId === "keiko.git.pullrequest")
+    return {
+      ...base,
+      action: "delivery",
+      intent: "pull-request",
+      phase: "propose",
+      title: "Change",
+    };
+  if (canonicalId === "keiko.git.execute")
+    return { ...base, action: "git", operation: "stage", phase: "execute", proposalId: "stage-1" };
+  return { ...base, action: "git", operation: "ci", forceFresh: false };
+}
+
+function representative(
+  canonicalId: string,
+  identity: CatalogActionIdentity,
+): CodingToolActionRequest {
+  const base = { actionId: identity.actionId, idempotencyKey: identity.idempotencyKey };
+  const workspace = workspaceRepresentative(canonicalId, base);
+  if (workspace !== undefined) return workspace;
+  if (canonicalId === "keiko.changeset.edit")
+    return {
+      ...base,
+      action: "edit",
+      changeset: {
+        patch: "--- a/a\n+++ b/a\n@@ -1 +1 @@\n-a\n+b\n",
+        files: [{ file: "a", expectedContentHash: "0".repeat(64) }],
+        selectedFiles: ["a"],
+      },
+    };
+  return auxiliaryRepresentative(canonicalId, base) ?? deliveryRepresentative(canonicalId, base);
+}
+
+function optionalUnavailable(
+  canonicalId: string,
+  unavailable: ReadonlySet<OpenCodeOptionalToolName>,
+): boolean {
+  return (
+    (canonicalId === "keiko.research.fetch" && unavailable.has("keiko_research_fetch")) ||
+    (canonicalId === "keiko.skill.invoke" && unavailable.has("keiko_skill")) ||
+    (canonicalId === "keiko.child.run" && unavailable.has("keiko_child_agent"))
+  );
+}
+
+function receiptBudget(): CatalogToolBudgetPort {
+  const live = new Set<string>();
+  return {
+    available: (_descriptor, context): boolean => !context.signal.aborted,
+    reserve: (
+      _descriptor,
+      context,
+      invocationId,
+    ): { readonly reservationId: string } | undefined => {
+      if (context.signal.aborted || live.has(invocationId)) return undefined;
+      live.add(invocationId);
+      return { reservationId: invocationId };
     },
-    () => {
-      if (timedOut()) emitDiscarded(runtime, meta);
+    check: (reservation, context): boolean =>
+      !context.signal.aborted && live.has(reservation.reservationId),
+    commit: (reservation): void => {
+      live.delete(reservation.reservationId);
+    },
+    release: (reservation): void => {
+      live.delete(reservation.reservationId);
+    },
+  };
+}
+
+function trustedContext(
+  context: CanonicalCatalogContext,
+  input: CodingToolFacadeInput,
+): CatalogTrustedContext | undefined {
+  if (input.capability === undefined) return undefined;
+  const signal = input.signal ?? new AbortController().signal;
+  return {
+    runId: context.runId,
+    correlationId: context.correlationId,
+    workspaceRoot: context.workspaceRoot,
+    workspaceIdentity: context.workspaceIdentity,
+    workspaceRevision: context.workspaceRevision,
+    authority: input.capability,
+    authorityExpiresAt: context.authorityExpiresAt,
+    deadlineAt: context.authorityExpiresAt,
+    signal,
+  };
+}
+
+function bindingFor(
+  descriptor: ToolDescriptor,
+  request: CodingToolActionRequest,
+  run: (signal: AbortSignal, mutationGuard: CodingToolMutationGuard) => Promise<CodingToolResult>,
+  recordResult: (result: CodingToolResult) => void,
+  unavailable: ReadonlySet<OpenCodeOptionalToolName>,
+): CatalogToolHandlerBinding {
+  return {
+    toolRef: descriptor.toolRef,
+    descriptorDigest: descriptor.descriptorDigest,
+    handlerId: descriptor.handlerRequirement.id,
+    handlerVersion: descriptor.handlerRequirement.contractVersion,
+    catalogAction: descriptor.actionMapping[0]?.action ?? "",
+    readiness: () =>
+      optionalUnavailable(descriptor.toolRef.canonicalId, unavailable) ? "unavailable" : "ready",
+    previewAction: (identity) => representative(descriptor.toolRef.canonicalId, identity),
+    actionFor: (_argumentsValue, identity) =>
+      descriptor.toolRef.canonicalId === catalogActionFor(request)?.toolId
+        ? { ...request, actionId: identity.actionId, idempotencyKey: identity.idempotencyKey }
+        : representative(descriptor.toolRef.canonicalId, identity),
+    execute: async (
+      _argumentsValue,
+      context: CatalogHandlerContext,
+    ): Promise<CatalogHandlerResult> => {
+      const result = await run(context.signal, context.mutationGuard);
+      recordResult(result);
+      if (result.status === "failed") throw new CatalogDispatchFault("failed", "handler-failed");
+      return {
+        data: JSON.stringify(result),
+        resultCount: 1,
+        page: { truncated: false, reason: "none", cursor: null },
+      };
+    },
+  };
+}
+
+type CatalogDispatchOutcome = Awaited<
+  ReturnType<ReturnType<typeof createCatalogToolBinder>["dispatch"]>
+>;
+
+function preservedExecutedResult(
+  outcome: CatalogDispatchOutcome,
+  executed: CodingToolResult | undefined,
+): CodingToolResult | undefined {
+  if (outcome.kind === "replayed") return undefined;
+  if (outcome.result.status === "completed" && executed !== undefined) return executed;
+  if (
+    outcome.result.status === "failed" &&
+    outcome.result.reason === "handler-failed" &&
+    executed?.status === "failed"
+  ) {
+    return executed;
+  }
+  return undefined;
+}
+
+function resultFor(
+  outcome: CatalogDispatchOutcome,
+  executed: CodingToolResult | undefined,
+): CodingToolResult {
+  if (outcome.kind === "replayed") return { status: "denied", evidence: [] };
+  const preserved = preservedExecutedResult(outcome, executed);
+  if (preserved !== undefined) return preserved;
+  if (outcome.result.status !== "completed") {
+    const status = outcome.result.status === "timeout" ? "failed" : outcome.result.status;
+    return { status, evidence: [] };
+  }
+  if (typeof outcome.result.data !== "string") return { status: "failed", evidence: [] };
+  try {
+    return JSON.parse(outcome.result.data) as CodingToolResult;
+  } catch {
+    return { status: "failed", evidence: [] };
+  }
+}
+
+function expiredResult(request: CodingToolActionRequest): CodingToolResult {
+  return request.action === "search"
+    ? { status: "failed", evidence: [], reasonCode: "search-authority-revoked" }
+    : { status: "denied", evidence: [] };
+}
+
+function emitExpiredBinding(
+  advertisement: ReturnType<typeof createOpenCodeGatewayToolCatalogAdvertisement>,
+  context: CanonicalCatalogContext,
+  logPort: CatalogLifecycleLogPort,
+): void {
+  emitToolLifecycleEvent(logPort, {
+    op: "tool-catalog.bind-unavailable",
+    correlationId: context.correlationId,
+    catalogRevision: advertisement.projection.catalogRevision,
+    profile: advertisement.projection.profile,
+    projectionDigest: advertisement.projection.projectionDigest,
+    readiness: "unavailable",
+    reason: "authority-expired",
+  });
+}
+
+function composedBindings(
+  descriptors: readonly ToolDescriptor[],
+  request: CodingToolActionRequest,
+  run: (signal: AbortSignal, mutationGuard: CodingToolMutationGuard) => Promise<CodingToolResult>,
+  recordResult: (result: CodingToolResult) => void,
+  unavailable: ReadonlySet<OpenCodeOptionalToolName>,
+): readonly CatalogToolHandlerBinding[] {
+  return descriptors.flatMap((descriptor) =>
+    optionalUnavailable(descriptor.toolRef.canonicalId, unavailable)
+      ? []
+      : [bindingFor(descriptor, request, run, recordResult, unavailable)],
+  );
+}
+
+/** The same concrete OpenCode handler composition used for dispatch, projected for advertisement. */
+export function createCanonicalOpenCodeHandlerCoverage(
+  unavailable: ReadonlySet<OpenCodeOptionalToolName>,
+): OpenCodeGatewayHandlerCoverage {
+  const advertisement = OPENCODE_CATALOG_ADVERTISEMENT;
+  const descriptors = OPENCODE_CATALOG_DESCRIPTORS;
+  const fallback = representative("keiko.workspace.discover", {
+    actionId: "coverage",
+    idempotencyKey: "coverage",
+  });
+  const bindings = composedBindings(
+    descriptors,
+    fallback,
+    (): Promise<CodingToolResult> =>
+      Promise.reject(new CatalogDispatchFault("failed", "handler-unavailable")),
+    () => undefined,
+    unavailable,
+  );
+  const handlers: readonly CatalogBoundHandler[] = descriptors.map((descriptor) => ({
+    descriptor,
+    binding: bindings.find(
+      (binding) => binding.toolRef.canonicalId === descriptor.toolRef.canonicalId,
+    ),
+  }));
+  return {
+    readinessByToolId: new Map(
+      handlers.map((handler) => [
+        handler.descriptor.toolRef.canonicalId,
+        catalogHandlerReadiness(handler),
+      ]),
+    ),
+    handlerSetDigest: computeHandlerSetDigest(advertisement.projection, handlers),
+  };
+}
+
+function createDispatchBinder(
+  bridgeInput: CanonicalCatalogFacadeBridgeInput,
+  request: CodingToolActionRequest,
+  facadeInput: CodingToolFacadeInput,
+  run: (signal: AbortSignal, mutationGuard: CodingToolMutationGuard) => Promise<CodingToolResult>,
+  recordResult: (result: CodingToolResult) => void,
+): ReturnType<typeof createCatalogToolBinder> {
+  const current = bridgeInput.context();
+  if (current === undefined) throw new TypeError("Catalog context unavailable");
+  const unavailable = bridgeInput.unavailableOptionalTools?.() ?? new Set();
+  return createCatalogToolBinder(
+    {
+      projection: OPENCODE_CATALOG_ADVERTISEMENT.projection,
+      handlerBindings: composedBindings(
+        OPENCODE_CATALOG_DESCRIPTORS,
+        request,
+        run,
+        recordResult,
+        unavailable,
+      ),
+      authorityPort: {
+        preview: bridgeInput.previewAuthority,
+        admit: bridgeInput.authority.admit,
+      },
+      budgetPort: bridgeInput.budgetPort ?? receiptBudget(),
+      approvalPort: {
+        available: () => bridgeInput.approvalAvailable,
+        request: () => Promise.resolve(undefined),
+      },
+      logPort: bridgeInput.logPort,
+    },
+    {
+      catalog: OPENCODE_CATALOG_ADVERTISEMENT.catalog,
+      context: () => {
+        const live = bridgeInput.context();
+        const trusted = live === undefined ? undefined : trustedContext(live, facadeInput);
+        if (trusted === undefined) throw new TypeError("Catalog context unavailable");
+        return trusted;
+      },
+      now: () => bridgeInput.context()?.now ?? current.now,
+      mintId: randomUUID,
+      invocationRegistry: bridgeInput.invocationRegistry,
     },
   );
-  void tail;
 }
 
-async function runReservedWithDeadline<T>(
-  runtime: BridgeRuntime,
-  meta: InvocationMeta,
-  reservation: CatalogFacadeBudgetReservation,
-  handlerPromise: Promise<T>,
-  deadlineMs: number,
-): Promise<T> {
-  let timedOut = false;
-  const deadline = armDeadlineTimeout(deadlineMs);
-  watchForLateCompletion(runtime, meta, handlerPromise, () => timedOut);
-  try {
-    const result = await Promise.race([handlerPromise, deadline.promise]);
-    return settleSuccess(runtime, meta, reservation, result);
-  } catch (error) {
-    if (error instanceof CatalogFacadeDeadlineExceeded) {
-      timedOut = true;
-      settleTimeout(runtime, meta, reservation);
-      throw new CatalogDispatchFault("timeout", "deadline-exceeded");
-    }
-    settleFailure(runtime, meta, reservation, error);
-    throw error;
-  } finally {
-    deadline.clear();
+async function executeCanonical(
+  bridgeInput: CanonicalCatalogFacadeBridgeInput,
+  request: CodingToolActionRequest,
+  facadeInput: CodingToolFacadeInput,
+  run: (signal: AbortSignal, mutationGuard: CodingToolMutationGuard) => Promise<CodingToolResult>,
+): Promise<CodingToolResult> {
+  const action = catalogActionFor(request);
+  const current = bridgeInput.context();
+  if (action === undefined || current === undefined) return { status: "denied", evidence: [] };
+  if (trustedContext(current, facadeInput) === undefined) return { status: "denied", evidence: [] };
+  if (Date.parse(current.authorityExpiresAt) <= current.now) {
+    emitExpiredBinding(OPENCODE_CATALOG_ADVERTISEMENT, current, bridgeInput.logPort);
+    return expiredResult(request);
   }
-}
-
-async function runReserved<T>(
-  runtime: BridgeRuntime,
-  meta: InvocationMeta,
-  reservation: CatalogFacadeBudgetReservation,
-  run: () => Promise<T>,
-): Promise<T> {
-  const handlerPromise = run();
-  const deadlineMs = meta.descriptor.bounds.maxDurationMs;
-  if (!Number.isFinite(deadlineMs) || deadlineMs <= 0) {
-    return settleAfterHandler(runtime, meta, reservation, handlerPromise);
-  }
-  return runReservedWithDeadline(runtime, meta, reservation, handlerPromise, deadlineMs);
-}
-
-/**
- * Resolves availability and reserves budget, settling (and throwing) BEFORE the handler ever runs
- * if either budget-port call itself throws or reports unavailable -- mirroring
- * `CatalogInvocation`'s own guarantee (catalogToolDispatch.ts's `executeInvocation`, one try/catch
- * around the whole pre-reservation sequence) that a pre-reservation failure is never silently
- * unlogged. Before this, `available()`/`reserve()` throwing propagated straight out of `dispatch()`
- * with zero `tool-catalog.*` evidence even though the call still failed closed to the caller
- * (#3413 F8 review, latent because the wired in-memory budget port never throws).
- */
-function reserveOrSettleDenied(
-  runtime: BridgeRuntime,
-  meta: InvocationMeta,
-): CatalogFacadeBudgetReservation {
-  try {
-    const available = catalogBudgetOperation(() => runtime.input.budget.available());
-    if (!available) denyBudgetExhausted(runtime, meta);
-    return catalogBudgetOperation(() => runtime.input.budget.reserve());
-  } catch (error) {
-    // `denyBudgetExhausted` already emitted its own "denied" settlement before throwing -- only a
-    // budget-port exception (classified `CatalogDispatchFault("failed","budget-port-failed", ...)`
-    // by `catalogBudgetOperation`) reaches here still unsettled.
-    if (error instanceof CatalogDispatchFault && error.status === "denied") throw error;
-    settleUnreserved(runtime, meta, error);
-    throw error;
-  }
-}
-
-function settleUnreserved(runtime: BridgeRuntime, meta: InvocationMeta, error: unknown): void {
-  const classified = classifyFailure(error);
-  emitSettlement(runtime, {
-    ...meta,
-    status: classified.status,
-    reason: classified.reason,
-    reservationId: null,
-    effectStarted: false,
-    budgetDisposition: "not-reserved",
-    error,
+  let executed: CodingToolResult | undefined;
+  const binder = createDispatchBinder(bridgeInput, request, facadeInput, run, (result) => {
+    executed = result;
   });
-}
-
-async function dispatchCovered<T>(
-  runtime: BridgeRuntime,
-  descriptor: ToolDescriptor,
-  run: () => Promise<T>,
-): Promise<T> {
-  const meta: InvocationMeta = {
-    descriptor,
-    invocationId: runtime.mintId(),
-    settlementId: runtime.mintId(),
-    startedAt: runtime.now(),
-  };
-  if (projectionDrift(runtime)) denyProjectionMismatch(runtime, meta);
-  const reservation = reserveOrSettleDenied(runtime, meta);
-  emitStarted(runtime, meta, reservation);
-  return runReserved(runtime, meta, reservation, run);
-}
-
-export function createCatalogFacadeBridge(input: CatalogFacadeBridgeInput): CatalogFacadeBridge {
-  const runtime: BridgeRuntime = {
-    input,
-    projection: compileToolProjection(currentCatalog(input), input.profile),
-    mintId: input.mintId ?? randomUUID,
-    now: input.now ?? Date.now,
-  };
-  return Object.freeze({
-    resolve: (request: CodingToolActionRequest): ToolDescriptor | undefined =>
-      resolveDescriptor(currentCatalog(input), request),
-    dispatch: <T>(request: CodingToolActionRequest, run: () => Promise<T>): Promise<T> => {
-      const outcome = resolveAction(currentCatalog(input), request);
-      if (outcome.kind === "uncovered") {
-        emitUnbound(runtime, request);
-        return run();
-      }
-      if (outcome.kind === "missing") return dispatchMissing(runtime);
-      return dispatchCovered(runtime, outcome.descriptor, run);
+  const offer = binder.offer();
+  const descriptor = OPENCODE_CATALOG_DESCRIPTORS.find(
+    (item) => item.toolRef.canonicalId === action.toolId,
+  );
+  if (descriptor === undefined) return { status: "denied", evidence: [] };
+  const outcome = await binder.dispatch(
+    {
+      kind: "bound",
+      toolRef: descriptor.toolRef,
+      projectionDigest: OPENCODE_CATALOG_ADVERTISEMENT.projection.projectionDigest,
+      offerId: offer.offerId,
+      arguments: action.arguments,
     },
+    { actionId: request.actionId, idempotencyKey: request.idempotencyKey },
+  );
+  return resultFor(outcome, executed);
+}
+
+function recordUnbound(
+  bridgeInput: CanonicalCatalogFacadeBridgeInput,
+  request: CodingToolActionRequest,
+): void {
+  const context = bridgeInput.context();
+  bridgeInput.logPort.primary.write({
+    category: "security",
+    op: "tool-catalog.dispatch-unbound",
+    correlationId: context?.correlationId ?? UNKNOWN_CORRELATION_ID,
+    extra: { action: request.action },
   });
+}
+
+export function createCanonicalCatalogFacadeBridge(
+  bridgeInput: CanonicalCatalogFacadeBridgeInput,
+): CanonicalCatalogFacadeBridge {
+  return {
+    covers: (request): boolean => catalogActionFor(request) !== undefined,
+    recordUnbound: (request, facadeInput): void => {
+      recordUnbound(bridgeInput, request);
+      void facadeInput;
+    },
+    execute: (request, facadeInput, run): Promise<CodingToolResult> =>
+      executeCanonical(bridgeInput, request, facadeInput, run),
+  };
 }

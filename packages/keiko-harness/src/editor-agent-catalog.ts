@@ -38,6 +38,7 @@ import {
 import {
   createLegacyPortCatalogBinding,
   type LegacyPortCatalogBindingEvidence,
+  type LegacyPortCatalogHandlerAttestation,
   type LegacyPortCatalogLifecycleObserver,
   type LegacyPortCatalogResultDisposition,
 } from "./legacy-port-catalog.js";
@@ -57,6 +58,7 @@ const EDITOR_CANONICAL_IDS_BY_NAME: ReadonlyMap<string, string> = new Map([
   ["editor_propose_changeset", "keiko.editor.changeset"],
   ["editor_request_verification", "keiko.editor.verify"],
 ]);
+const EDITOR_HANDLER_REQUIREMENT = { id: "editor-agent-tool-host", contractVersion: 1 } as const;
 
 function canonicalIdFor(definition: ToolDefinition): string {
   const canonicalId = EDITOR_CANONICAL_IDS_BY_NAME.get(definition.name);
@@ -157,7 +159,7 @@ function editorEntry(definition: ToolDefinition, canonicalId: string): CatalogSe
       effects: [effect],
       actionMapping: [{ action: definition.name, effects: [effect] }],
       policyReferences: [effect],
-      handlerRequirement: { id: "editor-agent-tool-host", contractVersion: 1 },
+      handlerRequirement: EDITOR_HANDLER_REQUIREMENT,
       bounds: {
         maxArgumentBytes: TOOL_CATALOG_LIMITS.maxArgumentBytes,
         maxResultBytes: TOOL_CATALOG_LIMITS.maxResultBytes,
@@ -197,6 +199,17 @@ function activeEditorRegistrationSet(port: ToolPort): CatalogRegistrationSet {
   if (aliases.some((alias) => !EDITOR_CANONICAL_IDS_BY_NAME.has(alias)))
     throw new TypeError("The active editor tool surface contains an unknown alias");
   return { ...full, entries: full.entries.filter((entry) => active.has(entry.alias)) };
+}
+
+function editorHandlerAttestations(
+  set: CatalogRegistrationSet,
+): readonly LegacyPortCatalogHandlerAttestation[] {
+  return set.entries.map((entry) => ({
+    alias: entry.alias,
+    handlerId: EDITOR_HANDLER_REQUIREMENT.id,
+    handlerVersion: EDITOR_HANDLER_REQUIREMENT.contractVersion,
+    catalogAction: entry.alias,
+  }));
 }
 
 const RESULT_CONTRACT_FAILED = { status: "failed", reason: "result-contract-failed" } as const;
@@ -320,6 +333,7 @@ export function createEditorAgentCatalogFactory(
     catalog,
     set.profile,
     port,
+    editorHandlerAttestations(set),
     observe,
     classifyEditorAgentCatalogResult,
   );

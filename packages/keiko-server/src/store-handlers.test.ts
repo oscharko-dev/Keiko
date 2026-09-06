@@ -35,10 +35,7 @@ import {
 import { clearAllGroundedTurns, groundedTurnRegistry } from "./grounded-turn-registry.js";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
-import type {
-  ChatGitChangeScope,
-  GroundedAnswer,
-} from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ChatGitChangeScope, GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_CHAT_LIST_LIMIT as DEFAULT_CHAT_LIST_PAGE,

@@ -2,7 +2,9 @@ import {
   assertCompatibilityTime,
   captureCatalogJson,
   compileToolProjection,
+  computeHandlerSetDigest as computeCanonicalHandlerSetDigest,
   lookupCatalogTool,
+  type ToolHandlerSetIdentity,
   verifyToolCatalogSnapshot,
 } from "@oscharko-dev/keiko-tool-catalog";
 import type {
@@ -18,7 +20,7 @@ import {
   type ToolHandlerReadiness,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
-import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
+import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
 import { emitToolLifecycleEvent } from "./catalogToolLifecycle.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import {
@@ -26,7 +28,7 @@ import {
   isValidCorrelationId,
   UNKNOWN_CORRELATION_ID,
 } from "../correlation.js";
-import { codingToolRequiredActionClasses } from "../coding-runtime/codingToolAuthorityPort.js";
+import { codingToolRequiredActionClasses } from "../coding-runtime/codingToolIpc.js";
 import type {
   BoundToolSet,
   CatalogToolBinderInput,
@@ -100,19 +102,14 @@ export function computeHandlerSetDigest(
   projection: CompiledToolProjection,
   handlers: readonly CatalogBoundHandler[],
 ): CatalogDigest {
-  return sha256Hex(
-    canonicalise({
-      domain: "keiko.tool-handler-set.v1",
-      projectionDigest: projection.projectionDigest,
-      bindings: handlers.map(({ descriptor, binding }) => ({
-        toolRef: descriptor.toolRef,
-        descriptorDigest: descriptor.descriptorDigest,
-        handlerId: binding?.handlerId ?? null,
-        handlerVersion: binding?.handlerVersion ?? null,
-        catalogAction: binding?.catalogAction ?? null,
-      })),
-    }),
-  ) as CatalogDigest;
+  const bindings: readonly ToolHandlerSetIdentity[] = handlers.map(({ descriptor, binding }) => ({
+    toolRef: descriptor.toolRef,
+    descriptorDigest: descriptor.descriptorDigest,
+    handlerId: binding?.handlerId ?? null,
+    handlerVersion: binding?.handlerVersion ?? null,
+    catalogAction: binding?.catalogAction ?? null,
+  }));
+  return computeCanonicalHandlerSetDigest(projection.projectionDigest, bindings);
 }
 function buildCatalogBinding(
   input: CatalogToolBinderInput,

@@ -1,6 +1,10 @@
 import type { ToolHandlerReadiness } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { describe, expect, it, vi } from "vitest";
-import { createInitialToolCatalog, compileToolProjection } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  createInitialToolCatalog,
+  compileToolProjection,
+  computeHandlerSetDigest as computeCanonicalHandlerSetDigest,
+} from "@oscharko-dev/keiko-tool-catalog";
 import {
   catalogBoundToolSet,
   computeHandlerSetDigest,
@@ -173,6 +177,18 @@ describe("catalog handler binding and offered projection", () => {
     const fixture = catalogToolFixture();
     const state = createCatalogBinding(fixture.input, fixture.options);
     expect(state.handlerSetDigest).toBe(computeHandlerSetDigest(state.projection, state.handlers));
+    expect(state.handlerSetDigest).toBe(
+      computeCanonicalHandlerSetDigest(
+        state.projection.projectionDigest,
+        state.handlers.map(({ descriptor, binding }) => ({
+          toolRef: descriptor.toolRef,
+          descriptorDigest: descriptor.descriptorDigest,
+          handlerId: binding?.handlerId ?? null,
+          handlerVersion: binding?.handlerVersion ?? null,
+          catalogAction: binding?.catalogAction ?? null,
+        })),
+      ),
+    );
     expect(state.handlerSetDigest).toMatch(/^[a-f0-9]{64}$/u);
     const unbound = createCatalogBinding(
       { ...fixture.input, handlerBindings: [] },

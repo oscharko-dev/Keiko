@@ -13,9 +13,15 @@ export {
 export { CATALOG_DIALECTS } from "./dialect.js";
 export { validateToolResultEnvelope } from "./result.js";
 export type { ToolResultValidationBinding } from "./result.js";
+export { computeHandlerSetDigest } from "./handler-set.js";
+export type { ToolHandlerSetIdentity } from "./handler-set.js";
 
 export { createInitialToolCatalog, legacyNativeRegistrationSet } from "./legacy.js";
-export { childRegistrationSet, CHILD_WORKSPACE_READ_ALIAS } from "./child.js";
+export {
+  childRegistrationSet,
+  CHILD_WORKSPACE_READ_ALIAS,
+  CHILD_WORKSPACE_READ_HANDLER_REQUIREMENT,
+} from "./child.js";
 export { opencodeRegistrationSet, OPENCODE_NATIVE_EXTENSION_DEFINITIONS } from "./opencode.js";
 export type { OpenCodeNativeExtensionDefinition } from "./opencode.js";
 export { createKeikoToolCatalog } from "./composer.js";

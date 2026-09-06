@@ -11,8 +11,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
-import { codingToolRequiredActionClasses } from "../coding-runtime/codingToolAuthorityPort.js";
 import {
+  codingToolRequiredActionClasses,
   parseCodingToolRequest,
   type CodingToolActionRequest,
 } from "../coding-runtime/codingToolIpc.js";
@@ -91,11 +91,15 @@ export function captureCatalogInvocation(
   const ref = captureRef(object.toolRef);
   const handler = state.handlers.find((item) => sameRef(item.descriptor.toolRef, ref));
   requireDispatch(handler !== undefined, "invalid", "unknown-tool");
-  requireDispatch(
-    state.latestOffer.toolRefs.some((item) => sameRef(item, ref)),
-    "invalid",
-    "unoffered-tool",
-  );
+  if (!state.latestOffer.toolRefs.some((item) => sameRef(item, ref))) {
+    const current = catalogDispatchContext(state);
+    requireDispatch(
+      catalogBudgetOperation(() => state.input.budgetPort.available(handler.descriptor, current)),
+      "denied",
+      "budget-exhausted",
+    );
+    requireDispatch(false, "invalid", "unoffered-tool");
+  }
   let args: CatalogJsonValue;
   try {
     args = validateToolArguments(object.arguments, handler.descriptor);

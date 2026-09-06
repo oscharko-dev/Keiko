@@ -158,15 +158,14 @@ export function deriveOptionalToolAvailability(
 }
 
 function hasResearchApprovalHandler(input: OptionalToolAvailabilityInput): boolean {
-  if (
-    input.researchGrantRegistry === undefined ||
-    input.gatewayEgress === undefined ||
-    input.requestResearchApproval === undefined
-  ) {
+  if (input.researchGrantRegistry === undefined || input.gatewayEgress === undefined) {
     return false;
   }
   try {
-    return input.gatewayEgress() !== undefined;
+    const hasApprovalPath = input.requestResearchApproval !== undefined;
+    const hasLiveGrant =
+      input.researchGrantRegistry.activeGrants(input.authorityRef.runId, Date.now()).length > 0;
+    return input.gatewayEgress() !== undefined && (hasApprovalPath || hasLiveGrant);
   } catch (error) {
     (input.activityLog ?? processServerLogSink()).write({
       category: "gateway",
@@ -235,6 +234,7 @@ export function createProductionManagedWorktreeToolFacade(
       // lifecycle evidence too.
       ...(input.activityLog === undefined ? {} : { catalogActivityLog: input.activityLog }),
       ...(input.diagnostics === undefined ? {} : { catalogDiagnostics: input.diagnostics }),
+      unavailableOptionalTools: () => deriveOptionalToolAvailability(input),
     },
   );
 }

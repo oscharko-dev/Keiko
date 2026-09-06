@@ -120,6 +120,10 @@ describe("editor agent registration set", () => {
     expect(advertisement.offered.toolRefs).toEqual(
       advertisement.projection.tools.map((tool) => tool.toolRef),
     );
+    expect(advertisement.offered.binding.handlerSetDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(advertisement.offered.binding.handlerSetDigest).not.toBe(
+      advertisement.projection.projectionDigest,
+    );
   });
 });
 

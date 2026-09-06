@@ -253,11 +253,14 @@ cursor minted by that invocation, and discarded/failed output invalidates its un
 Handler context exposes `pageSequence`, `createCursor` and the existing final-effect guard. The six
 initial descriptor schemas do not acquire pagination arguments until their #3414 consumer migrates.
 
-`createCatalogToolBinder` retains exact raw descriptors even when projection compilation adapts
-schema syntax. Its `handlerSetDigest` uses `keiko.tool-handler-set.v1` over `projectionDigest` and
-the ordered `bindings` entries (`toolRef`, `descriptorDigest`, `handlerId`, `handlerVersion`,
-`catalogAction`; absent bindings use null handler fields). This identifies declared composition;
-readiness, policy and effect eligibility are always live checks. Authority preview is non-consuming.
+`keiko-tool-catalog` owns the single `keiko.tool-handler-set.v1` digest over `projectionDigest` and
+the ordered immutable binding identities (`toolRef`, `descriptorDigest`, `handlerId`,
+`handlerVersion`, `catalogAction`; absent bindings use null handler fields). The server binder and
+portable harness adapters call that same owner. `createCatalogToolBinder` retains exact raw
+descriptors even when projection compilation adapts schema syntax. Portable adapters must supply an
+explicit per-alias handler attestation that matches the descriptor requirement and action; a
+missing, duplicate, or mismatched attestation cannot advertise a ready binding. This identifies
+declared composition; readiness, policy and effect eligibility are always live checks. Authority preview is non-consuming.
 The injected budget owner provides availability, reservation, reservation revalidation, commit and
 release; the binder owns no outer-run counters. A retained receipt does not recreate discarded
 result data. Its replay eligibility checks current authority without consuming an approval again.

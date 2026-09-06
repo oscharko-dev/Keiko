@@ -120,8 +120,7 @@ import type {
   CodingToolInvocationRegistry,
   CodingToolInvocationTakeResult,
 } from "./codingToolInvocationRegistry.js";
-import type { CatalogFacadeBridge } from "../tool-catalog/catalogToolFacadeBridge.js";
-import { CatalogDispatchFault } from "../tool-catalog/catalogToolRuntimeAuthority.js";
+import type { CanonicalCatalogFacadeBridge } from "../tool-catalog/catalogToolFacadeBridge.js";
 
 // F8 (#3413): an optional, additive extension of CodingToolFacadeOptions. `codingToolFacadePorts.ts`
 // stays the single owner of the base shape; this widens only the LOCAL parameter type accepted by
@@ -131,7 +130,7 @@ export interface CodingToolFacadeCreateOptions extends CodingToolFacadeOptions {
   /** Resolves a catalog binding per covered tool call and settles it around the existing handler
    * execution (descriptor, disposition, budget, tool-catalog.* lifecycle log lines). Actions the
    * catalog does not cover dispatch exactly as before -- no behaviour change, no log line. */
-  readonly catalogBridge?: CatalogFacadeBridge | undefined;
+  readonly catalogBridge?: CanonicalCatalogFacadeBridge | undefined;
 }
 
 export function createCodingToolFacade(
@@ -158,8 +157,31 @@ interface ExecutionContext {
   readonly maxInFlight: number;
   readonly invocationRegistry: CodingToolInvocationRegistry | undefined;
   readonly requireInvocationRegistryForEdits: boolean;
-  readonly catalogBridge: CatalogFacadeBridge | undefined;
+  readonly catalogBridge: CanonicalCatalogFacadeBridge | undefined;
   readonly inFlight: { count: number };
+}
+
+async function executeCatalogRequest(
+  context: ExecutionContext,
+  input: CodingToolFacadeInput,
+  request: CodingToolActionRequest,
+): Promise<CodingToolResult> {
+  const bridge = context.catalogBridge;
+  if (bridge === undefined) return empty("denied");
+  try {
+    return await bridge.execute(request, input, async (signal, mutationGuard) => {
+      try {
+        return project(
+          request,
+          await context.ports.delegate.execute(request, signal, mutationGuard),
+        );
+      } catch {
+        return projected("failed");
+      }
+    });
+  } finally {
+    if (request.action === "edit" && Buffer.isBuffer(input.body)) input.body.fill(0);
+  }
 }
 
 async function execute(
@@ -174,13 +196,16 @@ async function execute(
   if (context.inFlight.count >= context.maxInFlight) return empty("busy");
   context.inFlight.count += 1;
   try {
+    if (context.catalogBridge?.covers(request) === true) {
+      return await executeCatalogRequest(context, input, request);
+    }
+    context.catalogBridge?.recordUnbound(request, input);
     return await executeAdmitted(
       context.ports,
       input,
       request,
       context.invocationRegistry,
       context.requireInvocationRegistryForEdits,
-      context.catalogBridge,
     );
   } finally {
     context.inFlight.count -= 1;
@@ -193,17 +218,16 @@ async function executeAdmitted(
   request: CodingToolActionRequest,
   invocationRegistry: CodingToolInvocationRegistry | undefined,
   requireInvocationRegistryForEdits: boolean,
-  catalogBridge: CatalogFacadeBridge | undefined,
 ): Promise<CodingToolResult> {
   const admission = ports.authority.admit(input.capability, request);
   if (!admission.ok) return empty("denied");
   if (input.signal?.aborted === true) return empty("cancelled");
   if (!admission.mutationGuard.check()) return empty("denied");
   if (request.action === "edit" && invocationRegistry !== undefined) {
-    return executeStagedEdit(ports, input, request, admission, invocationRegistry, catalogBridge);
+    return executeStagedEdit(ports, input, request, admission, invocationRegistry);
   }
   if (request.action === "edit" && requireInvocationRegistryForEdits) return empty("denied");
-  return executePlainAction(ports, input, request, admission, catalogBridge);
+  return executePlainAction(ports, input, request, admission);
 }
 
 // F8 (#3413): every non-edit action's delegate call, optionally resolved as a catalog binding and
@@ -214,18 +238,13 @@ async function executePlainAction(
   input: CodingToolFacadeInput,
   request: CodingToolActionRequest,
   admission: Extract<CodingToolAdmission, { readonly ok: true }>,
-  catalogBridge: CatalogFacadeBridge | undefined,
 ): Promise<CodingToolResult> {
   const runDelegate = (): Promise<unknown> =>
     ports.delegate.execute(request, input.signal, admission.mutationGuard);
   try {
-    const outcome =
-      catalogBridge === undefined
-        ? await runDelegate()
-        : await catalogBridge.dispatch(request, runDelegate);
+    const outcome = await runDelegate();
     return project(request, outcome);
-  } catch (error) {
-    if (error instanceof CatalogDispatchFault && error.status === "denied") return empty("denied");
+  } catch {
     return projected("failed");
   }
 }
@@ -236,7 +255,6 @@ async function executeStagedEdit(
   request: Extract<CodingToolActionRequest, { readonly action: "edit" }>,
   admission: Extract<CodingToolAdmission, { readonly ok: true }>,
   registry: CodingToolInvocationRegistry,
-  catalogBridge: CatalogFacadeBridge | undefined,
 ): Promise<CodingToolResult> {
   const binding = admission.binding ?? admission.mutationGuard.binding;
   const payload = typeof input.body === "string" ? Buffer.from(input.body, "utf8") : input.body;
@@ -258,7 +276,7 @@ async function executeStagedEdit(
   const claimed = registry.take(identity);
   if (claimed.kind !== "ready") return wipeAndReturn(payload, empty("denied"));
   try {
-    return await executeClaimedEdit(ports, input, request, admission, claimed, catalogBridge);
+    return await executeClaimedEdit(ports, input, request, admission, claimed);
   } finally {
     registry.settle(identity);
   }
@@ -277,7 +295,6 @@ async function executeClaimedEdit(
   request: Extract<CodingToolActionRequest, { readonly action: "edit" }>,
   admission: Extract<CodingToolAdmission, { readonly ok: true }>,
   claimed: Extract<CodingToolInvocationTakeResult, { readonly kind: "ready" }>,
-  catalogBridge: CatalogFacadeBridge | undefined,
 ): Promise<CodingToolResult> {
   const signal =
     input.signal === undefined ? claimed.signal : AbortSignal.any([input.signal, claimed.signal]);
@@ -285,13 +302,9 @@ async function executeClaimedEdit(
   const runDelegate = (): Promise<unknown> =>
     ports.delegate.execute(request, signal, admission.mutationGuard);
   try {
-    const result =
-      catalogBridge === undefined
-        ? await runDelegate()
-        : await catalogBridge.dispatch(request, runDelegate);
+    const result = await runDelegate();
     return isAborted(signal) ? empty("cancelled") : project(request, result);
-  } catch (error) {
-    if (error instanceof CatalogDispatchFault && error.status === "denied") return empty("denied");
+  } catch {
     return projected("failed");
   }
 }

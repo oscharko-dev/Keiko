@@ -1,12 +1,5 @@
-/**
- * DECISION (#3413 F8 review, finding b1-1; see catalogToolFacadeBridge.ts's header and ADR-0175
- * D6 "Production mounting" for the full record): `createCatalogToolBinder`'s offer/dispatch/cursor
- * state machine below is kept as an independently-tested reference implementation of ADR-0175's
- * full contract, but is intentionally never wired into a production composition --
- * `catalogToolFacadeBridge.ts` is, and remains, the one production dispatch owner for
- * `codingToolFacade.ts`'s already-parsed `CodingToolActionRequest` path. Do not add a production
- * caller of `createCatalogToolBinder` here without first re-reading that decision record.
- */
+/** Canonical offer, dispatch, replay, cursor, deadline, and settlement owner. Production coding
+ * tool calls adapt their parsed request at `catalogToolFacadeBridge.ts` and enter this path. */
 import { Buffer } from "node:buffer";
 import { catalogJsonBytes } from "@oscharko-dev/keiko-tool-catalog";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";

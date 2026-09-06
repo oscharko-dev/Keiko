@@ -190,13 +190,25 @@ const CHANGESET_EDIT_SCHEMA = {
   required: ["changeset"],
 } as const;
 
+const OPENCODE_VERIFICATION_IDS: readonly string[] = [
+  "test",
+  "targeted-test",
+  "typecheck",
+  "lint",
+  "build",
+];
+
+export function isOpenCodeVerificationId(value: string): boolean {
+  return OPENCODE_VERIFICATION_IDS.includes(value);
+}
+
 const VERIFICATION_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
     verifierId: {
       type: "string",
-      enum: ["test", "targeted-test", "typecheck", "lint", "build"],
+      enum: OPENCODE_VERIFICATION_IDS,
     },
   },
   required: ["verifierId"],
@@ -208,7 +220,7 @@ const VERIFICATION_PROJECTED_SCHEMA = {
   properties: {
     verifierId: {
       type: "string",
-      enum: ["test", "targeted-test", "typecheck", "lint", "build"],
+      enum: OPENCODE_VERIFICATION_IDS,
     },
   },
   required: ["verifierId"],

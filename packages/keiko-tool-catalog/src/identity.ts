@@ -79,7 +79,11 @@ export function catalogDigest(value: CatalogJsonValue | undefined): CatalogDiges
 }
 
 export function semanticDigest(
-  domain: "keiko.tool-descriptor.v1" | "keiko.tool-projection.v1" | "keiko.tool-catalog.v1",
+  domain:
+    | "keiko.tool-descriptor.v1"
+    | "keiko.tool-projection.v1"
+    | "keiko.tool-catalog.v1"
+    | "keiko.tool-handler-set.v1",
   fields: unknown,
 ): CatalogDigest {
   const object: CatalogJsonObject = catalogObject(copyCatalogJson(fields));

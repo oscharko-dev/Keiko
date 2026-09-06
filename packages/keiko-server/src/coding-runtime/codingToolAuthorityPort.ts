@@ -22,20 +22,20 @@ import {
   createCodingToolGovernedDelegate,
   type CodingToolGovernedPorts,
 } from "./codingToolGovernedDelegate.js";
-import type { CodingToolActionRequest } from "./codingToolIpc.js";
+import { codingToolRequiredActionClasses, type CodingToolActionRequest } from "./codingToolIpc.js";
 import {
   isApprovableToolRequest,
   commitClaim,
   type CodingToolApprovalProofVerifier,
 } from "./codingToolApprovalBridge.js";
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
-import { createOpenCodeGatewayToolCatalogAdvertisement } from "./opencodeToolSchemas.js";
 import {
-  createCatalogFacadeBridge,
-  createInMemoryCatalogFacadeBudgetPort,
-  type CatalogFacadeBridge,
-  type CatalogFacadeBudgetPort,
+  createCanonicalCatalogFacadeBridge,
+  type CanonicalCatalogFacadeBridge,
 } from "../tool-catalog/catalogToolFacadeBridge.js";
+import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
+import type { CatalogToolBudgetPort } from "../tool-catalog/catalogToolPorts.js";
+import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { defaultServerDiagnosticSink, type ServerDiagnosticSink } from "../diagnostics-log.js";
@@ -76,7 +76,8 @@ interface RuntimeCodingToolFacadeOptions extends CodingToolFacadeOptions {
   // state. `disableCatalogBridge` exists only for a test that must isolate an unrelated concern.
   readonly catalogActivityLog?: ServerLogSink | undefined;
   readonly catalogDiagnostics?: ServerDiagnosticSink | undefined;
-  readonly catalogBudget?: CatalogFacadeBudgetPort | undefined;
+  readonly catalogBudget?: CatalogToolBudgetPort | undefined;
+  readonly unavailableOptionalTools?: (() => ReadonlySet<OpenCodeOptionalToolName>) | undefined;
   readonly disableCatalogBridge?: boolean | undefined;
 }
 
@@ -423,14 +424,16 @@ export function createRuntimeCodingToolFacade(
   governedPorts: CodingToolGovernedPorts,
   options: RuntimeCodingToolFacadeOptions = {},
 ): CodingToolFacade {
+  const activityLog = options.catalogActivityLog ?? processServerLogSink();
+  const authorityPort = createCodingToolAuthorityPort(authority, context, {
+    approvalProofVerifier: options.approvalProofVerifier,
+    activityLog,
+    requireProducerBinding: true,
+    reserveEditDelegation: options.reserveEditDelegation === true,
+  });
   return createCodingToolFacade(
     {
-      authority: createCodingToolAuthorityPort(authority, context, {
-        approvalProofVerifier: options.approvalProofVerifier,
-        activityLog: options.catalogActivityLog ?? processServerLogSink(),
-        requireProducerBinding: true,
-        reserveEditDelegation: options.reserveEditDelegation === true,
-      }),
+      authority: authorityPort,
       delegate: createCodingToolGovernedDelegate(governedPorts, options.ciRepairBudget),
     },
     {
@@ -439,7 +442,7 @@ export function createRuntimeCodingToolFacade(
       catalogBridge:
         options.disableCatalogBridge === true
           ? undefined
-          : catalogFacadeBridgeFor(context, options),
+          : catalogFacadeBridgeFor(authority, authorityPort, context, options, activityLog),
     },
   );
 }
@@ -449,19 +452,49 @@ export function createRuntimeCodingToolFacade(
  * the model (createOpenCodeGatewayToolCatalogAdvertisement), so there is exactly one catalog, not
  * a second one grown for this integration. */
 function catalogFacadeBridgeFor(
+  authority: Pick<
+    CodingRuntimeAuthorityService,
+    "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
+  >,
+  authorityPort: CodingToolAuthorityPort,
   context: CodingToolAuthorityContextProvider,
   options: RuntimeCodingToolFacadeOptions,
-): CatalogFacadeBridge {
-  const { catalog, projection } = createOpenCodeGatewayToolCatalogAdvertisement(Date.now());
-  return createCatalogFacadeBridge({
-    catalog,
-    profile: projection.profile,
-    budget: options.catalogBudget ?? createInMemoryCatalogFacadeBudgetPort(),
+  activityLog: ServerLogSink,
+): CanonicalCatalogFacadeBridge | undefined {
+  const invocationRegistry =
+    options.invocationRegistry ??
+    createCodingToolInvocationRegistry({ now: () => Date.parse(context().nowIso) });
+  return createCanonicalCatalogFacadeBridge({
+    authority: authorityPort,
+    previewAuthority: createCodingToolAuthorityPreview(authority, context, {
+      approvalProofVerifier: options.approvalProofVerifier,
+      activityLog,
+      requireProducerBinding: true,
+    }),
+    invocationRegistry,
+    approvalAvailable: options.approvalProofVerifier !== undefined,
+    ...(options.catalogBudget === undefined ? {} : { budgetPort: options.catalogBudget }),
     logPort: {
-      primary: options.catalogActivityLog ?? processServerLogSink(),
+      primary: activityLog,
       diagnostics: options.catalogDiagnostics ?? defaultServerDiagnosticSink,
     },
-    context: () => ({ correlationId: context().correlationId }),
+    context: () => {
+      const current = context();
+      return current.runId === undefined || current.authorityExpiresAt === undefined
+        ? undefined
+        : {
+            runId: current.runId,
+            correlationId: current.correlationId ?? UNKNOWN_CORRELATION_ID,
+            workspaceRoot: current.workspaceRoot,
+            workspaceIdentity: current.liveFacts.binding.workspaceId,
+            workspaceRevision: current.liveFacts.binding.branchHeadDigest,
+            authorityExpiresAt: current.authorityExpiresAt,
+            now: Date.parse(current.nowIso),
+          };
+    },
+    ...(options.unavailableOptionalTools === undefined
+      ? {}
+      : { unavailableOptionalTools: options.unavailableOptionalTools }),
   });
 }
 
@@ -543,50 +576,7 @@ function actionClassesAllowed(
     if (approved && envelope.authority.effectiveMode !== "autonomous-delivery")
       return hasClasses(envelope.authority.actionClasses, ["workspace-read"]);
   }
-  return hasClasses(envelope.authority.actionClasses, requiredClasses(request));
-}
-
-type RuntimeActionClass =
-  CodingWorkbenchRuntimeAuthorityEnvelope["authority"]["actionClasses"][number];
-
-// Static action-class requirement per governed action. Declared as a Record over the full action
-// union minus "git", so adding an action to the union fails to compile until its required classes
-// are named here — a new action can never default to "no class required". "git" is the one action
-// whose requirement depends on the request itself and is resolved below.
-const STATIC_REQUIRED_CLASSES: Readonly<
-  Record<Exclude<CodingToolActionRequest["action"], "git">, readonly RuntimeActionClass[]>
-> = {
-  read: ["workspace-read"],
-  discover: ["workspace-read"],
-  search: ["workspace-read"],
-  edit: ["workspace-write"],
-  command: ["command-execution"],
-  verification: ["verification"],
-  delivery: ["delivery-substrate"],
-  connector: ["connector-access", "network-egress"],
-  egress: ["network-egress"],
-  skill: ["workspace-read"],
-  "child-agent": ["workspace-read"],
-};
-
-function requiredClasses(request: CodingToolActionRequest): readonly RuntimeActionClass[] {
-  if (request.action === "git") {
-    if (request.operation === "ci") return ["workspace-read", "connector-access", "network-egress"];
-    return [
-      request.operation === "write" ||
-      (request.operation === "stage" && request.phase === "execute")
-        ? "workspace-write"
-        : "workspace-read",
-    ];
-  }
-  return STATIC_REQUIRED_CLASSES[request.action];
-}
-
-// Catalog binding consumes this owner without receiving a mutable reference to its policy table.
-export function codingToolRequiredActionClasses(
-  request: CodingToolActionRequest,
-): readonly RuntimeActionClass[] {
-  return Object.freeze([...requiredClasses(request)]);
+  return hasClasses(envelope.authority.actionClasses, codingToolRequiredActionClasses(request));
 }
 
 // The extra policy beyond the required action class, one exhaustive case per governed action.

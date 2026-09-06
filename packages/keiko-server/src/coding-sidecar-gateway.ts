@@ -41,14 +41,13 @@ import {
   type OpenCodeGatewayHandlerCoverage,
 } from "./coding-runtime/opencodeToolSchemas.js";
 import type { OpenCodeOptionalToolName } from "./coding-runtime/opencodeLaunchProfile.js";
-import type { CatalogDigest } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { readJsonObject } from "./files.js";
 import { getServerLogger } from "./observability/index.js";
 import { STREAMING, errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import { startSseHeartbeat } from "./sse.js";
+import { createCanonicalOpenCodeHandlerCoverage } from "./tool-catalog/catalogToolFacadeBridge.js";
 
 const ENABLE_TOKENS = new Set(["1", "true", "on", "yes", "enabled"]);
 const CODING_SIDECAR_DISABLED_ENV = "KEIKO_CODING_SIDECAR_DISABLED";
@@ -666,10 +665,6 @@ const OPENCODE_OPTIONAL_TOOL_NAMES: ReadonlySet<string> = new Set<OpenCodeOption
   "keiko_child_agent",
 ]);
 
-function isOpenCodeOptionalToolName(value: string): value is OpenCodeOptionalToolName {
-  return OPENCODE_OPTIONAL_TOOL_NAMES.has(value);
-}
-
 /**
  * #3384 wave-3 W3-1 redirect (reviewer 3941816393 / B1): `createOpenCodeGatewayToolCatalogAdvertisement`'s
  * `offered`/`readiness`/`handlerSetDigest` previously reflected the catalog's static declarations
@@ -691,45 +686,27 @@ function resolveToolCatalogHandlerCoverage(
 ): OpenCodeGatewayHandlerCoverage | undefined {
   const unavailable = runtimeCapabilityAuthenticator(deps)?.unavailableOptionalTools?.(runId);
   if (unavailable === undefined) return undefined;
-  const structural = createOpenCodeGatewayToolCatalogAdvertisement(Date.now());
   const unavailableOptionalTools = [...OPENCODE_OPTIONAL_TOOL_NAMES]
     .filter((name) => unavailable.has(name as OpenCodeOptionalToolName))
     .sort();
   const offeredOptionalTools = [...OPENCODE_OPTIONAL_TOOL_NAMES]
     .filter((name) => !unavailable.has(name as OpenCodeOptionalToolName))
     .sort();
-  const readinessByToolId = new Map(
-    structural.projection.tools.map(
-      (tool) =>
-        [
-          tool.toolRef.canonicalId,
-          isOpenCodeOptionalToolName(tool.alias) && unavailable.has(tool.alias)
-            ? ("unavailable" as const)
-            : ("ready" as const),
-        ] as const,
-    ),
-  );
-  const handlerSetDigest = sha256Hex(
-    canonicalise({
-      domain: "keiko.gateway-tool-handler-coverage.v1",
-      projectionDigest: structural.projection.projectionDigest,
-      unavailable: unavailableOptionalTools,
-    }),
-  ) as CatalogDigest;
+  const coverage = createCanonicalOpenCodeHandlerCoverage(unavailable);
   getServerLogger().info({
     category: "gateway",
     op: CODING_SIDECAR_GATEWAY_TOOL_AVAILABILITY_OP,
     correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
     extra: {
       runId,
-      handlerSetDigest,
+      handlerSetDigest: coverage.handlerSetDigest,
       unavailableOptionalTools,
       unavailableOptionalToolCount: unavailableOptionalTools.length,
       offeredOptionalTools,
       offeredOptionalToolCount: offeredOptionalTools.length,
     },
   });
-  return { readinessByToolId, handlerSetDigest };
+  return coverage;
 }
 
 function buildChatRequest(

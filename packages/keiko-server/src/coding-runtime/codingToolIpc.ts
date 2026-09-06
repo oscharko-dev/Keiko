@@ -11,6 +11,7 @@ import { isUtf8 } from "node:buffer";
 
 import type {
   AuxiliaryCapabilityOutcomeV1,
+  CodingWorkbenchRuntimeAuthorityEnvelope,
   EditorAgentChangeset,
   VerifiedCommitResult,
   CodingRuntimeGitResult,
@@ -118,6 +119,39 @@ export type CodingToolActionRequest =
       readonly objective: string;
       readonly maxToolCalls: number;
     });
+
+type RuntimeActionClass =
+  CodingWorkbenchRuntimeAuthorityEnvelope["authority"]["actionClasses"][number];
+
+const STATIC_REQUIRED_CLASSES: Readonly<
+  Record<Exclude<CodingToolActionRequest["action"], "git">, readonly RuntimeActionClass[]>
+> = {
+  read: ["workspace-read"],
+  discover: ["workspace-read"],
+  search: ["workspace-read"],
+  edit: ["workspace-write"],
+  command: ["command-execution"],
+  verification: ["verification"],
+  delivery: ["delivery-substrate"],
+  connector: ["connector-access", "network-egress"],
+  egress: ["network-egress"],
+  skill: ["workspace-read"],
+  "child-agent": ["workspace-read"],
+};
+
+/** Exact authority effects required by one parsed coding-tool action. */
+export function codingToolRequiredActionClasses(
+  request: CodingToolActionRequest,
+): readonly RuntimeActionClass[] {
+  if (request.action !== "git") return Object.freeze([...STATIC_REQUIRED_CLASSES[request.action]]);
+  if (request.operation === "ci")
+    return Object.freeze(["workspace-read", "connector-access", "network-egress"]);
+  const effect =
+    request.operation === "write" || (request.operation === "stage" && request.phase === "execute")
+      ? "workspace-write"
+      : "workspace-read";
+  return Object.freeze([effect]);
+}
 
 export type CodingToolResult =
   | {

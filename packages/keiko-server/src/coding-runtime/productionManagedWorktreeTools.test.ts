@@ -1055,6 +1055,8 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     // now a catalog-covered action (#3413 F8): its tool-catalog.* lifecycle pair wraps the H1
     // search handler's own started/settled pair, both threaded with this run's correlation id.
     expect(events.map((event) => event.op)).toEqual([
+      "tool-catalog.bind-unavailable",
+      "tool-catalog.projection",
       "tool-catalog.invocation-started",
       "coding-repository-handler.started",
       "coding-repository-handler.settled",

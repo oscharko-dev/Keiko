@@ -411,7 +411,7 @@ function skillSpec(): OpenCodeToolSpec {
       },
       ["skillId"],
     ),
-    effects: ["connector-access"],
+    effects: ["workspace-read"],
     idempotency: "server-key-required",
     handlerId: "opencode-skill-port",
   };
@@ -499,7 +499,7 @@ function gitStageSpec(): OpenCodeToolSpec {
       },
       ["paths"],
     ),
-    effects: ["workspace-write"],
+    effects: ["workspace-read"],
     idempotency: "server-key-required",
     handlerId: "opencode-git-stage-port",
   };
@@ -570,7 +570,7 @@ function ciStatusSpec(): OpenCodeToolSpec {
     alias: "keiko_ci_status",
     description: "Observe the accepted run's CI readiness.",
     inputSchema: managedObjectSchema({ forceFresh: { type: "boolean" } }, ["forceFresh"]),
-    effects: ["delivery-substrate", "network-egress"],
+    effects: ["workspace-read", "connector-access", "network-egress"],
     idempotency: "server-key-required",
     handlerId: "opencode-ci-status-port",
   };

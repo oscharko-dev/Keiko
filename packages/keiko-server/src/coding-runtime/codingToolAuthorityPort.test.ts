@@ -1237,6 +1237,8 @@ describe("CodingToolAuthorityPort", () => {
       expect(repositoryDiscover).toHaveBeenCalledOnce();
       const catalogEvents = log.events.filter((event) => event.op.startsWith("tool-catalog."));
       expect(catalogEvents.map((event) => event.op)).toEqual([
+        "tool-catalog.bind-ready",
+        "tool-catalog.projection",
         "tool-catalog.invocation-started",
         "tool-catalog.invocation-settled",
       ]);
@@ -1244,7 +1246,7 @@ describe("CodingToolAuthorityPort", () => {
         expect(event.correlationId).toBe("b".repeat(36));
         expect(JSON.stringify(event)).not.toContain("top secret needle");
       }
-      const settled = catalogEvents[1]?.extra as Record<string, unknown>;
+      const settled = catalogEvents[3]?.extra as Record<string, unknown>;
       expect(settled.status).toBe("completed");
     });
 
@@ -1288,6 +1290,9 @@ describe("CodingToolAuthorityPort", () => {
       expect(repositoryDiscover).not.toHaveBeenCalled();
       const settled = log.events.find((event) => event.op === "tool-catalog.invocation-settled");
       expect((settled?.extra as Record<string, unknown> | undefined)?.status).toBe("denied");
+      expect((settled?.extra as Record<string, unknown> | undefined)?.reason).toBe(
+        "budget-exhausted",
+      );
     });
 
     it("records handler-failed and charges started governed work when the delegate throws", async () => {
@@ -1350,11 +1355,13 @@ describe("CodingToolAuthorityPort", () => {
       expect(verificationRunner).toHaveBeenCalledOnce();
       const catalogEvents = log.events.filter((event) => event.op.startsWith("tool-catalog."));
       expect(catalogEvents.map((event) => event.op)).toEqual([
+        "tool-catalog.bind-ready",
+        "tool-catalog.projection",
         "tool-catalog.invocation-started",
         "tool-catalog.invocation-settled",
       ]);
       for (const event of catalogEvents) expect(event.correlationId).toBe("c".repeat(36));
-      const started = catalogEvents[0]?.extra as Record<string, unknown>;
+      const started = catalogEvents[2]?.extra as Record<string, unknown>;
       expect((started.toolRef as { canonicalId: string }).canonicalId).toBe(
         "keiko.verification.run",
       );
@@ -1392,11 +1399,13 @@ describe("CodingToolAuthorityPort", () => {
       expect(editorChangeset).toHaveBeenCalledOnce();
       const catalogEvents = log.events.filter((event) => event.op.startsWith("tool-catalog."));
       expect(catalogEvents.map((event) => event.op)).toEqual([
+        "tool-catalog.bind-ready",
+        "tool-catalog.projection",
         "tool-catalog.invocation-started",
         "tool-catalog.invocation-settled",
       ]);
       for (const event of catalogEvents) expect(event.correlationId).toBe("d".repeat(36));
-      const started = catalogEvents[0]?.extra as Record<string, unknown>;
+      const started = catalogEvents[2]?.extra as Record<string, unknown>;
       expect((started.toolRef as { canonicalId: string }).canonicalId).toBe("keiko.changeset.edit");
     });
 
@@ -1439,6 +1448,9 @@ describe("CodingToolAuthorityPort", () => {
       expect(editorChangeset).not.toHaveBeenCalled();
       const settled = log.events.find((event) => event.op === "tool-catalog.invocation-settled");
       expect((settled?.extra as Record<string, unknown> | undefined)?.status).toBe("denied");
+      expect((settled?.extra as Record<string, unknown> | undefined)?.reason).toBe(
+        "budget-exhausted",
+      );
     });
 
     it("records handler-failed and charges started staged-edit work when the delegate throws", async () => {

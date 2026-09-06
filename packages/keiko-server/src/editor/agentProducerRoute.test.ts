@@ -514,7 +514,10 @@ describe("editor-agent producer turn reachability (#2489 Findings 1/2)", () => {
     });
     expect(response.body.catalog?.catalogRevision).toMatch(/^[a-f0-9]{64}$/u);
     expect(response.body.catalog?.projectionDigest).toMatch(/^[a-f0-9]{64}$/u);
-    expect(response.body.catalog?.handlerSetDigest).toBe(response.body.catalog?.projectionDigest);
+    expect(response.body.catalog?.handlerSetDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(response.body.catalog?.handlerSetDigest).not.toBe(
+      response.body.catalog?.projectionDigest,
+    );
 
     const lifecycle = current.activityLogEvents.filter((event) =>
       event.op.startsWith("tool-catalog."),

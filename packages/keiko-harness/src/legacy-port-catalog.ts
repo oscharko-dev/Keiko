@@ -37,8 +37,10 @@ import type {
 import {
   catalogJsonBytes,
   compileToolProjection,
+  computeHandlerSetDigest,
   lookupCatalogTool,
   type ToolCatalog,
+  type ToolHandlerSetIdentity,
 } from "@oscharko-dev/keiko-tool-catalog";
 import type { HarnessCatalogContext, HarnessCatalogFactory } from "./catalog-runtime.js";
 import type { ToolCallResult, ToolPort } from "./ports.js";
@@ -48,13 +50,17 @@ type CompiledProjection = ReturnType<typeof compileToolProjection>;
 const OFFER_EXPIRY_ISO = "2100-01-01T00:00:00.000Z";
 const INVOCATION_ID = /^[A-Za-z0-9_-]{1,128}$/u;
 
-function offeredSet(catalog: ToolCatalog, projection: CompiledProjection): OfferedToolSet {
+function offeredSet(
+  catalog: ToolCatalog,
+  projection: CompiledProjection,
+  handlerSetDigest: BoundToolSet["handlerSetDigest"],
+): OfferedToolSet {
   return {
     binding: {
       catalogRevision: catalog.catalogRevision,
       profile: projection.profile,
       projectionDigest: projection.projectionDigest,
-      handlerSetDigest: projection.projectionDigest,
+      handlerSetDigest,
       readiness: "ready",
     },
     offerId: `${projection.profile.id}-offer`,
@@ -118,6 +124,14 @@ export interface LegacyPortCatalogBinding {
   readonly evidence: LegacyPortCatalogBindingEvidence;
 }
 
+/** Explicit identity asserted by the concrete ToolPort adapter for one advertised alias. */
+export interface LegacyPortCatalogHandlerAttestation {
+  readonly alias: string;
+  readonly handlerId: string;
+  readonly handlerVersion: number;
+  readonly catalogAction: string;
+}
+
 /**
  * Adapts an existing ToolPort into a HarnessCatalogFactory bound to one profile of `catalog`.
  * The port's own `execute()` remains the sole dispatch path; this only supplies the settlement
@@ -127,8 +141,9 @@ export function createLegacyPortCatalogFactory(
   catalog: ToolCatalog,
   profile: CatalogVersionRef,
   port: ToolPort,
+  handlers: readonly LegacyPortCatalogHandlerAttestation[],
 ): HarnessCatalogFactory {
-  return createLegacyPortCatalogBinding(catalog, profile, port).factory;
+  return createLegacyPortCatalogBinding(catalog, profile, port, handlers).factory;
 }
 
 /**
@@ -139,11 +154,14 @@ export function createLegacyPortCatalogBinding(
   catalog: ToolCatalog,
   profile: CatalogVersionRef,
   port: ToolPort,
+  handlers: readonly LegacyPortCatalogHandlerAttestation[],
   observe?: LegacyPortCatalogLifecycleObserver,
   classifyResult?: LegacyPortCatalogResultClassifier,
 ): LegacyPortCatalogBinding {
   const projection = compileToolProjection(catalog, profile);
-  const offered = offeredSet(catalog, projection);
+  const handlerIdentities = resolveHandlerIdentities(catalog, projection, handlers);
+  const handlerSetDigest = computeHandlerSetDigest(projection.projectionDigest, handlerIdentities);
+  const offered = offeredSet(catalog, projection, handlerSetDigest);
   const evidence: LegacyPortCatalogBindingEvidence = {
     ...offered.binding,
     toolRefs: offered.toolRefs,
@@ -187,6 +205,48 @@ export function createLegacyPortCatalogBinding(
     };
   };
   return { factory, evidence };
+}
+
+function requireHandlerAttestation(condition: boolean): asserts condition {
+  if (!condition) throw new TypeError("Invalid legacy-port handler attestation");
+}
+
+function resolveHandlerIdentity(
+  catalog: ToolCatalog,
+  tool: CompiledProjection["tools"][number],
+  handler: LegacyPortCatalogHandlerAttestation | undefined,
+): ToolHandlerSetIdentity {
+  const descriptor = lookupCatalogTool(catalog, tool.toolRef);
+  requireHandlerAttestation(descriptor !== undefined && handler !== undefined);
+  requireHandlerAttestation(
+    handler.handlerId === descriptor.handlerRequirement.id &&
+      handler.handlerVersion === descriptor.handlerRequirement.contractVersion &&
+      descriptor.actionMapping.some((mapping) => mapping.action === handler.catalogAction),
+  );
+  return {
+    toolRef: descriptor.toolRef,
+    descriptorDigest: descriptor.descriptorDigest,
+    handlerId: handler.handlerId,
+    handlerVersion: handler.handlerVersion,
+    catalogAction: handler.catalogAction,
+  };
+}
+
+function resolveHandlerIdentities(
+  catalog: ToolCatalog,
+  projection: CompiledProjection,
+  handlers: readonly LegacyPortCatalogHandlerAttestation[],
+): readonly ToolHandlerSetIdentity[] {
+  const aliases = handlers.map((handler) => handler.alias);
+  requireHandlerAttestation(new Set(aliases).size === aliases.length);
+  requireHandlerAttestation(handlers.length === projection.tools.length);
+  return projection.tools.map((tool) =>
+    resolveHandlerIdentity(
+      catalog,
+      tool,
+      handlers.find((handler) => handler.alias === tool.alias),
+    ),
+  );
 }
 
 interface DispatchTarget {
