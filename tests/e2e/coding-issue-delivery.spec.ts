@@ -315,6 +315,21 @@ async function expectGeneratedDescription(
     rejections: 0,
     lastEvidenceCount: 1,
   });
+  const staleReview = await page.request.post("/api/git-delivery/pr-description/review", {
+    headers: CSRF,
+    data: {
+      schemaVersion: "1",
+      projectId: root,
+      ownerAndRepo: DELIVERY_REPOSITORY,
+      prNumber,
+      snapshotDigest: "0".repeat(64),
+      proposalId: status.proposalId,
+    },
+  });
+  expect(staleReview.status()).toBe(404);
+  expect(await staleReview.json()).toMatchObject({
+    error: { code: "GIT_DELIVERY_PR_DESCRIPTION_UNKNOWN_PROPOSAL" },
+  });
   const generatedReview = await page.request.post("/api/git-delivery/pr-description/review", {
     headers: CSRF,
     data: {

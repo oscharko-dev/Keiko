@@ -334,8 +334,12 @@ function projectGovernedPermissionByKind(
   if (metadata.actionKind === "file-edit") {
     return projectGovernedEditPermission(properties, metadata);
   }
-  if (metadata.actionKind === "verification-command") {
-    return projectGovernedVerificationPermission(properties, metadata);
+  if (
+    metadata.actionKind === "verification-command" ||
+    metadata.actionKind === "ci-observe" ||
+    metadata.actionKind === "connector-read"
+  ) {
+    return projectGovernedCommandPermission(properties, metadata);
   }
   return undefined;
 }
@@ -371,20 +375,22 @@ function projectGovernedEditPermission(
   };
 }
 
-function projectGovernedVerificationPermission(
+function projectGovernedCommandPermission(
   properties: Record<string, unknown>,
   metadata: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
+  const actionKind = metadata.actionKind;
   if (
     !exactRecord(metadata, GOVERNED_VERIFICATION_METADATA_KEYS) ||
+    typeof actionKind !== "string" ||
     !fixedPermissionMetadata(
       metadata,
       "command-execution",
       "command-execution",
-      "verification-command",
+      actionKind,
       "low",
     ) ||
-    !validVerificationApproval(properties, metadata)
+    !validCommandApproval(properties, metadata)
   ) {
     return undefined;
   }
@@ -394,7 +400,7 @@ function projectGovernedVerificationPermission(
     : { type: "permission-request", requestId, ...metadata };
 }
 
-function validVerificationApproval(
+function validCommandApproval(
   properties: Record<string, unknown>,
   metadata: Record<string, unknown>,
 ): boolean {
@@ -402,12 +408,18 @@ function validVerificationApproval(
   const approvalDigest = metadata.approvalDigest;
   return (
     typeof commandLabel === "string" &&
-    GOVERNED_VERIFIERS.has(commandLabel) &&
+    validGovernedCommandTarget(metadata.actionKind, commandLabel) &&
     validApprovalIdentities(metadata) &&
     typeof approvalDigest === "string" &&
     /^[0-9a-f]{64}$/u.test(approvalDigest) &&
     sameStrings(properties.patterns, [commandLabel])
   );
+}
+
+function validGovernedCommandTarget(actionKind: unknown, commandLabel: string): boolean {
+  if (actionKind === "verification-command") return GOVERNED_VERIFIERS.has(commandLabel);
+  if (actionKind === "ci-observe") return commandLabel === "ci";
+  return actionKind === "connector-read" && boundedApprovalIdentity(commandLabel);
 }
 
 function validApprovalIdentities(metadata: Record<string, unknown>): boolean {

@@ -18,7 +18,9 @@ production-verified. Existing signing and confinement gates remain intact.
 
 The in-scope production OpenCode/real-model Workbench and Git-connected Chat journeys, runtime
 confinement, coding performance, review settlement and applicable current-head quality gates
-remain required. PR #3394 must not be merged to `dev` by this agent.
+remain required. On 2026-09-06 the owner explicitly authorized gated integration of PR #3394
+to `dev`, subsequent `dev` verification, completed issue closure and branch deletion. This
+supersedes the earlier human merge checkpoint; no required check or review gate is waived.
 
 ## Method and scope
 
@@ -434,5 +436,6 @@ criteria. Each maps to the aggregate of the child-issue rows above.
 5. Run the final combined-head typecheck, lint, format, tests, architecture, coverage,
    package-surface, observability and Sonar gates, then verify required PR checks and the
    independent acceptance audit. These are active work, not external or read-only exclusions.
-6. Preserve the no-merge instruction. Report which in-scope issues may close after a human merge;
-   do not mark excluded signing/Atlassian qualification or unexecuted evidence as complete.
+6. After successful gated integration, verify `dev`, close only completed in-scope issues and
+   delete the delivered branch. Do not mark excluded signing/Atlassian qualification or
+   unexecuted evidence as complete.

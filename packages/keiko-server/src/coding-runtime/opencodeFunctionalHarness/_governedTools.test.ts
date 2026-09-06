@@ -118,6 +118,49 @@ describe("scripted child executes the production generated approval shim", () =>
     expect(f.tools.reply(requestId, '{"reply":"once"}')).toBe(false);
   });
 
+  it.each(["governed-assist", "supervised-coding"])(
+    "holds a %s CI observation for a bound approval before the facade",
+    async (mode) => {
+      const f = fixture(mode);
+      const result = f.tools.execute(
+        { id: "ci-1", name: "keiko_ci_status", args: { forceFresh: true } },
+        new AbortController().signal,
+      );
+      const requestId = await pending(f.tools);
+      expect(f.fetch).not.toHaveBeenCalled();
+      const row = f.tools.rows()[0];
+      expect(
+        projectOpenCodePermissionEvent(
+          { id: "evt_permission1", type: "permission.asked", properties: row },
+          SESSION,
+        ),
+      ).toMatchObject({
+        actionKind: "ci-observe",
+        commandLabel: "ci",
+        actionId: `${SESSION}:ci-1`,
+      });
+      expect(f.tools.reply(requestId, '{"reply":"once"}')).toBe(true);
+      await expect(result).resolves.toBe('{"status":"completed"}');
+      const body = f.fetch.mock.calls[0]?.[1]?.body;
+      if (typeof body !== "string") throw new Error("Expected serialized facade request");
+      expect(JSON.parse(body)).toMatchObject({
+        action: "git",
+        operation: "ci",
+        forceFresh: true,
+        approvalProof: {
+          approvalId: `${SESSION}:ci-1`,
+          approvalDigest: codingToolApprovalBindingDigest(RUN, {
+            action: "git",
+            operation: "ci",
+            forceFresh: true,
+            actionId: `${SESSION}:ci-1`,
+            idempotencyKey: `${SESSION}:ci-1`,
+          }),
+        },
+      });
+    },
+  );
+
   it("rejects malformed or widening replies and never calls the facade on explicit denial", async () => {
     const f = fixture();
     const result = f.tools.execute(verification, new AbortController().signal);

@@ -164,6 +164,7 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
       gatewayConfinement: gatewayConfinement(),
       probeAvailability: () => NONE,
       platform: "darwin",
+      resolveGitExecutable: () => ATTESTED_GIT,
       activityLog,
       spawnRuntime: () => {
         spawns += 1;
@@ -189,6 +190,7 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
       gatewayConfinement: gatewayConfinement(),
       probeAvailability: () => ALL,
       platform: "linux",
+      resolveGitExecutable: () => ATTESTED_GIT,
       spawnRuntime: () => {
         spawns += 1;
         return fakeChild();

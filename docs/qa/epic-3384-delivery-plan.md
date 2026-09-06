@@ -1,10 +1,10 @@
 # Epic 3384 implementation and qualification plan
 
-**Paused on owner request, 2026-09-05 at 18:23 UTC:** current implementation and preliminary
-qualification work are preserved as an incomplete checkpoint in PR #3394. The
-[paused handoff](epic-3384-work-in-progress-handoff.md) records verified checkpoints,
-known failures and unfinished work. The acceptance evidence map remains an audit ledger,
-not a final closeout. Agents and the five-minute heartbeat are stopped.
+**Resumed on owner request, 2026-09-06:** complete the accepted epic, settle all actionable
+reviews and current-head gates, then integrate through the required native auto-merge path.
+Verify `dev` checks and issue closure after integration, then delete the delivered branch.
+The five-minute checkpoint and review heartbeat is active. Historical checkpoint evidence in the
+[handoff](epic-3384-work-in-progress-handoff.md) is not a final qualification claim.
 
 Audit baseline: PR #3394, `epic/3384-issue-to-pr`, commit
 `30fb85b54f863e86585d5db27a6ba2e6e4e660c6` (2026-09-04). The three latest commits
@@ -23,8 +23,8 @@ in scope. The owner supplied a controlled repository and the existing model conf
 a hard aggregate ceiling of USD 50 for all real-model attempts and retries.
 
 Preserve the current integration branch and settled review repairs. Use one accountable integrator
-and disjoint agent write scopes. Keep the existing PR. The recorded epic-specific owner review and
-merge checkpoint remains in effect; this work does not arm final-PR auto-merge.
+and disjoint agent write scopes. Keep the existing PR. The September 6 owner instruction
+authorizes native auto-merge after all required gates and review-resolution conditions hold.
 
 The owner clarified the delivery decision: all required dependencies ship in the existing PR
 #3394. The separate #3411 PR #3419 is superseded after its reviewed source is preserved in the
@@ -227,6 +227,6 @@ spend enforcement and complete journey are verified. Configuration availability 
 model-run receipt. Coding confinement (#2951), coding performance (#2952), complete live journeys,
 and final review/gate evidence remain in scope. Platform signing and Atlassian qualifications are
 excluded by the later owner decision above. Existing full-release manifest validators continue
-to report missing release evidence truthfully. The mandated human merge/close checkpoint remains
+to report missing release evidence truthfully. The required current-head gate and review checkpoint remains
 the repository owner's. Detailed evidence limitations are recorded in
 [`docs/design-system/evidence/3390/README.md`](../design-system/evidence/3390/README.md).

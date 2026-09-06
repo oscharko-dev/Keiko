@@ -911,6 +911,37 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
       actionKind: "verification-command",
     });
     expect(projectedVerification?.requestId).toMatch(/^permission-[0-9]+$/u);
+    const projectedCiObservation = projectOpenCodePermissionEvent(
+      {
+        ...base,
+        properties: {
+          ...base.properties,
+          patterns: ["ci"],
+          metadata: {
+            kind: "command-execution",
+            actionClass: "command-execution",
+            reasonCode: "approval-required",
+            expiresAt: "2026-07-23T14:05:00.000Z",
+            actionKind: "ci-observe",
+            scopeLabel: "workspace-scope",
+            risk: "low",
+            policyReason: "approval-required",
+            commandLabel: "ci",
+            actionId: "session:ci-call",
+            idempotencyKey: "session:ci-call",
+            approvalId: "session:ci-call",
+            approvalDigest: "b".repeat(64),
+          },
+        },
+      },
+      "ses_1",
+    );
+    expect(projectedCiObservation).toMatchObject({
+      type: "permission-request",
+      kind: "command-execution",
+      actionKind: "ci-observe",
+      commandLabel: "ci",
+    });
     for (const rejected of [
       { ...base, extra: true },
       { ...base, properties: { ...base.properties, sessionID: "ses_foreign" } },

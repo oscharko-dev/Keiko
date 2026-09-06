@@ -1,4 +1,11 @@
-# Epic #3384: paused work-in-progress handoff
+# Epic #3384: work-in-progress handoff
+
+**Active again on 2026-09-06:** the owner authorizes completion, gated merge to `dev`,
+postmerge verification, completed issue closure and branch cleanup. Agents and the five-minute
+checkpoint/review heartbeat are running. The September 5 record below is historical; it does
+not describe current agent state or final qualification.
+
+## Historical pause checkpoint — September 5
 
 The owner requested an immediate checkpoint and stop on 2026-09-05 at 18:23 UTC.
 All current source and preliminary evidence are preserved in PR #3394 on

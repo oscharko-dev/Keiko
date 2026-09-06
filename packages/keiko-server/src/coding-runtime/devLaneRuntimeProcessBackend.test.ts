@@ -14,17 +14,37 @@ import {
 import { createBufferedServerLogSink } from "../observability/index.js";
 
 import {
-  createDevLaneRuntimeProcessBackend,
+  createDevLaneRuntimeProcessBackend as createProductionDevLaneRuntimeProcessBackend,
   type DevLaneRuntimeChildProcess,
+  type DevLaneRuntimeProcessBackendOptions,
   type DevLaneRuntimeSpawn,
 } from "./devLaneRuntimeProcessBackend.js";
 import {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
+  type RuntimeProcessBackend,
   type RuntimeProcessTree,
   type RuntimeSupervisorLaunchRequest,
 } from "./runtimeProcessSupervisor.js";
 
 const IDENTITY = { platform: "darwin", arch: "arm64", backend: "macos-app-sandbox" } as const;
+const TEST_GIT = { path: "/qualified/apple/git", sha256: "d".repeat(64) } as const;
+
+function createDevLaneRuntimeProcessBackend(
+  options: DevLaneRuntimeProcessBackendOptions,
+): RuntimeProcessBackend {
+  return createProductionDevLaneRuntimeProcessBackend({
+    probeAvailability: () => ({
+      bubblewrap: false,
+      unshare: false,
+      seatbelt: true,
+      docker: false,
+      podman: false,
+    }),
+    platform: "darwin",
+    resolveGitExecutable: () => TEST_GIT,
+    ...options,
+  });
+}
 
 const roots: string[] = [];
 
@@ -374,7 +394,7 @@ describe("dev-lane runtime process backend", () => {
     await expect(backend.waitForCompleteTreeExit(tree, 10)).resolves.toBe(false);
   });
 
-  it.skipIf(process.platform === "win32")("spawns and reaps a real process group", async () => {
+  it.skipIf(process.platform !== "darwin")("spawns and reaps a real process group", async () => {
     const fixture = stageFixture();
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
@@ -454,7 +474,7 @@ describe("real OS-level gateway confinement through the production backend (#295
       const gateway = await listenEphemeral();
       const hostile = await listenEphemeral();
       try {
-        const backend = createDevLaneRuntimeProcessBackend({
+        const backend = createProductionDevLaneRuntimeProcessBackend({
           identity: IDENTITY,
           runtimeRoot: fixture.runtimeRoot,
           gatewayConfinement: createRuntimeGatewayConfinement({

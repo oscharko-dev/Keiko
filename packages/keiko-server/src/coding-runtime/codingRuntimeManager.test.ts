@@ -56,6 +56,8 @@ import {
   OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
   OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
 } from "./opencodeProtocolSurface.js";
+import { OPENCODE_GOVERNED_ACTION_PERMISSION } from "./opencodeToolSchemas.js";
+import { projectOpenCodePermissionEvent } from "./opencodeProtocol.js";
 
 const tempDirs: string[] = [];
 const OPENCODE_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
@@ -2822,27 +2824,41 @@ describe("coding runtime manager", () => {
     await manager.start(
       governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
-    harness.children[0]?.stdout.write(
-      permissionLine({
-        requestId: "permission-ci-observe",
-        kind: "command-execution",
-        actionClass: "command-execution",
-        reasonCode: "approval-required",
-        actionKind: "ci-observe",
-        scopeLabel: "workspace-scope",
-        risk: "high",
-        policyReason: "approval-required",
-        commandLabel: "ci",
-        actionId: request.actionId,
-        idempotencyKey: request.idempotencyKey,
-        approvalId: approvalProof.approvalId,
-        approvalDigest: approvalProof.approvalDigest,
-      }),
+    const projected = projectOpenCodePermissionEvent(
+      {
+        id: "evt_ci_observe",
+        type: "permission.asked",
+        properties: {
+          id: "per_ci_observe",
+          sessionID: "ses_1",
+          permission: OPENCODE_GOVERNED_ACTION_PERMISSION,
+          patterns: ["ci"],
+          always: [],
+          metadata: {
+            kind: "command-execution",
+            actionClass: "command-execution",
+            reasonCode: "approval-required",
+            expiresAt: "2026-07-07T13:05:00.000Z",
+            actionKind: "ci-observe",
+            scopeLabel: "workspace-scope",
+            risk: "low",
+            policyReason: "approval-required",
+            commandLabel: "ci",
+            actionId: request.actionId,
+            idempotencyKey: request.idempotencyKey,
+            approvalId: approvalProof.approvalId,
+            approvalDigest: approvalProof.approvalDigest,
+          },
+        },
+      },
+      "ses_1",
     );
+    if (projected === undefined) throw new Error("expected governed CI projection");
+    harness.children[0]?.stdout.write(`${JSON.stringify(projected)}\n`);
     await settle();
 
     expect(events.find((event) => event.kind === "permission-requested")).toMatchObject({
-      permissionRequest: { requestId: "permission-ci-observe", actionKind: "ci-observe" },
+      permissionRequest: { requestId: projected.requestId, actionKind: "ci-observe" },
     });
     expect(
       codingToolApprovals.consume({
@@ -2854,7 +2870,7 @@ describe("coding runtime manager", () => {
     expect(
       manager.issueApproval({
         runId: "run-1991",
-        requestId: "permission-ci-observe",
+        requestId: projected.requestId,
         actionKind: "ci-observe",
         approvedByUserId: "operator",
       }).ok,

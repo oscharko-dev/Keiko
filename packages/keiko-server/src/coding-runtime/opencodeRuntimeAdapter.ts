@@ -1027,6 +1027,37 @@ function toolDescription(action: GeneratedToolAction): string {
   );
 }
 
+function toolApprovalProofSource(): readonly string[] {
+  return [
+    "function ciObservationPermission(approvalProof) {",
+    '  if (!approvalProof) throw new Error("keiko-tool-invalid");',
+    "  return {",
+    '    patterns: ["ci"], metadata: { kind: "command-execution", actionClass: "command-execution", reasonCode: "approval-required", actionKind: "ci-observe", scopeLabel: "workspace-scope", risk: "low", policyReason: "approval-required", commandLabel: "ci", ...approvalProof },',
+    "  };",
+    "}",
+    "function toolApprovalRequired(request) {",
+    "  const mode = process.env.KEIKO_CODING_MODE;",
+    '  if (request.action === "git" && request.operation === "ci") return mode === "governed-assist" || mode === "supervised-coding";',
+    '  return mode === "governed-assist" && ["verification", "command"].includes(request.action);',
+    "}",
+    "function toolApprovalTarget(request) {",
+    '  if (request.action === "verification") return request.verifierId;',
+    '  if (request.action === "command") return request.commandId;',
+    '  return request.action === "git" && request.operation === "ci" ? "ci" : undefined;',
+    "}",
+    "async function toolApprovalProof(request) {",
+    "  if (!toolApprovalRequired(request)) return;",
+    "  const runId = process.env.KEIKO_CODING_RUN_ID;",
+    "  const targetId = toolApprovalTarget(request);",
+    '  if (!runId || typeof targetId !== "string") throw new Error("keiko-tool-invalid");',
+    '  const payload = JSON.stringify(["coding-tool-approval-v1", runId, request.action, request.actionId, request.idempotencyKey, targetId]);',
+    '  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));',
+    '  const approvalDigest = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");',
+    "  return { actionId: request.actionId, idempotencyKey: request.idempotencyKey, approvalId: request.actionId, approvalDigest };",
+    "}",
+  ];
+}
+
 function governedPermissionSource(): readonly string[] {
   return [
     `const governedPermission = ${JSON.stringify(OPENCODE_GOVERNED_ACTION_PERMISSION)};`,
@@ -1048,19 +1079,13 @@ function governedPermissionSource(): readonly string[] {
     '    patterns: [args.verifierId], metadata: { kind: "command-execution", actionClass: "command-execution", reasonCode: "approval-required", actionKind: "verification-command", scopeLabel: "workspace-scope", risk: "low", policyReason: "approval-required", commandLabel: args.verifierId, ...approvalProof },',
     "  };",
     "}",
-    "async function toolApprovalProof(request) {",
-    '  if (process.env.KEIKO_CODING_MODE !== "governed-assist" || !["verification", "command"].includes(request.action)) return;',
-    "  const runId = process.env.KEIKO_CODING_RUN_ID;",
-    '  const targetId = request.action === "verification" ? request.verifierId : request.commandId;',
-    '  if (!runId || typeof targetId !== "string") throw new Error("keiko-tool-invalid");',
-    '  const payload = JSON.stringify(["coding-tool-approval-v1", runId, request.action, request.actionId, request.idempotencyKey, targetId]);',
-    '  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));',
-    '  const approvalDigest = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");',
-    "  return { actionId: request.actionId, idempotencyKey: request.idempotencyKey, approvalId: request.actionId, approvalDigest };",
-    "}",
+    ...toolApprovalProofSource(),
     "async function askForGovernedPermission(args, context, approvalProof) {",
-    '  if (process.env.KEIKO_CODING_MODE !== "governed-assist") return;',
-    '  const request = action === "edit" ? editPermission(args) : action === "verification" ? verificationPermission(args, approvalProof) : undefined;',
+    "  const mode = process.env.KEIKO_CODING_MODE;",
+    "  let request;",
+    '  if (mode === "governed-assist" && action === "edit") request = editPermission(args);',
+    '  else if (mode === "governed-assist" && action === "verification") request = verificationPermission(args, approvalProof);',
+    '  else if ((mode === "governed-assist" || mode === "supervised-coding") && action === "git-ci") request = ciObservationPermission(approvalProof);',
     "  if (!request) return;",
     "  await context.ask({",
     "    permission: governedPermission,",

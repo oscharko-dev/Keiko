@@ -4135,11 +4135,9 @@ function workbenchDescriptionContextProvider(
   binding: WorkbenchRetentionBinding,
   runId: string,
   activeWorkspaceRoot: () => string | undefined,
-  signal?: AbortSignal,
 ): () => PrDescriptionContext | undefined {
   const accessScope = {};
   const current = (): boolean =>
-    signal?.aborted !== true &&
     activeWorkspaceRoot() === binding.request.projectId &&
     deps.gitDeliveryDescriptionAuthority?.current(
       binding.authorityScope,
@@ -4155,7 +4153,6 @@ function workbenchDescriptionContextProvider(
       accessScope,
       authorityDigest: descriptionAuthorityEnvelopeDigest(binding.authorityScope),
       correlationId: runId,
-      ...(signal === undefined ? {} : { signal }),
       stillAuthorized: current,
     };
   };
@@ -4168,7 +4165,6 @@ function resolveWorkbenchApplicationRetention(
   activeWorkspaceRoot: () => string | undefined,
   scope: WorkbenchRetentionScope,
   snapshotDigest: string,
-  signal?: AbortSignal,
 ): PrDescriptionApplicationService | undefined {
   const binding = workbenchRetentionBinding(scope, snapshotDigest);
   if (binding === undefined) return undefined;
@@ -4177,7 +4173,6 @@ function resolveWorkbenchApplicationRetention(
     binding,
     scope.runId,
     activeWorkspaceRoot,
-    signal,
   );
   const resolution = resolvePrDescriptionApplicationServiceForContext(
     deps,
@@ -4218,6 +4213,37 @@ interface WorkbenchRetentionContext {
   readonly activeWorkspaceRoot: () => string | undefined;
 }
 
+async function retainWorkbenchApplicationArtifact(
+  context: WorkbenchRetentionContext,
+  scope: WorkbenchRetentionScope,
+  artifact: Parameters<ProductionWorkbenchArtifactRetention["retain"]>[1],
+  signal: AbortSignal,
+  binding: WorkbenchRetentionBinding,
+  acceptedMode: CodingWorkbenchMode,
+): Promise<string | undefined> {
+  context.controlPlane.mintDescriptionAuthority?.({
+    scope: binding.authorityScope,
+    requestedMode: acceptedMode,
+    nowIso: new Date().toISOString(),
+    correlationId: scope.runId,
+  });
+  const service = resolveWorkbenchApplicationRetention(
+    context.deps,
+    context.activeWorkspaceRoot,
+    scope,
+    artifact.binding.snapshotDigest,
+  );
+  const result = await service?.previewArtifact(artifact);
+  // The dispatcher signal governs this retain attempt, not the cached application service that
+  // the later HTTP review owns. If cancellation wins while previewing, remove the partial hold;
+  // otherwise terminal dispatcher cleanup must leave the authority-bound proposal reviewable.
+  if (signal.aborted) {
+    service?.invalidate();
+    return undefined;
+  }
+  return result?.outcome === "preview" ? result.preview.proposalId : undefined;
+}
+
 async function retainWorkbenchArtifact(
   context: WorkbenchRetentionContext,
   scope: WorkbenchRetentionScope,
@@ -4235,20 +4261,14 @@ async function retainWorkbenchArtifact(
       snapshotDigest,
     )?.holdDraftArtifact(artifact, Date.now())?.proposalId;
   }
-  context.controlPlane.mintDescriptionAuthority?.({
-    scope: binding.authorityScope,
-    requestedMode: scope.acceptedMode,
-    nowIso: new Date().toISOString(),
-    correlationId: scope.runId,
-  });
-  const result = await resolveWorkbenchApplicationRetention(
-    context.deps,
-    context.activeWorkspaceRoot,
+  return retainWorkbenchApplicationArtifact(
+    context,
     scope,
-    snapshotDigest,
+    artifact,
     signal,
-  )?.previewArtifact(artifact);
-  return result?.outcome === "preview" ? result.preview.proposalId : undefined;
+    binding,
+    scope.acceptedMode,
+  );
 }
 
 function hasWorkbenchArtifact(
