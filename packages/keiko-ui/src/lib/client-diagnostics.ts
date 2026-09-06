@@ -25,11 +25,15 @@
 // rides alongside `message` rather than being folded into it so transports can preserve typed wire
 // fields instead of parsing a caller-specific string convention.
 
-import type { ClientDiagnosticGitChangeDescription } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import type {
+  ClientDiagnosticGitChangeDescription,
+  ClientDiagnosticWorkspaceTrustBinding,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 export interface ClientDiagnosticMeta {
   readonly correlationId?: string | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
+  readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
 }
 
 export type ClientDiagnosticWriter = (message: string, meta?: ClientDiagnosticMeta) => void;

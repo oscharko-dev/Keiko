@@ -113,6 +113,7 @@ import { useCodingWorkbenchChanges } from "@/lib/useCodingWorkbenchChanges";
 import { CodexSubscriptionAuthCard } from "./CodingWorkbenchModelCards";
 import {
   useCodingWorkbenchRunWorkspace,
+  type CodingWorkbenchRepositoryTrustBinding,
   type CodingWorkbenchRunWorkspace,
   type CodingWorkbenchRunWorkspaceBinding,
 } from "./useCodingWorkbenchRunWorkspace";
@@ -430,17 +431,26 @@ function workspaceBindingPendingOf(workspace: WorkbenchWorkspaceApi): boolean {
 
 // Verification in a managed worktree uses its repository's package-script trust, and independently
 // rechecks that both manifests still have the same basis. A private worktree is never a trust target.
-function liveTrustRepositoryRootOf(workspace: WorkbenchWorkspaceApi): string | null {
+function liveRepositoryTrustBindingOf(
+  workspace: WorkbenchWorkspaceApi,
+  projection: CodingWorkbenchWorkspaceProjection | null,
+): CodingWorkbenchRepositoryTrustBinding | null {
   const instance = workspace.activeInstance;
   if (
     workspace.error !== null ||
     workspaceBindingPendingOf(workspace) ||
     instance === null ||
-    workspace.activeBinding?.workspaceId !== instance.workspaceId
+    workspace.activeBinding?.workspaceId !== instance.workspaceId ||
+    projection?.workspaceId !== instance.workspaceId
   ) {
     return null;
   }
-  return instance.repositoryRoot;
+  return {
+    repositoryRoot: instance.repositoryRoot,
+    repositoryId: instance.repositoryId,
+    workspaceId: instance.workspaceId,
+    correlationId: instance.auditCorrelationId,
+  };
 }
 
 function liveWorkspaceIdentity(
@@ -451,7 +461,32 @@ function liveWorkspaceIdentity(
     root: liveWorkspaceRootOf(workspace),
     taskBranch: workspace.activeInstance?.taskBranch ?? null,
     workspace: state.workspace.value,
+    trust: liveRepositoryTrustBindingOf(workspace, state.workspace.value),
   };
+}
+
+function validatedRunTrustBinding(
+  runWorkspace: CodingWorkbenchRunWorkspaceBinding,
+): CodingWorkbenchRepositoryTrustBinding | null {
+  const current = runWorkspace.bound;
+  if (current === null || current.trust === null || current.workspace === null) return null;
+  return current.trust.workspaceId === current.workspace.workspaceId ? current.trust : null;
+}
+
+/** The trust target named by the visible run. A live shell switch cannot retarget it. */
+function sessionRepositoryTrustBinding(
+  state: CodingWorkbenchRuntimeState,
+  runWorkspace: CodingWorkbenchRunWorkspaceBinding,
+  activeWorkspace: WorkbenchWorkspaceApi,
+): CodingWorkbenchRepositoryTrustBinding | null {
+  if (state.mutation.kind === "start" && state.mutation.status === "pending") return null;
+  if (!activeRunState(state.run.value?.state)) {
+    return liveRepositoryTrustBindingOf(activeWorkspace, state.workspace.value);
+  }
+  const bound = validatedRunTrustBinding(runWorkspace);
+  if (bound === null) return null;
+  const runId = state.run.value?.runId;
+  return { ...bound, correlationId: runId ?? bound.correlationId };
 }
 
 /** The run-scoped workspace lock, wired from the live binding (#3381 review). */
@@ -662,7 +697,9 @@ function WorkbenchContent({
         state={state}
         workspace={sessionWorkspaceProjection(state, runWorkspace)}
       />
-      <CodingWorkbenchTrustAffordance root={liveTrustRepositoryRootOf(activeWorkspace)} />
+      <CodingWorkbenchTrustAffordance
+        binding={sessionRepositoryTrustBinding(state, runWorkspace, activeWorkspace)}
+      />
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {lifecycleAnnouncement(state, t, research.grant)}
       </p>

@@ -107,6 +107,7 @@ function clientDiagnosticPostBody(
   message: string,
   correlationId: string | undefined,
   gitChangeDescription: ClientDiagnosticMeta["gitChangeDescription"],
+  workspaceTrustBinding: ClientDiagnosticMeta["workspaceTrustBinding"],
 ): ClientDiagnosticIngestRequest {
   const bounded =
     message.length > CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH
@@ -116,7 +117,13 @@ function clientDiagnosticPostBody(
   const validId = validCorrelationId(correlationId);
   const sseMatch = SSE_DIAGNOSTIC_MESSAGE_PATTERN.exec(message);
   if (sseMatch === null)
-    return { message: bounded, clientTs, correlationId: validId, gitChangeDescription };
+    return {
+      message: bounded,
+      clientTs,
+      correlationId: validId,
+      gitChangeDescription,
+      workspaceTrustBinding,
+    };
   const readyStateDigit = sseMatch[1];
   if (readyStateDigit === undefined) return { message: bounded, clientTs, correlationId: validId };
   return {
@@ -124,6 +131,7 @@ function clientDiagnosticPostBody(
     clientTs,
     correlationId: validId,
     gitChangeDescription,
+    workspaceTrustBinding,
     readyState: parsedSseReadyState(readyStateDigit),
     kind: "sse-error",
   };
@@ -192,7 +200,12 @@ function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMe
     return;
   }
   try {
-    const body = clientDiagnosticPostBody(message, meta?.correlationId, meta?.gitChangeDescription);
+    const body = clientDiagnosticPostBody(
+      message,
+      meta?.correlationId,
+      meta?.gitChangeDescription,
+      meta?.workspaceTrustBinding,
+    );
     void bffFetchJson<undefined>("/api/diagnostics/client", {
       method: "POST",
       body: JSON.stringify(body),

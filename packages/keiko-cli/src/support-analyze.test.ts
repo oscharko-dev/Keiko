@@ -744,6 +744,32 @@ describe("analyzeLogText — extra fields and frames", () => {
     ]);
   });
 
+  it("reconstructs the run-correlated repository and workspace selected for trust", () => {
+    const correlationId = "originating-run-correlation";
+    const serialized = serializedActivityLog("keiko-support-workbench-trust-", (sink) => {
+      sink.write({
+        level: "warn",
+        category: productionLogCategory("client.diagnostic"),
+        op: "client.diagnostic",
+        correlationId,
+        extra: {
+          clientNote: "[keiko] coding workbench repository trust bound",
+          repositoryId: "repository-a",
+          workspaceId: "workspace-a",
+        },
+      });
+    });
+
+    const timeline = findTimeline(analyzeLogText(serialized), correlationId);
+    expect(timeline?.lines[0]).toMatchObject({
+      op: "client.diagnostic",
+      extra: {
+        repositoryId: "repository-a",
+        workspaceId: "workspace-a",
+      },
+    });
+  });
+
   it("omits extra entirely when no unknown key survives (never emits an empty object)", () => {
     const plain = line({ ts: T0, category: "http", op: "a", correlationId: "req-plain" });
 

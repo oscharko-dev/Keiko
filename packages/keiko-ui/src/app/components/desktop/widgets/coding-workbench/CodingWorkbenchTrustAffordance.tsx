@@ -20,12 +20,12 @@ import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
 } from "./coding-workbench-i18n";
+import type { CodingWorkbenchRepositoryTrustBinding } from "./useCodingWorkbenchRunWorkspace";
 import styles from "./CodingWorkbenchWindow.module.css";
 
 export interface CodingWorkbenchTrustAffordanceProps {
-  /** The settled active instance's repository root, or null while its binding is unavailable.
-   * The verification runner checks this repository's grant and the worktree's matching basis. */
-  readonly root: string | null;
+  /** The settled run-bound repository identity, or null while its binding is unavailable. */
+  readonly binding: CodingWorkbenchRepositoryTrustBinding | null;
 }
 
 /**
@@ -34,16 +34,25 @@ export interface CodingWorkbenchTrustAffordanceProps {
  * claims an action is available when it is not.
  */
 export function CodingWorkbenchTrustAffordance({
-  root,
+  binding,
 }: CodingWorkbenchTrustAffordanceProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const trust = useWorkspaceTrust(root ?? undefined);
+  const trust = useWorkspaceTrust(binding?.repositoryRoot);
+  const correlationId = binding?.correlationId;
+  const repositoryId = binding?.repositoryId;
+  const workspaceId = binding?.workspaceId;
   useEffect(() => {
-    if (root !== null) {
-      reportClientDiagnostic("[keiko] coding workbench repository trust bound");
+    if (correlationId !== undefined && repositoryId !== undefined && workspaceId !== undefined) {
+      reportClientDiagnostic("[keiko] coding workbench repository trust bound", {
+        correlationId,
+        workspaceTrustBinding: {
+          repositoryId,
+          workspaceId,
+        },
+      });
     }
-  }, [root]);
-  if (trust.status?.trust !== "restricted") return null;
+  }, [correlationId, repositoryId, workspaceId]);
+  if (binding === null || trust.status?.trust !== "restricted") return null;
   return (
     <TrustRestrictedNotice
       granting={trust.mutating}

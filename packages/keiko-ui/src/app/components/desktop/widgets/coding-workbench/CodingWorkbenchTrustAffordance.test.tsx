@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
 import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import { CodingWorkbenchTrustAffordance } from "./CodingWorkbenchTrustAffordance";
+import type { CodingWorkbenchRepositoryTrustBinding } from "./useCodingWorkbenchRunWorkspace";
 
 const fetchStatus = vi.hoisted(() => vi.fn());
 const mutateTrust = vi.hoisted(() => vi.fn());
@@ -31,13 +32,22 @@ function status(projectId: string, trust: "trusted" | "restricted"): WorkspaceTr
   };
 }
 
+function binding(repositoryRoot = "/repo-a"): CodingWorkbenchRepositoryTrustBinding {
+  return {
+    repositoryRoot,
+    repositoryId: "repository-a",
+    workspaceId: "workspace-a",
+    correlationId: "correlation-workspace-a",
+  };
+}
+
 afterEach(() => {
   vi.clearAllMocks();
 });
 
 describe("CodingWorkbenchTrustAffordance", () => {
   it("renders nothing while no workspace is bound", async () => {
-    const { container } = render(<CodingWorkbenchTrustAffordance root={null} />);
+    const { container } = render(<CodingWorkbenchTrustAffordance binding={null} />);
 
     expect(fetchStatus).not.toHaveBeenCalled();
     expect(container).toBeEmptyDOMElement();
@@ -45,7 +55,7 @@ describe("CodingWorkbenchTrustAffordance", () => {
 
   it("renders nothing once the bound workspace resolves as trusted", async () => {
     fetchStatus.mockResolvedValue(status("/repo-a", "trusted"));
-    const { container } = render(<CodingWorkbenchTrustAffordance root="/repo-a" />);
+    const { container } = render(<CodingWorkbenchTrustAffordance binding={binding()} />);
 
     await waitFor(() => expect(fetchStatus).toHaveBeenCalledWith("/repo-a"));
     expect(screen.queryByTestId("coding-workbench-trust-affordance")).not.toBeInTheDocument();
@@ -54,7 +64,7 @@ describe("CodingWorkbenchTrustAffordance", () => {
 
   it("shows the allow action once the bound workspace resolves as restricted", async () => {
     fetchStatus.mockResolvedValue(status("/repo-a", "restricted"));
-    render(<CodingWorkbenchTrustAffordance root="/repo-a" />);
+    render(<CodingWorkbenchTrustAffordance binding={binding()} />);
 
     const action = await screen.findByRole("button", {
       name: "Allow package scripts for verification",
@@ -62,11 +72,23 @@ describe("CodingWorkbenchTrustAffordance", () => {
     expect(action).toBeEnabled();
   });
 
+  it("removes a retained restricted action as soon as the validated binding disappears", async () => {
+    fetchStatus.mockResolvedValue(status("/repo-a", "restricted"));
+    const view = render(<CodingWorkbenchTrustAffordance binding={binding()} />);
+    await screen.findByRole("button", { name: "Allow package scripts for verification" });
+
+    view.rerender(<CodingWorkbenchTrustAffordance binding={null} />);
+
+    expect(
+      screen.queryByRole("button", { name: "Allow package scripts for verification" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("grants trust for the workspace root through the existing grant route on click", async () => {
     fetchStatus.mockResolvedValue(status("/repo-a", "restricted"));
     mutateTrust.mockResolvedValue(status("/repo-a", "trusted"));
     const user = userEvent.setup();
-    render(<CodingWorkbenchTrustAffordance root="/repo-a" />);
+    render(<CodingWorkbenchTrustAffordance binding={binding()} />);
 
     const action = await screen.findByRole("button", {
       name: "Allow package scripts for verification",
@@ -92,7 +114,7 @@ describe("CodingWorkbenchTrustAffordance", () => {
       }),
     );
     const user = userEvent.setup();
-    render(<CodingWorkbenchTrustAffordance root="/repo-a" />);
+    render(<CodingWorkbenchTrustAffordance binding={binding()} />);
 
     const action = await screen.findByRole("button", {
       name: "Allow package scripts for verification",
@@ -105,7 +127,7 @@ describe("CodingWorkbenchTrustAffordance", () => {
 
   it("has no serious or critical axe violations while the action is shown", async () => {
     fetchStatus.mockResolvedValue(status("/repo-a", "restricted"));
-    const { container } = render(<CodingWorkbenchTrustAffordance root="/repo-a" />);
+    const { container } = render(<CodingWorkbenchTrustAffordance binding={binding()} />);
     await screen.findByRole("button", { name: "Allow package scripts for verification" });
 
     const report = await axe(container);

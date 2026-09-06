@@ -242,6 +242,26 @@ describe("fanOutClientDiagnostic correlationId handling", () => {
     });
   });
 
+  it("keeps a body-free workspace trust identity structured on the diagnostic wire", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const workspaceTrustBinding = {
+      repositoryId: "repository-a",
+      workspaceId: "workspace-a",
+    };
+
+    fanOutClientDiagnostic("[keiko] coding workbench repository trust bound", {
+      correlationId: "originating-run-correlation",
+      workspaceTrustBinding,
+    });
+
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      correlationId: "originating-run-correlation",
+      workspaceTrustBinding,
+    });
+  });
+
   it("omits correlationId from the wire body when the caller supplies none", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
     vi.stubGlobal("fetch", fetchMock);

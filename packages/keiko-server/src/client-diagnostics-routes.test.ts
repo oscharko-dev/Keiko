@@ -141,6 +141,27 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  it("preserves the validated workspace trust identity on the originating timeline", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "coding workbench repository trust bound",
+      clientTs: CLIENT_TS,
+      correlationId: "originating-run-correlation",
+      workspaceTrustBinding: {
+        repositoryId: "repository-a",
+        workspaceId: "workspace-a",
+      },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticLine(sink)).toMatchObject({
+      op: "client.diagnostic",
+      correlationId: "originating-run-correlation",
+      repositoryId: "repository-a",
+      workspaceId: "workspace-a",
+    });
+  });
+
   it("rejects an invalid correlationId and retains the validated ingest correlation", async () => {
     const sink = captureServerLog();
     // Fails `isValidCorrelationId`'s alphabet (spaces and `!` are not in [A-Za-z0-9._-]), but is a

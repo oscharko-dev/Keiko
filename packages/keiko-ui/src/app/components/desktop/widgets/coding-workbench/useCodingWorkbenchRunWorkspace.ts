@@ -15,6 +15,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { CodingWorkbenchWorkspaceProjection } from "@/lib/coding-workbench-live-state";
 
+/** The settled, server-validated repository identity whose package-script trust a run may mutate. */
+export interface CodingWorkbenchRepositoryTrustBinding {
+  readonly repositoryRoot: string;
+  readonly repositoryId: string;
+  readonly workspaceId: string;
+  readonly correlationId: string;
+}
+
 /** The task-workspace identity one run is attributed to, frozen at that run's submission. */
 export interface CodingWorkbenchRunWorkspace {
   /** The active root the run was submitted against: the Git target and the editor-bridge root. */
@@ -23,6 +31,8 @@ export interface CodingWorkbenchRunWorkspace {
   readonly taskBranch: string | null;
   /** The runtime workspace projection (task id, branch, health) at submission. */
   readonly workspace: CodingWorkbenchWorkspaceProjection | null;
+  /** The repository trust target validated at submission; never reconstructed from a later root. */
+  readonly trust: CodingWorkbenchRepositoryTrustBinding | null;
 }
 
 export interface UseCodingWorkbenchRunWorkspaceInput {
@@ -42,7 +52,12 @@ export interface CodingWorkbenchRunWorkspaceBinding {
   readonly captureSubmission: () => void;
 }
 
-const UNBOUND: CodingWorkbenchRunWorkspace = { root: null, taskBranch: null, workspace: null };
+const UNBOUND: CodingWorkbenchRunWorkspace = {
+  root: null,
+  taskBranch: null,
+  workspace: null,
+  trust: null,
+};
 
 interface SubmissionCapture {
   /** The run that was current when Start was submitted; the capture belongs to the NEXT one. */

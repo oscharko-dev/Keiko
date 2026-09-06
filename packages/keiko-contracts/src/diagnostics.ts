@@ -77,6 +77,12 @@ export interface ClientDiagnosticGitChangeDescription {
   readonly outcome: ClientDiagnosticGitChangeDescriptionOutcome;
 }
 
+/** Body-free identity of the server-validated task-workspace repository selected for trust. */
+export interface ClientDiagnosticWorkspaceTrustBinding {
+  readonly repositoryId: string;
+  readonly workspaceId: string;
+}
+
 // The browser-side sink already bounds a diagnostic message to this length (client-diagnostics.ts,
 // `reportClientDiagnostic`); the server enforces the SAME bound independently rather than trusting
 // the browser's own promise, per this module's header.
@@ -97,6 +103,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly correlationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
+  readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -188,6 +195,18 @@ function isClientDiagnosticGitChangeDescription(
   );
 }
 
+function isClientDiagnosticWorkspaceTrustBinding(
+  value: unknown,
+): value is ClientDiagnosticWorkspaceTrustBinding {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.repositoryId === "string" &&
+    BODY_FREE_ID_PATTERN.test(value.repositoryId) &&
+    typeof value.workspaceId === "string" &&
+    BODY_FREE_ID_PATTERN.test(value.workspaceId)
+  );
+}
+
 function isCorrelationIdShape(value: unknown): value is string {
   return isBoundedString(value, CORRELATION_ID_MAX_LENGTH);
 }
@@ -201,12 +220,21 @@ export function isClientDiagnosticIngestRequest(
   value: unknown,
 ): value is ClientDiagnosticIngestRequest {
   if (!isRecord(value)) return false;
-  const { message, clientTs, readyState, correlationId, kind, gitChangeDescription } = value;
+  const {
+    message,
+    clientTs,
+    readyState,
+    correlationId,
+    kind,
+    gitChangeDescription,
+    workspaceTrustBinding,
+  } = value;
   if (!isBoundedString(message, CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH)) return false;
   if (!isIsoInstant(clientTs)) return false;
   if (!isOptional(readyState, isClientDiagnosticReadyState)) return false;
   if (!isOptional(correlationId, isCorrelationIdShape)) return false;
   if (!isOptional(kind, isClientDiagnosticKind)) return false;
   if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
+  if (!isOptional(workspaceTrustBinding, isClientDiagnosticWorkspaceTrustBinding)) return false;
   return true;
 }

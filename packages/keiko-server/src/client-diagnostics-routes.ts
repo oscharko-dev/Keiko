@@ -125,6 +125,10 @@ function logClientDiagnostic(
     extra.proposalId = request.gitChangeDescription.proposalId;
     extra.outcome = request.gitChangeDescription.outcome;
   }
+  if (request.workspaceTrustBinding !== undefined) {
+    extra.repositoryId = request.workspaceTrustBinding.repositoryId;
+    extra.workspaceId = request.workspaceTrustBinding.workspaceId;
+  }
   const correlationId =
     request.correlationId !== undefined && isValidCorrelationId(request.correlationId)
       ? request.correlationId

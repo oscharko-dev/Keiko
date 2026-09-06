@@ -269,13 +269,18 @@ function renderWorkbench(
 function activeWorkspaceWithBinding(
   repositoryRoot: string,
   activeRoot: string,
-  identity: { readonly workspaceId?: string; readonly taskBranch?: string } = {},
+  identity: {
+    readonly workspaceId?: string;
+    readonly taskBranch?: string;
+    readonly repositoryId?: string;
+    readonly auditCorrelationId?: string;
+  } = {},
 ): ActiveWorkspaceApi {
   const instance: WorkspaceInstance = {
     schemaVersion: "1",
     workspaceId: identity.workspaceId ?? "workspace-1",
     taskId: "task-1",
-    repositoryId: "repository-1",
+    repositoryId: identity.repositoryId ?? "repository-1",
     repositoryRoot,
     baseBranch: "dev",
     taskBranch: identity.taskBranch ?? "task-1",
@@ -288,7 +293,7 @@ function activeWorkspaceWithBinding(
     updatedAt: AT,
     driftMarkers: [],
     recoveryHints: [],
-    auditCorrelationId: "correlation-1",
+    auditCorrelationId: identity.auditCorrelationId ?? "correlation-1",
   };
   const binding: WorkspaceBinding = {
     schemaVersion: "1",
@@ -2566,10 +2571,13 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
 
     expect(trustStatusMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko");
     expect(trustMutateMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko", "grant");
-    expect(diagnostic).toHaveBeenCalledWith(
-      "[keiko] coding workbench repository trust bound",
-      undefined,
-    );
+    expect(diagnostic).toHaveBeenCalledWith("[keiko] coding workbench repository trust bound", {
+      correlationId: "correlation-1",
+      workspaceTrustBinding: {
+        repositoryId: "repository-1",
+        workspaceId: "workspace-1",
+      },
+    });
   });
 
   it.each<Partial<ActiveWorkspaceApi>>([
@@ -2653,24 +2661,47 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
 });
 
 describe("CodingWorkbenchWindow run workspace attribution", () => {
-  const WORKSPACE_A = { root: "/worktrees/task-a", branch: "issue/aaa", id: "workspace-a" };
-  const WORKSPACE_B = { root: "/worktrees/task-b", branch: "issue/bbb", id: "workspace-b" };
+  afterEach(resetClientDiagnosticWriter);
 
-  function workspaceApi(workspace: {
-    root: string;
-    branch: string;
-    id: string;
-  }): ActiveWorkspaceApi {
-    return activeWorkspaceWithBinding("/repos/keiko", workspace.root, {
+  const WORKSPACE_A = {
+    root: "/worktrees/task-a",
+    repositoryRoot: "/repos/a",
+    repositoryId: "repository-a",
+    branch: "issue/aaa",
+    id: "workspace-a",
+    correlationId: "correlation-workspace-a",
+  };
+  const WORKSPACE_B = {
+    root: "/worktrees/task-b",
+    repositoryRoot: "/repos/b",
+    repositoryId: "repository-b",
+    branch: "issue/bbb",
+    id: "workspace-b",
+    correlationId: "correlation-workspace-b",
+  };
+
+  interface WorkspaceFixture {
+    readonly root: string;
+    readonly repositoryRoot: string;
+    readonly repositoryId: string;
+    readonly branch: string;
+    readonly id: string;
+    readonly correlationId: string;
+  }
+
+  function workspaceApi(workspace: WorkspaceFixture): ActiveWorkspaceApi {
+    return activeWorkspaceWithBinding(workspace.repositoryRoot, workspace.root, {
       workspaceId: workspace.id,
       taskBranch: workspace.branch,
+      repositoryId: workspace.repositoryId,
+      auditCorrelationId: workspace.correlationId,
     });
   }
 
   /** The runtime state while the shell's pointer names `workspace`: the runtime's own workspace
    * projection follows that pointer, exactly as `useCodingWorkbenchWorkspaceEffect` makes it. */
   function stateIn(
-    workspace: { root: string; branch: string; id: string },
+    workspace: WorkspaceFixture,
     run: Partial<CodingWorkbenchRuntimeSnapshot> | null = null,
   ): CodingWorkbenchRuntimeState {
     return liveState({
@@ -2695,6 +2726,10 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
   async function startInAThenSwitchToB(
     liveActions: CodingWorkbenchRuntimeActions,
     onOpenGit: (target: CodingWorkbenchGitTarget) => void,
+    transitions: {
+      readonly beforeStart?: () => Promise<void>;
+      readonly onPendingSwitch?: () => Promise<void>;
+    } = {},
   ): Promise<void> {
     const user = userEvent.setup();
     runtimeHookMock.mockReturnValue({ state: stateIn(WORKSPACE_A), actions: liveActions });
@@ -2703,11 +2738,29 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
       <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>{window}</ActiveWorkspaceProvider>,
     );
     await user.type(screen.getByLabelText("Task instructions"), "Repair the failing gate");
+    await transitions.beforeStart?.();
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
 
-    // The Start response lands only now — after the operator switched the pointer to B.
+    // The operator switches the pointer while the Start response is still pending. The active
+    // workspace is now B, but neither B nor a prior hook result may become a trust target.
     runtimeHookMock.mockReturnValue({
-      state: stateIn(WORKSPACE_B, { state: "running", runId: "run-1" }),
+      state: {
+        ...stateIn(WORKSPACE_B),
+        mutation: { status: "pending", kind: "start", requestId: "req-start-a", error: null },
+      },
+      actions: liveActions,
+    });
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_B)}>{window}</ActiveWorkspaceProvider>,
+    );
+    await transitions.onPendingSwitch?.();
+
+    // The Start response lands only now, still attributed to A.
+    runtimeHookMock.mockReturnValue({
+      state: stateIn(WORKSPACE_B, {
+        state: "running",
+        runId: "run-correlation-0001",
+      }),
       actions: liveActions,
     });
     view.rerender(
@@ -2731,6 +2784,43 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     expect(onOpenGit).toHaveBeenCalledWith({
       root: WORKSPACE_A.root,
       binding: "task-workspace",
+    });
+  });
+
+  it("never redirects the run's repository trust grant after a cross-repository switch", async () => {
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    trustStatusMock.mockImplementation((repositoryRoot: string) =>
+      Promise.resolve(trustStatus(repositoryRoot, "restricted")),
+    );
+    trustMutateMock.mockImplementation((repositoryRoot: string) =>
+      Promise.resolve(trustStatus(repositoryRoot, "trusted")),
+    );
+    await startInAThenSwitchToB(actions(), vi.fn(), {
+      beforeStart: async () => {
+        await screen.findByRole("button", { name: "Allow package scripts for verification" });
+      },
+      onPendingSwitch: async () => {
+        expect(
+          screen.queryByRole("button", { name: "Allow package scripts for verification" }),
+        ).not.toBeInTheDocument();
+        expect(trustStatusMock).not.toHaveBeenCalledWith(WORKSPACE_B.repositoryRoot);
+      },
+    });
+
+    await waitFor(() => expect(trustStatusMock).toHaveBeenCalledWith(WORKSPACE_A.repositoryRoot));
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: "Allow package scripts for verification" }));
+
+    expect(trustStatusMock).not.toHaveBeenCalledWith(WORKSPACE_B.repositoryRoot);
+    expect(trustMutateMock).toHaveBeenCalledExactlyOnceWith(WORKSPACE_A.repositoryRoot, "grant");
+    expect(diagnostic).toHaveBeenLastCalledWith("[keiko] coding workbench repository trust bound", {
+      correlationId: "run-correlation-0001",
+      workspaceTrustBinding: {
+        repositoryId: WORKSPACE_A.repositoryId,
+        workspaceId: WORKSPACE_A.id,
+      },
     });
   });
 

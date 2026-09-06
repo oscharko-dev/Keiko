@@ -132,6 +132,25 @@ describe("isClientDiagnosticIngestRequest", () => {
     }
   });
 
+  it("accepts only a complete body-free workspace trust binding", () => {
+    const workspaceTrustBinding = {
+      repositoryId: "repository-a",
+      workspaceId: "workspace-a",
+    };
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), workspaceTrustBinding })).toBe(
+      true,
+    );
+    for (const invalid of [
+      { ...workspaceTrustBinding, repositoryId: "/customer/repository" },
+      { ...workspaceTrustBinding, workspaceId: "contains spaces" },
+      { repositoryId: workspaceTrustBinding.repositoryId },
+    ]) {
+      expect(
+        isClientDiagnosticIngestRequest({ ...validRequest(), workspaceTrustBinding: invalid }),
+      ).toBe(false);
+    }
+  });
+
   // This guard only asserts wire SHAPE (AGENTS.md: "reuse first" — the leaf must not duplicate
   // `correlation.ts`'s alphabet policy). A shape-conforming but semantically invalid id is the
   // server route's job to reject via `isValidCorrelationId`, never this guard's.
