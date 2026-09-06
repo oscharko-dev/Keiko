@@ -405,6 +405,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "runtime-stderr-counts",
   "runtime-stream-drain-failed",
   "runtime-approval-revocation-failed",
+  "runtime-approval-resolution-failed",
   "runtime-handshake-failed",
   "runtime-lifecycle-failed",
   "runtime-start-failed",

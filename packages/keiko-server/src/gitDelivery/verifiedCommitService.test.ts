@@ -700,6 +700,95 @@ describe("productive runtime status/diff/stage lane", () => {
     expect(git(["write-tree"])).toBe(index);
   });
 
+  it("does not admit an already-staged path through a truncated mixed-stage status", async () => {
+    writeFileSync(join(root, "other.js"), "export const other = 3;\n");
+    for (let index = 0; index < 51; index += 1) {
+      writeFileSync(join(root, `untracked-${String(index).padStart(2, "0")}.js`), "untracked\n");
+    }
+    const index = git(["write-tree"]);
+    const gitService = new RuntimeGitService({
+      ...options,
+      mode: (): "supervised-coding" => "supervised-coding",
+      invalidateVerification: (): void => {
+        service.invalidate();
+      },
+    });
+
+    expect(
+      await gitService.execute(
+        {
+          action: "git",
+          actionId: "truncated-status",
+          idempotencyKey: "truncated-status",
+          operation: "stage",
+          phase: "propose",
+          paths: ["code.js", "other.js"],
+        },
+        { check: () => true },
+      ),
+    ).toBeUndefined();
+    expect(git(["write-tree"])).toBe(index);
+  });
+
+  it("does not admit a mixed-stage selection whose reviewed diff is truncated", async () => {
+    writeFileSync(join(root, "other.js"), "x".repeat(62_000));
+    const index = git(["write-tree"]);
+    const gitService = new RuntimeGitService({
+      ...options,
+      mode: (): "supervised-coding" => "supervised-coding",
+      invalidateVerification: (): void => {
+        service.invalidate();
+      },
+    });
+
+    expect(
+      await gitService.execute(
+        {
+          action: "git",
+          actionId: "truncated-diff",
+          idempotencyKey: "truncated-diff",
+          operation: "stage",
+          phase: "propose",
+          paths: ["code.js", "other.js"],
+        },
+        { check: () => true },
+      ),
+    ).toBeUndefined();
+    expect(git(["write-tree"])).toBe(index);
+  });
+
+  it("blocks a conflicted path without changing the mixed-stage index", async () => {
+    git(["commit", "-qm", "codex change"]);
+    git(["checkout", "-q", "dev"]);
+    writeFileSync(join(root, "code.js"), "export const value = 3;\n");
+    git(["commit", "-qam", "dev change"]);
+    git(["checkout", "-q", "codex/task"]);
+    expect(() => git(["merge", "--no-edit", "dev"])).toThrow();
+    const index = git(["ls-files", "--stage"]);
+    const gitService = new RuntimeGitService({
+      ...options,
+      mode: (): "supervised-coding" => "supervised-coding",
+      invalidateVerification: (): void => {
+        service.invalidate();
+      },
+    });
+
+    expect(
+      await gitService.execute(
+        {
+          action: "git",
+          actionId: "conflicted-stage",
+          idempotencyKey: "conflicted-stage",
+          operation: "stage",
+          phase: "propose",
+          paths: ["code.js"],
+        },
+        { check: () => true },
+      ),
+    ).toBeUndefined();
+    expect(git(["ls-files", "--stage"])).toBe(index);
+  });
+
   it("captures stage operands before the first asynchronous admission read", async () => {
     git(["reset", "-q", "HEAD", "--", "code.js"]);
     writeFileSync(join(root, "other.js"), "unrelated bytes\n");

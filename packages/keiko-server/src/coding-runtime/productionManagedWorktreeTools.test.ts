@@ -24,7 +24,9 @@ import {
   createProductionManagedWorktreeToolFacade,
   codingVerificationTargetDigest,
   deriveOptionalToolAvailability,
+  recordProposalApprovalResolutionFailure,
   resolveChildModelForRun,
+  waitForRuntimeProposalApproval,
 } from "./productionManagedWorktreeTools.js";
 import type { SkillCatalog } from "./skillCatalog.js";
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
@@ -84,6 +86,60 @@ const FACTS: CodingWorkbenchRuntimeAuthorityFacts = {
 };
 
 describe("production managed worktree tools", () => {
+  it("settles a detached approval wait when live proposal review fails closed", async () => {
+    const activity: ServerLogEvent[] = [];
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const failure = new Error("PRIVATE_WORKSPACE_PATH_SENTINEL");
+    const probe = {
+      review: (): never => {
+        throw failure;
+      },
+      matchesApproval: vi.fn(() => false),
+    };
+
+    await expect(
+      waitForRuntimeProposalApproval(probe, "proposal-drift", undefined, (error) => {
+        recordProposalApprovalResolutionFailure(
+          {
+            authorityRef: { runId: "run-proposal-drift", envelopeDigest: DIGEST },
+            activityLog: { write: (event): void => void activity.push(event) },
+            diagnostics: { record: (record): void => void diagnostics.push(record) },
+          },
+          "commit",
+          "proposal-drift",
+          error,
+        );
+      }),
+    ).resolves.toBe("unavailable");
+    expect(activity).toEqual([
+      expect.objectContaining({
+        op: "coding-runtime.tool-result",
+        correlationId: "run-proposal-drift",
+        errorKind: "Error",
+        extra: expect.objectContaining({
+          actionKind: "commit",
+          proposalId: "proposal-drift",
+          state: "approval-wait-failed",
+          reason: "authority-resolution-failed",
+          frames: expect.any(Array) as unknown,
+          causeChain: expect.any(Array) as unknown,
+        }) as unknown,
+      }),
+    ]);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        operation: "coding-runtime.tool-result",
+        correlationId: "run-proposal-drift",
+        errorClass: "Error",
+        message: "runtime-approval-resolution-failed",
+      }),
+    ]);
+    expect(JSON.stringify({ activity, diagnostics })).not.toContain(
+      "PRIVATE_WORKSPACE_PATH_SENTINEL",
+    );
+    expect(probe.matchesApproval).not.toHaveBeenCalled();
+  });
+
   it("holds an approval-required stage proposal until its exact approval is issued", async () => {
     vi.useFakeTimers();
     try {

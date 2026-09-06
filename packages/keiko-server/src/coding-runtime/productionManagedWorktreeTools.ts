@@ -96,6 +96,7 @@ export function waitForRuntimeProposalApproval(
   probe: ProposalApprovalProbe,
   proposalId: string,
   signal?: AbortSignal,
+  onResolutionFailure?: (error: unknown) => void,
 ): Promise<ProposalApprovalWaitOutcome> {
   return new Promise((resolve) => {
     let interval: ReturnType<typeof setInterval> | undefined;
@@ -114,9 +115,17 @@ export function waitForRuntimeProposalApproval(
       finish("cancelled");
     };
     const inspect = (): void => {
-      if (signal?.aborted === true) finish("cancelled");
-      else if (probe.review(proposalId) === undefined) finish("unavailable");
-      else if (probe.matchesApproval(proposalId)) finish("approved");
+      try {
+        if (signal?.aborted === true) finish("cancelled");
+        else if (probe.review(proposalId) === undefined) finish("unavailable");
+        else if (probe.matchesApproval(proposalId)) finish("approved");
+      } catch (error) {
+        // A live authority/workspace resolver may fail closed after the proposal was displayed.
+        // Settle the bounded wait through its existing unavailable outcome; an exception escaping
+        // this interval callback would be an uncaught process-level failure.
+        onResolutionFailure?.(error);
+        finish("unavailable");
+      }
     };
     interval = setInterval(inspect, PROPOSAL_APPROVAL_POLL_MS);
     signal?.addEventListener("abort", abort, { once: true });
@@ -455,7 +464,14 @@ async function releaseStageProposal(
   requestStageReview(input, result);
   const service = input.runtimeGitService;
   if (service === undefined) return undefined;
-  const outcome = await waitForRuntimeProposalApproval(service, result.proposalId, signal);
+  const outcome = await waitForRuntimeProposalApproval(
+    service,
+    result.proposalId,
+    signal,
+    (error) => {
+      recordProposalApprovalResolutionFailure(input, "git-stage", result.proposalId, error);
+    },
+  );
   recordProposalApprovalWait(input, "git-stage", result.proposalId, outcome);
   return outcome === "approved" ? { ...result, status: "ready", reason: "none" } : undefined;
 }
@@ -516,7 +532,14 @@ async function releaseDraftDeliveryProposal(
     return { status: "completed", draftDelivery: proposal, approvalDisposition: "ready" };
   }
   input.requestDraftDeliveryApproval?.(proposal.record.proposalId);
-  const outcome = await waitForRuntimeProposalApproval(service, proposal.record.proposalId, signal);
+  const outcome = await waitForRuntimeProposalApproval(
+    service,
+    proposal.record.proposalId,
+    signal,
+    (error) => {
+      recordProposalApprovalResolutionFailure(input, actionKind, proposal.record.proposalId, error);
+    },
+  );
   recordProposalApprovalWait(input, actionKind, proposal.record.proposalId, outcome);
   return outcome === "approved"
     ? { status: "completed", draftDelivery: proposal, approvalDisposition: "ready" }
@@ -546,7 +569,14 @@ async function completeVerifiedCommitRequest(
     return { status: "completed", verifiedCommit: result, approvalDisposition: "ready" };
   }
   input.requestCommitApproval?.(result.proposalId);
-  const outcome = await waitForRuntimeProposalApproval(service, result.proposalId, signal);
+  const outcome = await waitForRuntimeProposalApproval(
+    service,
+    result.proposalId,
+    signal,
+    (error) => {
+      recordProposalApprovalResolutionFailure(input, "commit", result.proposalId, error);
+    },
+  );
   recordProposalApprovalWait(input, "commit", result.proposalId, outcome);
   return outcome === "approved"
     ? { status: "completed", verifiedCommit: result, approvalDisposition: "ready" }
@@ -604,6 +634,41 @@ function recordProposalApprovalWait(
     },
   });
 }
+
+export function recordProposalApprovalResolutionFailure(
+  input: Pick<ProductionManagedWorktreeToolInput, "activityLog" | "authorityRef" | "diagnostics">,
+  actionKind: "git-stage" | "commit" | "push" | "pull-request",
+  proposalId: string,
+  error: unknown,
+): void {
+  const correlationId = isValidCorrelationId(input.authorityRef.runId)
+    ? input.authorityRef.runId
+    : UNKNOWN_CORRELATION_ID;
+  (input.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    op: "coding-runtime.tool-result",
+    correlationId,
+    level: "warn",
+    errorKind: contentFreeErrorClass(error),
+    extra: {
+      actionKind,
+      proposalId,
+      state: "approval-wait-failed",
+      reason: "authority-resolution-failed",
+      frames: keikoStackFrames(error),
+      causeChain: causeChain(error),
+    },
+  });
+  emitServerDiagnostic(input.diagnostics, {
+    correlationId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.tool-result",
+    source: "production-managed-worktree-tools.approval-wait",
+    errorClass: contentFreeErrorClass(error),
+    message: "runtime-approval-resolution-failed",
+  });
+}
+
 function runCommitRequest(
   service: VerifiedCommitService,
   request: Extract<
