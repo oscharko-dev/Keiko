@@ -1,10 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   CodingWorkbenchIssueBinding,
   CodingWorkbenchRuntimeSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 import {
   qualificationResumeBinding,
+  readQualificationWorktree,
   resumeExistingIssueWorkspace,
   type QualificationResumeBinding,
 } from "./coding-issue-journey-live-resume.js";
@@ -26,6 +31,7 @@ const RESUME: QualificationResumeBinding = {
   headSha: HEAD_SHA,
   issueBindingDigest: ISSUE_BINDING_DIGEST,
   worktreeDigest: WORKTREE_DIGEST,
+  priorState: "cancelled",
 };
 
 const ISSUE: CodingWorkbenchIssueBinding = {
@@ -95,9 +101,15 @@ function client(
     .mockResolvedValueOnce(overrides.activeBefore === undefined ? active() : overrides.activeBefore)
     .mockResolvedValueOnce(overrides.activeAfter === undefined ? active() : overrides.activeAfter);
   const readWorktree = vi
-    .fn<(path: string) => { readonly headSha: string; readonly digest: string }>()
-    .mockReturnValueOnce({ headSha: HEAD_SHA, digest: overrides.digests?.[0] ?? WORKTREE_DIGEST })
-    .mockReturnValueOnce({ headSha: HEAD_SHA, digest: overrides.digests?.[1] ?? WORKTREE_DIGEST });
+    .fn<(path: string) => Promise<{ readonly headSha: string; readonly digest: string }>>()
+    .mockResolvedValueOnce({
+      headSha: HEAD_SHA,
+      digest: overrides.digests?.[0] ?? WORKTREE_DIGEST,
+    })
+    .mockResolvedValueOnce({
+      headSha: HEAD_SHA,
+      digest: overrides.digests?.[1] ?? WORKTREE_DIGEST,
+    });
   const bindIssue = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
   const start = vi
     .fn<() => Promise<CodingWorkbenchRuntimeSnapshot>>()
@@ -107,7 +119,7 @@ function client(
       readActiveWorkspace,
       readPriorRun: vi
         .fn<(runId: string) => Promise<CodingWorkbenchRuntimeSnapshot>>()
-        .mockResolvedValue(overrides.prior ?? snapshot(PRIOR_RUN_ID, "failed")),
+        .mockResolvedValue(overrides.prior ?? snapshot(PRIOR_RUN_ID, RESUME.priorState)),
       readWorktree,
       bindIssue,
       start,
@@ -136,6 +148,7 @@ describe("live qualification continuation", () => {
         KEIKO_QUALIFICATION_RESUME_HEAD_SHA: RESUME.headSha,
         KEIKO_QUALIFICATION_RESUME_ISSUE_BINDING_DIGEST: RESUME.issueBindingDigest,
         KEIKO_QUALIFICATION_RESUME_WORKTREE_DIGEST: RESUME.worktreeDigest,
+        KEIKO_QUALIFICATION_RESUME_PRIOR_STATE: RESUME.priorState,
       }),
     ).toEqual(RESUME);
     expect(() =>
@@ -151,8 +164,25 @@ describe("live qualification continuation", () => {
         KEIKO_QUALIFICATION_RESUME_HEAD_SHA: RESUME.headSha,
         KEIKO_QUALIFICATION_RESUME_ISSUE_BINDING_DIGEST: RESUME.issueBindingDigest,
         KEIKO_QUALIFICATION_RESUME_WORKTREE_DIGEST: createHash("sha256").digest("hex"),
+        KEIKO_QUALIFICATION_RESUME_PRIOR_STATE: RESUME.priorState,
       }),
     ).toThrow("worktree digest is invalid");
+    expect(() =>
+      qualificationResumeBinding({
+        KEIKO_QUALIFICATION_RESUME_WORKSPACE: "1",
+        KEIKO_QUALIFICATION_RESUME_PRIOR_RUN_ID: RESUME.priorRunId,
+        KEIKO_QUALIFICATION_RESUME_WORKSPACE_ID: RESUME.workspaceId,
+        KEIKO_QUALIFICATION_RESUME_TASK_ID: RESUME.taskId,
+        KEIKO_QUALIFICATION_RESUME_REPOSITORY_ID: RESUME.repositoryId,
+        KEIKO_QUALIFICATION_RESUME_BASE_BRANCH: RESUME.baseBranch,
+        KEIKO_QUALIFICATION_RESUME_TASK_BRANCH: RESUME.taskBranch,
+        KEIKO_QUALIFICATION_RESUME_WORKTREE_PATH: RESUME.managedWorktreePath,
+        KEIKO_QUALIFICATION_RESUME_HEAD_SHA: RESUME.headSha,
+        KEIKO_QUALIFICATION_RESUME_ISSUE_BINDING_DIGEST: RESUME.issueBindingDigest,
+        KEIKO_QUALIFICATION_RESUME_WORKTREE_DIGEST: RESUME.worktreeDigest,
+        KEIKO_QUALIFICATION_RESUME_PRIOR_STATE: "running",
+      }),
+    ).toThrow("prior state is invalid");
   });
 
   it("rebinds the exact existing workspace without changing model-authored files", async () => {
@@ -183,7 +213,7 @@ describe("live qualification continuation", () => {
     expect(mutated.start).not.toHaveBeenCalled();
   });
 
-  it("requires a failed exact prior binding and a distinct equally bound continuation run", async () => {
+  it("requires the configured terminal prior binding and a distinct equally bound run", async () => {
     const wrongPrior = client({ prior: snapshot(PRIOR_RUN_ID, "succeeded") });
     await expect(
       resumeExistingIssueWorkspace(wrongPrior.subject, RESUME, 1, "governed-assist"),
@@ -199,5 +229,98 @@ describe("live qualification continuation", () => {
     await expect(
       resumeExistingIssueWorkspace(reusedId.subject, RESUME, 1, "governed-assist"),
     ).rejects.toThrow("newly issue-bound run");
+
+    const failedResume = { ...RESUME, priorState: "failed" as const };
+    const failedPrior = client({ prior: snapshot(PRIOR_RUN_ID, "failed") });
+    await expect(
+      resumeExistingIssueWorkspace(failedPrior.subject, failedResume, 1, "governed-assist"),
+    ).resolves.toMatchObject({ runId: "run-new" });
+  });
+});
+
+const temporaryRepositories: string[] = [];
+
+function git(repository: string, ...args: string[]): void {
+  execFileSync("git", args, { cwd: repository, stdio: "ignore", timeout: 30_000 });
+}
+
+function repositoryFixture(): string {
+  const repository = mkdtempSync(join(tmpdir(), "keiko-live-resume-"));
+  temporaryRepositories.push(repository);
+  git(repository, "init", "-q");
+  git(repository, "config", "user.email", "fixture@example.invalid");
+  git(repository, "config", "user.name", "Fixture");
+  writeFileSync(join(repository, "index.js"), "module.exports = 1;\n");
+  git(repository, "add", "index.js");
+  git(repository, "commit", "-qm", "fixture");
+  return repository;
+}
+
+afterEach(() => {
+  for (const repository of temporaryRepositories.splice(0)) {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+describe("qualification worktree identity", () => {
+  it("changes when either tracked or untracked regular-file bytes change", async () => {
+    const repository = repositoryFixture();
+    const initial = await readQualificationWorktree(repository);
+    writeFileSync(join(repository, "index.js"), "module.exports = 2;\n");
+    const tracked = await readQualificationWorktree(repository);
+    mkdirSync(join(repository, "lib"));
+    writeFileSync(join(repository, "lib", "finite.js"), "module.exports = 3;\n");
+    const untracked = await readQualificationWorktree(repository);
+
+    expect(new Set([initial.digest, tracked.digest, untracked.digest])).toHaveLength(3);
+    expect(untracked.headSha).toBe(initial.headSha);
+  });
+
+  it.each(["tracked", "untracked"])("refuses a %s symbolic link", async (kind) => {
+    const repository = repositoryFixture();
+    const targetName = `${kind}-target.js`;
+    writeFileSync(join(repository, targetName), "module.exports = 2;\n");
+    const linked = join(repository, kind === "tracked" ? "index.js" : "link.js");
+    if (kind === "tracked") rmSync(linked);
+    symlinkSync(targetName, linked);
+
+    await expect(readQualificationWorktree(repository)).rejects.toThrow(
+      "qualification continuation only accepts stable regular files",
+    );
+  });
+
+  it("refuses a tracked file below a parent link before accepting its outside target", async () => {
+    const repository = repositoryFixture();
+    const outside = mkdtempSync(join(tmpdir(), "keiko-live-resume-outside-"));
+    temporaryRepositories.push(outside);
+    mkdirSync(join(repository, "lib"));
+    writeFileSync(join(repository, "lib", "finite.js"), "module.exports = 3;\n");
+    git(repository, "add", "lib/finite.js");
+    rmSync(join(repository, "lib"), { recursive: true });
+    writeFileSync(join(outside, "finite.js"), "module.exports = 4;\n");
+    symlinkSync(outside, join(repository, "lib"));
+
+    await expect(readQualificationWorktree(repository)).rejects.toThrow(
+      "qualification continuation file is unsafe or too large",
+    );
+  });
+
+  it("refuses a file that exceeds the aggregate identity byte bound", async () => {
+    const repository = repositoryFixture();
+    writeFileSync(join(repository, "oversized.bin"), Buffer.alloc(16 * 1024 * 1024 + 1));
+
+    await expect(readQualificationWorktree(repository)).rejects.toThrow(
+      "qualification continuation file is unsafe or too large",
+    );
+  });
+
+  it.skipIf(process.platform === "win32")("binds executable mode as well as bytes", async () => {
+    const repository = repositoryFixture();
+    git(repository, "config", "core.filemode", "true");
+    const ordinary = await readQualificationWorktree(repository);
+    chmodSync(join(repository, "index.js"), 0o755);
+    const executable = await readQualificationWorktree(repository);
+
+    expect(executable.digest).not.toBe(ordinary.digest);
   });
 });

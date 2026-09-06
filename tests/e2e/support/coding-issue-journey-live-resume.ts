@@ -2,7 +2,7 @@
 // workspace changes. A qualification retry must reuse that exact managed workspace through the
 // product's normal issue bind/start controls; deleting it or copying its diff would replace the
 // observed model work with a fixture artifact. This module verifies the persisted, body-free
-// workspace/run identities and the tracked-worktree digest on both sides of Bind before starting
+// workspace/run identities and the tracked/untracked worktree digest on both sides of Bind before starting
 // an independently issue-bound continuation run.
 
 import { expect, type Page } from "@playwright/test";
@@ -11,8 +11,13 @@ import type {
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  readGitStageFile,
+  type GitStageFile,
+} from "@oscharko-dev/keiko-workspace/internal/git-index";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import {
   assertRuntimeReady,
   ensureWorkflowEligibleModel,
@@ -31,6 +36,9 @@ const ACTIVE_WORKSPACE_ENDPOINT = "/api/task-workspaces/active";
 const SHA256 = /^[a-f0-9]{64}$/u;
 const GIT_SHA = /^[a-f0-9]{40}$/u;
 const EMPTY_WORKTREE_DIGEST = createHash("sha256").digest("hex");
+const MAX_IDENTITY_FILES = 4_096;
+const MAX_IDENTITY_BYTES = 16 * 1024 * 1024;
+const MAX_GIT_OUTPUT_BYTES = 4 * 1024 * 1024;
 
 export interface QualificationResumeBinding {
   readonly priorRunId: string;
@@ -43,6 +51,7 @@ export interface QualificationResumeBinding {
   readonly headSha: string;
   readonly issueBindingDigest: string;
   readonly worktreeDigest: string;
+  readonly priorState: "failed" | "cancelled";
 }
 
 interface ActiveWorkspaceIdentity {
@@ -58,7 +67,7 @@ interface ActiveWorkspaceIdentity {
 interface ResumeWorkspaceClient {
   readonly readActiveWorkspace: () => Promise<ActiveWorkspaceIdentity | null>;
   readonly readPriorRun: (runId: string) => Promise<CodingWorkbenchRuntimeSnapshot>;
-  readonly readWorktree: (path: string) => WorktreeIdentity;
+  readonly readWorktree: (path: string) => Promise<WorktreeIdentity>;
   readonly bindIssue: () => Promise<void>;
   readonly start: () => Promise<CodingWorkbenchRuntimeSnapshot>;
 }
@@ -91,6 +100,7 @@ export function qualificationResumeBinding(
     headSha: requiredEnv(env, "KEIKO_QUALIFICATION_RESUME_HEAD_SHA"),
     issueBindingDigest: requiredEnv(env, "KEIKO_QUALIFICATION_RESUME_ISSUE_BINDING_DIGEST"),
     worktreeDigest: requiredEnv(env, "KEIKO_QUALIFICATION_RESUME_WORKTREE_DIGEST"),
+    priorState: requiredEnv(env, "KEIKO_QUALIFICATION_RESUME_PRIOR_STATE"),
   };
   if (!GIT_SHA.test(binding.headSha) || !SHA256.test(binding.issueBindingDigest)) {
     throw new Error("qualification continuation binding has an invalid digest");
@@ -98,7 +108,10 @@ export function qualificationResumeBinding(
   if (!SHA256.test(binding.worktreeDigest) || binding.worktreeDigest === EMPTY_WORKTREE_DIGEST) {
     throw new Error("qualification continuation worktree digest is invalid");
   }
-  return binding;
+  if (binding.priorState !== "failed" && binding.priorState !== "cancelled") {
+    throw new Error("qualification continuation prior state is invalid");
+  }
+  return { ...binding, priorState: binding.priorState };
 }
 
 function sameWorkspace(
@@ -147,7 +160,7 @@ function assertPriorRun(
 ): CodingWorkbenchIssueBinding {
   if (
     snapshot.runId !== expected.priorRunId ||
-    snapshot.state !== "failed" ||
+    snapshot.state !== expected.priorState ||
     !matchingIssue(snapshot.issueBinding, expected.issueBindingDigest, issueNumber)
   ) {
     throw new Error("qualification continuation prior run binding is unavailable");
@@ -193,7 +206,7 @@ export async function resumeExistingIssueWorkspace(
   if (priorIssue.repositoryId !== expected.repositoryId) {
     throw new Error("qualification continuation repository binding changed");
   }
-  const before = client.readWorktree(expected.managedWorktreePath);
+  const before = await client.readWorktree(expected.managedWorktreePath);
   if (before.headSha !== expected.headSha || before.digest !== expected.worktreeDigest) {
     throw new Error("qualification continuation worktree changed before issue bind");
   }
@@ -202,7 +215,7 @@ export async function resumeExistingIssueWorkspace(
   if (activeAfter === null || !sameWorkspace(activeAfter, expected)) {
     throw new Error("qualification continuation issue bind replaced the active workspace");
   }
-  const after = client.readWorktree(expected.managedWorktreePath);
+  const after = await client.readWorktree(expected.managedWorktreePath);
   if (after.headSha !== expected.headSha || after.digest !== expected.worktreeDigest) {
     throw new Error("qualification continuation issue bind changed model-authored files");
   }
@@ -211,24 +224,90 @@ export async function resumeExistingIssueWorkspace(
   return started;
 }
 
-function readTrackedWorktree(path: string): WorktreeIdentity {
-  const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
+function gitOutput(path: string, args: readonly string[]): Buffer {
+  return execFileSync("git", [...args], {
     cwd: path,
     timeout: 30_000,
+    maxBuffer: MAX_GIT_OUTPUT_BYTES,
   });
-  if (untracked.length > 0) {
-    throw new Error("qualification continuation refuses an untracked worktree");
+}
+
+function gitPaths(path: string, args: readonly string[]): readonly string[] {
+  const output = gitOutput(path, args);
+  if (output.length === 0) return [];
+  if (output.at(-1) !== 0) throw new Error("qualification continuation Git paths are incomplete");
+  const encodedPaths = output.subarray(0, -1);
+  const decodedPaths = encodedPaths.toString("utf8");
+  if (!Buffer.from(decodedPaths, "utf8").equals(encodedPaths)) {
+    throw new Error("qualification continuation Git paths are invalid");
   }
-  const diff = execFileSync("git", ["diff", "--no-ext-diff", "--binary", "HEAD", "--"], {
-    cwd: path,
-    timeout: 30_000,
-  });
-  const headSha = execFileSync("git", ["rev-parse", "HEAD"], {
-    cwd: path,
-    encoding: "utf8",
-    timeout: 30_000,
-  }).trim();
-  return { headSha, digest: createHash("sha256").update(diff).digest("hex") };
+  const paths = decodedPaths.split("\0");
+  if (paths.some((value) => value.length === 0)) {
+    throw new Error("qualification continuation Git paths are invalid");
+  }
+  return paths;
+}
+
+async function boundedFile(
+  root: string,
+  path: string,
+  remainingBytes: number,
+): Promise<GitStageFile> {
+  try {
+    return await readGitStageFile(root, path, remainingBytes);
+  } catch {
+    throw new Error("qualification continuation file is unsafe or too large");
+  }
+}
+
+async function hashFiles(
+  hash: ReturnType<typeof createHash>,
+  root: string,
+  kind: "tracked" | "untracked",
+  paths: readonly string[],
+  initialBytes: number,
+): Promise<number> {
+  let total = 0;
+  for (const path of paths) {
+    const remaining = MAX_IDENTITY_BYTES - initialBytes - total;
+    const file = await boundedFile(root, path, remaining);
+    if (file.mode === "120000" || (kind === "untracked" && file.mode === "0")) {
+      throw new Error("qualification continuation only accepts stable regular files");
+    }
+    total += file.bytes.length;
+    const contentDigest = createHash("sha256").update(file.bytes).digest("hex");
+    hash.update(
+      `${kind}\0${file.mode}\0${String(Buffer.byteLength(path))}\0${path}\0${contentDigest}\0`,
+    );
+  }
+  return total;
+}
+
+async function readQualificationWorktreePass(path: string): Promise<WorktreeIdentity> {
+  const root = realpathSync(path);
+  const tracked = gitPaths(root, ["ls-files", "--cached", "-z", "--"]);
+  const untracked = gitPaths(root, ["ls-files", "--others", "--exclude-standard", "-z", "--"]);
+  if (tracked.length + untracked.length > MAX_IDENTITY_FILES) {
+    throw new Error("qualification continuation worktree identity has too many files");
+  }
+  const hash = createHash("sha256").update("keiko-qualification-worktree-v2\0");
+  hash.update(gitOutput(root, ["ls-files", "--stage", "-z", "--"]));
+  const trackedBytes = await hashFiles(hash, root, "tracked", tracked, 0);
+  await hashFiles(hash, root, "untracked", untracked, trackedBytes);
+  const headSha = gitOutput(root, ["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"])
+    .toString("utf8")
+    .trim();
+  if (!GIT_SHA.test(headSha)) throw new Error("qualification continuation HEAD is invalid");
+  return { headSha, digest: hash.digest("hex") };
+}
+
+export async function readQualificationWorktree(path: string): Promise<WorktreeIdentity> {
+  const before = await readQualificationWorktreePass(path);
+  const after = await readQualificationWorktreePass(path);
+  if (before.headSha !== after.headSha || before.digest !== after.digest) {
+    throw new Error("qualification continuation worktree changed during identity read");
+  }
+  return after;
 }
 
 interface ActiveWorkspaceResponse {
@@ -307,7 +386,7 @@ export async function resumeIssueToDraftPullRequest(
     {
       readActiveWorkspace: () => readActiveWorkspace(page),
       readPriorRun: (runId) => readRun(page, runId),
-      readWorktree: readTrackedWorktree,
+      readWorktree: readQualificationWorktree,
       bindIssue: async (): Promise<void> => {
         await reacceptBoundIssue(page, input.issueRef);
         if (await ensureWorkflowEligibleModel(page)) {
