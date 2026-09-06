@@ -18,6 +18,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { deriveGateVerdict, evidenceGateFailures } from "./lib/coding-issue-journey-evidence.mjs";
 import { codingIssueJourneyScenarioArtifactErrors } from "./lib/coding-issue-journey-scenario-evidence.mjs";
+import {
+  inspectCodingIssueJourneySourceBinding,
+  readCodingIssueJourneyEvidenceAtLanding,
+} from "./lib/coding-issue-journey-source-binding.mjs";
 import { sha256 } from "./lib/digest.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { readJsonFile } from "./lib/json.mjs";
@@ -87,18 +91,38 @@ function readScenarioArtifactEvidence(scenarioId, artifactBytes) {
  * producer -- this checker never reads them back off a receipt, since a scenario's declared
  * `recordedAt`/`provenance` are cross-referenced through the manifest itself, not the receipt.
  */
-export function readReceipts(receiptsDir, { observeArtifact } = {}) {
+function bytesForPath(path, contentByPath) {
+  if (contentByPath === undefined) return readFileSync(path);
+  const bytes = contentByPath.get(resolve(path));
+  if (bytes === undefined) throw new TypeError("Qualified evidence Git blob is missing");
+  return bytes;
+}
+
+function receiptEntries(receiptsDir, contentByPath) {
+  if (contentByPath === undefined) return readdirSync(receiptsDir);
+  const canonicalReceiptsDir = resolve(receiptsDir);
+  return [...contentByPath.keys()]
+    .filter((path) => dirname(path) === canonicalReceiptsDir)
+    .map((path) => basename(path));
+}
+
+function hasEvidencePath(path, contentByPath) {
+  return contentByPath === undefined ? existsSync(path) : contentByPath.has(resolve(path));
+}
+
+export function readReceipts(receiptsDir, { observeArtifact, contentByPath } = {}) {
   const receipts = new Map();
-  if (!existsSync(receiptsDir)) return receipts;
-  for (const entry of readdirSync(receiptsDir)) {
+  if (contentByPath === undefined && !existsSync(receiptsDir)) return receipts;
+  for (const entry of receiptEntries(receiptsDir, contentByPath)) {
     if (!entry.endsWith(RECEIPT_SUFFIX)) continue;
     const scenarioId = basename(entry, RECEIPT_SUFFIX);
     const artifactPath = resolve(receiptsDir, `${scenarioId}.artifact`);
-    if (!existsSync(artifactPath)) continue; // surfaced as "missing receipt" by the pure gate
-    const meta = readJsonFile(resolve(receiptsDir, entry));
+    const receiptPath = resolve(receiptsDir, entry);
+    if (!hasEvidencePath(artifactPath, contentByPath)) continue;
+    const meta = JSON.parse(bytesForPath(receiptPath, contentByPath).toString("utf8"));
     // A consumer that validates a structured artifact must inspect the same bytes whose digest
     // is retained. A separate read can race with an artifact writer and bind different content.
-    const artifactBytes = readFileSync(artifactPath);
+    const artifactBytes = bytesForPath(artifactPath, contentByPath);
     const digest = sha256(artifactBytes);
     observeArtifact?.(scenarioId, artifactBytes);
     const artifactEvidence = readScenarioArtifactEvidence(scenarioId, artifactBytes);
@@ -119,14 +143,19 @@ export function readReceipts(receiptsDir, { observeArtifact } = {}) {
 /** Reads the five distinct flow artifacts and hashes both the artifact bytes and the metadata
  * bytes. The artifact is parsed from those same bytes, so generation and verification cannot
  * validate one version while retaining a digest for another. */
-export function readFlowReceipts(receiptsDir, flowIds) {
+export function readFlowReceipts(receiptsDir, flowIds, { contentByPath } = {}) {
   const receipts = new Map();
   for (const flowId of flowIds) {
     const artifactPath = resolve(receiptsDir, `${flowId}.artifact`);
     const receiptPath = resolve(receiptsDir, `${flowId}.receipt.json`);
-    if (!existsSync(artifactPath) || !existsSync(receiptPath)) continue;
-    const artifactBytes = readFileSync(artifactPath);
-    const receiptBytes = readFileSync(receiptPath);
+    if (
+      !hasEvidencePath(artifactPath, contentByPath) ||
+      !hasEvidencePath(receiptPath, contentByPath)
+    ) {
+      continue;
+    }
+    const artifactBytes = bytesForPath(artifactPath, contentByPath);
+    const receiptBytes = bytesForPath(receiptPath, contentByPath);
     const meta = JSON.parse(receiptBytes.toString("utf8"));
     receipts.set(flowId, {
       artifact: JSON.parse(artifactBytes.toString("utf8")),
@@ -166,10 +195,16 @@ async function loadToolCatalog(root) {
   );
 }
 
-function validatedFlowReceipts(receiptsDir, registeredQualificationFlows, contractsModule) {
+function validatedFlowReceipts(
+  receiptsDir,
+  registeredQualificationFlows,
+  contractsModule,
+  contentByPath,
+) {
   const flowReceiptsById = readFlowReceipts(
     receiptsDir,
     registeredQualificationFlows.map((flow) => flow.flowId),
+    { contentByPath },
   );
   for (const receipt of flowReceiptsById.values()) {
     receipt.artifactValidation = contractsModule.validateCodeTaskQualificationFlowArtifact(
@@ -199,32 +234,57 @@ function qualificationDescriptorFailures(descriptor) {
     : ["qualification descriptor must declare exactly five flows"];
 }
 
-export async function checkCodingIssueJourneyEvidence({
+function resolveSourceBinding({
+  root,
+  headShas,
+  landingHead,
+  manifestValidation,
   manifestPath,
   receiptsDir,
-  binding,
-  root = REPO_ROOT,
-  headShas,
-  contracts,
-  toolCatalog,
+  descriptorPath,
   descriptor,
 }) {
-  const { sourceCommitSha: headCommitSha, sourceTreeSha: headTreeSha } =
-    headShas ?? gitHeadShas(root);
-  const contractsModule = contracts ?? (await loadContracts(root));
-  const toolCatalogModule = toolCatalog ?? (await loadToolCatalog(root));
+  const { sourceCommitSha: landingCommitSha, sourceTreeSha: landingTreeSha } =
+    landingHead ?? headShas ?? gitHeadShas(root);
+  if (headShas !== undefined || !manifestValidation.ok) {
+    return {
+      failures: [],
+      sourceCommitSha: landingCommitSha,
+      sourceTreeSha: landingTreeSha,
+      landingCommitSha,
+    };
+  }
+  return inspectCodingIssueJourneySourceBinding({
+    root,
+    sourceCommitSha: manifestValidation.value.sourceCommitSha,
+    sourceTreeSha: manifestValidation.value.sourceTreeSha,
+    landingCommitSha,
+    manifestPath,
+    receiptsDir,
+    descriptorPath,
+    descriptor,
+  });
+}
+
+function evaluateEvidence({
+  contractsModule,
+  toolCatalogModule,
+  manifestValidation,
+  sourceBinding,
+  receiptsDir,
+  binding,
+  descriptor,
+  contentByPath,
+}) {
   const modelVisibleToolNames = new Set(
     toolCatalogModule.OPENCODE_MODEL_VISIBLE_TOOLS.map((tool) => tool.name),
   );
-  const manifestValidation = contractsModule.validateCodeTaskQualificationManifest(
-    readJsonFile(manifestPath),
-  );
-  const resolvedBinding = qualificationBinding(binding, headCommitSha, descriptor);
-  const registeredQualificationFlows = resolvedBinding.registeredQualificationFlows;
+  const resolvedBinding = qualificationBinding(binding, sourceBinding.sourceCommitSha, descriptor);
   const flowReceiptsById = validatedFlowReceipts(
     receiptsDir,
-    registeredQualificationFlows,
+    resolvedBinding.registeredQualificationFlows,
     contractsModule,
+    contentByPath,
   );
   const manifestFailures = manifestValidation.ok
     ? contractsModule.codeTaskQualificationManifestFailures(
@@ -235,18 +295,124 @@ export async function checkCodingIssueJourneyEvidence({
   const failures = evidenceGateFailures({
     manifestValidation,
     manifestFailures,
-    headCommitSha,
-    headTreeSha,
-    receiptsByScenarioId: readReceipts(receiptsDir),
+    headCommitSha: sourceBinding.sourceCommitSha,
+    headTreeSha: sourceBinding.sourceTreeSha,
+    receiptsByScenarioId: readReceipts(receiptsDir, { contentByPath }),
     flowReceiptsById,
     modelVisibleToolNames,
   });
-  failures.push(...qualificationDescriptorFailures(descriptor));
+  failures.push(...sourceBinding.failures, ...qualificationDescriptorFailures(descriptor));
   const contractVerdict = manifestValidation.ok
     ? contractsModule.codeTaskQualificationVerdictFor(manifestValidation.value, resolvedBinding)
     : "blocked";
-  const verdict = deriveGateVerdict({ contractVerdict, failures, manifestValidation });
-  return { verdict, failures };
+  return {
+    verdict: deriveGateVerdict({ contractVerdict, failures, manifestValidation }),
+    failures,
+    sourceCommitSha: sourceBinding.sourceCommitSha,
+    landingCommitSha: sourceBinding.landingCommitSha,
+  };
+}
+
+export async function checkCodingIssueJourneyEvidence({
+  manifestPath,
+  receiptsDir,
+  binding,
+  root = REPO_ROOT,
+  headShas,
+  contracts,
+  toolCatalog,
+  descriptor,
+  descriptorPath,
+}) {
+  const inputs = resolveLandingInputs({
+    root,
+    headShas,
+    manifestPath,
+    receiptsDir,
+    descriptorPath,
+    descriptor,
+  });
+  if (inputs.failures.length > 0) return blockedLandingResult(inputs);
+  const contractsModule = contracts ?? (await loadContracts(root));
+  const toolCatalogModule = toolCatalog ?? (await loadToolCatalog(root));
+  const manifestValidation = contractsModule.validateCodeTaskQualificationManifest(inputs.manifest);
+  const sourceBinding = resolveSourceBinding({
+    root,
+    headShas,
+    landingHead: inputs.landingHead,
+    manifestValidation,
+    manifestPath,
+    receiptsDir,
+    descriptorPath,
+    descriptor: inputs.descriptor,
+  });
+  return evaluateEvidence({
+    contractsModule,
+    toolCatalogModule,
+    manifestValidation,
+    sourceBinding,
+    receiptsDir,
+    binding,
+    descriptor: inputs.descriptor,
+    contentByPath: inputs.contentByPath,
+  });
+}
+
+function resolveLandingInputs({
+  root,
+  headShas,
+  manifestPath,
+  receiptsDir,
+  descriptorPath,
+  descriptor,
+}) {
+  if (headShas !== undefined) {
+    return {
+      landingHead: headShas,
+      failures: [],
+      manifest: readJsonFile(manifestPath),
+      descriptor,
+      contentByPath: undefined,
+    };
+  }
+  return resolveGitLandingInputs({ root, manifestPath, receiptsDir, descriptorPath });
+}
+
+function resolveGitLandingInputs({ root, manifestPath, receiptsDir, descriptorPath }) {
+  const landingHead = gitHeadShas(root);
+  const landingEvidence = readCodingIssueJourneyEvidenceAtLanding({
+    root,
+    landingCommitSha: landingHead.sourceCommitSha,
+    manifestPath,
+    receiptsDir,
+    descriptorPath,
+  });
+  if (landingEvidence.failures.length > 0) {
+    return {
+      landingHead,
+      failures: landingEvidence.failures,
+      manifest: undefined,
+      descriptor: undefined,
+      contentByPath: undefined,
+    };
+  }
+  const manifestBytes = landingEvidence.contentByPath.get(resolve(manifestPath));
+  return {
+    landingHead,
+    failures: [],
+    manifest: JSON.parse(manifestBytes.toString("utf8")),
+    descriptor: landingEvidence.descriptor,
+    contentByPath: landingEvidence.contentByPath,
+  };
+}
+
+function blockedLandingResult(inputs) {
+  return {
+    verdict: "blocked",
+    failures: inputs.failures,
+    sourceCommitSha: inputs.landingHead.sourceCommitSha,
+    landingCommitSha: inputs.landingHead.sourceCommitSha,
+  };
 }
 
 function requiredArgument(argv, name) {
@@ -262,7 +428,7 @@ function parseArgs(argv) {
     .split(",")
     .map((id) => id.trim())
     .filter((id) => id.length > 0);
-  const descriptor = readJsonFile(resolve(requiredArgument(argv, "descriptor")));
+  const descriptorPath = resolve(requiredArgument(argv, "descriptor"));
   return {
     manifestPath: resolve(requiredArgument(argv, "manifest")),
     receiptsDir: resolve(requiredArgument(argv, "receipts")),
@@ -271,18 +437,23 @@ function parseArgs(argv) {
       childIssue: Number(requiredArgument(argv, "child")),
       registeredScenarioIds: registered,
     },
-    descriptor,
+    descriptorPath,
   };
 }
 
 async function runCli(argv) {
-  const { manifestPath, receiptsDir, binding, descriptor } = parseArgs(argv);
-  const { verdict, failures } = await checkCodingIssueJourneyEvidence({
-    manifestPath,
-    receiptsDir,
-    binding,
-    descriptor,
-  });
+  const { manifestPath, receiptsDir, binding, descriptor, descriptorPath } = parseArgs(argv);
+  if (!existsSync(manifestPath)) throw new Error(`missing manifest: ${manifestPath}`);
+  if (!existsSync(receiptsDir)) throw new Error(`missing receipts directory: ${receiptsDir}`);
+  if (!existsSync(descriptorPath)) throw new Error(`missing descriptor: ${descriptorPath}`);
+  const { verdict, failures, sourceCommitSha, landingCommitSha } =
+    await checkCodingIssueJourneyEvidence({
+      manifestPath,
+      receiptsDir,
+      binding,
+      descriptor,
+      descriptorPath,
+    });
   if (failures.length > 0) {
     console.error(`Coding-issue journey evidence check failed (${failures.length}):`);
     for (const failure of failures) {
@@ -290,7 +461,10 @@ async function runCli(argv) {
     }
     process.exitCode = 1;
   } else {
-    console.log(`Coding-issue journey evidence check passed. Verdict: ${verdict}.`);
+    console.log(
+      `Coding-issue journey evidence check passed. Verdict: ${verdict}; ` +
+        `source=${sourceCommitSha}; landing=${landingCommitSha}.`,
+    );
   }
 }
 

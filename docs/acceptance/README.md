@@ -163,9 +163,12 @@ When all five flow receipts exist, the generator derives `observedSpendUsd` from
 ledger cumulative. The optional CLI value remains available only for pre-flow evidence sets.
 
 The manifest is validated against `validateCodeTaskQualificationManifest` before it is written, the
-same contract-first pattern as the acceptance contribution above. The machine validator,
-`npm run check:coding-issue-journey-evidence:3390`, cross-references it against the qualified git
-head and the receipts directory; see
+same contract-first pattern as the acceptance contribution above. All five flows preserve one
+frozen source commit. The machine validator, `npm run
+check:coding-issue-journey-evidence:3390`, accepts an evidence-only descendant landing commit only
+when its changes are limited to the canonical manifest and exact descriptor-owned artifact and
+receipt paths; it reports the source and landing identities separately and cross-references the
+receipts without rebinding them. See
 [`docs/design-system/evidence/3390/README.md`](../design-system/evidence/3390/README.md) for the
 full operator sequence, including what a `blocked` row means and why it is never a skipped-green
 row.

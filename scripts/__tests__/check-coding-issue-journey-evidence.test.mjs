@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
@@ -16,6 +16,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND,
   CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
+  codeTaskQualificationManifestFailures,
+  codeTaskQualificationVerdictFor,
+  validateCodeTaskQualificationFlowArtifact,
+  validateCodeTaskQualificationManifest,
 } from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
 
 import {
@@ -29,6 +33,12 @@ import {
   platformKeyFor,
 } from "../lib/coding-issue-journey-evidence.mjs";
 import { writeCodingIssueJourneyFlowEvidenceReceipt } from "../lib/qualification-evidence-receipt.mjs";
+import {
+  CODING_ISSUE_JOURNEY_DESCRIPTOR_PATH,
+  CODING_ISSUE_JOURNEY_MANIFEST_PATH,
+  CODING_ISSUE_JOURNEY_RECEIPTS_PATH,
+} from "../lib/coding-issue-journey-source-binding.mjs";
+import { resolveHostExecutable } from "../lib/host-executable.mjs";
 
 const GATE_PATH = fileURLToPath(
   new URL("../check-coding-issue-journey-evidence.mjs", import.meta.url),
@@ -42,6 +52,14 @@ const FIXTURES_ROOT = fileURLToPath(
   new URL("fixtures/coding-issue-journey-evidence/", import.meta.url),
 );
 const TEMP_ROOTS = [];
+const GIT = resolveHostExecutable("git");
+const CONTRACTS = {
+  codeTaskQualificationManifestFailures,
+  codeTaskQualificationVerdictFor,
+  validateCodeTaskQualificationFlowArtifact,
+  validateCodeTaskQualificationManifest,
+};
+const TOOL_CATALOG = { OPENCODE_MODEL_VISIBLE_TOOLS: [{ name: "keiko_changeset_edit" }] };
 
 it("keeps receipt comparison on canonical UTF-16 code-unit key order", () => {
   expect(canonicalJson({ b2: 2, b10: 10, a: 0, b1: 1 })).toBe('{"a":0,"b1":1,"b10":10,"b2":2}');
@@ -191,7 +209,162 @@ function stageFiveFlowEvidence(fixtureName = "valid") {
   return { manifestPath, receiptsDir, descriptor, flows };
 }
 
+function git(root, ...args) {
+  return execFileSync(GIT, args, { cwd: root, encoding: "utf8", stdio: "pipe" }).trim();
+}
+
+function writePath(root, path, contents) {
+  const target = join(root, path);
+  mkdirSync(join(target, ".."), { recursive: true });
+  writeFileSync(target, contents);
+}
+
+function commit(root, message) {
+  git(root, "add", ".");
+  git(root, "commit", "--quiet", "-m", message);
+  return git(root, "rev-parse", "HEAD");
+}
+
+function replaceWithGitSymlink(root, path, target) {
+  git(root, "config", "core.symlinks", "false");
+  const oid = execFileSync(GIT, ["hash-object", "-w", "--stdin"], {
+    cwd: root,
+    encoding: "utf8",
+    input: target,
+  }).trim();
+  git(root, "update-index", "--add", "--cacheinfo", "120000", oid, path);
+  git(root, "commit", "--quiet", "-m", "replace evidence with a git symlink");
+  git(root, "reset", "--hard", "--quiet", "HEAD");
+}
+
+function stageCanonicalEvidenceOnlyLanding() {
+  const staged = stageFiveFlowEvidence();
+  const root = mkdtempSync(join(tmpdir(), "keiko-3390-checker-source-binding-"));
+  TEMP_ROOTS.push(root);
+  git(root, "init", "--quiet", "--initial-branch=dev");
+  git(root, "config", "user.email", "fixture@example.invalid");
+  git(root, "config", "user.name", "Qualification Fixture");
+  git(root, "config", "commit.gpgsign", "false");
+  const descriptor = {
+    scenarios: [{ scenarioId: "issue-to-pr-full-access", evidenceClass: "playwright-journey" }],
+    flows: staged.descriptor.flows,
+  };
+  writePath(root, CODING_ISSUE_JOURNEY_DESCRIPTOR_PATH, `${JSON.stringify(descriptor)}\n`);
+  writePath(root, "packages/keiko-server/src/runtime.ts", "export const runtime = true;\n");
+  const sourceCommitSha = commit(root, "freeze qualification source");
+  const sourceTreeSha = git(root, "rev-parse", `${sourceCommitSha}^{tree}`);
+  const receiptsDir = join(root, CODING_ISSUE_JOURNEY_RECEIPTS_PATH);
+  mkdirSync(receiptsDir, { recursive: true });
+  cpSync(
+    join(FIXTURES_ROOT, "valid/receipts/issue-to-pr-full-access.artifact"),
+    join(receiptsDir, "issue-to-pr-full-access.artifact"),
+  );
+  writeFileSync(
+    join(receiptsDir, "issue-to-pr-full-access.receipt.json"),
+    `${JSON.stringify({ scenarioId: "issue-to-pr-full-access", commitSha: sourceCommitSha, platform: "macos-arm64", testStatus: "passed" })}\n`,
+  );
+  const cumulatives = [3_240_000, 5_000_000, 7_000_000, 9_000_000, 11_000_000];
+  const artifacts = cumulatives.map((value, index) =>
+    flowArtifact(index, value, index === 0 ? 0 : cumulatives[index - 1], sourceCommitSha),
+  );
+  for (const artifact of artifacts) {
+    writeCodingIssueJourneyFlowEvidenceReceipt({
+      receiptsDir,
+      artifact,
+      platform: "macos-arm64",
+      recordedAt: "2026-09-06T05:30:00Z",
+    });
+  }
+  const receiptMap = readFlowReceipts(
+    receiptsDir,
+    artifacts.map(({ flowId }) => flowId),
+  );
+  const manifest = JSON.parse(readFileSync(staged.manifestPath, "utf8"));
+  manifest.sourceCommitSha = sourceCommitSha;
+  manifest.sourceTreeSha = sourceTreeSha;
+  manifest.flows = artifacts.map((artifact) => {
+    const receipt = receiptMap.get(artifact.flowId);
+    if (receipt === undefined) throw new Error(`missing receipt for ${artifact.flowId}`);
+    return {
+      ...artifact,
+      platform: receipt.platform,
+      provenance: receipt.provenance,
+      recordedAt: receipt.recordedAt,
+      artifactDigest: receipt.artifactDigest,
+      receiptDigest: receipt.receiptDigest,
+    };
+  });
+  const manifestPath = join(root, CODING_ISSUE_JOURNEY_MANIFEST_PATH);
+  writePath(root, CODING_ISSUE_JOURNEY_MANIFEST_PATH, `${JSON.stringify(manifest, null, 2)}\n`);
+  const landingCommitSha = commit(root, "land evidence only");
+  return { root, manifestPath, receiptsDir, descriptor, sourceCommitSha, landingCommitSha };
+}
+
 describe("checkCodingIssueJourneyEvidence", () => {
+  it("uses the production checker to accept only an evidence-only descendant of its source", async () => {
+    const staged = stageCanonicalEvidenceOnlyLanding();
+    const args = {
+      root: staged.root,
+      manifestPath: staged.manifestPath,
+      receiptsDir: staged.receiptsDir,
+      descriptorPath: join(staged.root, CODING_ISSUE_JOURNEY_DESCRIPTOR_PATH),
+      descriptor: staged.descriptor,
+      binding: BASE_BINDING,
+      contracts: CONTRACTS,
+      toolCatalog: TOOL_CATALOG,
+    };
+    const accepted = await checkCodingIssueJourneyEvidence(args);
+    expect(accepted).toMatchObject({
+      verdict: "qualified",
+      failures: [],
+      sourceCommitSha: staged.sourceCommitSha,
+      landingCommitSha: staged.landingCommitSha,
+    });
+
+    const receiptPath = join(staged.receiptsDir, "issue-to-pr-flow-01.receipt.json");
+    const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+    writeFileSync(
+      receiptPath,
+      `${JSON.stringify({ ...receipt, commitSha: staged.landingCommitSha })}\n`,
+    );
+    commit(staged.root, "misbind receipt");
+    expect((await checkCodingIssueJourneyEvidence(args)).failures).toContain(
+      "issue-to-pr-flow-01: stale or foreign flow source commit",
+    );
+
+    git(staged.root, "reset", "--hard", "--quiet", staged.landingCommitSha);
+    writePath(
+      staged.root,
+      "packages/keiko-server/src/runtime.ts",
+      "export const runtime = false;\n",
+    );
+    commit(staged.root, "change runtime after qualification");
+    expect((await checkCodingIssueJourneyEvidence(args)).failures).toContain(
+      "qualification source changed outside evidence outputs: packages/keiko-server/src/runtime.ts",
+    );
+  });
+
+  it("rejects a clean Git-symlink artifact before parsing its external target", async () => {
+    const staged = stageCanonicalEvidenceOnlyLanding();
+    const artifactPath = `${CODING_ISSUE_JOURNEY_RECEIPTS_PATH}/issue-to-pr-flow-01.artifact`;
+    replaceWithGitSymlink(staged.root, artifactPath, "../../../../../../outside-artifact.json");
+
+    expect(git(staged.root, "status", "--porcelain=v1", "--untracked-files=all")).toBe("");
+    const result = await checkCodingIssueJourneyEvidence({
+      root: staged.root,
+      manifestPath: staged.manifestPath,
+      receiptsDir: staged.receiptsDir,
+      descriptorPath: join(staged.root, CODING_ISSUE_JOURNEY_DESCRIPTOR_PATH),
+      binding: BASE_BINDING,
+      contracts: CONTRACTS,
+      toolCatalog: TOOL_CATALOG,
+    });
+    expect(result).toMatchObject({
+      verdict: "blocked",
+      failures: ["qualification evidence inputs must be tracked regular Git blobs"],
+    });
+  });
+
   it("derives production-functional authority only from matching trusted descriptor scenarios", () => {
     expect(
       qualificationBinding(BASE_BINDING, COMMIT_SHA, {

@@ -84,11 +84,16 @@ though Apple/Windows signing (#2198) and the Atlassian half of #2952 are exclude
   assembled manifest against the contract before writing it. See
   [`docs/acceptance/README.md`](../../../acceptance/README.md#3390-qualification-manifest-a-versioned-sibling-pipeline)
   for the full pipeline diagram and CLI reference.
-- **The machine validator.** `scripts/check-coding-issue-journey-evidence.mjs` (CLI) and
-  `scripts/lib/coding-issue-journey-evidence.mjs` (pure cross-referencing logic) SHA-bind a
-  manifest to the qualified git head and cross-reference its scenarios against on-disk receipts,
-  recomputing each receipt's artifact digest rather than trusting the manifest's claim, and reject
-  any `requiredTools` entry absent from the model-visible tool catalog on that head. Negative
+- **The machine validator.** `scripts/check-coding-issue-journey-evidence.mjs` (CLI),
+  `scripts/lib/coding-issue-journey-evidence.mjs` (pure cross-referencing logic), and
+  `scripts/lib/coding-issue-journey-source-binding.mjs` bind every manifest and receipt to one
+  frozen source commit. The validator accepts a later landing commit only when that source is its
+  ancestor and every net tree change from source to landing is the canonical manifest or a
+  descriptor-owned artifact or receipt. It rejects dirty worktrees, stale or missing source commits, changed descriptors,
+  runtime or rubric changes, noncanonical output locations, and unsafe descriptor ids. The source
+  and landing commits are reported separately; historical receipts are never rebound. The gate
+  recomputes each receipt's artifact digest rather than trusting the manifest's claim and rejects
+  any `requiredTools` entry absent from the model-visible tool catalog on that source. Negative
   fixtures under `scripts/__tests__/fixtures/coding-issue-journey-evidence/` cover a stale/foreign
   commit SHA, a scripted-model "passed" claim, an unregistered evidence class, a missing receipt, a
   tampered (wrong-digest) receipt, a wrong-platform receipt, a skipped test receipt, an unregistered
@@ -186,8 +191,8 @@ inputs in section 1/2 above), a qualification run follows this sequence.
    `issue-to-pr-supervised-coding`, `issue-to-pr-autonomous-delivery`, `ci-repair-loop`,
    `description-auto-draft-and-apply`, `mark-ready-intent`, `git-to-chat-connect-refine-apply`,
    `git-chat-negative-effects`), each scoped to the ADR-0138 mode or journey stage its scenario id
-   names. `human-merge-and-closure` is the one exception: the harness records the journey's own
-   outcome, but its receipt can only be completed after the human merge checkpoint in step 5.
+   names. `human-merge-and-closure` is emitted only after the explicit governed-merge confirmation
+   and the product's journey observer sees both the provider merge and bound issue closure.
 3. **Produce the coding-runtime performance receipt.** From the native macOS-arm64 reference
    machine: `npm run perf:evidence:coding-runtime` (append `-- --calibrate` the first time only, if
    `docs/release/2952-coding-runtime-calibration.json` does not yet exist — calibration is
@@ -204,28 +209,36 @@ inputs in section 1/2 above), a qualification run follows this sequence.
    `runtime.confinement.spawned` activity-log evidence from step 2. The Linux/Windows half of this
    same proof has no producer and stays `blocked` (see "Qualification inputs" above); this step
    never fabricates one in its place.
-5. **The human merge checkpoint — performed by the operator, never by an agent.** Issue #3390 AC5
-   requires a separate, explicit human review and merge in the controlled repository; the harness
-   must not bypass this with agent merge/close permissions, and no automated step above performs
-   it. The operator reviews and merges the controlled repository's pull request by hand, then
-   supplies the resulting merge fact through `--human-merge-attestation <path-to-digest>` on the
-   manifest generator (step 6) so `human-merge-and-closure` can complete. No script or harness step
-   in this pipeline ever merges or closes on the operator's behalf.
-6. **Generate the manifest.** `npm run qualify:coding-issue-journey:manifest -- --descriptor
+5. **The governed merge checkpoint — explicitly authorized and observed.** Issue #3390 AC5
+   requires a separate review and merge checkpoint in the controlled repository. The selected
+   five-flow drive uses the existing governed-merge window: it previews the exact pull request,
+   confirms the high-risk operation, executes through the existing approval-gated route, and then
+   waits for the product journey observer to report the provider merge and bound issue closure.
+   The harness cannot mint `human-merge-and-closure` before all three facts exist. The receipt's
+   artifact digest is the manifest's merge attestation; an unrelated operator-supplied file cannot
+   substitute. This is an operator-authorized governed action, never autonomous merge scheduling.
+6. **Generate the manifest.** Freeze the source commit before any real flow starts, and use that
+   same commit and its tree for every receipt and for the final manifest. Then run `npm run
+   qualify:coding-issue-journey:manifest -- --descriptor
    docs/acceptance/coding-issue-journey-3390.json --receipts <receipts-dir> --commit <head sha>
    --tree <head tree sha> --runtime-identity <id> --model-identity <id> --fixture-revision <id>
    --rubric docs/qa/evidence/coding-issue-journey/3390/rubric.md --required-tools <catalog tool
    names> --spend-budget-usd <budget> [--issue-ref <opaque>] [--pr-ref <opaque>] [--run-ref
    <opaque>] [--readiness-digest <sha256>] [--journey-outcome-digest <sha256>]
-   [--human-merge-attestation <path-to-digest>] [--audit-ref <opaque>] [--audit-digest <sha256>]
+   [--audit-ref <opaque>] [--audit-digest <sha256>]
    [--observed-spend-usd <number>] --output
    docs/qa/evidence/coding-issue-journey/3390/manifest.json`. The descriptor's six `blocked` rows
    need no receipt; their closed reason is carried in the descriptor itself, never fabricated by
    this step.
-7. **Validate.** `npm run check:coding-issue-journey-evidence:3390` SHA-binds the manifest to the
-   current git head, cross-references every scenario against the receipts directory, and prints the
-   derived verdict (`qualified` / `blocked` / `failed`) with every failure named. A `blocked` row is
-   never a skipped-green row: it names the external issue or process that still gates it (`#2198`,
+7. **Validate and land evidence.** Commit only the canonical manifest and exact artifact/receipt
+   files named by the frozen descriptor, then run `npm run
+   check:coding-issue-journey-evidence:3390` from that clean landing commit. The validator proves
+   that the manifest's frozen source is an ancestor of the landing commit and that no other path
+   changed between them. It cross-references every scenario against the receipts directory and
+   prints the source commit, landing commit, derived verdict (`qualified` / `blocked` / `failed`),
+   and every failure. Update human-facing status documents before freezing the source; they are not
+   trusted evidence outputs and therefore cannot change in the evidence-only landing. A `blocked`
+   row is never a skipped-green row: it names the external issue or process that still gates it (`#2198`,
    `#2951` — including, on the egress row, the ADR-0043 D14 Linux/Windows confinement-enforcement
    gap — the red real-binary lane, or the operator-run `keiko-issue-audit` process), so a reader can
    see exactly what remains outside this repository's control, and the manifest-level verdict can
