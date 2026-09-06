@@ -131,6 +131,27 @@ symbolic HEAD was verified as `master` before repairing this checkout metadata. 
 created a task workspace, pull request, merge or closure. The failed-run artifacts are retained;
 the matrix remains **0/5 completed flows**.
 
+Attempt 31 (`a46d14da`) created the first actual verified commit
+`aec3a459ea09f2efb939c21f3b35395e91b811c9`, pushed its task branch, and created
+[Wegwerf-Repo PR #7](https://github.com/oscharko/Wegwerf-Repo/pull/7) for issue #1. The actual
+required `ci` check passed on that head. The harness then checked terminal success before the
+model turn had settled; `8cd47d0a` corrects that wait without relaxing any success predicate.
+Independent review found opposite-sign extreme-value overflow in the model's online mean. The
+PR remains a draft and the issue remains open: commit, push and green CI are not a completed flow.
+
+Attempt 32 (`bea78437`) acknowledged the retained run through the normal recovery UI and admitted
+a successor linked to the actual predecessor. Its first task prompt was refused with
+`runtime-prompt-budget-denied` after `git.ci-repair.budget` reported `invalid-binding` for the
+retained draft PR. No new model-authored edit or delivery effect occurred. The workspace, existing
+PR, failed run and diagnostic trace are retained for the correction loop. A separate read through
+the production Node journey reader subsequently observed the current PR facts successfully;
+the earlier failed observation remains recorded and is not rewritten as success.
+
+The same `bea78437` source passed the local Sonar analyzer, real OpenCode binary qualification
+(2 tests), macOS runtime confinement producer, and five consumer qualification suites (81 tests)
+in a clean isolated checkout. Those receipts qualify their named runtime surfaces on that source;
+they do not replace the five real Issue-to-closure flows, which remain **0/5 complete** here.
+
 At `b38c7ec4`, the complete server suite passed 713 files / 13,691 tests (7 files / 16 tests
 skipped), and the model-gateway suite passed 57 files / 1,439 tests. Full typecheck, context-quality,
 error-observability and operation-catalog checks also passed. These are exact-source local results,
