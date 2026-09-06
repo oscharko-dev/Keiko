@@ -398,7 +398,6 @@ describe("CodingWorkbenchWindow", () => {
         await userEvent.setup().click(
           screen.getByRole("button", {
             name: "Start from a GitHub issue",
-            exact: true,
           }),
         );
         expect(screen.getByRole("region", { name: "Code setup" })).toBeVisible();
@@ -423,7 +422,6 @@ describe("CodingWorkbenchWindow", () => {
       expect(
         screen.queryByRole("button", {
           name: "Start from a GitHub issue",
-          exact: true,
         }),
       ).not.toBeInTheDocument();
     },
