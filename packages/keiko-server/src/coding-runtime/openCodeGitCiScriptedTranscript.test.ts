@@ -37,6 +37,7 @@ import { commitFacadeFixture } from "../gitDelivery/verifiedCommitFacadeTestSupp
 import type { CiObservationService } from "../gitDelivery/ciObservationService.js";
 import { createDraftRun } from "../gitDelivery/ciObservationTest/_support.js";
 import { DraftDeliveryFixture } from "../gitDelivery/draftDeliveryServiceTestSupport.js";
+import { DraftDeliveryController } from "../gitDelivery/draftDeliveryService.js";
 import type { VerifiedCommitRunContext } from "../gitDelivery/verifiedCommitTypes.js";
 import {
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
@@ -169,6 +170,28 @@ function lastToolResult(
   return undefined;
 }
 
+type TranscriptDeliveryMode = "supervised-coding" | "autonomous-delivery";
+
+async function approveTranscriptProposal(
+  mode: TranscriptDeliveryMode,
+  events: readonly CodingWorkbenchRuntimeEvent[],
+  actionKind: "commit" | "push" | "pull-request",
+  approve: (requestId: string) => unknown,
+): Promise<void> {
+  if (mode === "autonomous-delivery") return;
+  await vi.waitFor(
+    () => {
+      expect(events.some((event) => event.permissionRequest?.actionKind === actionKind)).toBe(true);
+    },
+    { timeout: 5_000 },
+  );
+  const pending = events.find(
+    (event) => event.permissionRequest?.actionKind === actionKind,
+  )?.permissionRequest;
+  if (pending === undefined) throw new TypeError("missing pending transcript approval");
+  expect(approve(pending.requestId)).toBeDefined();
+}
+
 type ScriptedStep = (last: Record<string, unknown> | undefined) => FakeToolCall;
 
 /**
@@ -255,7 +278,10 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
     return root;
   }
 
-  function fixture(root: string): {
+  function fixture(
+    root: string,
+    mode: TranscriptDeliveryMode,
+  ): {
     readonly facadeFetch: typeof globalThis.fetch;
     readonly bridge: ReturnType<typeof commitFacadeFixture>["bridge"];
     readonly events: CodingWorkbenchRuntimeEvent[];
@@ -268,7 +294,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       runId: "run-1",
       state: "running",
       revision: 0,
-      requestedMode: "autonomous-delivery",
+      requestedMode: mode,
       runtimeSource: "keiko-sidecar",
       modelSource: "keiko-model-gateway",
       createdAt: new Date(0).toISOString(),
@@ -335,17 +361,20 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
           Promise.resolve({ outcome: "unprotected" }),
       },
     };
-    const service = createVerifiedCommitService(options);
+    const service = createVerifiedCommitService({
+      ...options,
+      policyAllowsWithoutApproval: (): boolean => mode === "autonomous-delivery",
+    });
     const gitService = new RuntimeGitService({
       ...options,
-      mode: (): "autonomous-delivery" => "autonomous-delivery",
+      mode: (): TranscriptDeliveryMode => mode,
       invalidateVerification: (): void => undefined,
     });
     const { facade, bridge, events } = commitFacadeFixture({
       service,
       gitService,
       root,
-      mode: "autonomous-delivery",
+      mode,
       live: () => true,
       report: () => passingReport(root),
     });
@@ -359,133 +388,129 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
     return { facadeFetch, bridge, events };
   }
 
-  it("routes status, diff, a scripted-model stage/commit propose cycle and a real approved commit through the production facade", async () => {
-    const root = repo();
-    const { facadeFetch, bridge, events } = fixture(root);
-    const plan = swappableModelTurn();
-    const child = createScriptedGovernedTranscriptChild({
-      runId: "run-3386",
-      toolFacadeFetch: facadeFetch,
-      modelTurn: plan.modelTurn,
-    });
+  it.each(["supervised-coding", "autonomous-delivery"] as const)(
+    "routes a scripted-model stage/commit cycle through the production facade in %s",
+    async (mode) => {
+      const root = repo();
+      const { facadeFetch, bridge, events } = fixture(root, mode);
+      const plan = swappableModelTurn();
+      const child = createScriptedGovernedTranscriptChild({
+        runId: "run-3386",
+        toolFacadeFetch: facadeFetch,
+        modelTurn: plan.modelTurn,
+      });
 
-    plan.use([
-      (): FakeToolCall => toolCall("keiko_git_status", {}, "call-status"),
-      (): FakeToolCall =>
-        toolCall("keiko_git_diff", { scope: "working-tree", paths: ["code.js"] }, "call-diff"),
-      (): FakeToolCall => toolCall("keiko_git_stage", { paths: ["code.js"] }, "call-stage-propose"),
-      (last): FakeToolCall => {
-        const stage = (last as { readonly git: { readonly proposalId: string } }).git;
-        return toolCall(
-          "keiko_git_execute",
-          { kind: "stage", proposalId: stage.proposalId },
-          "call-stage-execute",
-        );
-      },
-      (): FakeToolCall =>
-        toolCall("keiko_verification", { verifierId: "typecheck" }, "call-verify"),
-      (): FakeToolCall =>
-        toolCall(
-          "keiko_git_commit",
-          { message: "feat: authorized scripted-transcript change" },
-          "call-commit-propose",
-        ),
-    ]);
-    const turn1Pending = child.runTurn("stage and commit the pending workspace change");
-    await vi.waitFor(
-      () => {
-        expect(events.some((event) => event.permissionRequest?.actionKind === "commit")).toBe(true);
-      },
-      { timeout: 5_000 },
-    );
-    const pendingCommit = events.find(
-      (event) => event.permissionRequest?.actionKind === "commit",
-    )?.permissionRequest;
-    if (pendingCommit === undefined) throw new TypeError("missing pending commit approval");
-    const beforeHead = git(root, ["rev-parse", "HEAD"]);
-    expect(bridge.issueCommit?.("run-1", pendingCommit.requestId)).toBeDefined();
-    const turn1 = await turn1Pending;
-    // The dispatch order was decided by the scripted model plan, not authored imperatively here --
-    // this is what the loop ACTUALLY executed, in the order it executed it.
-    expect(turn1.map((result) => result.tool)).toEqual([
-      "keiko_git_status",
-      "keiko_git_diff",
-      "keiko_git_stage",
-      "keiko_git_execute",
-      "keiko_verification",
-      "keiko_git_commit",
-    ]);
+      plan.use([
+        (): FakeToolCall => toolCall("keiko_git_status", {}, "call-status"),
+        (): FakeToolCall =>
+          toolCall("keiko_git_diff", { scope: "working-tree", paths: ["code.js"] }, "call-diff"),
+        (): FakeToolCall =>
+          toolCall("keiko_git_stage", { paths: ["code.js"] }, "call-stage-propose"),
+        (last): FakeToolCall => {
+          const stage = (last as { readonly git: { readonly proposalId: string } }).git;
+          return toolCall(
+            "keiko_git_execute",
+            { kind: "stage", proposalId: stage.proposalId },
+            "call-stage-execute",
+          );
+        },
+        (): FakeToolCall =>
+          toolCall("keiko_verification", { verifierId: "typecheck" }, "call-verify"),
+        (): FakeToolCall =>
+          toolCall(
+            "keiko_git_commit",
+            { message: "feat: authorized scripted-transcript change" },
+            "call-commit-propose",
+          ),
+      ]);
+      const turn1Pending = child.runTurn("stage and commit the pending workspace change");
+      const beforeHead = git(root, ["rev-parse", "HEAD"]);
+      await approveTranscriptProposal(mode, events, "commit", (id) =>
+        bridge.issueCommit?.("run-1", id),
+      );
+      const turn1 = await turn1Pending;
+      // The dispatch order was decided by the scripted model plan, not authored imperatively here --
+      // this is what the loop ACTUALLY executed, in the order it executed it.
+      expect(turn1.map((result) => result.tool)).toEqual([
+        "keiko_git_status",
+        "keiko_git_diff",
+        "keiko_git_stage",
+        "keiko_git_execute",
+        "keiko_verification",
+        "keiko_git_commit",
+      ]);
 
-    const status = toolResult(turn1, "call-status");
-    expect(status.status).toBe("completed");
-    expect((status.git as { readonly kind: string }).kind).toBe("status");
+      const status = toolResult(turn1, "call-status");
+      expect(status.status).toBe("completed");
+      expect((status.git as { readonly kind: string }).kind).toBe("status");
 
-    const diff = toolResult(turn1, "call-diff");
-    expect(diff.status).toBe("completed");
-    expect((diff.git as { readonly kind: string }).kind).toBe("diff");
+      const diff = toolResult(turn1, "call-diff");
+      expect(diff.status).toBe("completed");
+      expect((diff.git as { readonly kind: string }).kind).toBe("diff");
 
-    const stagePropose = toolResult(turn1, "call-stage-propose");
-    const stage = stagePropose.git as { readonly status: string; readonly proposalId: string };
-    // Staging a workspace-contained change is routine, contained authority in autonomous-delivery
-    // (ADR-0129/ADR-0138): the propose call is immediately "ready", with no approval hold -- only
-    // the higher-risk commit below requires the approval channel. `keiko_git_stage` still only
-    // PROPOSES; keiko_git_execute is the only tool that reaches the write outcome.
-    expect(stage.status).toBe("ready");
-    expect(stage.proposalId).toMatch(/^stage-\d+$/u);
+      const stagePropose = toolResult(turn1, "call-stage-propose");
+      const stage = stagePropose.git as { readonly status: string; readonly proposalId: string };
+      // Staging is routine in both modes. Delivery asks in Supervised workspace; Full access
+      // uses validated policy authority (ADR-0138). Only keiko_git_execute performs the effect.
+      expect(stage.status).toBe("ready");
+      expect(stage.proposalId).toMatch(/^stage-\d+$/u);
 
-    const staged = toolResult(turn1, "call-stage-execute").git as { readonly status: string };
-    expect(staged.status).toBe("succeeded");
-    expect(git(root, ["diff", "--cached", "--name-only"])).toBe("code.js");
+      const staged = toolResult(turn1, "call-stage-execute").git as { readonly status: string };
+      expect(staged.status).toBe("succeeded");
+      expect(git(root, ["diff", "--cached", "--name-only"])).toBe("code.js");
 
-    const verification = toolResult(turn1, "call-verify");
-    expect(verification.status).toBe("completed");
-    expect(events).toContainEqual(
-      expect.objectContaining({ kind: "verification-summarized", verificationStatus: "passed" }),
-    );
+      const verification = toolResult(turn1, "call-verify");
+      expect(verification.status).toBe("completed");
+      expect(events).toContainEqual(
+        expect.objectContaining({ kind: "verification-summarized", verificationStatus: "passed" }),
+      );
 
-    const commitPropose = toolResult(turn1, "call-commit-propose");
-    const commit = commitPropose.verifiedCommit as {
-      readonly status: string;
-      readonly proposalId: string;
-    };
-    expect(commit.status).toBe("approval-required");
-    // The commit proposal's outcome is visible on the run's tool-event stream -- the same
-    // permission-requested record the orchestrator's approval UI reads -- before a human ever
-    // approves it: `createProductionManagedWorktreeToolFacade`'s own `onRuntimeEvent` sink, not a
-    // second, test-invented notion of "the tool-event stream".
-    const commitPermissionEvent = events.find((event) => event.kind === "permission-requested");
-    expect(commitPermissionEvent).toMatchObject({
-      kind: "permission-requested",
-      runId: "run-1",
-      permissionRequest: {
-        requestId: commit.proposalId,
-        actionKind: "commit",
-        reasonCode: "commit-approval-required",
-      },
-    });
+      const commitPropose = toolResult(turn1, "call-commit-propose");
+      const commit = commitPropose.verifiedCommit as {
+        readonly status: string;
+        readonly proposalId: string;
+      };
+      expect(commit.status).toBe("approval-required");
+      // The commit proposal's outcome is visible on the run's tool-event stream -- the same
+      // permission-requested record the orchestrator's approval UI reads -- before a human ever
+      // approves it: `createProductionManagedWorktreeToolFacade`'s own `onRuntimeEvent` sink, not a
+      // second, test-invented notion of "the tool-event stream".
+      const commitPermissionEvent = events.find((event) => event.kind === "permission-requested");
+      if (mode === "supervised-coding")
+        expect(commitPermissionEvent).toMatchObject({
+          kind: "permission-requested",
+          runId: "run-1",
+          permissionRequest: {
+            requestId: commit.proposalId,
+            actionKind: "commit",
+            reasonCode: "commit-approval-required",
+          },
+        });
+      else expect(commitPermissionEvent).toBeUndefined();
 
-    expect(commitPropose.approvalDisposition).toBe("ready");
-    expect(git(root, ["rev-parse", "HEAD"])).toBe(beforeHead);
+      expect(commitPropose.approvalDisposition).toBe("ready");
+      expect(git(root, ["rev-parse", "HEAD"])).toBe(beforeHead);
 
-    plan.use([
-      (): FakeToolCall =>
-        toolCall(
-          "keiko_git_execute",
-          { kind: "commit", proposalId: commit.proposalId },
-          "call-commit-execute",
-        ),
-    ]);
-    const turn2 = await child.runTurn("the commit has been approved -- proceed");
-    const executed = toolResult(turn2, "call-commit-execute").verifiedCommit as {
-      readonly status: string;
-    };
-    expect(executed.status).toBe("succeeded");
-    expect(git(root, ["rev-parse", "HEAD"])).not.toBe(beforeHead);
-    expect(git(root, ["log", "-1", "--format=%s"])).toBe(
-      "feat: authorized scripted-transcript change",
-    );
-    await child.close();
-  });
+      plan.use([
+        (): FakeToolCall =>
+          toolCall(
+            "keiko_git_execute",
+            { kind: "commit", proposalId: commit.proposalId },
+            "call-commit-execute",
+          ),
+      ]);
+      const turn2 = await child.runTurn("the commit has been approved -- proceed");
+      const executed = toolResult(turn2, "call-commit-execute").verifiedCommit as {
+        readonly status: string;
+      };
+      expect(executed.status).toBe("succeeded");
+      expect(git(root, ["rev-parse", "HEAD"])).not.toBe(beforeHead);
+      expect(git(root, ["log", "-1", "--format=%s"])).toBe(
+        "feat: authorized scripted-transcript change",
+      );
+      await child.close();
+    },
+  );
 
   it("bounds a scripted-model observe-then-repair loop with the same cumulative CI repair budget the production controller enforces (#3388)", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-ci-repair-transcript-")));
@@ -1029,139 +1054,135 @@ function unusedVerifiedCommitService(root: string): ReturnType<typeof createVeri
  * push` to a real bare remote, and a REAL pull request through the fixture's fake GitHub adapter.
  */
 describe("scripted OpenCode transcript reaches DraftDeliveryController for push/pull-request (#3387)", () => {
-  it("routes a scripted-model push propose/approve/execute cycle to a real bare git remote", async () => {
-    const draft = new DraftDeliveryFixture();
-    try {
-      await draft.recordVerifiedCommit();
-      const { facade, bridge, events } = commitFacadeFixture({
-        service: unusedVerifiedCommitService(draft.root),
-        root: draft.root,
-        mode: "autonomous-delivery",
-        live: () => true,
-        report: () => passingReport(draft.root),
-        draftDeliveryService: draft.service,
-      });
-      const facadeFetch: typeof globalThis.fetch = async (_input, init) => {
-        const result = await facade.execute({
-          body: requestBodyText(init?.body),
-          capability: "scripted-fixture-capability",
+  it.each(["supervised-coding", "autonomous-delivery"] as const)(
+    "routes a scripted-model push and PR cycle to a real bare git remote in %s",
+    async (mode) => {
+      const draft = new DraftDeliveryFixture();
+      try {
+        await draft.recordVerifiedCommit();
+        const deliveryService = new DraftDeliveryController({
+          ...draft.options,
+          policyAllowsWithoutApproval: (): boolean => mode === "autonomous-delivery",
         });
-        return new Response(JSON.stringify(result));
-      };
-      const plan = swappableModelTurn();
-      const child = createScriptedGovernedTranscriptChild({
-        runId: "run-3387-push",
-        toolFacadeFetch: facadeFetch,
-        modelTurn: plan.modelTurn,
-      });
-
-      plan.use([(): FakeToolCall => toolCall("keiko_git_push", {}, "call-push-propose")]);
-      const turn1Pending = child.runTurn("push the verified commit");
-      await vi.waitFor(() => {
-        expect(events.some((event) => event.permissionRequest?.actionKind === "push")).toBe(true);
-      });
-      const pendingPush = events.find(
-        (event) => event.permissionRequest?.actionKind === "push",
-      )?.permissionRequest;
-      if (pendingPush === undefined) throw new TypeError("missing pending push approval");
-      expect(draft.pushCount).toBe(0);
-      expect(bridge.issueDelivery?.("run-1", pendingPush.requestId)).toBeDefined();
-      const turn1 = await turn1Pending;
-      expect(turn1.map((result) => result.tool)).toEqual(["keiko_git_push"]);
-      const pushPropose = toolResult(turn1, "call-push-propose").draftDelivery as {
-        readonly status: string;
-        readonly record: { readonly phase: string; readonly proposalId: string };
-      };
-      expect(pushPropose.status).toBe("recorded");
-      // Routine as this action class is, the delivery-substrate action class still needs an
-      // explicit human approval before keiko_git_execute may redeem it.
-      expect(pushPropose.record.phase).toBe("push-proposed");
-      expect(draft.pushCount).toBe(0);
-      expect(toolResult(turn1, "call-push-propose").approvalDisposition).toBe("ready");
-
-      plan.use([
-        (): FakeToolCall =>
-          toolCall(
-            "keiko_git_execute",
-            { kind: "push", proposalId: pushPropose.record.proposalId },
-            "call-push-execute",
-          ),
-      ]);
-      const turn2 = await child.runTurn("the push has been approved -- proceed");
-      const pushExecuted = toolResult(turn2, "call-push-execute").draftDelivery as {
-        readonly status: string;
-        readonly record: { readonly phase: string };
-      };
-      expect(pushExecuted.status).toBe("recorded");
-      expect(pushExecuted.record.phase).toBe("pushed");
-      // The REAL git push landed on the REAL bare remote -- not a simulated success.
-      expect(draft.pushCount).toBe(1);
-      const remoteHead = draft.git(
-        ["for-each-ref", "--format=%(objectname)", "refs/heads/feature/issue-1"],
-        draft.remote,
-      );
-      expect(remoteHead).toBe(draft.git(["rev-parse", "feature/issue-1"]));
-      await child.close();
-
-      // Same conversation, same run: propose a pull request against the branch just pushed.
-      const prChild = createScriptedGovernedTranscriptChild({
-        runId: "run-3387-pr",
-        toolFacadeFetch: facadeFetch,
-        modelTurn: plan.modelTurn,
-      });
-      plan.use([
-        (): FakeToolCall =>
-          toolCall("keiko_pull_request", { title: "feat: bounded change" }, "call-pr-propose"),
-      ]);
-      const turn3Pending = prChild.runTurn("open a pull request for the pushed branch");
-      await vi.waitFor(() => {
-        expect(events.some((event) => event.permissionRequest?.actionKind === "pull-request")).toBe(
-          true,
-        );
-      });
-      const pendingPullRequest = events.find(
-        (event) => event.permissionRequest?.actionKind === "pull-request",
-      )?.permissionRequest;
-      if (pendingPullRequest === undefined)
-        throw new TypeError("missing pending pull-request approval");
-      expect(draft.createCount).toBe(0);
-      expect(bridge.issueDelivery?.("run-1", pendingPullRequest.requestId)).toBeDefined();
-      const turn3 = await turn3Pending;
-      const prPropose = toolResult(turn3, "call-pr-propose").draftDelivery as {
-        readonly status: string;
-        readonly record: { readonly phase: string; readonly proposalId: string };
-      };
-      expect(prPropose.status).toBe("recorded");
-      expect(prPropose.record.phase).toBe("pr-proposed");
-      expect(draft.createCount).toBe(0);
-      expect(toolResult(turn3, "call-pr-propose").approvalDisposition).toBe("ready");
-
-      plan.use([
-        (): FakeToolCall =>
-          toolCall(
-            "keiko_git_execute",
-            { kind: "pull-request", proposalId: prPropose.record.proposalId },
-            "call-pr-execute",
-          ),
-      ]);
-      const turn4 = await prChild.runTurn("the pull request has been approved -- proceed");
-      const prExecuted = toolResult(turn4, "call-pr-execute").draftDelivery as {
-        readonly status: string;
-        readonly record: {
-          readonly phase: string;
-          readonly pullRequest?: { readonly number: number };
+        const { facade, bridge, events } = commitFacadeFixture({
+          service: unusedVerifiedCommitService(draft.root),
+          root: draft.root,
+          mode,
+          live: () => true,
+          report: () => passingReport(draft.root),
+          draftDeliveryService: deliveryService,
+        });
+        const facadeFetch: typeof globalThis.fetch = async (_input, init) => {
+          const result = await facade.execute({
+            body: requestBodyText(init?.body),
+            capability: "scripted-fixture-capability",
+          });
+          return new Response(JSON.stringify(result));
         };
-      };
-      expect(prExecuted.status).toBe("recorded");
-      expect(prExecuted.record.phase).toBe("draft-created");
-      // The REAL pull request was created through the fixture's fake GitHub adapter -- not merely
-      // recorded as an intent.
-      expect(draft.createCount).toBe(1);
-      expect(draft.prs).toHaveLength(1);
-      expect(prExecuted.record.pullRequest?.number).toBe(draft.prs[0]?.number);
-      await prChild.close();
-    } finally {
-      draft.close();
-    }
-  });
+        const plan = swappableModelTurn();
+        const child = createScriptedGovernedTranscriptChild({
+          runId: "run-3387-push",
+          toolFacadeFetch: facadeFetch,
+          modelTurn: plan.modelTurn,
+        });
+
+        plan.use([(): FakeToolCall => toolCall("keiko_git_push", {}, "call-push-propose")]);
+        const turn1Pending = child.runTurn("push the verified commit");
+        expect(draft.pushCount).toBe(0);
+        await approveTranscriptProposal(mode, events, "push", (id) =>
+          bridge.issueDelivery?.("run-1", id),
+        );
+        const turn1 = await turn1Pending;
+        expect(turn1.map((result) => result.tool)).toEqual(["keiko_git_push"]);
+        const pushPropose = toolResult(turn1, "call-push-propose").draftDelivery as {
+          readonly status: string;
+          readonly record: { readonly phase: string; readonly proposalId: string };
+        };
+        expect(pushPropose.status).toBe("recorded");
+        // Proposal completion carries authority only; the separate execute performs the effect.
+        expect(pushPropose.record.phase).toBe("push-proposed");
+        expect(draft.pushCount).toBe(0);
+        expect(toolResult(turn1, "call-push-propose").approvalDisposition).toBe("ready");
+
+        plan.use([
+          (): FakeToolCall =>
+            toolCall(
+              "keiko_git_execute",
+              { kind: "push", proposalId: pushPropose.record.proposalId },
+              "call-push-execute",
+            ),
+        ]);
+        const turn2 = await child.runTurn("the push has been approved -- proceed");
+        const pushExecuted = toolResult(turn2, "call-push-execute").draftDelivery as {
+          readonly status: string;
+          readonly record: { readonly phase: string };
+        };
+        expect(pushExecuted.status).toBe("recorded");
+        expect(pushExecuted.record.phase).toBe("pushed");
+        // The REAL git push landed on the REAL bare remote -- not a simulated success.
+        expect(draft.pushCount).toBe(1);
+        const remoteHead = draft.git(
+          ["for-each-ref", "--format=%(objectname)", "refs/heads/feature/issue-1"],
+          draft.remote,
+        );
+        expect(remoteHead).toBe(draft.git(["rev-parse", "feature/issue-1"]));
+        await child.close();
+
+        // Same conversation, same run: propose a pull request against the branch just pushed.
+        const prChild = createScriptedGovernedTranscriptChild({
+          runId: "run-3387-pr",
+          toolFacadeFetch: facadeFetch,
+          modelTurn: plan.modelTurn,
+        });
+        plan.use([
+          (): FakeToolCall =>
+            toolCall("keiko_pull_request", { title: "feat: bounded change" }, "call-pr-propose"),
+        ]);
+        const turn3Pending = prChild.runTurn("open a pull request for the pushed branch");
+        expect(draft.createCount).toBe(0);
+        await approveTranscriptProposal(mode, events, "pull-request", (id) =>
+          bridge.issueDelivery?.("run-1", id),
+        );
+        const turn3 = await turn3Pending;
+        const prPropose = toolResult(turn3, "call-pr-propose").draftDelivery as {
+          readonly status: string;
+          readonly record: { readonly phase: string; readonly proposalId: string };
+        };
+        expect(prPropose.status).toBe("recorded");
+        expect(prPropose.record.phase).toBe("pr-proposed");
+        expect(draft.createCount).toBe(0);
+        expect(toolResult(turn3, "call-pr-propose").approvalDisposition).toBe("ready");
+
+        plan.use([
+          (): FakeToolCall =>
+            toolCall(
+              "keiko_git_execute",
+              { kind: "pull-request", proposalId: prPropose.record.proposalId },
+              "call-pr-execute",
+            ),
+        ]);
+        const turn4 = await prChild.runTurn("the pull request has been approved -- proceed");
+        const prExecuted = toolResult(turn4, "call-pr-execute").draftDelivery as {
+          readonly status: string;
+          readonly record: {
+            readonly phase: string;
+            readonly pullRequest?: { readonly number: number };
+          };
+        };
+        expect(prExecuted.status).toBe("recorded");
+        expect(prExecuted.record.phase).toBe("draft-created");
+        // The REAL pull request was created through the fixture's fake GitHub adapter -- not merely
+        // recorded as an intent.
+        expect(draft.createCount).toBe(1);
+        expect(draft.prs).toHaveLength(1);
+        expect(events.filter((event) => event.kind === "permission-requested")).toHaveLength(
+          mode === "supervised-coding" ? 2 : 0,
+        );
+        expect(prExecuted.record.pullRequest?.number).toBe(draft.prs[0]?.number);
+        await prChild.close();
+      } finally {
+        draft.close();
+      }
+    },
+  );
 });
