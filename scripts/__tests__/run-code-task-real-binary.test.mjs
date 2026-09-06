@@ -17,6 +17,7 @@ import {
   buildJourneyReport,
   classifyLsofNetworkNames,
   createJourneyContext,
+  createMaterializedLimitObserver,
   createNetworkObserver,
   ensureMacTarget,
   governedExecutable,
@@ -190,7 +191,7 @@ describe("#2483 real-binary observation helpers", () => {
     expect(processIdsForExecutable(processList, executable)).toEqual([41]);
   });
 
-  it("reads only the content-free model limit pair from a materialized child config", () => {
+  it("reads only the content-free model limit triple from a materialized child config", () => {
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-2483-limits-"));
     const configDir = join(
       stateDir,
@@ -224,6 +225,54 @@ describe("#2483 real-binary observation helpers", () => {
     }
   });
 
+  it("retains distinct observed child input limits across successive samples", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-2483-limit-observer-"));
+    const configPath = join(
+      stateDir,
+      "bff-state",
+      "ui-db",
+      "coding-runtime",
+      "opencode",
+      "run-1",
+      "config",
+      "opencode",
+      "opencode.json",
+    );
+    const observer = createMaterializedLimitObserver(stateDir);
+    try {
+      mkdirSync(dirname(configPath), { recursive: true });
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          provider: {
+            "keiko-runtime": {
+              models: { coding: { limit: { context: 45_056, input: 40_960, output: 4_096 } } },
+            },
+          },
+        }),
+      );
+      observer.sample();
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          provider: {
+            "keiko-runtime": {
+              models: { coding: { limit: { context: 45_056, input: 40_961, output: 4_096 } } },
+            },
+          },
+        }),
+      );
+      observer.sample();
+
+      expect(observer.report()).toEqual([
+        { context: 45_056, input: 40_960, output: 4_096 },
+        { context: 45_056, input: 40_961, output: 4_096 },
+      ]);
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("derives declared geometry through the production selection and launch-profile owners", () => {
     const config = { providers: ["fixture"] };
     const metadata = {
@@ -242,8 +291,9 @@ describe("#2483 real-binary observation helpers", () => {
     expect(
       readDeclaredChildGeometry(
         "/private/state",
-        (path) => {
+        (path, env) => {
           seen.push(path);
+          expect(env).toBe(process.env);
           return config;
         },
         (input) => {

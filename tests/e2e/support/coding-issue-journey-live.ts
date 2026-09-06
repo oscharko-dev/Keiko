@@ -556,6 +556,13 @@ const DRAFT_WAIT_TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeSnapshot["st
   "succeeded",
 ]);
 
+const UNSUCCESSFUL_TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeSnapshot["state"]> = new Set([
+  "taken-over",
+  "failed",
+  "cancelled",
+  "recovery-required",
+]);
+
 export async function readSnapshotWhileAwaitingDraft(
   read: () => Promise<CodingWorkbenchRuntimeSnapshot>,
   expectedRunId?: string,
@@ -573,6 +580,19 @@ export async function readSnapshotWhileAwaitingDraft(
   throw new Error(
     `coding run ${runId} reached ${snapshot.state}${failure} before creating a draft pull request`,
   );
+}
+
+export async function readSnapshotWhileAwaitingSuccess(
+  read: () => Promise<CodingWorkbenchRuntimeSnapshot>,
+  expectedRunId: string,
+): Promise<CodingWorkbenchRuntimeSnapshot> {
+  const snapshot = await read();
+  if (snapshot.runId !== expectedRunId) {
+    throw new Error(`coding run changed while awaiting terminal success`);
+  }
+  if (!UNSUCCESSFUL_TERMINAL_STATES.has(snapshot.state)) return snapshot;
+  const failure = snapshot.failureCode === undefined ? "" : ` (${snapshot.failureCode})`;
+  throw new Error(`coding run ${expectedRunId} reached ${snapshot.state}${failure}`);
 }
 
 /**

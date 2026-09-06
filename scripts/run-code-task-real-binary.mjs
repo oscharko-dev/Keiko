@@ -255,7 +255,10 @@ export function readDeclaredChildGeometry(
   resolveGeometry = resolveOpenCodeContextGeometry,
 ) {
   try {
-    const config = loadConfig(join(stateDir, "bff-state", "ui-db", "keiko.config.json"));
+    const config = loadConfig(
+      join(stateDir, "bff-state", "ui-db", "keiko.config.json"),
+      process.env,
+    );
     const profile = resolveProfile(config);
     if (profile.status !== "available") return undefined;
     const geometry = resolveGeometry(profile.runMetadata);
@@ -282,12 +285,12 @@ function readGatewayGeometryEvidence(context) {
   };
 }
 
-function createMaterializedLimitObserver(stateDir) {
+export function createMaterializedLimitObserver(stateDir) {
   const observed = new Map();
   return {
     sample: () => {
       for (const limit of readMaterializedLimits(stateDir)) {
-        observed.set(`${limit.context}:${limit.output}`, limit);
+        observed.set(`${limit.context}:${limit.input}:${limit.output}`, limit);
       }
     },
     report: () => [...observed.values()],

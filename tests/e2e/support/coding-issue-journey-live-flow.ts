@@ -52,6 +52,7 @@ import { proposeJourneyReady } from "./coding-issue-journey-live-mark-ready.js";
 import {
   type DeliveredPullRequest,
   openLiveWorkbench,
+  readSnapshotWhileAwaitingSuccess,
   runtimeSnapshot,
   waitWhileAnsweringApprovals,
 } from "./coding-issue-journey-live.js";
@@ -827,7 +828,15 @@ async function assertVerifiedModelChange(
   page: Page,
   delivered: DeliveredPullRequest,
 ): Promise<void> {
-  const snapshot = await runtimeSnapshot(page);
+  const snapshot = await waitWhileAnsweringApprovals(
+    page,
+    () => readSnapshotWhileAwaitingSuccess(() => runtimeSnapshot(page), delivered.runId),
+    (value) => value.state === "succeeded" && value.result?.status === "succeeded",
+    {
+      timeoutMs: 25 * 60_000,
+      message: "model run did not settle successfully after creating its draft pull request",
+    },
+  );
   const verified = snapshot.verifiedCommitResult;
   if (
     snapshot.result?.status !== "succeeded" ||

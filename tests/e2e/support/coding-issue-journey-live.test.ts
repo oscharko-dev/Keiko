@@ -8,6 +8,7 @@ import {
   prepareTrustedIssueWorkspace,
   qualifyLiveModel,
   readSnapshotWhileAwaitingDraft,
+  readSnapshotWhileAwaitingSuccess,
   reconcileLiveWorkbenchAfterModelChange,
   registerTrustedRepositoryProject,
 } from "./coding-issue-journey-live.js";
@@ -87,6 +88,38 @@ describe("live journey draft wait", () => {
     await expect(readSnapshotWhileAwaitingDraft(() => Promise.resolve(snapshot))).resolves.toBe(
       snapshot,
     );
+  });
+});
+
+describe("live journey terminal-success wait", () => {
+  it.each(["running", "paused", "succeeded"] as const)(
+    "keeps the exact run available while it is %s",
+    async (state) => {
+      const snapshot = runtimeSnapshot(state);
+      await expect(
+        readSnapshotWhileAwaitingSuccess(() => Promise.resolve(snapshot), "run-terminal"),
+      ).resolves.toBe(snapshot);
+    },
+  );
+
+  it.each(["taken-over", "failed", "cancelled", "recovery-required"] as const)(
+    "fails promptly when the exact run reaches %s",
+    async (state) => {
+      const read = vi.fn(() => Promise.resolve(runtimeSnapshot(state)));
+      await expect(readSnapshotWhileAwaitingSuccess(read, "run-terminal")).rejects.toThrow(
+        `coding run run-terminal reached ${state}`,
+      );
+      expect(read).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("rejects a different run instead of accepting its success", async () => {
+    await expect(
+      readSnapshotWhileAwaitingSuccess(
+        () => Promise.resolve(runtimeSnapshot("succeeded", { runId: "run-other" })),
+        "run-terminal",
+      ),
+    ).rejects.toThrow("coding run changed while awaiting terminal success");
   });
 });
 
