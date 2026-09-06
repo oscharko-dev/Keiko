@@ -98,6 +98,31 @@ const PROMPT_RESERVATION_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeSt
   "running",
 ]);
 
+type RuntimeAuthorityMintFailureStage =
+  | "intent-binding"
+  | "approval-digest"
+  | "confirmation-consumption"
+  | "envelope-validation"
+  | "authority-registration"
+  | "capability-issuance";
+
+type RuntimeAuthorityMintFailureReason =
+  | "model-source-mismatch"
+  | "approval-digest-invalid"
+  | "confirmation-refused"
+  | "envelope-invalid"
+  | "registration-refused"
+  | "capability-issuance-refused";
+
+const MINT_FAILURE_ERROR_KIND: Readonly<Record<RuntimeAuthorityMintFailureReason, string>> = {
+  "model-source-mismatch": "CodingRuntimeAuthorityBindingFailure",
+  "approval-digest-invalid": "CodingRuntimeAuthorityValidationFailure",
+  "confirmation-refused": "CodingRuntimeAuthorityConfirmationFailure",
+  "envelope-invalid": "CodingRuntimeAuthorityValidationFailure",
+  "registration-refused": "CodingRuntimeAuthorityRegistrationFailure",
+  "capability-issuance-refused": "CodingRuntimeAuthorityCapabilityFailure",
+};
+
 function deliveryScopeGranted(mode: CodingWorkbenchMode): boolean {
   return codingWorkbenchPolicyEffectFor(mode, "delivery", "medium") !== "denied";
 }
@@ -395,7 +420,7 @@ export class CodingRuntimeAuthorityService {
   ): CodingRuntimeMintResult {
     if (this.runtimeState.state !== "idle") return { ok: false, reason: "active-run-conflict" };
     if (intent.modelSource !== context.modelProfile.source) {
-      return { ok: false, reason: "authority-resolution-failed" };
+      return this.refuseMint(runId, "intent-binding", "model-source-mismatch");
     }
     const approvalDigest = this.consumeConfirmation(
       intent,
@@ -404,7 +429,9 @@ export class CodingRuntimeAuthorityService {
       confirmation,
       nowIso,
     );
-    if (approvalDigest === undefined) return { ok: false, reason: "authority-resolution-failed" };
+    if (approvalDigest === undefined) {
+      return this.refuseMint(runId, "confirmation-consumption", "confirmation-refused");
+    }
     return this.mintConfirmedStartForRun(runId, intent, context, approvalDigest, nowIso);
   }
 
@@ -417,11 +444,11 @@ export class CodingRuntimeAuthorityService {
     nowIso: string,
   ): CodingRuntimeMintResult {
     if (this.runtimeState.state !== "idle") return { ok: false, reason: "active-run-conflict" };
-    if (
-      intent.modelSource !== context.modelProfile.source ||
-      !/^[a-f0-9]{64}$/u.test(approvalDigest)
-    ) {
-      return { ok: false, reason: "authority-resolution-failed" };
+    if (intent.modelSource !== context.modelProfile.source) {
+      return this.refuseMint(runId, "intent-binding", "model-source-mismatch");
+    }
+    if (!/^[a-f0-9]{64}$/u.test(approvalDigest)) {
+      return this.refuseMint(runId, "approval-digest", "approval-digest-invalid");
     }
     const envelope = buildRuntimeAuthority(
       intent,
@@ -432,7 +459,7 @@ export class CodingRuntimeAuthorityService {
       approvalDigest,
     );
     if (!validateCodingWorkbenchRuntimeAuthorityEnvelope(envelope).ok) {
-      return { ok: false, reason: "authority-resolution-failed" };
+      return this.refuseMint(runId, "envelope-validation", "envelope-invalid");
     }
     const registered = this.registry.registerRuntime(
       envelope,
@@ -440,14 +467,14 @@ export class CodingRuntimeAuthorityService {
       nowIso,
       context.issueBinding?.bindingDigest,
     );
-    if (!registered.ok) return { ok: false, reason: "authority-resolution-failed" };
+    if (!registered.ok) return this.refuseRegistration(runId);
     const capabilities = this.issueCapabilities(
       envelope,
       registered.authorityRef,
       context.modelProfile,
     );
     if (capabilities === undefined) {
-      return { ok: false, reason: "authority-resolution-failed" };
+      return this.refuseMint(runId, "capability-issuance", "capability-issuance-refused");
     }
     return this.activateMintedRuntime({
       runId,
@@ -457,6 +484,26 @@ export class CodingRuntimeAuthorityService {
       context,
       nowIso,
     });
+  }
+
+  private refuseMint(
+    runId: string,
+    stage: RuntimeAuthorityMintFailureStage,
+    reason: RuntimeAuthorityMintFailureReason,
+  ): CodingRuntimeMintResult {
+    (this.activityLog ?? processServerLogSink()).write({
+      category: "security",
+      op: "coding-runtime.authority.mint-failed",
+      correlationId: runId,
+      level: "warn",
+      errorKind: MINT_FAILURE_ERROR_KIND[reason],
+      extra: { runId, stage, reason },
+    });
+    return { ok: false, reason: "authority-resolution-failed" };
+  }
+
+  private refuseRegistration(runId: string): CodingRuntimeMintResult {
+    return this.refuseMint(runId, "authority-registration", "registration-refused");
   }
 
   private activateMintedRuntime(input: {

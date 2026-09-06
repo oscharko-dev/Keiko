@@ -53,6 +53,7 @@ import {
 import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import { createProductionAuxiliaryPorts } from "./productionAuxiliaryPorts.js";
 import {
@@ -130,12 +131,15 @@ export interface ProductionManagedWorktreeToolInput {
 // source. The caller feeds the result straight into `opencodeLaunchProfile.ts`'s
 // `unavailableOptionalTools` and (once wired) `opencodeToolSchemas.ts`'s `handlerCoverage`, so an
 // unready optional tool is ABSENT from what the model is told exists, not merely denied when
-// called. Research uses the live #2387 grant, not mere registry presence: a registry can be wired
-// for the process while this specific run holds no active grant.
+// called. Research readiness means the bounded approval-capable handler is fully bound; each URL
+// still needs a live #2387 grant at execution time. Requiring a grant here would hide the only
+// model-visible path that can request that grant and deadlock the ordinary first-use flow.
 export type OptionalToolAvailabilityInput = Pick<
   ProductionManagedWorktreeToolInput,
   | "researchGrantRegistry"
   | "gatewayEgress"
+  | "requestResearchApproval"
+  | "activityLog"
   | "authorityRef"
   | "skillCatalog"
   | "modelId"
@@ -146,16 +150,43 @@ export function deriveOptionalToolAvailability(
   input: OptionalToolAvailabilityInput,
 ): ReadonlySet<OpenCodeOptionalToolName> {
   const unavailable = new Set<OpenCodeOptionalToolName>();
-  if (!hasLiveResearchGrant(input)) unavailable.add("keiko_research_fetch");
+  if (!hasResearchApprovalHandler(input)) unavailable.add("keiko_research_fetch");
   if ((input.skillCatalog ?? createServerApprovedSkillCatalog()).list().length === 0)
     unavailable.add("keiko_skill");
   if (!hasResolvableChildAgentModel(input)) unavailable.add("keiko_child_agent");
   return unavailable;
 }
 
-function hasLiveResearchGrant(input: OptionalToolAvailabilityInput): boolean {
-  if (input.researchGrantRegistry === undefined || input.gatewayEgress === undefined) return false;
-  return input.researchGrantRegistry.activeGrants(input.authorityRef.runId, Date.now()).length > 0;
+function hasResearchApprovalHandler(input: OptionalToolAvailabilityInput): boolean {
+  if (
+    input.researchGrantRegistry === undefined ||
+    input.gatewayEgress === undefined ||
+    input.requestResearchApproval === undefined
+  ) {
+    return false;
+  }
+  try {
+    return input.gatewayEgress() !== undefined;
+  } catch (error) {
+    (input.activityLog ?? processServerLogSink()).write({
+      category: "gateway",
+      op: "coding-runtime.tool-availability.failed",
+      correlationId: isValidCorrelationId(input.authorityRef.runId)
+        ? input.authorityRef.runId
+        : UNKNOWN_CORRELATION_ID,
+      level: "warn",
+      errorKind: contentFreeErrorClass(error),
+      extra: {
+        runId: input.authorityRef.runId,
+        optionalTool: "keiko_research_fetch",
+        stage: "research-egress-config",
+        reason: "configuration-resolution-failed",
+        frames: keikoStackFrames(error),
+        causeChain: causeChain(error),
+      },
+    });
+    return false;
+  }
 }
 
 // Mirrors `auxiliaryPorts`' own fail-closed comment: an empty modelId means "no coding-safe

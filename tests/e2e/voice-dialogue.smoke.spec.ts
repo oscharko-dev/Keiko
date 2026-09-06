@@ -44,6 +44,7 @@ declare global {
     readonly __micStats?: Readonly<Record<string, number>>;
     readonly __providerNativeOutputEvents?: number;
     readonly __canonicalTtsPlays?: number;
+    readonly __releaseCanonicalTts?: () => void;
   }
 }
 
@@ -126,6 +127,7 @@ const REALTIME_BROWSER_FAKE_SCRIPT = `
     : "what is the deploy status";
   window.__providerNativeOutputEvents = 0;
   window.__canonicalTtsPlays = 0;
+  window.__releaseCanonicalTts = undefined;
   Object.defineProperty(window, "AudioWorkletNode", { configurable: true, value: undefined });
   window.Audio = class {
     constructor() {
@@ -138,7 +140,12 @@ const REALTIME_BROWSER_FAKE_SCRIPT = `
     play() {
       window.__canonicalTtsPlays++;
       if (this.onplaying) this.onplaying();
-      setTimeout(() => { if (this.onended) this.onended(); }, 0);
+      const finish = () => { if (this.onended) this.onended(); };
+      if (options.holdSpeech === true) {
+        window.__releaseCanonicalTts = finish;
+      } else {
+        setTimeout(finish, 0);
+      }
       return Promise.resolve();
     }
     pause() {}
@@ -270,10 +277,12 @@ const REALTIME_BROWSER_FAKE_SCRIPT = `
 
 function fakeRealtimeInit({
   emitTranscript = false,
+  holdSpeech = false,
   instrumentMic = false,
   transcript,
 }: {
   readonly emitTranscript?: boolean;
+  readonly holdSpeech?: boolean;
   readonly instrumentMic?: boolean;
   readonly transcript?: string;
 } = {}): string {
@@ -281,6 +290,7 @@ function fakeRealtimeInit({
     (() => {
       window.__keikoVoiceFakeOptions = {
         emitTranscript: ${JSON.stringify(emitTranscript)},
+        holdSpeech: ${JSON.stringify(holdSpeech)},
         instrumentMic: ${JSON.stringify(instrumentMic)},
         transcript: ${JSON.stringify(transcript)},
       };
@@ -752,6 +762,10 @@ async function canonicalTtsPlays(page: Page): Promise<number | undefined> {
   return page.evaluate(() => window.__canonicalTtsPlays);
 }
 
+async function releaseCanonicalTts(page: Page): Promise<void> {
+  await page.evaluate(() => window.__releaseCanonicalTts?.());
+}
+
 async function noVoiceFlow(page: Page): Promise<void> {
   await stubCapability(page, NO_VOICE_CAPABILITY);
   await openComposer(page);
@@ -769,12 +783,17 @@ async function expectDialogueOnlyControls(page: Page): Promise<void> {
   const interrupt = page.getByRole("button", { name: "Interrupt the assistant" });
   await expect(interrupt).toBeVisible();
   await expect(interrupt).toHaveAttribute("aria-disabled", "false");
+  await interrupt.click();
+  await releaseCanonicalTts(page);
+  await expect(interrupt).toHaveAttribute("aria-disabled", "true");
   await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Start speaking" })).toHaveCount(0);
 }
 
 async function dialogueTurnFlow(page: Page, request: APIRequestContext): Promise<void> {
-  await page.addInitScript(fakeRealtimeInit({ emitTranscript: true }));
+  // Hold fake playback open so the KEIKO-0217/#2894 reachability assertion observes an explicit
+  // provider-output state; releasing the fixture after Interrupt proves the settled state as well.
+  await page.addInitScript(fakeRealtimeInit({ emitTranscript: true, holdSpeech: true }));
   await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
   const chatSends = captureVoiceChatSends(page);
   const synthesizedTexts = await captureSynthesizedTexts(page);

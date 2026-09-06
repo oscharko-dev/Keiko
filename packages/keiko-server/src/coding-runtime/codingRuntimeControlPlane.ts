@@ -26,6 +26,7 @@ import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js
 import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.js";
 import type { CodingRuntimePermissionPort } from "./codingRuntimePermissionPort.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
+import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
 import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
 import type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
 
@@ -56,6 +57,8 @@ export interface CodingRuntimeHost {
         ) => unknown;
         readonly reservePromptTokens?:
           ((capability: string, promptTokens: number) => unknown) | undefined;
+        readonly unavailableOptionalTools?:
+          ((runId: string) => ReadonlySet<OpenCodeOptionalToolName> | undefined) | undefined;
       }
     | undefined;
   /** Live server-private delivery authority for the currently accepted runtime run. */

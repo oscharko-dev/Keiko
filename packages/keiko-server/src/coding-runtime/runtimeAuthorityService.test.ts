@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   CodingWorkbenchRuntimeAuthorityFacts,
   CodingWorkbenchRuntimeIntent,
@@ -239,6 +239,21 @@ function service(): CodingRuntimeAuthorityService {
     new EditorAgentAuthorityRegistry(),
     () => "run-1",
     () => "nonce-1",
+  );
+}
+
+function mintFailureService(
+  activity: ServerLogEvent[],
+  registry = new EditorAgentAuthorityRegistry(),
+  capabilities = createInMemoryRuntimeCapabilityStore(),
+): CodingRuntimeAuthorityService {
+  return new CodingRuntimeAuthorityService(
+    registry,
+    () => "run-1",
+    () => "nonce-1",
+    createInMemorySupervisedCodingApprovalStore(),
+    capabilities,
+    { write: (event): void => void activity.push(event) },
   );
 }
 
@@ -1387,6 +1402,159 @@ describe("CodingRuntimeAuthorityService fail-closed mint and release guards", ()
       authority.mintConfirmedStartForRun("run-1", intent, context(), "not-a-digest", NOW),
     ).toEqual({ ok: false, reason: "authority-resolution-failed" });
     expect(authority.state().state).toBe("idle");
+  });
+
+  it("records the closed stage and reason for every start-mint refusal", () => {
+    const events: ServerLogEvent[] = [];
+    const sourceMismatch = mintFailureService(events);
+    const sourceConfirmation = sourceMismatch.confirmStart(
+      intent,
+      context().taskId,
+      context().operatorId,
+      NOW,
+    );
+    expect(
+      sourceMismatch.mintStartForRun(
+        "run-source",
+        { ...intent, modelSource: "chatgpt-codex-subscription-profile" },
+        context(),
+        sourceConfirmation,
+        NOW,
+      ),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+
+    const confirmationRefused = mintFailureService(events);
+    const rejectedConfirmation = confirmationRefused.confirmStart(
+      intent,
+      context().taskId,
+      context().operatorId,
+      NOW,
+    );
+    expect(
+      confirmationRefused.mintStartForRun(
+        "run-confirmation",
+        intent,
+        context(),
+        { ...rejectedConfirmation, taskId: "different-task" },
+        NOW,
+      ),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+
+    const mismatched = mintFailureService(events);
+    expect(
+      mismatched.mintConfirmedStartForRun(
+        "run-model",
+        { ...intent, modelSource: "chatgpt-codex-subscription-profile" },
+        context(),
+        DIGEST,
+        NOW,
+      ),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+
+    const malformedDigest = mintFailureService(events);
+    expect(
+      malformedDigest.mintConfirmedStartForRun(
+        "run-digest",
+        intent,
+        context(),
+        "not-a-digest",
+        NOW,
+      ),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+
+    const invalidEnvelope = mintFailureService(events);
+    expect(
+      invalidEnvelope.mintConfirmedStartForRun(
+        "run-envelope",
+        intent,
+        { ...context(), projectDigest: "not-a-digest" },
+        DIGEST,
+        NOW,
+      ),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+
+    const refusingRegistry = new EditorAgentAuthorityRegistry();
+    vi.spyOn(refusingRegistry, "registerRuntime").mockReturnValue({
+      ok: false,
+      reason: "invalid",
+    });
+    const registration = mintFailureService(events, refusingRegistry);
+    expect(registration.mintConfirmedStartForRun("run-1", intent, context(), DIGEST, NOW)).toEqual({
+      ok: false,
+      reason: "authority-resolution-failed",
+    });
+
+    const capabilityIssuance = mintFailureService(
+      events,
+      new EditorAgentAuthorityRegistry(),
+      createInMemoryRuntimeCapabilityStore({
+        maxRecords: 1,
+        nowMs: () => Date.parse(NOW),
+      }),
+    );
+    expect(
+      capabilityIssuance.mintConfirmedStartForRun("run-1", intent, context(), DIGEST, NOW),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+
+    expect(
+      events.map((event) => ({
+        op: event.op,
+        correlationId: event.correlationId,
+        stage: event.extra?.stage,
+        reason: event.extra?.reason,
+        errorKind: event.errorKind,
+      })),
+    ).toEqual([
+      {
+        op: "coding-runtime.authority.mint-failed",
+        correlationId: "run-source",
+        stage: "intent-binding",
+        reason: "model-source-mismatch",
+        errorKind: "CodingRuntimeAuthorityBindingFailure",
+      },
+      {
+        op: "coding-runtime.authority.mint-failed",
+        correlationId: "run-confirmation",
+        stage: "confirmation-consumption",
+        reason: "confirmation-refused",
+        errorKind: "CodingRuntimeAuthorityConfirmationFailure",
+      },
+      {
+        op: "coding-runtime.authority.mint-failed",
+        correlationId: "run-model",
+        stage: "intent-binding",
+        reason: "model-source-mismatch",
+        errorKind: "CodingRuntimeAuthorityBindingFailure",
+      },
+      {
+        op: "coding-runtime.authority.mint-failed",
+        correlationId: "run-digest",
+        stage: "approval-digest",
+        reason: "approval-digest-invalid",
+        errorKind: "CodingRuntimeAuthorityValidationFailure",
+      },
+      {
+        op: "coding-runtime.authority.mint-failed",
+        correlationId: "run-envelope",
+        stage: "envelope-validation",
+        reason: "envelope-invalid",
+        errorKind: "CodingRuntimeAuthorityValidationFailure",
+      },
+      {
+        op: "coding-runtime.authority.mint-failed",
+        correlationId: "run-1",
+        stage: "authority-registration",
+        reason: "registration-refused",
+        errorKind: "CodingRuntimeAuthorityRegistrationFailure",
+      },
+      {
+        op: "coding-runtime.authority.mint-failed",
+        correlationId: "run-1",
+        stage: "capability-issuance",
+        reason: "capability-issuance-refused",
+        errorKind: "CodingRuntimeAuthorityCapabilityFailure",
+      },
+    ]);
   });
 
   it("rejects a tampered one-use mint confirmation", () => {

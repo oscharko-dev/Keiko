@@ -194,7 +194,7 @@ interface ResolverRunRecord extends ProductionRuntimeRunRecord {
   readonly questionPort?: CodingRuntimeQuestionPort | undefined;
   readonly permissionPort?: CodingRuntimePermissionPort | undefined;
   readonly toolBridge?: OpenCodeToolBridge | undefined;
-  readonly unavailableOptionalTools: ReadonlySet<OpenCodeOptionalToolName>;
+  readonly unavailableOptionalTools: () => ReadonlySet<OpenCodeOptionalToolName>;
 }
 
 /** The two server-level #2387 research stores threaded together through the run composition. */
@@ -394,7 +394,7 @@ function runtimeCapabilityAuthenticatorFor(
       ),
     settlePromptTokens: (capability, reservedPromptTokens, actualPromptTokens) =>
       authority.settlePromptTokens(capability, reservedPromptTokens, actualPromptTokens),
-    unavailableOptionalTools: (runId) => runs.get(runId)?.unavailableOptionalTools,
+    unavailableOptionalTools: (runId) => runs.get(runId)?.unavailableOptionalTools(),
   };
 }
 
@@ -544,7 +544,7 @@ interface RunToolSurface {
    * advertisement (coding-sidecar-gateway.ts) can derive its readiness from real bindings instead
    * of the catalog's static declarations alone (#3413-AC1/#3414-AC4/AC9).
    */
-  readonly unavailableOptionalTools: ReadonlySet<OpenCodeOptionalToolName>;
+  readonly unavailableOptionalTools: () => ReadonlySet<OpenCodeOptionalToolName>;
 }
 
 function commitServiceFor(
@@ -687,12 +687,11 @@ interface RunToolSurfaceInput {
 function unavailableOptionalToolsFor(
   input: ProductionCodingRuntimeResolverInput,
   minted: MintedRuntime,
-  research: ResearchComposition,
+  researchOptions: ReturnType<typeof managedResearchOptions>,
   skillCatalog: SkillCatalog,
 ): ReadonlySet<OpenCodeOptionalToolName> {
   return deriveOptionalToolAvailability({
-    researchGrantRegistry: research.grants,
-    gatewayEgress: input.gatewayEgress ?? ((): undefined => undefined),
+    ...researchOptions,
     authorityRef: minted.authorityRef,
     skillCatalog,
     modelId: input.childModelId?.(),
@@ -701,30 +700,21 @@ function unavailableOptionalToolsFor(
 }
 
 function createRunToolSurface(args: RunToolSurfaceInput): RunToolSurface {
-  const {
-    input,
-    request,
-    context,
-    minted,
-    authority,
-    research,
-    onRuntimeEvent,
-    signal,
-    notifyVerifiedHeadAdvanced,
-  } = args;
+  const { input, request, context, minted, authority, research, onRuntimeEvent } = args;
   const invocationRegistry = createCodingToolInvocationRegistry();
   const services = runtimeGitServices(
     input,
     context,
     minted,
     authority,
-    signal,
+    args.signal,
     onRuntimeEvent,
-    notifyVerifiedHeadAdvanced,
+    args.notifyVerifiedHeadAdvanced,
   );
   const { codingToolApprovals } = services;
   const { leases, skillCatalog, explicitSkills, resolveWorkspaceRootAccess } =
     prepareRunToolContext(input, request, context, invocationRegistry);
+  const researchOptions = managedResearchOptions(input, context, minted, research, onRuntimeEvent);
   const toolFacade = createManagedToolFacade({
     input,
     context,
@@ -738,6 +728,7 @@ function createRunToolSurface(args: RunToolSurfaceInput): RunToolSurface {
     ...services,
     onRuntimeEvent,
     resolveWorkspaceRootAccess,
+    researchOptions,
   });
   return {
     invocationRegistry,
@@ -747,7 +738,8 @@ function createRunToolSurface(args: RunToolSurfaceInput): RunToolSurface {
     toolFacade,
     codingToolApprovals,
     resolveWorkspaceRootAccess,
-    unavailableOptionalTools: unavailableOptionalToolsFor(input, minted, research, skillCatalog),
+    unavailableOptionalTools: () =>
+      unavailableOptionalToolsFor(input, minted, researchOptions, skillCatalog),
   };
 }
 
@@ -959,6 +951,7 @@ interface ManagedToolFacadeInput {
   readonly invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>;
   readonly leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>;
   readonly research: ResearchComposition;
+  readonly researchOptions?: ReturnType<typeof managedResearchOptions> | undefined;
   readonly skillCatalog: SkillCatalog;
   readonly explicitSkills: ExplicitSkillInvocationTracker;
   readonly codingToolApprovals: CodingToolApprovalBridge;
@@ -1033,7 +1026,8 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     adapterKind: adapterKind(context),
     workspaceRoot: context.workspaceRoot,
     resolveWorkspaceRootAccess,
-    ...managedResearchOptions(input, context, minted, research, onRuntimeEvent),
+    ...(options.researchOptions ??
+      managedResearchOptions(input, context, minted, research, onRuntimeEvent)),
     authorityExpiresAt: context.expiresAt,
     effectiveMode: minted.effectiveMode,
     effectiveModeNow: () => authority.effectiveMode(),

@@ -1207,42 +1207,60 @@ describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
     expect(unavailable).toEqual(new Set(["keiko_research_fetch", "keiko_child_agent"]));
   });
 
-  it("marks research available only when the registry AND gateway egress are wired and a grant is currently active for THIS run", () => {
+  it("offers research only when its configured approval-capable handler is bound", () => {
     const registry = createResearchGrantRegistry();
-    const now = Date.now();
-    registry.register(
-      runId,
-      {
-        grantId: "grant-1" as CodeTaskGrantId,
-        domains: ["docs.example.org"],
-        expiresAt: new Date(now + 60_000).toISOString(),
-        queryTextDigest: { outcome: "absent" },
-      },
-      undefined,
-      DIGEST,
-      now,
-    );
     const wired = deriveOptionalToolAvailability({
       authorityRef: { runId, envelopeDigest: DIGEST },
       researchGrantRegistry: registry,
       gatewayEgress: () => ({ noProxy: [] }),
+      requestResearchApproval: () => undefined,
     });
     expect(wired.has("keiko_research_fetch")).toBe(false);
 
-    // Registry wired, gateway egress present, but a DIFFERENT run holds the grant: unavailable.
-    const otherRun = deriveOptionalToolAvailability({
-      authorityRef: { runId: "run-availability-other", envelopeDigest: DIGEST },
+    // A registry and egress transport without the callback that opens the approval loop cannot
+    // serve the first ungranted request, so the tool stays hidden.
+    const noApprovalPath = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
       researchGrantRegistry: registry,
       gatewayEgress: () => ({ noProxy: [] }),
     });
-    expect(otherRun.has("keiko_research_fetch")).toBe(true);
+    expect(noApprovalPath.has("keiko_research_fetch")).toBe(true);
 
-    // Registry wired but no gatewayEgress: fail-closed stub, unavailable regardless of the grant.
+    // A bound gateway getter that currently resolves no transport remains unavailable.
     const noEgress = deriveOptionalToolAvailability({
       authorityRef: { runId, envelopeDigest: DIGEST },
       researchGrantRegistry: registry,
+      gatewayEgress: () => undefined,
+      requestResearchApproval: () => undefined,
     });
     expect(noEgress.has("keiko_research_fetch")).toBe(true);
+
+    const events: ServerLogEvent[] = [];
+    const throwingConfig = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      researchGrantRegistry: registry,
+      gatewayEgress: () => {
+        throw new Error("private configuration failure");
+      },
+      requestResearchApproval: () => undefined,
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+    expect(throwingConfig.has("keiko_research_fetch")).toBe(true);
+    expect(events).toHaveLength(1);
+    const event = events[0];
+    expect(event).toBeDefined();
+    if (event === undefined) return;
+    const extra = event.extra ?? {};
+    expect(event.op).toBe("coding-runtime.tool-availability.failed");
+    expect(event.correlationId).toBe(runId);
+    expect(event.errorKind).toBe("Error");
+    expect(extra.runId).toBe(runId);
+    expect(extra.optionalTool).toBe("keiko_research_fetch");
+    expect(extra.stage).toBe("research-egress-config");
+    expect(extra.reason).toBe("configuration-resolution-failed");
+    expect(Array.isArray(extra.frames)).toBe(true);
+    expect(extra.causeChain).toEqual([]);
+    expect(JSON.stringify(events)).not.toContain("private configuration failure");
   });
 
   it("marks skill available only when the catalog actually lists an approved entry", () => {

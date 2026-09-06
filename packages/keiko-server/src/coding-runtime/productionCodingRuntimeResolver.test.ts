@@ -7,7 +7,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
-import { createProductionCodingRuntimeHost } from "./productionCodingRuntimeHost.js";
+import {
+  createProductionCodingRuntimeHost,
+  type ProductionCodingRuntimeHost,
+} from "./productionCodingRuntimeHost.js";
 import { RESEARCH_GRANT_DEFAULT_MAX_TTL_MS } from "./researchGrantRegistry.js";
 import type { CodingRuntimeEditorMutationLeaseBroker } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import type {
@@ -17,6 +20,7 @@ import type {
 import {
   createProductionCodingRuntimeResolver,
   resolveProductionRuntimeStartConfirmationClaim,
+  type ProductionCodingRuntimeResolverInput,
   type ProductionRuntimeBackendInput,
   type ProductionRuntimeBackendResolver,
 } from "./productionCodingRuntimeResolver.js";
@@ -92,8 +96,11 @@ describe("production coding runtime resolver", () => {
         }),
       },
     }));
+    let gatewayConfigured = true;
     const host = createProductionCodingRuntimeHost(
-      resolverFor(fixture, createRun, confirmations.consumer),
+      resolverFor(fixture, createRun, confirmations.consumer, undefined, {
+        gatewayEgress: () => (gatewayConfigured ? { noProxy: [] } : undefined),
+      }),
     );
     if (host === undefined) throw new Error("expected qualified host");
     const request = launchRequest(fixture.workspace);
@@ -106,6 +113,7 @@ describe("production coding runtime resolver", () => {
       workspaceRoot: fixture.workspace,
       requestedMode: request.requestedMode,
     });
+    expect(researchUnavailable(host, request.runId)).toBe(false);
     const researchRequestId = host.pendingResearchApprovals?.request({
       runId: request.runId,
       url: new URL("https://example.com/reference"),
@@ -129,6 +137,12 @@ describe("production coding runtime resolver", () => {
     expect(host.researchGrants?.activeGrants(request.runId, approvalNowMs)).toEqual([
       expect.objectContaining({ expiresAtMs: approvalNowMs + RESEARCH_GRANT_DEFAULT_MAX_TTL_MS }),
     ]);
+    // Availability is evaluated when the gateway builds each offer. A live grant never widens a
+    // missing transport binding, and restoring the binding is visible without recreating the run.
+    gatewayConfigured = false;
+    expect(researchUnavailable(host, request.runId)).toBe(true);
+    gatewayConfigured = true;
+    expect(researchUnavailable(host, request.runId)).toBe(false);
   });
 
   // #3399 (epic #3384 correction 4): threaded through the exact same chain
@@ -451,11 +465,21 @@ describe("production coding runtime resolver", () => {
   });
 });
 
+function researchUnavailable(
+  host: ProductionCodingRuntimeHost,
+  runId: string,
+): boolean | undefined {
+  return host.runtimeCapabilityAuthenticator
+    ?.unavailableOptionalTools?.(runId)
+    ?.has("keiko_research_fetch");
+}
+
 function resolverFor(
   fixture: ReturnType<typeof workspaceFixture>,
   createRun: ProductionRuntimeBackendResolver["createRun"],
   confirmationConsumer?: CodingRuntimeStartConfirmationConsumer,
   runtimeMutationLeaseBroker?: Pick<CodingRuntimeEditorMutationLeaseBroker, "attach">,
+  overrides: Partial<ProductionCodingRuntimeResolverInput> = {},
 ) {
   return createProductionCodingRuntimeResolver({
     workspaceAuthority: fixture.authority,
@@ -481,6 +505,7 @@ function resolverFor(
         : undefined,
     ...(confirmationConsumer ? { confirmationConsumer } : {}),
     ...(runtimeMutationLeaseBroker ? { runtimeMutationLeaseBroker } : {}),
+    ...overrides,
   });
 }
 
