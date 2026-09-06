@@ -9,14 +9,8 @@
 // pins the export surface directly rather than only asserting behaviour.
 
 import { describe, expect, it } from "vitest";
-// `../server.js` first, exactly like the sibling prRoutes.test.ts: several gitDelivery route
-// modules (this one included) eagerly build a module-scope route-group constant at import time
-// (`export const X_ROUTE_GROUP = createXRouteGroup()`), and those modules also form an import
-// cycle with each other through routes.ts/agentOperationsRoutes.ts. Loading prMarkReadyExecution.ts
-// as the cold entry point (rather than through the server's own real load order) hits that
-// pre-existing circular-import ordering hazard — unrelated to this finding; see the b2-18
-// disposition notes.
-import "../server.js";
+// Keep this as the first non-Vitest import: importing the server first would mask the original
+// ESM ordering failure through requestPreparation/routes/agentOperationsRoutes/prRoutes.
 import * as prMarkReadyExecution from "./prMarkReadyExecution.js";
 
 describe("prMarkReadyExecution.ts export surface (b2-18)", () => {
