@@ -785,7 +785,11 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
           expiresAt: liveBinding.expiresAt,
         }),
         requiresEditorReview: () => requiresReview,
-        mutationLeaseCoordinator: { register, discard: vi.fn((): boolean => true) },
+        mutationLeaseCoordinator: {
+          register,
+          discard: vi.fn((): boolean => true),
+          waitForMutation: () => Promise.resolve("succeeded"),
+        },
       });
 
       await expect(

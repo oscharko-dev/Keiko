@@ -54,6 +54,7 @@ export interface CodingRuntimeEditorMutationLeaseRegistration {
  *    outstanding.
  */
 export type CodingRuntimeMutationIdleOutcome = "idle-succeeded" | "idle-failed" | "not-idle";
+export type CodingRuntimeMutationOutcome = "succeeded" | "failed" | "cancelled";
 
 export interface CodingRuntimeEditorMutationLeaseCoordinator {
   readonly lease: CodingRuntimeEditorMutationLeasePort;
@@ -74,6 +75,11 @@ export interface CodingRuntimeEditorMutationLeaseCoordinator {
   readonly discard: (request: CodingRuntimeEditorMutationLeaseRequest) => boolean;
   readonly revokeRun: (runId: string) => boolean;
   readonly waitForIdle: (signal: AbortSignal) => Promise<CodingRuntimeMutationIdleOutcome>;
+  /** Capture before dispatch: only this exact lease's terminal effect can complete the tool. */
+  readonly waitForMutation: (
+    request: CodingRuntimeEditorMutationLeaseRequest,
+    signal: AbortSignal,
+  ) => Promise<CodingRuntimeMutationOutcome>;
   readonly dispose: () => void;
 }
 
@@ -111,6 +117,7 @@ export function createCodingRuntimeEditorMutationLeaseBroker(): CodingRuntimeEdi
 
 interface LeaseRecord extends CodingRuntimeEditorMutationLeaseRegistration {
   readonly key: string;
+  readonly waiters: Set<(outcome: CodingRuntimeMutationOutcome) => void>;
   claimed: boolean;
 }
 
@@ -228,8 +235,11 @@ export function createCodingRuntimeEditorMutationLeaseCoordinator(
       revokeRun(deps, records, revokedRuns, idleWaiters, outcome, runId, disposed),
     waitForIdle: (signal): Promise<CodingRuntimeMutationIdleOutcome> =>
       waitForIdle(records, idleWaiters, outcome, signal, disposed),
+    waitForMutation: (request, signal): Promise<CodingRuntimeMutationOutcome> =>
+      waitForMutation(findRecord(records, request, disposed), signal),
     dispose: (): void => {
       disposed = true;
+      for (const record of records.values()) settleMutation(record, "cancelled");
       records.clear();
       settleIdleWaiters(idleWaiters, "not-idle");
     },
@@ -261,6 +271,7 @@ function registerRecord(
     idempotencyKey: registration.idempotencyKey,
     requiresReview: registration.requiresReview,
     mutationGuard: registration.mutationGuard,
+    waiters: new Set(),
     claimed: false,
   });
   return true;
@@ -286,6 +297,7 @@ function claimRecord(
     return true;
   }
   records.delete(record.key);
+  settleMutation(record, "failed");
   outcome.latestSucceeded = false;
   settleIfIdle(records, idleWaiters, outcome);
   return false;
@@ -302,6 +314,7 @@ function completeRecord(
   const record = findRecord(records, request, disposed);
   if (record === undefined || !records.delete(record.key)) return false;
   outcome.latestSucceeded = succeeded && record.claimed;
+  settleMutation(record, succeeded && record.claimed ? "succeeded" : "failed");
   settleIfIdle(records, idleWaiters, outcome);
   return true;
 }
@@ -324,6 +337,7 @@ function discardUnclaimedLease(
 ): boolean {
   const record = findRecord(records, request, disposed);
   if (record === undefined || !records.delete(record.key)) return false;
+  settleMutation(record, "failed");
   if (record.claimed) outcome.latestSucceeded = false;
   settleIfIdle(records, idleWaiters, outcome);
   return true;
@@ -342,12 +356,40 @@ function revokeRun(
   revokedRuns.add(runId);
   deps.invocationRegistry.revokeRun(runId);
   for (const [key, record] of records) {
-    if (record.authorityRef.runId === runId) records.delete(key);
+    if (record.authorityRef.runId === runId) {
+      records.delete(key);
+      settleMutation(record, "cancelled");
+    }
   }
   outcome.latestSucceeded = false;
   settleIfIdle(records, idleWaiters, outcome);
   deps.cancelPendingByAuthorityRun(runId);
   return true;
+}
+
+function waitForMutation(
+  record: LeaseRecord | undefined,
+  signal: AbortSignal,
+): Promise<CodingRuntimeMutationOutcome> {
+  if (record === undefined) return Promise.resolve("failed");
+  if (signal.aborted) return Promise.resolve("cancelled");
+  return new Promise((resolve) => {
+    const onAbort = (): void => {
+      record.waiters.delete(onComplete);
+      resolve("cancelled");
+    };
+    const onComplete = (result: CodingRuntimeMutationOutcome): void => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(signal.aborted ? "cancelled" : result);
+    };
+    record.waiters.add(onComplete);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function settleMutation(record: LeaseRecord, outcome: CodingRuntimeMutationOutcome): void {
+  for (const waiter of record.waiters) waiter(outcome);
+  record.waiters.clear();
 }
 
 function waitForIdle(

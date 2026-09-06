@@ -262,7 +262,11 @@ describe("production managed worktree tools", () => {
               },
             }),
         },
-        mutationLeaseCoordinator: { register, discard: vi.fn((): boolean => true) },
+        mutationLeaseCoordinator: {
+          register,
+          discard: vi.fn((): boolean => true),
+          waitForMutation: () => Promise.resolve("succeeded"),
+        },
         invocationRegistry: createCodingToolInvocationRegistry(),
         verificationRunner: { runToReport: vi.fn() },
         onRuntimeEvent: vi.fn(),

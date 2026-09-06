@@ -1469,15 +1469,21 @@
     {
       "op": "coding-runtime.editor-changeset",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:524",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:556",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.editor-changeset",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:543",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:575",
       "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.editor-mutation.settled",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:493",
       "package": "keiko-server"
     },
     {
@@ -1716,7 +1722,7 @@
     {
       "op": "coding-runtime.verification",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:696",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:697",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -1729,7 +1735,7 @@
     {
       "op": "coding-runtime.workspace-discovery",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:226",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:231",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2222,6 +2228,12 @@
       "op": "git.delivery.mutation.failed",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:438",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.pr-mark-ready.readiness-refreshed",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:362",
       "package": "keiko-server"
     },
     {
@@ -3334,6 +3346,7 @@
     "coding-runtime.dev-lane.activated",
     "coding-runtime.dev-lane.refused",
     "coding-runtime.editor-changeset",
+    "coding-runtime.editor-mutation.settled",
     "coding-runtime.emit",
     "coding-runtime.exit",
     "coding-runtime.follow-up.dispatch-failed",
@@ -3494,6 +3507,7 @@
     "git.delivery.dispatch.no-spawn",
     "git.delivery.mutation.completed",
     "git.delivery.mutation.failed",
+    "git.delivery.pr-mark-ready.readiness-refreshed",
     "git.delivery.pr.approval.minted",
     "git.delivery.pr.approval.required",
     "git.delivery.push.approval.minted",

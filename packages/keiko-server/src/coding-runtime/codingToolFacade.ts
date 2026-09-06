@@ -61,7 +61,11 @@ const EDIT_TRANSPORT_REASON_CODES = [
 // a live editor session. Both used to reach the model as a bare "failed", so a governed run whose
 // workspace authority had been revoked looked exactly like a retryable editor conflict and the
 // agent kept re-issuing the edit (workbench end-to-end run, 2026-09-03).
-const EDIT_PORT_REFUSAL_REASON_CODES = ["EDIT_PREPARE_FAILED", "WORKSPACE_ACCESS_LOST"] as const;
+const EDIT_PORT_REFUSAL_REASON_CODES = [
+  "EDIT_PREPARE_FAILED",
+  "WORKSPACE_ACCESS_LOST",
+  "EDIT_MUTATION_FAILED",
+] as const;
 const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   ...EDITOR_AGENT_CONFLICT_CODES,
   ...EDITOR_AGENT_FAILURE_CODES,

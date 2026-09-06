@@ -357,13 +357,13 @@ function logPostTransitionObservation(
   recorded: boolean,
   reason: string,
 ): void {
-  log(
-    input.options.activityLog,
-    "git.delivery.pr-mark-ready.readiness-refreshed",
-    input.correlationId,
-    200,
-    { runId: input.runId, recorded, reason },
-  );
+  (input.options.activityLog ?? processServerLogSink()).write({
+    category: "security",
+    op: "git.delivery.pr-mark-ready.readiness-refreshed",
+    correlationId: input.correlationId,
+    status: 200,
+    extra: { runId: input.runId, recorded, reason },
+  });
 }
 
 function postTransitionSubject(input: PostTransitionObservationInput):

@@ -87,6 +87,83 @@ function request(overrides: Partial<ReturnType<typeof registration>> = {}): {
 }
 
 describe("coding-runtime editor mutation lease coordinator (Issue #2332)", () => {
+  it("keeps concurrent mutation verdicts bound to their own exact leases", async () => {
+    const coordinator = createCodingRuntimeEditorMutationLeaseCoordinator({
+      invocationRegistry: createCodingToolInvocationRegistry(),
+      cancelPendingByAuthorityRun: () => 0,
+    });
+    const second = { ...registration(), actionId: "edit-2", idempotencyKey: "key-2" };
+    coordinator.register(registration());
+    coordinator.register(second);
+    const signal = new AbortController().signal;
+    const firstResult = coordinator.waitForMutation(request(), signal);
+    const secondResult = coordinator.waitForMutation(second, signal);
+    expect(coordinator.lease.claim(request())).toBe(true);
+    expect(coordinator.lease.complete(request(), false)).toBe(true);
+    expect(coordinator.lease.claim(second)).toBe(true);
+    expect(coordinator.lease.complete(second, true)).toBe(true);
+    await expect(firstResult).resolves.toBe("failed");
+    await expect(secondResult).resolves.toBe("succeeded");
+    await expect(coordinator.waitForMutation(request(), signal)).resolves.toBe("failed");
+    coordinator.dispose();
+  });
+
+  it.each(["abort", "revoke", "dispose"] as const)(
+    "cancels the exact mutation waiter on %s",
+    async (kind) => {
+      const coordinator = createCodingRuntimeEditorMutationLeaseCoordinator({
+        invocationRegistry: createCodingToolInvocationRegistry(),
+        cancelPendingByAuthorityRun: () => 0,
+      });
+      const controller = new AbortController();
+      coordinator.register(registration(() => !controller.signal.aborted));
+      const result = coordinator.waitForMutation(request(), controller.signal);
+      if (kind === "abort") controller.abort();
+      if (kind === "revoke") coordinator.revokeRun(RUN_ID);
+      if (kind === "dispose") coordinator.dispose();
+      await expect(result).resolves.toBe("cancelled");
+      expect(coordinator.lease.claim(request())).toBe(false);
+      coordinator.dispose();
+    },
+  );
+
+  it("does not consume or discard a claimed effect when only its waiter aborts", async () => {
+    const coordinator = createCodingRuntimeEditorMutationLeaseCoordinator({
+      invocationRegistry: createCodingToolInvocationRegistry(),
+      cancelPendingByAuthorityRun: () => 0,
+    });
+    coordinator.register(registration());
+    const controller = new AbortController();
+    const result = coordinator.waitForMutation(request(), controller.signal);
+    expect(coordinator.lease.claim(request())).toBe(true);
+    controller.abort();
+    await expect(result).resolves.toBe("cancelled");
+    expect(coordinator.lease.matches(request())).toBe(true);
+    expect(coordinator.lease.complete(request(), true)).toBe(true);
+    coordinator.dispose();
+  });
+
+  it("fails missing or mismatched mutation waiters closed and honors prior cancellation", async () => {
+    const coordinator = createCodingRuntimeEditorMutationLeaseCoordinator({
+      invocationRegistry: createCodingToolInvocationRegistry(),
+      cancelPendingByAuthorityRun: () => 0,
+    });
+    coordinator.register(registration());
+    const controller = new AbortController();
+    await expect(
+      coordinator.waitForMutation(
+        request({ workspaceRootDigest: "d".repeat(64) }),
+        controller.signal,
+      ),
+    ).resolves.toBe("failed");
+    controller.abort();
+    await expect(coordinator.waitForMutation(request(), controller.signal)).resolves.toBe(
+      "cancelled",
+    );
+    expect(coordinator.lease.complete(request(), true)).toBe(true);
+    coordinator.dispose();
+  });
+
   it("registers a content-free lease with review policy and waits for its one-use claim", async () => {
     const invocationRegistry = createCodingToolInvocationRegistry();
     const cancelPendingByAuthorityRun = vi.fn((): number => 0);

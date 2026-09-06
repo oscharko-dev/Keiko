@@ -29,7 +29,10 @@ import type { CodingToolActionOf, GovernedCodingToolPort } from "./codingToolGov
 import type {
   CodingRuntimeEditorMutationLeaseCoordinator,
   CodingRuntimeEditorMutationLeaseRequest,
+  CodingRuntimeMutationOutcome,
 } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
+import type { ServerLogSink } from "../observability/server-log.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
@@ -90,8 +93,10 @@ export interface CodingToolReadEditPortDeps {
   readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   readonly requiresEditorReview?: (() => boolean) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
   readonly mutationLeaseCoordinator?:
-    Pick<CodingRuntimeEditorMutationLeaseCoordinator, "register" | "discard"> | undefined;
+    | Pick<CodingRuntimeEditorMutationLeaseCoordinator, "register" | "discard" | "waitForMutation">
+    | undefined;
   /**
    * When true, a mutationGuard that carries no `binding` property at all fails closed at the
    * preflight boundary — read/discover/edit return failed rather than proceeding as if no
@@ -458,9 +463,14 @@ async function executeEdit(
       discardMutationLease(deps, prepared.leaseRequest);
       return editRefused(deps, correlationId, "WORKSPACE_ACCESS_LOST");
     }
+    // Capture before dispatch: an automatic editor apply may settle before its HTTP response.
+    const completion =
+      prepared.leaseRequest === undefined
+        ? undefined
+        : deps.mutationLeaseCoordinator?.waitForMutation(prepared.leaseRequest, prepared.signal);
     const result = await deps.editorAgentClient.action(action, prepared.signal);
     if (result.ok && editorStatusCompleted(result.value.result.status)) {
-      return { status: "completed" };
+      return await completedEdit(deps, correlationId, completion);
     }
     discardMutationLease(deps, prepared.leaseRequest);
     return editRefused(deps, correlationId, editFailureReasonCode(result));
@@ -469,6 +479,28 @@ async function executeEdit(
     emitEditFailureDiagnostic(deps.diagnostics, correlationId, error);
     return { status: "failed", reasonCode: "EDIT_TRANSPORT_ERROR" };
   }
+}
+
+async function completedEdit(
+  deps: CodingToolReadEditPortDeps,
+  correlationId: string,
+  completion: Promise<CodingRuntimeMutationOutcome> | undefined,
+): Promise<EditOutcome> {
+  if (completion === undefined) return { status: "completed" };
+  const outcome = await completion;
+  (deps.activityLog ?? processServerLogSink()).write({
+    category: "security",
+    op: "coding-runtime.editor-mutation.settled",
+    correlationId,
+    extra: { state: outcome, actionKind: "edit" },
+  });
+  return outcome === "succeeded"
+    ? { status: "completed" }
+    : editRefused(
+        deps,
+        correlationId,
+        outcome === "cancelled" ? "CANCELLED" : "EDIT_MUTATION_FAILED",
+      );
 }
 
 function editRefused(

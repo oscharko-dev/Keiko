@@ -241,6 +241,7 @@ export function createProductionManagedWorktreeToolFacade(
 
 function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingToolReadEditPorts {
   return createCodingToolReadEditPorts({
+    activityLog: input.activityLog,
     secureWorkspaceTextRead: input.secureWorkspaceTextRead,
     editorAgentClient: input.editorAgentClient,
     resolveEditorActionContext: () => ({
