@@ -754,7 +754,7 @@ class FakeOpenCodeChild {
       response.writeHead(404).end();
       return;
     }
-    const text = promptText(body);
+    const text = functionalPromptText(body);
     response.writeHead(204).end();
     const controller = new AbortController();
     this.turnController = controller;
@@ -1178,10 +1178,16 @@ function readBoundedBody(request: IncomingMessage): Promise<string> {
   });
 }
 
-function promptText(body: string): string {
+export function functionalPromptText(body: string): string {
   try {
-    const parsed = JSON.parse(body) as { parts?: readonly { text?: string }[] };
-    return parsed.parts?.[0]?.text ?? "";
+    const parsed: unknown = JSON.parse(body);
+    if (!isRecord(parsed) || !Array.isArray(parsed.parts) || parsed.parts.length === 0) return "";
+    const text: string[] = [];
+    for (const part of parsed.parts) {
+      if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string") return "";
+      text.push(part.text);
+    }
+    return text.join("\n\n");
   } catch {
     return "";
   }
