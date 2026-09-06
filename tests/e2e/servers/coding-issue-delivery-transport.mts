@@ -7,6 +7,7 @@ import { delimiter, join, relative, isAbsolute } from "node:path";
 import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 import { buildPrBodyReadArgv } from "@oscharko-dev/keiko-tools";
 import { GIT_PR_IDENTITY_JQ } from "../../../packages/keiko-tools/src/git-pr-gateway.js";
+import { buildGitJourneyReadArgv } from "../../../packages/keiko-tools/src/git-journey-read-argv.js";
 import {
   DELIVERY_REPOSITORY,
   DELIVERY_URL,
@@ -278,8 +279,98 @@ function notFound(): never {
   process.exit(1);
 }
 
+function fieldValue(args: readonly string[], key: string): string | undefined {
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] !== "-f" && args[index] !== "-F") continue;
+    const pair = args[index + 1] ?? "";
+    const separator = pair.indexOf("=");
+    if (separator !== -1 && pair.slice(0, separator) === key) return pair.slice(separator + 1);
+  }
+  return undefined;
+}
+
+function sameArgs(actual: readonly string[], expected: readonly string[]): boolean {
+  return (
+    actual.length === expected.length && actual.every((value, index) => value === expected[index])
+  );
+}
+
+function journeyRequest(
+  args: readonly string[],
+  state: DeliveryProviderState,
+): { readonly issueNumber: number; readonly pr: GitPullRequestIdentity } | undefined {
+  const issueNumber = Number(fieldValue(args, "issue"));
+  const prNumber = Number(fieldValue(args, "pr"));
+  const pr = state.pullRequests.find((candidate) => candidate.number === prNumber);
+  if (!Number.isSafeInteger(issueNumber) || pr === undefined) return undefined;
+  const expected = buildGitJourneyReadArgv(
+    {
+      repository: DELIVERY_REPOSITORY,
+      prNumber,
+      prNodeId: pr.externalId,
+      issueNumber,
+      issueIdDigest: digest(`I_fixture_${String(issueNumber)}`),
+    },
+    undefined,
+  );
+  return sameArgs(args, expected) ? { issueNumber, pr } : undefined;
+}
+
+function answerJourneyQuery(request: {
+  readonly issueNumber: number;
+  readonly pr: GitPullRequestIdentity;
+}): never {
+  const { issueNumber, pr } = request;
+  providerOutput({
+    data: {
+      repository: {
+        nameWithOwner: DELIVERY_REPOSITORY,
+        databaseId: 4139,
+        defaultBranchRef: { name: pr.baseRef },
+        issue: {
+          id: `I_fixture_${String(issueNumber)}`,
+          number: issueNumber,
+          state: "OPEN",
+          closedAt: null,
+          repository: { nameWithOwner: DELIVERY_REPOSITORY },
+        },
+        pullRequest: {
+          id: pr.externalId,
+          number: pr.number,
+          url: pr.url,
+          state: "OPEN",
+          isDraft: pr.isDraft,
+          baseRefName: pr.baseRef,
+          baseRefOid: pr.baseSha,
+          headRefName: pr.headRef,
+          headRefOid: pr.headSha,
+          mergedAt: null,
+          mergeCommit: null,
+          reviewDecision: "REVIEW_REQUIRED",
+          repository: { nameWithOwner: DELIVERY_REPOSITORY },
+          headRepository: { nameWithOwner: DELIVERY_REPOSITORY },
+          reviewThreads: {
+            totalCount: 0,
+            nodes: [],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    },
+  });
+}
+
+function answerJourneyQueryWhenMatched(
+  args: readonly string[],
+  state: DeliveryProviderState,
+): void {
+  const journey = journeyRequest(args, state);
+  if (journey !== undefined) answerJourneyQuery(journey);
+}
+
 function ghInvocation(input: Invocation, args: readonly string[]): void {
   const state = readState(input.stateDir);
+  answerJourneyQueryWhenMatched(args, state);
   const method = args[args.indexOf("--method") + 1];
   const host = args[args.indexOf("--hostname") + 1];
   const endpoint = args.find((arg) => arg.startsWith("/repos/")) ?? "";
