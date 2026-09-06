@@ -23,8 +23,8 @@ function assertRegularGitSources(commit, paths, root, execute, git) {
   }
 }
 
-// Read a source set in one Git process. --batch frames blobs by byte length, so source text may
-// contain arbitrary newlines (including strings that resemble the next object's header).
+// Read a source set with one mode inventory and one byte-framed Git batch. The latter permits
+// arbitrary source newlines, including strings that resemble the next object's header.
 export function readGitSourceContent(commit, paths, root, execute) {
   const objects = paths.map((path) => `${commit}:${path}`);
   if (objects.some((object) => /[\r\n\0]/u.test(object))) {
