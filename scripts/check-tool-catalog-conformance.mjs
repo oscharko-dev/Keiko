@@ -15,6 +15,8 @@ import {
 } from "./lib/tool-catalog-inventory.mjs";
 import { GOVERNED_TOOL_CONTRACT_PINS } from "./lib/governed-tool-contract-pins.mjs";
 import { REQUIRED_INTERFACE_FIELDS } from "./lib/governed-tool-contract-shape.mjs";
+import { collectH1OwnedSourcePaths } from "./lib/h1-source-closure.mjs";
+import { readGitSourceContent } from "./lib/git-source-content.mjs";
 
 export const TOOL_CATALOG_MANIFEST_PATH = "docs/architecture/tool-catalog-manifest.v1.json";
 export const TOOL_CATALOG_MIGRATION_PATH = "docs/architecture/tool-catalog-migration.v1.json";
@@ -219,14 +221,10 @@ function isCatalogProfileRef(value) {
   );
 }
 
-// The real, single source of "H1's owned source paths": the complete implementation annex beside
-// pendingH1 in the canonical pins. It deliberately does not reuse or enlarge the immutable 43-row
-// architecture census: migration ownership and source-content ownership answer different questions
-// (#3386 review). Extending or narrowing H1's implementation means editing that one annex, and this
-// derives from it automatically (AGENTS.md §5).
-export const H1_OWNED_SOURCE_PATHS = Object.freeze(
-  [...GOVERNED_TOOL_CONTRACT_PINS.pendingH1.ownedImplementation].sort(compareStrings),
-);
+// The canonical annex seeds the actual first-party runtime dependency closure. Shared execution,
+// path admission, regex safety and newly imported helpers are bound without hand-curated omissions.
+// Migration ownership remains the separate immutable 43-row census.
+export const H1_OWNED_SOURCE_PATHS = Object.freeze(collectH1OwnedSourcePaths());
 
 // One row per H1Provenance field: `test` reads the whole record so a check can span more than one
 // field (e.g. sourceHead/currentHead share a message) without growing this table's own branching.
@@ -448,19 +446,13 @@ function resolveCommitTreeId(commit, root, execute) {
 
 // The one digest formula for "owned source content at a commit", reused by both the producer side
 // (once #3414 lands real H1Provenance) and this recheck — never restated. Reads each owned path's
-// exact byte content at `commit` via `git show <commit>:<path>` (fails closed if any path is
+// exact byte content at `commit` via Git's byte-framed batch reader (fails closed if any path is
 // absent from that commit's tree) and hashes the sorted {path, content} pairs with this file's own
 // canonical digest primitive (`canonicalise`/`sha256Hex`, keiko-security — this file's own
 // `digest-primitives` inventory owner), so the result is bound to real Git object content, never a
 // caller-declared string.
 export function ownedSourceDigestAt(commit, root, execute, ownedPaths = H1_OWNED_SOURCE_PATHS) {
-  const files = ownedPaths.map((path) => ({
-    path,
-    content: execute(resolveHostExecutable("git"), ["show", `${commit}:${path}`], {
-      cwd: root,
-      encoding: "utf8",
-    }),
-  }));
+  const files = readGitSourceContent(commit, ownedPaths, root, execute);
   return sha256Hex(canonicalise(files));
 }
 

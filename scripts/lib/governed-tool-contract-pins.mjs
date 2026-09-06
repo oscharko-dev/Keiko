@@ -32,11 +32,11 @@ export const GOVERNED_TOOL_CONTRACT_PINS = {
   // checkToolCatalogMigrationCloseout) independently rechecks both fields the moment either is
   // populated -- see docs/architecture/governed-tool-migration.md for exactly what it verifies.
   // Review 3941891302: that recheck also resolves the durable record's `sourceHead` against real
-  // Git and rebinds its declared `treeDigest` to the complete `ownedImplementation` annex here.
-  // The annex is separate from the immutable 43-row architecture census: inventory rows describe
-  // migration ownership, while this list binds every H1-owned source file that defines its
-  // production request, execution, projection, bounds, or facade behavior. Both have this file as
-  // their one canonical owner; adding implementation files never rewrites the historical census.
+  // Git and rebinds its declared `treeDigest` to the runtime closure seeded by this annex.
+  // The closure follows first-party runtime imports/re-exports and includes workspace export maps
+  // and the dependency lockfile, so shared execution guards cannot escape the binding. The annex
+  // stays separate from the immutable 43-row migration census; adding an implementation dependency
+  // never rewrites historical migration ownership.
   pendingH1: {
     owner: 3386,
     canonicalTool: { canonicalId: "keiko.repo.search", contractVersion: 1 },

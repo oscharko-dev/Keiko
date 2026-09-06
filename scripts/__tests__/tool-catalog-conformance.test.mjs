@@ -857,6 +857,28 @@ describe("review 3941891302: sourceHead must resolve against real Git and bind t
     }
   });
 
+  it("invalidates H1 evidence when shared deadline or regex execution dependencies change", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-execution-dependencies-"));
+    workDir = root;
+    initHermeticRepo(root);
+    const dependencies = [
+      "packages/keiko-workspace/src/structuralExecution.ts",
+      "packages/keiko-workspace/src/repoSearchRegexSafety.ts",
+    ];
+    for (const path of new Set([...H1_OWNED_SOURCE_PATHS, ...dependencies])) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), `// initial ${path}\n`);
+    }
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "H1 execution closure"]);
+    const sourceDigest = ownedSourceDigestAt("HEAD", root, execFileSync);
+    for (const path of dependencies) writeFileSync(join(root, path), "// changed runtime guard\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "change execution guards"]);
+    expect(ownedSourceDigestAt("HEAD", root, execFileSync)).not.toBe(sourceDigest);
+    expect(H1_OWNED_SOURCE_PATHS).toEqual(expect.arrayContaining(dependencies));
+  });
+
   // Fails before the ownership-annex fix: changing the actual H1 request/authority handler left
   // the default owned-source digest unchanged because the historical 43-row migration census
   // named only four older integration helpers. The census remains immutable; the canonical pins

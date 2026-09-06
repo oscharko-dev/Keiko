@@ -145,9 +145,12 @@ The checker resolves real producer and consumer Git objects, verifies the review
 owned content at all three commits, rejects uncommitted owned changes,
 and recompiles the catalog/profile/projection identity. A branch name, empty placeholder, stale
 review, unrelated commit with identical bytes, or changed implementation cannot qualify H1.
-The source-set owner is `pendingH1.ownedImplementation` in the existing canonical pins; its
-complete implementation annex is separate from the 43 historical migration rows. Both producers
-and validators call `ownedSourceDigestAt`; no second source-digest formula exists.
+The source-set entry points are `pendingH1.ownedImplementation` in the existing canonical pins.
+The checker follows their complete first-party runtime import and value-re-export closure,
+including shared deadline, regex-safety and path-admission helpers, workspace package export maps,
+and the dependency lockfile. Type-only imports do not execute and do not expand that closure.
+This dependency-derived source set stays separate from the 43 historical migration rows. Both
+producers and validators call `ownedSourceDigestAt`; no second source-digest formula exists.
 
 The separately retained post-merge validator, `checkH1HandoffEvidence`, requires both
 `landedDevCommit` and `landedTreeDigest` together when either is populated. It checks the actual
