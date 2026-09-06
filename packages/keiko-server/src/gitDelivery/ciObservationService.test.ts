@@ -12,6 +12,7 @@ import { CodingRuntimeCiRepairController } from "../coding-runtime/codingRuntime
 import type { CiRepairBudgetContext } from "../coding-runtime/codingRuntimeCiRepairBudgetTypes.js";
 import { redactLogFields } from "../observability/log-redaction.js";
 import { DraftDeliveryFixture } from "./draftDeliveryServiceTestSupport.js";
+import { DraftDeliveryController } from "./draftDeliveryService.js";
 import { CiObservationController, type CiObservationOptions } from "./ciObservationService.js";
 import { CHECK, failureFacts } from "./ciObservationTest/_providerFacts.js";
 import type { GitCiFailureContextResult } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
@@ -108,6 +109,71 @@ function diagnostics(source = failedFacts()): GitCiFailureContextResult {
   };
 }
 describe("run-bound CI observations through existing draft authority", () => {
+  it("preserves a repaired-head push proposal and its approval while CI is unavailable", async () => {
+    fixture.git(["commit", "--allow-empty", "-qm", "fix: verified repair"]);
+    await fixture.recordVerifiedCommit("commit-2");
+    const proposal = await fixture.service.proposePush();
+    if (proposal.status !== "recorded") throw new Error("Missing repair push proposal");
+    expect(proposal.record).toMatchObject({
+      phase: "push-proposed",
+      pullRequest: { number: 17 },
+    });
+    expect(proposal.record.binding.headSha).not.toBe(proposal.record.pullRequest?.headSha);
+    fixture.service.issueApproval(proposal.record.proposalId);
+    const test = configured();
+
+    expect(await test.service.observe()).toMatchObject({
+      status: "unavailable",
+      reason: "draft-unavailable",
+    });
+    expect(fixture.snapshots.get("run-1")?.draftDelivery).toEqual(proposal.record);
+    expect(test.readFacts).not.toHaveBeenCalled();
+    expect(fixture.events.at(-1)).toMatchObject({
+      op: "git.ci-observation",
+      correlationId: fixture.context.correlationId,
+      extra: { reason: "draft-unavailable" },
+    });
+    expect(fixture.service.consumeApproval(proposal.record.proposalId)).toBeDefined();
+  });
+
+  it("preserves a proposal created while inherited CI recovery is resolving authority", async () => {
+    const successor = fixture.successorOptions();
+    let releaseTarget: (() => void) | undefined;
+    let enteredTarget: (() => void) | undefined;
+    const targetEntered = new Promise<void>((resolve) => {
+      enteredTarget = resolve;
+    });
+    const targetReleased = new Promise<void>((resolve) => {
+      releaseTarget = resolve;
+    });
+    fixture.asyncBeforeTarget = async (): Promise<void> => {
+      enteredTarget?.();
+      await targetReleased;
+    };
+    const observation = new CiObservationController({
+      ...successor,
+      persistence: createCodingRuntimeCiReadinessStore(fixture.db, fixture.snapshots),
+      onChanged: vi.fn(),
+      ciReader: (): GitCiProviderReader => ({ readFacts: vi.fn(() => Promise.resolve(facts())) }),
+    });
+
+    const pending = observation.observe();
+    await targetEntered;
+    fixture.asyncBeforeTarget = undefined;
+    const delivery = new DraftDeliveryController(successor);
+    const proposal = await delivery.proposePush();
+    if (proposal.status !== "recorded") throw new Error("Missing concurrent push proposal");
+    delivery.issueApproval(proposal.record.proposalId);
+    releaseTarget?.();
+
+    await expect(pending).resolves.toMatchObject({
+      status: "unavailable",
+      reason: "draft-unavailable",
+    });
+    expect(fixture.snapshots.get("run-2")?.draftDelivery).toEqual(proposal.record);
+    expect(delivery.consumeApproval(proposal.record.proposalId)).toBeDefined();
+  });
+
   it("adopts and reconciles the retained PR before recording successor-bound readiness", async () => {
     const successor = fixture.successorOptions();
     const inheritedContext = successor.context();

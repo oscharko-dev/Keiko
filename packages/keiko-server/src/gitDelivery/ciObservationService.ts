@@ -19,7 +19,6 @@ import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { draftDeliveryLineageRecord } from "../coding-runtime/codingRuntimeDraftDeliverySource.js";
 import { resolveDraftRepository } from "./draftDeliveryFacts.js";
-import { DraftDeliveryController } from "./draftDeliveryService.js";
 import {
   DraftDeliveryFailure,
   type DraftDeliveryDependencies,
@@ -148,15 +147,17 @@ export class CiObservationController implements CiObservationService {
   ): Promise<DraftDeliveryRecord | undefined> {
     const snapshot = this.options.snapshots.get(context.runId);
     if (snapshot === undefined) return undefined;
+    if (snapshot.draftDelivery !== undefined)
+      return snapshot.draftDelivery.phase === "draft-created" ? snapshot.draftDelivery : undefined;
     const candidate = draftDeliveryLineageRecord(snapshot, (runId) =>
       this.options.snapshots.get(runId),
     )?.record;
     if (candidate?.pullRequest === undefined) return undefined;
-    if (snapshot.draftDelivery?.phase === "draft-created") return snapshot.draftDelivery;
+    const { DraftDeliveryController } = await import("./draftDeliveryService.js");
     const result = await new DraftDeliveryController({
       ...this.options,
       onChanged: (): void => undefined,
-    }).reconcile();
+    }).reconcileInherited();
     return result.status === "recorded" && result.record.phase === "draft-created"
       ? result.record
       : undefined;

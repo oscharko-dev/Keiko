@@ -129,6 +129,9 @@ export class DraftDeliveryController implements DraftDeliveryService {
   public reconcile(): Promise<CodingRuntimeDeliveryResult> {
     return this.run((context) => this.reconcileCurrent(context));
   }
+  public reconcileInherited(): Promise<CodingRuntimeDeliveryResult> {
+    return this.run((context) => this.reconcileInheritedCurrent(context));
+  }
   public executeApproved(
     id: string,
     lease: object | undefined,
@@ -405,9 +408,36 @@ export class DraftDeliveryController implements DraftDeliveryService {
     await resolveDraftRepository(this.options, context);
     const adopted = this.getOrAdopt(context);
     if (adopted === undefined) return unavailable("verified-commit-required");
-    let current: DraftDeliveryRecord = adopted;
+    return this.reconcileRecord(context, adopted);
+  }
+  private async reconcileInheritedCurrent(
+    context: DraftDeliveryRunContext,
+  ): Promise<CodingRuntimeDeliveryResult> {
+    if (currentDraft(this.options, context) !== undefined)
+      return unavailable("proposal-unavailable");
+    const adopted = adoptDraftPredecessor(this.options, context);
+    if (adopted === undefined) return unavailable("verified-commit-required");
+    const stillAdopted = (): boolean =>
+      sameDraftRecord(currentDraft(this.options, context), adopted);
+    try {
+      await resolveDraftRepository(this.options, context);
+      return await this.reconcileRecord(context, adopted, stillAdopted);
+    } catch (error) {
+      if (!stillAdopted()) return unavailable("proposal-unavailable");
+      throw error;
+    }
+  }
+  private async reconcileRecord(
+    context: DraftDeliveryRunContext,
+    adopted: DraftDeliveryRecord,
+    stillCurrent: () => boolean = (): boolean => true,
+  ): Promise<CodingRuntimeDeliveryResult> {
+    if (!stillCurrent()) return unavailable("proposal-unavailable");
+    let current = adopted;
     await assertDraftLocalCandidate(this.options, context, current.binding);
+    if (!stillCurrent()) return unavailable("proposal-unavailable");
     const remote = await readDraftRemoteState(this.options, context, current.binding);
+    if (!stillCurrent()) return unavailable("proposal-unavailable");
     assertKnownDraftIdentity(current, remote);
     this.proposal = undefined;
     if (current.phase !== "recovery-required")
@@ -432,6 +462,18 @@ export class DraftDeliveryController implements DraftDeliveryService {
       ),
     );
   }
+}
+
+function sameDraftRecord(
+  current: DraftDeliveryRecord | undefined,
+  expected: DraftDeliveryRecord,
+): boolean {
+  return (
+    current?.revision === expected.revision &&
+    current.proposalId === expected.proposalId &&
+    current.proposalDigest === expected.proposalDigest &&
+    current.phase === expected.phase
+  );
 }
 
 function sameProposal(
