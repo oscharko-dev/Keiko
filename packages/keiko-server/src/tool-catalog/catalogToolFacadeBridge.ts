@@ -482,7 +482,10 @@ function composedBindings(
   );
 }
 
-function preparedBindings(request: CodingToolActionRequest): readonly CatalogToolHandlerBinding[] {
+function preparedBindings(
+  request: CodingToolActionRequest,
+  unavailable: () => ReadonlySet<OpenCodeOptionalToolName>,
+): readonly CatalogToolHandlerBinding[] {
   return OPENCODE_CATALOG_DESCRIPTORS.map((descriptor) =>
     bindingFor(
       descriptor,
@@ -490,7 +493,7 @@ function preparedBindings(request: CodingToolActionRequest): readonly CatalogToo
       (): Promise<CodingToolResult> =>
         Promise.reject(new CatalogDispatchFault("failed", "handler-unavailable")),
       () => undefined,
-      () => new Set(),
+      unavailable,
     ),
   );
 }
@@ -551,7 +554,11 @@ function prepareDispatchBinder(
   const preparation = prepareCatalogToolBinder(
     {
       projection: OPENCODE_CATALOG_ADVERTISEMENT.projection,
-      handlerBindings: preparedBindings(fallback),
+      handlerBindings: preparedBindings(
+        fallback,
+        bridgeInput.unavailableOptionalTools ??
+          ((): ReadonlySet<OpenCodeOptionalToolName> => new Set()),
+      ),
       authorityPort: {
         preview: bridgeInput.previewAuthority,
         admit: bridgeInput.authority.admit,

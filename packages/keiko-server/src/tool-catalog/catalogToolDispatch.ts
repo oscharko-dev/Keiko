@@ -219,7 +219,10 @@ export function prepareCatalogToolBinder(
   input: CatalogToolBinderInput,
   catalog: CatalogToolBinderOptions["catalog"],
 ): CatalogBindingPreparation {
-  return createCatalogBindingPreparation(input, catalog);
+  // A prepared binding is reused across availability-mask variants. Keep whole-set readiness
+  // invocation-local: each selected binding still has its live readiness callback, while a
+  // derived variant removes identities observed unavailable at its attested snapshot.
+  return createCatalogBindingPreparation(input, catalog, false);
 }
 
 export { deriveCatalogBindingPreparation } from "./catalogToolBinder.js";

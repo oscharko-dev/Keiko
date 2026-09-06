@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ConfigInvalidError, TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
-import {
-  Gateway,
-  type GatewayCallRequest,
-  type GatewaySpendReservation,
-} from "./gateway.js";
+import { Gateway, type GatewayCallRequest, type GatewaySpendReservation } from "./gateway.js";
 import type {
   GatewayConfig,
   GatewayRequest,

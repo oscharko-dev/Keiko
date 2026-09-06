@@ -25,6 +25,7 @@ vi.mock("@oscharko-dev/keiko-tool-catalog", async (importOriginal) => {
 
 import type { CodingToolActionRequest } from "../coding-runtime/codingToolIpc.js";
 import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
+import type { OpenCodeOptionalToolName } from "../coding-runtime/opencodeLaunchProfile.js";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import { createBufferedServerLogSink } from "../observability/server-log.js";
 import {
@@ -186,6 +187,31 @@ describe("canonical catalog facade bridge", () => {
       reason: "budget-exhausted",
       effectStarted: false,
       budgetDisposition: "not-reserved",
+    });
+  });
+
+  it("fails an optional handler closed when live availability disappears after its offer", async () => {
+    let unavailable = new Set<OpenCodeOptionalToolName>();
+    const { bridge, log } = createBridge({
+      unavailableOptionalTools: () => unavailable,
+      previewAuthority: () => {
+        unavailable = new Set<OpenCodeOptionalToolName>(["keiko_research_fetch"]);
+        return { ok: true };
+      },
+    });
+    const run = vi.fn(() => Promise.resolve({ status: "completed" as const, evidence: [] }));
+    const request = COVERED.find((entry) => entry.action === "egress");
+    if (request === undefined) throw new Error("optional egress fixture missing");
+
+    await expect(bridge.execute(request, facadeInput(), run)).resolves.toEqual({
+      status: "failed",
+      evidence: [],
+    });
+    expect(run).not.toHaveBeenCalled();
+    expect(log.events.at(-1)?.extra).toMatchObject({
+      status: "failed",
+      reason: "handler-unavailable",
+      effectStarted: false,
     });
   });
 

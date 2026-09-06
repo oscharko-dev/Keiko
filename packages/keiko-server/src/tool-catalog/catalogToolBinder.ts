@@ -224,9 +224,10 @@ export function createCatalogBinding(
 export function createCatalogBindingPreparation(
   input: CatalogToolBinderInput,
   catalog: CatalogToolBinderOptions["catalog"],
+  observeReadiness = true,
 ): CatalogBindingPreparation {
   try {
-    return buildCatalogPreparation(input, catalog, true);
+    return buildCatalogPreparation(input, catalog, observeReadiness);
   } catch (error) {
     bindingFailure(input, error, UNKNOWN_CORRELATION_ID);
     throw new TypeError("Invalid catalog handler binding", { cause: error });

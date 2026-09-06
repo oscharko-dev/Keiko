@@ -1,13 +1,13 @@
 import { expect, test, type Locator } from "@playwright/test";
 import {
   advanceGitChangeChatFixtureHead,
+  authorizeGitHubForFixture,
   buildGitChangeChatFixture,
   createChatForFixture,
   fetchGitChangeScopes,
   interceptGovernedPrDescriptionLifecycle,
-  interceptGitChangePullRequestConnect,
-  interceptPrDescriptionLifecycle,
   interceptProjectList,
+  readGitChangeChatProviderState,
   removeGitChangeChatFixture,
   seedGovernedPrDescriptionWindow,
   seedWorkspace,
@@ -59,6 +59,19 @@ async function activateWithKeyboard(control: Locator): Promise<void> {
   await control.focus();
   await expect(control).toBeFocused();
   await control.press("Enter");
+}
+
+async function sendConnectedRefinement(
+  chatWindow: Locator,
+  request: string,
+  expected: string,
+): Promise<void> {
+  const composer = chatWindow.getByRole("textbox", { name: "Chat message" });
+  await composer.fill(request);
+  await activateWithKeyboard(chatWindow.getByRole("button", { name: "Send message" }));
+  await expect(chatWindow.getByText(expected, { exact: false }).first()).toBeVisible({
+    timeout: 30_000,
+  });
 }
 
 // Issue #3400 (epic #3384) — "Connect a Git change to Chat for iterative pull request
@@ -121,7 +134,7 @@ test("connects the Git window's current branch to a Chat and shows the scope pil
   await expect(chatWindow).toBeVisible();
   const label = `${fixture.baseRef}...${fixture.headRef}`;
   await expect(chatWindow.getByText(label)).toBeVisible();
-  await expect(chatWindow.getByText("Current")).toBeVisible();
+  await expect(chatWindow.getByText("Current", { exact: true })).toBeVisible();
   // Exactly one file is changed by the fixture — the singular count message, not "1 files changed".
   await expect(chatWindow.getByText("1 file changed")).toBeVisible();
   await expect(
@@ -130,26 +143,22 @@ test("connects the Git window's current branch to a Chat and shows the scope pil
 
   // Refreshing an unchanged comparison stays "Current" (no head movement to detect).
   await chatWindow.getByRole("button", { name: `Refresh ${label}` }).click();
-  await expect(chatWindow.getByText("Current")).toBeVisible();
+  await expect(chatWindow.getByText("Current", { exact: true })).toBeVisible();
 
-  // T25 — a REAL Chat turn on this git-change-connected chat must hit the production
-  // description-authority admission gate (chat-handlers.ts's `admitGitChangeScopedTurn`) and be
-  // denied closed with the exact safe message the server returns — server tests
-  // (chat-handlers.test.ts, chat-stream-handlers.test.ts) prove the gate itself; this proves the
-  // real browser composer surfaces that exact denial rather than silently succeeding or hanging.
-  // The connected scope pill must stay untouched by the failed send ("silent" w.r.t. the pill):
-  // still "Current", same label, same file count.
+  // T25 — a real accepted Chat turn mints its description authority at turn admission and reaches
+  // the bounded Model Gateway. A comparison-only scope has no remote PR application target, but it
+  // still renders the generated generic description and keeps the server-issued pill current.
   const composer = chatWindow.getByRole("textbox", { name: "Chat message" });
   await composer.click();
-  await composer.fill("Please refine the description");
+  await composer.fill("First connected refinement");
   await activateWithKeyboard(chatWindow.getByRole("button", { name: "Send message" }));
   await expect(
-    chatWindow.getByText(
-      "The description authority for this connected Git change is missing or has expired.",
-    ),
-  ).toBeVisible();
+    chatWindow.getByText("First connected refinement is retained", { exact: false }).first(),
+  ).toBeVisible({
+    timeout: 30_000,
+  });
   await expect(chatWindow.getByText(label)).toBeVisible();
-  await expect(chatWindow.getByText("Current")).toBeVisible();
+  await expect(chatWindow.getByText("Current", { exact: true })).toBeVisible();
   await expect(chatWindow.getByText("1 file changed")).toBeVisible();
 
   // T25 — move the fixture's head and refresh again: this must surface the production
@@ -170,10 +179,10 @@ test("connects the Git window's current branch to a Chat and shows the scope pil
     .toBeUndefined();
 });
 
-// #3400 browser wiring proof. Server tests exercise both real Chat transports, shared generation,
-// exact snapshot binding, held-proposal approval, and the body-only apply effect. This hermetic
-// browser test scripts only the provider-dependent PR connect/review/apply responses and proves
-// the operator can read the exact held body before the guarded approve/apply actions are enabled.
+// #3400 F5 production route proof. Only the external provider boundary is hermetic: PR discovery,
+// two normal Chat turns, proposal retention, review, approval, body-only application and disconnect
+// all cross the mounted server handlers. The extra GitHub remote makes the old browser-selected
+// owner/repository bug observable; the real routes accept only the server-resolved origin target.
 test("reviews, approves and applies the held description through the connected pull request", async ({
   page,
   request,
@@ -181,16 +190,15 @@ test("reviews, approves and applies the held description through the connected p
   const fixture = buildGitChangeChatFixture();
   fixtures.push(fixture);
   const chat = await createChatForFixture(request, fixture.root);
+  await authorizeGitHubForFixture(request, fixture.root);
   await interceptProjectList(page, fixture.root);
-  await interceptGitChangePullRequestConnect(page, {
-    relationshipId: "e2e-pr-scope-1",
-    comparisonLabel: "PR #42",
-    baseRef: fixture.baseRef,
-    headRef: fixture.headRef,
-    pullRequestNumber: 42,
-  });
-  const lifecycle = await interceptPrDescriptionLifecycle(page);
   await seedWorkspace(page, fixture.root, chat);
+  const lifecycleRequests: Record<string, unknown>[] = [];
+  page.on("request", (networkRequest) => {
+    if (/\/api\/git-change\/(?:review|approve|apply)-description$/u.test(networkRequest.url())) {
+      lifecycleRequests.push(networkRequest.postDataJSON() as Record<string, unknown>);
+    }
+  });
 
   await page.goto("/");
 
@@ -210,14 +218,30 @@ test("reviews, approves and applies the held description through the connected p
   await expect(chatWindow).toBeVisible();
   await expect(chatWindow.getByText("PR #42")).toBeVisible();
 
+  await sendConnectedRefinement(
+    chatWindow,
+    "First connected refinement",
+    "First connected refinement is retained",
+  );
+  await sendConnectedRefinement(
+    chatWindow,
+    "Second connected refinement",
+    "Second connected refinement is visible",
+  );
+
+  const connectedScopes = await fetchGitChangeScopes(request, fixture.root, chat.id);
+  const scope = connectedScopes?.find((candidate) => candidate.pullRequestNumber === 42);
+  const proposalId = scope?.descriptionProposalId;
+  if (scope === undefined || proposalId === undefined) {
+    throw new Error("second connected Chat turn did not retain a PR-description proposal");
+  }
+
   await chatWindow.getByTestId("git-change-description-preview").click();
-  await expect(chatWindow.getByTestId("git-change-description-preview-body")).toContainText(
-    "refined over chat",
-  );
-  await expect(chatWindow.getByTestId("git-change-description-preview-body")).toHaveText(
-    lifecycle.finalBody,
-    { useInnerText: false },
-  );
+  const previewBody = chatWindow.getByTestId("git-change-description-preview-body");
+  await expect(previewBody).toHaveValue(/Second connected refinement is visible/u);
+  const finalBody = await previewBody.inputValue();
+  expect(finalBody).toContain("Human context before the managed region.");
+  expect(finalBody).toContain("Human footer after the managed region.");
   await expect(chatWindow.getByTestId("git-change-description-state")).toHaveText(
     "Blocked (approval-required)",
   );
@@ -232,7 +256,22 @@ test("reviews, approves and applies the held description through the connected p
     keyboardTarget: '[data-testid="git-change-description-approve"]',
   });
 
-  await chatWindow.getByTestId("git-change-description-approve").click();
+  const approve = chatWindow.getByTestId("git-change-description-approve");
+  await approve.click();
+  await expect(approve).toHaveAttribute("aria-disabled", "true");
+  const approvalRequest = {
+    schemaVersion: "1",
+    chatId: chat.id,
+    relationshipId: scope.relationshipId,
+    proposalId,
+  };
+  // A repeated approval reaches the SAME mounted route and binding. The store coalesces it into
+  // one live authorization, so only the first later apply can consume it.
+  const duplicateApproval = await request.post("/api/git-change/approve-description", {
+    headers: { "X-Keiko-CSRF": "1" },
+    data: approvalRequest,
+  });
+  expect(duplicateApproval.status(), await duplicateApproval.text()).toBe(200);
   await chatWindow.getByTestId("git-change-description-apply").click();
   await expect(chatWindow.getByTestId("git-change-description-state")).toHaveText(
     "Current (applied)",
@@ -250,18 +289,45 @@ test("reviews, approves and applies the held description through the connected p
     "aria-disabled",
     "true",
   );
-  expect(lifecycle.calls).toEqual({ review: 1, approve: 1, apply: 1 });
+  const replayedApply = await request.post("/api/git-change/apply-description", {
+    headers: { "X-Keiko-CSRF": "1" },
+    data: approvalRequest,
+  });
+  expect(replayedApply.status()).toBe(409);
+  const provider = readGitChangeChatProviderState();
+  expect(provider).toMatchObject({ body: finalBody, updates: 1 });
+  expect(lifecycleRequests).toHaveLength(3);
+  for (const body of lifecycleRequests) {
+    expect(body).toEqual(approvalRequest);
+    expect(body).not.toHaveProperty("ownerAndRepo");
+  }
+
+  await chatWindow.getByRole("button", { name: "Disconnect PR #42 from chat" }).click();
+  await expect
+    .poll(async () => await fetchGitChangeScopes(request, fixture.root, chat.id))
+    .toBeUndefined();
   writePrDescriptionJourneyEvidence({
     issue: 3400,
     cases: [
+      "two normal Chat turns refine one connected pull request",
       "server-held proposal reviewed before approval",
       "exact final body displayed",
-      "one-use approval applied once",
+      "fork and upstream remote ordering cannot author the target",
+      "repeated approval still permits only one apply",
+      "disconnect persists through the mounted PATCH route",
     ],
     observations: {
-      ...lifecycle.calls,
+      connectedChatTurns: 2,
+      reviewRequests: 1,
+      browserApprovalRequests: 1,
+      directDuplicateApprovals: 1,
+      applyRequests: 1,
+      rejectedApplyReplays: 1,
+      providerUpdates: provider.updates,
+      serverResolvedOrigin: true,
       exactFinalBodyDisplayed: true,
       appliedControlDisabled: true,
+      disconnectPersisted: true,
       appliedCapture,
     },
     sources: CHAT_VISUAL_SOURCES,

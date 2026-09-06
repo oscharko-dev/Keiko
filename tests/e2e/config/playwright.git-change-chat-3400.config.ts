@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { delimiter, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { e2eStateDir } from "../support/e2e-state-dir.js";
 
 // Issue #3400 (epic #3384) — browser evidence for "Connect a Git change to Chat": the Git
@@ -11,14 +13,28 @@ import { e2eStateDir } from "../support/e2e-state-dir.js";
 
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32211");
-const stateId = process.env.GITHUB_RUN_ID ?? `git-change-chat-3400-${String(process.pid)}`;
+const modelPort = publicPort - 1;
+const stateId =
+  process.env.KEIKO_E2E_GIT_CHANGE_CHAT_STATE_ID ??
+  (process.env.KEIKO_E2E_GIT_CHANGE_CHAT_STATE_ID = `git-change-chat-3400-${randomUUID()}`);
 const stateDir = e2eStateDir(stateId);
-const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
-const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
+const providerBin = join(stateDir, "provider-bin");
+const providerStatePath = join(stateDir, "git-change-chat-provider.json");
+const providerScript = join(root, "tests", "e2e", "support", "git-change-chat-3400-gh.mjs");
+const providerModuleUrl = pathToFileURL(providerScript).href;
+const modelMockScript = join(root, "tests", "e2e", "support", "model-mock-server.mjs");
+const serverEntry = join(
+  root,
+  "tests/e2e/servers/dist/tests/e2e/servers/git-change-chat-3400-server.mjs",
+);
+process.env.KEIKO_GIT_CHANGE_CHAT_PROVIDER_STATE = providerStatePath;
 const prepareRuntimeConfig = [
   "const fs = require('node:fs');",
   `fs.mkdirSync(${JSON.stringify(stateDir)}, { recursive: true });`,
-  `fs.copyFileSync(${JSON.stringify(fixtureConfigPath)}, ${JSON.stringify(runtimeConfigPath)});`,
+  `fs.mkdirSync(${JSON.stringify(providerBin)}, { recursive: true });`,
+  `try { fs.unlinkSync(${JSON.stringify(providerStatePath)}); } catch (error) { if (error?.code !== "ENOENT") throw error; }`,
+  `fs.writeFileSync(${JSON.stringify(join(providerBin, "gh"))}, ${JSON.stringify(`#!${process.execPath}\nprocess.env.KEIKO_GIT_CHANGE_CHAT_PROVIDER_STATE = ${JSON.stringify(providerStatePath)};\nimport(${JSON.stringify(providerModuleUrl)});\n`)});`,
+  `fs.chmodSync(${JSON.stringify(join(providerBin, "gh"))}, 0o755);`,
 ].join(" ");
 
 export default defineConfig({
@@ -49,22 +65,32 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], viewport: { width: 1600, height: 900 } },
     },
   ],
-  webServer: {
-    cwd: root,
-    command:
-      `node -e ${JSON.stringify(prepareRuntimeConfig)} && ` +
-      "npm run build && npm run prepare:bin && npm run build:ui && " +
-      `node dist/cli/index.js ui --port ${String(publicPort)} ` +
-      `--config ${runtimeConfigPath} ` +
-      `--ui-db ${join(stateDir, "ui", "ui.sqlite")}`,
-    url: `http://127.0.0.1:${String(publicPort)}`,
-    reuseExistingServer: false,
-    timeout: 240_000,
-    env: {
-      KEIKO_STATE_DIR: stateDir,
-      KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
-      KEIKO_MEMORY_DIR: join(stateDir, "memory"),
-      KEIKO_CONFIG_FILE: runtimeConfigPath,
+  webServer: [
+    {
+      cwd: root,
+      command: `node ${JSON.stringify(modelMockScript)}`,
+      url: `http://127.0.0.1:${String(modelPort)}/healthz`,
+      reuseExistingServer: false,
+      timeout: 30_000,
+      env: { KEIKO_E2E_MODEL_PORT: String(modelPort) },
     },
-  },
+    {
+      cwd: root,
+      command:
+        `node -e ${JSON.stringify(prepareRuntimeConfig)} && ` +
+        "npm run build:packages && npm run build:ui && " +
+        "node node_modules/@typescript/native/bin/tsc -p tests/e2e/servers/tsconfig.json && " +
+        `node ${serverEntry}`,
+      url: `http://127.0.0.1:${String(publicPort)}`,
+      reuseExistingServer: false,
+      timeout: 240_000,
+      env: {
+        PATH: `${providerBin}${delimiter}${process.env.PATH ?? ""}`,
+        KEIKO_GIT_CHANGE_CHAT_PROVIDER_STATE: providerStatePath,
+        KEIKO_STATE_DIR: stateDir,
+        KEIKO_E2E_UI_PORT: String(publicPort),
+        KEIKO_E2E_MODEL_PORT: String(modelPort),
+      },
+    },
+  ],
 });

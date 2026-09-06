@@ -3,7 +3,7 @@
 // helpers read as one unit, mirroring the existing coding-issue-* support modules.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { APIRequestContext, Page } from "@playwright/test";
@@ -24,6 +24,9 @@ export interface GitChangeChatFixture {
   readonly headRef: string;
 }
 
+export const GIT_CHANGE_CHAT_REPOSITORY = "fixture/git-change-chat-fork";
+export const GIT_CHANGE_CHAT_MODEL_ID = "functional-model";
+
 // A REAL git repository with exactly one comparison: `main` (the base) with one commit ahead of
 // it on `feature/x` (the head, and the branch left checked out — GitClientWindow's own "current
 // branch" read). The server resolves this comparison for real; only `/api/projects` is faked (see
@@ -32,11 +35,15 @@ export interface GitChangeChatFixture {
 // (gitChangeSnapshotService.ts) — but it is never fetched.
 export function buildGitChangeChatFixture(): GitChangeChatFixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-e2e-git-change-chat-3400-")));
-  git(["init", "-q"], root);
+  git(["init", "-q", "-b", "main"], root);
   git(["config", "user.email", "test@keiko.example"], root);
   git(["config", "user.name", "Keiko Test"], root);
   git(["config", "commit.gpgsign", "false"], root);
-  git(["remote", "add", "origin", "https://github.com/keiko-e2e/git-change-chat-3400.git"], root);
+  // Deliberately register a different GitHub remote first. The Chat description routes must derive
+  // their target from the checkout's server-owned `origin`, never whichever remote a browser lists
+  // first (the fork/upstream mismatch from PR review thread fjQcs).
+  git(["remote", "add", "aaa-upstream", "https://github.com/fixture/git-change-chat.git"], root);
+  git(["remote", "add", "origin", `https://github.com/${GIT_CHANGE_CHAT_REPOSITORY}.git`], root);
 
   writeFileSync(join(root, "README.md"), "# git-change-chat-3400 fixture\n", "utf8");
   git(["add", "."], root);
@@ -72,7 +79,14 @@ export function advanceGitChangeChatFixtureHead(fixture: GitChangeChatFixture): 
 
 interface ChatListEntry {
   readonly id: string;
-  readonly gitChangeScopes?: readonly unknown[];
+  readonly gitChangeScopes?: readonly GitChangeChatScope[];
+}
+
+export interface GitChangeChatScope {
+  readonly relationshipId: string;
+  readonly comparisonLabel: string;
+  readonly pullRequestNumber?: number;
+  readonly descriptionProposalId?: string;
 }
 
 // T25 — reads the chat's `gitChangeScopes` back through the REAL GET /api/chats?projectPath=...
@@ -82,7 +96,7 @@ export async function fetchGitChangeScopes(
   request: APIRequestContext,
   projectPath: string,
   chatId: string,
-): Promise<readonly unknown[] | undefined> {
+): Promise<readonly GitChangeChatScope[] | undefined> {
   const res = await request.get(`/api/chats?projectPath=${encodeURIComponent(projectPath)}`);
   if (!res.ok()) {
     throw new Error(`Chat list failed (${String(res.status())}): ${await res.text()}`);
@@ -116,7 +130,7 @@ export async function createChatForFixture(
     data: {
       projectPath,
       title: "External change review",
-      selectedModel: "e2e-chat-model",
+      selectedModel: GIT_CHANGE_CHAT_MODEL_ID,
     },
   });
   if (response.status() !== 201) {
@@ -124,6 +138,35 @@ export async function createChatForFixture(
   }
   const created = (await response.json()) as { chat: CreatedChat };
   return created.chat;
+}
+
+export async function authorizeGitHubForFixture(
+  request: APIRequestContext,
+  repositoryPath: string,
+): Promise<void> {
+  const query = new URLSearchParams({ repositoryPath });
+  const current = await request.get(
+    `/api/coding-workbench/github-authorization?${query.toString()}`,
+  );
+  if (!current.ok()) throw new Error(`Authorization read failed (${String(current.status())})`);
+  const revision = ((await current.json()) as { readonly revision: number }).revision;
+  const updated = await request.put("/api/coding-workbench/github-authorization", {
+    headers: MUTATION_HEADERS,
+    data: { repositoryPath, authorized: true, expectedRevision: revision },
+  });
+  if (!updated.ok()) throw new Error(`Authorization update failed (${String(updated.status())})`);
+}
+
+export interface GitChangeChatProviderState {
+  readonly body: string;
+  readonly updatedAt: string;
+  readonly updates: number;
+}
+
+export function readGitChangeChatProviderState(): GitChangeChatProviderState {
+  const path = process.env.KEIKO_GIT_CHANGE_CHAT_PROVIDER_STATE;
+  if (path === undefined || path.length === 0) throw new Error("provider state path missing");
+  return JSON.parse(readFileSync(path, "utf8")) as GitChangeChatProviderState;
 }
 
 // Seeds the REAL app.workspace persistence key with a governedGit window bound to the fixture
@@ -222,65 +265,6 @@ export async function interceptProjectList(page: Page, fixtureRoot: string): Pro
   });
 }
 
-// ─── #3400 final-audit F5 — chat's apply action (Preview -> Approve -> Apply to PR) ─────────────
-//
-// A REAL "pull-request" mode connect needs the trusted checkout's GitHub-reader grant plus a live
-// GitHub API read (`resolvePullRequestByHead`, gitChangeRoutes.ts) to find an open PR for the
-// fixture's local branch — no such PR or network access exists in this hermetic journey. Likewise
-// a real preview/apply needs a live Model Gateway call and a real GitHub PATCH. These three routes
-// are scripted instead, each answering in the EXACT wire shape the real route does (the same
-// `ChatGitChangeScope` / `PrDescriptionApplicationStatus` contracts api.ts's own client validates
-// against) so the journey still proves the browser's real request/response wiring end to end —
-// every OTHER route in this file (connect in comparison mode, refresh, chat CRUD) stays real.
-
-export interface GitChangePullRequestScopeFixture {
-  readonly relationshipId: string;
-  readonly comparisonLabel: string;
-  readonly baseRef: string;
-  readonly headRef: string;
-  readonly pullRequestNumber: number;
-}
-
-export async function interceptGitChangePullRequestConnect(
-  page: Page,
-  scope: GitChangePullRequestScopeFixture,
-): Promise<void> {
-  await page.route("**/api/git-change/connect", async (route) => {
-    const body = route.request().postDataJSON() as { readonly mode?: string };
-    if (body.mode !== "pull-request") {
-      await route.continue();
-      return;
-    }
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        status: "connected",
-        scope: {
-          kind: "git-change",
-          relationshipId: scope.relationshipId,
-          remoteDigest: "d".repeat(64),
-          comparisonLabel: scope.comparisonLabel,
-          baseRef: scope.baseRef,
-          headRef: scope.headRef,
-          baseSha: "a".repeat(40),
-          headSha: "b".repeat(40),
-          mergeBaseSha: "a".repeat(40),
-          snapshotDigest: "c".repeat(64),
-          pullRequestNumber: scope.pullRequestNumber,
-          descriptionProposalId: "e2e-proposal-1",
-          fileCount: 1,
-          totalFiles: 1,
-          omittedFiles: 0,
-          truncatedFiles: 0,
-          descriptionStatus: "current",
-          connectedAtMs: Date.now(),
-        },
-      }),
-    });
-  });
-}
-
 function prDescriptionApplicationStatusFixture(
   reason: "approval-required" | "applied",
 ): Record<string, unknown> {
@@ -316,105 +300,9 @@ function prDescriptionApplicationStatusFixture(
   };
 }
 
-const CHAT_DESCRIPTION_REQUEST_KEYS = new Set([
-  "schemaVersion",
-  "chatId",
-  "relationshipId",
-  "proposalId",
-]);
-
-function assertChatDescriptionRequest(request: Record<string, unknown>): void {
-  if (
-    request.schemaVersion !== "1" ||
-    typeof request.chatId !== "string" ||
-    request.chatId.length === 0 ||
-    request.relationshipId !== "e2e-pr-scope-1" ||
-    request.proposalId !== "e2e-proposal-1" ||
-    Object.keys(request).some((key) => !CHAT_DESCRIPTION_REQUEST_KEYS.has(key))
-  ) {
-    throw new Error("description request did not preserve the server-held Chat binding");
-  }
-}
-
 export interface PrDescriptionLifecycleObservation {
   readonly calls: { review: number; approve: number; apply: number };
   readonly finalBody: string;
-}
-
-async function installChatDescriptionReview(
-  page: Page,
-  calls: PrDescriptionLifecycleObservation["calls"],
-  finalBody: string,
-): Promise<void> {
-  const previewStatus = prDescriptionApplicationStatusFixture("approval-required");
-  await page.route("**/api/git-change/review-description", async (route) => {
-    assertChatDescriptionRequest(route.request().postDataJSON() as Record<string, unknown>);
-    calls.review += 1;
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        outcome: "preview",
-        preview: {
-          proposalId: "e2e-proposal-1",
-          expiresAt: new Date(Date.now() + 30_000).toISOString(),
-          status: previewStatus,
-          finalBody,
-          managedRegion: "refined over chat",
-          concurrencyLimitation: "GitHub cannot lock the PR body during this update.",
-        },
-      }),
-    });
-  });
-}
-
-async function installChatDescriptionApproval(
-  page: Page,
-  calls: PrDescriptionLifecycleObservation["calls"],
-): Promise<void> {
-  await page.route("**/api/git-change/approve-description", async (route) => {
-    assertChatDescriptionRequest(route.request().postDataJSON() as Record<string, unknown>);
-    calls.approve += 1;
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        schemaVersion: "1",
-        proposalId: "e2e-proposal-1",
-        expiresAt: new Date(Date.now() + 30_000).toISOString(),
-      }),
-    });
-  });
-}
-
-async function installChatDescriptionApply(
-  page: Page,
-  calls: PrDescriptionLifecycleObservation["calls"],
-): Promise<void> {
-  const appliedStatus = prDescriptionApplicationStatusFixture("applied");
-  await page.route("**/api/git-change/apply-description", async (route) => {
-    assertChatDescriptionRequest(route.request().postDataJSON() as Record<string, unknown>);
-    calls.apply += 1;
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ outcome: "observed", status: appliedStatus }),
-    });
-  });
-}
-
-export async function interceptPrDescriptionLifecycle(
-  page: Page,
-): Promise<PrDescriptionLifecycleObservation> {
-  const calls = { review: 0, approve: 0, apply: 0 };
-  const finalBody =
-    "Human context before the managed region.\n\n" +
-    "<!-- keiko:managed:v1:start -->refined over chat<!-- keiko:managed:v1:end -->\n\n" +
-    "Human footer after the managed region.";
-  await installChatDescriptionReview(page, calls, finalBody);
-  await installChatDescriptionApproval(page, calls);
-  await installChatDescriptionApply(page, calls);
-  return { calls, finalBody };
 }
 
 function assertGovernedDescriptionTarget(request: Record<string, unknown>): void {

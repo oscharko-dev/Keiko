@@ -78,6 +78,10 @@ import { createWorkspaceReconciliationService } from "../../../packages/keiko-se
 import { buildWorkspaceInstanceStoreOverDatabase } from "../../../packages/keiko-server/src/task-workspace/store.js";
 import type { GitHubCodeContextApiPort } from "../../../packages/keiko-server/src/coding-context/githubCodeContextConnector.js";
 import { createWorkspaceScriptTrustService } from "../../../packages/keiko-server/src/workspace-script-trust.js";
+import {
+  createRelationshipStorePort,
+  type RelationshipHandlerDeps,
+} from "../../../packages/keiko-server/src/relationship-handlers.js";
 
 type WorkspaceAdapterFactory = (
   workspace: Parameters<typeof createNodeGitWorktreeAdapter>[0]["workspace"],
@@ -98,6 +102,7 @@ interface JourneyWorkspaceServices {
   readonly codingRuntimeDescriptionJobStore: ReturnType<
     typeof createCodingRuntimeDescriptionJobStore
   >;
+  readonly relationship: RelationshipHandlerDeps;
 }
 
 /**
@@ -167,6 +172,9 @@ export interface CodingRuntimeJourneyServerConfig {
    * provider response. Only meaningful when `runtime === "scripted"`.
    */
   readonly descriptionDispatcher?: ProductionWorkbenchDescriptionDispatcher | undefined;
+  /** Test-only lower provider response; all BFF admission, authority, and persistence stay real. */
+  readonly chatResponse?: ((request: GatewayRequest) => NormalizedResponse) | undefined;
+  readonly gatewayConfig?: GatewayConfig | undefined;
 }
 
 interface JourneyComposition {
@@ -254,6 +262,10 @@ function createWorkspaceServices(managedRoot: string): JourneyWorkspaceServices 
     workspaceScriptTrust,
     codingRuntimeSnapshots: createCodingRuntimeSnapshotStore(db),
     codingRuntimeDescriptionJobStore: createCodingRuntimeDescriptionJobStore(db),
+    relationship: {
+      scopeResolver: () => ({ workspaceId: "git-change-chat-e2e" }),
+      store: createRelationshipStorePort({ db, redactString: (value) => value }),
+    },
   };
 }
 
@@ -308,6 +320,7 @@ function scriptedModelDeps(
   deps: UiHandlerDeps,
   script: ScriptState,
   includeQuestion: boolean,
+  chatResponse?: (request: GatewayRequest) => NormalizedResponse,
   observeGatewayRequest?: (request: GatewayRequest) => void,
   commit?: CodingIssueCommitFixture,
 ): UiHandlerDeps {
@@ -316,7 +329,10 @@ function scriptedModelDeps(
   // the transcript, so passing it always is behaviour-preserving.
   const chat = async (request?: GatewayRequest): Promise<NormalizedResponse> => {
     if (request !== undefined) observeGatewayRequest?.(request);
-    const response = nextScriptedTurn(script, includeQuestion, scriptedTranscript(request));
+    const response =
+      request === undefined || chatResponse === undefined
+        ? nextScriptedTurn(script, includeQuestion, scriptedTranscript(request))
+        : chatResponse(request);
     await commit?.beforeResponse(response);
     return response;
   };
@@ -435,6 +451,7 @@ function scriptedUiHandlerDepsOptions(
   env: ReturnType<typeof scriptedEnvironment>,
   resolver: ReturnType<typeof scriptedResolver>,
 ): Parameters<typeof buildUiHandlerDeps>[0] {
+  const chatResponse = config.chatResponse;
   return {
     configPath: undefined,
     evidenceDir: join(bffStateRoot, "evidence"),
@@ -455,12 +472,21 @@ function scriptedUiHandlerDepsOptions(
     codingRuntimeDeploymentCeiling: "autonomous-delivery",
     codingRuntimeServerPrincipal: () => `${config.fixtureId}-operator`,
     autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
+    ...(chatResponse === undefined
+      ? {}
+      : {
+          modelPortFactory: () => ({
+            call: (request: GatewayRequest): Promise<NormalizedResponse> =>
+              Promise.resolve(chatResponse(request)),
+          }),
+        }),
   };
 }
 
 function scriptedRuntimeDeps(
   options: Parameters<typeof buildUiHandlerDeps>[0],
   runtimeMutationLeaseBroker: ReturnType<typeof createCodingRuntimeEditorMutationLeaseBroker>,
+  relationship: RelationshipHandlerDeps,
 ): UiHandlerDeps {
   const assembled = buildUiHandlerDeps(options);
   const dispose = assembled.dispose;
@@ -470,11 +496,41 @@ function scriptedRuntimeDeps(
   // proposal. Attach the fixture's shared lease broker without changing the graph's identity.
   return Object.assign(assembled, {
     runtimeMutationLease: runtimeMutationLeaseBroker,
+    relationship,
     dispose: async (): Promise<void> => {
       await dispose?.();
       runtimeMutationLeaseBroker.dispose();
     },
   });
+}
+
+function scriptedJourneyModelDeps(
+  config: CodingRuntimeJourneyServerConfig,
+  deps: UiHandlerDeps,
+  script: ScriptState,
+  observe: ((request: GatewayRequest) => void) | undefined,
+  commit: CodingIssueCommitFixture | undefined,
+): UiHandlerDeps {
+  return scriptedModelDeps(
+    deps,
+    script,
+    config.includeQuestion,
+    config.chatResponse,
+    observe,
+    commit,
+  );
+}
+
+function writeChatGatewayConfig(
+  config: CodingRuntimeJourneyServerConfig,
+  bffStateRoot: string,
+): void {
+  if (config.chatResponse === undefined) return;
+  writeFileSync(
+    join(bffStateRoot, "ui-db", "keiko.config.json"),
+    `${JSON.stringify(config.gatewayConfig ?? functionalGatewayConfig(), null, 2)}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
 }
 
 function scriptedComposition(
@@ -487,6 +543,7 @@ function scriptedComposition(
   for (const dir of ["state", "ui-db", "evidence"]) {
     mkdirSync(join(bffStateRoot, dir), { recursive: true, mode: 0o700 });
   }
+  writeChatGatewayConfig(config, bffStateRoot);
   const script = journeyScript(config, stateDir);
   const holder: { deps?: UiHandlerDeps } = {};
   const commit = commitFixtureFor(config, stateDir, services, holder);
@@ -511,6 +568,7 @@ function scriptedComposition(
   const deps = scriptedRuntimeDeps(
     scriptedUiHandlerDepsOptions(config, services, bffStateRoot, env, resolver),
     runtimeMutationLeaseBroker,
+    services.relationship,
   );
   const observe =
     config.issue === undefined
@@ -518,7 +576,7 @@ function scriptedComposition(
       : (request: GatewayRequest): void => config.issue?.observeGatewayRequest(request, stateDir);
   holder.deps = deps;
   return {
-    deps: scriptedModelDeps(deps, script, config.includeQuestion, observe, commit),
+    deps: scriptedJourneyModelDeps(config, deps, script, observe, commit),
     scripted,
   };
 }

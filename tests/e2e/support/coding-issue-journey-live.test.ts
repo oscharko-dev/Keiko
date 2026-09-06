@@ -9,6 +9,12 @@ function chatModel(overrides: Partial<ModelCapability> = {}): ModelCapability {
     contextWindow: 1_050_000,
     maxOutputTokens: 8_192,
     toolCalling: false,
+    toolCallingVerification: {
+      status: "verified",
+      checkedAt: new Date().toISOString(),
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: "qualification-profile",
+    },
     structuredOutput: true,
     streaming: true,
     supportsImageInput: false,
@@ -52,6 +58,41 @@ describe("live journey model qualification", () => {
 
     expect(refreshToolCalling).not.toHaveBeenCalled();
     expect(enableWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("uses supported setup when an otherwise eligible chat model lacks the coding use case", async () => {
+    const loadModels = vi
+      .fn<() => Promise<readonly ModelCapability[]>>()
+      .mockResolvedValueOnce([chatModel({ toolCalling: true, preferredUseCases: ["Chat"] })])
+      .mockResolvedValueOnce([
+        chatModel({ toolCalling: true, preferredUseCases: ["Chat", "Coding"] }),
+      ]);
+    const refreshToolCalling = vi.fn<(modelId: string) => Promise<void>>();
+    const enableWorkflow = vi.fn<(modelId: string) => Promise<void>>();
+
+    await expect(
+      qualifyLiveModel({ loadModels, refreshToolCalling, enableWorkflow }),
+    ).resolves.toBe(true);
+
+    expect(refreshToolCalling).not.toHaveBeenCalled();
+    expect(enableWorkflow).toHaveBeenCalledExactlyOnceWith("qualified-chat");
+    expect(loadModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed when setup does not publish a coding-workbench model", async () => {
+    const loadModels = vi.fn(() =>
+      Promise.resolve([chatModel({ toolCalling: true, preferredUseCases: ["Chat"] })]),
+    );
+    const refreshToolCalling = vi.fn<(modelId: string) => Promise<void>>();
+    const enableWorkflow = vi.fn<(modelId: string) => Promise<void>>();
+
+    await expect(
+      qualifyLiveModel({ loadModels, refreshToolCalling, enableWorkflow }),
+    ).rejects.toThrow("publish the selected model as coding-workbench capable");
+
+    expect(refreshToolCalling).not.toHaveBeenCalled();
+    expect(enableWorkflow).toHaveBeenCalledExactlyOnceWith("qualified-chat");
+    expect(loadModels).toHaveBeenCalledTimes(2);
   });
 
   it("fails before a paid probe when the configured chat model is ambiguous", async () => {

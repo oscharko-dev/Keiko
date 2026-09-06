@@ -21,6 +21,7 @@
     "coding-runtime-server-shared.mts",
     "coding-issue-journey-server.mts",
     "coding-issue-handoff-server.mts",
-    "coding-issue-handoff-transport.mts"
+    "coding-issue-handoff-transport.mts",
+    "git-change-chat-3400-server.mts"
   ]
 }

@@ -20,6 +20,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { GatewayReadinessReport } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import { isCodingWorkbenchModel } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 import { selectCodingIssueMode } from "./coding-issue-browser.js";
 
@@ -155,8 +156,15 @@ export async function qualifyLiveModel(client: LiveModelQualificationClient): Pr
     expect(model.id, "readiness must refresh the selected model").toBe(selectedModelId);
     expect(model.toolCalling, "readiness must publish the refreshed tool-calling proof").toBe(true);
   }
-  if (model.workflowEligible) return changed;
-  await client.enableWorkflow(model.id);
+  if (isCodingWorkbenchModel(model)) return changed;
+  const selectedModelId = model.id;
+  await client.enableWorkflow(selectedModelId);
+  model = qualificationChatModel(await client.loadModels());
+  expect(model.id, "setup must preserve the selected model identity").toBe(selectedModelId);
+  expect(
+    isCodingWorkbenchModel(model),
+    "setup must publish the selected model as coding-workbench capable",
+  ).toBe(true);
   return true;
 }
 
@@ -174,7 +182,10 @@ export async function ensureWorkflowEligibleModel(page: Page): Promise<void> {
         headers: CSRF,
         data: { preserveExisting: true, workflowEligibleModelIds: [modelId] },
       });
-      expect(setupResponse.ok()).toBe(true);
+      expect(
+        setupResponse.ok(),
+        `the gateway setup call failed with HTTP ${String(setupResponse.status())}`,
+      ).toBe(true);
     },
   });
   if (!changed) return;
@@ -245,14 +256,19 @@ export function issueResolutionTaskInstructions(): string {
 export async function startCodingRun(page: Page, mode: CodingWorkbenchMode): Promise<void> {
   await selectCodingIssueMode(page, mode);
   await page.getByLabel("Task instructions").fill(issueResolutionTaskInstructions());
+  const startButton = page.getByRole("button", { name: "Start coding run", exact: true });
+  await expect(startButton).toBeEnabled({ timeout: 60_000 });
   const started = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
       response.url().endsWith("/api/coding-workbench/runtime/runs"),
   );
-  await page.getByRole("button", { name: "Start coding run", exact: true }).click();
+  await startButton.click();
   const response = await started;
-  expect(response.ok(), await response.text()).toBe(true);
+  expect(
+    response.ok(),
+    `the coding-run start call failed with HTTP ${String(response.status())}`,
+  ).toBe(true);
 }
 
 export async function runtimeSnapshot(page: Page): Promise<CodingWorkbenchRuntimeSnapshot> {

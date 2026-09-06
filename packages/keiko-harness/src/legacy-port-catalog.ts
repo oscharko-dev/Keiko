@@ -20,6 +20,10 @@ import type {
 import type {
   CatalogVersionRef,
   ToolDescriptor,
+  ToolRef,
+  ToolResultEnvelope,
+  ToolResultReason,
+  ToolResultStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   BoundToolSet,
@@ -28,12 +32,6 @@ import type {
   OfferedToolSet,
   ToolInvocationReceipt,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
-import type {
-  ToolRef,
-  ToolResultEnvelope,
-  ToolResultReason,
-  ToolResultStatus,
-} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   catalogJsonBytes,
   compileToolProjection,
@@ -190,18 +188,18 @@ export function createLegacyPortCatalogBinding(
       // `request.invocation` with no such check), so this adapter trusts the type instead of
       // re-deriving a check the normalizer already owns.
       execute: (request): Promise<CatalogToolDispatchOutcome> =>
-        dispatch(
+        dispatch({
           catalog,
           projection,
           port,
           context,
-          evidence,
+          binding: evidence,
           observe,
           classifyResult,
-          request.toolCallId,
-          request.invocation,
-          nextInvocationId(),
-        ),
+          toolCallId: request.toolCallId,
+          invocation: request.invocation,
+          invocationId: nextInvocationId(),
+        }),
     };
   };
   return { factory, evidence };
@@ -439,18 +437,21 @@ function settledResult(
   }
 }
 
-async function dispatch(
-  catalog: ToolCatalog,
-  projection: CompiledProjection,
-  port: ToolPort,
-  context: HarnessCatalogContext,
-  binding: LegacyPortCatalogBindingEvidence,
-  observe: LegacyPortCatalogLifecycleObserver | undefined,
-  classifyResult: LegacyPortCatalogResultClassifier | undefined,
-  toolCallId: string,
-  invocation: BoundToolInvocation,
-  invocationId: string,
-): Promise<CatalogToolDispatchOutcome> {
+interface DispatchInput {
+  readonly catalog: ToolCatalog;
+  readonly projection: CompiledProjection;
+  readonly port: ToolPort;
+  readonly context: HarnessCatalogContext;
+  readonly binding: LegacyPortCatalogBindingEvidence;
+  readonly observe: LegacyPortCatalogLifecycleObserver | undefined;
+  readonly classifyResult: LegacyPortCatalogResultClassifier | undefined;
+  readonly toolCallId: string;
+  readonly invocation: BoundToolInvocation;
+  readonly invocationId: string;
+}
+
+async function dispatch(input: DispatchInput): Promise<CatalogToolDispatchOutcome> {
+  const { catalog, projection, context, binding, observe, invocation, invocationId } = input;
   if (!INVOCATION_ID.test(invocationId))
     throw new TypeError("Invalid legacy-port catalog invocation identity");
   const { descriptor, alias } = resolveDispatchTarget(catalog, projection, invocation.toolRef);
@@ -467,9 +468,9 @@ async function dispatch(
     invocation,
     invocationId,
     observe,
-    classifyResult,
-    port,
-    toolCallId,
+    classifyResult: input.classifyResult,
+    port: input.port,
+    toolCallId: input.toolCallId,
     alias,
     reservation: reserved.reservation,
   });
