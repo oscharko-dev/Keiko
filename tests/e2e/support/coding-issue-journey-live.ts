@@ -332,7 +332,12 @@ export async function assertRuntimeReady(page: Page, mode: CodingWorkbenchMode):
 }
 
 export async function previewAndBindIssue(page: Page, issueRef: string): Promise<void> {
-  await page.getByLabel("Issue URL or #number").fill(issueRef);
+  const issueField = page.getByLabel("Issue URL or #number");
+  if (!(await issueField.isVisible())) {
+    await page.getByRole("button", { name: "Start from a GitHub issue", exact: true }).click();
+  }
+  await expect(issueField).toBeVisible();
+  await issueField.fill(issueRef);
   await page.getByRole("button", { name: "Preview issue", exact: true }).click();
   await expect(page.getByRole("region", { name: "Issue preview", exact: true })).toBeVisible({
     timeout: 60_000,
