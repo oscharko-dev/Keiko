@@ -537,7 +537,7 @@ describe("bounded coding safe-activity projection", () => {
 
     expect(projection.currentContent()).toMatchObject({
       feed: {
-        droppedEventCount: 1,
+        droppedEventCount: 2,
         turns: [
           {
             messages: [
@@ -553,9 +553,13 @@ describe("bounded coding safe-activity projection", () => {
   });
 
   it("retains the user anchor and newest assistant while older in-flight tools settle", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const activityLog = createBufferedServerLogSink();
     const projection = createCodingSafeActivityProjection({
       now: () => 1_721_323_200_000,
       limits: { maxMessagesPerTurn: 3 },
+      diagnostics: { record: (record) => void records.push(record) },
+      activityLog,
     });
     projection.open({
       runId: RUN_ID,
@@ -577,6 +581,13 @@ describe("bounded coding safe-activity projection", () => {
     projection.ingest(RUN_ID, message("msg_middle", "assistant", "msg_user"));
 
     expect(projection.ingest(RUN_ID, message("msg_new", "assistant", "msg_user"))).toBe(true);
+    expect(projection.currentContent()?.feed.droppedEventCount).toBe(1);
+    expect(activityLog.events).toContainEqual({
+      category: "process",
+      op: "coding-runtime.safe-activity",
+      correlationId: RUN_ID,
+      extra: { event: "dropped", reason: "capacity-rejected", occurrenceCount: 1 },
+    });
     expect(projection.ingest(RUN_ID, text("msg_new", "Newest progress."))).toBe(true);
     expect(projection.ingest(RUN_ID, text("msg_old", "Late old text."))).toBe(false);
     expect(
@@ -608,7 +619,7 @@ describe("bounded coding safe-activity projection", () => {
 
     expect(projection.currentContent()).toMatchObject({
       feed: {
-        droppedEventCount: 2,
+        droppedEventCount: 3,
         turns: [
           {
             messages: [
@@ -629,6 +640,13 @@ describe("bounded coding safe-activity projection", () => {
         ],
       },
     });
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        code: "CODING_SAFE_ACTIVITY_EVENT_DROPPED",
+        occurrenceCount: 1,
+      }),
+    );
+    expect(JSON.stringify(activityLog.events)).not.toMatch(/Old progress|Newest progress/u);
   });
 
   it("fails closed for invalid opening authority, unmatched signals, and throwing workspace checks", () => {

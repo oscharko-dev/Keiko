@@ -218,6 +218,8 @@ interface ResolvedLimits {
   readonly maxPlanBytes: number;
 }
 
+type SignalApplication = "accepted" | "capacity-dropped" | "rejected";
+
 class SafeActivityProjection implements CodingSafeActivityProjection {
   private readonly now: () => number;
   private readonly ttlMs: number;
@@ -281,14 +283,34 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     const rollbackNeeded = isFeedNearProjectionLimit(entry, this.limits);
     const priorFeed = rollbackNeeded ? structuredClone(entry.feed) : undefined;
     const priorMessageTurns = rollbackNeeded ? new Map(entry.messageTurns) : undefined;
-    const accepted = applySignal(entry, signal, this.limits);
-    if (!accepted) return this.reject(runId, "projection-rejected");
+    const application = applySignal(entry, signal, this.limits);
+    if (application === "rejected") return this.reject(runId, "projection-rejected");
     if (signal.signalId !== undefined) {
       rememberBoundedIdentity(entry.signalIds, signal.signalId, this.maxSignalIdentities);
     }
     entry.feed.updatedAt = signal.occurredAt;
+    const capacityDrop = capacityDropForApplication(
+      entry,
+      application,
+      this.maxDroppedEventCount,
+      signal.occurredAt,
+    );
     enforceFeedBounds(entry, this.limits);
-    return this.finalizeIngest(runId, entry, priorFeed, priorMessageTurns);
+    return this.finalizeCapacityDrop(runId, entry, priorFeed, priorMessageTurns, capacityDrop);
+  }
+
+  private finalizeCapacityDrop(
+    runId: string,
+    entry: ProjectionEntry,
+    priorFeed: StoredFeed | undefined,
+    priorMessageTurns: Map<string, string> | undefined,
+    capacityDrop: DropCountChange | undefined,
+  ): boolean {
+    const finalized = this.finalizeIngest(runId, entry, priorFeed, priorMessageTurns);
+    if (finalized && capacityDrop !== undefined) {
+      this.emitDropMilestones(runId, "capacity-rejected", capacityDrop.previous, capacityDrop.next);
+    }
+    return finalized;
   }
 
   /**
@@ -336,7 +358,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (next === previous) return;
     entry.feed = withDroppedCount(entry.feed, next, instant(this.now()));
     this.notify();
-    this.emitDropMilestones(reason, previous, next);
+    this.emitDropMilestones(runId, reason, previous, next);
   }
 
   public purge(runId: string, reason: CodingSafeActivityPurgeReason): void {
@@ -464,10 +486,17 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   }
 
   private emitDropMilestones(
+    runId: string,
     reason: CodingSafeActivityDropReason,
     previous: number,
     next: number,
   ): void {
+    this.activityLog?.write({
+      category: "process",
+      op: "coding-runtime.safe-activity",
+      correlationId: correlationIdOrUnknown(runId),
+      extra: { event: "dropped", reason, occurrenceCount: next },
+    });
     for (let milestone = 1; milestone <= next; milestone *= 2) {
       if (milestone <= previous || milestone <= this.lastEmittedDropCount) continue;
       this.lastEmittedDropCount = milestone;
@@ -535,32 +564,38 @@ function applySignal(
   entry: ProjectionEntry,
   signal: CodingSafeActivitySignal,
   limits: ResolvedLimits,
-): boolean {
-  if (entry.feed.availability !== "available") return false;
+): SignalApplication {
+  if (entry.feed.availability !== "available") return "rejected";
   if (signal.kind === "message") return applyMessage(entry, signal, limits);
-  if (signal.kind === "text") return applyText(entry, signal, limits);
-  if (signal.kind === "plan") return applyPlan(entry, signal, limits);
-  return applyTool(entry, signal, limits);
+  if (signal.kind === "text") return applicationResult(applyText(entry, signal, limits));
+  if (signal.kind === "plan") return applicationResult(applyPlan(entry, signal, limits));
+  return applicationResult(applyTool(entry, signal, limits));
+}
+
+function applicationResult(accepted: boolean): SignalApplication {
+  return accepted ? "accepted" : "rejected";
 }
 
 function applyMessage(
   entry: ProjectionEntry,
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "message" }>,
   limits: ResolvedLimits,
-): boolean {
-  if (entry.feed.availability !== "available") return false;
+): SignalApplication {
+  if (entry.feed.availability !== "available") return "rejected";
   const knownTurn = entry.messageTurns.get(signal.messageId);
-  if (knownTurn !== undefined) return true;
+  if (knownTurn !== undefined) return "accepted";
   const turn = turnForMessage(entry, signal);
-  if (turn === undefined) return false;
+  if (turn === undefined) return "rejected";
+  let application: SignalApplication = "accepted";
   if (turn.messages.length >= limits.maxMessagesPerTurn) {
     turn.truncated = true;
-    if (!evictOldestAssistantMessage(entry, turn)) return true;
+    if (!evictOldestAssistantMessage(entry, turn)) return "capacity-dropped";
+    application = "capacity-dropped";
   }
   turn.messages.push(newMessage(signal));
   entry.messageTurns.set(signal.messageId, turn.turnId);
   enforceTurnCount(entry, limits.maxTurns);
-  return true;
+  return application;
 }
 
 function evictOldestAssistantMessage(entry: ProjectionEntry, turn: MutableTurn): boolean {
@@ -981,6 +1016,35 @@ function withDroppedCount(
     updatedAt,
     droppedEventCount,
   };
+}
+
+function incrementDroppedCount(
+  entry: ProjectionEntry,
+  maximum: number,
+  updatedAt: string,
+): DropCountChange | undefined {
+  if (entry.feed.availability !== "available") return undefined;
+  const previous = entry.feed.droppedEventCount;
+  const next = Math.min(maximum, previous + 1);
+  if (next === previous) return undefined;
+  entry.feed = withDroppedCount(entry.feed, next, updatedAt);
+  return { previous, next };
+}
+
+interface DropCountChange {
+  readonly previous: number;
+  readonly next: number;
+}
+
+function capacityDropForApplication(
+  entry: ProjectionEntry,
+  application: SignalApplication,
+  maximum: number,
+  updatedAt: string,
+): DropCountChange | undefined {
+  return application === "capacity-dropped"
+    ? incrementDroppedCount(entry, maximum, updatedAt)
+    : undefined;
 }
 
 // Issue #3245: both drop/purge reason unions are small and genuinely closed (5 members each), so
