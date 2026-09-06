@@ -18,6 +18,7 @@ import type {
   CodingWorkbenchRuntimeSnapshot,
   ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
+import type { GatewayReadinessReport } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 import { selectCodingIssueMode } from "./coding-issue-browser.js";
@@ -25,6 +26,7 @@ import { selectCodingIssueMode } from "./coding-issue-browser.js";
 const SURFACE = 'section[aria-label="Coding Workbench"][data-state]';
 const AUTH_ENDPOINT = "/api/coding-workbench/github-authorization";
 const MODELS_ENDPOINT = "/api/models";
+const GATEWAY_READINESS_ENDPOINT = "/api/gateway/readiness";
 const GATEWAY_SETUP_ENDPOINT = "/api/gateway/setup";
 const READINESS_ENDPOINT = "/api/coding-workbench/runtime/readiness";
 const CSRF = { "X-Keiko-CSRF": "1" };
@@ -95,28 +97,87 @@ export async function openLiveWorkbench(page: Page, repositoryRoot: string): Pro
   await expect(page.getByLabel("Repository path")).toHaveValue(repositoryRoot);
 }
 
-// Live-run blocker (B), unchanged from the original single test: the real gateway config may hold
-// a tool-calling chat model that is not yet marked workflow-eligible.
-export async function ensureWorkflowEligibleModel(page: Page): Promise<void> {
+async function liveModels(page: Page): Promise<readonly ModelCapability[]> {
   const modelsResponse = await page.request.get(MODELS_ENDPOINT);
   expect(modelsResponse.ok()).toBe(true);
   const { models } = (await modelsResponse.json()) as {
     readonly models: readonly ModelCapability[];
   };
-  const toolCallingChatModels = models.filter(
-    (model) => model.kind === "chat" && model.toolCalling,
-  );
+  return models;
+}
+
+function qualificationChatModel(models: readonly ModelCapability[]): ModelCapability {
+  const chatModels = models.filter((model) => model.kind === "chat");
+  const eligible = chatModels.filter((model) => model.workflowEligible);
+  const candidates = eligible.length > 0 ? eligible : chatModels;
   expect(
-    toolCallingChatModels.length,
-    "the configured Model Gateway must expose at least one tool-calling chat model",
+    candidates.length,
+    "the configured Model Gateway must expose at least one chat model",
   ).toBeGreaterThan(0);
-  if (toolCallingChatModels.some((model) => model.workflowEligible)) return;
-  const modelId = toolCallingChatModels[0]?.id;
-  const setupResponse = await page.request.post(GATEWAY_SETUP_ENDPOINT, {
+  expect(
+    candidates.length,
+    "the live qualification config must identify one unambiguous chat model",
+  ).toBe(1);
+  const candidate = candidates[0];
+  if (candidate === undefined) throw new Error("live qualification chat model was unavailable");
+  return candidate;
+}
+
+async function refreshToolCallingProof(page: Page, modelId: string): Promise<void> {
+  const response = await page.request.post(GATEWAY_READINESS_ENDPOINT, {
     headers: CSRF,
-    data: { preserveExisting: true, workflowEligibleModelIds: [modelId] },
+    data: { modelId, options: { probes: ["tool_calling"] } },
   });
-  expect(setupResponse.ok()).toBe(true);
+  expect(
+    response.ok(),
+    `the guarded readiness call failed with HTTP ${String(response.status())}`,
+  ).toBe(true);
+  const report = (await response.json()) as GatewayReadinessReport;
+  const proof = report.probes.find((probe) => probe.name === "tool_calling");
+  expect(proof?.status, "the guarded readiness call must verify tool calling").toBe("passed");
+  expect(report.verifiedCapabilities.toolCalling).toBe(true);
+}
+
+interface LiveModelQualificationClient {
+  readonly loadModels: () => Promise<readonly ModelCapability[]>;
+  readonly refreshToolCalling: (modelId: string) => Promise<void>;
+  readonly enableWorkflow: (modelId: string) => Promise<void>;
+}
+
+export async function qualifyLiveModel(client: LiveModelQualificationClient): Promise<boolean> {
+  let changed = false;
+  let model = qualificationChatModel(await client.loadModels());
+  if (!model.toolCalling) {
+    const selectedModelId = model.id;
+    await client.refreshToolCalling(selectedModelId);
+    changed = true;
+    model = qualificationChatModel(await client.loadModels());
+    expect(model.id, "readiness must refresh the selected model").toBe(selectedModelId);
+    expect(model.toolCalling, "readiness must publish the refreshed tool-calling proof").toBe(true);
+  }
+  if (model.workflowEligible) return changed;
+  await client.enableWorkflow(model.id);
+  return true;
+}
+
+// Live-run blocker (B): the real gateway config may hold a chat model whose previously verified
+// tool-calling proof has expired, or one that has not yet been marked workflow-eligible. Refreshing
+// an expired proof must go through the production readiness route, which is protected by the same
+// durable qualification-spend admission as every subsequent provider request. Filtering the stale
+// model out before that call made a valid configured profile impossible to qualify.
+export async function ensureWorkflowEligibleModel(page: Page): Promise<void> {
+  const changed = await qualifyLiveModel({
+    loadModels: () => liveModels(page),
+    refreshToolCalling: (modelId) => refreshToolCallingProof(page, modelId),
+    enableWorkflow: async (modelId): Promise<void> => {
+      const setupResponse = await page.request.post(GATEWAY_SETUP_ENDPOINT, {
+        headers: CSRF,
+        data: { preserveExisting: true, workflowEligibleModelIds: [modelId] },
+      });
+      expect(setupResponse.ok()).toBe(true);
+    },
+  });
+  if (!changed) return;
   await page.reload();
   await expect(workbenchSurface(page)).toBeVisible();
 }
