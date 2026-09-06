@@ -30,6 +30,7 @@ const MODELS_ENDPOINT = "/api/models";
 const GATEWAY_READINESS_ENDPOINT = "/api/gateway/readiness";
 const GATEWAY_SETUP_ENDPOINT = "/api/gateway/setup";
 const READINESS_ENDPOINT = "/api/coding-workbench/runtime/readiness";
+const PROJECTS_ENDPOINT = "/api/projects";
 const CSRF = { "X-Keiko-CSRF": "1" };
 
 export function workbenchSurface(page: Page): Locator {
@@ -316,6 +317,63 @@ export async function grantGithubAccess(page: Page, repositoryRoot: string): Pro
   expect(updated.ok()).toBe(true);
 }
 
+interface RepositoryProjectRegistration {
+  readonly status: number;
+  readonly warning?: unknown;
+}
+
+export interface LiveRepositoryProjectClient {
+  readonly register: (repositoryRoot: string) => Promise<RepositoryProjectRegistration>;
+}
+
+export async function registerTrustedRepositoryProject(
+  client: LiveRepositoryProjectClient,
+  repositoryRoot: string,
+): Promise<void> {
+  const registered = await client.register(repositoryRoot);
+  expect(
+    registered.status,
+    `the repository project registration failed with HTTP ${String(registered.status)}`,
+  ).toBe(201);
+  expect(
+    registered.warning,
+    "the registered repository must inherit package-script trust before worktree provisioning",
+  ).toBeUndefined();
+}
+
+export interface LiveIssueWorkspacePreparation {
+  readonly open: () => Promise<void>;
+  readonly grantGithub: () => Promise<void>;
+  readonly registerProject: () => Promise<void>;
+  readonly bindIssue: () => Promise<void>;
+}
+
+export async function prepareTrustedIssueWorkspace(
+  steps: LiveIssueWorkspacePreparation,
+): Promise<void> {
+  await steps.open();
+  await steps.grantGithub();
+  await steps.registerProject();
+  await steps.bindIssue();
+}
+
+async function registerLiveRepositoryProject(page: Page, repositoryRoot: string): Promise<void> {
+  await registerTrustedRepositoryProject(
+    {
+      register: async (path): Promise<RepositoryProjectRegistration> => {
+        const response = await page.request.post(PROJECTS_ENDPOINT, {
+          headers: CSRF,
+          data: { path, name: "Issue Journey Controlled Repository" },
+        });
+        if (response.status() !== 201) return { status: response.status() };
+        const body = (await response.json()) as { readonly warning?: unknown };
+        return { status: response.status(), warning: body.warning };
+      },
+    },
+    repositoryRoot,
+  );
+}
+
 export async function assertRuntimeReady(page: Page, mode: CodingWorkbenchMode): Promise<void> {
   await expect
     .poll(
@@ -492,12 +550,18 @@ export async function driveIssueToDraftPullRequest(
   page: Page,
   input: DriveToDraftPrInput,
 ): Promise<DeliveredPullRequest> {
-  await openLiveWorkbench(page, input.repositoryRoot);
-  await grantGithubAccess(page, input.repositoryRoot);
-  await prepareBoundIssueForRun({
-    previewAndBind: () => previewAndBindIssue(page, input.issueRef),
-    qualifyModel: () => ensureWorkflowEligibleModel(page),
-    previewAndAccept: () => previewAndAcceptIssue(page, input.issueRef),
+  await prepareTrustedIssueWorkspace({
+    open: () => openLiveWorkbench(page, input.repositoryRoot),
+    grantGithub: () => grantGithubAccess(page, input.repositoryRoot),
+    // Project registration is the folder picker's explicit trust act. It must precede Bind so
+    // the production provisioner derives that trust onto the managed worktree.
+    registerProject: () => registerLiveRepositoryProject(page, input.repositoryRoot),
+    bindIssue: () =>
+      prepareBoundIssueForRun({
+        previewAndBind: () => previewAndBindIssue(page, input.issueRef),
+        qualifyModel: () => ensureWorkflowEligibleModel(page),
+        previewAndAccept: () => previewAndAcceptIssue(page, input.issueRef),
+      }),
   });
   await assertRuntimeReady(page, input.mode);
   await startCodingRun(page, input.mode, input.issueRef);

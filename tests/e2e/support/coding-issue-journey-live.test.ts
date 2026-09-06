@@ -2,8 +2,10 @@ import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
   prepareBoundIssueForRun,
+  prepareTrustedIssueWorkspace,
   qualifyLiveModel,
   reconcileLiveWorkbenchAfterModelChange,
+  registerTrustedRepositoryProject,
 } from "./coding-issue-journey-live.js";
 
 function chatModel(overrides: Partial<ModelCapability> = {}): ModelCapability {
@@ -245,5 +247,56 @@ describe("live journey model-change reload", () => {
     expect(reload).not.toHaveBeenCalled();
     expect(waitForWorkbench).not.toHaveBeenCalled();
     expect(waitForWorkspaceIdentity).not.toHaveBeenCalled();
+  });
+});
+
+describe("live journey repository trust", () => {
+  it("registers trust before the issue provisions its managed worktree", async () => {
+    const order: string[] = [];
+
+    await prepareTrustedIssueWorkspace({
+      open: (): Promise<void> => {
+        order.push("opened");
+        return Promise.resolve();
+      },
+      grantGithub: (): Promise<void> => {
+        order.push("github-authorized");
+        return Promise.resolve();
+      },
+      registerProject: (): Promise<void> => {
+        order.push("project-registered");
+        return Promise.resolve();
+      },
+      bindIssue: (): Promise<void> => {
+        order.push("issue-bound");
+        return Promise.resolve();
+      },
+    });
+
+    expect(order).toEqual(["opened", "github-authorized", "project-registered", "issue-bound"]);
+  });
+
+  it("registers the accepted repository as a trusted project before provisioning", async () => {
+    const register = vi.fn(() => Promise.resolve({ status: 201 }));
+
+    await registerTrustedRepositoryProject({ register }, "/controlled/repository");
+
+    expect(register).toHaveBeenCalledExactlyOnceWith("/controlled/repository");
+  });
+
+  it("fails closed when project registration keeps repository scripts restricted", async () => {
+    const register = vi.fn(() => Promise.resolve({ status: 201, warning: "restricted" }));
+
+    await expect(
+      registerTrustedRepositoryProject({ register }, "/controlled/repository"),
+    ).rejects.toThrow("must inherit package-script trust");
+  });
+
+  it("reports only the rejected HTTP status when registration fails", async () => {
+    const register = vi.fn(() => Promise.resolve({ status: 409 }));
+
+    await expect(
+      registerTrustedRepositoryProject({ register }, "/controlled/repository"),
+    ).rejects.toThrow("failed with HTTP 409");
   });
 });
