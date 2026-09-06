@@ -23,6 +23,7 @@ import {
   type ModelGatewayLogSink,
 } from "./observability.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
+import { GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import { CircuitBreaker, executeWithRetry, systemClock } from "./resilience.js";
 import { assertValidGatewaySamplingParameters } from "./types.js";
 import type {
@@ -100,6 +101,32 @@ function callIds(requestId: string, request: GatewayCallRequest): CallIds {
 
 function callIdFields(ids: CallIds): Readonly<Record<string, unknown>> {
   return ids.correlationId === ids.requestId ? {} : { requestId: ids.requestId };
+}
+
+function measuredCatalogFailureUsage(
+  error: unknown,
+  capability: ModelCapability,
+  correlationId: string,
+): UsageMetadata | undefined {
+  if (!(error instanceof GatewayToolCatalogError) || error.partialUsage === undefined) {
+    return undefined;
+  }
+  const { promptTokens, completionTokens } = error.partialUsage;
+  if (
+    !Number.isSafeInteger(promptTokens) ||
+    promptTokens < 0 ||
+    !Number.isSafeInteger(completionTokens) ||
+    completionTokens < 0
+  ) {
+    return undefined;
+  }
+  return {
+    requestId: correlationId,
+    promptTokens,
+    completionTokens,
+    latencyMs: 0,
+    costClass: capability.costClass,
+  };
 }
 
 function gatewayEvent(
@@ -308,10 +335,7 @@ export class Gateway {
         firstTokenMs ??= firstNonEmptyDeltaMs(chunk, elapsed);
         if (chunk.type === "done") {
           terminalUsage = chunk.response.usage;
-          yield {
-            type: "done",
-            response: this.enrich(chunk.response, ids.requestId, start, route),
-          };
+          yield this.enrichDone(chunk.response, ids.requestId, start, route);
         } else {
           yield chunk;
         }
@@ -320,6 +344,7 @@ export class Gateway {
       settled = true;
     } catch (error) {
       settled = true;
+      terminalUsage = measuredCatalogFailureUsage(error, route.capability, ids.correlationId);
       this.failStream(ids, route, breaker, chunkCount, elapsed(), error);
     } finally {
       reservation?.settle(terminalUsage);
@@ -555,6 +580,15 @@ export class Gateway {
     };
   }
 
+  private enrichDone(
+    response: NormalizedResponse,
+    requestId: string,
+    start: number,
+    route: RoutedCall,
+  ): GatewayStreamChunk {
+    return { type: "done", response: this.enrich(response, requestId, start, route) };
+  }
+
   circuitStatus(modelId: string): CircuitBreakerStatus {
     const breaker = this.breakers.get(modelId);
     return (
@@ -584,6 +618,7 @@ export class Gateway {
       breaker.recordSuccess(correlationId);
       return response;
     } catch (error) {
+      usage = measuredCatalogFailureUsage(error, capability, correlationId);
       // A client-initiated cancel is not a provider fault — skip the breaker.
       recordProviderFailure(breaker, error, correlationId);
       throw error;

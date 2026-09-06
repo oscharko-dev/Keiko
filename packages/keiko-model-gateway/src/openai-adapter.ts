@@ -26,7 +26,10 @@ import {
   SseIdleTimeoutError,
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
-import { createGatewayToolCatalogBridge } from "./toolCatalogBridge.js";
+import {
+  createGatewayToolCatalogBridge,
+  retainMeasuredCatalogFailureUsage,
+} from "./toolCatalogBridge.js";
 import {
   bindNormalizedToolCalls,
   normalizeChatResponse,
@@ -462,6 +465,27 @@ function redactResponse(
   };
 }
 
+function providerReportedUsage(payload: unknown): boolean {
+  if (!isRecord(payload) || !isRecord(payload.usage)) return false;
+  return [payload.usage.prompt_tokens, payload.usage.completion_tokens].every(
+    (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0,
+  );
+}
+
+function bindCatalogResponse(
+  response: NormalizedResponse,
+  secrets: readonly string[],
+  bind: (calls: readonly NormalizedToolCall[]) => readonly NormalizedToolCall[],
+  usageReported: boolean,
+): NormalizedResponse {
+  try {
+    return bindNormalizedToolCalls(redactResponse(response, secrets), bind);
+  } catch (error) {
+    if (usageReported) retainMeasuredCatalogFailureUsage(error, response.usage);
+    throw error;
+  }
+}
+
 function configuredSecrets(secrets: readonly string[]): readonly string[] {
   return secrets.filter((secret) => secret.length > 0);
 }
@@ -593,6 +617,7 @@ interface StreamAccumulator {
   finishReason: FinishReason;
   prompt: number;
   completion: number;
+  usageReported: boolean;
   readonly toolCalls: ToolCallAccumulator;
 }
 
@@ -605,6 +630,7 @@ function applyChunkMetadata(chunk: unknown, acc: StreamAccumulator): void {
   if (usage !== undefined) {
     acc.prompt = usage.prompt;
     acc.completion = usage.completion;
+    acc.usageReported = true;
   }
   applyToolCallDelta(acc.toolCalls, chunk);
 }
@@ -664,7 +690,12 @@ export class OpenAiAdapter implements ProviderAdapter {
       request.responseFormat?.type === "json_schema",
     );
     assertUsableAssistantResponse(normalized, config.modelId, secrets);
-    return bindNormalizedToolCalls(redactResponse(normalized, secrets), catalog.bindCalls);
+    return bindCatalogResponse(
+      normalized,
+      secrets,
+      catalog.bindCalls,
+      providerReportedUsage(payload),
+    );
   };
 
   // Streaming chat path (Layer 1): yields redacted content-delta tokens as they arrive, then a
@@ -702,6 +733,7 @@ export class OpenAiAdapter implements ProviderAdapter {
       finishReason: "stop",
       prompt: 0,
       completion: 0,
+      usageReported: false,
       toolCalls: new Map(),
     };
     for await (const token of this.streamDeltas(response, config, secrets, acc)) {
@@ -709,7 +741,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     }
     const assembled = this.assembleResponse(config, start, acc);
     assertUsableAssistantResponse(assembled, config.modelId, secrets);
-    const bound = bindNormalizedToolCalls(redactResponse(assembled, secrets), catalog.bindCalls);
+    const bound = bindCatalogResponse(assembled, secrets, catalog.bindCalls, acc.usageReported);
     yield { type: "done", response: bound };
   };
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ConfigInvalidError, TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { Gateway, type GatewayCallRequest, type GatewaySpendReservation } from "./gateway.js";
+import { GatewayToolCatalogError, retainMeasuredCatalogFailureUsage } from "./toolCatalogBridge.js";
 import type {
   GatewayConfig,
   GatewayRequest,
@@ -145,6 +146,47 @@ describe("Gateway attempt spend admission", () => {
     });
     await gateway.chat(request);
     expect(settle).toHaveBeenCalledExactlyOnceWith(response.usage);
+  });
+
+  it("settles reported failed usage before a bounded malformed-call retry", async () => {
+    const firstSettle = vi.fn();
+    const secondSettle = vi.fn();
+    const finalSettle = vi.fn();
+    const reserve = vi
+      .fn<() => GatewaySpendReservation>()
+      .mockReturnValueOnce({ settle: firstSettle })
+      .mockReturnValueOnce({ settle: secondSettle })
+      .mockReturnValueOnce({ settle: finalSettle });
+    const firstMalformed = new GatewayToolCatalogError("invalid-arguments", undefined, true);
+    retainMeasuredCatalogFailureUsage(firstMalformed, {
+      ...response.usage,
+      promptTokens: 41,
+      completionTokens: 7,
+    });
+    const secondMalformed = new GatewayToolCatalogError("invalid-arguments", undefined, true);
+    retainMeasuredCatalogFailureUsage(secondMalformed, {
+      ...response.usage,
+      promptTokens: 43,
+      completionTokens: 9,
+    });
+    const call = vi
+      .fn<() => Promise<NormalizedResponse>>()
+      .mockRejectedValueOnce(firstMalformed)
+      .mockRejectedValueOnce(secondMalformed)
+      .mockResolvedValueOnce(response);
+    const gateway = new Gateway(config, { adapter: { call }, spendBudget: { reserve } });
+
+    await expect(gateway.chat(request)).resolves.toMatchObject({ content: response.content });
+
+    expect(call).toHaveBeenCalledTimes(3);
+    expect(reserve).toHaveBeenCalledTimes(3);
+    expect(firstSettle).toHaveBeenCalledWith(
+      expect.objectContaining({ promptTokens: 41, completionTokens: 7 }),
+    );
+    expect(secondSettle).toHaveBeenCalledWith(
+      expect.objectContaining({ promptTokens: 43, completionTokens: 9 }),
+    );
+    expect(finalSettle).toHaveBeenCalledWith(response.usage);
   });
 
   it("retains the upper reservation when a stream consumer disconnects", async () => {

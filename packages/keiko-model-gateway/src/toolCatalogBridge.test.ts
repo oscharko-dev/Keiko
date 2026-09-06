@@ -32,7 +32,10 @@ function advertisement(): GatewayToolCatalogAdvertisement {
   return gatewayCatalogAdvertisement(NOW);
 }
 
-function response(args: unknown = { path: "src/example.ts" }): Response {
+function response(
+  args: unknown = { path: "src/example.ts" },
+  usage?: { readonly promptTokens: number; readonly completionTokens: number },
+): Response {
   return new Response(
     JSON.stringify({
       choices: [
@@ -53,6 +56,14 @@ function response(args: unknown = { path: "src/example.ts" }): Response {
           },
         },
       ],
+      ...(usage === undefined
+        ? {}
+        : {
+            usage: {
+              prompt_tokens: usage.promptTokens,
+              completion_tokens: usage.completionTokens,
+            },
+          }),
     }),
     { status: 200, headers: { "content-type": "application/json" } },
   );
@@ -308,7 +319,7 @@ describe("gateway bridge trust and compatibility boundaries", () => {
     );
     await expect(
       subject.call({ ...request(), toolCatalog: advertisement() }, CONFIG),
-    ).rejects.toMatchObject({ status: "invalid" });
+    ).rejects.toMatchObject({ status: "invalid", retryable: false });
   });
   it("keeps the bound payload identical to the existing redacted argument view", async () => {
     const result = await adapter(() => Promise.resolve(response({ path: CONFIG.apiKey }))).call(
@@ -343,7 +354,35 @@ describe("gateway bridge trust and compatibility boundaries", () => {
     expect(JSON.stringify(events)).not.toContain("src/example.ts");
     expect(events.at(-1)).toMatchObject({
       errorKind: "validation",
-      extra: { phase: "response", status: "invalid", reason: "invalid-arguments" },
+      extra: {
+        phase: "response",
+        status: "invalid",
+        reason: "invalid-arguments",
+        catalogReason: "invalid-shape",
+        canonicalToolId: "keiko.file.read",
+        contractVersion: 1,
+      },
+    });
+  });
+
+  it("retains reported usage when invalid tool arguments reject an HTTP 200 response", async () => {
+    const subject = adapter(() =>
+      Promise.resolve(
+        response(
+          { path: "raw-body", extra: "raw-body" },
+          {
+            promptTokens: 41,
+            completionTokens: 7,
+          },
+        ),
+      ),
+    );
+
+    await expect(
+      subject.call({ ...request(), toolCatalog: advertisement() }, CONFIG),
+    ).rejects.toMatchObject({
+      retryable: true,
+      partialUsage: { promptTokens: 41, completionTokens: 7, streamedChars: 0 },
     });
   });
   it("never executes an accessor while inspecting the catalog advertisement", () => {
@@ -457,7 +496,9 @@ describe("native extensions (question/todowrite, #3414 follow-up)", () => {
       { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
       (): number => NOW,
     );
-    expect(() => bridge.bind({ id: "call-1", name: "not_a_real_tool", arguments: {} })).toThrow();
+    expect(() => bridge.bind({ id: "call-1", name: "not_a_real_tool", arguments: {} })).toThrow(
+      expect.objectContaining({ retryable: true }),
+    );
   });
 
   // b1-16: native-extension passthrough shares `captureCall`'s structural check with every bound

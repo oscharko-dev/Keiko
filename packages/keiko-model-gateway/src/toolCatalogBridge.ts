@@ -7,19 +7,23 @@ import {
   captureCatalogJson,
   createToolInvocationNormalizer,
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
+  ToolCatalogError,
   type ToolInvocationNormalizer,
 } from "@oscharko-dev/keiko-tool-catalog";
 import { MalformedToolCallError } from "@oscharko-dev/keiko-security/errors/gateway";
-import type { GatewayRequest, NormalizedToolCall, ToolDefinition } from "./types.js";
+import type { GatewayRequest, NormalizedToolCall, ToolDefinition, UsageMetadata } from "./types.js";
 import { resolveLogSink, type ModelGatewayLogSink } from "./observability.js";
 
 export class GatewayToolCatalogError extends MalformedToolCallError {
   readonly status = "invalid";
+  override readonly retryable: boolean;
   constructor(
     readonly reason: ToolResultReason<"invalid">,
     cause?: unknown,
+    retryable = false,
   ) {
     super(`catalog tool request ${reason}`);
+    this.retryable = retryable;
     if (cause !== undefined) this.cause = cause;
   }
 }
@@ -27,6 +31,16 @@ export interface GatewayToolCatalogBridge {
   readonly bindCalls: (calls: readonly NormalizedToolCall[]) => readonly NormalizedToolCall[];
   readonly tools: readonly ToolDefinition[];
   readonly bind: (call: NormalizedToolCall) => NormalizedToolCall;
+}
+
+/** Retains counts the provider reported before its semantically invalid tool call was rejected. */
+export function retainMeasuredCatalogFailureUsage(error: unknown, usage: UsageMetadata): void {
+  if (!(error instanceof GatewayToolCatalogError) || error.partialUsage !== undefined) return;
+  error.partialUsage = {
+    promptTokens: usage.promptTokens,
+    completionTokens: usage.completionTokens,
+    streamedChars: 0,
+  };
 }
 function requireBridge(value: boolean, reason: ToolResultReason<"invalid">): asserts value {
   if (!value) throw new GatewayToolCatalogError(reason);
@@ -125,18 +139,56 @@ function captureCall(input: NormalizedToolCall): NormalizedToolCall {
   );
   return object as unknown as NormalizedToolCall;
 }
-function reject(log: ModelGatewayLogSink, phase: "projection" | "response", cause: unknown): never {
+interface CatalogRejectionDetails {
+  readonly canonicalToolId?: string | undefined;
+  readonly contractVersion?: number | undefined;
+  readonly catalogReason?: string | undefined;
+}
+
+function retryableResponseRejection(phase: "projection" | "response", cause: unknown): boolean {
+  return (
+    phase === "response" &&
+    cause instanceof ToolCatalogError &&
+    (cause.reason === "invalid-shape" || cause.reason === "invalid-identity")
+  );
+}
+
+function reject(
+  log: ModelGatewayLogSink,
+  phase: "projection" | "response",
+  cause: unknown,
+  details: CatalogRejectionDetails = {},
+): never {
   const reason = phase === "projection" ? "projection-mismatch" : "invalid-arguments";
   const error =
-    cause instanceof GatewayToolCatalogError ? cause : new GatewayToolCatalogError(reason, cause);
+    cause instanceof GatewayToolCatalogError
+      ? cause
+      : new GatewayToolCatalogError(reason, cause, retryableResponseRejection(phase, cause));
   log.write({
     level: "warn",
     category: "gateway",
     op: "gateway.tool-catalog.rejected",
     errorKind: "validation",
-    extra: { phase, status: error.status, reason: error.reason },
+    extra: { phase, status: error.status, reason: error.reason, ...details },
   });
   throw error;
+}
+
+function rejectionDetails(
+  normalizer: ToolInvocationNormalizer | undefined,
+  call: NormalizedToolCall,
+  cause: unknown,
+): CatalogRejectionDetails {
+  const projected = normalizer?.binding.projection.tools.find((tool) => tool.alias === call.name);
+  return {
+    ...(projected === undefined
+      ? {}
+      : {
+          canonicalToolId: projected.toolRef.canonicalId,
+          contractVersion: projected.toolRef.contractVersion,
+        }),
+    ...(cause instanceof ToolCatalogError ? { catalogReason: cause.reason } : {}),
+  };
 }
 function bindCall(
   normalizer: ToolInvocationNormalizer | undefined,
@@ -172,7 +224,7 @@ function bindCall(
       invocation,
     });
   } catch (cause) {
-    return reject(log, "response", cause);
+    return reject(log, "response", cause, rejectionDetails(normalizer, input, cause));
   }
 }
 function bindCalls(
