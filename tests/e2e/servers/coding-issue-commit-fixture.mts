@@ -39,7 +39,9 @@ interface CommitFixtureInput {
 }
 
 /** The resolver is constructed before the BFF; all real ports resolve from the completed assembly. */
-function deferredDependencies(input: CommitFixtureInput): VerifiedCommitRuntimeDependencies {
+export function createDeferredVerifiedCommitDependencies(
+  input: Pick<CommitFixtureInput, "deps" | "snapshots">,
+): VerifiedCommitRuntimeDependencies {
   let cached: VerifiedCommitRuntimeDependencies | undefined;
   const actual = (): VerifiedCommitRuntimeDependencies => {
     cached ??= createProductionVerifiedCommitDependencies(input.deps(), input.snapshots);
@@ -121,7 +123,7 @@ class CommitFixture implements CodingIssueCommitFixture {
   private latestResult: CodingToolResult | undefined;
   private staging: Promise<void> | undefined;
   constructor(private readonly input: CommitFixtureInput) {
-    this.verifiedCommit = deferredDependencies(input);
+    this.verifiedCommit = createDeferredVerifiedCommitDependencies(input);
     if (input.delivery === true)
       this.draftDelivery = deferredDeliveryDependencies(
         input.deps,

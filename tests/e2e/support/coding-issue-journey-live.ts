@@ -410,6 +410,14 @@ export async function previewAndBindIssue(page: Page, issueRef: string): Promise
   await expect(page.getByRole("region", { name: "Code setup", exact: true })).toHaveCount(0);
 }
 
+export async function reacceptBoundIssue(page: Page, issueRef: string): Promise<void> {
+  const identity = await currentLiveWorkbenchIdentity(page);
+  // The setup surface closes only after the existing bind/reconcile/activate sequence settles.
+  // Provision reuses this repository/task pair; assert that reacceptance did not create a task.
+  await previewAndBindIssue(page, issueRef);
+  await waitForLiveWorkbenchIdentity(page, identity);
+}
+
 export interface BoundIssueRunPreparation {
   readonly previewAndBind: () => Promise<void>;
   readonly qualifyModel: () => Promise<boolean>;
@@ -560,7 +568,7 @@ export async function driveIssueToDraftPullRequest(
       prepareBoundIssueForRun({
         previewAndBind: () => previewAndBindIssue(page, input.issueRef),
         qualifyModel: () => ensureWorkflowEligibleModel(page),
-        previewAndAccept: () => previewAndAcceptIssue(page, input.issueRef),
+        previewAndAccept: () => reacceptBoundIssue(page, input.issueRef),
       }),
   });
   await assertRuntimeReady(page, input.mode);

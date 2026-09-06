@@ -13,6 +13,10 @@ import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 import { evidenceArtifactPath, evidenceScreenshotPath } from "./support/evidence.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
 import {
+  prepareBoundIssueForRun,
+  reacceptBoundIssue,
+} from "./support/coding-issue-journey-live.js";
+import {
   ISSUE_INTAKE_EDITED,
   ISSUE_INTAKE_CONTEXT_MARKER,
   ISSUE_INTAKE_LAUNCHER_SECRET,
@@ -309,6 +313,7 @@ async function startBoundIssue(
     path: evidenceScreenshotPath("docs/design-system/evidence/3385/09-accepted.png"),
     animations: "disabled",
   });
+  await reacceptAfterQualificationReload(page);
   await enableFullAccess(page);
   await page
     .getByLabel("Task instructions")
@@ -356,6 +361,34 @@ async function startBoundIssue(
   await page.getByRole("button", { name: "Stop run", exact: true }).click();
   await expect(workbench(page)).toHaveAttribute("data-state", "cancelled");
   expect((await snapshot(page)).issueBinding).toEqual(running.issueBinding);
+}
+
+async function reacceptAfterQualificationReload(page: Page): Promise<void> {
+  const inventory = await page.request.get("/api/task-workspaces");
+  const before = (await inventory.json()) as {
+    readonly instances: readonly { readonly workspaceId: string; readonly taskBranch: string }[];
+  };
+  expect(before.instances).toHaveLength(1);
+  await prepareBoundIssueForRun({
+    previewAndBind: (): Promise<void> => Promise.resolve(),
+    qualifyModel: async (): Promise<boolean> => {
+      // Exercise the real browser reload triggered by a changed qualification. The fixture's
+      // provider is deterministic; qualification probing itself is covered by the live unit suite.
+      await page.reload();
+      await expect(page.getByLabel("Task instructions")).toBeVisible();
+      return true;
+    },
+    previewAndAccept: () => reacceptBoundIssue(page, "#42"),
+  });
+  await expect(page.getByRole("region", { name: "Code setup", exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Task instructions")).toBeVisible();
+  const after = await page.request.get("/api/task-workspaces");
+  const restored = (await after.json()) as {
+    readonly instances: readonly { readonly workspaceId: string; readonly taskBranch: string }[];
+  };
+  expect(restored.instances).toHaveLength(1);
+  expect(restored.instances[0]?.workspaceId).toBe(before.instances[0]?.workspaceId);
+  expect(restored.instances[0]?.taskBranch).toBe(before.instances[0]?.taskBranch);
 }
 
 test("#3385 @coding-issue-intake mounted preview, refusal, managed workspace, initial model context and reload", async ({
@@ -441,6 +474,7 @@ function recordJourneyProof(): void {
           "stale-preview-no-workspace",
           "grant-revoked-before-start-no-run",
           "real-managed-git-workspace",
+          "qualification-reload-reaccepts-same-workspace-before-issue-bound-start",
           "default-base-preserved",
           "initial-model-context-causality",
           "model-edit-in-managed-workspace",

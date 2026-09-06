@@ -5,6 +5,7 @@ import type { DraftDeliveryDependencies } from "../../../packages/keiko-server/s
 // shutdown, and deterministic provider-boundary wiring live here once.
 
 import {
+  createDeferredVerifiedCommitDependencies,
   createCodingIssueCommitFixture,
   type CodingIssueCommitFixture,
 } from "./coding-issue-commit-fixture.mjs";
@@ -411,6 +412,7 @@ function scriptedResolver(
   services: JourneyWorkspaceServices,
   scripted: ScriptedOpenCodeHarness,
   runtimeMutationLeaseBroker: ReturnType<typeof createCodingRuntimeEditorMutationLeaseBroker>,
+  verifiedCommit: CodingIssueCommitFixture["verifiedCommit"],
   commit?: CodingIssueCommitFixture,
   resetScript?: () => void,
 ): ReturnType<typeof createFunctionalRuntimeResolver> {
@@ -424,12 +426,12 @@ function scriptedResolver(
     verificationRunner: verificationRunner(config.fixtureLabel),
     runtimeEvidence: createCodingRuntimeEvidenceAggregator(createInMemoryEvidenceStore()),
     runtimeMutationLeaseBroker,
+    verifiedCommit,
     createSupervisor: scripted.createSupervisor,
     resolveManagedModelProfile: scriptedManagedModelProfile,
     ...(commit === undefined
       ? {}
       : {
-          verifiedCommit: commit.verifiedCommit,
           ...(commit.draftDelivery === undefined ? {} : { draftDelivery: commit.draftDelivery }),
           observeBackendRun: (
             run: Parameters<CodingIssueCommitFixture["observeBackendRun"]>[0],
@@ -536,6 +538,19 @@ function writeChatGatewayConfig(
   );
 }
 
+function deferredJourneyCommit(
+  services: JourneyWorkspaceServices,
+  holder: { readonly deps?: UiHandlerDeps },
+): CodingIssueCommitFixture["verifiedCommit"] {
+  return createDeferredVerifiedCommitDependencies({
+    deps: (): UiHandlerDeps => {
+      if (holder.deps === undefined) throw new Error("journey-dependencies-unavailable");
+      return holder.deps;
+    },
+    snapshots: services.codingRuntimeSnapshots,
+  });
+}
+
 function scriptedComposition(
   config: CodingRuntimeJourneyServerConfig,
   stateDir: string,
@@ -555,6 +570,8 @@ function scriptedComposition(
     ...(commit === undefined ? {} : { observePhase: commit.observeToolPhase.bind(commit) }),
   });
   const runtimeMutationLeaseBroker = createCodingRuntimeEditorMutationLeaseBroker();
+  // Every prompt proves its live pre-PR lineage through the production snapshot owner, including
+  // read/edit-only journeys. Omitting delivery controls must not omit that budget dependency.
   const resolver = scriptedResolver(
     config,
     stateDir,
@@ -562,6 +579,7 @@ function scriptedComposition(
     services,
     scripted,
     runtimeMutationLeaseBroker,
+    commit?.verifiedCommit ?? deferredJourneyCommit(services, holder),
     commit,
     () => {
       script.calls = 0;
