@@ -868,6 +868,10 @@ describe("validateCodeTaskQualificationManifest", () => {
     ["empty", []],
     ["partial", CODE_TASK_QUALIFICATION_REQUIRED_TOOLS.slice(0, -1)],
     [
+      "missing delivery execution",
+      CODE_TASK_QUALIFICATION_REQUIRED_TOOLS.filter((tool: string) => tool !== "keiko_git_execute"),
+    ],
+    [
       "duplicate",
       [...CODE_TASK_QUALIFICATION_REQUIRED_TOOLS, CODE_TASK_QUALIFICATION_REQUIRED_TOOLS[0]],
     ],

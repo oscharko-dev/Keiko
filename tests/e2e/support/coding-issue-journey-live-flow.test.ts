@@ -561,7 +561,7 @@ describe("completed live qualification flow evidence", () => {
     expect(hasRedGreenVerificationSequence([passed])).toBe(false);
   });
 
-  it("requires repository search first and a later bounded read of one returned path digest", () => {
+  it("requires a useful search and a later bounded read without prescribing prior tools", () => {
     const hit = "a".repeat(64);
     const other = "b".repeat(64);
     const searchStart = {
@@ -582,12 +582,27 @@ describe("completed live qualification flow evidence", () => {
     expect(hasUsefulRepositorySearchSequence([searchStart, searchSettled, read])).toBe(true);
     expect(
       hasUsefulRepositorySearchSequence([
+        {
+          ...searchStart,
+          toolRef: { canonicalId: "keiko.workspace.discover", contractVersion: 1 },
+        },
         { ...searchStart, toolRef: { canonicalId: "keiko.workspace.read", contractVersion: 1 } },
         searchStart,
         searchSettled,
         read,
       ]),
-    ).toBe(false);
+    ).toBe(true);
+    expect(hasUsefulRepositorySearchSequence([searchSettled, read])).toBe(false);
+    expect(hasUsefulRepositorySearchSequence([searchStart, read, searchSettled])).toBe(false);
+    expect(
+      hasUsefulRepositorySearchSequence([
+        searchStart,
+        { ...searchSettled, resultCount: 0, resultPathSha256: [] },
+        searchStart,
+        searchSettled,
+        read,
+      ]),
+    ).toBe(true);
     expect(
       hasUsefulRepositorySearchSequence([
         searchStart,

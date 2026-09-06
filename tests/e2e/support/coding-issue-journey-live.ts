@@ -439,7 +439,7 @@ export async function prepareBoundIssueForRun(steps: BoundIssueRunPreparation): 
 export function issueResolutionTaskInstructions(): string {
   return [
     "Resolve the linked issue end to end, using your available tools:",
-    "1) Use keiko_repository_search first to locate the existing production implementation and tests, and use at least one returned hit to choose the files you read.",
+    "1) Use keiko_repository_search to locate the existing production implementation and tests, and use at least one returned hit to choose the files you read.",
     "2) Add the regression test before the production fix, run that targeted test, and observe it fail for the issue's stated behavior.",
     "3) Implement the required fix across the affected production modules without a pre-recorded patch.",
     "4) Rerun the targeted regression and the project's complete verification, and proceed only when both pass.",

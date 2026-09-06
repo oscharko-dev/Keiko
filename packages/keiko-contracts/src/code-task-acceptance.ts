@@ -591,6 +591,7 @@ export const CODE_TASK_QUALIFICATION_REQUIRED_TOOLS = Object.freeze([
   "keiko_git_status",
   "keiko_git_diff",
   "keiko_git_stage",
+  "keiko_git_execute",
   "keiko_git_commit",
   "keiko_git_push",
   "keiko_pull_request",

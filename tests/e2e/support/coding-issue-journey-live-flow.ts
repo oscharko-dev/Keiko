@@ -705,25 +705,31 @@ export function isUsefulRepositorySearchEvent(event: Readonly<Record<string, unk
 export function hasUsefulRepositorySearchSequence(
   events: readonly Readonly<Record<string, unknown>>[],
 ): boolean {
-  const firstTool = events.findIndex((event) => event.op === "tool-catalog.invocation-started");
-  if (firstTool < 0 || canonicalToolId(events[firstTool]) !== "keiko.repo.search") return false;
-  const search = events.findIndex(
-    (event, index) => index > firstTool && isUsefulRepositorySearchEvent(event),
-  );
-  if (search < 0) return false;
-  const paths = digestSet(events[search]?.resultPathSha256);
-  return (
-    paths.size > 0 &&
-    events
-      .slice(search + 1)
+  return events.some((event, searchIndex) => {
+    if (!isUsefulRepositorySearchEvent(event)) return false;
+    const invoked = events
+      .slice(0, searchIndex)
       .some(
-        (event) =>
-          event.op === "coding-runtime.workspace-read" &&
-          event.state === "completed" &&
-          typeof event.targetPathSha256 === "string" &&
-          paths.has(event.targetPathSha256),
-      )
-  );
+        (candidate) =>
+          candidate.op === "tool-catalog.invocation-started" &&
+          canonicalToolId(candidate) === "keiko.repo.search" &&
+          candidate.correlationId === event.correlationId,
+      );
+    if (!invoked) return false;
+    const paths = digestSet(event.resultPathSha256);
+    return (
+      paths.size > 0 &&
+      events
+        .slice(searchIndex + 1)
+        .some(
+          (read) =>
+            read.op === "coding-runtime.workspace-read" &&
+            read.state === "completed" &&
+            typeof read.targetPathSha256 === "string" &&
+            paths.has(read.targetPathSha256),
+        )
+    );
+  });
 }
 
 function canonicalToolId(event: Readonly<Record<string, unknown>> | undefined): string | undefined {

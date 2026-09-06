@@ -118,9 +118,9 @@ CI-repair scenario.
 
 Each issue flow passes only when all of these effects are observed:
 
-- The model uses `keiko_repository_search` first, consumes at least one returned hit to select a
+- The model uses `keiko_repository_search`, consumes at least one returned hit to select a
   bounded repository read, and performs the issue's own failing-before and passing-after
-  verification sequence.
+  verification sequence. Earlier discovery or reads are allowed; no fixed tool sequence is required.
 - The model produces a verification-backed commit containing the required production modules and
   regression tests, pushes it, and opens a draft pull request at that exact head.
 - Required checks are green on the exact delivered head. A CI repair requires a recorded failed
@@ -153,7 +153,7 @@ remain outside `OPENCODE_MODEL_VISIBLE_TOOLS`:
 
 ```
 question, keiko_repository_search, keiko_workspace_discover, keiko_workspace_read,
-keiko_changeset_edit, keiko_verification, keiko_git_status, keiko_git_diff, keiko_git_stage,
+keiko_changeset_edit, keiko_verification, keiko_git_status, keiko_git_diff, keiko_git_stage, keiko_git_execute,
 keiko_git_commit, keiko_git_push, keiko_pull_request, keiko_ci_status, todowrite
 ```
 
