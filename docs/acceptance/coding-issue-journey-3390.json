@@ -93,6 +93,11 @@
       "scenarioId": "egress-confinement-macos-arm64",
       "evidenceClass": "production-functional",
       "platform": "macos-arm64"
+    },
+    {
+      "scenarioId": "real-binary-lane",
+      "evidenceClass": "production-functional",
+      "platform": "macos-arm64"
     }
   ],
   "blocked": [
@@ -121,12 +126,6 @@
       "blockedReason": "#2951 (ADR-0043 D14: Linux and Windows have no OS-level gateway-confinement enforcement)"
     },
     {
-      "scenarioId": "real-binary-lane",
-      "evidenceClass": "production-functional",
-      "platform": "macos-arm64",
-      "blockedReason": "real-binary nightly lane red since 2026-07-23"
-    },
-    {
       "scenarioId": "keiko-issue-audit",
       "evidenceClass": "production-functional",
       "platform": "macos-arm64",
@@ -136,7 +135,6 @@
   "knownLimitations": [
     "packaged reference-installation rows depend on #2198 (signing and notarization) and #2951 (sidecar egress attestation), which remain open",
     "egress and confinement qualification is proven on macos-arm64 only; #2951 must land the Linux/Windows enforcement before those platforms qualify (ADR-0043 D14)",
-    "the real-binary nightly lane is red on dev and is not release qualification evidence",
     "keiko-issue-audit runs outside this repository and is bound by opaque reference only"
   ]
 }

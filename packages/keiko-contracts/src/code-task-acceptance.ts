@@ -4,6 +4,7 @@
 // ids, digests, counts, outcomes, and repo-relative paths only — never file bodies, prompts,
 // commands, endpoints, or credentials.
 import type { CodingWorkbenchMode, CodingWorkbenchValidationResult } from "./coding-workbench.js";
+import { isGitCiReadinessEvidenceRef } from "./git-ci-readiness.js";
 
 export const CODE_TASK_ACCEPTANCE_SCHEMA_VERSION = 1;
 
@@ -614,10 +615,57 @@ export interface CodeTaskQualificationFlowBindingV1 {
 export interface CodeTaskQualificationRequiredChecksV1 {
   readonly observation: "observed";
   readonly headSha: CodeTaskGitCommitSha;
+  readonly requirementsVersion: "1";
+  /** Digest produced by assessGitCiFacts from the effective named/app-bound requirements. */
+  readonly requirementsDigest: CodeTaskSha256Digest;
+  readonly evidenceRef: string;
   readonly total: number;
   readonly passed: number;
   readonly failed: number;
   readonly pending: number;
+}
+
+export interface CodeTaskQualificationAuthorityObservationV1 {
+  readonly requestedMode: CodingWorkbenchMode;
+  readonly effectiveMode: CodingWorkbenchMode;
+  readonly approvalRequestCount: number;
+  readonly toolInvocationCount: number;
+  readonly effectStartedCount: number;
+  readonly completedToolCount: number;
+  readonly deniedToolCount: number;
+  readonly failedToolCount: number;
+  readonly otherToolCount: number;
+}
+
+export interface CodeTaskQualificationRubricReviewV1 {
+  readonly reviewId: string;
+  readonly reviewDigest: CodeTaskSha256Digest;
+  readonly verdict: "approved";
+  readonly flowId: CodeTaskScenarioId;
+  readonly taskRunId: string;
+  readonly repository: string;
+  readonly issueNumber: number;
+  readonly pullRequestNumber: number;
+  readonly pullRequestHeadSha: CodeTaskGitCommitSha;
+  readonly sourceCommitSha: CodeTaskGitCommitSha;
+  readonly rubricDigest: CodeTaskSha256Digest;
+  readonly criteriaTotal: number;
+  readonly criteriaPassed: number;
+}
+
+export type CodeTaskQualificationRubricReview = CodeTaskQualificationRubricReviewV1;
+
+export interface CodeTaskQualificationStageReceiptV1 {
+  readonly scenarioId: CodeTaskScenarioId;
+  readonly receiptDigest: CodeTaskSha256Digest;
+}
+
+export interface CodeTaskQualificationFlowStageEvidenceV1 {
+  readonly issueToPr: CodeTaskQualificationStageReceiptV1;
+  readonly ciRepair: CodeTaskQualificationStageReceiptV1 | null;
+  readonly description: CodeTaskQualificationStageReceiptV1;
+  readonly markReady: CodeTaskQualificationStageReceiptV1;
+  readonly governedMerge: CodeTaskQualificationStageReceiptV1;
 }
 
 export interface CodeTaskQualificationFlowSpendV1 {
@@ -650,6 +698,9 @@ export interface CodeTaskQualificationFlowArtifactV1 {
   readonly pullRequestMergedAt: CodeTaskIsoInstant;
   readonly mergeCommitSha: CodeTaskGitCommitSha;
   readonly requiredChecks: CodeTaskQualificationRequiredChecksV1;
+  readonly authorityObservation: CodeTaskQualificationAuthorityObservationV1;
+  readonly rubricReview: CodeTaskQualificationRubricReviewV1;
+  readonly stageEvidence: CodeTaskQualificationFlowStageEvidenceV1;
   readonly transitions: readonly CodeTaskQualificationFlowTransition[];
   readonly sourceCommitSha: CodeTaskGitCommitSha;
   /** Instant the product's journey observer produced the completed outcome. */
@@ -759,6 +810,9 @@ const QUALIFICATION_FLOW_ARTIFACT_KEYS = [
   "pullRequestMergedAt",
   "mergeCommitSha",
   "requiredChecks",
+  "authorityObservation",
+  "rubricReview",
+  "stageEvidence",
   "transitions",
   "sourceCommitSha",
   "observedAt",
@@ -777,11 +831,52 @@ const QUALIFICATION_FLOW_KEYS = [
 const QUALIFICATION_REQUIRED_CHECK_KEYS = [
   "observation",
   "headSha",
+  "requirementsVersion",
+  "requirementsDigest",
+  "evidenceRef",
   "total",
   "passed",
   "failed",
   "pending",
 ] as const;
+
+const QUALIFICATION_AUTHORITY_OBSERVATION_KEYS = [
+  "requestedMode",
+  "effectiveMode",
+  "approvalRequestCount",
+  "toolInvocationCount",
+  "effectStartedCount",
+  "completedToolCount",
+  "deniedToolCount",
+  "failedToolCount",
+  "otherToolCount",
+] as const;
+
+const QUALIFICATION_RUBRIC_REVIEW_KEYS = [
+  "reviewId",
+  "reviewDigest",
+  "verdict",
+  "flowId",
+  "taskRunId",
+  "repository",
+  "issueNumber",
+  "pullRequestNumber",
+  "pullRequestHeadSha",
+  "sourceCommitSha",
+  "rubricDigest",
+  "criteriaTotal",
+  "criteriaPassed",
+] as const;
+
+const QUALIFICATION_FLOW_STAGE_EVIDENCE_KEYS = [
+  "issueToPr",
+  "ciRepair",
+  "description",
+  "markReady",
+  "governedMerge",
+] as const;
+
+const QUALIFICATION_STAGE_RECEIPT_KEYS = ["scenarioId", "receiptDigest"] as const;
 
 const QUALIFICATION_FLOW_SPEND_KEYS = [
   "budgetNanoUsd",
@@ -795,6 +890,12 @@ const QUALIFICATION_MODES = [
   "supervised-coding",
   "autonomous-delivery",
 ] as const;
+
+const QUALIFICATION_MODE_SCENARIO_IDS: Readonly<Record<CodingWorkbenchMode, string>> = {
+  "governed-assist": "issue-to-pr-governed-assist",
+  "supervised-coding": "issue-to-pr-supervised-coding",
+  "autonomous-delivery": "issue-to-pr-autonomous-delivery",
+};
 
 const QUALIFICATION_MANIFEST_KEYS = [
   "kind",
@@ -914,9 +1015,9 @@ function qualificationRequiredCheckCompletionErrors(
     typeof passed === "number" &&
     typeof failed === "number" &&
     typeof pending === "number" &&
-    (failed !== 0 || pending !== 0 || passed !== total)
+    (total <= 0 || failed !== 0 || pending !== 0 || passed !== total)
   ) {
-    return [`${path} must report every observed required check passed`];
+    return [`${path} must report one or more observed required checks passed`];
   }
   return [];
 }
@@ -934,7 +1035,210 @@ function qualificationRequiredChecksErrors(value: unknown, path: string): readon
   if (!isCodeTaskGitCommitSha(ownField(value, "headSha"))) {
     errors.push(`${path}.headSha is invalid`);
   }
+  if (ownField(value, "requirementsVersion") !== "1") {
+    errors.push(`${path}.requirementsVersion must be 1`);
+  }
+  if (!isCodeTaskSha256Digest(ownField(value, "requirementsDigest"))) {
+    errors.push(`${path}.requirementsDigest is invalid`);
+  }
+  if (!isGitCiReadinessEvidenceRef(ownField(value, "evidenceRef"))) {
+    errors.push(`${path}.evidenceRef is invalid`);
+  }
   return errors;
+}
+
+function qualificationAuthorityObservationErrors(value: unknown, path: string): readonly string[] {
+  if (!isRecord(value)) return [`${path} must be an object`];
+  const errors = [...unknownKeys(value, QUALIFICATION_AUTHORITY_OBSERVATION_KEYS, path)];
+  for (const field of QUALIFICATION_AUTHORITY_OBSERVATION_KEYS.slice(2)) {
+    const count = ownField(value, field);
+    if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) {
+      errors.push(`${path}.${field} must be a non-negative safe integer`);
+    }
+  }
+  for (const field of ["requestedMode", "effectiveMode"] as const) {
+    if (!isOneOf(ownField(value, field), QUALIFICATION_MODES)) {
+      errors.push(`${path}.${field} is invalid`);
+    }
+  }
+  errors.push(...qualificationAuthorityCountErrors(value, path));
+  return errors;
+}
+
+function qualificationAuthorityCountErrors(
+  value: Record<string, unknown>,
+  path: string,
+): readonly string[] {
+  const errors: string[] = [];
+  if (invalidAuthorityAccounting(value)) {
+    errors.push(`${path} must account for one or more settled tool invocations`);
+  }
+  if (requiresObservedApproval(value)) {
+    errors.push(`${path} must retain at least one approval request`);
+  }
+  if (nonPositiveObservedCount(value, "effectStartedCount")) {
+    errors.push(`${path} must retain at least one started effect`);
+  }
+  if (nonPositiveObservedCount(value, "completedToolCount")) {
+    errors.push(`${path} must retain at least one completed tool invocation`);
+  }
+  if (startedEffectsExceedInvocations(value)) {
+    errors.push(`${path}.effectStartedCount cannot exceed toolInvocationCount`);
+  }
+  return errors;
+}
+
+function requiresObservedApproval(value: Record<string, unknown>): boolean {
+  return (
+    ownField(value, "requestedMode") !== "autonomous-delivery" &&
+    nonPositiveObservedCount(value, "approvalRequestCount")
+  );
+}
+
+function invalidAuthorityAccounting(value: Record<string, unknown>): boolean {
+  const total = ownField(value, "toolInvocationCount");
+  if (typeof total !== "number") return false;
+  const outcomes = ["completedToolCount", "deniedToolCount", "failedToolCount", "otherToolCount"]
+    .map((field) => ownField(value, field))
+    .filter((count): count is number => typeof count === "number");
+  if (outcomes.length !== 4) return false;
+  return total <= 0 || outcomes.reduce((count, amount) => count + amount, 0) !== total;
+}
+
+function nonPositiveObservedCount(value: Record<string, unknown>, field: string): boolean {
+  const count = ownField(value, field);
+  return typeof count === "number" && count <= 0;
+}
+
+function startedEffectsExceedInvocations(value: Record<string, unknown>): boolean {
+  const total = ownField(value, "toolInvocationCount");
+  const effects = ownField(value, "effectStartedCount");
+  return typeof total === "number" && typeof effects === "number" && effects > total;
+}
+
+function qualificationRubricReviewErrors(value: unknown, path: string): readonly string[] {
+  if (!isRecord(value)) return [`${path} must be an object`];
+  const errors = [...unknownKeys(value, QUALIFICATION_RUBRIC_REVIEW_KEYS, path)];
+  if (!isCodeTaskContentFreeNote(ownField(value, "reviewId"))) {
+    errors.push(`${path}.reviewId must be a bounded content-free reference`);
+  }
+  for (const field of ["reviewDigest", "rubricDigest"] as const) {
+    if (!isCodeTaskSha256Digest(ownField(value, field))) errors.push(`${path}.${field} is invalid`);
+  }
+  if (ownField(value, "verdict") !== "approved") errors.push(`${path}.verdict must be approved`);
+  errors.push(...qualificationRubricReviewIdentityErrors(value, path));
+  return errors;
+}
+
+function qualificationRubricReviewIdentityErrors(
+  value: Record<string, unknown>,
+  path: string,
+): readonly string[] {
+  const errors: string[] = [];
+  if (!isCodeTaskScenarioId(ownField(value, "flowId"))) errors.push(`${path}.flowId is invalid`);
+  if (!isCodeTaskContentFreeNote(ownField(value, "taskRunId"))) {
+    errors.push(`${path}.taskRunId must be a bounded content-free reference`);
+  }
+  if (!GITHUB_REPOSITORY_PATTERN.test(String(ownField(value, "repository")))) {
+    errors.push(`${path}.repository is invalid`);
+  }
+  for (const field of [
+    "issueNumber",
+    "pullRequestNumber",
+    "criteriaTotal",
+    "criteriaPassed",
+  ] as const) {
+    if (!isPositiveInteger(ownField(value, field))) errors.push(`${path}.${field} is invalid`);
+  }
+  for (const field of ["pullRequestHeadSha", "sourceCommitSha"] as const) {
+    if (!isCodeTaskGitCommitSha(ownField(value, field))) errors.push(`${path}.${field} is invalid`);
+  }
+  if (ownField(value, "criteriaPassed") !== ownField(value, "criteriaTotal")) {
+    errors.push(`${path} must report every independent criterion passed`);
+  }
+  return errors;
+}
+
+function qualificationStageReceiptErrors(
+  value: unknown,
+  path: string,
+  expectedScenarioId: string,
+): readonly string[] {
+  if (!isRecord(value)) return [`${path} must be an object`];
+  const errors = [...unknownKeys(value, QUALIFICATION_STAGE_RECEIPT_KEYS, path)];
+  if (
+    !isCodeTaskScenarioId(ownField(value, "scenarioId")) ||
+    ownField(value, "scenarioId") !== expectedScenarioId
+  ) {
+    errors.push(`${path}.scenarioId must be ${expectedScenarioId}`);
+  }
+  if (!isCodeTaskSha256Digest(ownField(value, "receiptDigest"))) {
+    errors.push(`${path}.receiptDigest is invalid`);
+  }
+  return errors;
+}
+
+function qualificationFlowStageEvidenceErrors(
+  value: unknown,
+  flow: Record<string, unknown>,
+  path: string,
+): readonly string[] {
+  if (!isRecord(value)) return [`${path} must be an object`];
+  const mode = ownField(flow, "mode");
+  const modeScenario = isOneOf(mode, QUALIFICATION_MODES)
+    ? QUALIFICATION_MODE_SCENARIO_IDS[mode]
+    : "invalid-mode";
+  const errors = [
+    ...unknownKeys(value, QUALIFICATION_FLOW_STAGE_EVIDENCE_KEYS, path),
+    ...qualificationStageReceiptErrors(
+      ownField(value, "issueToPr"),
+      `${path}.issueToPr`,
+      modeScenario,
+    ),
+    ...qualificationStageReceiptErrors(
+      ownField(value, "description"),
+      `${path}.description`,
+      "description-auto-draft-and-apply",
+    ),
+    ...qualificationStageReceiptErrors(
+      ownField(value, "markReady"),
+      `${path}.markReady`,
+      "mark-ready-intent",
+    ),
+    ...qualificationStageReceiptErrors(
+      ownField(value, "governedMerge"),
+      `${path}.governedMerge`,
+      "human-merge-and-closure",
+    ),
+  ];
+  errors.push(
+    ...qualificationCiRepairStageErrors(value, path),
+    ...qualificationStageDigestErrors(value, path),
+  );
+  return errors;
+}
+
+function qualificationCiRepairStageErrors(
+  value: Record<string, unknown>,
+  path: string,
+): readonly string[] {
+  const ciRepair = ownField(value, "ciRepair");
+  return ciRepair === null
+    ? []
+    : qualificationStageReceiptErrors(ciRepair, `${path}.ciRepair`, "ci-repair-loop");
+}
+
+function qualificationStageDigestErrors(
+  value: Record<string, unknown>,
+  path: string,
+): readonly string[] {
+  const stages = QUALIFICATION_FLOW_STAGE_EVIDENCE_KEYS.map((key) => ownField(value, key)).filter(
+    isRecord,
+  );
+  const digests = stages.map((stage) => ownField(stage, "receiptDigest"));
+  return digests.every(isCodeTaskSha256Digest) && new Set(digests).size === digests.length
+    ? []
+    : [`${path} must contain distinct stage receipt digests`];
 }
 
 function qualificationFlowSpendErrors(value: unknown, path: string): readonly string[] {
@@ -1035,6 +1339,17 @@ function qualificationFlowTimestampErrors(
   for (const field of ["issueClosedAt", "pullRequestMergedAt", "observedAt"] as const) {
     if (!isCodeTaskIsoInstant(ownField(value, field))) errors.push(`${path}.${field} is invalid`);
   }
+  const mergedAt = ownField(value, "pullRequestMergedAt");
+  const closedAt = ownField(value, "issueClosedAt");
+  const observedAt = ownField(value, "observedAt");
+  if (
+    isCodeTaskIsoInstant(mergedAt) &&
+    isCodeTaskIsoInstant(closedAt) &&
+    isCodeTaskIsoInstant(observedAt) &&
+    (Date.parse(mergedAt) > Date.parse(closedAt) || Date.parse(closedAt) > Date.parse(observedAt))
+  ) {
+    errors.push(`${path} lifecycle timestamps are out of causal order`);
+  }
   return errors;
 }
 
@@ -1056,6 +1371,16 @@ function qualificationFlowCompletionErrors(
       ownField(value, "requiredChecks"),
       `${path}.requiredChecks`,
     ),
+    ...qualificationAuthorityObservationErrors(
+      ownField(value, "authorityObservation"),
+      `${path}.authorityObservation`,
+    ),
+    ...qualificationRubricReviewErrors(ownField(value, "rubricReview"), `${path}.rubricReview`),
+    ...qualificationFlowStageEvidenceErrors(
+      ownField(value, "stageEvidence"),
+      value,
+      `${path}.stageEvidence`,
+    ),
     ...qualificationFlowSpendErrors(ownField(value, "spend"), `${path}.spend`),
   );
   const transitions = ownField(value, "transitions");
@@ -1071,6 +1396,37 @@ function qualificationFlowCompletionErrors(
   const checks = ownField(value, "requiredChecks");
   if (isRecord(checks) && ownField(checks, "headSha") !== ownField(value, "pullRequestHeadSha")) {
     errors.push(`${path}.requiredChecks.headSha must match pullRequestHeadSha`);
+  }
+  errors.push(...qualificationFlowEvidenceBindingErrors(value, path));
+  return errors;
+}
+
+function qualificationFlowEvidenceBindingErrors(
+  value: Record<string, unknown>,
+  path: string,
+): readonly string[] {
+  const errors: string[] = [];
+  const authority = ownField(value, "authorityObservation");
+  if (
+    isRecord(authority) &&
+    (ownField(authority, "requestedMode") !== ownField(value, "mode") ||
+      ownField(authority, "effectiveMode") !== ownField(value, "mode"))
+  ) {
+    errors.push(`${path}.authorityObservation must match the selected mode without escalation`);
+  }
+  const review = ownField(value, "rubricReview");
+  if (!isRecord(review)) return errors;
+  const bindings = [
+    ["flowId", "flowId"],
+    ["taskRunId", "taskRunId"],
+    ["repository", "repository"],
+    ["issueNumber", "issueNumber"],
+    ["pullRequestNumber", "pullRequestNumber"],
+    ["pullRequestHeadSha", "pullRequestHeadSha"],
+    ["sourceCommitSha", "sourceCommitSha"],
+  ] as const;
+  if (bindings.some(([reviewField, flowField]) => review[reviewField] !== value[flowField])) {
+    errors.push(`${path}.rubricReview must match the completed flow identity`);
   }
   return errors;
 }
@@ -1397,6 +1753,9 @@ function qualificationFlowFailures(
   for (const flow of manifest.flows) {
     if (flow.sourceCommitSha !== manifest.sourceCommitSha) {
       failures.push(`${flow.flowId}: stale or foreign flow source SHA binding`);
+    }
+    if (flow.rubricReview.rubricDigest !== manifest.rubricDigest) {
+      failures.push(`${flow.flowId}: rubric review does not match manifest rubric digest`);
     }
   }
   const finalFlow = manifest.flows.at(-1);

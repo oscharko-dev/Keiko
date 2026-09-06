@@ -6,13 +6,22 @@
 
 import { expect, type Page } from "@playwright/test";
 import type {
+  CodeTaskGitCommitSha,
+  CodeTaskQualificationAuthorityObservationV1,
   CodeTaskQualificationFlowArtifactV1,
+  CodeTaskQualificationFlowStageEvidenceV1,
+  CodeTaskQualificationRubricReview,
+  CodeTaskQualificationStageReceiptV1,
+  CodeTaskScenarioId,
   CodingWorkbenchMode,
   JourneyOutcome,
 } from "@oscharko-dev/keiko-contracts";
 import {
   CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND,
   CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
+  isCodeTaskGitCommitSha,
+  isCodeTaskScenarioId,
+  isCodeTaskSha256Digest,
   validateCodeTaskQualificationFlowArtifact,
 } from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
 import { isJourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-validation";
@@ -32,7 +41,13 @@ import {
   reconcileAppliedDescriptionAfterMarkReady,
   waitForAutoDraftDescription,
 } from "./coding-issue-journey-live-description.js";
-import { waitForCiRepairOutcome } from "./coding-issue-journey-live-ci.js";
+import {
+  evaluateCiRepairLoopOutcome,
+  type CiRepairOutcome,
+  waitForCiRepairOutcome,
+} from "./coding-issue-journey-live-ci.js";
+import { awaitIndependentQualificationReview } from "./coding-issue-journey-independent-review.js";
+import { observeQualificationFlowAuthority } from "./coding-issue-journey-live-authority.js";
 import { proposeJourneyReady } from "./coding-issue-journey-live-mark-ready.js";
 import {
   type DeliveredPullRequest,
@@ -42,6 +57,15 @@ import {
 } from "./coding-issue-journey-live.js";
 import { resolveLiveJourneyEnv } from "./coding-issue-journey-live-runners.js";
 import { currentPlatformKey, receiptsDir } from "./coding-issue-journey-scenarios.js";
+import {
+  ciRepairAssertions,
+  descriptionAssertions,
+  governedMergeAndClosureEvidence,
+  issueToPrAssertions,
+  markReadyAssertions,
+  modeScenarioId,
+} from "./coding-issue-journey-stage-assertions.js";
+import { recordSuccessfulJourneyStage } from "./coding-issue-journey-stage-receipts.js";
 
 const DESCRIPTOR_PATH = join("docs", "acceptance", "coding-issue-journey-3390.json");
 const GIT_WINDOW_ID = "coding-issue-journey-governed-git";
@@ -51,7 +75,7 @@ const MAX_AUTHORIZED_BUDGET_NANO_USD = 50_000_000_000;
 const NANO_USD = 1_000_000_000;
 
 export interface QualificationFlowBinding {
-  readonly flowId: string;
+  readonly flowId: CodeTaskScenarioId;
   readonly ordinal: number;
   readonly repository: string;
   readonly issueNumber: number;
@@ -66,6 +90,9 @@ interface FlowArtifactInput {
   readonly budgetNanoUsd: number;
   readonly previousCumulativeChargedNanoUsd: number;
   readonly cumulativeChargedNanoUsd: number;
+  readonly authorityObservation: CodeTaskQualificationAuthorityObservationV1;
+  readonly rubricReview: CodeTaskQualificationRubricReview;
+  readonly stageEvidence: CodeTaskQualificationFlowStageEvidenceV1;
 }
 
 export interface SpendSnapshot {
@@ -213,11 +240,17 @@ export function buildQualificationFlowArtifact(
     requiredChecks: {
       observation: "observed",
       headSha: readiness.headSha,
+      requirementsVersion: readiness.requirementsVersion,
+      requirementsDigest: readiness.requirementsDigest,
+      evidenceRef: readiness.evidenceRef,
       total: checks.total,
       passed: checks.passed,
       failed: checks.failed,
       pending: checks.pending,
     },
+    authorityObservation: input.authorityObservation,
+    rubricReview: input.rubricReview,
+    stageEvidence: input.stageEvidence,
     transitions: CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
     observedAt: input.outcome.observedAt,
     sourceCommitSha: input.sourceCommitSha,
@@ -248,7 +281,7 @@ function descriptorFlow(value: unknown, ordinal: number): QualificationFlowBindi
   const mode = entry.mode;
   if (
     entry.ordinal !== ordinal ||
-    typeof entry.flowId !== "string" ||
+    !isCodeTaskScenarioId(entry.flowId) ||
     typeof entry.repository !== "string" ||
     !Number.isSafeInteger(entry.issueNumber) ||
     !isCodingMode(mode)
@@ -564,8 +597,10 @@ function assertConfiguredIssue(flow: QualificationFlowBinding, configured: strin
   }
 }
 
-function sourceCommitSha(): string {
-  return execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+function sourceCommitSha(): CodeTaskGitCommitSha {
+  const source = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  if (!isCodeTaskGitCommitSha(source)) throw new Error("qualification source commit is invalid");
+  return source;
 }
 
 function sameStablePullRequest(
@@ -750,6 +785,105 @@ function qualificationSpendLedgerPath(): string {
   return path;
 }
 
+function stageFlowBinding(
+  flow: QualificationFlowBinding,
+  delivered: DeliveredPullRequest,
+): NonNullable<Parameters<typeof recordSuccessfulJourneyStage>[4]> {
+  if (delivered.repository !== flow.repository) {
+    throw new Error("qualification stage repository does not match the selected flow");
+  }
+  return {
+    flowId: flow.flowId,
+    taskRunId: delivered.runId,
+    repository: flow.repository,
+    issueNumber: flow.issueNumber,
+    pullRequestNumber: delivered.number,
+    pullRequestHeadSha: delivered.headSha,
+  };
+}
+
+function completedCatalogToolCount(runId: string): number {
+  return activityEventsForRun(runId).filter(
+    (event) => event.op === "tool-catalog.invocation-settled" && event.status === "completed",
+  ).length;
+}
+
+function stageReceiptIdentity(
+  scenarioId: string,
+  receiptDigest: string,
+): CodeTaskQualificationStageReceiptV1 {
+  if (!isCodeTaskScenarioId(scenarioId) || !isCodeTaskSha256Digest(receiptDigest)) {
+    throw new Error("qualification stage receipt identity is invalid");
+  }
+  return { scenarioId, receiptDigest };
+}
+
+export function qualifiedCiRepairAssertions(
+  outcome: CiRepairOutcome,
+): readonly string[] | undefined {
+  return evaluateCiRepairLoopOutcome(outcome).result === "passed"
+    ? ciRepairAssertions(outcome)
+    : undefined;
+}
+
+async function recordDeliveryAndCiStages(
+  page: Page,
+  flow: QualificationFlowBinding,
+  delivered: DeliveredPullRequest,
+  ciAssertions: readonly string[] | undefined,
+  startedAt: number,
+  toolCallCount: number,
+): Promise<Pick<CodeTaskQualificationFlowStageEvidenceV1, "issueToPr" | "ciRepair">> {
+  const flowBinding = stageFlowBinding(flow, delivered);
+  const issueToPrScenario = modeScenarioId(flow.mode);
+  const issueToPrDigest = await recordSuccessfulJourneyStage(
+    page,
+    issueToPrScenario,
+    issueToPrAssertions(delivered, flow.mode),
+    startedAt,
+    flowBinding,
+    toolCallCount,
+  );
+  let ciRepair: CodeTaskQualificationFlowStageEvidenceV1["ciRepair"] = null;
+  if (ciAssertions !== undefined) {
+    const receiptDigest = await recordSuccessfulJourneyStage(
+      page,
+      "ci-repair-loop",
+      ciAssertions,
+      startedAt,
+      flowBinding,
+      toolCallCount,
+    );
+    ciRepair = stageReceiptIdentity("ci-repair-loop", receiptDigest);
+  }
+  return {
+    issueToPr: stageReceiptIdentity(issueToPrScenario, issueToPrDigest),
+    ciRepair,
+  };
+}
+
+async function applyAndRecordDescription(
+  page: Page,
+  repositoryRoot: string,
+  delivered: DeliveredPullRequest,
+  flow: QualificationFlowBinding,
+  startedAt: number,
+  toolCallCount: number,
+): Promise<CodeTaskQualificationFlowStageEvidenceV1["description"]> {
+  const description = await waitForAutoDraftDescription(page);
+  const retained = await mountGovernedPullRequestCard(page, repositoryRoot, delivered, description);
+  await applyAutoDraftDescriptionThroughPrCard(page, retained);
+  const receiptDigest = await recordSuccessfulJourneyStage(
+    page,
+    "description-auto-draft-and-apply",
+    descriptionAssertions(description, retained),
+    startedAt,
+    stageFlowBinding(flow, delivered),
+    toolCallCount,
+  );
+  return stageReceiptIdentity("description-auto-draft-and-apply", receiptDigest);
+}
+
 async function driveSelectedDraftPullRequest(
   page: Page,
   flow: QualificationFlowBinding,
@@ -769,47 +903,155 @@ async function driveSelectedDraftPullRequest(
   });
 }
 
-async function driveFlowToCompletedOutcome(
+async function resolveExactHeadDelivery(
   page: Page,
   flow: QualificationFlowBinding,
   repositoryRoot: string,
 ): Promise<{
-  readonly outcome: JourneyOutcome;
-  readonly readiness: NonNullable<JourneyOutcome["readiness"]>;
+  readonly delivered: DeliveredPullRequest;
+  readonly ciAssertions: readonly string[] | undefined;
+  readonly toolCallCount: number;
 }> {
   const issueRef = `https://github.com/${flow.repository}/issues/${String(flow.issueNumber)}`;
   const delivered = await driveSelectedDraftPullRequest(page, flow, repositoryRoot, issueRef);
   const ci = await waitForCiRepairOutcome(page);
+  const ciAssertions = qualifiedCiRepairAssertions(ci);
   if (ci.finalState !== "technical-ready") {
     throw new Error("qualification flow did not reach exact-head technical readiness");
   }
-  const finalSnapshot = await runtimeSnapshot(page);
-  const finalDelivered = resolveFinalDeliveredPullRequest(
+  const snapshot = await runtimeSnapshot(page);
+  const exactHead = resolveFinalDeliveredPullRequest(
     delivered,
     {
-      runId: finalSnapshot.runId,
-      phase: finalSnapshot.draftDelivery?.phase,
-      reason: finalSnapshot.draftDelivery?.reason,
-      bindingHeadSha: finalSnapshot.draftDelivery?.binding.headSha,
-      pullRequest: finalSnapshot.draftDelivery?.pullRequest,
+      runId: snapshot.runId,
+      phase: snapshot.draftDelivery?.phase,
+      reason: snapshot.draftDelivery?.reason,
+      bindingHeadSha: snapshot.draftDelivery?.binding.headSha,
+      pullRequest: snapshot.draftDelivery?.pullRequest,
     },
     ci.finalHeadSha,
   );
-  await assertVerifiedModelChange(page, finalDelivered);
-  const description = await waitForAutoDraftDescription(page);
-  const retained = await mountGovernedPullRequestCard(
+  await assertVerifiedModelChange(page, exactHead);
+  return {
+    delivered: exactHead,
+    ciAssertions,
+    toolCallCount: completedCatalogToolCount(exactHead.runId),
+  };
+}
+
+async function recordPreMergeStages(
+  page: Page,
+  flow: QualificationFlowBinding,
+  repositoryRoot: string,
+  startedAt: number,
+  exactHead: Awaited<ReturnType<typeof resolveExactHeadDelivery>>,
+): Promise<{
+  readonly readiness: NonNullable<JourneyOutcome["readiness"]>;
+  readonly flowBinding: ReturnType<typeof stageFlowBinding>;
+  readonly stages: Omit<CodeTaskQualificationFlowStageEvidenceV1, "governedMerge">;
+}> {
+  const { delivered, ciAssertions, toolCallCount } = exactHead;
+  const delivery = await recordDeliveryAndCiStages(
+    page,
+    flow,
+    delivered,
+    ciAssertions,
+    startedAt,
+    toolCallCount,
+  );
+  const description = await applyAndRecordDescription(
     page,
     repositoryRoot,
-    finalDelivered,
-    description,
+    delivered,
+    flow,
+    startedAt,
+    toolCallCount,
   );
-  await applyAutoDraftDescriptionThroughPrCard(page, retained);
   await proposeJourneyReady(page);
-  await reconcileAppliedDescriptionAfterMarkReady(page, repositoryRoot, finalDelivered);
-  const readiness = await waitForPreMergeReadiness(page, finalDelivered);
+  await reconcileAppliedDescriptionAfterMarkReady(page, repositoryRoot, delivered);
+  const flowBinding = stageFlowBinding(flow, delivered);
+  const markReadyDigest = await recordSuccessfulJourneyStage(
+    page,
+    "mark-ready-intent",
+    markReadyAssertions(),
+    startedAt,
+    flowBinding,
+    toolCallCount,
+  );
+  return {
+    readiness: await waitForPreMergeReadiness(page, delivered),
+    flowBinding,
+    stages: {
+      ...delivery,
+      description,
+      markReady: stageReceiptIdentity("mark-ready-intent", markReadyDigest),
+    },
+  };
+}
+
+async function reviewExactHead(
+  flow: QualificationFlowBinding,
+  delivered: DeliveredPullRequest,
+  qualifiedSourceCommitSha: CodeTaskGitCommitSha,
+): Promise<CodeTaskQualificationRubricReview> {
+  if (!isCodeTaskGitCommitSha(delivered.headSha)) {
+    throw new Error("qualification final pull-request head is invalid");
+  }
+  return awaitIndependentQualificationReview({
+    flowId: flow.flowId,
+    taskRunId: delivered.runId,
+    repository: flow.repository,
+    issueNumber: flow.issueNumber,
+    pullRequestNumber: delivered.number,
+    pullRequestHeadSha: delivered.headSha,
+    sourceCommitSha: qualifiedSourceCommitSha,
+  });
+}
+
+async function driveFlowToCompletedOutcome(
+  page: Page,
+  flow: QualificationFlowBinding,
+  repositoryRoot: string,
+  startedAt: number,
+  qualifiedSourceCommitSha: CodeTaskGitCommitSha,
+): Promise<{
+  readonly outcome: JourneyOutcome;
+  readonly readiness: NonNullable<JourneyOutcome["readiness"]>;
+  readonly authorityObservation: CodeTaskQualificationAuthorityObservationV1;
+  readonly rubricReview: CodeTaskQualificationRubricReview;
+  readonly stageEvidence: CodeTaskQualificationFlowStageEvidenceV1;
+}> {
+  const exactHead = await resolveExactHeadDelivery(page, flow, repositoryRoot);
+  const preMerge = await recordPreMergeStages(page, flow, repositoryRoot, startedAt, exactHead);
+  const finalDelivered = exactHead.delivered;
+  const rubricReview = await reviewExactHead(flow, finalDelivered, qualifiedSourceCommitSha);
   await executeGovernedMerge(page, repositoryRoot, finalDelivered);
   const outcome = await waitForCompletedJourney(page, finalDelivered.runId);
-  return { outcome, readiness };
+  const mergeEvidence = governedMergeAndClosureEvidence(outcome);
+  const mergeReceiptDigest = await recordSuccessfulJourneyStage(
+    page,
+    "human-merge-and-closure",
+    mergeEvidence.assertions,
+    startedAt,
+    { ...preMerge.flowBinding, mergeCommitSha: mergeEvidence.mergeCommitSha },
+    exactHead.toolCallCount,
+  );
+  return {
+    outcome,
+    readiness: preMerge.readiness,
+    authorityObservation: observeQualificationFlowAuthority(
+      activityEventsForRun(finalDelivered.runId),
+      {
+        runId: finalDelivered.runId,
+        mode: flow.mode,
+      },
+    ),
+    rubricReview,
+    stageEvidence: {
+      ...preMerge.stages,
+      governedMerge: stageReceiptIdentity("human-merge-and-closure", mergeReceiptDigest),
+    },
+  };
 }
 
 function recordFlowArtifact(
@@ -819,15 +1061,21 @@ function recordFlowArtifact(
   budgetNanoUsd: number,
   previousCumulativeChargedNanoUsd: number,
   after: SpendSnapshot,
+  completed: Pick<
+    Awaited<ReturnType<typeof driveFlowToCompletedOutcome>>,
+    "authorityObservation" | "rubricReview" | "stageEvidence"
+  >,
+  qualifiedSourceCommitSha: CodeTaskGitCommitSha,
 ): CodeTaskQualificationFlowArtifactV1 {
   const artifact = buildQualificationFlowArtifact({
     flow,
     outcome,
     readiness,
-    sourceCommitSha: sourceCommitSha(),
+    sourceCommitSha: qualifiedSourceCommitSha,
     budgetNanoUsd,
     previousCumulativeChargedNanoUsd,
     cumulativeChargedNanoUsd: after.charged,
+    ...completed,
   });
   const dir = receiptsDir();
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -848,6 +1096,8 @@ export async function runSelectedQualificationFlow(
   page: Page,
   flow: QualificationFlowBinding,
 ): Promise<CodeTaskQualificationFlowArtifactV1> {
+  const startedAt = Date.now();
+  const qualifiedSourceCommitSha = sourceCommitSha();
   const env = resolveLiveJourneyEnv();
   assertConfiguredIssue(flow, env.issueRef);
   const previousCumulativeChargedNanoUsd = previousFlowCumulative(flow);
@@ -858,9 +1108,18 @@ export async function runSelectedQualificationFlow(
     throw new Error("durable spend ledger predates the prior completed qualification flow");
   }
   await updateControlledBaseThroughGovernedGit(page, flow, env.repositoryRoot);
-  const completed = await driveFlowToCompletedOutcome(page, flow, env.repositoryRoot);
+  const completed = await driveFlowToCompletedOutcome(
+    page,
+    flow,
+    env.repositoryRoot,
+    startedAt,
+    qualifiedSourceCommitSha,
+  );
   const after = spendSnapshot(ledgerPath);
   assertQualificationSpendEnvelope(before, after, process.env);
+  if (sourceCommitSha() !== qualifiedSourceCommitSha) {
+    throw new Error("qualification source changed while the real flow was running");
+  }
   return recordFlowArtifact(
     flow,
     completed.outcome,
@@ -868,5 +1127,7 @@ export async function runSelectedQualificationFlow(
     budgetNanoUsd,
     previousCumulativeChargedNanoUsd,
     after,
+    completed,
+    qualifiedSourceCommitSha,
   );
 }

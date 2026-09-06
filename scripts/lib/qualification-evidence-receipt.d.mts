@@ -16,6 +16,8 @@ export interface QualificationEvidenceReceiptFacts {
 export interface WriteQualificationEvidenceReceiptInput {
   readonly receiptsDir: string;
   readonly scenarioId: string;
+  /** Optional filesystem identity for a distinct observation of the canonical scenario. */
+  readonly receiptKey?: string;
   readonly receipt: QualificationEvidenceReceiptFacts;
   readonly recordedAt: string;
   readonly provenance?: "real-model" | "scripted" | "production-functional";
@@ -29,7 +31,7 @@ export interface WriteQualificationEvidenceReceiptInput {
  */
 export function writeQualificationEvidenceReceipt(
   input: WriteQualificationEvidenceReceiptInput,
-): void;
+): string;
 
 export interface WriteCodingIssueJourneyFlowEvidenceReceiptInput {
   readonly receiptsDir: string;

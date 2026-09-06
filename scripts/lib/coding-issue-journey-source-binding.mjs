@@ -1,6 +1,7 @@
 // Git-backed freshness boundary for #3390 qualification evidence. The five live flows bind one
-// frozen source commit. A later commit may add only the canonical manifest and descriptor-owned
-// receipt files; all executable source, inputs and general documentation stay byte-identical.
+// frozen source commit. A later commit may add the canonical manifest, descriptor-owned receipt
+// files and the two owning D12 generated evidence documents; all executable source, inputs and
+// general documentation stay byte-identical.
 
 import { Buffer } from "node:buffer";
 import { execFileSync } from "node:child_process";
@@ -20,6 +21,16 @@ export const CODING_ISSUE_JOURNEY_RECEIPTS_PATH =
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/u;
 const SCENARIO_ID = /^[a-z][a-z0-9-]{1,80}$/u;
+const CODING_MODES = new Set(["governed-assist", "supervised-coding", "autonomous-delivery"]);
+const COMMON_FLOW_STAGE_SCENARIOS = [
+  "description-auto-draft-and-apply",
+  "mark-ready-intent",
+  "human-merge-and-closure",
+];
+const GENERATED_D12_EVIDENCE_PATHS = [
+  "docs/release/1209-perf-evidence.json",
+  "docs/release/1209-bundle-evidence.json",
+];
 
 function git(root, args) {
   return execFileSync(resolveHostExecutable("git"), args, {
@@ -169,11 +180,44 @@ function descriptorEvidenceIds(descriptor) {
   return ids.every((id) => typeof id === "string" && SCENARIO_ID.test(id)) ? ids : null;
 }
 
+function validFlowStageBinding(flow) {
+  return (
+    typeof flow?.flowId === "string" &&
+    SCENARIO_ID.test(flow.flowId) &&
+    Number.isSafeInteger(flow.ordinal) &&
+    CODING_MODES.has(flow.mode)
+  );
+}
+
+function flowStageEvidenceIds(descriptor, availableScenarios) {
+  const flows = Array.isArray(descriptor?.flows) ? descriptor.flows : [];
+  const ids = [];
+  for (const flow of flows) {
+    if (!validFlowStageBinding(flow)) return null;
+    const scenarioIds = [
+      `issue-to-pr-${flow.mode}`,
+      ...COMMON_FLOW_STAGE_SCENARIOS,
+      "ci-repair-loop",
+    ];
+    for (const scenarioId of scenarioIds) {
+      if (availableScenarios.has(scenarioId)) ids.push(`${flow.flowId}.${scenarioId}`);
+    }
+  }
+  return ids;
+}
+
 function allowedEvidencePaths(descriptor) {
   const ids = descriptorEvidenceIds(descriptor);
   if (ids === null) return null;
-  const paths = new Set([CODING_ISSUE_JOURNEY_MANIFEST_PATH]);
-  for (const id of ids) {
+  const scenarios = new Set(
+    (Array.isArray(descriptor?.scenarios) ? descriptor.scenarios : []).map(
+      (scenario) => scenario.scenarioId,
+    ),
+  );
+  const flowStageIds = flowStageEvidenceIds(descriptor, scenarios);
+  if (flowStageIds === null) return null;
+  const paths = new Set([CODING_ISSUE_JOURNEY_MANIFEST_PATH, ...GENERATED_D12_EVIDENCE_PATHS]);
+  for (const id of [...ids, ...flowStageIds]) {
     paths.add(`${CODING_ISSUE_JOURNEY_RECEIPTS_PATH}/${id}.artifact`);
     paths.add(`${CODING_ISSUE_JOURNEY_RECEIPTS_PATH}/${id}.receipt.json`);
   }

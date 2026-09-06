@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -17,11 +18,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { clearInterval, setInterval } from "node:timers";
 import { fileURLToPath } from "node:url";
 
 import { hostDevLaneTarget } from "./stage-dev-coding-runtime.mjs";
+import { realBinaryScenarioArtifactErrors } from "./lib/coding-issue-journey-real-binary-evidence.mjs";
+import { writeQualificationEvidenceReceipt } from "./lib/qualification-evidence-receipt.mjs";
 import {
   TOOL_CATALOG_QUALIFICATION_DIR_ENV,
   TOOL_CATALOG_QUALIFICATION_HEAD_ENV,
@@ -36,6 +39,7 @@ const MAX_DISTINCT_CONNECTIONS = 4_096;
 const MAX_ACTIVITY_LOG_BYTES = 32 * 1_024 * 1_024;
 const REAL_BINARY_VERSION = "1.17.17";
 const EVIDENCE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const QUALIFICATION_RECEIPTS_DIR_ENV = "KEIKO_CODE_TASK_QUALIFICATION_RECEIPTS_DIR";
 
 // Absolute, fixed system paths — never a bare name resolved through PATH. This runner samples
 // process and socket facts on a developer or CI machine whose PATH may contain writable
@@ -344,7 +348,11 @@ export function buildJourneyReport(input) {
     sourceHead: input.sourceHead,
     evidenceClass: "functional-not-platform-qualified",
     runtime: { name: "opencode-compatible", version: REAL_BINARY_VERSION, target: input.target },
-    journey: { exitCode: input.exitCode, wallClockMs: input.wallClockMs },
+    journey: {
+      exitCode: input.exitCode,
+      wallClockMs: input.wallClockMs,
+      completedAt: input.completedAt,
+    },
     limits: {
       materializedChildLimits: input.limits,
       gatewayRequestCount: input.gateway.requestCount,
@@ -612,6 +620,82 @@ export function realBinaryEvidenceComplete(report) {
   );
 }
 
+export function buildRealBinaryScenarioArtifact(report) {
+  if (!realBinaryEvidenceComplete(report)) {
+    throw new TypeError("real-binary qualification evidence is incomplete");
+  }
+  const artifact = {
+    schemaVersion: 1,
+    evidenceKind: "keiko-code-task-real-binary-v1",
+    scenarioId: "real-binary-lane",
+    evidenceClass: "production-functional",
+    sourceCommitSha: report.sourceHead,
+    platformTarget: report.runtime.target,
+    result: "passed",
+    runtime: report.runtime,
+    run: {
+      correlationId: report.managedCatalog.correlationId,
+      activityLogSha256: report.activityLog.sha256,
+    },
+    limits: {
+      contextWindow: 32_768,
+      outputTokens: 4_096,
+      gatewayRequestCount: report.limits.gatewayRequestCount,
+      gatewayCatalogBindingRequestCount: report.limits.gatewayCatalogBindingRequestCount,
+    },
+    missingPayload: { unavailableReason: report.missingPayload.unavailableReason },
+    h1Search: {
+      toolCallId: report.h1Search.toolCallId,
+      hitCount: report.h1Search.hitCount,
+      pathDigest: report.h1Search.pathDigest,
+      snippetDigest: report.h1Search.snippetDigest,
+      startLine: report.h1Search.startLine,
+      endLine: report.h1Search.endLine,
+      readTargetDerivedFromResult: report.h1Search.readTargetDerivedFromResult,
+    },
+    managedCatalog: {
+      binding: report.managedCatalog.binding,
+      settlementCount: report.managedCatalog.settlementCount,
+      proof: report.managedCatalog.proof,
+    },
+  };
+  if (realBinaryScenarioArtifactErrors(artifact).length > 0) {
+    throw new TypeError("real-binary qualification artifact is invalid");
+  }
+  return artifact;
+}
+
+function privateQualificationReceiptsDirectory(configured) {
+  if (!isAbsolute(configured)) {
+    throw new TypeError("qualification receipts directory must be absolute");
+  }
+  const entry = lstatSync(configured);
+  if (!entry.isDirectory() || entry.isSymbolicLink() || (entry.mode & 0o077) !== 0) {
+    throw new TypeError("qualification receipts directory must be a private real directory");
+  }
+  return resolve(configured);
+}
+
+export function writeRealBinaryQualificationEvidence(report, env = process.env) {
+  const configured = env[QUALIFICATION_RECEIPTS_DIR_ENV];
+  if (configured === undefined) return false;
+  const artifact = buildRealBinaryScenarioArtifact(report);
+  writeQualificationEvidenceReceipt({
+    receiptsDir: privateQualificationReceiptsDirectory(configured),
+    scenarioId: artifact.scenarioId,
+    receipt: artifact,
+    recordedAt: report.journey.completedAt,
+    provenance: "production-functional",
+  });
+  return true;
+}
+
+function persistJourneyEvidence(context, report) {
+  writeEvidence(context.evidencePath, report);
+  writeManagedCatalogObservation(report);
+  writeRealBinaryQualificationEvidence(report);
+}
+
 export function writeManagedCatalogObservation(report) {
   const qualificationDirectory = process.env[TOOL_CATALOG_QUALIFICATION_DIR_ENV];
   const qualificationHead = process.env[TOOL_CATALOG_QUALIFICATION_HEAD_ENV];
@@ -680,6 +764,7 @@ export async function runRealBinaryJourney() {
   const h1Search = readH1SearchEvidence(context.stateDir);
   const managedCatalog = readManagedCatalogEvidence(context.stateDir, gateway, h1Search);
   const activityLog = retainJourneyActivityLog(context);
+  const completedAt = new Date().toISOString();
   const report = buildJourneyReport({
     context,
     sourceHead,
@@ -693,9 +778,9 @@ export async function runRealBinaryJourney() {
     observer,
     target,
     wallClockMs: Date.now() - startedAt,
+    completedAt,
   });
-  writeEvidence(context.evidencePath, report);
-  writeManagedCatalogObservation(report);
+  persistJourneyEvidence(context, report);
   removeJourneyState(context);
   // A bare nonzero exit forces the next reader to diff the evidence file against the predicate.
   reportMissingEvidence(report);

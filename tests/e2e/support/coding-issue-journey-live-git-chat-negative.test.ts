@@ -25,10 +25,28 @@ const TURN_REQUESTS = [
 ] as const;
 
 function completedTurnEvents(): readonly Readonly<Record<string, unknown>>[] {
-  return TURN_REQUESTS.flatMap(({ correlationId }) => [
+  return TURN_REQUESTS.flatMap(({ correlationId }, index) => [
+    event("coding-runtime.description-authority", correlationId, {
+      event: index === 0 ? "minted" : "narrowed",
+    }),
     event("pr-description.chat.turn.admitted", correlationId, { relationshipId: "rel-1" }),
-    event("gateway.stream.started", correlationId),
-    event("gateway.stream.completed", correlationId),
+    event("coding-runtime.description-authority", correlationId, { event: "narrowed" }),
+    event("pr-description.chat.turn.admitted", correlationId, { relationshipId: "rel-1" }),
+    event("git.snapshot.capture", correlationId),
+    event("git.snapshot.read", correlationId),
+    event("pr-description.generation.started", correlationId),
+    event("gateway.chat.started", correlationId, {
+      requestId: `gateway-${String(index)}`,
+      streaming: false,
+    }),
+    event("gateway.chat.completed", correlationId, {
+      requestId: `gateway-${String(index)}`,
+      streaming: false,
+    }),
+    event("pr-description.generation.completed", correlationId),
+    event("pr-description.chat.generated", correlationId),
+    event("git.pr-description", correlationId, { phase: "preview", effect: "none" }),
+    event("sse.stream.closed", correlationId),
   ]);
 }
 
@@ -90,7 +108,7 @@ describe("Git-connected Chat negative effect surface", () => {
     expect(events.listenerCount("request")).toBe(0);
   });
 
-  it("binds every completed Chat stream to the exact chat and connected relationship", () => {
+  it("binds every completed Chat turn to the exact chat and connected relationship", () => {
     expect(
       assertNoForbiddenSessionToolEvents({
         chatId: "chat-1",
@@ -176,11 +194,10 @@ describe("Git-connected Chat negative effect surface", () => {
     ).toThrow("exact connected Git relationship");
   });
 
-  it("refuses a turn without a completed Model Gateway stream", () => {
+  it("refuses a turn without a completed buffered Model Gateway call", () => {
     const activityEvents = completedTurnEvents().filter(
       (entry) =>
-        entry.correlationId !== "chat-turn-correlation-2" ||
-        entry.op !== "gateway.stream.completed",
+        entry.correlationId !== "chat-turn-correlation-2" || entry.op !== "gateway.chat.completed",
     );
     expect(() =>
       assertNoForbiddenSessionToolEvents({
@@ -190,8 +207,25 @@ describe("Git-connected Chat negative effect surface", () => {
         requests: TURN_REQUESTS,
         activityEvents,
       }),
-    ).toThrow("completed Model Gateway stream");
+    ).toThrow("completed buffered Model Gateway call");
   });
+
+  it.each(["git.snapshot.capture", "coding-runtime.description-authority"])(
+    "accepts the production description-only %s operation",
+    (allowedOp) => {
+      const matching = completedTurnEvents().filter((entry) => entry.op === allowedOp);
+      expect(matching.length).toBeGreaterThan(0);
+      expect(() =>
+        assertNoForbiddenSessionToolEvents({
+          chatId: "chat-1",
+          relationshipId: "rel-1",
+          expectedTurnCount: 2,
+          requests: TURN_REQUESTS,
+          activityEvents: completedTurnEvents(),
+        }),
+      ).not.toThrow();
+    },
+  );
 
   it("refuses forbidden server-side tool activity in the observed Chat correlation", () => {
     const activityEvents = [

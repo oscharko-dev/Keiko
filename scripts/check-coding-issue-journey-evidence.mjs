@@ -76,6 +76,7 @@ function readScenarioArtifactEvidence(scenarioId, artifactBytes) {
         sourceCommitSha: artifact?.sourceCommitSha,
         platformTarget: artifact?.platformTarget,
         result: artifact?.result,
+        flowBinding: artifact?.flowBinding,
       },
     };
   } catch {
@@ -115,18 +116,20 @@ export function readReceipts(receiptsDir, { observeArtifact, contentByPath } = {
   if (contentByPath === undefined && !existsSync(receiptsDir)) return receipts;
   for (const entry of receiptEntries(receiptsDir, contentByPath)) {
     if (!entry.endsWith(RECEIPT_SUFFIX)) continue;
-    const scenarioId = basename(entry, RECEIPT_SUFFIX);
-    const artifactPath = resolve(receiptsDir, `${scenarioId}.artifact`);
+    const receiptKey = basename(entry, RECEIPT_SUFFIX);
+    const artifactPath = resolve(receiptsDir, `${receiptKey}.artifact`);
     const receiptPath = resolve(receiptsDir, entry);
     if (!hasEvidencePath(artifactPath, contentByPath)) continue;
     const meta = JSON.parse(bytesForPath(receiptPath, contentByPath).toString("utf8"));
+    const scenarioId = meta.scenarioId;
     // A consumer that validates a structured artifact must inspect the same bytes whose digest
     // is retained. A separate read can race with an artifact writer and bind different content.
     const artifactBytes = bytesForPath(artifactPath, contentByPath);
     const digest = sha256(artifactBytes);
-    observeArtifact?.(scenarioId, artifactBytes);
+    observeArtifact?.(receiptKey, artifactBytes);
     const artifactEvidence = readScenarioArtifactEvidence(scenarioId, artifactBytes);
-    receipts.set(scenarioId, {
+    receipts.set(receiptKey, {
+      receiptKey,
       scenarioId,
       commitSha: meta.commitSha,
       platform: meta.platform,

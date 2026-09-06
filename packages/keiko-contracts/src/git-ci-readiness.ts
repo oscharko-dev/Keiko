@@ -103,6 +103,9 @@ function keys(value: Record<string, unknown>, expected: readonly string[]): bool
 function pattern(value: unknown, expression: RegExp): value is string {
   return typeof value === "string" && expression.test(value);
 }
+export function isGitCiReadinessEvidenceRef(value: unknown): value is string {
+  return pattern(value, ID);
+}
 function count(value: unknown, maximum = 1_500): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= maximum;
 }
@@ -166,7 +169,7 @@ function identity(value: Record<string, unknown>): boolean {
   return (
     pattern(value.runId, ID) &&
     pattern(value.remoteDigest, DIGEST) &&
-    pattern(value.evidenceRef, ID) &&
+    isGitCiReadinessEvidenceRef(value.evidenceRef) &&
     typeof value.repository === "string" &&
     isGitHubOwnerAndRepo(value.repository) &&
     count(value.prNumber, GITHUB_ISSUE_NUMBER_MAX) &&

@@ -964,13 +964,18 @@ export type {
 // reusing its closed vocabularies. See code-task-acceptance.ts's "Qualification manifest" section.
 export type {
   CodeTaskQualificationManifestV1,
+  CodeTaskQualificationAuthorityObservationV1,
   CodeTaskQualificationFlowArtifactV1,
   CodeTaskQualificationFlowBindingV1,
+  CodeTaskQualificationFlowStageEvidenceV1,
   CodeTaskQualificationFlowSpendV1,
   CodeTaskQualificationFlowTransition,
   CodeTaskQualificationFlowV1,
   CodeTaskQualificationProvenance,
   CodeTaskQualificationRequiredChecksV1,
+  CodeTaskQualificationRubricReview,
+  CodeTaskQualificationRubricReviewV1,
+  CodeTaskQualificationStageReceiptV1,
   CodeTaskQualificationScenarioV1,
   CodeTaskQualificationVerdict,
 } from "./code-task-acceptance.js";

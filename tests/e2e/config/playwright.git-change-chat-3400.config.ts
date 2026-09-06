@@ -18,6 +18,7 @@ const stateId =
   process.env.KEIKO_E2E_GIT_CHANGE_CHAT_STATE_ID ??
   (process.env.KEIKO_E2E_GIT_CHANGE_CHAT_STATE_ID = `git-change-chat-3400-${randomUUID()}`);
 const stateDir = e2eStateDir(stateId);
+process.env.KEIKO_QUALIFICATION_ACTIVITY_LOG_PATH = join(stateDir, "logs", "server.log");
 const providerBin = join(stateDir, "provider-bin");
 const providerStatePath = join(stateDir, "git-change-chat-provider.json");
 const providerScript = join(root, "tests", "e2e", "support", "git-change-chat-3400-gh.mjs");

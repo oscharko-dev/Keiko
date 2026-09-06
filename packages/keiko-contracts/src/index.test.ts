@@ -872,12 +872,17 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").CodeTaskGitTreeSha>();
     pin<import("./index.js").CodeTaskSha256Digest>();
     pin<import("./index.js").CodeTaskIsoInstant>();
+    pin<import("./index.js").CodeTaskQualificationAuthorityObservationV1>();
     pin<import("./index.js").CodeTaskQualificationFlowArtifactV1>();
     pin<import("./index.js").CodeTaskQualificationFlowBindingV1>();
+    pin<import("./index.js").CodeTaskQualificationFlowStageEvidenceV1>();
     pin<import("./index.js").CodeTaskQualificationFlowSpendV1>();
     pin<import("./index.js").CodeTaskQualificationFlowTransition>();
     pin<import("./index.js").CodeTaskQualificationFlowV1>();
     pin<import("./index.js").CodeTaskQualificationRequiredChecksV1>();
+    pin<import("./index.js").CodeTaskQualificationRubricReview>();
+    pin<import("./index.js").CodeTaskQualificationRubricReviewV1>();
+    pin<import("./index.js").CodeTaskQualificationStageReceiptV1>();
   });
 
   it("code-task governance contracts remain available at their declared public surface (#2386)", async () => {

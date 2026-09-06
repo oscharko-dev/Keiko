@@ -81,6 +81,9 @@ function buildFlow(entry, flowReceiptsById) {
     pullRequestMergedAt: artifact.pullRequestMergedAt,
     mergeCommitSha: artifact.mergeCommitSha,
     requiredChecks: artifact.requiredChecks,
+    authorityObservation: artifact.authorityObservation,
+    rubricReview: artifact.rubricReview,
+    stageEvidence: artifact.stageEvidence,
     transitions: artifact.transitions,
     sourceCommitSha: artifact.sourceCommitSha,
     observedAt: artifact.observedAt,
@@ -107,6 +110,24 @@ function manifestFacts(input) {
     humanMergeAttestationDigest: fact(input.humanMergeAttestationDigest),
     observedSpendUsd: fact(input.observedSpendUsd),
   };
+}
+
+function mergeAttestationDigest(receipt, finalFlow) {
+  const binding = receipt?.artifactIdentity?.flowBinding;
+  if (finalFlow === undefined) return undefined;
+  if (receipt?.testStatus !== "passed") return undefined;
+  if (!Array.isArray(receipt.artifactValidationErrors)) return undefined;
+  if (receipt.artifactValidationErrors.length !== 0 || binding === undefined) return undefined;
+  const matches = [
+    [binding.flowId, finalFlow.flowId],
+    [binding.taskRunId, finalFlow.taskRunId],
+    [binding.repository, finalFlow.repository],
+    [binding.issueNumber, finalFlow.issueNumber],
+    [binding.pullRequestNumber, finalFlow.pullRequestNumber],
+    [binding.pullRequestHeadSha, finalFlow.pullRequestHeadSha],
+    [binding.mergeCommitSha, finalFlow.mergeCommitSha],
+  ].every(([actual, expected]) => actual === expected);
+  return matches ? receipt.digest : undefined;
 }
 
 /**
@@ -136,14 +157,20 @@ export function buildCodingIssueJourneyManifest(input) {
   ];
   const flows = (descriptor.flows ?? []).map((entry) => buildFlow(entry, flowReceiptsById));
   const firstFlow = flows[0];
+  const finalFlow = flows.at(-1);
+  const attestationDigest = mergeAttestationDigest(
+    receiptsByScenarioId.get("human-merge-and-closure"),
+    finalFlow,
+  );
   const manifestInput =
     firstFlow === undefined
-      ? input
+      ? { ...input, humanMergeAttestationDigest: attestationDigest }
       : {
           ...input,
           issueReference: firstFlow.issueReference,
           pullRequestReference: firstFlow.pullRequestReference,
           runReference: firstFlow.taskRunId,
+          humanMergeAttestationDigest: attestationDigest,
         };
   return {
     kind: "code-task-qualification-manifest",

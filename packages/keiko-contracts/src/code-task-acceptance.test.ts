@@ -599,23 +599,24 @@ function validQualificationFlow(
   cumulativeChargedNanoUsd = 3_240_000,
   chargedDeltaNanoUsd = cumulativeChargedNanoUsd,
 ): CodeTaskQualificationFlowArtifactV1 {
-  const pullRequestHeadSha = (
-    ordinal === 1 ? TREE_SHA : "d".repeat(40)
-  ) as CodeTaskQualificationFlowArtifactV1["pullRequestHeadSha"];
-  const mergeCommitSha = (
-    ordinal === 1 ? COMMIT_SHA : "e".repeat(40)
-  ) as CodeTaskQualificationFlowArtifactV1["mergeCommitSha"];
-  return {
+  const pullRequestHeadSha = ordinal === 1 ? TREE_SHA : "d".repeat(40);
+  const mergeCommitSha = ordinal === 1 ? COMMIT_SHA : "e".repeat(40);
+  const mode = ordinal === 1 ? "governed-assist" : "supervised-coding";
+  const issueToPrScenario = {
+    "governed-assist": "issue-to-pr-governed-assist",
+    "supervised-coding": "issue-to-pr-supervised-coding",
+  }[mode];
+  const candidate: unknown = {
     evidenceKind: CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND,
     schemaVersion: 1,
-    flowId: `issue-to-pr-flow-0${String(ordinal)}` as CodeTaskQualificationFlowArtifactV1["flowId"],
+    flowId: `issue-to-pr-flow-0${String(ordinal)}`,
     ordinal,
     repository: "oscharko/Wegwerf-Repo",
     issueReference: `https://github.com/oscharko/Wegwerf-Repo/issues/${String(ordinal)}`,
     issueNumber: ordinal,
     issueState: "closed",
     issueClosedAt: QUALIFICATION_RECORDED_AT,
-    mode: ordinal === 1 ? "governed-assist" : "supervised-coding",
+    mode,
     taskRunId: `run-${String(ordinal)}`,
     pullRequestReference: `https://github.com/oscharko/Wegwerf-Repo/pull/${String(ordinal)}`,
     pullRequestNumber: ordinal,
@@ -626,13 +627,59 @@ function validQualificationFlow(
     requiredChecks: {
       observation: "observed",
       headSha: pullRequestHeadSha,
-      total: 0,
-      passed: 0,
+      requirementsVersion: "1",
+      requirementsDigest: RUBRIC_DIGEST,
+      evidenceRef: "ci-observation-1",
+      total: 1,
+      passed: 1,
       failed: 0,
       pending: 0,
     },
+    authorityObservation: {
+      requestedMode: mode,
+      effectiveMode: mode,
+      approvalRequestCount: 2,
+      toolInvocationCount: 4,
+      effectStartedCount: 3,
+      completedToolCount: 3,
+      deniedToolCount: 0,
+      failedToolCount: 1,
+      otherToolCount: 0,
+    },
+    rubricReview: {
+      reviewId: `qualification-review-${String(ordinal)}`,
+      reviewDigest: DIGEST,
+      verdict: "approved",
+      flowId: `issue-to-pr-flow-0${String(ordinal)}`,
+      taskRunId: `run-${String(ordinal)}`,
+      repository: "oscharko/Wegwerf-Repo",
+      issueNumber: ordinal,
+      pullRequestNumber: ordinal,
+      pullRequestHeadSha,
+      sourceCommitSha: COMMIT_SHA,
+      rubricDigest: RUBRIC_DIGEST,
+      criteriaTotal: 5,
+      criteriaPassed: 5,
+    },
+    stageEvidence: {
+      issueToPr: {
+        scenarioId: issueToPrScenario,
+        receiptDigest: "4".repeat(64),
+      },
+      ciRepair:
+        ordinal === 1 ? { scenarioId: "ci-repair-loop", receiptDigest: "5".repeat(64) } : null,
+      description: {
+        scenarioId: "description-auto-draft-and-apply",
+        receiptDigest: "6".repeat(64),
+      },
+      markReady: { scenarioId: "mark-ready-intent", receiptDigest: "7".repeat(64) },
+      governedMerge: {
+        scenarioId: "human-merge-and-closure",
+        receiptDigest: "8".repeat(64),
+      },
+    },
     transitions: CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
-    sourceCommitSha: COMMIT_SHA as CodeTaskQualificationFlowArtifactV1["sourceCommitSha"],
+    sourceCommitSha: COMMIT_SHA,
     observedAt: QUALIFICATION_RECORDED_AT,
     spend: {
       budgetNanoUsd: 50_000_000_000,
@@ -641,6 +688,9 @@ function validQualificationFlow(
       remainingNanoUsd: 50_000_000_000 - cumulativeChargedNanoUsd,
     },
   };
+  const result = validateCodeTaskQualificationFlowArtifact(candidate);
+  if (!result.ok) throw new Error(result.errors.join("; "));
+  return result.value;
 }
 
 function validQualificationManifest(): CodeTaskQualificationManifestV1 {
@@ -825,9 +875,15 @@ describe("validateCodeTaskQualificationManifest", () => {
     ).toBe(false);
   });
 
-  it("accepts observed zero required checks and rejects unknown or non-passing checks", () => {
+  it("requires positive app-bound passing required-check evidence", () => {
     expect(validateCodeTaskQualificationFlowArtifact(validQualificationFlow()).ok).toBe(true);
     const base = validQualificationFlow();
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        requiredChecks: { ...base.requiredChecks, total: 0, passed: 0 },
+      }).ok,
+    ).toBe(false);
     expect(
       validateCodeTaskQualificationFlowArtifact({
         ...base,
@@ -838,6 +894,114 @@ describe("validateCodeTaskQualificationManifest", () => {
       validateCodeTaskQualificationFlowArtifact({
         ...base,
         requiredChecks: { ...base.requiredChecks, total: 1, pending: 1 },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        requiredChecks: { ...base.requiredChecks, requirementsDigest: "not-a-digest" },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        requiredChecks: { ...base.requiredChecks, evidenceRef: "invalid evidence ref" },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("requires observed authority without mode escalation and complete tool accounting", () => {
+    const base = validQualificationFlow();
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        authorityObservation: {
+          ...base.authorityObservation,
+          effectiveMode: "autonomous-delivery",
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        authorityObservation: { ...base.authorityObservation, toolInvocationCount: 5 },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it.each(["approvalRequestCount", "effectStartedCount", "completedToolCount"] as const)(
+    "rejects a zero %s authority observation",
+    (field) => {
+      const base = validQualificationFlow();
+      expect(
+        validateCodeTaskQualificationFlowArtifact({
+          ...base,
+          authorityObservation: { ...base.authorityObservation, [field]: 0 },
+        }).ok,
+      ).toBe(false);
+    },
+  );
+
+  it("accepts a Full zero approval count while Ask and Supervised require one", () => {
+    const base = validQualificationFlow();
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        mode: "autonomous-delivery",
+        authorityObservation: {
+          ...base.authorityObservation,
+          requestedMode: "autonomous-delivery",
+          effectiveMode: "autonomous-delivery",
+          approvalRequestCount: 0,
+        },
+        stageEvidence: {
+          ...base.stageEvidence,
+          issueToPr: {
+            ...base.stageEvidence.issueToPr,
+            scenarioId: "issue-to-pr-autonomous-delivery",
+          },
+        },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        authorityObservation: { ...base.authorityObservation, approvalRequestCount: 0 },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        mode: "supervised-coding",
+        authorityObservation: {
+          ...base.authorityObservation,
+          requestedMode: "supervised-coding",
+          effectiveMode: "supervised-coding",
+          approvalRequestCount: 0,
+        },
+        stageEvidence: {
+          ...base.stageEvidence,
+          issueToPr: {
+            ...base.stageEvidence.issueToPr,
+            scenarioId: "issue-to-pr-supervised-coding",
+          },
+        },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("requires an approved independent rubric review bound to the exact flow", () => {
+    const base = validQualificationFlow();
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        rubricReview: { ...base.rubricReview, criteriaPassed: 4 },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        rubricReview: { ...base.rubricReview, pullRequestHeadSha: COMMIT_SHA },
       }).ok,
     ).toBe(false);
   });
@@ -852,6 +1016,51 @@ describe("validateCodeTaskQualificationManifest", () => {
         validateCodeTaskQualificationFlowArtifact({ ...base, [field]: "not-an-instant" }).ok,
       ).toBe(false);
     }
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        pullRequestMergedAt: codeTaskIsoInstant("2026-09-04T12:00:01Z"),
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("allows nullable CI repair on any flow while validating every present receipt", () => {
+    const first = validQualificationFlow();
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...first,
+        stageEvidence: { ...first.stageEvidence, ciRepair: null },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...first,
+        stageEvidence: {
+          ...first.stageEvidence,
+          description: {
+            ...first.stageEvidence.description,
+            receiptDigest: first.stageEvidence.issueToPr.receiptDigest,
+          },
+        },
+      }).ok,
+    ).toBe(false);
+    const second = validQualificationFlow(2);
+    expect(validateCodeTaskQualificationFlowArtifact(second).ok).toBe(true);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...second,
+        stageEvidence: { ...second.stageEvidence, ciRepair: first.stageEvidence.ciRepair },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...second,
+        stageEvidence: {
+          ...second.stageEvidence,
+          ciRepair: { scenarioId: "mark-ready-intent", receiptDigest: "9".repeat(64) },
+        },
+      }).ok,
+    ).toBe(false);
   });
 
   it("rejects incomplete transitions and a checks snapshot from another PR head", () => {
@@ -1109,6 +1318,22 @@ describe("codeTaskQualificationManifestFailures and codeTaskQualificationVerdict
       })),
     };
     expect(codeTaskQualificationManifestFailures(manifest, flowBinding)).toEqual([]);
+    const foreignRubricReview: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      flows: [
+        {
+          ...firstManifestFlow,
+          rubricReview: {
+            ...firstManifestFlow.rubricReview,
+            rubricDigest: firstManifestFlow.rubricReview.reviewDigest,
+          },
+        },
+        secondManifestFlow,
+      ],
+    };
+    expect(codeTaskQualificationManifestFailures(foreignRubricReview, flowBinding)).toContain(
+      "issue-to-pr-flow-01: rubric review does not match manifest rubric digest",
+    );
     const erasedFailedCharges: CodeTaskQualificationManifestV1 = {
       ...manifest,
       flows: [

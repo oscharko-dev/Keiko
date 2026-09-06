@@ -14,6 +14,15 @@ const PLATFORM_KEY_BY_OS_ARCH = Object.freeze({
   "win32:x64": "windows-x64",
   "linux:x64": "linux-x64",
 });
+const FLOW_BOUND_STAGE_SCENARIOS = new Set([
+  "issue-to-pr-governed-assist",
+  "issue-to-pr-supervised-coding",
+  "issue-to-pr-autonomous-delivery",
+  "ci-repair-loop",
+  "description-auto-draft-and-apply",
+  "mark-ready-intent",
+  "human-merge-and-closure",
+]);
 
 /**
  * Maps a Node `os.platform()`/`os.arch()` pair to a `CODE_TASK_EVIDENCE_PLATFORMS` member, or
@@ -25,6 +34,9 @@ export function platformKeyFor(osName, archName) {
 
 function receiptBindingFailures(scenario, receipt, headCommitSha) {
   const failures = [];
+  if (receipt.scenarioId !== scenario.scenarioId) {
+    failures.push(`${scenario.scenarioId}: receipt metadata scenario identity mismatch`);
+  }
   if (receipt.commitSha !== headCommitSha) {
     failures.push(
       `${scenario.scenarioId}: receipt is bound to a stale or foreign commit (expected ` +
@@ -61,7 +73,7 @@ function receiptTestStatusFailures(scenario, receipt) {
   return [];
 }
 
-function scenarioReceiptFailures(scenario, receiptsByScenarioId, headCommitSha) {
+function scenarioReceiptFailures(scenario, receiptsByScenarioId, headCommitSha, flows) {
   if (scenario.receiptDigest.outcome !== "known") {
     return scenario.outcome === "passed"
       ? [`${scenario.scenarioId}: a passed scenario requires a known receipt digest`]
@@ -75,12 +87,55 @@ function scenarioReceiptFailures(scenario, receiptsByScenarioId, headCommitSha) 
     (error) => `${scenario.scenarioId}: ${error}`,
   );
   const artifactBindingFailures = scenarioArtifactBindingFailures(scenario, receipt, headCommitSha);
+  artifactBindingFailures.push(...scenarioFlowBindingFailures(scenario, receipt, flows));
   return [
     ...artifactFailures,
     ...artifactBindingFailures,
     ...receiptBindingFailures(scenario, receipt, headCommitSha),
     ...receiptTestStatusFailures(scenario, receipt),
   ];
+}
+
+function flowMatchesBinding(flow, binding) {
+  if (binding === undefined || binding === null) return false;
+  return [
+    [binding.flowId, flow.flowId],
+    [binding.taskRunId, flow.taskRunId],
+    [binding.repository, flow.repository],
+    [binding.issueNumber, flow.issueNumber],
+    [binding.pullRequestNumber, flow.pullRequestNumber],
+    [binding.pullRequestHeadSha, flow.pullRequestHeadSha],
+  ].every(([actual, expected]) => actual === expected);
+}
+
+function flowBoundScenario(scenarioId) {
+  return FLOW_BOUND_STAGE_SCENARIOS.has(scenarioId);
+}
+
+function scenarioFlowBindingFailures(scenario, receipt, flows) {
+  if (flows.length === 0 || !flowBoundScenario(scenario.scenarioId)) return [];
+  const binding = receipt.artifactIdentity?.flowBinding;
+  const flow = flows.find((candidate) => flowMatchesBinding(candidate, binding));
+  if (flow === undefined) {
+    return [`${scenario.scenarioId}: stage receipt does not match a completed flow`];
+  }
+  if (modeStageDoesNotMatch(scenario.scenarioId, flow.mode)) {
+    return [`${scenario.scenarioId}: mode receipt does not match its completed flow`];
+  }
+  const finalFlow = flows.at(-1);
+  if (mergeStageDoesNotMatch(scenario.scenarioId, flow, finalFlow, binding)) {
+    return ["human-merge-and-closure: attestation does not match the final completed flow"];
+  }
+  return [];
+}
+
+function modeStageDoesNotMatch(scenarioId, mode) {
+  return scenarioId.startsWith("issue-to-pr-") && scenarioId !== `issue-to-pr-${mode}`;
+}
+
+function mergeStageDoesNotMatch(scenarioId, flow, finalFlow, binding) {
+  if (scenarioId !== "human-merge-and-closure") return false;
+  return flow !== finalFlow || binding?.mergeCommitSha !== flow.mergeCommitSha;
 }
 
 function scenarioArtifactBindingFailures(scenario, receipt, headCommitSha) {
@@ -118,11 +173,70 @@ function flowArtifactProjection(flow) {
     pullRequestMergedAt: flow.pullRequestMergedAt,
     mergeCommitSha: flow.mergeCommitSha,
     requiredChecks: flow.requiredChecks,
+    authorityObservation: flow.authorityObservation,
+    rubricReview: flow.rubricReview,
+    stageEvidence: flow.stageEvidence,
     transitions: flow.transitions,
     sourceCommitSha: flow.sourceCommitSha,
     observedAt: flow.observedAt,
     spend: flow.spend,
   };
+}
+
+function stageReceiptFailure(flow, stage, receiptsByScenarioId, headCommitSha) {
+  const key = `${flow.flowId}.${stage.scenarioId}`;
+  const receipt = receiptsByScenarioId.get(key);
+  if (receipt === undefined) return [`${flow.flowId}: missing ${stage.scenarioId} stage receipt`];
+  const identity = receipt.artifactIdentity;
+  const prefix = `${flow.flowId}: ${stage.scenarioId} stage`;
+  const failures = [
+    [
+      [receipt.scenarioId, identity?.scenarioId].every((id) => id === stage.scenarioId),
+      `${prefix} scenario identity mismatch`,
+    ],
+    [receipt.digest === stage.receiptDigest, `${prefix} receipt digest mismatch`],
+    [
+      [receipt.commitSha, identity?.sourceCommitSha].every((sha) => sha === headCommitSha),
+      `${prefix} source commit is stale or foreign`,
+    ],
+    [
+      [
+        receipt.platform === flow.platform,
+        receipt.testStatus === "passed",
+        receipt.provenance === "real-model",
+      ].every(Boolean),
+      `${prefix} is not passing real-model evidence`,
+    ],
+    [flowMatchesBinding(flow, identity?.flowBinding), `${prefix} flow binding mismatch`],
+    [
+      stage.scenarioId !== "human-merge-and-closure" ||
+        identity?.flowBinding?.mergeCommitSha === flow.mergeCommitSha,
+      `${flow.flowId}: governed merge stage merge commit mismatch`,
+    ],
+  ]
+    .filter(([valid]) => !valid)
+    .map(([, error]) => error);
+  for (const error of receipt.artifactValidationErrors ?? []) {
+    failures.push(`${flow.flowId}: ${stage.scenarioId} stage ${error}`);
+  }
+  return failures;
+}
+
+function flowStageReceiptFailures(flow, receiptsByScenarioId, headCommitSha) {
+  const stageEvidence = flow.stageEvidence;
+  if (stageEvidence === undefined || stageEvidence === null) {
+    return [`${flow.flowId}: missing per-flow stage evidence`];
+  }
+  const stages = [
+    stageEvidence.issueToPr,
+    ...(stageEvidence.ciRepair === null ? [] : [stageEvidence.ciRepair]),
+    stageEvidence.description,
+    stageEvidence.markReady,
+    stageEvidence.governedMerge,
+  ];
+  return stages.flatMap((stage) =>
+    stageReceiptFailure(flow, stage, receiptsByScenarioId, headCommitSha),
+  );
 }
 
 export function canonicalJson(value) {
@@ -217,10 +331,15 @@ export function evidenceGateFailures({
   }
   failures.push(...requiredToolFailures(manifest.requiredTools, modelVisibleToolNames));
   for (const scenario of manifest.scenarios) {
-    failures.push(...scenarioReceiptFailures(scenario, receiptsByScenarioId, headCommitSha));
+    failures.push(
+      ...scenarioReceiptFailures(scenario, receiptsByScenarioId, headCommitSha, manifest.flows),
+    );
   }
   for (const flow of manifest.flows) {
-    failures.push(...flowReceiptFailures(flow, flowReceiptsById, headCommitSha));
+    failures.push(
+      ...flowReceiptFailures(flow, flowReceiptsById, headCommitSha),
+      ...flowStageReceiptFailures(flow, receiptsByScenarioId, headCommitSha),
+    );
   }
   return failures;
 }

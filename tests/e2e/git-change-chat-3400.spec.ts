@@ -23,6 +23,7 @@ import {
   interceptWorkbenchDescriptionRace,
   seedWorkbenchDescriptionWindow,
 } from "./support/workbench-description-3401.js";
+import { observeBoundGitChatSessionActivity } from "./support/coding-issue-journey-live-git-chat-negative.js";
 
 const CHAT_VISUAL_SOURCES = [
   "tests/e2e/git-change-chat-3400.spec.ts",
@@ -218,22 +219,37 @@ test("reviews, approves and applies the held description through the connected p
   const chatWindow = page.locator('[data-window-id="issue-3400-chat-window"]');
   await expect(chatWindow).toBeVisible();
   await expect(chatWindow.getByText("PR #42")).toBeVisible();
-
-  await sendConnectedRefinement(
-    chatWindow,
-    "First connected refinement",
-    "First connected refinement is retained",
+  const initialScopes = await fetchGitChangeScopes(request, fixture.root, chat.id);
+  const initialScope = initialScopes?.find((candidate) => candidate.pullRequestNumber === 42);
+  if (initialScope === undefined) {
+    throw new Error("connected Chat did not retain the fixture pull request scope");
+  }
+  const activity = await observeBoundGitChatSessionActivity(
+    page,
+    { chatId: chat.id, relationshipId: initialScope.relationshipId },
+    2,
+    async () => {
+      await sendConnectedRefinement(
+        chatWindow,
+        "First connected refinement",
+        "First connected refinement is retained",
+      );
+      await sendConnectedRefinement(
+        chatWindow,
+        "Second connected refinement",
+        "Second connected refinement is visible",
+      );
+    },
   );
-  await sendConnectedRefinement(
-    chatWindow,
-    "Second connected refinement",
-    "Second connected refinement is visible",
-  );
+  expect(activity.assertion).toBe("no-forbidden-session-tool-events:true");
 
   const connectedScopes = await fetchGitChangeScopes(request, fixture.root, chat.id);
   const scope = connectedScopes?.find((candidate) => candidate.pullRequestNumber === 42);
-  const proposalId = scope?.descriptionProposalId;
-  if (scope === undefined || proposalId === undefined) {
+  if (scope === undefined) {
+    throw new Error("connected Chat lost the fixture pull request scope after refinement");
+  }
+  const proposalId = scope.descriptionProposalId;
+  if (proposalId === undefined) {
     throw new Error("second connected Chat turn did not retain a PR-description proposal");
   }
 

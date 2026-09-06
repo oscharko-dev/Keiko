@@ -191,7 +191,13 @@ inputs in section 1/2 above), a qualification run follows this sequence.
    `issue-to-pr-supervised-coding`, `issue-to-pr-autonomous-delivery`, `ci-repair-loop`,
    `description-auto-draft-and-apply`, `mark-ready-intent`, `git-to-chat-connect-refine-apply`,
    `git-chat-negative-effects`), each scoped to the ADR-0138 mode or journey stage its scenario id
-   names. `human-merge-and-closure` is emitted only after the explicit governed-merge confirmation
+   names. A selected five-flow run writes the corresponding stage receipts during that same drive,
+   bound to its exact flow/run/PR/head, rather than starting these paid scenarios again. Each flow
+   artifact retains the digests for its `<flowId>.<scenarioId>` stage receipts, so later repeated
+   modes cannot overwrite the proof for earlier flows. The
+   `ci-repair-loop` receipt is retained only from the seeded first flow's actual failed-head to
+   repaired-head transition; green-first later flows do not claim it. `human-merge-and-closure` is
+   emitted only after the explicit governed-merge confirmation
    and the product's journey observer sees both the provider merge and bound issue closure.
 3. **Produce the coding-runtime performance receipt.** From the native macOS-arm64 reference
    machine: `npm run perf:evidence:coding-runtime` (append `-- --calibrate` the first time only, if
@@ -201,8 +207,11 @@ inputs in section 1/2 above), a qualification run follows this sequence.
    judgement, together with the measurement's own bound source commit and `darwin`/`arm64`
    environment, is translated into `coding-runtime-performance-budgets`'s
    `<scenarioId>.receipt.json` + `.artifact` pair through the same shared writer the platform
-   launch drivers use (`scripts/lib/qualification-evidence-receipt.mjs`), written into the same
-   receipts directory as step 2.
+   launch drivers use (`scripts/lib/qualification-evidence-receipt.mjs`). Run
+   `node scripts/qualify-coding-issue-journey-performance.mjs --source-commit-sha <qualified-sha>
+   --receipts <qualification-receipts-directory>` from that clean exact source head. The qualifier
+   preserves the native measurement's original source identity and rejects a stale measured subject
+   or ruler instead of restamping it, then writes into the same receipts directory as step 2.
 4. **Produce the macOS egress-confinement receipt.** `egress-confinement-macos-arm64`'s receipt is
    the same translation applied to a different real result: `packages/keiko-sandbox`'s
    Seatbelt/gateway confinement tests passing, cross-referenced against the live run's own

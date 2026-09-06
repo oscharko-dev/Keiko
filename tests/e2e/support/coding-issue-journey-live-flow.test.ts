@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
-import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts";
-import { CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS } from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
+import type {
+  CodeTaskGitCommitSha,
+  CodeTaskScenarioId,
+  CodeTaskSha256Digest,
+  JourneyOutcome,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
+  isCodeTaskGitCommitSha,
+  isCodeTaskScenarioId,
+  isCodeTaskSha256Digest,
+} from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
 import { JourneyObservationController } from "../../../packages/keiko-server/src/gitDelivery/journeyObservationService.js";
 import { journeyFixture } from "../../../packages/keiko-server/src/gitDelivery/journeyOutcomeTest/_support.js";
 import { DescriptionFixture } from "../../../packages/keiko-server/src/gitDelivery/prDescriptionTestSupport.js";
@@ -9,24 +19,91 @@ import {
   buildQualificationFlowArtifact,
   hasRedGreenVerificationSequence,
   isUsefulRepositorySearchEvent,
+  qualifiedCiRepairAssertions,
   resolveFinalDeliveredPullRequest,
   selectedQualificationFlow,
   type QualificationFlowBinding,
 } from "./coding-issue-journey-live-flow.js";
 import { isScenarioSelected } from "./coding-issue-journey-scenarios.js";
 
-const HEAD_SHA = "1".repeat(40);
-const MERGE_SHA = "2".repeat(40);
-const SOURCE_SHA = "3".repeat(40);
+function gitCommit(value: string): CodeTaskGitCommitSha {
+  if (!isCodeTaskGitCommitSha(value)) throw new TypeError("fixture Git commit is invalid");
+  return value;
+}
+
+function scenarioId(value: string): CodeTaskScenarioId {
+  if (!isCodeTaskScenarioId(value)) throw new TypeError("fixture scenario id is invalid");
+  return value;
+}
+
+function digest(value: string): CodeTaskSha256Digest {
+  if (!isCodeTaskSha256Digest(value)) throw new TypeError("fixture digest is invalid");
+  return value;
+}
+
+const HEAD_SHA = gitCommit("1".repeat(40));
+const MERGE_SHA = gitCommit("2".repeat(40));
+const SOURCE_SHA = gitCommit("3".repeat(40));
 const REPAIRED_HEAD_SHA = "5".repeat(40);
 
 const FLOW: QualificationFlowBinding = {
-  flowId: "issue-to-pr-flow-01",
+  flowId: scenarioId("issue-to-pr-flow-01"),
   ordinal: 1,
   repository: "oscharko/Wegwerf-Repo",
   issueNumber: 1,
   mode: "governed-assist",
 };
+
+const QUALIFICATION_OBSERVATIONS = {
+  authorityObservation: {
+    requestedMode: "governed-assist",
+    effectiveMode: "governed-assist",
+    approvalRequestCount: 1,
+    toolInvocationCount: 2,
+    effectStartedCount: 1,
+    completedToolCount: 2,
+    deniedToolCount: 0,
+    failedToolCount: 0,
+    otherToolCount: 0,
+  },
+  rubricReview: {
+    reviewId: "review-1",
+    reviewDigest: digest("6".repeat(64)),
+    verdict: "approved",
+    flowId: FLOW.flowId,
+    taskRunId: "run-1",
+    repository: FLOW.repository,
+    issueNumber: FLOW.issueNumber,
+    pullRequestNumber: 7,
+    pullRequestHeadSha: HEAD_SHA,
+    sourceCommitSha: SOURCE_SHA,
+    rubricDigest: digest("7".repeat(64)),
+    criteriaTotal: 5,
+    criteriaPassed: 5,
+  },
+  stageEvidence: {
+    issueToPr: {
+      scenarioId: scenarioId("issue-to-pr-governed-assist"),
+      receiptDigest: digest("8".repeat(64)),
+    },
+    ciRepair: {
+      scenarioId: scenarioId("ci-repair-loop"),
+      receiptDigest: digest("9".repeat(64)),
+    },
+    description: {
+      scenarioId: scenarioId("description-auto-draft-and-apply"),
+      receiptDigest: digest("a".repeat(64)),
+    },
+    markReady: {
+      scenarioId: scenarioId("mark-ready-intent"),
+      receiptDigest: digest("b".repeat(64)),
+    },
+    governedMerge: {
+      scenarioId: scenarioId("human-merge-and-closure"),
+      receiptDigest: digest("c".repeat(64)),
+    },
+  },
+} as const;
 
 function technicalReadiness(): NonNullable<JourneyOutcome["readiness"]> {
   return {
@@ -143,6 +220,7 @@ describe("completed live qualification flow evidence", () => {
       budgetNanoUsd: 50_000_000_000,
       previousCumulativeChargedNanoUsd: 0,
       cumulativeChargedNanoUsd: 3_240_000,
+      ...QUALIFICATION_OBSERVATIONS,
     });
 
     expect(artifact).toMatchObject({
@@ -187,6 +265,7 @@ describe("completed live qualification flow evidence", () => {
         budgetNanoUsd: 50_000_000_000,
         previousCumulativeChargedNanoUsd: 0,
         cumulativeChargedNanoUsd: 3_240_000,
+        ...QUALIFICATION_OBSERVATIONS,
       }),
     ).toThrow("completed merge and issue closure");
   });
@@ -201,6 +280,7 @@ describe("completed live qualification flow evidence", () => {
         budgetNanoUsd: 50_000_000_000,
         previousCumulativeChargedNanoUsd: 4_000_000,
         cumulativeChargedNanoUsd: 3_240_000,
+        ...QUALIFICATION_OBSERVATIONS,
       }),
     ).toThrow("durable spend cumulative regressed");
 
@@ -217,6 +297,7 @@ describe("completed live qualification flow evidence", () => {
         budgetNanoUsd: 50_000_000_000,
         previousCumulativeChargedNanoUsd: 0,
         cumulativeChargedNanoUsd: 3_240_000,
+        ...QUALIFICATION_OBSERVATIONS,
       }),
     ).toThrow("exact merged head");
   });
@@ -242,6 +323,7 @@ describe("completed live qualification flow evidence", () => {
         budgetNanoUsd: 50_000_000_000,
         previousCumulativeChargedNanoUsd: 0,
         cumulativeChargedNanoUsd: 3_240_000,
+        ...QUALIFICATION_OBSERVATIONS,
       }),
     ).toThrow("passing checks on the exact merged head");
   });
@@ -339,14 +421,17 @@ describe("completed live qualification flow evidence", () => {
         return result.outcome;
       };
       const beforeMerge = await observe();
+      const mergedAt = new Date(source.observedAtMs - 2_000).toISOString();
+      const closedAt = new Date(source.observedAtMs - 1_000).toISOString();
       facts = {
         ...facts,
         identity: { ...facts.identity, state: "closed", isDraft: false },
-        mergedAt: "2026-09-06T05:59:00Z",
+        mergedAt,
         mergeCommitSha: MERGE_SHA,
-        issue: { ...facts.issue, state: "closed", closedAt: "2026-09-06T05:59:30Z" },
+        issue: { ...facts.issue, state: "closed", closedAt },
       };
       const afterMerge = await observe();
+      const afterMergeHeadSha = gitCommit(afterMerge.binding.headSha);
 
       expect(afterMerge.readiness).toBeNull();
       if (beforeMerge.readiness === null) throw new Error("pre-merge readiness was unavailable");
@@ -363,6 +448,14 @@ describe("completed live qualification flow evidence", () => {
           budgetNanoUsd: 50_000_000_000,
           previousCumulativeChargedNanoUsd: 0,
           cumulativeChargedNanoUsd: 3_240_000,
+          ...QUALIFICATION_OBSERVATIONS,
+          rubricReview: {
+            ...QUALIFICATION_OBSERVATIONS.rubricReview,
+            repository: afterMerge.binding.repository,
+            issueNumber: afterMerge.binding.issueNumber,
+            pullRequestNumber: afterMerge.binding.prNumber,
+            pullRequestHeadSha: afterMergeHeadSha,
+          },
         }),
       ).toMatchObject({ pullRequestHeadSha: afterMerge.binding.headSha });
     } finally {
@@ -443,6 +536,28 @@ describe("completed live qualification flow evidence", () => {
     expect(hasRedGreenVerificationSequence([failed, passed])).toBe(true);
     expect(hasRedGreenVerificationSequence([passed, failed])).toBe(false);
     expect(hasRedGreenVerificationSequence([passed])).toBe(false);
+  });
+
+  it("completes a green-first flow without fabricating CI-repair evidence", () => {
+    const requiredChecks = technicalReadiness().requiredChecks;
+    expect(
+      qualifiedCiRepairAssertions({
+        finalState: "technical-ready",
+        observedFailureBeforeReady: false,
+        requiredChecks,
+        failureHeadSha: undefined,
+        finalHeadSha: HEAD_SHA,
+      }),
+    ).toBeUndefined();
+    expect(
+      qualifiedCiRepairAssertions({
+        finalState: "technical-ready",
+        observedFailureBeforeReady: true,
+        requiredChecks,
+        failureHeadSha: HEAD_SHA,
+        finalHeadSha: REPAIRED_HEAD_SHA,
+      }),
+    ).toContain("ci-repair-evidence:observed-failure-repaired-fresh-head-ready");
   });
 
   it("fails before work when the durable ceiling exceeds authorization or changes mid-flow", () => {

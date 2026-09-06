@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isReadinessSnapshot, type ReadinessSnapshot } from "./git-ci-readiness.js";
+import {
+  isGitCiReadinessEvidenceRef,
+  isReadinessSnapshot,
+  type ReadinessSnapshot,
+} from "./git-ci-readiness.js";
 
 const COUNTS = { total: 1, passed: 1, failed: 0, pending: 0, blocked: 0, unknown: 0 };
 const SNAPSHOT: ReadinessSnapshot = {
@@ -32,6 +36,10 @@ const SNAPSHOT: ReadinessSnapshot = {
   },
 };
 describe("exact-revision CI readiness evidence", () => {
+  it("shares the bounded evidence-reference vocabulary with qualification receipts", () => {
+    expect(isGitCiReadinessEvidenceRef("ci-observation-1")).toBe(true);
+    expect(isGitCiReadinessEvidenceRef("contains spaces")).toBe(false);
+  });
   it("keeps technical readiness independent from draftness and human review visibility", () => {
     expect(isReadinessSnapshot(SNAPSHOT)).toBe(true);
     expect(SNAPSHOT).not.toHaveProperty("mergeAllowed");

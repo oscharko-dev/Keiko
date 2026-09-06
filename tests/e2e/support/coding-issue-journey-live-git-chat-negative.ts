@@ -3,7 +3,8 @@
 // effect boundaries, and the connected Chat renders no matching mutation controls. Neither claim
 // establishes full session-authority isolation. The companion positive two-turn scenario binds
 // each real Chat stream request to the persisted Git relationship and its correlation-scoped
-// admission, gateway completion, and absence of server-side effect operations; qualification still
+// admission, buffered gateway completion, and absence of server-side effect operations;
+// qualification still
 // requires that real journey to execute successfully.
 // Reuses the same real
 // hermetic git fixture and Chat-connect flow the `git-change-chat-3400.spec.ts` sibling already
@@ -57,21 +58,26 @@ const FORBIDDEN_SESSION_ROUTE_PREFIXES = [
 
 const FORBIDDEN_SESSION_ACTIVITY_PREFIXES = [
   "coding-repository-handler.",
-  "coding-runtime.",
   "coding-sidecar.",
   "command.",
   "gateway.tool-catalog.",
-  "git.",
   "runtime.confinement.",
   "tool-catalog.",
 ] as const;
 
-const CHAT_STREAM_ROUTE = "/api/desktop/chat/stream";
-const STREAM_TERMINAL_OPS = new Set([
-  "gateway.stream.abandoned",
-  "gateway.stream.completed",
-  "gateway.stream.failed",
+const ALLOWED_GIT_CHAT_ACTIVITY_OPS = new Set([
+  "coding-runtime.description-authority",
+  "git.delivery.authority.admitted",
+  "git.pr-description",
+  "git.snapshot.capture",
+  "git.snapshot.read",
+  "git.snapshot.recheck",
+  "git.snapshot.released",
+  "git.snapshot.reserved",
 ]);
+
+const CHAT_STREAM_ROUTE = "/api/desktop/chat/stream";
+const CHAT_TERMINAL_OPS = new Set(["gateway.chat.completed", "gateway.chat.failed"]);
 
 export interface ObservedGitChatStreamRequest {
   readonly chatId: string;
@@ -163,10 +169,64 @@ function eventCount(events: readonly Readonly<Record<string, unknown>>[], op: st
 
 function isForbiddenSessionActivity(event: Readonly<Record<string, unknown>>): boolean {
   const op = event.op;
+  if (typeof op !== "string") return false;
+  if (FORBIDDEN_SESSION_ACTIVITY_PREFIXES.some((prefix) => op.startsWith(prefix))) return true;
+  if (op.startsWith("coding-runtime.") || op.startsWith("git.")) {
+    if (!ALLOWED_GIT_CHAT_ACTIVITY_OPS.has(op)) return true;
+    return op === "git.pr-description" && event.effect !== "none";
+  }
+  return false;
+}
+
+function isMatchingBufferedCall(
+  started: Readonly<Record<string, unknown>> | undefined,
+  completed: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  if (started === undefined || completed === undefined) return false;
   return (
-    typeof op === "string" &&
-    FORBIDDEN_SESSION_ACTIVITY_PREFIXES.some((prefix) => op.startsWith(prefix))
+    started.streaming === false &&
+    completed.streaming === false &&
+    typeof started.requestId === "string" &&
+    started.requestId === completed.requestId
   );
+}
+
+function assertBufferedGatewayCompletion(
+  turnEvents: readonly Readonly<Record<string, unknown>>[],
+): void {
+  const started = turnEvents.filter((event) => event.op === "gateway.chat.started");
+  const completed = turnEvents.filter((event) => event.op === "gateway.chat.completed");
+  const terminals = turnEvents.filter((event) => CHAT_TERMINAL_OPS.has(String(event.op)));
+  if (
+    started.length !== 1 ||
+    completed.length !== 1 ||
+    terminals.length !== 1 ||
+    !isMatchingBufferedCall(started[0], completed[0])
+  ) {
+    throw new Error("Chat turn did not produce one completed buffered Model Gateway call");
+  }
+}
+
+function assertDescriptionOnlyLifecycle(
+  turnEvents: readonly Readonly<Record<string, unknown>>[],
+): void {
+  const authority = turnEvents.filter(
+    (event) => event.op === "coding-runtime.description-authority",
+  );
+  const preview = turnEvents.filter((event) => event.op === "git.pr-description");
+  if (
+    authority.length < 2 ||
+    authority.some((event) => event.event !== "minted" && event.event !== "narrowed") ||
+    eventCount(turnEvents, "git.snapshot.capture") === 0 ||
+    eventCount(turnEvents, "git.snapshot.read") === 0 ||
+    preview.some((event) => event.phase !== "preview" || event.effect !== "none") ||
+    eventCount(turnEvents, "pr-description.generation.started") !== 1 ||
+    eventCount(turnEvents, "pr-description.generation.completed") !== 1 ||
+    eventCount(turnEvents, "pr-description.chat.generated") !== 1 ||
+    eventCount(turnEvents, "sse.stream.closed") !== 1
+  ) {
+    throw new Error("Chat turn did not complete the bounded description-only lifecycle");
+  }
 }
 
 function assertCompletedBoundTurn(
@@ -179,16 +239,11 @@ function assertCompletedBoundTurn(
   }
   const turnEvents = activityEventTree(events, request.correlationId);
   const admitted = turnEvents.filter((event) => event.op === "pr-description.chat.turn.admitted");
-  if (admitted.length !== 1 || admitted[0]?.relationshipId !== relationshipId) {
+  if (admitted.length !== 2 || admitted.some((event) => event.relationshipId !== relationshipId)) {
     throw new Error("Chat turn was not admitted for the exact connected Git relationship");
   }
-  if (
-    eventCount(turnEvents, "gateway.stream.started") !== 1 ||
-    eventCount(turnEvents, "gateway.stream.completed") !== 1 ||
-    turnEvents.filter((event) => STREAM_TERMINAL_OPS.has(String(event.op))).length !== 1
-  ) {
-    throw new Error("Chat turn did not produce one completed Model Gateway stream");
-  }
+  assertBufferedGatewayCompletion(turnEvents);
+  assertDescriptionOnlyLifecycle(turnEvents);
   const forbidden = turnEvents.some(isForbiddenSessionActivity);
   if (forbidden) throw new Error("Git-connected Chat emitted forbidden server-side tool activity");
 }
@@ -214,8 +269,8 @@ export function assertNoForbiddenSessionToolEvents(
 
 /** Captures only this connected Chat's stream requests, then joins their client correlation ids
  * to the synchronous production activity log. An empty UI timeline cannot satisfy this proof: all
- * expected turns must have an admitted relationship-bound server event and a completed gateway
- * stream before the absence of correlated repository/tool effects is asserted. */
+ * expected turns must have both relationship-bound admissions and a completed buffered gateway
+ * call before the absence of correlated repository/tool effects is asserted. */
 export async function observeBoundGitChatSessionActivity<T>(
   page: Page,
   session: { readonly chatId: string; readonly relationshipId: string },

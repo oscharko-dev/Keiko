@@ -178,6 +178,81 @@ describe("editor catalog settlement classification", () => {
     expect(classify({ ok: false, error: { kind, code: "BODY_FREE" } })).toEqual(expected);
   });
 
+  it.each([
+    [{ status: "queued" }, { status: "busy", reason: "invocation-in-flight" }],
+    [{ status: "conflict" }, { status: "failed", reason: "result-contract-failed" }],
+    [{ status: "failed" }, { status: "failed", reason: "handler-failed" }],
+    [
+      { status: "failed", failure: { code: "TIMED_OUT", message: "Timed out." } },
+      { status: "timeout", reason: "deadline-exceeded" },
+    ],
+    [
+      { status: "failed", failure: { code: "LIMIT_EXCEEDED", message: "Limit reached." } },
+      { status: "denied", reason: "budget-exhausted" },
+    ],
+  ] as const)("maps the %s action lifecycle into its governed settlement", (result, expected) => {
+    expect(
+      classify({
+        ok: true,
+        kind: "action-result",
+        result: {
+          schemaVersion: "1",
+          actionId: "action-lifecycle",
+          sessionId: "session-1",
+          ...result,
+        },
+      }),
+    ).toEqual(expected);
+  });
+
+  it.each([
+    [
+      {
+        outcome: "completed",
+        report: {
+          overallStatus: "passed",
+          durationMs: 5,
+          counts: {
+            passed: 1,
+            failed: 0,
+            skipped: 0,
+            denied: 0,
+            "timed-out": 0,
+            cancelled: 0,
+            "resource-exceeded": 0,
+          },
+          steps: [{ kind: "typecheck", status: "passed", durationMs: 5 }],
+        },
+      },
+      { status: "completed", reason: "none" },
+    ],
+    [
+      {
+        outcome: "not-run",
+        disposition: "review-required",
+        reason: "mode-approval-required",
+      },
+      { status: "denied", reason: "approval-required" },
+    ],
+    [
+      { outcome: "not-run", disposition: "denied", reason: "mode-policy-denied" },
+      { status: "denied", reason: "hard-denial" },
+    ],
+  ] as const)("maps verification result %# into its closed settlement", (result, expected) => {
+    expect(classify({ ok: true, kind: "verification", result })).toEqual(expected);
+  });
+
+  it("accepts bounded read results and fails closed on unknown successful result kinds", () => {
+    expect(classify({ ok: true, kind: "sessions", sessions: [] })).toEqual({
+      status: "completed",
+      reason: "none",
+    });
+    expect(classify({ ok: true, kind: "unknown" })).toEqual({
+      status: "failed",
+      reason: "result-contract-failed",
+    });
+  });
+
   it("fails closed when the legacy output is malformed", () => {
     expect(
       classifyEditorAgentCatalogResult({ toolCallId: "call-1", output: "{", durationMs: 1 }),

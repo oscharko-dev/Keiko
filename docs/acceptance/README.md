@@ -129,17 +129,40 @@ bridge a real, passing result into the same receipts-directory shape via the sha
 `scripts/lib/qualification-evidence-receipt.mjs` writer, so a scenario that is blocked today
 becomes real evidence with no separate translation step once its external prerequisite lands.
 
+After the native coding-runtime measurement and freshness gate pass, translate that unchanged
+measurement into its #3390 receipt from the clean qualified source head:
+
+```sh
+node scripts/qualify-coding-issue-journey-performance.mjs \
+  --source-commit-sha <qualified-source-sha> \
+  --receipts <qualification-receipts-directory>
+```
+
+The qualifier re-runs the existing source-freshness judgement and requires the measurement's
+subject and ruler digests to match the current qualified source. It preserves the measurement's
+original commit and does not relabel an older sample as a current one.
+
 The descriptor also fixes five ordered Issue-to-PR flow identities. Each flow has its own artifact
 and metadata receipt and is written only after the controlled-repository issue is closed and its PR
 is merged. The artifact records the issue, task run, exact PR head and merge SHA, an observed
-required-check summary (including an honest observed total of zero on an unprotected fixture), the
-complete product transition list, and nano-USD ledger delta/cumulative/remaining values. The first
+required-check summary with at least one passing required check on that head, the complete product
+transition list, and nano-USD ledger delta/cumulative/remaining values. The first
 delta starts at the evaluation ledger's zero baseline, so failed attempts and qualification probes
 before the first successful flow remain charged. The checker rejects missing, reordered, duplicate,
 stale, tampered, non-monotonic, or over-budget flow evidence. The artifact retains the provider's
 pull-request merge and issue-closure instants plus the product journey observer's completion
 instant; the live producer records these values from the observed outcome instead of synthesizing
 them.
+
+The selected flow records the existing scenario receipts as each governed stage is observed; it
+does not launch the legacy scenario tests as additional paid drives. Every mode, CI-repair,
+description-apply, mark-ready, and merge/closure stage receipt binds the exact flow, task run,
+repository, issue, pull request, and head. The checker rejects a receipt from an earlier failed
+attempt or another flow. The flow artifact retains each stage digest and the corresponding files
+use `<flowId>.<scenarioId>` keys, so repeated modes and stages cannot overwrite the evidence for
+another completed flow. Only the seeded first flow may establish the CI-repair row, and only after
+an actual failed head is followed by a different technically-ready head; later already-green flows
+do not overwrite that proof or claim a repair they did not perform.
 
 Generator invocation:
 
@@ -154,21 +177,29 @@ node scripts/generate-coding-issue-journey-manifest.mjs \
   --spend-budget-usd <positive number> \
   [--issue-ref <opaque>] [--pr-ref <opaque>] [--run-ref <opaque>] \
   [--readiness-digest <sha256>] [--journey-outcome-digest <sha256>] \
-  [--human-merge-attestation <path-to-digest>] \
   [--audit-ref <opaque>] [--audit-digest <sha256>] [--observed-spend-usd <number>] \
   --output <path>/manifest.json
 ```
 
 When all five flow receipts exist, the generator derives `observedSpendUsd` from the final durable
-ledger cumulative. The optional CLI value remains available only for pre-flow evidence sets.
+ledger cumulative. The optional CLI value remains available only for pre-flow evidence sets. The
+merge attestation digest is likewise derived from the validated `human-merge-and-closure` artifact,
+which is emitted only after the explicit governed confirmation, provider merge, and bound issue
+closure are observed; arbitrary operator-supplied bytes cannot stand in for those facts.
 
 The manifest is validated against `validateCodeTaskQualificationManifest` before it is written, the
 same contract-first pattern as the acceptance contribution above. All five flows preserve one
 frozen source commit. The machine validator, `npm run
 check:coding-issue-journey-evidence:3390`, accepts an evidence-only descendant landing commit only
 when its changes are limited to the canonical manifest and exact descriptor-owned artifact and
-receipt paths; it reports the source and landing identities separately and cross-references the
-receipts without rebinding them. See
+receipt paths. The only other permitted landing changes are the owning D12 producer's exact
+`docs/release/1209-perf-evidence.json` and `docs/release/1209-bundle-evidence.json` outputs. This
+finite exception lets the five real journeys run against one frozen executable source before the
+long D12 measurement; it does not qualify those documents by itself. The final landing must still
+pass the existing D12 integrity, source-freshness, same-ruler and bundle validators after the
+producer writes them. The ruler, calibration, budgets, descriptor, rubric, executable source and
+all other documentation remain frozen. The source-binding gate reports the source and landing
+identities separately and cross-references the receipts without rebinding them. See
 [`docs/design-system/evidence/3390/README.md`](../design-system/evidence/3390/README.md) for the
 full operator sequence, including what a `blocked` row means and why it is never a skipped-green
 row.

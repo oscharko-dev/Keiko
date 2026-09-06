@@ -26,13 +26,18 @@ import {
   checkCodingIssueJourneyEvidence,
   qualificationBinding,
   readFlowReceipts,
+  readReceipts,
 } from "../check-coding-issue-journey-evidence.mjs";
 import {
   canonicalJson,
   deriveGateVerdict,
+  evidenceGateFailures,
   platformKeyFor,
 } from "../lib/coding-issue-journey-evidence.mjs";
-import { writeCodingIssueJourneyFlowEvidenceReceipt } from "../lib/qualification-evidence-receipt.mjs";
+import {
+  writeCodingIssueJourneyFlowEvidenceReceipt,
+  writeQualificationEvidenceReceipt,
+} from "../lib/qualification-evidence-receipt.mjs";
 import {
   CODING_ISSUE_JOURNEY_DESCRIPTOR_PATH,
   CODING_ISSUE_JOURNEY_MANIFEST_PATH,
@@ -128,10 +133,53 @@ function flowArtifact(
     requiredChecks: {
       observation: "observed",
       headSha: pullRequestHeadSha,
-      total: 0,
-      passed: 0,
+      requirementsVersion: "1",
+      requirementsDigest: "e".repeat(64),
+      evidenceRef: `ci-run-${String(ordinal)}`,
+      total: 1,
+      passed: 1,
       failed: 0,
       pending: 0,
+    },
+    authorityObservation: {
+      requestedMode: FLOW_MODES[index],
+      effectiveMode: FLOW_MODES[index],
+      approvalRequestCount: 1,
+      toolInvocationCount: 2,
+      effectStartedCount: 1,
+      completedToolCount: 2,
+      deniedToolCount: 0,
+      failedToolCount: 0,
+      otherToolCount: 0,
+    },
+    rubricReview: {
+      reviewId: `review-${String(ordinal)}`,
+      reviewDigest: "f".repeat(64),
+      verdict: "approved",
+      flowId,
+      taskRunId: `run-${String(ordinal)}`,
+      repository: "oscharko/Wegwerf-Repo",
+      issueNumber,
+      pullRequestNumber,
+      pullRequestHeadSha,
+      sourceCommitSha,
+      rubricDigest: "e".repeat(64),
+      criteriaTotal: 5,
+      criteriaPassed: 5,
+    },
+    stageEvidence: {
+      issueToPr: { scenarioId: `issue-to-pr-${FLOW_MODES[index]}`, receiptDigest: "1".repeat(64) },
+      ciRepair:
+        ordinal === 1 ? { scenarioId: "ci-repair-loop", receiptDigest: "2".repeat(64) } : null,
+      description: {
+        scenarioId: "description-auto-draft-and-apply",
+        receiptDigest: "3".repeat(64),
+      },
+      markReady: { scenarioId: "mark-ready-intent", receiptDigest: "4".repeat(64) },
+      governedMerge: {
+        scenarioId: "human-merge-and-closure",
+        receiptDigest: "5".repeat(64),
+      },
     },
     transitions: CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
     sourceCommitSha,
@@ -145,7 +193,94 @@ function flowArtifact(
   };
 }
 
-function stageFiveFlowEvidence(fixtureName = "valid") {
+function stageAssertions(flow, scenarioId) {
+  if (scenarioId.startsWith("issue-to-pr-")) {
+    return [
+      `real-model-run-recorded:${flow.taskRunId}`,
+      `draft-pull-request-created:${flow.repository}#${String(flow.pullRequestNumber)}`,
+      `mode-selected:${flow.mode}`,
+    ];
+  }
+  if (scenarioId === "ci-repair-loop") {
+    return [
+      "ci-terminal-state:technical-ready",
+      "observed-failure-before-ready:true",
+      "required-checks-total:1",
+      "repair-head-changed:true",
+      "ci-repair-evidence:observed-failure-repaired-fresh-head-ready",
+    ];
+  }
+  if (scenarioId === "description-auto-draft-and-apply") {
+    return [
+      "auto-draft-reason:generated",
+      "retained-proposal:proposal-1",
+      "governed-apply-completed:true",
+    ];
+  }
+  if (scenarioId === "mark-ready-intent") return ["ready-for-review-proposed:true"];
+  return [
+    "governed-merge-confirmed:true",
+    "provider-merge-observed:true",
+    "bound-issue-closure-observed:true",
+  ];
+}
+
+function writeStageReceipt(receiptsDir, flow, scenarioId) {
+  const receiptKey = `${flow.flowId}.${scenarioId}`;
+  const receipt = {
+    schemaVersion: 1,
+    scenarioId,
+    evidenceClass: "playwright-journey",
+    sourceCommitSha: flow.sourceCommitSha,
+    platformTarget: "macos-arm64",
+    result: "passed",
+    assertions: stageAssertions(flow, scenarioId),
+    usage: {
+      spendObservability: "unknown",
+      observedToolCallEvents: 2,
+      observedRunDurationMs: 10,
+    },
+    flowBinding: {
+      flowId: flow.flowId,
+      taskRunId: flow.taskRunId,
+      repository: flow.repository,
+      issueNumber: flow.issueNumber,
+      pullRequestNumber: flow.pullRequestNumber,
+      pullRequestHeadSha: flow.pullRequestHeadSha,
+      ...(scenarioId === "human-merge-and-closure" ? { mergeCommitSha: flow.mergeCommitSha } : {}),
+    },
+  };
+  writeQualificationEvidenceReceipt({
+    receiptsDir,
+    scenarioId,
+    recordedAt: "2026-09-06T05:30:00Z",
+    receipt,
+  });
+  return writeQualificationEvidenceReceipt({
+    receiptsDir,
+    scenarioId,
+    receiptKey,
+    recordedAt: "2026-09-06T05:30:00Z",
+    receipt,
+  });
+}
+
+function writeFlowStageReceipts(receiptsDir, flow, repairOrdinal = 1) {
+  const modeScenarioId = `issue-to-pr-${flow.mode}`;
+  const stage = (scenarioId) => ({
+    scenarioId,
+    receiptDigest: writeStageReceipt(receiptsDir, flow, scenarioId),
+  });
+  return {
+    issueToPr: stage(modeScenarioId),
+    ciRepair: flow.ordinal === repairOrdinal ? stage("ci-repair-loop") : null,
+    description: stage("description-auto-draft-and-apply"),
+    markReady: stage("mark-ready-intent"),
+    governedMerge: stage("human-merge-and-closure"),
+  };
+}
+
+function stageFiveFlowEvidence(fixtureName = "valid", repairOrdinal = 1) {
   const root = mkdtempSync(join(tmpdir(), "keiko-five-flow-evidence-"));
   TEMP_ROOTS.push(root);
   const sourceFixture = fixture(fixtureName);
@@ -157,7 +292,7 @@ function stageFiveFlowEvidence(fixtureName = "valid") {
   }
   const manifest = JSON.parse(readFileSync(sourceFixture.manifestPath, "utf8"));
   const cumulatives = [3_240_000, 5_000_000, 7_000_000, 9_000_000, 11_000_000];
-  const artifacts = cumulatives.map((cumulative, index) =>
+  const baseArtifacts = cumulatives.map((cumulative, index) =>
     flowArtifact(
       index,
       cumulative,
@@ -165,6 +300,10 @@ function stageFiveFlowEvidence(fixtureName = "valid") {
       manifest.sourceCommitSha,
     ),
   );
+  const artifacts = baseArtifacts.map((artifact) => ({
+    ...artifact,
+    stageEvidence: writeFlowStageReceipts(receiptsDir, artifact, repairOrdinal),
+  }));
   for (const artifact of artifacts) {
     writeCodingIssueJourneyFlowEvidenceReceipt({
       receiptsDir,
@@ -246,11 +385,24 @@ function stageCanonicalEvidenceOnlyLanding() {
   git(root, "config", "user.name", "Qualification Fixture");
   git(root, "config", "commit.gpgsign", "false");
   const descriptor = {
-    scenarios: [{ scenarioId: "issue-to-pr-full-access", evidenceClass: "playwright-journey" }],
+    scenarios: [
+      { scenarioId: "issue-to-pr-full-access", evidenceClass: "playwright-journey" },
+      ...[
+        "issue-to-pr-governed-assist",
+        "issue-to-pr-supervised-coding",
+        "issue-to-pr-autonomous-delivery",
+        "ci-repair-loop",
+        "description-auto-draft-and-apply",
+        "mark-ready-intent",
+        "human-merge-and-closure",
+      ].map((scenarioId) => ({ scenarioId, evidenceClass: "playwright-journey" })),
+    ],
     flows: staged.descriptor.flows,
   };
   writePath(root, CODING_ISSUE_JOURNEY_DESCRIPTOR_PATH, `${JSON.stringify(descriptor)}\n`);
   writePath(root, "packages/keiko-server/src/runtime.ts", "export const runtime = true;\n");
+  writePath(root, "docs/release/1209-perf-evidence.json", "{}\n");
+  writePath(root, "docs/release/1209-bundle-evidence.json", "{}\n");
   const sourceCommitSha = commit(root, "freeze qualification source");
   const sourceTreeSha = git(root, "rev-parse", `${sourceCommitSha}^{tree}`);
   const receiptsDir = join(root, CODING_ISSUE_JOURNEY_RECEIPTS_PATH);
@@ -264,9 +416,13 @@ function stageCanonicalEvidenceOnlyLanding() {
     `${JSON.stringify({ scenarioId: "issue-to-pr-full-access", commitSha: sourceCommitSha, platform: "macos-arm64", testStatus: "passed" })}\n`,
   );
   const cumulatives = [3_240_000, 5_000_000, 7_000_000, 9_000_000, 11_000_000];
-  const artifacts = cumulatives.map((value, index) =>
+  const baseArtifacts = cumulatives.map((value, index) =>
     flowArtifact(index, value, index === 0 ? 0 : cumulatives[index - 1], sourceCommitSha),
   );
+  const artifacts = baseArtifacts.map((artifact) => ({
+    ...artifact,
+    stageEvidence: writeFlowStageReceipts(receiptsDir, artifact),
+  }));
   for (const artifact of artifacts) {
     writeCodingIssueJourneyFlowEvidenceReceipt({
       receiptsDir,
@@ -301,6 +457,159 @@ function stageCanonicalEvidenceOnlyLanding() {
 }
 
 describe("checkCodingIssueJourneyEvidence", () => {
+  it("accepts real CI repair on a later completed flow and still requires its receipt", async () => {
+    const staged = stageFiveFlowEvidence("valid", 2);
+    const manifest = JSON.parse(readFileSync(staged.manifestPath, "utf8"));
+    const receipt = readReceipts(staged.receiptsDir).get("ci-repair-loop");
+    manifest.scenarios.push({
+      ...manifest.scenarios[0],
+      scenarioId: "ci-repair-loop",
+      artifactDigests: [receipt.digest],
+      receiptDigest: { outcome: "known", value: receipt.digest },
+    });
+    writeFileSync(staged.manifestPath, JSON.stringify(manifest));
+    const args = {
+      ...staged,
+      binding: {
+        ...BASE_BINDING,
+        registeredScenarioIds: [...BASE_BINDING.registeredScenarioIds, "ci-repair-loop"],
+      },
+      headShas: HEAD_SHAS,
+    };
+    expect(staged.flows[0].stageEvidence.ciRepair).toBeNull();
+    expect(await checkCodingIssueJourneyEvidence(args)).toMatchObject({
+      verdict: "qualified",
+      failures: [],
+    });
+    rmSync(join(staged.receiptsDir, "ci-repair-loop.receipt.json"));
+    expect((await checkCodingIssueJourneyEvidence(args)).failures).toContain(
+      "ci-repair-loop: missing receipt",
+    );
+  });
+
+  it("keeps five green-first deliveries unqualified without the required CI-repair scenario", async () => {
+    const staged = stageFiveFlowEvidence("valid", null);
+    const result = await checkCodingIssueJourneyEvidence({
+      ...staged,
+      binding: {
+        ...BASE_BINDING,
+        registeredScenarioIds: [...BASE_BINDING.registeredScenarioIds, "ci-repair-loop"],
+      },
+      headShas: HEAD_SHAS,
+    });
+    expect(result.verdict).toBe("blocked");
+    expect(result.failures.some((failure) => failure.includes("ci-repair-loop"))).toBe(true);
+  });
+
+  it("rejects a stage receipt from another attempt even when its source and catalog are current", () => {
+    const flow = flowArtifact(0, 3_240_000, 0);
+    const scenario = {
+      scenarioId: "issue-to-pr-governed-assist",
+      outcome: "passed",
+      receiptDigest: { outcome: "known", value: "c".repeat(64) },
+    };
+    const failures = evidenceGateFailures({
+      manifestValidation: {
+        ok: true,
+        value: {
+          sourceTreeSha: TREE_SHA,
+          requiredTools: [],
+          scenarios: [scenario],
+          flows: [flow],
+        },
+      },
+      manifestFailures: [],
+      headCommitSha: COMMIT_SHA,
+      headTreeSha: TREE_SHA,
+      receiptsByScenarioId: new Map([
+        [
+          scenario.scenarioId,
+          {
+            commitSha: COMMIT_SHA,
+            platform: undefined,
+            testStatus: "passed",
+            digest: "c".repeat(64),
+            artifactValidationErrors: [],
+            artifactIdentity: {
+              scenarioId: scenario.scenarioId,
+              sourceCommitSha: COMMIT_SHA,
+              result: "passed",
+              flowBinding: {
+                flowId: flow.flowId,
+                taskRunId: "run-from-failed-attempt",
+                repository: flow.repository,
+                issueNumber: flow.issueNumber,
+                pullRequestNumber: flow.pullRequestNumber,
+                pullRequestHeadSha: flow.pullRequestHeadSha,
+              },
+            },
+          },
+        ],
+      ]),
+      flowReceiptsById: new Map(),
+      modelVisibleToolNames: new Set(),
+    });
+
+    expect(failures).toContain(
+      "issue-to-pr-governed-assist: stage receipt does not match a completed flow",
+    );
+  });
+
+  it("rejects a merge attestation whose merge identity differs from the completed flow", () => {
+    const flow = flowArtifact(4, 11_000_000, 9_000_000);
+    const scenario = {
+      scenarioId: "human-merge-and-closure",
+      outcome: "passed",
+      receiptDigest: { outcome: "known", value: "c".repeat(64) },
+    };
+    const failures = evidenceGateFailures({
+      manifestValidation: {
+        ok: true,
+        value: {
+          sourceTreeSha: TREE_SHA,
+          requiredTools: [],
+          scenarios: [scenario],
+          flows: [flow],
+        },
+      },
+      manifestFailures: [],
+      headCommitSha: COMMIT_SHA,
+      headTreeSha: TREE_SHA,
+      receiptsByScenarioId: new Map([
+        [
+          scenario.scenarioId,
+          {
+            commitSha: COMMIT_SHA,
+            platform: undefined,
+            testStatus: "passed",
+            digest: "c".repeat(64),
+            artifactValidationErrors: [],
+            artifactIdentity: {
+              scenarioId: scenario.scenarioId,
+              sourceCommitSha: COMMIT_SHA,
+              result: "passed",
+              flowBinding: {
+                flowId: flow.flowId,
+                taskRunId: flow.taskRunId,
+                repository: flow.repository,
+                issueNumber: flow.issueNumber,
+                pullRequestNumber: flow.pullRequestNumber,
+                pullRequestHeadSha: flow.pullRequestHeadSha,
+                mergeCommitSha: "f".repeat(40),
+              },
+            },
+          },
+        ],
+      ]),
+      flowReceiptsById: new Map(),
+      modelVisibleToolNames: new Set(),
+    });
+
+    expect(failures).toContain(
+      "human-merge-and-closure: attestation does not match the final completed flow",
+    );
+  });
+
   it("uses the production checker to accept only an evidence-only descendant of its source", async () => {
     const staged = stageCanonicalEvidenceOnlyLanding();
     const args = {
@@ -541,6 +850,47 @@ describe("checkCodingIssueJourneyEvidence", () => {
     });
     expect(failures).toContain(`${flowId}: flow artifact digest mismatch`);
     expect(failures).toContain(`${flowId}: metadata has an unknown field`);
+  });
+
+  it("requires every flow's own stage receipt and rejects a prior-attempt binding", async () => {
+    const staged = stageFiveFlowEvidence();
+    const flow = staged.flows[1];
+    const stageKey = `${flow.flowId}.description-auto-draft-and-apply`;
+    const artifactPath = join(staged.receiptsDir, `${stageKey}.artifact`);
+    const artifact = JSON.parse(readFileSync(artifactPath, "utf8"));
+    writeFileSync(
+      artifactPath,
+      `${JSON.stringify({
+        ...artifact,
+        flowBinding: { ...artifact.flowBinding, taskRunId: "run-from-prior-attempt" },
+      })}\n`,
+    );
+
+    const tampered = await checkCodingIssueJourneyEvidence({
+      manifestPath: staged.manifestPath,
+      receiptsDir: staged.receiptsDir,
+      binding: BASE_BINDING,
+      descriptor: staged.descriptor,
+      headShas: HEAD_SHAS,
+    });
+    expect(tampered.failures).toContain(
+      `${flow.flowId}: description-auto-draft-and-apply stage receipt digest mismatch`,
+    );
+    expect(tampered.failures).toContain(
+      `${flow.flowId}: description-auto-draft-and-apply stage flow binding mismatch`,
+    );
+
+    rmSync(artifactPath);
+    const missing = await checkCodingIssueJourneyEvidence({
+      manifestPath: staged.manifestPath,
+      receiptsDir: staged.receiptsDir,
+      binding: BASE_BINDING,
+      descriptor: staged.descriptor,
+      headShas: HEAD_SHAS,
+    });
+    expect(missing.failures).toContain(
+      `${flow.flowId}: missing description-auto-draft-and-apply stage receipt`,
+    );
   });
 });
 

@@ -14,6 +14,16 @@ import {
   validateCodeTaskQualificationFlowArtifact,
 } from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
 import { codingIssueJourneyScenarioArtifactErrors } from "./coding-issue-journey-scenario-evidence.mjs";
+import { sha256 } from "./digest.mjs";
+
+const RECEIPT_KEY = /^[a-z][a-z0-9.-]{1,180}$/u;
+
+function safeReceiptKey(receiptKey) {
+  if (!RECEIPT_KEY.test(receiptKey) || receiptKey.includes("..")) {
+    throw new TypeError("invalid qualification evidence receipt key");
+  }
+  return receiptKey;
+}
 
 function assertValidOwnedScenarioArtifact(scenarioId, receipt) {
   const errors = codingIssueJourneyScenarioArtifactErrors(receipt, scenarioId);
@@ -25,18 +35,17 @@ function assertValidOwnedScenarioArtifact(scenarioId, receipt) {
 export function writeQualificationEvidenceReceipt({
   receiptsDir,
   scenarioId,
+  receiptKey = scenarioId,
   receipt,
   recordedAt,
   provenance = "real-model",
 }) {
   assertValidOwnedScenarioArtifact(scenarioId, receipt);
+  const key = safeReceiptKey(receiptKey);
+  const artifactBytes = `${JSON.stringify(receipt, null, 2)}\n`;
+  writeFileSync(join(receiptsDir, `${key}.artifact`), artifactBytes, { mode: 0o600 });
   writeFileSync(
-    join(receiptsDir, `${scenarioId}.artifact`),
-    `${JSON.stringify(receipt, null, 2)}\n`,
-    { mode: 0o600 },
-  );
-  writeFileSync(
-    join(receiptsDir, `${scenarioId}.receipt.json`),
+    join(receiptsDir, `${key}.receipt.json`),
     `${JSON.stringify(
       {
         scenarioId,
@@ -51,6 +60,7 @@ export function writeQualificationEvidenceReceipt({
     )}\n`,
     { mode: 0o600 },
   );
+  return sha256(artifactBytes);
 }
 
 /** Writes one completed #3390 flow with a distinct identity. Failed attempts are represented in

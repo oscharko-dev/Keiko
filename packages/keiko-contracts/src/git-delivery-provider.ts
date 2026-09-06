@@ -34,6 +34,7 @@ export type {
 export {
   GIT_CI_READINESS_REASON_STATES,
   isGitCiCheckCounts,
+  isGitCiReadinessEvidenceRef,
   isReadinessSnapshot,
 } from "./git-ci-readiness.js";
 export type {

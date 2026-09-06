@@ -1,5 +1,4 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import {
   isScenarioSelected,
   recordScenarioReceipt,
@@ -18,6 +17,7 @@ import {
   runSelectedQualificationFlow,
   selectedQualificationFlow,
 } from "./support/coding-issue-journey-live-flow.js";
+import { modeScenarioId } from "./support/coding-issue-journey-stage-assertions.js";
 
 // Issue #3390: the real-model production-composition journey. This spec is deliberately the only
 // one in `tests/e2e/` that installs NO `page.route()` interception and imports NO scripted server
@@ -37,10 +37,9 @@ import {
 // (`isScenarioSelected`) so an orchestrator can run one scenario at a time within the operator's
 // USD spend budget, rather than every registered scenario on every invocation.
 //
-// The original human-merge-and-closure scenario remains a separately attested scenario. The
-// operator-authorized five-flow qualification is an additional lane: it drives the real governed
-// merge approval surface and records a distinct receipt only after provider merge and issue closure
-// are observed for that flow.
+// The five-flow lane also records each legacy stage through this file's shared receipt owner. Its
+// merge receipt is emitted only after explicit governed confirmation and provider-observed merge
+// and issue closure; the final flow artifact remains independently bound to its issue/run/PR.
 
 test.describe.configure({ mode: "serial" });
 
@@ -87,12 +86,6 @@ async function recordOutcome(
 }
 
 const ISSUE_TO_PR_MODES = ["governed-assist", "supervised-coding", "autonomous-delivery"] as const;
-const MODE_SCENARIO_IDS: Record<CodingWorkbenchMode, CodingIssueJourneyScenarioId> = {
-  "governed-assist": "issue-to-pr-governed-assist",
-  "supervised-coding": "issue-to-pr-supervised-coding",
-  "autonomous-delivery": "issue-to-pr-autonomous-delivery",
-};
-
 const selectedFlow = selectedQualificationFlow();
 
 test("#3390 @coding-issue-journey completes one selected real issue-to-closure qualification flow", async ({
@@ -111,7 +104,7 @@ test("#3390 @coding-issue-journey completes one selected real issue-to-closure q
 });
 
 for (const mode of ISSUE_TO_PR_MODES) {
-  const scenarioId = MODE_SCENARIO_IDS[mode];
+  const scenarioId = modeScenarioId(mode);
   test(`#3390 @coding-issue-journey a real model resolves the controlled issue to a draft PR in ${mode}`, async ({
     page,
   }) => {

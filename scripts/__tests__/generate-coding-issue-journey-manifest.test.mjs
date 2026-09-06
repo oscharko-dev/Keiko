@@ -143,6 +143,57 @@ describe("buildCodingIssueJourneyManifest", () => {
     ).toThrow("missing receipt for issue-to-pr-full-access");
   });
 
+  it("does not derive a merge attestation without a matching completed flow", () => {
+    const manifest = buildCodingIssueJourneyManifest({
+      descriptor: {
+        ...descriptor(),
+        scenarios: [
+          {
+            scenarioId: "human-merge-and-closure",
+            evidenceClass: "playwright-journey",
+            platform: "macos-arm64",
+          },
+        ],
+        blocked: [],
+      },
+      receiptsByScenarioId: new Map([
+        [
+          "human-merge-and-closure",
+          {
+            testStatus: "passed",
+            recordedAt: GENERATED_AT,
+            provenance: "real-model",
+            digest: "d".repeat(64),
+            artifactValidationErrors: [],
+            artifactIdentity: {
+              flowBinding: {
+                flowId: "issue-to-pr-flow-01",
+                taskRunId: "run-1",
+                repository: "oscharko/Wegwerf-Repo",
+                issueNumber: 1,
+                pullRequestNumber: 2,
+                pullRequestHeadSha: TREE_SHA,
+                mergeCommitSha: COMMIT_SHA,
+              },
+            },
+          },
+        ],
+      ]),
+      generatedAt: GENERATED_AT,
+      sourceCommitSha: COMMIT_SHA,
+      sourceTreeSha: TREE_SHA,
+      runtimeIdentity: "opencode-1.17.17",
+      modelIdentity: "gateway-profile:coding-issue-journey",
+      fixtureRevision: "controlled-fixture-rev-1",
+      rubricDigest: DIGEST,
+      humanMergeAttestationDigest: "e".repeat(64),
+      requiredTools: [],
+      spendBudgetUsd: 25,
+    });
+
+    expect(manifest.humanMergeAttestationDigest).toEqual({ outcome: "unknown" });
+  });
+
   it("projects a flow from the exact artifact and receipt digests", () => {
     const artifact = {
       evidenceKind: "code-task-qualification-flow-evidence",
@@ -165,10 +216,55 @@ describe("buildCodingIssueJourneyManifest", () => {
       requiredChecks: {
         observation: "observed",
         headSha: TREE_SHA,
-        total: 0,
-        passed: 0,
+        requirementsVersion: "1",
+        requirementsDigest: "e".repeat(64),
+        evidenceRef: "ci-run-1",
+        total: 1,
+        passed: 1,
         failed: 0,
         pending: 0,
+      },
+      authorityObservation: {
+        requestedMode: "governed-assist",
+        effectiveMode: "governed-assist",
+        approvalRequestCount: 1,
+        toolInvocationCount: 2,
+        effectStartedCount: 1,
+        completedToolCount: 2,
+        deniedToolCount: 0,
+        failedToolCount: 0,
+        otherToolCount: 0,
+      },
+      rubricReview: {
+        reviewId: "review-1",
+        reviewDigest: "d".repeat(64),
+        verdict: "approved",
+        flowId: "issue-to-pr-flow-01",
+        taskRunId: "run-1",
+        repository: "oscharko/Wegwerf-Repo",
+        issueNumber: 1,
+        pullRequestNumber: 2,
+        pullRequestHeadSha: TREE_SHA,
+        sourceCommitSha: COMMIT_SHA,
+        rubricDigest: DIGEST,
+        criteriaTotal: 5,
+        criteriaPassed: 5,
+      },
+      stageEvidence: {
+        issueToPr: {
+          scenarioId: "issue-to-pr-governed-assist",
+          receiptDigest: "1".repeat(64),
+        },
+        ciRepair: { scenarioId: "ci-repair-loop", receiptDigest: "2".repeat(64) },
+        description: {
+          scenarioId: "description-auto-draft-and-apply",
+          receiptDigest: "3".repeat(64),
+        },
+        markReady: { scenarioId: "mark-ready-intent", receiptDigest: "4".repeat(64) },
+        governedMerge: {
+          scenarioId: "human-merge-and-closure",
+          receiptDigest: "5".repeat(64),
+        },
       },
       transitions: CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
       sourceCommitSha: COMMIT_SHA,
@@ -183,6 +279,14 @@ describe("buildCodingIssueJourneyManifest", () => {
     const manifest = buildCodingIssueJourneyManifest({
       descriptor: {
         ...descriptor(),
+        scenarios: [
+          ...descriptor().scenarios,
+          {
+            scenarioId: "human-merge-and-closure",
+            evidenceClass: "playwright-journey",
+            platform: "macos-arm64",
+          },
+        ],
         flows: [{ flowId: artifact.flowId }],
       },
       receiptsByScenarioId: new Map([
@@ -193,6 +297,27 @@ describe("buildCodingIssueJourneyManifest", () => {
             recordedAt: GENERATED_AT,
             provenance: "real-model",
             digest: DIGEST,
+          },
+        ],
+        [
+          "human-merge-and-closure",
+          {
+            testStatus: "passed",
+            recordedAt: GENERATED_AT,
+            provenance: "real-model",
+            digest: "e".repeat(64),
+            artifactValidationErrors: [],
+            artifactIdentity: {
+              flowBinding: {
+                flowId: artifact.flowId,
+                taskRunId: artifact.taskRunId,
+                repository: artifact.repository,
+                issueNumber: artifact.issueNumber,
+                pullRequestNumber: artifact.pullRequestNumber,
+                pullRequestHeadSha: artifact.pullRequestHeadSha,
+                mergeCommitSha: artifact.mergeCommitSha,
+              },
+            },
           },
         ],
       ]),
@@ -232,6 +357,10 @@ describe("buildCodingIssueJourneyManifest", () => {
       value: artifact.pullRequestReference,
     });
     expect(manifest.runReference).toEqual({ outcome: "known", value: artifact.taskRunId });
+    expect(manifest.humanMergeAttestationDigest).toEqual({
+      outcome: "known",
+      value: "e".repeat(64),
+    });
   });
 });
 

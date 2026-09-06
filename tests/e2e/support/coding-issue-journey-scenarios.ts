@@ -13,10 +13,9 @@ import { mkdirSync } from "node:fs";
 import { platformKeyFor } from "../../../scripts/lib/coding-issue-journey-evidence.mjs";
 import { writeQualificationEvidenceReceipt } from "../../../scripts/lib/qualification-evidence-receipt.mjs";
 
-// The 9 `playwright-journey` scenario ids this harness can produce evidence for. Excludes
-// `human-merge-and-closure` (docs/acceptance/coding-issue-journey-3390.json) on purpose: issue
-// #3390 AC5 requires that transition to stay a real, separate human GitHub action -- this harness
-// must never mint a receipt for it (Part 2.4 of the qualification runbook).
+// The `playwright-journey` scenario ids this harness can produce evidence for. The merge row is
+// emitted only after the explicit governed-merge confirmation and the provider-observed merge and
+// bound issue closure; the receipt cannot substitute for those observations.
 export const CODING_ISSUE_JOURNEY_SCENARIO_IDS = [
   "issue-to-pr-governed-assist",
   "issue-to-pr-supervised-coding",
@@ -24,6 +23,7 @@ export const CODING_ISSUE_JOURNEY_SCENARIO_IDS = [
   "ci-repair-loop",
   "description-auto-draft-and-apply",
   "mark-ready-intent",
+  "human-merge-and-closure",
   "git-to-chat-connect-refine-apply",
   "git-chat-negative-effects",
 ] as const;
@@ -78,9 +78,20 @@ export interface ObservedGatewayUsage {
 
 export interface ScenarioReceiptInput {
   readonly scenarioId: CodingIssueJourneyScenarioId;
+  /** Distinguishes one flow's observation while retaining the canonical scenario identity. */
+  readonly receiptKey?: string;
   readonly result: "passed" | "failed";
   readonly assertions: readonly string[];
   readonly usage: ObservedGatewayUsage;
+  readonly flowBinding?: {
+    readonly flowId: string;
+    readonly taskRunId: string;
+    readonly repository: string;
+    readonly issueNumber: number;
+    readonly pullRequestNumber: number;
+    readonly pullRequestHeadSha: string;
+    readonly mergeCommitSha?: string;
+  };
 }
 
 function headCommitSha(): string {
@@ -108,12 +119,13 @@ export function receiptsDir(
  * content-free evidence itself (named assertions and counts, never prompts/diffs/PR bodies/tokens
  * -- AGENTS.md §7), and its bytes are what the manifest's `receiptDigest` binds to.
  */
-export function recordScenarioReceipt(input: ScenarioReceiptInput): void {
+export function recordScenarioReceipt(input: ScenarioReceiptInput): string {
   const dir = receiptsDir();
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeQualificationEvidenceReceipt({
+  return writeQualificationEvidenceReceipt({
     receiptsDir: dir,
     scenarioId: input.scenarioId,
+    ...(input.receiptKey === undefined ? {} : { receiptKey: input.receiptKey }),
     recordedAt: new Date().toISOString(),
     provenance: "real-model",
     receipt: {
@@ -125,6 +137,7 @@ export function recordScenarioReceipt(input: ScenarioReceiptInput): void {
       result: input.result,
       assertions: input.assertions,
       usage: input.usage,
+      ...(input.flowBinding === undefined ? {} : { flowBinding: input.flowBinding }),
     },
   });
 }

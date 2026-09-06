@@ -488,14 +488,7 @@ describe("stateless debug launch Layer-2 planning", () => {
       },
     });
     expect(plan.runtimeIdentityDigest).toMatch(/^[a-f0-9]{64}$/u);
-    const mounts = [
-      context.adapter,
-      context.node,
-      context.npm,
-      context.shell,
-      context.npmUserConfig,
-      context.npmGlobalConfig,
-    ].map((artifact) => ({
+    const mounts = [context.adapter, context.node].map((artifact) => ({
       hostPath: artifact.realPath,
       capsulePath: artifact.capsulePath,
       identityDigest: artifact.identityDigest,
@@ -504,7 +497,9 @@ describe("stateless debug launch Layer-2 planning", () => {
       .update(JSON.stringify([context.runtimeMount.identityDigest, mounts]))
       .digest("hex");
     expect(plan.runtimeIdentityDigest).toBe(expectedRuntimeDigest);
-    expect(plan.provisioningDigest).toBe(deriveDebugProvisioningDigest(context));
+    expect(plan.provisioningDigest).toBe(
+      deriveCanonicalDebugProvisioningDigest(plan.spawnEnvelope.artifacts),
+    );
     expect(plan.spawnEnvelope.provisioningDigest).toBe(plan.provisioningDigest);
     expect(plan.launchIdentityDigest).toMatch(/^[a-f0-9]{64}$/u);
     expect(JSON.stringify(plan.launchRequest)).not.toMatch(
@@ -519,14 +514,13 @@ describe("stateless debug launch Layer-2 planning", () => {
         "--new-session",
         "--ro-bind",
         "/opt/keiko-debug/adapter",
-        "/opt/keiko-debug/npm-user-config",
-        "/opt/keiko-debug/npm-global-config",
       ]),
     );
-    expect(plan.spawnEnvelope.artifacts).toEqual(
+    expect(plan.capsule.args).not.toContain("/opt/keiko-debug/npm-user-config");
+    expect(plan.capsule.args).not.toContain("/opt/keiko-debug/npm-global-config");
+    expect(plan.spawnEnvelope.artifacts).not.toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ capsulePath: "/opt/keiko-debug/npm-user-config", size: 0 }),
-        expect.objectContaining({ capsulePath: "/opt/keiko-debug/npm-global-config", size: 0 }),
+        expect.objectContaining({ capsulePath: "/opt/keiko-debug/npm-user-config" }),
       ]),
     );
   });
@@ -584,6 +578,50 @@ describe("stateless debug launch Layer-2 planning", () => {
     await expect(validator(drift).validateAndRederive(catalogInput)).rejects.toMatchObject({
       code: "INVALID_CAPSULE_PLAN",
     });
+  });
+
+  it("mounts the npm closure only for catalog targets that can execute npm", async () => {
+    const { context, input } = fixture();
+    const closureRoot = context.backendExecutable.approvedRoot;
+    const nodeLibraryPath = join(closureRoot, "node-library");
+    const npmLibraryPath = join(closureRoot, "npm-library");
+    writeFileSync(nodeLibraryPath, "node-library", "utf8");
+    writeFileSync(npmLibraryPath, "npm-library", "utf8");
+    const nodeLibrary = artifact(nodeLibraryPath, "/lib/node-library.so");
+    const npmLibrary = artifact(npmLibraryPath, "/opt/keiko-runtime/npm/lib/npm-library.js");
+    const closedContext = { ...context, runtimeClosure: [nodeLibrary, npmLibrary] };
+
+    const filePlan = await validator(closedContext).validateAndRederive(input);
+    const catalogPlan = await validator(closedContext).validateAndRederive({
+      ...input,
+      candidate: { kind: "catalog", targetId: "npm-script:start" },
+      binding: { ...input.binding, targetKind: "catalog" },
+    });
+    const fileCapsulePaths = filePlan.capsule.immutableMounts.map(({ capsulePath }) => capsulePath);
+    const catalogCapsulePaths = catalogPlan.capsule.immutableMounts.map(
+      ({ capsulePath }) => capsulePath,
+    );
+    const fileEnvelopePaths = filePlan.spawnEnvelope.artifacts.map(
+      ({ capsulePath }) => capsulePath,
+    );
+
+    expect(fileCapsulePaths).toContain(nodeLibrary.capsulePath);
+    expect(fileCapsulePaths).not.toContain(npmLibrary.capsulePath);
+    expect(fileCapsulePaths).not.toContain(context.npm.capsulePath);
+    expect(fileCapsulePaths).not.toContain(context.shell.capsulePath);
+    expect(fileEnvelopePaths.slice(1)).toStrictEqual(fileCapsulePaths);
+    expect(filePlan.provisioningDigest).toBe(
+      deriveCanonicalDebugProvisioningDigest(filePlan.spawnEnvelope.artifacts),
+    );
+    expect(catalogCapsulePaths).toEqual(
+      expect.arrayContaining([
+        nodeLibrary.capsulePath,
+        npmLibrary.capsulePath,
+        context.npm.capsulePath,
+        context.shell.capsulePath,
+      ]),
+    );
+    expect(filePlan.provisioningDigest).not.toBe(catalogPlan.provisioningDigest);
   });
 
   it.each([
@@ -1141,15 +1179,7 @@ describe("stateless debug launch Layer-2 planning", () => {
       temp: input.adapter.temp,
       cwd: "/keiko-execution-root",
       endpoint: plan.endpoint,
-      artifacts: [
-        context.backendExecutable,
-        context.adapter,
-        context.node,
-        context.npm,
-        context.shell,
-        context.npmUserConfig,
-        context.npmGlobalConfig,
-      ].map((value) => ({
+      artifacts: [context.backendExecutable, context.adapter, context.node].map((value) => ({
         hostPath: value.hostPath,
         realPath: value.realPath,
         approvedRootRealPath: realpathSync(value.approvedRoot),

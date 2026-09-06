@@ -4,10 +4,13 @@
 // through the existing receipt digest.
 
 import { runtimeGatewayConfinementArtifactErrors } from "./runtime-gateway-confinement-evidence.mjs";
+import { codingIssueJourneyPerformanceArtifactErrors } from "./coding-issue-journey-functional-evidence.mjs";
+import { realBinaryScenarioArtifactErrors } from "./coding-issue-journey-real-binary-evidence.mjs";
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/u;
 const SAFE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const REPOSITORY_PULL_REQUEST = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9]\d*$/u;
+const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const PLATFORM_TARGETS = new Set(["macos-arm64", "macos-x64", "windows-x64", "linux-x64"]);
 const PLAYWRIGHT_SCENARIOS = new Set([
   "issue-to-pr-governed-assist",
@@ -16,8 +19,18 @@ const PLAYWRIGHT_SCENARIOS = new Set([
   "ci-repair-loop",
   "description-auto-draft-and-apply",
   "mark-ready-intent",
+  "human-merge-and-closure",
   "git-to-chat-connect-refine-apply",
   "git-chat-negative-effects",
+]);
+const FLOW_BOUND_STAGE_SCENARIOS = new Set([
+  "issue-to-pr-governed-assist",
+  "issue-to-pr-supervised-coding",
+  "issue-to-pr-autonomous-delivery",
+  "ci-repair-loop",
+  "description-auto-draft-and-apply",
+  "mark-ready-intent",
+  "human-merge-and-closure",
 ]);
 
 function exactKeys(value, keys) {
@@ -86,6 +99,13 @@ const ASSERTION_VALIDATORS = Object.freeze({
   "description-auto-draft-and-apply": descriptionAssertions,
   "mark-ready-intent": (assertions) =>
     assertions.length === 1 && exactAssertion(assertions, "ready-for-review-proposed:true"),
+  "human-merge-and-closure": (assertions) =>
+    [
+      assertions.length === 3,
+      exactAssertion(assertions, "governed-merge-confirmed:true"),
+      exactAssertion(assertions, "provider-merge-observed:true"),
+      exactAssertion(assertions, "bound-issue-closure-observed:true"),
+    ].every(Boolean),
   "git-to-chat-connect-refine-apply": (assertions) =>
     [
       assertions.length === 5,
@@ -145,26 +165,78 @@ function usageErrors(usage) {
   return valid ? [] : ["usage must have the closed body-free observed shape"];
 }
 
+function positiveInteger(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+function flowBindingFieldsAreValid(binding, requiresMerge) {
+  const values = [
+    SAFE_TOKEN.test(binding?.flowId),
+    SAFE_TOKEN.test(binding?.taskRunId),
+    REPOSITORY.test(binding?.repository),
+    positiveInteger(binding?.issueNumber),
+    positiveInteger(binding?.pullRequestNumber),
+    COMMIT_SHA.test(binding?.pullRequestHeadSha),
+  ];
+  if (requiresMerge) values.push(COMMIT_SHA.test(binding?.mergeCommitSha));
+  return values.every(Boolean);
+}
+
+function flowBindingErrors(binding, requiresMerge) {
+  const keys = [
+    "flowId",
+    "taskRunId",
+    "repository",
+    "issueNumber",
+    "pullRequestNumber",
+    "pullRequestHeadSha",
+  ];
+  if (requiresMerge) keys.push("mergeCommitSha");
+  const valid = exactKeys(binding, keys) && flowBindingFieldsAreValid(binding, requiresMerge);
+  return valid ? [] : ["flowBinding must have the closed completed-flow identity"];
+}
+
+function flowBoundScenario(scenarioId) {
+  return FLOW_BOUND_STAGE_SCENARIOS.has(scenarioId);
+}
+
+function flowBoundArtifactErrors(value, scenarioId) {
+  const binding = value.flowBinding;
+  if (binding === undefined) {
+    return scenarioId === "human-merge-and-closure"
+      ? ["human-merge-and-closure requires a completed flow binding"]
+      : [];
+  }
+  const errors = flowBindingErrors(binding, scenarioId === "human-merge-and-closure");
+  if (value.result === "passed" && value.usage?.observedToolCallEvents <= 0) {
+    errors.push("flow-bound stage must retain observed model tool activity");
+  }
+  if (!flowBoundScenario(scenarioId)) errors.push("scenario does not accept a flow binding");
+  return errors;
+}
+
 function playwrightArtifactErrors(value, scenarioId) {
-  if (
-    !exactKeys(value, [
-      "schemaVersion",
-      "scenarioId",
-      "evidenceClass",
-      "sourceCommitSha",
-      "platformTarget",
-      "result",
-      "assertions",
-      "usage",
-    ])
-  ) {
+  const keys = [
+    "schemaVersion",
+    "scenarioId",
+    "evidenceClass",
+    "sourceCommitSha",
+    "platformTarget",
+    "result",
+    "assertions",
+    "usage",
+  ];
+  if (value?.flowBinding !== undefined) keys.push("flowBinding");
+  if (!exactKeys(value, keys)) {
     return ["artifact must have the closed playwright-journey shape"];
   }
-  return [
+  const errors = [
     ...identityErrors(value, scenarioId),
     ...assertionErrors(value, scenarioId),
     ...usageErrors(value.usage),
   ];
+  errors.push(...flowBoundArtifactErrors(value, scenarioId));
+  return errors;
 }
 
 /** Returns null for receipt classes owned elsewhere; otherwise returns closed validation errors. */
@@ -173,5 +245,9 @@ export function codingIssueJourneyScenarioArtifactErrors(value, scenarioId) {
   if (scenarioId === "egress-confinement-macos-arm64") {
     return runtimeGatewayConfinementArtifactErrors(value, scenarioId);
   }
+  if (scenarioId === "coding-runtime-performance-budgets") {
+    return codingIssueJourneyPerformanceArtifactErrors(value);
+  }
+  if (scenarioId === "real-binary-lane") return realBinaryScenarioArtifactErrors(value);
   return null;
 }

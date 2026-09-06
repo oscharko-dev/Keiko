@@ -62,7 +62,6 @@ function projectManifest(receiptsDir) {
       ? numberArgument("observed-spend-usd", { required: false })
       : finalFlow.artifact.spend.cumulativeChargedNanoUsd / 1_000_000_000;
   const rubricPath = resolve(argument("rubric"));
-  const humanMergeAttestationPath = argument("human-merge-attestation", { required: false });
   return buildCodingIssueJourneyManifest({
     descriptor,
     receiptsByScenarioId: readReceipts(receiptsDir),
@@ -79,10 +78,6 @@ function projectManifest(receiptsDir) {
     runReference: argument("run-ref", { required: false }),
     readinessSnapshotDigest: argument("readiness-digest", { required: false }),
     journeyOutcomeDigest: argument("journey-outcome-digest", { required: false }),
-    humanMergeAttestationDigest:
-      humanMergeAttestationPath === undefined
-        ? undefined
-        : sha256File(resolve(humanMergeAttestationPath)),
     auditReference: argument("audit-ref", { required: false }),
     auditDigest: argument("audit-digest", { required: false }),
     requiredTools: listArgument("required-tools"),

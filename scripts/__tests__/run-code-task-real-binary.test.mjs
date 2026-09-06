@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -12,6 +13,7 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  buildRealBinaryScenarioArtifact,
   buildJourneyReport,
   classifyLsofNetworkNames,
   createJourneyContext,
@@ -27,7 +29,9 @@ import {
   readMaterializedLimits,
   realBinaryEvidenceComplete,
   writeManagedCatalogObservation,
+  writeRealBinaryQualificationEvidence,
 } from "../run-code-task-real-binary.mjs";
+import { readReceipts } from "../check-coding-issue-journey-evidence.mjs";
 
 const H1_SEARCH = {
   schemaVersion: 1,
@@ -58,6 +62,27 @@ const MANAGED_CATALOG = {
     causalHandoff: true,
   },
 };
+
+function completeQualificationReport() {
+  return buildJourneyReport({
+    sourceHead: SOURCE_HEAD,
+    exitCode: 0,
+    gateway: {
+      requestCount: 2,
+      outputTokenLimits: [4_096],
+      catalogBindingRequestCount: 2,
+    },
+    limits: [{ context: 32_768, output: 4_096 }],
+    missingPayload: { passed: true, unavailableReason: "payload-missing" },
+    h1Search: H1_SEARCH,
+    managedCatalog: MANAGED_CATALOG,
+    activityLog: ACTIVITY_LOG,
+    observer: createNetworkObserver("/nonexistent/opencode"),
+    target: "macos-arm64",
+    wallClockMs: 41_128,
+    completedAt: "2026-09-06T11:30:00.000Z",
+  });
+}
 
 /**
  * Whether `candidate` really lives under `root`, separator-aware.
@@ -197,6 +222,113 @@ describe("#2483 real-binary observation helpers", () => {
         limits: { ...complete.limits, materializedChildLimits: [] },
       }),
     ).toBe(false);
+  });
+
+  it("projects the complete real-binary producer report into closed qualification evidence", () => {
+    const artifact = buildRealBinaryScenarioArtifact(completeQualificationReport());
+
+    expect(artifact).toMatchObject({
+      scenarioId: "real-binary-lane",
+      evidenceClass: "production-functional",
+      sourceCommitSha: SOURCE_HEAD,
+      platformTarget: "macos-arm64",
+      result: "passed",
+      runtime: { name: "opencode-compatible", version: "1.17.17" },
+      run: {
+        correlationId: MANAGED_CATALOG.correlationId,
+        activityLogSha256: ACTIVITY_LOG.sha256,
+      },
+      limits: {
+        contextWindow: 32_768,
+        outputTokens: 4_096,
+        gatewayRequestCount: 2,
+        gatewayCatalogBindingRequestCount: 2,
+      },
+      h1Search: {
+        toolCallId: H1_SEARCH.toolCallId,
+        hitCount: 1,
+        pathDigest: H1_SEARCH.pathDigest,
+        snippetDigest: H1_SEARCH.snippetDigest,
+        startLine: 1,
+        endLine: 1,
+        readTargetDerivedFromResult: true,
+      },
+      managedCatalog: {
+        binding: CATALOG_BINDING,
+        settlementCount: 3,
+        proof: MANAGED_CATALOG.proof,
+      },
+    });
+    expect(JSON.stringify(artifact)).not.toMatch(/raw|path\/|endpoint|prompt|response/iu);
+  });
+
+  it("checks the complete-run predicate before projecting report fields", () => {
+    const incomplete = {
+      ...completeQualificationReport(),
+      sourceHead: "main",
+      get runtime() {
+        throw new Error("projection must not run");
+      },
+    };
+
+    expect(() => buildRealBinaryScenarioArtifact(incomplete)).toThrow(
+      "real-binary qualification evidence is incomplete",
+    );
+  });
+
+  it("writes an optional production-functional receipt that the shared reader validates", () => {
+    const receiptsDir = mkdtempSync(join(tmpdir(), "keiko-real-binary-receipt-"));
+    try {
+      expect(
+        writeRealBinaryQualificationEvidence(completeQualificationReport(), {
+          KEIKO_CODE_TASK_QUALIFICATION_RECEIPTS_DIR: receiptsDir,
+        }),
+      ).toBe(true);
+      const receipt = readReceipts(receiptsDir).get("real-binary-lane");
+      expect(receipt).toMatchObject({
+        scenarioId: "real-binary-lane",
+        commitSha: SOURCE_HEAD,
+        platform: "macos-arm64",
+        testStatus: "passed",
+        recordedAt: "2026-09-06T11:30:00.000Z",
+        provenance: "production-functional",
+        artifactValidationErrors: [],
+      });
+    } finally {
+      rmSync(receiptsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps ordinary runs unchanged and refuses incomplete configured qualification", () => {
+    const receiptsDir = mkdtempSync(join(tmpdir(), "keiko-real-binary-receipt-"));
+    const incomplete = { ...completeQualificationReport(), h1Search: undefined };
+    try {
+      expect(writeRealBinaryQualificationEvidence(incomplete, {})).toBe(false);
+      expect(readdirSync(receiptsDir)).toEqual([]);
+      expect(() =>
+        writeRealBinaryQualificationEvidence(incomplete, {
+          KEIKO_CODE_TASK_QUALIFICATION_RECEIPTS_DIR: receiptsDir,
+        }),
+      ).toThrow("real-binary qualification evidence is incomplete");
+      expect(readdirSync(receiptsDir)).toEqual([]);
+    } finally {
+      rmSync(receiptsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a qualification receipt directory writable by another local user", () => {
+    const receiptsDir = mkdtempSync(join(tmpdir(), "keiko-real-binary-receipt-"));
+    try {
+      chmodSync(receiptsDir, 0o755);
+      expect(() =>
+        writeRealBinaryQualificationEvidence(completeQualificationReport(), {
+          KEIKO_CODE_TASK_QUALIFICATION_RECEIPTS_DIR: receiptsDir,
+        }),
+      ).toThrow("qualification receipts directory must be a private real directory");
+      expect(readdirSync(receiptsDir)).toEqual([]);
+    } finally {
+      rmSync(receiptsDir, { recursive: true, force: true });
+    }
   });
 
   it("names every missing observation so a failed run explains itself", () => {
@@ -467,6 +599,7 @@ describe("#2483 real-binary observation helpers", () => {
       observer: createNetworkObserver("/nonexistent/opencode"),
       target: "macos-arm64",
       wallClockMs: 41_128,
+      completedAt: "2026-09-06T11:30:00.000Z",
     });
 
     expect(report).toMatchObject({
@@ -475,7 +608,11 @@ describe("#2483 real-binary observation helpers", () => {
       sourceHead: SOURCE_HEAD,
       evidenceClass: "functional-not-platform-qualified",
       runtime: { name: "opencode-compatible", version: "1.17.17", target: "macos-arm64" },
-      journey: { exitCode: 0, wallClockMs: 41_128 },
+      journey: {
+        exitCode: 0,
+        wallClockMs: 41_128,
+        completedAt: "2026-09-06T11:30:00.000Z",
+      },
     });
     expect(missingRealBinaryEvidence(report)).toEqual([]);
     // The whole report must stay free of paths, endpoints, and page or prompt text.
