@@ -232,7 +232,8 @@ function extractNodeTest(lines: readonly string[]): VerificationFailureLocation[
     assertion.comparison ??= nodeComparison(line);
     const location = nodeStackLocation(line);
     if (location === undefined) continue;
-    const detail = `${assertion.message}${assertion.comparison === undefined ? "" : ` ${assertion.comparison}`}`;
+    const comparison = assertion.comparison === undefined ? "" : ` ${assertion.comparison}`;
+    const detail = `${assertion.message}${comparison}`;
     out.push({
       ...location,
       message: title === undefined ? detail : `${title}: ${detail}`,

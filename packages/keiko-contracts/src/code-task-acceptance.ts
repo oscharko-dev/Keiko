@@ -1145,8 +1145,8 @@ function qualificationAuthorityObservationErrors(value: unknown, path: string): 
     ...qualificationApprovalRequestErrors(value, path),
     ...qualificationApprovedProposalErrors(value, path),
     ...qualificationEffectToolErrors(value, path),
+    ...qualificationAuthorityCountErrors(value, path),
   );
-  errors.push(...qualificationAuthorityCountErrors(value, path));
   return errors;
 }
 

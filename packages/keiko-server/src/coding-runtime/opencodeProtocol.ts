@@ -9,8 +9,10 @@ import {
   parseCodingSidecarEventLine,
   type SidecarPermissionEvent,
 } from "./codingSidecarEventParser.js";
-import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
-import type { OpenCodeCompactionActivity } from "./opencodeReconciler.js";
+import type {
+  OpenCodeCompactionActivity,
+  OpenCodeReconciliationEvent,
+} from "./opencodeReconciler.js";
 import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_TOOL_SOURCE_DEFINITIONS,
