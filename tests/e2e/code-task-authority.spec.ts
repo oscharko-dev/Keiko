@@ -467,7 +467,11 @@ async function proveRepositorySearchConsumption(timeline: Locator): Promise<void
     endLine: 1,
     readTargetDerivedFromResult: true,
   });
-  await expect(timeline.locator('[data-tool-state="succeeded"]')).toContainText(/search/iu);
+  for (const tool of ["keiko_repository_search", "keiko_workspace_read"]) {
+    const succeeded = timeline.locator('[data-tool-state="succeeded"]').filter({ hasText: tool });
+    await expect(succeeded).toHaveCount(1);
+    await expect(succeeded).toBeVisible();
+  }
 }
 
 async function settleRealBinaryRun(page: Page, runId: string): Promise<void> {
