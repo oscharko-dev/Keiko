@@ -5,6 +5,7 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -329,7 +330,25 @@ export function buildJourneyReport(input) {
     egress: input.observer.report(),
     missingPayload: input.missingPayload,
     h1Search: input.h1Search,
+    activityLog: input.activityLog,
   };
+}
+
+export function retainJourneyActivityLog(context) {
+  const source = join(context.stateDir, "activity", "logs", "server.log");
+  if (!existsSync(source)) return { status: "missing" };
+  mkdirSync(dirname(context.evidencePath), { recursive: true });
+  copyFileSync(source, `${context.evidencePath}.activity.jsonl`);
+  return {
+    status: "retained",
+    sha256: createHash("sha256").update(readFileSync(source)).digest("hex"),
+  };
+}
+
+function hasRetainedActivity(report) {
+  return (
+    report.activityLog?.status === "retained" && /^[a-f0-9]{64}$/u.test(report.activityLog.sha256)
+  );
 }
 
 function validH1SearchEvidence(value) {
@@ -380,16 +399,20 @@ export function missingRealBinaryEvidence(report) {
   if (!limits.observedGatewayOutputTokenLimits.includes(4_096)) {
     gaps.push("no gateway request carried the effective output limit 4096");
   }
-  if (report.missingPayload?.passed !== true) {
-    gaps.push(
-      `payload-missing probe did not pass (reason ${String(report.missingPayload?.unavailableReason)})`,
-    );
-  } else if (report.missingPayload.unavailableReason !== "payload-missing") {
-    gaps.push(`payload-missing probe reported ${report.missingPayload.unavailableReason}`);
-  }
+  gaps.push(...missingPayloadEvidence(report.missingPayload));
   if (!validH1SearchEvidence(report.h1Search))
     gaps.push("no useful H1 search-to-read result evidence");
+  if (!hasRetainedActivity(report)) gaps.push("no retained canonical activity log");
   return gaps;
+}
+
+function missingPayloadEvidence(probe) {
+  if (probe?.passed !== true) {
+    return [`payload-missing probe did not pass (reason ${String(probe?.unavailableReason)})`];
+  }
+  return probe.unavailableReason === "payload-missing"
+    ? []
+    : [`payload-missing probe reported ${probe.unavailableReason}`];
 }
 
 export function realBinaryEvidenceComplete(report) {
@@ -403,7 +426,8 @@ export function realBinaryEvidenceComplete(report) {
     limits.observedGatewayOutputTokenLimits.includes(4_096) &&
     report.missingPayload?.passed === true &&
     report.missingPayload.unavailableReason === "payload-missing" &&
-    validH1SearchEvidence(report.h1Search)
+    validH1SearchEvidence(report.h1Search) &&
+    hasRetainedActivity(report)
   );
 }
 
@@ -421,6 +445,7 @@ export async function runRealBinaryJourney() {
     {
       ...process.env,
       KEIKO_E2E_STATE_DIR: context.stateDir,
+      KEIKO_STATE_DIR: join(context.stateDir, "activity"),
       KEIKO_E2E_REAL_BINARY: "1",
       KEIKO_2483_GATEWAY_OBSERVATION_PATH: context.gatewayObservation,
     },
@@ -429,6 +454,7 @@ export async function runRealBinaryJourney() {
   );
   const missingPayload =
     exitCode === 0 ? runMissingPayloadProbe(target, context.probeState) : undefined;
+  const activityLog = retainJourneyActivityLog(context);
   const report = buildJourneyReport({
     context,
     exitCode,
@@ -436,6 +462,7 @@ export async function runRealBinaryJourney() {
     limits: limitObserver.report(),
     missingPayload,
     h1Search: readH1SearchEvidence(context.stateDir),
+    activityLog,
     observer,
     target,
     wallClockMs: Date.now() - startedAt,

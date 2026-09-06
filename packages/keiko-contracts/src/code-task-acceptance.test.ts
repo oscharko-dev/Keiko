@@ -21,6 +21,7 @@ import {
   validateCodeTaskQualificationFlowArtifact,
   type CodeTaskAcceptanceBinding,
   type CodeTaskAcceptanceContributionV1,
+  type CodeTaskIsoInstant,
   type CodeTaskQualificationManifestV1,
   type CodeTaskQualificationFlowArtifactV1,
 } from "./code-task-acceptance.js";
@@ -584,7 +585,14 @@ const READINESS_DIGEST = "f".repeat(64);
 const OUTCOME_DIGEST = "1".repeat(64);
 const AUDIT_DIGEST = "2".repeat(64);
 const HUMAN_MERGE_ATTESTATION_DIGEST = "3".repeat(64);
-const QUALIFICATION_RECORDED_AT = "2026-09-04T12:00:00Z";
+function codeTaskIsoInstant(value: string): CodeTaskIsoInstant {
+  if (!isCodeTaskIsoInstant(value)) {
+    throw new TypeError("qualification fixture instant must be canonical UTC ISO-8601");
+  }
+  return value;
+}
+
+const QUALIFICATION_RECORDED_AT = codeTaskIsoInstant("2026-09-04T12:00:00Z");
 
 function validQualificationFlow(
   ordinal = 1,
@@ -1021,8 +1029,7 @@ describe("codeTaskQualificationManifestFailures and codeTaskQualificationVerdict
       ...first,
       platform: "macos-arm64" as const,
       provenance: "real-model" as const,
-      recordedAt:
-        QUALIFICATION_RECORDED_AT as CodeTaskQualificationManifestV1["flows"][number]["recordedAt"],
+      recordedAt: QUALIFICATION_RECORDED_AT,
       artifactDigest: DIGEST as CodeTaskQualificationManifestV1["flows"][number]["artifactDigest"],
       receiptDigest:
         RUBRIC_DIGEST as CodeTaskQualificationManifestV1["flows"][number]["receiptDigest"],

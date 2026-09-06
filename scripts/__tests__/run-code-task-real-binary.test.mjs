@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -13,6 +13,7 @@ import {
   missingRealBinaryEvidence,
   readGatewayObservation,
   readH1SearchEvidence,
+  retainJourneyActivityLog,
   processIdsForExecutable,
   readMaterializedLimits,
   realBinaryEvidenceComplete,
@@ -28,6 +29,7 @@ const H1_SEARCH = {
   endLine: 1,
   readTargetDerivedFromResult: true,
 };
+const ACTIVITY_LOG = { status: "retained", sha256: "c".repeat(64) };
 
 /**
  * Whether `candidate` really lives under `root`, separator-aware.
@@ -42,6 +44,25 @@ function containedIn(root, candidate) {
 }
 
 describe("#2483 real-binary observation helpers", () => {
+  it("retains the existing activity log before deleting ephemeral journey state", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-real-binary-activity-"));
+    const context = {
+      stateDir: join(root, "state"),
+      evidencePath: join(root, "out", "report.json"),
+    };
+    try {
+      expect(retainJourneyActivityLog(context)).toEqual({ status: "missing" });
+      const source = join(context.stateDir, "activity", "logs", "server.log");
+      mkdirSync(dirname(source), { recursive: true });
+      const line = '{"op":"coding-runtime.run-started","correlationId":"run-fixture"}\n';
+      writeFileSync(source, line);
+      expect(retainJourneyActivityLog(context)).toMatchObject({ status: "retained" });
+      rmSync(context.stateDir, { recursive: true });
+      expect(readFileSync(`${context.evidencePath}.activity.jsonl`, "utf8")).toBe(line);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   it("retains only validated body-free H1 consumption facts before state cleanup", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-h1-real-binary-receipt-"));
     const path = join(root, "h1-result-consumption.json");
@@ -134,6 +155,7 @@ describe("#2483 real-binary observation helpers", () => {
       },
       missingPayload: { passed: true, unavailableReason: "payload-missing" },
       h1Search: H1_SEARCH,
+      activityLog: ACTIVITY_LOG,
     };
 
     expect(realBinaryEvidenceComplete(complete)).toBe(true);
@@ -156,6 +178,7 @@ describe("#2483 real-binary observation helpers", () => {
       },
       missingPayload: { passed: true, unavailableReason: "payload-missing" },
       h1Search: H1_SEARCH,
+      activityLog: ACTIVITY_LOG,
     };
 
     expect(missingRealBinaryEvidence(complete)).toEqual([]);
@@ -202,7 +225,7 @@ describe("#2483 real-binary observation helpers", () => {
       missingPayload: undefined,
     });
 
-    expect(gaps).toHaveLength(6);
+    expect(gaps).toHaveLength(7);
     expect(gaps).toContain("no useful H1 search-to-read result evidence");
   });
 
@@ -283,6 +306,7 @@ describe("#2483 real-binary observation helpers", () => {
       limits: [{ context: 32_768, output: 4_096 }],
       missingPayload: { passed: true, unavailableReason: "payload-missing" },
       h1Search: H1_SEARCH,
+      activityLog: ACTIVITY_LOG,
       observer: createNetworkObserver("/nonexistent/opencode"),
       target: "macos-arm64",
       wallClockMs: 41_128,
