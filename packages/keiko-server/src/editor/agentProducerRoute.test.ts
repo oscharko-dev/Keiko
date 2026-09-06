@@ -25,17 +25,20 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchMode,
   EditorAgentGovernedAuthorityReference,
   EditorAgentSessionSnapshot,
   VerificationReport,
 } from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
+  CODING_WORKBENCH_MODE_POLICIES,
   CODING_WORKBENCH_SCHEMA_VERSION,
   resolveEffectiveCodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
 import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { validateCodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { GatewayCallRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import { createToolInvocationNormalizer } from "@oscharko-dev/keiko-tool-catalog";
@@ -129,10 +132,14 @@ function snapshot(root: string): EditorAgentSessionSnapshot {
   };
 }
 
-function authority(root: string): EditorAgentGovernedAuthorityReference {
+function authority(
+  root: string,
+  requestedMode: CodingWorkbenchMode = CEILING,
+  runId = "run-2489",
+): EditorAgentGovernedAuthorityReference {
   const envelope: CodingWorkbenchAuthorityEnvelope = {
     schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
-    runId: "run-2489",
+    runId,
     localUser: "local-operator",
     taskRefs: ["issue-2489"],
     workspace: {
@@ -146,11 +153,11 @@ function authority(root: string): EditorAgentGovernedAuthorityReference {
       allowDetachedHead: false,
       allowedPrefixes: ["local-"],
     },
-    requestedMode: CEILING,
+    requestedMode,
     deploymentCeiling: CEILING,
-    effectiveMode: resolveEffectiveCodingWorkbenchMode(CEILING, CEILING),
+    effectiveMode: resolveEffectiveCodingWorkbenchMode(requestedMode, CEILING),
     runtimeSource: "keiko-sidecar",
-    actionClasses: CODING_WORKBENCH_ACTION_CLASSES,
+    actionClasses: CODING_WORKBENCH_MODE_POLICIES[requestedMode].allowedActionClasses,
     connectorScopes: [],
     modelProfile: {
       profileId: "profile-2489",
@@ -181,7 +188,12 @@ function authority(root: string): EditorAgentGovernedAuthorityReference {
     CEILING,
     new Date().toISOString(),
   );
-  if (!registered.ok) throw new Error("expected authority registration");
+  if (!registered.ok) {
+    const validation = validateCodingWorkbenchAuthorityEnvelope(envelope);
+    throw new Error(
+      validation.ok ? "expected authority registration" : validation.errors.join("; "),
+    );
+  }
   return registered.authorityRef;
 }
 
@@ -573,12 +585,12 @@ describe("editor-agent producer turn reachability (#2489 Findings 1/2)", () => {
     });
     let disconnected = false;
     current.setModel({
-      call: (request): Promise<NormalizedResponse> => {
+      call: (request, signal): Promise<NormalizedResponse> => {
         if (!disconnected) {
           disconnected = true;
           current.disconnectBridge();
         }
-        return scripted.call(request);
+        return scripted.call(request, signal);
       },
     });
     const response = await postProducerTurn(current.port);
@@ -701,6 +713,29 @@ describe("editor-agent producer turn error paths (#2489 coverage)", () => {
 // rejected before it ever reaches the tool host, so the mutation action never reaches
 // agentRoutes.ts (asserted via the empty audit ledger for the session).
 describe("editor-agent producer tool-scope enforcement (#2489 security hardening)", () => {
+  it("withholds verification in Ask mode because this producer has no approval-resume channel", async () => {
+    const current = fixture;
+    if (current === undefined) throw new Error("fixture missing");
+    const askAuthority = authority(current.root, "governed-assist", "run-2489-ask");
+    current.setModel(
+      toolCallThenStop("editor_request_verification", {
+        sessionId: SESSION_ID,
+        kind: "typecheck",
+      }),
+    );
+
+    const response = await postProducerTurn(current.port, { authorityRef: askAuthority });
+
+    expect(response.status).toBe(200);
+    expect(response.body.outcome).toBe("failed");
+    expect(response.body.catalog?.toolRefs).not.toContainEqual({
+      canonicalId: "keiko.editor.verify",
+      contractVersion: 1,
+    });
+    expect(response.body.toolCallCount).toBe(0);
+    expect(current.verificationRunner.calls).toBe(0);
+  });
+
   it("rejects a tool call outside the advertised producer surface before it reaches the host", async () => {
     const current = fixture;
     if (current === undefined) throw new Error("fixture missing");

@@ -1269,6 +1269,7 @@ describe("CodingToolAuthorityPort", () => {
             reserve: () => {
               throw new Error("must not reserve when unavailable");
             },
+            check: () => false,
             commit: () => undefined,
             release: () => undefined,
           },
@@ -1425,6 +1426,7 @@ describe("CodingToolAuthorityPort", () => {
             reserve: () => {
               throw new Error("must not reserve when unavailable");
             },
+            check: () => false,
             commit: () => undefined,
             release: () => undefined,
           },

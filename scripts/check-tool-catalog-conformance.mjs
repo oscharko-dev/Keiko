@@ -554,7 +554,7 @@ function staleRecordFailures(record, landedDevCommit, landedTreeDigest) {
 }
 
 async function landedEvidenceFailures(root, landedDevCommit, landedTreeDigest, deps) {
-  const { record, shapeFailures } = readH1Provenance(root);
+  const { record, shapeFailures } = readH1Provenance(root, deps.provenancePath);
   if (record === null || shapeFailures.length > 0) return shapeFailures;
   return [
     ...staleRecordFailures(record, landedDevCommit, landedTreeDigest),
@@ -575,6 +575,7 @@ export async function checkH1HandoffEvidence(
     execute = execFileSync,
     identityFailures = realProducerIdentityFailures,
     sourceHeadFailures = realSourceHeadFailures,
+    provenancePath = H1_PROVENANCE_PATH,
   } = {},
 ) {
   const migration = pendingH1 ?? JSON.parse(await toolCatalogMigrationBytes(root)).pendingH1;
@@ -585,6 +586,7 @@ export async function checkH1HandoffEvidence(
     execute,
     identityFailures,
     sourceHeadFailures,
+    provenancePath,
   });
 }
 const CATALOG_NEGATIVE_FIXTURES_DIR = "tests/architecture/fixtures/tool-catalog-negatives";

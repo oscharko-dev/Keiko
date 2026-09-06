@@ -649,6 +649,40 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
     });
     expect(errors).toEqual([`H1 handoff evidence missing: no ${H1_PROVENANCE_PATH}`]);
   });
+  it("validates an external postmerge receipt through the same reachability and identity gates", async () => {
+    workDir = mkdtempSync(join(tmpdir(), "keiko-h1-external-"));
+    const root = join(workDir, "source");
+    mkdirSync(root);
+    writeFileSync(join(workDir, "handoff.json"), JSON.stringify(VALID_RECORD));
+    const pending = {
+      landedDevCommit: VALID_RECORD.currentHead,
+      landedTreeDigest: VALID_RECORD.treeDigest,
+    };
+    const visited = [];
+    const deps = {
+      provenancePath: "../handoff.json",
+      execute: () => "",
+      sourceHeadFailures: async (_root, record) => {
+        visited.push(record.sourceHead);
+        return [];
+      },
+      identityFailures: async (_root, record) => {
+        visited.push(record.projectionDigest);
+        return [];
+      },
+    };
+    expect(await checkH1HandoffEvidence(root, pending, deps)).toEqual([]);
+    expect(visited).toEqual([VALID_RECORD.sourceHead, VALID_RECORD.projectionDigest]);
+    expect(
+      await checkH1HandoffEvidence(root, pending, {
+        ...deps,
+        identityFailures: async () => ["fixture projection mismatch"],
+      }),
+    ).toEqual(["fixture projection mismatch"]);
+    expect(await checkH1HandoffEvidence(root, pending)).toEqual([
+      `H1 handoff evidence missing: no ${H1_PROVENANCE_PATH}`,
+    ]);
+  });
   it("fails closed when the durable record exists but is malformed JSON", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-"));
     workDir = root;

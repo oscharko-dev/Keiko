@@ -207,6 +207,27 @@ resistance. H1 and subsequent owners must deliver production-port tests for thei
 
 ## Verification and delivery evidence
 
+The final `CatalogCloseout` artifact is produced with `npm run check:tool-catalog-closeout --
+--artifact <qualified-package> --receipts <receipt-directory> --h1 <postmerge-handoff>
+--manifest <external-manifest> --write`. The manifest must be outside the clean source checkout;
+symlink redirection back into the checkout is rejected. The postmerge handoff can also be external,
+so recording the actual merge identity never requires inventing a future source commit. Its
+reachability, source content and producer identity use the existing H1 validators unchanged.
+
+Each named check uses the existing `.receipt.json`/`.artifact` reader. Structured reports are
+parsed from the same bytes whose digest the reader retains. They carry only exact source/package
+digests, actual platform/runtime, closed execution/status values, counts and binding identities.
+Skipped, mocked, missing, stale or changed reports fail qualification. Managed OpenCode requires
+`real-runtime` evidence; a production-composition label alone cannot substitute. All five consumer
+bindings must be present, and the managed consumer must match the independently validated H1
+binding. Profile rows preserve each consumer's actual catalog revision rather than inventing an
+aggregate revision for separately composed profiles. Source-only Linux CI checks retain their real
+platform/runtime and a null package digest; they do not claim to have inspected a local package.
+
+This final artifact is not a premerge gate or an alternative merge authority. It requires the actual
+postmerge H1 proof and supplements the source gates and exact-head required CI. There is no final
+closeout artifact while live qualification, required checks or actual merge evidence is missing.
+
 Run the issue's minimum loop, `check:governed-tool-contract`, `check:adr-index`, existing architecture
 negative gates and `gates:sonar`. The raw-coordinate regression was executed against the unchanged
 import-policy owner first: six negative cases failed while four allowed/control cases passed.

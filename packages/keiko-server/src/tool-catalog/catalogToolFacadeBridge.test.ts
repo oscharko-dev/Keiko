@@ -66,7 +66,15 @@ const COVERED: readonly CodingToolActionRequest[] = [
   {
     ...identity,
     action: "search",
-    repositoryRequest: { kind: "search", mode: "literal", query: "x", maxResults: 3 },
+    repositoryRequest: {
+      kind: "search",
+      mode: "literal",
+      query: "x",
+      caseSensitive: false,
+      includeGlobs: [],
+      excludeGlobs: [],
+      maxResults: 3,
+    },
   },
   {
     ...identity,

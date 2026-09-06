@@ -21,6 +21,14 @@ remain required. On 2026-09-06 the owner explicitly authorized gated integration
 to `dev`, subsequent `dev` verification, completed issue closure and branch deletion. This
 supersedes the earlier human merge checkpoint; no required check or review gate is waived.
 
+The owner additionally requires at least five successful real runs in the controlled repository:
+Issue → accepted Keiko task → PR → verified merge → closed issue. The prepared issues are
+Wegwerf-Repo #1, #3, #4, #5 and #6, using Ask/Supervised/Full/Supervised/Full modes sequentially.
+Preparation is not execution evidence. Each completed run must expose its issue/PR links, task/run
+identity, merge commit, actual checks and closure state, qualification receipt and ledger cost.
+All attempts, probes, failures and retries share one durable aggregate USD 50 ceiling; no run may
+reset that ledger or claim a separate USD 50 allowance.
+
 ## Method and scope
 
 The original per-feature source audit was recorded at `02cb5f4b`; file/line references below are

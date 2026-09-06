@@ -12,12 +12,12 @@
 // exist or does not match.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { deriveGateVerdict, evidenceGateFailures } from "./lib/coding-issue-journey-evidence.mjs";
-import { sha256File } from "./lib/digest.mjs";
+import { sha256 } from "./lib/digest.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { readJsonFile } from "./lib/json.mjs";
 
@@ -46,7 +46,7 @@ function gitHeadShas(root) {
  * producer -- this checker never reads them back off a receipt, since a scenario's declared
  * `recordedAt`/`provenance` are cross-referenced through the manifest itself, not the receipt.
  */
-export function readReceipts(receiptsDir) {
+export function readReceipts(receiptsDir, { observeArtifact } = {}) {
   const receipts = new Map();
   if (!existsSync(receiptsDir)) return receipts;
   for (const entry of readdirSync(receiptsDir)) {
@@ -55,6 +55,11 @@ export function readReceipts(receiptsDir) {
     const artifactPath = resolve(receiptsDir, `${scenarioId}.artifact`);
     if (!existsSync(artifactPath)) continue; // surfaced as "missing receipt" by the pure gate
     const meta = readJsonFile(resolve(receiptsDir, entry));
+    // A consumer that validates a structured artifact must inspect the same bytes whose digest
+    // is retained. A separate read can race with an artifact writer and bind different content.
+    const artifactBytes = readFileSync(artifactPath);
+    const digest = sha256(artifactBytes);
+    observeArtifact?.(scenarioId, artifactBytes);
     receipts.set(scenarioId, {
       scenarioId,
       commitSha: meta.commitSha,
@@ -62,7 +67,7 @@ export function readReceipts(receiptsDir) {
       testStatus: meta.testStatus,
       recordedAt: meta.recordedAt,
       provenance: meta.provenance,
-      digest: sha256File(artifactPath),
+      digest,
     });
   }
   return receipts;
