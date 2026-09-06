@@ -729,6 +729,21 @@ export function codingWorkbenchPolicyEffectFor(
   return CODING_WORKBENCH_MODE_POLICIES[mode].effects[resourceScope][risk];
 }
 
+export type CodingWorkbenchCodeTaskDeliveryAction = "commit" | "push" | "pull-request";
+
+/**
+ * Scoped policy for an accepted Code task's proposal-bound delivery execute. The general
+ * `delivery` matrix remains approval-required because it also covers merge and repository facades
+ * that do not carry the Code task's live mutation guard.
+ */
+export function codingWorkbenchCodeTaskDeliveryEffectFor(
+  mode: CodingWorkbenchMode,
+  _action: CodingWorkbenchCodeTaskDeliveryAction,
+): CodingWorkbenchPolicyEffect {
+  const general = codingWorkbenchPolicyEffectFor(mode, "delivery", "high");
+  return mode === "autonomous-delivery" && general === "approval-required" ? "allowed" : general;
+}
+
 export function strictestCodingWorkbenchPolicyEffect(
   first: CodingWorkbenchPolicyEffect,
   ...rest: readonly CodingWorkbenchPolicyEffect[]

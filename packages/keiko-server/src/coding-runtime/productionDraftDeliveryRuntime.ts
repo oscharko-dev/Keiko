@@ -40,7 +40,7 @@ export function createProductionDraftDeliveryService(
     onChanged: (record): void => {
       publishDraftDeliveryRecord(record, onEvent);
     },
-    policyAllowsWithoutApproval: binding.policyAllowsWithoutApproval ?? (() => false),
+    policyAllowsWithoutApproval: binding.policyAllowsWithoutApproval ?? ((): boolean => false),
   });
 }
 export function resolveDraftDeliveryContext(

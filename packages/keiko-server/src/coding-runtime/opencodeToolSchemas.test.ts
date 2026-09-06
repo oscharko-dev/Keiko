@@ -418,8 +418,19 @@ describe("deriveGatewayCatalogReadiness", () => {
 // sends `{"$schema":"https://json-schema.org/draft/2020-12/schema","properties":{},"type":
 // "object"}` -- no `required` key. The fixture below is that exact live capture, unmodified.
 describe("OpenCode 1.17.17 real advertisement fidelity (#3390 live-run evidence)", () => {
-  it("accepts the real OpenCode 1.17.17 advertisement byte-for-byte", () => {
-    expect(hasExactOpenCodeVisibleToolContract(realAdvertisementFixture())).toBe(true);
+  it("accepts the unchanged live-captured tools with the current verification projection", () => {
+    const currentVerification = projectedTools().find((tool) => tool.name === "keiko_verification");
+    if (currentVerification === undefined) throw new Error("Expected verification projection.");
+    const currentAdvertisement = realAdvertisementFixture().map((tool) =>
+      tool.name === "keiko_verification"
+        ? { ...tool, parameters: currentVerification.parameters }
+        : tool,
+    );
+    expect(hasExactOpenCodeVisibleToolContract(currentAdvertisement)).toBe(true);
+  });
+
+  it("denies the historical capture after the verification contract gains targetPath", () => {
+    expect(hasExactOpenCodeVisibleToolContract(realAdvertisementFixture())).toBe(false);
   });
 
   it("denies the real advertisement with one tool removed", () => {

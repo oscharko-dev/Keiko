@@ -49,6 +49,7 @@ import {
   CODING_WORKBENCH_MODE_POLICIES,
   CODING_WORKBENCH_POLICY_EFFECTS,
   CODING_WORKBENCH_POLICY_RESOURCE_SCOPES,
+  codingWorkbenchCodeTaskDeliveryEffectFor,
   codingWorkbenchPolicyEffectFor,
   strictestCodingWorkbenchPolicyEffect,
 } from "./coding-workbench.js";
@@ -298,6 +299,23 @@ describe("coding workbench autonomy policy", () => {
       "denied",
     );
     expect(strictestCodingWorkbenchPolicyEffect("allowed")).toBe("allowed");
+  });
+
+  it("allows only proposal-bound Code-task delivery in Full without widening general delivery", () => {
+    for (const action of ["commit", "push", "pull-request"] as const) {
+      expect(codingWorkbenchCodeTaskDeliveryEffectFor("governed-assist", action)).toBe(
+        "approval-required",
+      );
+      expect(codingWorkbenchCodeTaskDeliveryEffectFor("supervised-coding", action)).toBe(
+        "approval-required",
+      );
+      expect(codingWorkbenchCodeTaskDeliveryEffectFor("autonomous-delivery", action)).toBe(
+        "allowed",
+      );
+    }
+    expect(codingWorkbenchPolicyEffectFor("autonomous-delivery", "delivery", "high")).toBe(
+      "approval-required",
+    );
   });
 
   // Epic #2384: total monotonicity. Raising the mode must never make ANY (scope, risk) cell

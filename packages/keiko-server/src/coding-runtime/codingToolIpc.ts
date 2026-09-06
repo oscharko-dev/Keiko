@@ -531,10 +531,21 @@ function approvableNamedRequest(
   };
 }
 
+function validVerificationTarget(targeted: boolean, targetPath: unknown): boolean {
+  if (!targeted) return targetPath === undefined || targetPath === "";
+  return (
+    typeof targetPath === "string" &&
+    targetPath.length > 0 &&
+    isContainedAgentPath(targetPath) &&
+    !isDenied(targetPath)
+  );
+}
+
 function verificationRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
   const base = approvableNamedRequest(value, "verifierId", "verification");
   if (base?.action !== "verification") return undefined;
   const targeted = base.verifierId === "targeted-test";
+  const targetPath = value.targetPath;
   if (
     !hasAllowedKeys(value, [
       "action",
@@ -544,13 +555,11 @@ function verificationRequest(value: Record<string, unknown>): CodingToolActionRe
       "targetPath",
       "approvalProof",
     ]) ||
-    targeted !== (typeof value.targetPath === "string") ||
-    (targeted &&
-      (!isContainedAgentPath(value.targetPath as string) || isDenied(value.targetPath as string)))
+    !validVerificationTarget(targeted, targetPath)
   ) {
     return undefined;
   }
-  return targeted ? { ...base, targetPath: value.targetPath as string } : base;
+  return targeted ? { ...base, targetPath: targetPath as string } : base;
 }
 
 /** A single explicit result shape: `optionalApprovalProof` always returns an object literal

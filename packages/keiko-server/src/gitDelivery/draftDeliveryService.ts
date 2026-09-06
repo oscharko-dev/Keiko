@@ -356,7 +356,7 @@ export class DraftDeliveryController implements DraftDeliveryService {
       proposal.record.proposalDigest
     )
       throw new DraftDeliveryFailure("payload-changed");
-    if (claim.required === false && this.options.policyAllowsWithoutApproval?.() !== true)
+    if (!claim.required && this.options.policyAllowsWithoutApproval?.() !== true)
       throw new DraftDeliveryFailure("approval-invalid");
     const current = advanceDraft(
       this.options,

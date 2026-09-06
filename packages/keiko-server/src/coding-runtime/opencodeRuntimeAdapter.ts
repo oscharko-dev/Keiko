@@ -1085,7 +1085,8 @@ function toolDescription(action: GeneratedToolAction): string {
     return (
       "Run one vetted repository verification through Keiko governance — the only way to " +
       "execute checks (there is no shell). Pick exactly one verifierId: test, targeted-test, " +
-      "typecheck, lint, or build. targeted-test also requires one workspace-relative targetPath."
+      "typecheck, lint, or build. targeted-test requires one workspace-relative targetPath; " +
+      "use an empty targetPath for every other verifierId."
     );
   }
   return (
@@ -1221,6 +1222,7 @@ function toolSource(
     "    const identity = `${context.sessionID}:${context.callID || context.messageID}`;",
     "    const request = { action: wireAction, actionId: identity, idempotencyKey: identity, ...literalFields };",
     "    for (const name of argumentNames) request[name] = args[name];",
+    '    if (action === "verification" && request.targetPath === "") delete request.targetPath;',
     // git-execute is the one action whose wire shape depends on a model-supplied argument
     // (`kind`): redeeming a stage proposal posts `{action:"git",operation:"stage",...}` while
     // redeeming a commit/push/pull-request proposal posts `{action:"delivery",intent:kind,...}`.

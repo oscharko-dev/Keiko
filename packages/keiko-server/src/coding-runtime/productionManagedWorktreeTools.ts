@@ -493,6 +493,20 @@ async function completeDraftDeliveryRequest(
     return result;
   const service = input.draftDeliveryService;
   if (service === undefined) return { status: "failed", reasonCode: "delivery-authority-revoked" };
+  return releaseDraftDeliveryProposal(input, request, guard, signal, service, proposal);
+}
+
+async function releaseDraftDeliveryProposal(
+  input: ProductionManagedWorktreeToolInput,
+  request: Parameters<typeof runDraftDeliveryRequest>[1],
+  guard: CodingToolMutationGuard,
+  signal: AbortSignal | undefined,
+  service: DraftDeliveryService,
+  proposal: Extract<
+    import("@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery").CodingRuntimeDeliveryResult,
+    { readonly status: "recorded" }
+  >,
+): Promise<GovernedCodingToolResult> {
   const actionKind = proposal.record.phase === "push-proposed" ? "push" : "pull-request";
   if (
     service.review(proposal.record.proposalId) !== undefined &&
@@ -602,10 +616,9 @@ function runCommitRequest(
   if (request.phase === "propose" && request.message !== undefined)
     return service.propose(request.message);
   if (request.proposalId === undefined) return Promise.resolve(undefined);
-  // #3384 F4: `deliveryApproval` carries the un-consumed commit claim built by
-  // codingToolAuthorityPort.ts's finishAdmission (never a pre-consumed lease) — execute()'s own
-  // preflightBlock -> consumeApproval -> executeConsumed order decides whether it gets spent,
-  // only after every legitimate pre-commit block has had a chance to fire.
+  // In Ask/Supervised, `deliveryApproval` carries the unconsumed commit claim built by
+  // codingToolAuthorityPort.ts. Full access deliberately has no claim; execute() combines its
+  // trusted live-mode callback with this exact request guard before using policy authorization.
   const approval = guard.deliveryApproval as CommitExecutionApproval | undefined;
   return service.execute(request.proposalId, approval?.claim, { check: guard.check, signal });
 }

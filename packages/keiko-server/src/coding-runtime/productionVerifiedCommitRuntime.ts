@@ -38,7 +38,7 @@ export function createProductionVerifiedCommitService(
     : createVerifiedCommitService({
         ...deps,
         context: () => resolveVerifiedCommitContext(deps, binding),
-        policyAllowsWithoutApproval: binding.policyAllowsWithoutApproval ?? (() => false),
+        policyAllowsWithoutApproval: binding.policyAllowsWithoutApproval ?? ((): boolean => false),
       });
 }
 export function resolveVerifiedCommitContext(

@@ -634,7 +634,6 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     { name: "ProviderAuthError", data: { providerID: "functional", message: "SENTINEL" } },
     { name: "UnknownError", data: { message: "SENTINEL", ref: "bounded-reference" } },
     { name: "MessageOutputLengthError", data: {} },
-    { name: "MessageAbortedError", data: { message: "SENTINEL" } },
     { name: "StructuredOutputError", data: { message: "SENTINEL", retries: 2 } },
     { name: "ContextOverflowError", data: { message: "SENTINEL", responseBody: "SENTINEL" } },
     { name: "ContentFilterError", data: { message: "SENTINEL" } },
@@ -660,6 +659,24 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     expect(parsed).toMatchObject({
       ok: true,
       value: [{ sequence: 1, kind: "terminal-failure" }],
+    });
+    expect(JSON.stringify(parsed)).not.toContain("SENTINEL");
+  });
+
+  it("settles the pinned native abort error without retaining its body", () => {
+    const parsed = parseOpenCodeHistory([
+      syncRow(1, "message.updated.1", {
+        sessionID: "ses_1",
+        info: assistantMessage({
+          error: { name: "MessageAbortedError", data: { message: "SENTINEL" } },
+          time: { created: 1, completed: 2 },
+        }),
+      }),
+    ]);
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      value: [{ sequence: 1, kind: "terminal" }],
     });
     expect(JSON.stringify(parsed)).not.toContain("SENTINEL");
   });

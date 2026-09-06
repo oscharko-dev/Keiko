@@ -74,7 +74,8 @@ that data, not its home (ADR-0129 D5 unchanged). The user-facing meanings are:
   allowed; risky contained work and every external-file, internet, and delivery effect require
   approval.
 - **Full access** — non-denied task-workspace, external-file, and internet effects may run
-  unattended inside the validated Authority Envelope; delivery remains separately governed.
+  unattended inside the validated Authority Envelope; delivery remains separately governed, with
+  the narrow Code-task commit/push/draft-PR policy path specified in D3 item 5 below.
 
 ### D2 — One total, monotonic effect matrix
 
@@ -236,13 +237,21 @@ is:
    user-driven redemption path rather than a test-only store call. The continuity re-check right
    before the actual network dispatch defers
    (`deliveryApprovalDeferred: true`) to that already-verified consumption rather than peeking the
-   now-emptied record a second time. Nothing in this record, `runBoundAuthority.ts`, #3386, #3387,
-   or #3390 admits an unapproved delivery effect in any mode, including Full access — `autonomous-
-   delivery` itself never consults redemption at all, since `modeDecision` resolves it outright. The
-   coding-runtime tool port (`codingToolAuthorityPort.ts`) is
-   the second enforcement point named by epic #3384 correction 5 and reads the same matrix for its
-   `workspace-contained`/medium path already; its `git`/`delivery` branches converging onto the
-   identical evaluator is tracked by that correction, not restated here.
+   now-emptied record a second time.
+
+   The end-user Code-task tool path has one narrower Full access execution rule. After a separate
+   commit, push, or draft-pull-request proposal, `codingToolAuthorityPort.ts` may admit the execute
+   without a per-action operator claim only when the freshly revalidated envelope is
+   `autonomous-delivery` and carries every action-specific class, source-control scope, network
+   policy, workspace binding, deployment ceiling, and expiry required by that exact request. The
+   owning execution service rechecks both the live Full-mode decision and the same mutation guard
+   at the effect boundary, then passes the existing `{ required: false }` policy requirement to the
+   Git kernel. It never mints `GIT_DELIVERY_LOCAL_OPERATOR_ID` or an approval token. Ask for
+   approval and Supervised workspace retain their exact, one-use operator approval path. The model
+   still makes a separate execute call after proposal, and merge remains explicitly approval-gated
+   under ADR-0087. The generic repository-agent boolean facade has neither this trusted Code-task
+   binding nor an approval channel and therefore continues to reject delivery execute in every
+   mode.
 
 Every existing policy consumer named above must be enumerated and regression-tested in the
 implementing child (#2385) before merge; no surface may keep a local copy of the old matrix or

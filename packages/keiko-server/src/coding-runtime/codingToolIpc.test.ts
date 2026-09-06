@@ -312,7 +312,7 @@ describe("coding tool IPC targeted verification", () => {
     ).toEqual({ ...request, targetPath: "src/math.test.ts" });
   });
 
-  it.each([undefined, "/tmp/x.test.ts", "../x.test.ts", ".env", "secrets/.env"])(
+  it.each([undefined, "", "/tmp/x.test.ts", "../x.test.ts", ".env", "secrets/.env"])(
     "rejects missing, escaping, absolute, or sensitive target %s",
     (targetPath) => {
       expect(
@@ -328,6 +328,15 @@ describe("coding tool IPC targeted verification", () => {
         262_144,
       ),
     ).toBeUndefined();
+  });
+
+  it("normalizes the provider wire's empty targetPath for an ordinary verifier", () => {
+    expect(
+      parseCodingToolRequest(
+        JSON.stringify({ ...request, verifierId: "test", targetPath: "" }),
+        262_144,
+      ),
+    ).toEqual({ ...request, verifierId: "test" });
   });
 });
 

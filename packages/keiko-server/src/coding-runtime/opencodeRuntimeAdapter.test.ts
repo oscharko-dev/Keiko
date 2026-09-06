@@ -191,6 +191,54 @@ interface GeneratedOpenCodeBundle {
   readonly toolSources: Readonly<Record<string, string>>;
 }
 
+interface GeneratedVerificationTool {
+  readonly execute: (
+    args: { readonly verifierId: string; readonly targetPath: string },
+    context: {
+      readonly sessionID: string;
+      readonly callID: string;
+      readonly abort: AbortSignal;
+      readonly ask: (request: Record<string, unknown>) => Promise<void>;
+    },
+  ) => Promise<{ readonly title: string; readonly output: string; readonly metadata: unknown }>;
+}
+
+type GeneratedVerificationToolContext = Parameters<GeneratedVerificationTool["execute"]>[1];
+
+function loadGeneratedVerificationTool(fetchImpl: typeof fetch): GeneratedVerificationTool {
+  const source = createGeneratedOpenCodeBundle().toolSources.keiko_verification;
+  if (source === undefined) throw new Error("keiko_verification tool source missing");
+  const script = new Script(`${source.replace("export default", "const generated =")}\ngenerated;`);
+  const value: unknown = script.runInNewContext(
+    {
+      process: {
+        env: {
+          KEIKO_CODING_MODE: "autonomous-delivery",
+          KEIKO_TOOL_FACADE_URL: "https://tool-facade.internal/invoke",
+          KEIKO_TOOL_FACADE_CAPABILITY: "capability-token",
+        },
+      },
+      fetch: fetchImpl,
+      AbortController,
+      TextEncoder,
+      TextDecoder,
+      Uint8Array,
+      setTimeout,
+      clearTimeout,
+    },
+    { timeout: 1000 },
+  );
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("execute" in value) ||
+    typeof value.execute !== "function"
+  ) {
+    throw new Error("generated verification tool invalid");
+  }
+  return value as GeneratedVerificationTool;
+}
+
 describe("generated OpenCode bundle", () => {
   it("uses the governed response ceiling for native custom-tool output", () => {
     const bundle = createGeneratedOpenCodeBundle();
@@ -198,6 +246,47 @@ describe("generated OpenCode bundle", () => {
     expect(bundle.toolSources.keiko_verification).toContain(
       `const MAX_RESPONSE_BYTES = ${String(CODING_TOOL_MAX_BODY_BYTES)};`,
     );
+  });
+
+  it("normalizes the required provider target sentinel before strict production IPC", async () => {
+    const requests: unknown[] = [];
+    const tool = loadGeneratedVerificationTool((_input, init) => {
+      requests.push(typeof init?.body === "string" ? JSON.parse(init.body) : undefined);
+      return Promise.resolve(
+        new Response(JSON.stringify({ status: "completed", evidence: [] }), {
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    });
+    const context = (callID: string): GeneratedVerificationToolContext => ({
+      sessionID: "ses_1",
+      callID,
+      abort: new AbortController().signal,
+      ask: (): Promise<void> => Promise.resolve(),
+    });
+
+    await tool.execute({ verifierId: "test", targetPath: "" }, context("ordinary"));
+    await tool.execute(
+      { verifierId: "targeted-test", targetPath: "src/math.test.ts" },
+      context("targeted"),
+    );
+
+    expect(requests).toHaveLength(2);
+    const ordinary = parseCodingToolRequest(
+      JSON.stringify(requests[0]),
+      CODING_TOOL_MAX_BODY_BYTES,
+    );
+    const targeted = parseCodingToolRequest(
+      JSON.stringify(requests[1]),
+      CODING_TOOL_MAX_BODY_BYTES,
+    );
+    expect(ordinary).toMatchObject({ action: "verification", verifierId: "test" });
+    expect(ordinary).not.toHaveProperty("targetPath");
+    expect(targeted).toMatchObject({
+      action: "verification",
+      verifierId: "targeted-test",
+      targetPath: "src/math.test.ts",
+    });
   });
 });
 

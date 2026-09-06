@@ -397,7 +397,8 @@ function verificationSpec(): OpenCodeToolSpec {
     alias: "keiko_verification",
     description:
       "Run one named verification gate (test, typecheck, lint or build). Ordinary working-tree " +
-      "tests may pass without commit proof. For a commit, execute a ready stage proposal, or an " +
+      "tests use an empty targetPath and may pass without commit proof; targeted-test requires " +
+      "one workspace-relative test path. For a commit, execute a ready stage proposal, or an " +
       "approval-required stage proposal after approval, then rerun verification and proceed only " +
       'when the result reports verification: { commitProof: "recorded" }. A ' +
       "candidate-not-staged result with nextAction stage-then-verify requires staging and another " +
@@ -408,8 +409,16 @@ function verificationSpec(): OpenCodeToolSpec {
           type: "string",
           enum: ["test", "targeted-test", "typecheck", "lint", "build"],
         },
+        targetPath: {
+          type: "string",
+          minLength: 0,
+          maxLength: 4096,
+          pattern: String.raw`^(?:$|(?![\\/])(?!.*(?:^|/)\.\.?(?:/|$))(?!.*\\).+)$`,
+          description:
+            "Use an empty string for ordinary gates; targeted-test requires one workspace-relative test path.",
+        },
       },
-      ["verifierId"],
+      ["verifierId", "targetPath"],
     ),
     effects: ["verification"],
     idempotency: "server-key-required",
@@ -524,11 +533,12 @@ function gitDiffSpec(): OpenCodeToolSpec {
 }
 
 const PROPOSAL_EXECUTION_GUIDANCE =
-  ' This call waits for any required operator decision. When approvalDisposition: "ready" is ' +
-  "present, approval has already been granted: immediately call keiko_git_execute with the " +
-  "matching kind and proposalId. The immutable receipt may still say approval-required; the " +
-  "fresh approvalDisposition is authoritative for this continuation. A ready stage status also " +
-  "permits execute. A denied result authorizes no effect. Proposing never executes the effect.";
+  " This call waits for any required operator decision. When the recorded status is ready or the " +
+  'fresh approvalDisposition is ready (approvalDisposition: "ready"), immediately call ' +
+  "keiko_git_execute with the matching kind and proposalId: authorization is already present. An " +
+  "immutable recorded receipt may retain status approval-required; the fresh disposition is " +
+  "authoritative for this continuation. A denied proposal authorizes no effect. Proposing never " +
+  "executes the effect.";
 
 function gitStageSpec(): OpenCodeToolSpec {
   return {

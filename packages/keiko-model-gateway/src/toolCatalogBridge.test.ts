@@ -135,10 +135,10 @@ describe("production gateway catalog bridge", () => {
           type: "function",
           function: expect.objectContaining({
             name,
-            description: expect.stringContaining('approvalDisposition: "ready"'),
-          }),
+            description: expect.stringContaining('approvalDisposition: "ready"') as unknown,
+          }) as unknown,
         },
-      ]),
+      ]) as unknown,
     });
   });
 
@@ -164,7 +164,7 @@ describe("production gateway catalog bridge", () => {
           type: "function",
           function: {
             name: "keiko_verification",
-            description: expect.any(String),
+            description: expect.any(String) as unknown,
             parameters: {
               type: "object",
               properties: expect.objectContaining({
@@ -172,13 +172,13 @@ describe("production gateway catalog bridge", () => {
                   type: "string",
                   minLength: 0,
                   maxLength: 4096,
-                }),
-              }),
+                }) as unknown,
+              }) as unknown,
               required: ["targetPath", "verifierId"],
             },
           },
         },
-      ]),
+      ]) as unknown,
     });
   });
 

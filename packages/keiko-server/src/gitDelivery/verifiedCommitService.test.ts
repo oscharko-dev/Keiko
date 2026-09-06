@@ -455,6 +455,7 @@ describe("verified Code-task commit service", () => {
   });
   it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
     "routes actual verification, review, approval and commit through the runtime facade in %s",
+    // eslint-disable-next-line complexity -- this is the exhaustive three-mode behavior matrix
     async (mode) => {
       service = createVerifiedCommitService({
         ...options,
@@ -803,6 +804,7 @@ describe("productive runtime status/diff/stage lane", () => {
 
   it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
     "stages the exact selected candidate through the facade in %s",
+    // eslint-disable-next-line complexity -- this is the exhaustive three-mode behavior matrix
     async (mode) => {
       git(["reset", "--mixed", "HEAD"]);
       const gitService = new RuntimeGitService({
@@ -854,7 +856,7 @@ describe("productive runtime status/diff/stage lane", () => {
       if (!("git" in proposed) || proposed.git.kind !== "stage")
         throw new Error("stage proposal missing");
       const id = proposed.git.proposalId;
-      expect(proposed.git.status).toBe(mode === "governed-assist" ? "approval-required" : "ready");
+      expect(proposed.git.status).toBe("ready");
       if (mode === "governed-assist") {
         expect(fixture.events.at(-1)).toMatchObject({
           kind: "permission-requested",

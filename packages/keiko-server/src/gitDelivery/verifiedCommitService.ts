@@ -543,7 +543,7 @@ class VerifiedCommitController implements VerifiedCommitService {
     // caller's own checks and this call still gets one last live look before the effect.
     const blocked = await this.preflightBlock(proposal);
     if (blocked !== undefined) return blocked;
-    if (claim.required === false && this.options.policyAllowsWithoutApproval?.() !== true)
+    if (!claim.required && this.options.policyAllowsWithoutApproval?.() !== true)
       return this.record(context, binding, "blocked", "approval-invalid");
     this.proposals.delete(binding.proposalId);
     this.proof = undefined;

@@ -9,7 +9,10 @@ import type {
   CodingWorkbenchRuntimeDelegationUsage,
   GitDeliveryApprovalClaim,
 } from "@oscharko-dev/keiko-contracts";
-import { codingWorkbenchPolicyEffectFor } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  codingWorkbenchCodeTaskDeliveryEffectFor,
+  codingWorkbenchPolicyEffectFor,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 import type {
   CodingToolAuthorityPort,
@@ -645,8 +648,8 @@ function commitPolicyAllowed(
   if (request.phase === "propose" || request.phase === "reconcile") return true;
   if (request.phase !== "execute") return false;
   const mode = envelope.authority.effectiveMode;
-  const effect = codingWorkbenchPolicyEffectFor(mode, "delivery", "high");
-  if (effect === "denied" || (!approved && mode !== "autonomous-delivery")) return false;
+  const effect = codingWorkbenchCodeTaskDeliveryEffectFor(mode, request.intent);
+  if (effect === "denied" || (!approved && effect !== "allowed")) return false;
   return (
     mode !== "autonomous-delivery" ||
     (isDraftToolRequest(request)
@@ -666,7 +669,8 @@ export function codingToolFullAccessDeliveryAllowed(
 ): boolean {
   const executeRequest = { ...request, phase: "execute" } as const;
   return (
-    authority.effectiveMode === "autonomous-delivery" &&
+    codingWorkbenchCodeTaskDeliveryEffectFor(authority.effectiveMode, request.intent) ===
+      "allowed" &&
     hasClasses(authority.actionClasses, codingToolRequiredActionClasses(executeRequest)) &&
     hasScope(authority.connectorScopes, "source-control.write") &&
     (request.intent === "commit" ||

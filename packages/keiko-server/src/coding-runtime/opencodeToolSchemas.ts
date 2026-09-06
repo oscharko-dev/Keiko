@@ -213,20 +213,14 @@ const VERIFICATION_SCHEMA = {
     },
     targetPath: {
       type: "string",
-      minLength: 1,
+      minLength: 0,
       maxLength: EDITOR_AGENT_TARGET_PATH_MAX_BYTES,
-      pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(?:/|$))(?!.*\\).+$`,
-      description: "Required only for targeted-test; workspace-relative test file path.",
+      pattern: String.raw`^(?:$|(?![\\/])(?!.*(?:^|/)\.\.?(?:/|$))(?!.*\\).+)$`,
+      description:
+        "Use an empty string for ordinary gates; targeted-test requires one workspace-relative test path.",
     },
   },
-  required: ["verifierId"],
-  allOf: [
-    {
-      if: { properties: { verifierId: { const: "targeted-test" } }, required: ["verifierId"] },
-      then: { required: ["targetPath"] },
-      else: { not: { required: ["targetPath"] } },
-    },
-  ],
+  required: ["targetPath", "verifierId"],
 } as const;
 
 /** OpenCode v1.17.17 removes this unsupported JSON Schema keyword before forwarding a tool. */
@@ -237,8 +231,9 @@ const VERIFICATION_PROJECTED_SCHEMA = {
       type: "string",
       enum: OPENCODE_VERIFICATION_IDS,
     },
+    targetPath: VERIFICATION_SCHEMA.properties.targetPath,
   },
-  required: ["verifierId"],
+  required: ["targetPath", "verifierId"],
 } as const;
 
 /**
@@ -453,7 +448,10 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
   {
     name: "keiko_verification",
     action: "verification",
-    arguments: { verifierId: VERIFICATION_SCHEMA.properties.verifierId },
+    arguments: {
+      verifierId: VERIFICATION_SCHEMA.properties.verifierId,
+      targetPath: VERIFICATION_SCHEMA.properties.targetPath,
+    },
   },
   {
     name: "keiko_research_fetch",

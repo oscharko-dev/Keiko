@@ -320,6 +320,7 @@ describe("draft delivery hard boundaries", () => {
 describe.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
   "productive draft facade in %s",
   (mode) => {
+    // eslint-disable-next-line complexity -- this is the exhaustive three-mode behavior matrix
     it("requires different exact push and PR approvals and rejects cross-operation grants, revoked runs and replay", async () => {
       const draftService = new DraftDeliveryController({
         ...fixture.options,

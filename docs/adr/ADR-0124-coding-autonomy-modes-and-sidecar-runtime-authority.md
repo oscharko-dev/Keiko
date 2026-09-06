@@ -78,10 +78,11 @@ remains separately approval-required in this mode, never a flat, unredeemable de
 
 `autonomous-delivery` is the highest mode. It may include delivery-substrate actions once the
 Authority Envelope explicitly grants them and a later child implements the corresponding surface,
-but a delivery effect is never admitted the way a workspace-contained effect is: ADR-0138 D2 keeps
-every delivery effect separately approval-required even in this mode — Full access removes
-per-action approval for workspace-contained work, not for delivery. Naming the mode here does not
-implement the runner.
+but a delivery effect is never admitted from the mode label alone: ADR-0138 D2 keeps delivery
+separately governed. The accepted Code-task path may use the live, action-specific Full access
+envelope as policy authorization for commit, push, and draft-pull-request execution without a
+per-action operator claim; Ask and Supervised still require that claim, and merge remains explicit.
+Naming the mode here does not implement the runner.
 
 ### D2 — Effective mode is the fail-closed minimum of request and deployment ceiling
 

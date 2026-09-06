@@ -469,9 +469,7 @@ function createAbortTask(readyRun: ReadyRunLookup): OpenCodeRunPort["abortTask"]
         AbortSignal.timeout(ABORT_SETTLEMENT_TIMEOUT_MS),
       );
       if (settled) {
-        await run.runtimeAdapter.waitForTerminal(
-          AbortSignal.timeout(ABORT_SETTLEMENT_TIMEOUT_MS),
-        );
+        await run.runtimeAdapter.waitForTerminal(AbortSignal.timeout(ABORT_SETTLEMENT_TIMEOUT_MS));
       } else {
         run.runtimeAdapter.cancelTurn();
       }

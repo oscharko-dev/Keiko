@@ -906,6 +906,8 @@ function messageUpdated(
     return undefined;
   if (data.info.role === "user") return userMessage(data.info) ? "observation" : undefined;
   if (!assistantMessage(data.info)) return undefined;
+  if (isRecord(data.info.error) && data.info.error.name === "MessageAbortedError")
+    return "terminal";
   if (data.info.error !== undefined) return "terminal-failure";
   const completed = isRecord(data.info.time) && nonNegativeNumber(data.info.time.completed);
   if (!completed) return "observation";
