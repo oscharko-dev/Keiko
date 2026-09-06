@@ -697,7 +697,7 @@ function WorkbenchContent({
       data-state={state.run.value?.state ?? "idle"}
     >
       <h2 className="sr-only">{workbenchLabel}</h2>
-      <header className={styles.header}>
+      <header className={styles["cmp-workbench-header"]}>
         <SessionContextBar
           state={state}
           workspace={sessionWorkspaceProjection(state, runWorkspace)}

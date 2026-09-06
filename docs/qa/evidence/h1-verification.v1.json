@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "status": "verified",
   "verificationKind": "deterministic-production-managed",
-  "sourceHead": "8b3140b08c20c6347d6c2ee938228f9c37aa4439",
-  "ownedSourceDigest": "dfbee5d513652c4ba2a06c2389f4f44b715f43ef149b0cd587139afb3bd6eec2",
-  "command": "npx vitest run packages/keiko-workspace/src/codingRepositorySearch.test.ts packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.test.ts packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts --reporter=json --outputFile=/tmp/keiko-3384-audit/h1-verification-8b3140b0-results.json --maxWorkers=2",
+  "sourceHead": "5be376e60c73033d00f8495a81176cc70bbee97d",
+  "ownedSourceDigest": "5cffa714ed4ce630b4e85429b0a0d5988371dda9ebba8901b738f94b15aca240",
+  "command": "npx vitest run packages/keiko-workspace/src/codingRepositorySearch.test.ts packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.test.ts packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts --reporter=json --outputFile=/tmp/keiko-3384-audit/h1-verification-5be376e6-results.json --maxWorkers=2",
   "testFiles": 3,
   "testCount": 83,
   "result": "passed"

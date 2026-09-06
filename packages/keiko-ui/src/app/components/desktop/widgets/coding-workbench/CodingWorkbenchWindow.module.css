@@ -59,11 +59,11 @@
   color: var(--feedback-danger);
 }
 
-.header {
+.cmp-workbench-header {
   min-width: 0;
 }
 
-.trustNotice {
+.cmp-trust-notice {
   display: flex;
   min-width: 0;
   align-items: center;
@@ -74,7 +74,7 @@
   background: var(--surface-inset);
 }
 
-.trustNoticeText {
+.cmp-trust-notice-text {
   min-width: 0;
   flex: 1 1 24rem;
   color: var(--text-secondary);
