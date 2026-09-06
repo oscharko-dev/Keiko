@@ -151,7 +151,7 @@ function armWallTimeDeadline(
 ): () => void {
   let cleared = false;
   const deadlineController = new AbortController();
-  void clock
+  clock
     .sleep(ctx.limits.maxWallTimeMs, deadlineController.signal)
     .then(() => {
       // isSettled() bails out one tick earlier than `cleared` (set only once clearDeadline, a
