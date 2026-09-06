@@ -5,6 +5,25 @@ postmerge verification, completed issue closure and branch cleanup. Agents and t
 checkpoint/review heartbeat are running. The September 5 record below is historical; it does
 not describe current agent state or final qualification.
 
+## Active audit checkpoint — September 6
+
+The branch is progressing through verified repair checkpoints. The complete final tree is not
+qualified yet; the historical table below must not be read as a current green bar.
+
+- Native and Linux Git fixture suites: 58 tests passed with stronger deterministic setup.
+- Shared monetary admission: direct, streaming, retry and durable-store regression suites pass;
+  direct capability probes are still being connected before any paid qualification attempt.
+- UI coverage: 447 files, 8,006 tests passed, one skipped; lines 92.93%, branches 82.60%.
+- Current-source visual/accessibility receipts for #3389, #3400 and #3401 are checked in.
+- Authoritative Linux editor bundle verification passed against the existing committed receipt.
+- Authority/optional-tool refinements: 259 tests and scoped lint passed. Consent waiting logging:
+  114 tests, scoped lint and server typecheck passed after the public-snapshot type correction.
+- The real production-composition positive journey still needs completed retained-review proof.
+  Real-model journeys, native performance, full final gates, exact-head PR checks, postmerge `dev`
+  checks and completed issue closure remain outstanding. No paid model call has been launched.
+- H1's active duplicate inventory is zero. Independent producer checkpoint and final integration
+  provenance must still be completed; a null postmerge identity is not evidence of a merge.
+
 ## Historical pause checkpoint — September 5
 
 The owner requested an immediate checkpoint and stop on 2026-09-05 at 18:23 UTC.
