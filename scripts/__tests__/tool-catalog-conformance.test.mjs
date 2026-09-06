@@ -403,6 +403,24 @@ describe("compiler measurements reuse the existing sample and percentile convent
     expect(
       evaluateToolCatalogPerformanceEvidence(environmentDrift, calibration, budget).defects,
     ).toContain("catalog performance environment differs from calibration");
+    const substitutionRaw = structuredClone(calibrationRaw);
+    substitutionRaw.cases[`synthetic-${String(TOOL_CATALOG_SYNTHETIC_TOOL_COUNT)}-tool`] =
+      structuredClone(substitutionRaw.cases["legacy-native-6-tool"]);
+    const substitutedMeasurement = buildToolCatalogPerformanceDocument(substitutionRaw, {
+      role: "measurement",
+      measuredAtIso: "2026-09-06T00:01:00.000Z",
+      measurementHarnessSha256: "a".repeat(64),
+      calibrationSha256: calibration.documentSha256,
+      environment,
+    });
+    expect(
+      evaluateToolCatalogPerformanceEvidence(substitutedMeasurement, calibration, budget),
+    ).toEqual({
+      defects: [
+        `synthetic-${String(TOOL_CATALOG_SYNTHETIC_TOOL_COUNT)}-tool case identity differs from calibration`,
+      ],
+      verdicts: [],
+    });
   }, 45_000);
 });
 describe("#3415 catalog-semantic negative-fixture matrix", () => {

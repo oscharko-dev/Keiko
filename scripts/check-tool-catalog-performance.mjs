@@ -523,7 +523,22 @@ function performancePairDefects(measurement, calibration, budget) {
     ...(Date.parse(measurement.measuredAtIso) < Date.parse(calibration.measuredAtIso)
       ? ["catalog performance measurement predates calibration"]
       : []),
+    ...performanceCaseIdentityDefects(measurement, calibration),
   ];
+}
+
+function performanceCaseIdentityDefects(measurement, calibration) {
+  return expectedPerformanceCaseIds().flatMap((id) => {
+    const measured = measurement.cases[id];
+    const calibrated = calibration.cases[id];
+    const measuredSample = measured.samples[0];
+    const calibratedSample = calibrated.samples[0];
+    const matches =
+      measured.toolCount === calibrated.toolCount &&
+      measuredSample.catalogRevision === calibratedSample.catalogRevision &&
+      measuredSample.projectionDigest === calibratedSample.projectionDigest;
+    return matches ? [] : [`${id} case identity differs from calibration`];
+  });
 }
 
 function performanceVerdicts(measurement, budget) {
