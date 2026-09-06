@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import type {
+  CodingWorkbenchSidecarGatewayRunMetadata,
   CodingWorkbenchRuntimeEvidenceClass,
   CodingWorkbenchRuntimeUnavailableReason,
 } from "@oscharko-dev/keiko-contracts";
@@ -47,6 +48,8 @@ export interface ProductionOpenCodeActivationInput {
     OpenCodeGatewayReadinessRegistry,
     "waitForObservedRequest" | "verifyObserved" | "clear"
   >;
+  readonly resolveGatewayRunMetadata?:
+    ((modelId: string) => CodingWorkbenchSidecarGatewayRunMetadata | undefined) | undefined;
   /** Explicit test/composition override; packaged production constructs its own verified port. */
   readonly secureWorkspaceTextRead?: SecureWorkspaceTextReadPort | undefined;
   /** Live active-task-workspace root resolution for the dev-lane secure-read port. */
@@ -120,6 +123,9 @@ export function resolveProductionOpenCodeActivation(
         portable: runtime.portable,
         runtimeStateRoot: input.runtimeStateDir,
         gatewayUrl: endpoints.gatewayUrl,
+        resolveGatewayRunMetadata:
+          input.resolveGatewayRunMetadata ??
+          ((): CodingWorkbenchSidecarGatewayRunMetadata | undefined => undefined),
         // ADR-0043 D11-D14 (#3390): the SAME single attested loopback origin as the model
         // gateway above, never a second listener's own port.
         toolFacadeUrl: endpoints.toolFacadeUrl,

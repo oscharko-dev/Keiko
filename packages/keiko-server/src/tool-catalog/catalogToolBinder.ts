@@ -443,8 +443,13 @@ function buildCatalogOfferForTool(state: CatalogBindingState, toolRef: ToolRef):
   requireBinding(handler !== undefined);
   const readiness = catalogHandlerReadiness(handler);
   const ready = readiness === "ready";
-  const toolRefs =
-    ready && canOffer(state, handler, context, offerId) ? [handler.descriptor.toolRef] : [];
+  // This targeted offer is used only to reify an already parsed, catalog-known facade request at
+  // dispatch time. Keep the ready handler in that internal offer so the canonical invocation path
+  // can settle a current authority or budget refusal as `denied` with `effectStarted: false`.
+  // The model-facing whole-catalog offer above still calls `canOffer`, so it never advertises an
+  // action that current authority or budget does not admit. An unavailable handler remains absent
+  // here and therefore retains the canonical `unoffered-tool` result.
+  const toolRefs = ready ? [handler.descriptor.toolRef] : [];
   const binding: BoundToolSet = deepFreeze({
     catalogRevision: state.projection.catalogRevision,
     profile: state.projection.profile,

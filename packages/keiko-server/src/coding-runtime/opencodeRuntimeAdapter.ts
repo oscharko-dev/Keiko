@@ -6,7 +6,10 @@ import { processServerLogSink } from "../process-log-sink.js";
 
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 
-import { createFixedOpenCodeConfig } from "./opencodeLaunchProfile.js";
+import {
+  createFixedOpenCodeConfig,
+  type OpenCodeContextGeometry,
+} from "./opencodeLaunchProfile.js";
 import {
   createOpenCodeReconciler,
   OPEN_CODE_EVENT_KINDS,
@@ -72,6 +75,7 @@ export interface GeneratedOpenCodeBundle {
     readonly model: string;
     readonly agent: Readonly<Record<string, { readonly prompt: string }>>;
     readonly provider: Readonly<Record<string, unknown>>;
+    readonly compaction: Readonly<Record<string, boolean | number>>;
     readonly tools: Readonly<Record<string, boolean>>;
     readonly permission: Readonly<Record<string, string>>;
   };
@@ -81,6 +85,7 @@ export interface GeneratedOpenCodeBundle {
 export interface OpenCodeRuntimeAdapterPorts {
   readonly activityLog?: ServerLogSink | undefined;
   readonly correlationId?: string | undefined;
+  readonly contextGeometry?: OpenCodeContextGeometry | undefined;
   readonly readiness: {
     readonly verifiedTarget: { readonly executable: string; readonly attestationDigest: string };
     readonly configDigest: string;
@@ -574,7 +579,20 @@ function recordReadinessPhase(
     correlationId: correlationIdOrUnknown(ports.correlationId),
     extra: {
       phase,
-      ...(phase === "config-materialization" ? { dependencyInstallPolicy: "offline" } : {}),
+      ...(phase === "config-materialization"
+        ? {
+            dependencyInstallPolicy: "offline",
+            ...(ports.contextGeometry === undefined
+              ? {}
+              : {
+                  contextWindowTokens: ports.contextGeometry.contextWindowTokens,
+                  maxInputTokens: ports.contextGeometry.maxInputTokens,
+                  maxOutputTokens: ports.contextGeometry.maxOutputTokens,
+                  compactionAuto: true,
+                  compactionPrune: true,
+                }),
+          }
+        : {}),
     },
   });
   return phase;
@@ -677,7 +695,8 @@ async function applyHistoryPlan(
   replaceMap(state.recent, planned.recent);
   replaceMap(state.observedIds, planned.observedIds);
   for (const signal of activity) {
-    if (ports.safeActivitySink?.ingest(signal) === false) ports.safeActivitySink.recordDrops(1);
+    // The sink owns rejection accounting and records the projection-specific closed reason.
+    ports.safeActivitySink?.ingest(signal);
   }
 }
 
@@ -900,7 +919,14 @@ function runCleanup(safety: OpenCodeRuntimeAdapterPorts["safety"]): void {
 
 export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
   return {
-    config: createFixedOpenCodeConfig(),
+    // The no-argument bundle is used only by the adapter's readiness shape and hermetic tool-source
+    // fixtures. Production materialization passes the per-run config built from admitted gateway
+    // geometry in opencodeRuntimeComposition.ts.
+    config: createFixedOpenCodeConfig({
+      contextWindowTokens: 32_768,
+      maxInputTokens: 28_672,
+      maxOutputTokens: 4_096,
+    }),
     toolSources: Object.fromEntries(
       OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name, action, arguments: schemas }) => [
         name,

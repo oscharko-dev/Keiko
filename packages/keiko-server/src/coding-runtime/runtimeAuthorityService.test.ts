@@ -362,6 +362,7 @@ describe("CodingRuntimeAuthorityService", () => {
         actionClasses: trusted.actionClasses,
         connectorScopes: trusted.connectorScopes,
         networkPolicyMode: "deny-all",
+        maxPromptTokens: trusted.budget.maxPromptTokens,
       },
     });
   });

@@ -36,6 +36,23 @@ import {
 } from "./launchFailure.js";
 
 const RUNTIME_TTL_MS = 30 * 60_000;
+const DEFAULT_RUNTIME_PROMPT_TOKENS = 200_000;
+const MAX_RUNTIME_PROMPT_TOKENS = 2_000_000;
+
+function checkedRuntimePromptTokenBudget(value: number): number {
+  if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_RUNTIME_PROMPT_TOKENS) {
+    throw new RangeError("Coding runtime prompt token budget is outside the supported range.");
+  }
+  return value;
+}
+
+export function configuredRuntimePromptTokenBudget(value: string | undefined): number {
+  if (value === undefined) return DEFAULT_RUNTIME_PROMPT_TOKENS;
+  if (!/^[1-9][0-9]*$/u.test(value)) {
+    throw new RangeError("Coding runtime prompt token budget must be a positive integer.");
+  }
+  return checkedRuntimePromptTokenBudget(Number(value));
+}
 
 type LaunchResolutionInput = Parameters<CodingRuntimeLaunchResolver["resolve"]>[0];
 
@@ -45,6 +62,8 @@ export interface ProductionWorkspaceAuthorityInput {
   readonly workspaceLifecycle: Pick<WorkspaceLifecycleService, "getActive">;
   readonly managedTaskWorkspaceRoot: string;
   readonly deploymentCeiling: CodingWorkbenchMode;
+  /** Trusted deployment ceiling for a newly minted run; never changes an existing envelope. */
+  readonly promptTokenBudget?: number | undefined;
   readonly readWorkspaceHead: (workspaceRoot: string, repositoryRoot: string) => string | undefined;
   readonly now?: (() => Date) | undefined;
   // When the deployment activates read-only public research (#2387), the base envelope admits the
@@ -163,7 +182,9 @@ function contextFromActive(
     budget: {
       maxRuntimeMs: RUNTIME_TTL_MS,
       maxToolCalls: 256,
-      maxPromptTokens: 200_000,
+      maxPromptTokens: checkedRuntimePromptTokenBudget(
+        input.promptTokenBudget ?? DEFAULT_RUNTIME_PROMPT_TOKENS,
+      ),
       maxPatchBytes: 262_144,
     },
     expiresAt: new Date(now.getTime() + RUNTIME_TTL_MS).toISOString(),

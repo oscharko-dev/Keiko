@@ -547,6 +547,7 @@ export class CodingRuntimeAuthorityService {
         actionClasses: envelope.authority.actionClasses,
         connectorScopes: envelope.authority.connectorScopes,
         networkPolicyMode: envelope.authority.networkPolicy.mode,
+        maxPromptTokens: envelope.authority.budget.maxPromptTokens,
       },
     });
     return {

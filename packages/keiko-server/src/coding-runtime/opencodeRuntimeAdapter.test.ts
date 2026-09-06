@@ -102,6 +102,11 @@ interface OpenCodeRuntimeAdapterModule {
 interface OpenCodeRuntimeAdapterPorts {
   readonly activityLog?: ServerLogSink;
   readonly correlationId?: string;
+  readonly contextGeometry?: {
+    readonly contextWindowTokens: number;
+    readonly maxInputTokens: number;
+    readonly maxOutputTokens: number;
+  };
   readonly readiness: {
     readonly verifiedTarget: { readonly executable: string; readonly attestationDigest: string };
     readonly configDigest: string;
@@ -150,6 +155,7 @@ interface GeneratedOpenCodeBundle {
     readonly model: string;
     readonly agent: Readonly<Record<string, { readonly prompt: string }>>;
     readonly provider: Readonly<Record<string, unknown>>;
+    readonly compaction: Readonly<Record<string, boolean | number>>;
     readonly tools: Readonly<Record<string, boolean>>;
     readonly permission: Readonly<Record<string, string>>;
   };
@@ -226,6 +232,11 @@ function readinessPorts(failAt?: ReadinessPhase): {
   const failed = (phase: ReadinessPhase): boolean => failAt !== phase;
   return {
     ports: {
+      contextGeometry: {
+        contextWindowTokens: 32_768,
+        maxInputTokens: 28_672,
+        maxOutputTokens: 4_096,
+      },
       readiness: {
         verifiedTarget: { executable: "/verified/opencode", attestationDigest: DIGEST },
         configDigest: DIGEST,
@@ -316,7 +327,15 @@ describe("OpenCode runtime adapter readiness", () => {
         expect.objectContaining({
           op: "coding-runtime.readiness.phase",
           correlationId: "run-pending-handshake",
-          extra: { phase: "config-materialization", dependencyInstallPolicy: "offline" },
+          extra: {
+            phase: "config-materialization",
+            dependencyInstallPolicy: "offline",
+            contextWindowTokens: 32_768,
+            maxInputTokens: 28_672,
+            maxOutputTokens: 4_096,
+            compactionAuto: true,
+            compactionPrune: true,
+          },
         }),
       );
       expect(JSON.stringify(events)).not.toContain(SECRET);
@@ -384,9 +403,10 @@ describe("OpenCode runtime adapter readiness", () => {
     if (bundle === undefined) throw new Error("expected generated config bundle");
     expect(bundle.config.snapshot).toBe(false);
     expect(bundle.config.model).toBe("keiko-runtime/coding");
-    expect(Object.keys(bundle.config.agent)).toEqual(["build"]);
+    expect(Object.keys(bundle.config.agent)).toEqual(["build", "compaction"]);
     expect(bundle.config.agent.build?.prompt).toContain("keiko_workspace_read");
     expect(bundle.config.agent.build?.prompt).toContain("must never be called");
+    expect(bundle.config.agent.compaction?.prompt).toContain("acceptance criteria");
     const provider = record(bundle.config.provider["keiko-runtime"]);
     const options = record(provider.options);
     const headers = record(options.headers);
@@ -397,9 +417,10 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(record(record(provider.models).coding)).toEqual({
       name: "Keiko Governed Coding",
       tool_call: true,
-      limit: { context: 32_768, output: 4_096 },
+      limit: { context: 32_768, input: 28_672, output: 4_096 },
       cost: { input: 0, output: 0 },
     });
+    expect(bundle.config.compaction).toMatchObject({ auto: true, prune: true, tail_turns: 2 });
     expect(options.baseURL).toBe("{env:KEIKO_MODEL_GATEWAY_URL}");
     expect(options.chunkTimeout).toBe(30 * 60_000);
     expect(Object.keys(options)).toEqual(["baseURL", "chunkTimeout", "headers"]);
@@ -766,6 +787,30 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(harness.ports.readiness.clearSafeActivity).toHaveBeenCalledTimes(2);
     await expect(adapter.reconcile()).resolves.toMatchObject({ ok: true });
     expect(harness.ports.readiness.clearSafeActivity).toHaveBeenCalledTimes(3);
+    await adapter.close();
+  });
+
+  it("does not double-count a safe-activity rejection already recorded by the projection", async () => {
+    const harness = readinessPorts();
+    const signal: CodingSafeActivitySignal = {
+      kind: "text",
+      messageId: "msg_missing",
+      text: "Visible",
+      occurredAt: "2026-07-18T17:00:00.001Z",
+    };
+    harness.ports.readiness.history = (): Promise<readonly GovernedEvent[]> =>
+      Promise.resolve([event(0)]);
+    harness.ports.readiness.takeSafeActivity = (): CodingSafeActivitySignal => signal;
+    const recordDrops = vi.fn();
+    harness.ports.safeActivitySink = {
+      ingest: vi.fn(() => false),
+      recordDrops,
+    };
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
+
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    expect(harness.ports.safeActivitySink.ingest).toHaveBeenCalledOnce();
+    expect(recordDrops).not.toHaveBeenCalled();
     await adapter.close();
   });
 

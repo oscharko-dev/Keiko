@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildOpenCodeLaunchProfile,
   createFixedOpenCodeConfig,
+  OPENCODE_GOVERNED_COMPACTION_PROMPT,
   OPENCODE_GOVERNED_SYSTEM_PROMPT,
+  resolveOpenCodeContextGeometry,
   type OpenCodeLaunchProfileInput,
 } from "./opencodeLaunchProfile.js";
 import {
@@ -11,6 +13,13 @@ import {
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
   OPENCODE_PINNED_BUILT_IN_TOOLS,
 } from "./opencodeToolSchemas.js";
+
+const CONTEXT_GEOMETRY = {
+  contextWindowTokens: 65_536,
+  maxInputTokens: 61_440,
+  maxOutputTokens: 4_096,
+} as const;
+const CONTEXT_INPUT = { contextGeometry: CONTEXT_GEOMETRY } as const;
 
 function record(value: unknown): Readonly<Record<string, unknown>> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -49,10 +58,18 @@ function finalPermissionAction(
 }
 
 describe("OpenCode launch profile", () => {
+  it("distinguishes ready delivery proposals from proposals requiring human approval", () => {
+    expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("approval-required");
+    expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("ready");
+    expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).not.toContain(
+      "A proposal needs a human approval through the operator's own approval channel before it can proceed.",
+    );
+  });
   it("disables upstream snapshots with a deterministic server-owned config digest", () => {
     const input = {
       executable: "/managed/opencode",
       stateRoot: "/private/run",
+      ...CONTEXT_INPUT,
       randomBytes: (): Buffer => Buffer.alloc(32, 7),
       snapshot: true,
     } satisfies OpenCodeLaunchProfileInput & { readonly snapshot: boolean };
@@ -74,6 +91,7 @@ describe("OpenCode launch profile", () => {
     const profile = buildOpenCodeLaunchProfile({
       executable: "/managed/opencode",
       stateRoot: "/private/run",
+      ...CONTEXT_INPUT,
       randomBytes: () => Buffer.alloc(32, 7),
     });
     if (!profile.ok) throw new Error("expected fixed managed launch profile");
@@ -85,8 +103,11 @@ describe("OpenCode launch profile", () => {
       readonly permission: Readonly<Record<string, string>>;
     };
     expect(config.model).toBe("keiko-runtime/coding");
-    expect(Object.keys(config.agent)).toEqual(["build"]);
+    expect(Object.keys(config.agent)).toEqual(["build", "compaction"]);
     expect(record(config.agent.build)).toEqual({ prompt: OPENCODE_GOVERNED_SYSTEM_PROMPT });
+    expect(record(config.agent.compaction)).toEqual({
+      prompt: OPENCODE_GOVERNED_COMPACTION_PROMPT,
+    });
     const provider = record(config.provider["keiko-runtime"]);
     expect(provider).toMatchObject({
       name: "Keiko Governed Coding Gateway",
@@ -96,7 +117,7 @@ describe("OpenCode launch profile", () => {
     expect(record(record(provider.models).coding)).toEqual({
       name: "Keiko Governed Coding",
       tool_call: true,
-      limit: { context: 32_768, output: 4_096 },
+      limit: { context: 65_536, input: 61_440, output: 4_096 },
       cost: { input: 0, output: 0 },
     });
     const options = record(provider.options);
@@ -150,6 +171,7 @@ describe("OpenCode launch profile", () => {
     const profile = buildOpenCodeLaunchProfile({
       executable: "/managed/opencode",
       stateRoot: "/private/run",
+      ...CONTEXT_INPUT,
       randomBytes: () => Buffer.alloc(32, 7),
     });
     expect(profile.ok).toBe(true);
@@ -179,6 +201,7 @@ describe("OpenCode launch profile", () => {
     const profile = buildOpenCodeLaunchProfile({
       executable: "/managed/opencode",
       stateRoot: "/private/run",
+      ...CONTEXT_INPUT,
       randomBytes: () => Buffer.alloc(32, 7),
     });
     if (!profile.ok) throw new Error("expected fixed managed launch profile");
@@ -202,7 +225,10 @@ describe("OpenCode launch profile", () => {
   // permission[name]="deny"), not merely denied when called -- static catalog membership alone
   // must never make it appear ready.
   it("denies an unavailable optional tool in both tools and permission (#3414-AC9)", () => {
-    const config = createFixedOpenCodeConfig(new Set(["keiko_research_fetch", "keiko_skill"]));
+    const config = createFixedOpenCodeConfig(
+      CONTEXT_GEOMETRY,
+      new Set(["keiko_research_fetch", "keiko_skill"]),
+    );
     expect(config.tools.keiko_research_fetch).toBe(false);
     expect(config.tools.keiko_skill).toBe(false);
     expect(config.permission.keiko_research_fetch).toBe("deny");
@@ -216,8 +242,8 @@ describe("OpenCode launch profile", () => {
   });
 
   it("leaves every optional tool available, and the config byte-identical, when omitted", () => {
-    const withoutInput = JSON.stringify(createFixedOpenCodeConfig());
-    const withEmptySet = JSON.stringify(createFixedOpenCodeConfig(new Set()));
+    const withoutInput = JSON.stringify(createFixedOpenCodeConfig(CONTEXT_GEOMETRY));
+    const withEmptySet = JSON.stringify(createFixedOpenCodeConfig(CONTEXT_GEOMETRY, new Set()));
     expect(withoutInput).toBe(withEmptySet);
     const parsed = JSON.parse(withoutInput) as {
       readonly tools: Readonly<Record<string, boolean>>;
@@ -231,6 +257,7 @@ describe("OpenCode launch profile", () => {
     const profile = buildOpenCodeLaunchProfile({
       executable: "/managed/opencode",
       stateRoot: "/private/run",
+      ...CONTEXT_INPUT,
       randomBytes: () => Buffer.alloc(32, 7),
       unavailableOptionalTools: new Set(["keiko_child_agent"]),
     });
@@ -244,7 +271,9 @@ describe("OpenCode launch profile", () => {
   });
 
   it("fails closed for non-absolute executable or insufficient secret entropy", () => {
-    expect(buildOpenCodeLaunchProfile({ executable: "opencode", stateRoot: "/x" })).toEqual({
+    expect(
+      buildOpenCodeLaunchProfile({ executable: "opencode", stateRoot: "/x", ...CONTEXT_INPUT }),
+    ).toEqual({
       ok: false,
       reason: "invalid-launch-input",
     });
@@ -252,8 +281,51 @@ describe("OpenCode launch profile", () => {
       buildOpenCodeLaunchProfile({
         executable: "/x",
         stateRoot: "/x",
+        ...CONTEXT_INPUT,
         randomBytes: () => Buffer.alloc(31),
       }),
     ).toEqual({ ok: false, reason: "secret-generation-failed" });
+  });
+
+  it("derives model-specific limits below the raw JSON transport ceiling", () => {
+    const smaller = resolveOpenCodeContextGeometry({
+      maxPromptTokens: 64_000,
+      maxOutputTokens: 4_000,
+      maxInputMessages: 512,
+      maxRequestBytes: 1_048_576,
+    });
+    const larger = resolveOpenCodeContextGeometry({
+      maxPromptTokens: 1_050_000,
+      maxOutputTokens: 32_000,
+      maxInputMessages: 512,
+      maxRequestBytes: 1_048_576,
+    });
+
+    expect(smaller).toEqual({
+      contextWindowTokens: 44_960,
+      maxInputTokens: 40_960,
+      maxOutputTokens: 4_000,
+    });
+    expect(larger).toEqual({
+      contextWindowTokens: 72_960,
+      maxInputTokens: 40_960,
+      maxOutputTokens: 32_000,
+    });
+    expect(40_960 * 24 + 65_536).toBe(1_048_576);
+  });
+
+  it("fails closed when admitted model or transport geometry is unknown or contradictory", () => {
+    expect(buildOpenCodeLaunchProfile({ executable: "/x", stateRoot: "/x" })).toEqual({
+      ok: false,
+      reason: "invalid-launch-input",
+    });
+    expect(
+      resolveOpenCodeContextGeometry({
+        maxPromptTokens: 4_096,
+        maxOutputTokens: 4_096,
+        maxInputMessages: 512,
+        maxRequestBytes: 1_048_576,
+      }),
+    ).toBeUndefined();
   });
 });

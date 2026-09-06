@@ -6,6 +6,7 @@
 // pass unchanged; the handlers degrade gracefully (no config → 400 NO_MODEL on a run, null config on
 // the inspector; no store → an empty evidence list).
 
+import { configuredRuntimePromptTokenBudget } from "./coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import {
   createDefaultChatCapability,
   findConfiguredCapability,
@@ -4720,6 +4721,12 @@ function resolveProductionRuntimePorts(
     runtimeStateDir: dirname(args.resolvedUiDbPath),
     runtimeEvidence,
     gatewayReadiness: readiness,
+    resolveGatewayRunMetadata: (modelId) => {
+      const result = resolveCodingSafeSidecarGatewayProfile(args.runtimeConfig.current(), {
+        modelId,
+      });
+      return result.status === "available" ? result.runMetadata : undefined;
+    },
     activityLog: processServerLogSink(),
     // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) yields no root: the
     // activation stays unavailable rather than crashing the resolution or trusting an unproven tree.
@@ -4778,6 +4785,9 @@ function runtimeWorkspaceAuthority(
     workspaceLifecycle,
     managedTaskWorkspaceRoot,
     deploymentCeiling,
+    promptTokenBudget: configuredRuntimePromptTokenBudget(
+      args.options.env.KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS,
+    ),
     readWorkspaceHead: readProductionWorkspaceHead,
     verifiedCommitResult: (runId) =>
       args.bundle.codingRuntimeSnapshotStore?.getLastSuccessfulVerifiedCommit?.(runId),

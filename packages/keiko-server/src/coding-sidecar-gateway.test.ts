@@ -3143,7 +3143,7 @@ describe("coding-sidecar gateway", () => {
 
     const result = await handleCodingSidecarGatewayChatCompletions(
       routeContext({
-        messages: Array.from({ length: 65 }, (_, index) => ({
+        messages: Array.from({ length: 513 }, (_, index) => ({
           role: "user",
           content: `message-${String(index)}`,
         })),
@@ -3156,7 +3156,7 @@ describe("coding-sidecar gateway", () => {
       body: {
         error: {
           code: "BAD_REQUEST",
-          message: "Request body messages exceed profile maxInputMessages (64).",
+          message: "Request body messages exceed profile maxInputMessages (512).",
         },
       },
     });

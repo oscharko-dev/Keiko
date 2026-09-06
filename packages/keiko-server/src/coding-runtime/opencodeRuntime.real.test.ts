@@ -941,6 +941,11 @@ describe("[functional-only] real staged OpenCode runtime", () => {
       const runtime = createOpenCodeRuntimeComposition({
         portable,
         stateBaseRoot,
+        contextGeometry: {
+          contextWindowTokens: 65_536,
+          maxInputTokens: 61_440,
+          maxOutputTokens: 4_096,
+        },
         capabilities: {
           modelGatewayCapability: MODEL_CAPABILITY,
           toolFacadeCapability: TOOL_CAPABILITY,

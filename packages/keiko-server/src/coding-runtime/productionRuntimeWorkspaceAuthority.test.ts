@@ -12,6 +12,7 @@ import {
   productionWorkspaceMatches,
   type ProductionWorkspaceAuthorityInput,
   resolveProductionRuntimeContext,
+  configuredRuntimePromptTokenBudget,
 } from "./productionRuntimeWorkspaceAuthority.js";
 import {
   CodingRuntimeLaunchResolutionError,
@@ -48,6 +49,27 @@ function expectLaunchResolutionFailure(
 }
 
 describe("production runtime workspace authority", () => {
+  it("binds an explicit deployment prompt budget only into newly resolved authority", () => {
+    const fixture = liveFixture();
+    const prior = resolveProductionRuntimeContext(fixture.input, fixture.request);
+    const next = resolveProductionRuntimeContext(
+      { ...fixture.input, promptTokenBudget: 2_000_000 },
+      { ...fixture.request, runId: "run-next" },
+    );
+    expect(prior.budget.maxPromptTokens).toBe(200_000);
+    expect(next.budget.maxPromptTokens).toBe(2_000_000);
+    expect(next.budget.maxToolCalls).toBe(prior.budget.maxToolCalls);
+    expect(next.budget.maxRuntimeMs).toBe(prior.budget.maxRuntimeMs);
+    expect(next.budget.maxPatchBytes).toBe(prior.budget.maxPatchBytes);
+  });
+
+  it("validates the deployment prompt budget without an invalid-value fallback", () => {
+    expect(configuredRuntimePromptTokenBudget(undefined)).toBe(200_000);
+    expect(configuredRuntimePromptTokenBudget("2000000")).toBe(2_000_000);
+    for (const invalid of ["", "0", "-1", "1.5", "NaN", "Infinity", "2000001", "1e6"]) {
+      expect(() => configuredRuntimePromptTokenBudget(invalid)).toThrow(RangeError);
+    }
+  });
   it("binds only the healthy active managed worktree and fails on live HEAD drift", () => {
     const managed = realpathSync(mkdtempSync(join(tmpdir(), "keiko-runtime-managed-")));
     roots.push(managed);

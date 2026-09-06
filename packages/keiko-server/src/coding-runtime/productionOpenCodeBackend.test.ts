@@ -48,6 +48,38 @@ describe("production OpenCode backend composition", () => {
     }
   });
 
+  it("fails closed when the selected model has no admitted gateway geometry", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-production-opencode-metadata-"));
+    try {
+      const input = backendInput(root, windowsDevLaneRuntime(root));
+      const backend = createProductionOpenCodeBackend({
+        ...input,
+        resolveGatewayRunMetadata: () => undefined,
+      });
+
+      expect(() => backend.createRun(runInput(root))).toThrow("runtime-unqualified");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("resolves gateway geometry for the exact model bound to the run", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-production-opencode-model-"));
+    try {
+      const input = backendInput(root, windowsDevLaneRuntime(root));
+      const resolveGatewayRunMetadata = vi.fn((modelId: string) =>
+        input.resolveGatewayRunMetadata?.(modelId),
+      );
+      createProductionOpenCodeBackend({ ...input, resolveGatewayRunMetadata }).createRun(
+        runInput(root),
+      );
+
+      expect(resolveGatewayRunMetadata).toHaveBeenCalledExactlyOnceWith("profile-windows");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("composes a Windows dev-lane run through the native Job Object supervisor", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-production-opencode-windows-backend-"));
     try {
@@ -208,6 +240,12 @@ function backendInput(
     portable,
     runtimeStateRoot: root,
     gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
+    resolveGatewayRunMetadata: () => ({
+      maxPromptTokens: 128_000,
+      maxOutputTokens: 4_096,
+      maxInputMessages: 512,
+      maxRequestBytes: 1_048_576,
+    }),
     // ADR-0043 D11-D14 (#3390): the SAME single attested loopback origin as `gatewayUrl` above.
     toolFacadeUrl: "http://127.0.0.1:1983/api/coding-sidecar/tool",
     runtimeEvidence: { observe: (): void => undefined },

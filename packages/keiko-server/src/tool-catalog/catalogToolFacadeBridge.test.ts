@@ -190,6 +190,25 @@ describe("canonical catalog facade bridge", () => {
     });
   });
 
+  it("settles a known operation as denied when authority was revoked after its model offer", async () => {
+    const run = vi.fn(() => Promise.resolve({ status: "completed" as const, evidence: [] }));
+    const { bridge, log } = createBridge({
+      previewAuthority: () => ({ ok: false, reason: "revoked" }),
+    });
+
+    await expect(bridge.execute(discoverRequest, facadeInput(), run)).resolves.toEqual({
+      status: "denied",
+      evidence: [],
+    });
+
+    expect(run).not.toHaveBeenCalled();
+    expect(log.events.at(-1)?.extra).toMatchObject({
+      status: "denied",
+      reason: "hard-denial",
+      effectStarted: false,
+    });
+  });
+
   it("fails an optional handler closed when live availability disappears after its offer", async () => {
     let unavailable = new Set<OpenCodeOptionalToolName>();
     const { bridge, log } = createBridge({

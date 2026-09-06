@@ -259,6 +259,11 @@ interface OpenCodeRuntimeCompositionModule {
       readonly target: "macos-arm64";
     };
     readonly stateBaseRoot: string;
+    readonly contextGeometry: {
+      readonly contextWindowTokens: number;
+      readonly maxInputTokens: number;
+      readonly maxOutputTokens: number;
+    };
     readonly capabilities: {
       readonly modelGatewayCapability: string;
       readonly toolFacadeCapability: string;
@@ -673,6 +678,11 @@ async function startBridgeFixture(
   const runtime = (await compositionModule()).createOpenCodeRuntimeComposition({
     portable: { verification: portable.verification, resourceRoot, target: "macos-arm64" },
     stateBaseRoot: join(root, "state"),
+    contextGeometry: {
+      contextWindowTokens: 65_536,
+      maxInputTokens: 61_440,
+      maxOutputTokens: 4_096,
+    },
     capabilities: {
       modelGatewayCapability: MODEL_CAPABILITY,
       toolFacadeCapability: TOOL_CAPABILITY,
@@ -1012,6 +1022,11 @@ describe("unmounted OpenCode runtime composition", () => {
     const runtime = (await compositionModule()).createOpenCodeRuntimeComposition({
       portable: { verification: portable.verification, resourceRoot, target: "macos-arm64" },
       stateBaseRoot,
+      contextGeometry: {
+        contextWindowTokens: 65_536,
+        maxInputTokens: 61_440,
+        maxOutputTokens: 4_096,
+      },
       capabilities: {
         modelGatewayCapability: MODEL_CAPABILITY,
         toolFacadeCapability: TOOL_CAPABILITY,
@@ -1137,6 +1152,23 @@ describe("unmounted OpenCode runtime composition", () => {
     expect(files).not.toContain(FIXED_SESSION_TITLE);
     expect(JSON.stringify(governedEvents)).not.toContain(FIXED_SESSION_TITLE);
     expect(files).toContain("Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}");
+    const materializedConfig = JSON.parse(
+      readFileSync(join(runRoot, "config", "opencode", "opencode.json"), "utf8"),
+    ) as {
+      readonly provider: Readonly<Record<string, unknown>>;
+      readonly compaction: Readonly<Record<string, unknown>>;
+    };
+    const materializedProvider = materializedConfig.provider["keiko-runtime"] as {
+      readonly models: Readonly<
+        Record<string, { readonly limit: Readonly<Record<string, number>> }>
+      >;
+    };
+    expect(materializedProvider.models.coding?.limit).toEqual({
+      context: 65_536,
+      input: 61_440,
+      output: 4_096,
+    });
+    expect(materializedConfig.compaction).toMatchObject({ auto: true, prune: true, tail_turns: 2 });
     const paths = fetchMock.mock.calls.map(([url]) => requestPath(url));
     expect(paths.indexOf("/session")).toBeLessThan(paths.lastIndexOf("/session"));
     expect(paths.indexOf("/sync/history")).toBeGreaterThan(paths.indexOf("/session"));

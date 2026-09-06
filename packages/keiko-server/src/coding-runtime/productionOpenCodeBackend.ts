@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
 import type {
+  CodingWorkbenchSidecarGatewayRunMetadata,
   CodingWorkbenchRuntimeEvent,
   UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
@@ -44,6 +45,7 @@ import {
 import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
 import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { resolveOpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
 
 const OPEN_CODE_START_TIMEOUT_MS = 120_000;
 
@@ -69,6 +71,8 @@ export interface ProductionOpenCodeBackendInput {
   readonly portable: ResolvedPortableOpenCodeRuntime;
   readonly runtimeStateRoot: string;
   readonly gatewayUrl: string;
+  readonly resolveGatewayRunMetadata?:
+    ((modelId: string) => CodingWorkbenchSidecarGatewayRunMetadata | undefined) | undefined;
   /**
    * ADR-0043 D11-D14 (#3390): the full loopback URL the tool facade rides -- the SAME attested
    * origin as `gatewayUrl`, at `/api/coding-sidecar/tool` -- never a second listener.
@@ -118,12 +122,18 @@ function createOpenCodeRun(
   safeActivityProjection: CodingSafeActivityProjection,
 ): QualifiedProductionRuntimeRun {
   assertOpenCodeRun(run);
+  const metadata = input.resolveGatewayRunMetadata?.(run.context.modelProfile.profileId);
+  const contextGeometry =
+    metadata === undefined ? undefined : resolveOpenCodeContextGeometry(metadata);
+  if (contextGeometry === undefined) {
+    throw new CodingRuntimeLaunchRejectedError("runtime-unqualified");
+  }
   const safeActivity = safeActivityController(
     run.minted.authorityRef.runId,
     safeActivityProjection,
   );
   try {
-    const composition = composeOpenCodeRun(input, run, safeActivity);
+    const composition = composeOpenCodeRun(input, run, safeActivity, contextGeometry);
     const launch = openCodeLaunchMaterial(input, run);
     const turnPort = createOpenCodeRuntimeTurnPort(composition.runPort);
     const questionPort = createOpenCodeRuntimeQuestionPort(composition.runPort);
@@ -151,6 +161,7 @@ function composeOpenCodeRun(
   input: ProductionOpenCodeBackendInput,
   run: ProductionRuntimeBackendInput,
   safeActivity: NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>,
+  contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
 ): ReturnType<typeof createOpenCodeRuntimeComposition> {
   return createOpenCodeRuntimeComposition({
     portable: {
@@ -160,6 +171,7 @@ function composeOpenCodeRun(
       admission: admissionPolicy(input.portable),
     },
     stateBaseRoot: join(input.runtimeStateRoot, "coding-runtime", "opencode"),
+    contextGeometry,
     capabilities: {
       modelGatewayCapability: run.minted.modelGatewayCapability,
       toolFacadeCapability: run.minted.toolFacadeCapability,

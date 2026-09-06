@@ -1,15 +1,34 @@
 import { randomBytes as nodeRandomBytes } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 
+import type { CodingWorkbenchSidecarGatewayRunMetadata } from "@oscharko-dev/keiko-contracts";
+
 import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
   OPENCODE_PINNED_BUILT_IN_TOOLS,
 } from "./opencodeToolSchemas.js";
 
+const OPENCODE_WIRE_ENVELOPE_RESERVE_BYTES = 64 * 1_024;
+// JSON may expand one input character to a six-byte escape and the shared conservative estimator
+// allows roughly four characters per token. Using their product keeps OpenCode's proactive
+// compaction threshold below the gateway's raw-body ceiling even for escape-dense text.
+const OPENCODE_WIRE_BYTES_PER_PROMPT_TOKEN = 24;
+const OPENCODE_COMPACTION_MAX_RESERVED_TOKENS = 20_000;
+const OPENCODE_COMPACTION_TAIL_TURNS = 2;
+const OPENCODE_COMPACTION_MIN_RECENT_TOKENS = 2_000;
+const OPENCODE_COMPACTION_MAX_RECENT_TOKENS = 8_000;
+
+export interface OpenCodeContextGeometry {
+  readonly contextWindowTokens: number;
+  readonly maxInputTokens: number;
+  readonly maxOutputTokens: number;
+}
+
 export interface OpenCodeLaunchProfileInput {
   readonly executable: string;
   readonly stateRoot: string;
+  readonly contextGeometry?: OpenCodeContextGeometry | undefined;
   readonly randomBytes?: ((size: number) => Buffer) | undefined;
   /**
    * #3414-AC9: an optional tool whose handler/readiness/policy prerequisite is not satisfied for
@@ -30,6 +49,8 @@ export const OPENCODE_RUNTIME_MODEL_ALIAS = "coding";
 export const OPENCODE_RUNTIME_READINESS_PROMPT = "Keiko runtime readiness handshake.";
 const OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS = 30 * 60_000;
 
+export const OPENCODE_GOVERNED_COMPACTION_PROMPT = `Preserve the exact accepted coding task and enough verified state to continue it correctly. Retain acceptance criteria, constraints, current plan, relevant files and symbols, completed edits, observed failing-before evidence, later verification results, unresolved failures, and immediate next actions. Distinguish verified facts from assumptions. Never report an unrun check as passed, weaken or remove regression coverage, redo a completed failing-before step solely because of compaction, or lose the current user task.`;
+
 /**
  * Replaces the pinned child's model-family default system prompt (v1.17.17 resolves the unknown
  * model id "coding" to its built-in-tool coding prompt). That default teaches bash/grep/glob/edit
@@ -46,11 +67,11 @@ Governed workflow, in order:
 2. Discover: keiko_workspace_discover returns only bounded, allowed workspace-relative file paths matching a short query. Use it when the task does not already identify the files; use * only for a bounded repository overview. keiko_repository_search searches repository CONTENTS (mode lexical, literal, regex or symbol) and returns bounded, allowed workspace-relative hits with continuation cursors; use its matches to locate call sites, definitions and strings, then read the relevant window before editing.
 3. Read: keiko_workspace_read returns one file as a bounded line window (relativePath, startLine, maxLines). The result reports totalLines, nextStartLine when the window is truncated, and the SHA-256 digest of the whole file. Read every file before you edit it.
 4. Edit: keiko_changeset_edit is the only way to change files. Submit one strict unified diff covering every listed file and bind each file to the expectedContentHash digest returned by its most recent keiko_workspace_read. On a digest mismatch, re-read the file and rebuild the patch instead of retrying it unchanged.
-5. Verify: keiko_verification runs exactly one vetted verifier — test, targeted-test, typecheck, lint, or build. Verify after your edits and repair failures until verification passes; never report success without it.
+5. Verify: keiko_verification runs exactly one vetted verifier — test, targeted-test, typecheck, lint, or build. Verify after your edits and repair failures until verification passes; never report success without it. Preserve existing regression expectations and required CI checks. If targeted-test has no configured runnable steps, use the configured full test verifier; an unavailable verifier is not a failing regression. Passing tests on unstaged files do not yet supply commit proof: execute staging, verify that staged candidate, then propose the commit.
 
 Additional governed capabilities: keiko_research_fetch (one exact public https URL), keiko_skill (one approved read-only skill), and keiko_child_agent (one bounded read-only child agent) may be granted for some tasks; a denied result is a policy decision, not a transient error. Use question only when you are blocked on a decision that belongs to the operator.
 
-Delivering your work, when granted: keiko_git_status and keiko_git_diff read the current Git state; keiko_git_stage proposes staging paths. keiko_git_commit proposes a commit message, keiko_git_push proposes pushing the last verified commit, and keiko_pull_request proposes a draft pull request title -- each of these three only PROPOSES, returning a proposalId; you never commit, push or open a pull request directly. When keiko_git_commit is blocked by the message policy, its result carries a violations array of exact codes (for example missing-conventional-prefix or subject-too-long); read it and fix the message yourself, then call keiko_git_commit again -- never ask the operator which commit format to use. A proposal needs a human approval through the operator's own approval channel before it can proceed. Once approved, call keiko_git_execute with the proposal's kind (stage, commit, push or pull-request) and its proposalId to redeem it; a denied result means no matching approval exists yet. keiko_ci_status observes the run's CI readiness (set forceFresh to bypass the cached snapshot) -- use it after a push or pull-request to decide whether to keep repairing before handing off.
+Delivering your work, when granted: keiko_git_status and keiko_git_diff read the current Git state; keiko_git_stage proposes staging paths. keiko_git_commit proposes a commit message, keiko_git_push proposes pushing the last verified commit, and keiko_pull_request proposes a draft pull request title -- each of these three only PROPOSES, returning a proposalId; you never commit, push or open a pull request directly. When keiko_git_commit is blocked by the message policy, its result carries a violations array of exact codes (for example missing-conventional-prefix or subject-too-long); read it and fix the message yourself, then call keiko_git_commit again -- never ask the operator which commit format to use. Follow each proposal's actual disposition: when it is ready, call keiko_git_execute with its matching kind (stage, commit, push or pull-request) and proposalId without asking a redundant question. When it is approval-required, wait for the operator's own approval channel before executing it. Creating or approving a proposal does not execute it. A denied result authorizes no effect; do not retry a denial blindly or widen authority. keiko_ci_status observes the run's CI readiness (set forceFresh to bypass the cached snapshot) -- use it after a push or pull-request to decide whether to keep repairing before handing off.
 
 Work in small read/edit/verify cycles, keep patches minimal, and never describe an edit in prose instead of submitting it through keiko_changeset_edit. Progress happens only through tool calls.`;
 export type OpenCodeLaunchProfileResult =
@@ -60,6 +81,7 @@ export type OpenCodeLaunchProfileResult =
       readonly args: readonly string[];
       readonly env: Readonly<Record<string, string>>;
       readonly config: string;
+      readonly configValue: ReturnType<typeof createFixedOpenCodeConfig>;
     }
   | { readonly ok: false; readonly reason: "invalid-launch-input" | "secret-generation-failed" };
 
@@ -69,9 +91,16 @@ export function buildOpenCodeLaunchProfile(
 ): OpenCodeLaunchProfileResult {
   if (!isAbsolute(input.executable) || !isAbsolute(input.stateRoot))
     return { ok: false, reason: "invalid-launch-input" };
+  if (input.contextGeometry === undefined || !validContextGeometry(input.contextGeometry)) {
+    return { ok: false, reason: "invalid-launch-input" };
+  }
   const secret = (input.randomBytes ?? nodeRandomBytes)(32);
   if (secret.length < 32) return { ok: false, reason: "secret-generation-failed" };
   const home = join(input.stateRoot, "home");
+  const configValue = createFixedOpenCodeConfig(
+    input.contextGeometry,
+    input.unavailableOptionalTools,
+  );
   return {
     ok: true,
     executable: input.executable,
@@ -93,11 +122,48 @@ export function buildOpenCodeLaunchProfile(
       OPENCODE_DB: join(input.stateRoot, "state", "opencode.db"),
       OPENCODE_SERVER_PASSWORD: secret.toString("base64url"),
     }),
-    config: JSON.stringify(createFixedOpenCodeConfig(input.unavailableOptionalTools)),
+    config: JSON.stringify(configValue),
+    configValue,
   };
 }
 
-function fixedOpenCodeProvider(): Readonly<Record<string, unknown>> {
+export function resolveOpenCodeContextGeometry(
+  metadata: CodingWorkbenchSidecarGatewayRunMetadata,
+): OpenCodeContextGeometry | undefined {
+  const { maxPromptTokens, maxOutputTokens, maxRequestBytes } = metadata;
+  if (
+    ![maxPromptTokens, maxOutputTokens, maxRequestBytes, metadata.maxInputMessages].every(
+      (value) => Number.isSafeInteger(value) && value > 0,
+    ) ||
+    maxOutputTokens >= maxPromptTokens ||
+    maxRequestBytes <= OPENCODE_WIRE_ENVELOPE_RESERVE_BYTES
+  ) {
+    return undefined;
+  }
+  const modelInputTokens = maxPromptTokens - maxOutputTokens;
+  const wireInputTokens = Math.floor(
+    (maxRequestBytes - OPENCODE_WIRE_ENVELOPE_RESERVE_BYTES) / OPENCODE_WIRE_BYTES_PER_PROMPT_TOKEN,
+  );
+  const maxInputTokens = Math.min(modelInputTokens, wireInputTokens);
+  if (maxInputTokens <= 0) return undefined;
+  return {
+    contextWindowTokens: maxInputTokens + maxOutputTokens,
+    maxInputTokens,
+    maxOutputTokens,
+  };
+}
+
+function validContextGeometry(geometry: OpenCodeContextGeometry): boolean {
+  return (
+    [geometry.contextWindowTokens, geometry.maxInputTokens, geometry.maxOutputTokens].every(
+      (value) => Number.isSafeInteger(value) && value > 0,
+    ) && geometry.maxInputTokens + geometry.maxOutputTokens <= geometry.contextWindowTokens
+  );
+}
+
+function fixedOpenCodeProvider(
+  geometry: OpenCodeContextGeometry,
+): Readonly<Record<string, unknown>> {
   return {
     "keiko-runtime": {
       name: "Keiko Governed Coding Gateway",
@@ -107,7 +173,11 @@ function fixedOpenCodeProvider(): Readonly<Record<string, unknown>> {
         [OPENCODE_RUNTIME_MODEL_ALIAS]: {
           name: "Keiko Governed Coding",
           tool_call: true,
-          limit: { context: 32_768, output: 4_096 },
+          limit: {
+            context: geometry.contextWindowTokens,
+            input: geometry.maxInputTokens,
+            output: geometry.maxOutputTokens,
+          },
           cost: { input: 0, output: 0 },
         },
       },
@@ -120,6 +190,25 @@ function fixedOpenCodeProvider(): Readonly<Record<string, unknown>> {
         headers: { Authorization: "Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}" },
       },
     },
+  };
+}
+
+function fixedOpenCodeCompaction(
+  geometry: OpenCodeContextGeometry,
+): Readonly<Record<string, boolean | number>> {
+  const reserved = Math.min(OPENCODE_COMPACTION_MAX_RESERVED_TOKENS, geometry.maxOutputTokens);
+  const usable = Math.max(0, geometry.maxInputTokens - reserved);
+  const preserveRecent = Math.min(
+    OPENCODE_COMPACTION_MAX_RECENT_TOKENS,
+    usable,
+    Math.max(OPENCODE_COMPACTION_MIN_RECENT_TOKENS, Math.floor(usable * 0.25)),
+  );
+  return {
+    auto: true,
+    prune: true,
+    reserved,
+    tail_turns: OPENCODE_COMPACTION_TAIL_TURNS,
+    preserve_recent_tokens: preserveRecent,
   };
 }
 
@@ -154,6 +243,7 @@ function fixedOpenCodePermission(
 }
 
 export function createFixedOpenCodeConfig(
+  contextGeometry: OpenCodeContextGeometry,
   unavailableOptionalTools?: ReadonlySet<OpenCodeOptionalToolName>,
 ): {
   readonly autoupdate: false;
@@ -161,6 +251,7 @@ export function createFixedOpenCodeConfig(
   readonly model: string;
   readonly agent: Readonly<Record<string, { readonly prompt: string }>>;
   readonly provider: Readonly<Record<string, unknown>>;
+  readonly compaction: Readonly<Record<string, boolean | number>>;
   readonly tools: Readonly<Record<string, boolean>>;
   readonly permission: Readonly<Record<string, string>>;
 } {
@@ -171,8 +262,12 @@ export function createFixedOpenCodeConfig(
     model: `keiko-runtime/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
     // "build" is the pinned child's default primary agent; its prompt override replaces the
     // misleading built-in-tool default prompt for every governed turn.
-    agent: { build: { prompt: OPENCODE_GOVERNED_SYSTEM_PROMPT } },
-    provider: fixedOpenCodeProvider(),
+    agent: {
+      build: { prompt: OPENCODE_GOVERNED_SYSTEM_PROMPT },
+      compaction: { prompt: OPENCODE_GOVERNED_COMPACTION_PROMPT },
+    },
+    provider: fixedOpenCodeProvider(contextGeometry),
+    compaction: fixedOpenCodeCompaction(contextGeometry),
     tools: fixedOpenCodeTools(unavailable),
     permission: fixedOpenCodePermission(unavailable),
   };

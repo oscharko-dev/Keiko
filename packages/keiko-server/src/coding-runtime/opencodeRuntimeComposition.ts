@@ -49,6 +49,7 @@ import {
   parseOpenCodeChildEndpoint,
 } from "./opencodeHttpClient.js";
 import { buildOpenCodeLaunchProfile } from "./opencodeLaunchProfile.js";
+import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
 import {
   createGeneratedOpenCodeBundle,
   createOpenCodeRuntimeAdapter,
@@ -92,6 +93,7 @@ type OpenCodeToolSettlementState = "succeeded" | "failed" | "denied" | "cancelle
 export interface OpenCodeRuntimeCompositionInput {
   readonly portable: VerifiedPortableInput;
   readonly stateBaseRoot: string;
+  readonly contextGeometry: OpenCodeContextGeometry;
   readonly capabilities: {
     readonly modelGatewayCapability: string;
     readonly toolFacadeCapability: string;
@@ -632,10 +634,11 @@ async function materializePrepare(
   const profile = buildOpenCodeLaunchProfile({
     executable: request.executablePath,
     stateRoot: runRoot,
+    contextGeometry: input.contextGeometry,
   });
   if (!profile.ok) throw new Error("profile-invalid");
-  const bundle = createGeneratedOpenCodeBundle();
-  const config = JSON.stringify(bundle.config);
+  const bundle = { ...createGeneratedOpenCodeBundle(), config: profile.configValue };
+  const config = profile.config;
   materialize(runRoot, config, bundle.toolSources);
   const password = profile.env.OPENCODE_SERVER_PASSWORD;
   if (password === undefined) throw new Error("password-missing");
@@ -716,6 +719,7 @@ async function handshake(
     });
     const adapter = createOpenCodeRuntimeAdapter({
       correlationId: request.runId,
+      contextGeometry: input.contextGeometry,
       readiness: readinessPorts(input, bridge, run, client, parsed.endpoint, request),
       governedSink: input.governedEventSink,
       ...(input.safeActivity
