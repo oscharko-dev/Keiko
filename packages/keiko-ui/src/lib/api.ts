@@ -307,22 +307,32 @@ function withReadDeadline(
   return caller === undefined || caller === null ? deadline : combineAbortSignals(caller, deadline);
 }
 
+function fetchJsonHeaders(
+  init: RequestInit | undefined,
+  isStateChanging: boolean,
+  correlationId: string | undefined,
+): HeadersInit {
+  if (correlationId !== undefined) return buildBffHeaders(init, correlationId);
+  return {
+    Accept: "application/json",
+    ...(isStateChanging ? { "Content-Type": "application/json" } : {}),
+    ...(isStateChanging ? { "X-Keiko-CSRF": "1" } : {}),
+    ...init?.headers,
+  };
+}
+
 async function fetchJson<T>(
   path: string,
   init?: RequestInit,
   validator?: ResponseValidator,
+  correlationId?: string,
 ): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const isStateChanging = method !== "GET" && method !== "HEAD";
   const res = await fetch(path, {
     ...init,
     signal: withReadDeadline(init, isStateChanging),
-    headers: {
-      Accept: "application/json",
-      ...(isStateChanging ? { "Content-Type": "application/json" } : {}),
-      ...(isStateChanging ? { "X-Keiko-CSRF": "1" } : {}),
-      ...init?.headers,
-    },
+    headers: fetchJsonHeaders(init, isStateChanging, correlationId),
   });
 
   if (!res.ok) throw await bffFailure(res);
@@ -3920,17 +3930,24 @@ export interface ApplyGitChangeChatDescriptionInput {
 export async function approveGitChangeChatDescription(
   input: ApplyGitChangeChatDescriptionInput,
   signal?: AbortSignal,
+  correlationId?: string,
 ): Promise<GitDeliveryPrDescriptionApproveResponse> {
-  return fetchJson<GitDeliveryPrDescriptionApproveResponse>("/api/git-change/approve-description", {
-    method: "POST",
-    body: JSON.stringify({ schemaVersion: "1", ...input }),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  return fetchJson<GitDeliveryPrDescriptionApproveResponse>(
+    "/api/git-change/approve-description",
+    {
+      method: "POST",
+      body: JSON.stringify({ schemaVersion: "1", ...input }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    undefined,
+    correlationId,
+  );
 }
 
 export async function reviewGitChangeChatDescription(
   input: ApplyGitChangeChatDescriptionInput,
   signal?: AbortSignal,
+  correlationId?: string,
 ): Promise<PrDescriptionApplicationResultWire> {
   const adapter = await import("./coding-workbench-lazy-fetchers");
   return fetchJson<PrDescriptionApplicationResultWire>(
@@ -3941,6 +3958,7 @@ export async function reviewGitChangeChatDescription(
       ...(signal === undefined ? {} : { signal }),
     },
     adapter.validatePrDescriptionApplicationResultWire,
+    correlationId,
   );
 }
 
@@ -3951,6 +3969,7 @@ export async function reviewGitChangeChatDescription(
 export async function applyGitChangeChatDescription(
   input: ApplyGitChangeChatDescriptionInput,
   signal?: AbortSignal,
+  correlationId?: string,
 ): Promise<PrDescriptionApplicationResultWire> {
   const adapter = await import("./coding-workbench-lazy-fetchers");
   return fetchJson<PrDescriptionApplicationResultWire>(
@@ -3961,5 +3980,6 @@ export async function applyGitChangeChatDescription(
       ...(signal === undefined ? {} : { signal }),
     },
     adapter.validateGitChangeApplyDescriptionResponse,
+    correlationId,
   );
 }

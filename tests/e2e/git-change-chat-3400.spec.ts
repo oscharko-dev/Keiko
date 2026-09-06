@@ -16,6 +16,7 @@ import {
 import {
   capturePrDescriptionModes,
   capturePrDescriptionState,
+  measureRenderedTextContrast,
   writePrDescriptionJourneyEvidence,
 } from "./support/pr-description-visual-evidence.js";
 import {
@@ -278,6 +279,11 @@ test("reviews, approves and applies the held description through the connected p
   );
   await expect(chatWindow.getByText("Current", { exact: true })).toBeVisible();
   await expect(chatWindow.getByText("Blocked", { exact: true })).toHaveCount(0);
+  const appliedStatusContrastRatio = await measureRenderedTextContrast(
+    page,
+    '[data-window-id="issue-3400-chat-window"] .scope-pill-status',
+  );
+  expect(appliedStatusContrastRatio).toBeGreaterThanOrEqual(4.5);
   const appliedCapture = await capturePrDescriptionState(
     page,
     3400,
@@ -329,6 +335,7 @@ test("reviews, approves and applies the held description through the connected p
       serverResolvedOrigin: true,
       exactFinalBodyDisplayed: true,
       appliedControlDisabled: true,
+      appliedStatusContrastRatio,
       disconnectPersisted: true,
       appliedCapture,
     },

@@ -13,6 +13,11 @@ import type {
 } from "@/lib/types";
 import type { GitChangeRefreshResponse, PrDescriptionApplicationResultWire } from "@/lib/api";
 
+const reportClientDiagnosticMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/client-diagnostics", () => ({
+  reportClientDiagnostic: reportClientDiagnosticMock,
+}));
+
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {
     id: "chat-1",
@@ -63,7 +68,10 @@ describe("GitChangeScopePill", () => {
     const chat = makeChat({ gitChangeScopes: [makeGitChangeScope()] });
     render(<GitChangeScopePill chat={chat} updateScopes={vi.fn()} refreshScope={vi.fn()} />);
     expect(screen.getByText("main...feature/x")).toBeInTheDocument();
-    expect(screen.getByText("Current")).toBeInTheDocument();
+    expect(screen.getByText("Current")).toHaveStyle({
+      background: "var(--surface-primary)",
+      color: "var(--text-accent)",
+    });
     expect(screen.getByText("3 files changed")).toBeInTheDocument();
   });
 
@@ -513,14 +521,18 @@ describe("GitChangeScopePill — description apply affordance (#3400 final-audit
     expect(await screen.findByTestId("git-change-description-preview-body")).toHaveTextContent(
       "exact held body",
     );
-    expect(review).toHaveBeenCalledWith(chat, "rel-1", "prop-1");
+    expect(review).toHaveBeenCalledWith(chat, "rel-1", "prop-1", expect.any(String));
     await user.click(screen.getByTestId("git-change-description-approve"));
-    await waitFor(() => expect(approveDescription).toHaveBeenCalledWith(chat, scope, "prop-1"));
+    await waitFor(() =>
+      expect(approveDescription).toHaveBeenCalledWith(chat, scope, "prop-1", expect.any(String)),
+    );
     await user.click(screen.getByTestId("git-change-description-approve"));
     expect(approveDescription).toHaveBeenCalledTimes(1);
 
     await user.click(screen.getByTestId("git-change-description-apply"));
-    await waitFor(() => expect(applyDescription).toHaveBeenCalledWith(chat, "rel-1", "prop-1"));
+    await waitFor(() =>
+      expect(applyDescription).toHaveBeenCalledWith(chat, "rel-1", "prop-1", expect.any(String)),
+    );
     expect(screen.queryByText("Blocked", { exact: true })).not.toBeInTheDocument();
     expect(screen.getByText("Current", { exact: true })).toBeInTheDocument();
 
@@ -530,11 +542,19 @@ describe("GitChangeScopePill — description apply affordance (#3400 final-audit
   });
 
   it("does not let an older apply response mask a newer stale scope", async () => {
+    reportClientDiagnosticMock.mockClear();
     const scope = prScope({ descriptionStatus: "blocked" });
     const chat = makeChat({ gitChangeScopes: [scope] });
     const approveDescription = vi.fn().mockResolvedValue({ proposalId: "prop-1" });
     let resolveApply: ((value: PrDescriptionApplicationResultWire) => void) | undefined;
-    const applyDescription = vi.fn(
+    const applyDescription = vi.fn<
+      (
+        chat: Chat,
+        relationshipId: string,
+        proposalId: string,
+        correlationId: string,
+      ) => Promise<PrDescriptionApplicationResultWire>
+    >(
       () =>
         new Promise<PrDescriptionApplicationResultWire>((resolve) => {
           resolveApply = resolve;
@@ -570,6 +590,12 @@ describe("GitChangeScopePill — description apply affordance (#3400 final-audit
     resolveApply?.({ outcome: "observed", status: applicationStatusFixture() as never });
     await waitFor(() => expect(screen.getByText("Stale", { exact: true })).toBeInTheDocument());
     expect(screen.queryByText("Current", { exact: true })).not.toBeInTheDocument();
+    const applyCorrelationId = applyDescription.mock.calls[0]?.[3];
+    expect(applyCorrelationId).toEqual(expect.any(String));
+    expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+      `[keiko] git-change description response: action=apply, disposition=discarded, relationshipId=rel-1, snapshotDigest=${"e".repeat(64)}, proposalId=prop-1, outcome=observed`,
+      { correlationId: applyCorrelationId },
+    );
   });
 
   it("disables approve when a Chat-held proposal becomes stale", async () => {

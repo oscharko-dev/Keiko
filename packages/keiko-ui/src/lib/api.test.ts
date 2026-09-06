@@ -4472,10 +4472,15 @@ describe("Chat's git-change apply-description action (#3400 final-audit F5)", ()
     const fetchMock = vi.fn().mockResolvedValue(jsonOk(approved));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(approveGitChangeChatDescription(INPUT)).resolves.toEqual(approved);
+    await expect(
+      approveGitChangeChatDescription(INPUT, undefined, "ui-git-change-approve-correlation"),
+    ).resolves.toEqual(approved);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/git-change/approve-description");
     expect(JSON.parse(init.body as string)).toEqual({ schemaVersion: "1", ...INPUT });
+    expect(new Headers(init.headers).get("X-Keiko-Correlation-Id")).toBe(
+      "ui-git-change-approve-correlation",
+    );
   });
 
   it("reviews the exact server-held Chat proposal without repository identity", async () => {
@@ -4490,13 +4495,15 @@ describe("Chat's git-change apply-description action (#3400 final-audit F5)", ()
     const fetchMock = vi.fn().mockResolvedValue(jsonOk({ outcome: "preview", preview }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(reviewGitChangeChatDescription(INPUT)).resolves.toEqual({
-      outcome: "preview",
-      preview,
-    });
+    await expect(
+      reviewGitChangeChatDescription(INPUT, undefined, "ui-git-change-review-correlation"),
+    ).resolves.toEqual({ outcome: "preview", preview });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/git-change/review-description");
     expect(JSON.parse(init.body as string)).toEqual({ schemaVersion: "1", ...INPUT });
+    expect(new Headers(init.headers).get("X-Keiko-Correlation-Id")).toBe(
+      "ui-git-change-review-correlation",
+    );
   });
 
   it("posts exactly chatId, relationshipId and proposalId — never ownerAndRepo", async () => {
@@ -4505,12 +4512,19 @@ describe("Chat's git-change apply-description action (#3400 final-audit F5)", ()
       .mockResolvedValue(jsonOk({ outcome: "observed", status: statusFixture() }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await applyGitChangeChatDescription(INPUT);
+    const result = await applyGitChangeChatDescription(
+      INPUT,
+      undefined,
+      "ui-git-change-apply-correlation",
+    );
 
     expect(result).toEqual({ outcome: "observed", status: statusFixture() });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/git-change/apply-description");
     expect(JSON.parse(init.body as string)).toEqual({ schemaVersion: "1", ...INPUT });
+    expect(new Headers(init.headers).get("X-Keiko-Correlation-Id")).toBe(
+      "ui-git-change-apply-correlation",
+    );
   });
 
   it("returns a blocked outcome with a reason in the closed vocabulary", async () => {

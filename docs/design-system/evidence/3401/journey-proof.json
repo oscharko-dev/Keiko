@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "issue": 3401,
-  "checkedAt": "2026-09-06T05:32:56.842Z",
+  "checkedAt": "2026-09-06T05:55:30.049Z",
   "passed": true,
   "evidenceClass": "production-ui-deterministic-browser-fixture",
   "modelQualification": false,
@@ -21,13 +21,13 @@
     "olderResponseDiscarded": true,
     "currentCapture": {
       "screenshot": "docs/design-system/evidence/3401/09-response-race-current.png",
-      "screenshotSha256": "3084738ea091e9b470e7360d3f3ec7acc0d76b51237916124a170207b44650d1"
+      "screenshotSha256": "dc3cf842ba43e33c42e010d20ebe752c25d9f7278f4fe1af5982ccabbe586eb6"
     }
   },
   "sourceHashes": {
-    "tests/e2e/git-change-chat-3400.spec.ts": "7b0d6366d307a2c3ad54e8e1b8871987d61ad7c2c3e052209b6f25113c9a014e",
+    "tests/e2e/git-change-chat-3400.spec.ts": "1aafc3e36e5c14c9a20bde15a62a613365c2aba7d631eefe894bb0198ba800da",
     "tests/e2e/config/playwright.git-change-chat-3400.config.ts": "c07c3b11cf51b6685b5592a530636d5c973f85c022d9652553f20fc34266cf46",
-    "tests/e2e/support/pr-description-visual-evidence.ts": "48ea6e2dee3b8a50c80dddb633512400a06dcb0a2100aeac85efe81a0ced6368",
+    "tests/e2e/support/pr-description-visual-evidence.ts": "b8fd2796d695925ac8bf2bb5e5a6442bf5a9e2940440b2c36502a14899998889",
     "tests/e2e/support/workbench-description-3401.ts": "f0c07608c88aa0ef8ff74ebbaadab3ae18786de772b493499864167c97c604e2",
     "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchDraftDelivery.tsx": "3f528a6ad658582bdc11f65954f88045852e7ac5b003899189b1d8f45b24637c",
     "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css": "9f23120ee44e6d8b82b6fcd23a72a7c2c2c5cb0c65675e9a55b4c57c297e34c2",

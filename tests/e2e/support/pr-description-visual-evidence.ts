@@ -1,5 +1,6 @@
 import { expect, type Page } from "@playwright/test";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   CODING_WORKBENCH_EVIDENCE_MODES,
   applyCodingWorkbenchEvidenceMode,
@@ -7,6 +8,11 @@ import {
 } from "./coding-issue-commit-evidence.js";
 import { evidenceArtifactPath, evidenceScreenshotPath } from "./evidence.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./axe.js";
+
+const A11Y_MEASURE_SOURCE = readFileSync(
+  join(process.cwd(), "design-system/a11y-measure.js"),
+  "utf8",
+);
 
 export type PrDescriptionVisualIssue = 3389 | 3400 | 3401;
 
@@ -114,6 +120,27 @@ export async function capturePrDescriptionState(
     .locator(`section.window[data-window-id="${windowId}"]`)
     .screenshot({ path: evidenceScreenshotPath(screenshot), animations: "disabled" });
   return { screenshot, screenshotSha256: artifactDigest(evidenceScreenshotPath(screenshot)) };
+}
+
+/** Measures rendered text/background contrast through the design system's canonical WCAG ruler. */
+export async function measureRenderedTextContrast(page: Page, selector: string): Promise<number> {
+  await page.addScriptTag({ content: A11Y_MEASURE_SOURCE });
+  return page.locator(selector).evaluate((element) => {
+    const measure = (
+      window as unknown as {
+        KeikoA11y?: {
+          readonly toRGBA: (value: string) => readonly [number, number, number, number];
+          readonly ratio: (
+            foreground: readonly [number, number, number, number],
+            background: readonly [number, number, number, number],
+          ) => number;
+        };
+      }
+    ).KeikoA11y;
+    if (measure === undefined) throw new TypeError("design-system contrast ruler is unavailable");
+    const style = getComputedStyle(element);
+    return measure.ratio(measure.toRGBA(style.color), measure.toRGBA(style.backgroundColor));
+  });
 }
 
 export function writePrDescriptionJourneyEvidence(input: {

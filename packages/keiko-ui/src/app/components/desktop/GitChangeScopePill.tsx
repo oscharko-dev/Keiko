@@ -29,6 +29,8 @@ import {
 } from "@/lib/api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { restoreScopeHeaderFocus } from "./ConnectedScopePill";
 import { formatUserError } from "./format-error";
 import type { Chat, ChatGitChangeDescriptionStatus, ChatGitChangeScope } from "@/lib/types";
@@ -50,18 +52,21 @@ type ApproveGitChangeDescriptionFn = (
   chat: Chat,
   scope: ChatGitChangeScope,
   proposalId: string,
+  correlationId: string,
 ) => Promise<GitDeliveryPrDescriptionApproveResponse>;
 
 type ApplyGitChangeDescriptionFn = (
   chat: Chat,
   relationshipId: string,
   proposalId: string,
+  correlationId: string,
 ) => Promise<PrDescriptionApplicationResultWire>;
 
 export type ReviewGitChangeDescriptionFn = (
   chat: Chat,
   relationshipId: string,
   proposalId: string,
+  correlationId: string,
 ) => Promise<PrDescriptionApplicationResultWire>;
 
 export interface GitChangeScopePillProps {
@@ -117,18 +122,45 @@ export function gitChangeBlockedReasonMessage(
 }
 
 // ─── #3400 — approve/apply the exact Chat-generated artifact for a PR-bound scope ──────────────
-const defaultApproveDescription: ApproveGitChangeDescriptionFn = async (chat, scope, proposalId) =>
-  approveGitChangeChatDescription({
-    chatId: chat.id,
-    relationshipId: scope.relationshipId,
-    proposalId,
-  });
+const defaultApproveDescription: ApproveGitChangeDescriptionFn = async (
+  chat,
+  scope,
+  proposalId,
+  correlationId,
+) =>
+  approveGitChangeChatDescription(
+    {
+      chatId: chat.id,
+      relationshipId: scope.relationshipId,
+      proposalId,
+    },
+    undefined,
+    correlationId,
+  );
 
-const defaultApplyDescription: ApplyGitChangeDescriptionFn = (chat, relationshipId, proposalId) =>
-  applyGitChangeChatDescription({ chatId: chat.id, relationshipId, proposalId });
+const defaultApplyDescription: ApplyGitChangeDescriptionFn = (
+  chat,
+  relationshipId,
+  proposalId,
+  correlationId,
+) =>
+  applyGitChangeChatDescription(
+    { chatId: chat.id, relationshipId, proposalId },
+    undefined,
+    correlationId,
+  );
 
-const defaultReviewDescription: ReviewGitChangeDescriptionFn = (chat, relationshipId, proposalId) =>
-  reviewGitChangeChatDescription({ chatId: chat.id, relationshipId, proposalId });
+const defaultReviewDescription: ReviewGitChangeDescriptionFn = (
+  chat,
+  relationshipId,
+  proposalId,
+  correlationId,
+) =>
+  reviewGitChangeChatDescription(
+    { chatId: chat.id, relationshipId, proposalId },
+    undefined,
+    correlationId,
+  );
 
 function descriptionResultState(
   result: PrDescriptionApplicationResultWire | undefined,
@@ -190,13 +222,14 @@ interface DescriptionRunContext {
 // result type so each action stays a one-line call site.
 async function runDescriptionAction<TResult>(
   ctx: DescriptionRunContext,
-  action: () => Promise<TResult>,
-  onSuccess: (result: TResult) => void,
+  action: (correlationId: string) => Promise<TResult>,
+  onSuccess: (result: TResult, correlationId: string) => void,
 ): Promise<void> {
+  const correlationId = newClientCorrelationId();
   ctx.setError(null);
   ctx.setBusy(true);
   try {
-    onSuccess(await action());
+    onSuccess(await action(correlationId), correlationId);
   } catch (error_) {
     ctx.setError(formatDescriptionErrorMessage(error_, ctx.t));
   } finally {
@@ -241,9 +274,17 @@ interface DescriptionRunnerState {
   readonly proposalId: string | undefined;
   readonly approvedProposalId: string | undefined;
   readonly reviewedProposalId: string | undefined;
-  readonly setResult: (result: PrDescriptionApplicationResultWire) => void;
-  readonly setApprovedProposalId: (id: string | undefined) => void;
+  readonly acceptResult: (
+    action: DescriptionAction,
+    result: PrDescriptionApplicationResultWire,
+    proposalId: string,
+    correlationId: string,
+  ) => boolean;
+  readonly acceptApproval: (proposalId: string, correlationId: string) => void;
+  readonly clearApproval: () => void;
 }
+
+type DescriptionAction = "review" | "approve" | "apply";
 
 // Extracted so useGitChangeDescriptionActions stays under the max-lines-per-function bar. The
 // preview -> approve -> apply chain is a strict, one-use-approval sequence, never a free-text
@@ -264,8 +305,10 @@ function buildDescriptionRunners(
     if (state.busy || state.stale || proposalId === undefined) return;
     void runDescriptionAction(
       ctx,
-      () => fns.review(chat, scope.relationshipId, proposalId),
-      state.setResult,
+      (correlationId) => fns.review(chat, scope.relationshipId, proposalId, correlationId),
+      (result, correlationId) => {
+        state.acceptResult("review", result, proposalId, correlationId);
+      },
     );
   };
   const runApprove = (): void => {
@@ -280,8 +323,8 @@ function buildDescriptionRunners(
       return;
     void runDescriptionAction(
       ctx,
-      () => fns.approve(chat, scope, proposalId),
-      () => state.setApprovedProposalId(proposalId),
+      (correlationId) => fns.approve(chat, scope, proposalId, correlationId),
+      (_result, correlationId) => state.acceptApproval(proposalId, correlationId),
     );
   };
   const runApply = (): void => {
@@ -289,10 +332,9 @@ function buildDescriptionRunners(
     if (state.busy || state.stale || proposalId === undefined) return;
     void runDescriptionAction(
       ctx,
-      () => fns.apply(chat, scope.relationshipId, proposalId),
-      (next) => {
-        state.setResult(next);
-        state.setApprovedProposalId(undefined);
+      (correlationId) => fns.apply(chat, scope.relationshipId, proposalId, correlationId),
+      (next, correlationId) => {
+        if (state.acceptResult("apply", next, proposalId, correlationId)) state.clearApproval();
       },
     );
   };
@@ -340,8 +382,23 @@ function canApplyDescription(state: {
 interface ScopedDescriptionState {
   readonly result: PrDescriptionApplicationResultWire | undefined;
   readonly approvedProposalId: string | undefined;
-  readonly setResult: (result: PrDescriptionApplicationResultWire) => void;
-  readonly setApprovedProposalId: (id: string | undefined) => void;
+  readonly acceptResult: DescriptionRunnerState["acceptResult"];
+  readonly acceptApproval: DescriptionRunnerState["acceptApproval"];
+  readonly clearApproval: DescriptionRunnerState["clearApproval"];
+}
+
+function reportDescriptionResponse(input: {
+  readonly action: DescriptionAction;
+  readonly disposition: "accepted" | "discarded";
+  readonly scope: ChatGitChangeScope;
+  readonly proposalId: string;
+  readonly correlationId: string;
+  readonly outcome: string;
+}): void {
+  reportClientDiagnostic(
+    `[keiko] git-change description response: action=${input.action}, disposition=${input.disposition}, relationshipId=${input.scope.relationshipId}, snapshotDigest=${input.scope.snapshotDigest}, proposalId=${input.proposalId}, outcome=${input.outcome}`,
+    { correlationId: input.correlationId },
+  );
 }
 
 function useScopedDescriptionState(scope: ChatGitChangeScope): ScopedDescriptionState {
@@ -352,12 +409,39 @@ function useScopedDescriptionState(scope: ChatGitChangeScope): ScopedDescription
   const [approval, setApproval] = useState<
     { readonly scopeKey: string; readonly proposalId: string } | undefined
   >(undefined);
+  const latestScopeKey = useLatestRef(scopeKey);
+  const disposition = (): "accepted" | "discarded" =>
+    latestScopeKey.current === scopeKey ? "accepted" : "discarded";
   return {
     result: observed?.scopeKey === scopeKey ? observed.result : undefined,
     approvedProposalId: approval?.scopeKey === scopeKey ? approval.proposalId : undefined,
-    setResult: (result): void => setObserved({ scopeKey, result }),
-    setApprovedProposalId: (proposalId): void =>
-      setApproval(proposalId === undefined ? undefined : { scopeKey, proposalId }),
+    acceptResult: (action, result, proposalId, correlationId): boolean => {
+      const responseDisposition = disposition();
+      reportDescriptionResponse({
+        action,
+        disposition: responseDisposition,
+        scope,
+        proposalId,
+        correlationId,
+        outcome: result.outcome,
+      });
+      if (responseDisposition === "discarded") return false;
+      setObserved({ scopeKey, result });
+      return true;
+    },
+    acceptApproval: (proposalId, correlationId): void => {
+      const responseDisposition = disposition();
+      reportDescriptionResponse({
+        action: "approve",
+        disposition: responseDisposition,
+        scope,
+        proposalId,
+        correlationId,
+        outcome: "approved",
+      });
+      if (responseDisposition === "accepted") setApproval({ scopeKey, proposalId });
+    },
+    clearApproval: (): void => setApproval(undefined),
   };
 }
 
@@ -369,7 +453,7 @@ function useGitChangeDescriptionActions(
   const { chat, scope, approveDescription, applyDescription, reviewDescription, t } = props;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { result, approvedProposalId, setResult, setApprovedProposalId } =
+  const { result, approvedProposalId, acceptResult, acceptApproval, clearApproval } =
     useScopedDescriptionState(scope);
   const ctx: DescriptionRunContext = { chat, scope, t, setBusy, setError };
   const proposalId = scope.descriptionProposalId ?? descriptionProposalId(result);
@@ -384,8 +468,9 @@ function useGitChangeDescriptionActions(
       proposalId,
       approvedProposalId,
       reviewedProposalId,
-      setResult,
-      setApprovedProposalId,
+      acceptResult,
+      acceptApproval,
+      clearApproval,
     },
   );
   const actionState = { busy, stale, proposalId, reviewedProposalId, approvedProposalId };
@@ -655,6 +740,24 @@ function useGitChangePillActions(props: GitChangePillItemProps): GitChangePillAc
   };
 }
 
+function ScopePillStatus({
+  status,
+  t,
+}: {
+  readonly status: ChatGitChangeDescriptionStatus;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const style =
+    status === "current"
+      ? { background: "var(--surface-primary)", color: "var(--text-accent)" }
+      : undefined;
+  return (
+    <span className={`${STATUS_BADGE_CLASS[status]} scope-pill-status`} style={style}>
+      {t(STATUS_LABEL_KEY[status])}
+    </span>
+  );
+}
+
 function GitChangePillRow({
   scope,
   status,
@@ -677,7 +780,7 @@ function GitChangePillRow({
     <span className="scope-pill">
       <span aria-hidden="true">⇄</span>
       <span aria-label={accessibleLabel}>{scope.comparisonLabel}</span>
-      <span className={STATUS_BADGE_CLASS[status]}>{t(STATUS_LABEL_KEY[status])}</span>
+      <ScopePillStatus status={status} t={t} />
       <button
         type="button"
         className="scope-pill-disconnect"
