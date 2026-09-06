@@ -65,6 +65,7 @@ import {
   type VerificationRunnerManager,
 } from "../../../packages/keiko-server/src/editor/verificationRunner.js";
 import { createUiServer, UI_HOST } from "../../../packages/keiko-server/src/server.js";
+import { processServerLogSink } from "../../../packages/keiko-server/src/process-log-sink.js";
 import { createInMemoryUiStore } from "../../../packages/keiko-server/src/store/index.js";
 import { createCodingRuntimeSnapshotStore } from "../../../packages/keiko-server/src/coding-runtime/codingRuntimeSnapshotStore.js";
 import { createCodingRuntimeDescriptionJobStore } from "../../../packages/keiko-server/src/coding-runtime/codingRuntimeDescriptionJobStore.js";
@@ -853,7 +854,13 @@ export async function runCodingRuntimeJourneyServer(
   }
   const staticRoot = join(process.cwd(), "dist", "ui", "static");
   const csp = buildCspHeader(extractInlineScriptHashes(collectHtmlDocuments(staticRoot)));
-  const server = createUiServer({ staticRoot, csp, port, handlerDeps: composition.deps });
+  const server = createUiServer({
+    staticRoot,
+    csp,
+    port,
+    handlerDeps: composition.deps,
+    activityLog: processServerLogSink(),
+  });
   registerShutdown(server, composition);
   await new Promise<void>((resolve) => {
     server.listen(port, UI_HOST, resolve);
