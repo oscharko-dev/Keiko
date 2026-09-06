@@ -414,7 +414,7 @@ export const CODING_WORKBENCH_MODE_POLICIES: Readonly<
     display: {
       label: "Full access",
       description:
-        "File and internet operations within the validated Authority Envelope proceed without per-action approval. Delivery remains separately human-approved.",
+        "File, internet, and accepted Code-task commit, push, and draft pull request operations within the validated Authority Envelope proceed without per-action approval. Merge remains separately approval-gated.",
     },
     effects: {
       "workspace-contained": {
@@ -637,6 +637,7 @@ export interface CodingWorkbenchRuntimeEvent {
   readonly skippedCount?: number | undefined;
   readonly failureLocationCount?: number | undefined;
   readonly failureLocationsTruncated?: boolean | undefined;
+  readonly verificationTargetDigest?: string | undefined;
   readonly artifactKind?: string | undefined;
   readonly artifactLabel?: string | undefined;
   readonly artifactDigest?: string | undefined;
@@ -741,11 +742,15 @@ export function codingWorkbenchCodeTaskDeliveryEffectFor(
   action: CodingWorkbenchCodeTaskDeliveryAction,
 ): CodingWorkbenchPolicyEffect {
   const general = codingWorkbenchPolicyEffectFor(mode, "delivery", "high");
-  const scoped = action === "commit" || action === "push" || action === "pull-request";
+  const scoped = codeTaskDeliveryActionIsScoped(action);
   if (!scoped && action !== "merge") return "denied";
   return mode === "autonomous-delivery" && scoped && general === "approval-required"
     ? "allowed"
     : general;
+}
+
+function codeTaskDeliveryActionIsScoped(action: string): boolean {
+  return action === "commit" || action === "push" || action === "pull-request";
 }
 
 export function strictestCodingWorkbenchPolicyEffect(

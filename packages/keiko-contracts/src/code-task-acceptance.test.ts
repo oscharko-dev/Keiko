@@ -9,6 +9,7 @@ import {
   CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
   CODE_TASK_QUALIFICATION_MANIFEST_KIND,
   CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION,
+  CODE_TASK_QUALIFICATION_REQUIRED_TOOLS,
   codeTaskAcceptanceQualificationFailures,
   codeTaskQualificationManifestFailures,
   codeTaskQualificationVerdictFor,
@@ -714,7 +715,7 @@ function validQualificationManifest(): CodeTaskQualificationManifestV1 {
       auditReference: { outcome: "known", value: "keiko-issue-audit-20260904" },
       auditDigest: { outcome: "known", value: AUDIT_DIGEST },
       humanMergeAttestationDigest: { outcome: "known", value: HUMAN_MERGE_ATTESTATION_DIGEST },
-      requiredTools: ["keiko_changeset_edit"],
+      requiredTools: CODE_TASK_QUALIFICATION_REQUIRED_TOOLS,
       spendBudgetUsd: 25,
       observedSpendUsd: { outcome: "known", value: 4.5 },
       scenarios: [
@@ -848,6 +849,22 @@ describe("validateCodeTaskQualificationManifest", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.errors).toContain("requiredTools must be an array of catalog tool names");
+  });
+
+  it.each([
+    ["empty", []],
+    ["partial", CODE_TASK_QUALIFICATION_REQUIRED_TOOLS.slice(0, -1)],
+    [
+      "duplicate",
+      [...CODE_TASK_QUALIFICATION_REQUIRED_TOOLS, CODE_TASK_QUALIFICATION_REQUIRED_TOOLS[0]],
+    ],
+  ] as const)("rejects a %s requiredTools inventory", (_description, requiredTools) => {
+    const result = validateCodeTaskQualificationManifest(mutatedManifest({ requiredTools }));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toContain(
+      "requiredTools must exactly match the controlled-journey rubric inventory",
+    );
   });
 
   it("rejects a non-positive or unbounded spendBudgetUsd (#3390 audit F15)", () => {

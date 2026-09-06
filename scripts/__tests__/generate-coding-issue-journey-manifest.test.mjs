@@ -11,7 +11,10 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
-import { CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS } from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
+import {
+  CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
+  CODE_TASK_QUALIFICATION_REQUIRED_TOOLS,
+} from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
 
 import { buildCodingIssueJourneyManifest } from "../lib/coding-issue-journey-manifest.mjs";
 
@@ -70,7 +73,7 @@ describe("buildCodingIssueJourneyManifest", () => {
       modelIdentity: "gateway-profile:coding-issue-journey",
       fixtureRevision: "controlled-fixture-rev-1",
       rubricDigest: DIGEST,
-      requiredTools: ["keiko_changeset_edit"],
+      requiredTools: CODE_TASK_QUALIFICATION_REQUIRED_TOOLS,
       spendBudgetUsd: 25,
       observedSpendUsd: undefined,
     });
@@ -434,7 +437,7 @@ describe("generate-coding-issue-journey-manifest CLI", () => {
       "--rubric",
       rubricPath,
       "--required-tools",
-      "keiko_changeset_edit,keiko_git_push",
+      CODE_TASK_QUALIFICATION_REQUIRED_TOOLS.join(","),
       "--spend-budget-usd",
       "25",
       "--output",
@@ -443,7 +446,7 @@ describe("generate-coding-issue-journey-manifest CLI", () => {
     await import(`${SCRIPT_URL}?case=happy`);
     const written = JSON.parse(readFileSync(outputPath, "utf8"));
     expect(written.sourceCommitSha).toBe(COMMIT_SHA);
-    expect(written.requiredTools).toEqual(["keiko_changeset_edit", "keiko_git_push"]);
+    expect(written.requiredTools).toEqual(CODE_TASK_QUALIFICATION_REQUIRED_TOOLS);
     const ran = written.scenarios.find(
       (scenario) => scenario.scenarioId === "issue-to-pr-full-access",
     );

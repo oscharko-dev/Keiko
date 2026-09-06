@@ -572,6 +572,24 @@ export const CODE_TASK_QUALIFICATION_MANIFEST_KIND = "code-task-qualification-ma
 
 export const CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION = 1;
 
+/** Exact model-visible inventory required by the controlled #3390 journey rubric. */
+export const CODE_TASK_QUALIFICATION_REQUIRED_TOOLS = Object.freeze([
+  "question",
+  "keiko_repository_search",
+  "keiko_workspace_discover",
+  "keiko_workspace_read",
+  "keiko_changeset_edit",
+  "keiko_verification",
+  "keiko_git_status",
+  "keiko_git_diff",
+  "keiko_git_stage",
+  "keiko_git_commit",
+  "keiko_git_push",
+  "keiko_pull_request",
+  "keiko_ci_status",
+  "todowrite",
+] as const satisfies readonly string[]);
+
 export const CODE_TASK_QUALIFICATION_PROVENANCES = Object.freeze([
   "real-model",
   "scripted",
@@ -1551,6 +1569,14 @@ function qualificationManifestRequiredToolsErrors(
   const requiredTools = ownField(value, "requiredTools");
   if (!Array.isArray(requiredTools) || !requiredTools.every((tool) => isCodeTaskToolName(tool))) {
     return ["requiredTools must be an array of catalog tool names"];
+  }
+  if (
+    requiredTools.length !== CODE_TASK_QUALIFICATION_REQUIRED_TOOLS.length ||
+    CODE_TASK_QUALIFICATION_REQUIRED_TOOLS.some(
+      (expected, index) => requiredTools[index] !== expected,
+    )
+  ) {
+    return ["requiredTools must exactly match the controlled-journey rubric inventory"];
   }
   return [];
 }

@@ -213,7 +213,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Routinemäßige Bearbeitungen im Arbeitsbereich mit niedrigem und mittlerem Risiko, geprüfte Befehle und Verifizierungen werden ausgeführt; der Zugriff auf externe Dateien und die Internetnutzung erfordern eine Genehmigung. Die Auslieferung bleibt separat menschlich genehmigt.",
   "codingWorkbench.mode.autonomous-delivery.label": "Vollzugriff",
   "codingWorkbench.mode.autonomous-delivery.description":
-    "Datei- und Internetvorgänge innerhalb des validierten Authority Envelope werden ohne Genehmigung pro Aktion ausgeführt. Die Auslieferung bleibt separat menschlich genehmigt.",
+    "Datei- und Internetvorgänge sowie akzeptierte Code-Task-Operationen zum Committen, Pushen und Erstellen eines Draft-Pull-Requests werden innerhalb des validierten Authority Envelope ohne Genehmigung pro Aktion ausgeführt. Merge bleibt separat genehmigungspflichtig.",
   "codingWorkbench.task.eyebrow": "Aufgabe",
   "codingWorkbench.task.title": "Begrenzte Coding-Aufgabe beschreiben",
   "codingWorkbench.task.instructions": "Aufgabenanweisungen",
@@ -490,7 +490,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.controls.title": "Anhalten oder übernehmen",
   "codingWorkbench.controls.stop": "Lauf anhalten",
   "codingWorkbench.controls.takeover": "Manuell übernehmen",
-  "codingWorkbench.controls.help": "Auslieferungsaktionen bleiben separat menschlich genehmigt.",
+  "codingWorkbench.controls.help":
+    "Die Auslieferung folgt dem serverbestätigten Modus und dem validierten Authority Envelope. Merge bleibt separat genehmigungspflichtig.",
   "codingWorkbench.controls.resumeMode.label": "Autonomie beim Fortsetzen",
   "codingWorkbench.controls.resumeMode.help":
     "Setze den Lauf mit dem serverbestätigten aktuellen oder einem strengeren Modus fort. Eine Erweiterung ist nicht verfügbar.",

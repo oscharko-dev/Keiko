@@ -40,7 +40,22 @@
   "humanMergeAttestationDigest": {
     "outcome": "absent"
   },
-  "requiredTools": ["keiko_changeset_edit"],
+  "requiredTools": [
+    "question",
+    "keiko_repository_search",
+    "keiko_workspace_discover",
+    "keiko_workspace_read",
+    "keiko_changeset_edit",
+    "keiko_verification",
+    "keiko_git_status",
+    "keiko_git_diff",
+    "keiko_git_stage",
+    "keiko_git_commit",
+    "keiko_git_push",
+    "keiko_pull_request",
+    "keiko_ci_status",
+    "todowrite"
+  ],
   "spendBudgetUsd": 25,
   "observedSpendUsd": {
     "outcome": "known",

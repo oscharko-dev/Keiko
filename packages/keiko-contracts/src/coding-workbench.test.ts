@@ -220,7 +220,7 @@ describe("coding workbench autonomy policy", () => {
     expect(CODING_WORKBENCH_MODE_POLICIES["autonomous-delivery"].display).toEqual({
       label: "Full access",
       description:
-        "File and internet operations within the validated Authority Envelope proceed without per-action approval. Delivery remains separately human-approved.",
+        "File, internet, and accepted Code-task commit, push, and draft pull request operations within the validated Authority Envelope proceed without per-action approval. Merge remains separately approval-gated.",
     });
   });
 

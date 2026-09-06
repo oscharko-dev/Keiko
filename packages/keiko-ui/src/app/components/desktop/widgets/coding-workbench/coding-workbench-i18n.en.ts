@@ -195,7 +195,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Routine low- and medium-risk workspace edits, vetted commands, and verification proceed; external-file access and internet use require approval. Delivery remains separately human-approved.",
   "codingWorkbench.mode.autonomous-delivery.label": "Full access",
   "codingWorkbench.mode.autonomous-delivery.description":
-    "File and internet operations within the validated Authority Envelope proceed without per-action approval. Delivery remains separately human-approved.",
+    "File, internet, and accepted Code-task commit, push, and draft pull request operations within the validated Authority Envelope proceed without per-action approval. Merge remains separately approval-gated.",
   "codingWorkbench.task.eyebrow": "Task",
   "codingWorkbench.task.title": "Describe the bounded coding task",
   "codingWorkbench.task.instructions": "Task instructions",
@@ -468,7 +468,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.controls.title": "Stop or take over",
   "codingWorkbench.controls.stop": "Stop run",
   "codingWorkbench.controls.takeover": "Take over manually",
-  "codingWorkbench.controls.help": "Delivery actions remain separately human-approved.",
+  "codingWorkbench.controls.help":
+    "Delivery follows the server-confirmed mode and validated Authority Envelope. Merge remains separately approval-gated.",
   "codingWorkbench.controls.resumeMode.label": "Resume autonomy",
   "codingWorkbench.controls.resumeMode.help":
     "Resume with the server-confirmed current mode or a stricter mode. Widening is unavailable.",

@@ -14,6 +14,32 @@ describe("Coding Workbench translations", () => {
     );
   });
 
+  it("describes scoped Full delivery without advertising approval-free merge", () => {
+    const en = translateCodingWorkbench(
+      "en",
+      "codingWorkbench.mode.autonomous-delivery.description",
+    );
+    const de = translateCodingWorkbench(
+      "de",
+      "codingWorkbench.mode.autonomous-delivery.description",
+    );
+    for (const text of [en, de]) {
+      expect(text).toMatch(/commit/iu);
+      expect(text).toMatch(/push/iu);
+      expect(text).toMatch(/merge/iu);
+    }
+    expect(en).toContain("draft pull request");
+    expect(en).toContain("Merge remains separately approval-gated");
+    expect(de).toContain("Draft-Pull-Request");
+    expect(de).toContain("Merge bleibt separat genehmigungspflichtig");
+    expect(translateCodingWorkbench("en", "codingWorkbench.controls.help")).toContain(
+      "server-confirmed mode",
+    );
+    expect(translateCodingWorkbench("de", "codingWorkbench.controls.help")).toContain(
+      "serverbestätigten Modus",
+    );
+  });
+
   // ADR-0163 D9: every new key resolves non-empty in BOTH catalogs and the two strings differ, so
   // a German entry copied from the English one cannot pass as a translation. The wording must never
   // present the evaluation runtime with an unqualified "ready", "verified" or "confirmed".

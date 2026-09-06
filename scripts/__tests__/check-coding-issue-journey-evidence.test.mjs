@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND,
   CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
+  CODE_TASK_QUALIFICATION_REQUIRED_TOOLS,
   codeTaskQualificationManifestFailures,
   codeTaskQualificationVerdictFor,
   validateCodeTaskQualificationFlowArtifact,
@@ -64,7 +65,9 @@ const CONTRACTS = {
   validateCodeTaskQualificationFlowArtifact,
   validateCodeTaskQualificationManifest,
 };
-const TOOL_CATALOG = { OPENCODE_MODEL_VISIBLE_TOOLS: [{ name: "keiko_changeset_edit" }] };
+const TOOL_CATALOG = {
+  OPENCODE_MODEL_VISIBLE_TOOLS: CODE_TASK_QUALIFICATION_REQUIRED_TOOLS.map((name) => ({ name })),
+};
 
 it("keeps receipt comparison on canonical UTF-16 code-unit key order", () => {
   expect(canonicalJson({ b2: 2, b10: 10, a: 0, b1: 1 })).toBe('{"a":0,"b1":1,"b10":10,"b2":2}');
@@ -836,12 +839,12 @@ describe("checkCodingIssueJourneyEvidence", () => {
     );
   });
 
-  it("rejects a requiredTools entry absent from the model-visible tool catalog (#3390 audit F10)", async () => {
+  it("rejects requiredTools inventory drift before catalog comparison (#3390 audit F10)", async () => {
     const { verdict, failures } = await runFixture("missing-required-tool");
     expect(verdict).toBe("blocked");
     expect(
       failures.includes(
-        "requiredTools: keiko_shell_execute is not in the model-visible tool catalog",
+        "manifest: requiredTools must exactly match the controlled-journey rubric inventory",
       ),
     ).toBe(true);
   });
