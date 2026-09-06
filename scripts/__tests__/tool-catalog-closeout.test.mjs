@@ -149,6 +149,22 @@ describe("exact-head catalog closeout artifact", () => {
     });
     expect(manifest.platform).toBe("darwin-arm64");
   });
+  it("retains reviewed premerge H1 evidence without claiming a future dev merge", async () => {
+    const f = await fixture();
+    f.context.h1EvidenceRef = "h1-producer-checkpoint.v1";
+    const manifest = buildToolCatalogCloseout(f.context, f.receipts, f.reports);
+    expect(manifest.h1EvidenceRef).toBe("h1-producer-checkpoint.v1");
+    expect(validateToolCatalogCloseout(manifest, f.context, f.receipts, f.reports)).toEqual(
+      manifest,
+    );
+  });
+  it("rejects unknown H1 evidence stages", async () => {
+    const f = await fixture();
+    f.context.h1EvidenceRef = "narrated-h1-ready";
+    expect(() => buildToolCatalogCloseout(f.context, f.receipts, f.reports)).toThrow(
+      "invalid H1 evidence reference",
+    );
+  });
   it("joins the real producer identity with byte-hashed receipt artifacts", async () => {
     const f = await fixture();
     expect(check(f)).toEqual(f.manifest);

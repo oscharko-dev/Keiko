@@ -10,7 +10,7 @@ import {
   checkH1HandoffEvidence,
   checkH1ProducerCheckpoint,
   checkToolCatalogMigrationCloseout,
-  H1_PROVENANCE_PATH,
+  H1_PRODUCER_CHECKPOINT_PATH,
 } from "./check-tool-catalog-conformance.mjs";
 import { sha256File } from "./lib/digest.mjs";
 import { REQUIRED_INTERFACE_FIELDS } from "./lib/governed-tool-contract-shape.mjs";
@@ -42,6 +42,7 @@ export const CATALOG_CLOSEOUT_CHECKS = Object.freeze([
   "sonar",
   "required-ci",
 ]);
+const H1_EVIDENCE_REFS = new Set(["h1-producer-checkpoint.v1", "h1-provenance.v1"]);
 const DIGEST = /^[a-f0-9]{64}$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
 const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/u;
@@ -75,7 +76,7 @@ function validateContext(context) {
   requireEvidence(COMMIT.test(context.currentHead), "invalid current head");
   requireEvidence(DIGEST.test(context.artifactDigest), "invalid artifact digest");
   requireEvidence(DIGEST.test(context.h1EvidenceDigest), "invalid H1 evidence digest");
-  requireEvidence(context.h1EvidenceRef === "h1-provenance.v1", "invalid H1 evidence reference");
+  requireEvidence(H1_EVIDENCE_REFS.has(context.h1EvidenceRef), "invalid H1 evidence reference");
   requireEvidence(PLATFORMS.has(context.platform), "unsupported qualification platform");
   validateRuntime(context.runtime);
 }
@@ -217,21 +218,29 @@ function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 async function qualifiedH1(root, h1Path) {
+  const evidenceRef = basename(h1Path, ".json");
+  requireEvidence(H1_EVIDENCE_REFS.has(evidenceRef), "invalid H1 evidence reference");
   const h1 = readJson(h1Path);
+  // Consolidated delivery qualifies #3415 before #3390 and before the final #3394 merge.
+  // Both phases retain the independently reviewed producer and real source-content checks.
   const failures = [
     ...(await checkH1ProducerCheckpoint(root)),
+    ...(await checkH1ProducerCheckpoint(root, { checkpointPath: relative(root, h1Path) })),
     ...(await checkToolCatalogMigrationCloseout(root)),
-    ...(await checkH1HandoffEvidence(
-      root,
-      {
-        landedDevCommit: h1.currentHead,
-        landedTreeDigest: h1.treeDigest,
-      },
-      { provenancePath: relative(root, h1Path) },
-    )),
   ];
+  // A provenance claim additionally requires actual dev-reachable integration. Choosing the
+  // checkpoint phase never labels its evidence as landed provenance or authorizes a merge.
+  if (evidenceRef === "h1-provenance.v1") {
+    failures.push(
+      ...(await checkH1HandoffEvidence(
+        root,
+        { landedDevCommit: h1.currentHead, landedTreeDigest: h1.treeDigest },
+        { provenancePath: relative(root, h1Path) },
+      )),
+    );
+  }
   requireEvidence(failures.length === 0, "H1 handoff or migration qualification failed");
-  return h1;
+  return { h1, evidenceRef };
 }
 
 export async function checkToolCatalogCloseoutFiles({
@@ -239,18 +248,18 @@ export async function checkToolCatalogCloseoutFiles({
   artifactPath,
   receiptsDir,
   manifestPath,
-  h1Path = join(root, H1_PROVENANCE_PATH),
+  h1Path = join(root, H1_PRODUCER_CHECKPOINT_PATH),
   write = false,
 }) {
   const head = catalogCloseoutHead(root);
   if (write) requireExternalManifest(root, manifestPath);
   const h1Digest = sha256File(h1Path);
-  const h1 = await qualifiedH1(root, h1Path);
+  const { h1, evidenceRef } = await qualifiedH1(root, h1Path);
   const { receipts, reports } = readCatalogCloseoutReceipts(receiptsDir);
   const context = {
     currentHead: head,
     artifactDigest: sha256File(artifactPath),
-    h1EvidenceRef: "h1-provenance.v1",
+    h1EvidenceRef: evidenceRef,
     h1EvidenceDigest: h1Digest,
     h1Binding: Object.fromEntries(
       ["catalogRevision", "profile", "projectionDigest", "handlerSetDigest"].map((key) => [

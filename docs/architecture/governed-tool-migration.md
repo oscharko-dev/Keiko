@@ -208,11 +208,18 @@ resistance. H1 and subsequent owners must deliver production-port tests for thei
 ## Verification and delivery evidence
 
 The final `CatalogCloseout` artifact is produced with `npm run check:tool-catalog-closeout --
---artifact <qualified-package> --receipts <receipt-directory> --h1 <postmerge-handoff>
+--artifact <qualified-package> --receipts <receipt-directory> --h1 <reviewed-h1-record>
 --manifest <external-manifest> --write`. The manifest must be outside the clean source checkout;
-symlink redirection back into the checkout is rejected. The postmerge handoff can also be external,
-so recording the actual merge identity never requires inventing a future source commit. Its
-reachability, source content and producer identity use the existing H1 validators unchanged.
+symlink redirection back into the checkout is rejected. Before integration, supply
+`h1-producer-checkpoint.v1.json`: the existing checkpoint validator verifies the real producer and
+consumer history, current owned contents, recomputed producer identity, and pinned verification
+and independent review receipts. The manifest explicitly retains `h1-producer-checkpoint.v1` as its
+evidence reference. This permits #3415 to qualify before #3390 and the final consolidated merge.
+
+After integration, supply `h1-provenance.v1.json`. That reference additionally invokes the existing
+postmerge validator and requires a real dev-reachable integration commit. This record may be
+external, so recording the actual merge identity never requires inventing a future source commit.
+A checkpoint reference cannot be presented as landed provenance.
 
 Each named check uses the existing `.receipt.json`/`.artifact` reader. Structured reports are
 parsed from the same bytes whose digest the reader retains. They carry only exact source/package
@@ -224,9 +231,10 @@ binding. Profile rows preserve each consumer's actual catalog revision rather th
 aggregate revision for separately composed profiles. Source-only Linux CI checks retain their real
 platform/runtime and a null package digest; they do not claim to have inspected a local package.
 
-This final artifact is not a premerge gate or an alternative merge authority. It requires the actual
-postmerge H1 proof and supplements the source gates and exact-head required CI. There is no final
-closeout artifact while live qualification, required checks or actual merge evidence is missing.
+This artifact supplements the source gates and exact-head required CI; it grants no merge
+authority. A premerge artifact still requires actual consumer qualification and every named check.
+Postmerge closure additionally requires the provenance phase and verified integration results.
+Missing live qualification or required-check evidence never produces a qualified artifact.
 
 Run the issue's minimum loop, `check:governed-tool-contract`, `check:adr-index`, existing architecture
 negative gates and `gates:sonar`. The raw-coordinate regression was executed against the unchanged
