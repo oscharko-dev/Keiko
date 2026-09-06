@@ -1,6 +1,8 @@
 // Closed, body-free #3390 projection of the existing real-binary journey report. The runner owns
 // the completeness decision; this leaf owns only the shape accepted by the shared receipt reader.
 
+import { resolveOpenCodeContextGeometry } from "../../packages/keiko-server/dist/coding-runtime/opencodeLaunchProfile.js";
+
 const COMMIT_SHA = /^[a-f0-9]{40}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const EVIDENCE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
@@ -45,16 +47,45 @@ function runIsValid(value) {
   );
 }
 
+function admittedGeometry(admission) {
+  if (
+    !exactKeys(admission, [
+      "maxPromptTokens",
+      "maxOutputTokens",
+      "maxInputMessages",
+      "maxRequestBytes",
+    ])
+  ) {
+    return undefined;
+  }
+  try {
+    return resolveOpenCodeContextGeometry(admission);
+  } catch {
+    return undefined;
+  }
+}
+
+function limitsMatchGeometry(value) {
+  const geometry = admittedGeometry(value?.admission);
+  return (
+    geometry !== undefined &&
+    value.contextWindow === geometry.contextWindowTokens &&
+    value.inputTokens === geometry.maxInputTokens &&
+    value.outputTokens === geometry.maxOutputTokens
+  );
+}
+
 function limitsAreValid(value) {
   return (
     exactKeys(value, [
+      "admission",
       "contextWindow",
+      "inputTokens",
       "outputTokens",
       "gatewayRequestCount",
       "gatewayCatalogBindingRequestCount",
     ]) &&
-    value.contextWindow === 32_768 &&
-    value.outputTokens === 4_096 &&
+    limitsMatchGeometry(value) &&
     Number.isSafeInteger(value.gatewayRequestCount) &&
     value.gatewayRequestCount > 0 &&
     value.gatewayCatalogBindingRequestCount === value.gatewayRequestCount

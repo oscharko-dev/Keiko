@@ -22,6 +22,7 @@ import {
   governedExecutable,
   missingRealBinaryEvidence,
   readGatewayObservation,
+  readDeclaredChildGeometry,
   readH1SearchEvidence,
   readManagedCatalogEvidence,
   retainJourneyActivityLog,
@@ -32,6 +33,7 @@ import {
   writeRealBinaryQualificationEvidence,
 } from "../run-code-task-real-binary.mjs";
 import { readReceipts } from "../check-coding-issue-journey-evidence.mjs";
+import { functionalGatewayConfig } from "../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.js";
 
 const H1_SEARCH = {
   schemaVersion: 1,
@@ -63,16 +65,38 @@ const MANAGED_CATALOG = {
   },
 };
 
+function productionDeclaredGeometry() {
+  const stateDir = mkdtempSync(join(tmpdir(), "keiko-declared-geometry-"));
+  const configPath = join(stateDir, "bff-state", "ui-db", "keiko.config.json");
+  try {
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify(functionalGatewayConfig()));
+    const geometry = readDeclaredChildGeometry(stateDir);
+    if (geometry === undefined) throw new TypeError("production geometry fixture is unavailable");
+    return geometry;
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+}
+
 function completeQualificationReport() {
+  const declaredGeometry = productionDeclaredGeometry();
   return buildJourneyReport({
     sourceHead: SOURCE_HEAD,
     exitCode: 0,
     gateway: {
       requestCount: 2,
-      outputTokenLimits: [4_096],
+      outputTokenLimits: [declaredGeometry.maxOutputTokens],
       catalogBindingRequestCount: 2,
     },
-    limits: [{ context: 32_768, output: 4_096 }],
+    declaredGeometry,
+    limits: [
+      {
+        context: declaredGeometry.contextWindowTokens,
+        input: declaredGeometry.maxInputTokens,
+        output: declaredGeometry.maxOutputTokens,
+      },
+    ],
     missingPayload: { passed: true, unavailableReason: "payload-missing" },
     h1Search: H1_SEARCH,
     managedCatalog: MANAGED_CATALOG,
@@ -185,34 +209,67 @@ describe("#2483 real-binary observation helpers", () => {
         JSON.stringify({
           provider: {
             "keiko-runtime": {
-              models: { coding: { limit: { context: 32_768, output: 4_096 } } },
+              models: { coding: { limit: { context: 32_768, input: 28_672, output: 4_096 } } },
             },
           },
           prompt: "must-not-be-projected",
         }),
       );
 
-      expect(readMaterializedLimits(stateDir)).toEqual([{ context: 32_768, output: 4_096 }]);
+      expect(readMaterializedLimits(stateDir)).toEqual([
+        { context: 32_768, input: 28_672, output: 4_096 },
+      ]);
     } finally {
       rmSync(stateDir, { recursive: true, force: true });
     }
   });
 
-  it("requires every real-binary acceptance observation before reporting success", () => {
-    const complete = {
-      sourceHead: SOURCE_HEAD,
-      journey: { exitCode: 0 },
-      limits: {
-        materializedChildLimits: [{ context: 32_768, output: 4_096 }],
-        gatewayRequestCount: 1,
-        gatewayCatalogBindingRequestCount: 1,
-        observedGatewayOutputTokenLimits: [4_096],
-      },
-      missingPayload: { passed: true, unavailableReason: "payload-missing" },
-      h1Search: H1_SEARCH,
-      managedCatalog: MANAGED_CATALOG,
-      activityLog: ACTIVITY_LOG,
+  it("derives declared geometry through the production selection and launch-profile owners", () => {
+    const config = { providers: ["fixture"] };
+    const metadata = {
+      maxPromptTokens: 128_000,
+      maxOutputTokens: 4_096,
+      maxInputMessages: 512,
+      maxRequestBytes: 1_048_576,
     };
+    const geometry = {
+      contextWindowTokens: 45_056,
+      maxInputTokens: 40_960,
+      maxOutputTokens: 4_096,
+    };
+    const seen = [];
+
+    expect(
+      readDeclaredChildGeometry(
+        "/private/state",
+        (path) => {
+          seen.push(path);
+          return config;
+        },
+        (input) => {
+          expect(input).toBe(config);
+          return { status: "available", runMetadata: metadata };
+        },
+        (input) => {
+          expect(input).toBe(metadata);
+          return geometry;
+        },
+      ),
+    ).toEqual({ ...geometry, runMetadata: metadata });
+    expect(seen[0]).toBe("/private/state/bff-state/ui-db/keiko.config.json");
+  });
+
+  it("derives the exact real-binary fixture geometry from the actual production owners", () => {
+    expect(productionDeclaredGeometry()).toMatchObject({
+      contextWindowTokens: 45_056,
+      maxInputTokens: 40_960,
+      maxOutputTokens: 4_096,
+    });
+  });
+
+  it("requires every real-binary acceptance observation before reporting success", () => {
+    const complete = completeQualificationReport();
+    const declared = complete.limits.declaredChildGeometry;
 
     expect(realBinaryEvidenceComplete(complete)).toBe(true);
     expect(realBinaryEvidenceComplete({ ...complete, h1Search: undefined })).toBe(false);
@@ -222,10 +279,82 @@ describe("#2483 real-binary observation helpers", () => {
         limits: { ...complete.limits, materializedChildLimits: [] },
       }),
     ).toBe(false);
+    expect(
+      realBinaryEvidenceComplete({
+        ...complete,
+        limits: {
+          ...complete.limits,
+          materializedChildLimits: [
+            {
+              context: declared.contextWindowTokens + 1,
+              input: declared.maxInputTokens,
+              output: declared.maxOutputTokens,
+            },
+          ],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      realBinaryEvidenceComplete({
+        ...complete,
+        limits: {
+          ...complete.limits,
+          materializedChildLimits: [
+            {
+              context: declared.contextWindowTokens,
+              input: declared.maxInputTokens + 1,
+              output: declared.maxOutputTokens,
+            },
+          ],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      realBinaryEvidenceComplete({
+        ...complete,
+        limits: {
+          ...complete.limits,
+          materializedChildLimits: [
+            ...complete.limits.materializedChildLimits,
+            {
+              context: declared.contextWindowTokens + 1,
+              input: declared.maxInputTokens,
+              output: declared.maxOutputTokens,
+            },
+          ],
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts the exact production-advertised geometry when its output matches gateway admission", () => {
+    const complete = completeQualificationReport();
+    const declared = complete.limits.declaredChildGeometry;
+
+    expect(realBinaryEvidenceComplete(complete)).toBe(true);
+    expect(buildRealBinaryScenarioArtifact(complete).limits).toEqual({
+      admission: declared.runMetadata,
+      contextWindow: declared.contextWindowTokens,
+      inputTokens: declared.maxInputTokens,
+      outputTokens: declared.maxOutputTokens,
+      gatewayRequestCount: 2,
+      gatewayCatalogBindingRequestCount: 2,
+    });
+    expect(
+      realBinaryEvidenceComplete({
+        ...complete,
+        limits: {
+          ...complete.limits,
+          observedGatewayOutputTokenLimits: [8_192],
+        },
+      }),
+    ).toBe(false);
   });
 
   it("projects the complete real-binary producer report into closed qualification evidence", () => {
-    const artifact = buildRealBinaryScenarioArtifact(completeQualificationReport());
+    const report = completeQualificationReport();
+    const artifact = buildRealBinaryScenarioArtifact(report);
+    const declared = report.limits.declaredChildGeometry;
 
     expect(artifact).toMatchObject({
       scenarioId: "real-binary-lane",
@@ -239,8 +368,10 @@ describe("#2483 real-binary observation helpers", () => {
         activityLogSha256: ACTIVITY_LOG.sha256,
       },
       limits: {
-        contextWindow: 32_768,
-        outputTokens: 4_096,
+        admission: declared.runMetadata,
+        contextWindow: declared.contextWindowTokens,
+        inputTokens: declared.maxInputTokens,
+        outputTokens: declared.maxOutputTokens,
         gatewayRequestCount: 2,
         gatewayCatalogBindingRequestCount: 2,
       },
@@ -259,7 +390,7 @@ describe("#2483 real-binary observation helpers", () => {
         proof: MANAGED_CATALOG.proof,
       },
     });
-    expect(JSON.stringify(artifact)).not.toMatch(/raw|path\/|endpoint|prompt|response/iu);
+    expect(JSON.stringify(artifact)).not.toMatch(/"raw|path\/|endpoint|"prompt"|"response"/iu);
   });
 
   it("checks the complete-run predicate before projecting report fields", () => {
@@ -332,20 +463,7 @@ describe("#2483 real-binary observation helpers", () => {
   });
 
   it("names every missing observation so a failed run explains itself", () => {
-    const complete = {
-      sourceHead: SOURCE_HEAD,
-      journey: { exitCode: 0 },
-      limits: {
-        materializedChildLimits: [{ context: 32_768, output: 4_096 }],
-        gatewayRequestCount: 1,
-        gatewayCatalogBindingRequestCount: 1,
-        observedGatewayOutputTokenLimits: [4_096],
-      },
-      missingPayload: { passed: true, unavailableReason: "payload-missing" },
-      h1Search: H1_SEARCH,
-      managedCatalog: MANAGED_CATALOG,
-      activityLog: ACTIVITY_LOG,
-    };
+    const complete = completeQualificationReport();
 
     expect(missingRealBinaryEvidence(complete)).toEqual([]);
     expect(missingRealBinaryEvidence({ ...complete, journey: { exitCode: 1 } })).toEqual([
@@ -365,7 +483,7 @@ describe("#2483 real-binary observation helpers", () => {
         ...complete,
         limits: { ...complete.limits, observedGatewayOutputTokenLimits: [8_192] },
       }),
-    ).toEqual(["no gateway request carried the effective output limit 4096"]);
+    ).toEqual(["no single materialized child geometry matched the admitted gateway output limit"]);
     expect(
       missingRealBinaryEvidence({
         ...complete,
@@ -385,20 +503,7 @@ describe("#2483 real-binary observation helpers", () => {
 
   it("writes managed qualification only after the whole real-binary journey is complete", () => {
     const directory = mkdtempSync(join(tmpdir(), "keiko-managed-observation-"));
-    const complete = {
-      sourceHead: SOURCE_HEAD,
-      journey: { exitCode: 0 },
-      limits: {
-        materializedChildLimits: [{ context: 32_768, output: 4_096 }],
-        gatewayRequestCount: 1,
-        gatewayCatalogBindingRequestCount: 1,
-        observedGatewayOutputTokenLimits: [4_096],
-      },
-      missingPayload: { passed: true, unavailableReason: "payload-missing" },
-      h1Search: H1_SEARCH,
-      managedCatalog: MANAGED_CATALOG,
-      activityLog: ACTIVITY_LOG,
-    };
+    const complete = completeQualificationReport();
     process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_DIR = directory;
     process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_HEAD = "2".repeat(40);
     try {
@@ -442,7 +547,7 @@ describe("#2483 real-binary observation helpers", () => {
       missingPayload: undefined,
     });
 
-    expect(gaps).toHaveLength(10);
+    expect(gaps).toHaveLength(9);
     expect(gaps).toContain("no exact source head was retained");
     expect(gaps).toContain("no useful H1 search-to-read result evidence");
   });
@@ -583,15 +688,23 @@ describe("#2483 real-binary observation helpers", () => {
   });
 
   it("assembles an evidence report that carries counts and outcomes only", () => {
+    const declaredGeometry = productionDeclaredGeometry();
     const report = buildJourneyReport({
       sourceHead: SOURCE_HEAD,
       exitCode: 0,
       gateway: {
         requestCount: 7,
-        outputTokenLimits: [4096],
+        outputTokenLimits: [declaredGeometry.maxOutputTokens],
         catalogBindingRequestCount: 7,
       },
-      limits: [{ context: 32_768, output: 4_096 }],
+      declaredGeometry,
+      limits: [
+        {
+          context: declaredGeometry.contextWindowTokens,
+          input: declaredGeometry.maxInputTokens,
+          output: declaredGeometry.maxOutputTokens,
+        },
+      ],
       missingPayload: { passed: true, unavailableReason: "payload-missing" },
       h1Search: H1_SEARCH,
       managedCatalog: MANAGED_CATALOG,

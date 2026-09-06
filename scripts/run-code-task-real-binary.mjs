@@ -22,6 +22,12 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { clearInterval, setInterval } from "node:timers";
 import { fileURLToPath } from "node:url";
 
+import {
+  loadConfigFromFile,
+  resolveCodingSafeSidecarGatewayProfile,
+} from "@oscharko-dev/keiko-model-gateway";
+import { resolveOpenCodeContextGeometry } from "../packages/keiko-server/dist/coding-runtime/opencodeLaunchProfile.js";
+
 import { hostDevLaneTarget } from "./stage-dev-coding-runtime.mjs";
 import { realBinaryScenarioArtifactErrors } from "./lib/coding-issue-journey-real-binary-evidence.mjs";
 import { writeQualificationEvidenceReceipt } from "./lib/qualification-evidence-receipt.mjs";
@@ -227,14 +233,53 @@ export function readMaterializedLimits(stateDir) {
     try {
       const config = JSON.parse(readFileSync(path, "utf8"));
       const limit = config.provider?.["keiko-runtime"]?.models?.coding?.limit;
-      return Number.isSafeInteger(limit?.context) && Number.isSafeInteger(limit?.output)
-        ? [{ context: limit.context, output: limit.output }]
+      const geometry = [limit?.context, limit?.input, limit?.output];
+      return geometry.every((value) => Number.isSafeInteger(value))
+        ? [{ context: limit.context, input: limit.input, output: limit.output }]
         : [];
     } catch {
       return [];
     }
   });
-  return [...new Map(limits.map((limit) => [`${limit.context}:${limit.output}`, limit])).values()];
+  return [
+    ...new Map(
+      limits.map((limit) => [`${limit.context}:${limit.input}:${limit.output}`, limit]),
+    ).values(),
+  ];
+}
+
+export function readDeclaredChildGeometry(
+  stateDir,
+  loadConfig = loadConfigFromFile,
+  resolveProfile = resolveCodingSafeSidecarGatewayProfile,
+  resolveGeometry = resolveOpenCodeContextGeometry,
+) {
+  try {
+    const config = loadConfig(join(stateDir, "bff-state", "ui-db", "keiko.config.json"));
+    const profile = resolveProfile(config);
+    if (profile.status !== "available") return undefined;
+    const geometry = resolveGeometry(profile.runMetadata);
+    return geometry === undefined
+      ? undefined
+      : {
+          ...geometry,
+          runMetadata: {
+            maxPromptTokens: profile.runMetadata.maxPromptTokens,
+            maxOutputTokens: profile.runMetadata.maxOutputTokens,
+            maxInputMessages: profile.runMetadata.maxInputMessages,
+            maxRequestBytes: profile.runMetadata.maxRequestBytes,
+          },
+        };
+  } catch {
+    return undefined;
+  }
+}
+
+function readGatewayGeometryEvidence(context) {
+  return {
+    gateway: readGatewayObservation(context.gatewayObservation),
+    declaredGeometry: readDeclaredChildGeometry(context.stateDir),
+  };
 }
 
 function createMaterializedLimitObserver(stateDir) {
@@ -354,6 +399,7 @@ export function buildJourneyReport(input) {
       completedAt: input.completedAt,
     },
     limits: {
+      declaredChildGeometry: input.declaredGeometry,
       materializedChildLimits: input.limits,
       gatewayRequestCount: input.gateway.requestCount,
       gatewayCatalogBindingRequestCount: input.gateway.catalogBindingRequestCount,
@@ -564,6 +610,45 @@ function hasStableGatewayCatalogBinding(limits) {
   );
 }
 
+function onlyItem(values) {
+  return Array.isArray(values) && values.length === 1 ? values[0] : undefined;
+}
+
+function validDeclaredChildGeometry(geometry) {
+  if (geometry?.runMetadata === undefined) return false;
+  let derived;
+  try {
+    derived = resolveOpenCodeContextGeometry(geometry.runMetadata);
+  } catch {
+    return false;
+  }
+  return (
+    derived !== undefined &&
+    derived.contextWindowTokens === geometry.contextWindowTokens &&
+    derived.maxInputTokens === geometry.maxInputTokens &&
+    derived.maxOutputTokens === geometry.maxOutputTokens
+  );
+}
+
+function observedChildGeometry(limits) {
+  const geometry = onlyItem(limits.materializedChildLimits);
+  const admittedOutput = onlyItem(limits.observedGatewayOutputTokenLimits);
+  const declared = limits.declaredChildGeometry;
+  if (
+    !validDeclaredChildGeometry(declared) ||
+    !Number.isSafeInteger(geometry?.context) ||
+    !Number.isSafeInteger(geometry.input) ||
+    !Number.isSafeInteger(geometry.output) ||
+    geometry.context !== declared.contextWindowTokens ||
+    geometry.input !== declared.maxInputTokens ||
+    geometry.output !== declared.maxOutputTokens ||
+    admittedOutput !== declared.maxOutputTokens
+  ) {
+    return undefined;
+  }
+  return geometry;
+}
+
 /**
  * Names every observation the evidence predicate requires but the report does not carry. Empty means
  * the report is complete; the list is the operator-facing explanation of a failed run.
@@ -574,15 +659,12 @@ export function missingRealBinaryEvidence(report) {
   if (!validSourceHead(report)) gaps.push("no exact source head was retained");
   if (report.journey.exitCode !== 0)
     gaps.push(`journey exit code ${String(report.journey.exitCode)}`);
-  if (!limits.materializedChildLimits.some((l) => l.context === 32_768 && l.output === 4_096)) {
-    gaps.push("no materialized child limits of context 32768 / output 4096");
+  if (observedChildGeometry(limits) === undefined) {
+    gaps.push("no single materialized child geometry matched the admitted gateway output limit");
   }
   if (limits.gatewayRequestCount <= 0) gaps.push("no gateway request was observed");
   if (!hasStableGatewayCatalogBinding(limits)) {
     gaps.push("not every gateway request carried the stable productive catalog binding");
-  }
-  if (!limits.observedGatewayOutputTokenLimits.includes(4_096)) {
-    gaps.push("no gateway request carried the effective output limit 4096");
   }
   gaps.push(...missingPayloadEvidence(report.missingPayload));
   if (!validH1SearchEvidence(report.h1Search))
@@ -607,11 +689,8 @@ export function realBinaryEvidenceComplete(report) {
   const limits = report.limits;
   return (
     validJourneyIdentity(report) &&
-    limits.materializedChildLimits.some(
-      (limit) => limit.context === 32_768 && limit.output === 4_096,
-    ) &&
+    observedChildGeometry(limits) !== undefined &&
     hasStableGatewayCatalogBinding(limits) &&
-    limits.observedGatewayOutputTokenLimits.includes(4_096) &&
     report.missingPayload?.passed === true &&
     report.missingPayload.unavailableReason === "payload-missing" &&
     validH1SearchEvidence(report.h1Search) &&
@@ -621,7 +700,8 @@ export function realBinaryEvidenceComplete(report) {
 }
 
 export function buildRealBinaryScenarioArtifact(report) {
-  if (!realBinaryEvidenceComplete(report)) {
+  const geometry = observedChildGeometry(report.limits);
+  if (!realBinaryEvidenceComplete(report) || geometry === undefined) {
     throw new TypeError("real-binary qualification evidence is incomplete");
   }
   const artifact = {
@@ -638,8 +718,10 @@ export function buildRealBinaryScenarioArtifact(report) {
       activityLogSha256: report.activityLog.sha256,
     },
     limits: {
-      contextWindow: 32_768,
-      outputTokens: 4_096,
+      admission: report.limits.declaredChildGeometry.runMetadata,
+      contextWindow: geometry.context,
+      inputTokens: geometry.input,
+      outputTokens: geometry.output,
       gatewayRequestCount: report.limits.gatewayRequestCount,
       gatewayCatalogBindingRequestCount: report.limits.gatewayCatalogBindingRequestCount,
     },
@@ -760,7 +842,7 @@ export async function runRealBinaryJourney() {
   );
   const missingPayload =
     exitCode === 0 ? runMissingPayloadProbe(target, context.probeState) : undefined;
-  const gateway = readGatewayObservation(context.gatewayObservation);
+  const { gateway, declaredGeometry } = readGatewayGeometryEvidence(context);
   const h1Search = readH1SearchEvidence(context.stateDir);
   const managedCatalog = readManagedCatalogEvidence(context.stateDir, gateway, h1Search);
   const activityLog = retainJourneyActivityLog(context);
@@ -770,6 +852,7 @@ export async function runRealBinaryJourney() {
     sourceHead,
     exitCode,
     gateway,
+    declaredGeometry,
     limits: limitObserver.report(),
     missingPayload,
     h1Search,
