@@ -54,7 +54,7 @@ function modeAssertions(scenarioId, assertions) {
 function ciAssertions(assertions) {
   return [
     assertions.length === 5,
-    exactAssertion(assertions, "ci-terminal-state:ready"),
+    exactAssertion(assertions, "ci-terminal-state:technical-ready"),
     exactAssertion(assertions, "observed-failure-before-ready:true"),
     hasAssertion(assertions, "required-checks-total", (value) => /^\d{1,9}$/u.test(value)),
     exactAssertion(assertions, "repair-head-changed:true"),

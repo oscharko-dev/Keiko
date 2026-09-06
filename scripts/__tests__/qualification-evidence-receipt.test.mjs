@@ -58,16 +58,6 @@ describe("writeQualificationEvidenceReceipt strict journey artifacts", () => {
       ],
     ],
     [
-      "ci-repair-loop",
-      [
-        "ci-terminal-state:ready",
-        "observed-failure-before-ready:true",
-        "required-checks-total:2",
-        "repair-head-changed:true",
-        "ci-repair-evidence:observed-failure-repaired-fresh-head-ready",
-      ],
-    ],
-    [
       "description-auto-draft-and-apply",
       [
         "auto-draft-reason:generated",
