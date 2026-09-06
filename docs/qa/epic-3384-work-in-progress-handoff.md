@@ -28,20 +28,27 @@ qualified yet; the historical table below must not be read as a current green ba
 - Root typecheck passed on the subsequent binder/result/effects working tree, and 539 targeted
   catalog/runtime tests passed. An independent three-file facade/settlement run passed 129 tests.
   These are checkpoint results; the final immutable full-server and complete quality runs remain open.
-- H1's active duplicate inventory is zero. The premerge producer checkpoint validator is
-  implemented, and `b39c6705` adds an exact-source final CatalogCloseout validator. The retained
-  H1 producer checkpoint pins the independently reviewed f3e4f436 source and its actual 70-test
-  verification receipt. This is deterministic producer evidence, not live-runtime or postmerge
-  proof. No future merge identity has been fabricated.
-- Catalog and native reference performance measurements, real-model qualification, complete
-  final gates, exact-head PR checks, postmerge `dev` checks and completed issue closure remain open.
+- H1's active duplicate inventory is zero. At exact `2658956c`, the independent producer
+  verification passed 70 production-managed tests and rederived the canonical 647-path Git-byte
+  digest. The real pinned OpenCode composition then completed causally linked repository-search and
+  bounded-read settlements with one actual handler-set binding across all eight gateway requests.
+  The source checkpoint and reviewed receipts bind those facts without inventing postmerge provenance.
+- Catalog reference performance is measured in the committed calibrated Linux arm64 evidence at
+  `9889d9d3`. At exact `2658956c`, six nonmanaged production test files passed 81 tests, the real
+  managed runtime completed successfully, and the five-consumer qualifier matched all seven
+  observations to byte-identical staged-package files. Coding-runtime performance under #2952,
+  final exact-head gates, postmerge `dev` checks and completed issue closure remain open.
 - The owner requires five successful real Issue → task → PR → merge → issue-closed runs. The
   controlled repository has five prepared task issues (#1, #3, #4, #5 and #6), spanning Ask,
-  Supervised and Full access. No successful run is claimed. Four attempts have retained failure
-  receipts: path binding, stale tool proof, canonical vault persistence and missing Coding use case.
-  The first two admitted no paid call; actual readiness probes in attempts 3 and 4 consumed a
-  combined USD 0.003240. Attempt 5 starts from immutable 700fd4c0 with the supported setup fix and
-  reuses the fresh provider proof. All attempts, probes and retries share one durable USD 50 ledger.
+  Supervised and Full access. The live matrix remains **0/5 complete**. Attempt 11b for issue #1
+  reached real search/read/discover/edit/verification effects, applied an edit and observed one
+  failing verifier, then stopped on an invalid-arguments/GATEWAY_MALFORMED_TOOL_CALL response. It
+  created no PR, commit or qualification receipt; its two modified tracked files are preserved for
+  recovery. The durable ledger now retains a conservative USD 7.330651500 admission charge,
+  including a USD 6.502752000 unknown-cost upper bound; this is not represented as measured or
+  provider-invoiced usage. USD 92.669348500 remains under the single USD 100 ceiling. The retained
+  body-free attempt receipt is `/tmp/keiko-3384-audit/attempt-11b-failure.json` (SHA-256
+  `4835db693abf387736ab2152b24d51eec29f44d3d68ef1c515a2eefeccf60d48`).
 
 ## Historical pause checkpoint — September 5
 
@@ -58,7 +65,8 @@ Apple, Windows and other platform signing/notarization and Atlassian work from t
 accepted delivery. Separate release qualification issues remain open. Coding
 confinement and performance remain in scope. The approved controlled repository is
 `oscharko/Wegwerf-Repo`; the aggregate budget for all real-model attempts and retries
-is USD 50. At the historical September 5 pause no paid model request had been launched. The active
+is USD 100, raised from USD 50 by explicit owner authorization on 2026-09-06. At the historical
+September 5 pause no paid model request had been launched. The active
 September 6 checkpoint above records the resumed probe spend and attempts. Configuration
 availability does not constitute a live qualification receipt.
 
@@ -91,37 +99,33 @@ availability does not constitute a live qualification receipt.
 
 These are actual checkpoint results, not claims about the complete final tree:
 
-| Checkpoint / scope                                                      | Result                                                                                                                                       |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Package coverage at `9b617173`                                          | 39,711 passed; 3 failed; 49 skipped. Two inventory failures and the real-OS test fixture failure were subsequently repaired in focused runs. |
-| Package coverage floors at `9b617173`                                   | All four package metric gates, strict UI/CLI release targets, and 68 per-file floors passed.                                                 |
-| Updated coverage inventory                                              | 66 tests passed; enforced package/per-file thresholds preserved or raised.                                                                   |
-| UI coverage at `a9869962`                                               | 444 files, 7,992 tests passed; 1 skipped. Lines 92.92%, branches 82.59%.                                                                     |
-| Script coverage at `a9869962`                                           | 196 files, 5,042 tests passed; 26 skipped.                                                                                                   |
-| Full lint / architecture / negative architecture / format at `9b617173` | Passed.                                                                                                                                      |
-| Local Sonar at `ca664db2`                                               | Passed; rerun required for later changes.                                                                                                    |
-| Latest catalog closeout and busy-delivery targeted run                  | 8 files, 263 tests passed. Active migration closeout gate passed; postmerge H1 identities remain unset.                                      |
-| Question/migration targeted suites                                      | 196 tests passed; additional production question/route coverage 84 passed.                                                                   |
-| Latest root focused lint                                                | Two remaining errors: an unnecessary narrowed readiness condition and a void-expression arrow in the migration test.                         |
-| Combined final typecheck/build                                          | Not qualified. An intermediate complete typecheck passed during catalog migration; newer sandbox/module and review edits need a fresh run.   |
+| Checkpoint / scope                                                      | Result                                                                                                                                                                            |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Package coverage at `9b617173`                                          | 39,711 passed; 3 failed; 49 skipped. Two inventory failures and the real-OS test fixture failure were subsequently repaired in focused runs.                                      |
+| Package coverage floors at `9b617173`                                   | All four package metric gates, strict UI/CLI release targets, and 68 per-file floors passed.                                                                                      |
+| Updated coverage inventory                                              | 66 tests passed; enforced package/per-file thresholds preserved or raised.                                                                                                        |
+| UI coverage at `a9869962`                                               | 444 files, 7,992 tests passed; 1 skipped. Lines 92.92%, branches 82.59%.                                                                                                          |
+| Script coverage at `a9869962`                                           | 196 files, 5,042 tests passed; 26 skipped.                                                                                                                                        |
+| Full lint / architecture / negative architecture / format at `9b617173` | Passed.                                                                                                                                                                           |
+| Local Sonar at `ca664db2`                                               | Passed; rerun required for later changes.                                                                                                                                         |
+| Exact `2658956c` H1 and packaged five-consumer qualification            | H1: 3 files/70 tests and canonical 647-path digest passed. Consumers: 6 nonmanaged files/81 tests plus one real managed runtime observation; staged-package byte matching passed. |
+| Question/migration targeted suites                                      | 196 tests passed; additional production question/route coverage 84 passed.                                                                                                        |
+| CI export/package-surface regression repair at `2658956c`               | `check:knip`, root typecheck and trusted assembled package-surface check passed; package surface contained 5,610 files.                                                           |
+| Complete final gate set                                                 | Still pending after the latest evidence-only changes; exact-head CI, coverage, Sonar, coding-performance and postmerge checks remain required.                                    |
 
 ## Work to resume
 
-1. Finish the interrupted sandbox and draft-digest P1 repairs and the cached-signal
-   description-retention defect; rerun the complete positive delivery and handoff journeys.
-2. Repair the two known focused lint errors, refresh generated catalogs/source hashes,
-   and remeasure inventory if additional production files remain.
-3. Finish the acceptance map for #3411–#3415 and reconcile historical documentation.
-   Keep actual postmerge H1/issue closure facts conditional on the owner's merge.
-4. Finish review resolution. The last fetched snapshot at 18:15 UTC had 49 unresolved
-   conversations, including new findings delegated or repaired afterward. Fetch fresh
-   state before resolving anything. CodeRabbit's 926-file/100-file-limit notice was
-   minimized at the owner's request; other reviewers remain authoritative inputs.
-5. Enforce the USD 50 aggregate budget before every paid provider attempt, including
-   retries and restarts, then execute the real-model/GitHub qualification. Budget
-   configuration currently supplies metadata, not a proven pre-call monetary ceiling.
-6. Complete seven-mode visual/accessibility evidence, the agreed coding performance
-   reference runs, full final gates, packaged surface smoke and exact-head required CI.
+1. Complete five successful real-model Issue → task → PR → merge → closed-issue flows in
+   the controlled repository. Retain every failure and retry in the one durable ledger and keep the
+   conservative total below USD 100; the current state is 0/5 and USD 7.330651500 admitted.
+2. Finish the remaining #2952 coding-runtime measurement and the applicable current-head
+   visual/accessibility evidence. Catalog performance and five-consumer packaged qualification are
+   complete at their recorded checkpoints and must remain distinct from these open lanes.
+3. Finish all non-CodeRabbit review conversations, run the full final local gate matrix and obtain
+   exact-head required CI. CodeRabbit's oversized-PR limit is the sole ignored review failure.
+4. Merge through the authorized guarded path, verify the exact merged `dev` head, then write the
+   real postmerge H1 provenance and close the completed in-scope issues. Do not qualify excluded
+   signing/notarization or Atlassian work, and delete the delivery branch only after closure.
 
 The detailed local execution logs and review disposition ledgers are under
 `/tmp/keiko-3384-audit/` on the audit machine. They are transient local diagnostics;
