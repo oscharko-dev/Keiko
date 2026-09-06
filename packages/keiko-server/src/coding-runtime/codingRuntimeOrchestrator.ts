@@ -1515,13 +1515,25 @@ export class CodingRuntimeOrchestrator {
     const parsed = this.parseEndRequest(kind, input);
     const current = this.current();
     if (!this.isEndRequestConsistent(parsed, runId, current)) return this.fail("invalid-intent");
-    if (!current) return { ok: true, snapshot: this.projection.idle() };
+    if (!current) return this.stopSettledRun(kind, runId);
     if (current.state === "recovery-required") return this.fail("recovery-required");
     this.deps.safeActivityProjection?.purge(runId, kind === "stop" ? "stop" : "takeover");
     const stopping = this.createEndStoppingTransition(kind, current);
     if (!stopping.ok) return stopping;
     const result = await this.executeEndRequest(kind, current.runId);
     return this.completeEndRequest(kind, runId, result);
+  }
+
+  private stopSettledRun(
+    kind: "stop" | "takeover",
+    runId: string,
+  ): CodingRuntimeOrchestratorResult {
+    const settled = kind === "stop" ? this.deps.snapshots.get(runId) : undefined;
+    if (settled === undefined || !TERMINAL_STATES.has(settled.state)) {
+      return { ok: true, snapshot: this.projection.idle() };
+    }
+    this.deps.safeActivityProjection?.purge(runId, "stop");
+    return { ok: true, snapshot: this.publicSnapshotWithDescription(settled) };
   }
 
   private completeEndRequest(

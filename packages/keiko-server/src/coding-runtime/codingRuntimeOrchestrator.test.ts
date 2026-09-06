@@ -532,6 +532,30 @@ describe("CodingRuntimeOrchestrator", () => {
     });
   });
 
+  it("purges only the requested run when stop follows natural terminal settlement", async () => {
+    const f = fixture();
+    let resolveCompletion: ((outcome: "succeeded") => void) | undefined;
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: new Promise<"succeeded">((resolve) => {
+        resolveCompletion = resolve;
+      }),
+    });
+    await f.orchestrator.start(start);
+    resolveCompletion?.("succeeded");
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+
+    expect(
+      successfulSnapshot(await f.orchestrator.stop("run-1", { requestId: "run-1" })),
+    ).toMatchObject({ runId: "run-1", state: "succeeded" });
+    expect(f.safeActivityProjection.purge).toHaveBeenCalledWith("run-1", "stop");
+
+    await f.orchestrator.stop("run-other", { requestId: "run-other" });
+    expect(f.safeActivityProjection.purge).not.toHaveBeenCalledWith("run-other", "stop");
+  });
+
   // The constructor and the startup reconcile restore the settled pointer from the durable ledger.
   // Without a reload test they can regress silently: the in-memory cases below never exercise them
   // (CodeRabbit on #3270). The ledger holds three terminal rows here, so the assertion also proves
