@@ -22,10 +22,16 @@ import type {
   ToolDescriptor,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
+  BoundToolSet,
   BoundToolInvocation,
   CatalogToolDispatchOutcome,
   OfferedToolSet,
+  ToolInvocationReceipt,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
+import type {
+  ToolRef,
+  ToolResultEnvelope,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   catalogJsonBytes,
   compileToolProjection,
@@ -55,6 +61,50 @@ function offeredSet(catalog: ToolCatalog, projection: CompiledProjection): Offer
   };
 }
 
+/** Body-free identity of the exact ready projection bound to one existing ToolPort. */
+export interface LegacyPortCatalogBindingEvidence extends BoundToolSet {
+  readonly toolRefs: readonly ToolRef[];
+}
+
+export type LegacyPortCatalogLifecycleObservation =
+  | {
+      readonly phase: "binding";
+      readonly binding: LegacyPortCatalogBindingEvidence;
+    }
+  | {
+      readonly phase: "invocation-started";
+      readonly binding: LegacyPortCatalogBindingEvidence;
+      readonly invocationId: string;
+      readonly toolRef: ToolRef;
+      readonly reservationId: string;
+    }
+  | {
+      readonly phase: "invocation-settled";
+      readonly binding: LegacyPortCatalogBindingEvidence;
+      readonly invocationId: string;
+      readonly toolRef: ToolRef;
+      readonly settlementId: string;
+      readonly reservationId: string | null;
+      readonly status: ToolResultEnvelope["status"];
+      readonly reason: ToolResultEnvelope["reason"];
+      readonly effectStarted: boolean;
+      readonly budgetDisposition: ToolInvocationReceipt["budgetDisposition"];
+      readonly inputBytes: number;
+      readonly outputBytes: number;
+      readonly resultCount: number;
+      readonly durationMs: number;
+      readonly truncated: boolean;
+    };
+
+export type LegacyPortCatalogLifecycleObserver = (
+  observation: LegacyPortCatalogLifecycleObservation,
+) => void;
+
+export interface LegacyPortCatalogBinding {
+  readonly factory: HarnessCatalogFactory;
+  readonly evidence: LegacyPortCatalogBindingEvidence;
+}
+
 /**
  * Adapts an existing ToolPort into a HarnessCatalogFactory bound to one profile of `catalog`.
  * The port's own `execute()` remains the sole dispatch path; this only supplies the settlement
@@ -65,15 +115,34 @@ export function createLegacyPortCatalogFactory(
   profile: CatalogVersionRef,
   port: ToolPort,
 ): HarnessCatalogFactory {
+  return createLegacyPortCatalogBinding(catalog, profile, port).factory;
+}
+
+/**
+ * Builds the adapter and exposes its exact body-free binding identity to production callers that
+ * must persist catalog lifecycle evidence. The optional observer sees no arguments or result body.
+ */
+export function createLegacyPortCatalogBinding(
+  catalog: ToolCatalog,
+  profile: CatalogVersionRef,
+  port: ToolPort,
+  observe?: LegacyPortCatalogLifecycleObserver,
+): LegacyPortCatalogBinding {
   const projection = compileToolProjection(catalog, profile);
+  const offered = offeredSet(catalog, projection);
+  const evidence: LegacyPortCatalogBindingEvidence = {
+    ...offered.binding,
+    toolRefs: offered.toolRefs,
+  };
   const advertisement: GatewayToolCatalogAdvertisement = {
     kind: "bound",
     catalog,
     projection,
-    offered: offeredSet(catalog, projection),
+    offered,
   };
-  return (context: HarnessCatalogContext): CatalogToolPort => {
+  const factory = (context: HarnessCatalogContext): CatalogToolPort => {
     let sequence = 0;
+    observe?.({ phase: "binding", binding: evidence });
     const nextInvocationId = (): string => {
       sequence += 1;
       return `${context.runId}-${projection.profile.id}-${String(sequence)}`;
@@ -94,12 +163,15 @@ export function createLegacyPortCatalogFactory(
           projection,
           port,
           context,
+          evidence,
+          observe,
           request.toolCallId,
           request.invocation,
           nextInvocationId(),
         ),
     };
   };
+  return { factory, evidence };
 }
 
 interface DispatchTarget {
@@ -174,7 +246,7 @@ function handlerFailedOutcome(
   invocation: BoundToolInvocation,
   invocationId: string,
   reservation: ToolInvocationBudgetReservation | undefined,
-): CatalogToolDispatchOutcome {
+): Extract<CatalogToolDispatchOutcome, { readonly kind: "settled" }> {
   return {
     kind: "settled",
     receipt: {
@@ -211,7 +283,7 @@ function settledOutcome(
   reservationId: string,
   output: string,
   durationMs: number,
-): CatalogToolDispatchOutcome {
+): Extract<CatalogToolDispatchOutcome, { readonly kind: "settled" }> {
   return {
     kind: "settled",
     receipt: {
@@ -247,6 +319,8 @@ async function dispatch(
   projection: CompiledProjection,
   port: ToolPort,
   context: HarnessCatalogContext,
+  binding: LegacyPortCatalogBindingEvidence,
+  observe: LegacyPortCatalogLifecycleObserver | undefined,
   toolCallId: string,
   invocation: BoundToolInvocation,
   invocationId: string,
@@ -255,18 +329,62 @@ async function dispatch(
     throw new TypeError("Invalid legacy-port catalog invocation identity");
   const { descriptor, alias } = resolveDispatchTarget(catalog, projection, invocation.toolRef);
   const reserved = reserveOrFail(context, descriptor, invocationId);
-  if ("failed" in reserved) return handlerFailedOutcome(invocation, invocationId, reserved.failed);
+  if ("failed" in reserved) {
+    const outcome = handlerFailedOutcome(invocation, invocationId, reserved.failed);
+    observeSettlement(observe, binding, outcome);
+    return outcome;
+  }
+  return dispatchReserved({
+    binding,
+    context,
+    descriptor,
+    invocation,
+    invocationId,
+    observe,
+    port,
+    toolCallId,
+    alias,
+    reservation: reserved.reservation,
+  });
+}
+
+interface ReservedDispatchInput {
+  readonly binding: LegacyPortCatalogBindingEvidence;
+  readonly context: HarnessCatalogContext;
+  readonly descriptor: ToolDescriptor;
+  readonly invocation: BoundToolInvocation;
+  readonly invocationId: string;
+  readonly observe: LegacyPortCatalogLifecycleObserver | undefined;
+  readonly port: ToolPort;
+  readonly toolCallId: string;
+  readonly alias: string;
+  readonly reservation: ToolInvocationBudgetReservation;
+}
+
+async function dispatchReserved(input: ReservedDispatchInput): Promise<CatalogToolDispatchOutcome> {
+  const { binding, context, descriptor, invocation, invocationId, observe, port, toolCallId } =
+    input;
+  observe?.({
+    phase: "invocation-started",
+    binding,
+    invocationId,
+    toolRef: descriptor.toolRef,
+    reservationId: input.reservation.reservationId,
+  });
   const executed = await executeOrFail(
     port,
     context,
     toolCallId,
-    alias,
+    input.alias,
     invocation,
-    reserved.reservation,
+    input.reservation,
   );
-  if ("failed" in executed)
-    return handlerFailedOutcome(invocation, invocationId, reserved.reservation);
-  context.budgetPort.commit(reserved.reservation);
+  if ("failed" in executed) {
+    const outcome = handlerFailedOutcome(invocation, invocationId, input.reservation);
+    observeSettlement(observe, binding, outcome);
+    return outcome;
+  }
+  context.budgetPort.commit(input.reservation);
   context.observeExecution({
     toolRef: descriptor.toolRef,
     toolCallId,
@@ -274,11 +392,43 @@ async function dispatch(
     durationMs: executed.result.durationMs,
     ...(executed.result.metadata === undefined ? {} : { metadata: executed.result.metadata }),
   });
-  return settledOutcome(
+  const outcome = settledOutcome(
     invocation,
     invocationId,
-    reserved.reservation.reservationId,
+    input.reservation.reservationId,
     executed.result.output,
     executed.result.durationMs,
   );
+  observeSettlement(observe, binding, outcome);
+  return outcome;
+}
+
+function observeSettlement(
+  observe: LegacyPortCatalogLifecycleObserver | undefined,
+  binding: LegacyPortCatalogBindingEvidence,
+  outcome: Extract<CatalogToolDispatchOutcome, { readonly kind: "settled" }>,
+): void {
+  const { receipt, result } = outcome;
+  observe?.({
+    phase: "invocation-settled",
+    binding,
+    invocationId: receipt.invocationId,
+    toolRef: requireToolRef(result.toolRef),
+    settlementId: receipt.settlementId,
+    reservationId: receipt.reservationId,
+    status: result.status,
+    reason: result.reason,
+    effectStarted: receipt.effectStarted,
+    budgetDisposition: receipt.budgetDisposition,
+    inputBytes: result.metrics.inputBytes,
+    outputBytes: result.metrics.outputBytes,
+    resultCount: result.metrics.resultCount,
+    durationMs: result.metrics.durationMs,
+    truncated: result.page?.truncated ?? false,
+  });
+}
+
+function requireToolRef(value: ToolRef | null): ToolRef {
+  if (value !== null) return value;
+  throw new TypeError("Legacy-port settlement omitted its bound tool identity");
 }

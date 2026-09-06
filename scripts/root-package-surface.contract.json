@@ -276,6 +276,8 @@
     "GatewaySamplingParameterIssue",
     "GatewaySamplingParameterName",
     "GatewaySamplingParameters",
+    "GatewaySpendBudget",
+    "GatewaySpendReservation",
     "GatewayStreamChunk",
     "GatewayToolCatalogBridge",
     "GatewayToolCatalogError",

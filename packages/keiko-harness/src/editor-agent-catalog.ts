@@ -26,7 +26,11 @@ import {
   type CatalogRegistrationSet,
   type CatalogSetEntry,
 } from "@oscharko-dev/keiko-tool-catalog";
-import { createLegacyPortCatalogFactory } from "./legacy-port-catalog.js";
+import {
+  createLegacyPortCatalogBinding,
+  type LegacyPortCatalogBindingEvidence,
+  type LegacyPortCatalogLifecycleObserver,
+} from "./legacy-port-catalog.js";
 import type { HarnessCatalogFactory } from "./catalog-runtime.js";
 import type { ToolPort } from "./ports.js";
 
@@ -173,14 +177,34 @@ export function editorAgentRegistrationSet(): CatalogRegistrationSet {
   };
 }
 
+function activeEditorRegistrationSet(port: ToolPort): CatalogRegistrationSet {
+  const full = editorAgentRegistrationSet();
+  const definitions = port.listTools();
+  const aliases = definitions.map((definition) => definition.name);
+  const active = new Set(aliases);
+  if (active.size !== aliases.length)
+    throw new TypeError("The active editor tool surface contains duplicate aliases");
+  if (aliases.some((alias) => !EDITOR_CANONICAL_IDS_BY_NAME.has(alias)))
+    throw new TypeError("The active editor tool surface contains an unknown alias");
+  return { ...full, entries: full.entries.filter((entry) => active.has(entry.alias)) };
+}
+
 /**
  * Binds an existing editor ToolPort to the "editor" catalog profile (#3408). Callers that must
  * scope dispatch to fewer than the full nine tools (agentProducerRoute.ts's PRODUCER_TOOL_NAMES)
- * pass their own scoping ToolPort wrapper here rather than the raw EditorAgentToolHost -- the
- * catalog offers all nine (ADR-0175 D2), the caller's own port still decides what actually runs.
+ * pass their scoping ToolPort wrapper here. Its declared ready surface selects the catalog entries,
+ * while dispatch still resolves through that same port.
  */
-export function createEditorAgentCatalogFactory(port: ToolPort): HarnessCatalogFactory {
-  const set = editorAgentRegistrationSet();
+export interface EditorAgentCatalogFactory extends HarnessCatalogFactory {
+  readonly evidence: LegacyPortCatalogBindingEvidence;
+}
+
+export function createEditorAgentCatalogFactory(
+  port: ToolPort,
+  observe?: LegacyPortCatalogLifecycleObserver,
+): EditorAgentCatalogFactory {
+  const set = activeEditorRegistrationSet(port);
   const catalog = createKeikoToolCatalog([set]);
-  return createLegacyPortCatalogFactory(catalog, set.profile, port);
+  const binding = createLegacyPortCatalogBinding(catalog, set.profile, port, observe);
+  return Object.assign(binding.factory, { evidence: binding.evidence });
 }

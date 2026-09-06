@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import { createPrDescriptionApplicationService } from "./prDescriptionService.js";
 import { DescriptionFixture } from "./prDescriptionTestSupport.js";
 import type { PrDescriptionPreview } from "./prDescriptionTypes.js";
@@ -47,18 +46,6 @@ function instrumentSnapshotReservations(): { reserved: string[]; released: strin
   return { reserved, released };
 }
 
-async function captureUnrelatedSnapshots(count: number): Promise<void> {
-  for (let index = 0; index < count; index += 1) {
-    await fixture.snapshots.capture({
-      workspace: fixture.context.workspace,
-      baseRef: fixture.remote.identity.baseRef,
-      headRef: fixture.remote.identity.headRef,
-      expectedHeadSha: fixture.remote.identity.headSha,
-      accessScope: fixture.context.accessScope,
-      correlationId: `unrelated-${String(index)}`,
-    });
-  }
-}
 describe("body-only description application", () => {
   it("holds and applies the exact pre-generated artifact without a second generation", async () => {
     const artifact = await fixture.generateArtifact("Selected Chat intent");
@@ -542,14 +529,18 @@ describe("snapshot reservation lifecycle (wave-3 W3-4 item 3)", () => {
   it("keeps the reservation through the execution-time snapshot recheck", async () => {
     const { reserved, released } = instrumentSnapshotReservations();
     const { review, lease } = await approved();
-    const snapshotReader = fixture.options.execution.snapshotReader;
+    const snapshots = fixture.options.snapshots;
+    let recheckCount = 0;
     Object.assign(fixture.options, {
-      execution: {
-        ...fixture.options.execution,
-        snapshotReader: async (workspace: WorkspaceInfo) => {
-          await captureUnrelatedSnapshots(33);
-          if (snapshotReader === undefined) throw new Error("snapshot reader fixture is missing");
-          return snapshotReader(workspace);
+      snapshots: {
+        ...snapshots,
+        recheck: async (...args: Parameters<typeof snapshots.recheck>) => {
+          // The registry's own eviction regression proves that a reserved reference survives a
+          // capacity sweep. At this service boundary, assert the complementary lifecycle fact
+          // directly: every real execution-time recheck runs before the service releases it.
+          expect(released).toHaveLength(0);
+          recheckCount += 1;
+          return await snapshots.recheck(...args);
         },
       },
     });
@@ -557,6 +548,7 @@ describe("snapshot reservation lifecycle (wave-3 W3-4 item 3)", () => {
     await expect(fixture.service.executeApproved(review.proposalId, lease)).resolves.toMatchObject({
       outcome: "observed",
     });
+    expect(recheckCount).toBeGreaterThan(0);
     expect(fixture.writes).toHaveLength(1);
     expect(released).toEqual(reserved);
   });

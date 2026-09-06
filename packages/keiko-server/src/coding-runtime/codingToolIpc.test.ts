@@ -274,9 +274,9 @@ describe("coding tool IPC approval proofs", () => {
  *
  * `decideSupervisedFileEdit` (supervisedCodingPolicy) also performs a realpath containment check,
  * but it is reached only from `supervisedCodingRuntimeEvent`, which requires a permission ask in
- * `supervised-coding` mode — and the generated child tool source asks for permission ONLY in
- * `governed-assist` (opencodeRuntimeAdapter: `KEIKO_CODING_MODE !== "governed-assist"` returns
- * early). For the bundled OpenCode child that branch therefore never runs. The containment the edit
+ * `supervised-coding` mode — and the generated child source asks for EDIT permission only when its
+ * captured mode is `governed-assist` (opencodeRuntimeAdapter's explicit mode/action branch). For
+ * the bundled OpenCode child that branch therefore never runs. The containment the edit
  * path really depends on is (1) THIS parse boundary and (2) the `keiko-tools` contained writer's
  * `assertContained` / `assertNoSymlink` / realpath-parent checks at the effect edge.
  *

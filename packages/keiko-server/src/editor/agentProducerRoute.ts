@@ -32,6 +32,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import { readJsonObject } from "../files.js";
 import {
   logHarnessContextCompactionEvents,
@@ -43,9 +44,17 @@ import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { editorAgentAuthorityRegistry } from "./agentAuthorityRegistry.js";
 import {
+  emitToolLifecycleEvent,
+  type CatalogLifecycleLogPort,
+} from "../tool-catalog/catalogToolLifecycle.js";
+import {
   EDITOR_AGENT_ROOT_BOUNDARY_ERROR_CODE,
   resolveEditorAgentActionRoot,
 } from "./agentRootBoundary.js";
+
+type ProducerCatalogEvidence = ReturnType<typeof createEditorAgentCatalogFactory>["evidence"];
+type ProducerCatalogObserver = NonNullable<Parameters<typeof createEditorAgentCatalogFactory>[1]>;
+type ProducerCatalogObservation = Parameters<ProducerCatalogObserver>[0];
 
 // Scope IN (#2489): the first Keiko-native producer is restricted to the four tools whose
 // dispatch is server-resolved (navigateSymbol/searchWorkspace/queryGit) or synchronously governed
@@ -223,6 +232,7 @@ interface ProducerTurnResult {
   readonly toolCallCount: number;
   readonly toolNames: readonly string[];
   readonly toolOutcomes: readonly ProducerToolOutcome[];
+  readonly catalog: ProducerCatalogEvidence;
 }
 
 // Reads the local (server-bound) port off the live connection so the producer calls itself over a
@@ -289,19 +299,22 @@ async function runProducerTurn(
   activityLog: ServerLogSink = processServerLogSink(),
 ): Promise<ProducerTurnResult> {
   const outcomes: ProducerToolOutcome[] = [];
-  // The SAME scoped port both feeds the (now dispatch-inert) legacy `tools` field and binds the
-  // mandatory catalog: dispatch still executes through scopedProducerToolPort.execute(), which is
-  // the one place PRODUCER_TOOL_NAMES is enforced -- the catalog advertises all nine Editor tools
-  // (ADR-0175 D2), but every call still resolves through this same allowlist, unmodified, before
-  // it can reach EditorAgentToolHost -> EditorAgentHttpClient -> agentRoutes.ts.
+  // The SAME scoped port both feeds the (now dispatch-inert) legacy `tools` field and selects the
+  // exact ready catalog projection. Dispatch still executes through scopedProducerToolPort.execute(),
+  // the one place PRODUCER_TOOL_NAMES is enforced, before EditorAgentToolHost can be reached.
   const scopedTools = scopedProducerToolPort(host, outcomes);
+  const correlationId = requestCorrelationId ?? UNKNOWN_CORRELATION_ID;
+  const catalog = createEditorAgentCatalogFactory(
+    scopedTools,
+    producerCatalogObserver(activityLog, correlationId),
+  );
   const session = createSession(
     { taskType: "editor-agent-turn", input: { goal: request.goal, sessionId: request.sessionId } },
     { model: request.modelId, workingDirectory: workspaceRoot, dryRun: false },
     {
       model,
       tools: scopedTools,
-      bindToolCatalog: createEditorAgentCatalogFactory(scopedTools),
+      bindToolCatalog: catalog,
       sink: new MemoryEventSink(),
       // KEIKO-0726 (#3323): a real, tool-using production call site — unlike explain-plan's
       // single-shot read-only path, an editor-agent-turn producer run can loop through several
@@ -320,16 +333,13 @@ async function runProducerTurn(
   // instead of failing closed on every tool call, so this line is the only activity-log evidence
   // of what a producer turn actually did: outcome, tool identifiers, and a bounded count -- never
   // the goal text, tool arguments, or tool output (AGENTS.md §8 body-free rule).
-  activityLog.write({
-    category: "process",
-    op: "editor.producer-turn.completed",
-    correlationId: requestCorrelationId ?? UNKNOWN_CORRELATION_ID,
-    extra: {
-      runId: session.runId,
-      outcome: result.outcome,
-      toolCallCount: toolCompletions.length,
-      toolNames,
-    },
+  recordProducerCompletion(activityLog, {
+    catalog: catalog.evidence,
+    correlationId,
+    outcome: result.outcome,
+    runId: session.runId,
+    toolCallCount: toolCompletions.length,
+    toolNames,
   });
   return {
     schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
@@ -338,6 +348,129 @@ async function runProducerTurn(
     toolCallCount: toolCompletions.length,
     toolNames,
     toolOutcomes: outcomes,
+    catalog: catalog.evidence,
+  };
+}
+
+interface ProducerCompletionEvidence {
+  readonly catalog: ProducerCatalogEvidence;
+  readonly correlationId: string;
+  readonly outcome: string;
+  readonly runId: string;
+  readonly toolCallCount: number;
+  readonly toolNames: readonly string[];
+}
+
+function recordProducerCompletion(log: ServerLogSink, evidence: ProducerCompletionEvidence): void {
+  log.write({
+    category: "process",
+    op: "editor.producer-turn.completed",
+    correlationId: evidence.correlationId,
+    extra: {
+      runId: evidence.runId,
+      outcome: evidence.outcome,
+      toolCallCount: evidence.toolCallCount,
+      toolNames: evidence.toolNames,
+      catalogRevision: evidence.catalog.catalogRevision,
+      catalogProfile: evidence.catalog.profile,
+      projectionDigest: evidence.catalog.projectionDigest,
+      handlerSetDigest: evidence.catalog.handlerSetDigest,
+      advertisedToolRefs: evidence.catalog.toolRefs,
+    },
+  });
+}
+
+function lifecycleIdentity(
+  correlationId: string,
+  observation: ProducerCatalogObservation,
+): Record<string, unknown> {
+  return {
+    correlationId,
+    catalogRevision: observation.binding.catalogRevision,
+    profile: observation.binding.profile,
+    projectionDigest: observation.binding.projectionDigest,
+  };
+}
+
+function emitCatalogBinding(
+  logPort: CatalogLifecycleLogPort,
+  correlationId: string,
+  observation: Extract<ProducerCatalogObservation, { readonly phase: "binding" }>,
+): void {
+  const identity = lifecycleIdentity(correlationId, observation);
+  emitToolLifecycleEvent(logPort, {
+    ...identity,
+    op: "tool-catalog.projection",
+    readiness: observation.binding.readiness,
+    resultCount: observation.binding.toolRefs.length,
+  });
+  emitToolLifecycleEvent(logPort, {
+    ...identity,
+    op: "tool-catalog.bind-ready",
+    readiness: "ready",
+    handlerSetDigest: observation.binding.handlerSetDigest,
+  });
+}
+
+function emitCatalogStarted(
+  logPort: CatalogLifecycleLogPort,
+  correlationId: string,
+  observation: Extract<ProducerCatalogObservation, { readonly phase: "invocation-started" }>,
+): void {
+  emitToolLifecycleEvent(logPort, {
+    ...lifecycleIdentity(correlationId, observation),
+    op: "tool-catalog.invocation-started",
+    invocationId: observation.invocationId,
+    toolRef: observation.toolRef,
+    state: "started",
+    reason: "none",
+    reservationId: observation.reservationId,
+  });
+}
+
+function emitCatalogSettled(
+  logPort: CatalogLifecycleLogPort,
+  correlationId: string,
+  observation: Extract<ProducerCatalogObservation, { readonly phase: "invocation-settled" }>,
+): void {
+  emitToolLifecycleEvent(logPort, {
+    ...lifecycleIdentity(correlationId, observation),
+    op: "tool-catalog.invocation-settled",
+    invocationId: observation.invocationId,
+    toolRef: observation.toolRef,
+    settlementId: observation.settlementId,
+    reservationId: observation.reservationId,
+    status: observation.status,
+    reason: observation.reason,
+    effectStarted: observation.effectStarted,
+    budgetDisposition: observation.budgetDisposition,
+    inputBytes: observation.inputBytes,
+    outputBytes: observation.outputBytes,
+    resultCount: observation.resultCount,
+    durationMs: observation.durationMs,
+    truncated: observation.truncated,
+    ...(observation.status === "failed" ? { errorKind: "Error", frames: [], causeChain: [] } : {}),
+  });
+}
+
+function emitProducerCatalogObservation(
+  logPort: CatalogLifecycleLogPort,
+  correlationId: string,
+  observation: ProducerCatalogObservation,
+): void {
+  if (observation.phase === "binding") emitCatalogBinding(logPort, correlationId, observation);
+  else if (observation.phase === "invocation-started")
+    emitCatalogStarted(logPort, correlationId, observation);
+  else emitCatalogSettled(logPort, correlationId, observation);
+}
+
+function producerCatalogObserver(
+  activityLog: ServerLogSink,
+  correlationId: string,
+): ProducerCatalogObserver {
+  const logPort = { primary: activityLog, diagnostics: defaultServerDiagnosticSink };
+  return (observation): void => {
+    emitProducerCatalogObservation(logPort, correlationId, observation);
   };
 }
 

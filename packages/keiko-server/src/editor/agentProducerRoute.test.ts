@@ -397,6 +397,16 @@ interface ProducerTurnResponse {
       readonly status?: string;
       readonly failureKind?: string;
     }[];
+    readonly catalog?: {
+      readonly catalogRevision: string;
+      readonly profile: { readonly id: string; readonly version: number };
+      readonly projectionDigest: string;
+      readonly handlerSetDigest: string;
+      readonly toolRefs: readonly {
+        readonly canonicalId: string;
+        readonly contractVersion: number;
+      }[];
+    };
     readonly error?: { readonly code: string };
   };
 }
@@ -492,6 +502,44 @@ describe("editor-agent producer turn reachability (#2489 Findings 1/2)", () => {
       extra: { outcome: "completed", toolCallCount: 1, toolNames: ["editor_navigate_symbol"] },
     });
     expect(JSON.stringify(completed)).not.toContain("reachability probe");
+
+    expect(response.body.catalog).toMatchObject({
+      profile: { id: "editor", version: 1 },
+      toolRefs: [
+        { canonicalId: "keiko.editor.git", contractVersion: 1 },
+        { canonicalId: "keiko.editor.search", contractVersion: 1 },
+        { canonicalId: "keiko.editor.symbol", contractVersion: 1 },
+        { canonicalId: "keiko.editor.verify", contractVersion: 1 },
+      ],
+    });
+    expect(response.body.catalog?.catalogRevision).toMatch(/^[a-f0-9]{64}$/u);
+    expect(response.body.catalog?.projectionDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(response.body.catalog?.handlerSetDigest).toBe(response.body.catalog?.projectionDigest);
+
+    const lifecycle = current.activityLogEvents.filter((event) =>
+      event.op.startsWith("tool-catalog."),
+    );
+    expect(lifecycle.map((event) => event.op)).toEqual([
+      "tool-catalog.projection",
+      "tool-catalog.bind-ready",
+      "tool-catalog.invocation-started",
+      "tool-catalog.invocation-settled",
+    ]);
+    expect(lifecycle[0]?.extra).toMatchObject({
+      profile: { id: "editor", version: 1 },
+      resultCount: 4,
+    });
+    expect(lifecycle[2]?.extra).toMatchObject({
+      toolRef: { canonicalId: "keiko.editor.symbol", contractVersion: 1 },
+      state: "started",
+    });
+    expect(lifecycle[3]?.extra).toMatchObject({
+      toolRef: { canonicalId: "keiko.editor.symbol", contractVersion: 1 },
+      status: "completed",
+      reason: "none",
+      effectStarted: true,
+      budgetDisposition: "committed",
+    });
   });
 
   it("drives editor_search_workspace to real production dispatch", async () => {
@@ -632,15 +680,14 @@ describe("editor-agent producer tool-scope enforcement (#2489 security hardening
     );
     const response = await postProducerTurn(current.port);
     expect(response.status).toBe(200);
-    expect(response.body.outcome).toBe("completed");
-    expect(response.body.toolCallCount).toBe(1);
-    // #2713 strengthens this pin rather than relaxing it: the rejection must still be a FAILURE, and
-    // it must now also identify itself as a PRE-DISPATCH refusal ("invalid-arguments"), never a
-    // route/transport kind — which would mean the call had actually reached a downstream route. The
-    // audit-ledger assertion below stays the decisive proof; this only narrows what may precede it.
-    expect(response.body.toolOutcomes).toEqual([
-      { toolName: "editor_propose_edit", ok: false, failureKind: "invalid-arguments" },
-    ]);
+    // #3408 strengthens the original dispatch-level allowlist pin: the active catalog no longer
+    // advertises this alias, so the mandatory catalog rejects the unbound model output before the
+    // scoped ToolPort itself runs. A failed turn with no completed calls/outcomes is therefore the
+    // earlier fail-closed result; the audit-ledger assertion remains the decisive host-boundary pin.
+    expect(response.body.outcome).toBe("failed");
+    expect(response.body.toolCallCount).toBe(0);
+    expect(response.body.toolNames).toEqual([]);
+    expect(response.body.toolOutcomes).toEqual([]);
     // The decisive proof: a real applyTextEdits dispatch would have reached agentRoutes.ts and
     // been audited (queued for browser-bridge review or denied) — zero audit entries proves the
     // request never left the producer's own scope check.

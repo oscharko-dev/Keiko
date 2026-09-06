@@ -397,7 +397,10 @@ describe("OpenCode runtime adapter readiness", () => {
     }
     expect(bundle.toolSources.keiko_changeset_edit).toContain("context.ask");
     expect(bundle.toolSources.keiko_changeset_edit).toContain(
-      'KEIKO_CODING_MODE !== "governed-assist"',
+      "const mode = process.env.KEIKO_CODING_MODE;",
+    );
+    expect(bundle.toolSources.keiko_changeset_edit).toContain(
+      'if (mode === "governed-assist" && action === "edit") request = editPermission(args);',
     );
     const verificationSource = bundle.toolSources.keiko_verification;
     if (verificationSource === undefined) throw new TypeError("verification source missing");

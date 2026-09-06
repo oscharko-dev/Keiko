@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
+import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_AGENT_TOOL_DEFINITIONS } from "@oscharko-dev/keiko-tools";
 import { compileToolProjection, createKeikoToolCatalog } from "@oscharko-dev/keiko-tool-catalog";
-import { editorAgentRegistrationSet } from "./editor-agent-catalog.js";
+import { createHarnessCatalogBudget } from "./catalog-budget.js";
+import { newCounters } from "./context.js";
+import {
+  createEditorAgentCatalogFactory,
+  editorAgentRegistrationSet,
+} from "./editor-agent-catalog.js";
+import { DEFAULT_LIMITS } from "./types.js";
+import type { ToolCallResult, ToolPort } from "./ports.js";
 
 describe("editor agent registration set", () => {
   it("declares all nine editor descriptors under the reserved ADR-0175 identities", () => {
@@ -67,5 +75,41 @@ describe("editor agent registration set", () => {
     expect((properties.mode as Record<string, unknown>).enum).toEqual(["regex", "symbol", "text"]);
     expect((properties.caseSensitive as Record<string, unknown>).default).toBeUndefined();
     expect(search.descriptor.inputSchema.required).toContain("mode");
+  });
+
+  it("advertises only the allowed ready subset exposed by the bound editor port", () => {
+    const activeAliases = new Set([
+      "editor_navigate_symbol",
+      "editor_search_workspace",
+      "editor_git_context",
+      "editor_request_verification",
+    ]);
+    const port: ToolPort = {
+      listTools: (): readonly ToolDefinition[] =>
+        EDITOR_AGENT_TOOL_DEFINITIONS.filter((definition) => activeAliases.has(definition.name)),
+      execute: (): Promise<ToolCallResult> => Promise.reject(new Error("not exercised")),
+    };
+    const controller = new AbortController();
+    const budget = createHarnessCatalogBudget({
+      runId: "editor-catalog-subset",
+      signal: controller.signal,
+      counters: newCounters(),
+      limits: DEFAULT_LIMITS,
+      now: () => 0,
+      deadlineAt: 1_000,
+    });
+    const catalogPort = createEditorAgentCatalogFactory(port)({
+      runId: "editor-catalog-subset",
+      signal: controller.signal,
+      budgetPort: budget.port,
+      observeExecution: () => undefined,
+    });
+    const advertisement = catalogPort.offer();
+    expect(advertisement.projection.tools.map((tool) => tool.alias).sort()).toEqual(
+      [...activeAliases].sort(),
+    );
+    expect(advertisement.offered.toolRefs).toEqual(
+      advertisement.projection.tools.map((tool) => tool.toolRef),
+    );
   });
 });
