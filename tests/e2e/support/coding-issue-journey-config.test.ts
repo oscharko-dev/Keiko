@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -122,7 +122,28 @@ describe("resolveCodingIssueJourneyQualificationConfig", () => {
     const result = resolveCodingIssueJourneyQualificationConfig(env);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.config.gatewayConfigPath).toBe(configPath);
+    expect(result.config.gatewayConfigPath).toBe(realpathSync(configPath));
+  });
+
+  it("canonicalizes a symlinked gateway config path before the credential vault persists it", () => {
+    const root = trackedGithubCheckout();
+    const configDir = mkdtempSync(join(tmpdir(), "coding-issue-journey-gateway-symlink-"));
+    dirsToClean.push(configDir);
+    const configPath = join(configDir, "keiko.config.json");
+    const aliasPath = join(configDir, "keiko.config.alias.json");
+    writeFileSync(configPath, JSON.stringify({ providers: [] }));
+    symlinkSync(configPath, aliasPath);
+
+    const result = resolveCodingIssueJourneyQualificationConfig({
+      KEIKO_QUALIFICATION_GATEWAY_CONFIG_PATH: aliasPath,
+      KEIKO_QUALIFICATION_CONTROLLED_REPOSITORY_ROOT: root,
+      KEIKO_QUALIFICATION_SPEND_BUDGET_USD: "1.5",
+      KEIKO_QUALIFICATION_SPEND_LEDGER_PATH: join(root, "spend.db"),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.config.gatewayConfigPath).toBe(realpathSync(configPath));
   });
 
   it("rejects a gateway config path that does not exist on disk", () => {

@@ -29,6 +29,7 @@ describe("launchedEnv", () => {
     );
     expect(result.KEIKO_QUALIFICATION_SPEND_BUDGET_USD).toBe("25");
     expect(result.KEIKO_QUALIFICATION_SPEND_LEDGER_PATH).toBe("/tmp/qualification/spend.db");
+    expect(result.KEIKO_CODING_RUNTIME_DEV_LANE).toBe("1");
     expect(result.PATH).toBe("/usr/bin");
   });
 

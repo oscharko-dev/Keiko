@@ -51,12 +51,19 @@ function hasEnvOnlyModelProfile(env: Readonly<Record<string, string | undefined>
   return hasConfiguredEnvModelProvider(env);
 }
 
-function hasRealModelGatewayProfile(env: Readonly<Record<string, string | undefined>>): boolean {
+function resolveGatewayConfigPath(
+  env: Readonly<Record<string, string | undefined>>,
+): string | undefined {
   const configPath = env.KEIKO_QUALIFICATION_GATEWAY_CONFIG_PATH;
   if (configPath !== undefined && configPath.length > 0) {
-    return existsSync(configPath);
+    try {
+      const canonical = realpathSync(configPath);
+      return statSync(canonical).isFile() ? canonical : undefined;
+    } catch {
+      return undefined;
+    }
   }
-  return hasEnvOnlyModelProfile(env);
+  return undefined;
 }
 
 /** Resolves `root` to a canonical absolute path, or `undefined` when it does not exist. Mirrors
@@ -155,7 +162,14 @@ export function resolveCodingIssueJourneyQualificationConfig(
   env: Readonly<Record<string, string | undefined>>,
 ): CodingIssueJourneyQualificationResolution {
   const missing: string[] = [];
-  if (!hasRealModelGatewayProfile(env)) {
+  const requestedGatewayConfig = env.KEIKO_QUALIFICATION_GATEWAY_CONFIG_PATH;
+  const hasRequestedGatewayConfig =
+    requestedGatewayConfig !== undefined && requestedGatewayConfig.length > 0;
+  const gatewayConfigPath = resolveGatewayConfigPath(env);
+  if (
+    gatewayConfigPath === undefined &&
+    (hasRequestedGatewayConfig || !hasEnvOnlyModelProfile(env))
+  ) {
     missing.push(
       "a real Model Gateway/LiteLLM profile (KEIKO_MODEL_<id>_API_KEY and _BASE_URL, or " +
         "KEIKO_QUALIFICATION_GATEWAY_CONFIG_PATH naming an existing gateway config file)",
@@ -176,7 +190,7 @@ export function resolveCodingIssueJourneyQualificationConfig(
   return {
     ok: true,
     config: {
-      gatewayConfigPath: env.KEIKO_QUALIFICATION_GATEWAY_CONFIG_PATH,
+      gatewayConfigPath,
       controlledRepositoryRoot: repository.root,
       controlledRepositorySlug: repository.slug,
       spendBudgetUsd,

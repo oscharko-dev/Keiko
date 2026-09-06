@@ -101,6 +101,13 @@ export function launchedEnv(
 ): Record<string, string | undefined> {
   return {
     ...baseEnv,
+    // This entry point is the trusted launcher for the live qualification lane. It invokes
+    // `runUiCli` directly rather than `npm run dev:start`, so it must opt into the same supported,
+    // byte-verified dev runtime that the normal development launcher enables. Discovery still
+    // re-verifies the staged pinned OpenCode payload and reports the honest
+    // `functional-not-platform-qualified` evidence class; this flag cannot bypass a missing,
+    // stale, unapproved or tampered payload.
+    KEIKO_CODING_RUNTIME_DEV_LANE: "1",
     KEIKO_QUALIFICATION_SPEND_BUDGET_USD: String(spendBudgetUsd),
     KEIKO_QUALIFICATION_SPEND_LEDGER_PATH: spendLedgerPath,
     [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: launcherSecret,
