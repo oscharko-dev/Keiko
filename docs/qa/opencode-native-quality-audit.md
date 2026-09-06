@@ -57,6 +57,14 @@ new-file convention (a `/dev/null` source diff with the empty-content SHA-256). 
 failed against the previous actual provider request body and pass with the shared descriptions.
 These instructions do not relax content-hash validation or admit a rejected edit.
 
+An actual model run also exposed unchanged-context retries after a schema-rejected changeset.
+The existing gateway retry now supplies one fixed correction for a safely captured, offered tool
+whose response arguments failed schema validation. Repeated attempts replace that correction
+instead of growing the transcript. Invalid argument bodies are never retained or dispatched; the
+corrected request is recounted against model context/output capacity and the existing spend,
+deadline, and retry limits still apply. Production provider-request tests cover repair, exhaustion,
+secret exclusion, noneligible rejection, and output-headroom refusal before another provider call.
+
 ## Additional native capabilities assessed
 
 OpenCode's LSP tool provides definitions, references, symbols, and call hierarchy. Keiko already

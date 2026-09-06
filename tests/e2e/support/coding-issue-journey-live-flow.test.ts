@@ -567,17 +567,20 @@ describe("completed live qualification flow evidence", () => {
     const searchStart = {
       op: "tool-catalog.invocation-started",
       toolRef: { canonicalId: "keiko.repo.search", contractVersion: 1 },
+      correlationId: "run-search-consumption",
     } as const;
     const searchSettled = {
       op: "coding-repository-handler.settled",
       state: "completed",
       resultCount: 1,
       resultPathSha256: [hit],
+      correlationId: "run-search-consumption",
     } as const;
     const read = {
       op: "coding-runtime.workspace-read",
       state: "completed",
       targetPathSha256: hit,
+      correlationId: "run-search-consumption",
     } as const;
     expect(hasUsefulRepositorySearchSequence([searchStart, searchSettled, read])).toBe(true);
     expect(
@@ -611,6 +614,36 @@ describe("completed live qualification flow evidence", () => {
       ]),
     ).toBe(false);
   });
+
+  it.each(["run-other-operation", "", undefined])(
+    "rejects a matching read with unrelated or missing correlation %s",
+    (readCorrelationId) => {
+      const pathDigest = "a".repeat(64);
+      const correlationId = "run-search-consumption";
+      expect(
+        hasUsefulRepositorySearchSequence([
+          {
+            op: "tool-catalog.invocation-started",
+            toolRef: { canonicalId: "keiko.repo.search", contractVersion: 1 },
+            correlationId,
+          },
+          {
+            op: "coding-repository-handler.settled",
+            state: "completed",
+            resultCount: 1,
+            resultPathSha256: [pathDigest],
+            correlationId,
+          },
+          {
+            op: "coding-runtime.workspace-read",
+            state: "completed",
+            targetPathSha256: pathDigest,
+            correlationId: readCorrelationId,
+          },
+        ]),
+      ).toBe(false);
+    },
+  );
 
   it("completes a green-first flow without fabricating CI-repair evidence", () => {
     const requiredChecks = technicalReadiness().requiredChecks;

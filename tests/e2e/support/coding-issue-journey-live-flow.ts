@@ -706,7 +706,12 @@ export function hasUsefulRepositorySearchSequence(
   events: readonly Readonly<Record<string, unknown>>[],
 ): boolean {
   return events.some((event, searchIndex) => {
-    if (!isUsefulRepositorySearchEvent(event)) return false;
+    if (
+      !isUsefulRepositorySearchEvent(event) ||
+      typeof event.correlationId !== "string" ||
+      event.correlationId.length === 0
+    )
+      return false;
     const invoked = events
       .slice(0, searchIndex)
       .some(
@@ -725,6 +730,7 @@ export function hasUsefulRepositorySearchSequence(
           (read) =>
             read.op === "coding-runtime.workspace-read" &&
             read.state === "completed" &&
+            read.correlationId === event.correlationId &&
             typeof read.targetPathSha256 === "string" &&
             paths.has(read.targetPathSha256),
         )
