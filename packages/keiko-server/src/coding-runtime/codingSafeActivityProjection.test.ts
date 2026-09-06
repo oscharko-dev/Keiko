@@ -511,11 +511,11 @@ describe("bounded coding safe-activity projection", () => {
     projection.ingest(RUN_ID, message("msg_user", "user"));
     projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
     expect(projection.ingest(RUN_ID, message("msg_extra", "assistant", "msg_user"))).toBe(true);
-    projection.ingest(RUN_ID, text("msg_assistant", "first"));
-    expect(projection.ingest(RUN_ID, text("msg_assistant", "second"))).toBe(true);
+    projection.ingest(RUN_ID, text("msg_extra", "first"));
+    expect(projection.ingest(RUN_ID, text("msg_extra", "second"))).toBe(true);
     projection.ingest(RUN_ID, {
       kind: "tool",
-      messageId: "msg_assistant",
+      messageId: "msg_extra",
       callId: "call_1",
       tool: "keiko_workspace_read",
       state: "pending",
@@ -524,7 +524,7 @@ describe("bounded coding safe-activity projection", () => {
     expect(
       projection.ingest(RUN_ID, {
         kind: "tool",
-        messageId: "msg_assistant",
+        messageId: "msg_extra",
         callId: "call_2",
         tool: "keiko_workspace_read",
         state: "pending",
@@ -540,8 +540,90 @@ describe("bounded coding safe-activity projection", () => {
         droppedEventCount: 1,
         turns: [
           {
-            messages: [{}, { segments: [{ text: "first" }], truncated: true }],
+            messages: [
+              {},
+              { messageId: "msg_extra", segments: [{ text: "first" }], truncated: true },
+            ],
             tools: [{ callId: "call_1" }],
+            truncated: true,
+          },
+        ],
+      },
+    });
+  });
+
+  it("retains the user anchor and newest assistant while older in-flight tools settle", () => {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      limits: { maxMessagesPerTurn: 3 },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, message("msg_old", "assistant", "msg_user"));
+    projection.ingest(RUN_ID, text("msg_old", "Old progress."));
+    projection.ingest(RUN_ID, {
+      kind: "tool",
+      messageId: "msg_old",
+      callId: "call_old",
+      tool: "keiko_git_push",
+      state: "running",
+      occurredAt: "2026-07-18T17:00:00.002Z",
+    });
+    projection.ingest(RUN_ID, message("msg_middle", "assistant", "msg_user"));
+
+    expect(projection.ingest(RUN_ID, message("msg_new", "assistant", "msg_user"))).toBe(true);
+    expect(projection.ingest(RUN_ID, text("msg_new", "Newest progress."))).toBe(true);
+    expect(projection.ingest(RUN_ID, text("msg_old", "Late old text."))).toBe(false);
+    expect(
+      projection.ingest(RUN_ID, {
+        kind: "tool",
+        callId: "call_old",
+        state: "succeeded",
+        occurredAt: "2026-07-18T17:00:00.003Z",
+      }),
+    ).toBe(true);
+    expect(
+      projection.ingest(RUN_ID, {
+        kind: "tool",
+        messageId: "msg_new",
+        callId: "call_new",
+        tool: "keiko_pull_request",
+        state: "running",
+        occurredAt: "2026-07-18T17:00:00.004Z",
+      }),
+    ).toBe(true);
+    expect(
+      projection.ingest(RUN_ID, {
+        kind: "tool",
+        callId: "call_unknown",
+        state: "succeeded",
+        occurredAt: "2026-07-18T17:00:00.005Z",
+      }),
+    ).toBe(false);
+
+    expect(projection.currentContent()).toMatchObject({
+      feed: {
+        droppedEventCount: 2,
+        turns: [
+          {
+            messages: [
+              { messageId: "msg_user", role: "user" },
+              { messageId: "msg_middle", role: "assistant" },
+              {
+                messageId: "msg_new",
+                role: "assistant",
+                segments: [{ text: "Newest progress." }],
+              },
+            ],
+            tools: [
+              { callId: "call_old", state: "succeeded" },
+              { callId: "call_new", state: "running" },
+            ],
             truncated: true,
           },
         ],

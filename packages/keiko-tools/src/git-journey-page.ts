@@ -1,4 +1,5 @@
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
+import { sameGitHubOwnerAndRepo } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import {
   isSafeGitRefName,
   isGitObjectId,
@@ -42,13 +43,16 @@ function decision(value: unknown): GitJourneyHeader["reviewDecision"] {
   if (value === "REVIEW_REQUIRED") return "review-required";
   throw new GitJourneyReadError("malformed-response");
 }
+function repositoryMatches(value: unknown, expected: string): boolean {
+  return typeof value === "string" && sameGitHubOwnerAndRepo(value, expected);
+}
 function issue(raw: unknown, target: GitJourneyReadTarget): GitJourneyHeader["issue"] {
   const value = object(raw);
   if (
     typeof value.id !== "string" ||
     sha256Hex(value.id) !== target.issueIdDigest ||
     value.number !== target.issueNumber ||
-    object(value.repository).nameWithOwner !== target.repository
+    !repositoryMatches(object(value.repository).nameWithOwner, target.repository)
   )
     throw new GitJourneyReadError("revision-changed");
   if (value.state === "OPEN" && value.closedAt === null)
@@ -105,7 +109,7 @@ function header(
 ): GitJourneyHeader {
   const ref = object(repo.defaultBranchRef).name;
   if (
-    repo.nameWithOwner !== target.repository ||
+    !repositoryMatches(repo.nameWithOwner, target.repository) ||
     !count(repo.databaseId, Number.MAX_SAFE_INTEGER, 1) ||
     typeof ref !== "string" ||
     !isSafeGitRefName(ref)

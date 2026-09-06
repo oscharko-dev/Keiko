@@ -16,6 +16,29 @@ function fixture(value = payload()): {
   };
 }
 describe("canonical PR and bound issue lifecycle observation", () => {
+  it.each(["OWNER/repo", "owner/REPO", "OWNER/REPO"])(
+    "observes the same GitHub repository across canonical casing: %s",
+    async (repository) => {
+      const input = fixture();
+      const result = await readGitJourneyFacts({
+        ...input,
+        target: { ...TARGET, repository },
+      });
+      expect(result).toMatchObject({
+        status: "observed",
+        identity: { repository: "owner/repo", headSha: PR.headRefOid },
+        issue: { number: TARGET.issueNumber, state: "open" },
+      });
+      expect(input.run).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("does not equate a different repository when folding GitHub casing", async () => {
+    expect(
+      await readGitJourneyFacts({ ...fixture(), target: { ...TARGET, repository: "OWNER/REPO2" } }),
+    ).toMatchObject({ status: "unavailable", failure: { reason: "revision-changed" } });
+  });
+
   it("observes unresolved review conversations without issuing any mutation or returning bodies", async () => {
     const input = fixture();
     const result = await readGitJourneyFacts(input);

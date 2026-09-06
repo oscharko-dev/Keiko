@@ -555,11 +555,19 @@ function applyMessage(
   if (turn === undefined) return false;
   if (turn.messages.length >= limits.maxMessagesPerTurn) {
     turn.truncated = true;
-    return true;
+    if (!evictOldestAssistantMessage(entry, turn)) return true;
   }
   turn.messages.push(newMessage(signal));
   entry.messageTurns.set(signal.messageId, turn.turnId);
   enforceTurnCount(entry, limits.maxTurns);
+  return true;
+}
+
+function evictOldestAssistantMessage(entry: ProjectionEntry, turn: MutableTurn): boolean {
+  const index = turn.messages.findIndex(({ role }) => role === "assistant");
+  if (index < 0) return false;
+  const removed = turn.messages.splice(index, 1)[0];
+  if (removed !== undefined) entry.messageTurns.delete(removed.messageId);
   return true;
 }
 
