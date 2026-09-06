@@ -741,6 +741,25 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  it.each([
+    { commitProof: "recorded", unexpected: true },
+    { commitProof: "unavailable", reasonCode: "candidate-not-staged", nextAction: "verify-again" },
+  ])("strips a malformed verification proof payload", async (verification) => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "completed", verification }));
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "verification", verifierId: "unit" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+    });
+  });
+
   // The other half of sourcing the runner vocabulary: the exclusion is a decision, not an accident.
   // A route-only code has no meaning for a tool call, so it collapses to the bare status instead of
   // being handed to the model as if the runner had refused.

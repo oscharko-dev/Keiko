@@ -209,7 +209,10 @@ class VerifiedCommitController implements VerifiedCommitService {
     const context = this.context();
     if (context === undefined) return undefined;
     const facts = await this.facts(context);
-    if (!facts.clean) return undefined;
+    if (!facts.clean) {
+      this.log(context, "verification-unavailable", { reason: "candidate-not-staged" });
+      return undefined;
+    }
     const ticket = {};
     this.tickets.set(ticket, { context, facts, startedAtMs: this.now() });
     return ticket;

@@ -47,6 +47,7 @@ import type {
   CodingToolGovernedPorts,
   GovernedCodingToolPort,
 } from "./codingToolGovernedDelegate.js";
+import type { CodingToolVerificationResult } from "./codingToolIpc.js";
 import {
   createCodingRepositorySearchHandler,
   type CodingRepositorySearchHandler,
@@ -544,7 +545,10 @@ function auxiliaryPorts(
 // Liveness is re-checked both before the run and after the report lands, so a verification that
 // completes after the authority expired is reported failed rather than completed.
 type VerificationPortResult =
-  | { readonly status: "completed" }
+  | {
+      readonly status: "completed";
+      readonly verification?: CodingToolVerificationResult;
+    }
   | { readonly status: "failed"; readonly reasonCode?: string | undefined };
 
 // What a finished run that did not pass tells the model. Exhaustive by TYPE, not by convention:
@@ -587,6 +591,7 @@ function buildVerificationRunner(
       }
       let report: VerificationReport;
       let ticket: object | undefined;
+      let commitProof: CodingToolVerificationResult | undefined;
       try {
         ticket = await input.verifiedCommitService?.beginVerification();
         if (!verificationCompletionLive(input, guard, signal)) {
@@ -599,7 +604,7 @@ function buildVerificationRunner(
         if (!verificationCompletionLive(input, guard, signal)) {
           return verificationPortRefusal(input, "verification-authority-revoked");
         }
-        await completeCandidateVerification(input, ticket, report, guard, signal);
+        commitProof = await completeCandidateVerification(input, ticket, report, guard, signal);
       } catch (error) {
         return verificationRefused(input, error);
       }
@@ -608,7 +613,7 @@ function buildVerificationRunner(
       }
       verificationSequence += 1;
       publishVerification(input, verificationSequence, report);
-      return verificationOutcome(input, report, guard, signal);
+      return verificationOutcome(input, report, guard, signal, commitProof);
     },
   };
 }
@@ -618,6 +623,7 @@ function verificationOutcome(
   report: VerificationReport,
   guard: CodingToolMutationGuard,
   signal: AbortSignal | undefined,
+  commitProof: CodingToolVerificationResult | undefined,
 ): VerificationPortResult {
   if (report.overallStatus !== "passed") {
     return {
@@ -627,7 +633,7 @@ function verificationOutcome(
   }
   // A passing runner whose authority lapsed is a refusal, never a failed test run.
   return verificationCompletionLive(input, guard, signal)
-    ? { status: "completed" }
+    ? { status: "completed", ...(commitProof === undefined ? {} : { verification: commitProof }) }
     : verificationPortRefusal(input, "verification-authority-revoked");
 }
 
@@ -637,12 +643,21 @@ async function completeCandidateVerification(
   report: VerificationReport,
   guard: CodingToolMutationGuard,
   signal: AbortSignal | undefined,
-): Promise<void> {
-  if (ticket !== undefined)
-    await input.verifiedCommitService?.completeVerification(ticket, report, {
-      check: guard.check,
-      signal,
-    });
+): Promise<CodingToolVerificationResult | undefined> {
+  if (input.verifiedCommitService === undefined) return undefined;
+  if (ticket === undefined)
+    return {
+      commitProof: "unavailable",
+      reasonCode: "candidate-not-staged",
+      nextAction: "stage-then-verify",
+    };
+  const recorded = await input.verifiedCommitService.completeVerification(ticket, report, {
+    check: guard.check,
+    signal,
+  });
+  return recorded
+    ? { commitProof: "recorded" }
+    : { commitProof: "unavailable", reasonCode: "candidate-drift", nextAction: "verify-again" };
 }
 function verificationCompletionLive(
   input: ProductionManagedWorktreeToolInput,

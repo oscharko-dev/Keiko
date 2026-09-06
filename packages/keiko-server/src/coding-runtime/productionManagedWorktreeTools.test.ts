@@ -659,6 +659,59 @@ describe("production managed worktree tools", () => {
     ).resolves.toMatchObject({ status: "completed" });
   });
 
+  it.each([
+    [
+      "unstaged candidate",
+      undefined,
+      true,
+      {
+        commitProof: "unavailable",
+        reasonCode: "candidate-not-staged",
+        nextAction: "stage-then-verify",
+      },
+    ],
+    [
+      "candidate drift",
+      {},
+      false,
+      { commitProof: "unavailable", reasonCode: "candidate-drift", nextAction: "verify-again" },
+    ],
+    ["recorded proof", {}, true, { commitProof: "recorded" }],
+  ] as const)(
+    "reports a passed run with %s commit-proof status",
+    async (_label, ticket, recorded, expected) => {
+      const beginVerification = vi.fn<VerifiedCommitService["beginVerification"]>(() =>
+        Promise.resolve(ticket),
+      );
+      const completeVerification = vi.fn<VerifiedCommitService["completeVerification"]>(() =>
+        Promise.resolve(recorded),
+      );
+      const facade = verificationFacade({
+        runToReport: () => Promise.resolve(verificationReport("passed")),
+        records: [],
+        verifiedCommitService: {
+          ...verificationService(),
+          beginVerification,
+          completeVerification,
+        },
+      });
+
+      await expect(
+        facade.execute({
+          capability: "opaque-capability",
+          body: JSON.stringify({
+            action: "verification",
+            actionId: "verification-proof",
+            idempotencyKey: "verification-proof-key",
+            verifierId: "test",
+          }),
+        }),
+      ).resolves.toMatchObject({ status: "completed", verification: expected });
+      expect(beginVerification).toHaveBeenCalledOnce();
+      expect(completeVerification).toHaveBeenCalledTimes(ticket === undefined ? 0 : 1);
+    },
+  );
+
   // `Error.name` is a writable own property; a library that assigns a message or a path to it would
   // put that text on the `[keiko-server:diagnostic]` stderr line and the activity log's `errorKind`
   // verbatim, because the sink redacts neither. The repository's own hardening

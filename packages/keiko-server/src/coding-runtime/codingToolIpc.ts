@@ -54,6 +54,14 @@ export interface CodingToolApprovalProof {
   readonly approvalDigest: string;
 }
 
+export type CodingToolVerificationResult =
+  | { readonly commitProof: "recorded" }
+  | {
+      readonly commitProof: "unavailable";
+      readonly reasonCode: "candidate-not-staged" | "candidate-drift";
+      readonly nextAction: "stage-then-verify" | "verify-again";
+    };
+
 export type CodingToolActionRequest =
   | (CodingToolRequestIdentity & {
       readonly action: "read";
@@ -154,6 +162,11 @@ export function codingToolRequiredActionClasses(
 }
 
 export type CodingToolResult =
+  | {
+      readonly status: "completed";
+      readonly evidence: readonly CodingToolEvidence[];
+      readonly verification: CodingToolVerificationResult;
+    }
   | {
       readonly status: "completed";
       readonly evidence: readonly CodingToolEvidence[];

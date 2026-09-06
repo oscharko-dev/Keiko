@@ -395,7 +395,13 @@ function verificationSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.verification.run",
     alias: "keiko_verification",
-    description: "Run one named verification gate (test, typecheck, lint or build).",
+    description:
+      "Run one named verification gate (test, typecheck, lint or build). Ordinary working-tree " +
+      "tests may pass without commit proof. For a commit, execute a ready stage proposal, or an " +
+      "approval-required stage proposal after approval, then rerun verification and proceed only " +
+      'when the result reports verification: { commitProof: "recorded" }. A ' +
+      "candidate-not-staged result with nextAction stage-then-verify requires staging and another " +
+      "verification run.",
     inputSchema: managedObjectSchema(
       {
         verifierId: {
@@ -521,7 +527,12 @@ function gitStageSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.git.stage",
     alias: "keiko_git_stage",
-    description: "Propose staging one or more workspace-relative paths.",
+    description:
+      "Create a non-mutating proposal to stage one or more workspace-relative paths. This call " +
+      "does not mutate the Git index. If the result is ready, call keiko_git_execute with kind " +
+      "stage and the returned proposalId. If the result is approval-required, wait for approval " +
+      "before calling that execute tool. Execute staging before rerunning verification for commit " +
+      "proof.",
     inputSchema: managedObjectSchema(
       {
         paths: {
@@ -543,7 +554,11 @@ function gitCommitSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.git.commit",
     alias: "keiko_git_commit",
-    description: "Propose a commit message over the currently staged changes.",
+    description:
+      "Create an approval-required commit proposal over the staged changes. This call does not " +
+      "create a commit. First complete staging and rerun verification until it reports " +
+      'verification: { commitProof: "recorded" }. After commit approval, call ' +
+      "keiko_git_execute with kind commit and the returned proposalId.",
     inputSchema: managedObjectSchema(
       { message: { type: "string", minLength: 1, maxLength: 8_192 } },
       ["message"],
@@ -584,7 +599,11 @@ function gitExecuteSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.git.execute",
     alias: "keiko_git_execute",
-    description: "Redeem one approved stage, commit, push or pull-request proposal.",
+    description:
+      "Execute a stage, commit, push or pull-request proposal when its result is ready, or after " +
+      "approval when its result is approval-required, using its matching kind and returned " +
+      "proposalId. Stage execution mutates the Git index and must complete before commit-grade " +
+      "verification; proposal tools alone perform no Git mutation.",
     inputSchema: managedObjectSchema(
       {
         kind: { type: "string", enum: ["stage", "commit", "push", "pull-request"] },

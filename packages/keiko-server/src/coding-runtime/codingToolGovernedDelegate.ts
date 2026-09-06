@@ -19,6 +19,7 @@ import type {
   CodingToolActionRequest,
   CodingToolEgressReadResult,
   CodingToolReadResult,
+  CodingToolVerificationResult,
 } from "./codingToolIpc.js";
 
 export type CodingToolActionOf<Kind extends CodingToolActionRequest["action"]> = Extract<
@@ -45,6 +46,7 @@ export type GovernedCodingToolResult =
       readonly git?: CodingRuntimeGitResult;
       readonly ci?: CodingRuntimeCiResult;
       readonly search?: CodingRepositoryResult;
+      readonly verification?: CodingToolVerificationResult;
     }
   // `reasonCode` is a closed-vocabulary marker. The facade forwards only its own allowlisted,
   // body-free codes and collapses every unrecognized value to a bare failed outcome.
@@ -151,8 +153,8 @@ function governedOutcome(
     return { outcome: "failed", reasonCode: result.reasonCode };
   }
   if (result.status !== "completed") return { outcome: result.status };
-  const git = gitOutcome(action, result);
-  if (git !== undefined) return git;
+  const domain = gitOutcome(action, result);
+  if (domain !== undefined) return domain;
   if (READ_BEARING_ACTIONS.has(action) && result.read !== undefined) {
     return { outcome: "completed", read: result.read };
   }
@@ -166,7 +168,20 @@ function gitOutcome(
   action: CodingToolActionRequest["action"],
   result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
 ): unknown {
-  return deliveryOutcome(action, result) ?? searchOutcome(action, result);
+  return (
+    deliveryOutcome(action, result) ??
+    searchOutcome(action, result) ??
+    verificationOutcome(action, result)
+  );
+}
+
+function verificationOutcome(
+  action: CodingToolActionRequest["action"],
+  result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
+): unknown {
+  return action === "verification" && result.verification !== undefined
+    ? { outcome: "completed", verification: result.verification }
+    : undefined;
 }
 
 function deliveryOutcome(

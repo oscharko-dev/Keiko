@@ -346,6 +346,17 @@ describe("verified Code-task commit service", () => {
     );
     expect(git(["rev-parse", "HEAD"])).toBe(before);
   });
+  it("logs a body-free reason when an unstaged candidate cannot receive commit proof", async () => {
+    writeFileSync(join(root, "code.js"), "export const value = 3;\n");
+    expect(await service.beginVerification()).toBeUndefined();
+    const event = events.find((candidate) => candidate.extra?.phase === "verification-unavailable");
+    expect(event).toMatchObject({
+      op: "git.verified-commit",
+      correlationId: "verified-commit-test",
+      extra: { phase: "verification-unavailable", reason: "candidate-not-staged" },
+    });
+    expect(JSON.stringify(events)).not.toContain("code.js");
+  });
   it("invalidates verification when staged content changes after a green command", async () => {
     const id = await verifiedProposal();
     const approval = await claim(id);

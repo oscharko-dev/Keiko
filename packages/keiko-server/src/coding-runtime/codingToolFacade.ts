@@ -24,6 +24,7 @@ import {
   type CodingToolEgressReadResult,
   type CodingToolReadResult,
   type CodingToolResult,
+  type CodingToolVerificationResult,
 } from "./codingToolIpc.js";
 // KEIKO-0695: hoisted from below EDIT_FAILURE_REASON_CODES to the top-of-file import block.
 import type {
@@ -359,6 +360,17 @@ function project(request: CodingToolActionRequest, input: unknown): CodingToolRe
     : { status: "completed", evidence: [{ kind: "governed-delegate", code: "completed" }], read };
 }
 
+function isCodingToolVerificationResult(value: unknown): value is CodingToolVerificationResult {
+  if (!isRecord(value)) return false;
+  if (value.commitProof === "recorded") return Object.keys(value).length === 1;
+  return (
+    value.commitProof === "unavailable" &&
+    ((value.reasonCode === "candidate-not-staged" && value.nextAction === "stage-then-verify") ||
+      (value.reasonCode === "candidate-drift" && value.nextAction === "verify-again")) &&
+    Object.keys(value).length === 3
+  );
+}
+
 // The three closed, already-typed domain payloads a governed delegate outcome may carry, tried in
 // a fixed order so `project()` itself stays a single flat dispatch instead of inlining every
 // action's own branching (each helper already returns `undefined` for an action it does not own).
@@ -369,8 +381,22 @@ function projectDomainResult(
   return (
     projectRuntimeGit(request, value) ??
     projectVerifiedCommit(request, value) ??
-    projectSearch(request, value)
+    projectSearch(request, value) ??
+    projectVerification(request, value)
   );
+}
+
+function projectVerification(
+  request: CodingToolActionRequest,
+  value: Record<string, unknown>,
+): CodingToolResult | undefined {
+  if (request.action !== "verification" || !isCodingToolVerificationResult(value.verification))
+    return undefined;
+  return {
+    status: "completed",
+    evidence: [{ kind: "governed-delegate", code: "completed" }],
+    verification: value.verification,
+  };
 }
 
 function projectRuntimeGit(
