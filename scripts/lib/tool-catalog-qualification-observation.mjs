@@ -149,7 +149,19 @@ function validObservation(input, sourceHead, components) {
       input.terminalStatus,
       input.settlementCount,
       input.proof,
-    )
+    ) &&
+    validManagedRunBinding(input, sourceHead)
+  );
+}
+
+function validManagedRunBinding(input, sourceHead) {
+  if (input.component !== "managed-opencode") return input.runBinding === undefined;
+  const binding = input.runBinding;
+  return (
+    exactKeys(binding, ["correlationId", "activityLogSha256"]) &&
+    /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(binding.correlationId) &&
+    DIGEST.test(binding.activityLogSha256) &&
+    COMMIT.test(sourceHead ?? "")
   );
 }
 

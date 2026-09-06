@@ -35,6 +35,7 @@ const OBSERVATION_FIELDS = Object.freeze([
   "settlementCount",
   "proof",
 ]);
+const MANAGED_RUN_BINDING_FIELDS = Object.freeze(["correlationId", "activityLogSha256"]);
 
 function exactFields(value, fields, message) {
   requireQualification(
@@ -76,10 +77,12 @@ function readObservation(directory, consumer, component, currentHead) {
   const value = JSON.parse(
     readFileSync(join(directory, observationFile(consumer, component)), "utf8"),
   );
+  const expectedFields =
+    component === "managed-opencode" ? [...OBSERVATION_FIELDS, "runBinding"] : OBSERVATION_FIELDS;
   requireQualification(
     isDeepStrictEqual(
       Object.keys(value).sort(compareStrings),
-      [...OBSERVATION_FIELDS].sort(compareStrings),
+      [...expectedFields].sort(compareStrings),
     ),
     "observation has unexpected fields",
   );
@@ -105,6 +108,18 @@ function readObservation(directory, consumer, component, currentHead) {
     ),
     `${component} has incomplete canonical execution proof`,
   );
+  if (component === "managed-opencode") {
+    exactFields(
+      value.runBinding,
+      MANAGED_RUN_BINDING_FIELDS,
+      "managed run binding has unexpected fields",
+    );
+    requireQualification(
+      /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value.runBinding.correlationId) &&
+        /^[a-f0-9]{64}$/u.test(value.runBinding.activityLogSha256),
+      "managed run binding is invalid",
+    );
+  }
   return value;
 }
 
@@ -168,11 +183,12 @@ export function buildToolCatalogConsumerReports({
         skipped: 0,
         binding: evidence.binding,
         components: evidence.observations.map(
-          ({ component, terminalStatus, settlementCount, proof }) => ({
+          ({ component, terminalStatus, settlementCount, proof, runBinding }) => ({
             component,
             terminalStatus,
             settlementCount,
             proof,
+            ...(runBinding === undefined ? {} : { runBinding }),
           }),
         ),
         packages: packageEvidence.get(consumer),

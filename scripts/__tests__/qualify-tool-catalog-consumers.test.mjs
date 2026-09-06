@@ -29,6 +29,10 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+function managedRunBinding(managed) {
+  return managed ? { runBinding: { correlationId: "run-managed", activityLogSha256: DIGEST } } : {};
+}
+
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "keiko-catalog-consumers-"));
   roots.push(root);
@@ -55,6 +59,7 @@ function fixture() {
                 causalHandoff: true,
               }
             : { kind: unavailable ? "closed-unavailable" : "single-settlement" },
+          ...managedRunBinding(managed),
         }),
       );
     }
@@ -150,6 +155,10 @@ describe("tool catalog consumer qualification", () => {
     expect(reports.get("native-harness-gateway")).toMatchObject({ passed: 1, binding: BINDING });
     expect(reports.get("cli-server-sdk")).toMatchObject({ passed: 3, binding: BINDING });
     expect(reports.get("managed-opencode")?.executionKind).toBe("real-runtime");
+    expect(reports.get("managed-opencode")?.components[0]?.runBinding).toEqual({
+      correlationId: "run-managed",
+      activityLogSha256: DIGEST,
+    });
     expect(reports.get("editor")?.components).toEqual([
       {
         component: "editor",
@@ -182,6 +191,10 @@ describe("tool catalog consumer qualification", () => {
             boundedReadSettled: true,
             causalHandoff: false,
           },
+        }),
+      (root) =>
+        update(root, "managed-opencode.managed-opencode", {
+          runBinding: { correlationId: "run-other", activityLogSha256: "not-a-digest" },
         }),
       (root) =>
         update(root, "managed-opencode.managed-opencode", {

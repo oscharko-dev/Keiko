@@ -23,10 +23,13 @@ import { fileURLToPath } from "node:url";
 
 import { hostDevLaneTarget } from "./stage-dev-coding-runtime.mjs";
 import {
+  TOOL_CATALOG_QUALIFICATION_DIR_ENV,
+  TOOL_CATALOG_QUALIFICATION_HEAD_ENV,
   captureToolCatalogQualificationBinding,
   validToolCatalogQualificationOutcome,
   writeToolCatalogQualificationObservation,
 } from "./lib/tool-catalog-qualification-observation.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const MAX_DISTINCT_CONNECTIONS = 4_096;
@@ -338,6 +341,7 @@ export function buildJourneyReport(input) {
   return {
     schemaVersion: 1,
     issue: 2483,
+    sourceHead: input.sourceHead,
     evidenceClass: "functional-not-platform-qualified",
     runtime: { name: "opencode-compatible", version: REAL_BINARY_VERSION, target: input.target },
     journey: { exitCode: input.exitCode, wallClockMs: input.wallClockMs },
@@ -370,6 +374,14 @@ function hasRetainedActivity(report) {
   return (
     report.activityLog?.status === "retained" && /^[a-f0-9]{64}$/u.test(report.activityLog.sha256)
   );
+}
+
+function validSourceHead(report) {
+  return /^[a-f0-9]{40}$/u.test(report.sourceHead);
+}
+
+function validJourneyIdentity(report) {
+  return validSourceHead(report) && report.journey.exitCode === 0;
 }
 
 function validH1SearchEvidence(value) {
@@ -551,6 +563,7 @@ function hasStableGatewayCatalogBinding(limits) {
 export function missingRealBinaryEvidence(report) {
   const limits = report.limits;
   const gaps = [];
+  if (!validSourceHead(report)) gaps.push("no exact source head was retained");
   if (report.journey.exitCode !== 0)
     gaps.push(`journey exit code ${String(report.journey.exitCode)}`);
   if (!limits.materializedChildLimits.some((l) => l.context === 32_768 && l.output === 4_096)) {
@@ -585,7 +598,7 @@ function missingPayloadEvidence(probe) {
 export function realBinaryEvidenceComplete(report) {
   const limits = report.limits;
   return (
-    report.journey.exitCode === 0 &&
+    validJourneyIdentity(report) &&
     limits.materializedChildLimits.some(
       (limit) => limit.context === 32_768 && limit.output === 4_096,
     ) &&
@@ -600,7 +613,14 @@ export function realBinaryEvidenceComplete(report) {
 }
 
 export function writeManagedCatalogObservation(report) {
-  if (!realBinaryEvidenceComplete(report)) return false;
+  const qualificationDirectory = process.env[TOOL_CATALOG_QUALIFICATION_DIR_ENV];
+  const qualificationHead = process.env[TOOL_CATALOG_QUALIFICATION_HEAD_ENV];
+  if (
+    !realBinaryEvidenceComplete(report) ||
+    (qualificationDirectory !== undefined && qualificationHead !== report.sourceHead)
+  ) {
+    return false;
+  }
   writeToolCatalogQualificationObservation({
     consumer: "managed-opencode",
     component: "managed-opencode",
@@ -608,6 +628,10 @@ export function writeManagedCatalogObservation(report) {
     terminalStatus: "completed",
     settlementCount: report.managedCatalog.settlementCount,
     proof: report.managedCatalog.proof,
+    runBinding: {
+      correlationId: report.managedCatalog.correlationId,
+      activityLogSha256: report.activityLog.sha256,
+    },
   });
   return true;
 }
@@ -620,9 +644,18 @@ function reportMissingEvidence(report) {
   process.exitCode = 1;
 }
 
+function currentSourceHead() {
+  return execFileSync(resolveHostExecutable("git"), ["rev-parse", "HEAD"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    timeout: 30_000,
+  }).trim();
+}
+
 export async function runRealBinaryJourney() {
   const target = ensureMacTarget();
   const context = createJourneyContext(target);
+  const sourceHead = currentSourceHead();
   if (!existsSync(context.executable)) {
     throw new Error("staged approved OpenCode payload is missing");
   }
@@ -649,6 +682,7 @@ export async function runRealBinaryJourney() {
   const activityLog = retainJourneyActivityLog(context);
   const report = buildJourneyReport({
     context,
+    sourceHead,
     exitCode,
     gateway,
     limits: limitObserver.report(),

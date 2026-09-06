@@ -56,6 +56,7 @@ function passingInput() {
     },
     testReportBytes: Buffer.from("test-report"),
     realBinaryReport: {
+      sourceHead: SOURCE,
       runtime: { name: "opencode-compatible", version: "1.17.17", target: "macos-arm64" },
       journey: { exitCode: 0 },
       activityLog: { status: "retained", sha256: sha256(activityBytes) },
@@ -67,6 +68,7 @@ function passingInput() {
       consumer: "managed-opencode",
       terminalStatus: "completed",
       binding,
+      runBinding: { correlationId: CORRELATION, activityLogSha256: sha256(activityBytes) },
     },
     activityBytes,
     correlationId: CORRELATION,
@@ -95,6 +97,7 @@ describe("runtime gateway confinement qualification evidence", () => {
         },
         testReportBytes: Buffer.from("test-report"),
         realBinaryReport: {
+          sourceHead: SOURCE,
           journey: { exitCode: 0 },
           activityLog: { status: "retained", sha256: "b".repeat(64) },
           managedCatalog: { correlationId: "run-1" },
@@ -104,6 +107,7 @@ describe("runtime gateway confinement qualification evidence", () => {
           sourceHead: "a".repeat(40),
           consumer: "managed-opencode",
           terminalStatus: "completed",
+          runBinding: { correlationId: CORRELATION, activityLogSha256: "b".repeat(64) },
         },
         activityBytes: Buffer.from("{}\n"),
         correlationId: CORRELATION,
@@ -161,6 +165,40 @@ describe("runtime gateway confinement qualification evidence", () => {
         realBinaryReport: {
           ...input.realBinaryReport,
           runtime: { ...input.realBinaryReport.runtime, version: "1.18.0" },
+        },
+      }),
+    ).toThrow("not bound to one successful production run");
+  });
+
+  it("rejects a cross-run join even when both runs use the same catalog binding", () => {
+    const input = passingInput();
+    expect(() =>
+      buildRuntimeGatewayConfinementArtifact({
+        ...input,
+        managedObservation: {
+          ...input.managedObservation,
+          runBinding: {
+            ...input.managedObservation.runBinding,
+            correlationId: "run-other",
+          },
+        },
+      }),
+    ).toThrow("not bound to one successful production run");
+    expect(() =>
+      buildRuntimeGatewayConfinementArtifact({
+        ...input,
+        realBinaryReport: { ...input.realBinaryReport, sourceHead: "f".repeat(40) },
+      }),
+    ).toThrow("not bound to one successful production run");
+    expect(() =>
+      buildRuntimeGatewayConfinementArtifact({
+        ...input,
+        managedObservation: {
+          ...input.managedObservation,
+          runBinding: {
+            ...input.managedObservation.runBinding,
+            activityLogSha256: "f".repeat(64),
+          },
         },
       }),
     ).toThrow("not bound to one successful production run");

@@ -30,6 +30,10 @@ export interface WriteToolCatalogQualificationObservationInput {
         readonly boundedReadSettled: true;
         readonly causalHandoff: true;
       };
+  readonly runBinding?: {
+    readonly correlationId: string;
+    readonly activityLogSha256: string;
+  };
 }
 
 export const TOOL_CATALOG_QUALIFICATION_DIR_ENV: "KEIKO_TOOL_CATALOG_QUALIFICATION_DIR";

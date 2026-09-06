@@ -40,6 +40,7 @@ const H1_SEARCH = {
   readTargetDerivedFromResult: true,
 };
 const ACTIVITY_LOG = { status: "retained", sha256: "c".repeat(64) };
+const SOURCE_HEAD = "1".repeat(40);
 const CATALOG_BINDING = {
   catalogRevision: "d".repeat(64),
   profile: { id: "opencode", version: 1 },
@@ -174,6 +175,7 @@ describe("#2483 real-binary observation helpers", () => {
 
   it("requires every real-binary acceptance observation before reporting success", () => {
     const complete = {
+      sourceHead: SOURCE_HEAD,
       journey: { exitCode: 0 },
       limits: {
         materializedChildLimits: [{ context: 32_768, output: 4_096 }],
@@ -199,6 +201,7 @@ describe("#2483 real-binary observation helpers", () => {
 
   it("names every missing observation so a failed run explains itself", () => {
     const complete = {
+      sourceHead: SOURCE_HEAD,
       journey: { exitCode: 0 },
       limits: {
         materializedChildLimits: [{ context: 32_768, output: 4_096 }],
@@ -251,6 +254,7 @@ describe("#2483 real-binary observation helpers", () => {
   it("writes managed qualification only after the whole real-binary journey is complete", () => {
     const directory = mkdtempSync(join(tmpdir(), "keiko-managed-observation-"));
     const complete = {
+      sourceHead: SOURCE_HEAD,
       journey: { exitCode: 0 },
       limits: {
         materializedChildLimits: [{ context: 32_768, output: 4_096 }],
@@ -264,10 +268,12 @@ describe("#2483 real-binary observation helpers", () => {
       activityLog: ACTIVITY_LOG,
     };
     process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_DIR = directory;
-    process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_HEAD = "1".repeat(40);
+    process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_HEAD = "2".repeat(40);
     try {
       expect(writeManagedCatalogObservation({ ...complete, h1Search: undefined })).toBe(false);
+      expect(writeManagedCatalogObservation(complete)).toBe(false);
       expect(readdirSync(directory)).toEqual([]);
+      process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_HEAD = SOURCE_HEAD;
       expect(writeManagedCatalogObservation(complete)).toBe(true);
       expect(
         JSON.parse(
@@ -281,6 +287,10 @@ describe("#2483 real-binary observation helpers", () => {
         binding: CATALOG_BINDING,
         settlementCount: 3,
         proof: MANAGED_CATALOG.proof,
+        runBinding: {
+          correlationId: MANAGED_CATALOG.correlationId,
+          activityLogSha256: ACTIVITY_LOG.sha256,
+        },
       });
     } finally {
       delete process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_DIR;
@@ -300,7 +310,8 @@ describe("#2483 real-binary observation helpers", () => {
       missingPayload: undefined,
     });
 
-    expect(gaps).toHaveLength(9);
+    expect(gaps).toHaveLength(10);
+    expect(gaps).toContain("no exact source head was retained");
     expect(gaps).toContain("no useful H1 search-to-read result evidence");
   });
 
@@ -441,6 +452,7 @@ describe("#2483 real-binary observation helpers", () => {
 
   it("assembles an evidence report that carries counts and outcomes only", () => {
     const report = buildJourneyReport({
+      sourceHead: SOURCE_HEAD,
       exitCode: 0,
       gateway: {
         requestCount: 7,
@@ -460,6 +472,7 @@ describe("#2483 real-binary observation helpers", () => {
     expect(report).toMatchObject({
       schemaVersion: 1,
       issue: 2483,
+      sourceHead: SOURCE_HEAD,
       evidenceClass: "functional-not-platform-qualified",
       runtime: { name: "opencode-compatible", version: "1.17.17", target: "macos-arm64" },
       journey: { exitCode: 0, wallClockMs: 41_128 },
