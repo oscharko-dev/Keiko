@@ -27,7 +27,9 @@ export function readGitSourceContent(commit, paths, root, execute) {
       throw new TypeError("Git source blob is truncated");
     }
     offset = contentEnd + 1;
-    return { path, content: output.subarray(contentStart, contentEnd).toString("utf8") };
+    // UTF-8 decoding replaces distinct malformed bytes with the same character. Base64 keeps
+    // every Git byte (including invalid UTF-8 and BOMs) distinct in the canonical digest input.
+    return { path, contentBase64: output.subarray(contentStart, contentEnd).toString("base64") };
   });
   if (offset !== output.length) throw new TypeError("Git source output contains extra bytes");
   return files;

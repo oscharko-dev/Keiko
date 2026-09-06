@@ -11,6 +11,11 @@ function blob(content) {
 }
 
 describe("Git source batch framing", () => {
+  it("keeps distinct invalid UTF-8 source bytes distinct", () => {
+    const first = readGitSourceContent("HEAD", ["src/a.ts"], ".", () => blob(Buffer.from([0x80])));
+    const second = readGitSourceContent("HEAD", ["src/a.ts"], ".", () => blob(Buffer.from([0x81])));
+    expect(first).not.toEqual(second);
+  });
   it("preserves UTF-8 source bytes and header-like body text in path order", () => {
     const content = `ä🙂\n${"b".repeat(40)} blob 999\n`;
     const execute = (_command, args, options) => {
@@ -19,8 +24,8 @@ describe("Git source batch framing", () => {
       return Buffer.concat([blob(content), blob("")]);
     };
     expect(readGitSourceContent("HEAD", ["src/a.ts", "src/b.ts"], ".", execute)).toEqual([
-      { path: "src/a.ts", content },
-      { path: "src/b.ts", content: "" },
+      { path: "src/a.ts", contentBase64: Buffer.from(content).toString("base64") },
+      { path: "src/b.ts", contentBase64: "" },
     ]);
   });
 

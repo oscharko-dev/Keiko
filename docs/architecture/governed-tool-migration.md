@@ -151,6 +151,8 @@ including shared deadline, regex-safety and path-admission helpers, workspace pa
 and the dependency lockfile. Type-only imports do not execute and do not expand that closure.
 This dependency-derived source set stays separate from the 43 historical migration rows. Both
 producers and validators call `ownedSourceDigestAt`; no second source-digest formula exists.
+Its canonical path/content pairs encode Git blob bytes as base64, preserving distinct malformed
+UTF-8 bytes and byte-order marks instead of collapsing them during text decoding.
 
 The separately retained post-merge validator, `checkH1HandoffEvidence`, requires both
 `landedDevCommit` and `landedTreeDigest` together when either is populated. It checks the actual

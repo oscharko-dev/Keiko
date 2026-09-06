@@ -447,7 +447,7 @@ function resolveCommitTreeId(commit, root, execute) {
 // The one digest formula for "owned source content at a commit", reused by both the producer side
 // (once #3414 lands real H1Provenance) and this recheck — never restated. Reads each owned path's
 // exact byte content at `commit` via Git's byte-framed batch reader (fails closed if any path is
-// absent from that commit's tree) and hashes the sorted {path, content} pairs with this file's own
+// absent from that commit's tree) and hashes sorted {path, contentBase64} pairs with this file's own
 // canonical digest primitive (`canonicalise`/`sha256Hex`, keiko-security — this file's own
 // `digest-primitives` inventory owner), so the result is bound to real Git object content, never a
 // caller-declared string.
