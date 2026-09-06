@@ -62,6 +62,15 @@ function budget(
   if (result === undefined) throw new TypeError("fixture budget missing");
   return result;
 }
+
+function expectStructuredRejection(reason: string): void {
+  const event = events.at(-1);
+  expect(event?.op).toBe("gateway.spend.rejected");
+  expect(event?.extra?.reason).toBe(reason);
+  expect(Array.isArray(event?.extra?.frames)).toBe(true);
+  expect((event?.extra?.frames as readonly unknown[] | undefined)?.length).toBeGreaterThan(0);
+  expect(Array.isArray(event?.extra?.causeChain)).toBe(true);
+}
 const config: GatewayConfig = {
   providers: [
     {
@@ -85,6 +94,48 @@ afterEach(() => {
 });
 
 describe("shared persistent model spend admission", () => {
+  it("records reconstructable diagnostics for caught and locally-constructed rejections", () => {
+    expect(() =>
+      budget().reserve(
+        { ...capability, pricing: undefined },
+        request,
+        "pricing-rejection",
+      ),
+    ).toThrow("spend-pricing-unavailable");
+    expectStructuredRejection("spend-pricing-unavailable");
+
+    expect(() => budget("0").reserve(capability, request, "budget-rejection")).toThrow(
+      "spend-budget-exceeded",
+    );
+    expectStructuredRejection("spend-budget-exceeded");
+  });
+
+  it("admits zero output only for a validated embedding capability", () => {
+    const embedding: ModelCapability = {
+      ...capability,
+      id: "embedding-fixture",
+      kind: "embedding",
+      maxOutputTokens: 0,
+    };
+    const reservation = budget().reserve(
+      embedding,
+      { modelId: embedding.id, messages: [{ role: "user", content: "private input" }] },
+      "embedding-probe",
+    );
+    reservation.settle({
+      ...response.usage,
+      promptTokens: 10,
+      completionTokens: 0,
+    });
+    expect(() =>
+      budget().reserve(
+        { ...capability, maxOutputTokens: 0 },
+        { modelId: capability.id, messages: [] },
+        "invalid-chat",
+      ),
+    ).toThrow("spend-bound-unavailable");
+  });
+
   it("does not enforce a qualification ceiling when no spend budget is configured", async () => {
     const call = vi.fn(() => Promise.resolve(response));
     const spendBudget = createGatewaySpendBudget({});
@@ -119,15 +170,12 @@ describe("shared persistent model spend admission", () => {
 
   it("records a violated provider cost bound and closes the ledger against further calls", () => {
     const hold = budget().reserve(capability, request, "bounded");
-    expect(() => hold.settle({ ...response.usage, promptTokens: 200 })).toThrow(
-      "spend-bound-unavailable",
-    );
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        op: "gateway.spend.settled",
-        extra: expect.objectContaining({ chargedNanoUsd: 210_000_000_000, boundExceeded: true }),
-      }),
-    );
+    expect(() => {
+      hold.settle({ ...response.usage, promptTokens: 200 });
+    }).toThrow("spend-bound-unavailable");
+    const event = events.find((candidate) => candidate.op === "gateway.spend.settled");
+    expect(event?.extra?.chargedNanoUsd).toBe(210_000_000_000);
+    expect(event?.extra?.boundExceeded).toBe(true);
     expect(() => budget().reserve(capability, request, "after-bound-violation")).toThrow(
       "spend-budget-exceeded",
     );

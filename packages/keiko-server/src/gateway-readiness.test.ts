@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { Readable } from "node:stream";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +19,10 @@ import {
 } from "./gateway-readiness.js";
 import type { RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
+import {
+  QUALIFICATION_SPEND_BUDGET_USD_ENV,
+  QUALIFICATION_SPEND_LEDGER_PATH_ENV,
+} from "./gateway-spend-budget.js";
 
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -73,12 +78,13 @@ function depsWith(
   config: GatewayConfig | undefined,
   fetchImpl: typeof fetch = vi.fn(),
   diagnostics?: ServerDiagnosticSink,
+  env: Readonly<Record<string, string | undefined>> = {},
 ): UiHandlerDeps {
   return {
     config,
     configPresent: config !== undefined,
     evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
-    env: {},
+    env,
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
@@ -182,6 +188,74 @@ afterEach(() => {
 });
 
 describe("gateway readiness route", () => {
+  it("reserves the shared spend ceiling before chat probe dispatch", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-readiness-budget-"));
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const base = gatewayConfig();
+    const config: GatewayConfig = {
+      ...base,
+      capabilities: base.capabilities?.map((capability) => ({
+        ...capability,
+        ...(capability.kind === "chat" ? { maxOutputTokens: 20 } : {}),
+        pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+      })),
+    };
+    const deps = depsWith(config, fetchImpl, undefined, {
+      [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0",
+      [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.json"),
+    });
+    try {
+      const report = await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
+      if ("status" in report) throw new Error("expected readiness report");
+      expect(report.probes.map(({ name, status }) => [name, status])).toEqual([["chat", "failed"]]);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      deps.store.close();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reserves the shared spend ceiling before embedding probe dispatch", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-embedding-probe-budget-"));
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          ...chatPayload("OK"),
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }),
+      ),
+    ) as typeof fetch;
+    const base = gatewayConfig();
+    const config: GatewayConfig = {
+      ...base,
+      capabilities: base.capabilities?.map((capability) => ({
+        ...capability,
+        ...(capability.kind === "chat" ? { maxOutputTokens: 20 } : {}),
+        pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+      })),
+    };
+    const deps = depsWith(config, fetchImpl, undefined, {
+      [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0.008",
+      [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.json"),
+    });
+    try {
+      const report = await runGatewayReadiness(
+        { options: { probes: ["chat", "embedding"] } },
+        deps,
+      );
+      if ("status" in report) throw new Error("expected readiness report");
+      expect(report.probes.map(({ name, status }) => [name, status])).toEqual([
+        ["chat", "passed"],
+        ["embedding", "failed"],
+      ]);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(requestBodyAt(fetchImpl, 0).max_tokens).toBe(20);
+    } finally {
+      deps.store.close();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps credentialed chat completion transport inside the model gateway package", () => {
     const source = readFileSync(join(CURRENT_DIR, "gateway-readiness.ts"), "utf8");
 

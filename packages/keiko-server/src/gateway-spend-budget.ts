@@ -69,10 +69,13 @@ function upperCharge(
   pricing: ModelCapabilityPricing,
 ): number {
   const output = request.maxOutputTokens ?? capability.maxOutputTokens;
+  const outputBoundValid =
+    capability.kind === "embedding"
+      ? capability.maxOutputTokens === 0 && output === 0
+      : positiveInteger(capability.maxOutputTokens) && positiveInteger(output);
   if (
     !positiveInteger(capability.contextWindow) ||
-    !positiveInteger(capability.maxOutputTokens) ||
-    !positiveInteger(output) ||
+    !outputBoundValid ||
     output > capability.maxOutputTokens
   ) {
     throw new ConfigInvalidError("spend-bound-unavailable");
@@ -105,6 +108,8 @@ function reject(
   reason: Rejection,
   error?: unknown,
 ): never {
+  const rejection = new ConfigInvalidError(reason);
+  const diagnosticError = error ?? rejection;
   log.write({
     category: "gateway",
     level: "warn",
@@ -113,12 +118,11 @@ function reject(
     errorKind: "GATEWAY_CONFIG_INVALID",
     extra: {
       reason,
-      ...(error === undefined
-        ? {}
-        : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
+      frames: keikoStackFrames(diagnosticError),
+      causeChain: causeChain(diagnosticError),
     },
   });
-  throw new ConfigInvalidError(reason);
+  throw rejection;
 }
 
 function reservation(
@@ -172,6 +176,7 @@ function chargeForAttempt(
       error instanceof ConfigInvalidError && error.message === "spend-pricing-unavailable"
         ? "spend-pricing-unavailable"
         : "spend-bound-unavailable",
+      error,
     );
   }
 }

@@ -1119,7 +1119,7 @@ describe("CodingRuntimeOrchestrator", () => {
       (candidate) => candidate.op === "coding-runtime.approval.waiting",
     );
     if (event === undefined) throw new Error("expected CI consent wait activity");
-    expect(event.category).toBe("policy");
+    expect(event.category).toBe("process");
     expect(event.correlationId).toBe(UNKNOWN_CORRELATION_ID);
     expect(event.extra).toEqual({
       runId: "run-1",

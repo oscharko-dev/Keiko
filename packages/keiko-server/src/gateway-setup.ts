@@ -1865,14 +1865,24 @@ async function setupToolCallingObservations(
         observations[index] = { modelId, status: "unverified", checkedAt };
         continue;
       }
-      const status = await probeGatewayToolCalling(config, provider, undefined, (error) => {
-        reportSetupVerificationFailure(
-          deps,
-          error,
-          correlationId,
-          "gateway.setup.tool-calling-probe",
-        );
-      });
+      const status = await probeGatewayToolCalling(
+        config,
+        provider,
+        undefined,
+        (error) => {
+          reportSetupVerificationFailure(
+            deps,
+            error,
+            correlationId,
+            "gateway.setup.tool-calling-probe",
+          );
+        },
+        {
+          env: deps.env,
+          capability: findConfiguredCapability(config, modelId),
+          correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+        },
+      );
       observations[index] = {
         modelId,
         status,
