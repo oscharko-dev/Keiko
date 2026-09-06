@@ -3181,17 +3181,12 @@ describe("coding-sidecar gateway", () => {
     expect(result.status).toBe(200);
     expect(seen).toHaveLength(1);
     expect(seen[0]?.messages).toEqual([{ role: "user", content }]);
-    expect(sink.events).toContainEqual(
-      expect.objectContaining({
-        op: "coding-sidecar.gateway.request-validated",
-        correlationId: expect.any(String),
-        extra: expect.objectContaining({
-          maxRequestBytes: 1_048_576,
-          inputMessageCount: 1,
-          estimatedPromptTokens: expect.any(Number),
-        }),
-      }),
+    const validated = sink.events.find(
+      (event) => event.op === "coding-sidecar.gateway.request-validated",
     );
+    expect(validated?.correlationId).toEqual(expect.any(String));
+    expect(validated?.extra).toMatchObject({ maxRequestBytes: 1_048_576, inputMessageCount: 1 });
+    expect(validated?.extra?.estimatedPromptTokens).toEqual(expect.any(Number));
     expect(JSON.stringify(sink.events)).not.toContain("bounded source context");
   });
 
@@ -3208,12 +3203,8 @@ describe("coding-sidecar gateway", () => {
     assertRouteResult(result);
     expect(result.status).toBe(413);
     expect(calls).not.toHaveBeenCalled();
-    expect(sink.events).toContainEqual(
-      expect.objectContaining({
-        op: "coding-sidecar.gateway.rejected",
-        extra: expect.objectContaining({ reason: "request-too-large" }),
-      }),
-    );
+    const rejected = sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected");
+    expect(rejected?.extra).toMatchObject({ reason: "request-too-large" });
     expect(JSON.stringify(sink.events)).not.toContain("private-overflow");
   });
 
