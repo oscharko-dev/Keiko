@@ -1019,12 +1019,15 @@ function WorkbenchColumns({
             snapshot={state.run.value}
             onRemove={() => setAcceptedIssue(null)}
           />
-          {showWelcome && acceptedIssue === null ? (
+          {welcomeEligibleState(state.run.value?.state) && acceptedIssue === null ? (
             <button
               type="button"
               className={styles.button}
               disabled={state.mutation.status === "pending"}
-              onClick={() => setIssueSetup(true)}
+              onClick={() => {
+                reportClientDiagnostic("[keiko] coding workbench issue intake opened");
+                setIssueSetup(true);
+              }}
             >
               {t("codingWorkbench.issue.title")}
             </button>

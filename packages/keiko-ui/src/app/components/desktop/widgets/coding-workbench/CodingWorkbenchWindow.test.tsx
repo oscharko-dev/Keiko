@@ -383,6 +383,52 @@ beforeEach(() => {
 });
 
 describe("CodingWorkbenchWindow", () => {
+  it.each(["succeeded", "failed", "cancelled", "taken-over"] as const)(
+    "can reopen issue intake after a %s run with retained activity",
+    async (state) => {
+      const diagnostic = vi.fn();
+      setClientDiagnosticWriter(diagnostic);
+      try {
+        renderWorkbench(
+          liveState({
+            run: { status: "ready", error: null, value: snapshot({ state, runId: "run-1" }) },
+            events: [event(1)],
+          }),
+        );
+        await userEvent.setup().click(
+          screen.getByRole("button", {
+            name: "Start from a GitHub issue",
+            exact: true,
+          }),
+        );
+        expect(screen.getByRole("region", { name: "Code setup" })).toBeVisible();
+        expect(diagnostic).toHaveBeenCalledWith(
+          "[keiko] coding workbench issue intake opened",
+          undefined,
+        );
+      } finally {
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it.each(["running", "paused", "awaiting-approval", "recovery-required"] as const)(
+    "does not offer a new issue while a run is %s",
+    (state) => {
+      renderWorkbench(
+        liveState({
+          run: { status: "ready", error: null, value: snapshot({ state, runId: "run-1" }) },
+        }),
+      );
+      expect(
+        screen.queryByRole("button", {
+          name: "Start from a GitHub issue",
+          exact: true,
+        }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
   it("refreshes the model catalog when the Workbench opens", (): void => {
     const listener = vi.fn();
     window.addEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, listener);
