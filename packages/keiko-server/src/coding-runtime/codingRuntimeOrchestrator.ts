@@ -314,16 +314,17 @@ function recordRuntimeRunStarted(
 
 function recordRuntimeApprovalWaiting(
   activityLog: ServerLogSink | undefined,
-  snapshot: CodingRuntimeSnapshot,
+  runId: string,
+  revision: number,
   permission: CodingWorkbenchRuntimePendingPermission,
 ): void {
   activityLog?.write({
-    category: "policy",
+    category: "process",
     op: "coding-runtime.approval.waiting",
-    correlationId: runtimeDiagnosticCorrelationId(snapshot.runId),
+    correlationId: runtimeDiagnosticCorrelationId(runId),
     extra: {
-      runId: snapshot.runId,
-      revision: snapshot.revision,
+      runId,
+      revision,
       requestId: permission.requestId,
       permissionKind: permission.kind,
       actionClass: permission.actionClass,
@@ -667,7 +668,8 @@ export class CodingRuntimeOrchestrator {
     if (approval !== undefined) {
       recordRuntimeApprovalWaiting(
         this.deps.activityLog,
-        transitioned.snapshot,
+        runId,
+        transitioned.snapshot.revision,
         approval.permission,
       );
     }
@@ -1070,12 +1072,20 @@ export class CodingRuntimeOrchestrator {
     current: CodingRuntimeSnapshot,
     event: CodingWorkbenchRuntimeEvent,
   ): CodingRuntimeOrchestratorResult {
-    if (!this.stashApproval(current, event)) return this.fail("invalid-intent");
+    const permission = event.permissionRequest;
+    if (permission === undefined || !this.stashApproval(current, event)) {
+      return this.fail("invalid-intent");
+    }
     const next = this.transition(current, "awaiting-approval");
     if (!next.ok) {
       this.approvals.delete(current.runId);
     } else {
-      recordRuntimeApprovalWaiting(this.deps.activityLog, next.snapshot, event.permissionRequest);
+      recordRuntimeApprovalWaiting(
+        this.deps.activityLog,
+        current.runId,
+        next.snapshot.revision,
+        permission,
+      );
     }
     return next;
   }
