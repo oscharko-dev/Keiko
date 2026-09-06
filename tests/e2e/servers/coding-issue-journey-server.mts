@@ -14,7 +14,7 @@
 // model and a real repository, or the lane does not start at all.
 
 import { randomBytes } from "node:crypto";
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { runUiCli, type CliIo } from "@oscharko-dev/keiko-cli";
@@ -79,6 +79,16 @@ function processIo(): CliIo {
       process.stderr.write(text);
     },
   };
+}
+
+export function evaluationLocalGitMutationEnv(
+  baseEnv: Readonly<Record<string, string | undefined>>,
+  identityHome: string | undefined,
+): Record<string, string | undefined> | undefined {
+  if (identityHome === undefined) return undefined;
+  if (!isAbsolute(identityHome) || identityHome.length > 4_096 || /[\r\n\0]/u.test(identityHome))
+    throw new TypeError("qualification-git-identity-home-invalid");
+  return { ...baseEnv, HOME: identityHome };
 }
 
 /**
@@ -155,17 +165,20 @@ async function main(): Promise<number> {
   // project. Pointing it at the controlled repository checkout is what makes this composition
   // real rather than a stand-in.
   const launcherSecret = resolveLauncherSecret(process.env);
-  return runUiCli(
-    args,
-    processIo(),
-    launchedEnv(
-      process.env,
-      resolved.config.spendBudgetUsd,
-      resolved.config.spendLedgerPath,
-      launcherSecret,
-    ),
-    { cwd: resolved.config.controlledRepositoryRoot },
+  const serverEnv = launchedEnv(
+    process.env,
+    resolved.config.spendBudgetUsd,
+    resolved.config.spendLedgerPath,
+    launcherSecret,
   );
+  const localGitMutationEnv = evaluationLocalGitMutationEnv(
+    serverEnv,
+    process.env.KEIKO_QUALIFICATION_GIT_IDENTITY_HOME,
+  );
+  return runUiCli(args, processIo(), serverEnv, {
+    cwd: resolved.config.controlledRepositoryRoot,
+    ...(localGitMutationEnv === undefined ? {} : { localGitMutationEnv }),
+  });
 }
 
 // Guarded like the sibling `coding-issue-delivery-server.mts`: only run the real production

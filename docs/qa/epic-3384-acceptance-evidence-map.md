@@ -117,14 +117,26 @@ failed verification, production edits, passing targeted/full verification, and a
 three files. The approved commit was attempted but refused before mutation because the host's
 global Git configuration requires signing; the governed executor deliberately refuses an unsigned
 commit under that policy. HEAD remained unchanged. The stopped run, staged work, trace and activity
-are retained. The next controlled evaluation uses its own process configuration with unsigned
-commits; the host configuration and the product signing-policy refusal remain unchanged.
+are retained. The controlled evaluation requires an isolated Git identity configuration for
+unsigned fixture commits; the host configuration and the product signing-policy refusal remain
+unchanged.
+
+Attempts 29 and 30 (`2f4ad5cd`) failed before any model call. Applying the evaluation HOME to the
+whole test process first displaced the Playwright browser cache and then coincided with a macOS
+missing-keychain dialog. That broad override has been removed; Git identity isolation must apply
+only to the local Git mutation subprocess environment. Attempt 30 also exposed an independently
+incomplete fixture checkout: `origin/HEAD` was absent, so issue preview correctly returned
+`clone-failed` / `default-branch-unresolved` after two successful GitHub reads. The remote's actual
+symbolic HEAD was verified as `master` before repairing this checkout metadata. Neither attempt
+created a task workspace, pull request, merge or closure. The failed-run artifacts are retained;
+the matrix remains **0/5 completed flows**.
 
 At `b38c7ec4`, the complete server suite passed 713 files / 13,691 tests (7 files / 16 tests
 skipped), and the model-gateway suite passed 57 files / 1,439 tests. Full typecheck, context-quality,
 error-observability and operation-catalog checks also passed. These are exact-source local results,
 not completed live-flow evidence. Six subsequent local Sonar findings are corrected with 203
-focused tests and full typecheck; the stable-source analyzer rerun remains required.
+focused tests and full typecheck. The stable-source Sonar analyzer passed at exact `2f4ad5cd`
+with no unresolved findings. These checks do not replace the five live-flow receipts.
 
 The identified runtime, schema-guidance and UI defects are being repaired through their owning
 layers with regression tests. A failed attempt and its retained work are not a qualified flow.
@@ -299,8 +311,10 @@ Primary evidence: `packages/keiko-contracts/src/code-task-acceptance.ts`,
 | 12  | External Git change connected to Chat, refined over multiple turns and governably applied | qualification-pending      | A real two-turn Git Chat lifecycle and governed apply passed at `8597efd5`; the old helper failed against that production trace as the regression proof. The final qualification manifest still needs a current-source, source-bound receipt rather than treating this checkpoint as five-flow completion.                                                       |
 | 13  | Git-connected Chat cannot execute Git delivery, merge/close, repair or arbitrary effects  | partial                    | Route-contract and mounted negative tests pin the description-only surface, and the real two-turn checkpoint observed no delivery substitution. Final source-bound negative evidence and the independent acceptance audit remain outstanding.                                                                                                                    |
 
-**Closeability:** not yet. Attempts through 20 produced no qualifying PR, merge or closure; the
-latest preserved workspace still needs arithmetic and approval-continuation repair. The matrix remains 0/5 at the latest recorded observation. At least
+**Closeability:** not yet. Attempts through 30 produced no qualifying PR, merge or closure.
+Attempt 28 reached passing targeted/full verification and an executed commit request, but the
+signing-policy refusal left HEAD unchanged. Attempts 29 and 30 stopped before model execution.
+The matrix remains 0/5 at the latest recorded observation. At least
 five successful flows, the separate aggregate CI-repair scenario, current-source qualification,
 exact-head required checks, final gated integration and postmerge verification are required.
 
@@ -544,8 +558,8 @@ shortest runnable path to a reviewable result rather than by issue number.
 
 | Priority  | Criteria still open                                                                                                        | Runnable evidence or decision still required                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | --------- | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P0        | #3390 AC1–AC5, AC7, AC11; #3385 AC1/AC10                                                                                   | Finish attempt 16 without substituting manual Git effects. Retain the actual issue intake, run/tool identities, rubric result, exact verified tree, commit, draft PR, description and approvals. If it does not complete, preserve its body-free failure envelope before the next retry. Repeat only after one complete flow is reviewable, then execute the remaining Ask/Supervised/Full/Supervised/Full rows.                                                                             |
-| P0        | #3390 AC2/AC4; #3386 AC1/AC10                                                                                              | Make the advertised `targeted-test` verifier runnable by binding an existing governed target path through the canonical schema, IPC, approval and production runner. Prove missing/wrong/out-of-scope targets fail closed and a real targeted regression supplies the intended red/green evidence. Do not reinterpret `NO_RUNNABLE_STEPS` as a failing test.                                                                                                                                 |
+| P0        | #3390 AC1–AC5, AC7, AC11; #3385 AC1/AC10                                                                                   | Complete a current-source flow in the corrected controlled checkout without substituting manual Git effects. Retain actual issue intake, run/tool identities, rubric result, exact verified tree, commit, draft PR, description and approvals. Preserve each failed attempt's body-free failure envelope. After one complete flow is reviewable, execute the remaining Supervised/Full/Supervised/Full rows.                                                                                 |
+| P0        | #3390 AC2/AC4; #3386 AC1/AC10                                                                                              | Target-path binding and native Node targeted verification are implemented and were observed failing then passing in actual attempt 28. Retain this same causal evidence in the completed final-source flow; `NO_RUNNABLE_STEPS` must never count as a failing regression.                                                                                                                                                                                                                    |
 | P0        | #3386 AC2/AC4/AC8; #3390 AC2/AC11                                                                                          | If `verification-missing` recurs, reconstruct why the passing verifier receipt did not bind the final staged tree, then add a fail-first owning regression. A full-test pass against an earlier tree is not commit authority.                                                                                                                                                                                                                                                                |
 | P0        | #3387 AC1–AC8; #3388 AC1–AC12; #3389 AC1–AC10; #3390 AC3/AC5/AC7                                                           | From a verified commit, complete governed push and draft PR creation, observe exact-head required checks, execute the separate real CI failure→model repair→new green head scenario, apply the current description, mark ready, then record the authorized merge and actual CLOSED issue facts. Five distinct final receipts remain mandatory.                                                                                                                                               |
 | P1        | #3390 AC12/AC13; #3400 AC1–AC8                                                                                             | Bind the passed real two-turn Git Chat checkpoint to the final source/evidence manifest and retain its governed apply plus no-forbidden-effect proof. Rerun only if final-source changes invalidate the immutable checkpoint.                                                                                                                                                                                                                                                                |

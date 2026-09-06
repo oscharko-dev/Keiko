@@ -1001,6 +1001,8 @@ export interface BuildHandlerDepsOptions {
   // Evidence directory (`keiko ui --evidence-dir`); resolved via the audit precedence rules.
   readonly evidenceDir: string | undefined;
   readonly env: EnvSource;
+  /** Optional local Git-mutation subprocess env; omitted by every normal product launch. */
+  readonly localGitMutationEnv?: EnvSource | undefined;
   readonly conversationAttachmentStore?: ConversationAttachmentStore | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   // Optional deployment replacement for the default memory category denylist. Production leaves
@@ -4959,7 +4961,7 @@ function runtimeVerifiedCommitDependencies(
       store: args.bundle.uiStore,
       evidenceStore: args.evidenceStore,
       redactor: args.liveRedactor,
-      env: args.options.env,
+      env: args.options.localGitMutationEnv ?? args.options.env,
       activityLog: processServerLogSink(),
       editorSettingsControl: input.editorSettingsControl,
       managedTaskWorkspaceRoot: input.managedTaskWorkspaceRoot,

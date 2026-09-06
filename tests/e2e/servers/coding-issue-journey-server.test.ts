@@ -11,11 +11,24 @@ import { SESSION_PAIRING_LAUNCHER_SECRET_ENV } from "@oscharko-dev/keiko-server"
 import {
   defaultStateDir,
   defaultUiStaticRoot,
+  evaluationLocalGitMutationEnv,
   launchedEnv,
   resolveLauncherSecret,
 } from "./coding-issue-journey-server.mjs";
 
 describe("launchedEnv", () => {
+  it("isolates only the governed Git subprocess HOME for evaluation", () => {
+    const base = { HOME: "/host/home", PATH: "/usr/bin" };
+    const gitEnv = evaluationLocalGitMutationEnv(base, "/private/evaluation-home");
+
+    expect(gitEnv).toEqual({ HOME: "/private/evaluation-home", PATH: "/usr/bin" });
+    expect(base.HOME).toBe("/host/home");
+    expect(evaluationLocalGitMutationEnv(base, undefined)).toBeUndefined();
+    expect(() => evaluationLocalGitMutationEnv(base, "relative/home")).toThrow(
+      "qualification-git-identity-home-invalid",
+    );
+  });
+
   it("threads the resolved spend budget into the launched process env", () => {
     const result = launchedEnv(
       {
