@@ -572,7 +572,10 @@ function recordReadinessPhase(
     level: "info",
     op: "coding-runtime.readiness.phase",
     correlationId: correlationIdOrUnknown(ports.correlationId),
-    extra: { phase },
+    extra: {
+      phase,
+      ...(phase === "config-materialization" ? { dependencyInstallPolicy: "offline" } : {}),
+    },
   });
   return phase;
 }

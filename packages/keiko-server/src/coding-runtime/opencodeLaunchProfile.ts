@@ -86,6 +86,10 @@ export function buildOpenCodeLaunchProfile(
       TMP: join(input.stateRoot, "tmp"),
       OPENCODE_CONFIG_DIR: join(input.stateRoot, "config", "opencode"),
       OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+      // The pinned runtime checks plugin dependencies before loading even dependency-free custom
+      // tools. Registry retries cannot succeed inside the gateway-only network boundary. Keep its
+      // package manager offline so absent optional packages fail promptly, without registry egress.
+      npm_config_offline: "true",
       OPENCODE_DB: join(input.stateRoot, "state", "opencode.db"),
       OPENCODE_SERVER_PASSWORD: secret.toString("base64url"),
     }),

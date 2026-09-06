@@ -166,6 +166,7 @@ describe("OpenCode launch profile", () => {
       expect(profile.env.PATH).toBeUndefined();
       expect(profile.env.HOME).toContain("/private/run");
       expect(profile.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
+      expect(profile.env.npm_config_offline).toBe("true");
       expect(profile.env.OPENCODE_CONFIG_DIR).toBe("/private/run/config/opencode");
       expect(profile.env.OPENCODE_CONFIG).toBeUndefined();
       expect((JSON.parse(profile.config) as { permission: { bash: string } }).permission.bash).toBe(

@@ -312,6 +312,13 @@ describe("OpenCode runtime adapter readiness", () => {
         correlationId: "run-pending-handshake",
         extra: { phase: "sse-history-reconciliation" },
       });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          op: "coding-runtime.readiness.phase",
+          correlationId: "run-pending-handshake",
+          extra: { phase: "config-materialization", dependencyInstallPolicy: "offline" },
+        }),
+      );
       expect(JSON.stringify(events)).not.toContain(SECRET);
     } finally {
       resolvePending?.({ done: true, value: undefined });
