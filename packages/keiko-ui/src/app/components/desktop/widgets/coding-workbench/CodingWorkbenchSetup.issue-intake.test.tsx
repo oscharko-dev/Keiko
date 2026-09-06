@@ -547,6 +547,38 @@ describe("CodingWorkbenchSetup issue intake (#3385)", () => {
     expect(screen.getByRole("button", { name: "Bind workspace" })).toBeEnabled();
   });
 
+  it("keeps an explicit same-issue reacceptance after mounting a failed historical run", async () => {
+    const user = userEvent.setup();
+    const binding = previewResponse().binding;
+    renderWorkbench(workspaceApi(), {
+      ...liveState(),
+      run: {
+        status: "ready",
+        error: null,
+        value: {
+          schemaVersion: "1",
+          state: "failed",
+          revision: 3,
+          updatedAt: "2026-09-06T16:05:00.000Z",
+          runId: "failed-run-42",
+          failureCode: "runtime-failed",
+          issueBinding: {
+            ...binding,
+            schemaVersion: "1",
+            contentRevisionDigest: "d".repeat(64),
+          },
+        },
+      },
+    });
+    await previewReady(user);
+    await user.click(screen.getByRole("button", { name: "Use this issue" }));
+    expect(screen.getByRole("button", { name: "Bind workspace" })).toBeEnabled();
+    expect(diagnostics).not.toContainEqual({
+      message: "[keiko] coding workbench issue selection released after terminal run",
+      meta: undefined,
+    });
+  });
+
   it("refuses a generic bind while an entered issue is unresolved or failed", async () => {
     const user = userEvent.setup();
     previewMock.mockRejectedValue(refusal("auth-required", 403));

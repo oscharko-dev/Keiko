@@ -749,8 +749,15 @@ function WorkbenchColumns({
   const [acceptedIssue, setAcceptedIssue] = useState<AcceptedWorkbenchIssue | null>(null);
   const activeIssueRepository = activeWorkspace.activeInstance?.repositoryId;
   const activeIssueTask = activeWorkspace.activeBinding?.taskId;
+  const observedTerminalRunIdRef = useRef<string | undefined>(terminalRunId(state.run.value));
   useEffect(() => {
-    if (terminalRunMatchesAcceptedIssue(state.run.value, acceptedIssue)) {
+    const currentTerminalRunId = terminalRunId(state.run.value);
+    if (
+      currentTerminalRunId !== undefined &&
+      observedTerminalRunIdRef.current !== currentTerminalRunId
+    ) {
+      observedTerminalRunIdRef.current = currentTerminalRunId;
+      if (!runMatchesAcceptedIssue(state.run.value, acceptedIssue)) return;
       reportClientDiagnostic(
         "[keiko] coding workbench issue selection released after terminal run",
       );
@@ -1080,15 +1087,17 @@ function terminalRunState(state: CodingWorkbenchRuntimeStateName): boolean {
   );
 }
 
-function terminalRunMatchesAcceptedIssue(
+function terminalRunId(run: CodingWorkbenchRuntimeState["run"]["value"]): string | undefined {
+  return run?.runId !== undefined && terminalRunState(run.state) ? run.runId : undefined;
+}
+
+function runMatchesAcceptedIssue(
   run: CodingWorkbenchRuntimeState["run"]["value"],
   acceptedIssue: AcceptedWorkbenchIssue | null,
 ): boolean {
   return (
     acceptedIssue !== null &&
-    run?.runId !== undefined &&
-    run.issueBinding?.bindingDigest === acceptedIssue.binding.bindingDigest &&
-    terminalRunState(run.state)
+    run?.issueBinding?.bindingDigest === acceptedIssue.binding.bindingDigest
   );
 }
 
