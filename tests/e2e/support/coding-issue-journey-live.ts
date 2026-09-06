@@ -549,7 +549,7 @@ export interface DriveToDraftPrInput {
 }
 
 const DRAFT_WAIT_TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeSnapshot["state"]> = new Set([
-  "stopped",
+  "taken-over",
   "failed",
   "cancelled",
   "recovery-required",

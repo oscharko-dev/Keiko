@@ -505,8 +505,10 @@ export function assertContinuationCanReachDraft(
   runId: string,
 ): void {
   if (snapshot.runId !== runId || snapshot.draftDelivery?.phase === "draft-created") return;
-  if (snapshot.state === "stopped") {
-    throw new Error(`continued run ${runId} reached stopped before creating a draft pull request`);
+  if (snapshot.state === "taken-over") {
+    throw new Error(
+      `continued run ${runId} reached taken-over before creating a draft pull request`,
+    );
   }
   if (
     snapshot.state === "failed" ||

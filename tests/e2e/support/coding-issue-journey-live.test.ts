@@ -27,7 +27,7 @@ function runtimeSnapshot(
 }
 
 describe("live journey draft wait", () => {
-  it.each(["stopped", "failed", "cancelled", "recovery-required", "succeeded"] as const)(
+  it.each(["taken-over", "failed", "cancelled", "recovery-required", "succeeded"] as const)(
     "stops after one read when the live run reaches %s without a draft",
     async (state) => {
       const read = vi.fn(() => Promise.resolve(runtimeSnapshot(state)));
