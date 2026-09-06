@@ -229,4 +229,35 @@ describe("canonical catalog facade bridge", () => {
       effectStarted: false,
     });
   });
+
+  it("preserves an authoritative catalog timeout in the model-facing IPC result", async () => {
+    vi.useFakeTimers();
+    let now = 0;
+    let started!: () => void;
+    const handlerStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const { bridge, log } = createBridge({
+      context: () => ({
+        ...context,
+        authorityExpiresAt: new Date(5_000).toISOString(),
+        now,
+      }),
+    });
+
+    const pending = bridge.execute(discoverRequest, facadeInput(), () => {
+      started();
+      return new Promise(() => undefined);
+    });
+    await handlerStarted;
+    now = 6_000;
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await expect(pending).resolves.toEqual({ status: "timeout", evidence: [] });
+    expect(log.events.at(-1)?.extra).toMatchObject({
+      status: "timeout",
+      reason: "deadline-exceeded",
+    });
+    vi.useRealTimers();
+  });
 });

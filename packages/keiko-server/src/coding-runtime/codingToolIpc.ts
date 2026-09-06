@@ -196,7 +196,7 @@ export type CodingToolResult =
       readonly auxiliary: AuxiliaryCapabilityOutcomeV1;
     }
   | {
-      readonly status: "denied" | "invalid" | "cancelled" | "busy" | "observed";
+      readonly status: "denied" | "invalid" | "cancelled" | "timeout" | "busy" | "observed";
       readonly evidence: readonly [];
     };
 

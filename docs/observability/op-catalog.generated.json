@@ -3001,7 +3001,7 @@
     {
       "op": "tool-catalog.bind-unavailable",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:433",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:432",
       "package": "keiko-server"
     },
     {
@@ -3039,7 +3039,7 @@
     {
       "op": "tool-catalog.dispatch-unbound",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:581",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:580",
       "package": "keiko-server"
     },
     {

@@ -1309,6 +1309,36 @@ describe("keiko_repository_search generated tool dispatch", () => {
     expect(hits.length).toBeLessThanOrEqual(50);
   });
 
+  it("accepts the canonical timeout result from the server without collapsing it", async () => {
+    const tool = loadRepositorySearchTool(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ status: "timeout", evidence: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    const result = await tool.execute(
+      {
+        mode: "lexical",
+        query: "safeActivity",
+        caseSensitive: false,
+        includeGlobs: [],
+        excludeGlobs: [],
+        maxResults: 10,
+      },
+      {
+        sessionID: "ses_1",
+        callID: "call_timeout",
+        abort: new AbortController().signal,
+        ask: (): Promise<void> => Promise.resolve(),
+      },
+    );
+
+    expect(JSON.parse(result.output)).toEqual({ status: "timeout", evidence: [] });
+  });
+
   it("rejects a flat, unnested wire body the same real parser would reject (proves the nesting is load-bearing)", () => {
     const flatBody = JSON.stringify({
       action: "search",

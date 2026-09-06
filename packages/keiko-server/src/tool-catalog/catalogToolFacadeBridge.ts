@@ -407,8 +407,7 @@ function resultFor(
   const preserved = preservedExecutedResult(outcome, executed);
   if (preserved !== undefined) return preserved;
   if (outcome.result.status !== "completed") {
-    const status = outcome.result.status === "timeout" ? "failed" : outcome.result.status;
-    return { status, evidence: [] };
+    return { status: outcome.result.status, evidence: [] };
   }
   if (typeof outcome.result.data !== "string") return { status: "failed", evidence: [] };
   try {

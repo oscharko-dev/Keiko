@@ -1118,7 +1118,7 @@ function toolSource(
     `const inputSchemas = ${JSON.stringify(schemas)};`,
     "function validResult(value) {",
     '  if (!value || typeof value !== "object" || Array.isArray(value)) return false;',
-    '  if (!["completed", "failed", "denied", "invalid", "cancelled", "busy", "observed"].includes(value.status)) return false;',
+    '  if (!["completed", "failed", "denied", "invalid", "cancelled", "timeout", "busy", "observed"].includes(value.status)) return false;',
     '  if ((action !== "read" && action !== "discover" && action !== "egress") || value.status !== "completed") return true;',
     "  const read = value.read;",
     '  if (!read || typeof read !== "object" || Array.isArray(read) || typeof read.text !== "string" || !Number.isSafeInteger(read.byteCount) || !/^[a-f0-9]{64}$/.test(read.digest)) return false;',
