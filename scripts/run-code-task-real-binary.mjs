@@ -418,7 +418,7 @@ function readActivityRecords(stateDir) {
         return undefined;
       }
     });
-  return records.some((value) => value === undefined) ? undefined : records;
+  return records.includes(undefined) ? undefined : records;
 }
 
 function catalogSettlement(value, expectedBinding) {

@@ -494,13 +494,10 @@ async function completedEdit(
     correlationId,
     extra: { state: outcome, actionKind: "edit" },
   });
+  const reasonCode = outcome === "cancelled" ? "CANCELLED" : "EDIT_MUTATION_FAILED";
   return outcome === "succeeded"
     ? { status: "completed" }
-    : editRefused(
-        deps,
-        correlationId,
-        outcome === "cancelled" ? "CANCELLED" : "EDIT_MUTATION_FAILED",
-      );
+    : editRefused(deps, correlationId, reasonCode);
 }
 
 function editRefused(

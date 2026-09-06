@@ -125,7 +125,7 @@ export function readToolCatalogQualificationObservations(directory, currentHead)
   requireQualification(
     isDeepStrictEqual(
       readdirSync(directory).sort(compareStrings),
-      expectedFiles.sort(compareStrings),
+      expectedFiles.toSorted(compareStrings),
     ),
     "observation inventory is incomplete or contains unknown files",
   );
@@ -207,7 +207,7 @@ function filesUnder(directory) {
         "built dist contains special files",
       );
       if (stat.isDirectory()) visit(path);
-      else files.push(relative(directory, path).split("\\").join("/"));
+      else files.push(relative(directory, path).replaceAll("\\", "/"));
     }
   };
   visit(directory);
