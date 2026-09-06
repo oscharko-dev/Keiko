@@ -333,6 +333,27 @@ function recordRuntimeApprovalWaiting(
   });
 }
 
+function recordRuntimeVerificationSummary(
+  activityLog: ServerLogSink | undefined,
+  event: CodingWorkbenchRuntimeEvent,
+): void {
+  if (event.kind !== "verification-summarized") return;
+  activityLog?.write({
+    category: "process",
+    op: "coding-runtime.verification-summarized",
+    correlationId: runtimeDiagnosticCorrelationId(event.runId),
+    extra: {
+      runId: event.runId,
+      verificationEventId: event.eventId,
+      verificationKind: event.verificationKind,
+      verificationStatus: event.verificationStatus,
+      passedCount: event.passedCount,
+      failedCount: event.failedCount,
+      skippedCount: event.skippedCount,
+    },
+  });
+}
+
 function recordRuntimeRunSettled(
   activityLog: ServerLogSink | undefined,
   snapshot: CodingRuntimeSnapshot,
@@ -1039,6 +1060,7 @@ export class CodingRuntimeOrchestrator {
     }
     if (event.kind === "task-submitted") return this.ingestTaskSubmitted(current);
     if (event.kind === "runtime-stopped") return this.ingestRuntimeStopped(current);
+    recordRuntimeVerificationSummary(this.deps.activityLog, event);
     return this.publishOrRecover(current, event.kind, auxiliaryEventFacts(event));
   }
 

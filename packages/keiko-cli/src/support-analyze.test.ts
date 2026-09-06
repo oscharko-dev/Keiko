@@ -73,6 +73,7 @@ const OP_CATALOG = JSON.parse(readFileSync(OP_CATALOG_PATH, "utf8")) as OpCatalo
 // model fails loudly here instead of silently logging under the wrong one.
 const MODELLED_LOG_CATEGORIES: Readonly<Record<string, ServerLogCategory>> = {
   diagnostic: "diagnostic",
+  process: "process",
   search: "search",
   security: "security",
 };
@@ -768,6 +769,60 @@ describe("analyzeLogText — extra fields and frames", () => {
         workspaceId: "workspace-a",
       },
     });
+  });
+
+  it("reconstructs run-correlated failed and passed coding verifier summaries", () => {
+    const correlationId = "originating-verification-run";
+    const op = "coding-runtime.verification-summarized";
+    const serialized = serializedActivityLog("keiko-support-coding-verification-", (sink) => {
+      for (const [eventId, verificationStatus, passedCount, failedCount] of [
+        ["verification-1", "failed", 0, 1],
+        ["verification-2", "passed", 4, 0],
+      ] as const) {
+        sink.write({
+          category: productionLogCategory(op),
+          op,
+          correlationId,
+          extra: {
+            runId: correlationId,
+            verificationEventId: eventId,
+            verificationKind: "targeted-test",
+            verificationStatus,
+            passedCount,
+            failedCount,
+            skippedCount: 0,
+          },
+        });
+      }
+    });
+
+    const timeline = findTimeline(analyzeLogText(serialized), correlationId);
+    expect(timeline?.lines.map(({ op: lineOp, extra }) => ({ op: lineOp, extra }))).toEqual([
+      {
+        op,
+        extra: {
+          runId: correlationId,
+          verificationEventId: "verification-1",
+          verificationKind: "targeted-test",
+          verificationStatus: "failed",
+          passedCount: 0,
+          failedCount: 1,
+          skippedCount: 0,
+        },
+      },
+      {
+        op,
+        extra: {
+          runId: correlationId,
+          verificationEventId: "verification-2",
+          verificationKind: "targeted-test",
+          verificationStatus: "passed",
+          passedCount: 4,
+          failedCount: 0,
+          skippedCount: 0,
+        },
+      },
+    ]);
   });
 
   it("omits extra entirely when no unknown key survives (never emits an empty object)", () => {

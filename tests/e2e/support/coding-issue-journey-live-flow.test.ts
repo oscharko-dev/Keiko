@@ -4,6 +4,7 @@ import { CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS } from "@oscharko-dev/keiko-co
 import {
   assertQualificationSpendEnvelope,
   buildQualificationFlowArtifact,
+  hasRedGreenVerificationSequence,
   isUsefulRepositorySearchEvent,
   resolveFinalDeliveredPullRequest,
   selectedQualificationFlow,
@@ -279,6 +280,25 @@ describe("completed live qualification flow evidence", () => {
         extra: { state: "completed", resultCount: 2 },
       }),
     ).toBe(false);
+  });
+
+  it("requires an observed failed verifier result before a later passing result", () => {
+    const failed = {
+      op: "coding-runtime.verification-summarized",
+      verificationStatus: "failed",
+      passedCount: 0,
+      failedCount: 1,
+    } as const;
+    const passed = {
+      op: "coding-runtime.verification-summarized",
+      verificationStatus: "passed",
+      passedCount: 4,
+      failedCount: 0,
+    } as const;
+
+    expect(hasRedGreenVerificationSequence([failed, passed])).toBe(true);
+    expect(hasRedGreenVerificationSequence([passed, failed])).toBe(false);
+    expect(hasRedGreenVerificationSequence([passed])).toBe(false);
   });
 
   it("fails before work when the durable ceiling exceeds authorization or changes mid-flow", () => {

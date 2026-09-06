@@ -1,6 +1,28 @@
 import { Buffer } from "node:buffer";
 import { resolveHostExecutable } from "./host-executable.mjs";
 
+const REGULAR_GIT_MODES = new Set(["100644", "100755"]);
+
+function assertRegularGitSources(commit, paths, root, execute, git) {
+  const output = execute(git, ["ls-tree", "-z", "--full-tree", commit, "--", ...paths], {
+    cwd: root,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (!Buffer.isBuffer(output)) throw new TypeError("Git source inventory must be bytes");
+  const records = output.toString("utf8").split("\0");
+  if (records.at(-1) === "") records.pop();
+  const regularPaths = records.map((record) => {
+    const match = /^(\d{6}) blob [a-f0-9]{40,64}\t(.+)$/u.exec(record);
+    if (match === null || !REGULAR_GIT_MODES.has(match[1])) {
+      throw new TypeError("Git source entry must be a regular blob");
+    }
+    return match[2];
+  });
+  if (regularPaths.length !== paths.length || paths.some((path) => !regularPaths.includes(path))) {
+    throw new TypeError("Git source inventory does not match the owned source set");
+  }
+}
+
 // Read a source set in one Git process. --batch frames blobs by byte length, so source text may
 // contain arbitrary newlines (including strings that resemble the next object's header).
 export function readGitSourceContent(commit, paths, root, execute) {
@@ -9,7 +31,9 @@ export function readGitSourceContent(commit, paths, root, execute) {
     throw new TypeError("Git source object names must be single-line values");
   }
   if (objects.length === 0) return [];
-  const output = execute(resolveHostExecutable("git"), ["cat-file", "--batch"], {
+  const git = resolveHostExecutable("git");
+  assertRegularGitSources(commit, paths, root, execute, git);
+  const output = execute(git, ["cat-file", "--batch"], {
     cwd: root,
     input: `${objects.join("\n")}\n`,
     maxBuffer: 64 * 1024 * 1024,

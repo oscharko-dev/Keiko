@@ -1018,6 +1018,74 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(JSON.stringify([...f.rows.values()])).not.toContain(start.taskIntent);
   });
 
+  it("records body-free failed and passed verifier summaries under the originating run", async () => {
+    const runId = "run-verification-proof";
+    const captured = captureActivityLog();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      captured.activityLog,
+      undefined,
+      undefined,
+      undefined,
+      () => runId,
+    );
+    await f.orchestrator.start(start);
+
+    for (const [ordinal, verificationStatus, passedCount, failedCount] of [
+      [1, "failed", 0, 1],
+      [2, "passed", 4, 0],
+    ] as const) {
+      await f.orchestrator.ingest({
+        schemaVersion: "1",
+        eventId: `verification-${String(ordinal)}`,
+        runId,
+        occurredAt: "2026-01-01T00:00:00.000Z",
+        kind: "verification-summarized",
+        verificationKind: "targeted-test",
+        verificationStatus,
+        passedCount,
+        failedCount,
+        skippedCount: 0,
+      });
+    }
+
+    expect(
+      captured.records.filter((event) => event.op === "coding-runtime.verification-summarized"),
+    ).toEqual([
+      {
+        category: "process",
+        op: "coding-runtime.verification-summarized",
+        correlationId: runId,
+        extra: {
+          runId,
+          verificationEventId: "verification-1",
+          verificationKind: "targeted-test",
+          verificationStatus: "failed",
+          passedCount: 0,
+          failedCount: 1,
+          skippedCount: 0,
+        },
+      },
+      {
+        category: "process",
+        op: "coding-runtime.verification-summarized",
+        correlationId: runId,
+        extra: {
+          runId,
+          verificationEventId: "verification-2",
+          verificationKind: "targeted-test",
+          verificationStatus: "passed",
+          passedCount: 4,
+          failedCount: 0,
+          skippedCount: 0,
+        },
+      },
+    ]);
+  });
+
   it("binds approval to its pending revision and consumes it once", async () => {
     const f = fixture();
     await f.orchestrator.start(start);

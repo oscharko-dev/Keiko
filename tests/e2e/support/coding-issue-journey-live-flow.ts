@@ -593,6 +593,29 @@ export function isUsefulRepositorySearchEvent(event: Readonly<Record<string, unk
   );
 }
 
+export function hasRedGreenVerificationSequence(
+  events: readonly Readonly<Record<string, unknown>>[],
+): boolean {
+  const failedIndex = events.findIndex(
+    (event) =>
+      event.op === "coding-runtime.verification-summarized" &&
+      event.verificationStatus === "failed" &&
+      Number(event.failedCount) > 0,
+  );
+  return (
+    failedIndex >= 0 &&
+    events
+      .slice(failedIndex + 1)
+      .some(
+        (event) =>
+          event.op === "coding-runtime.verification-summarized" &&
+          event.verificationStatus === "passed" &&
+          Number(event.passedCount) > 0 &&
+          Number(event.failedCount) === 0,
+      )
+  );
+}
+
 function assertUsefulRepositorySearch(events: readonly Readonly<Record<string, unknown>>[]): void {
   if (!events.some(isUsefulRepositorySearchEvent)) {
     throw new Error("model run did not consume a useful governed repository-search result");
@@ -615,6 +638,14 @@ function assertVerificationBackedCommit(
   }
 }
 
+function assertRedGreenVerification(events: readonly Readonly<Record<string, unknown>>[]): void {
+  if (!hasRedGreenVerificationSequence(events)) {
+    throw new Error(
+      "model run did not retain an actual failing-before and passing-after verifier sequence",
+    );
+  }
+}
+
 async function assertVerifiedModelChange(
   page: Page,
   delivered: DeliveredPullRequest,
@@ -633,6 +664,7 @@ async function assertVerifiedModelChange(
   }
   const events = activityEventsForRun(delivered.runId);
   assertUsefulRepositorySearch(events);
+  assertRedGreenVerification(events);
   assertVerificationBackedCommit(events, verified.verificationEvidenceId);
 }
 
