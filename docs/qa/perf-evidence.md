@@ -9,6 +9,8 @@ The committed performance evidence documents live in `docs/release/`:
 | `1580-workspace-perf-evidence.json`      | Workspace browser-performance measurement                             | `npm run check:perf-evidence:workspace`      |
 | `2952-coding-runtime-calibration.json`   | Frozen native coding-runtime reference samples and provenance         | `npm run check:perf-evidence:coding-runtime` |
 | `2952-coding-runtime-perf-evidence.json` | Native coding-runtime candidate measurements                          | `npm run check:perf-evidence:coding-runtime` |
+| `3415-tool-catalog-calibration.json`     | Frozen tool-catalog reference samples and provenance                  | `npm run check:tool-catalog-performance`     |
+| `3415-tool-catalog-perf-evidence.json`   | Tool-catalog candidate compiler and lookup measurements               | `npm run check:tool-catalog-performance`     |
 
 ## When evidence must be regenerated
 
@@ -88,6 +90,49 @@ missing required run and an additional stale project entry, so deleting the prio
 the Chromium producer cannot silently narrow the evidence contract.
 
 Commit the resulting document as the final change that moves the workspace measurement ruler.
+
+## Tool-catalog compiler evidence (#3415)
+
+This target measures the shipped tool-catalog producer through its built package. It covers the
+legacy native profile and a 300-tool synthetic profile, the largest stable fixture below the
+producer's 262,144-byte catalog bound. A separate 320-tool fixture must be rejected with
+`input-bound`. Each case retains two warmups and then thirty samples. Lookup work is bounded by
+6,000 comparisons per sample, so the normal pull-request gate proves complete work without using a
+host-dependent timeout as a performance threshold.
+
+The committed calibration and candidate use the same percentile and budget policy as the native
+coding-runtime target: nearest-rank p95 with a ceiling of the calibration maximum plus its full
+observed range. The evidence binds the tool-catalog source tree, lockfile, and the five scripts that
+form its measurement ruler. `npm run check:tool-catalog-performance` runs a fresh deterministic
+work check on every invocation, then evaluates the committed reference evidence. Fresh local or CI
+wall-clock values are reported for diagnosis and are never compared with the reference threshold.
+
+The reference environment is the pinned Linux arm64 Node image below with at least 14 logical cores.
+Create a self-contained clone at the exact source revision first; do not mount this repository's
+`node_modules` into the container. The image identity is supplied both to Docker and to the producer,
+which records and validates it. The producer writes the calibration, derived budget, and candidate
+before returning any performance verdict, so a slow run cannot destroy its evidence.
+
+```bash
+git clone --no-local . /tmp/keiko-3415-performance.noindex
+docker run --rm --platform linux/arm64 --cpus=16 --memory=20g \
+  -e KEIKO_TOOL_CATALOG_REFERENCE_IMAGE=node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 \
+  -v /tmp/keiko-3415-performance.noindex:/repo -w /repo \
+  node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 \
+  bash -lc 'npm ci --no-audit --no-fund && npm run build:packages && node scripts/check-tool-catalog-performance.mjs --write-reference'
+```
+
+Copy these three canonical files back from the disposable clone and run the gate again in the
+working checkout:
+
+```bash
+cp /tmp/keiko-3415-performance.noindex/docs/release/3415-tool-catalog-{calibration,perf-evidence}.json docs/release/
+cp /tmp/keiko-3415-performance.noindex/scripts/tool-catalog-performance-budget.json scripts/
+npm run check:tool-catalog-performance
+```
+
+This is functional compiler and lookup performance evidence. It does not qualify provider latency,
+live-model behavior, or production customer workloads.
 
 ## How to regenerate (one command)
 

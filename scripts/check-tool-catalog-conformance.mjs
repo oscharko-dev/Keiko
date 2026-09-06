@@ -172,7 +172,11 @@ export async function checkToolCatalogConformance(root = process.cwd()) {
  * landed its migration and #3415 itself closes out. Callers opt in with `--closeout` (main below)
  * or by calling this directly once every owning migration issue is done.
  */
-export async function checkToolCatalogMigrationCloseout(root = process.cwd()) {
+export async function checkToolCatalogMigrationCloseout(
+  root = process.cwd(),
+  options = {},
+  { producerCheckpointFailures = checkH1ProducerCheckpoint } = {},
+) {
   const migration = JSON.parse(await toolCatalogMigrationBytes(root));
   const inventoryErrors =
     migration.inventory.length === 0
@@ -180,7 +184,11 @@ export async function checkToolCatalogMigrationCloseout(root = process.cwd()) {
       : [
           `migration inventory not empty at closeout: ${String(migration.inventory.length)} row(s) remain`,
         ];
-  return [...inventoryErrors, ...(await checkH1HandoffEvidence(root, migration.pendingH1))];
+  return [
+    ...inventoryErrors,
+    ...(await producerCheckpointFailures(root, options)),
+    ...(await checkH1HandoffEvidence(root, migration.pendingH1)),
+  ];
 }
 
 // #3414 AC7 / #3415 AC5-AC6: the durable, independently-verifiable H1 dev-landing record. #3414
@@ -194,6 +202,7 @@ export async function checkToolCatalogMigrationCloseout(root = process.cwd()) {
 // mismatched fails qualification rather than passing silently (review 3941891302: a caller could
 // otherwise declare a nonexistent `sourceHead` and a fabricated `treeDigest` and pass unchecked).
 export const H1_PROVENANCE_PATH = "docs/architecture/h1-provenance.v1.json";
+export const H1_PRODUCER_CHECKPOINT_PATH = "docs/architecture/h1-producer-checkpoint.v1.json";
 const HEX_64 = /^[a-f0-9]{64}$/u;
 const HEX_40 = /^[a-f0-9]{40}$/u;
 
@@ -267,14 +276,14 @@ export function h1ProvenanceShapeFailures(record) {
   );
 }
 
-function readH1Provenance(root) {
+function readH1Provenance(root, recordPath = H1_PROVENANCE_PATH) {
   let bytes;
   try {
-    bytes = readFileSync(join(root, H1_PROVENANCE_PATH), "utf8");
+    bytes = readFileSync(join(root, recordPath), "utf8");
   } catch {
     return {
       record: null,
-      shapeFailures: [`H1 handoff evidence missing: no ${H1_PROVENANCE_PATH}`],
+      shapeFailures: [`H1 handoff evidence missing: no ${recordPath}`],
     };
   }
   try {
@@ -283,6 +292,95 @@ function readH1Provenance(root) {
   } catch {
     return { record: null, shapeFailures: ["H1 handoff evidence malformed: not valid JSON"] };
   }
+}
+
+function checkpointAncestorFailures(root, record, execute) {
+  try {
+    const options = { cwd: root, encoding: "utf8", stdio: "pipe" };
+    execute(
+      resolveHostExecutable("git"),
+      ["merge-base", "--is-ancestor", record.sourceHead, record.currentHead],
+      options,
+    );
+    // Squash/rebase integration rewrites commit identities. Preserve the original reviewed
+    // producer-to-consumer ancestry and common repository history; realSourceHeadFailures below
+    // independently requires exactly the reviewed owned contents at the actual current HEAD.
+    execute(resolveHostExecutable("git"), ["merge-base", record.currentHead, "HEAD"], options);
+    return [];
+  } catch {
+    return ["H1 producer checkpoint unreachable: producer/consumer integration history mismatch"];
+  }
+}
+
+function acceptedCheckpointReceipt(receipt, record, kind) {
+  return (
+    receipt.schemaVersion === 1 &&
+    receipt.status === (kind === "verification" ? "verified" : "accepted") &&
+    receipt.sourceHead === record.sourceHead &&
+    receipt.ownedSourceDigest === record.treeDigest
+  );
+}
+
+function checkpointReceiptFailures(root, record, kind) {
+  const receiptPath = `docs/qa/evidence/h1-${kind}.v1.json`;
+  const ref = kind === "verification" ? record.verificationRef : record.reviewRef;
+  const prefix = `${receiptPath}#sha256=`;
+  if (!ref.startsWith(prefix) || !HEX_64.test(ref.slice(prefix.length)))
+    return [`H1 producer checkpoint invalid ${kind} reference: expected a pinned local receipt`];
+  try {
+    const bytes = readFileSync(join(root, receiptPath), "utf8");
+    if (sha256Hex(bytes) !== ref.slice(prefix.length))
+      return [`H1 producer checkpoint stale ${kind} receipt: content digest mismatch`];
+    const receipt = JSON.parse(bytes);
+    if (!acceptedCheckpointReceipt(receipt, record, kind))
+      return [`H1 producer checkpoint invalid ${kind} receipt: source or acceptance mismatch`];
+    return [];
+  } catch {
+    return [`H1 producer checkpoint missing or malformed ${kind} receipt`];
+  }
+}
+
+function checkpointWorktreeFailures(root, execute, ownedPaths) {
+  try {
+    execute(resolveHostExecutable("git"), ["diff", "--quiet", "HEAD", "--", ...ownedPaths], {
+      cwd: root,
+      stdio: "pipe",
+    });
+    return [];
+  } catch {
+    return ["H1 producer checkpoint stale: uncommitted owned-source changes"];
+  }
+}
+
+// Consolidated #3394 delivery requires the reviewed producer BEFORE the final merge can exist.
+// Preserve the stricter, separate post-merge recheck below. This checkpoint grants no runtime
+// authority and is not an input to any projection digest. Reuse the same H1 record and Git/source
+// identity helpers; a real ancestor alone is insufficient if the current owned contents drift.
+export async function checkH1ProducerCheckpoint(
+  root = process.cwd(),
+  { checkpointPath = H1_PRODUCER_CHECKPOINT_PATH } = {},
+  {
+    execute = execFileSync,
+    identityFailures = realProducerIdentityFailures,
+    ownedPaths = H1_OWNED_SOURCE_PATHS,
+  } = {},
+) {
+  const { record, shapeFailures } = readH1Provenance(root, checkpointPath);
+  if (record === null || shapeFailures.length > 0) return shapeFailures;
+  return [
+    ...checkpointAncestorFailures(root, record, execute),
+    ...checkpointWorktreeFailures(root, execute, ownedPaths),
+    ...(await realSourceHeadFailures(root, record, execute, ownedPaths)),
+    ...(await realSourceHeadFailures(
+      root,
+      { ...record, currentHead: "HEAD" },
+      execute,
+      ownedPaths,
+    )),
+    ...(await identityFailures(root, record)),
+    ...checkpointReceiptFailures(root, record, "verification"),
+    ...checkpointReceiptFailures(root, record, "review"),
+  ];
 }
 
 export function isAncestorOfDev(commit, root, execute) {

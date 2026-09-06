@@ -1,6 +1,5 @@
 import type { GroundedRerankerDiagnostics } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
-  findConfiguredCapability,
   requestLiteLLMRerank,
   resolveOutboundHttpEgressConfig,
   type GatewayConfig,
@@ -245,9 +244,11 @@ async function requestRerankTransport(
   try {
     const reservation = reserveGatewaySpendForAttempt(
       input.deps.env,
-      input.gatewayConfig === undefined
-        ? undefined
-        : findConfiguredCapability(input.gatewayConfig, reranker.modelId),
+      // A chat context limit is not a billable bound for a rerank document batch. The current
+      // capability contract supplies no verified aggregate token/chunk or per-search price
+      // ceiling. The shared monetary owner must refuse this unknown bound when a qualification
+      // budget is configured; ordinary unbudgeted reranking keeps its existing behavior.
+      undefined,
       {
         modelId: reranker.modelId,
         messages: [{ role: "user", content: "Gateway reranker request." }],

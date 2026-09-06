@@ -27,7 +27,7 @@ export const CODING_PERFORMANCE_PROCEDURE = Object.freeze({
 const SHA256 = /^[a-f\d]{64}$/u;
 const VERSION = /^\d+\.\d+\.\d+$/u;
 const CLASS = "functional-performance-not-platform-qualified";
-const POLICY = "observed-maximum-plus-full-range-v1";
+export const CODING_PERFORMANCE_BUDGET_POLICY = "observed-maximum-plus-full-range-v1";
 
 function assert(condition, reason) {
   if (!condition) throw new TypeError(reason);
@@ -235,7 +235,7 @@ export function calibrationBudgets(calibration) {
   return {
     schemaVersion: 1,
     target: "coding-runtime",
-    policy: POLICY,
+    policy: CODING_PERFORMANCE_BUDGET_POLICY,
     calibrationSha256: calibration.documentSha256,
     maximumP95Ms: Object.fromEntries(
       CODING_PERFORMANCE_METRICS.map((metric) => {

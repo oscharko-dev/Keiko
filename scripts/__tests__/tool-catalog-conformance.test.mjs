@@ -30,10 +30,13 @@ import {
 import { scanToolRegistrySource } from "../lib/tool-catalog-inventory.mjs";
 import { resolveHostExecutable } from "../lib/host-executable.mjs";
 import {
+  buildToolCatalogPerformanceDocument,
   buildSyntheticRegistrationSet,
+  evaluateToolCatalogPerformanceEvidence,
   deriveLookupIterations,
   measureToolCatalogOverflowRejection,
   measureToolCatalogPerformance,
+  toolCatalogPerformanceBudgets,
   TOOL_CATALOG_OVERFLOW_TOOL_COUNT,
   TOOL_CATALOG_SYNTHETIC_TOOL_COUNT,
   validateToolCatalogPerformanceSamples,
@@ -155,11 +158,28 @@ describe("initial compiler and finite migration conformance gate", () => {
   });
 });
 describe("closeout enforcement", () => {
+  it("requires the producer checkpoint even before the final dev merge exists", async () => {
+    const errors = await checkToolCatalogMigrationCloseout(ROOT, {
+      checkpointPath: "docs/architecture/absent-h1-checkpoint.json",
+    });
+    expect(errors).toContain(
+      "H1 handoff evidence missing: no docs/architecture/absent-h1-checkpoint.json",
+    );
+  });
   it("passes only after the source-derived active migration inventory reaches zero", async () => {
     const migration = JSON.parse(await toolCatalogMigrationBytes(ROOT));
     expect(activeToolCatalogMigrations(ROOT)).toEqual([]);
     expect(migration.inventory).toEqual([]);
-    expect(await checkToolCatalogMigrationCloseout(ROOT)).toEqual([]);
+    // The repository scan owns the active inventory. Producer qualification is independently
+    // covered by real, hermetic Git histories in h1-producer-checkpoint.test.mjs; a fresh dev
+    // clone after squash need not contain the original PR's private source objects for this unit.
+    expect(
+      await checkToolCatalogMigrationCloseout(
+        ROOT,
+        {},
+        { producerCheckpointFailures: async () => [] },
+      ),
+    ).toEqual([]);
   });
   it.each([
     [
@@ -258,6 +278,66 @@ describe("compiler measurements reuse the existing sample and percentile convent
       reason: "input-bound",
     });
   });
+  it("separates calibrated reference verdicts from deterministic CI work validation", async () => {
+    let calibrationClock = 0;
+    let measurementClock = 0;
+    const calibrationRaw = await measureToolCatalogPerformance(ROOT, () => ++calibrationClock);
+    const measurementRaw = await measureToolCatalogPerformance(
+      ROOT,
+      () => (measurementClock += 10),
+    );
+    // The shared-tree test runner may overlap an owning-package edit. Threshold semantics are
+    // isolated from that source-freshness guard; the real writer rejects any concurrent drift.
+    measurementRaw.subject = structuredClone(calibrationRaw.subject);
+    const environment = {
+      platform: "linux",
+      architecture: "arm64",
+      nodeVersion: "v24.18.0",
+      logicalCores: 16,
+      totalMemoryBytes: 24_000_000_000,
+      containerImage:
+        "node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059",
+    };
+    const calibration = buildToolCatalogPerformanceDocument(calibrationRaw, {
+      role: "calibration",
+      measuredAtIso: "2026-09-06T00:00:00.000Z",
+      measurementHarnessSha256: "a".repeat(64),
+      environment,
+    });
+    const budget = toolCatalogPerformanceBudgets(calibration);
+    const measurement = buildToolCatalogPerformanceDocument(measurementRaw, {
+      role: "measurement",
+      measuredAtIso: "2026-09-06T00:01:00.000Z",
+      measurementHarnessSha256: "a".repeat(64),
+      calibrationSha256: calibration.documentSha256,
+      environment,
+    });
+    expect(evaluateToolCatalogPerformanceEvidence(measurement, calibration, budget)).toEqual({
+      defects: [],
+      verdicts: [
+        "legacy-native-6-tool coldCompileMs exceeds the calibrated p95 budget",
+        "legacy-native-6-tool lookupBatchMs exceeds the calibrated p95 budget",
+        `synthetic-${String(TOOL_CATALOG_SYNTHETIC_TOOL_COUNT)}-tool coldCompileMs exceeds the calibrated p95 budget`,
+        `synthetic-${String(TOOL_CATALOG_SYNTHETIC_TOOL_COUNT)}-tool lookupBatchMs exceeds the calibrated p95 budget`,
+      ],
+    });
+    const withinBudget = buildToolCatalogPerformanceDocument(calibrationRaw, {
+      role: "measurement",
+      measuredAtIso: "2026-09-06T00:01:00.000Z",
+      measurementHarnessSha256: "a".repeat(64),
+      calibrationSha256: calibration.documentSha256,
+      environment,
+    });
+    expect(evaluateToolCatalogPerformanceEvidence(withinBudget, calibration, budget)).toEqual({
+      defects: [],
+      verdicts: [],
+    });
+    const alteredBudget = structuredClone(budget);
+    alteredBudget.maximumP95Ms["legacy-native-6-tool"].coldCompileMs += 1;
+    expect(
+      evaluateToolCatalogPerformanceEvidence(withinBudget, calibration, alteredBudget).defects,
+    ).toEqual(["catalog performance budget differs from calibration"]);
+  }, 45_000);
 });
 describe("#3415 catalog-semantic negative-fixture matrix", () => {
   const fixtureFiles = readdirSync(join(ROOT, NEGATIVE_FIXTURES_DIR)).filter(
@@ -566,8 +646,14 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
       "H1 handoff evidence identity mismatch: catalogRevision does not match the current producer",
     ]);
   });
-  it("checkToolCatalogMigrationCloseout stays green on the real repo (H1 not yet landed)", async () => {
-    expect(await checkToolCatalogMigrationCloseout(ROOT)).toEqual([]);
+  it("retains the independent final-landing phase while producer qualification is injected", async () => {
+    expect(
+      await checkToolCatalogMigrationCloseout(
+        ROOT,
+        {},
+        { producerCheckpointFailures: async () => [] },
+      ),
+    ).toEqual([]);
   });
   // The stubbed `execute` above proves the recheck's own control flow. This proves the REAL,
   // unstubbed git-reachability check against this actual repository: `dev`'s own current tip is
