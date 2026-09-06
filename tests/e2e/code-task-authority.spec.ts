@@ -250,13 +250,8 @@ async function openRealBinaryEditorBridge(page: Page): Promise<void> {
   await workspace.locator('button.tr-caret-btn[aria-label="Expand folder: src"]').click();
   await openTreeFile(workspace, AUTHORITY_TARGET_RELATIVE_PATH);
   await expect.poll(() => hasEditorSession(page, root)).toBe(true);
-  const codingWindow = page.locator('section[data-window-id="coding"]');
-  await codingWindow
-    .getByRole("group", { name: "Coding Workbench window controls" })
-    .getByRole("button", { name: "Close Coding Workbench window" })
-    .click();
-  await expect(codingWindow).toHaveCount(0);
   await assertInheritedWorkspaceTrust(page);
+  await page.locator('section[data-window-id="coding"]').focus();
 }
 
 // M11 (#2612/#2686) rebuilt workspace trust around user-facing projects: registering the folder
@@ -287,17 +282,11 @@ async function assertInheritedWorkspaceTrust(page: Page): Promise<void> {
   await expect(page.getByTestId("workspace-trust-banner-editor")).toHaveCount(0);
 }
 
-async function reopenRealBinaryCodingWorkbench(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Coding Workbench", exact: true }).click();
-  const codingWindow = page.locator('section[data-window-id="coding"]');
-  await expect(codingWindow).toHaveAttribute("data-top", "true");
-  await expect(workbench(page)).toHaveAttribute("data-state", "running");
-}
-
 async function approveRealBinaryChangeset(page: Page): Promise<void> {
   if (!realBinaryJourney) return;
-  const editorWindow = page.locator('section[data-window-id="editor"]');
-  const review = editorWindow.getByRole("group", { name: "Agent changeset review" });
+  // The run's own registered bridge owns this review. Keep it mounted and approve its exact
+  // proposed diff in the Workbench; opening an unrelated Editor session cannot transfer authority.
+  const review = workbench(page).getByRole("region", { name: "Review the proposed file change" });
   await expect
     .poll(() => latestChangesetAudit(page))
     .toMatchObject({
@@ -305,12 +294,11 @@ async function approveRealBinaryChangeset(page: Page): Promise<void> {
       outcome: "queued",
     });
   await expect(review).toBeVisible({ timeout: 30_000 });
-  await expect(editorWindow).toHaveAttribute("data-top", "true");
-  const apply = review.getByTestId("keiko-diff-apply");
+  await expect(review).toContainText(AUTHORITY_TARGET_RELATIVE_PATH);
+  const apply = review.getByRole("button", { name: "Apply change", exact: true });
   await expect(apply).toBeVisible();
   await apply.click();
   await expect(review).toBeHidden();
-  await reopenRealBinaryCodingWorkbench(page);
 }
 
 async function proveVerificationActivity(timeline: Locator): Promise<void> {
@@ -437,8 +425,8 @@ async function proveLiveActivityTimeline(
   await expect(completedRead).toContainText("workspace");
   await proveUnpairedClientReadsNoQuestionText(request, new URL(page.url()).origin, runId);
   await answerVisibleQuestion(page);
-  await openRealBinaryEditorBridge(page);
   await approveRealBinaryChangeset(page);
+  await openRealBinaryEditorBridge(page);
   await proveVerificationActivity(timeline);
   await expect(
     timeline.getByText(FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX, { exact: false }),
