@@ -428,6 +428,21 @@ function workspaceBindingPendingOf(workspace: WorkbenchWorkspaceApi): boolean {
   return workspace.loading || workspace.switching;
 }
 
+// Verification in a managed worktree uses its repository's package-script trust, and independently
+// rechecks that both manifests still have the same basis. A private worktree is never a trust target.
+function liveTrustRepositoryRootOf(workspace: WorkbenchWorkspaceApi): string | null {
+  const instance = workspace.activeInstance;
+  if (
+    workspace.error !== null ||
+    workspaceBindingPendingOf(workspace) ||
+    instance === null ||
+    workspace.activeBinding?.workspaceId !== instance.workspaceId
+  ) {
+    return null;
+  }
+  return instance.repositoryRoot;
+}
+
 function liveWorkspaceIdentity(
   workspace: WorkbenchWorkspaceApi,
   state: CodingWorkbenchRuntimeState,
@@ -647,10 +662,7 @@ function WorkbenchContent({
         state={state}
         workspace={sessionWorkspaceProjection(state, runWorkspace)}
       />
-      {/* #3390 wave: the same live root the editor bridge and changes panel already key on
-          (`liveWorkspaceRootOf`), so a run refused WORKSPACE_TRUST_REQUIRED has one visible, explicit
-          exit here instead of requiring the operator to already know the Editor's own command. */}
-      <CodingWorkbenchTrustAffordance root={liveWorkspaceRootOf(activeWorkspace)} />
+      <CodingWorkbenchTrustAffordance root={liveTrustRepositoryRootOf(activeWorkspace)} />
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {lifecycleAnnouncement(state, t, research.grant)}
       </p>

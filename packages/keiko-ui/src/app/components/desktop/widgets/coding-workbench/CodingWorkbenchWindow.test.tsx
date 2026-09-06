@@ -2541,10 +2541,52 @@ describe("Codex subscription sign-in surface", () => {
 // bar and the Git target must keep naming THAT workspace. Following the pointer instead labelled a
 // run in A with B's root and branch and opened B's Git — an invitation to act on the wrong tree.
 // #3390 wave: the header's "Allow package scripts for verification" affordance. It reads the SAME
-// server-owned trust status the Editor's own trust surface reads, keyed on the live active root —
+// server-owned trust status the Editor's own trust surface reads, keyed on the bound repository —
 // the operator no longer has to already know the Editor's own command to unblock a run refused
 // WORKSPACE_TRUST_REQUIRED (2026-09-05 real run).
 describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
+  afterEach(resetClientDiagnosticWriter);
+
+  it("reads and grants a managed task's repository trust rather than its private worktree", async () => {
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    trustStatusMock.mockResolvedValue(trustStatus("/repos/keiko", "restricted"));
+    trustMutateMock.mockResolvedValue(trustStatus("/repos/keiko", "trusted"));
+    const user = userEvent.setup();
+    renderWorkbench(
+      liveState(),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko", "/state/.keiko/task-workspaces/task-1"),
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Allow package scripts for verification" }),
+    );
+
+    expect(trustStatusMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko");
+    expect(trustMutateMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko", "grant");
+    expect(diagnostic).toHaveBeenCalledWith(
+      "[keiko] coding workbench repository trust bound",
+      undefined,
+    );
+  });
+
+  it.each<Partial<ActiveWorkspaceApi>>([
+    { loading: true },
+    { switching: true },
+    { error: "workspace unavailable" },
+    { activeInstance: null },
+    { activeBinding: null },
+  ])("withholds trust while the workspace binding is unsettled: %j", (unsettled) => {
+    renderWorkbench(liveState(), actions(), undefined, {
+      ...activeWorkspaceWithBinding("/repos/keiko", "/worktrees/task-1"),
+      ...unsettled,
+    });
+    expect(trustStatusMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("coding-workbench-trust-affordance")).not.toBeInTheDocument();
+  });
+
   it("shows the allow action once the bound workspace resolves as restricted", async () => {
     trustStatusMock.mockResolvedValue(trustStatus("/repos/keiko", "restricted"));
     renderWorkbench(

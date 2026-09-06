@@ -13,7 +13,8 @@
 // Nothing here runs the grant automatically or widens authority on the run's behalf — a "restricted"
 // status just makes the one exit visible instead of requiring the operator to already know it exists.
 
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { useWorkspaceTrust } from "../../workspace-trust/useWorkspaceTrust";
 import {
   useCodingWorkbenchTranslate,
@@ -22,8 +23,8 @@ import {
 import styles from "./CodingWorkbenchWindow.module.css";
 
 export interface CodingWorkbenchTrustAffordanceProps {
-  /** The active workspace's live repository root, or null while nothing is bound (#3381 pattern:
-   * `liveWorkspaceRootOf`). Matches the `projectId` the Editor's verification-trust route keys on. */
+  /** The settled active instance's repository root, or null while its binding is unavailable.
+   * The verification runner checks this repository's grant and the worktree's matching basis. */
   readonly root: string | null;
 }
 
@@ -37,6 +38,11 @@ export function CodingWorkbenchTrustAffordance({
 }: CodingWorkbenchTrustAffordanceProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const trust = useWorkspaceTrust(root ?? undefined);
+  useEffect(() => {
+    if (root !== null) {
+      reportClientDiagnostic("[keiko] coding workbench repository trust bound");
+    }
+  }, [root]);
   if (trust.status?.trust !== "restricted") return null;
   return (
     <TrustRestrictedNotice
