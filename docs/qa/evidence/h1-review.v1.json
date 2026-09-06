@@ -4,8 +4,8 @@
   "reviewKind": "independent-source-and-evidence-audit",
   "integrationPr": 3394,
   "ownerIssue": 3386,
-  "sourceHead": "f3e4f4367bc9ed946d3c13df1efc06a10d93b0d3",
-  "ownedSourceDigest": "a1f299ce1f88339d349e5717ce5d5b28e98b59e002c6d1940457b4e9c6bc084f",
+  "sourceHead": "d6854025a1c6caa68ab7ee640b30d7b083a8bd4f",
+  "ownedSourceDigest": "2a853e9b5bc7c6ad08672b1c72d62275f980555b8360be0a1424743d79800c23",
   "producerIdentity": {
     "profile": {
       "id": "opencode",
@@ -79,7 +79,7 @@
   ],
   "ownership": {
     "result": "verified",
-    "ownedSourcePathCount": 12,
+    "ownedSourcePathCount": 647,
     "historicalInventoryRowCount": 43,
     "generatedMigrationChanged": false
   }
