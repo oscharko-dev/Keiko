@@ -119,6 +119,27 @@ describe("managed PR region byte preservation", () => {
     expect(second.suffix).toBe("");
   });
 
+  it("preserves a CRLF fenced marker example across repeated reconciliation", () => {
+    const example = [
+      "# Human template",
+      "",
+      "```html",
+      START,
+      "old content",
+      END,
+      "```",
+      "",
+      "Closes #42",
+    ].join("\r\n");
+    const firstRegion = framePrDescriptionRegion("new");
+    const first = reconcilePrDescriptionRegion(example, firstRegion);
+    expect(first.finalBody).toBe(example + "\n\n" + firstRegion);
+    const updatedRegion = framePrDescriptionRegion("updated");
+    const second = reconcilePrDescriptionRegion(first.finalBody, updatedRegion);
+    expect(second.finalBody).toBe(example + "\n\n" + updatedRegion);
+    expect(second.prefix).toBe(example + "\n\n");
+  });
+
   it("does not flag a fenced example as a duplicate when it follows the real managed region", () => {
     const region = framePrDescriptionRegion("old");
     const example = [

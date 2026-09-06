@@ -1,3 +1,4 @@
+import { gatewaySpendBudgetForEnv } from "./gateway-spend-budget.js";
 // First-run gateway setup for non-technical UI users. The browser provides a base URL, API token,
 // and optionally a Figma PAT; the loopback BFF builds the local provider config, performs a real
 // chat-completions smoke call, stores the resulting config on disk with private permissions, and
@@ -1802,7 +1803,10 @@ async function defaultGatewaySetupTester(
   // Wired to the process activity log: first-run setup is where an operator's endpoint is wrong
   // in a way no UI message can name (a proxy that blocks CONNECT, a provider that answers 404 for
   // every model). Without the sink the smoke loop's retries and rejections are invisible.
-  const gateway = new Gateway(config, { log: processServerLogSink() });
+  const gateway = new Gateway(config, {
+    log: processServerLogSink(),
+    spendBudget: gatewaySpendBudgetForEnv(deps.env),
+  });
   const testedModelIds = await smokeTestCandidates(
     candidateModelIds,
     async (modelId) => {

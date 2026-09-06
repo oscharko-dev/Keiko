@@ -224,6 +224,11 @@ describe("app-session stream transport and completion remain distinct", () => {
           errorClass: "Error",
         }),
       );
+      // A rejected `write` has already placed this one bounded frame in Node's buffer. The
+      // app-session stream stops publishing and ends the response so that frame can flush; an
+      // abrupt socket destroy would turn ordinary pressure into a client-visible offline error.
+      expect(response.writableEnded).toBe(true);
+      expect(response.destroyed).toBe(false);
       expect(terminalReason()).toBe("backpressure-killed");
       projection.purge("run-stream", "stop");
       expect(record).toHaveBeenCalledOnce();

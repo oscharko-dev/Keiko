@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import {
   CancelledError,
+  ConfigInvalidError,
   GatewayError,
   UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
@@ -37,7 +38,22 @@ import type {
   UsageMetadata,
 } from "./types.js";
 
+/** Shared, durable admission owned by the host; invoked before EVERY provider attempt. */
+export interface GatewaySpendBudget {
+  reserve(
+    capability: ModelCapability,
+    request: GatewayCallRequest,
+    correlationId: string,
+  ): GatewaySpendReservation;
+}
+
+export interface GatewaySpendReservation {
+  /** Missing usage retains the full upper reservation, including cancellation or process loss. */
+  settle(usage: UsageMetadata | undefined): void;
+}
+
 export interface GatewayDeps {
+  readonly spendBudget?: GatewaySpendBudget | undefined;
   readonly adapter?: ProviderAdapter | undefined;
   readonly clock?: Clock | undefined;
   // Randomness source for the retry backoff's equal jitter. Injectable so tests
@@ -107,6 +123,16 @@ function attachGatewayRequestId(error: unknown, requestId: string): void {
   }
 }
 
+function recordProviderFailure(
+  breaker: CircuitBreaker,
+  error: unknown,
+  correlationId: string,
+): void {
+  if (!(error instanceof CancelledError) && !(error instanceof ConfigInvalidError)) {
+    breaker.recordFailure(correlationId);
+  }
+}
+
 interface RoutedCall {
   readonly provider: ModelProviderConfig;
   readonly capability: ModelCapability;
@@ -156,6 +182,7 @@ function streamUsageIfSupplied(usage: UsageMetadata | undefined): StreamTerminal
 }
 
 export class Gateway {
+  private readonly spendBudget: GatewaySpendBudget | undefined;
   private readonly clock: Clock;
   private readonly random: () => number;
   private readonly adapter: ProviderAdapter | undefined;
@@ -168,6 +195,7 @@ export class Gateway {
     private readonly config: GatewayConfig,
     deps: GatewayDeps = {},
   ) {
+    this.spendBudget = deps.spendBudget;
     this.clock = deps.clock ?? systemClock;
     this.random = deps.random ?? Math.random;
     this.adapter = deps.adapter;
@@ -212,7 +240,7 @@ export class Gateway {
     try {
       result = await executeWithRetry(
         (attemptTimeoutMs) =>
-          this.invoke(breaker, adapter, request, ids.correlationId, {
+          this.invoke(breaker, adapter, request, route.capability, ids.correlationId, {
             ...route.provider,
             ...(attemptTimeoutMs === undefined ? {} : { timeoutMs: attemptTimeoutMs }),
           }),
@@ -249,13 +277,13 @@ export class Gateway {
     const route = this.route(request.modelId, request.logContext?.correlationId);
     assertValidGatewaySamplingParameters(request);
     const breaker = this.breakerFor(route.provider);
-    const requestId = randomUUID();
-    const ids = callIds(requestId, request);
+    const ids = callIds(randomUUID(), request);
     breaker.assertAllowed(ids.correlationId);
     const start = this.clock.now();
     const elapsed = logTimer();
-    const adapter = this.adapterFor(requestId, route.capability, ids.correlationId);
+    const adapter = this.adapterFor(ids.requestId, route.capability, ids.correlationId);
     this.logCallStarted(ids, route, true, request.reasoningEffort);
+    let reservation: GatewaySpendReservation | undefined;
     let chunkCount = 0;
     // The moment the caller saw its first actual content, timed off the same `elapsed()` as every
     // other stream outcome. `??=` locks it in on the first non-empty delta and leaves it alone.
@@ -265,12 +293,16 @@ export class Gateway {
     // so the `finally` can tell "the consumer walked away" from the two paths that already spoke.
     let settled = false;
     try {
+      reservation = this.spendBudget?.reserve(route.capability, request, ids.correlationId);
       for await (const chunk of this.streamFrom(adapter, request, route.provider, ids)) {
         chunkCount += 1;
         firstTokenMs ??= firstNonEmptyDeltaMs(chunk, elapsed);
         if (chunk.type === "done") {
           terminalUsage = chunk.response.usage;
-          yield { type: "done", response: this.enrich(chunk.response, requestId, start, route) };
+          yield {
+            type: "done",
+            response: this.enrich(chunk.response, ids.requestId, start, route),
+          };
         } else {
           yield chunk;
         }
@@ -278,16 +310,10 @@ export class Gateway {
       breaker.recordSuccess(ids.correlationId);
       settled = true;
     } catch (error) {
-      // A client-initiated cancel is not a provider fault — skip the breaker.
-      if (!(error instanceof CancelledError)) {
-        breaker.recordFailure(ids.correlationId);
-      }
-      // RB-6: stamp the gateway request id onto the thrown error (mid-stream failure traceability).
-      attachGatewayRequestId(error, requestId);
       settled = true;
-      this.logStreamFailed(ids, route, chunkCount, elapsed(), error);
-      throw error;
+      this.failStream(ids, route, breaker, chunkCount, elapsed(), error);
     } finally {
+      reservation?.settle(terminalUsage);
       // A consumer that stops iterating (client disconnect, request abort, `break`) closes this
       // generator through `return()`: the loop is left without running either outcome branch, so
       // without this line the log keeps `gateway.stream.started` with nothing after it — the exact
@@ -306,6 +332,20 @@ export class Gateway {
       firstTokenMs,
       streamUsageIfSupplied(terminalUsage),
     );
+  }
+
+  private failStream(
+    ids: CallIds,
+    route: RoutedCall,
+    breaker: CircuitBreaker,
+    chunkCount: number,
+    durationMs: number,
+    error: unknown,
+  ): never {
+    recordProviderFailure(breaker, error, ids.correlationId);
+    attachGatewayRequestId(error, ids.requestId);
+    this.logStreamFailed(ids, route, chunkCount, durationMs, error);
+    throw error;
   }
 
   // THE ATTEMPT LINE for a model call — written BEFORE the adapter is invoked, not after it
@@ -522,20 +562,24 @@ export class Gateway {
     breaker: CircuitBreaker,
     adapter: ProviderAdapter,
     request: GatewayCallRequest,
+    capability: ModelCapability,
     correlationId: string,
     provider: ModelProviderConfig,
   ): Promise<NormalizedResponse> {
     breaker.assertAllowed(correlationId);
+    const reservation = this.spendBudget?.reserve(capability, request, correlationId);
+    let usage: UsageMetadata | undefined;
     try {
       const response = await adapter.call(request, provider);
+      usage = response.usage;
       breaker.recordSuccess(correlationId);
       return response;
     } catch (error) {
       // A client-initiated cancel is not a provider fault — skip the breaker.
-      if (!(error instanceof CancelledError)) {
-        breaker.recordFailure(correlationId);
-      }
+      recordProviderFailure(breaker, error, correlationId);
       throw error;
+    } finally {
+      reservation?.settle(usage);
     }
   }
 

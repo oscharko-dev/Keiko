@@ -149,7 +149,13 @@ export {
 // for this addition (KEIKO-final-audit F13/F24).
 export { hasConfiguredEnvModelProvider } from "./config.js";
 
-export { Gateway, type GatewayCallRequest, type GatewayDeps } from "./gateway.js";
+export {
+  Gateway,
+  type GatewayCallRequest,
+  type GatewayDeps,
+  type GatewaySpendBudget,
+  type GatewaySpendReservation,
+} from "./gateway.js";
 
 // The caller-supplied correlation context a `GatewayCallRequest` may carry (ADR-0173 D5). Exported
 // so a `ModelPort`/`ChatModel` caller outside this package can build one without reaching past the

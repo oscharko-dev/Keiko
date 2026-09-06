@@ -88,6 +88,8 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:pa
 import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
+import { gatewaySpendBudgetForEnv } from "./gateway-spend-budget.js";
+import type { GatewaySpendBudget } from "@oscharko-dev/keiko-model-gateway";
 import { gatewayForConfig, gatewayForRuntimeConfig } from "./gateway-instance-cache.js";
 import {
   createConversationAttachmentStore,
@@ -440,6 +442,7 @@ export type QualityIntelligenceReviewPrincipalResolver = (
 ) => QualityIntelligenceReviewPrincipal;
 
 export interface RuntimeGatewayConfig {
+  readonly spendBudget?: GatewaySpendBudget | undefined;
   readonly storagePath: string;
   current(): GatewayConfig | undefined;
   present(): boolean;
@@ -1274,6 +1277,7 @@ function createRuntimeGatewayConfig(
   initial: GatewayConfig | undefined,
   initialPresent: boolean,
   storagePath: string,
+  env: EnvSource,
 ): RuntimeGatewayConfig {
   let config = initial;
   let present = initialPresent;
@@ -1288,6 +1292,7 @@ function createRuntimeGatewayConfig(
   let generation = 0;
   return {
     storagePath,
+    spendBudget: gatewaySpendBudgetForEnv(env),
     current: (): GatewayConfig | undefined => config,
     present: (): boolean => present,
     set(next: GatewayConfig | undefined, nextPresent: boolean): void {
@@ -1330,7 +1335,9 @@ export function currentGateway(deps: UiHandlerDeps): Gateway | undefined {
   if (deps.gatewayConfig !== undefined) {
     return gatewayForRuntimeConfig(deps.gatewayConfig);
   }
-  return deps.config === undefined ? undefined : gatewayForConfig(deps.config);
+  return deps.config === undefined
+    ? undefined
+    : gatewayForConfig(deps.config, gatewaySpendBudgetForEnv(deps.env));
 }
 
 /**
@@ -4984,7 +4991,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     resolvedEvidenceDir,
   );
   const egress = resolveConfiguredEgress(options.configPath, options.env, runtimeConfigPath);
-  const runtimeConfig = createRuntimeGatewayConfig(config, configPresent, storagePath);
+  const runtimeConfig = createRuntimeGatewayConfig(config, configPresent, storagePath, options.env);
   const evidenceStore = createNodeEvidenceStore(resolvedEvidenceDir);
   const codingWorkbenchEvidenceStore =
     options.codingWorkbenchEvidenceStore ??

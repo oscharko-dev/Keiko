@@ -17,13 +17,14 @@ export function writeSessionStreamFrame(
   res: ServerResponse,
   frame: string,
   correlationId: string = UNKNOWN_CORRELATION_ID,
+  destroyOnBackpressure = true,
 ): boolean {
   recordSseStreamFrame(res, frame, correlationId);
   try {
     const accepted = res.write(frame);
     if (!accepted) {
       markSseStreamBackpressureKilled(res);
-      res.destroy();
+      if (destroyOnBackpressure) res.destroy();
     }
     return accepted;
   } catch (error) {
@@ -56,7 +57,10 @@ export function createSessionStreamWriter(
       }
       try {
         const frame = `event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`;
-        const accepted = writeSessionStreamFrame(res, frame, correlationId);
+        // Node has already accepted this single frame into its bounded buffer. The publisher
+        // detaches on `false`; its queued close can therefore flush the frame without accepting
+        // any more channel content or turning transient pressure into a client network error.
+        const accepted = writeSessionStreamFrame(res, frame, correlationId, false);
         if (!accepted || snapshot.content === null) finish();
         // A successfully written content-free terminal frame is not transport backpressure.
         return accepted;
