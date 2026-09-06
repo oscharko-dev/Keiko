@@ -32,6 +32,7 @@ import { readySnapshot } from "../gitDelivery/ciObservationTest/_support.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
+import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
 
 const DIGEST = "a".repeat(64);
 const resolveWorkspaceRootAccess = (): WorkspaceRootAccess => ({
@@ -63,6 +64,60 @@ const FACTS: CodingWorkbenchRuntimeAuthorityFacts = {
 };
 
 describe("production managed worktree tools", () => {
+  it("holds an approval-required stage proposal until its exact approval is issued", async () => {
+    vi.useFakeTimers();
+    try {
+      let approved = false;
+      const proposal = {
+        kind: "stage" as const,
+        proposalId: "stage-3384",
+        status: "approval-required" as const,
+        reason: "approval-required" as const,
+        pathCount: 1,
+      };
+      const requestStageApproval = vi.fn();
+      const service = {
+        execute: vi.fn(() => Promise.resolve(proposal)),
+        review: vi.fn(() => proposal),
+        matchesApproval: vi.fn(() => approved),
+      } as unknown as RuntimeGitService;
+      const facade = verificationFacade({
+        runToReport: vi.fn(),
+        records: [],
+        runtimeGitService: service,
+        requestStageApproval,
+      });
+
+      const pending = facade.execute({
+        capability: "runtime-capability",
+        body: JSON.stringify({
+          action: "git",
+          operation: "stage",
+          phase: "propose",
+          paths: ["src/index.ts"],
+          actionId: "stage-1",
+          idempotencyKey: "stage-1",
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(requestStageApproval).toHaveBeenCalledExactlyOnceWith("stage-3384");
+      let settled = false;
+      void pending.then((): void => {
+        settled = true;
+      });
+      expect(settled).toBe(false);
+
+      approved = true;
+      await vi.advanceTimersByTimeAsync(25);
+      await expect(pending).resolves.toMatchObject({
+        status: "completed",
+        git: { proposalId: "stage-3384", status: "ready", reason: "none" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("routes a CI tool call to the confirmed-PR observer through the existing facade", async () => {
     const observe = vi.fn<CiObservationService["observe"]>(() =>
       Promise.resolve({ status: "observed", snapshot: readySnapshot(), retryAfterMs: 0 }),
@@ -1592,6 +1647,8 @@ function failedVerificationReport(): VerificationReport {
 function verificationFacade(options: {
   readonly ciRepairBudget?: CiRepairExecutionBudget;
   readonly verifiedCommitService?: VerifiedCommitService;
+  readonly runtimeGitService?: RuntimeGitService;
+  readonly requestStageApproval?: (proposalId: string) => void;
   readonly events?: CodingWorkbenchRuntimeEvent[];
   readonly ciObservationService?: CiObservationService;
   readonly runToReport: () => Promise<VerificationReport>;
@@ -1602,6 +1659,12 @@ function verificationFacade(options: {
     ...(options.verifiedCommitService === undefined
       ? {}
       : { verifiedCommitService: options.verifiedCommitService }),
+    ...(options.runtimeGitService === undefined
+      ? {}
+      : { runtimeGitService: options.runtimeGitService }),
+    ...(options.requestStageApproval === undefined
+      ? {}
+      : { requestStageApproval: options.requestStageApproval }),
     ...(options.ciObservationService === undefined
       ? {}
       : { ciObservationService: options.ciObservationService }),

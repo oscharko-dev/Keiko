@@ -10,6 +10,7 @@ import {
   type SidecarPermissionEvent,
 } from "./codingSidecarEventParser.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
+import type { OpenCodeCompactionActivity } from "./opencodeReconciler.js";
 import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_TOOL_SOURCE_DEFINITIONS,
@@ -654,9 +655,83 @@ export function parseOpenCodeHistory(
       sequence,
       kind,
       digest: historyDigest(id, aggregateId, sequence, type, data),
+      ...compactionProjection(type, data),
     });
   }
   return { ok: true, value: result };
+}
+
+function compactionProjection(
+  type: string,
+  data: Record<string, unknown>,
+): { readonly compaction: OpenCodeCompactionActivity } | Record<string, never> {
+  if (type === "message.part.updated.1") return compactionPartProjection(data.part);
+  return type === "message.updated.1" ? compactionSummaryProjection(data.info) : {};
+}
+
+function compactionPartProjection(
+  value: unknown,
+): { readonly compaction: OpenCodeCompactionActivity } | Record<string, never> {
+  if (!isRecord(value) || value.type !== "compaction" || typeof value.messageID !== "string") {
+    return {};
+  }
+  const common = {
+    compactionIdSha256: structuralDigest(value.messageID),
+    auto: value.auto === true,
+    overflow: value.overflow === true,
+  };
+  return typeof value.tail_start_id === "string"
+    ? {
+        compaction: {
+          event: "tail-retained",
+          ...common,
+          retainedTail: true,
+          tailStartIdSha256: structuralDigest(value.tail_start_id),
+        },
+      }
+    : { compaction: { event: "started", ...common, retainedTail: false } };
+}
+
+function compactionSummaryProjection(
+  value: unknown,
+): { readonly compaction: OpenCodeCompactionActivity } | Record<string, never> {
+  if (!isRecord(value) || !settledCompactionSummary(value)) return {};
+  const info = value;
+  const compactionIdSha256 = structuralDigest(String(info.parentID));
+  if (info.error === undefined && info.finish === "stop") {
+    return { compaction: { event: "completed", compactionIdSha256 } };
+  }
+  if (!FAILED_TERMINAL_FINISH_REASONS.has(String(info.finish))) return {};
+  const errorKind =
+    isRecord(info.error) && typeof info.error.name === "string"
+      ? info.error.name
+      : "OpenCodeCompactionFailure";
+  return {
+    compaction: {
+      event: "failed",
+      compactionIdSha256,
+      errorKind,
+      finishReason: String(info.finish),
+    },
+  };
+}
+
+function settledCompactionSummary(info: Record<string, unknown>): boolean {
+  if (
+    info.role !== "assistant" ||
+    info.summary !== true ||
+    info.mode !== "compaction" ||
+    info.agent !== "compaction" ||
+    typeof info.parentID !== "string" ||
+    !isRecord(info.time) ||
+    !nonNegativeNumber(info.time.completed)
+  )
+    return false;
+  return true;
+}
+
+function structuralDigest(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 /** The closed allowlist is a security control, not a dispatch extension point. */
@@ -1083,9 +1158,10 @@ function toolState(state: Record<string, unknown>): boolean {
   }
   if (state.status === "error") {
     return (
-      exactRecord(state, ["status", "input", "error", "time"]) &&
+      allowedRecord(state, ["status", "input", "error", "metadata", "time"]) &&
       isRecord(state.input) &&
       nonEmpty(state.error) &&
+      (state.metadata === undefined || isRecord(state.metadata)) &&
       exactStartEndTime(state.time)
     );
   }

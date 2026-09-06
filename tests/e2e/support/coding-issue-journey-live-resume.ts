@@ -54,7 +54,7 @@ export interface QualificationResumeBinding {
   readonly headSha: string;
   readonly issueBindingDigest: string;
   readonly worktreeDigest: string;
-  readonly priorState: "failed" | "cancelled" | "recovery-required";
+  readonly priorState: "failed" | "cancelled" | "recovery-required" | "succeeded";
   readonly correctionInstructions?: string | undefined;
 }
 
@@ -105,7 +105,12 @@ function correctionInstructions(
 }
 
 function priorState(value: string): QualificationResumeBinding["priorState"] {
-  const states: ReadonlySet<string> = new Set(["failed", "cancelled", "recovery-required"]);
+  const states: ReadonlySet<string> = new Set([
+    "failed",
+    "cancelled",
+    "recovery-required",
+    "succeeded",
+  ]);
   if (!states.has(value)) throw new Error("qualification continuation prior state is invalid");
   return value as QualificationResumeBinding["priorState"];
 }
@@ -502,7 +507,8 @@ export function assertContinuationCanReachDraft(
   if (
     snapshot.state !== "failed" &&
     snapshot.state !== "cancelled" &&
-    snapshot.state !== "recovery-required"
+    snapshot.state !== "recovery-required" &&
+    snapshot.state !== "succeeded"
   )
     return;
   throw new Error(

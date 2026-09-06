@@ -954,16 +954,24 @@ function promptTokenAccounting(profile: AvailableGatewayProfile): ModelTokenAcco
   return findConfiguredCapability(profile.config, profile.result.modelAlias)?.tokenAccounting;
 }
 
-function budgetValidationMessage(
+function contextOverflowRequest(message: string): RouteResult {
+  return { status: 400, body: errorBody("context_length_exceeded", message) };
+}
+
+function budgetValidationError(
   parsed: CodingSidecarGatewayChatCompletionRequest,
   runMetadata: CodingWorkbenchSidecarGatewayRunMetadata,
   estimatedPromptTokens: number,
-): string | undefined {
+): RouteResult | undefined {
   if (parsed.messages.length > runMetadata.maxInputMessages) {
-    return `Request body messages exceed profile maxInputMessages (${String(runMetadata.maxInputMessages)}).`;
+    return contextOverflowRequest(
+      `Request body messages exceed profile maxInputMessages (${String(runMetadata.maxInputMessages)}).`,
+    );
   }
   if (estimatedPromptTokens > runMetadata.maxPromptTokens) {
-    return `Request body estimated prompt tokens exceed profile maxPromptTokens (${String(runMetadata.maxPromptTokens)}).`;
+    return badRequest(
+      `Request body estimated prompt tokens exceed profile maxPromptTokens (${String(runMetadata.maxPromptTokens)}).`,
+    );
   }
   return undefined;
 }
@@ -1000,10 +1008,8 @@ function validationErrorForChatRequest(
   if (invalidSamplingMessage !== undefined) {
     return badRequest(invalidSamplingMessage);
   }
-  const invalidBudgetMessage = budgetValidationMessage(parsed, runMetadata, estimatedPromptTokens);
-  if (invalidBudgetMessage !== undefined) {
-    return badRequest(invalidBudgetMessage);
-  }
+  const invalidBudget = budgetValidationError(parsed, runMetadata, estimatedPromptTokens);
+  if (invalidBudget !== undefined) return invalidBudget;
   if (!isMatchingModelAlias(parsed.model, modelAlias, runtimeAuthenticated)) {
     return {
       status: 400,
@@ -1143,10 +1149,11 @@ function isAdmittedManagedToolSet(
 }
 
 function isRuntimeReadinessProbe(parsed: CodingSidecarGatewayChatCompletionRequest): boolean {
+  const readiness = parsed.messages.at(-1);
   return (
-    parsed.messages.length === 1 &&
-    parsed.messages[0]?.role === "user" &&
-    parsed.messages[0].content === OPENCODE_RUNTIME_READINESS_PROMPT
+    readiness?.role === "user" &&
+    readiness.content === OPENCODE_RUNTIME_READINESS_PROMPT &&
+    parsed.messages.slice(0, -1).every((message) => message.role === "system")
   );
 }
 

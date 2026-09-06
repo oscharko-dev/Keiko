@@ -460,12 +460,22 @@ function scriptedProductiveResponse(): ProductiveResponseControl {
       releaseResponse?.();
       releaseResponse = undefined;
     },
-    script: (_request, callIndex): Promise<NormalizedResponse> => {
-      if (callIndex === 0)
-        return Promise.resolve(
-          toolResponse("call-read", "keiko_workspace_read", { relativePath: "src/example.ts" }),
-        );
-      if (callIndex === 1)
+    script: (request): Promise<NormalizedResponse> => {
+      if (requestContainsText(request, "Continue after the prepared change.")) {
+        return new Promise<NormalizedResponse>((resolve) => {
+          held = true;
+          releaseResponse = (): void => {
+            resolve({ ...normalResponse(), content: "Cancelled turn settled." });
+          };
+        });
+      }
+      if (requestContainsToolCall(request, "keiko_changeset_edit")) {
+        return Promise.resolve({ ...normalResponse(), content: "Completed." });
+      }
+      if (requestContainsToolCall(request, "question")) {
+        return Promise.resolve(toolResponse("call-edit", "keiko_changeset_edit", { changeset }));
+      }
+      if (requestContainsToolCall(request, "keiko_workspace_read")) {
         return Promise.resolve(
           toolResponse("call-question", "question", {
             questions: [
@@ -477,17 +487,29 @@ function scriptedProductiveResponse(): ProductiveResponseControl {
             ],
           }),
         );
-      if (callIndex === 2)
-        return Promise.resolve(toolResponse("call-edit", "keiko_changeset_edit", { changeset }));
-      if (callIndex === 3) return Promise.resolve({ ...normalResponse(), content: "Completed." });
-      return new Promise<NormalizedResponse>((resolve) => {
-        held = true;
-        releaseResponse = (): void => {
-          resolve({ ...normalResponse(), content: "Cancelled turn settled." });
-        };
-      });
+      }
+      if (!requestContainsTitleGeneration(request)) {
+        return Promise.resolve(
+          toolResponse("call-read", "keiko_workspace_read", { relativePath: "src/example.ts" }),
+        );
+      }
+      return Promise.resolve({ ...normalResponse(), content: "Prepared change" });
     },
   };
+}
+
+function requestContainsText(request: GatewayRequest, text: string): boolean {
+  return request.messages.some((message) => message.content.includes(text));
+}
+
+function requestContainsTitleGeneration(request: GatewayRequest): boolean {
+  return request.messages.some((message) =>
+    message.content.startsWith("Generate a title for this conversation:"),
+  );
+}
+
+function requestContainsToolCall(request: GatewayRequest, name: string): boolean {
+  return request.messages.some((message) => message.toolCalls?.some((call) => call.name === name));
 }
 
 async function createGatewayHarness(
@@ -535,6 +557,9 @@ async function createGatewayHarness(
           requests.push(request);
           const callIndex = providerCalls;
           providerCalls += 1;
+          // Establish the same streaming response lifecycle a real provider does before a
+          // scripted final response is deliberately held for the native abort proof.
+          yield { type: "delta", token: "" };
           yield { type: "done", response: await script(request, callIndex) };
         },
       }),
@@ -813,7 +838,10 @@ function functionalToolFacade(ledger: string[], statuses: string[]): CodingToolF
   };
 }
 
-function statusCapturingFetch(statuses: string[]): typeof globalThis.fetch {
+function statusCapturingFetch(
+  statuses: string[],
+  histories: string[] = [],
+): typeof globalThis.fetch {
   return async (input, init): Promise<Response> => {
     const response = await globalThis.fetch(input, init);
     const url =
@@ -824,8 +852,29 @@ function statusCapturingFetch(statuses: string[]): typeof globalThis.fetch {
           : new URL(input.url);
     if (url.pathname === "/session/status")
       statuses.push(await sessionStatusSummary(response.clone()));
+    if (url.pathname === "/sync/history")
+      histories.push(await historyEventSummary(response.clone()));
     return response;
   };
+}
+
+async function historyEventSummary(response: Response): Promise<string> {
+  try {
+    const value: unknown = await response.json();
+    if (!Array.isArray(value)) return "history=invalid";
+    return value
+      .map((entry) => {
+        if (!isRecord(entry) || !isRecord(entry.data)) return "invalid";
+        const part = isRecord(entry.data.part) ? entry.data.part : undefined;
+        const state = part !== undefined && isRecord(part.state) ? part.state : undefined;
+        return [entry.type, part?.type, part?.tool, state?.status]
+          .filter((field): field is string => typeof field === "string")
+          .join(":");
+      })
+      .join("|");
+  } catch {
+    return "history=unavailable";
+  }
 }
 
 async function sessionStatusSummary(response: Response): Promise<string> {
@@ -930,6 +979,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
       const productiveActions: string[] = [];
       const toolStatuses: string[] = [];
       const sessionStatuses: string[] = [];
+      const historyEvents: string[] = [];
       const governedIdentityKeys = new Set<string>();
       let duplicateGovernedEffects = 0;
       const backend = new DirectChildRuntimeBackend(functionalPlatform().qualification);
@@ -960,7 +1010,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
           },
         },
         gatewayReadiness: gateway.readiness,
-        fetch: statusCapturingFetch(sessionStatuses),
+        fetch: statusCapturingFetch(sessionStatuses, historyEvents),
         supervisor,
         authorityLifecycle: {
           revokeRuntime: () => true,
@@ -1002,7 +1052,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         });
         if (!started.ok) {
           throw new Error(
-            `functional-opencode-start-failed:${started.failureCode}:gateway-calls=${String(gateway.calls())}:gateway-responses=${gateway.responses().join(",")}:gateway-summaries=${gateway.summaries().join(",")}:tool-statuses=${toolStatuses.join(",")}:stderr=${backend.redactedStderr()}`,
+            `functional-opencode-start-failed:${started.failureCode}:gateway-calls=${String(gateway.calls())}:gateway-responses=${gateway.responses().join(",")}:gateway-summaries=${gateway.summaries().join(",")}:tool-statuses=${toolStatuses.join(",")}:history-events=${historyEvents.join(",")}:stderr=${backend.redactedStderr()}`,
           );
         }
         expect(started).toMatchObject({ runId: RUN_ID, status: "ready" });
@@ -1039,7 +1089,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
             `functional-opencode-terminal-missing:terminal=${String(terminal)}:pending-after-answer=${String(pendingAfterAnswer)}:pending-after-final=${String(pendingAfterFinal)}:actions=${productiveActions.join(",")}:tool-statuses=${toolStatuses.join(",")}:gateway-requests=${String(gateway.requests.length)}:session-statuses=${sessionStatuses.join(",")}:stderr=${backend.redactedStderr()}:${runtimeDatabaseProjection(join(runRoot, "state", "opencode.db"))}`,
           );
         }
-        expect(productiveActions).toEqual(["read", "edit"]);
+        expect(productiveActions, gateway.summaries().join("|")).toEqual(["read", "edit"]);
         expect(gateway.requests).toHaveLength(4);
         const expectedProjection = createOpenCodeGatewayToolCatalogAdvertisement(
           Date.parse("2026-09-05T00:00:00.000Z"),
@@ -1061,10 +1111,6 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         const statusSampleOffset = sessionStatuses.length;
         const secondAccepted = await runtime.runPort.submitTask(RUN_ID, secondPrompt);
         expect(secondAccepted).toBe(true);
-        const abortedTerminal = runtime.runPort.waitForTerminal(
-          RUN_ID,
-          AbortSignal.timeout(20_000),
-        );
         const heldWaitStarted = Date.now();
         const held = await waitForCondition(responseControl.held, AbortSignal.timeout(5_000));
         const heldArrivalLatencyMs = Date.now() - heldWaitStarted;
@@ -1080,7 +1126,8 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         expect(["status=", "status=busy"]).toContain(statusBeforeSecondSubmit);
         await expect(
           waitForCondition(
-            () => sessionStatuses.some((status) => status.includes("busy")),
+            () =>
+              sessionStatuses.slice(statusSampleOffset).some((status) => status.includes("busy")),
             AbortSignal.timeout(5_000),
           ),
         ).resolves.toBe(true);
@@ -1088,9 +1135,15 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         expect(gateway.requests.at(-1)?.toolCatalog?.projection.projectionDigest).toBe(
           expectedProjection.projectionDigest,
         );
-        await expect(runtime.runPort.abortTask(RUN_ID)).resolves.toBe(true);
+        const aborted = await runtime.runPort.abortTask(RUN_ID);
+        expect(
+          aborted,
+          `statuses=${sessionStatuses.join(",")}:gateway=${gateway.summaries().join("|")}`,
+        ).toBe(true);
         responseControl.release();
-        await expect(abortedTerminal).resolves.toBe(true);
+        await expect(
+          runtime.runPort.waitForTerminal(RUN_ID, AbortSignal.timeout(20_000)),
+        ).resolves.toBe(true);
         await expect(
           waitForCondition(
             () => gateway.responseCloses() === gateway.calls(),

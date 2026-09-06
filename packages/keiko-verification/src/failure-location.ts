@@ -19,7 +19,9 @@ import {
   VERIFICATION_MAX_FAILURE_LOCATIONS,
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import type { CommandResult } from "@oscharko-dev/keiko-tools";
+import { redact } from "@oscharko-dev/keiko-security";
 import { posix as posixPath, win32 as win32Path } from "node:path";
+import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 
 // A defensive per-line length ceiling: a pathological single line is skipped rather than matched.
@@ -57,6 +59,10 @@ const VITEST_FRAME =
 // unconditionally reaches `$` in one pass (nothing left to backtrack against), and the title is
 // trimmed in code (`trimEnd`) instead, which can never backtrack.
 const VITEST_TITLE = /^\s*(?:FAIL\b|×|✗|✖)\s*(?<title>.{1,4096})$/u;
+const NODE_ASSERTION =
+  /^\s*AssertionError(?: \[(?<rule>ERR_[A-Z0-9_]{1,128})\])?: (?<message>.{1,4096})$/u;
+const NODE_TEST_DURATION = / \(\d+(?:\.\d+)?ms\)$/u;
+const NODE_COMPARISON_OPERATORS = new Set([" !== ", " === ", " != ", " == "]);
 
 function toInt(value: string): number {
   return Number.parseInt(value, 10);
@@ -155,6 +161,7 @@ function matchVitestFrame(
   line: string,
   title: string | undefined,
 ): VerificationFailureLocation | undefined {
+  if (line.trimStart().startsWith("test at ")) return undefined;
   const groups = VITEST_FRAME.exec(line)?.groups;
   if (groups?.file === undefined) return undefined;
   return {
@@ -163,6 +170,77 @@ function matchVitestFrame(
     column: toInt(groups.col ?? "0"),
     message: cap(title ?? "Test failure"),
   };
+}
+
+interface NodeAssertion {
+  readonly message: string;
+  readonly ruleId?: string | undefined;
+  comparison?: string | undefined;
+}
+
+function nodeTestTitle(line: string): string | undefined {
+  const title = VITEST_TITLE.exec(line)?.groups?.title?.trimEnd();
+  if (title === undefined || title === "failing tests:") return undefined;
+  return title.replace(NODE_TEST_DURATION, "");
+}
+
+function nodeAssertion(line: string): NodeAssertion | undefined {
+  const groups = NODE_ASSERTION.exec(line)?.groups;
+  if (groups?.message === undefined) return undefined;
+  return {
+    message: groups.message.trim(),
+    ...(groups.rule === undefined ? {} : { ruleId: groups.rule }),
+  };
+}
+
+function nodeComparison(line: string): string | undefined {
+  const value = line.trim();
+  if (value.length === 0 || value.length > VERIFICATION_FAILURE_MESSAGE_MAX_CHARS) return undefined;
+  return [...NODE_COMPARISON_OPERATORS].some((operator) => value.includes(operator))
+    ? value
+    : undefined;
+}
+
+function nodeStackLocation(line: string): Omit<VerificationFailureLocation, "message"> | undefined {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("at ")) return undefined;
+  let location = trimmed.slice(3);
+  const open = location.lastIndexOf("(");
+  if (open >= 0 && location.endsWith(")")) location = location.slice(open + 1, -1);
+  const columnSeparator = location.lastIndexOf(":");
+  const lineSeparator = location.lastIndexOf(":", columnSeparator - 1);
+  if (lineSeparator <= 0 || columnSeparator <= lineSeparator) return undefined;
+  const file = location.slice(0, lineSeparator);
+  if (!file.startsWith("file:") && !posixPath.isAbsolute(file) && !win32Path.isAbsolute(file)) {
+    return undefined;
+  }
+  return {
+    file,
+    line: toInt(location.slice(lineSeparator + 1, columnSeparator)),
+    column: toInt(location.slice(columnSeparator + 1)),
+  };
+}
+
+function extractNodeTest(lines: readonly string[]): VerificationFailureLocation[] {
+  const out: VerificationFailureLocation[] = [];
+  let title: string | undefined;
+  let assertion: NodeAssertion | undefined;
+  for (const line of lines) {
+    title = nodeTestTitle(line) ?? title;
+    assertion = nodeAssertion(line) ?? assertion;
+    if (assertion === undefined) continue;
+    assertion.comparison ??= nodeComparison(line);
+    const location = nodeStackLocation(line);
+    if (location === undefined) continue;
+    const detail = `${assertion.message}${assertion.comparison === undefined ? "" : ` ${assertion.comparison}`}`;
+    out.push({
+      ...location,
+      message: title === undefined ? detail : `${title}: ${detail}`,
+      ...(assertion.ruleId === undefined ? {} : { ruleId: assertion.ruleId }),
+    });
+    assertion = undefined;
+  }
+  return out;
 }
 
 function extractVitest(lines: readonly string[]): VerificationFailureLocation[] {
@@ -191,7 +269,7 @@ function extractByKind(
       return extractEslint(lines);
     case "test":
     case "targeted-test":
-      return extractVitest(lines);
+      return [...extractNodeTest(lines), ...extractVitest(lines)];
     case "build":
       return [];
   }
@@ -232,20 +310,33 @@ function normalizePosixPath(file: string, workspaceRoot: string): string | undef
   return isEscapingRelative(relative, posixPath.isAbsolute(relative)) ? undefined : relative;
 }
 
-function normalizeFailurePath(file: string, workspaceRoot: string): string | undefined {
-  if (
-    file.length === 0 ||
-    workspaceRoot.length === 0 ||
-    file.includes("\u0000") ||
-    workspaceRoot.includes("\u0000") ||
-    TEXT_ENCODER.encode(file).length > MAX_PATH_BYTES ||
-    hasTraversal(file)
-  ) {
+function decodeFailurePath(file: string, workspaceRoot: string): string | undefined {
+  if (!file.startsWith("file:")) return file;
+  try {
+    return fileURLToPath(file, { windows: WINDOWS_ROOT.test(workspaceRoot) });
+  } catch {
     return undefined;
   }
+}
+
+function validFailurePath(candidate: string | undefined, workspaceRoot: string): candidate is string {
+  return (
+    candidate !== undefined &&
+    candidate.length > 0 &&
+    workspaceRoot.length > 0 &&
+    !candidate.includes("\u0000") &&
+    !workspaceRoot.includes("\u0000") &&
+    TEXT_ENCODER.encode(candidate).length <= MAX_PATH_BYTES &&
+    !hasTraversal(candidate)
+  );
+}
+
+function normalizeFailurePath(file: string, workspaceRoot: string): string | undefined {
+  const candidate = decodeFailurePath(file, workspaceRoot);
+  if (!validFailurePath(candidate, workspaceRoot)) return undefined;
   const normalized = WINDOWS_ROOT.test(workspaceRoot)
-    ? normalizeWindowsPath(file, workspaceRoot)
-    : normalizePosixPath(file, workspaceRoot);
+    ? normalizeWindowsPath(candidate, workspaceRoot)
+    : normalizePosixPath(candidate, workspaceRoot);
   if (normalized === undefined || TEXT_ENCODER.encode(normalized).length > MAX_PATH_BYTES) {
     return undefined;
   }
@@ -272,7 +363,7 @@ function normalizeLocation(
     file,
     ...(location.line === undefined ? {} : { line: location.line }),
     ...(location.column === undefined ? {} : { column: location.column }),
-    message: cap(location.message),
+    message: cap(redact(location.message)),
     ...(location.ruleId === undefined ? {} : { ruleId: cap(location.ruleId, MAX_RULE_ID_CHARS) }),
   };
 }

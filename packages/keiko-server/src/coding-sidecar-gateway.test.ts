@@ -1643,7 +1643,14 @@ describe("coding-sidecar gateway", () => {
     expect(readiness.isVerified("run-1")).toBe(false);
     expect(
       await handleCodingSidecarGatewayChatCompletions(
-        request(modelVisibleTools(), OPENCODE_RUNTIME_READINESS_PROMPT),
+        authenticatedContext({
+          model: "coding",
+          messages: [
+            { role: "system", content: "native injected system instruction" },
+            { role: "user", content: OPENCODE_RUNTIME_READINESS_PROMPT },
+          ],
+          tools: modelVisibleTools(),
+        }),
         deps,
       ),
     ).toMatchObject({ status: 200 });
@@ -3126,7 +3133,7 @@ describe("coding-sidecar gateway", () => {
     expect(seenRequests).toHaveLength(0);
   });
 
-  it("returns BAD_REQUEST when messages exceed the advertised maxInputMessages", async () => {
+  it("returns a provider context overflow when messages exceed maxInputMessages", async () => {
     const seenRequests: GatewayRequest[] = [];
     const deps = depsValue(
       configValue(provider(), capability()),
@@ -3155,7 +3162,7 @@ describe("coding-sidecar gateway", () => {
       status: 400,
       body: {
         error: {
-          code: "BAD_REQUEST",
+          code: "context_length_exceeded",
           message: "Request body messages exceed profile maxInputMessages (512).",
         },
       },

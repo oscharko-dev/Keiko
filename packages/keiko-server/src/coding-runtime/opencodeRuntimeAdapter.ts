@@ -13,12 +13,14 @@ import {
 } from "./opencodeLaunchProfile.js";
 import {
   createOpenCodeReconciler,
+  isOpenCodeCompactionActivity,
   OPEN_CODE_EVENT_KINDS,
   type OpenCodeReconciliationEvent,
   type OpenCodeReconciliationPreparation,
   type OpenCodeReconciler,
 } from "./opencodeReconciler.js";
 import type { OpenCodeLiveControl } from "./opencodeProtocol.js";
+import { MAX_APPROVAL_CHALLENGE_TTL_MS } from "./codingRuntimeOrchestrator.js";
 import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_PINNED_VERSION,
@@ -36,6 +38,7 @@ const MAX_HISTORY_CATCH_UP_ATTEMPTS = 4;
 const MAX_STREAM_RECONNECTS = 3;
 // The generated client must outlive the server-owned 30 s governed tool-bridge deadline.
 const OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS = 35_000;
+const OPEN_CODE_APPROVAL_TOOL_CLIENT_TIMEOUT_MS = MAX_APPROVAL_CHALLENGE_TTL_MS + 5_000;
 export const OPEN_CODE_MAX_TURN_WAIT_MS = 30 * 60_000;
 
 export type OpenCodeGovernedSinkReceipt = "applied" | "duplicate";
@@ -690,6 +693,7 @@ async function applyHistoryPlan(
     if (receipt !== "applied" && receipt !== "duplicate") throw new Error("sink-receipt-invalid");
   }
   if (!prepared.commit()) throw new Error("reconciler-commit-conflict");
+  recordCompactionActivity(ports, prepared.projections);
   replaceMap(state.checkpoints, planned.checkpoints);
   replaceMap(state.evidenceCheckpoints, planned.evidenceCheckpoints);
   replaceMap(state.terminalCheckpoints, planned.terminalCheckpoints);
@@ -699,6 +703,32 @@ async function applyHistoryPlan(
   for (const signal of activity) {
     // The sink owns rejection accounting and records the projection-specific closed reason.
     ports.safeActivitySink?.ingest(signal);
+  }
+}
+
+function recordCompactionActivity(
+  ports: OpenCodeRuntimeAdapterPorts,
+  projections: readonly import("./opencodeReconciler.js").OpenCodeProjection[],
+): void {
+  const activityLog = ports.activityLog ?? processServerLogSink();
+  for (const projection of projections) {
+    const activity = projection.compaction;
+    if (activity === undefined) continue;
+    const failure = activity.event === "failed";
+    activityLog.write({
+      category: "process",
+      level: failure ? "error" : "info",
+      op: "coding-runtime.compaction",
+      correlationId: correlationIdOrUnknown(ports.correlationId),
+      ...(failure ? { errorKind: activity.errorKind } : {}),
+      extra: failure
+        ? {
+            event: activity.event,
+            compactionIdSha256: activity.compactionIdSha256,
+            finishReason: activity.finishReason,
+          }
+        : activity,
+    });
   }
 }
 
@@ -855,13 +885,15 @@ function validControl(value: unknown): value is OpenCodeLiveControl {
 
 function validEvent(event: OpenCodeReconciliationEvent): boolean {
   return (
-    exactRecord(event, ["id", "aggregateId", "sequence", "digest", "kind"]) &&
+    (exactRecord(event, ["id", "aggregateId", "sequence", "digest", "kind"]) ||
+      exactRecord(event, ["id", "aggregateId", "sequence", "digest", "kind", "compaction"])) &&
     EVENT_ID.test(event.id) &&
     SESSION_ID.test(event.aggregateId) &&
     Number.isSafeInteger(event.sequence) &&
     event.sequence >= 0 &&
     DIGEST.test(event.digest) &&
-    OPEN_CODE_EVENT_KINDS.includes(event.kind)
+    OPEN_CODE_EVENT_KINDS.includes(event.kind) &&
+    isOpenCodeCompactionActivity(event.compaction)
   );
 }
 
@@ -1004,22 +1036,28 @@ const GIT_ACTION_DESCRIPTIONS: Readonly<Partial<Record<GeneratedToolAction, stri
   "git-diff":
     "Read one bounded Git diff (working-tree or staged) for the given workspace-relative paths.",
   "git-stage":
-    "Propose staging one or more workspace-relative paths. This proposes only; redeem the " +
-    "returned proposalId with keiko_git_execute once approved.",
+    "Propose staging one or more workspace-relative paths. This proposes only. When the returned " +
+    "status is ready, call keiko_git_execute immediately; when the status is approval-required, " +
+    "wait for the operator decision before calling it. A denied proposal authorizes no effect.",
   "git-commit":
     "Propose a commit with the given message over the currently staged changes. This proposes " +
-    "only -- the model never commits directly. A human must approve the proposal through the " +
-    "existing approval channel before keiko_git_execute can redeem it.",
+    "only. When the returned status is ready, call keiko_git_execute immediately; when the status " +
+    "is approval-required, wait for the operator decision before calling it. A denied proposal " +
+    "authorizes no effect.",
   "git-push":
-    "Propose pushing the last verified commit by its exact SHA. This proposes only -- a human " +
-    "must approve before keiko_git_execute can redeem it.",
+    "Propose pushing the last verified commit by its exact SHA. This proposes only. When the " +
+    "returned status is ready, call keiko_git_execute immediately; when the status is " +
+    "approval-required, wait for the operator decision before calling it. A denied proposal " +
+    "authorizes no effect.",
   "git-pull-request":
-    "Propose opening a draft pull request with the given title. This proposes only -- a human " +
-    "must approve before keiko_git_execute can redeem it.",
+    "Propose opening a draft pull request with the given title. This proposes only. When the " +
+    "returned status is ready, call keiko_git_execute immediately; when the status is " +
+    "approval-required, wait for the operator decision before calling it. A denied proposal " +
+    "authorizes no effect.",
   "git-execute":
-    "Redeem one previously proposed and now-approved stage, commit, push or pull-request " +
-    "proposal by its kind and the proposalId returned by the matching propose call. Denied when " +
-    "no matching approval exists.",
+    "Redeem one ready stage, commit, push or pull-request proposal by its kind and the proposalId " +
+    "returned by the matching propose call. A denied proposal authorizes no effect, and a " +
+    "proposal still awaiting approval cannot be redeemed.",
   "git-ci":
     "Observe the accepted run's CI readiness (required checks, review/merge state). Set " +
     "forceFresh to bypass the cached snapshot.",
@@ -1070,6 +1108,15 @@ function toolDescription(action: GeneratedToolAction): string {
     "expectedContentHash digest returned by its most recent keiko_workspace_read; on a digest " +
     "mismatch re-read the file and rebuild the patch."
   );
+}
+
+function toolClientTimeoutMs(action: GeneratedToolAction): number {
+  return action === "git-stage" ||
+    action === "git-commit" ||
+    action === "git-push" ||
+    action === "git-pull-request"
+    ? OPEN_CODE_APPROVAL_TOOL_CLIENT_TIMEOUT_MS
+    : OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS;
 }
 
 function toolApprovalProofSource(): readonly string[] {
@@ -1155,7 +1202,7 @@ function toolSource(
   const wire = wireRequestFor(action) ?? { action, literal: {} };
   return [
     `const MAX_RESPONSE_BYTES = ${String(CODING_TOOL_MAX_BODY_BYTES)};`,
-    `const TIMEOUT_MS = ${String(OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS)};`,
+    `const TIMEOUT_MS = ${String(toolClientTimeoutMs(action))};`,
     `const action = ${JSON.stringify(action)};`,
     `const wireAction = ${JSON.stringify(wire.action)};`,
     `const literalFields = ${JSON.stringify(wire.literal)};`,

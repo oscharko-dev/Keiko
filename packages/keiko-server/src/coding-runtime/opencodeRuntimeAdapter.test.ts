@@ -70,6 +70,33 @@ interface GovernedEvent {
     | "terminal"
     | "terminal-control"
     | "terminal-failure";
+  readonly compaction?:
+    | {
+        readonly event: "started";
+        readonly compactionIdSha256: string;
+        readonly auto: boolean;
+        readonly overflow: boolean;
+        readonly retainedTail: false;
+      }
+    | {
+        readonly event: "tail-retained";
+        readonly compactionIdSha256: string;
+        readonly auto: boolean;
+        readonly overflow: boolean;
+        readonly retainedTail: true;
+        readonly tailStartIdSha256: string;
+      }
+    | {
+        readonly event: "completed";
+        readonly compactionIdSha256: string;
+      }
+    | {
+        readonly event: "failed";
+        readonly compactionIdSha256: string;
+        readonly errorKind: string;
+        readonly finishReason: string;
+      }
+    | undefined;
 }
 
 type OpenCodeSyncHint =
@@ -465,8 +492,18 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(Object.keys(bundle.toolSources).sort()).toEqual([...KEIKO_PRODUCER_TOOLS].sort());
     expect(JSON.stringify(bundle.toolSources)).not.toMatch(/\b(?:import|require)\b/u);
     expect(JSON.stringify(bundle.toolSources)).not.toContain(SECRET);
-    for (const source of Object.values(bundle.toolSources)) {
-      expect(source).toContain("const TIMEOUT_MS = 35000;");
+    const approvalWaitTools = new Set([
+      "keiko_git_stage",
+      "keiko_git_commit",
+      "keiko_git_push",
+      "keiko_pull_request",
+    ]);
+    for (const [name, source] of Object.entries(bundle.toolSources)) {
+      expect(source).toContain(
+        approvalWaitTools.has(name)
+          ? "const TIMEOUT_MS = 305000;"
+          : "const TIMEOUT_MS = 35000;",
+      );
       expect(source).toContain('redirect: "manual"');
       expect(source).toContain("signal:");
       expect(source).toMatch(/timeout|AbortController/u);
@@ -513,6 +550,17 @@ describe("OpenCode runtime adapter readiness", () => {
       '"intent":"pull-request","phase":"propose"',
     );
     expect(bundle.toolSources.keiko_ci_status).toContain('"operation":"ci"');
+    const deliverySources = [
+      bundle.toolSources.keiko_git_stage,
+      bundle.toolSources.keiko_git_commit,
+      bundle.toolSources.keiko_git_push,
+      bundle.toolSources.keiko_pull_request,
+      bundle.toolSources.keiko_git_execute,
+    ].join("\n");
+    expect(deliverySources).not.toContain("A human must approve");
+    expect(deliverySources).toContain("status is ready");
+    expect(deliverySources).toContain("status is approval-required");
+    expect(deliverySources).toContain("A denied proposal authorizes no effect");
     // keiko_git_execute is the one tool whose wire action/operation/intent is computed from the
     // model-supplied `kind` at call time, never a fixed literal.
     const execute = bundle.toolSources.keiko_git_execute;
@@ -822,6 +870,126 @@ describe("OpenCode runtime adapter readiness", () => {
     await expect(adapter.start()).resolves.toMatchObject({ ok: true });
     expect(harness.ports.safeActivitySink.ingest).toHaveBeenCalledOnce();
     expect(recordDrops).not.toHaveBeenCalled();
+    await adapter.close();
+  });
+
+  it("records committed native compaction lifecycle projections once with run correlation", async () => {
+    const harness = readinessPorts();
+    const log: ServerLogEvent[] = [];
+    const compactionIdSha256 = "b".repeat(64);
+    const failedCompactionIdSha256 = "d".repeat(64);
+    const tailStartIdSha256 = "c".repeat(64);
+    const lifecycle: readonly GovernedEvent[] = [
+      {
+        ...event(1),
+        compaction: {
+          event: "started",
+          compactionIdSha256,
+          auto: true,
+          overflow: true,
+          retainedTail: false,
+        },
+      },
+      {
+        ...event(2),
+        compaction: { event: "completed", compactionIdSha256 },
+      },
+      {
+        ...event(3),
+        compaction: {
+          event: "tail-retained",
+          compactionIdSha256,
+          tailStartIdSha256,
+          auto: true,
+          overflow: true,
+          retainedTail: true,
+        },
+      },
+      {
+        ...event(4),
+        compaction: {
+          event: "started",
+          compactionIdSha256: failedCompactionIdSha256,
+          auto: true,
+          overflow: false,
+          retainedTail: false,
+        },
+      },
+      {
+        ...event(5),
+        kind: "terminal-failure",
+        compaction: {
+          event: "failed",
+          compactionIdSha256: failedCompactionIdSha256,
+          errorKind: "ContextOverflowError",
+          finishReason: "error",
+        },
+      },
+    ];
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      correlationId: "run-native-compaction",
+      activityLog: {
+        write: (event): void => {
+          log.push(event);
+        },
+      },
+    });
+
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    harness.ports.readiness.history = (): Promise<readonly GovernedEvent[]> =>
+      Promise.resolve(lifecycle);
+    await expect(adapter.reconcile()).resolves.toMatchObject({ ok: true });
+    await expect(adapter.reconcile()).resolves.toMatchObject({ ok: true });
+
+    expect(log.filter(({ op }) => op === "coding-runtime.compaction")).toEqual([
+      expect.objectContaining({
+        correlationId: "run-native-compaction",
+        extra: {
+          event: "started",
+          compactionIdSha256,
+          auto: true,
+          overflow: true,
+          retainedTail: false,
+        },
+      }),
+      expect.objectContaining({
+        correlationId: "run-native-compaction",
+        extra: { event: "completed", compactionIdSha256 },
+      }),
+      expect.objectContaining({
+        correlationId: "run-native-compaction",
+        extra: {
+          event: "tail-retained",
+          compactionIdSha256,
+          tailStartIdSha256,
+          auto: true,
+          overflow: true,
+          retainedTail: true,
+        },
+      }),
+      expect.objectContaining({
+        correlationId: "run-native-compaction",
+        extra: {
+          event: "started",
+          compactionIdSha256: failedCompactionIdSha256,
+          auto: true,
+          overflow: false,
+          retainedTail: false,
+        },
+      }),
+      expect.objectContaining({
+        level: "error",
+        correlationId: "run-native-compaction",
+        errorKind: "ContextOverflowError",
+        extra: {
+          event: "failed",
+          compactionIdSha256: failedCompactionIdSha256,
+          finishReason: "error",
+        },
+      }),
+    ]);
+    expect(JSON.stringify(log)).not.toMatch(/msg_|provider body/u);
     await adapter.close();
   });
 

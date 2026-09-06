@@ -125,6 +125,36 @@ describe("extractFailureLocations — test (best-effort)", () => {
       },
     ]);
   });
+
+  it("parses a Node test assertion with its comparison and workspace location", () => {
+    const out = extract(
+      "test",
+      cmd(
+        [
+          "✖ keeps the online mean stable (0.5ms)",
+          "✖ failing tests:",
+          "test at ci/numerical-stability.test.js:12:1",
+          "✖ keeps the online mean stable (0.5ms)",
+          "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:",
+          "",
+          "  4 !== 3.75",
+          "",
+          "      at TestContext.<anonymous> (file:///repo/ci/numerical-stability.test.js:13:10)",
+          "      at Test.runInAsyncScope (node:async_hooks:226:14)",
+        ].join("\n"),
+      ),
+    );
+
+    expect(out).toEqual([
+      {
+        file: "ci/numerical-stability.test.js",
+        line: 13,
+        column: 10,
+        message: "keeps the online mean stable: Expected values to be strictly equal: 4 !== 3.75",
+        ruleId: "ERR_ASSERTION",
+      },
+    ]);
+  });
 });
 
 describe("extractFailureLocations — degrade to empty, never throw (AC11)", () => {

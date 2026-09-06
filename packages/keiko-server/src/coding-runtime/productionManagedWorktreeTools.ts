@@ -78,6 +78,48 @@ import {
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
+import { MAX_APPROVAL_CHALLENGE_TTL_MS } from "./codingRuntimeOrchestrator.js";
+
+const PROPOSAL_APPROVAL_POLL_MS = 25;
+
+type ProposalApprovalWaitOutcome = "approved" | "cancelled" | "expired" | "unavailable";
+
+interface ProposalApprovalProbe {
+  readonly review: (proposalId: string) => unknown;
+  readonly matchesApproval: (proposalId: string) => boolean;
+}
+
+export function waitForRuntimeProposalApproval(
+  probe: ProposalApprovalProbe,
+  proposalId: string,
+  signal?: AbortSignal,
+): Promise<ProposalApprovalWaitOutcome> {
+  return new Promise((resolve) => {
+    let interval: ReturnType<typeof setInterval> | undefined;
+    const timeout = setTimeout((): void => {
+      finish("expired");
+    }, MAX_APPROVAL_CHALLENGE_TTL_MS);
+    const finish = (outcome: ProposalApprovalWaitOutcome): void => {
+      if (interval === undefined) return;
+      clearInterval(interval);
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
+      interval = undefined;
+      resolve(outcome);
+    };
+    const abort = (): void => {
+      finish("cancelled");
+    };
+    const inspect = (): void => {
+      if (signal?.aborted === true) finish("cancelled");
+      else if (probe.review(proposalId) === undefined) finish("unavailable");
+      else if (probe.matchesApproval(proposalId)) finish("approved");
+    };
+    interval = setInterval(inspect, PROPOSAL_APPROVAL_POLL_MS);
+    signal?.addEventListener("abort", abort, { once: true });
+    inspect();
+  });
+}
 
 export interface ProductionManagedWorktreeToolInput {
   readonly ciRepairBudget?: CiRepairExecutionBudget;
@@ -372,8 +414,10 @@ function buildRuntimeGitPort(
         return { status: "failed", reasonCode: "capability-backend-unavailable" };
       const result = await input.runtimeGitService.execute(request, guard, signal);
       if (result === undefined) return { status: "failed", reasonCode: "git-authority-revoked" };
-      requestStageReview(input, result);
-      return { status: "completed", git: result };
+      const released = await releaseStageProposal(input, result, signal);
+      return released === undefined
+        ? { status: "failed", reasonCode: "git-authority-revoked" }
+        : { status: "completed", git: released };
     },
   };
 }
@@ -399,6 +443,20 @@ function requestStageReview(
     input.requestStageApproval?.(result.proposalId);
 }
 
+async function releaseStageProposal(
+  input: ProductionManagedWorktreeToolInput,
+  result: import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult,
+  signal: AbortSignal | undefined,
+): Promise<import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult | undefined> {
+  if (result.kind !== "stage" || result.status !== "approval-required") return result;
+  requestStageReview(input, result);
+  const service = input.runtimeGitService;
+  if (service === undefined) return undefined;
+  const outcome = await waitForRuntimeProposalApproval(service, result.proposalId, signal);
+  recordProposalApprovalWait(input, "git-stage", result.proposalId, outcome);
+  return outcome === "approved" ? { ...result, status: "ready", reason: "none" } : undefined;
+}
+
 function buildVerifiedCommitPort(
   input: ProductionManagedWorktreeToolInput,
 ): GovernedCodingToolPort<"delivery"> {
@@ -410,18 +468,65 @@ function buildVerifiedCommitPort(
     ): ReturnType<GovernedCodingToolPort<"delivery">["execute"]> => {
       if (signalAborted(signal) || !guard.check() || !live(input))
         return { status: "failed", reasonCode: "delivery-authority-revoked" };
-      if (isDraftToolRequest(request))
-        return runDraftDeliveryRequest(input, request, guard, signal);
+      if (isDraftToolRequest(request)) {
+        const result = await runDraftDeliveryRequest(input, request, guard, signal);
+        const proposal = result.status === "completed" ? result.draftDelivery : undefined;
+        if (
+          proposal?.status !== "recorded" ||
+          (proposal.record.phase !== "push-proposed" && proposal.record.phase !== "pr-proposed")
+        )
+          return result;
+        const service = input.draftDeliveryService;
+        if (service === undefined)
+          return { status: "failed", reasonCode: "delivery-authority-revoked" };
+        const actionKind = proposal.record.phase === "push-proposed" ? "push" : "pull-request";
+        const outcome = await waitForRuntimeProposalApproval(
+          service,
+          proposal.record.proposalId,
+          signal,
+        );
+        recordProposalApprovalWait(input, actionKind, proposal.record.proposalId, outcome);
+        return outcome === "approved"
+          ? result
+          : { status: "failed", reasonCode: "delivery-authority-revoked" };
+      }
       const service = input.verifiedCommitService;
       if (service === undefined || request.intent !== "commit")
         return { status: "failed", reasonCode: "capability-backend-unavailable" };
       const result = await runCommitRequest(service, request, guard, signal);
       if (result === undefined)
         return { status: "failed", reasonCode: "delivery-authority-revoked" };
-      if (result.status === "approval-required") input.requestCommitApproval?.(result.proposalId);
+      if (result.status === "approval-required") {
+        input.requestCommitApproval?.(result.proposalId);
+        const outcome = await waitForRuntimeProposalApproval(service, result.proposalId, signal);
+        recordProposalApprovalWait(input, "commit", result.proposalId, outcome);
+        if (outcome !== "approved")
+          return { status: "failed", reasonCode: "delivery-authority-revoked" };
+      }
       return { status: "completed", verifiedCommit: result };
     },
   };
+}
+
+function recordProposalApprovalWait(
+  input: ProductionManagedWorktreeToolInput,
+  actionKind: "git-stage" | "commit" | "push" | "pull-request",
+  proposalId: string,
+  outcome: ProposalApprovalWaitOutcome,
+): void {
+  (input.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    op: "coding-runtime.tool-result",
+    correlationId: isValidCorrelationId(input.authorityRef.runId)
+      ? input.authorityRef.runId
+      : UNKNOWN_CORRELATION_ID,
+    extra: {
+      actionKind,
+      proposalId,
+      state: "approval-wait-settled",
+      reason: outcome,
+    },
+  });
 }
 function runCommitRequest(
   service: VerifiedCommitService,

@@ -172,7 +172,7 @@ describe("live qualification continuation", () => {
     }
   });
 
-  it.each(["failed", "cancelled", "recovery-required"] as const)(
+  it.each(["failed", "cancelled", "recovery-required", "succeeded"] as const)(
     "stops waiting when the continued run reaches %s without a draft pull request",
     (state) => {
       expect(() => {
@@ -279,19 +279,27 @@ describe("live qualification continuation", () => {
     ).toThrow("correction instructions are invalid");
   });
 
-  it("rebinds the exact existing workspace without changing model-authored files", async () => {
-    const fixture = client();
+  it.each(["cancelled", "failed", "succeeded"] as const)(
+    "rebinds an exact %s workspace without changing model-authored files",
+    async (priorState) => {
+      const fixture = client({ prior: snapshot(PRIOR_RUN_ID, priorState) });
 
-    await expect(
-      resumeExistingIssueWorkspace(fixture.subject, RESUME, 1, "governed-assist"),
-    ).resolves.toMatchObject({
-      runId: "run-new",
-      issueBinding: { issueNumber: 1, bindingDigest: ISSUE_BINDING_DIGEST },
-    });
+      await expect(
+        resumeExistingIssueWorkspace(
+          fixture.subject,
+          { ...RESUME, priorState },
+          1,
+          "governed-assist",
+        ),
+      ).resolves.toMatchObject({
+        runId: "run-new",
+        issueBinding: { issueNumber: 1, bindingDigest: ISSUE_BINDING_DIGEST },
+      });
 
-    expect(fixture.bindIssue).toHaveBeenCalledOnce();
-    expect(fixture.start).toHaveBeenCalledOnce();
-  });
+      expect(fixture.bindIssue).toHaveBeenCalledOnce();
+      expect(fixture.start).toHaveBeenCalledOnce();
+    },
+  );
 
   it("refuses workspace replacement or worktree mutation before starting", async () => {
     const replaced = client({ activeAfter: active({ workspaceId: "ws_replaced" }) });

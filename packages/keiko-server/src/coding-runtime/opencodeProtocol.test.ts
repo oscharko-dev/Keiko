@@ -443,13 +443,45 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
         time: 61,
       });
 
-    expect(parseOpenCodeHistory([row(compactionPart)])).toMatchObject({
+    const started = parseOpenCodeHistory([row(compactionPart)]);
+    expect(started).toMatchObject({
       ok: true,
-      value: [{ sequence: 61, kind: "observation" }],
+      value: [
+        {
+          sequence: 61,
+          kind: "observation",
+          compaction: {
+            event: "started",
+            auto: true,
+            overflow: false,
+            retainedTail: false,
+          },
+        },
+      ],
     });
-    expect(
-      parseOpenCodeHistory([row({ ...compactionPart, tail_start_id: "msg_retained_tail" })]),
-    ).toMatchObject({ ok: true });
+    if (!started.ok) throw new Error("expected compaction start");
+    expect(started.value[0]?.compaction?.compactionIdSha256).toMatch(/^[0-9a-f]{64}$/u);
+    const retained = parseOpenCodeHistory([
+      row({ ...compactionPart, tail_start_id: "msg_retained_tail" }),
+    ]);
+    expect(retained).toMatchObject({
+      ok: true,
+      value: [
+        {
+          compaction: {
+            event: "tail-retained",
+            auto: true,
+            overflow: false,
+            retainedTail: true,
+          },
+        },
+      ],
+    });
+    if (!retained.ok) throw new Error("expected retained compaction tail");
+    const retainedActivity = retained.value[0]?.compaction;
+    if (retainedActivity?.event !== "tail-retained") throw new Error("expected tail metadata");
+    expect(retainedActivity.compactionIdSha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(retainedActivity.tailStartIdSha256).toMatch(/^[0-9a-f]{64}$/u);
     for (const invalid of [
       { ...compactionPart, auto: "true" },
       { ...compactionPart, overflow: 0 },
@@ -462,11 +494,66 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
         reason: "event-unknown",
       });
     }
-    expect(
-      JSON.stringify(
-        parseOpenCodeHistory([row({ ...compactionPart, tail_start_id: "msg_retained_tail" })]),
-      ),
-    ).not.toMatch(/auto|tail_start_id/u);
+    const serialized = JSON.stringify(
+      parseOpenCodeHistory([row({ ...compactionPart, tail_start_id: "msg_retained_tail" })]),
+    );
+    expect(serialized).not.toMatch(/msg_assistant|msg_retained_tail|tail_start_id/u);
+  });
+
+  it("projects only settled native compaction summary outcomes without their bodies", () => {
+    const row = (extra: Record<string, unknown>): Record<string, unknown> =>
+      syncRow(62, "message.updated.1", {
+        sessionID: "ses_1",
+        info: assistantMessage({
+          time: { created: 1, completed: 2 },
+          parentID: "msg_compaction",
+          mode: "compaction",
+          agent: "compaction",
+          summary: true,
+          ...extra,
+        }),
+      });
+    const completed = parseOpenCodeHistory([row({ finish: "stop" })]);
+    expect(completed).toMatchObject({
+      ok: true,
+      value: [
+        {
+          compaction: {
+            event: "completed",
+          },
+        },
+      ],
+    });
+    if (!completed.ok) throw new Error("expected completed compaction summary");
+    expect(completed.value[0]?.compaction?.compactionIdSha256).toMatch(/^[0-9a-f]{64}$/u);
+    const failed = parseOpenCodeHistory([
+      row({
+        finish: "error",
+        error: {
+          name: "ContextOverflowError",
+          data: { message: "SENTINEL_PRIVATE_PROVIDER_BODY" },
+        },
+      }),
+    ]);
+    expect(failed).toMatchObject({
+      ok: true,
+      value: [
+        {
+          compaction: {
+            event: "failed",
+            errorKind: "ContextOverflowError",
+            finishReason: "error",
+          },
+        },
+      ],
+    });
+    expect(JSON.stringify(failed)).not.toContain("SENTINEL_PRIVATE_PROVIDER_BODY");
+    const ordinary = parseOpenCodeHistory([
+      row({ finish: "stop", mode: "build", agent: "build", summary: true }),
+    ]);
+    expect(ordinary).toMatchObject({ ok: true });
+    if (!ordinary.ok) throw new Error("expected ordinary summary marker");
+    expect(ordinary.value[0]).not.toHaveProperty("compaction");
   });
 
   it("keeps productive tool-loop lifecycle events content-free and non-terminal", () => {
@@ -622,10 +709,19 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     const parsed = parseOpenCodeHistory([row(errorState)]);
     expect(parsed).toMatchObject({ ok: true, value: [{ kind: "observation" }] });
     expect(JSON.stringify(parsed)).not.toContain(sentinel);
+    const withNativeMetadata = parseOpenCodeHistory([
+      row({ ...errorState, metadata: { nativeDiagnostic: "PRIVATE_NATIVE_TOOL_DETAIL" } }),
+    ]);
+    expect(withNativeMetadata).toMatchObject({
+      ok: true,
+      value: [{ kind: "observation" }],
+    });
+    expect(JSON.stringify(withNativeMetadata)).not.toContain("PRIVATE_NATIVE_TOOL_DETAIL");
     for (const invalid of [
       { ...errorState, error: "" },
       { ...errorState, error: "x".repeat(4097) },
       { ...errorState, time: { start: 1 } },
+      { ...errorState, metadata: "not-a-record" },
       { ...errorState, unexpected: true },
     ]) {
       expect(parseOpenCodeHistory([row(invalid)])).toEqual({
