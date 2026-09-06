@@ -7,9 +7,11 @@ import { randomUUID } from "node:crypto";
 import {
   CancelledError,
   ConfigInvalidError,
+  ContextOverflowError,
   GatewayError,
   UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { findConfiguredCapability } from "./model-selection.js";
 import {
   logEndpointHost,
@@ -23,7 +25,8 @@ import {
   type ModelGatewayLogSink,
 } from "./observability.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
-import { GatewayToolCatalogError } from "./toolCatalogBridge.js";
+import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
+import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import { CircuitBreaker, executeWithRetry, systemClock } from "./resilience.js";
 import { assertValidGatewaySamplingParameters } from "./types.js";
 import type {
@@ -165,6 +168,43 @@ interface RoutedCall {
   readonly capability: ModelCapability;
 }
 
+interface BufferedChatAttempt {
+  readonly route: RoutedCall;
+  readonly breaker: CircuitBreaker;
+  readonly adapter: ProviderAdapter;
+  readonly originalRequest: GatewayCallRequest;
+  readonly correlationId: string;
+  readonly state: { request: GatewayCallRequest; attemptNumber: number };
+}
+
+interface RepairPromptBudget {
+  readonly promptTokens: number;
+  readonly maxPromptTokens: number;
+  readonly maxOutputTokens: number;
+}
+
+const TOOL_SCHEMA_REPAIR_PREFIX =
+  "The previous tool call was rejected before execution because its arguments did not match the advertised schema.";
+
+function toolSchemaRepairMessage(error: GatewayToolCatalogError): string | undefined {
+  const repair = error.repair;
+  if (repair === undefined) return undefined;
+  return `${TOOL_SCHEMA_REPAIR_PREFIX} Retry tool call ${repair.toolCallId} for offered tool ${repair.offeredAlias} with arguments that match its advertised schema exactly.`;
+}
+
+function repairedRequest(
+  original: GatewayCallRequest,
+  error: unknown,
+): GatewayCallRequest | undefined {
+  if (!(error instanceof GatewayToolCatalogError)) return undefined;
+  const correction = toolSchemaRepairMessage(error);
+  if (correction === undefined) return undefined;
+  return {
+    ...original,
+    messages: [...original.messages, { role: "system", content: correction }],
+  };
+}
+
 // Bare hostname only — never `scheme://host:port` (that's `logEndpointHost`, used on the per-call
 // attempt line) and never the full `baseUrl`, which can carry a path or embedded credentials for a
 // misconfigured provider entry (`https://user:token@host/deploy-path`). An unparseable URL yields
@@ -271,15 +311,19 @@ export class Gateway {
     const start = this.clock.now();
     const elapsed = logTimer();
     const adapter = this.adapterFor(requestId, route.capability, ids.correlationId);
+    const attempt: BufferedChatAttempt = {
+      route,
+      breaker,
+      adapter,
+      originalRequest: request,
+      correlationId: ids.correlationId,
+      state: { request, attemptNumber: 0 },
+    };
     this.logCallStarted(ids, route, false, request.reasoningEffort);
     let result;
     try {
       result = await executeWithRetry(
-        (attemptTimeoutMs) =>
-          this.invoke(breaker, adapter, request, route.capability, ids.correlationId, {
-            ...route.provider,
-            ...(attemptTimeoutMs === undefined ? {} : { timeoutMs: attemptTimeoutMs }),
-          }),
+        (attemptTimeoutMs) => this.invokeBufferedAttempt(attempt, attemptTimeoutMs),
         route.provider,
         this.clock,
         request.cancellationSignal,
@@ -303,6 +347,87 @@ export class Gateway {
         costClass: route.capability.costClass,
       },
     };
+  }
+
+  private async invokeBufferedAttempt(
+    attempt: BufferedChatAttempt,
+    attemptTimeoutMs: number | undefined,
+  ): Promise<NormalizedResponse> {
+    attempt.state.attemptNumber += 1;
+    try {
+      return await this.invoke(
+        attempt.breaker,
+        attempt.adapter,
+        attempt.state.request,
+        attempt.route.capability,
+        attempt.correlationId,
+        {
+          ...attempt.route.provider,
+          ...(attemptTimeoutMs === undefined ? {} : { timeoutMs: attemptTimeoutMs }),
+        },
+      );
+    } catch (error) {
+      if (attempt.state.attemptNumber <= attempt.route.provider.maxRetries) {
+        attempt.state.request = this.requestAfterToolSchemaRejection(
+          attempt.originalRequest,
+          attempt.state.request,
+          attempt.route.capability,
+          attempt.correlationId,
+          error,
+        );
+      }
+      throw error;
+    }
+  }
+
+  private requestAfterToolSchemaRejection(
+    original: GatewayCallRequest,
+    current: GatewayCallRequest,
+    capability: ModelCapability,
+    correlationId: string,
+    error: unknown,
+  ): GatewayCallRequest {
+    const candidate = repairedRequest(original, error);
+    if (candidate === undefined) return current;
+    const prepared = this.prepareRequest(candidate, capability);
+    const context = deriveContextProfileFromCapability(capability);
+    const maxOutputTokens = prepared.maxOutputTokens ?? context.reservedOutputTokens;
+    const promptTokens = countGatewayPromptTokens(
+      {
+        messages: prepared.messages,
+        tools: createGatewayToolCatalogBridge(prepared, (): number => this.clock.now()).tools,
+      },
+      capability.tokenAccounting,
+    );
+    const maxPromptTokens = Math.max(0, context.maxInputTokens - maxOutputTokens);
+    const budget = { promptTokens, maxPromptTokens, maxOutputTokens };
+    const repair = error instanceof GatewayToolCatalogError ? error.repair : undefined;
+    if (promptTokens > maxPromptTokens) {
+      this.logToolSchemaRepair(correlationId, repair, "denied", budget);
+      throw new ContextOverflowError("tool-call schema repair exceeds the model context window");
+    }
+    this.logToolSchemaRepair(correlationId, repair, "scheduled", budget);
+    return prepared;
+  }
+
+  private logToolSchemaRepair(
+    correlationId: string,
+    repair: GatewayToolCatalogError["repair"],
+    state: "denied" | "scheduled",
+    budget: RepairPromptBudget,
+  ): void {
+    if (repair === undefined) return;
+    this.log.write(
+      gatewayEvent("warn", "gateway.tool-catalog.repair", correlationId, {
+        state,
+        reason: state === "denied" ? "context-window-exceeded" : "invalid-shape",
+        toolCallId: repair.toolCallId,
+        offeredAlias: repair.offeredAlias,
+        ...budget,
+        correctionMessageCount: 1,
+        effectStarted: false,
+      }),
+    );
   }
 
   // Streaming counterpart of chat(). Routes identically and guards with the circuit

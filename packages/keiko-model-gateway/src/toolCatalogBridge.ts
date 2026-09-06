@@ -21,11 +21,17 @@ export class GatewayToolCatalogError extends MalformedToolCallError {
     readonly reason: ToolResultReason<"invalid">,
     cause?: unknown,
     retryable = false,
+    readonly repair?: GatewayToolCallRepair | undefined,
   ) {
     super(`catalog tool request ${reason}`);
     this.retryable = retryable;
     if (cause !== undefined) this.cause = cause;
   }
+}
+/** Body-free provider-call identity retained only for a bounded schema-correction retry. */
+export interface GatewayToolCallRepair {
+  readonly toolCallId: string;
+  readonly offeredAlias: string;
 }
 export interface GatewayToolCatalogBridge {
   readonly bindCalls: (calls: readonly NormalizedToolCall[]) => readonly NormalizedToolCall[];
@@ -158,12 +164,18 @@ function reject(
   phase: "projection" | "response",
   cause: unknown,
   details: CatalogRejectionDetails = {},
+  repair?: GatewayToolCallRepair,
 ): never {
   const reason = phase === "projection" ? "projection-mismatch" : "invalid-arguments";
   const error =
     cause instanceof GatewayToolCatalogError
       ? cause
-      : new GatewayToolCatalogError(reason, cause, retryableResponseRejection(phase, cause));
+      : new GatewayToolCatalogError(
+          reason,
+          cause,
+          retryableResponseRejection(phase, cause),
+          repair,
+        );
   log.write({
     level: "warn",
     category: "gateway",
@@ -172,6 +184,17 @@ function reject(
     extra: { phase, status: error.status, reason: error.reason, ...details },
   });
   throw error;
+}
+
+function schemaRepair(
+  normalizer: ToolInvocationNormalizer | undefined,
+  call: NormalizedToolCall,
+  cause: unknown,
+): GatewayToolCallRepair | undefined {
+  if (!(cause instanceof ToolCatalogError) || cause.reason !== "invalid-shape") return undefined;
+  const projected = normalizer?.binding.projection.tools.find((tool) => tool.alias === call.name);
+  if (projected === undefined) return undefined;
+  return Object.freeze({ toolCallId: call.id, offeredAlias: projected.alias });
 }
 
 function rejectionDetails(
@@ -196,8 +219,10 @@ function bindCall(
   now: () => number,
   log: ModelGatewayLogSink,
 ): NormalizedToolCall {
+  let captured: NormalizedToolCall | undefined;
   try {
     const call = captureCall(input);
+    captured = call;
     requireBridge(normalizer !== undefined, "unoffered-tool");
     if (isNativeExtensionAlias(normalizer, call.name)) {
       log.write({
@@ -224,7 +249,13 @@ function bindCall(
       invocation,
     });
   } catch (cause) {
-    return reject(log, "response", cause, rejectionDetails(normalizer, input, cause));
+    return reject(
+      log,
+      "response",
+      cause,
+      rejectionDetails(normalizer, input, cause),
+      captured === undefined ? undefined : schemaRepair(normalizer, captured, cause),
+    );
   }
 }
 function bindCalls(
