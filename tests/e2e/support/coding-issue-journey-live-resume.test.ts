@@ -8,12 +8,14 @@ import type {
   CodingWorkbenchRuntimeSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  assertContinuationCanReachDraft,
   qualificationResumeBinding,
   readQualificationWorktree,
   resumeExistingIssueWorkspace,
   type QualificationResumeBinding,
 } from "./coding-issue-journey-live-resume.js";
 import { createHash } from "node:crypto";
+import { e2eStateDir } from "./e2e-state-dir.js";
 
 const PRIOR_RUN_ID = "run-215162337154423732873987034429728011180";
 const ISSUE_BINDING_DIGEST = "a".repeat(64);
@@ -157,6 +159,34 @@ function client(
 }
 
 describe("live qualification continuation", () => {
+  it("publishes the default resolved state directory to the recovery worker", async () => {
+    const originalStateDirectory = process.env.KEIKO_E2E_STATE_DIR;
+    delete process.env.KEIKO_E2E_STATE_DIR;
+    const expected = e2eStateDir("coding-issue-journey-e2e");
+    try {
+      await import("../config/playwright.coding-issue-journey.config.js");
+      expect(process.env.KEIKO_E2E_STATE_DIR).toBe(expected);
+    } finally {
+      if (originalStateDirectory === undefined) delete process.env.KEIKO_E2E_STATE_DIR;
+      else process.env.KEIKO_E2E_STATE_DIR = originalStateDirectory;
+    }
+  });
+
+  it.each(["failed", "cancelled", "recovery-required"] as const)(
+    "stops waiting when the continued run reaches %s without a draft pull request",
+    (state) => {
+      expect(() => {
+        assertContinuationCanReachDraft(snapshot("run-new", state), "run-new");
+      }).toThrow(`continued run run-new reached ${state} before creating a draft pull request`);
+      expect(() => {
+        assertContinuationCanReachDraft(snapshot("run-other", state), "run-new");
+      }).not.toThrow();
+      expect(() => {
+        assertContinuationCanReachDraft(snapshot("run-new", "running"), "run-new");
+      }).not.toThrow();
+    },
+  );
+
   it("requires the complete exact resume binding when continuation is selected", () => {
     expect(qualificationResumeBinding({})).toBeUndefined();
     expect(() => qualificationResumeBinding({ KEIKO_QUALIFICATION_RESUME_WORKSPACE: "1" })).toThrow(

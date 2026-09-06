@@ -494,10 +494,30 @@ function readPredecessorRunId(runId: string): string | undefined {
   }
 }
 
+export function assertContinuationCanReachDraft(
+  snapshot: CodingWorkbenchRuntimeSnapshot,
+  runId: string,
+): void {
+  if (snapshot.runId !== runId || snapshot.draftDelivery?.phase === "draft-created") return;
+  if (
+    snapshot.state !== "failed" &&
+    snapshot.state !== "cancelled" &&
+    snapshot.state !== "recovery-required"
+  )
+    return;
+  throw new Error(
+    `continued run ${runId} reached ${snapshot.state} before creating a draft pull request`,
+  );
+}
+
 async function waitForDraftPullRequest(page: Page, runId: string): Promise<DeliveredPullRequest> {
   const snapshot = await waitWhileAnsweringApprovals(
     page,
-    () => runtimeSnapshot(page),
+    async () => {
+      const current = await runtimeSnapshot(page);
+      assertContinuationCanReachDraft(current, runId);
+      return current;
+    },
     (value) => value.runId === runId && value.draftDelivery?.phase === "draft-created",
     {
       timeoutMs: 25 * 60_000,

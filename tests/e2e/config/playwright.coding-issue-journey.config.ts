@@ -21,6 +21,10 @@ const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "4390");
 // temporary root, satisfying both boundaries without weakening either one. An explicit external
 // KEIKO_E2E_STATE_DIR remains available to operators who need durable qualification artifacts.
 const stateDir = e2eStateDir("coding-issue-journey-e2e");
+// Recovery reads the durable predecessor link from the worker after the server admits a successor.
+// Publish the same resolved default/override that `webServer.env` receives below; deriving it again
+// in the worker would split the two processes back onto different databases.
+process.env.KEIKO_E2E_STATE_DIR = stateDir;
 
 // Live-run pairing fix: `coding-issue-journey-server.mts` and `coding-issue-journey.spec.ts` run
 // in SEPARATE processes (the webServer's launched `keiko ui` process, and this test runner's own
