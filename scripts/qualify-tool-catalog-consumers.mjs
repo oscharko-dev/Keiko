@@ -4,8 +4,7 @@ import { join, relative, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { catalogCloseoutHead } from "./check-tool-catalog-closeout.mjs";
 import { compareStrings } from "./lib/compare-strings.mjs";
-import { sha256File } from "./lib/digest.mjs";
-import { sha256 } from "./lib/digest.mjs";
+import { sha256, sha256File } from "./lib/digest.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import {
@@ -305,8 +304,9 @@ export function runNonManagedConsumerTests(root, observationsDir, currentHead) {
     [TOOL_CATALOG_QUALIFICATION_DIR_ENV]: observationsDir,
     [TOOL_CATALOG_QUALIFICATION_HEAD_ENV]: currentHead,
   };
+  const npm = resolveHostExecutable("npm");
   for (const file of CONSUMER_TEST_FILES) {
-    execFileSync("npm", ["exec", "vitest", "run", "--", file, "--reporter=dot"], {
+    execFileSync(npm, ["exec", "vitest", "run", "--", file, "--reporter=dot"], {
       cwd: root,
       env,
       stdio: "inherit",
