@@ -24,7 +24,11 @@ import {
   refineDescriptionOverChat,
   reviewApproveApplyGitChangeDescription,
 } from "./coding-issue-journey-live-git-chat.js";
-import { assertGitChangeChatExposesNoMutatingAffordance } from "./coding-issue-journey-live-git-chat-negative.js";
+import {
+  assertGitChangeChatExposesNoMutatingAffordance,
+  assertNoForbiddenSessionToolEvents,
+  observeNoForbiddenSessionRequests,
+} from "./coding-issue-journey-live-git-chat-negative.js";
 
 export interface LiveJourneyEnv {
   readonly repositoryRoot: string;
@@ -145,10 +149,14 @@ export async function runGitToChatScenario(
 ): Promise<ScenarioRunResult> {
   const env = resolveLiveJourneyEnv();
   const worktree = attachDisposableBranchCheckout(env.repositoryRoot, "docs/usage-section");
+  let toolEventAssertion: string;
   try {
-    await connectControlledPullRequestToChat(page, request, worktree.root);
-    await refineDescriptionOverChat(page, GIT_TO_CHAT_TURNS);
-    await reviewApproveApplyGitChangeDescription(page);
+    toolEventAssertion = await observeNoForbiddenSessionRequests(page, async () => {
+      await connectControlledPullRequestToChat(page, request, worktree.root);
+      await refineDescriptionOverChat(page, GIT_TO_CHAT_TURNS);
+      await reviewApproveApplyGitChangeDescription(page);
+      return assertNoForbiddenSessionToolEvents(page);
+    });
   } finally {
     worktree.release();
   }
@@ -157,6 +165,8 @@ export async function runGitToChatScenario(
       "git-change-chat-connected:true",
       `refined-over-turns:${String(GIT_TO_CHAT_TURNS.length)}`,
       "governed-apply-completed:true",
+      "no-forbidden-session-requests:true",
+      toolEventAssertion,
     ],
   };
 }

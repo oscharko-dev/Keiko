@@ -71,10 +71,31 @@ function scenarioReceiptFailures(scenario, receiptsByScenarioId, headCommitSha) 
   if (receipt === undefined) {
     return [`${scenario.scenarioId}: missing receipt`];
   }
+  const artifactFailures = (receipt.artifactValidationErrors ?? []).map(
+    (error) => `${scenario.scenarioId}: ${error}`,
+  );
+  const artifactBindingFailures = scenarioArtifactBindingFailures(scenario, receipt, headCommitSha);
   return [
+    ...artifactFailures,
+    ...artifactBindingFailures,
     ...receiptBindingFailures(scenario, receipt, headCommitSha),
     ...receiptTestStatusFailures(scenario, receipt),
   ];
+}
+
+function scenarioArtifactBindingFailures(scenario, receipt, headCommitSha) {
+  if (receipt.artifactValidationErrors === null) return [];
+  const identity = receipt.artifactIdentity;
+  const checks = [
+    [identity?.scenarioId === scenario.scenarioId, "artifact scenario identity mismatch"],
+    [identity?.sourceCommitSha === headCommitSha, "artifact source commit is stale or foreign"],
+    [identity?.platformTarget === scenario.platform, "artifact platform mismatch"],
+    [
+      (identity?.result === "passed") === (receipt.testStatus === "passed"),
+      "artifact result disagrees with receipt test status",
+    ],
+  ];
+  return checks.filter(([valid]) => !valid).map(([, error]) => `${scenario.scenarioId}: ${error}`);
 }
 
 function flowArtifactProjection(flow) {

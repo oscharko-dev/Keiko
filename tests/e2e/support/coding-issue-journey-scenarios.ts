@@ -81,7 +81,6 @@ export interface ScenarioReceiptInput {
   readonly result: "passed" | "failed";
   readonly assertions: readonly string[];
   readonly usage: ObservedGatewayUsage;
-  readonly details?: Readonly<Record<string, string | number | boolean>>;
 }
 
 function headCommitSha(): string {
@@ -126,7 +125,6 @@ export function recordScenarioReceipt(input: ScenarioReceiptInput): void {
       result: input.result,
       assertions: input.assertions,
       usage: input.usage,
-      ...(input.details === undefined ? {} : { details: input.details }),
     },
   });
 }

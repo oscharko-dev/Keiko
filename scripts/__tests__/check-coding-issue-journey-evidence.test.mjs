@@ -20,6 +20,7 @@ import {
 
 import {
   checkCodingIssueJourneyEvidence,
+  qualificationBinding,
   readFlowReceipts,
 } from "../check-coding-issue-journey-evidence.mjs";
 import {
@@ -191,6 +192,27 @@ function stageFiveFlowEvidence(fixtureName = "valid") {
 }
 
 describe("checkCodingIssueJourneyEvidence", () => {
+  it("derives production-functional authority only from matching trusted descriptor scenarios", () => {
+    expect(
+      qualificationBinding(BASE_BINDING, COMMIT_SHA, {
+        flows: [],
+        scenarios: [
+          {
+            scenarioId: "egress-confinement-macos-arm64",
+            evidenceClass: "production-functional",
+          },
+          { scenarioId: "issue-to-pr-full-access", evidenceClass: "playwright-journey" },
+        ],
+        blocked: [
+          {
+            scenarioId: "egress-confinement-linux-windows",
+            evidenceClass: "production-functional",
+          },
+        ],
+      }).registeredProductionFunctionalScenarioIds,
+    ).toEqual(["egress-confinement-macos-arm64"]);
+  });
+
   it("passes a fully valid manifest bound to the qualified head with a matching receipt", async () => {
     const { verdict, failures } = await runFixture("valid");
     expect(failures).toEqual([]);

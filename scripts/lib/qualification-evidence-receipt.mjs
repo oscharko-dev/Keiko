@@ -13,6 +13,14 @@ import {
   isCodeTaskIsoInstant,
   validateCodeTaskQualificationFlowArtifact,
 } from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
+import { codingIssueJourneyScenarioArtifactErrors } from "./coding-issue-journey-scenario-evidence.mjs";
+
+function assertValidOwnedScenarioArtifact(scenarioId, receipt) {
+  const errors = codingIssueJourneyScenarioArtifactErrors(receipt, scenarioId);
+  if (errors !== null && errors.length > 0) {
+    throw new TypeError("invalid coding-issue journey scenario artifact");
+  }
+}
 
 export function writeQualificationEvidenceReceipt({
   receiptsDir,
@@ -21,6 +29,7 @@ export function writeQualificationEvidenceReceipt({
   recordedAt,
   provenance = "real-model",
 }) {
+  assertValidOwnedScenarioArtifact(scenarioId, receipt);
   writeFileSync(
     join(receiptsDir, `${scenarioId}.artifact`),
     `${JSON.stringify(receipt, null, 2)}\n`,

@@ -18,7 +18,7 @@ export interface WriteQualificationEvidenceReceiptInput {
   readonly scenarioId: string;
   readonly receipt: QualificationEvidenceReceiptFacts;
   readonly recordedAt: string;
-  readonly provenance?: "real-model" | "scripted";
+  readonly provenance?: "real-model" | "scripted" | "production-functional";
 }
 
 /**

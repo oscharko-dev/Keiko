@@ -17,6 +17,7 @@ import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { deriveGateVerdict, evidenceGateFailures } from "./lib/coding-issue-journey-evidence.mjs";
+import { codingIssueJourneyScenarioArtifactErrors } from "./lib/coding-issue-journey-scenario-evidence.mjs";
 import { sha256 } from "./lib/digest.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { readJsonFile } from "./lib/json.mjs";
@@ -59,6 +60,25 @@ function gitHeadShas(root) {
   return { sourceCommitSha, sourceTreeSha };
 }
 
+function readScenarioArtifactEvidence(scenarioId, artifactBytes) {
+  const ownedErrors = codingIssueJourneyScenarioArtifactErrors(undefined, scenarioId);
+  if (ownedErrors === null) return { artifactValidationErrors: null };
+  try {
+    const artifact = JSON.parse(artifactBytes.toString("utf8"));
+    return {
+      artifactValidationErrors: codingIssueJourneyScenarioArtifactErrors(artifact, scenarioId),
+      artifactIdentity: {
+        scenarioId: artifact?.scenarioId,
+        sourceCommitSha: artifact?.sourceCommitSha,
+        platformTarget: artifact?.platformTarget,
+        result: artifact?.result,
+      },
+    };
+  } catch {
+    return { artifactValidationErrors: ["artifact is not valid JSON"] };
+  }
+}
+
 /**
  * Reads every `<scenarioId>.receipt.json` + `.artifact` pair from a receipts directory, keyed by
  * scenario id. Exported so both this checker and the manifest producer
@@ -81,6 +101,7 @@ export function readReceipts(receiptsDir, { observeArtifact } = {}) {
     const artifactBytes = readFileSync(artifactPath);
     const digest = sha256(artifactBytes);
     observeArtifact?.(scenarioId, artifactBytes);
+    const artifactEvidence = readScenarioArtifactEvidence(scenarioId, artifactBytes);
     receipts.set(scenarioId, {
       scenarioId,
       commitSha: meta.commitSha,
@@ -89,6 +110,7 @@ export function readReceipts(receiptsDir, { observeArtifact } = {}) {
       recordedAt: meta.recordedAt,
       provenance: meta.provenance,
       digest,
+      ...artifactEvidence,
     });
   }
   return receipts;
@@ -157,10 +179,16 @@ function validatedFlowReceipts(receiptsDir, registeredQualificationFlows, contra
   return flowReceiptsById;
 }
 
-function qualificationBinding(binding, headCommitSha, descriptor) {
+export function qualificationBinding(binding, headCommitSha, descriptor) {
+  const registeredProductionFunctionalScenarioIds = Array.isArray(descriptor?.scenarios)
+    ? descriptor.scenarios
+        .filter((scenario) => scenario?.evidenceClass === "production-functional")
+        .map((scenario) => scenario.scenarioId)
+    : [];
   return {
     ...binding,
     sourceCommitSha: headCommitSha,
+    registeredProductionFunctionalScenarioIds,
     registeredQualificationFlows: Array.isArray(descriptor?.flows) ? descriptor.flows : [],
   };
 }

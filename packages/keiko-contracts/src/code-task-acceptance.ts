@@ -504,6 +504,8 @@ export interface CodeTaskAcceptanceBinding {
   readonly childIssue: number;
   readonly sourceCommitSha: string;
   readonly registeredScenarioIds: readonly string[];
+  /** Scenario ids whose trusted descriptor assigns the production-functional evidence class. */
+  readonly registeredProductionFunctionalScenarioIds?: readonly string[];
   /** Qualification-only flow identities. Contribution callers leave this absent. */
   readonly registeredQualificationFlows?: readonly CodeTaskQualificationFlowBindingV1[];
 }
@@ -546,10 +548,11 @@ export function codeTaskAcceptanceQualificationFailures(
 // Versioned sibling of CodeTaskAcceptanceContributionV1 above (issue #3390 correction 6): it
 // reuses this file's closed vocabularies (evidence classes, platforms, scenario outcomes) and
 // hardened validation primitives (isRecord, ownField, unknownKeys, factErrors) rather than
-// standing up a second schema file. #3390 qualifies the real-model issue-to-PR and Git-to-Chat
-// journeys; unlike the #2384 acceptance contribution, a qualification scenario also carries the
-// provenance that produced it -- a scripted double can establish regression coverage but never
-// qualification -- and, when blocked, the closed reason that names the missing external input.
+// standing up a second schema file. #3390 qualifies real-model journeys and real production-
+// functional platform proofs; unlike the #2384 acceptance contribution, a qualification scenario
+// also carries the provenance that produced it. A scripted double can establish regression
+// coverage but never qualification. Production-functional provenance is valid only for the same
+// evidence class, and blocked rows carry the closed reason naming the missing external input.
 //
 // The real-binary lane's ps/lsof egress sampling (scripts/run-code-task-real-binary.mjs) emits a
 // `functional-not-platform-qualified` observation that is deliberately NOT added to
@@ -571,6 +574,7 @@ export const CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION = 1;
 export const CODE_TASK_QUALIFICATION_PROVENANCES = Object.freeze([
   "real-model",
   "scripted",
+  "production-functional",
 ] as const satisfies readonly string[]);
 
 export const CODE_TASK_QUALIFICATION_VERDICTS = Object.freeze([
@@ -854,7 +858,7 @@ function qualificationScenarioErrors(value: unknown, path: string): readonly str
     errors.push(`${path}.platform is not a supported evidence platform`);
   }
   if (!isOneOf(ownField(value, "provenance"), CODE_TASK_QUALIFICATION_PROVENANCES)) {
-    errors.push(`${path}.provenance must be real-model or scripted`);
+    errors.push(`${path}.provenance is invalid`);
   }
   const outcome = ownField(value, "outcome");
   if (!isOneOf(outcome, CODE_TASK_SCENARIO_OUTCOMES)) {
@@ -1263,6 +1267,7 @@ export function validateCodeTaskQualificationManifest(
 function scenarioQualificationFailures(
   scenario: CodeTaskQualificationScenarioV1,
   registeredScenarioIds: ReadonlySet<string>,
+  registeredProductionFunctionalScenarioIds: ReadonlySet<string>,
 ): readonly string[] {
   const failures: string[] = [];
   if (!registeredScenarioIds.has(scenario.scenarioId)) {
@@ -1274,6 +1279,16 @@ function scenarioQualificationFailures(
   if (scenario.outcome === "passed" && scenario.provenance === "scripted") {
     failures.push(
       `scripted-model provenance cannot establish qualification: ${scenario.scenarioId}`,
+    );
+  }
+  if (
+    scenario.outcome === "passed" &&
+    scenario.provenance === "production-functional" &&
+    (scenario.evidenceClass !== "production-functional" ||
+      !registeredProductionFunctionalScenarioIds.has(scenario.scenarioId))
+  ) {
+    failures.push(
+      `production-functional provenance is not trusted for scenario: ${scenario.scenarioId}`,
     );
   }
   return failures;
@@ -1448,8 +1463,13 @@ export function codeTaskQualificationManifestFailures(
     failures.push("stale or foreign source SHA binding");
   }
   const registered = new Set(binding.registeredScenarioIds);
+  const registeredProductionFunctional = new Set(
+    binding.registeredProductionFunctionalScenarioIds ?? [],
+  );
   for (const scenario of manifest.scenarios) {
-    failures.push(...scenarioQualificationFailures(scenario, registered));
+    failures.push(
+      ...scenarioQualificationFailures(scenario, registered, registeredProductionFunctional),
+    );
   }
   failures.push(
     ...missingRequiredScenarioFailures(manifest, binding),
@@ -1465,7 +1485,7 @@ export function codeTaskQualificationManifestFailures(
  * does not hold or the scenario set does not yet establish qualification (a missing/foreign
  * binding, an outstanding blocked scenario, or a "passed" claim resting on scripted provenance);
  * "qualified" only when the binding matches and every registered scenario is "passed" with
- * real-model provenance.
+ * real-model provenance or matching production-functional evidence.
  */
 export function codeTaskQualificationVerdictFor(
   manifest: CodeTaskQualificationManifestV1,
@@ -1478,7 +1498,11 @@ export function codeTaskQualificationVerdictFor(
     return "blocked";
   }
   const allQualified = manifest.scenarios.every(
-    (scenario) => scenario.outcome === "passed" && scenario.provenance === "real-model",
+    (scenario) =>
+      scenario.outcome === "passed" &&
+      (scenario.provenance === "real-model" ||
+        (scenario.provenance === "production-functional" &&
+          scenario.evidenceClass === "production-functional")),
   );
   return allQualified ? "qualified" : "blocked";
 }

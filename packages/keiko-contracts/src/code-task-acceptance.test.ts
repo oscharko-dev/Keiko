@@ -716,9 +716,7 @@ describe("validateCodeTaskQualificationManifest", () => {
     if (result.ok) return;
     expect(result.errors).toContain("runtimeIdentity must be a bounded content-free reference");
     expect(result.errors).toContain("rubricDigest is invalid");
-    expect(result.errors.some((error) => error.includes("provenance must be real-model"))).toBe(
-      true,
-    );
+    expect(result.errors.some((error) => error.includes("provenance is invalid"))).toBe(true);
   });
 
   it("rejects a wrong kind and a non-literal schema version", () => {
@@ -945,6 +943,62 @@ describe("codeTaskQualificationManifestFailures and codeTaskQualificationVerdict
       "scripted-model provenance cannot establish qualification: issue-to-pr-full-access",
     );
     expect(codeTaskQualificationVerdictFor(scripted, binding)).toBe("blocked");
+  });
+
+  it("accepts production-functional provenance only for a trusted descriptor scenario", () => {
+    const manifest = validQualificationManifest();
+    const scenario = manifest.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const forgedModelJourney: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      scenarios: [
+        {
+          ...scenario,
+          evidenceClass: "production-functional",
+          provenance: "production-functional",
+        },
+      ],
+    };
+    expect(codeTaskQualificationManifestFailures(forgedModelJourney, binding)).toContain(
+      "production-functional provenance is not trusted for scenario: issue-to-pr-full-access",
+    );
+    expect(codeTaskQualificationVerdictFor(forgedModelJourney, binding)).toBe("blocked");
+
+    const productionFunctionalValidation = validateCodeTaskQualificationManifest({
+      ...manifest,
+      scenarios: [
+        {
+          ...scenario,
+          scenarioId: "egress-confinement-macos-arm64",
+          evidenceClass: "production-functional",
+          provenance: "production-functional",
+        },
+      ],
+    });
+    expect(productionFunctionalValidation.ok).toBe(true);
+    if (!productionFunctionalValidation.ok) return;
+    const productionFunctional = productionFunctionalValidation.value;
+    const confinementBinding: CodeTaskAcceptanceBinding = {
+      ...binding,
+      registeredScenarioIds: ["egress-confinement-macos-arm64"],
+      registeredProductionFunctionalScenarioIds: ["egress-confinement-macos-arm64"],
+    };
+    expect(codeTaskQualificationManifestFailures(productionFunctional, confinementBinding)).toEqual(
+      [],
+    );
+    expect(codeTaskQualificationVerdictFor(productionFunctional, confinementBinding)).toBe(
+      "qualified",
+    );
+
+    const falseClaim: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      scenarios: [{ ...scenario, provenance: "production-functional" }],
+    };
+    expect(codeTaskQualificationManifestFailures(falseClaim, binding)).toContain(
+      "production-functional provenance is not trusted for scenario: issue-to-pr-full-access",
+    );
+    expect(codeTaskQualificationVerdictFor(falseClaim, binding)).toBe("blocked");
   });
 
   it("an outstanding blocked scenario with a reason yields verdict blocked, not qualified", () => {
