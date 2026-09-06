@@ -954,8 +954,19 @@ function promptTokenAccounting(profile: AvailableGatewayProfile): ModelTokenAcco
   return findConfiguredCapability(profile.config, profile.result.modelAlias)?.tokenAccounting;
 }
 
+interface OpenAiCompatibleContextOverflowBody {
+  readonly error: {
+    readonly code: "context_length_exceeded";
+    readonly message: string;
+  };
+}
+
+function openAiCompatibleContextOverflowBody(message: string): OpenAiCompatibleContextOverflowBody {
+  return { error: { code: "context_length_exceeded", message } };
+}
+
 function contextOverflowRequest(message: string): RouteResult {
-  return { status: 400, body: errorBody("context_length_exceeded", message) };
+  return { status: 400, body: openAiCompatibleContextOverflowBody(message) };
 }
 
 function budgetValidationError(

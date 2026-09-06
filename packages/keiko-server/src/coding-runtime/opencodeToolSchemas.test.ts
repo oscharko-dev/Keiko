@@ -419,18 +419,28 @@ describe("deriveGatewayCatalogReadiness", () => {
 // "object"}` -- no `required` key. The fixture below is that exact live capture, unmodified.
 describe("OpenCode 1.17.17 real advertisement fidelity (#3390 live-run evidence)", () => {
   it("accepts the unchanged live-captured tools with the current verification projection", () => {
-    const currentVerification = projectedTools().find((tool) => tool.name === "keiko_verification");
-    if (currentVerification === undefined) throw new Error("Expected verification projection.");
-    const currentAdvertisement = realAdvertisementFixture().map((tool) =>
-      tool.name === "keiko_verification"
-        ? { ...tool, parameters: currentVerification.parameters }
-        : tool,
-    );
-    expect(hasExactOpenCodeVisibleToolContract(currentAdvertisement)).toBe(true);
+    expect(hasExactOpenCodeVisibleToolContract(realAdvertisementFixture())).toBe(true);
   });
 
-  it("denies the historical capture after the verification contract gains targetPath", () => {
-    expect(hasExactOpenCodeVisibleToolContract(realAdvertisementFixture())).toBe(false);
+  it("denies a historical verification projection without targetPath", () => {
+    const historicalAdvertisement = realAdvertisementFixture().map((tool) =>
+      tool.name === "keiko_verification"
+        ? {
+            ...tool,
+            parameters: {
+              type: "object",
+              properties: {
+                verifierId: {
+                  type: "string",
+                  enum: ["test", "targeted-test", "typecheck", "lint", "build"],
+                },
+              },
+              required: ["verifierId"],
+            },
+          }
+        : tool,
+    );
+    expect(hasExactOpenCodeVisibleToolContract(historicalAdvertisement)).toBe(false);
   });
 
   it("denies the real advertisement with one tool removed", () => {

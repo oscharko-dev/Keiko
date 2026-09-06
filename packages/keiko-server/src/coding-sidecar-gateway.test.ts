@@ -418,8 +418,16 @@ const VERIFICATION_PROJECTED_SCHEMA = {
       type: "string",
       enum: ["test", "targeted-test", "typecheck", "lint", "build"],
     },
+    targetPath: {
+      type: "string",
+      minLength: 0,
+      maxLength: 4096,
+      pattern: String.raw`^(?:$|(?![\\/])(?!.*(?:^|/)\.\.?(?:/|$))(?!.*\\).+)$`,
+      description:
+        "Use an empty string for ordinary gates; targeted-test requires one workspace-relative test path.",
+    },
   },
-  required: ["verifierId"],
+  required: ["verifierId", "targetPath"],
 } as const;
 
 // The built-in todowrite projection is byte-identical to its source schema (#2480).
@@ -1152,7 +1160,7 @@ describe("coding-sidecar gateway", () => {
         "3abb5e7d1f1fa82aabb7b821c515078bc1a2e165a1471c940d4d72b9b9fc4069",
       ],
       ["keiko_changeset_edit", "59902a2dd9af28ed8b97d1108215c6e88bbe0fba017a4756a99e833b9af48952"],
-      ["keiko_verification", "4cd58eaead9fef3c41ef7faaacd2feb5440755e052ed67efa6b9c4860e18e988"],
+      ["keiko_verification", "bb319a7fcdf14fb30a612f9a98945c1e2a356aab2ca6924014d07cb930c580ef"],
       ["keiko_research_fetch", "8510b5132cc06c627c2b46c20df92c3fcca392f0d16a621b7006eb41d2bf02b5"],
       ["keiko_skill", "c3a50e828f78a32481ce662f8cd92e04dd6375af8df916f3c588b0628ff2de2d"],
       ["keiko_child_agent", "aa977e5c893cef8e1c7f6e5185836e039bb0a874e35c476d6a896a14441cb0ab"],
@@ -1780,7 +1788,7 @@ describe("coding-sidecar gateway", () => {
           {
             name: "keiko_verification",
             parameters: {
-              required: ["verifierId"],
+              required: ["verifierId", "targetPath"],
               properties: { ...VERIFICATION_PROJECTED_SCHEMA.properties },
               type: "object",
             },
