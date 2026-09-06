@@ -812,6 +812,44 @@ describe("OpenAiAdapter.callStream", () => {
     );
   });
 
+  it.each([undefined, -1])(
+    "does not retain provider usage with prompt count %s from a rejected streamed tool call",
+    async (promptTokens) => {
+      const adapter = adapterWith(() =>
+        Promise.resolve(
+          sseResponse([
+            `data: ${JSON.stringify({
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: "call-1",
+                        function: { name: "read_file", arguments: "{}" },
+                      },
+                    ],
+                  },
+                },
+              ],
+            })}\n`,
+            `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n`,
+            `data: ${JSON.stringify({
+              choices: [],
+              usage: { prompt_tokens: promptTokens, completion_tokens: 7 },
+            })}\n`,
+            "data: [DONE]\n",
+          ]),
+        ),
+      );
+
+      await expect(collectStream(adapter.callStream(REQUEST, CONFIG))).rejects.toMatchObject({
+        reason: "unoffered-tool",
+        partialUsage: undefined,
+      });
+    },
+  );
+
   it("redacts a configured secret leaked inside a streamed delta token", async () => {
     const customSecret = "opaque-stream-token-value-987";
     const adapter = adapterWith(() =>

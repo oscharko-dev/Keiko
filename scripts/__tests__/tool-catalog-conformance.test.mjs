@@ -298,15 +298,18 @@ describe("compiler measurements reuse the existing sample and percentile convent
   });
   it("separates calibrated reference verdicts from deterministic CI work validation", async () => {
     let calibrationClock = 0;
-    let measurementClock = 0;
     const calibrationRaw = await measureToolCatalogPerformance(ROOT, () => ++calibrationClock);
-    const measurementRaw = await measureToolCatalogPerformance(
-      ROOT,
-      () => (measurementClock += 10),
-    );
-    // The shared-tree test runner may overlap an owning-package edit. Threshold semantics are
-    // isolated from that source-freshness guard; the real writer rejects any concurrent drift.
-    measurementRaw.subject = structuredClone(calibrationRaw.subject);
+    // This test owns verdict semantics. Derive a slower input from real producer output rather
+    // than executing another complete benchmark under coverage just to advance its fake clock.
+    // Scaling preserves the producer's sample/aggregate relation without restating percentiles.
+    const measurementRaw = structuredClone(calibrationRaw);
+    for (const testCase of Object.values(measurementRaw.cases)) {
+      for (const metric of ["coldCompileMs", "lookupBatchMs"]) {
+        for (const sample of testCase.samples) sample[metric] *= 10;
+        for (const key of Object.keys(testCase.aggregates[metric]))
+          testCase.aggregates[metric][key] *= 10;
+      }
+    }
     const environment = {
       platform: "linux",
       architecture: "arm64",

@@ -1,14 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import { DraftDeliveryFixture } from "./draftDeliveryServiceTestSupport.js";
 
 let fixture: DraftDeliveryFixture;
 beforeEach(async () => {
+  // Real GitHub Actions context must not be scrubbed out of Git's tracking headers.
+  vi.stubEnv("GITHUB_REF_TYPE", "branch");
   fixture = new DraftDeliveryFixture();
   await fixture.recordVerifiedCommit();
 });
 afterEach(() => {
   fixture.close();
+  vi.unstubAllEnvs();
 });
 function proposalId(value: CodingRuntimeDeliveryResult): string {
   expect(value.status, JSON.stringify(fixture.events)).toBe("recorded");
@@ -51,6 +54,15 @@ describe("push effect preflight snapshot", () => {
     });
     // The push adapter must never be reached once preflight blocks the attempt.
     expect(fixture.pushCount).toBe(0);
+    const diagnostic = fixture.events.find(
+      (event) => event.op === "git.delivery.mutation.completed",
+    );
+    expect(diagnostic?.correlationId).toBe("draft-delivery-test");
+    expect(diagnostic?.extra).toMatchObject({
+      actionKind: "push",
+      status: "blocked",
+      preflightBlockingCount: 1,
+    });
   });
   it("still allows a clean push once the local branch is not behind its upstream", async () => {
     const proposal = await fixture.service.proposePush();

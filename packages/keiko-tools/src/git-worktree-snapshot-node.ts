@@ -551,6 +551,15 @@ function parseLines(stdout: string): readonly string[] {
     .filter((l) => l.length > 0);
 }
 
+function snapshotReadDeps(deps: NodeGitWorktreeReaderDeps): NodeGitWorktreeReaderDeps {
+  return {
+    ...deps,
+    // Machine-readable Git headers overlap ordinary CI context values (GITHUB_REF_TYPE=branch).
+    // Use the existing credential scrub, keeping child environment and execution limits intact.
+    policy: { ...(deps.policy ?? DEFAULT_SANDBOX_POLICY), outputScrub: "credentials-only" },
+  };
+}
+
 // ─── Public reader ───────────────────────────────────────────────────────────────────────────
 
 /**
@@ -561,18 +570,23 @@ function parseLines(stdout: string): readonly string[] {
 export async function readGitWorktreeSnapshot(
   deps: NodeGitWorktreeReaderDeps,
 ): Promise<GitWorktreeSnapshot> {
-  const ctx = buildReadContext(deps);
+  const reader = snapshotReadDeps(deps);
+  const ctx = buildReadContext(reader);
   const [statusOut, branchOut, remoteOut, indexOut] = await Promise.all([
     runRead(ctx, ["status", "--porcelain=v2", "--branch"]),
     runRead(ctx, ["branch", "--list", "--format=%(refname:short)"]),
     runRead(ctx, ["remote"]),
     runRead(ctx, ["ls-files", "--stage", "-z"]),
   ]);
+  // A credential can itself overlap the protocol or a ref. Never interpret scrubbed metadata as
+  // an absent upstream/clean worktree: that would weaken the caller's mutation preflight.
+  if ([statusOut, branchOut, remoteOut, indexOut].some((output) => output.includes("[REDACTED]")))
+    throw new GitWorktreeReadError("git snapshot metadata was redacted");
   const c = parsePorcelain(statusOut);
   return {
     ...(statusOut.includes("# branch.oid (initial)")
       ? {}
-      : { headSha: await readGitRevision(deps, "HEAD") }),
+      : { headSha: await readGitRevision(reader, "HEAD") }),
     stagedTreeDigest: gitIndexTreeDigest(indexOut),
     headDetached: c.headDetached,
     ...(c.currentBranchName !== undefined ? { currentBranchName: c.currentBranchName } : {}),

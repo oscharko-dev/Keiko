@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { readGitRawWorktreeSnapshot } from "./git-raw-worktree-node.js";
-import { readGitWorktreeSnapshot } from "./git-worktree-snapshot-node.js";
+import { GitWorktreeReadError, readGitWorktreeSnapshot } from "./git-worktree-snapshot-node.js";
 import { indexStatMatches, readGitIndexWriteTimeNs } from "./git-index-stat.js";
 
 // Owner audit finding b2-7: the racy-clean guard in `indexStatMatches` existed but was never
@@ -71,6 +71,28 @@ afterEach(() => {
 });
 
 describe("readGitRawWorktreeSnapshot documented tracking limits", () => {
+  it("retains tracking headers when CI context values overlap the Git protocol", async () => {
+    const real = await readGitWorktreeSnapshot({
+      workspace,
+      processEnv: { PATH: process.env.PATH, GITHUB_REF_TYPE: "branch", GITHUB_HEAD_REF: "master" },
+    });
+    expect(real).toMatchObject({
+      currentBranchName: "master",
+      hasUpstream: true,
+      aheadCount: 0,
+      behindCount: 1,
+    });
+  });
+
+  it("refuses a credential-redacted snapshot instead of reporting no upstream", async () => {
+    await expect(
+      readGitWorktreeSnapshot({
+        workspace,
+        processEnv: { PATH: process.env.PATH, MY_DEPLOY_TOKEN: "branch" },
+      }),
+    ).rejects.toBeInstanceOf(GitWorktreeReadError);
+  });
+
   it("never reflects the real upstream/ahead/behind state, unlike readGitWorktreeSnapshot", async () => {
     // The real reader sees the local branch is behind its configured upstream.
     const real = await readGitWorktreeSnapshot({ workspace });

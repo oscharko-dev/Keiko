@@ -80,6 +80,39 @@ function expectStructuredRejection(reason: string): void {
   expect(frames.length).toBeGreaterThan(0);
   expect(Array.isArray(event?.extra?.causeChain)).toBe(true);
 }
+
+function incompleteUsageToolCallStream(): Response {
+  const lines = [
+    {
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: "call-1",
+                function: { name: "read_file", arguments: "{}" },
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    { choices: [], usage: { completion_tokens: 7 } },
+  ].map((payload) => `data: ${JSON.stringify(payload)}\n`);
+  return new Response([...lines, "data: [DONE]\n"].join(""), {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+async function consumeStream(stream: AsyncIterable<unknown>): Promise<void> {
+  for await (const chunk of stream) {
+    // Consumption drives the provider stream through its terminal semantic validation.
+    void chunk;
+  }
+}
 const config: GatewayConfig = {
   providers: [
     {
@@ -159,6 +192,22 @@ describe("shared persistent model spend admission", () => {
     expect(call).not.toHaveBeenCalled();
     hold.settle(undefined);
     expect(() => budget().reserve(capability, request, "restart")).toThrow("spend-budget-exceeded");
+  });
+
+  it("retains a streamed semantic failure's upper reservation when provider usage is incomplete", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(incompleteUsageToolCallStream()));
+    const gateway = new Gateway(config, { fetchImpl, spendBudget: budget() });
+
+    await expect(consumeStream(gateway.chatStream(request))).rejects.toMatchObject({
+      reason: "unoffered-tool",
+    });
+    await expect(gateway.chat(request)).rejects.toThrow("spend-budget-exceeded");
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    const settlement = events.find((event) => event.op === "gateway.spend.settled");
+    expect(settlement?.extra).toMatchObject({ chargedNanoUsd: 120_000_000_000, measured: false });
+    expect(JSON.stringify(events)).not.toContain("private");
+    expect(JSON.stringify(events)).not.toContain(directory);
   });
 
   it("settles measured usage once and lets other model sources use the same remaining budget", () => {

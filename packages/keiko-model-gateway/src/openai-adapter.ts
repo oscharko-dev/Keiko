@@ -630,7 +630,7 @@ function applyChunkMetadata(chunk: unknown, acc: StreamAccumulator): void {
   if (usage !== undefined) {
     acc.prompt = usage.prompt;
     acc.completion = usage.completion;
-    acc.usageReported = true;
+    acc.usageReported = providerReportedUsage(chunk);
   }
   applyToolCallDelta(acc.toolCalls, chunk);
 }

@@ -498,7 +498,7 @@
     {
       "op": "chat.request.dispatch",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:827",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:859",
       "package": "keiko-model-gateway"
     },
     {
@@ -630,19 +630,19 @@
     {
       "op": "gateway.chat.completed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:497",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:522",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.chat.failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:394",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:419",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.chat.started",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:374",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:399",
       "package": "keiko-model-gateway"
     },
     {
@@ -672,7 +672,7 @@
     {
       "op": "gateway.config.resolved",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:226",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:253",
       "package": "keiko-model-gateway"
     },
     {
@@ -702,61 +702,61 @@
     {
       "op": "gateway.route.rejected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:611",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:646",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.abandoned",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:442",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:467",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.buffered-fallback",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:530",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:555",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.completed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:414",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:439",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:467",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:492",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.started",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:374",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:399",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.call-bound",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:166",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:218",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.native-passthrough",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:154",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:206",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.projected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:231",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:283",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.rejected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:135",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:170",
       "package": "keiko-model-gateway"
     },
     {
@@ -1445,7 +1445,7 @@
     {
       "op": "coding-runtime.description",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1975",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1987",
       "package": "keiko-server"
     },
     {
@@ -1469,14 +1469,14 @@
     {
       "op": "coding-runtime.editor-changeset",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:556",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:553",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.editor-changeset",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:575",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:572",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

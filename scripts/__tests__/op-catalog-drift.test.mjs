@@ -551,13 +551,13 @@ describe("diagnostic operation projection rules", () => {
     const generated = generateOpCatalog(repoRoot);
     const removed = structuredClone(generated);
     removed.operations.pop();
-    expect(removed).not.toEqual(generateOpCatalog(repoRoot));
+    expect(removed).not.toEqual(generated);
     const provenance = structuredClone(generated);
     const diagnostic = provenance.entries.find(
       (entry) => entry.sourceKind === "diagnostic-operation",
     );
     expect(diagnostic).toBeDefined();
     delete diagnostic.sourceKind;
-    expect(provenance).not.toEqual(generateOpCatalog(repoRoot));
+    expect(provenance).not.toEqual(generated);
   });
 });
