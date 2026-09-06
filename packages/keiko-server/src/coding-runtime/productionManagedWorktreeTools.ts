@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
 import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
 import { runDraftDeliveryRequest } from "./productionDraftDeliveryRuntime.js";
@@ -46,6 +47,7 @@ import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge
 import type { CodingToolFacade, CodingToolMutationGuard } from "./codingToolFacadePorts.js";
 import type {
   CodingToolGovernedPorts,
+  GovernedCodingToolResult,
   GovernedCodingToolPort,
 } from "./codingToolGovernedDelegate.js";
 import {
@@ -468,44 +470,57 @@ function buildVerifiedCommitPort(
     ): ReturnType<GovernedCodingToolPort<"delivery">["execute"]> => {
       if (signalAborted(signal) || !guard.check() || !live(input))
         return { status: "failed", reasonCode: "delivery-authority-revoked" };
-      if (isDraftToolRequest(request)) {
-        const result = await runDraftDeliveryRequest(input, request, guard, signal);
-        const proposal = result.status === "completed" ? result.draftDelivery : undefined;
-        if (
-          proposal?.status !== "recorded" ||
-          (proposal.record.phase !== "push-proposed" && proposal.record.phase !== "pr-proposed")
-        )
-          return result;
-        const service = input.draftDeliveryService;
-        if (service === undefined)
-          return { status: "failed", reasonCode: "delivery-authority-revoked" };
-        const actionKind = proposal.record.phase === "push-proposed" ? "push" : "pull-request";
-        const outcome = await waitForRuntimeProposalApproval(
-          service,
-          proposal.record.proposalId,
-          signal,
-        );
-        recordProposalApprovalWait(input, actionKind, proposal.record.proposalId, outcome);
-        return outcome === "approved"
-          ? result
-          : { status: "failed", reasonCode: "delivery-authority-revoked" };
-      }
-      const service = input.verifiedCommitService;
-      if (service === undefined || request.intent !== "commit")
-        return { status: "failed", reasonCode: "capability-backend-unavailable" };
-      const result = await runCommitRequest(service, request, guard, signal);
-      if (result === undefined)
-        return { status: "failed", reasonCode: "delivery-authority-revoked" };
-      if (result.status === "approval-required") {
-        input.requestCommitApproval?.(result.proposalId);
-        const outcome = await waitForRuntimeProposalApproval(service, result.proposalId, signal);
-        recordProposalApprovalWait(input, "commit", result.proposalId, outcome);
-        if (outcome !== "approved")
-          return { status: "failed", reasonCode: "delivery-authority-revoked" };
-      }
-      return { status: "completed", verifiedCommit: result };
+      return isDraftToolRequest(request)
+        ? completeDraftDeliveryRequest(input, request, guard, signal)
+        : completeVerifiedCommitRequest(input, request, guard, signal);
     },
   };
+}
+
+async function completeDraftDeliveryRequest(
+  input: ProductionManagedWorktreeToolInput,
+  request: Parameters<typeof runDraftDeliveryRequest>[1],
+  guard: CodingToolMutationGuard,
+  signal: AbortSignal | undefined,
+): Promise<GovernedCodingToolResult> {
+  const result = await runDraftDeliveryRequest(input, request, guard, signal);
+  const proposal = result.status === "completed" ? result.draftDelivery : undefined;
+  if (
+    proposal?.status !== "recorded" ||
+    (proposal.record.phase !== "push-proposed" && proposal.record.phase !== "pr-proposed")
+  )
+    return result;
+  const service = input.draftDeliveryService;
+  if (service === undefined) return { status: "failed", reasonCode: "delivery-authority-revoked" };
+  const actionKind = proposal.record.phase === "push-proposed" ? "push" : "pull-request";
+  const outcome = await waitForRuntimeProposalApproval(service, proposal.record.proposalId, signal);
+  recordProposalApprovalWait(input, actionKind, proposal.record.proposalId, outcome);
+  return outcome === "approved"
+    ? { status: "completed", draftDelivery: proposal, approvalDisposition: "ready" }
+    : { status: "failed", reasonCode: "delivery-authority-revoked" };
+}
+
+async function completeVerifiedCommitRequest(
+  input: ProductionManagedWorktreeToolInput,
+  request: Extract<
+    import("./codingToolIpc.js").CodingToolActionRequest,
+    { readonly action: "delivery" }
+  >,
+  guard: CodingToolMutationGuard,
+  signal: AbortSignal | undefined,
+): Promise<GovernedCodingToolResult> {
+  const service = input.verifiedCommitService;
+  if (service === undefined || request.intent !== "commit")
+    return { status: "failed", reasonCode: "capability-backend-unavailable" };
+  const result = await runCommitRequest(service, request, guard, signal);
+  if (result === undefined) return { status: "failed", reasonCode: "delivery-authority-revoked" };
+  if (result.status !== "approval-required") return { status: "completed", verifiedCommit: result };
+  input.requestCommitApproval?.(result.proposalId);
+  const outcome = await waitForRuntimeProposalApproval(service, result.proposalId, signal);
+  recordProposalApprovalWait(input, "commit", result.proposalId, outcome);
+  return outcome === "approved"
+    ? { status: "completed", verifiedCommit: result, approvalDisposition: "ready" }
+    : { status: "failed", reasonCode: "delivery-authority-revoked" };
 }
 
 function recordProposalApprovalWait(
@@ -752,7 +767,7 @@ function buildVerificationRunner(
           return verificationPortRefusal(input, "verification-authority-revoked");
         }
         report = await input.verificationRunner.runToReport(
-          verificationRunInput(input, request.actionId, kind),
+          verificationRunInput(input, request, kind),
           signal ?? new AbortController().signal,
         );
         if (!verificationCompletionLive(input, guard, signal)) {
@@ -848,16 +863,43 @@ function verificationCompletionLive(
 // correlation the same way (verificationRoutes.ts).
 function verificationRunInput(
   input: ProductionManagedWorktreeToolInput,
-  requestId: string,
+  request: Extract<
+    import("./codingToolIpc.js").CodingToolActionRequest,
+    { readonly action: "verification" }
+  >,
   kind: VerificationKind,
 ): VerificationRunInput {
   const correlationId = verificationCorrelationId(input);
+  recordVerificationTarget(input, request, kind);
   return {
     projectId: input.workspaceRoot,
     kinds: [kind],
-    requestId,
+    requestId: request.actionId,
+    ...(request.targetPath === undefined ? {} : { targetPath: request.targetPath }),
     ...(correlationId === undefined ? {} : { correlationId }),
   };
+}
+
+function recordVerificationTarget(
+  input: ProductionManagedWorktreeToolInput,
+  request: Extract<
+    import("./codingToolIpc.js").CodingToolActionRequest,
+    { readonly action: "verification" }
+  >,
+  kind: VerificationKind,
+): void {
+  if (request.targetPath === undefined) return;
+  input.activityLog?.write({
+    category: "process",
+    op: "coding-runtime.verification",
+    correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID,
+    extra: {
+      state: "target-bound",
+      verifierId: kind,
+      targetCount: 1,
+      targetPathSha256: createHash("sha256").update(request.targetPath, "utf8").digest("hex"),
+    },
+  });
 }
 
 // The run id is the timeline every verification line belongs to; the tool action id carries the

@@ -500,9 +500,7 @@ describe("OpenCode runtime adapter readiness", () => {
     ]);
     for (const [name, source] of Object.entries(bundle.toolSources)) {
       expect(source).toContain(
-        approvalWaitTools.has(name)
-          ? "const TIMEOUT_MS = 305000;"
-          : "const TIMEOUT_MS = 35000;",
+        approvalWaitTools.has(name) ? "const TIMEOUT_MS = 305000;" : "const TIMEOUT_MS = 35000;",
       );
       expect(source).toContain('redirect: "manual"');
       expect(source).toContain("signal:");
@@ -558,8 +556,11 @@ describe("OpenCode runtime adapter readiness", () => {
       bundle.toolSources.keiko_git_execute,
     ].join("\n");
     expect(deliverySources).not.toContain("A human must approve");
-    expect(deliverySources).toContain("status is ready");
-    expect(deliverySources).toContain("status is approval-required");
+    expect(deliverySources).toContain("recorded status is ready");
+    expect(deliverySources).toContain("fresh approvalDisposition is ready");
+    expect(deliverySources).toContain(
+      "immutable recorded receipt may retain status approval-required",
+    );
     expect(deliverySources).toContain("A denied proposal authorizes no effect");
     // keiko_git_execute is the one tool whose wire action/operation/intent is computed from the
     // model-supplied `kind` at call time, never a fixed literal.

@@ -48,6 +48,8 @@ export type GovernedCodingToolResult =
       readonly ci?: CodingRuntimeCiResult;
       readonly search?: CodingRepositoryResult;
       readonly verification?: CodingToolVerificationResult;
+      /** Fresh server-only approval-store observation; the immutable domain receipt is unchanged. */
+      readonly approvalDisposition?: "ready" | undefined;
     }
   // `reasonCode` is a closed-vocabulary marker. The facade forwards only its own allowlisted,
   // body-free codes and collapses every unrecognized value to a bare failed outcome.
@@ -208,10 +210,23 @@ function deliveryOutcome(
   if (action === "git" && result.git !== undefined)
     return { outcome: "completed", git: result.git };
   if (action === "delivery" && result.draftDelivery !== undefined)
-    return { outcome: "completed", draftDelivery: result.draftDelivery };
+    return withApprovalDisposition({ draftDelivery: result.draftDelivery }, result);
   if (action === "delivery" && result.verifiedCommit !== undefined)
-    return { outcome: "completed", verifiedCommit: result.verifiedCommit };
+    return withApprovalDisposition({ verifiedCommit: result.verifiedCommit }, result);
   return undefined;
+}
+
+function withApprovalDisposition(
+  domain: Readonly<Record<string, unknown>>,
+  result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
+): Readonly<Record<string, unknown>> {
+  return {
+    outcome: "completed",
+    ...domain,
+    ...(result.approvalDisposition === undefined
+      ? {}
+      : { approvalDisposition: result.approvalDisposition }),
+  };
 }
 
 function searchOutcome(

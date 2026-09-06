@@ -66,7 +66,10 @@ import {
   type SidecarHealthEvent,
   type SidecarPermissionEvent,
 } from "./codingSidecarEventParser.js";
-import type { CodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
+import {
+  codingToolVerificationApprovalTargetId,
+  type CodingToolApprovalBridge,
+} from "./codingToolApprovalBridge.js";
 import {
   contentFreeErrorClass,
   emitServerDiagnostic,
@@ -3058,8 +3061,13 @@ function toolApprovalBridgeAction(
 function toolApprovalTargetId(
   actionKind: CodingWorkbenchSupervisedActionKind,
   commandLabel: string | undefined,
+  targetPathHash: string | undefined,
 ): string | undefined {
-  return actionKind === "ci-observe" ? CODING_TOOL_CI_OBSERVATION_TARGET_ID : commandLabel;
+  if (actionKind === "ci-observe") return CODING_TOOL_CI_OBSERVATION_TARGET_ID;
+  if (actionKind === "verification-command" && commandLabel !== undefined) {
+    return codingToolVerificationApprovalTargetId(commandLabel, targetPathHash);
+  }
+  return targetPathHash === undefined ? commandLabel : undefined;
 }
 
 function observeCodingToolApproval(
@@ -3075,7 +3083,7 @@ function observeCodingToolApproval(
   ) {
     return true;
   }
-  const targetId = toolApprovalTargetId(actionKind, event.commandLabel);
+  const targetId = toolApprovalTargetId(actionKind, event.commandLabel, event.targetPathHash);
   if (
     event.approvalId === undefined ||
     event.approvalDigest === undefined ||

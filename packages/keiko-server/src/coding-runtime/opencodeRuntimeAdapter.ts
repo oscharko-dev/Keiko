@@ -1031,29 +1031,28 @@ function wireRequestFor(
 // Data, not branching logic: keeping the git/delivery descriptions in a table (rather than more
 // `if` arms in `toolDescription`) is what keeps that function under the repository's complexity
 // and line-count ceilings while still documenting all eight actions individually.
+const PROPOSAL_EXECUTION_GUIDANCE =
+  " This call waits while an operator decision is pending. Call keiko_git_execute when the " +
+  "recorded status is ready or the fresh approvalDisposition is ready; an immutable recorded " +
+  "receipt may retain status approval-required after that fresh approval check. A denied proposal " +
+  "authorizes no effect.";
 const GIT_ACTION_DESCRIPTIONS: Readonly<Partial<Record<GeneratedToolAction, string>>> = {
   "git-status": "Read the workspace's current Git status through Keiko governance.",
   "git-diff":
     "Read one bounded Git diff (working-tree or staged) for the given workspace-relative paths.",
   "git-stage":
-    "Propose staging one or more workspace-relative paths. This proposes only. When the returned " +
-    "status is ready, call keiko_git_execute immediately; when the status is approval-required, " +
-    "wait for the operator decision before calling it. A denied proposal authorizes no effect.",
+    "Propose staging one or more workspace-relative paths. This proposes only." +
+    PROPOSAL_EXECUTION_GUIDANCE,
   "git-commit":
     "Propose a commit with the given message over the currently staged changes. This proposes " +
-    "only. When the returned status is ready, call keiko_git_execute immediately; when the status " +
-    "is approval-required, wait for the operator decision before calling it. A denied proposal " +
-    "authorizes no effect.",
+    "only." +
+    PROPOSAL_EXECUTION_GUIDANCE,
   "git-push":
-    "Propose pushing the last verified commit by its exact SHA. This proposes only. When the " +
-    "returned status is ready, call keiko_git_execute immediately; when the status is " +
-    "approval-required, wait for the operator decision before calling it. A denied proposal " +
-    "authorizes no effect.",
+    "Propose pushing the last verified commit by its exact SHA. This proposes only." +
+    PROPOSAL_EXECUTION_GUIDANCE,
   "git-pull-request":
-    "Propose opening a draft pull request with the given title. This proposes only. When the " +
-    "returned status is ready, call keiko_git_execute immediately; when the status is " +
-    "approval-required, wait for the operator decision before calling it. A denied proposal " +
-    "authorizes no effect.",
+    "Propose opening a draft pull request with the given title. This proposes only." +
+    PROPOSAL_EXECUTION_GUIDANCE,
   "git-execute":
     "Redeem one ready stage, commit, push or pull-request proposal by its kind and the proposalId " +
     "returned by the matching propose call. A denied proposal authorizes no effect, and a " +
@@ -1099,7 +1098,7 @@ function toolDescription(action: GeneratedToolAction): string {
     return (
       "Run one vetted repository verification through Keiko governance — the only way to " +
       "execute checks (there is no shell). Pick exactly one verifierId: test, targeted-test, " +
-      "typecheck, lint, or build."
+      "typecheck, lint, or build. targeted-test also requires one workspace-relative targetPath."
     );
   }
   return (
@@ -1132,20 +1131,27 @@ function toolApprovalProofSource(): readonly string[] {
     '  if (request.action === "git" && request.operation === "ci") return mode === "governed-assist" || mode === "supervised-coding";',
     '  return mode === "governed-assist" && ["verification", "command"].includes(request.action);',
     "}",
-    "function toolApprovalTarget(request) {",
-    '  if (request.action === "verification") return request.verifierId;',
-    '  if (request.action === "command") return request.commandId;',
-    '  return request.action === "git" && request.operation === "ci" ? "ci" : undefined;',
+    "async function toolApprovalTarget(request) {",
+    '  if (request.action === "verification" && request.verifierId === "targeted-test") {',
+    '    if (typeof request.targetPath !== "string") throw new Error("keiko-tool-invalid");',
+    '    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(request.targetPath));',
+    '    const targetPathHash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");',
+    '    return { targetId: `targeted-test:${targetPathHash}`, targetPathHash };',
+    "  }",
+    '  if (request.action === "verification") return { targetId: request.verifierId };',
+    '  if (request.action === "command") return { targetId: request.commandId };',
+    '  return request.action === "git" && request.operation === "ci" ? { targetId: "ci" } : undefined;',
     "}",
     "async function toolApprovalProof(request) {",
     "  if (!toolApprovalRequired(request)) return;",
     "  const runId = process.env.KEIKO_CODING_RUN_ID;",
-    "  const targetId = toolApprovalTarget(request);",
-    '  if (!runId || typeof targetId !== "string") throw new Error("keiko-tool-invalid");',
+    "  const target = await toolApprovalTarget(request);",
+    '  if (!runId || !target || typeof target.targetId !== "string") throw new Error("keiko-tool-invalid");',
+    "  const { targetId, targetPathHash } = target;",
     '  const payload = JSON.stringify(["coding-tool-approval-v1", runId, request.action, request.actionId, request.idempotencyKey, targetId]);',
     '  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));',
     '  const approvalDigest = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");',
-    "  return { actionId: request.actionId, idempotencyKey: request.idempotencyKey, approvalId: request.actionId, approvalDigest };",
+    "  return { actionId: request.actionId, idempotencyKey: request.idempotencyKey, approvalId: request.actionId, approvalDigest, ...(targetPathHash ? { targetPathHash } : {}) };",
     "}",
   ];
 }

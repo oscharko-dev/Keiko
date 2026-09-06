@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -33,6 +33,12 @@ import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
+import {
+  createVerificationRunnerManager,
+  type VerificationRunnerManager,
+} from "../editor/verificationRunner.js";
+import { createInMemoryUiStore } from "../store/index.js";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 
 const DIGEST = "a".repeat(64);
 const resolveWorkspaceRootAccess = (): WorkspaceRootAccess => ({
@@ -76,6 +82,7 @@ describe("production managed worktree tools", () => {
         pathCount: 1,
       };
       const requestStageApproval = vi.fn();
+      const log: ServerLogEvent[] = [];
       const service = {
         execute: vi.fn(() => Promise.resolve(proposal)),
         review: vi.fn(() => proposal),
@@ -86,6 +93,7 @@ describe("production managed worktree tools", () => {
         records: [],
         runtimeGitService: service,
         requestStageApproval,
+        log,
       });
 
       const pending = facade.execute({
@@ -113,6 +121,18 @@ describe("production managed worktree tools", () => {
         status: "completed",
         git: { proposalId: "stage-3384", status: "ready", reason: "none" },
       });
+      expect(log).toContainEqual(
+        expect.objectContaining({
+          op: "coding-runtime.tool-result",
+          correlationId: "run-verification-3",
+          extra: {
+            actionKind: "git-stage",
+            proposalId: "stage-3384",
+            state: "approval-wait-settled",
+            reason: "approved",
+          },
+        }),
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -441,8 +461,7 @@ describe("production managed worktree tools", () => {
       },
     });
 
-    await expect(
-      facade.execute({
+    const result = await facade.execute({
         capability: "opaque-capability",
         body: JSON.stringify({
           action: "egress",
@@ -450,8 +469,8 @@ describe("production managed worktree tools", () => {
           idempotencyKey: "research-key-1",
           target: "https://docs.example.org/",
         }),
-      }),
-    ).resolves.toMatchObject({ status: "completed" });
+      });
+    expect(result).toEqual({ status: "completed" });
     expect(calls[0]?.egress).toMatchObject({
       httpsProxy: "https://proxy.example",
       httpProxy: "http://proxy.example",
@@ -749,6 +768,83 @@ describe("production managed worktree tools", () => {
         }),
       }),
     ).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("runs targeted-test against the exact bounded target and logs only its digest", async () => {
+    const workspaceRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-targeted-tool-")));
+    mkdirSync(join(workspaceRoot, "src"), { recursive: true });
+    writeFileSync(
+      join(workspaceRoot, "package.json"),
+      `${JSON.stringify({ name: "targeted-fixture", devDependencies: { vitest: "^3.0.0" } })}\n`,
+    );
+    writeFileSync(join(workspaceRoot, "src", "math.test.ts"), "export {};\n");
+    const execute = vi.fn((args) =>
+      Promise.resolve({
+        report: { ...verificationReport("passed"), workspaceRoot: args.workspace.root },
+        probe: { available: true, backend: "test-backend" },
+      }),
+    );
+    const store = createInMemoryUiStore();
+    store.createProject(workspaceRoot, "targeted-fixture");
+    const manager = createVerificationRunnerManager({
+      store,
+      evidenceStore: createInMemoryEvidenceStore(),
+      execute,
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task",
+        canonicalRoot: workspaceRoot,
+        repositoryRoot: workspaceRoot,
+        fs: nodeWorkspaceFs,
+      }),
+    });
+    const log: ServerLogEvent[] = [];
+    const facade = verificationFacade({
+      runToReport: manager.runToReport,
+      records: [],
+      log,
+      workspaceRoot,
+    });
+
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "verification-targeted",
+        idempotencyKey: "verification-targeted-key",
+        verifierId: "targeted-test",
+        targetPath: "src/math.test.ts",
+      }),
+    });
+    expect(result).toMatchObject({ status: "completed" });
+    expect(execute).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        plan: {
+          workspaceRoot,
+          steps: [
+            expect.objectContaining({
+              kind: "targeted-test",
+              command: "npx",
+              args: ["vitest", "run", "src/math.test.ts"],
+            }),
+          ],
+        },
+      }),
+    );
+    expect(log).toContainEqual(
+      expect.objectContaining({
+        op: "coding-runtime.verification",
+        correlationId: "run-verification-3",
+        extra: {
+          state: "target-bound",
+          verifierId: "targeted-test",
+          targetCount: 1,
+          targetPathSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        },
+      }),
+    );
+    expect(JSON.stringify(log)).not.toContain("src/math.test.ts");
+    store.close();
+    rmSync(workspaceRoot, { recursive: true, force: true });
   });
 
   it.each([
@@ -1057,12 +1153,35 @@ describe("production managed worktree tools", () => {
       recordedAt: "2026-09-05T13:24:40.039Z",
       violations: ["missing-conventional-prefix" as const],
     };
+    const approvalRequiredResult = {
+      schemaVersion: "1" as const,
+      proposalId: "commit-3390-ready",
+      runId: "run-1",
+      envelopeDigest: DIGEST,
+      runtimeAuthorityDigest: DIGEST,
+      workspaceDigest: DIGEST,
+      repositoryDigest: DIGEST,
+      baseSha: "1".repeat(40),
+      parentSha: "2".repeat(40),
+      stagedTreeDigest: DIGEST,
+      verificationEvidenceId: "verification-1",
+      messageDigest: DIGEST,
+      status: "approval-required" as const,
+      reason: "approval-required" as const,
+      recordedAt: "2026-09-05T13:24:40.039Z",
+    };
+    const requestCommitApproval = vi.fn();
     const service = {
       ...verificationService(),
-      propose: vi.fn(() => Promise.resolve(blockedResult)),
+      propose: vi.fn((message: string) =>
+        Promise.resolve(message === "feat: approved" ? approvalRequiredResult : blockedResult),
+      ),
+      review: vi.fn(() => true as never),
+      matchesApproval: vi.fn(() => true),
     };
     const facade = createProductionManagedWorktreeToolFacade({
       verifiedCommitService: service,
+      requestCommitApproval,
       authority: {
         revalidateCapabilityForMutation: () => ({
           ok: true as const,
@@ -1121,6 +1240,44 @@ describe("production managed worktree tools", () => {
         reason: "message-policy",
         violations: blockedResult.violations,
       },
+    });
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "delivery",
+          actionId: "delivery-2",
+          idempotencyKey: "delivery-key-2",
+          intent: "commit",
+          phase: "propose",
+          message: "feat: approved",
+        }),
+      }),
+    ).resolves.toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "approval-required" }],
+      verifiedCommit: approvalRequiredResult,
+      approvalDisposition: "ready",
+    });
+    expect(requestCommitApproval).toHaveBeenCalledExactlyOnceWith("commit-3390-ready");
+
+    service.review.mockReturnValue(undefined);
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "delivery",
+          actionId: "delivery-3",
+          idempotencyKey: "delivery-key-3",
+          intent: "commit",
+          phase: "propose",
+          message: "feat: approved",
+        }),
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      reasonCode: "delivery-authority-revoked",
+      evidence: [{ kind: "governed-delegate", code: "delivery-authority-revoked" }],
     });
   });
 });
@@ -1649,9 +1806,11 @@ function verificationFacade(options: {
   readonly verifiedCommitService?: VerifiedCommitService;
   readonly runtimeGitService?: RuntimeGitService;
   readonly requestStageApproval?: (proposalId: string) => void;
+  readonly log?: ServerLogEvent[];
   readonly events?: CodingWorkbenchRuntimeEvent[];
   readonly ciObservationService?: CiObservationService;
-  readonly runToReport: () => Promise<VerificationReport>;
+  readonly runToReport: VerificationRunnerManager["runToReport"];
+  readonly workspaceRoot?: string;
   readonly records: ServerDiagnosticRecord[];
 }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
   return createProductionManagedWorktreeToolFacade({
@@ -1679,8 +1838,16 @@ function verificationFacade(options: {
       }),
     },
     authorityRef: { runId: "run-verification-3", envelopeDigest: DIGEST },
-    workspaceRoot: "/managed/worktree",
-    resolveWorkspaceRootAccess,
+    workspaceRoot: options.workspaceRoot ?? "/managed/worktree",
+    resolveWorkspaceRootAccess:
+      options.workspaceRoot === undefined
+        ? resolveWorkspaceRootAccess
+        : () => ({
+            kind: "managed-task" as const,
+            canonicalRoot: options.workspaceRoot ?? "/managed/worktree",
+            fs: nodeWorkspaceFs,
+            repositoryRoot: options.workspaceRoot ?? "/managed/worktree",
+          }),
     authorityExpiresAt: "2099-01-01T00:00:00.000Z",
     effectiveMode: "autonomous-delivery",
     deploymentCeiling: "autonomous-delivery",
@@ -1699,6 +1866,9 @@ function verificationFacade(options: {
     invocationRegistry: createCodingToolInvocationRegistry(),
     verificationRunner: { runToReport: options.runToReport },
     diagnostics: { record: (record): void => void options.records.push(record) },
+    ...(options.log === undefined
+      ? {}
+      : { activityLog: { write: (event): void => void options.log?.push(event) } }),
     onRuntimeEvent: (event): void => {
       options.events?.push(event);
     },

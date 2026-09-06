@@ -40,6 +40,7 @@ export interface SidecarPermissionEvent {
   readonly idempotencyKey?: string | undefined;
   readonly approvalId?: string | undefined;
   readonly approvalDigest?: string | undefined;
+  readonly targetPathHash?: string | undefined;
   readonly targetPath?: string | undefined;
   readonly allowedRelativePaths?: readonly string[] | undefined;
   readonly fileCount?: number | undefined;
@@ -169,15 +170,27 @@ function optionalMutationMetadata(
   record: Record<string, unknown>,
 ): Partial<SidecarPermissionEvent> | undefined {
   const approvalDigest = optionalApprovalDigest(record);
-  if (approvalDigest === undefined) return undefined;
+  const targetPathHash = optionalTargetPathHash(record);
+  if (approvalDigest === undefined || targetPathHash === undefined) return undefined;
   return {
     ...optionalStringField(record, "actionId"),
     ...optionalStringField(record, "idempotencyKey"),
     ...optionalStringField(record, "approvalId"),
     ...approvalDigest,
+    ...targetPathHash,
     ...optionalApprovalToken(record),
     ...optionalBooleanField(record, "operatorStopped"),
   };
+}
+
+function optionalTargetPathHash(
+  record: Record<string, unknown>,
+): { readonly targetPathHash?: string } | undefined {
+  if (!Object.hasOwn(record, "targetPathHash")) return {};
+  const value = record.targetPathHash;
+  return typeof value === "string" && APPROVAL_DIGEST_PATTERN.test(value)
+    ? { targetPathHash: value }
+    : undefined;
 }
 
 function optionalApprovalDigest(

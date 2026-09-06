@@ -134,6 +134,28 @@ describe("OpenCode visible tool contract", () => {
     },
   );
 
+  it("requires a bounded targetPath exactly for targeted-test", () => {
+    const verification = OPENCODE_MODEL_VISIBLE_TOOLS.find(
+      (tool) => tool.name === "keiko_verification",
+    );
+    expect(verification?.parameters).toMatchObject({
+      properties: {
+        targetPath: {
+          type: "string",
+          minLength: 1,
+          maxLength: 4096,
+        },
+      },
+      allOf: [
+        {
+          if: { properties: { verifierId: { const: "targeted-test" } } },
+          then: { required: ["targetPath"] },
+          else: { not: { required: ["targetPath"] } },
+        },
+      ],
+    });
+  });
+
   it("accepts the exact projected surface including the eight new Git/CI tools and #3414's repository search", () => {
     expect(hasExactOpenCodeVisibleToolContract(projectedTools())).toBe(true);
     expect(OPENCODE_MODEL_VISIBLE_TOOLS).toHaveLength(18);

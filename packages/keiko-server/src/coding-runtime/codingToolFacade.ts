@@ -437,27 +437,38 @@ function projectRuntimeGit(
 // succeeded when it did not. Only `status: "recorded"` rides out as completed; `"unavailable"`
 // collapses to the facade's own closed "failed" reasonCode vocabulary, the same shape
 // `projectGovernedFailure` already uses for a governed refusal.
-function projectDraftDelivery(value: unknown): CodingToolResult {
-  if (!isCodingRuntimeDeliveryResult(value)) return projected("failed");
-  if (value.status === "unavailable") return projected("failed", value.reason, true);
+function projectDraftDelivery(value: Record<string, unknown>): CodingToolResult {
+  if (!isCodingRuntimeDeliveryResult(value.draftDelivery)) return projected("failed");
+  if (value.draftDelivery.status === "unavailable")
+    return projected("failed", value.draftDelivery.reason, true);
+  const disposition = approvalDisposition(value);
+  if (disposition === false) return projected("failed");
   return {
     status: "completed",
     evidence: [{ kind: "governed-delegate", code: "completed" }],
-    draftDelivery: value,
+    draftDelivery: value.draftDelivery,
+    ...(disposition === undefined ? {} : { approvalDisposition: disposition }),
   };
+}
+
+function approvalDisposition(value: Record<string, unknown>): "ready" | false | undefined {
+  if (!Object.hasOwn(value, "approvalDisposition")) return undefined;
+  return value.approvalDisposition === "ready" ? "ready" : false;
 }
 
 function projectVerifiedCommit(
   request: CodingToolActionRequest,
   value: Record<string, unknown>,
 ): CodingToolResult | undefined {
-  if (isDraftToolRequest(request)) return projectDraftDelivery(value.draftDelivery);
+  if (isDraftToolRequest(request)) return projectDraftDelivery(value);
   if (request.action === "delivery" && request.intent === "commit") {
-    return isVerifiedCommitResult(value.verifiedCommit)
+    const disposition = approvalDisposition(value);
+    return isVerifiedCommitResult(value.verifiedCommit) && disposition !== false
       ? {
           status: "completed",
           evidence: [{ kind: "governed-delegate", code: value.verifiedCommit.status }],
           verifiedCommit: value.verifiedCommit,
+          ...(disposition === undefined ? {} : { approvalDisposition: disposition }),
         }
       : projected("failed");
   }

@@ -391,7 +391,20 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
           "call-commit-propose",
         ),
     ]);
-    const turn1 = await child.runTurn("stage and commit the pending workspace change");
+    const turn1Pending = child.runTurn("stage and commit the pending workspace change");
+    await vi.waitFor(
+      () => {
+        expect(events.some((event) => event.permissionRequest?.actionKind === "commit")).toBe(true);
+      },
+      { timeout: 5_000 },
+    );
+    const pendingCommit = events.find(
+      (event) => event.permissionRequest?.actionKind === "commit",
+    )?.permissionRequest;
+    if (pendingCommit === undefined) throw new TypeError("missing pending commit approval");
+    const beforeHead = git(root, ["rev-parse", "HEAD"]);
+    expect(bridge.issueCommit?.("run-1", pendingCommit.requestId)).toBeDefined();
+    const turn1 = await turn1Pending;
     // The dispatch order was decided by the scripted model plan, not authored imperatively here --
     // this is what the loop ACTUALLY executed, in the order it executed it.
     expect(turn1.map((result) => result.tool)).toEqual([
@@ -451,7 +464,8 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       },
     });
 
-    expect(bridge.issueCommit?.("run-1", commit.proposalId)).toBeDefined();
+    expect(commitPropose.approvalDisposition).toBe("ready");
+    expect(git(root, ["rev-parse", "HEAD"])).toBe(beforeHead);
 
     plan.use([
       (): FakeToolCall =>
@@ -461,7 +475,6 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
           "call-commit-execute",
         ),
     ]);
-    const beforeHead = git(root, ["rev-parse", "HEAD"]);
     const turn2 = await child.runTurn("the commit has been approved -- proceed");
     const executed = toolResult(turn2, "call-commit-execute").verifiedCommit as {
       readonly status: string;
@@ -1020,7 +1033,7 @@ describe("scripted OpenCode transcript reaches DraftDeliveryController for push/
     const draft = new DraftDeliveryFixture();
     try {
       await draft.recordVerifiedCommit();
-      const { facade, bridge } = commitFacadeFixture({
+      const { facade, bridge, events } = commitFacadeFixture({
         service: unusedVerifiedCommitService(draft.root),
         root: draft.root,
         mode: "autonomous-delivery",
@@ -1043,7 +1056,17 @@ describe("scripted OpenCode transcript reaches DraftDeliveryController for push/
       });
 
       plan.use([(): FakeToolCall => toolCall("keiko_git_push", {}, "call-push-propose")]);
-      const turn1 = await child.runTurn("push the verified commit");
+      const turn1Pending = child.runTurn("push the verified commit");
+      await vi.waitFor(() => {
+        expect(events.some((event) => event.permissionRequest?.actionKind === "push")).toBe(true);
+      });
+      const pendingPush = events.find(
+        (event) => event.permissionRequest?.actionKind === "push",
+      )?.permissionRequest;
+      if (pendingPush === undefined) throw new TypeError("missing pending push approval");
+      expect(draft.pushCount).toBe(0);
+      expect(bridge.issueDelivery?.("run-1", pendingPush.requestId)).toBeDefined();
+      const turn1 = await turn1Pending;
       expect(turn1.map((result) => result.tool)).toEqual(["keiko_git_push"]);
       const pushPropose = toolResult(turn1, "call-push-propose").draftDelivery as {
         readonly status: string;
@@ -1054,8 +1077,7 @@ describe("scripted OpenCode transcript reaches DraftDeliveryController for push/
       // explicit human approval before keiko_git_execute may redeem it.
       expect(pushPropose.record.phase).toBe("push-proposed");
       expect(draft.pushCount).toBe(0);
-
-      expect(bridge.issueDelivery?.("run-1", pushPropose.record.proposalId)).toBeDefined();
+      expect(toolResult(turn1, "call-push-propose").approvalDisposition).toBe("ready");
 
       plan.use([
         (): FakeToolCall =>
@@ -1091,7 +1113,20 @@ describe("scripted OpenCode transcript reaches DraftDeliveryController for push/
         (): FakeToolCall =>
           toolCall("keiko_pull_request", { title: "feat: bounded change" }, "call-pr-propose"),
       ]);
-      const turn3 = await prChild.runTurn("open a pull request for the pushed branch");
+      const turn3Pending = prChild.runTurn("open a pull request for the pushed branch");
+      await vi.waitFor(() => {
+        expect(events.some((event) => event.permissionRequest?.actionKind === "pull-request")).toBe(
+          true,
+        );
+      });
+      const pendingPullRequest = events.find(
+        (event) => event.permissionRequest?.actionKind === "pull-request",
+      )?.permissionRequest;
+      if (pendingPullRequest === undefined)
+        throw new TypeError("missing pending pull-request approval");
+      expect(draft.createCount).toBe(0);
+      expect(bridge.issueDelivery?.("run-1", pendingPullRequest.requestId)).toBeDefined();
+      const turn3 = await turn3Pending;
       const prPropose = toolResult(turn3, "call-pr-propose").draftDelivery as {
         readonly status: string;
         readonly record: { readonly phase: string; readonly proposalId: string };
@@ -1099,8 +1134,7 @@ describe("scripted OpenCode transcript reaches DraftDeliveryController for push/
       expect(prPropose.status).toBe("recorded");
       expect(prPropose.record.phase).toBe("pr-proposed");
       expect(draft.createCount).toBe(0);
-
-      expect(bridge.issueDelivery?.("run-1", prPropose.record.proposalId)).toBeDefined();
+      expect(toolResult(turn3, "call-pr-propose").approvalDisposition).toBe("ready");
 
       plan.use([
         (): FakeToolCall =>

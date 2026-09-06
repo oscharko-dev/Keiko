@@ -3245,7 +3245,7 @@ describe("coding-sidecar gateway", () => {
       status: 400,
       body: {
         error: {
-          code: "BAD_REQUEST",
+          code: "context_length_exceeded",
           message: "Request body estimated prompt tokens exceed profile maxPromptTokens (128000).",
         },
       },
@@ -3272,7 +3272,7 @@ describe("coding-sidecar gateway", () => {
     expect(JSON.stringify(sink.events)).not.toContain("private-overflow");
   });
 
-  it("returns BAD_REQUEST when estimated prompt tokens exceed the advertised maxPromptTokens", async () => {
+  it("returns a provider context overflow when estimated prompt tokens exceed maxPromptTokens", async () => {
     const seenRequests: GatewayRequest[] = [];
     const deps = depsValue(
       configValue(provider(), capability({ contextWindow: 16 })),
@@ -3298,7 +3298,7 @@ describe("coding-sidecar gateway", () => {
       status: 400,
       body: {
         error: {
-          code: "BAD_REQUEST",
+          code: "context_length_exceeded",
           message: "Request body estimated prompt tokens exceed profile maxPromptTokens (16).",
         },
       },

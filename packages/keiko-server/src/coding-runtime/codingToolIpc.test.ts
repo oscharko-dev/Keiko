@@ -295,6 +295,42 @@ describe("coding tool IPC approval proofs", () => {
   });
 });
 
+describe("coding tool IPC targeted verification", () => {
+  const request = {
+    action: "verification" as const,
+    actionId: "targeted-1",
+    idempotencyKey: "targeted-1",
+    verifierId: "targeted-test",
+  };
+
+  it("carries one bounded contained target into the governed verification request", () => {
+    expect(
+      parseCodingToolRequest(
+        JSON.stringify({ ...request, targetPath: "src/math.test.ts" }),
+        262_144,
+      ),
+    ).toEqual({ ...request, targetPath: "src/math.test.ts" });
+  });
+
+  it.each([undefined, "/tmp/x.test.ts", "../x.test.ts", ".env", "secrets/.env"])(
+    "rejects missing, escaping, absolute, or sensitive target %s",
+    (targetPath) => {
+      expect(
+        parseCodingToolRequest(JSON.stringify({ ...request, targetPath }), 262_144),
+      ).toBeUndefined();
+    },
+  );
+
+  it("rejects a targetPath on a non-targeted verifier", () => {
+    expect(
+      parseCodingToolRequest(
+        JSON.stringify({ ...request, verifierId: "test", targetPath: "src/math.test.ts" }),
+        262_144,
+      ),
+    ).toBeUndefined();
+  });
+});
+
 /**
  * Where the shipped OpenCode runtime's edit containment actually lives.
  *

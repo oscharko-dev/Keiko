@@ -969,7 +969,7 @@ function budgetValidationError(
     );
   }
   if (estimatedPromptTokens > runMetadata.maxPromptTokens) {
-    return badRequest(
+    return contextOverflowRequest(
       `Request body estimated prompt tokens exceed profile maxPromptTokens (${String(runMetadata.maxPromptTokens)}).`,
     );
   }

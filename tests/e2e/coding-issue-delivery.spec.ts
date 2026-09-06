@@ -26,14 +26,17 @@ import {
   DELIVERY_TEMPLATE,
   DELIVERY_TITLE,
   deliveryDescriptionModelState,
-  deliveryProviderState,
   deliveryRemote,
   deliveryRepository,
   deliveryRevisionPath,
   deliveryStateDir,
   type DeliveryFixtureOperation,
 } from "./support/coding-issue-delivery.js";
-import type { DeliveryProviderState } from "./servers/coding-issue-delivery-transport.mjs";
+import {
+  readState,
+  writeState,
+  type DeliveryProviderState,
+} from "./servers/coding-issue-delivery-transport.mjs";
 import type { DeliveryDescriptionModelState } from "./servers/coding-issue-description-model.mjs";
 
 const stateDir = deliveryStateDir();
@@ -64,7 +67,7 @@ function observe(): Observation {
   return JSON.parse(readFileSync(commitObservationPath(stateDir), "utf8")) as Observation;
 }
 function provider(): DeliveryProviderState {
-  return JSON.parse(readFileSync(deliveryProviderState(stateDir), "utf8")) as DeliveryProviderState;
+  return readState(stateDir);
 }
 function descriptionModel(): DeliveryDescriptionModelState {
   return JSON.parse(
@@ -438,7 +441,7 @@ for (const [index, mode] of (
 }
 
 function setProviderMode(mode: DeliveryProviderState["mode"]): void {
-  writeFileSync(deliveryProviderState(stateDir), JSON.stringify({ ...provider(), mode }));
+  writeState(stateDir, { ...provider(), mode });
 }
 async function pushApproved(page: Page): Promise<void> {
   recordFor(await control("push-propose"), "push-proposed");

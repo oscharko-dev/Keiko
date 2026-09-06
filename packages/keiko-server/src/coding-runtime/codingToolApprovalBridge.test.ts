@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   codingToolApprovalBindingDigest,
+  codingToolVerificationApprovalTargetId,
   createCodingToolApprovalBridge,
 } from "./codingToolApprovalBridge.js";
 
@@ -37,6 +38,24 @@ function observe(
 }
 
 describe("coding tool approval bridge capacity", () => {
+  it("binds a targeted-test approval to the exact target digest", () => {
+    const first = {
+      action: "verification" as const,
+      actionId: "targeted-action",
+      idempotencyKey: "targeted-key",
+      verifierId: "targeted-test",
+      targetPath: "src/first.test.ts",
+    };
+    expect(codingToolApprovalBindingDigest(RUN_ID, first)).not.toBe(
+      codingToolApprovalBindingDigest(RUN_ID, { ...first, targetPath: "src/second.test.ts" }),
+    );
+    expect(codingToolVerificationApprovalTargetId("targeted-test", "a".repeat(64))).toBe(
+      `targeted-test:${"a".repeat(64)}`,
+    );
+    expect(codingToolVerificationApprovalTargetId("targeted-test")).toBeUndefined();
+    expect(codingToolVerificationApprovalTargetId("test", "a".repeat(64))).toBeUndefined();
+  });
+
   it("rejects excess pending observations without evicting a live approval", () => {
     const bridge = createCodingToolApprovalBridge();
     for (let index = 0; index < 64; index += 1) expect(observe(bridge, index)).toBe(true);

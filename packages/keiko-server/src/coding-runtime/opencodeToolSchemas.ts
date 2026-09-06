@@ -14,6 +14,7 @@ import type {
 import type { ToolHandlerReadiness } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { CODING_REPOSITORY_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
+import { EDITOR_AGENT_TARGET_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
   CODING_TOOL_DISCOVER_MAX_RESULTS,
   CODING_TOOL_READ_MAX_START_LINE,
@@ -210,8 +211,22 @@ const VERIFICATION_SCHEMA = {
       type: "string",
       enum: OPENCODE_VERIFICATION_IDS,
     },
+    targetPath: {
+      type: "string",
+      minLength: 1,
+      maxLength: EDITOR_AGENT_TARGET_PATH_MAX_BYTES,
+      pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(?:/|$))(?!.*\\).+$`,
+      description: "Required only for targeted-test; workspace-relative test file path.",
+    },
   },
   required: ["verifierId"],
+  allOf: [
+    {
+      if: { properties: { verifierId: { const: "targeted-test" } }, required: ["verifierId"] },
+      then: { required: ["targetPath"] },
+      else: { not: { required: ["targetPath"] } },
+    },
+  ],
 } as const;
 
 /** OpenCode v1.17.17 removes this unsupported JSON Schema keyword before forwarding a tool. */

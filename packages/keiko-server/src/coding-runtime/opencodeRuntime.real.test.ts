@@ -922,6 +922,18 @@ function runtimeDatabaseProjection(databasePath: string): string {
   }
 }
 
+function runtimeDatabasePartTypes(databasePath: string): readonly string[] {
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const rows = database
+      .prepare("SELECT DISTINCT json_extract(data, '$.type') AS type FROM part ORDER BY type")
+      .all() as readonly Record<string, unknown>[];
+    return rows.flatMap((row) => (typeof row.type === "string" ? [row.type] : []));
+  } finally {
+    database.close();
+  }
+}
+
 function runtimeDatabaseMessageSummary(row: Readonly<Record<string, unknown>>): string {
   return `role=${runtimeDatabaseScalar(row.role)}:finish=${runtimeDatabaseScalar(row.finish)}:error=${runtimeDatabaseScalar(row.error_name)}`;
 }
@@ -960,7 +972,258 @@ async function waitForQuestions(
   return [];
 }
 
+interface NativeCompactionState {
+  rounds: number;
+  roundsInTurn: number;
+  readonly assistantContentChars: number;
+  readonly turnSize: number;
+  readonly compactionMessageCounts: number[];
+  readonly recoveryMessageCounts: number[];
+}
+
+function batchedReadResponse(round: number, assistantContentChars: number): NormalizedResponse {
+  return {
+    ...normalResponse(),
+    content: "x".repeat(assistantContentChars),
+    finishReason: "tool_calls",
+    toolCalls: [
+      {
+        id: `call-${String(round)}`,
+        name: "keiko_workspace_read",
+        arguments: { relativePath: `src/fixture-${String(round)}.ts` },
+      },
+    ],
+  };
+}
+
+function nativeCompactionResponseScript(state: NativeCompactionState): GatewayResponseScript {
+  return (request): Promise<NormalizedResponse> => {
+    if (requestContainsTitleGeneration(request)) {
+      return Promise.resolve({ ...normalResponse(), content: "Compaction proof" });
+    }
+    if (request.toolCatalog === undefined) {
+      state.compactionMessageCounts.push(request.messages.length);
+      return Promise.resolve({ ...normalResponse(), content: "Retained verified task state." });
+    }
+    if (state.compactionMessageCounts.length > 0) {
+      state.recoveryMessageCounts.push(request.messages.length);
+      return Promise.resolve({ ...normalResponse(), content: "Recovered after compaction." });
+    }
+    state.rounds += 1;
+    state.roundsInTurn += 1;
+    if (state.roundsInTurn === state.turnSize) {
+      state.roundsInTurn = 0;
+      return Promise.resolve({ ...normalResponse(), content: "Turn checkpoint complete." });
+    }
+    return Promise.resolve(batchedReadResponse(state.rounds, state.assistantContentChars));
+  };
+}
+
+interface NativeCompactionHarness {
+  readonly root: string;
+  readonly runRoot: string;
+  readonly runtime: ReturnType<typeof createOpenCodeRuntimeComposition>;
+  readonly gateway: GatewayHarness;
+  readonly toolFacade: ToolFacadeHarness;
+  readonly backend: DirectChildRuntimeBackend;
+  readonly productiveActions: string[];
+}
+
+async function createNativeCompactionHarness(
+  script: GatewayResponseScript,
+): Promise<NativeCompactionHarness> {
+  const root = mkdtempSync(join(tmpdir(), "keiko-opencode-compaction-"));
+  const workspaceRoot = join(root, "workspace");
+  const stateBaseRoot = join(root, "state");
+  mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 });
+  const portable = realPortableRuntime(root);
+  const gateway = await createGatewayHarness(script);
+  const toolFacade = await createToolFacadeHarness();
+  const productiveActions: string[] = [];
+  const backend = new DirectChildRuntimeBackend(functionalPlatform().qualification);
+  const runtime = createOpenCodeRuntimeComposition({
+    portable,
+    stateBaseRoot,
+    contextGeometry: {
+      contextWindowTokens: 65_536,
+      maxInputTokens: 61_440,
+      maxOutputTokens: 4_096,
+    },
+    capabilities: {
+      modelGatewayCapability: MODEL_CAPABILITY,
+      toolFacadeCapability: TOOL_CAPABILITY,
+    },
+    toolFacadeOrigin: toolFacade.endpoint,
+    toolFacade: functionalToolFacade(productiveActions, []),
+    governedEventSink: { execute: () => Promise.resolve("applied") },
+    gatewayReadiness: gateway.readiness,
+    fetch: globalThis.fetch,
+    supervisor: createRuntimeProcessSupervisor({
+      backend,
+      qualifications: [functionalPlatform().qualification],
+    }),
+    authorityLifecycle: {
+      revokeRuntime: () => true,
+      abortInFlightActions: () => true,
+      markRuntimeRecoveryRequired: () => true,
+      releaseRuntimeAfterReap: () => true,
+    },
+  });
+  toolFacade.bind((request) => runtime.toolBridge.handle(request));
+  return {
+    root,
+    runRoot: join(stateBaseRoot, RUN_ID),
+    runtime,
+    gateway,
+    toolFacade,
+    backend,
+    productiveActions,
+  };
+}
+
+async function startNativeCompactionHarness(harness: NativeCompactionHarness): Promise<void> {
+  const started = await harness.runtime.manager.start({
+    runId: RUN_ID,
+    treeBindingId: TREE_BINDING_ID,
+    taskRef: "issue-3384-message-limit",
+    workspaceRoot: join(harness.root, "workspace"),
+    adapterKind: "opencode-compatible",
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+    requestedMode: "supervised-coding",
+    effectiveMode: "supervised-coding",
+    executablePath: join(harness.root, "portable-resource/payload/bin/opencode"),
+    managedRoot: join(harness.root, "portable-resource/payload"),
+    gatewayUrl: harness.gateway.endpoint,
+    modelProfileId: "coding-safe-openai-compatible",
+    args: [],
+    inheritedEnvAllowlist: [],
+    shutdownTimeoutMs: 5_000,
+    startTimeoutMs: 20_000,
+    confinement: functionalPlatform().qualification,
+  });
+  if (!started.ok) {
+    throw new Error(
+      `native-compaction-start-failed:${started.failureCode}:${harness.backend.redactedStderr()}`,
+    );
+  }
+}
+
+async function closeNativeCompactionHarness(harness: NativeCompactionHarness): Promise<void> {
+  await harness.runtime.manager.stop(RUN_ID);
+  await harness.gateway.close();
+  await harness.toolFacade.close();
+  rmSync(harness.root, { recursive: true, force: true });
+}
+
+function requestMessageCount(summary: string): number | undefined {
+  const value = /:messages=(\d+):/u.exec(summary)?.[1];
+  return value === undefined ? undefined : Number(value);
+}
+
 describe("[functional-only] real staged OpenCode runtime", () => {
+  it.skipIf(!FUNCTIONAL_ENABLED)(
+    "decodes a 513-message overflow, compacts natively, and completes the retry",
+    async () => {
+      const state: NativeCompactionState = {
+        rounds: 0,
+        roundsInTurn: 0,
+        assistantContentChars: 0,
+        turnSize: 100,
+        compactionMessageCounts: [],
+        recoveryMessageCounts: [],
+      };
+      const harness = await createNativeCompactionHarness(nativeCompactionResponseScript(state));
+      try {
+        await startNativeCompactionHarness(harness);
+        const terminals: boolean[] = [];
+        for (let turn = 1; turn <= 3; turn += 1) {
+          await expect(
+            harness.runtime.runPort.submitTask(
+              RUN_ID,
+              `Exercise bounded native compaction turn ${String(turn)}.`,
+            ),
+          ).resolves.toBe(true);
+          terminals.push(
+            await harness.runtime.runPort.waitForTerminal(RUN_ID, AbortSignal.timeout(60_000)),
+          );
+        }
+
+        const messageCounts = harness.gateway.summaries().flatMap((summary) => {
+          const count = requestMessageCount(summary);
+          return count === undefined ? [] : [count];
+        });
+        expect(
+          terminals,
+          `state=${JSON.stringify(state)}:max-messages=${String(Math.max(...messageCounts))}:http-400=${String(harness.gateway.responses().filter((response) => response.endsWith(" 400")).length)}`,
+        ).toEqual([true, true, true]);
+        expect(
+          messageCounts.includes(513),
+          `rounds=${String(state.rounds)}:max-messages=${String(Math.max(...messageCounts))}`,
+        ).toBe(true);
+        expect(harness.gateway.responses().some((response) => response.endsWith(" 400"))).toBe(
+          true,
+        );
+        expect(state.compactionMessageCounts).toHaveLength(1);
+        expect(state.compactionMessageCounts[0]).toBeLessThanOrEqual(512);
+        expect(state.recoveryMessageCounts).toHaveLength(1);
+        expect(state.recoveryMessageCounts[0]).toBeLessThanOrEqual(512);
+        expect(state.rounds).toBeGreaterThan(1);
+        expect(harness.productiveActions.length).toBeGreaterThan(0);
+        expect(runtimeDatabasePartTypes(join(harness.runRoot, "state", "opencode.db"))).toContain(
+          "compaction",
+        );
+      } finally {
+        await closeNativeCompactionHarness(harness);
+      }
+    },
+    120_000,
+  );
+
+  it.skipIf(!FUNCTIONAL_ENABLED)(
+    "stops after the native compactor rejects an uncompactable long turn",
+    async () => {
+      const state: NativeCompactionState = {
+        rounds: 0,
+        roundsInTurn: 0,
+        assistantContentChars: 100_000,
+        turnSize: Number.MAX_SAFE_INTEGER,
+        compactionMessageCounts: [],
+        recoveryMessageCounts: [],
+      };
+      const harness = await createNativeCompactionHarness(nativeCompactionResponseScript(state));
+      try {
+        await startNativeCompactionHarness(harness);
+        await expect(
+          harness.runtime.runPort.submitTask(RUN_ID, "Exercise bounded uncompactable history."),
+        ).resolves.toBe(true);
+        const terminal = await harness.runtime.runPort.waitForTerminal(
+          RUN_ID,
+          AbortSignal.timeout(60_000),
+        );
+
+        const messageCounts = harness.gateway.summaries().flatMap((summary) => {
+          const count = requestMessageCount(summary);
+          return count === undefined ? [] : [count];
+        });
+        expect(Math.max(...messageCounts)).toBeLessThanOrEqual(512);
+        expect(
+          harness.gateway.responses().filter((response) => response.endsWith(" 400")),
+        ).toHaveLength(2);
+        expect(state.compactionMessageCounts).toEqual([]);
+        expect(state.recoveryMessageCounts).toEqual([]);
+        expect(state.rounds).toBeGreaterThan(1);
+        const databasePath = join(harness.runRoot, "state", "opencode.db");
+        expect(runtimeDatabasePartTypes(databasePath)).toContain("compaction");
+        expect(runtimeDatabaseProjection(databasePath)).toContain("ContextOverflowError");
+        expect(terminal).toBe(false);
+      } finally {
+        await closeNativeCompactionHarness(harness);
+      }
+    },
+    120_000,
+  );
+
   it.skipIf(!FUNCTIONAL_ENABLED)(
     "starts and reaps the explicit staged v1.17.17 binary without native qualification claims",
     // eslint-disable-next-line complexity -- the real question and abort lifecycle keeps all gates visible.

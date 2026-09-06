@@ -136,7 +136,7 @@ export type ApprovalDigestInput =
     >
   | Pick<
       Extract<ApprovableToolRequest, { readonly action: "verification" }>,
-      "action" | "actionId" | "idempotencyKey" | "verifierId"
+      "action" | "actionId" | "idempotencyKey" | "verifierId" | "targetPath"
     >
   | Pick<ApprovableConnectorRequest, "action" | "actionId" | "idempotencyKey" | "scope">
   | Pick<ApprovableCiObservationRequest, "action" | "actionId" | "idempotencyKey" | "operation">;
@@ -146,6 +146,14 @@ export function codingToolApprovalBindingDigest(
   request: ApprovalDigestInput,
 ): string {
   const targetId = requestTargetId(request);
+  return approvalBindingDigest(runId, request, targetId);
+}
+
+function approvalBindingDigest(
+  runId: string,
+  request: Pick<ApprovalDigestInput, "action" | "actionId" | "idempotencyKey">,
+  targetId: string,
+): string {
   const payload = JSON.stringify([
     "coding-tool-approval-v1",
     runId,
@@ -362,25 +370,7 @@ function validBinding(input: CodingToolApprovalObservation): boolean {
 }
 
 function bindingDigest(input: ApprovalBinding): string {
-  if (input.action === "command")
-    return codingToolApprovalBindingDigest(input.runId, {
-      ...input,
-      action: "command",
-      commandId: input.targetId,
-    });
-  if (input.action === "verification")
-    return codingToolApprovalBindingDigest(input.runId, {
-      ...input,
-      action: "verification",
-      verifierId: input.targetId,
-    });
-  if (input.action === "connector")
-    return codingToolApprovalBindingDigest(input.runId, {
-      ...input,
-      action: "connector",
-      scope: input.targetId,
-    });
-  return codingToolApprovalBindingDigest(input.runId, { ...input, action: "git", operation: "ci" });
+  return approvalBindingDigest(input.runId, input, input.targetId);
 }
 
 // The one implicit target of a "git ci" observation is the run's CI status itself -- unlike
@@ -389,9 +379,29 @@ const CI_OBSERVATION_TARGET_ID = "ci";
 
 function requestTargetId(request: ApprovalDigestInput): string {
   if (request.action === "command") return request.commandId;
-  if (request.action === "verification") return request.verifierId;
+  if (request.action === "verification") {
+    const targetPathHash =
+      request.targetPath === undefined
+        ? undefined
+        : createHash("sha256").update(request.targetPath, "utf8").digest("hex");
+    const targetId = codingToolVerificationApprovalTargetId(request.verifierId, targetPathHash);
+    if (targetId === undefined) throw new TypeError("verification approval target is invalid");
+    return targetId;
+  }
   if (request.action === "connector") return request.scope;
   return CI_OBSERVATION_TARGET_ID;
+}
+
+export function codingToolVerificationApprovalTargetId(
+  verifierId: string,
+  targetPathHash?: string,
+): string | undefined {
+  if (verifierId === "targeted-test") {
+    return targetPathHash !== undefined && DIGEST_PATTERN.test(targetPathHash)
+      ? `${verifierId}:${targetPathHash}`
+      : undefined;
+  }
+  return targetPathHash === undefined ? verifierId : undefined;
 }
 
 function permissionKey(runId: string, requestId: string): string {

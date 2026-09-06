@@ -1,8 +1,8 @@
 // Test-only provider boundary. Ordinary Git remains real; accepted remote effects target a real
 // disposable bare repository. This is composed functional evidence, never live authentication.
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, join, relative, isAbsolute } from "node:path";
 import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 import { buildPrBodyReadArgv } from "@oscharko-dev/keiko-tools";
@@ -49,8 +49,13 @@ export function readState(stateDir: string): DeliveryProviderState {
 }
 export function writeState(stateDir: string, state: DeliveryProviderState): void {
   const path = deliveryProviderState(stateDir);
-  writeFileSync(`${path}.next`, JSON.stringify(state));
-  renameSync(`${path}.next`, path);
+  const temporary = `${path}.${randomUUID()}.next`;
+  try {
+    writeFileSync(temporary, JSON.stringify(state), { flag: "wx" });
+    renameSync(temporary, path);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
 }
 function deny(stateDir: string): never {
   const state = readState(stateDir);

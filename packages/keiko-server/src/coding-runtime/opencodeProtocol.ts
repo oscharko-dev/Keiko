@@ -268,6 +268,10 @@ const GOVERNED_VERIFICATION_METADATA_KEYS = [
   "approvalId",
   "approvalDigest",
 ] as const;
+const GOVERNED_TARGETED_VERIFICATION_METADATA_KEYS = [
+  ...GOVERNED_VERIFICATION_METADATA_KEYS,
+  "targetPathHash",
+] as const;
 const GOVERNED_VERIFIERS = new Set(["test", "targeted-test", "typecheck", "lint", "build"]);
 // Colons are rejected wholesale: `C:/…` is drive-absolute under win32 resolution and
 // `file.txt:stream` names an NTFS alternate data stream — neither is a workspace-relative path.
@@ -381,8 +385,12 @@ function projectGovernedCommandPermission(
   metadata: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
   const actionKind = metadata.actionKind;
+  const metadataKeys =
+    actionKind === "verification-command" && metadata.commandLabel === "targeted-test"
+      ? GOVERNED_TARGETED_VERIFICATION_METADATA_KEYS
+      : GOVERNED_VERIFICATION_METADATA_KEYS;
   if (
-    !exactRecord(metadata, GOVERNED_VERIFICATION_METADATA_KEYS) ||
+    !exactRecord(metadata, metadataKeys) ||
     typeof actionKind !== "string" ||
     !fixedPermissionMetadata(
       metadata,
@@ -407,12 +415,16 @@ function validCommandApproval(
 ): boolean {
   const commandLabel = metadata.commandLabel;
   const approvalDigest = metadata.approvalDigest;
+  const targetPathHash = metadata.targetPathHash;
   return (
     typeof commandLabel === "string" &&
     validGovernedCommandTarget(metadata.actionKind, commandLabel) &&
     validApprovalIdentities(metadata) &&
     typeof approvalDigest === "string" &&
     /^[0-9a-f]{64}$/u.test(approvalDigest) &&
+    (commandLabel === "targeted-test"
+      ? typeof targetPathHash === "string" && /^[0-9a-f]{64}$/u.test(targetPathHash)
+      : targetPathHash === undefined) &&
     sameStrings(properties.patterns, [commandLabel])
   );
 }

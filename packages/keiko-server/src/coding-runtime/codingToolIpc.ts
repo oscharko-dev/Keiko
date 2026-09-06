@@ -19,6 +19,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { isCodeTaskSkillId } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
 import { isEditorAgentChangeset } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { isContainedAgentPath } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 export const CODING_TOOL_MAX_BODY_BYTES = 262_144;
@@ -102,6 +103,8 @@ export type CodingToolActionRequest =
   | (CodingToolRequestIdentity & {
       readonly action: "verification";
       readonly verifierId: string;
+      /** Required only for targeted-test; always a bounded workspace-relative path. */
+      readonly targetPath?: string | undefined;
       readonly approvalProof?: CodingToolApprovalProof | undefined;
     })
   | (CodingToolRequestIdentity & { readonly action: "git"; readonly operation: "read" })
@@ -186,6 +189,8 @@ export type CodingToolResult =
       readonly status: "completed";
       readonly evidence: readonly CodingToolEvidence[];
       readonly draftDelivery: CodingRuntimeDeliveryResult;
+      /** Fresh bound approval-store disposition; the recorded delivery receipt remains immutable. */
+      readonly approvalDisposition?: "ready" | undefined;
     }
   | {
       readonly status: "completed";
@@ -196,6 +201,8 @@ export type CodingToolResult =
       readonly status: "completed";
       readonly evidence: readonly CodingToolEvidence[];
       readonly verifiedCommit: VerifiedCommitResult;
+      /** Fresh bound approval-store disposition; the recorded commit receipt remains immutable. */
+      readonly approvalDisposition?: "ready" | undefined;
     }
   | {
       readonly status: "completed";
@@ -309,7 +316,7 @@ function requestFromRecord(value: Record<string, unknown>): CodingToolActionRequ
     case "command":
       return approvableNamedRequest(value, "commandId", "command");
     case "verification":
-      return approvableNamedRequest(value, "verifierId", "verification");
+      return verificationRequest(value);
     case "git":
       return gitRequest(value);
     case "delivery":
@@ -497,7 +504,14 @@ function approvableNamedRequest(
   const approvalProof = optionalApprovalProof(value);
   if (
     identity === undefined ||
-    !hasAllowedKeys(value, ["action", "actionId", "idempotencyKey", key, "approvalProof"]) ||
+    !hasAllowedKeys(value, [
+      "action",
+      "actionId",
+      "idempotencyKey",
+      key,
+      "approvalProof",
+      ...(action === "verification" ? ["targetPath"] : []),
+    ]) ||
     !nonEmpty(value[key]) ||
     approvalProof.kind === "invalid"
   )
@@ -515,6 +529,28 @@ function approvableNamedRequest(
     verifierId: value[key],
     ...(approvalProof.kind === "present" ? { approvalProof: approvalProof.proof } : {}),
   };
+}
+
+function verificationRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
+  const base = approvableNamedRequest(value, "verifierId", "verification");
+  if (base?.action !== "verification") return undefined;
+  const targeted = base.verifierId === "targeted-test";
+  if (
+    !hasAllowedKeys(value, [
+      "action",
+      "actionId",
+      "idempotencyKey",
+      "verifierId",
+      "targetPath",
+      "approvalProof",
+    ]) ||
+    targeted !== (typeof value.targetPath === "string") ||
+    (targeted &&
+      (!isContainedAgentPath(value.targetPath as string) || isDenied(value.targetPath as string)))
+  ) {
+    return undefined;
+  }
+  return targeted ? { ...base, targetPath: value.targetPath as string } : base;
 }
 
 /** A single explicit result shape: `optionalApprovalProof` always returns an object literal

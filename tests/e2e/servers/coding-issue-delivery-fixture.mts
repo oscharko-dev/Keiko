@@ -1,15 +1,11 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readState, writeState } from "./coding-issue-delivery-transport.mjs";
 import { createProductionDraftDeliveryDependencies } from "../../../packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.js";
 import type { DraftDeliveryDependencies } from "../../../packages/keiko-server/src/gitDelivery/draftDeliveryTypes.js";
 import type { UiHandlerDeps } from "../../../packages/keiko-server/src/deps.js";
 import type { CodingRuntimeSnapshotStore } from "../../../packages/keiko-server/src/coding-runtime/codingRuntimeSnapshotStore.js";
 import type { ProductionRuntimeBackendInput } from "../../../packages/keiko-server/src/coding-runtime/productionCodingRuntimeResolver.js";
 import type { CodingToolResult } from "../../../packages/keiko-server/src/coding-runtime/codingToolIpc.js";
-import {
-  DELIVERY_TITLE,
-  deliveryProviderState,
-  type DeliveryFixtureOperation,
-} from "../support/coding-issue-delivery.js";
+import { DELIVERY_TITLE, type DeliveryFixtureOperation } from "../support/coding-issue-delivery.js";
 
 export function deferredDeliveryDependencies(
   deps: () => UiHandlerDeps,
@@ -46,9 +42,7 @@ export function selectDeliveryProviderRef(
   stateDir: string,
   run: ProductionRuntimeBackendInput,
 ): void {
-  const path = deliveryProviderState(stateDir);
-  const state = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-  writeFileSync(path, JSON.stringify({ ...state, headRef: run.context.branch.headRef }));
+  writeState(stateDir, { ...readState(stateDir), headRef: run.context.branch.headRef });
 }
 
 export class DeliveryFixtureDriver {
