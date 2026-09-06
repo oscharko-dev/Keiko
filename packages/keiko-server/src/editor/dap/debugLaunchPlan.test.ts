@@ -22,6 +22,7 @@ import {
 } from "./debugCapsulePlan.js";
 import { inspectDebugWorkspaceIdentity } from "./debugLaunchContext.js";
 import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
+import { createFileServerLogSink } from "../../observability/server-log.js";
 import {
   assertDebugTargetCandidate,
   assertDebugLaunchEnvironment,
@@ -279,12 +280,14 @@ function validator(
   epoch = 4,
   now = 100,
   planCapsule?: DebugLaunchPlanDeps["planCapsule"],
+  activityLog?: DebugLaunchPlanDeps["activityLog"],
 ): DebugCapsuleLayer2Validator {
   return createDebugLaunchLayer2Validator({
     resolveContext: () => Promise.resolve(context),
     epoch: () => epoch,
     now: () => now,
     planCapsule,
+    activityLog,
   });
 }
 
@@ -590,13 +593,29 @@ describe("stateless debug launch Layer-2 planning", () => {
     const nodeLibrary = artifact(nodeLibraryPath, "/lib/node-library.so");
     const npmLibrary = artifact(npmLibraryPath, "/opt/keiko-runtime/npm/lib/npm-library.js");
     const closedContext = { ...context, runtimeClosure: [nodeLibrary, npmLibrary] };
+    const logRoot = temporary("keiko-debug-selection-log-");
+    const activityLog = createFileServerLogSink(logRoot);
 
-    const filePlan = await validator(closedContext).validateAndRederive(input);
-    const catalogPlan = await validator(closedContext).validateAndRederive({
+    const filePlan = await validator(
+      closedContext,
+      4,
+      100,
+      undefined,
+      activityLog,
+    ).validateAndRederive({ ...input, correlationId: "debug-session-file" });
+    const catalogPlan = await validator(
+      closedContext,
+      4,
+      100,
+      undefined,
+      activityLog,
+    ).validateAndRederive({
       ...input,
+      correlationId: "debug-session-catalog",
       candidate: { kind: "catalog", targetId: "npm-script:start" },
       binding: { ...input.binding, targetKind: "catalog" },
     });
+    activityLog.close?.();
     const fileCapsulePaths = filePlan.capsule.immutableMounts.map(({ capsulePath }) => capsulePath);
     const catalogCapsulePaths = catalogPlan.capsule.immutableMounts.map(
       ({ capsulePath }) => capsulePath,
@@ -622,6 +641,32 @@ describe("stateless debug launch Layer-2 planning", () => {
       ]),
     );
     expect(filePlan.provisioningDigest).not.toBe(catalogPlan.provisioningDigest);
+    const persisted = readFileSync(join(logRoot, "logs", "server.log"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(persisted).toEqual([
+      expect.objectContaining({
+        op: "dap.debug-runtime.selected",
+        correlationId: "debug-session-file",
+        targetKind: "file",
+        selectedArtifactCount: filePlan.capsule.immutableMounts.length,
+        provisionedArtifactCount: filePlan.spawnEnvelope.artifacts.length,
+        runtimeIdentityDigest: filePlan.runtimeIdentityDigest,
+        provisioningDigest: filePlan.provisioningDigest,
+      }),
+      expect.objectContaining({
+        op: "dap.debug-runtime.selected",
+        correlationId: "debug-session-catalog",
+        targetKind: "catalog",
+        selectedArtifactCount: catalogPlan.capsule.immutableMounts.length,
+        provisionedArtifactCount: catalogPlan.spawnEnvelope.artifacts.length,
+        runtimeIdentityDigest: catalogPlan.runtimeIdentityDigest,
+        provisioningDigest: catalogPlan.provisioningDigest,
+      }),
+    ]);
+    expect(JSON.stringify(persisted)).not.toContain(context.workspaceRoot);
+    expect(JSON.stringify(persisted)).not.toContain(context.npm.realPath);
   });
 
   it.each([

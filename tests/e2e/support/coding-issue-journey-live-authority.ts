@@ -66,6 +66,28 @@ function statusCount(events: readonly ActivityEvent[], status: string): number {
   return events.filter((event) => event.status === status).length;
 }
 
+function assertSettlementPairing(
+  starts: readonly ActivityEvent[],
+  settlements: readonly ActivityEvent[],
+): void {
+  uniqueIds(starts, "invocationId", "started tool invocation");
+  uniqueIds(settlements, "invocationId", "settled tool invocation");
+  const startedIds = new Set(starts.map((event) => event.invocationId));
+  const settledIds = new Set(settlements.map((event) => event.invocationId));
+  // Catalog admission can settle before execution starts. Only a non-completed,
+  // no-effect settlement may lack a start; every actual start still needs a settlement.
+  if (
+    starts.some((event) => !settledIds.has(event.invocationId)) ||
+    settlements.some(
+      (event) =>
+        !startedIds.has(event.invocationId) &&
+        (event.status === "completed" || event.effectStarted !== false),
+    )
+  ) {
+    throw new Error("qualification authority observation has unmatched tool invocations");
+  }
+}
+
 function settlementCounts(
   starts: readonly ActivityEvent[],
   settlements: readonly ActivityEvent[],
@@ -88,15 +110,7 @@ function settlementCounts(
   ) {
     throw new Error("qualification authority observation has invalid tool settlement evidence");
   }
-  uniqueIds(starts, "invocationId", "started tool invocation");
-  uniqueIds(settlements, "invocationId", "settled tool invocation");
-  const startedIds = new Set(starts.map((event) => event.invocationId));
-  if (
-    starts.length !== settlements.length ||
-    settlements.some((event) => !startedIds.has(event.invocationId))
-  ) {
-    throw new Error("qualification authority observation has unmatched tool invocations");
-  }
+  assertSettlementPairing(starts, settlements);
   const completedToolCount = statusCount(settlements, "completed");
   const deniedToolCount = statusCount(settlements, "denied");
   const failedToolCount = statusCount(settlements, "failed");

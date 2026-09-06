@@ -83,49 +83,76 @@ function active(override: Partial<QualificationResumeBinding> = {}): {
   };
 }
 
+function valueOr<T>(value: T | undefined, fallback: T): T {
+  if (value === undefined) return fallback;
+  return value;
+}
+
 function client(
   overrides: {
     readonly activeBefore?: ReturnType<typeof active> | null;
     readonly activeAfter?: ReturnType<typeof active> | null;
     readonly prior?: CodingWorkbenchRuntimeSnapshot;
+    readonly acknowledged?: CodingWorkbenchRuntimeSnapshot;
     readonly started?: CodingWorkbenchRuntimeSnapshot;
     readonly digests?: readonly string[];
+    readonly predecessorRunId?: string | undefined;
   } = {},
 ): {
   readonly subject: Parameters<typeof resumeExistingIssueWorkspace>[0];
   readonly bindIssue: ReturnType<typeof vi.fn>;
   readonly start: ReturnType<typeof vi.fn>;
+  readonly acknowledgeRecovery: ReturnType<typeof vi.fn>;
+  readonly retry: ReturnType<typeof vi.fn>;
 } {
   const readActiveWorkspace = vi
     .fn<() => Promise<ReturnType<typeof active> | null>>()
-    .mockResolvedValueOnce(overrides.activeBefore === undefined ? active() : overrides.activeBefore)
-    .mockResolvedValueOnce(overrides.activeAfter === undefined ? active() : overrides.activeAfter);
+    .mockResolvedValueOnce(valueOr(overrides.activeBefore, active()))
+    .mockResolvedValueOnce(valueOr(overrides.activeAfter, active()));
   const readWorktree = vi
     .fn<(path: string) => Promise<{ readonly headSha: string; readonly digest: string }>>()
     .mockResolvedValueOnce({
       headSha: HEAD_SHA,
-      digest: overrides.digests?.[0] ?? WORKTREE_DIGEST,
+      digest: valueOr(overrides.digests?.[0], WORKTREE_DIGEST),
     })
     .mockResolvedValueOnce({
       headSha: HEAD_SHA,
-      digest: overrides.digests?.[1] ?? WORKTREE_DIGEST,
+      digest: valueOr(overrides.digests?.[1], WORKTREE_DIGEST),
     });
   const bindIssue = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
   const start = vi
     .fn<() => Promise<CodingWorkbenchRuntimeSnapshot>>()
-    .mockResolvedValue(overrides.started ?? snapshot("run-new", "running"));
+    .mockResolvedValue(valueOr(overrides.started, snapshot("run-new", "running")));
+  const acknowledgeRecovery = vi
+    .fn<() => Promise<CodingWorkbenchRuntimeSnapshot>>()
+    .mockResolvedValue(
+      valueOr(overrides.acknowledged, {
+        ...snapshot(PRIOR_RUN_ID, "recovery-required"),
+        recoveryAcknowledged: true,
+      }),
+    );
+  const retry = vi
+    .fn<() => Promise<CodingWorkbenchRuntimeSnapshot>>()
+    .mockResolvedValue(valueOr(overrides.started, snapshot("run-new", "running")));
   return {
     subject: {
       readActiveWorkspace,
       readPriorRun: vi
         .fn<(runId: string) => Promise<CodingWorkbenchRuntimeSnapshot>>()
-        .mockResolvedValue(overrides.prior ?? snapshot(PRIOR_RUN_ID, RESUME.priorState)),
+        .mockResolvedValue(valueOr(overrides.prior, snapshot(PRIOR_RUN_ID, RESUME.priorState))),
       readWorktree,
       bindIssue,
       start,
+      acknowledgeRecovery,
+      retry,
+      readPredecessorRunId: vi
+        .fn<(runId: string) => string | undefined>()
+        .mockReturnValue(valueOr(overrides.predecessorRunId, PRIOR_RUN_ID)),
     },
     bindIssue,
     start,
+    acknowledgeRecovery,
+    retry,
   };
 }
 
@@ -183,6 +210,43 @@ describe("live qualification continuation", () => {
         KEIKO_QUALIFICATION_RESUME_PRIOR_STATE: "running",
       }),
     ).toThrow("prior state is invalid");
+    expect(
+      qualificationResumeBinding({
+        KEIKO_QUALIFICATION_RESUME_WORKSPACE: "1",
+        KEIKO_QUALIFICATION_RESUME_PRIOR_RUN_ID: RESUME.priorRunId,
+        KEIKO_QUALIFICATION_RESUME_WORKSPACE_ID: RESUME.workspaceId,
+        KEIKO_QUALIFICATION_RESUME_TASK_ID: RESUME.taskId,
+        KEIKO_QUALIFICATION_RESUME_REPOSITORY_ID: RESUME.repositoryId,
+        KEIKO_QUALIFICATION_RESUME_BASE_BRANCH: RESUME.baseBranch,
+        KEIKO_QUALIFICATION_RESUME_TASK_BRANCH: RESUME.taskBranch,
+        KEIKO_QUALIFICATION_RESUME_WORKTREE_PATH: RESUME.managedWorktreePath,
+        KEIKO_QUALIFICATION_RESUME_HEAD_SHA: RESUME.headSha,
+        KEIKO_QUALIFICATION_RESUME_ISSUE_BINDING_DIGEST: RESUME.issueBindingDigest,
+        KEIKO_QUALIFICATION_RESUME_WORKTREE_DIGEST: RESUME.worktreeDigest,
+        KEIKO_QUALIFICATION_RESUME_PRIOR_STATE: "recovery-required",
+        KEIKO_QUALIFICATION_RESUME_CORRECTION_INSTRUCTIONS: "  Repair the overflow regression.  ",
+      }),
+    ).toMatchObject({
+      priorState: "recovery-required",
+      correctionInstructions: "Repair the overflow regression.",
+    });
+    expect(() =>
+      qualificationResumeBinding({
+        KEIKO_QUALIFICATION_RESUME_WORKSPACE: "1",
+        KEIKO_QUALIFICATION_RESUME_PRIOR_RUN_ID: RESUME.priorRunId,
+        KEIKO_QUALIFICATION_RESUME_WORKSPACE_ID: RESUME.workspaceId,
+        KEIKO_QUALIFICATION_RESUME_TASK_ID: RESUME.taskId,
+        KEIKO_QUALIFICATION_RESUME_REPOSITORY_ID: RESUME.repositoryId,
+        KEIKO_QUALIFICATION_RESUME_BASE_BRANCH: RESUME.baseBranch,
+        KEIKO_QUALIFICATION_RESUME_TASK_BRANCH: RESUME.taskBranch,
+        KEIKO_QUALIFICATION_RESUME_WORKTREE_PATH: RESUME.managedWorktreePath,
+        KEIKO_QUALIFICATION_RESUME_HEAD_SHA: RESUME.headSha,
+        KEIKO_QUALIFICATION_RESUME_ISSUE_BINDING_DIGEST: RESUME.issueBindingDigest,
+        KEIKO_QUALIFICATION_RESUME_WORKTREE_DIGEST: RESUME.worktreeDigest,
+        KEIKO_QUALIFICATION_RESUME_PRIOR_STATE: "recovery-required",
+        KEIKO_QUALIFICATION_RESUME_CORRECTION_INSTRUCTIONS: "x".repeat(4_097),
+      }),
+    ).toThrow("correction instructions are invalid");
   });
 
   it("rebinds the exact existing workspace without changing model-authored files", async () => {
@@ -235,6 +299,43 @@ describe("live qualification continuation", () => {
     await expect(
       resumeExistingIssueWorkspace(failedPrior.subject, failedResume, 1, "governed-assist"),
     ).resolves.toMatchObject({ runId: "run-new" });
+  });
+
+  it("acknowledges recovery and retries the same workspace with an exact predecessor", async () => {
+    const resume = { ...RESUME, priorState: "recovery-required" as const };
+    const fixture = client({
+      prior: snapshot(PRIOR_RUN_ID, "recovery-required"),
+      predecessorRunId: PRIOR_RUN_ID,
+    });
+
+    await expect(
+      resumeExistingIssueWorkspace(fixture.subject, resume, 1, "governed-assist"),
+    ).resolves.toMatchObject({ runId: "run-new" });
+
+    expect(fixture.acknowledgeRecovery).toHaveBeenCalledOnce();
+    expect(fixture.retry).toHaveBeenCalledOnce();
+    expect(fixture.bindIssue).not.toHaveBeenCalled();
+    expect(fixture.start).not.toHaveBeenCalled();
+  });
+
+  it("refuses a recovery retry after workspace mutation or without predecessor linkage", async () => {
+    const resume = { ...RESUME, priorState: "recovery-required" as const };
+    const mutated = client({
+      prior: snapshot(PRIOR_RUN_ID, "recovery-required"),
+      digests: [WORKTREE_DIGEST, "9".repeat(64)],
+    });
+    await expect(
+      resumeExistingIssueWorkspace(mutated.subject, resume, 1, "governed-assist"),
+    ).rejects.toThrow("recovery acknowledgement changed model-authored files");
+    expect(mutated.retry).not.toHaveBeenCalled();
+
+    const unlinked = client({
+      prior: snapshot(PRIOR_RUN_ID, "recovery-required"),
+      predecessorRunId: "run-other",
+    });
+    await expect(
+      resumeExistingIssueWorkspace(unlinked.subject, resume, 1, "governed-assist"),
+    ).rejects.toThrow("predecessor binding is unavailable");
   });
 });
 

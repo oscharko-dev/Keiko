@@ -18,6 +18,8 @@ import {
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   assertRuntimeReady,
   ensureWorkflowEligibleModel,
@@ -39,6 +41,7 @@ const EMPTY_WORKTREE_DIGEST = createHash("sha256").digest("hex");
 const MAX_IDENTITY_FILES = 4_096;
 const MAX_IDENTITY_BYTES = 16 * 1024 * 1024;
 const MAX_GIT_OUTPUT_BYTES = 4 * 1024 * 1024;
+const MAX_CORRECTION_INSTRUCTIONS_CHARS = 4_096;
 
 export interface QualificationResumeBinding {
   readonly priorRunId: string;
@@ -51,7 +54,8 @@ export interface QualificationResumeBinding {
   readonly headSha: string;
   readonly issueBindingDigest: string;
   readonly worktreeDigest: string;
-  readonly priorState: "failed" | "cancelled";
+  readonly priorState: "failed" | "cancelled" | "recovery-required";
+  readonly correctionInstructions?: string | undefined;
 }
 
 interface ActiveWorkspaceIdentity {
@@ -70,6 +74,9 @@ interface ResumeWorkspaceClient {
   readonly readWorktree: (path: string) => Promise<WorktreeIdentity>;
   readonly bindIssue: () => Promise<void>;
   readonly start: () => Promise<CodingWorkbenchRuntimeSnapshot>;
+  readonly acknowledgeRecovery: () => Promise<CodingWorkbenchRuntimeSnapshot>;
+  readonly retry: () => Promise<CodingWorkbenchRuntimeSnapshot>;
+  readonly readPredecessorRunId: (runId: string) => string | undefined;
 }
 
 interface WorktreeIdentity {
@@ -83,6 +90,24 @@ function requiredEnv(env: Readonly<Record<string, string | undefined>>, key: str
     throw new Error(`${key} is required for qualification workspace continuation`);
   }
   return value;
+}
+
+function correctionInstructions(
+  env: Readonly<Record<string, string | undefined>>,
+): string | undefined {
+  const value = env.KEIKO_QUALIFICATION_RESUME_CORRECTION_INSTRUCTIONS;
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_CORRECTION_INSTRUCTIONS_CHARS) {
+    throw new Error("qualification continuation correction instructions are invalid");
+  }
+  return trimmed;
+}
+
+function priorState(value: string): QualificationResumeBinding["priorState"] {
+  const states: ReadonlySet<string> = new Set(["failed", "cancelled", "recovery-required"]);
+  if (!states.has(value)) throw new Error("qualification continuation prior state is invalid");
+  return value as QualificationResumeBinding["priorState"];
 }
 
 export function qualificationResumeBinding(
@@ -100,7 +125,7 @@ export function qualificationResumeBinding(
     headSha: requiredEnv(env, "KEIKO_QUALIFICATION_RESUME_HEAD_SHA"),
     issueBindingDigest: requiredEnv(env, "KEIKO_QUALIFICATION_RESUME_ISSUE_BINDING_DIGEST"),
     worktreeDigest: requiredEnv(env, "KEIKO_QUALIFICATION_RESUME_WORKTREE_DIGEST"),
-    priorState: requiredEnv(env, "KEIKO_QUALIFICATION_RESUME_PRIOR_STATE"),
+    priorState: priorState(requiredEnv(env, "KEIKO_QUALIFICATION_RESUME_PRIOR_STATE")),
   };
   if (!GIT_SHA.test(binding.headSha) || !SHA256.test(binding.issueBindingDigest)) {
     throw new Error("qualification continuation binding has an invalid digest");
@@ -108,10 +133,12 @@ export function qualificationResumeBinding(
   if (!SHA256.test(binding.worktreeDigest) || binding.worktreeDigest === EMPTY_WORKTREE_DIGEST) {
     throw new Error("qualification continuation worktree digest is invalid");
   }
-  if (binding.priorState !== "failed" && binding.priorState !== "cancelled") {
-    throw new Error("qualification continuation prior state is invalid");
-  }
-  return { ...binding, priorState: binding.priorState };
+  const correction = correctionInstructions(env);
+  return {
+    ...binding,
+    priorState: binding.priorState,
+    ...(correction === undefined ? {} : { correctionInstructions: correction }),
+  };
 }
 
 function sameWorkspace(
@@ -176,7 +203,7 @@ function assertNewRun(
   expected: QualificationResumeBinding,
   priorIssue: CodingWorkbenchIssueBinding,
   mode: CodingWorkbenchMode,
-): void {
+): string {
   if (
     snapshot.runId === undefined ||
     snapshot.runId === expected.priorRunId ||
@@ -186,6 +213,54 @@ function assertNewRun(
   ) {
     throw new Error("qualification continuation did not start a newly issue-bound run");
   }
+  return snapshot.runId;
+}
+
+function assertRecoveryAcknowledged(
+  snapshot: CodingWorkbenchRuntimeSnapshot,
+  expected: QualificationResumeBinding,
+  priorIssue: CodingWorkbenchIssueBinding,
+): void {
+  if (
+    snapshot.runId !== expected.priorRunId ||
+    snapshot.state !== "recovery-required" ||
+    snapshot.recoveryAcknowledged !== true ||
+    !sameIssueBinding(snapshot.issueBinding, priorIssue)
+  ) {
+    throw new Error("qualification continuation recovery acknowledgement is unavailable");
+  }
+}
+
+async function assertWorkspaceUnchanged(
+  client: ResumeWorkspaceClient,
+  expected: QualificationResumeBinding,
+  action: string,
+): Promise<void> {
+  const active = await client.readActiveWorkspace();
+  if (active === null || !sameWorkspace(active, expected)) {
+    throw new Error(`qualification continuation ${action} replaced the active workspace`);
+  }
+  const worktree = await client.readWorktree(expected.managedWorktreePath);
+  if (worktree.headSha !== expected.headSha || worktree.digest !== expected.worktreeDigest) {
+    throw new Error(`qualification continuation ${action} changed model-authored files`);
+  }
+}
+
+async function continueRecoveryRequired(
+  client: ResumeWorkspaceClient,
+  expected: QualificationResumeBinding,
+  priorIssue: CodingWorkbenchIssueBinding,
+  mode: CodingWorkbenchMode,
+): Promise<CodingWorkbenchRuntimeSnapshot> {
+  const acknowledged = await client.acknowledgeRecovery();
+  assertRecoveryAcknowledged(acknowledged, expected, priorIssue);
+  await assertWorkspaceUnchanged(client, expected, "recovery acknowledgement");
+  const started = await client.retry();
+  const startedRunId = assertNewRun(started, expected, priorIssue, mode);
+  if (client.readPredecessorRunId(startedRunId) !== expected.priorRunId) {
+    throw new Error("qualification continuation predecessor binding is unavailable");
+  }
+  return started;
 }
 
 export async function resumeExistingIssueWorkspace(
@@ -210,15 +285,11 @@ export async function resumeExistingIssueWorkspace(
   if (before.headSha !== expected.headSha || before.digest !== expected.worktreeDigest) {
     throw new Error("qualification continuation worktree changed before issue bind");
   }
+  if (expected.priorState === "recovery-required") {
+    return continueRecoveryRequired(client, expected, priorIssue, mode);
+  }
   await client.bindIssue();
-  const activeAfter = await client.readActiveWorkspace();
-  if (activeAfter === null || !sameWorkspace(activeAfter, expected)) {
-    throw new Error("qualification continuation issue bind replaced the active workspace");
-  }
-  const after = await client.readWorktree(expected.managedWorktreePath);
-  if (after.headSha !== expected.headSha || after.digest !== expected.worktreeDigest) {
-    throw new Error("qualification continuation issue bind changed model-authored files");
-  }
+  await assertWorkspaceUnchanged(client, expected, "issue bind");
   const started = await client.start();
   assertNewRun(started, expected, priorIssue, mode);
   return started;
@@ -328,20 +399,25 @@ async function readRun(page: Page, runId: string): Promise<CodingWorkbenchRuntim
   return (await response.json()) as CodingWorkbenchRuntimeSnapshot;
 }
 
-function continuationInstructions(): string {
-  return [
+function continuationInstructions(correction: string | undefined): string {
+  const instructions = [
     "Continue the linked issue from the existing operator-approved workspace changes.",
     "Inspect the current diff first; retain correct prior work and repair it where needed.",
     issueResolutionTaskInstructions(),
-  ].join(" ");
+  ];
+  if (correction !== undefined) {
+    instructions.push(`Apply this operator-observed correction: ${correction}`);
+  }
+  return instructions.join(" ");
 }
 
 async function startContinuation(
   page: Page,
   mode: CodingWorkbenchMode,
+  correction: string | undefined,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
   await selectCodingIssueMode(page, mode);
-  await page.getByLabel("Task instructions").fill(continuationInstructions());
+  await page.getByLabel("Task instructions").fill(continuationInstructions(correction));
   const startButton = page.getByRole("button", { name: "Start coding run", exact: true });
   await expect(startButton).toBeEnabled({ timeout: 60_000 });
   const responsePromise = page.waitForResponse(
@@ -353,6 +429,68 @@ async function startContinuation(
     true,
   );
   return (await response.json()) as CodingWorkbenchRuntimeSnapshot;
+}
+
+async function acknowledgeRecovery(
+  page: Page,
+  runId: string,
+): Promise<CodingWorkbenchRuntimeSnapshot> {
+  const endpoint = `${RUN_ENDPOINT}/${encodeURIComponent(runId)}/recovery-ack`;
+  const responsePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().endsWith(endpoint),
+  );
+  const button = page.getByRole("button", { name: "Acknowledge recovery", exact: true });
+  await expect(button).toBeEnabled({ timeout: 60_000 });
+  await button.click();
+  const response = await responsePromise;
+  expect(
+    response.ok(),
+    `recovery acknowledgement failed with HTTP ${String(response.status())}`,
+  ).toBe(true);
+  return (await response.json()) as CodingWorkbenchRuntimeSnapshot;
+}
+
+async function retryRecovery(
+  page: Page,
+  runId: string,
+  mode: CodingWorkbenchMode,
+  correction: string | undefined,
+): Promise<CodingWorkbenchRuntimeSnapshot> {
+  await selectCodingIssueMode(page, mode);
+  await page.getByLabel("Task instructions").fill(continuationInstructions(correction));
+  const endpoint = `${RUN_ENDPOINT}/${encodeURIComponent(runId)}/retry`;
+  const responsePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().endsWith(endpoint),
+  );
+  const button = page.getByRole("button", { name: "Retry as a fresh run", exact: true });
+  await expect(button).toBeEnabled({ timeout: 60_000 });
+  await button.click();
+  const response = await responsePromise;
+  expect(response.ok(), `recovery retry failed with HTTP ${String(response.status())}`).toBe(true);
+  return (await response.json()) as CodingWorkbenchRuntimeSnapshot;
+}
+
+function readPredecessorRunId(runId: string): string | undefined {
+  const stateDirectory = requiredEnv(process.env, "KEIKO_E2E_STATE_DIR");
+  const database = new DatabaseSync(join(stateDirectory, "ui-db", "keiko-ui.db"), {
+    readOnly: true,
+  });
+  try {
+    const row: unknown = database
+      .prepare("SELECT predecessor_run_id FROM coding_runtime_snapshots WHERE run_id = ?")
+      .get(runId);
+    if (typeof row !== "object" || row === null || Array.isArray(row)) {
+      throw new Error("qualification continuation successor snapshot is unavailable");
+    }
+    const predecessor = (row as Readonly<Record<string, unknown>>).predecessor_run_id;
+    if (predecessor === null) return undefined;
+    if (typeof predecessor !== "string" || predecessor.length === 0) {
+      throw new Error("qualification continuation predecessor snapshot is invalid");
+    }
+    return predecessor;
+  } finally {
+    database.close();
+  }
 }
 
 async function waitForDraftPullRequest(page: Page, runId: string): Promise<DeliveredPullRequest> {
@@ -387,6 +525,15 @@ export async function resumeIssueToDraftPullRequest(
       readActiveWorkspace: () => readActiveWorkspace(page),
       readPriorRun: (runId) => readRun(page, runId),
       readWorktree: readQualificationWorktree,
+      acknowledgeRecovery: () => acknowledgeRecovery(page, input.resume.priorRunId),
+      retry: () =>
+        retryRecovery(
+          page,
+          input.resume.priorRunId,
+          input.mode,
+          input.resume.correctionInstructions,
+        ),
+      readPredecessorRunId,
       bindIssue: async (): Promise<void> => {
         await reacceptBoundIssue(page, input.issueRef);
         if (await ensureWorkflowEligibleModel(page)) {
@@ -395,7 +542,7 @@ export async function resumeIssueToDraftPullRequest(
       },
       start: async (): Promise<CodingWorkbenchRuntimeSnapshot> => {
         await assertRuntimeReady(page, input.mode);
-        return startContinuation(page, input.mode);
+        return startContinuation(page, input.mode, input.resume.correctionInstructions);
       },
     },
     input.resume,

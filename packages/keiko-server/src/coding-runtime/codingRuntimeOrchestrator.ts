@@ -47,6 +47,7 @@ import {
 import {
   contentFreeErrorClass,
   emitServerDiagnostic,
+  serverDiagnosticFromError,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -288,6 +289,23 @@ function recordRuntimeLifecycleFailure(
     message: "runtime-lifecycle-failed",
     code: `stage=lifecycle:reason=${reason}`,
   });
+}
+
+function recordRuntimeStopFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    diagnostics,
+    serverDiagnosticFromError({
+      correlationId: runtimeDiagnosticCorrelationId(runId),
+      operation: "coding-runtime.stop",
+      source: "coding-runtime-orchestrator.permission-denied",
+      error,
+      redact: () => "Coding runtime stop failed.",
+    }),
+  );
 }
 
 function recordRuntimeRunStarted(
@@ -997,7 +1015,8 @@ export class CodingRuntimeOrchestrator {
       return stopped.ok
         ? this.transition(live, "failed", "revoked")
         : this.transition(live, "recovery-required", "recovery-required");
-    } catch {
+    } catch (error: unknown) {
+      recordRuntimeStopFailure(this.deps.diagnostics, current.runId, error);
       const live = this.current();
       return live === undefined
         ? this.fail("runtime-failed")

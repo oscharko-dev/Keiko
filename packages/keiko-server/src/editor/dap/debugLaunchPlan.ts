@@ -36,6 +36,8 @@ import {
 } from "./debugLaunchCatalog.js";
 import { isSafeDapSocketBasename, isSha256Digest } from "./debugLaunchSecurityPredicates.js";
 import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
+import type { ServerLogSink } from "../../observability/server-log.js";
+import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../../correlation.js";
 
 const CAPSULE_ROOT = "/keiko-execution-root" as const;
 const CAPSULE_RUNTIME_ROOT = "/run/keiko-debug" as const;
@@ -104,6 +106,7 @@ export interface DebugLaunchPlanDeps {
   readonly now: () => number;
   readonly epoch: () => number;
   readonly planCapsule?: typeof planStrictDebugCapsule | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 type OpaqueTarget =
@@ -698,7 +701,7 @@ async function buildPlan(
   const finalTarget = deriveTarget(candidate, context);
   if (finalTarget.targetIdentityDigest !== target.targetIdentityDigest)
     throw new DebugCapsulePlanError();
-  return assemblePlan({
+  const plan = assemblePlan({
     deps,
     input,
     context,
@@ -707,6 +710,38 @@ async function buildPlan(
     candidate,
     artifacts,
     provisioningDigest,
+  });
+  recordRuntimeSelection(
+    deps.activityLog,
+    input.correlationId,
+    target.kind,
+    artifacts.length,
+    plan,
+  );
+  return plan;
+}
+
+function recordRuntimeSelection(
+  activityLog: ServerLogSink | undefined,
+  correlationId: string | undefined,
+  targetKind: DebugLaunchTarget["kind"],
+  selectedArtifactCount: number,
+  plan: Layer2DebugCapsulePlan,
+): void {
+  activityLog?.write({
+    category: "process",
+    op: "dap.debug-runtime.selected",
+    correlationId:
+      correlationId !== undefined && isValidCorrelationId(correlationId)
+        ? correlationId
+        : UNKNOWN_CORRELATION_ID,
+    extra: {
+      targetKind,
+      selectedArtifactCount,
+      provisionedArtifactCount: plan.spawnEnvelope.artifacts.length,
+      runtimeIdentityDigest: plan.runtimeIdentityDigest,
+      provisioningDigest: plan.provisioningDigest,
+    },
   });
 }
 

@@ -1351,6 +1351,59 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });
 
+  it("records structured diagnostics when stopping a denied run fails", async () => {
+    const captured = captureDiagnostics();
+    const f = fixture(undefined, undefined, [], captured.diagnostics);
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "task-denied-stop-failure",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "task-submitted",
+    });
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "permission-denied-stop-failure",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-denied",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "approval-required",
+        actionKind: "file-edit",
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+    f.manager.stop.mockRejectedValueOnce(
+      new TypeError("private stop detail", { cause: new RangeError("private cause detail") }),
+    );
+
+    const result = await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-denied",
+      decision: "denied",
+      expectedRevision: 5,
+    });
+
+    expect(successfulSnapshot(result)).toMatchObject({
+      state: "recovery-required",
+      failureCode: "recovery-required",
+    });
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        correlationId: UNKNOWN_CORRELATION_ID,
+        operation: "coding-runtime.stop",
+        source: "coding-runtime-orchestrator.permission-denied",
+        errorClass: "TypeError",
+        causeChain: ["RangeError"],
+      }),
+    );
+    expect(JSON.stringify(captured.records)).not.toContain("private stop detail");
+    expect(JSON.stringify(captured.records)).not.toContain("private cause detail");
+  });
+
   it("queues concurrent permission asks without orphaning the operator-visible challenge", async () => {
     const captured = captureActivityLog();
     const f = fixture(undefined, undefined, [], undefined, captured.activityLog);

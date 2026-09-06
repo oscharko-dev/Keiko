@@ -138,19 +138,30 @@ function mergeStageDoesNotMatch(scenarioId, flow, finalFlow, binding) {
   return flow !== finalFlow || binding?.mergeCommitSha !== flow.mergeCommitSha;
 }
 
+function artifactResultAndPlatformFailures(expectedPlatform, receipt) {
+  const identity = receipt.artifactIdentity;
+  const checks = [
+    [identity?.platformTarget === expectedPlatform, "artifact platform mismatch"],
+    [
+      (identity?.result === "passed") === (receipt.testStatus === "passed"),
+      "artifact result disagrees with receipt test status",
+    ],
+  ];
+  return checks.filter(([valid]) => !valid).map(([, error]) => error);
+}
+
 function scenarioArtifactBindingFailures(scenario, receipt, headCommitSha) {
   if (receipt.artifactValidationErrors === null) return [];
   const identity = receipt.artifactIdentity;
   const checks = [
     [identity?.scenarioId === scenario.scenarioId, "artifact scenario identity mismatch"],
     [identity?.sourceCommitSha === headCommitSha, "artifact source commit is stale or foreign"],
-    [identity?.platformTarget === scenario.platform, "artifact platform mismatch"],
-    [
-      (identity?.result === "passed") === (receipt.testStatus === "passed"),
-      "artifact result disagrees with receipt test status",
-    ],
   ];
-  return checks.filter(([valid]) => !valid).map(([, error]) => `${scenario.scenarioId}: ${error}`);
+  const failures = [
+    ...checks.filter(([valid]) => !valid).map(([, error]) => error),
+    ...artifactResultAndPlatformFailures(scenario.platform, receipt),
+  ];
+  return failures.map((error) => `${scenario.scenarioId}: ${error}`);
 }
 
 function flowArtifactProjection(flow) {
@@ -216,7 +227,10 @@ function stageReceiptFailure(flow, stage, receiptsByScenarioId, headCommitSha) {
   ]
     .filter(([valid]) => !valid)
     .map(([, error]) => error);
-  for (const error of receipt.artifactValidationErrors ?? []) {
+  for (const error of [
+    ...artifactResultAndPlatformFailures(flow.platform, receipt),
+    ...(receipt.artifactValidationErrors ?? []),
+  ]) {
     failures.push(`${flow.flowId}: ${stage.scenarioId} stage ${error}`);
   }
   return failures;

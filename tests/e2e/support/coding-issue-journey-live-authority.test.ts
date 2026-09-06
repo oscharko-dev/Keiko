@@ -32,6 +32,39 @@ function events(changes: readonly Event[] = []): readonly Event[] {
 }
 
 describe("observeQualificationFlowAuthority", () => {
+  it("counts a policy denial settled before execution without inventing a start", () => {
+    const observed = events().filter(
+      (event) =>
+        event.op !== "tool-catalog.invocation-started" || event.invocationId !== "invocation-2",
+    );
+    expect(
+      observeQualificationFlowAuthority(observed, { runId: "run-1", mode: "governed-assist" }),
+    ).toMatchObject({ toolInvocationCount: 2, deniedToolCount: 1, effectStartedCount: 1 });
+  });
+
+  it.each([
+    { status: "completed", effectStarted: false },
+    { status: "denied", effectStarted: true },
+  ])("rejects an unstarted settlement with invalid execution evidence: %j", (settlement) => {
+    expect(() =>
+      observeQualificationFlowAuthority(
+        events([
+          { op: "tool-catalog.invocation-settled", invocationId: "unstarted", ...settlement },
+        ]),
+        { runId: "run-1", mode: "governed-assist" },
+      ),
+    ).toThrow("unmatched tool invocations");
+  });
+
+  it("rejects an execution start without its settlement", () => {
+    expect(() =>
+      observeQualificationFlowAuthority(
+        events([{ op: "tool-catalog.invocation-started", invocationId: "unfinished" }]),
+        { runId: "run-1", mode: "governed-assist" },
+      ),
+    ).toThrow("unmatched tool invocations");
+  });
+
   it("derives exact mode, approval, settlement, and effect counts from the run event tree", () => {
     expect(
       observeQualificationFlowAuthority(events(), {

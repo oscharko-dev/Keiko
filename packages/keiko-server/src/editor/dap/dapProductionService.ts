@@ -7,6 +7,7 @@ import {
 } from "../../diagnostics-log.js";
 import { createDapEvidenceProjector } from "./dapEvidenceProjector.js";
 import { createDapEventBridge, type DapEventBridge } from "./dapEventBridge.js";
+import { processServerLogSink } from "../../process-log-sink.js";
 import { createDapLifecycleLedger, type DapLifecycleLedger } from "./dapLifecycleLedger.js";
 import {
   createProductionDebugCapsuleLauncher,
@@ -203,6 +204,7 @@ function composeDapProductionService(
   const validateCapsulePlan = factories.createLayer2Validator({
     now: deps.now,
     epoch: deps.epoch,
+    activityLog: processServerLogSink(),
     resolveContext: (input) =>
       factories.createLaunchContextResolver({
         ...deps.provisioning.launchContext(input.binding),

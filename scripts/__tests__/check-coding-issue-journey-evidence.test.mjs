@@ -348,6 +348,40 @@ function stageFiveFlowEvidence(fixtureName = "valid", repairOrdinal = 1) {
   return { manifestPath, receiptsDir, descriptor, flows };
 }
 
+function rebindStageArtifact(staged, flowIndex, stageName, artifactPatch) {
+  const manifest = JSON.parse(readFileSync(staged.manifestPath, "utf8"));
+  const flow = manifest.flows[flowIndex];
+  const stage = flow.stageEvidence[stageName];
+  const receiptKey = `${flow.flowId}.${stage.scenarioId}`;
+  const artifactPath = join(staged.receiptsDir, `${receiptKey}.artifact`);
+  const artifact = JSON.parse(readFileSync(artifactPath, "utf8"));
+  writeFileSync(artifactPath, `${JSON.stringify({ ...artifact, ...artifactPatch }, null, 2)}\n`);
+
+  const stageReceipt = readReceipts(staged.receiptsDir).get(receiptKey);
+  if (stageReceipt === undefined) throw new Error(`missing staged receipt ${receiptKey}`);
+  const flowArtifactPath = join(staged.receiptsDir, `${flow.flowId}.artifact`);
+  const flowArtifact = JSON.parse(readFileSync(flowArtifactPath, "utf8"));
+  flowArtifact.stageEvidence[stageName].receiptDigest = stageReceipt.digest;
+  writeCodingIssueJourneyFlowEvidenceReceipt({
+    receiptsDir: staged.receiptsDir,
+    artifact: flowArtifact,
+    platform: "macos-arm64",
+    recordedAt: "2026-09-06T05:30:00Z",
+  });
+  const flowReceipt = readFlowReceipts(staged.receiptsDir, [flow.flowId]).get(flow.flowId);
+  if (flowReceipt === undefined) throw new Error(`missing staged flow ${flow.flowId}`);
+  manifest.flows[flowIndex] = {
+    ...flowArtifact,
+    platform: flowReceipt.platform,
+    provenance: flowReceipt.provenance,
+    recordedAt: flowReceipt.recordedAt,
+    artifactDigest: flowReceipt.artifactDigest,
+    receiptDigest: flowReceipt.receiptDigest,
+  };
+  writeFileSync(staged.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  return { flow, scenarioId: stage.scenarioId };
+}
+
 function git(root, ...args) {
   return execFileSync(GIT, args, { cwd: root, encoding: "utf8", stdio: "pipe" }).trim();
 }
@@ -891,6 +925,28 @@ describe("checkCodingIssueJourneyEvidence", () => {
     expect(missing.failures).toContain(
       `${flow.flowId}: missing description-auto-draft-and-apply stage receipt`,
     );
+  });
+
+  it.each([
+    [
+      "failed result",
+      { result: "failed", assertions: ["scenario-execution-failed:true"] },
+      "artifact result disagrees with receipt test status",
+    ],
+    ["foreign platform", { platformTarget: "linux-x64" }, "artifact platform mismatch"],
+  ])("rejects a bound per-flow stage artifact with a %s", async (_label, patch, failure) => {
+    const staged = stageFiveFlowEvidence();
+    const { flow, scenarioId } = rebindStageArtifact(staged, 1, "description", patch);
+    const result = await checkCodingIssueJourneyEvidence({
+      manifestPath: staged.manifestPath,
+      receiptsDir: staged.receiptsDir,
+      binding: BASE_BINDING,
+      descriptor: staged.descriptor,
+      headShas: HEAD_SHAS,
+    });
+
+    expect(result.verdict).toBe("blocked");
+    expect(result.failures).toContain(`${flow.flowId}: ${scenarioId} stage ${failure}`);
   });
 });
 
