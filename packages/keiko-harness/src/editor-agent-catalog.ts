@@ -17,8 +17,17 @@ import type {
   CatalogJsonObject,
   CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
+import {
+  type EditorAgentActionResult,
+  type EditorAgentConflictCode,
+  type EditorAgentFailureCode,
+  type ToolCallResult,
+  type ToolDefinition,
+} from "@oscharko-dev/keiko-contracts";
+import { isEditorAgentActionResult } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { isEditorAgentVerificationResult } from "@oscharko-dev/keiko-contracts/runtime/editor-agent-verification";
 import { EDITOR_AGENT_TOOL_DEFINITIONS } from "@oscharko-dev/keiko-tools";
+import type { EditorAgentToolOutput } from "@oscharko-dev/keiko-tools";
 import {
   createKeikoToolCatalog,
   createToolDescriptor,
@@ -30,6 +39,7 @@ import {
   createLegacyPortCatalogBinding,
   type LegacyPortCatalogBindingEvidence,
   type LegacyPortCatalogLifecycleObserver,
+  type LegacyPortCatalogResultDisposition,
 } from "./legacy-port-catalog.js";
 import type { HarnessCatalogFactory } from "./catalog-runtime.js";
 import type { ToolPort } from "./ports.js";
@@ -189,6 +199,107 @@ function activeEditorRegistrationSet(port: ToolPort): CatalogRegistrationSet {
   return { ...full, entries: full.entries.filter((entry) => active.has(entry.alias)) };
 }
 
+const RESULT_CONTRACT_FAILED = { status: "failed", reason: "result-contract-failed" } as const;
+
+const EDITOR_ERROR_DISPOSITIONS: Readonly<
+  Record<
+    Extract<EditorAgentToolOutput, { readonly ok: false }>["error"]["kind"],
+    LegacyPortCatalogResultDisposition
+  >
+> = {
+  cancelled: { status: "cancelled", reason: "explicit-cancellation" },
+  transport: { status: "failed", reason: "handler-failed" },
+  route: { status: "failed", reason: "handler-failed" },
+  "malformed-response": RESULT_CONTRACT_FAILED,
+  "invalid-arguments": { status: "invalid", reason: "invalid-arguments" },
+  host: { status: "failed", reason: "handler-failed" },
+};
+
+const EDITOR_FAILURE_DISPOSITIONS: Readonly<
+  Record<EditorAgentFailureCode, LegacyPortCatalogResultDisposition>
+> = {
+  TIMED_OUT: { status: "timeout", reason: "deadline-exceeded" },
+  QUEUE_FULL: { status: "busy", reason: "capacity-exhausted" },
+  CANCELLED: { status: "cancelled", reason: "explicit-cancellation" },
+  PROVIDER_UNAVAILABLE: { status: "failed", reason: "handler-unavailable" },
+  UNSUPPORTED_OPERATION: { status: "invalid", reason: "unsupported-capability" },
+  LIMIT_EXCEEDED: { status: "denied", reason: "budget-exhausted" },
+};
+
+const EDITOR_CONFLICT_DISPOSITIONS: Readonly<
+  Record<EditorAgentConflictCode, LegacyPortCatalogResultDisposition>
+> = {
+  DIRTY: { status: "invalid", reason: "workspace-stale" },
+  VERSION_MISMATCH: { status: "invalid", reason: "workspace-stale" },
+  CONTENT_HASH_MISMATCH: { status: "invalid", reason: "workspace-stale" },
+  NO_ACTIVE_SESSION: { status: "failed", reason: "handler-unavailable" },
+  NO_ACTIVE_BRIDGE: { status: "failed", reason: "handler-unavailable" },
+  INVALID_EDITS: { status: "invalid", reason: "invalid-arguments" },
+  OUT_OF_SCOPE: { status: "denied", reason: "workspace-denied" },
+  DECOMPOSE_PER_ROOT: { status: "invalid", reason: "unsupported-capability" },
+  PRECONDITION_REQUIRED: { status: "invalid", reason: "invalid-arguments" },
+  POLICY_DENIED: { status: "denied", reason: "effect-denied" },
+  APPROVAL_REQUIRED: { status: "denied", reason: "approval-required" },
+};
+
+function actionDisposition(result: EditorAgentActionResult): LegacyPortCatalogResultDisposition {
+  if (result.status === "succeeded") return { status: "completed", reason: "none" };
+  if (result.status === "queued") return { status: "busy", reason: "invocation-in-flight" };
+  if (result.status === "conflict")
+    return result.conflict === undefined
+      ? RESULT_CONTRACT_FAILED
+      : EDITOR_CONFLICT_DISPOSITIONS[result.conflict.code];
+  return result.failure === undefined
+    ? { status: "failed", reason: "handler-failed" }
+    : EDITOR_FAILURE_DISPOSITIONS[result.failure.code];
+}
+
+function failedEditorDisposition(
+  value: Record<string, unknown>,
+): LegacyPortCatalogResultDisposition {
+  const error = isRecord(value.error) ? value.error : undefined;
+  const kind = error?.kind;
+  return typeof kind === "string" && Object.hasOwn(EDITOR_ERROR_DISPOSITIONS, kind)
+    ? EDITOR_ERROR_DISPOSITIONS[
+        kind as Extract<EditorAgentToolOutput, { readonly ok: false }>["error"]["kind"]
+      ]
+    : RESULT_CONTRACT_FAILED;
+}
+
+function successfulEditorDisposition(
+  value: Record<string, unknown>,
+): LegacyPortCatalogResultDisposition {
+  if (value.kind === "action-result")
+    return isEditorAgentActionResult(value.result)
+      ? actionDisposition(value.result)
+      : RESULT_CONTRACT_FAILED;
+  if (value.kind === "verification") {
+    if (!isEditorAgentVerificationResult(value.result)) return RESULT_CONTRACT_FAILED;
+    if (value.result.outcome === "completed") return { status: "completed", reason: "none" };
+    return value.result.disposition === "review-required"
+      ? { status: "denied", reason: "approval-required" }
+      : { status: "denied", reason: "hard-denial" };
+  }
+  return value.kind === "sessions" || value.kind === "snapshot"
+    ? { status: "completed", reason: "none" }
+    : RESULT_CONTRACT_FAILED;
+}
+
+function parsedEditorDisposition(value: unknown): LegacyPortCatalogResultDisposition {
+  if (!isRecord(value) || typeof value.ok !== "boolean") return RESULT_CONTRACT_FAILED;
+  return value.ok ? successfulEditorDisposition(value) : failedEditorDisposition(value);
+}
+
+export function classifyEditorAgentCatalogResult(
+  result: ToolCallResult,
+): LegacyPortCatalogResultDisposition {
+  try {
+    return parsedEditorDisposition(JSON.parse(result.output));
+  } catch {
+    return RESULT_CONTRACT_FAILED;
+  }
+}
+
 /**
  * Binds an existing editor ToolPort to the "editor" catalog profile (#3408). Callers that must
  * scope dispatch to fewer than the full nine tools (agentProducerRoute.ts's PRODUCER_TOOL_NAMES)
@@ -205,6 +316,12 @@ export function createEditorAgentCatalogFactory(
 ): EditorAgentCatalogFactory {
   const set = activeEditorRegistrationSet(port);
   const catalog = createKeikoToolCatalog([set]);
-  const binding = createLegacyPortCatalogBinding(catalog, set.profile, port, observe);
+  const binding = createLegacyPortCatalogBinding(
+    catalog,
+    set.profile,
+    port,
+    observe,
+    classifyEditorAgentCatalogResult,
+  );
   return Object.assign(binding.factory, { evidence: binding.evidence });
 }

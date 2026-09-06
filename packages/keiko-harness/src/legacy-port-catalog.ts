@@ -31,6 +31,8 @@ import type {
 import type {
   ToolRef,
   ToolResultEnvelope,
+  ToolResultReason,
+  ToolResultStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   catalogJsonBytes,
@@ -100,6 +102,17 @@ export type LegacyPortCatalogLifecycleObserver = (
   observation: LegacyPortCatalogLifecycleObservation,
 ) => void;
 
+export type LegacyPortCatalogResultDisposition = {
+  readonly [Status in ToolResultStatus]: {
+    readonly status: Status;
+    readonly reason: ToolResultReason<Status>;
+  };
+}[ToolResultStatus];
+
+export type LegacyPortCatalogResultClassifier = (
+  result: ToolCallResult,
+) => LegacyPortCatalogResultDisposition;
+
 export interface LegacyPortCatalogBinding {
   readonly factory: HarnessCatalogFactory;
   readonly evidence: LegacyPortCatalogBindingEvidence;
@@ -127,6 +140,7 @@ export function createLegacyPortCatalogBinding(
   profile: CatalogVersionRef,
   port: ToolPort,
   observe?: LegacyPortCatalogLifecycleObserver,
+  classifyResult?: LegacyPortCatalogResultClassifier,
 ): LegacyPortCatalogBinding {
   const projection = compileToolProjection(catalog, profile);
   const offered = offeredSet(catalog, projection);
@@ -165,6 +179,7 @@ export function createLegacyPortCatalogBinding(
           context,
           evidence,
           observe,
+          classifyResult,
           request.toolCallId,
           request.invocation,
           nextInvocationId(),
@@ -283,7 +298,9 @@ function settledOutcome(
   reservationId: string,
   output: string,
   durationMs: number,
+  disposition: LegacyPortCatalogResultDisposition,
 ): Extract<CatalogToolDispatchOutcome, { readonly kind: "settled" }> {
+  const result = settledResult(invocation, invocationId, output, durationMs, disposition);
   return {
     kind: "settled",
     receipt: {
@@ -292,26 +309,74 @@ function settledOutcome(
       settlementId: invocationId,
       budgetDisposition: "committed",
       effectStarted: true,
-      status: "completed",
+      status: disposition.status,
     },
-    result: {
-      schemaVersion: 1,
-      invocationId,
-      toolRef: invocation.toolRef,
-      projectionDigest: invocation.projectionDigest,
-      status: "completed",
-      reason: "none",
-      effectStarted: true,
-      metrics: {
-        inputBytes: catalogJsonBytes(invocation.arguments),
-        outputBytes: catalogJsonBytes(output),
-        resultCount: 1,
-        durationMs,
-      },
-      page: { truncated: false, reason: "none", cursor: null },
-      data: output,
+    result,
+  };
+}
+
+interface SettledResultBase {
+  readonly schemaVersion: 1;
+  readonly invocationId: string;
+  readonly toolRef: BoundToolInvocation["toolRef"];
+  readonly projectionDigest: BoundToolInvocation["projectionDigest"];
+  readonly effectStarted: true;
+  readonly metrics: ToolResultEnvelope["metrics"];
+}
+
+function settledResultBase(
+  invocation: BoundToolInvocation,
+  invocationId: string,
+  output: string,
+  durationMs: number,
+): SettledResultBase {
+  return {
+    schemaVersion: 1 as const,
+    invocationId,
+    toolRef: invocation.toolRef,
+    projectionDigest: invocation.projectionDigest,
+    effectStarted: true,
+    metrics: {
+      inputBytes: catalogJsonBytes(invocation.arguments),
+      outputBytes: catalogJsonBytes(output),
+      resultCount: 0,
+      durationMs,
     },
   };
+}
+
+function settledResult(
+  invocation: BoundToolInvocation,
+  invocationId: string,
+  output: string,
+  durationMs: number,
+  disposition: LegacyPortCatalogResultDisposition,
+): ToolResultEnvelope {
+  const base = settledResultBase(invocation, invocationId, output, durationMs);
+  if (disposition.status === "completed")
+    return {
+      ...base,
+      metrics: { ...base.metrics, resultCount: 1 },
+      status: "completed",
+      reason: "none",
+      page: { truncated: false, reason: "none", cursor: null },
+      data: output,
+    };
+  const failure = { ...base, page: null, data: null };
+  switch (disposition.status) {
+    case "denied":
+      return { ...failure, status: "denied", reason: disposition.reason };
+    case "invalid":
+      return { ...failure, status: "invalid", reason: disposition.reason };
+    case "busy":
+      return { ...failure, status: "busy", reason: disposition.reason };
+    case "cancelled":
+      return { ...failure, status: "cancelled", reason: disposition.reason };
+    case "timeout":
+      return { ...failure, status: "timeout", reason: disposition.reason };
+    case "failed":
+      return { ...failure, status: "failed", reason: disposition.reason };
+  }
 }
 
 async function dispatch(
@@ -321,6 +386,7 @@ async function dispatch(
   context: HarnessCatalogContext,
   binding: LegacyPortCatalogBindingEvidence,
   observe: LegacyPortCatalogLifecycleObserver | undefined,
+  classifyResult: LegacyPortCatalogResultClassifier | undefined,
   toolCallId: string,
   invocation: BoundToolInvocation,
   invocationId: string,
@@ -341,6 +407,7 @@ async function dispatch(
     invocation,
     invocationId,
     observe,
+    classifyResult,
     port,
     toolCallId,
     alias,
@@ -359,6 +426,7 @@ interface ReservedDispatchInput {
   readonly toolCallId: string;
   readonly alias: string;
   readonly reservation: ToolInvocationBudgetReservation;
+  readonly classifyResult: LegacyPortCatalogResultClassifier | undefined;
 }
 
 async function dispatchReserved(input: ReservedDispatchInput): Promise<CatalogToolDispatchOutcome> {
@@ -398,6 +466,7 @@ async function dispatchReserved(input: ReservedDispatchInput): Promise<CatalogTo
     input.reservation.reservationId,
     executed.result.output,
     executed.result.durationMs,
+    input.classifyResult?.(executed.result) ?? { status: "completed", reason: "none" },
   );
   observeSettlement(observe, binding, outcome);
   return outcome;

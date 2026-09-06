@@ -5,11 +5,20 @@ import { compileToolProjection, createKeikoToolCatalog } from "@oscharko-dev/kei
 import { createHarnessCatalogBudget } from "./catalog-budget.js";
 import { newCounters } from "./context.js";
 import {
+  classifyEditorAgentCatalogResult,
   createEditorAgentCatalogFactory,
   editorAgentRegistrationSet,
 } from "./editor-agent-catalog.js";
 import { DEFAULT_LIMITS } from "./types.js";
 import type { ToolCallResult, ToolPort } from "./ports.js";
+
+function classify(payload: unknown): ReturnType<typeof classifyEditorAgentCatalogResult> {
+  return classifyEditorAgentCatalogResult({
+    toolCallId: "call-1",
+    output: JSON.stringify(payload),
+    durationMs: 1,
+  });
+}
 
 describe("editor agent registration set", () => {
   it("declares all nine editor descriptors under the reserved ADR-0175 identities", () => {
@@ -111,5 +120,53 @@ describe("editor agent registration set", () => {
     expect(advertisement.offered.toolRefs).toEqual(
       advertisement.projection.tools.map((tool) => tool.toolRef),
     );
+  });
+});
+
+describe("editor catalog settlement classification", () => {
+  it("distinguishes successful action, governed conflict, and structured host failure", () => {
+    expect(
+      classify({
+        ok: true,
+        kind: "action-result",
+        result: {
+          schemaVersion: "1",
+          actionId: "action-1",
+          sessionId: "session-1",
+          status: "succeeded",
+        },
+      }),
+    ).toEqual({ status: "completed", reason: "none" });
+    expect(
+      classify({
+        ok: true,
+        kind: "action-result",
+        result: {
+          schemaVersion: "1",
+          actionId: "action-2",
+          sessionId: "session-1",
+          status: "conflict",
+          conflict: { code: "NO_ACTIVE_BRIDGE", message: "Unavailable." },
+        },
+      }),
+    ).toEqual({ status: "failed", reason: "handler-unavailable" });
+    expect(classify({ ok: false, error: { kind: "host", code: "HOST_FAILURE" } })).toEqual({
+      status: "failed",
+      reason: "handler-failed",
+    });
+  });
+
+  it.each([
+    ["cancelled", { status: "cancelled", reason: "explicit-cancellation" }],
+    ["invalid-arguments", { status: "invalid", reason: "invalid-arguments" }],
+    ["malformed-response", { status: "failed", reason: "result-contract-failed" }],
+  ] as const)("maps the %s failure kind into the closed catalog vocabulary", (kind, expected) => {
+    expect(classify({ ok: false, error: { kind, code: "BODY_FREE" } })).toEqual(expected);
+  });
+
+  it("fails closed when the legacy output is malformed", () => {
+    expect(
+      classifyEditorAgentCatalogResult({ toolCallId: "call-1", output: "{", durationMs: 1 }),
+    ).toEqual({ status: "failed", reason: "result-contract-failed" });
   });
 });

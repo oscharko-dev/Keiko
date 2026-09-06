@@ -558,6 +558,43 @@ describe("editor-agent producer turn reachability (#2489 Findings 1/2)", () => {
     expectSucceededToolOutcome(response, "editor_search_workspace", "succeeded");
   });
 
+  it("records a real disconnected search conflict as a failed canonical settlement", async () => {
+    const current = fixture;
+    if (current === undefined) throw new Error("fixture missing");
+    const scripted = toolCallThenStop("editor_search_workspace", {
+      sessionId: SESSION_ID,
+      idempotencyKey: "idem-search-disconnected",
+      query: "producer-reachability-needle",
+      mode: "text",
+      maxResults: 5,
+    });
+    let disconnected = false;
+    current.setModel({
+      call: (request): Promise<NormalizedResponse> => {
+        if (!disconnected) {
+          disconnected = true;
+          current.disconnectBridge();
+        }
+        return scripted.call(request);
+      },
+    });
+    const response = await postProducerTurn(current.port);
+    expect(response.status).toBe(200);
+    expect(response.body.toolOutcomes).toEqual([
+      { toolName: "editor_search_workspace", ok: true, status: "conflict" },
+    ]);
+    const settlements = current.activityLogEvents.filter(
+      (event) => event.op === "tool-catalog.invocation-settled",
+    );
+    expect(settlements).toHaveLength(1);
+    expect(settlements[0]?.extra).toMatchObject({
+      status: "failed",
+      reason: "handler-unavailable",
+      effectStarted: true,
+      budgetDisposition: "committed",
+    });
+  });
+
   it("drives editor_git_context to real production dispatch", async () => {
     const current = fixture;
     if (current === undefined) throw new Error("fixture missing");
