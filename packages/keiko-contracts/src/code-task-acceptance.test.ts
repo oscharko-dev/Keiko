@@ -640,8 +640,21 @@ function validQualificationFlow(
       requestedMode: mode,
       effectiveMode: mode,
       approvalRequestCount: 2,
+      approvalRequests: [
+        { actionClass: "workspace-write", actionKind: "file-edit", requestCount: 1 },
+        {
+          actionClass: "delivery-substrate",
+          actionKind: "commit",
+          requestCount: 1,
+        },
+      ],
+      approvedProposalActions: [{ actionKind: "commit", approvalCount: 1 }],
       toolInvocationCount: 4,
       effectStartedCount: 3,
+      effectStartedTools: [
+        { canonicalId: "keiko.changeset.edit", contractVersion: 1, invocationCount: 1 },
+        { canonicalId: "keiko.verification.run", contractVersion: 1, invocationCount: 2 },
+      ],
       completedToolCount: 3,
       deniedToolCount: 0,
       failedToolCount: 1,
@@ -904,6 +917,17 @@ describe("validateCodeTaskQualificationManifest", () => {
     expect(
       validateCodeTaskQualificationFlowArtifact({
         ...base,
+        authorityObservation: {
+          ...base.authorityObservation,
+          approvalRequests: [
+            { actionClass: "workspace-write", actionKind: "commit", requestCount: 2 },
+          ],
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
         requiredChecks: { ...base.requiredChecks, observation: "unknown" },
       }).ok,
     ).toBe(false);
@@ -946,6 +970,39 @@ describe("validateCodeTaskQualificationManifest", () => {
     ).toBe(false);
   });
 
+  it("requires grouped action evidence and exact effectful tool references", () => {
+    const base = validQualificationFlow();
+    const duplicateRequest = base.authorityObservation.approvalRequests[0];
+    if (duplicateRequest === undefined) throw new Error("fixture approval request is unavailable");
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        authorityObservation: {
+          ...base.authorityObservation,
+          approvalRequests: [...base.authorityObservation.approvalRequests, duplicateRequest],
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        authorityObservation: {
+          ...base.authorityObservation,
+          approvedProposalActions: [{ actionKind: "commit", approvalCount: 2 }],
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        authorityObservation: {
+          ...base.authorityObservation,
+          effectStartedTools: [{ canonicalId: "keiko.changeset.edit", invocationCount: 3 }],
+        },
+      }).ok,
+    ).toBe(false);
+  });
+
   it.each(["approvalRequestCount", "effectStartedCount", "completedToolCount"] as const)(
     "rejects a zero %s authority observation",
     (field) => {
@@ -970,6 +1027,8 @@ describe("validateCodeTaskQualificationManifest", () => {
           requestedMode: "autonomous-delivery",
           effectiveMode: "autonomous-delivery",
           approvalRequestCount: 0,
+          approvalRequests: [],
+          approvedProposalActions: [],
         },
         stageEvidence: {
           ...base.stageEvidence,

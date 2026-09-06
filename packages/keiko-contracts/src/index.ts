@@ -963,8 +963,11 @@ export type {
 // #3390 qualification manifest: a versioned sibling of the #2384 acceptance contribution above,
 // reusing its closed vocabularies. See code-task-acceptance.ts's "Qualification manifest" section.
 export type {
+  CodeTaskQualificationApprovalRequestObservationV1,
+  CodeTaskQualificationApprovedProposalObservationV1,
   CodeTaskQualificationManifestV1,
   CodeTaskQualificationAuthorityObservationV1,
+  CodeTaskQualificationEffectToolObservationV1,
   CodeTaskQualificationFlowArtifactV1,
   CodeTaskQualificationFlowBindingV1,
   CodeTaskQualificationFlowStageEvidenceV1,
@@ -972,6 +975,7 @@ export type {
   CodeTaskQualificationFlowTransition,
   CodeTaskQualificationFlowV1,
   CodeTaskQualificationProvenance,
+  CodeTaskQualificationProposalActionKind,
   CodeTaskQualificationRequiredChecksV1,
   CodeTaskQualificationRubricReview,
   CodeTaskQualificationRubricReviewV1,

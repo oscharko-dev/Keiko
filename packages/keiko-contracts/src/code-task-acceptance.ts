@@ -3,7 +3,15 @@
 // one contribution bound to its final source/tree SHA. The payload is content-free by contract:
 // ids, digests, counts, outcomes, and repo-relative paths only — never file bodies, prompts,
 // commands, endpoints, or credentials.
-import type { CodingWorkbenchMode, CodingWorkbenchValidationResult } from "./coding-workbench.js";
+import {
+  CODING_WORKBENCH_ACTION_CLASSES,
+  CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
+  permissionKindForSupervisedCodingAction,
+  type CodingWorkbenchActionClass,
+  type CodingWorkbenchMode,
+  type CodingWorkbenchSupervisedActionKind,
+  type CodingWorkbenchValidationResult,
+} from "./coding-workbench.js";
 import { isGitCiReadinessEvidenceRef } from "./git-ci-readiness.js";
 
 export const CODE_TASK_ACCEPTANCE_SCHEMA_VERSION = 1;
@@ -647,12 +655,35 @@ export interface CodeTaskQualificationAuthorityObservationV1 {
   readonly requestedMode: CodingWorkbenchMode;
   readonly effectiveMode: CodingWorkbenchMode;
   readonly approvalRequestCount: number;
+  readonly approvalRequests: readonly CodeTaskQualificationApprovalRequestObservationV1[];
+  readonly approvedProposalActions: readonly CodeTaskQualificationApprovedProposalObservationV1[];
   readonly toolInvocationCount: number;
   readonly effectStartedCount: number;
+  readonly effectStartedTools: readonly CodeTaskQualificationEffectToolObservationV1[];
   readonly completedToolCount: number;
   readonly deniedToolCount: number;
   readonly failedToolCount: number;
   readonly otherToolCount: number;
+}
+
+export interface CodeTaskQualificationApprovalRequestObservationV1 {
+  readonly actionClass: CodingWorkbenchActionClass;
+  readonly actionKind: CodingWorkbenchSupervisedActionKind;
+  readonly requestCount: number;
+}
+
+export type CodeTaskQualificationProposalActionKind =
+  "git-stage" | "commit" | "push" | "pull-request";
+
+export interface CodeTaskQualificationApprovedProposalObservationV1 {
+  readonly actionKind: CodeTaskQualificationProposalActionKind;
+  readonly approvalCount: number;
+}
+
+export interface CodeTaskQualificationEffectToolObservationV1 {
+  readonly canonicalId: string;
+  readonly contractVersion: number;
+  readonly invocationCount: number;
 }
 
 export interface CodeTaskQualificationRubricReviewV1 {
@@ -862,6 +893,19 @@ const QUALIFICATION_AUTHORITY_OBSERVATION_KEYS = [
   "requestedMode",
   "effectiveMode",
   "approvalRequestCount",
+  "approvalRequests",
+  "approvedProposalActions",
+  "toolInvocationCount",
+  "effectStartedCount",
+  "effectStartedTools",
+  "completedToolCount",
+  "deniedToolCount",
+  "failedToolCount",
+  "otherToolCount",
+] as const;
+
+const QUALIFICATION_AUTHORITY_COUNT_KEYS = [
+  "approvalRequestCount",
   "toolInvocationCount",
   "effectStartedCount",
   "completedToolCount",
@@ -869,6 +913,23 @@ const QUALIFICATION_AUTHORITY_OBSERVATION_KEYS = [
   "failedToolCount",
   "otherToolCount",
 ] as const;
+
+const QUALIFICATION_APPROVAL_REQUEST_KEYS = ["actionClass", "actionKind", "requestCount"] as const;
+
+const QUALIFICATION_APPROVED_PROPOSAL_KEYS = ["actionKind", "approvalCount"] as const;
+
+const QUALIFICATION_EFFECT_TOOL_KEYS = [
+  "canonicalId",
+  "contractVersion",
+  "invocationCount",
+] as const;
+const QUALIFICATION_PROPOSAL_ACTION_KINDS = [
+  "git-stage",
+  "commit",
+  "push",
+  "pull-request",
+] as const;
+const CANONICAL_TOOL_ID_PATTERN = /^[a-z][a-z0-9.-]{2,127}$/u;
 
 const QUALIFICATION_RUBRIC_REVIEW_KEYS = [
   "reviewId",
@@ -1068,7 +1129,7 @@ function qualificationRequiredChecksErrors(value: unknown, path: string): readon
 function qualificationAuthorityObservationErrors(value: unknown, path: string): readonly string[] {
   if (!isRecord(value)) return [`${path} must be an object`];
   const errors = [...unknownKeys(value, QUALIFICATION_AUTHORITY_OBSERVATION_KEYS, path)];
-  for (const field of QUALIFICATION_AUTHORITY_OBSERVATION_KEYS.slice(2)) {
+  for (const field of QUALIFICATION_AUTHORITY_COUNT_KEYS) {
     const count = ownField(value, field);
     if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) {
       errors.push(`${path}.${field} must be a non-negative safe integer`);
@@ -1079,8 +1140,116 @@ function qualificationAuthorityObservationErrors(value: unknown, path: string): 
       errors.push(`${path}.${field} is invalid`);
     }
   }
+  errors.push(
+    ...qualificationApprovalRequestErrors(value, path),
+    ...qualificationApprovedProposalErrors(value, path),
+    ...qualificationEffectToolErrors(value, path),
+  );
   errors.push(...qualificationAuthorityCountErrors(value, path));
   return errors;
+}
+
+function qualificationApprovalRequestErrors(
+  value: Record<string, unknown>,
+  path: string,
+): readonly string[] {
+  const requests = ownField(value, "approvalRequests");
+  if (!Array.isArray(requests)) return [`${path}.approvalRequests must be an array`];
+  const errors = requests.flatMap((request, index) => {
+    const itemPath = `${path}.approvalRequests[${String(index)}]`;
+    if (!isRecord(request)) return [`${itemPath} must be an object`];
+    const itemErrors = [...unknownKeys(request, QUALIFICATION_APPROVAL_REQUEST_KEYS, itemPath)];
+    const actionClass = ownField(request, "actionClass");
+    const actionKind = ownField(request, "actionKind");
+    if (!isOneOf(actionClass, CODING_WORKBENCH_ACTION_CLASSES))
+      itemErrors.push(`${itemPath}.actionClass is invalid`);
+    if (!isOneOf(actionKind, CODING_WORKBENCH_SUPERVISED_ACTION_KINDS))
+      itemErrors.push(`${itemPath}.actionKind is invalid`);
+    if (
+      isOneOf(actionClass, CODING_WORKBENCH_ACTION_CLASSES) &&
+      isOneOf(actionKind, CODING_WORKBENCH_SUPERVISED_ACTION_KINDS) &&
+      permissionKindForSupervisedCodingAction(actionKind) !== actionClass
+    ) {
+      itemErrors.push(`${itemPath} actionClass does not match actionKind`);
+    }
+    if (!positiveSafeInteger(ownField(request, "requestCount")))
+      itemErrors.push(`${itemPath}.requestCount must be a positive safe integer`);
+    return itemErrors;
+  });
+  if (hasDuplicateObservedKeys(requests, ["actionClass", "actionKind"])) {
+    errors.push(`${path}.approvalRequests must group each action once`);
+  }
+  if (sumObservedCounts(requests, "requestCount") !== ownField(value, "approvalRequestCount"))
+    errors.push(`${path}.approvalRequests must account for approvalRequestCount`);
+  return errors;
+}
+
+function qualificationApprovedProposalErrors(
+  value: Record<string, unknown>,
+  path: string,
+): readonly string[] {
+  const actions = ownField(value, "approvedProposalActions");
+  if (!Array.isArray(actions)) return [`${path}.approvedProposalActions must be an array`];
+  const errors = actions.flatMap((action, index) => {
+    const itemPath = `${path}.approvedProposalActions[${String(index)}]`;
+    if (!isRecord(action)) return [`${itemPath} must be an object`];
+    const itemErrors = [...unknownKeys(action, QUALIFICATION_APPROVED_PROPOSAL_KEYS, itemPath)];
+    if (!isOneOf(ownField(action, "actionKind"), QUALIFICATION_PROPOSAL_ACTION_KINDS))
+      itemErrors.push(`${itemPath}.actionKind is invalid`);
+    if (!positiveSafeInteger(ownField(action, "approvalCount")))
+      itemErrors.push(`${itemPath}.approvalCount must be a positive safe integer`);
+    return itemErrors;
+  });
+  if (hasDuplicateObservedKeys(actions, ["actionKind"])) {
+    errors.push(`${path}.approvedProposalActions must group each action once`);
+  }
+  return errors;
+}
+
+function qualificationEffectToolErrors(
+  value: Record<string, unknown>,
+  path: string,
+): readonly string[] {
+  const tools = ownField(value, "effectStartedTools");
+  if (!Array.isArray(tools)) return [`${path}.effectStartedTools must be an array`];
+  const errors = tools.flatMap((tool, index) => {
+    const itemPath = `${path}.effectStartedTools[${String(index)}]`;
+    if (!isRecord(tool)) return [`${itemPath} must be an object`];
+    const itemErrors = [...unknownKeys(tool, QUALIFICATION_EFFECT_TOOL_KEYS, itemPath)];
+    const canonicalId = ownField(tool, "canonicalId");
+    if (typeof canonicalId !== "string" || !CANONICAL_TOOL_ID_PATTERN.test(canonicalId))
+      itemErrors.push(`${itemPath}.canonicalId is invalid`);
+    if (!positiveSafeInteger(ownField(tool, "contractVersion")))
+      itemErrors.push(`${itemPath}.contractVersion must be a positive safe integer`);
+    if (!positiveSafeInteger(ownField(tool, "invocationCount")))
+      itemErrors.push(`${itemPath}.invocationCount must be a positive safe integer`);
+    return itemErrors;
+  });
+  if (hasDuplicateObservedKeys(tools, ["canonicalId", "contractVersion"])) {
+    errors.push(`${path}.effectStartedTools must group each tool reference once`);
+  }
+  if (sumObservedCounts(tools, "invocationCount") !== ownField(value, "effectStartedCount"))
+    errors.push(`${path}.effectStartedTools must account for effectStartedCount`);
+  return errors;
+}
+
+function positiveSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function sumObservedCounts(values: readonly unknown[], field: string): number {
+  return values.reduce<number>((sum, value) => {
+    if (!isRecord(value)) return sum;
+    const count = ownField(value, field);
+    return positiveSafeInteger(count) ? sum + count : sum;
+  }, 0);
+}
+
+function hasDuplicateObservedKeys(values: readonly unknown[], fields: readonly string[]): boolean {
+  const keys = values
+    .filter(isRecord)
+    .map((value) => fields.map((field) => String(ownField(value, field))).join("\u0000"));
+  return new Set(keys).size !== keys.length;
 }
 
 function qualificationAuthorityCountErrors(
@@ -1103,7 +1272,35 @@ function qualificationAuthorityCountErrors(
   if (startedEffectsExceedInvocations(value)) {
     errors.push(`${path}.effectStartedCount cannot exceed toolInvocationCount`);
   }
+  if (approvedProposalsExceedRequests(value)) {
+    errors.push(`${path}.approvedProposalActions must match observed approval requests`);
+  }
   return errors;
+}
+
+function approvedProposalsExceedRequests(value: Record<string, unknown>): boolean {
+  const requests = ownField(value, "approvalRequests");
+  const approvals = ownField(value, "approvedProposalActions");
+  if (!Array.isArray(requests) || !Array.isArray(approvals)) return false;
+  const requestedCounts = new Map<string, number>();
+  for (const request of requests) {
+    if (!isRecord(request)) continue;
+    const actionKind = ownField(request, "actionKind");
+    const requestCount = ownField(request, "requestCount");
+    if (typeof actionKind === "string" && positiveSafeInteger(requestCount)) {
+      requestedCounts.set(actionKind, (requestedCounts.get(actionKind) ?? 0) + requestCount);
+    }
+  }
+  return approvals.some((approval) => {
+    if (!isRecord(approval)) return false;
+    const actionKind = ownField(approval, "actionKind");
+    const approvalCount = ownField(approval, "approvalCount");
+    return (
+      typeof actionKind === "string" &&
+      positiveSafeInteger(approvalCount) &&
+      approvalCount > (requestedCounts.get(actionKind) ?? 0)
+    );
+  });
 }
 
 function requiresObservedApproval(value: Record<string, unknown>): boolean {

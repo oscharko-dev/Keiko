@@ -231,8 +231,15 @@ describe("buildCodingIssueJourneyManifest", () => {
         requestedMode: "governed-assist",
         effectiveMode: "governed-assist",
         approvalRequestCount: 1,
+        approvalRequests: [
+          { actionClass: "workspace-write", actionKind: "file-edit", requestCount: 1 },
+        ],
+        approvedProposalActions: [],
         toolInvocationCount: 2,
         effectStartedCount: 1,
+        effectStartedTools: [
+          { canonicalId: "keiko.changeset.edit", contractVersion: 1, invocationCount: 1 },
+        ],
         completedToolCount: 2,
         deniedToolCount: 0,
         failedToolCount: 0,

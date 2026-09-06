@@ -4,8 +4,19 @@
 
 import type {
   CodeTaskQualificationAuthorityObservationV1,
+  CodeTaskQualificationApprovalRequestObservationV1,
+  CodeTaskQualificationApprovedProposalObservationV1,
+  CodeTaskQualificationEffectToolObservationV1,
+  CodeTaskQualificationProposalActionKind,
+  CodingWorkbenchActionClass,
   CodingWorkbenchMode,
+  CodingWorkbenchSupervisedActionKind,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  CODING_WORKBENCH_ACTION_CLASSES,
+  CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
+  permissionKindForSupervisedCodingAction,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 type ActivityEvent = Readonly<Record<string, unknown>>;
 
@@ -23,6 +34,15 @@ const TOOL_SETTLEMENT_STATUSES = new Set([
   "timeout",
   "failed",
 ]);
+const PROPOSAL_ACTION_KINDS = ["git-stage", "commit", "push", "pull-request"] as const;
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isOneOf<Value extends string>(value: unknown, values: readonly Value[]): value is Value {
+  return typeof value === "string" && values.some((candidate) => candidate === value);
+}
 
 function exactlyOne(
   events: readonly ActivityEvent[],
@@ -64,6 +84,136 @@ function runIdentity(events: readonly ActivityEvent[], binding: AuthorityObserva
 
 function statusCount(events: readonly ActivityEvent[], status: string): number {
   return events.filter((event) => event.status === status).length;
+}
+
+interface ObservedApprovalRequest {
+  readonly requestId: string;
+  readonly actionClass: CodingWorkbenchActionClass;
+  readonly actionKind: CodingWorkbenchSupervisedActionKind;
+}
+
+function approvalRequestFromEvent(
+  event: ActivityEvent,
+  binding: AuthorityObservationBinding,
+): ObservedApprovalRequest {
+  const { requestId, permissionKind, actionClass, actionKind } = event;
+  if (
+    event.runId !== binding.runId ||
+    typeof requestId !== "string" ||
+    requestId.length === 0 ||
+    !isOneOf(actionClass, CODING_WORKBENCH_ACTION_CLASSES) ||
+    !isOneOf(actionKind, CODING_WORKBENCH_SUPERVISED_ACTION_KINDS) ||
+    permissionKind !== actionClass ||
+    permissionKindForSupervisedCodingAction(actionKind) !== actionClass
+  ) {
+    throw new Error("qualification authority observation contains an invalid approval request");
+  }
+  return { requestId, actionClass, actionKind };
+}
+
+function assertStableApprovalRequest(
+  prior: Omit<ObservedApprovalRequest, "requestId"> | undefined,
+  current: Omit<ObservedApprovalRequest, "requestId">,
+): void {
+  if (
+    prior !== undefined &&
+    (prior.actionClass !== current.actionClass || prior.actionKind !== current.actionKind)
+  ) {
+    throw new Error("qualification authority observation has changed approval request metadata");
+  }
+}
+
+function approvalRequests(
+  events: readonly ActivityEvent[],
+  binding: AuthorityObservationBinding,
+): readonly CodeTaskQualificationApprovalRequestObservationV1[] {
+  const approvals = events.filter((event) => event.op === "coding-runtime.approval.waiting");
+  const byRequest = new Map<
+    string,
+    { actionClass: CodingWorkbenchActionClass; actionKind: CodingWorkbenchSupervisedActionKind }
+  >();
+  for (const event of approvals) {
+    const { requestId, ...current } = approvalRequestFromEvent(event, binding);
+    assertStableApprovalRequest(byRequest.get(requestId), current);
+    byRequest.set(requestId, current);
+  }
+  const grouped = new Map<string, CodeTaskQualificationApprovalRequestObservationV1>();
+  for (const approval of byRequest.values()) {
+    const key = `${approval.actionClass}\u0000${approval.actionKind}`;
+    const prior = grouped.get(key);
+    grouped.set(key, { ...approval, requestCount: (prior?.requestCount ?? 0) + 1 });
+  }
+  return [...grouped.values()].sort((left, right) =>
+    `${left.actionClass}:${left.actionKind}`.localeCompare(
+      `${right.actionClass}:${right.actionKind}`,
+    ),
+  );
+}
+
+function approvedProposalActions(
+  events: readonly ActivityEvent[],
+): readonly CodeTaskQualificationApprovedProposalObservationV1[] {
+  const approvals = events.filter(
+    (event) =>
+      event.op === "coding-runtime.tool-result" &&
+      event.state === "approval-wait-settled" &&
+      event.reason === "approved",
+  );
+  const byProposal = new Map<string, CodeTaskQualificationProposalActionKind>();
+  for (const event of approvals) {
+    const { proposalId, actionKind } = event;
+    if (
+      typeof proposalId !== "string" ||
+      proposalId.length === 0 ||
+      !isOneOf(actionKind, PROPOSAL_ACTION_KINDS)
+    ) {
+      throw new Error("qualification authority observation has invalid approved proposal evidence");
+    }
+    const prior = byProposal.get(proposalId);
+    if (prior !== undefined && prior !== actionKind) {
+      throw new Error("qualification authority observation has changed approved proposal metadata");
+    }
+    byProposal.set(proposalId, actionKind);
+  }
+  const counts = new Map<CodeTaskQualificationProposalActionKind, number>();
+  for (const actionKind of byProposal.values()) {
+    counts.set(actionKind, (counts.get(actionKind) ?? 0) + 1);
+  }
+  return [...counts]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([actionKind, approvalCount]) => ({ actionKind, approvalCount }));
+}
+
+function effectStartedTools(
+  settlements: readonly ActivityEvent[],
+): readonly CodeTaskQualificationEffectToolObservationV1[] {
+  const counts = new Map<string, CodeTaskQualificationEffectToolObservationV1>();
+  for (const event of settlements.filter((candidate) => candidate.effectStarted === true)) {
+    const toolRef = event.toolRef;
+    if (!isRecord(toolRef)) {
+      throw new Error("qualification authority observation has invalid effectful tool reference");
+    }
+    const { canonicalId, contractVersion } = toolRef;
+    if (
+      typeof canonicalId !== "string" ||
+      !Number.isSafeInteger(contractVersion) ||
+      Number(contractVersion) <= 0
+    ) {
+      throw new Error("qualification authority observation has invalid effectful tool reference");
+    }
+    const key = `${canonicalId}\u0000${String(contractVersion)}`;
+    const prior = counts.get(key);
+    counts.set(key, {
+      canonicalId,
+      contractVersion: Number(contractVersion),
+      invocationCount: (prior?.invocationCount ?? 0) + 1,
+    });
+  }
+  return [...counts.values()].sort((left, right) =>
+    `${left.canonicalId}:${String(left.contractVersion)}`.localeCompare(
+      `${right.canonicalId}:${String(right.contractVersion)}`,
+    ),
+  );
 }
 
 function assertSettlementPairing(
@@ -129,17 +279,20 @@ export function observeQualificationFlowAuthority(
   binding: AuthorityObservationBinding,
 ): CodeTaskQualificationAuthorityObservationV1 {
   runIdentity(events, binding);
-  const approvals = events.filter((event) => event.op === "coding-runtime.approval.waiting");
-  if (approvals.some((event) => event.runId !== binding.runId)) {
-    throw new Error("qualification authority observation contains a foreign approval request");
-  }
-  uniqueIds(approvals, "requestId", "approval request");
+  const approvalRequestObservations = approvalRequests(events, binding);
   const starts = events.filter((event) => event.op === "tool-catalog.invocation-started");
   const settlements = events.filter((event) => event.op === "tool-catalog.invocation-settled");
+  const counts = settlementCounts(starts, settlements);
   return {
     requestedMode: binding.mode,
     effectiveMode: binding.mode,
-    approvalRequestCount: approvals.length,
-    ...settlementCounts(starts, settlements),
+    approvalRequestCount: approvalRequestObservations.reduce(
+      (count, observation) => count + observation.requestCount,
+      0,
+    ),
+    approvalRequests: approvalRequestObservations,
+    approvedProposalActions: approvedProposalActions(events),
+    effectStartedTools: effectStartedTools(settlements),
+    ...counts,
   };
 }

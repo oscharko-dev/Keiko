@@ -11,20 +11,37 @@ function events(changes: readonly Event[] = []): readonly Event[] {
       requestedMode: "governed-assist",
       effectiveMode: "governed-assist",
     },
-    { op: "coding-runtime.approval.waiting", runId: "run-1", requestId: "approval-1" },
-    { op: "tool-catalog.invocation-started", invocationId: "invocation-1" },
+    {
+      op: "coding-runtime.approval.waiting",
+      runId: "run-1",
+      requestId: "approval-1",
+      permissionKind: "workspace-write",
+      actionClass: "workspace-write",
+      actionKind: "file-edit",
+    },
+    {
+      op: "tool-catalog.invocation-started",
+      invocationId: "invocation-1",
+      toolRef: { canonicalId: "keiko.changeset.edit", contractVersion: 1 },
+    },
     {
       op: "tool-catalog.invocation-settled",
       invocationId: "invocation-1",
       status: "completed",
       effectStarted: true,
+      toolRef: { canonicalId: "keiko.changeset.edit", contractVersion: 1 },
     },
-    { op: "tool-catalog.invocation-started", invocationId: "invocation-2" },
+    {
+      op: "tool-catalog.invocation-started",
+      invocationId: "invocation-2",
+      toolRef: { canonicalId: "keiko.workspace.read", contractVersion: 1 },
+    },
     {
       op: "tool-catalog.invocation-settled",
       invocationId: "invocation-2",
       status: "denied",
       effectStarted: false,
+      toolRef: { canonicalId: "keiko.workspace.read", contractVersion: 1 },
     },
     { op: "coding-runtime.run.settled", runId: "run-1", state: "succeeded" },
     ...changes,
@@ -81,7 +98,78 @@ describe("observeQualificationFlowAuthority", () => {
       deniedToolCount: 1,
       failedToolCount: 0,
       otherToolCount: 0,
+      approvalRequests: [
+        { actionClass: "workspace-write", actionKind: "file-edit", requestCount: 1 },
+      ],
+      approvedProposalActions: [],
+      effectStartedTools: [
+        { canonicalId: "keiko.changeset.edit", contractVersion: 1, invocationCount: 1 },
+      ],
     });
+  });
+
+  it("deduplicates repeated waiting projections and rejects changed action metadata", () => {
+    const repeated = {
+      op: "coding-runtime.approval.waiting",
+      runId: "run-1",
+      requestId: "approval-1",
+      permissionKind: "workspace-write",
+      actionClass: "workspace-write",
+      actionKind: "file-edit",
+      queuePosition: 1,
+    } as const;
+    expect(
+      observeQualificationFlowAuthority(events([repeated]), {
+        runId: "run-1",
+        mode: "governed-assist",
+      }).approvalRequestCount,
+    ).toBe(1);
+    expect(() =>
+      observeQualificationFlowAuthority(
+        events([
+          {
+            ...repeated,
+            permissionKind: "command-execution",
+            actionClass: "command-execution",
+            actionKind: "verification-command",
+          },
+        ]),
+        { runId: "run-1", mode: "governed-assist" },
+      ),
+    ).toThrow("changed approval request metadata");
+    expect(() =>
+      observeQualificationFlowAuthority(
+        events([{ ...repeated, permissionKind: "command-execution" }]),
+        { runId: "run-1", mode: "governed-assist" },
+      ),
+    ).toThrow("invalid approval request");
+  });
+
+  it("retains approved proposal actions and exact effectful catalog tools", () => {
+    const observed = observeQualificationFlowAuthority(
+      events([
+        {
+          op: "coding-runtime.approval.waiting",
+          runId: "run-1",
+          requestId: "approval-2",
+          permissionKind: "delivery-substrate",
+          actionClass: "delivery-substrate",
+          actionKind: "commit",
+        },
+        {
+          op: "coding-runtime.tool-result",
+          state: "approval-wait-settled",
+          reason: "approved",
+          actionKind: "commit",
+          proposalId: "commit-1",
+        },
+      ]),
+      { runId: "run-1", mode: "governed-assist" },
+    );
+    expect(observed.approvedProposalActions).toEqual([{ actionKind: "commit", approvalCount: 1 }]);
+    expect(observed.effectStartedTools).toEqual([
+      { canonicalId: "keiko.changeset.edit", contractVersion: 1, invocationCount: 1 },
+    ]);
   });
 
   it("retains a real zero approval count for a full-access run", () => {
@@ -130,15 +218,7 @@ describe("observeQualificationFlowAuthority", () => {
     ).toThrow("tool settlement");
   });
 
-  it("refuses duplicate approval and invocation identities", () => {
-    expect(() =>
-      observeQualificationFlowAuthority(
-        events([
-          { op: "coding-runtime.approval.waiting", runId: "run-1", requestId: "approval-1" },
-        ]),
-        { runId: "run-1", mode: "governed-assist" },
-      ),
-    ).toThrow("approval request");
+  it("refuses duplicate invocation identities", () => {
     expect(() =>
       observeQualificationFlowAuthority(
         events([
