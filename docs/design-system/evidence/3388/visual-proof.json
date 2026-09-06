@@ -1,28 +1,28 @@
 {
   "schemaVersion": 1,
   "issue": 3388,
-  "checkedAt": "2026-09-05T03:11:45.270Z",
+  "checkedAt": "2026-09-06T20:18:33.113Z",
   "evidenceClass": "production-composed-deterministic-browser",
   "modelQualification": false,
   "sourceHashes": {
     "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchCiReadiness.tsx": "9d8e5d10d2be6d951fa51e0d087ababaf929dd4e513bc2af46f05ffa01c4b752",
     "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchCiReadiness.module.css": "015fda13fc6bf47dd0bf986de33fb8205b49ebeb1f54a88eb9508f85616af99c",
-    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/coding-workbench-i18n.en.ts": "4d0ffa863cb43dbee7682d99bc645928e4ccf41d2237610997475ba076997401",
-    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/coding-workbench-i18n.de.ts": "0d594df07fedeeb8460436ddc1d1739276524b6eaab57a464edfffd3167fa591",
-    "tests/e2e/coding-issue-ci.spec.ts": "d7207403770e76ddb250ff350e9fede30e2588bbf673ee89a80117637730aa32",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/coding-workbench-i18n.en.ts": "2f9ab2d0aeeae685f2e20e60c9759f7ee3fec4bab548adf88c304496c2eae5c7",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/coding-workbench-i18n.de.ts": "179559314b40a3f46eccabb925a6deac88d73a1fb233a82917f5ff45c5260b7c",
+    "tests/e2e/coding-issue-ci.spec.ts": "a512011a725db002737586caa1d59e0b6f06cf762cf9293e8ba51f591240a306",
     "tests/e2e/servers/coding-issue-ci-fixture.mts": "59be298be7b2d833783d42aa4866a09d73565d6a6ad1c6f085337c1b28329b6e",
     "tests/e2e/servers/coding-issue-ci-driver.mts": "c0003632ea93dffb1f9a511d7cacc970ceebcd7079a257fbece020b6fbb383da",
-    "packages/keiko-server/src/coding-runtime/productionCiObservationRuntime.ts": "becde7acf5e48090873c74a5d9a931de40ce244852e64499a7faf1eeaecea85f",
-    "packages/keiko-server/src/gitDelivery/ciObservationService.ts": "3863aab5ffa88b535862041fa412fce0dc6bb6de6ebe0ededb7f8d94d728da42",
-    "packages/keiko-server/src/gitDelivery/ciReadinessSnapshot.ts": "1c538f881a628d7197e8e6737c5db33022331d743f88c928ef6a706734c9b7f4",
-    "packages/keiko-tools/src/git-ci-facts.ts": "4285be04aff4bcba5d1f40b8c34321c400f9c7851db059f69b2fd512ffc491ed"
+    "packages/keiko-server/src/coding-runtime/productionCiObservationRuntime.ts": "6bd8a789749a8c8c4a8d71e2863b9bb82a762b2f081816db42b9fd19d225363d",
+    "packages/keiko-server/src/gitDelivery/ciObservationService.ts": "e4f797105d77fd77015351918546bb6b23e2b93f5b68ae243b8016f5ea641f56",
+    "packages/keiko-server/src/gitDelivery/ciReadinessSnapshot.ts": "59fbe501a46195763facbfff7b02668913cd8d6465da7f4f6ec076d85ed637fd",
+    "packages/keiko-tools/src/git-ci-facts.ts": "81de9ad701073556eb1e0ad31e2de7f245f29a50f24784c7abbf0553979995e5"
   },
   "captures": [
     {
       "name": "01-dark",
       "theme": "dark",
       "screenshot": "docs/design-system/evidence/3388/01-dark.png",
-      "screenshotSha256": "2f99d0288ae328e0097cd37576d6800834a91656bb8bbf3f2a404c81c3c7c940",
+      "screenshotSha256": "9cc544afbce6deb9d625e6ca120c0bc7731c04db38d1413c1990001f6d5126f5",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -31,7 +31,7 @@
       "name": "02-light",
       "theme": "light",
       "screenshot": "docs/design-system/evidence/3388/02-light.png",
-      "screenshotSha256": "b55a7cbaf186dc1be465b5da9acea40fd928f3f4fcbcfba5c573cbcb8d406d4b",
+      "screenshotSha256": "d957fd7f51ff76fca0efb9a3cac943d65c5fa634eb4f50319a7cd370a4f50edb",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -41,7 +41,7 @@
       "theme": "dark",
       "highContrast": true,
       "screenshot": "docs/design-system/evidence/3388/03-dark-high-contrast.png",
-      "screenshotSha256": "b2696d2d6e57142e25c2f7ebcc32db15ee52b8f2ced7be7836da50dc4e4da055",
+      "screenshotSha256": "5880f2897e26dd3cd5a8b53231af5220ee2b5bf84b3e82edacd72b3fe971a740",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -51,7 +51,7 @@
       "theme": "light",
       "highContrast": true,
       "screenshot": "docs/design-system/evidence/3388/04-light-high-contrast.png",
-      "screenshotSha256": "d0c825fc6f135d361d43b4708fa919add8a4d5d65839aaf9d543fc7dd1cfd125",
+      "screenshotSha256": "27804456cd8de8d84e9b7c6e90ff97f581923b7f225fba46d3dffee437c75dd8",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -61,7 +61,7 @@
       "theme": "dark",
       "contrast": "more",
       "screenshot": "docs/design-system/evidence/3388/05-prefers-contrast.png",
-      "screenshotSha256": "b2696d2d6e57142e25c2f7ebcc32db15ee52b8f2ced7be7836da50dc4e4da055",
+      "screenshotSha256": "5880f2897e26dd3cd5a8b53231af5220ee2b5bf84b3e82edacd72b3fe971a740",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -71,7 +71,7 @@
       "theme": "dark",
       "forcedColors": "active",
       "screenshot": "docs/design-system/evidence/3388/06-forced-colors.png",
-      "screenshotSha256": "b971624889880e123beb642735e647c1242687f5c665a0ba1f9a5b6a6ec598de",
+      "screenshotSha256": "b4faababef77d5b439d0002b1f2fafa0bd0940c9c77ea01656bfcd4af3e0264e",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -81,7 +81,7 @@
       "theme": "dark",
       "reducedMotion": "reduce",
       "screenshot": "docs/design-system/evidence/3388/07-reduced-motion.png",
-      "screenshotSha256": "4a1fc18bfd7d373a7ed31b5bddcbfce95923fc198686c04163ea650578bd8abb",
+      "screenshotSha256": "eead2d77957aea71aae19eb242f487fc7e995830f3769c974307eee9bc3813c7",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -91,7 +91,7 @@
       "theme": "dark",
       "width": 360,
       "screenshot": "docs/design-system/evidence/3388/08-compact.png",
-      "screenshotSha256": "e540bb0c3a4fa3e5392a20806f1129b2104785300c23e68916444de378424f8d",
+      "screenshotSha256": "4173424d2909d2d576152155ec2ac1dfb70cdeeb3336551c9cc026347ab80c3f",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []

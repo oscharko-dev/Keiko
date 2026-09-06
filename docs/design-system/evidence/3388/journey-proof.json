@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "issue": 3388,
-  "checkedAt": "2026-09-05T03:12:22.910Z",
+  "checkedAt": "2026-09-06T20:20:29.396Z",
   "passed": true,
   "evidenceClass": "production-composed-deterministic-browser",
   "modelQualification": false,
@@ -10,20 +10,20 @@
     "#3388 @coding-issue-ci pending failure approved repair new head and technical readiness",
     "#3388 @coding-issue-ci incomplete visibility and wrong PR or head never become ready"
   ],
-  "correlatedObservationCount": 12,
-  "correlatedDisplayCount": 3,
+  "correlatedObservationCount": 14,
+  "correlatedDisplayCount": 22,
   "sourceHashes": {
     "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchCiReadiness.tsx": "9d8e5d10d2be6d951fa51e0d087ababaf929dd4e513bc2af46f05ffa01c4b752",
     "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchCiReadiness.module.css": "015fda13fc6bf47dd0bf986de33fb8205b49ebeb1f54a88eb9508f85616af99c",
-    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/coding-workbench-i18n.en.ts": "4d0ffa863cb43dbee7682d99bc645928e4ccf41d2237610997475ba076997401",
-    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/coding-workbench-i18n.de.ts": "0d594df07fedeeb8460436ddc1d1739276524b6eaab57a464edfffd3167fa591",
-    "tests/e2e/coding-issue-ci.spec.ts": "d7207403770e76ddb250ff350e9fede30e2588bbf673ee89a80117637730aa32",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/coding-workbench-i18n.en.ts": "2f9ab2d0aeeae685f2e20e60c9759f7ee3fec4bab548adf88c304496c2eae5c7",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/coding-workbench-i18n.de.ts": "179559314b40a3f46eccabb925a6deac88d73a1fb233a82917f5ff45c5260b7c",
+    "tests/e2e/coding-issue-ci.spec.ts": "a512011a725db002737586caa1d59e0b6f06cf762cf9293e8ba51f591240a306",
     "tests/e2e/servers/coding-issue-ci-fixture.mts": "59be298be7b2d833783d42aa4866a09d73565d6a6ad1c6f085337c1b28329b6e",
     "tests/e2e/servers/coding-issue-ci-driver.mts": "c0003632ea93dffb1f9a511d7cacc970ceebcd7079a257fbece020b6fbb383da",
-    "packages/keiko-server/src/coding-runtime/productionCiObservationRuntime.ts": "becde7acf5e48090873c74a5d9a931de40ce244852e64499a7faf1eeaecea85f",
-    "packages/keiko-server/src/gitDelivery/ciObservationService.ts": "3863aab5ffa88b535862041fa412fce0dc6bb6de6ebe0ededb7f8d94d728da42",
-    "packages/keiko-server/src/gitDelivery/ciReadinessSnapshot.ts": "1c538f881a628d7197e8e6737c5db33022331d743f88c928ef6a706734c9b7f4",
-    "packages/keiko-tools/src/git-ci-facts.ts": "4285be04aff4bcba5d1f40b8c34321c400f9c7851db059f69b2fd512ffc491ed"
+    "packages/keiko-server/src/coding-runtime/productionCiObservationRuntime.ts": "6bd8a789749a8c8c4a8d71e2863b9bb82a762b2f081816db42b9fd19d225363d",
+    "packages/keiko-server/src/gitDelivery/ciObservationService.ts": "e4f797105d77fd77015351918546bb6b23e2b93f5b68ae243b8016f5ea641f56",
+    "packages/keiko-server/src/gitDelivery/ciReadinessSnapshot.ts": "59fbe501a46195763facbfff7b02668913cd8d6465da7f4f6ec076d85ed637fd",
+    "packages/keiko-tools/src/git-ci-facts.ts": "81de9ad701073556eb1e0ad31e2de7f245f29a50f24784c7abbf0553979995e5"
   },
   "rawContentRecorded": false
 }

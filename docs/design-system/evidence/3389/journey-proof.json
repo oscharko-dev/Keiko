@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "issue": 3389,
-  "checkedAt": "2026-09-06T06:06:45.610Z",
+  "checkedAt": "2026-09-06T20:18:22.955Z",
   "passed": true,
   "evidenceClass": "production-ui-deterministic-browser-fixture",
   "modelQualification": false,
@@ -23,8 +23,8 @@
     }
   },
   "sourceHashes": {
-    "tests/e2e/git-change-chat-3400.spec.ts": "1aafc3e36e5c14c9a20bde15a62a613365c2aba7d631eefe894bb0198ba800da",
-    "tests/e2e/config/playwright.git-change-chat-3400.config.ts": "c07c3b11cf51b6685b5592a530636d5c973f85c022d9652553f20fc34266cf46",
+    "tests/e2e/git-change-chat-3400.spec.ts": "9047fcf321a78098b1d08a1e21a5dd26ce4cd06238094961415c78727205a20c",
+    "tests/e2e/config/playwright.git-change-chat-3400.config.ts": "d24e0151b791783a91bcc56829ed3b6ca84b72a2660304f39465ebbc3cbf2e85",
     "tests/e2e/support/git-change-chat-3400.ts": "3dc35f2495b8d05589978d0d9c7c98d1692cc91a6c0b3744cf102be6a8cc0354",
     "tests/e2e/support/pr-description-visual-evidence.ts": "b8fd2796d695925ac8bf2bb5e5a6442bf5a9e2940440b2c36502a14899998889",
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/GovernedPullRequestCard.tsx": "0936e3c2755854cf355db23d5dfd20e31bb520e075acd7c1d37a4c2b2f49f44f",

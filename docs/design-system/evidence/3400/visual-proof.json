@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "issue": 3400,
-  "checkedAt": "2026-09-06T06:06:42.657Z",
+  "checkedAt": "2026-09-06T20:18:19.938Z",
   "evidenceClass": "production-ui-deterministic-browser-fixture",
   "modelQualification": false,
   "liveAuthenticationQualification": false,
   "sourceHashes": {
-    "tests/e2e/git-change-chat-3400.spec.ts": "1aafc3e36e5c14c9a20bde15a62a613365c2aba7d631eefe894bb0198ba800da",
-    "tests/e2e/config/playwright.git-change-chat-3400.config.ts": "c07c3b11cf51b6685b5592a530636d5c973f85c022d9652553f20fc34266cf46",
+    "tests/e2e/git-change-chat-3400.spec.ts": "9047fcf321a78098b1d08a1e21a5dd26ce4cd06238094961415c78727205a20c",
+    "tests/e2e/config/playwright.git-change-chat-3400.config.ts": "d24e0151b791783a91bcc56829ed3b6ca84b72a2660304f39465ebbc3cbf2e85",
     "tests/e2e/support/git-change-chat-3400.ts": "3dc35f2495b8d05589978d0d9c7c98d1692cc91a6c0b3744cf102be6a8cc0354",
     "tests/e2e/support/pr-description-visual-evidence.ts": "b8fd2796d695925ac8bf2bb5e5a6442bf5a9e2940440b2c36502a14899998889",
     "packages/keiko-ui/src/app/components/desktop/GitChangeScopePill.tsx": "777bc2f7dc0c468c2f134cf853c08a072bdd853ddf6610d312b0e6ed360e6531",
@@ -21,7 +21,7 @@
       "theme": "dark",
       "state": "held-preview",
       "screenshot": "docs/design-system/evidence/3400/01-dark.png",
-      "screenshotSha256": "b5c8ed8e0afe080b2103eeca4b2e96753d4d3befd3dcec217eb5bf3d85cb77e1",
+      "screenshotSha256": "cb1aadfc2e7f108f7921ff301b2a9f5ee2f1be685a75a2663fcbbbfb3dee5756",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -31,7 +31,7 @@
       "theme": "light",
       "state": "held-preview",
       "screenshot": "docs/design-system/evidence/3400/02-light.png",
-      "screenshotSha256": "98071afc63e674acb23f0bc7aef695d0476bd87b430a255048204d6cf284b12a",
+      "screenshotSha256": "78402be5ec2db7a1eef4965234a86d6937f1062cba8cf1e2803f8455d03ea837",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -42,7 +42,7 @@
       "highContrast": true,
       "state": "held-preview",
       "screenshot": "docs/design-system/evidence/3400/03-dark-high-contrast.png",
-      "screenshotSha256": "c3d693afaa877361b663f70fbae666fe762237fafc468d3905829f9fc43923fc",
+      "screenshotSha256": "d05a00233199813df81e3267bc8ad5e63947c34f7c69f92871267b83528e6df6",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -53,7 +53,7 @@
       "highContrast": true,
       "state": "held-preview",
       "screenshot": "docs/design-system/evidence/3400/04-light-high-contrast.png",
-      "screenshotSha256": "be38cbee9e52e6dbbdecba62d395bee2ed8fba94cfa8259eb142f8021d5ce36b",
+      "screenshotSha256": "ecc0751c109d46b052bcc9cf2609efb9c974c38e67cc6e82ae9d026a621078ea",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -64,7 +64,7 @@
       "contrast": "more",
       "state": "held-preview",
       "screenshot": "docs/design-system/evidence/3400/05-prefers-contrast.png",
-      "screenshotSha256": "d0dcea17e08432cd5b7d7d40734b2d10c618dcc893276f53ae339ff03d436e74",
+      "screenshotSha256": "0caebc8f2a3c35eb31e29317747f0cc36ff300911f63f2b5d2ef3115067e40a4",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -75,7 +75,7 @@
       "forcedColors": "active",
       "state": "held-preview",
       "screenshot": "docs/design-system/evidence/3400/06-forced-colors.png",
-      "screenshotSha256": "e1e3518a87ac476b57a75dc050e54642e64091e807bc358fb30fe503c173699c",
+      "screenshotSha256": "b22a81aba2784214e9c2bf1d40446d75fa35f247b1eeea0dd97a27bdabd93b60",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -86,7 +86,7 @@
       "reducedMotion": "reduce",
       "state": "held-preview",
       "screenshot": "docs/design-system/evidence/3400/07-reduced-motion.png",
-      "screenshotSha256": "4c0b5974af8ccb4a767d23720765f897cacf3ccf59cddd03b9386252a579f830",
+      "screenshotSha256": "b6ca5ad6c86a5a1e1258c7818a38ebcf34f831022406ef34c55512a09757f904",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -97,7 +97,7 @@
       "width": 360,
       "state": "held-preview",
       "screenshot": "docs/design-system/evidence/3400/08-compact.png",
-      "screenshotSha256": "512c69cf19b8d21f52fe4467124eb85e35b3ad6eb1541f2f58bfeb15a70270cc",
+      "screenshotSha256": "65c4292b9258a549858b3ea87f1d428266da80fc666a7756ab1617e2595c6411",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
