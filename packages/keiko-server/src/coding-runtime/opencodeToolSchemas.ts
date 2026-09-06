@@ -233,7 +233,7 @@ const VERIFICATION_PROJECTED_SCHEMA = {
     },
     targetPath: VERIFICATION_SCHEMA.properties.targetPath,
   },
-  required: ["targetPath", "verifierId"],
+  required: ["verifierId", "targetPath"],
 } as const;
 
 /**

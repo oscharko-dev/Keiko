@@ -729,7 +729,7 @@ export function codingWorkbenchPolicyEffectFor(
   return CODING_WORKBENCH_MODE_POLICIES[mode].effects[resourceScope][risk];
 }
 
-export type CodingWorkbenchCodeTaskDeliveryAction = "commit" | "push" | "pull-request";
+export type CodingWorkbenchCodeTaskDeliveryAction = "commit" | "push" | "pull-request" | "merge";
 
 /**
  * Scoped policy for an accepted Code task's proposal-bound delivery execute. The general
@@ -738,10 +738,14 @@ export type CodingWorkbenchCodeTaskDeliveryAction = "commit" | "push" | "pull-re
  */
 export function codingWorkbenchCodeTaskDeliveryEffectFor(
   mode: CodingWorkbenchMode,
-  _action: CodingWorkbenchCodeTaskDeliveryAction,
+  action: CodingWorkbenchCodeTaskDeliveryAction,
 ): CodingWorkbenchPolicyEffect {
   const general = codingWorkbenchPolicyEffectFor(mode, "delivery", "high");
-  return mode === "autonomous-delivery" && general === "approval-required" ? "allowed" : general;
+  const scoped = action === "commit" || action === "push" || action === "pull-request";
+  if (!scoped && action !== "merge") return "denied";
+  return mode === "autonomous-delivery" && scoped && general === "approval-required"
+    ? "allowed"
+    : general;
 }
 
 export function strictestCodingWorkbenchPolicyEffect(

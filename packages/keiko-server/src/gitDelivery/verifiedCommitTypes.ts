@@ -12,6 +12,7 @@ import type { GitDeliveryExecutionSeams, GitDeliveryMutationDeps } from "./execu
 import type { CodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntimeSnapshotStore.js";
 import type { GitCommitCommand } from "@oscharko-dev/keiko-tools";
 import type { GitDeliveryIssuedApproval } from "./approvalStore.js";
+import type { CodingWorkbenchCodeTaskDeliveryAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 /** Entirely server-resolved accepted authority. Browser/model inputs cannot provide these facts. */
 export interface VerifiedCommitRunContext {
@@ -52,7 +53,8 @@ export interface VerifiedCommitServiceOptions {
    * Trusted live mode decision. This is necessary but never sufficient: callers must also supply
    * the exact coding-tool mutation guard, which revalidates the complete Authority Envelope.
    */
-  readonly policyAllowsWithoutApproval?: (() => boolean) | undefined;
+  readonly policyAllowsWithoutApproval?:
+    ((action: CodingWorkbenchCodeTaskDeliveryAction) => boolean) | undefined;
   readonly snapshots: Pick<
     CodingRuntimeSnapshotStore,
     "get" | "recordVerifiedCommit" | "getLastSuccessfulVerifiedCommit"

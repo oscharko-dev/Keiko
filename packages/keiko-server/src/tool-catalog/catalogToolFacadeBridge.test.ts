@@ -140,6 +140,33 @@ describe("canonical catalog facade bridge", () => {
     for (const request of UNCOVERED) expect(bridge.covers(request)).toBe(false);
   });
 
+  it.each([
+    ["ordinary sentinel", { ...identity, action: "verification" as const, verifierId: "test" }],
+    [
+      "targeted path",
+      {
+        ...identity,
+        action: "verification" as const,
+        verifierId: "targeted-test",
+        targetPath: "src/math.test.ts",
+      },
+    ],
+  ])("projects the %s through the canonical verification schema", async (_label, request) => {
+    const { bridge, log } = createBridge({ approvalAvailable: true });
+    const run = vi.fn(() =>
+      Promise.resolve({
+        status: "completed" as const,
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+        verification: { commitProof: "recorded" as const },
+      }),
+    );
+    const result = await bridge.execute(request, facadeInput(), run);
+    expect({ result, lastEvent: log.events.at(-1) }).toMatchObject({
+      result: { status: "completed" },
+    });
+    expect(run).toHaveBeenCalledOnce();
+  });
+
   it("runs a covered action through canonical binding, projection, and settlement without logging bodies", async () => {
     const { bridge, log } = createBridge();
     const run = vi.fn((_signal: AbortSignal, mutationGuard: { readonly check: () => boolean }) => {

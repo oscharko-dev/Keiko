@@ -19,6 +19,7 @@ import type { VerifiedCommitRunContext } from "./verifiedCommitTypes.js";
 import type { GitDeliveryExecutionSeams, GitDeliveryMutationDeps } from "./execution.js";
 import type { GitDeliveryPublishSeams } from "./pushExecution.js";
 import type { GitDeliveryPullRequestSeams } from "./prExecution.js";
+import type { CodingWorkbenchCodeTaskDeliveryAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 export interface DraftDeliveryRunContext extends VerifiedCommitRunContext {
   readonly taskId: string;
@@ -65,7 +66,8 @@ export interface DraftDeliveryDependencies {
 export interface DraftDeliveryServiceOptions extends DraftDeliveryDependencies {
   readonly context: () => DraftDeliveryRunContext | undefined;
   /** See VerifiedCommitServiceOptions.policyAllowsWithoutApproval. */
-  readonly policyAllowsWithoutApproval?: (() => boolean) | undefined;
+  readonly policyAllowsWithoutApproval?:
+    ((action: CodingWorkbenchCodeTaskDeliveryAction) => boolean) | undefined;
   /** Existing runtime event ingestion refreshes the public snapshot after every durable phase. */
   readonly onChanged: (record: DraftDeliveryRecord) => void;
 }

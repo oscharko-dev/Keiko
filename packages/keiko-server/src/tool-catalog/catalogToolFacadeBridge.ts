@@ -145,7 +145,13 @@ function catalogActionFor(request: CodingToolActionRequest): CatalogAction | und
   switch (request.action) {
     case "verification":
       return isOpenCodeVerificationId(request.verifierId)
-        ? { toolId: "keiko.verification.run", arguments: { verifierId: request.verifierId } }
+        ? {
+            toolId: "keiko.verification.run",
+            arguments: {
+              verifierId: request.verifierId,
+              targetPath: request.targetPath ?? "",
+            },
+          }
         : undefined;
     case "egress":
       return { toolId: "keiko.research.fetch", arguments: { target: request.target } };

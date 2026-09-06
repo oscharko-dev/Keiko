@@ -20,6 +20,7 @@ import {
 import {
   createProductionVerifiedCommitService,
   requestVerifiedCommitApproval,
+  type VerifiedCommitRuntimeBinding,
   type VerifiedCommitRuntimeDependencies,
 } from "./productionVerifiedCommitRuntime.js";
 import type { VerifiedCommitService } from "../gitDelivery/verifiedCommitTypes.js";
@@ -31,7 +32,11 @@ import type {
   CodingWorkbenchRuntimeIntent,
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
-import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  codingWorkbenchCodeTaskDeliveryEffectFor,
+  isCodingWorkbenchMode,
+  type CodingWorkbenchCodeTaskDeliveryAction,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 import {
   EditorAgentAuthorityRegistry,
@@ -549,6 +554,14 @@ interface RunToolSurface {
   readonly unavailableOptionalTools: () => ReadonlySet<OpenCodeOptionalToolName>;
 }
 
+function codeTaskDeliveryPolicyAllows(
+  authority: Pick<CodingRuntimeAuthorityService, "effectiveMode">,
+  action: CodingWorkbenchCodeTaskDeliveryAction,
+): boolean {
+  const mode = authority.effectiveMode();
+  return mode !== undefined && codingWorkbenchCodeTaskDeliveryEffectFor(mode, action) === "allowed";
+}
+
 function commitServiceFor(
   input: ProductionCodingRuntimeResolverInput,
   context: CodingRuntimeTrustedContext,
@@ -562,7 +575,7 @@ function commitServiceFor(
     context,
     signal,
     stillAuthorized: () => runtimeMutationLive(input, context, minted, authority),
-    policyAllowsWithoutApproval: () => authority.effectiveMode() === "autonomous-delivery",
+    policyAllowsWithoutApproval: (action) => codeTaskDeliveryPolicyAllows(authority, action),
   });
 }
 
@@ -583,13 +596,13 @@ function runtimeGitServices(
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
   notifyVerifiedHeadAdvanced: (runId: string) => void,
 ): RuntimeGitServices {
-  const binding = {
+  const binding: VerifiedCommitRuntimeBinding = {
     runId: minted.authorityRef.runId,
     envelopeDigest: minted.authorityRef.envelopeDigest,
     context,
     signal,
     stillAuthorized: (): boolean => runtimeMutationLive(input, context, minted, authority),
-    policyAllowsWithoutApproval: (): boolean => authority.effectiveMode() === "autonomous-delivery",
+    policyAllowsWithoutApproval: (action) => codeTaskDeliveryPolicyAllows(authority, action),
   };
   const verifiedCommitService = commitServiceFor(input, context, minted, authority, signal);
   const { ciRepairBudget, ciObservationService } = runtimeCiServices(

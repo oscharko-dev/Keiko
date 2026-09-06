@@ -57,6 +57,9 @@ function unavailable(
 ): CodingRuntimeDeliveryResult {
   return { status: "unavailable", reason };
 }
+function deliveryAction(proposal: PreparedDraftDelivery): "push" | "pull-request" {
+  return proposal.command.kind === "push" ? "push" : "pull-request";
+}
 
 export class DraftDeliveryController implements DraftDeliveryService {
   private generation = 0;
@@ -356,7 +359,10 @@ export class DraftDeliveryController implements DraftDeliveryService {
       proposal.record.proposalDigest
     )
       throw new DraftDeliveryFailure("payload-changed");
-    if (!claim.required && this.options.policyAllowsWithoutApproval?.() !== true)
+    if (
+      !claim.required &&
+      this.options.policyAllowsWithoutApproval?.(deliveryAction(proposal)) !== true
+    )
       throw new DraftDeliveryFailure("approval-invalid");
     const current = advanceDraft(
       this.options,
@@ -378,7 +384,7 @@ export class DraftDeliveryController implements DraftDeliveryService {
     const approved = lease === undefined ? undefined : this.leases.get(lease);
     if (lease !== undefined) this.leases.delete(lease);
     if (approved?.proposal === proposal) return approved.claim;
-    if (this.options.policyAllowsWithoutApproval?.() !== true)
+    if (this.options.policyAllowsWithoutApproval?.(deliveryAction(proposal)) !== true)
       throw new DraftDeliveryFailure("approval-invalid");
     (this.options.execution?.activityLog ?? processServerLogSink()).write({
       category: "process",

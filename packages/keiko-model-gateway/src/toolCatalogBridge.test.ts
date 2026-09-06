@@ -72,6 +72,13 @@ function request(): GatewayRequest {
   return { modelId: CONFIG.modelId, messages: [{ role: "user", content: "fixture" }] };
 }
 
+function requiredRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError(`Expected ${label} record`);
+  }
+  return value as Record<string, unknown>;
+}
+
 function toolCallDeltaLine(id: string, name: string, argumentsText: string): string {
   return `data: ${JSON.stringify({
     choices: [
@@ -158,27 +165,24 @@ describe("production gateway catalog bridge", () => {
       { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
       CONFIG,
     );
-    expect(body).toMatchObject({
-      tools: expect.arrayContaining([
-        {
-          type: "function",
-          function: {
-            name: "keiko_verification",
-            description: expect.any(String) as unknown,
-            parameters: {
-              type: "object",
-              properties: expect.objectContaining({
-                targetPath: expect.objectContaining({
-                  type: "string",
-                  minLength: 0,
-                  maxLength: 4096,
-                }) as unknown,
-              }) as unknown,
-              required: ["targetPath", "verifierId"],
-            },
-          },
-        },
-      ]) as unknown,
+    const tools = requiredRecord(body, "provider request").tools;
+    if (!Array.isArray(tools)) throw new TypeError("Expected provider tools array");
+    const verification = tools
+      .map((tool) => requiredRecord(tool, "provider tool"))
+      .find(
+        (tool) => requiredRecord(tool.function, "provider function").name === "keiko_verification",
+      );
+    if (verification === undefined) throw new Error("Expected verification tool advertisement");
+    const advertisedFunction = requiredRecord(verification.function, "verification function");
+    const parameters = requiredRecord(advertisedFunction.parameters, "verification parameters");
+    const properties = requiredRecord(parameters.properties, "verification properties");
+    expect(typeof advertisedFunction.description).toBe("string");
+    expect(parameters.type).toBe("object");
+    expect(parameters.required).toEqual(["targetPath", "verifierId"]);
+    expect(requiredRecord(properties.targetPath, "targetPath schema")).toMatchObject({
+      type: "string",
+      minLength: 0,
+      maxLength: 4096,
     });
   });
 

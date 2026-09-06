@@ -13,6 +13,7 @@ import type {
   VerifiedCommitServiceOptions,
 } from "../gitDelivery/verifiedCommitTypes.js";
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
+import type { CodingWorkbenchCodeTaskDeliveryAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 export interface VerifiedCommitRuntimeDependencies extends Omit<
   VerifiedCommitServiceOptions,
@@ -26,7 +27,8 @@ export interface VerifiedCommitRuntimeBinding {
   readonly envelopeDigest: string;
   readonly context: CodingRuntimeTrustedContext;
   readonly stillAuthorized: () => boolean;
-  readonly policyAllowsWithoutApproval?: (() => boolean) | undefined;
+  readonly policyAllowsWithoutApproval?:
+    ((action: CodingWorkbenchCodeTaskDeliveryAction) => boolean) | undefined;
   readonly signal: AbortSignal;
 }
 export function createProductionVerifiedCommitService(

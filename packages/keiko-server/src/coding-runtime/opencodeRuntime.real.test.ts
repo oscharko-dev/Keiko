@@ -801,15 +801,9 @@ function gatewayRequestSummary(body: Buffer): string {
         value.content.startsWith("Generate a title for this conversation:")
       );
     });
-    const verification = Array.isArray(record.tools)
-      ? record.tools.find((item) => {
-          const tool = item as { function?: { name?: unknown } };
-          return tool.function?.name === "keiko_verification";
-        })
-      : undefined;
     const streamOptions = record.stream_options;
     const includeUsage = streamOptionsIncludeUsage(streamOptions);
-    return `model=${model}:tools=${tools}:verification=${JSON.stringify(verification)}:messages=${String(messages.length)}:roles=${roles}:title-generation=${String(titleGeneration)}:stream-options-include-usage=${String(includeUsage)}`;
+    return `model=${model}:tools=${tools}:messages=${String(messages.length)}:roles=${roles}:title-generation=${String(titleGeneration)}:stream-options-include-usage=${String(includeUsage)}`;
   } catch {
     return "body=invalid";
   }

@@ -316,6 +316,12 @@ describe("coding workbench autonomy policy", () => {
     expect(codingWorkbenchPolicyEffectFor("autonomous-delivery", "delivery", "high")).toBe(
       "approval-required",
     );
+    expect(codingWorkbenchCodeTaskDeliveryEffectFor("autonomous-delivery", "merge")).toBe(
+      "approval-required",
+    );
+    expect(
+      codingWorkbenchCodeTaskDeliveryEffectFor("autonomous-delivery", "unknown" as never),
+    ).toBe("denied");
   });
 
   // Epic #2384: total monotonicity. Raising the mode must never make ANY (scope, risk) cell
