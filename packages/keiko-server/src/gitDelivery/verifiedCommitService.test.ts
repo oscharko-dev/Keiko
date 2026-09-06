@@ -623,6 +623,83 @@ describe("verified Code-task commit service", () => {
 });
 
 describe("productive runtime status/diff/stage lane", () => {
+  it("stages remaining edits when the selected set also contains already-staged files", async () => {
+    const stagedBlob = git(["rev-parse", ":code.js"]);
+    writeFileSync(join(root, "other.js"), "export const other = 3;\n");
+    const gitService = new RuntimeGitService({
+      ...options,
+      mode: (): "supervised-coding" => "supervised-coding",
+      invalidateVerification: (): void => {
+        service.invalidate();
+      },
+    });
+    const proposed = await gitService.execute(
+      {
+        action: "git",
+        actionId: "mixed",
+        idempotencyKey: "mixed",
+        operation: "stage",
+        phase: "propose",
+        paths: ["code.js", "other.js"],
+      },
+      { check: () => true },
+    );
+    expect(proposed).toMatchObject({ kind: "stage", status: "ready", pathCount: 2 });
+    if (proposed?.kind !== "stage") throw new Error("stage proposal unavailable");
+    expect(gitService.review(proposed.proposalId)?.review.paths).toEqual(["code.js", "other.js"]);
+    expect(
+      await gitService.execute(
+        {
+          action: "git",
+          actionId: "mixed-execute",
+          idempotencyKey: "mixed-execute",
+          operation: "stage",
+          phase: "execute",
+          proposalId: proposed.proposalId,
+        },
+        { check: () => true },
+      ),
+    ).toMatchObject({ status: "succeeded" });
+    expect(git(["rev-parse", ":code.js"])).toBe(stagedBlob);
+    expect(git(["show", ":other.js"])).toBe("export const other = 3;");
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "git.runtime-action",
+        correlationId: "verified-commit-test",
+        extra: expect.objectContaining({
+          phase: "stage-propose",
+          state: "ready",
+          pathCount: 2,
+        }) as unknown,
+      }),
+    );
+  });
+
+  it("does not admit missing paths as already-staged no-ops", async () => {
+    const index = git(["write-tree"]);
+    const gitService = new RuntimeGitService({
+      ...options,
+      mode: (): "supervised-coding" => "supervised-coding",
+      invalidateVerification: (): void => {
+        service.invalidate();
+      },
+    });
+    expect(
+      await gitService.execute(
+        {
+          action: "git",
+          actionId: "missing",
+          idempotencyKey: "missing",
+          operation: "stage",
+          phase: "propose",
+          paths: ["code.js", "missing.js"],
+        },
+        { check: () => true },
+      ),
+    ).toBeUndefined();
+    expect(git(["write-tree"])).toBe(index);
+  });
+
   it("captures stage operands before the first asynchronous admission read", async () => {
     git(["reset", "-q", "HEAD", "--", "code.js"]);
     writeFileSync(join(root, "other.js"), "unrelated bytes\n");

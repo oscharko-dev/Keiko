@@ -110,6 +110,26 @@ function resultEvidence(
     : { state: "completed", fileCount: result.diff.totalFiles, truncated: result.diff.truncated };
 }
 
+async function stageSelectionReviewed(
+  context: VerifiedCommitRunContext,
+  execution: NonNullable<VerifiedCommitServiceOptions["execution"]>,
+  paths: readonly string[],
+  diff: import("@oscharko-dev/keiko-contracts").GitEditorDiffResponse,
+): Promise<boolean> {
+  if (diff.truncated || diff.files.some((file) => file.truncated)) return false;
+  const reviewed = new Set(diff.files.map((file) => file.path));
+  if (paths.every((path) => reviewed.has(path))) return true;
+  const status = await runtimeGitStatus(context, execution);
+  if (status.truncated) return false;
+  // A fully staged file has no remaining index-to-worktree diff. Retain its exact path in the
+  // candidate/approval binding; admitting this no-op must not admit missing or conflicted paths.
+  for (const change of status.changes) {
+    if (change.staged && !change.unstaged && !change.untracked && !change.conflicted)
+      reviewed.add(change.path);
+  }
+  return paths.every((path) => reviewed.has(path));
+}
+
 export class RuntimeGitService {
   private generation = 0;
   private readonly proposals = new Map<string, RuntimeGitProposal>();
@@ -250,12 +270,7 @@ export class RuntimeGitService {
     const facts = await readVerifiedCommitFacts(context, execution);
     const worktreeDigest = await readGitStageCandidate(context.workspace.root, paths);
     const diff = await runtimeGitDiff(context, execution, "unstaged", paths);
-    if (
-      diff.truncated ||
-      diff.files.some((file) => file.truncated) ||
-      diff.files.length !== paths.length
-    )
-      return undefined;
+    if (!(await stageSelectionReviewed(context, execution, paths, diff))) return undefined;
     if ((await readGitStageCandidate(context.workspace.root, paths)) !== worktreeDigest)
       return undefined;
     const proposal = buildStageProposal(context, facts, paths, worktreeDigest, diff, this.now());
