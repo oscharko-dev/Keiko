@@ -20,6 +20,7 @@ export interface DeliveryProviderState {
   readonly pushes: number;
   readonly creates: number;
   readonly rejections: number;
+  readonly rejectionReasons?: Readonly<Record<string, number>>;
   readonly mode: "normal" | "push-response-loss" | "create-response-loss" | "read-failure";
   readonly pullRequests: readonly GitPullRequestIdentity[];
   /** Exact transient provider state; delivery evidence records only its digest below. */
@@ -57,10 +58,17 @@ export function writeState(stateDir: string, state: DeliveryProviderState): void
     rmSync(temporary, { force: true });
   }
 }
-function deny(stateDir: string): never {
+function deny(stateDir: string, reason: string): never {
   const state = readState(stateDir);
-  writeState(stateDir, { ...state, rejections: state.rejections + 1 });
-  process.stderr.write("fixture-provider-boundary-denied\n");
+  writeState(stateDir, {
+    ...state,
+    rejections: state.rejections + 1,
+    rejectionReasons: {
+      ...state.rejectionReasons,
+      [reason]: (state.rejectionReasons?.[reason] ?? 0) + 1,
+    },
+  });
+  process.stderr.write(`fixture-provider-boundary-denied:${reason}\n`);
   process.exit(73);
 }
 
@@ -92,6 +100,7 @@ export function initializeDeliveryRemote(stateDir: string, realGit: string): voi
     pushes: 0,
     creates: 0,
     rejections: 0,
+    rejectionReasons: {},
     mode: "normal",
     pullRequests: [],
     pullRequestBodies: {},
@@ -172,9 +181,8 @@ function gitInvocation(input: Invocation, args: readonly string[]): void {
     push(input, args, index);
     return;
   }
-  if (!LOCAL_GIT.has(command) || isDeniedRemoteInvocation(command, args, index)) {
-    deny(input.stateDir);
-  }
+  if (!LOCAL_GIT.has(command)) deny(input.stateDir, "git-command");
+  if (isDeniedRemoteInvocation(command, args, index)) deny(input.stateDir, "git-remote-subcommand");
   const result = spawnSync(input.realGit, [...args], { stdio: "inherit", timeout: 30_000 });
   if (result.status !== 0) recordLocalGitFailure(input.stateDir, command, result.status);
   process.exit(result.status ?? 74);
@@ -186,7 +194,7 @@ function push(input: Invocation, args: readonly string[], index: number): void {
   const spec = args[index + 2] ?? "";
   const match = /^([a-f0-9]{40}):refs\/heads\/(.+)$/u.exec(spec);
   if (remote !== DELIVERY_URL || args.length !== index + 3 || match?.[2] !== state.headRef)
-    deny(input.stateDir);
+    deny(input.stateDir, "push-target");
   const result = spawnSync(
     input.realGit,
     [...args.slice(0, index + 1), deliveryRemote(input.stateDir), spec],
@@ -280,12 +288,12 @@ function ghInvocation(input: Invocation, args: readonly string[]): void {
     host !== "github.com" ||
     !endpoint.startsWith(`/repos/${DELIVERY_REPOSITORY}/`)
   )
-    deny(input.stateDir);
+    deny(input.stateDir, "gh-target");
   if (method === "POST" && endpoint === `/repos/${DELIVERY_REPOSITORY}/pulls`) {
     createPullRequest(input, args, state);
     return;
   }
-  if (method !== "GET") deny(input.stateDir);
+  if (method !== "GET") deny(input.stateDir, "gh-method");
   if (state.mode === "read-failure") {
     process.stderr.write("HTTP 503: Service Unavailable\n");
     process.exit(1);
@@ -310,23 +318,23 @@ function readProvider(
       url.searchParams.get("head") !== `fixture:${state.headRef}` ||
       projection !== `[.[] | ${GIT_PR_IDENTITY_JQ}]`
     )
-      deny(input.stateDir);
+      deny(input.stateDir, "pull-list-query");
     providerOutput(state.pullRequests.filter((pr) => pr.headRef === state.headRef));
   }
   const pr = state.pullRequests.find(
     (candidate) => endpoint === `${prefix}/pulls/${String(candidate.number)}`,
   );
-  if (pr === undefined) deny(input.stateDir);
+  if (pr === undefined) deny(input.stateDir, "pull-missing");
   const bodyProjection = buildPrBodyReadArgv({
     ownerAndRepo: DELIVERY_REPOSITORY,
     prExternalId: String(pr.number),
   }).at(-1);
   if (projection === bodyProjection) {
     const body = state.pullRequestBodies[String(pr.number)];
-    if (body === undefined) deny(input.stateDir);
+    if (body === undefined) deny(input.stateDir, "pull-body-missing");
     providerOutput({ identity: pr, ...body });
   }
-  if (projection !== GIT_PR_IDENTITY_JQ) deny(input.stateDir);
+  if (projection !== GIT_PR_IDENTITY_JQ) deny(input.stateDir, "pull-projection");
   providerOutput(pr);
 }
 
@@ -342,7 +350,7 @@ function readBranch(
     (ref !== "main" && ref !== state.headRef) ||
     projection !== "{ref,sha:.object.sha,type:.object.type}"
   )
-    deny(input.stateDir);
+    deny(input.stateDir, "branch-query");
   const sha = remoteSha(input, ref);
   if (sha === undefined) notFound();
   providerOutput({ ref: `refs/heads/${ref}`, sha, type: "commit" });
@@ -401,7 +409,7 @@ function createFields(
     if (!new Set(["-f", "-F"]).has(args[i] ?? "")) continue;
     const value = args[i + 1] ?? "";
     const key = value.slice(0, value.indexOf("="));
-    if (fields.has(key)) deny(input.stateDir);
+    if (fields.has(key)) deny(input.stateDir, "duplicate-create-field");
     fields.set(key, value.slice(key.length + 1));
   }
   assertCreateFields(input, args, state, fields);
@@ -415,7 +423,7 @@ function assertCreateFields(
   fields: ReadonlyMap<string, string>,
 ): void {
   const keys = ["head", "base", "draft", "title", "body"];
-  if (!keys.every((key) => fields.has(key))) deny(input.stateDir);
+  if (!keys.every((key) => fields.has(key))) deny(input.stateDir, "missing-create-field");
   if (
     fields.size !== 5 ||
     fields.get("head") !== state.headRef ||
@@ -423,7 +431,7 @@ function assertCreateFields(
     fields.get("draft") !== "true" ||
     args.at(-1) !== GIT_PR_IDENTITY_JQ
   )
-    deny(input.stateDir);
+    deny(input.stateDir, "create-fields");
 }
 
 function digest(value: string): string {

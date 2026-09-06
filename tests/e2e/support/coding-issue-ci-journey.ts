@@ -21,6 +21,9 @@ const repository = deliveryRepository(stateDir);
 export interface CiJourneyObservation {
   readonly phase: string;
   readonly lastControl: number;
+  readonly completedControls: readonly number[];
+  readonly failedControls: readonly number[];
+  readonly controlResults: Readonly<Record<string, CodingToolResult | undefined>>;
   readonly result?: CodingToolResult;
 }
 export function ciObservation(): CiJourneyObservation {
@@ -28,22 +31,45 @@ export function ciObservation(): CiJourneyObservation {
 }
 export async function ciControl(
   operation: CommitFixtureOperation | DeliveryFixtureOperation | CiFixtureOperation,
+  proposalId?: string,
 ): Promise<CodingToolResult | undefined> {
   const id = ciObservation().lastControl + 1;
   const path = commitControlPath(stateDir);
-  writeFileSync(`${path}.next`, JSON.stringify({ id, operation }));
+  writeFileSync(
+    `${path}.next`,
+    JSON.stringify({ id, operation, ...(proposalId === undefined ? {} : { proposalId }) }),
+  );
   renameSync(`${path}.next`, path);
   await expect
-    .poll(() => ({ id: ciObservation().lastControl, phase: ciObservation().phase }), {
-      timeout: 60_000,
-    })
-    .toEqual({ id, phase: operation });
-  return ciObservation().result;
+    .poll(
+      () => {
+        const current = ciObservation();
+        if (current.failedControls.includes(id)) return "failed";
+        return current.completedControls.includes(id) ? "completed" : "pending";
+      },
+      { timeout: 60_000 },
+    )
+    .toBe("completed");
+  return ciObservation().controlResults[String(id)];
 }
 export async function ciSnapshot(page: Page): Promise<CodingWorkbenchRuntimeSnapshot> {
   const response = await page.request.get("/api/coding-workbench/runtime/status");
   expect(response.ok(), await response.text()).toBe(true);
   return (await response.json()) as CodingWorkbenchRuntimeSnapshot;
+}
+function requireCommitProposalId(result: CodingToolResult | undefined): string {
+  if (result === undefined || !("verifiedCommit" in result))
+    throw new Error("Expected ready CI commit proposal");
+  return result.verifiedCommit.proposalId;
+}
+function requireDeliveryProposalId(result: CodingToolResult | undefined, intent: string): string {
+  if (
+    result === undefined ||
+    !("draftDelivery" in result) ||
+    result.draftDelivery.status !== "recorded"
+  )
+    throw new Error(`Expected ready CI ${intent} proposal`);
+  return result.draftDelivery.record.proposalId;
 }
 async function bind(page: Page, number: number): Promise<void> {
   const clear = await page.request.delete("/api/task-workspaces/active", {
@@ -69,24 +95,26 @@ async function bind(page: Page, number: number): Promise<void> {
   await page.getByRole("button", { name: "Bind workspace", exact: true }).click();
   await expect(page.getByRole("region", { name: "Code setup", exact: true })).toHaveCount(0);
 }
-export async function approveCiDelivery(page: Page): Promise<void> {
-  await expect(page.getByRole("button", { name: "Approve once", exact: true })).toBeEnabled();
-  await page.getByRole("button", { name: "Approve once", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Approve once", exact: true })).toHaveCount(0);
-}
 export async function commitCiCandidate(page: Page): Promise<void> {
   const proposal = await ciControl("propose");
   expect(proposal).toHaveProperty("verifiedCommit.status", "approval-required");
-  await approveCiDelivery(page);
-  expect(await ciControl("execute")).toHaveProperty("verifiedCommit.status", "succeeded");
+  expect(proposal).toHaveProperty("approvalDisposition", "ready");
+  expect(await ciSnapshot(page)).not.toHaveProperty("pendingPermission");
+  await expect(page.getByRole("button", { name: "Approve once", exact: true })).toHaveCount(0);
+  const proposalId = requireCommitProposalId(proposal);
+  expect(await ciControl("execute", proposalId)).toHaveProperty(
+    "verifiedCommit.status",
+    "succeeded",
+  );
 }
 export async function pushCiCandidate(page: Page): Promise<void> {
-  expect(await ciControl("push-propose")).toHaveProperty(
-    "draftDelivery.record.phase",
-    "push-proposed",
-  );
-  await approveCiDelivery(page);
-  const pushed = await ciControl("push-execute");
+  const proposal = await ciControl("push-propose");
+  expect(proposal).toHaveProperty("draftDelivery.record.phase", "push-proposed");
+  expect(proposal).toHaveProperty("approvalDisposition", "ready");
+  expect(await ciSnapshot(page)).not.toHaveProperty("pendingPermission");
+  await expect(page.getByRole("button", { name: "Approve once", exact: true })).toHaveCount(0);
+  const proposalId = requireDeliveryProposalId(proposal, "push");
+  const pushed = await ciControl("push-execute", proposalId);
   expect(pushed).toHaveProperty("draftDelivery.status", "recorded");
   expect(await ciSnapshot(page)).not.toHaveProperty("ciReadiness");
 }
@@ -111,9 +139,13 @@ export async function startCiDraft(page: Page, issue: number): Promise<void> {
   await expect.poll(() => ciObservation().phase, { timeout: 120_000 }).toBe("verified-turn-ready");
   await commitCiCandidate(page);
   await pushCiCandidate(page);
-  expect(await ciControl("pr-propose")).toHaveProperty("draftDelivery.record.phase", "pr-proposed");
-  await approveCiDelivery(page);
-  expect(await ciControl("pr-execute")).toHaveProperty(
+  const proposal = await ciControl("pr-propose");
+  expect(proposal).toHaveProperty("draftDelivery.record.phase", "pr-proposed");
+  expect(proposal).toHaveProperty("approvalDisposition", "ready");
+  expect(await ciSnapshot(page)).not.toHaveProperty("pendingPermission");
+  await expect(page.getByRole("button", { name: "Approve once", exact: true })).toHaveCount(0);
+  const proposalId = requireDeliveryProposalId(proposal, "pull-request");
+  expect(await ciControl("pr-execute", proposalId)).toHaveProperty(
     "draftDelivery.record.phase",
     "draft-created",
   );

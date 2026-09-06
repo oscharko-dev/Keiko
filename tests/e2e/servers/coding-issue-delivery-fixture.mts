@@ -51,6 +51,7 @@ export class DeliveryFixtureDriver {
     run: ProductionRuntimeBackendInput,
     operation: DeliveryFixtureOperation,
     id: number,
+    proposalId?: string,
   ): Promise<CodingToolResult> {
     const intent = operation.startsWith("push") ? "push" : "pull-request";
     let phase = "execute";
@@ -65,7 +66,7 @@ export class DeliveryFixtureDriver {
         phase,
         actionId: identity,
         idempotencyKey: identity,
-        ...(phase === "execute" ? { proposalId: this.proposalId } : {}),
+        ...(phase === "execute" ? { proposalId: proposalId ?? this.proposalId } : {}),
         ...(operation === "pr-propose" ? { title: DELIVERY_TITLE } : {}),
       }),
     });

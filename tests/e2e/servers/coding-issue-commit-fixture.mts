@@ -12,7 +12,8 @@ import {
   type DeliveryFixtureOperation,
 } from "../support/coding-issue-delivery.js";
 import type { DraftDeliveryDependencies } from "../../../packages/keiko-server/src/gitDelivery/draftDeliveryTypes.js";
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { setTimeout } from "node:timers/promises";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { UiHandlerDeps } from "../../../packages/keiko-server/src/deps.js";
@@ -67,6 +68,27 @@ export function createDeferredVerifiedCommitDependencies(
 interface Control {
   readonly id: number;
   readonly operation: CommitFixtureOperation | DeliveryFixtureOperation | CiFixtureOperation;
+  readonly proposalId?: string;
+}
+const CONTROL_KEYS = new Set(["id", "operation", "proposalId"]);
+function isValidControlRecord(record: Readonly<Record<string, unknown>>): record is Readonly<
+  Record<string, unknown>
+> & {
+  readonly id: number;
+  readonly proposalId?: string;
+} {
+  const keys = Object.keys(record);
+  const proposalId = record.proposalId;
+  return (
+    keys.length >= 2 &&
+    keys.length <= 3 &&
+    keys.every((key) => CONTROL_KEYS.has(key)) &&
+    typeof record.id === "number" &&
+    Number.isSafeInteger(record.id) &&
+    record.id > 0 &&
+    (proposalId === undefined ||
+      (typeof proposalId === "string" && /^(?:commit|delivery)-[0-9]+$/u.test(proposalId)))
+  );
 }
 function readControl(stateDir: string, delivery: boolean, ci: boolean): Control | undefined {
   const value: unknown = JSON.parse(readFileSync(commitControlPath(stateDir), "utf8"));
@@ -74,15 +96,12 @@ function readControl(stateDir: string, delivery: boolean, ci: boolean): Control 
   const record = value as Record<string, unknown>;
   const allowed = allowedControls(delivery, ci);
   const operation = allowed.find((candidate) => candidate === record.operation);
-  if (
-    Object.keys(record).length !== 2 ||
-    typeof record.id !== "number" ||
-    !Number.isSafeInteger(record.id) ||
-    record.id <= 0 ||
-    operation === undefined
-  )
-    return undefined;
-  return { id: record.id, operation };
+  if (operation === undefined || !isValidControlRecord(record)) return undefined;
+  return {
+    id: record.id,
+    operation,
+    ...(typeof record.proposalId === "string" ? { proposalId: record.proposalId } : {}),
+  };
 }
 
 function allowedControls(delivery: boolean, ci: boolean): readonly Control["operation"][] {
@@ -107,6 +126,8 @@ type FixturePhase =
   | "run-created"
   | "stage-proposed"
   | "candidate-staged"
+  | "control-pending"
+  | "control-failed"
   | "verified-turn-ready";
 
 class CommitFixture implements CodingIssueCommitFixture {
@@ -122,6 +143,9 @@ class CommitFixture implements CodingIssueCommitFixture {
   private latestPhase: FixturePhase = "run-created";
   private latestResult: CodingToolResult | undefined;
   private staging: Promise<void> | undefined;
+  private readonly completedControls = new Set<number>();
+  private readonly controlResults = new Map<number, CodingToolResult>();
+  private readonly failedControls = new Set<number>();
   constructor(private readonly input: CommitFixtureInput) {
     this.verifiedCommit = createDeferredVerifiedCommitDependencies(input);
     if (input.delivery === true)
@@ -136,20 +160,29 @@ class CommitFixture implements CodingIssueCommitFixture {
     this.latestPhase = phase;
     this.latestResult = result;
     const path = commitObservationPath(this.input.stateDir);
-    writeFileSync(
-      `${path}.next`,
-      JSON.stringify({
-        sequence: ++this.sequence,
-        runId: this.run?.request.runId,
-        phase,
-        lastControl: this.lastControl,
-        ...(result === undefined ? {} : { result }),
-        rawContentRecorded: false,
-        toolPhases: this.toolPhases,
-        modelResponsePhases: this.modelResponsePhases,
-      }),
-    );
-    renameSync(`${path}.next`, path);
+    const temporary = `${path}.${randomUUID()}.next`;
+    try {
+      writeFileSync(
+        temporary,
+        JSON.stringify({
+          sequence: ++this.sequence,
+          runId: this.run?.request.runId,
+          phase,
+          lastControl: this.lastControl,
+          ...(result === undefined ? {} : { result }),
+          completedControls: [...this.completedControls],
+          controlResults: Object.fromEntries(this.controlResults),
+          failedControls: [...this.failedControls],
+          rawContentRecorded: false,
+          toolPhases: this.toolPhases,
+          modelResponsePhases: this.modelResponsePhases,
+        }),
+        { flag: "wx" },
+      );
+      renameSync(temporary, path);
+    } finally {
+      rmSync(temporary, { force: true });
+    }
   }
   public observeToolPhase(event: ScriptedToolPhase): void {
     if (event.runId !== this.run?.request.runId) return;
@@ -161,10 +194,10 @@ class CommitFixture implements CodingIssueCommitFixture {
       void this.staging.catch(() => undefined);
     }
   }
-  private async invoke(
-    operation: CommitFixtureOperation | DeliveryFixtureOperation | CiFixtureOperation,
-  ): Promise<boolean> {
+  private async invoke(control: Control): Promise<boolean> {
+    const { operation } = control;
     if (operation === "finish") {
+      this.completedControls.add(control.id);
       this.write("finish");
       return true;
     }
@@ -172,21 +205,25 @@ class CommitFixture implements CodingIssueCommitFixture {
     if (run === undefined) throw new Error("commit-fixture-run-unavailable");
     const ci = CI_OPERATIONS.find((entry) => entry === operation);
     if (ci !== undefined) {
-      this.write(ci, await invokeCiFixture(run, ci, this.lastControl, () => this.stageCandidate()));
+      this.completeControl(
+        control,
+        await invokeCiFixture(run, ci, control.id, () => this.stageCandidate()),
+      );
       return false;
     }
     if (operation !== "propose" && operation !== "execute") {
-      this.write(
-        operation,
+      this.completeControl(
+        control,
         await this.deliveryDriver.invoke(
           run,
           operation as DeliveryFixtureOperation,
-          this.lastControl,
+          control.id,
+          control.proposalId,
         ),
       );
       return false;
     }
-    const identity = `commit-fixture-${String(this.lastControl)}`;
+    const identity = `commit-fixture-${String(control.id)}`;
     const result = await run.toolFacade.execute({
       capability: run.minted.toolFacadeCapability,
       body: JSON.stringify({
@@ -196,11 +233,26 @@ class CommitFixture implements CodingIssueCommitFixture {
         idempotencyKey: identity,
         ...(operation === "propose"
           ? { phase: "propose", message: COMMIT_MESSAGE }
-          : { phase: "execute", proposalId: this.proposalId }),
+          : { phase: "execute", proposalId: control.proposalId ?? this.proposalId }),
       }),
     });
     if ("verifiedCommit" in result) this.proposalId = result.verifiedCommit.proposalId;
-    this.write(operation, result);
+    this.completeControl(control, result);
+    return false;
+  }
+  private completeControl(control: Control, result: CodingToolResult): void {
+    this.completedControls.add(control.id);
+    this.controlResults.set(control.id, result);
+    this.write(control.operation, result);
+  }
+  private startControl(control: Control): Promise<boolean> | boolean {
+    if (!control.operation.endsWith("propose")) return this.invoke(control);
+    this.write("control-pending");
+    void this.invoke(control).catch(() => {
+      this.failedControls.add(control.id);
+      this.write("control-failed");
+      process.stderr.write("commit-fixture-control-failed\n");
+    });
     return false;
   }
   private async waitForControls(): Promise<void> {
@@ -214,7 +266,7 @@ class CommitFixture implements CodingIssueCommitFixture {
       );
       if (control !== undefined && control.id > this.lastControl) {
         this.lastControl = control.id;
-        if (await this.invoke(control.operation)) return;
+        if (await this.startControl(control)) return;
       }
       await setTimeout(25);
     }
@@ -225,6 +277,9 @@ class CommitFixture implements CodingIssueCommitFixture {
     if (this.input.delivery === true) selectDeliveryProviderRef(this.input.stateDir, run);
     this.proposalId = undefined;
     this.staging = undefined;
+    this.completedControls.clear();
+    this.controlResults.clear();
+    this.failedControls.clear();
     this.write("run-created");
   }
   public async beforeResponse(response: NormalizedResponse): Promise<void> {

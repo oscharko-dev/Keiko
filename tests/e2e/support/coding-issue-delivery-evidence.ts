@@ -10,8 +10,17 @@ import {
 } from "./coding-issue-delivery.js";
 import { COMMIT_MESSAGE } from "./coding-issue-commit.js";
 
+function expectProviderEvidence(provider: Readonly<Record<string, unknown>>): void {
+  expect(provider).toMatchObject({ pushes: 7, creates: 5, rejections: 5 });
+  expect(provider.rejectionReasons).toEqual({
+    "branch-query": 1,
+    "gh-target": 2,
+    "push-target": 2,
+  });
+}
+
 export function writeDeliveryJourneyReceipt(stateDir: string, cases: readonly string[]): void {
-  expect(cases).toHaveLength(11);
+  expect(cases).toHaveLength(12);
   const lines = readDeliveryLog(stateDir);
   const deliveries = lines.filter((line) => line.op === "git.draft-delivery");
   expect(deliveries.length).toBeGreaterThan(0);
@@ -27,7 +36,7 @@ export function writeDeliveryJourneyReceipt(stateDir: string, cases: readonly st
     string,
     unknown
   >;
-  expect(provider).toMatchObject({ pushes: 6, creates: 4, rejections: 5 });
+  expectProviderEvidence(provider);
   writeFileSync(
     evidenceArtifactPath("docs/design-system/evidence/3387/journey-proof.json"),
     `${JSON.stringify(

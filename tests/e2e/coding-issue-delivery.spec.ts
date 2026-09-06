@@ -2,7 +2,7 @@ import { writeDeliveryJourneyReceipt } from "./support/coding-issue-delivery-evi
 import { captureDeliveryModes } from "./support/coding-issue-commit-evidence.js";
 import { join } from "node:path";
 import { buildPrReadBranchHeadArgv } from "../../packages/keiko-tools/src/git-pr-gateway.js";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -50,12 +50,15 @@ test.afterEach((): void => {
   if (info.status === "passed") completedCases.push(info.title);
 });
 test.afterAll((): void => {
-  if (completedCases.length === 11) writeDeliveryJourneyReceipt(stateDir, completedCases);
+  if (completedCases.length === 12) writeDeliveryJourneyReceipt(stateDir, completedCases);
 });
 interface Observation {
   readonly phase: string;
   readonly runId?: string;
   readonly lastControl: number;
+  readonly completedControls: readonly number[];
+  readonly failedControls: readonly number[];
+  readonly controlResults: Readonly<Record<string, Observation["result"]>>;
   readonly result?: {
     readonly status: string;
     readonly verifiedCommit?: VerifiedCommitResult;
@@ -76,18 +79,87 @@ function descriptionModel(): DeliveryDescriptionModelState {
 }
 async function control(
   operation: CommitFixtureOperation | DeliveryFixtureOperation,
+  proposalId?: string,
 ): Promise<Observation> {
+  return waitControl(await startControl(operation, proposalId));
+}
+async function startControl(
+  operation: CommitFixtureOperation | DeliveryFixtureOperation,
+  proposalId?: string,
+): Promise<number> {
   const id = observe().lastControl + 1;
   const path = commitControlPath(stateDir);
-  writeFileSync(`${path}.next`, JSON.stringify({ id, operation }));
+  writeFileSync(
+    `${path}.next`,
+    JSON.stringify({ id, operation, ...(proposalId === undefined ? {} : { proposalId }) }),
+  );
   renameSync(`${path}.next`, path);
   await expect.poll(() => observe().lastControl, { timeout: 60_000 }).toBe(id);
-  return observe();
+  return id;
+}
+async function waitControl(id: number): Promise<Observation> {
+  await expect
+    .poll(
+      () => {
+        const current = observe();
+        if (current.failedControls.includes(id)) return "failed";
+        return current.completedControls.includes(id) ? "completed" : "pending";
+      },
+      { timeout: 60_000 },
+    )
+    .toBe("completed");
+  const current = observe();
+  const result = current.controlResults[String(id)];
+  return { ...current, ...(result === undefined ? {} : { result }) };
 }
 async function snapshot(page: Page): Promise<CodingWorkbenchRuntimeSnapshot> {
   const response = await page.request.get("/api/coding-workbench/runtime/status");
   expect(response.ok()).toBe(true);
   return (await response.json()) as CodingWorkbenchRuntimeSnapshot;
+}
+async function startPendingProposal(
+  page: Page,
+  operation: "propose" | "push-propose" | "pr-propose",
+  actionKind: "commit" | "push" | "pull-request",
+): Promise<{ readonly controlId: number; readonly proposalId: string }> {
+  const controlId = await startControl(operation);
+  await expect
+    .poll(async () => (await snapshot(page)).pendingPermission?.actionKind)
+    .toBe(actionKind);
+  const proposalId = (await snapshot(page)).pendingPermission?.requestId;
+  if (proposalId === undefined)
+    throw new Error(`Expected canonical pending ${actionKind} proposal`);
+  return { controlId, proposalId };
+}
+type ProposalOperation = "propose" | "push-propose" | "pr-propose";
+function proposalIdFor(operation: ProposalOperation, proposed: Observation): string | undefined {
+  return operation === "propose"
+    ? proposed.result?.verifiedCommit?.proposalId
+    : proposed.result?.draftDelivery?.record?.proposalId;
+}
+async function readyProposal(
+  page: Page,
+  mode: CodingWorkbenchMode,
+  operation: ProposalOperation,
+  actionKind: "commit" | "push" | "pull-request",
+  approve: () => Promise<void>,
+  beforeApproval?: (proposalId: string) => Promise<void>,
+): Promise<{ readonly proposed: Observation; readonly proposalId: string }> {
+  if (mode === "autonomous-delivery") {
+    const proposed = await control(operation);
+    const proposalId = proposalIdFor(operation, proposed);
+    if (proposalId === undefined) throw new Error(`Expected ready ${actionKind} proposal`);
+    expect(proposed.result).toHaveProperty("approvalDisposition", "ready");
+    expect((await snapshot(page)).pendingPermission).toBeUndefined();
+    await expect(page.getByRole("button", { name: "Approve once", exact: true })).toHaveCount(0);
+    return { proposed, proposalId };
+  }
+  const pending = await startPendingProposal(page, operation, actionKind);
+  await beforeApproval?.(pending.proposalId);
+  await approve();
+  const proposed = await waitControl(pending.controlId);
+  expect(proposed.result).toHaveProperty("approvalDisposition", "ready");
+  return { proposed, proposalId: pending.proposalId };
 }
 function git(root: string, args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd: root, encoding: "utf8", timeout: 30_000 }).trim();
@@ -172,14 +244,23 @@ async function startVerified(
     mode === "governed-assist" ? ["file-edit", "git-stage", "verification-command"] : [],
   );
   expect((await snapshot(page)).issueBinding?.issueNumber).toBe(number);
-  const proposed = await control("propose");
+  const { proposed, proposalId } = await readyProposal(
+    page,
+    mode,
+    "propose",
+    "commit",
+    async () => {
+      await page.getByRole("button", { name: "Approve once", exact: true }).click();
+      await expect(page.getByRole("button", { name: "Approve once", exact: true })).toHaveCount(0);
+    },
+    async () => {
+      await expect(
+        page.getByRole("region", { name: "Reviewed commit message" }).locator("pre"),
+      ).toHaveText(COMMIT_MESSAGE, { useInnerText: false });
+    },
+  );
   expect(proposed.result?.verifiedCommit?.status).toBe("approval-required");
-  await expect(
-    page.getByRole("region", { name: "Reviewed commit message" }).locator("pre"),
-  ).toHaveText(COMMIT_MESSAGE, { useInnerText: false });
-  await page.getByRole("button", { name: "Approve once", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Approve once", exact: true })).toHaveCount(0);
-  expect((await control("execute")).result?.verifiedCommit?.status).toBe("succeeded");
+  expect((await control("execute", proposalId)).result?.verifiedCommit?.status).toBe("succeeded");
   return root;
 }
 async function finish(page: Page, revoked = false): Promise<void> {
@@ -210,8 +291,49 @@ async function review(
   expect(response.ok()).toBe(true);
   return (await response.json()) as CodingWorkbenchRuntimeApprovalReviewChannelPayload;
 }
+async function expectReviewedPullRequest(
+  page: Page,
+  runId: string,
+  issueNumber: number,
+): Promise<{ readonly title: string; readonly body: string }> {
+  const pending = (await review(page, runId)).pending?.draftDelivery;
+  if (pending === undefined || !("title" in pending)) throw new Error("Expected actual PR review");
+  expect(pending.title).toBe(DELIVERY_TITLE);
+  expect(pending.body.startsWith(DELIVERY_TEMPLATE)).toBe(true);
+  expect(pending.body.match(/Closes #\d+/gu)).toEqual([`Closes #${String(issueNumber)}`]);
+  await expect(
+    page.getByRole("region", { name: "Reviewed pull request description" }).locator("pre"),
+  ).toHaveText(pending.body, { useInnerText: false });
+  return pending;
+}
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+async function expectFullUnpairedReview(
+  request: APIRequestContext,
+  mode: CodingWorkbenchMode,
+  runId: string,
+): Promise<void> {
+  if (mode !== "autonomous-delivery") return;
+  const unpaired = await request.get(`/api/coding-workbench/runtime/runs/${runId}/approval-review`);
+  expect(await unpaired.json()).toEqual({ session: "unpaired" });
+}
+async function captureFirstDeliveryMode(page: Page, index: number): Promise<void> {
+  if (index !== 1) return;
+  await captureDeliveryModes(page, WINDOW_ID, 'section[aria-label="Coding Workbench"][data-state]');
+}
+function requiredCreatedBody(
+  reviewed: { readonly body: string } | undefined,
+  createdNumber: number | undefined,
+): string {
+  const body = reviewed?.body ?? provider().pullRequestBodies[String(createdNumber)]?.body;
+  if (body === undefined) throw new Error("Expected created pull-request body");
+  return body;
+}
+function requiredPullRequestNumber(record: DraftDeliveryRecord): number {
+  const number = record.pullRequest?.number;
+  if (number === undefined) throw new Error("Expected created pull request number");
+  return number;
 }
 
 test("#3387 @coding-issue-delivery hermetic provider refuses foreign hosts repositories and refs", () => {
@@ -264,6 +386,11 @@ test("#3387 @coding-issue-delivery hermetic provider refuses foreign hosts repos
     pushes: before.pushes,
     creates: before.creates,
     rejections: before.rejections + cases.length,
+    rejectionReasons: {
+      "branch-query": 1,
+      "gh-target": 2,
+      "push-target": 2,
+    },
   });
   expect(git(deliveryRemote(stateDir), ["for-each-ref", "--format=%(refname)"])).toBe(
     "refs/heads/main",
@@ -284,8 +411,19 @@ function runFor(observation: Observation): string {
   if (observation.runId === undefined) throw new Error("Expected run observation");
   return observation.runId;
 }
-async function expectDenied(operation: DeliveryFixtureOperation): Promise<void> {
-  expect((await control(operation)).result?.status).toBe("denied");
+async function expectDenied(
+  operation: DeliveryFixtureOperation,
+  proposalId?: string,
+): Promise<void> {
+  expect((await control(operation, proposalId)).result?.status).toBe("denied");
+}
+async function expectReplayRejected(
+  mode: CodingWorkbenchMode,
+  operation: DeliveryFixtureOperation,
+  proposalId: string,
+): Promise<void> {
+  const expected = mode === "autonomous-delivery" ? "failed" : "denied";
+  expect((await control(operation, proposalId)).result?.status).toBe(expected);
 }
 
 async function expectGeneratedDescription(
@@ -371,16 +509,25 @@ for (const [index, mode] of (
     const beforeProvider = provider();
     const root = await startVerified(page, mode, 42 + index);
     const head = git(root, ["rev-parse", "HEAD"]);
-    const proposed = await control("push-propose");
+    const { proposed, proposalId: pushProposalId } = await readyProposal(
+      page,
+      mode,
+      "push-propose",
+      "push",
+      () => approveDelivery(page),
+      async (proposalId) => {
+        expect(provider().pushes).toBe(beforeProvider.pushes);
+        await expectDenied("push-execute", proposalId);
+        const unpaired = await request.get(
+          `/api/coding-workbench/runtime/runs/${(await snapshot(page)).runId ?? ""}/approval-review`,
+        );
+        expect(await unpaired.json()).toEqual({ session: "unpaired" });
+      },
+    );
     recordFor(proposed, "push-proposed");
     expect(provider().pushes).toBe(beforeProvider.pushes);
-    await expectDenied("push-execute");
-    const unpaired = await request.get(
-      `/api/coding-workbench/runtime/runs/${runFor(proposed)}/approval-review`,
-    );
-    expect(await unpaired.json()).toEqual({ session: "unpaired" });
-    await approveDelivery(page);
-    recordFor(await control("push-execute"), "pushed");
+    await expectFullUnpairedReview(request, mode, runFor(proposed));
+    recordFor(await control("push-execute", pushProposalId), "pushed");
     expect(provider().lastPush).toMatchObject({
       sha: head,
       privateView: true,
@@ -390,36 +537,42 @@ for (const [index, mode] of (
       head,
     );
     expect(provider().pushes).toBe(beforeProvider.pushes + 1);
-    await expectDenied("push-execute");
-    const pr = await control("pr-propose");
+    if (mode !== "autonomous-delivery")
+      await expectReplayRejected(mode, "push-execute", pushProposalId);
+    let reviewedPullRequest: { readonly title: string; readonly body: string } | undefined;
+    const { proposed: pr, proposalId: prProposalId } = await readyProposal(
+      page,
+      mode,
+      "pr-propose",
+      "pull-request",
+      () => approveDelivery(page),
+      async (proposalId) => {
+        await expectDenied("pr-execute", proposalId);
+        expect(provider().creates).toBe(beforeProvider.creates);
+        reviewedPullRequest = await expectReviewedPullRequest(
+          page,
+          (await snapshot(page)).runId ?? "",
+          42 + index,
+        );
+        await captureFirstDeliveryMode(page, index);
+      },
+    );
     recordFor(pr, "pr-proposed");
-    const pending = (await review(page, runFor(pr))).pending?.draftDelivery;
-    if (pending === undefined || !("title" in pending))
-      throw new Error("Expected actual PR review");
-    expect(pending.title).toBe(DELIVERY_TITLE);
-    expect(pending.body.startsWith(DELIVERY_TEMPLATE)).toBe(true);
-    expect(pending.body.match(/Closes #\d+/gu)).toEqual([`Closes #${String(42 + index)}`]);
-    await expect(
-      page.getByRole("region", { name: "Reviewed pull request description" }).locator("pre"),
-    ).toHaveText(pending.body, { useInnerText: false });
-    await expectDenied("pr-execute");
     expect(provider().creates).toBe(beforeProvider.creates);
-    if (index === 0)
-      await captureDeliveryModes(
-        page,
-        WINDOW_ID,
-        'section[aria-label="Coding Workbench"][data-state]',
-      );
-    await approveDelivery(page);
-    const created = await control("pr-execute");
+    const created = await control("pr-execute", prProposalId);
     const createdRecord = recordFor(created, "draft-created");
+    const createdNumber = createdRecord.pullRequest?.number;
+    const createdBody = requiredCreatedBody(reviewedPullRequest, createdNumber);
+    expect(createdBody.startsWith(DELIVERY_TEMPLATE)).toBe(true);
+    expect(createdBody.match(/Closes #\d+/gu)).toEqual([`Closes #${String(42 + index)}`]);
     expect(provider()).toMatchObject({
       creates: beforeProvider.creates + 1,
-      lastTitleDigest: digest(pending.title),
-      lastBodyDigest: digest(pending.body),
+      lastTitleDigest: digest(reviewedPullRequest?.title ?? DELIVERY_TITLE),
+      lastBodyDigest: digest(createdBody),
     });
-    await expectDenied("pr-execute");
-    const number = createdRecord.pullRequest?.number;
+    if (mode !== "autonomous-delivery")
+      await expectReplayRejected(mode, "pr-execute", prProposalId);
+    const number = requiredPullRequestNumber(createdRecord);
     const beforeDescriptions = descriptionModel().requests;
     await finish(page);
     await page.reload();
@@ -435,18 +588,50 @@ for (const [index, mode] of (
     // #3401: the terminal transition dispatches through deps.ts's real production dispatcher and
     // Model Gateway. The lower loopback provider derives its citations from the captured snapshot's
     // actual evidence ids; the retained proposal below proves this is a reviewable bound artifact.
-    if (number === undefined) throw new Error("Expected created pull request number");
     await expectGeneratedDescription(page, root, number, beforeDescriptions);
   });
 }
 
+test("#3387 @coding-issue-delivery Full consumed proposals fail closed on replay", async ({
+  page,
+}) => {
+  const before = provider();
+  await startVerified(page, "autonomous-delivery", 52);
+  const push = await readyProposal(page, "autonomous-delivery", "push-propose", "push", () =>
+    approveDelivery(page),
+  );
+  recordFor(await control("push-execute", push.proposalId), "pushed");
+  const pullRequest = await readyProposal(
+    page,
+    "autonomous-delivery",
+    "pr-propose",
+    "pull-request",
+    () => approveDelivery(page),
+  );
+  recordFor(await control("pr-execute", pullRequest.proposalId), "draft-created");
+  const effects = provider();
+  await expectReplayRejected("autonomous-delivery", "push-execute", push.proposalId);
+  await expectReplayRejected("autonomous-delivery", "pr-execute", pullRequest.proposalId);
+  expect(provider()).toMatchObject({
+    pushes: before.pushes + 1,
+    creates: before.creates + 1,
+  });
+  expect(provider()).toEqual(effects);
+  await control("finish");
+});
+
 function setProviderMode(mode: DeliveryProviderState["mode"]): void {
   writeState(stateDir, { ...provider(), mode });
 }
-async function pushApproved(page: Page): Promise<void> {
-  recordFor(await control("push-propose"), "push-proposed");
-  await approveDelivery(page);
-  recordFor(await control("push-execute"), "pushed");
+async function pushApproved(
+  page: Page,
+  mode: "autonomous-delivery" | "supervised-coding" = "autonomous-delivery",
+): Promise<void> {
+  const { proposed, proposalId } = await readyProposal(page, mode, "push-propose", "push", () =>
+    approveDelivery(page),
+  );
+  recordFor(proposed, "push-proposed");
+  recordFor(await control("push-execute", proposalId), "pushed");
 }
 
 test("#3387 @coding-issue-delivery explicit push denial revokes all remote effects", async ({
@@ -454,10 +639,11 @@ test("#3387 @coding-issue-delivery explicit push denial revokes all remote effec
 }) => {
   const before = provider();
   await startVerified(page, "governed-assist", 45);
-  recordFor(await control("push-propose"), "push-proposed");
+  const pending = await startPendingProposal(page, "push-propose", "push");
   await page.getByRole("button", { name: "Deny", exact: true }).click();
   await expect.poll(async () => (await snapshot(page)).state).toBe("failed");
-  await expectDenied("push-execute");
+  expect((await waitControl(pending.controlId)).result?.status).toBe("failed");
+  await expectDenied("push-execute", pending.proposalId);
   expect(provider()).toMatchObject({ pushes: before.pushes, creates: before.creates });
   await finish(page, true);
 });
@@ -467,10 +653,15 @@ test("#3387 @coding-issue-delivery dirty worktree after approval cannot publish"
 }) => {
   const before = provider();
   const root = await startVerified(page, "autonomous-delivery", 46);
-  recordFor(await control("push-propose"), "push-proposed");
-  await approveDelivery(page);
+  const proposed = await control("push-propose");
+  recordFor(proposed, "push-proposed");
+  expect(proposed.result).toHaveProperty("approvalDisposition", "ready");
+  const proposalId = proposed.result?.draftDelivery?.record?.proposalId;
+  if (proposalId === undefined) throw new Error("Expected ready push proposal");
   writeFileSync(join(root, "unverified.txt"), "Unverified fixture content.");
-  expect(recordFor(await control("push-execute"), "recovery-required").reason).toBe("remote-drift");
+  expect(recordFor(await control("push-execute", proposalId), "recovery-required").reason).toBe(
+    "remote-drift",
+  );
   expect(provider()).toMatchObject({ pushes: before.pushes, creates: before.creates });
   await page.reload();
   await expect(page.getByRole("region", { name: "Repository delivery" })).toContainText(
@@ -484,10 +675,15 @@ test("#3387 @coding-issue-delivery changed frozen issue refuses the approved pus
 }) => {
   const before = provider();
   await startVerified(page, "autonomous-delivery", 47);
-  recordFor(await control("push-propose"), "push-proposed");
-  await approveDelivery(page);
+  const proposed = await control("push-propose");
+  recordFor(proposed, "push-proposed");
+  expect(proposed.result).toHaveProperty("approvalDisposition", "ready");
+  const proposalId = proposed.result?.draftDelivery?.record?.proposalId;
+  if (proposalId === undefined) throw new Error("Expected ready push proposal");
   writeFileSync(deliveryRevisionPath(stateDir), "2");
-  expect(recordFor(await control("push-execute"), "recovery-required").reason).toBe("issue-drift");
+  expect(recordFor(await control("push-execute", proposalId), "recovery-required").reason).toBe(
+    "issue-drift",
+  );
   expect(provider()).toMatchObject({ pushes: before.pushes, creates: before.creates });
   writeFileSync(deliveryRevisionPath(stateDir), "1");
   await finish(page);
@@ -498,10 +694,15 @@ test("#3387 @coding-issue-delivery changed effective push URL refuses before pro
 }) => {
   const before = provider();
   const root = await startVerified(page, "autonomous-delivery", 48);
-  recordFor(await control("push-propose"), "push-proposed");
-  await approveDelivery(page);
+  const proposed = await control("push-propose");
+  recordFor(proposed, "push-proposed");
+  expect(proposed.result).toHaveProperty("approvalDisposition", "ready");
+  const proposalId = proposed.result?.draftDelivery?.record?.proposalId;
+  if (proposalId === undefined) throw new Error("Expected ready push proposal");
   git(root, ["config", "remote.origin.pushurl", "https://github.com/fixture/foreign.git"]);
-  expect(recordFor(await control("push-execute"), "recovery-required").reason).toBe("remote-drift");
+  expect(recordFor(await control("push-execute", proposalId), "recovery-required").reason).toBe(
+    "remote-drift",
+  );
   expect(provider()).toMatchObject({
     pushes: before.pushes,
     creates: before.creates,
@@ -516,10 +717,13 @@ test("#3387 @coding-issue-delivery uncertain push is reconciled without another 
 }) => {
   const before = provider();
   await startVerified(page, "autonomous-delivery", 49);
-  recordFor(await control("push-propose"), "push-proposed");
-  await approveDelivery(page);
+  const proposed = await control("push-propose");
+  recordFor(proposed, "push-proposed");
+  expect(proposed.result).toHaveProperty("approvalDisposition", "ready");
+  const proposalId = proposed.result?.draftDelivery?.record?.proposalId;
+  if (proposalId === undefined) throw new Error("Expected ready push proposal");
   setProviderMode("push-response-loss");
-  recordFor(await control("push-execute"), "recovery-required");
+  recordFor(await control("push-execute", proposalId), "recovery-required");
   expect(provider().pushes).toBe(before.pushes + 1);
   await page.reload();
   await expect(page.getByRole("button", { name: "Approve once", exact: true })).toHaveCount(0);
@@ -535,10 +739,13 @@ test("#3387 @coding-issue-delivery unknown PR after response loss is not adopted
   const before = provider();
   await startVerified(page, "autonomous-delivery", 50);
   await pushApproved(page);
-  recordFor(await control("pr-propose"), "pr-proposed");
-  await approveDelivery(page);
+  const proposed = await control("pr-propose");
+  recordFor(proposed, "pr-proposed");
+  expect(proposed.result).toHaveProperty("approvalDisposition", "ready");
+  const proposalId = proposed.result?.draftDelivery?.record?.proposalId;
+  if (proposalId === undefined) throw new Error("Expected ready pull-request proposal");
   setProviderMode("create-response-loss");
-  expect(recordFor(await control("pr-execute"), "recovery-required").reason).toBe(
+  expect(recordFor(await control("pr-execute", proposalId), "recovery-required").reason).toBe(
     "ambiguous-remote",
   );
   expect(provider().creates).toBe(before.creates + 1);
@@ -558,11 +765,12 @@ test("#3387 @coding-issue-delivery PR denial keeps the pushed commit but creates
 }) => {
   const before = provider();
   await startVerified(page, "supervised-coding", 51);
-  await pushApproved(page);
-  recordFor(await control("pr-propose"), "pr-proposed");
+  await pushApproved(page, "supervised-coding");
+  const pending = await startPendingProposal(page, "pr-propose", "pull-request");
   await page.getByRole("button", { name: "Deny", exact: true }).click();
   await expect.poll(async () => (await snapshot(page)).state).toBe("failed");
-  await expectDenied("pr-execute");
+  expect((await waitControl(pending.controlId)).result?.status).toBe("failed");
+  await expectDenied("pr-execute", pending.proposalId);
   expect(provider()).toMatchObject({ pushes: before.pushes + 1, creates: before.creates });
   await finish(page, true);
 });

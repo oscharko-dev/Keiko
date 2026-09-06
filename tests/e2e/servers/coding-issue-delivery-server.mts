@@ -89,7 +89,7 @@ function readDeliveryIssue(stateDir: string, args: readonly string[]): Promise<u
   const number = Number(
     new RegExp(`^/repos/${DELIVERY_REPOSITORY}/issues/(\\d+)(?:$|/)`, "u").exec(endpoint)?.[1],
   );
-  if (!Number.isSafeInteger(number) || number < 42 || number > 51)
+  if (!Number.isSafeInteger(number) || number < 42 || number > 52)
     return Promise.reject(new Error("delivery-fixture-issue-target-denied"));
   if (endpoint.includes("comments?")) return Promise.resolve([]);
   return Promise.resolve({

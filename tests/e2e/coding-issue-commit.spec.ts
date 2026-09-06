@@ -39,24 +39,89 @@ interface Observation {
   readonly phase: string;
   readonly runId?: string;
   readonly lastControl: number;
+  readonly completedControls: readonly number[];
+  readonly failedControls: readonly number[];
+  readonly controlResults: Readonly<Record<string, Observation["result"]>>;
   readonly result?: { readonly status: string; readonly verifiedCommit?: VerifiedCommitResult };
   readonly rawContentRecorded: boolean;
 }
 function observe(): Observation {
   return JSON.parse(readFileSync(commitObservationPath(stateDir), "utf8")) as Observation;
 }
-async function control(operation: CommitFixtureOperation): Promise<Observation> {
+async function control(
+  operation: CommitFixtureOperation,
+  proposalId?: string,
+): Promise<Observation> {
+  return waitControl(await startControl(operation, proposalId));
+}
+async function startControl(
+  operation: CommitFixtureOperation,
+  proposalId?: string,
+): Promise<number> {
   const id = observe().lastControl + 1;
   const path = commitControlPath(stateDir);
-  writeFileSync(`${path}.next`, JSON.stringify({ id, operation }));
+  writeFileSync(
+    `${path}.next`,
+    JSON.stringify({ id, operation, ...(proposalId === undefined ? {} : { proposalId }) }),
+  );
   renameSync(`${path}.next`, path);
   await expect.poll(() => observe().lastControl).toBe(id);
-  return observe();
+  return id;
+}
+async function waitControl(id: number): Promise<Observation> {
+  await expect
+    .poll(() => {
+      const current = observe();
+      if (current.failedControls.includes(id)) return "failed";
+      return current.completedControls.includes(id) ? "completed" : "pending";
+    })
+    .toBe("completed");
+  const current = observe();
+  const result = current.controlResults[String(id)];
+  return { ...current, ...(result === undefined ? {} : { result }) };
 }
 async function snapshot(page: Page): Promise<CodingWorkbenchRuntimeSnapshot> {
   const response = await page.request.get("/api/coding-workbench/runtime/status");
   expect(response.ok()).toBe(true);
   return (await response.json()) as CodingWorkbenchRuntimeSnapshot;
+}
+async function startPendingCommit(page: Page): Promise<{
+  readonly controlId: number;
+  readonly proposalId: string;
+}> {
+  const controlId = await startControl("propose");
+  await expect
+    .poll(async () => (await snapshot(page)).pendingPermission?.actionKind)
+    .toBe("commit");
+  const proposalId = (await snapshot(page)).pendingPermission?.requestId;
+  if (proposalId === undefined) throw new Error("Expected canonical pending commit proposal");
+  return { controlId, proposalId };
+}
+async function readyCommitProposal(
+  page: Page,
+  mode: CodingWorkbenchMode,
+  beforeApproval?: () => Promise<void>,
+): Promise<{ readonly proposed: Observation; readonly proposalId: string }> {
+  if (mode === "autonomous-delivery") {
+    const proposed = await control("propose");
+    const proposalId = proposed.result?.verifiedCommit?.proposalId;
+    if (proposalId === undefined) throw new Error("Expected ready commit proposal");
+    expect(proposed.result).toHaveProperty("approvalDisposition", "ready");
+    expect((await snapshot(page)).pendingPermission).toBeUndefined();
+    await expect(page.getByRole("button", { name: "Approve once", exact: true })).toHaveCount(0);
+    return { proposed, proposalId };
+  }
+  const pending = await startPendingCommit(page);
+  expect((await control("execute", pending.proposalId)).result?.status).toBe("denied");
+  const message = page.getByRole("region", { name: "Reviewed commit message" });
+  await expect(message.locator("pre")).toHaveText(COMMIT_MESSAGE, { useInnerText: false });
+  await expect(message.locator("script")).toHaveCount(0);
+  await beforeApproval?.();
+  await page.getByRole("button", { name: "Approve once", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Approve once", exact: true })).toHaveCount(0);
+  const proposed = await waitControl(pending.controlId);
+  expect(proposed.result).toHaveProperty("approvalDisposition", "ready");
+  return { proposed, proposalId: pending.proposalId };
 }
 function git(root: string, args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd: root, encoding: "utf8", timeout: 30_000 }).trim();
@@ -177,22 +242,23 @@ for (const mode of ["autonomous-delivery", "supervised-coding", "governed-assist
     await openWorkbench(page);
     const root = await startVerified(page, mode, "success");
     const before = git(root, ["rev-parse", "HEAD"]);
-    const proposed = await control("propose");
+    const { proposed, proposalId } = await readyCommitProposal(
+      page,
+      mode,
+      mode === "supervised-coding"
+        ? async (): Promise<void> => {
+            await captureCommitModes(page, WINDOW_ID, SURFACE);
+          }
+        : undefined,
+    );
     expect(proposed.result?.verifiedCommit?.status).toBe("approval-required");
-    const message = page.getByRole("region", { name: "Reviewed commit message" });
-    await expect(message.locator("pre")).toHaveText(COMMIT_MESSAGE, { useInnerText: false });
-    await expect(message.locator("script")).toHaveCount(0);
     const unpaired = await request.get(
       `/api/coding-workbench/runtime/runs/${proposed.runId ?? ""}/approval-review`,
     );
     expect(await unpaired.json()).toEqual({ session: "unpaired" });
     expect(git(root, ["rev-parse", "HEAD"])).toBe(before);
-    if (mode === "autonomous-delivery") await captureCommitModes(page, WINDOW_ID, SURFACE);
-    const premature = await control("execute");
-    expect(premature.result?.status).toBe("denied");
-    await page.getByRole("button", { name: "Approve once", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Approve once", exact: true })).toHaveCount(0);
-    const executed = await control("execute");
+    expect(git(root, ["rev-parse", "HEAD"])).toBe(before);
+    const executed = await control("execute", proposalId);
     expect(executed.result?.verifiedCommit?.status).toBe("succeeded");
     expect(git(root, ["rev-list", "--count", `${before}..HEAD`])).toBe("1");
     expect(git(root, ["show", "-s", "--format=%B", "HEAD"])).toBe(COMMIT_MESSAGE);
@@ -202,8 +268,8 @@ for (const mode of ["autonomous-delivery", "supervised-coding", "governed-assist
     );
     await expect(page.getByRole("region", { name: "Reviewed commit message" })).toHaveCount(0);
     expect((await snapshot(page)).verifiedCommitResult).toEqual(executed.result?.verifiedCommit);
-    const replay = await control("execute");
-    expect(replay.result?.status).toBe("denied");
+    const replay = await control("execute", proposalId);
+    expect(replay.result?.status).toBe(mode === "autonomous-delivery" ? "failed" : "denied");
     expect(git(root, ["rev-list", "--count", `${before}..HEAD`])).toBe("1");
     await finish(page);
     completedCases.push(`approved-exactly-once-and-reloaded-${mode}`);
@@ -236,13 +302,16 @@ test("#3386 @coding-issue-commit staged drift after review cannot execute", asyn
   await openWorkbench(page);
   const root = await startVerified(page, "autonomous-delivery", "drift");
   const before = git(root, ["rev-parse", "HEAD"]);
-  expect((await control("propose")).result?.verifiedCommit?.status).toBe("approval-required");
-  await expect(page.getByRole("region", { name: "Reviewed commit message" })).toBeVisible();
+  const proposed = await control("propose");
+  expect(proposed.result?.verifiedCommit?.status).toBe("approval-required");
+  expect(proposed.result).toHaveProperty("approvalDisposition", "ready");
+  const proposalId = proposed.result?.verifiedCommit?.proposalId;
+  if (proposalId === undefined) throw new Error("Expected ready commit proposal");
+  expect((await snapshot(page)).pendingPermission).toBeUndefined();
+  await expect(page.getByRole("button", { name: "Approve once", exact: true })).toHaveCount(0);
   writeFileSync(join(root, COMMIT_TARGET), "export const value = 'DRIFTED_COMMIT_3386';\n");
   git(root, ["add", "--", COMMIT_TARGET]);
-  await page.getByRole("button", { name: "Approve once", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Approve once", exact: true })).toHaveCount(0);
-  const executed = await control("execute");
+  const executed = await control("execute", proposalId);
   expect(executed.result?.verifiedCommit).toMatchObject({
     status: "drift",
     reason: "candidate-drift",
@@ -261,11 +330,12 @@ test("#3386 @coding-issue-commit actual UI denial revokes the execution path", a
   await openWorkbench(page);
   const root = await startVerified(page, "governed-assist", "denied");
   const before = git(root, ["rev-parse", "HEAD"]);
-  expect((await control("propose")).result?.verifiedCommit?.status).toBe("approval-required");
+  const pending = await startPendingCommit(page);
   await page.getByRole("button", { name: "Deny", exact: true }).click();
   await expect(page.locator(SURFACE)).toHaveAttribute("data-state", "failed");
   expect(await snapshot(page)).toMatchObject({ failureCode: "revoked" });
-  expect((await control("execute")).result?.status).toBe("denied");
+  expect((await waitControl(pending.controlId)).result?.status).toBe("failed");
+  expect((await control("execute", pending.proposalId)).result?.status).toBe("denied");
   expect(git(root, ["rev-parse", "HEAD"])).toBe(before);
   await expect(page.getByRole("region", { name: "Reviewed commit message" })).toHaveCount(0);
   await finish(page, "revoked");
