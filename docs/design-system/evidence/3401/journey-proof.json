@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "issue": 3401,
-  "checkedAt": "2026-09-06T06:06:47.718Z",
+  "checkedAt": "2026-09-06T20:38:40.001Z",
   "passed": true,
   "evidenceClass": "production-ui-deterministic-browser-fixture",
   "modelQualification": false,
@@ -21,16 +21,16 @@
     "olderResponseDiscarded": true,
     "currentCapture": {
       "screenshot": "docs/design-system/evidence/3401/09-response-race-current.png",
-      "screenshotSha256": "ce128d945cfe162ddbf738b5731385dcc29ea5fbe67bacf8bf2d3c3b77b61a4d"
+      "screenshotSha256": "8044af0f161c5ccb2872696385b29c9ec92d2f15f6bcdeaf68b91cb2fe417ae8"
     }
   },
   "sourceHashes": {
-    "tests/e2e/git-change-chat-3400.spec.ts": "1aafc3e36e5c14c9a20bde15a62a613365c2aba7d631eefe894bb0198ba800da",
-    "tests/e2e/config/playwright.git-change-chat-3400.config.ts": "c07c3b11cf51b6685b5592a530636d5c973f85c022d9652553f20fc34266cf46",
+    "tests/e2e/git-change-chat-3400.spec.ts": "9047fcf321a78098b1d08a1e21a5dd26ce4cd06238094961415c78727205a20c",
+    "tests/e2e/config/playwright.git-change-chat-3400.config.ts": "d24e0151b791783a91bcc56829ed3b6ca84b72a2660304f39465ebbc3cbf2e85",
     "tests/e2e/support/pr-description-visual-evidence.ts": "b8fd2796d695925ac8bf2bb5e5a6442bf5a9e2940440b2c36502a14899998889",
     "tests/e2e/support/workbench-description-3401.ts": "f0c07608c88aa0ef8ff74ebbaadab3ae18786de772b493499864167c97c604e2",
     "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchDraftDelivery.tsx": "3f528a6ad658582bdc11f65954f88045852e7ac5b003899189b1d8f45b24637c",
-    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css": "9f23120ee44e6d8b82b6fcd23a72a7c2c2c5cb0c65675e9a55b4c57c297e34c2",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css": "c86f5f97860ae3c3dea96a6c58f85ff9a5fa9d7cdd11b528db8b2053e752352c",
     "packages/keiko-ui/src/lib/coding-workbench-runtime-api.ts": "efcd25ddd9ae3013f4b487cf7c713a60ee87d3b644e1f4f7f911cc0f214abe2d"
   },
   "rawContentRecorded": false

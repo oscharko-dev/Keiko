@@ -3,14 +3,14 @@
   "issue": 3385,
   "evidenceClass": "production-composed-deterministic-browser",
   "modelQualification": false,
-  "capturedAt": "2026-09-04T20:46:40.332Z",
-  "gitHead": "30fb85b54f863e86585d5db27a6ba2e6e4e660c6",
+  "capturedAt": "2026-09-06T20:37:53.936Z",
+  "gitHead": "f8088db28f7a7be40730b67fd8dffdf94f5e4bbb",
   "sourceHashes": {
-    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchIssueIntake.tsx": "68ed7c45abdda0615f1d16120802af8e4b891230078b4740032d271b1c5eb0d0",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchIssueIntake.tsx": "9b550cde22b75f2d1e448f7d1761ceb2b902b2e4bc6eb8ddc73d927ba0cd1613",
     "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchIssueIntake.module.css": "674b8102d25ce6d5e11cb57f162ea7d82c3cb2b02d3e4ec1f78d0ca999fa94e3",
-    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchSetup.tsx": "4e0a1df1e93a5c77c2dd5e5648fb0a3cdd69036f0f1edd71b64bba1cc0ad4000",
-    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.tsx": "58146e0f118fe236702771790a0b0bf016e0f99c4d9de8c20bbe470442841b83",
-    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css": "4faa14219ed1dd9fa727686106b269669e9ad9f89f15385dcaf6dd6637d6889a"
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchSetup.tsx": "a74a0a9fc2193a405654fc854be52512f5f5f43691eef6496c8437f7aee4b145",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.tsx": "b20a6909e2a8dac9f8f34343999c50d474298c678b2cc53fefa0e96fc957de4c",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css": "c86f5f97860ae3c3dea96a6c58f85ff9a5fa9d7cdd11b528db8b2053e752352c"
   },
   "captures": [
     {

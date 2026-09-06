@@ -4,7 +4,7 @@
   "passed": true,
   "evidenceClass": "production-composed-deterministic-browser",
   "modelQualification": false,
-  "checkedAt": "2026-09-04T20:46:43.081Z",
+  "checkedAt": "2026-09-06T20:37:57.436Z",
   "assertions": [
     "auth-refusal-no-run",
     "mismatch-no-run",
@@ -12,6 +12,7 @@
     "stale-preview-no-workspace",
     "grant-revoked-before-start-no-run",
     "real-managed-git-workspace",
+    "qualification-reload-reaccepts-same-workspace-before-issue-bound-start",
     "default-base-preserved",
     "initial-model-context-causality",
     "model-edit-in-managed-workspace",

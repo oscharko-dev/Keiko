@@ -1,17 +1,17 @@
 {
   "schemaVersion": 1,
   "issue": 3401,
-  "checkedAt": "2026-09-06T06:06:47.653Z",
+  "checkedAt": "2026-09-06T20:38:39.927Z",
   "evidenceClass": "production-ui-deterministic-browser-fixture",
   "modelQualification": false,
   "liveAuthenticationQualification": false,
   "sourceHashes": {
-    "tests/e2e/git-change-chat-3400.spec.ts": "1aafc3e36e5c14c9a20bde15a62a613365c2aba7d631eefe894bb0198ba800da",
-    "tests/e2e/config/playwright.git-change-chat-3400.config.ts": "c07c3b11cf51b6685b5592a530636d5c973f85c022d9652553f20fc34266cf46",
+    "tests/e2e/git-change-chat-3400.spec.ts": "9047fcf321a78098b1d08a1e21a5dd26ce4cd06238094961415c78727205a20c",
+    "tests/e2e/config/playwright.git-change-chat-3400.config.ts": "d24e0151b791783a91bcc56829ed3b6ca84b72a2660304f39465ebbc3cbf2e85",
     "tests/e2e/support/pr-description-visual-evidence.ts": "b8fd2796d695925ac8bf2bb5e5a6442bf5a9e2940440b2c36502a14899998889",
     "tests/e2e/support/workbench-description-3401.ts": "f0c07608c88aa0ef8ff74ebbaadab3ae18786de772b493499864167c97c604e2",
     "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchDraftDelivery.tsx": "3f528a6ad658582bdc11f65954f88045852e7ac5b003899189b1d8f45b24637c",
-    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css": "9f23120ee44e6d8b82b6fcd23a72a7c2c2c5cb0c65675e9a55b4c57c297e34c2",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css": "c86f5f97860ae3c3dea96a6c58f85ff9a5fa9d7cdd11b528db8b2053e752352c",
     "packages/keiko-ui/src/lib/coding-workbench-runtime-api.ts": "efcd25ddd9ae3013f4b487cf7c713a60ee87d3b644e1f4f7f911cc0f214abe2d"
   },
   "captures": [
@@ -20,7 +20,7 @@
       "theme": "dark",
       "state": "generic-held-draft-after-response-race",
       "screenshot": "docs/design-system/evidence/3401/01-dark.png",
-      "screenshotSha256": "ce128d945cfe162ddbf738b5731385dcc29ea5fbe67bacf8bf2d3c3b77b61a4d",
+      "screenshotSha256": "c7ce8a4b2e757119ebce8a3336af35f896ce3ff46c7a976c18bdef11457da1da",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -30,7 +30,7 @@
       "theme": "light",
       "state": "generic-held-draft-after-response-race",
       "screenshot": "docs/design-system/evidence/3401/02-light.png",
-      "screenshotSha256": "5465f0b6dd5fd2a75c2270fac2e8c5ece9d5fd9405ed515d53f8dcf5425a3886",
+      "screenshotSha256": "837a483f88fb17d95eb38d0698f843aa9b2780ca839121c88ae7b3f244c6f180",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -41,7 +41,7 @@
       "highContrast": true,
       "state": "generic-held-draft-after-response-race",
       "screenshot": "docs/design-system/evidence/3401/03-dark-high-contrast.png",
-      "screenshotSha256": "834eeeb17af8b39629be888a70645c2c03ced6356f2f9bf53fc2cdbabe8fcfa0",
+      "screenshotSha256": "8796bcafa6a3cd07cc4514fea82a3fa0c3be4c59392d1b53b878e0356dd66bc4",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -52,7 +52,7 @@
       "highContrast": true,
       "state": "generic-held-draft-after-response-race",
       "screenshot": "docs/design-system/evidence/3401/04-light-high-contrast.png",
-      "screenshotSha256": "896610909232c3e9ab440ca4d49385f41528f02dd8eed253574b159bdc9a58b1",
+      "screenshotSha256": "7e15882ce0cf9b381a66ba4e0d8d2272e41996118ab0d134b4f51ffd87e7f5f5",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -63,7 +63,7 @@
       "contrast": "more",
       "state": "generic-held-draft-after-response-race",
       "screenshot": "docs/design-system/evidence/3401/05-prefers-contrast.png",
-      "screenshotSha256": "834eeeb17af8b39629be888a70645c2c03ced6356f2f9bf53fc2cdbabe8fcfa0",
+      "screenshotSha256": "8796bcafa6a3cd07cc4514fea82a3fa0c3be4c59392d1b53b878e0356dd66bc4",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -74,7 +74,7 @@
       "forcedColors": "active",
       "state": "generic-held-draft-after-response-race",
       "screenshot": "docs/design-system/evidence/3401/06-forced-colors.png",
-      "screenshotSha256": "638ad98727f8d22be8f916f6d2b2fd0d3e846e764115eaa825d57228d429820a",
+      "screenshotSha256": "8183917b476ab45dcb9019841a7cafe67cf43f12709dccae2dc89e883ce3f638",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -85,7 +85,7 @@
       "reducedMotion": "reduce",
       "state": "generic-held-draft-after-response-race",
       "screenshot": "docs/design-system/evidence/3401/07-reduced-motion.png",
-      "screenshotSha256": "ce128d945cfe162ddbf738b5731385dcc29ea5fbe67bacf8bf2d3c3b77b61a4d",
+      "screenshotSha256": "8044af0f161c5ccb2872696385b29c9ec92d2f15f6bcdeaf68b91cb2fe417ae8",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -96,7 +96,7 @@
       "width": 360,
       "state": "generic-held-draft-after-response-race",
       "screenshot": "docs/design-system/evidence/3401/08-compact.png",
-      "screenshotSha256": "b40116bb32f5fd68c9b0d444ee8bc2e1af1118f3bb3537f6d2dcfe8bcced93d5",
+      "screenshotSha256": "4f6eb95e5cf2ca686df8e97e95343f883a638c877f70e02c8a6278bf7cfba133",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
