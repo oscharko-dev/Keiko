@@ -8,6 +8,11 @@
 // binds to.
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
+import {
+  CODE_TASK_EVIDENCE_PLATFORMS,
+  isCodeTaskIsoInstant,
+  validateCodeTaskQualificationFlowArtifact,
+} from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
 
 export function writeQualificationEvidenceReceipt({
   receiptsDir,
@@ -31,6 +36,46 @@ export function writeQualificationEvidenceReceipt({
         testStatus: receipt.result === "passed" ? "passed" : "failed",
         recordedAt,
         provenance,
+      },
+      null,
+      2,
+    )}\n`,
+    { mode: 0o600 },
+  );
+}
+
+/** Writes one completed #3390 flow with a distinct identity. Failed attempts are represented in
+ * the next successful flow's ledger delta; this writer is called only after merge and closure. */
+export function writeCodingIssueJourneyFlowEvidenceReceipt({
+  receiptsDir,
+  artifact,
+  platform,
+  recordedAt,
+}) {
+  const validation = validateCodeTaskQualificationFlowArtifact(artifact);
+  if (!validation.ok) {
+    throw new TypeError("invalid qualification flow artifact");
+  }
+  if (!CODE_TASK_EVIDENCE_PLATFORMS.includes(platform) || !isCodeTaskIsoInstant(recordedAt)) {
+    throw new TypeError("invalid qualification flow receipt metadata");
+  }
+  const validatedArtifact = validation.value;
+  const flowId = validatedArtifact.flowId;
+  writeFileSync(
+    join(receiptsDir, `${flowId}.artifact`),
+    `${JSON.stringify(validatedArtifact, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  writeFileSync(
+    join(receiptsDir, `${flowId}.receipt.json`),
+    `${JSON.stringify(
+      {
+        flowId,
+        commitSha: validatedArtifact.sourceCommitSha,
+        platform,
+        testStatus: "passed",
+        recordedAt,
+        provenance: "real-model",
       },
       null,
       2,

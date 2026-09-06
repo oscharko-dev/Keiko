@@ -58,6 +58,38 @@ function buildBlockedScenario(entry, generatedAt) {
   };
 }
 
+function buildFlow(entry, flowReceiptsById) {
+  const receipt = flowReceiptsById.get(entry.flowId);
+  if (receipt === undefined) throw new Error(`missing flow receipt for ${entry.flowId}`);
+  const artifact = receipt.artifact;
+  return {
+    evidenceKind: artifact.evidenceKind,
+    schemaVersion: artifact.schemaVersion,
+    flowId: artifact.flowId,
+    ordinal: artifact.ordinal,
+    repository: artifact.repository,
+    issueReference: artifact.issueReference,
+    issueNumber: artifact.issueNumber,
+    issueState: artifact.issueState,
+    mode: artifact.mode,
+    taskRunId: artifact.taskRunId,
+    pullRequestReference: artifact.pullRequestReference,
+    pullRequestNumber: artifact.pullRequestNumber,
+    pullRequestHeadSha: artifact.pullRequestHeadSha,
+    pullRequestState: artifact.pullRequestState,
+    mergeCommitSha: artifact.mergeCommitSha,
+    requiredChecks: artifact.requiredChecks,
+    transitions: artifact.transitions,
+    sourceCommitSha: artifact.sourceCommitSha,
+    spend: artifact.spend,
+    platform: receipt.platform,
+    provenance: receipt.provenance,
+    recordedAt: receipt.recordedAt,
+    artifactDigest: receipt.artifactDigest,
+    receiptDigest: receipt.receiptDigest,
+  };
+}
+
 /** Assembles the opaque-fact fields shared by every manifest -- split out purely to keep
  * `buildCodingIssueJourneyManifest` under the repository's per-function line ceiling. */
 function manifestFacts(input) {
@@ -94,10 +126,22 @@ function manifestFacts(input) {
  */
 export function buildCodingIssueJourneyManifest(input) {
   const { descriptor, receiptsByScenarioId, generatedAt } = input;
+  const flowReceiptsById = input.flowReceiptsById ?? new Map();
   const scenarios = [
     ...descriptor.scenarios.map((entry) => buildRanScenario(entry, receiptsByScenarioId)),
     ...descriptor.blocked.map((entry) => buildBlockedScenario(entry, generatedAt)),
   ];
+  const flows = (descriptor.flows ?? []).map((entry) => buildFlow(entry, flowReceiptsById));
+  const firstFlow = flows[0];
+  const manifestInput =
+    firstFlow === undefined
+      ? input
+      : {
+          ...input,
+          issueReference: firstFlow.issueReference,
+          pullRequestReference: firstFlow.pullRequestReference,
+          runReference: firstFlow.taskRunId,
+        };
   return {
     kind: "code-task-qualification-manifest",
     schemaVersion: 1,
@@ -109,10 +153,11 @@ export function buildCodingIssueJourneyManifest(input) {
     modelIdentity: input.modelIdentity,
     fixtureRevision: input.fixtureRevision,
     rubricDigest: input.rubricDigest,
-    ...manifestFacts(input),
+    ...manifestFacts(manifestInput),
     requiredTools: input.requiredTools,
     spendBudgetUsd: input.spendBudgetUsd,
     scenarios,
+    flows,
     knownLimitations: descriptor.knownLimitations,
   };
 }

@@ -1,10 +1,29 @@
 import { spawnSync } from "node:child_process";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND,
+  CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
+} from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
 
-import { checkCodingIssueJourneyEvidence } from "../check-coding-issue-journey-evidence.mjs";
+import {
+  checkCodingIssueJourneyEvidence,
+  readFlowReceipts,
+} from "../check-coding-issue-journey-evidence.mjs";
 import { deriveGateVerdict, platformKeyFor } from "../lib/coding-issue-journey-evidence.mjs";
+import { writeCodingIssueJourneyFlowEvidenceReceipt } from "../lib/qualification-evidence-receipt.mjs";
 
 const GATE_PATH = fileURLToPath(
   new URL("../check-coding-issue-journey-evidence.mjs", import.meta.url),
@@ -17,6 +36,11 @@ const HEAD_SHAS = { sourceCommitSha: COMMIT_SHA, sourceTreeSha: TREE_SHA };
 const FIXTURES_ROOT = fileURLToPath(
   new URL("fixtures/coding-issue-journey-evidence/", import.meta.url),
 );
+const TEMP_ROOTS = [];
+
+afterEach(() => {
+  for (const root of TEMP_ROOTS.splice(0)) rmSync(root, { recursive: true, force: true });
+});
 
 function fixture(name) {
   return {
@@ -32,8 +56,127 @@ const BASE_BINDING = {
 };
 
 async function runFixture(name, { headShas = HEAD_SHAS, binding = BASE_BINDING } = {}) {
-  const { manifestPath, receiptsDir } = fixture(name);
-  return checkCodingIssueJourneyEvidence({ manifestPath, receiptsDir, binding, headShas });
+  const staged = stageFiveFlowEvidence(name);
+  return checkCodingIssueJourneyEvidence({ ...staged, binding, headShas });
+}
+
+const FLOW_MODES = [
+  "governed-assist",
+  "supervised-coding",
+  "autonomous-delivery",
+  "supervised-coding",
+  "autonomous-delivery",
+];
+const FLOW_ISSUES = [1, 3, 4, 5, 6];
+
+function flowArtifact(
+  index,
+  cumulativeChargedNanoUsd,
+  priorCumulative,
+  sourceCommitSha = COMMIT_SHA,
+) {
+  const ordinal = index + 1;
+  const flowId = `issue-to-pr-flow-0${String(ordinal)}`;
+  const issueNumber = FLOW_ISSUES[index];
+  const pullRequestNumber = 100 + ordinal;
+  const pullRequestHeadSha = String(ordinal).repeat(40);
+  return {
+    evidenceKind: CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND,
+    schemaVersion: 1,
+    flowId,
+    ordinal,
+    repository: "oscharko/Wegwerf-Repo",
+    issueReference: `https://github.com/oscharko/Wegwerf-Repo/issues/${String(issueNumber)}`,
+    issueNumber,
+    issueState: "closed",
+    mode: FLOW_MODES[index],
+    taskRunId: `run-${String(ordinal)}`,
+    pullRequestReference: `https://github.com/oscharko/Wegwerf-Repo/pull/${String(pullRequestNumber)}`,
+    pullRequestNumber,
+    pullRequestHeadSha,
+    pullRequestState: "merged",
+    mergeCommitSha: ["6", "7", "8", "9", "d"][index].repeat(40),
+    requiredChecks: {
+      observation: "observed",
+      headSha: pullRequestHeadSha,
+      total: 0,
+      passed: 0,
+      failed: 0,
+      pending: 0,
+    },
+    transitions: CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
+    sourceCommitSha,
+    spend: {
+      budgetNanoUsd: 50_000_000_000,
+      chargedDeltaNanoUsd: cumulativeChargedNanoUsd - priorCumulative,
+      cumulativeChargedNanoUsd,
+      remainingNanoUsd: 50_000_000_000 - cumulativeChargedNanoUsd,
+    },
+  };
+}
+
+function stageFiveFlowEvidence(fixtureName = "valid") {
+  const root = mkdtempSync(join(tmpdir(), "keiko-five-flow-evidence-"));
+  TEMP_ROOTS.push(root);
+  const sourceFixture = fixture(fixtureName);
+  const receiptsDir = join(root, "receipts");
+  if (existsSync(sourceFixture.receiptsDir)) {
+    cpSync(sourceFixture.receiptsDir, receiptsDir, { recursive: true });
+  } else {
+    mkdirSync(receiptsDir, { recursive: true });
+  }
+  const manifest = JSON.parse(readFileSync(sourceFixture.manifestPath, "utf8"));
+  const cumulatives = [3_240_000, 5_000_000, 7_000_000, 9_000_000, 11_000_000];
+  const artifacts = cumulatives.map((cumulative, index) =>
+    flowArtifact(
+      index,
+      cumulative,
+      index === 0 ? 0 : cumulatives[index - 1],
+      manifest.sourceCommitSha,
+    ),
+  );
+  for (const artifact of artifacts) {
+    writeCodingIssueJourneyFlowEvidenceReceipt({
+      receiptsDir,
+      artifact,
+      platform: "macos-arm64",
+      recordedAt: "2026-09-06T05:30:00Z",
+    });
+  }
+  const receipts = readFlowReceipts(
+    receiptsDir,
+    artifacts.map((artifact) => artifact.flowId),
+  );
+  const flows = artifacts.map((artifact) => {
+    const receipt = receipts.get(artifact.flowId);
+    if (receipt === undefined) throw new Error(`missing staged flow ${artifact.flowId}`);
+    return {
+      ...artifact,
+      platform: receipt.platform,
+      provenance: receipt.provenance,
+      recordedAt: receipt.recordedAt,
+      artifactDigest: receipt.artifactDigest,
+      receiptDigest: receipt.receiptDigest,
+    };
+  });
+  manifest.spendBudgetUsd = 50;
+  manifest.observedSpendUsd = { outcome: "known", value: 0.011 };
+  manifest.flows = flows;
+  manifest.issueReference = { outcome: "known", value: flows[0].issueReference };
+  manifest.pullRequestReference = { outcome: "known", value: flows[0].pullRequestReference };
+  manifest.runReference = { outcome: "known", value: flows[0].taskRunId };
+  const manifestPath = join(root, "manifest.json");
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const descriptor = {
+    flows: artifacts.map(({ flowId, ordinal, repository, issueNumber, mode }) => ({
+      flowId,
+      ordinal,
+      repository,
+      issueNumber,
+      mode,
+    })),
+  };
+  return { manifestPath, receiptsDir, descriptor, flows };
 }
 
 describe("checkCodingIssueJourneyEvidence", () => {
@@ -41,6 +184,18 @@ describe("checkCodingIssueJourneyEvidence", () => {
     const { verdict, failures } = await runFixture("valid");
     expect(failures).toEqual([]);
     expect(verdict).toBe("qualified");
+  });
+
+  it("cannot claim #3390 qualification without the five-flow descriptor", async () => {
+    const { manifestPath, receiptsDir } = fixture("valid");
+    const { verdict, failures } = await checkCodingIssueJourneyEvidence({
+      manifestPath,
+      receiptsDir,
+      binding: BASE_BINDING,
+      headShas: HEAD_SHAS,
+    });
+    expect(verdict).toBe("blocked");
+    expect(failures).toContain("qualification descriptor must declare exactly five flows");
   });
 
   it("rejects a manifest bound to a stale/foreign commit SHA", async () => {
@@ -141,6 +296,46 @@ describe("checkCodingIssueJourneyEvidence", () => {
       ),
     ).toBe(true);
   });
+
+  it("accepts five distinct byte-bound completed flows and retains pre-flow failed spend", async () => {
+    const staged = stageFiveFlowEvidence();
+    const { verdict, failures } = await checkCodingIssueJourneyEvidence({
+      manifestPath: staged.manifestPath,
+      receiptsDir: staged.receiptsDir,
+      binding: BASE_BINDING,
+      descriptor: staged.descriptor,
+      headShas: HEAD_SHAS,
+    });
+    expect(failures).toEqual([]);
+    expect(verdict).toBe("qualified");
+    expect(staged.flows[0].spend.chargedDeltaNanoUsd).toBe(3_240_000);
+  });
+
+  it("rejects tampered flow artifact bytes and unregistered receipt metadata", async () => {
+    const staged = stageFiveFlowEvidence();
+    const flowId = staged.flows[0].flowId;
+    expect(() =>
+      writeCodingIssueJourneyFlowEvidenceReceipt({
+        receiptsDir: staged.receiptsDir,
+        artifact: { ...flowArtifact(0, 3_240_000, 0), promptText: "must-not-write" },
+        platform: "macos-arm64",
+        recordedAt: "2026-09-06T05:30:00Z",
+      }),
+    ).toThrow("invalid qualification flow artifact");
+    writeFileSync(join(staged.receiptsDir, `${flowId}.artifact`), "{}\n");
+    const receiptPath = join(staged.receiptsDir, `${flowId}.receipt.json`);
+    const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+    writeFileSync(receiptPath, `${JSON.stringify({ ...receipt, promptText: "must-not-pass" })}\n`);
+    const { failures } = await checkCodingIssueJourneyEvidence({
+      manifestPath: staged.manifestPath,
+      receiptsDir: staged.receiptsDir,
+      binding: BASE_BINDING,
+      descriptor: staged.descriptor,
+      headShas: HEAD_SHAS,
+    });
+    expect(failures).toContain(`${flowId}: flow artifact digest mismatch`);
+    expect(failures).toContain(`${flowId}: metadata has an unknown field`);
+  });
 });
 
 describe("platformKeyFor", () => {
@@ -212,6 +407,8 @@ describe("CLI entry point", () => {
         "/tmp/keiko-does-not-exist-manifest.json",
         "--receipts",
         "/tmp/keiko-does-not-exist-receipts",
+        "--descriptor",
+        join(process.cwd(), "docs/acceptance/coding-issue-journey-3390.json"),
         "--epic",
         "3384",
         "--child",

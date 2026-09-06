@@ -5,6 +5,8 @@ import {
   CODE_TASK_ACCEPTANCE_SCHEMA_VERSION,
   CODE_TASK_EVIDENCE_CLASSES,
   CODE_TASK_EVIDENCE_PLATFORMS,
+  CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND,
+  CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
   CODE_TASK_QUALIFICATION_MANIFEST_KIND,
   CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION,
   codeTaskAcceptanceQualificationFailures,
@@ -16,9 +18,11 @@ import {
   isCodeTaskRepoRelativePath,
   validateCodeTaskAcceptanceContribution,
   validateCodeTaskQualificationManifest,
+  validateCodeTaskQualificationFlowArtifact,
   type CodeTaskAcceptanceBinding,
   type CodeTaskAcceptanceContributionV1,
   type CodeTaskQualificationManifestV1,
+  type CodeTaskQualificationFlowArtifactV1,
 } from "./code-task-acceptance.js";
 import { withPollutedPrototype } from "./code-task-pollution-test-support.js";
 
@@ -580,6 +584,53 @@ const READINESS_DIGEST = "f".repeat(64);
 const OUTCOME_DIGEST = "1".repeat(64);
 const AUDIT_DIGEST = "2".repeat(64);
 const HUMAN_MERGE_ATTESTATION_DIGEST = "3".repeat(64);
+const QUALIFICATION_RECORDED_AT = "2026-09-04T12:00:00Z";
+
+function validQualificationFlow(
+  ordinal = 1,
+  cumulativeChargedNanoUsd = 3_240_000,
+  chargedDeltaNanoUsd = cumulativeChargedNanoUsd,
+): CodeTaskQualificationFlowArtifactV1 {
+  const pullRequestHeadSha = (
+    ordinal === 1 ? TREE_SHA : "d".repeat(40)
+  ) as CodeTaskQualificationFlowArtifactV1["pullRequestHeadSha"];
+  const mergeCommitSha = (
+    ordinal === 1 ? COMMIT_SHA : "e".repeat(40)
+  ) as CodeTaskQualificationFlowArtifactV1["mergeCommitSha"];
+  return {
+    evidenceKind: CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND,
+    schemaVersion: 1,
+    flowId: `issue-to-pr-flow-0${String(ordinal)}` as CodeTaskQualificationFlowArtifactV1["flowId"],
+    ordinal,
+    repository: "oscharko/Wegwerf-Repo",
+    issueReference: `https://github.com/oscharko/Wegwerf-Repo/issues/${String(ordinal)}`,
+    issueNumber: ordinal,
+    issueState: "closed",
+    mode: ordinal === 1 ? "governed-assist" : "supervised-coding",
+    taskRunId: `run-${String(ordinal)}`,
+    pullRequestReference: `https://github.com/oscharko/Wegwerf-Repo/pull/${String(ordinal)}`,
+    pullRequestNumber: ordinal,
+    pullRequestHeadSha,
+    pullRequestState: "merged",
+    mergeCommitSha,
+    requiredChecks: {
+      observation: "observed",
+      headSha: pullRequestHeadSha,
+      total: 0,
+      passed: 0,
+      failed: 0,
+      pending: 0,
+    },
+    transitions: CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
+    sourceCommitSha: COMMIT_SHA as CodeTaskQualificationFlowArtifactV1["sourceCommitSha"],
+    spend: {
+      budgetNanoUsd: 50_000_000_000,
+      chargedDeltaNanoUsd,
+      cumulativeChargedNanoUsd,
+      remainingNanoUsd: 50_000_000_000 - cumulativeChargedNanoUsd,
+    },
+  };
+}
 
 function validQualificationManifest(): CodeTaskQualificationManifestV1 {
   const parsed: unknown = JSON.parse(
@@ -618,6 +669,7 @@ function validQualificationManifest(): CodeTaskQualificationManifestV1 {
           receiptDigest: { outcome: "known", value: DIGEST },
         },
       ],
+      flows: [],
       knownLimitations: ["packaged Windows x64 reference run is a documented external dependency"],
     }),
   );
@@ -761,6 +813,39 @@ describe("validateCodeTaskQualificationManifest", () => {
       validateCodeTaskQualificationManifest(
         mutatedManifest({ observedSpendUsd: { outcome: "known", value: -1 } }),
       ).ok,
+    ).toBe(false);
+  });
+
+  it("accepts observed zero required checks and rejects unknown or non-passing checks", () => {
+    expect(validateCodeTaskQualificationFlowArtifact(validQualificationFlow()).ok).toBe(true);
+    const base = validQualificationFlow();
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        requiredChecks: { ...base.requiredChecks, observation: "unknown" },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        requiredChecks: { ...base.requiredChecks, total: 1, pending: 1 },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects incomplete transitions and a checks snapshot from another PR head", () => {
+    const base = validQualificationFlow();
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        transitions: base.transitions.slice(0, -1),
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        requiredChecks: { ...base.requiredChecks, headSha: COMMIT_SHA },
+      }).ok,
     ).toBe(false);
   });
 });
@@ -912,5 +997,57 @@ describe("codeTaskQualificationManifestFailures and codeTaskQualificationVerdict
       observedSpendUsd: { outcome: "unknown" },
     };
     expect(codeTaskQualificationManifestFailures(unreportedSpend, binding)).toEqual([]);
+  });
+
+  it("requires the ordered distinct flow identities and preserves failed-attempt ledger charges", () => {
+    const first = validQualificationFlow();
+    const second = validQualificationFlow(2, 8_000_000, 4_760_000);
+    const firstManifestFlow = {
+      ...first,
+      platform: "macos-arm64" as const,
+      provenance: "real-model" as const,
+      recordedAt:
+        QUALIFICATION_RECORDED_AT as CodeTaskQualificationManifestV1["flows"][number]["recordedAt"],
+      artifactDigest: DIGEST as CodeTaskQualificationManifestV1["flows"][number]["artifactDigest"],
+      receiptDigest:
+        RUBRIC_DIGEST as CodeTaskQualificationManifestV1["flows"][number]["receiptDigest"],
+    };
+    const secondManifestFlow = { ...firstManifestFlow, ...second };
+    const manifest: CodeTaskQualificationManifestV1 = {
+      ...validQualificationManifest(),
+      spendBudgetUsd: 50,
+      observedSpendUsd: { outcome: "known", value: 0.008 },
+      issueReference: { outcome: "known", value: first.issueReference },
+      pullRequestReference: { outcome: "known", value: first.pullRequestReference },
+      runReference: { outcome: "known", value: first.taskRunId },
+      flows: [firstManifestFlow, secondManifestFlow],
+    };
+    const flowBinding = {
+      ...binding,
+      registeredQualificationFlows: [first, second].map((flow) => ({
+        flowId: flow.flowId,
+        ordinal: flow.ordinal,
+        repository: flow.repository,
+        issueNumber: flow.issueNumber,
+        mode: flow.mode,
+      })),
+    };
+    expect(codeTaskQualificationManifestFailures(manifest, flowBinding)).toEqual([]);
+    const erasedFailedCharges: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      flows: [
+        firstManifestFlow,
+        { ...secondManifestFlow, spend: { ...second.spend, chargedDeltaNanoUsd: 1 } },
+      ],
+    };
+    expect(codeTaskQualificationManifestFailures(erasedFailedCharges, flowBinding)).toContain(
+      "issue-to-pr-flow-02: charged delta does not bridge the prior ledger cumulative",
+    );
+    expect(
+      codeTaskQualificationManifestFailures(
+        { ...manifest, flows: [firstManifestFlow, firstManifestFlow] },
+        flowBinding,
+      ),
+    ).toContain("duplicate flow taskRunId");
   });
 });

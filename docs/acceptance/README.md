@@ -102,10 +102,11 @@ descriptor-plus-receipts pattern for a versioned sibling schema, `CodeTaskQualif
 (same file as the contract above, "Qualification manifest" section) — it is not a second pipeline:
 
 ```text
-docs/acceptance/coding-issue-journey-3390.json  ── descriptor (scenarios + blocked rows)  ┐
-<receipts dir>/<scenarioId>.receipt.json+.artifact  ── per-scenario receipts             ┼─▶ scripts/generate-coding-issue-journey-manifest.mjs
-git rev-parse HEAD / HEAD^{tree}                ── sha inputs                             ┤          │
-opaque refs, digests, required tools, spend budget ── CLI arguments                       ┘          ▼
+docs/acceptance/coding-issue-journey-3390.json  ── descriptor (flows + scenarios)         ┐
+<receipts dir>/<scenarioId>.receipt.json+.artifact  ── per-scenario receipts              ├─▶ scripts/generate-coding-issue-journey-manifest.mjs
+<receipts dir>/issue-to-pr-flow-0N.receipt.json+.artifact ── five completed flows          ┤          │
+git rev-parse HEAD / HEAD^{tree}                ── sha inputs                              ┤          │
+opaque refs, digests, required tools, spend budget ── CLI arguments                        ┘          ▼
                                                                             CodeTaskQualificationManifestV1
                                                                             (contract-validated JSON)
 ```
@@ -128,6 +129,15 @@ bridge a real, passing result into the same receipts-directory shape via the sha
 `scripts/lib/qualification-evidence-receipt.mjs` writer, so a scenario that is blocked today
 becomes real evidence with no separate translation step once its external prerequisite lands.
 
+The descriptor also fixes five ordered Issue-to-PR flow identities. Each flow has its own artifact
+and metadata receipt and is written only after the controlled-repository issue is closed and its PR
+is merged. The artifact records the issue, task run, exact PR head and merge SHA, an observed
+required-check summary (including an honest observed total of zero on an unprotected fixture), the
+complete product transition list, and nano-USD ledger delta/cumulative/remaining values. The first
+delta starts at the evaluation ledger's zero baseline, so failed attempts and qualification probes
+before the first successful flow remain charged. The checker rejects missing, reordered, duplicate,
+stale, tampered, non-monotonic, or over-budget flow evidence.
+
 Generator invocation:
 
 ```sh
@@ -145,6 +155,9 @@ node scripts/generate-coding-issue-journey-manifest.mjs \
   [--audit-ref <opaque>] [--audit-digest <sha256>] [--observed-spend-usd <number>] \
   --output <path>/manifest.json
 ```
+
+When all five flow receipts exist, the generator derives `observedSpendUsd` from the final durable
+ledger cumulative. The optional CLI value remains available only for pre-flow evidence sets.
 
 The manifest is validated against `validateCodeTaskQualificationManifest` before it is written, the
 same contract-first pattern as the acceptance contribution above. The machine validator,

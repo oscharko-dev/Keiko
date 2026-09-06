@@ -849,6 +849,11 @@ describe("keiko-contracts package surface", () => {
     expect(mod.isCodeTaskIsoInstant("2026-07-16T12:00:00Z")).toBe(true);
     expect(mod.isCodeTaskRepoRelativePath("packages/keiko-contracts/src/index.ts")).toBe(true);
     expect(mod.isCodeTaskContentFreeNote("bounded note")).toBe(true);
+    expect(mod.CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND).toBe(
+      "code-task-qualification-flow-evidence",
+    );
+    expect(mod.CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS).toHaveLength(10);
+    expect(mod.validateCodeTaskQualificationFlowArtifact({}).ok).toBe(false);
 
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<import("./index.js").CodeTaskAcceptanceContributionV1>();
@@ -867,6 +872,12 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").CodeTaskGitTreeSha>();
     pin<import("./index.js").CodeTaskSha256Digest>();
     pin<import("./index.js").CodeTaskIsoInstant>();
+    pin<import("./index.js").CodeTaskQualificationFlowArtifactV1>();
+    pin<import("./index.js").CodeTaskQualificationFlowBindingV1>();
+    pin<import("./index.js").CodeTaskQualificationFlowSpendV1>();
+    pin<import("./index.js").CodeTaskQualificationFlowTransition>();
+    pin<import("./index.js").CodeTaskQualificationFlowV1>();
+    pin<import("./index.js").CodeTaskQualificationRequiredChecksV1>();
   });
 
   it("code-task governance contracts remain available at their declared public surface (#2386)", async () => {

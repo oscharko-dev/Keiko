@@ -1,6 +1,43 @@
 {
   "epicIssue": 3384,
   "childIssue": 3390,
+  "flows": [
+    {
+      "flowId": "issue-to-pr-flow-01",
+      "ordinal": 1,
+      "repository": "oscharko/Wegwerf-Repo",
+      "issueNumber": 1,
+      "mode": "governed-assist"
+    },
+    {
+      "flowId": "issue-to-pr-flow-02",
+      "ordinal": 2,
+      "repository": "oscharko/Wegwerf-Repo",
+      "issueNumber": 3,
+      "mode": "supervised-coding"
+    },
+    {
+      "flowId": "issue-to-pr-flow-03",
+      "ordinal": 3,
+      "repository": "oscharko/Wegwerf-Repo",
+      "issueNumber": 4,
+      "mode": "autonomous-delivery"
+    },
+    {
+      "flowId": "issue-to-pr-flow-04",
+      "ordinal": 4,
+      "repository": "oscharko/Wegwerf-Repo",
+      "issueNumber": 5,
+      "mode": "supervised-coding"
+    },
+    {
+      "flowId": "issue-to-pr-flow-05",
+      "ordinal": 5,
+      "repository": "oscharko/Wegwerf-Repo",
+      "issueNumber": 6,
+      "mode": "autonomous-delivery"
+    }
+  ],
   "scenarios": [
     {
       "scenarioId": "issue-to-pr-governed-assist",

@@ -24,6 +24,27 @@ import { readJsonFile } from "./lib/json.mjs";
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..");
 const RECEIPT_SUFFIX = ".receipt.json";
+const FLOW_RECEIPT_KEYS = new Set([
+  "flowId",
+  "commitSha",
+  "platform",
+  "testStatus",
+  "recordedAt",
+  "provenance",
+]);
+
+function flowReceiptMetadataErrors(meta) {
+  if (meta === null || typeof meta !== "object" || Array.isArray(meta)) {
+    return ["metadata must be an object"];
+  }
+  const errors = Object.keys(meta)
+    .filter((key) => !FLOW_RECEIPT_KEYS.has(key))
+    .map(() => "metadata has an unknown field");
+  for (const key of FLOW_RECEIPT_KEYS) {
+    if (!Object.hasOwn(meta, key)) errors.push(`metadata is missing ${key}`);
+  }
+  return errors;
+}
 
 function gitHeadShas(root) {
   const git = resolveHostExecutable("git");
@@ -73,6 +94,34 @@ export function readReceipts(receiptsDir, { observeArtifact } = {}) {
   return receipts;
 }
 
+/** Reads the five distinct flow artifacts and hashes both the artifact bytes and the metadata
+ * bytes. The artifact is parsed from those same bytes, so generation and verification cannot
+ * validate one version while retaining a digest for another. */
+export function readFlowReceipts(receiptsDir, flowIds) {
+  const receipts = new Map();
+  for (const flowId of flowIds) {
+    const artifactPath = resolve(receiptsDir, `${flowId}.artifact`);
+    const receiptPath = resolve(receiptsDir, `${flowId}.receipt.json`);
+    if (!existsSync(artifactPath) || !existsSync(receiptPath)) continue;
+    const artifactBytes = readFileSync(artifactPath);
+    const receiptBytes = readFileSync(receiptPath);
+    const meta = JSON.parse(receiptBytes.toString("utf8"));
+    receipts.set(flowId, {
+      artifact: JSON.parse(artifactBytes.toString("utf8")),
+      artifactDigest: sha256(artifactBytes),
+      receiptDigest: sha256(receiptBytes),
+      commitSha: meta.commitSha,
+      platform: meta.platform,
+      testStatus: meta.testStatus,
+      recordedAt: meta.recordedAt,
+      provenance: meta.provenance,
+      flowId: meta.flowId,
+      metadataErrors: flowReceiptMetadataErrors(meta),
+    });
+  }
+  return receipts;
+}
+
 /**
  * Loads the contracts module used to validate the manifest. Exposed so tests can inject a fixture
  * double instead of depending on the built package.
@@ -95,6 +144,33 @@ async function loadToolCatalog(root) {
   );
 }
 
+function validatedFlowReceipts(receiptsDir, registeredQualificationFlows, contractsModule) {
+  const flowReceiptsById = readFlowReceipts(
+    receiptsDir,
+    registeredQualificationFlows.map((flow) => flow.flowId),
+  );
+  for (const receipt of flowReceiptsById.values()) {
+    receipt.artifactValidation = contractsModule.validateCodeTaskQualificationFlowArtifact(
+      receipt.artifact,
+    );
+  }
+  return flowReceiptsById;
+}
+
+function qualificationBinding(binding, headCommitSha, descriptor) {
+  return {
+    ...binding,
+    sourceCommitSha: headCommitSha,
+    registeredQualificationFlows: Array.isArray(descriptor?.flows) ? descriptor.flows : [],
+  };
+}
+
+function qualificationDescriptorFailures(descriptor) {
+  return Array.isArray(descriptor?.flows) && descriptor.flows.length === 5
+    ? []
+    : ["qualification descriptor must declare exactly five flows"];
+}
+
 export async function checkCodingIssueJourneyEvidence({
   manifestPath,
   receiptsDir,
@@ -103,6 +179,7 @@ export async function checkCodingIssueJourneyEvidence({
   headShas,
   contracts,
   toolCatalog,
+  descriptor,
 }) {
   const { sourceCommitSha: headCommitSha, sourceTreeSha: headTreeSha } =
     headShas ?? gitHeadShas(root);
@@ -114,7 +191,13 @@ export async function checkCodingIssueJourneyEvidence({
   const manifestValidation = contractsModule.validateCodeTaskQualificationManifest(
     readJsonFile(manifestPath),
   );
-  const resolvedBinding = { ...binding, sourceCommitSha: headCommitSha };
+  const resolvedBinding = qualificationBinding(binding, headCommitSha, descriptor);
+  const registeredQualificationFlows = resolvedBinding.registeredQualificationFlows;
+  const flowReceiptsById = validatedFlowReceipts(
+    receiptsDir,
+    registeredQualificationFlows,
+    contractsModule,
+  );
   const manifestFailures = manifestValidation.ok
     ? contractsModule.codeTaskQualificationManifestFailures(
         manifestValidation.value,
@@ -127,8 +210,10 @@ export async function checkCodingIssueJourneyEvidence({
     headCommitSha,
     headTreeSha,
     receiptsByScenarioId: readReceipts(receiptsDir),
+    flowReceiptsById,
     modelVisibleToolNames,
   });
+  failures.push(...qualificationDescriptorFailures(descriptor));
   const contractVerdict = manifestValidation.ok
     ? contractsModule.codeTaskQualificationVerdictFor(manifestValidation.value, resolvedBinding)
     : "blocked";
@@ -149,6 +234,7 @@ function parseArgs(argv) {
     .split(",")
     .map((id) => id.trim())
     .filter((id) => id.length > 0);
+  const descriptor = readJsonFile(resolve(requiredArgument(argv, "descriptor")));
   return {
     manifestPath: resolve(requiredArgument(argv, "manifest")),
     receiptsDir: resolve(requiredArgument(argv, "receipts")),
@@ -157,15 +243,17 @@ function parseArgs(argv) {
       childIssue: Number(requiredArgument(argv, "child")),
       registeredScenarioIds: registered,
     },
+    descriptor,
   };
 }
 
 async function runCli(argv) {
-  const { manifestPath, receiptsDir, binding } = parseArgs(argv);
+  const { manifestPath, receiptsDir, binding, descriptor } = parseArgs(argv);
   const { verdict, failures } = await checkCodingIssueJourneyEvidence({
     manifestPath,
     receiptsDir,
     binding,
+    descriptor,
   });
   if (failures.length > 0) {
     console.error(`Coding-issue journey evidence check failed (${failures.length}):`);

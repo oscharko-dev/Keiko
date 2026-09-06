@@ -30,3 +30,19 @@ export interface WriteQualificationEvidenceReceiptInput {
 export function writeQualificationEvidenceReceipt(
   input: WriteQualificationEvidenceReceiptInput,
 ): void;
+
+export interface WriteCodingIssueJourneyFlowEvidenceReceiptInput {
+  readonly receiptsDir: string;
+  readonly artifact: CodeTaskQualificationFlowArtifactV1;
+  readonly platform: CodeTaskEvidencePlatform;
+  readonly recordedAt: string;
+}
+
+/** Writes the flow artifact plus its independently hash-bound metadata receipt. */
+export function writeCodingIssueJourneyFlowEvidenceReceipt(
+  input: WriteCodingIssueJourneyFlowEvidenceReceiptInput,
+): void;
+import type {
+  CodeTaskEvidencePlatform,
+  CodeTaskQualificationFlowArtifactV1,
+} from "@oscharko-dev/keiko-contracts";

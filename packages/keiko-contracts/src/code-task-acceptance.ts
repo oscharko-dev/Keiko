@@ -4,6 +4,7 @@
 // ids, digests, counts, outcomes, and repo-relative paths only — never file bodies, prompts,
 // commands, endpoints, or credentials.
 import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
+import type { CodingWorkbenchMode } from "./coding-workbench.js";
 
 export const CODE_TASK_ACCEPTANCE_SCHEMA_VERSION = 1;
 
@@ -67,6 +68,7 @@ const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/
 const REPO_RELATIVE_PATH_PATTERN = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/u;
 const CONTENT_FREE_NOTE_PATTERN = /^[\x20-\x7E]{1,200}$/u;
 const NOTE_SECRET_MARKERS = /(?:secret|token|password|api[-_]?key|bearer |ghp_|-----BEGIN)/iu;
+const GITHUB_REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 
 export function isCodeTaskGitCommitSha(value: unknown): value is CodeTaskGitCommitSha {
   return typeof value === "string" && GIT_SHA_PATTERN.test(value);
@@ -503,6 +505,8 @@ export interface CodeTaskAcceptanceBinding {
   readonly childIssue: number;
   readonly sourceCommitSha: string;
   readonly registeredScenarioIds: readonly string[];
+  /** Qualification-only flow identities. Contribution callers leave this absent. */
+  readonly registeredQualificationFlows?: readonly CodeTaskQualificationFlowBindingV1[];
 }
 
 /**
@@ -576,8 +580,81 @@ export const CODE_TASK_QUALIFICATION_VERDICTS = Object.freeze([
   "failed",
 ] as const satisfies readonly string[]);
 
+export const CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND = "code-task-qualification-flow-evidence";
+
+export const CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS = Object.freeze([
+  "issue-accepted",
+  "coding-task-started",
+  "verified-commit",
+  "pushed-head",
+  "draft-pull-request",
+  "required-checks-observed",
+  "description-applied",
+  "ready-for-review",
+  "merge-observed",
+  "issue-closure-observed",
+] as const satisfies readonly string[]);
+
 export type CodeTaskQualificationProvenance = (typeof CODE_TASK_QUALIFICATION_PROVENANCES)[number];
 export type CodeTaskQualificationVerdict = (typeof CODE_TASK_QUALIFICATION_VERDICTS)[number];
+export type CodeTaskQualificationFlowTransition =
+  (typeof CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS)[number];
+
+export interface CodeTaskQualificationFlowBindingV1 {
+  readonly flowId: CodeTaskScenarioId;
+  readonly ordinal: number;
+  readonly repository: string;
+  readonly issueNumber: number;
+  readonly mode: CodingWorkbenchMode;
+}
+
+export interface CodeTaskQualificationRequiredChecksV1 {
+  readonly observation: "observed";
+  readonly headSha: CodeTaskGitCommitSha;
+  readonly total: number;
+  readonly passed: number;
+  readonly failed: number;
+  readonly pending: number;
+}
+
+export interface CodeTaskQualificationFlowSpendV1 {
+  readonly budgetNanoUsd: number;
+  readonly chargedDeltaNanoUsd: number;
+  readonly cumulativeChargedNanoUsd: number;
+  readonly remainingNanoUsd: number;
+}
+
+/** One completed controlled-repository flow. This is the exact artifact body written by the live
+ * harness; digests and receipt metadata are added only when the manifest binds its bytes. */
+export interface CodeTaskQualificationFlowArtifactV1 {
+  readonly evidenceKind: typeof CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND;
+  readonly schemaVersion: 1;
+  readonly flowId: CodeTaskScenarioId;
+  readonly ordinal: number;
+  readonly repository: string;
+  readonly issueReference: string;
+  readonly issueNumber: number;
+  readonly issueState: "closed";
+  readonly mode: CodingWorkbenchMode;
+  readonly taskRunId: string;
+  readonly pullRequestReference: string;
+  readonly pullRequestNumber: number;
+  readonly pullRequestHeadSha: CodeTaskGitCommitSha;
+  readonly pullRequestState: "merged";
+  readonly mergeCommitSha: CodeTaskGitCommitSha;
+  readonly requiredChecks: CodeTaskQualificationRequiredChecksV1;
+  readonly transitions: readonly CodeTaskQualificationFlowTransition[];
+  readonly sourceCommitSha: CodeTaskGitCommitSha;
+  readonly spend: CodeTaskQualificationFlowSpendV1;
+}
+
+export interface CodeTaskQualificationFlowV1 extends CodeTaskQualificationFlowArtifactV1 {
+  readonly platform: CodeTaskEvidencePlatform;
+  readonly provenance: CodeTaskQualificationProvenance;
+  readonly recordedAt: CodeTaskIsoInstant;
+  readonly artifactDigest: CodeTaskSha256Digest;
+  readonly receiptDigest: CodeTaskSha256Digest;
+}
 
 export interface CodeTaskQualificationScenarioV1 {
   readonly scenarioId: CodeTaskScenarioId;
@@ -637,6 +714,8 @@ export interface CodeTaskQualificationManifestV1 {
    * by comparing this against `spendBudgetUsd` -- the budget is checked, not merely recorded. */
   readonly observedSpendUsd: CodeTaskFact<number>;
   readonly scenarios: readonly CodeTaskQualificationScenarioV1[];
+  /** Five independently byte-bound, completed Issue -> task -> PR -> merge -> closed flows. */
+  readonly flows: readonly CodeTaskQualificationFlowV1[];
   readonly knownLimitations: readonly string[];
 }
 
@@ -650,6 +729,59 @@ const QUALIFICATION_SCENARIO_KEYS = [
   "blockedReason",
   "artifactDigests",
   "receiptDigest",
+] as const;
+
+const QUALIFICATION_FLOW_ARTIFACT_KEYS = [
+  "evidenceKind",
+  "schemaVersion",
+  "flowId",
+  "ordinal",
+  "repository",
+  "issueReference",
+  "issueNumber",
+  "issueState",
+  "mode",
+  "taskRunId",
+  "pullRequestReference",
+  "pullRequestNumber",
+  "pullRequestHeadSha",
+  "pullRequestState",
+  "mergeCommitSha",
+  "requiredChecks",
+  "transitions",
+  "sourceCommitSha",
+  "spend",
+] as const;
+
+const QUALIFICATION_FLOW_KEYS = [
+  ...QUALIFICATION_FLOW_ARTIFACT_KEYS,
+  "platform",
+  "provenance",
+  "recordedAt",
+  "artifactDigest",
+  "receiptDigest",
+] as const;
+
+const QUALIFICATION_REQUIRED_CHECK_KEYS = [
+  "observation",
+  "headSha",
+  "total",
+  "passed",
+  "failed",
+  "pending",
+] as const;
+
+const QUALIFICATION_FLOW_SPEND_KEYS = [
+  "budgetNanoUsd",
+  "chargedDeltaNanoUsd",
+  "cumulativeChargedNanoUsd",
+  "remainingNanoUsd",
+] as const;
+
+const QUALIFICATION_MODES = [
+  "governed-assist",
+  "supervised-coding",
+  "autonomous-delivery",
 ] as const;
 
 const QUALIFICATION_MANIFEST_KEYS = [
@@ -675,6 +807,7 @@ const QUALIFICATION_MANIFEST_KEYS = [
   "spendBudgetUsd",
   "observedSpendUsd",
   "scenarios",
+  "flows",
   "knownLimitations",
 ] as const;
 
@@ -740,6 +873,225 @@ function qualificationScenarioErrors(value: unknown, path: string): readonly str
     ),
   );
   return errors;
+}
+
+function qualificationRequiredCheckCountErrors(
+  value: Record<string, unknown>,
+  path: string,
+): readonly string[] {
+  const errors: string[] = [];
+  for (const field of ["total", "passed", "failed", "pending"] as const) {
+    const count = ownField(value, field);
+    if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) {
+      errors.push(`${path}.${field} must be a non-negative integer`);
+    }
+  }
+  return errors;
+}
+
+function qualificationRequiredCheckCompletionErrors(
+  value: Record<string, unknown>,
+  path: string,
+): readonly string[] {
+  const total = ownField(value, "total");
+  const passed = ownField(value, "passed");
+  const failed = ownField(value, "failed");
+  const pending = ownField(value, "pending");
+  if (
+    typeof total === "number" &&
+    typeof passed === "number" &&
+    typeof failed === "number" &&
+    typeof pending === "number" &&
+    (failed !== 0 || pending !== 0 || passed !== total)
+  ) {
+    return [`${path} must report every observed required check passed`];
+  }
+  return [];
+}
+
+function qualificationRequiredChecksErrors(value: unknown, path: string): readonly string[] {
+  if (!isRecord(value)) return [`${path} must be an object`];
+  const errors = [
+    ...unknownKeys(value, QUALIFICATION_REQUIRED_CHECK_KEYS, path),
+    ...qualificationRequiredCheckCountErrors(value, path),
+    ...qualificationRequiredCheckCompletionErrors(value, path),
+  ];
+  if (ownField(value, "observation") !== "observed") {
+    errors.push(`${path}.observation must be observed`);
+  }
+  if (!isCodeTaskGitCommitSha(ownField(value, "headSha"))) {
+    errors.push(`${path}.headSha is invalid`);
+  }
+  return errors;
+}
+
+function qualificationFlowSpendErrors(value: unknown, path: string): readonly string[] {
+  if (!isRecord(value)) return [`${path} must be an object`];
+  const errors = [...unknownKeys(value, QUALIFICATION_FLOW_SPEND_KEYS, path)];
+  for (const field of QUALIFICATION_FLOW_SPEND_KEYS) {
+    const amount = ownField(value, field);
+    if (typeof amount !== "number" || !Number.isSafeInteger(amount) || amount < 0) {
+      errors.push(`${path}.${field} must be a non-negative safe integer`);
+    }
+  }
+  const budget = ownField(value, "budgetNanoUsd");
+  const cumulative = ownField(value, "cumulativeChargedNanoUsd");
+  const remaining = ownField(value, "remainingNanoUsd");
+  if (
+    typeof budget === "number" &&
+    typeof cumulative === "number" &&
+    typeof remaining === "number" &&
+    cumulative + remaining !== budget
+  ) {
+    errors.push(`${path} cumulative charge plus remaining amount must equal budget`);
+  }
+  return errors;
+}
+
+function qualificationFlowUrlErrors(
+  value: Record<string, unknown>,
+  path: string,
+): readonly string[] {
+  const errors: string[] = [];
+  const repository = ownField(value, "repository");
+  const issueNumber = ownField(value, "issueNumber");
+  const pullRequestNumber = ownField(value, "pullRequestNumber");
+  if (typeof repository !== "string" || !GITHUB_REPOSITORY_PATTERN.test(repository)) {
+    errors.push(`${path}.repository must be a GitHub owner/name identity`);
+  }
+  if (
+    typeof repository === "string" &&
+    typeof issueNumber === "number" &&
+    ownField(value, "issueReference") !==
+      `https://github.com/${repository}/issues/${String(issueNumber)}`
+  ) {
+    errors.push(`${path}.issueReference does not match repository and issueNumber`);
+  }
+  if (
+    typeof repository === "string" &&
+    typeof pullRequestNumber === "number" &&
+    ownField(value, "pullRequestReference") !==
+      `https://github.com/${repository}/pull/${String(pullRequestNumber)}`
+  ) {
+    errors.push(`${path}.pullRequestReference does not match repository and pullRequestNumber`);
+  }
+  return errors;
+}
+
+function qualificationFlowReferenceErrors(
+  value: Record<string, unknown>,
+  path: string,
+): readonly string[] {
+  const errors = [...qualificationFlowUrlErrors(value, path)];
+  for (const field of [
+    "repository",
+    "issueReference",
+    "taskRunId",
+    "pullRequestReference",
+  ] as const) {
+    if (!isCodeTaskContentFreeNote(ownField(value, field))) {
+      errors.push(`${path}.${field} must be a bounded content-free reference`);
+    }
+  }
+  return errors;
+}
+
+function qualificationFlowIdentityErrors(
+  value: Record<string, unknown>,
+  path: string,
+): readonly string[] {
+  const errors = [...qualificationFlowReferenceErrors(value, path)];
+  if (!isCodeTaskScenarioId(ownField(value, "flowId"))) errors.push(`${path}.flowId is invalid`);
+  if (!isPositiveInteger(ownField(value, "ordinal"))) errors.push(`${path}.ordinal is invalid`);
+  if (!isPositiveInteger(ownField(value, "issueNumber"))) {
+    errors.push(`${path}.issueNumber is invalid`);
+  }
+  if (!isPositiveInteger(ownField(value, "pullRequestNumber"))) {
+    errors.push(`${path}.pullRequestNumber is invalid`);
+  }
+  if (!isOneOf(ownField(value, "mode"), QUALIFICATION_MODES)) {
+    errors.push(`${path}.mode is invalid`);
+  }
+  return errors;
+}
+
+function qualificationFlowCompletionErrors(
+  value: Record<string, unknown>,
+  path: string,
+): readonly string[] {
+  const errors: string[] = [];
+  if (ownField(value, "issueState") !== "closed") errors.push(`${path}.issueState must be closed`);
+  if (ownField(value, "pullRequestState") !== "merged") {
+    errors.push(`${path}.pullRequestState must be merged`);
+  }
+  for (const field of ["pullRequestHeadSha", "mergeCommitSha", "sourceCommitSha"] as const) {
+    if (!isCodeTaskGitCommitSha(ownField(value, field))) errors.push(`${path}.${field} is invalid`);
+  }
+  errors.push(
+    ...qualificationRequiredChecksErrors(
+      ownField(value, "requiredChecks"),
+      `${path}.requiredChecks`,
+    ),
+    ...qualificationFlowSpendErrors(ownField(value, "spend"), `${path}.spend`),
+  );
+  const transitions = ownField(value, "transitions");
+  if (
+    !Array.isArray(transitions) ||
+    transitions.length !== CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS.length ||
+    transitions.some(
+      (transition, index) => transition !== CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS[index],
+    )
+  ) {
+    errors.push(`${path}.transitions must contain the complete ordered qualification journey`);
+  }
+  const checks = ownField(value, "requiredChecks");
+  if (isRecord(checks) && ownField(checks, "headSha") !== ownField(value, "pullRequestHeadSha")) {
+    errors.push(`${path}.requiredChecks.headSha must match pullRequestHeadSha`);
+  }
+  return errors;
+}
+
+function qualificationFlowArtifactErrors(
+  value: unknown,
+  path: string,
+  allowedKeys: readonly string[] = QUALIFICATION_FLOW_ARTIFACT_KEYS,
+): readonly string[] {
+  if (!isRecord(value)) return [`${path} must be an object`];
+  const errors = [...unknownKeys(value, allowedKeys, path)];
+  if (ownField(value, "evidenceKind") !== CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND) {
+    errors.push(`${path}.evidenceKind is invalid`);
+  }
+  if (ownField(value, "schemaVersion") !== 1) errors.push(`${path}.schemaVersion must be 1`);
+  errors.push(...qualificationFlowIdentityErrors(value, path));
+  errors.push(...qualificationFlowCompletionErrors(value, path));
+  return errors;
+}
+
+function qualificationFlowErrors(value: unknown, path: string): readonly string[] {
+  if (!isRecord(value)) return [`${path} must be an object`];
+  const errors = [...qualificationFlowArtifactErrors(value, path, QUALIFICATION_FLOW_KEYS)];
+  if (!isOneOf(ownField(value, "platform"), CODE_TASK_EVIDENCE_PLATFORMS)) {
+    errors.push(`${path}.platform is invalid`);
+  }
+  if (ownField(value, "provenance") !== "real-model") {
+    errors.push(`${path}.provenance must be real-model`);
+  }
+  if (!isCodeTaskIsoInstant(ownField(value, "recordedAt"))) {
+    errors.push(`${path}.recordedAt is invalid`);
+  }
+  for (const field of ["artifactDigest", "receiptDigest"] as const) {
+    if (!isCodeTaskSha256Digest(ownField(value, field))) errors.push(`${path}.${field} is invalid`);
+  }
+  return errors;
+}
+
+export function validateCodeTaskQualificationFlowArtifact(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodeTaskQualificationFlowArtifactV1> {
+  const errors = qualificationFlowArtifactErrors(value, "flowArtifact");
+  return errors.length > 0
+    ? { ok: false, errors }
+    : { ok: true, value: value as CodeTaskQualificationFlowArtifactV1 };
 }
 
 function qualificationManifestHeaderErrors(value: Record<string, unknown>): readonly string[] {
@@ -851,6 +1203,14 @@ function qualificationManifestBodyErrors(value: Record<string, unknown>): readon
   } else {
     errors.push("scenarios must be an array");
   }
+  const flows = ownField(value, "flows");
+  if (Array.isArray(flows)) {
+    flows.forEach((flow, index) => {
+      errors.push(...qualificationFlowErrors(flow, `flows[${String(index)}]`));
+    });
+  } else {
+    errors.push("flows must be an array");
+  }
   const knownLimitations = ownField(value, "knownLimitations");
   if (
     !Array.isArray(knownLimitations) ||
@@ -911,6 +1271,109 @@ function missingRequiredScenarioFailures(
     .map((requiredId) => `missing required scenario: ${requiredId}`);
 }
 
+function duplicateFlowIdentityFailures(
+  flows: readonly CodeTaskQualificationFlowV1[],
+): readonly string[] {
+  const failures: string[] = [];
+  const fields = [
+    "flowId",
+    "ordinal",
+    "issueReference",
+    "taskRunId",
+    "pullRequestReference",
+    "mergeCommitSha",
+  ] as const;
+  for (const field of fields) {
+    const values = flows.map((flow) => flow[field]);
+    if (new Set(values).size !== values.length) failures.push(`duplicate flow ${field}`);
+  }
+  return failures;
+}
+
+function flowBindingFailures(
+  flows: readonly CodeTaskQualificationFlowV1[],
+  expected: readonly CodeTaskQualificationFlowBindingV1[],
+): readonly string[] {
+  const failures: string[] = [];
+  if (flows.length !== expected.length) {
+    failures.push(
+      `expected ${String(expected.length)} qualification flows, got ${String(flows.length)}`,
+    );
+  }
+  for (const [index, binding] of expected.entries()) {
+    const flow = flows[index];
+    if (flow === undefined) continue;
+    for (const field of ["flowId", "ordinal", "repository", "issueNumber", "mode"] as const) {
+      if (flow[field] !== binding[field]) {
+        failures.push(`qualification flow ${String(index + 1)} has foreign ${field}`);
+      }
+    }
+  }
+  return failures;
+}
+
+function flowSpendSequenceFailures(
+  flows: readonly CodeTaskQualificationFlowV1[],
+  spendBudgetUsd: number,
+): readonly string[] {
+  const failures: string[] = [];
+  const budgetNanoUsd = Math.round(spendBudgetUsd * 1_000_000_000);
+  let priorCumulative = 0;
+  for (const flow of flows) {
+    if (flow.spend.budgetNanoUsd !== budgetNanoUsd) {
+      failures.push(`${flow.flowId}: flow budget does not match manifest budget`);
+    }
+    if (flow.spend.cumulativeChargedNanoUsd !== priorCumulative + flow.spend.chargedDeltaNanoUsd) {
+      failures.push(`${flow.flowId}: charged delta does not bridge the prior ledger cumulative`);
+    }
+    priorCumulative = flow.spend.cumulativeChargedNanoUsd;
+  }
+  return failures;
+}
+
+function flowSummaryReferenceFailures(
+  manifest: CodeTaskQualificationManifestV1,
+): readonly string[] {
+  const firstFlow = manifest.flows[0];
+  if (firstFlow === undefined) return [];
+  const matches =
+    manifest.issueReference.outcome === "known" &&
+    manifest.issueReference.value === firstFlow.issueReference &&
+    manifest.pullRequestReference.outcome === "known" &&
+    manifest.pullRequestReference.value === firstFlow.pullRequestReference &&
+    manifest.runReference.outcome === "known" &&
+    manifest.runReference.value === firstFlow.taskRunId;
+  return matches ? [] : ["manifest journey references must identify the first qualification flow"];
+}
+
+function qualificationFlowFailures(
+  manifest: CodeTaskQualificationManifestV1,
+  binding: CodeTaskAcceptanceBinding,
+): readonly string[] {
+  const expected = binding.registeredQualificationFlows ?? [];
+  const failures = [
+    ...flowBindingFailures(manifest.flows, expected),
+    ...duplicateFlowIdentityFailures(manifest.flows),
+    ...flowSpendSequenceFailures(manifest.flows, manifest.spendBudgetUsd),
+    ...flowSummaryReferenceFailures(manifest),
+  ];
+  for (const flow of manifest.flows) {
+    if (flow.sourceCommitSha !== manifest.sourceCommitSha) {
+      failures.push(`${flow.flowId}: stale or foreign flow source SHA binding`);
+    }
+  }
+  const finalFlow = manifest.flows.at(-1);
+  if (
+    finalFlow !== undefined &&
+    (manifest.observedSpendUsd.outcome !== "known" ||
+      Math.round(manifest.observedSpendUsd.value * 1_000_000_000) !==
+        finalFlow.spend.cumulativeChargedNanoUsd)
+  ) {
+    failures.push("observedSpendUsd must equal the final flow ledger cumulative");
+  }
+  return failures;
+}
+
 // #3390 audit F9 / issue #3390 contract-correction 5: a human merge attestation supplements
 // #3389's machine-observed merge/closure facts and can never replace them, but the manifest cannot
 // itself see whether the referenced journey outcome claims merged/closed -- it only holds an
@@ -968,6 +1431,7 @@ export function codeTaskQualificationManifestFailures(
   }
   failures.push(
     ...missingRequiredScenarioFailures(manifest, binding),
+    ...qualificationFlowFailures(manifest, binding),
     ...manifestCrossFieldFailures(manifest),
   );
   return failures;

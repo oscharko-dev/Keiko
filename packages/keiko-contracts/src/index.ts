@@ -964,19 +964,28 @@ export type {
 // reusing its closed vocabularies. See code-task-acceptance.ts's "Qualification manifest" section.
 export type {
   CodeTaskQualificationManifestV1,
+  CodeTaskQualificationFlowArtifactV1,
+  CodeTaskQualificationFlowBindingV1,
+  CodeTaskQualificationFlowSpendV1,
+  CodeTaskQualificationFlowTransition,
+  CodeTaskQualificationFlowV1,
   CodeTaskQualificationProvenance,
+  CodeTaskQualificationRequiredChecksV1,
   CodeTaskQualificationScenarioV1,
   CodeTaskQualificationVerdict,
 } from "./code-task-acceptance.js";
 export type {
   CODE_TASK_QUALIFICATION_MANIFEST_KIND,
   CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION,
+  CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND,
+  CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
   CODE_TASK_QUALIFICATION_PROVENANCES,
   CODE_TASK_QUALIFICATION_VERDICTS,
   codeTaskQualificationManifestFailures,
   codeTaskQualificationVerdictFor,
   isCodeTaskToolName,
   validateCodeTaskQualificationManifest,
+  validateCodeTaskQualificationFlowArtifact,
 } from "./code-task-acceptance.js";
 
 // ─── Code-task governance contracts (Issue #2386, Epic #2384) ──────────────────────

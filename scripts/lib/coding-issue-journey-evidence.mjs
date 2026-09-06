@@ -75,6 +75,77 @@ function scenarioReceiptFailures(scenario, receiptsByScenarioId, headCommitSha) 
   ];
 }
 
+function flowArtifactProjection(flow) {
+  return {
+    evidenceKind: flow.evidenceKind,
+    schemaVersion: flow.schemaVersion,
+    flowId: flow.flowId,
+    ordinal: flow.ordinal,
+    repository: flow.repository,
+    issueReference: flow.issueReference,
+    issueNumber: flow.issueNumber,
+    issueState: flow.issueState,
+    mode: flow.mode,
+    taskRunId: flow.taskRunId,
+    pullRequestReference: flow.pullRequestReference,
+    pullRequestNumber: flow.pullRequestNumber,
+    pullRequestHeadSha: flow.pullRequestHeadSha,
+    pullRequestState: flow.pullRequestState,
+    mergeCommitSha: flow.mergeCommitSha,
+    requiredChecks: flow.requiredChecks,
+    transitions: flow.transitions,
+    sourceCommitSha: flow.sourceCommitSha,
+    spend: flow.spend,
+  };
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function flowReceiptBindingFailures(flow, receipt, headCommitSha) {
+  const failures = (receipt.metadataErrors ?? []).map((error) => `${flow.flowId}: ${error}`);
+  if (receipt.flowId !== flow.flowId) failures.push(`${flow.flowId}: receipt flow id mismatch`);
+  if (receipt.commitSha !== headCommitSha || flow.sourceCommitSha !== headCommitSha) {
+    failures.push(`${flow.flowId}: stale or foreign flow source commit`);
+  }
+  if (receipt.platform !== flow.platform) failures.push(`${flow.flowId}: flow platform mismatch`);
+  if (receipt.provenance !== "real-model" || receipt.testStatus !== "passed") {
+    failures.push(`${flow.flowId}: flow receipt is not passing real-model evidence`);
+  }
+  if (receipt.artifactDigest !== flow.artifactDigest) {
+    failures.push(`${flow.flowId}: flow artifact digest mismatch`);
+  }
+  if (receipt.receiptDigest !== flow.receiptDigest) {
+    failures.push(`${flow.flowId}: flow receipt digest mismatch`);
+  }
+  return failures;
+}
+
+function flowReceiptFailures(flow, flowReceiptsById, headCommitSha) {
+  const receipt = flowReceiptsById.get(flow.flowId);
+  if (receipt === undefined) return [`${flow.flowId}: missing flow receipt`];
+  const failures = [...flowReceiptBindingFailures(flow, receipt, headCommitSha)];
+  if (!receipt.artifactValidation.ok) {
+    failures.push(
+      `${flow.flowId}: artifact failed structural validation ` +
+        `(${String(receipt.artifactValidation.errors.length)} errors)`,
+    );
+  } else if (
+    canonicalJson(receipt.artifactValidation.value) !== canonicalJson(flowArtifactProjection(flow))
+  ) {
+    failures.push(`${flow.flowId}: artifact facts do not match manifest flow`);
+  }
+  return failures;
+}
+
 /**
  * Flags a `requiredTools` entry the model-visible tool catalog on the head under qualification
  * does not project (#3390 audit F10 / issue #3390 contract-correction 4): the fixture rubric
@@ -101,6 +172,7 @@ export function evidenceGateFailures({
   headCommitSha,
   headTreeSha,
   receiptsByScenarioId,
+  flowReceiptsById,
   modelVisibleToolNames,
 }) {
   if (!manifestValidation.ok) {
@@ -120,6 +192,9 @@ export function evidenceGateFailures({
   failures.push(...requiredToolFailures(manifest.requiredTools, modelVisibleToolNames));
   for (const scenario of manifest.scenarios) {
     failures.push(...scenarioReceiptFailures(scenario, receiptsByScenarioId, headCommitSha));
+  }
+  for (const flow of manifest.flows) {
+    failures.push(...flowReceiptFailures(flow, flowReceiptsById, headCommitSha));
   }
   return failures;
 }

@@ -11,7 +11,7 @@ import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { readReceipts } from "./check-coding-issue-journey-evidence.mjs";
+import { readFlowReceipts, readReceipts } from "./check-coding-issue-journey-evidence.mjs";
 import { buildCodingIssueJourneyManifest } from "./lib/coding-issue-journey-manifest.mjs";
 import { sha256File } from "./lib/digest.mjs";
 import { readJsonFile } from "./lib/json.mjs";
@@ -51,11 +51,22 @@ async function loadContracts() {
 /** Reads the descriptor and joins it with the receipts directory into an unvalidated manifest. */
 function projectManifest(receiptsDir) {
   const descriptor = readJsonFile(resolve(argument("descriptor")));
+  const flowReceiptsById = readFlowReceipts(
+    receiptsDir,
+    (descriptor.flows ?? []).map((flow) => flow.flowId),
+  );
+  const finalFlowId = descriptor.flows?.at(-1)?.flowId;
+  const finalFlow = finalFlowId === undefined ? undefined : flowReceiptsById.get(finalFlowId);
+  const observedSpendUsd =
+    finalFlow === undefined
+      ? numberArgument("observed-spend-usd", { required: false })
+      : finalFlow.artifact.spend.cumulativeChargedNanoUsd / 1_000_000_000;
   const rubricPath = resolve(argument("rubric"));
   const humanMergeAttestationPath = argument("human-merge-attestation", { required: false });
   return buildCodingIssueJourneyManifest({
     descriptor,
     receiptsByScenarioId: readReceipts(receiptsDir),
+    flowReceiptsById,
     generatedAt: new Date().toISOString(),
     sourceCommitSha: argument("commit"),
     sourceTreeSha: argument("tree"),
@@ -76,7 +87,7 @@ function projectManifest(receiptsDir) {
     auditDigest: argument("audit-digest", { required: false }),
     requiredTools: listArgument("required-tools"),
     spendBudgetUsd: numberArgument("spend-budget-usd"),
-    observedSpendUsd: numberArgument("observed-spend-usd", { required: false }),
+    observedSpendUsd,
   });
 }
 

@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS } from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
 
 import { buildCodingIssueJourneyManifest } from "../lib/coding-issue-journey-manifest.mjs";
 
@@ -140,6 +141,94 @@ describe("buildCodingIssueJourneyManifest", () => {
         spendBudgetUsd: 25,
       }),
     ).toThrow("missing receipt for issue-to-pr-full-access");
+  });
+
+  it("projects a flow from the exact artifact and receipt digests", () => {
+    const artifact = {
+      evidenceKind: "code-task-qualification-flow-evidence",
+      schemaVersion: 1,
+      flowId: "issue-to-pr-flow-01",
+      ordinal: 1,
+      repository: "oscharko/Wegwerf-Repo",
+      issueReference: "https://github.com/oscharko/Wegwerf-Repo/issues/1",
+      issueNumber: 1,
+      issueState: "closed",
+      mode: "governed-assist",
+      taskRunId: "run-1",
+      pullRequestReference: "https://github.com/oscharko/Wegwerf-Repo/pull/2",
+      pullRequestNumber: 2,
+      pullRequestHeadSha: TREE_SHA,
+      pullRequestState: "merged",
+      mergeCommitSha: COMMIT_SHA,
+      requiredChecks: {
+        observation: "observed",
+        headSha: TREE_SHA,
+        total: 0,
+        passed: 0,
+        failed: 0,
+        pending: 0,
+      },
+      transitions: CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
+      sourceCommitSha: COMMIT_SHA,
+      spend: {
+        budgetNanoUsd: 50_000_000_000,
+        chargedDeltaNanoUsd: 3_240_000,
+        cumulativeChargedNanoUsd: 3_240_000,
+        remainingNanoUsd: 49_996_760_000,
+      },
+    };
+    const manifest = buildCodingIssueJourneyManifest({
+      descriptor: {
+        ...descriptor(),
+        flows: [{ flowId: artifact.flowId }],
+      },
+      receiptsByScenarioId: new Map([
+        [
+          "issue-to-pr-full-access",
+          {
+            testStatus: "passed",
+            recordedAt: GENERATED_AT,
+            provenance: "real-model",
+            digest: DIGEST,
+          },
+        ],
+      ]),
+      flowReceiptsById: new Map([
+        [
+          artifact.flowId,
+          {
+            artifact,
+            platform: "macos-arm64",
+            provenance: "real-model",
+            recordedAt: GENERATED_AT,
+            artifactDigest: "d".repeat(64),
+            receiptDigest: "f".repeat(64),
+          },
+        ],
+      ]),
+      generatedAt: GENERATED_AT,
+      sourceCommitSha: COMMIT_SHA,
+      sourceTreeSha: TREE_SHA,
+      runtimeIdentity: "opencode-1.17.17",
+      modelIdentity: "gateway-profile:coding-issue-journey",
+      fixtureRevision: "controlled-fixture-rev-1",
+      rubricDigest: DIGEST,
+      requiredTools: [],
+      spendBudgetUsd: 50,
+      observedSpendUsd: 0.00324,
+    });
+    expect(manifest.flows[0]).toMatchObject({
+      flowId: artifact.flowId,
+      artifactDigest: "d".repeat(64),
+      receiptDigest: "f".repeat(64),
+      spend: artifact.spend,
+    });
+    expect(manifest.issueReference).toEqual({ outcome: "known", value: artifact.issueReference });
+    expect(manifest.pullRequestReference).toEqual({
+      outcome: "known",
+      value: artifact.pullRequestReference,
+    });
+    expect(manifest.runReference).toEqual({ outcome: "known", value: artifact.taskRunId });
   });
 });
 
