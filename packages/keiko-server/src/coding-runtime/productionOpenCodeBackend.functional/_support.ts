@@ -57,6 +57,11 @@ import type {
   ProductionRuntimeBackendInput,
 } from "../productionCodingRuntimeResolver.js";
 import type { SecureWorkspaceTextReadPort } from "../secureWorkspaceTextRead.js";
+import {
+  H1_PROOF_SEARCH_CALL_ID,
+  repositorySearchReadHandoff,
+  type RepositorySearchConsumptionProof,
+} from "./repositorySearchProof.js";
 
 const MAX_READ_BYTES = 65_536;
 export const FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX = "VISIBLE_ASSISTANT_TEXT_2479:";
@@ -68,7 +73,7 @@ export const FUNCTIONAL_PLAN_STEP_VERIFY = "PLAN_STEP_VERIFY_2480";
 export const FUNCTIONAL_PLAN_DROPPED_CANARY = "PLAN_DROPPED_CANARY_2480";
 
 export interface ScriptState {
-  mode: "productive" | "out-of-scope" | "discovery" | "research";
+  mode: "productive" | "productive-search" | "out-of-scope" | "discovery" | "research";
   calls: number;
   readonly old: string;
   readonly next: string;
@@ -80,6 +85,7 @@ export interface ScriptState {
   readonly injectionDirective?: string;
   /** Invoked with every scripted tool name so a journey can assert what the model REQUESTED. */
   readonly observeToolCall?: (name: string) => void;
+  readonly observeRepositorySearch?: (proof: RepositorySearchConsumptionProof) => void;
 }
 
 type FunctionalEditorAgentClient = ProductionCodingRuntimeResolverInput["editorAgentClient"];
@@ -692,6 +698,8 @@ export function scriptedResponse(script: ScriptState, transcript = ""): Normaliz
 
 function scriptedResponseFor(script: ScriptState, transcript: string): NormalizedResponse {
   const step = script.calls++;
+  if (script.mode === "productive-search")
+    return productiveSearchResponse(step, script, transcript);
   if (script.mode === "research") return researchScriptedResponse(step, transcript, script);
   if (script.mode === "out-of-scope") {
     return step === 0
@@ -723,6 +731,34 @@ function productiveResponse(step: number, script: ScriptState): NormalizedRespon
   if (step === 3) return tool("keiko_changeset_edit", edit(script));
   if (step === 4) return tool("todowrite", planUpdate(2));
   return step === 5 ? tool("keiko_verification", { verifierId: "typecheck" }) : normal();
+}
+
+function productiveSearchResponse(
+  step: number,
+  script: ScriptState,
+  transcript: string,
+): NormalizedResponse {
+  if (step === 1) {
+    return tool(
+      "keiko_repository_search",
+      {
+        mode: "literal",
+        query: script.old.trim(),
+        caseSensitive: true,
+        includeGlobs: ["src/**/*.ts"],
+        excludeGlobs: [],
+        maxResults: 5,
+      },
+      H1_PROOF_SEARCH_CALL_ID,
+    );
+  }
+  if (step === 2) {
+    return tool(
+      "keiko_workspace_read",
+      repositorySearchReadHandoff(transcript, script.old.trim(), script.observeRepositorySearch),
+    );
+  }
+  return productiveResponse(step > 2 ? step - 1 : step, script);
 }
 
 /** Revision 1 opens two steps; revision 2 flips their states and appends the verify step. */
@@ -805,6 +841,7 @@ let scriptedToolCallSequence = 0;
 function tool(
   name:
     | "keiko_workspace_read"
+    | "keiko_repository_search"
     | "keiko_changeset_edit"
     | "keiko_verification"
     | "keiko_research_fetch"

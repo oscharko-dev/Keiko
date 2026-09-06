@@ -328,6 +328,39 @@ export function buildJourneyReport(input) {
     },
     egress: input.observer.report(),
     missingPayload: input.missingPayload,
+    h1Search: input.h1Search,
+  };
+}
+
+function validH1SearchEvidence(value) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    value.schemaVersion === 1 &&
+    value.toolCallId === "h1-real-binary-search" &&
+    value.hitCount === 1 &&
+    value.startLine === 1 &&
+    value.endLine === 1 &&
+    value.readTargetDerivedFromResult === true &&
+    /^[a-f0-9]{64}$/u.test(value.pathDigest) &&
+    /^[a-f0-9]{64}$/u.test(value.snippetDigest)
+  );
+}
+
+export function readH1SearchEvidence(stateDir) {
+  const path = join(stateDir, "h1-result-consumption.json");
+  if (!existsSync(path) || statSync(path).size > 4_096) return undefined;
+  const value = JSON.parse(readFileSync(path, "utf8"));
+  if (!validH1SearchEvidence(value)) return undefined;
+  return {
+    schemaVersion: value.schemaVersion,
+    toolCallId: value.toolCallId,
+    hitCount: value.hitCount,
+    pathDigest: value.pathDigest,
+    snippetDigest: value.snippetDigest,
+    startLine: value.startLine,
+    endLine: value.endLine,
+    readTargetDerivedFromResult: true,
   };
 }
 
@@ -354,6 +387,8 @@ export function missingRealBinaryEvidence(report) {
   } else if (report.missingPayload.unavailableReason !== "payload-missing") {
     gaps.push(`payload-missing probe reported ${report.missingPayload.unavailableReason}`);
   }
+  if (!validH1SearchEvidence(report.h1Search))
+    gaps.push("no useful H1 search-to-read result evidence");
   return gaps;
 }
 
@@ -367,7 +402,8 @@ export function realBinaryEvidenceComplete(report) {
     limits.gatewayRequestCount > 0 &&
     limits.observedGatewayOutputTokenLimits.includes(4_096) &&
     report.missingPayload?.passed === true &&
-    report.missingPayload.unavailableReason === "payload-missing"
+    report.missingPayload.unavailableReason === "payload-missing" &&
+    validH1SearchEvidence(report.h1Search)
   );
 }
 
@@ -399,6 +435,7 @@ export async function runRealBinaryJourney() {
     gateway: readGatewayObservation(context.gatewayObservation),
     limits: limitObserver.report(),
     missingPayload,
+    h1Search: readH1SearchEvidence(context.stateDir),
     observer,
     target,
     wallClockMs: Date.now() - startedAt,

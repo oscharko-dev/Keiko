@@ -25,7 +25,8 @@
 // confirmed" and disable Start.
 
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
@@ -39,6 +40,7 @@ import {
 import {
   AUTHORITY_APP_SESSION_LAUNCHER_SECRET,
   AUTHORITY_EDITED_CONTENT,
+  AUTHORITY_ORIGINAL_CONTENT,
   AUTHORITY_TARGET_RELATIVE_PATH,
   authorityManagedWorkspaceRoot,
   authorityRepositoryRoot,
@@ -425,6 +427,7 @@ async function proveLiveActivityTimeline(
   runId: string,
 ): Promise<void> {
   await awaitRequiredQuestion(page);
+  if (realBinaryJourney) await proveRepositorySearchConsumption(timeline);
   await expect(timeline.getByRole("region", { name: "Runtime questions" })).toBeVisible();
   await expect(timeline.getByText(FUNCTIONAL_PLAN_STEP_READ, { exact: true })).toBeVisible();
   await expect(timeline.locator('[data-tool-state="succeeded"]')).toContainText("workspace");
@@ -448,6 +451,23 @@ async function proveLiveActivityTimeline(
   expect(edited).toHaveLength(1);
   expect(readFileSync(edited[0] ?? "", "utf8")).toBe(AUTHORITY_EDITED_CONTENT);
   if (!realBinaryJourney) await proveRunChangesView(page, request, edited[0] ?? "");
+}
+
+async function proveRepositorySearchConsumption(timeline: Locator): Promise<void> {
+  const path = join(stateDir, "h1-result-consumption.json");
+  await expect.poll(() => existsSync(path)).toBe(true);
+  const proof: unknown = JSON.parse(readFileSync(path, "utf8"));
+  expect(proof).toMatchObject({
+    schemaVersion: 1,
+    toolCallId: "h1-real-binary-search",
+    hitCount: 1,
+    pathDigest: createHash("sha256").update(AUTHORITY_TARGET_RELATIVE_PATH).digest("hex"),
+    snippetDigest: createHash("sha256").update(AUTHORITY_ORIGINAL_CONTENT.trim()).digest("hex"),
+    startLine: 1,
+    endLine: 1,
+    readTargetDerivedFromResult: true,
+  });
+  await expect(timeline.locator('[data-tool-state="succeeded"]')).toContainText(/search/iu);
 }
 
 async function settleRealBinaryRun(page: Page, runId: string): Promise<void> {

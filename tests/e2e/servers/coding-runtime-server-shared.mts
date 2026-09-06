@@ -149,6 +149,8 @@ export interface CodingRuntimeJourneyServerConfig {
   readonly fixtureLabel: string;
   readonly runtime: "scripted" | "production-discovery";
   readonly includeQuestion: boolean;
+  /** Actual runtime search result must determine the model boundary's subsequent read. */
+  readonly proveRepositorySearch?: boolean;
   readonly defaultPort: number;
   readonly originalContent: string;
   readonly editedContent: string;
@@ -618,10 +620,21 @@ function scriptedEnvironment(
 function journeyScript(config: CodingRuntimeJourneyServerConfig, stateDir: string): ScriptState {
   if (config.research === undefined) {
     return {
-      mode: "productive",
+      mode: config.proveRepositorySearch === true ? "productive-search" : "productive",
       calls: 0,
       old: config.originalContent,
       next: config.editedContent,
+      ...(config.proveRepositorySearch === true
+        ? {
+            observeRepositorySearch: (proof): void => {
+              writeFileSync(
+                join(stateDir, "h1-result-consumption.json"),
+                `${JSON.stringify(proof)}\n`,
+                { mode: 0o600 },
+              );
+            },
+          }
+        : {}),
     };
   }
   const logPath = config.research.toolCallLogPath(stateDir);

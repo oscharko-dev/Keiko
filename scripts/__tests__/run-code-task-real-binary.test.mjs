@@ -12,10 +12,22 @@ import {
   governedExecutable,
   missingRealBinaryEvidence,
   readGatewayObservation,
+  readH1SearchEvidence,
   processIdsForExecutable,
   readMaterializedLimits,
   realBinaryEvidenceComplete,
 } from "../run-code-task-real-binary.mjs";
+
+const H1_SEARCH = {
+  schemaVersion: 1,
+  toolCallId: "h1-real-binary-search",
+  hitCount: 1,
+  pathDigest: "a".repeat(64),
+  snippetDigest: "b".repeat(64),
+  startLine: 1,
+  endLine: 1,
+  readTargetDerivedFromResult: true,
+};
 
 /**
  * Whether `candidate` really lives under `root`, separator-aware.
@@ -30,6 +42,19 @@ function containedIn(root, candidate) {
 }
 
 describe("#2483 real-binary observation helpers", () => {
+  it("retains only validated body-free H1 consumption facts before state cleanup", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-real-binary-receipt-"));
+    const path = join(root, "h1-result-consumption.json");
+    try {
+      expect(readH1SearchEvidence(root)).toBeUndefined();
+      writeFileSync(path, JSON.stringify({ ...H1_SEARCH, rawContent: "never retained" }));
+      expect(readH1SearchEvidence(root)).toEqual(H1_SEARCH);
+      writeFileSync(path, JSON.stringify({ ...H1_SEARCH, pathDigest: "/raw/path" }));
+      expect(readH1SearchEvidence(root)).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   it("rejects the Windows dev-lane target before its macOS-only real-binary journey", () => {
     expect(() => ensureMacTarget("windows-x64")).toThrow("requires macOS arm64 or x64");
     expect(ensureMacTarget("macos-arm64")).toBe("macos-arm64");
@@ -108,9 +133,11 @@ describe("#2483 real-binary observation helpers", () => {
         observedGatewayOutputTokenLimits: [4_096],
       },
       missingPayload: { passed: true, unavailableReason: "payload-missing" },
+      h1Search: H1_SEARCH,
     };
 
     expect(realBinaryEvidenceComplete(complete)).toBe(true);
+    expect(realBinaryEvidenceComplete({ ...complete, h1Search: undefined })).toBe(false);
     expect(
       realBinaryEvidenceComplete({
         ...complete,
@@ -128,6 +155,7 @@ describe("#2483 real-binary observation helpers", () => {
         observedGatewayOutputTokenLimits: [4_096],
       },
       missingPayload: { passed: true, unavailableReason: "payload-missing" },
+      h1Search: H1_SEARCH,
     };
 
     expect(missingRealBinaryEvidence(complete)).toEqual([]);
@@ -174,7 +202,8 @@ describe("#2483 real-binary observation helpers", () => {
       missingPayload: undefined,
     });
 
-    expect(gaps).toHaveLength(5);
+    expect(gaps).toHaveLength(6);
+    expect(gaps).toContain("no useful H1 search-to-read result evidence");
   });
 
   it("resolves a governed executable only from a fixed absolute path", () => {
@@ -253,6 +282,7 @@ describe("#2483 real-binary observation helpers", () => {
       gateway: { requestCount: 7, outputTokenLimits: [4096] },
       limits: [{ context: 32_768, output: 4_096 }],
       missingPayload: { passed: true, unavailableReason: "payload-missing" },
+      h1Search: H1_SEARCH,
       observer: createNetworkObserver("/nonexistent/opencode"),
       target: "macos-arm64",
       wallClockMs: 41_128,
