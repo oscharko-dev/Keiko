@@ -16,6 +16,7 @@ import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runti
 import type { GitPushCommand, GitPrCreateCommand } from "@oscharko-dev/keiko-tools";
 import { draftDeliveryId } from "./draftDeliveryFacts.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { draftDeliveryLineageRecord } from "../coding-runtime/codingRuntimeDraftDeliverySource.js";
 
 export type DraftDeliveryCommand = GitPushCommand | GitPrCreateCommand;
 export function draftProposalDigest(
@@ -122,7 +123,9 @@ export function adoptDraftPredecessor(
 ): DraftDeliveryRecord | undefined {
   const snapshot = options.snapshots.get(context.runId);
   if (snapshot?.predecessorRunId === undefined) return undefined;
-  const prior = options.snapshots.get(snapshot.predecessorRunId)?.draftDelivery;
+  const prior = draftDeliveryLineageRecord(snapshot, (runId) =>
+    options.snapshots.get(runId),
+  )?.record;
   if (prior === undefined) return undefined;
   const record: DraftDeliveryRecord = {
     ...prior,

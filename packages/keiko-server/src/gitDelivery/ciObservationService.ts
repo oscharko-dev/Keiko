@@ -17,7 +17,9 @@ import type {
 import { describeError } from "../diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { draftDeliveryLineageRecord } from "../coding-runtime/codingRuntimeDraftDeliverySource.js";
 import { resolveDraftRepository } from "./draftDeliveryFacts.js";
+import { DraftDeliveryController } from "./draftDeliveryService.js";
 import {
   DraftDeliveryFailure,
   type DraftDeliveryDependencies,
@@ -118,8 +120,8 @@ export class CiObservationController implements CiObservationService {
     context: DraftDeliveryRunContext,
     forceFresh: boolean,
   ): Promise<CodingRuntimeCiResult> {
-    const draft = this.options.snapshots.get(context.runId)?.draftDelivery;
-    if (draft?.pullRequest === undefined || draft.phase !== "draft-created")
+    const draft = await this.observationDraft(context);
+    if (draft?.pullRequest === undefined)
       return this.record(context, unavailable("draft-unavailable"));
     const startedAt = this.now();
     const backoff = this.backoff(context.runId, startedAt, forceFresh);
@@ -140,6 +142,24 @@ export class CiObservationController implements CiObservationService {
       headSha: draft.binding.headSha,
     });
     return this.finishRead(observation, facts, reader);
+  }
+  private async observationDraft(
+    context: DraftDeliveryRunContext,
+  ): Promise<DraftDeliveryRecord | undefined> {
+    const snapshot = this.options.snapshots.get(context.runId);
+    if (snapshot === undefined) return undefined;
+    const candidate = draftDeliveryLineageRecord(snapshot, (runId) =>
+      this.options.snapshots.get(runId),
+    )?.record;
+    if (candidate?.pullRequest === undefined) return undefined;
+    if (snapshot.draftDelivery?.phase === "draft-created") return snapshot.draftDelivery;
+    const result = await new DraftDeliveryController({
+      ...this.options,
+      onChanged: (): void => undefined,
+    }).reconcile();
+    return result.status === "recorded" && result.record.phase === "draft-created"
+      ? result.record
+      : undefined;
   }
   private async finishRead(
     observation: Observation,

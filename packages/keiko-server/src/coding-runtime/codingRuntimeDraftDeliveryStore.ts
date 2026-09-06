@@ -8,11 +8,11 @@ import { canonicalise } from "@oscharko-dev/keiko-security";
 import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import {
   assertDraftDeliveryVerifiedSource,
+  draftDeliveryLineageRecord,
   draftRecoveryTarget,
   draftDeliverySourceFromRow,
   hasDraftDeliveryPredecessorSource,
   localDraftDeliverySource,
-  sameDraftRecoveryTask,
 } from "./codingRuntimeDraftDeliverySource.js";
 import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
 
@@ -203,13 +203,14 @@ function assertAcknowledgedPredecessor(prior: CodingRuntimeSnapshot): void {
 
 function assertRecoveryPredecessor(
   snapshot: CodingRuntimeSnapshot,
-  prior: CodingRuntimeSnapshot | undefined,
+  read: (runId: string) => CodingRuntimeSnapshot | undefined,
   value: DraftDeliveryRecord,
 ): void {
-  const source = prior?.draftDelivery;
-  if (prior === undefined || source === undefined || !sameDraftRecoveryTask(snapshot, prior))
+  const lineage = draftDeliveryLineageRecord(snapshot, read);
+  const source = lineage?.record;
+  if (lineage === undefined || source === undefined)
     throw new TypeError("draft recovery predecessor does not match the accepted task");
-  assertAcknowledgedPredecessor(prior);
+  assertAcknowledgedPredecessor(lineage.snapshot);
   if (
     draftRecoveryTarget(source) !== draftRecoveryTarget(value) ||
     canonicalise(source.pullRequest) !== canonicalise(value.pullRequest)
@@ -234,9 +235,7 @@ export function adoptDraftDeliveryFromPredecessor(
   if (snapshot === undefined) throw new TypeError("draft recovery runtime was not found");
   assertDraftDeliveryForSnapshot(snapshot, value);
   assertRecoveryStart(snapshot, value);
-  const prior =
-    snapshot.predecessorRunId === undefined ? undefined : read(snapshot.predecessorRunId);
-  assertRecoveryPredecessor(snapshot, prior, value);
+  assertRecoveryPredecessor(snapshot, read, value);
   if (
     !hasDraftDeliveryPredecessorSource(snapshot, value, read, (row) =>
       draftDeliverySourceFromRow(row, sourceJson(db, row.runId)),

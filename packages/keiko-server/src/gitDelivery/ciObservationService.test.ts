@@ -108,6 +108,57 @@ function diagnostics(source = failedFacts()): GitCiFailureContextResult {
   };
 }
 describe("run-bound CI observations through existing draft authority", () => {
+  it("adopts and reconciles the retained PR before recording successor-bound readiness", async () => {
+    const successor = fixture.successorOptions();
+    const inheritedContext = successor.context();
+    if (inheritedContext === undefined) throw new Error("Missing successor context");
+    const successorCorrelation = "successor-ci-observation";
+    const changed = vi.fn();
+    const readFacts = vi.fn(() => Promise.resolve(facts()));
+    const persistence = createCodingRuntimeCiReadinessStore(fixture.db, fixture.snapshots);
+    const service = new CiObservationController({
+      ...successor,
+      context: (): typeof inheritedContext => ({
+        ...inheritedContext,
+        correlationId: successorCorrelation,
+      }),
+      persistence,
+      onChanged: changed,
+      ciReader: (): GitCiProviderReader => ({ readFacts }),
+    });
+
+    expect(fixture.snapshots.get("run-2")?.draftDelivery).toBeUndefined();
+    expect(await service.observe()).toMatchObject({
+      status: "observed",
+      snapshot: { runId: "run-2", state: "technical-ready" },
+    });
+    expect(fixture.snapshots.get("run-2")?.draftDelivery).toMatchObject({
+      phase: "draft-created",
+      binding: { runId: "run-2", runtimeAuthorityDigest: "b".repeat(64) },
+      pullRequest: { number: 17 },
+    });
+    expect(persistence.get("run-2")).toEqual(changed.mock.calls[0]?.[0]);
+    expect(readFacts).toHaveBeenCalledOnce();
+    expect(fixture.pushCount).toBe(1);
+    expect(fixture.createCount).toBe(1);
+    const successorLines = fixture.events.filter(
+      (event) => event.correlationId === successorCorrelation,
+    );
+    expect(
+      successorLines
+        .filter((event) => event.op === "git.draft-delivery")
+        .map((event) => event.extra?.phase),
+    ).toEqual(["recovery-required", "draft-created"]);
+    expect(
+      successorLines
+        .filter((event) => event.op === "git.ci-observation")
+        .map((event) => event.extra?.phase),
+    ).toEqual(["started", "observed"]);
+    for (const line of successorLines)
+      expect(redactLogFields(line.extra ?? {})).toEqual(line.extra);
+    expect(JSON.stringify(successorLines)).not.toMatch(/owner\/repository|feat: accepted issue/u);
+  });
+
   it("supersedes all CI facts when the diagnostic owner observes a provider revision change", async () => {
     const test = configured(() => Promise.resolve(failedFacts()));
     const service = new CiObservationController({

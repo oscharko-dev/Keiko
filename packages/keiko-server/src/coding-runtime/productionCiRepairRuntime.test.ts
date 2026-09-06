@@ -106,7 +106,7 @@ function recover(snapshots: CodingRuntimeSnapshotStore): CodingRuntimeSnapshot {
     ...shared
   } = source;
   expect(_receipt?.status).toBe("succeeded");
-  expect(_readiness).toBeUndefined();
+  void _readiness;
   snapshots.create({
     ...shared,
     runId: "run-2",
@@ -171,9 +171,16 @@ function dependencies(
     },
   };
 }
-function fixture(recovered: boolean): {
+function fixture(
+  recovered: boolean,
+  options: {
+    readonly predecessorReadiness?: ReadinessSnapshot;
+    readonly seedExhaustedBudget?: boolean;
+  } = {},
+): {
   readonly snapshots: CodingRuntimeSnapshotStore;
   readonly current: VerifiedCommitRuntimeBinding;
+  readonly ciRepairBudget: ReturnType<typeof createCodingRuntimeCiRepairBudgetStore>;
   readonly deps: DraftDeliveryDependencies;
   readonly verified: VerifiedCommitRuntimeDependencies;
   readonly events: ServerLogEvent[];
@@ -183,6 +190,10 @@ function fixture(recovered: boolean): {
   const snapshots = createDraftRun(db);
   const initial = snapshots.get("run-1");
   if (initial?.draftDelivery === undefined) throw new Error("Missing initial draft");
+  if (options.predecessorReadiness !== undefined) {
+    const readiness = createCodingRuntimeCiReadinessStore(db, snapshots);
+    expect(readiness.complete(readiness.begin("run-1"), options.predecessorReadiness)).toBe(true);
+  }
   const events: ServerLogEvent[] = [];
   const store = createCodingRuntimeCiRepairBudgetStore({
     db,
@@ -202,27 +213,30 @@ function fixture(recovered: boolean): {
     stillAuthorized: (): boolean => true,
     limits: { maxRuntimeMs: 60000, maxToolCalls: 1, maxPromptTokens: 1000 },
   };
-  expect(
-    store.begin(context, {
-      attemptId: "attempt-1",
-      failureSignatureDigest: DIGEST,
-      kind: "verification",
-      headSha: initial.draftDelivery.binding.headSha,
-      baseSha: initial.draftDelivery.binding.baseSha,
-      expectedRevision: null,
-    }).status,
-  ).toBe("recorded");
-  expect(
-    store.charge(context, {
-      attemptId: "attempt-1",
-      chargeId: "call-1",
-      toolCalls: 1,
-      promptTokens: 0,
-      expectedRevision: 0,
-    }),
-  ).toMatchObject({ status: "blocked", reason: "tool-budget-exhausted" });
+  if (options.seedExhaustedBudget !== false) {
+    expect(
+      store.begin(context, {
+        attemptId: "attempt-1",
+        failureSignatureDigest: DIGEST,
+        kind: "verification",
+        headSha: initial.draftDelivery.binding.headSha,
+        baseSha: initial.draftDelivery.binding.baseSha,
+        expectedRevision: null,
+      }).status,
+    ).toBe("recorded");
+    expect(
+      store.charge(context, {
+        attemptId: "attempt-1",
+        chargeId: "call-1",
+        toolCalls: 1,
+        promptTokens: 0,
+        expectedRevision: 0,
+      }),
+    ).toMatchObject({ status: "blocked", reason: "tool-budget-exhausted" });
+  }
   return {
     snapshots,
+    ciRepairBudget: store,
     current: binding(recovered ? recover(snapshots) : initial),
     ...dependencies(snapshots, events),
     events,
@@ -320,12 +334,14 @@ describe("production CI repair accounting availability", () => {
     expect(draftDelivery?.pullRequest?.number).toBe(17);
     const snapshots = {
       ...test.snapshots,
+      ciRepairBudget: test.ciRepairBudget,
       get: (runId: string): CodingRuntimeSnapshot | undefined =>
         runId === "run-2" ? awaitingAdoption : test.snapshots.get(runId),
     };
-    delete snapshots.ciRepairBudget;
+    const { ciRepairBudget, ...snapshotsWithoutBudget } = snapshots;
+    expect(ciRepairBudget).toBeDefined();
     const budget = createProductionCiRepairBudget(
-      { ...test.deps, snapshots },
+      { ...test.deps, snapshots: snapshotsWithoutBudget },
       test.verified,
       test.current,
     );
@@ -340,6 +356,7 @@ describe("production CI repair accounting availability", () => {
     expect(draftDelivery?.pullRequest?.number).toBe(17);
     const snapshots = {
       ...test.snapshots,
+      ciRepairBudget: test.ciRepairBudget,
       get: (runId: string): CodingRuntimeSnapshot | undefined =>
         runId === "run-2" ? awaitingAdoption : test.snapshots.get(runId),
     };
@@ -351,6 +368,88 @@ describe("production CI repair accounting availability", () => {
     expect(budget?.admitTool(request)).toBeUndefined();
     expect(budget?.chargePrompt(1)).toBe(false);
     expect(budget?.chargeDelegatedRead?.("child", "read")).toBe(false);
+  });
+  it("admits an exact technical-ready successor before draft adoption without resetting accounting", () => {
+    const test = fixture(true, {
+      predecessorReadiness: readySnapshot(),
+      seedExhaustedBudget: false,
+    });
+    const current = test.snapshots.get("run-2");
+    if (current === undefined) throw new Error("Missing recovered run");
+    const { draftDelivery: _draft, ...awaitingAdoption } = current;
+    void _draft;
+    const snapshots = {
+      ...test.snapshots,
+      ciRepairBudget: test.ciRepairBudget,
+      get: (runId: string): CodingRuntimeSnapshot | undefined =>
+        runId === "run-2" ? awaitingAdoption : test.snapshots.get(runId),
+    };
+    const budget = createProductionCiRepairBudget(
+      { ...test.deps, snapshots },
+      { ...test.verified, snapshots },
+      test.current,
+    );
+    expect(budget?.chargePrompt(1)).toBe(true);
+    expect(budget?.admitTool(request)?.check()).toBe(true);
+  });
+  it("retains cumulative exhaustion across an exact technical-ready successor lineage", () => {
+    const test = fixture(true, { predecessorReadiness: readySnapshot() });
+    const current = test.snapshots.get("run-2");
+    if (current === undefined) throw new Error("Missing recovered run");
+    const { draftDelivery: _draft, ...awaitingAdoption } = current;
+    void _draft;
+    const snapshots = {
+      ...test.snapshots,
+      ciRepairBudget: test.ciRepairBudget,
+      get: (runId: string): CodingRuntimeSnapshot | undefined =>
+        runId === "run-2" ? awaitingAdoption : test.snapshots.get(runId),
+    };
+    const budget = createProductionCiRepairBudget(
+      { ...test.deps, snapshots },
+      { ...test.verified, snapshots },
+      test.current,
+    );
+    expect(budget?.chargePrompt(1)).toBe(false);
+    expect(budget?.admitTool(request)).toBeUndefined();
+  });
+  it("starts a bounded repair attempt from an exact failed predecessor observation", () => {
+    const failed: ReadinessSnapshot = {
+      ...readySnapshot(),
+      state: "failed",
+      reason: "required-checks-failed",
+      failureSignatureDigest: DIGEST,
+      requiredChecks: { total: 1, passed: 0, failed: 1, pending: 0, blocked: 0, unknown: 0 },
+    };
+    const test = fixture(true, { predecessorReadiness: failed, seedExhaustedBudget: false });
+    expect(test.snapshots.get("run-1")?.ciReadiness).toMatchObject({ state: "failed" });
+    const current = test.snapshots.get("run-2");
+    if (current === undefined) throw new Error("Missing recovered run");
+    const { draftDelivery: _draft, ...awaitingAdoption } = current;
+    void _draft;
+    const snapshots = {
+      ...test.snapshots,
+      ciRepairBudget: test.ciRepairBudget,
+      get: (runId: string): CodingRuntimeSnapshot | undefined =>
+        runId === "run-2" ? awaitingAdoption : test.snapshots.get(runId),
+    };
+    const budget = createProductionCiRepairBudget(
+      { ...test.deps, snapshots },
+      { ...test.verified, snapshots },
+      test.current,
+    );
+    expect(budget?.chargePrompt(1)).toBe(true);
+    const lease = budget?.admitTool(request);
+    expect(lease?.check()).toBe(true);
+    expect(
+      test.ciRepairBudget.read({
+        runId: "run-2",
+        remoteDigest: DIGEST,
+        prNumber: 17,
+        correlationId: "run-2",
+        stillAuthorized: (): boolean => true,
+        limits: { maxRuntimeMs: 60_000, maxToolCalls: 1, maxPromptTokens: 1_000 },
+      }).record,
+    ).toMatchObject({ attempts: [{ runId: "run-2", status: "active" }] });
   });
   it("fails closed on a missing current snapshot with healthy accounting dependencies", () => {
     const test = fixture(true);

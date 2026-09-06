@@ -17,6 +17,17 @@ import {
   type CiRepairExecutionLease,
 } from "./codingRuntimeCiRepairController.js";
 import type { CiRepairBudgetContext } from "./codingRuntimeCiRepairBudgetTypes.js";
+import {
+  draftDeliveryLineageRecord,
+  draftRecoveryTarget,
+  DRAFT_DELIVERY_RECOVERY_MAX_PREDECESSORS,
+  sameDraftRecoveryTask,
+} from "./codingRuntimeDraftDeliverySource.js";
+import {
+  readinessMatchesDraft,
+  type CiObservationTicket,
+} from "./codingRuntimeCiReadinessStore.js";
+import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 
 export function createProductionCiRepairBudget(
   deps: DraftDeliveryDependencies | undefined,
@@ -39,7 +50,15 @@ export function createProductionCiRepairBudget(
     return unavailableBudget(deps, verified, binding);
   const controller = new CodingRuntimeCiRepairController({
     store,
-    readiness,
+    readiness: {
+      begin: (runId): CiObservationTicket => readiness.begin(runId),
+      invalidate: (runId): boolean => readiness.invalidate(runId),
+      complete: (ticket, snapshot): boolean => readiness.complete(ticket, snapshot),
+      recordPostDeliveryObservation: (runId, snapshot): boolean =>
+        readiness.recordPostDeliveryObservation(runId, snapshot),
+      get: (runId): ReadinessSnapshot | undefined =>
+        readiness.get(runId) ?? inheritedReadiness(deps.snapshots, runId),
+    },
     now: deps.execution?.now ?? Date.now,
     context: (): CiRepairBudgetContext | undefined => budgetContext(deps, verified, binding),
     ...(notifyVerifiedHeadAdvanced === undefined ? {} : { notifyVerifiedHeadAdvanced }),
@@ -60,7 +79,11 @@ function budgetContext(
   verified: VerifiedCommitRuntimeDependencies,
   binding: VerifiedCommitRuntimeBinding,
 ): CiRepairBudgetContext | undefined {
-  const draft = deps.snapshots.get(binding.runId)?.draftDelivery;
+  const snapshot = deps.snapshots.get(binding.runId);
+  const draft =
+    snapshot === undefined
+      ? undefined
+      : draftDeliveryLineageRecord(snapshot, (runId) => deps.snapshots.get(runId))?.record;
   if (draft?.pullRequest === undefined) return undefined;
   const budget = binding.context.budget;
   return {
@@ -182,9 +205,43 @@ function knownScope(
   const current = snapshots.get(binding.runId);
   if (!liveScope(current, binding)) return false;
   return (
-    (allowConfirmed && current.draftDelivery?.pullRequest !== undefined) ||
+    (allowConfirmed &&
+      draftDeliveryLineageRecord(current, (runId) => snapshots.get(runId))?.record.pullRequest !==
+        undefined) ||
     prePrLineage(snapshots, current)
   );
+}
+
+function inheritedReadiness(
+  snapshots: Pick<CodingRuntimeSnapshotStore, "get">,
+  runId: string,
+): ReadinessSnapshot | undefined {
+  const initial = snapshots.get(runId);
+  if (initial === undefined) return undefined;
+  const target = draftDeliveryLineageRecord(initial, (id) => snapshots.get(id))?.record;
+  if (target === undefined) return undefined;
+  let current: CodingRuntimeSnapshot | undefined = initial;
+  const seen = new Set<string>();
+  for (let depth = 0; depth < DRAFT_DELIVERY_RECOVERY_MAX_PREDECESSORS; depth += 1) {
+    if (current === undefined || seen.has(current.runId)) return undefined;
+    seen.add(current.runId);
+    if (!sameDraftRecoveryTask(initial, current)) return undefined;
+    const readiness = matchingReadiness(current, target);
+    if (readiness !== undefined) return readiness;
+    current =
+      current.predecessorRunId === undefined ? undefined : snapshots.get(current.predecessorRunId);
+  }
+  return undefined;
+}
+function matchingReadiness(
+  snapshot: CodingRuntimeSnapshot,
+  target: NonNullable<CodingRuntimeSnapshot["draftDelivery"]>,
+): ReadinessSnapshot | undefined {
+  const readiness = snapshot.ciReadiness;
+  const draft = snapshot.draftDelivery;
+  if (readiness === undefined || draft === undefined) return undefined;
+  if (draftRecoveryTarget(draft) !== draftRecoveryTarget(target)) return undefined;
+  return readinessMatchesDraft(readiness, draft) ? readiness : undefined;
 }
 function liveScope(
   current: CodingRuntimeSnapshot | undefined,

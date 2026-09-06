@@ -30,6 +30,30 @@ export function sameDraftRecoveryTask(
   );
 }
 
+export interface DraftDeliveryLineageRecord {
+  readonly snapshot: CodingRuntimeSnapshot;
+  readonly record: DraftDeliveryRecord;
+}
+
+/** Finds the nearest same-task draft without copying its predecessor authority into this run. */
+export function draftDeliveryLineageRecord(
+  initial: CodingRuntimeSnapshot,
+  read: SnapshotReader,
+): DraftDeliveryLineageRecord | undefined {
+  let current: CodingRuntimeSnapshot | undefined = initial;
+  const seen = new Set<string>();
+  for (let depth = 0; depth < DRAFT_DELIVERY_RECOVERY_MAX_PREDECESSORS; depth += 1) {
+    if (current === undefined || seen.has(current.runId)) return undefined;
+    seen.add(current.runId);
+    if (!sameDraftRecoveryTask(initial, current)) return undefined;
+    if (current.draftDelivery !== undefined) {
+      return { snapshot: current, record: current.draftDelivery };
+    }
+    current = current.predecessorRunId === undefined ? undefined : read(current.predecessorRunId);
+  }
+  return undefined;
+}
+
 function matchesVerifiedCommit(
   snapshot: CodingRuntimeSnapshot,
   record: DraftDeliveryRecord,
@@ -93,10 +117,11 @@ export function hasDraftDeliveryPredecessorSource(
     seen.add(runId);
     const prior = read(runId);
     const record = prior?.draftDelivery;
-    if (prior === undefined || record === undefined || !sameDraftRecoveryTask(current, prior))
-      return false;
-    if (draftRecoveryTarget(record) !== draftRecoveryTarget(target)) return false;
-    if (localDraftDeliverySource(prior, record, readSource(prior)) !== undefined) return true;
+    if (prior === undefined || !sameDraftRecoveryTask(current, prior)) return false;
+    if (record !== undefined) {
+      if (draftRecoveryTarget(record) !== draftRecoveryTarget(target)) return false;
+      if (localDraftDeliverySource(prior, record, readSource(prior)) !== undefined) return true;
+    }
     runId = prior.predecessorRunId;
   }
   return false;

@@ -399,6 +399,22 @@ describe("draft delivery predecessor recovery", () => {
     }
   });
 
+  it("adopts the verified draft through an exact intermediate successor without a draft", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const store = storeWithRun(db);
+      store.recordDraftDelivery(proposed, null);
+      successor(store);
+      const fresh = successor(store, "run-2", "run-3");
+      const adopted = recovery(fresh);
+      expect(store.adoptDraftDeliveryFromPredecessor(adopted).draftDelivery).toEqual(adopted);
+      expect(store.get("run-2")?.draftDelivery).toBeUndefined();
+      expect(store.get("run-1")?.draftDelivery).toEqual(proposed);
+    } finally {
+      db.close();
+    }
+  });
+
   it.each([
     [
       "no predecessor",

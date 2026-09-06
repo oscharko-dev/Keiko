@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { correlationIdOrUnknown } from "../correlation.js";
 import { describeError } from "../diagnostics-log.js";
@@ -34,6 +35,7 @@ import {
   settleCiRepairAttempt,
   tightenedCiRepairBudget,
 } from "./codingRuntimeCiRepairBudgetPolicy.js";
+import { draftDeliveryLineageRecord } from "./codingRuntimeDraftDeliverySource.js";
 
 interface Dependencies {
   readonly db: DatabaseSync;
@@ -44,6 +46,7 @@ interface Dependencies {
 interface Scope {
   readonly context: CiRepairBudgetContext;
   readonly snapshot: CodingRuntimeSnapshot;
+  readonly draft: DraftDeliveryRecord;
   readonly now: number;
   readonly current: CiRepairBudgetRecord | undefined;
 }
@@ -73,9 +76,9 @@ function beginRefusal(
   input: CiRepairBegin,
 ): Extract<CiRepairBudgetBlockReason, "invalid-input" | "invalid-binding"> | undefined {
   if (!validBegin(input)) return "invalid-input";
-  const draft = scope.snapshot.draftDelivery;
-  const observedBase = scope.snapshot.ciReadiness?.baseSha ?? draft?.binding.baseSha;
-  if (input.headSha !== draft?.binding.headSha || input.baseSha !== observedBase)
+  const draft = scope.draft;
+  const observedBase = scope.snapshot.ciReadiness?.baseSha ?? draft.binding.baseSha;
+  if (input.headSha !== draft.binding.headSha || input.baseSha !== observedBase)
     return "invalid-binding";
   return undefined;
 }
@@ -145,18 +148,24 @@ function priorChargeResult(
     : blocked("invalid-input", record);
 }
 
-function liveSnapshot(snapshot: CodingRuntimeSnapshot, context: CiRepairBudgetContext): boolean {
-  const draft = snapshot.draftDelivery;
+function liveDraft(
+  snapshot: CodingRuntimeSnapshot,
+  context: CiRepairBudgetContext,
+  read: (runId: string) => CodingRuntimeSnapshot | undefined,
+): DraftDeliveryRecord | undefined {
+  const draft = draftDeliveryLineageRecord(snapshot, read)?.record;
+  if (draft === undefined) return undefined;
   return [
     snapshot.terminalAt === undefined,
     new Set(["ready", "running", "awaiting-approval"]).has(snapshot.state),
     snapshot.issueBinding?.remoteDigest === context.remoteDigest,
-    draft?.binding.runId === context.runId,
-    draft?.binding.remoteDigest === context.remoteDigest,
-    draft?.binding.issueBindingDigest === snapshot.issueBinding?.bindingDigest,
-    draft?.pullRequest?.number === context.prNumber,
-    draft?.pullRequest?.state === "open",
-  ].every(Boolean);
+    draft.binding.remoteDigest === context.remoteDigest,
+    draft.binding.issueBindingDigest === snapshot.issueBinding?.bindingDigest,
+    draft.pullRequest?.number === context.prNumber,
+    draft.pullRequest?.state === "open",
+  ].every(Boolean)
+    ? draft
+    : undefined;
 }
 
 class SqliteCiRepairBudgetStore implements CodingRuntimeCiRepairBudgetStore {
@@ -209,13 +218,14 @@ class SqliteCiRepairBudgetStore implements CodingRuntimeCiRepairBudgetStore {
     if (!context.stillAuthorized()) return blocked("authority-denied");
     if (!validContext(context)) return blocked("invalid-binding");
     const snapshot = this.deps.snapshots.get(context.runId);
-    if (snapshot === undefined || !liveSnapshot(snapshot, context))
-      return blocked("invalid-binding");
+    if (snapshot === undefined) return blocked("invalid-binding");
+    const draft = liveDraft(snapshot, context, (runId) => this.deps.snapshots.get(runId));
+    if (draft === undefined) return blocked("invalid-binding");
     const now = this.deps.now?.() ?? Date.now();
     if (!validTime(now, context)) return blocked("invalid-input");
     const current = this.load(snapshot, context);
     if (current !== undefined && now < current.updatedAtMs) return blocked("clock-drift", current);
-    return { context, snapshot, now, current };
+    return { context, snapshot, draft, now, current };
   }
   private load(
     snapshot: CodingRuntimeSnapshot,
