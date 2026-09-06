@@ -16,6 +16,10 @@ interface OpenFence {
   readonly char: "`" | "~";
   readonly length: number;
 }
+interface FenceAnalysis {
+  readonly offsets: ReadonlySet<number>;
+  readonly unterminated: boolean;
+}
 
 // CommonMark/GFM fence delimiters allow up to 3 leading spaces before the fence run.
 // https://github.github.com/gfm/#fenced-code-blocks
@@ -57,7 +61,7 @@ function isClosingFence(line: string, open: OpenFence): boolean {
 // shorter or different-character inner fence never closes an outer one) and returns every byte
 // offset that falls strictly between an opening and closing fence delimiter line. An unterminated
 // fence runs to the end of the body.
-function fencedOffsets(body: string): ReadonlySet<number> {
+function analyseFences(body: string): FenceAnalysis {
   const fenced = new Set<number>();
   let offset = 0;
   let open: OpenFence | undefined;
@@ -75,7 +79,7 @@ function fencedOffsets(body: string): ReadonlySet<number> {
     }
     offset += line.length + 1;
   }
-  return fenced;
+  return { offsets: fenced, unterminated: open !== undefined };
 }
 
 function bodyHasFence(body: string): boolean {
@@ -127,9 +131,12 @@ function containsUnfencedMarker(
   return containsPrDescriptionMarker(chars.join(""));
 }
 
-function split(body: string): { prefix: string; region: string; suffix: string } | undefined {
+function split(
+  body: string,
+  analysis?: FenceAnalysis,
+): { prefix: string; region: string; suffix: string } | undefined {
   if (!containsPrDescriptionMarker(body)) return undefined;
-  const fenced = bodyHasFence(body) ? fencedOffsets(body) : undefined;
+  const fenced = analysis?.offsets;
   const bounds = findMarkerBounds(body, fenced);
   if (bounds === undefined) return undefined;
   const { start, end } = bounds;
@@ -146,6 +153,15 @@ function split(body: string): { prefix: string; region: string; suffix: string }
     throw new TypeError("Closing directive inside replaceable PR description region");
   return { prefix, region, suffix };
 }
+
+function existingRegion(body: string): ReturnType<typeof split> {
+  const analysis = bodyHasFence(body) ? analyseFences(body) : undefined;
+  const previous = split(body, analysis);
+  if (previous === undefined && analysis?.unterminated === true) {
+    throw new TypeError("Unterminated fenced code block prevents safe PR description insertion");
+  }
+  return previous;
+}
 /** Exact slices retain CRLF, BOM and every human-authored outside byte. No trim or normalization. */
 export function reconcilePrDescriptionRegion(
   body: string,
@@ -154,7 +170,7 @@ export function reconcilePrDescriptionRegion(
   const managed = split(replacement);
   if (managed?.prefix !== "" || managed.suffix !== "")
     throw new TypeError("Replacement must contain only the managed region");
-  const previous = split(body);
+  const previous = existingRegion(body);
   const prefix = previous?.prefix ?? body;
   const suffix = previous?.suffix ?? "";
   const separator = previous === undefined && body !== "" ? "\n\n" : "";

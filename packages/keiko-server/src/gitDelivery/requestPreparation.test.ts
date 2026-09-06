@@ -34,7 +34,7 @@ function workspaceAt(root: string): WorkspaceInfo {
     selectedRoot: root,
     name: undefined,
     version: undefined,
-    testFramework: "none",
+    testFramework: "unknown",
     sourceDirs: [],
     testDirs: [],
     languages: [],

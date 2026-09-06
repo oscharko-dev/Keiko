@@ -324,8 +324,13 @@ function memSameDescriptorReader(
 }
 
 export function memFs(root: string, files: Readonly<Record<string, string>>): WorkspaceFs {
+  const keyByAbsolutePath = new Map<string, string>();
+  for (const key of Object.keys(files)) {
+    const absolutePath = toAbs(root, key);
+    if (!keyByAbsolutePath.has(absolutePath)) keyByAbsolutePath.set(absolutePath, key);
+  }
   const findKey = (absolutePath: string): string | undefined =>
-    Object.keys(files).find((key) => toAbs(root, key) === canonicalPath(absolutePath));
+    keyByAbsolutePath.get(canonicalPath(absolutePath));
   const canonicalRoot = canonicalPath(root);
   return {
     readFileUtf8: (absolutePath: string): string => {

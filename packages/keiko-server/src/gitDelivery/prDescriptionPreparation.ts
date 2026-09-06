@@ -223,7 +223,11 @@ async function withReservedSnapshot<T>(
   reference: string,
   body: () => Promise<T>,
 ): Promise<T> {
-  options.snapshots.reserve?.(reference, context.accessScope, context.correlationId);
+  const reserved =
+    options.snapshots.reserve?.(reference, context.accessScope, context.correlationId) ?? true;
+  if (!reserved) {
+    throw new PrDescriptionFailure("stale-snapshot");
+  }
   try {
     return await body();
   } catch (error) {

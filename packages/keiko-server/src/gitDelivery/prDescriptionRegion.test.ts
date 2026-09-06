@@ -192,14 +192,14 @@ describe("managed PR region byte preservation", () => {
     expect(result.suffix).toBe("");
   });
 
-  // An unterminated fence runs to the end of the body: a marker pair after an opening delimiter
-  // that never closes is documentation-in-progress, not the real managed region.
-  it("treats an unterminated fence as running to the end of the body, preserving the marker pair inside it", () => {
+  // An unterminated fence has no safe append position: appending a region would place it inside
+  // the human fence, so the next reconciliation would ignore it and append another copy.
+  it("refuses to append a managed region inside an unterminated human fence", () => {
     const body = ["# Human template", "", "```markdown", START, "content", END].join("\n");
     const region = framePrDescriptionRegion("new");
-    const result = reconcilePrDescriptionRegion(body, region);
-    expect(result.finalBody).toBe(body + "\n\n" + region);
-    expect(result.prefix).toBe(body);
-    expect(result.suffix).toBe("");
+    expect(() => reconcilePrDescriptionRegion(body, region)).toThrow(
+      "Unterminated fenced code block prevents safe PR description insertion",
+    );
+    expect(body).toBe(["# Human template", "", "```markdown", START, "content", END].join("\n"));
   });
 });

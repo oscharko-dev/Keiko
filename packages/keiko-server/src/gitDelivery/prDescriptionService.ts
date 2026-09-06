@@ -246,7 +246,6 @@ class DescriptionService implements PrDescriptionApplicationService {
       return { outcome: "blocked", reason: "approval-invalid" };
     const requirement = this.approvals.redeem(proposal, lease);
     if (requirement === undefined) return { outcome: "blocked", reason: "approval-invalid" };
-    this.releaseProposalSnapshot(proposal);
     this.proposals.delete(id);
     this.busy = true;
     const generation = this.generation;
@@ -262,6 +261,10 @@ class DescriptionService implements PrDescriptionApplicationService {
     } catch (error) {
       return this.failure(proposal.context, "apply", error);
     } finally {
+      // The approved effect rechecks the captured snapshot immediately before dispatch. Keep its
+      // reservation until every recheck and observation has finished so unrelated captures cannot
+      // evict the evidence between approval redemption and the provider write.
+      this.releaseProposalSnapshot(proposal);
       this.busy = false;
     }
   }

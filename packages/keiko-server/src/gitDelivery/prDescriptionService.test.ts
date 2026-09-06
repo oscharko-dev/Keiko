@@ -45,6 +45,19 @@ function instrumentSnapshotReservations(): { reserved: string[]; released: strin
   });
   return { reserved, released };
 }
+
+async function captureUnrelatedSnapshots(count: number): Promise<void> {
+  for (let index = 0; index < count; index += 1) {
+    await fixture.snapshots.capture({
+      workspace: fixture.context.workspace,
+      baseRef: fixture.remote.identity.baseRef,
+      headRef: fixture.remote.identity.headRef,
+      expectedHeadSha: fixture.remote.identity.headSha,
+      accessScope: fixture.context.accessScope,
+      correlationId: `unrelated-${String(index)}`,
+    });
+  }
+}
 describe("body-only description application", () => {
   it("holds and applies the exact pre-generated artifact without a second generation", async () => {
     const artifact = await fixture.generateArtifact("Selected Chat intent");
@@ -458,6 +471,36 @@ it("admits only one in-flight generation per service", async () => {
 });
 
 describe("snapshot reservation lifecycle (wave-3 W3-4 item 3)", () => {
+  it("refuses preview before model generation when the snapshot cannot be reserved", async () => {
+    let modelRequests = 0;
+    const generation = fixture.options.generation;
+    Object.assign(fixture.options, {
+      snapshots: { ...fixture.options.snapshots, reserve: (): boolean => false },
+      generation: {
+        ...generation,
+        gateway: {
+          chat: (request: Parameters<typeof generation.gateway.chat>[0]) => {
+            modelRequests += 1;
+            return generation.gateway.chat(request);
+          },
+        },
+      },
+    });
+
+    await expect(fixture.service.preview({ language: "en" })).resolves.toEqual({
+      outcome: "blocked",
+      reason: "stale-snapshot",
+    });
+    expect(modelRequests).toBe(0);
+    const refusal = fixture.events.find(
+      (event) =>
+        event.op === "git.pr-description" &&
+        event.extra?.phase === "preview" &&
+        event.extra.reason === "stale-snapshot",
+    );
+    expect(refusal).toBeDefined();
+  });
+
   it("reserves the captured reference while held, and releases it when a fresh preview replaces it", async () => {
     const { reserved, released } = instrumentSnapshotReservations();
     const first = await preview();
@@ -492,6 +535,27 @@ describe("snapshot reservation lifecycle (wave-3 W3-4 item 3)", () => {
     expect(reserved).toHaveLength(1);
     expect(released).toHaveLength(0);
     await fixture.service.executeApproved(review.proposalId, lease);
+    expect(released).toEqual(reserved);
+  });
+
+  it("keeps the reservation through the execution-time snapshot recheck", async () => {
+    const { reserved, released } = instrumentSnapshotReservations();
+    const { review, lease } = await approved();
+    const snapshotReader = fixture.options.execution.snapshotReader;
+    Object.assign(fixture.options, {
+      execution: {
+        ...fixture.options.execution,
+        snapshotReader: async () => {
+          await captureUnrelatedSnapshots(33);
+          return snapshotReader?.();
+        },
+      },
+    });
+
+    await expect(fixture.service.executeApproved(review.proposalId, lease)).resolves.toMatchObject({
+      outcome: "observed",
+    });
+    expect(fixture.writes).toHaveLength(1);
     expect(released).toEqual(reserved);
   });
 

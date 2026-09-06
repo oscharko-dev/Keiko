@@ -35,7 +35,10 @@ import {
 import { clearAllGroundedTurns, groundedTurnRegistry } from "./grounded-turn-registry.js";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  ChatGitChangeScope,
+  GroundedAnswer,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_CHAT_LIST_LIMIT as DEFAULT_CHAT_LIST_PAGE,
@@ -1132,8 +1135,8 @@ describe("PATCH /api/chats", () => {
   // git-change scope by constructing the request body itself.
   describe("gitChangeScopes relationship binding (#3400-AC3)", () => {
     function gitChangeScopeFixture(
-      overrides: Partial<Record<string, unknown>> = {},
-    ): Record<string, unknown> {
+      overrides: Partial<ChatGitChangeScope> = {},
+    ): ChatGitChangeScope {
       return {
         kind: "git-change",
         relationshipId: "rel-bound",

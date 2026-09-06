@@ -326,9 +326,9 @@ async function expectGeneratedDescription(
       proposalId: status.proposalId,
     },
   });
-  expect(staleReview.status()).toBe(404);
+  expect(staleReview.status()).toBe(403);
   expect(await staleReview.json()).toMatchObject({
-    error: { code: "GIT_DELIVERY_PR_DESCRIPTION_UNKNOWN_PROPOSAL" },
+    error: { code: "GIT_DELIVERY_PR_DESCRIPTION_UNAVAILABLE" },
   });
   const generatedReview = await page.request.post("/api/git-delivery/pr-description/review", {
     headers: CSRF,
