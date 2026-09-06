@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "status": "verified",
   "verificationKind": "deterministic-production-managed",
-  "sourceHead": "2658956cf5dd5387c0fa4310c97f7c9e529ec149",
-  "ownedSourceDigest": "06bb2d55a91c9e5d025354fc3b8906e5dc0be00e6e966bf507b044b6fe764f1e",
-  "command": "npx vitest run packages/keiko-workspace/src/codingRepositorySearch.test.ts packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.test.ts packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts --reporter=dot",
+  "sourceHead": "8b3140b08c20c6347d6c2ee938228f9c37aa4439",
+  "ownedSourceDigest": "dfbee5d513652c4ba2a06c2389f4f44b715f43ef149b0cd587139afb3bd6eec2",
+  "command": "npx vitest run packages/keiko-workspace/src/codingRepositorySearch.test.ts packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.test.ts packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts --reporter=json --outputFile=/tmp/keiko-3384-audit/h1-verification-8b3140b0-results.json --maxWorkers=2",
   "testFiles": 3,
-  "testCount": 70,
+  "testCount": 83,
   "result": "passed"
 }
