@@ -1,3 +1,4 @@
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import {
   createToolCatalog,
   createToolDescriptor,
@@ -114,6 +115,41 @@ async function collectToolCallStream(
 }
 
 describe("production gateway catalog bridge", () => {
+  it.each([
+    ["keiko_workspace_read", "whole-file SHA-256"],
+    ["keiko_workspace_read", "nextStartLine"],
+    ["keiko_changeset_edit", "expectedContentHash"],
+    ["keiko_changeset_edit", "selectedFiles"],
+    ["keiko_changeset_edit", sha256Hex("")],
+  ])("preserves actionable read/edit guidance for %s: %s", async (name, guidance) => {
+    let body: unknown;
+    const fetchImpl: typeof fetch = (_url, init) => {
+      if (typeof init?.body !== "string") throw new TypeError("Expected serialized request");
+      body = JSON.parse(init.body) as unknown;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "done" } }] }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+    };
+    await adapter(fetchImpl).call(
+      { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
+      CONFIG,
+    );
+    expect(body).toMatchObject({
+      tools: expect.arrayContaining([
+        {
+          type: "function",
+          function: expect.objectContaining({
+            name,
+            description: expect.stringContaining(guidance) as unknown,
+          }) as unknown,
+        },
+      ]) as unknown,
+    });
+  });
+
   it.each([
     "keiko_git_stage",
     "keiko_git_commit",

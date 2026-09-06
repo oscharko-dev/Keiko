@@ -37,6 +37,7 @@
 // are generated from (see the header note above) — that consolidation, and matching
 // `codingToolIpc.ts`'s independent action vocabulary to this one, remain open (#3414 follow-up).
 // `keiko.file.read`'s `path` in legacy.ts stays pattern-free; that is a separate, still-open case.
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
@@ -248,7 +249,10 @@ function discoverSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.workspace.discover",
     alias: "keiko_workspace_discover",
-    description: "Discover workspace-relative file paths by case-insensitive keyword match.",
+    description:
+      "Find exact workspace-relative file paths through bounded repository discovery. Search by " +
+      "short filename or path keywords; * returns a bounded overview. Denied and ignored paths " +
+      "never appear.",
     inputSchema: managedObjectSchema(
       {
         query: { type: "string", minLength: 1, maxLength: 256 },
@@ -266,7 +270,11 @@ function readSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.workspace.read",
     alias: "keiko_workspace_read",
-    description: "Read one bounded, line-windowed slice of a workspace text file.",
+    description:
+      "Read one bounded repository text window. startLine is 1-based; maxLines sets the window " +
+      "height. The result reports totalLines, nextStartLine when truncated, and the whole-file " +
+      "SHA-256 digest required as expectedContentHash by keiko_changeset_edit. Copy that digest " +
+      "exactly; never calculate a hash from a partial window.",
     inputSchema: managedObjectSchema(
       {
         relativePath: {
@@ -304,8 +312,9 @@ function repositorySearchSpec(): OpenCodeToolSpec {
     canonicalId: "keiko.repo.search",
     alias: "keiko_repository_search",
     description:
-      "Search the workspace's tracked text content for lexical, literal, regex or symbol " +
-      "matches, returning bounded content excerpts with file path and line range.",
+      "Search tracked workspace text. Choose lexical (keywords), literal (exact text), regex " +
+      "(bounded pattern), or symbol (exact identifier). Results contain bounded excerpts with " +
+      "path and line range; use a returned path/startLine/endLine with keiko_workspace_read.",
     inputSchema: managedObjectSchema(
       {
         mode: { type: "string", enum: ["lexical", "literal", "regex", "symbol"] },
@@ -383,7 +392,14 @@ function changesetEditSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.changeset.edit",
     alias: "keiko_changeset_edit",
-    description: "Apply one validated unified-diff changeset to the workspace.",
+    description:
+      "Apply one strict unified-diff changeset through workspace governance. Supply changeset " +
+      "with patch, files, and selectedFiles; each files entry has file and expectedContentHash. " +
+      "For existing files, copy the exact whole-file digest from the most recent " +
+      "keiko_workspace_read. On a hash mismatch, re-read and rebuild the patch. For a new file, " +
+      `use a /dev/null source diff and the empty-content SHA-256 ${sha256Hex("")}. ` +
+      "Include every intended path in files and selectedFiles. Inspect the result and current " +
+      "files before retrying a failed edit.",
     inputSchema: managedObjectSchema({ changeset }, ["changeset"]),
     effects: ["workspace-write"],
     idempotency: "server-key-required",

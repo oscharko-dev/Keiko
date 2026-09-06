@@ -1029,72 +1029,15 @@ function wireRequestFor(
   }
 }
 
-// The gateway advertises the central catalog description to the actual model. Reuse that same
-// owner here so the native plugin cannot describe a different approval/execute workflow.
-function gitToolDescription(action: GeneratedToolAction): string | undefined {
-  const aliases: Readonly<Partial<Record<GeneratedToolAction, string>>> = {
-    "git-status": "keiko_git_status",
-    "git-diff": "keiko_git_diff",
-    "git-stage": "keiko_git_stage",
-    "git-commit": "keiko_git_commit",
-    "git-push": "keiko_git_push",
-    "git-pull-request": "keiko_pull_request",
-    "git-execute": "keiko_git_execute",
-    "git-ci": "keiko_ci_status",
-  };
-  const alias = aliases[action];
-  if (alias === undefined) return undefined;
-  const entry = opencodeRegistrationSet().entries.find((candidate) => candidate.alias === alias);
-  if (entry === undefined) throw new TypeError("OpenCode Git tool is missing from the catalog");
-  return entry.descriptor.description;
-}
-
+// The native plugin and actual provider use one description owner. Otherwise richer native
+// read/edit guidance is replaced by a generic catalog description at the gateway boundary.
 function toolDescription(action: GeneratedToolAction): string {
-  const gitDescription = gitToolDescription(action);
-  if (gitDescription !== undefined) return gitDescription;
-  if (action === "discover") {
-    return (
-      "Find exact workspace-relative file paths through Keiko's bounded repository discovery. " +
-      "Search by short filename or path keywords before reading files; * returns only a bounded " +
-      "overview. Denied and ignored paths never appear."
-    );
-  }
-  if (action === "read") {
-    return (
-      "Read one repository text file through Keiko governance — the only way to observe " +
-      "workspace content. startLine/maxLines select the returned line window (start at 1 with " +
-      "a generous maxLines for a whole small file); the result reports totalLines plus " +
-      "nextStartLine when truncated, and the whole-file SHA-256 digest that " +
-      "keiko_changeset_edit requires as expectedContentHash."
-    );
-  }
-  if (action === "repository-search") {
-    return (
-      "Search the workspace's tracked text content through Keiko governance. Pick exactly one " +
-      "mode: lexical (natural-language keywords), literal (exact substring), regex (bounded, " +
-      "ReDoS-safe pattern) or symbol (exact identifier). Returns bounded excerpts with path and " +
-      "line range; use keiko_workspace_read on a hit's path/startLine/endLine to read more."
-    );
-  }
-  if (action === "egress") {
-    return "Fetch one approved public https URL through governed read-only research (#2387).";
-  }
-  if (action === "skill") return "Invoke one exact server-approved read-only skill.";
-  if (action === "child-agent") return "Run one bounded, one-layer read-only child agent.";
-  if (action === "verification") {
-    return (
-      "Run one vetted repository verification through Keiko governance — the only way to " +
-      "execute checks (there is no shell). Pick exactly one verifierId: test, targeted-test, " +
-      "typecheck, lint, or build. targeted-test requires one workspace-relative targetPath; " +
-      "use an empty targetPath for every other verifierId."
-    );
-  }
-  return (
-    "Submit a bounded changeset through Keiko governance — the only way to modify workspace " +
-    "files. Provide one strict unified diff and, for every listed file, the " +
-    "expectedContentHash digest returned by its most recent keiko_workspace_read; on a digest " +
-    "mismatch re-read the file and rebuild the patch."
+  const definition = OPENCODE_TOOL_SOURCE_DEFINITIONS.find((tool) => tool.action === action);
+  const entry = opencodeRegistrationSet().entries.find(
+    (candidate) => candidate.alias === definition?.name,
   );
+  if (entry === undefined) throw new TypeError("OpenCode tool is missing from the catalog");
+  return entry.descriptor.description;
 }
 
 function toolClientTimeoutMs(action: GeneratedToolAction): number {
