@@ -739,6 +739,7 @@ interface PermissionLineInput {
   readonly idempotencyKey?: string | undefined;
   readonly approvalId?: string | undefined;
   readonly approvalDigest?: string | undefined;
+  readonly targetPathHash?: string | undefined;
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly targetPath?: string | undefined;
   readonly allowedRelativePaths?: readonly string[] | undefined;
@@ -2719,8 +2720,10 @@ describe("coding runtime manager", () => {
       action: "verification" as const,
       actionId: "session:call",
       idempotencyKey: "session:call",
-      verifierId: "typecheck",
+      verifierId: "targeted-test",
+      targetPath: "src/math.test.ts",
     };
+    const targetPathHash = createHash("sha256").update(request.targetPath, "utf8").digest("hex");
     const approvalProof = {
       approvalId: request.actionId,
       approvalDigest: codingToolApprovalBindingDigest("run-1991", request),
@@ -2754,6 +2757,7 @@ describe("coding runtime manager", () => {
         idempotencyKey: request.idempotencyKey,
         approvalId: approvalProof.approvalId,
         approvalDigest: approvalProof.approvalDigest,
+        targetPathHash,
       }),
     );
     await settle();
@@ -2761,7 +2765,7 @@ describe("coding runtime manager", () => {
     expect(events.find((event) => event.kind === "permission-requested")).toMatchObject({
       permissionRequest: {
         requestId: "permission-verification",
-        commandLabel: "typecheck",
+        commandLabel: "targeted-test",
       },
     });
     expect(

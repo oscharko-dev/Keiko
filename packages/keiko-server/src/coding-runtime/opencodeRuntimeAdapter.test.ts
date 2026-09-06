@@ -519,6 +519,9 @@ describe("OpenCode runtime adapter readiness", () => {
     if (verificationSource === undefined) throw new TypeError("verification source missing");
     expect(verificationSource).toContain('actionClass: "command-execution"');
     expect(verificationSource).toContain('crypto.subtle.digest("SHA-256"');
+    expect(verificationSource).toContain("request.targetPath");
+    expect(verificationSource).toContain("targeted-test:${targetPathHash}");
+    expect(verificationSource).toContain("targetPathHash");
     expect(verificationSource).toContain("includes(request.action)");
     expect(verificationSource).toContain("actionId: request.actionId");
     expect(verificationSource).toContain(

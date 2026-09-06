@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,7 +26,10 @@ import {
 } from "./productionManagedWorktreeTools.js";
 import type { SkillCatalog } from "./skillCatalog.js";
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
-import type { VerifiedCommitService } from "../gitDelivery/verifiedCommitTypes.js";
+import type {
+  VerifiedCommitProposal,
+  VerifiedCommitService,
+} from "../gitDelivery/verifiedCommitTypes.js";
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 import type { CiObservationService } from "../gitDelivery/ciObservationService.js";
 import { readySnapshot } from "../gitDelivery/ciObservationTest/_support.js";
@@ -35,6 +39,7 @@ import type { ServerLogEvent } from "../observability/server-log.js";
 import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
 import {
   createVerificationRunnerManager,
+  type VerificationExecutePort,
   type VerificationRunnerManager,
 } from "../editor/verificationRunner.js";
 import { createInMemoryUiStore } from "../store/index.js";
@@ -462,15 +467,15 @@ describe("production managed worktree tools", () => {
     });
 
     const result = await facade.execute({
-        capability: "opaque-capability",
-        body: JSON.stringify({
-          action: "egress",
-          actionId: "research-1",
-          idempotencyKey: "research-key-1",
-          target: "https://docs.example.org/",
-        }),
-      });
-    expect(result).toEqual({ status: "completed" });
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "egress",
+        actionId: "research-1",
+        idempotencyKey: "research-key-1",
+        target: "https://docs.example.org/",
+      }),
+    });
+    expect(result).toMatchObject({ status: "completed" });
     expect(calls[0]?.egress).toMatchObject({
       httpsProxy: "https://proxy.example",
       httpProxy: "http://proxy.example",
@@ -778,7 +783,7 @@ describe("production managed worktree tools", () => {
       `${JSON.stringify({ name: "targeted-fixture", devDependencies: { vitest: "^3.0.0" } })}\n`,
     );
     writeFileSync(join(workspaceRoot, "src", "math.test.ts"), "export {};\n");
-    const execute = vi.fn((args) =>
+    const execute = vi.fn<VerificationExecutePort>((args) =>
       Promise.resolve({
         report: { ...verificationReport("passed"), workspaceRoot: args.workspace.root },
         probe: { available: true, backend: "test-backend" },
@@ -838,7 +843,7 @@ describe("production managed worktree tools", () => {
           state: "target-bound",
           verifierId: "targeted-test",
           targetCount: 1,
-          targetPathSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          targetPathSha256: createHash("sha256").update("src/math.test.ts").digest("hex"),
         },
       }),
     );
@@ -1170,13 +1175,60 @@ describe("production managed worktree tools", () => {
       reason: "approval-required" as const,
       recordedAt: "2026-09-05T13:24:40.039Z",
     };
+    const commitProposal: VerifiedCommitProposal = {
+      binding: approvalRequiredResult,
+      command: {
+        kind: "commit",
+        message: "feat: approved",
+        allowEmpty: false,
+        verified: {
+          headSha: approvalRequiredResult.parentSha,
+          stagedTreeDigest: approvalRequiredResult.stagedTreeDigest,
+          branchName: "codex/task",
+          baseRef: "dev",
+          baseSha: approvalRequiredResult.baseSha,
+        },
+      },
+      context: {
+        runId: approvalRequiredResult.runId,
+        envelopeDigest: approvalRequiredResult.envelopeDigest,
+        runtimeAuthorityDigest: approvalRequiredResult.runtimeAuthorityDigest,
+        workspaceDigest: approvalRequiredResult.workspaceDigest,
+        repositoryDigest: approvalRequiredResult.repositoryDigest,
+        workspace: {
+          root: "/managed/worktree",
+          selectedRoot: "/managed/worktree",
+          name: "test",
+          testFramework: "vitest",
+          sourceDirs: [],
+          testDirs: [],
+          languages: [],
+          ignoreLines: [],
+        },
+        baseRef: "dev",
+        headRef: "codex/task",
+        correlationId: "run-1",
+        buffersClean: () => true,
+        stillAuthorized: () => true,
+      },
+      expiresAtMs: Date.parse("2099-01-01T00:00:00.000Z"),
+      review: {
+        requestId: approvalRequiredResult.proposalId,
+        paths: ["src/index.ts"],
+        pathsTruncated: false,
+        fileCount: 1,
+        addedLines: 1,
+        deletedLines: 1,
+        verifiedCommit: { result: approvalRequiredResult, message: "feat: approved" },
+      },
+    };
     const requestCommitApproval = vi.fn();
     const service = {
       ...verificationService(),
       propose: vi.fn((message: string) =>
         Promise.resolve(message === "feat: approved" ? approvalRequiredResult : blockedResult),
       ),
-      review: vi.fn(() => true as never),
+      review: vi.fn<VerifiedCommitService["review"]>(() => commitProposal),
       matchesApproval: vi.fn(() => true),
     };
     const facade = createProductionManagedWorktreeToolFacade({
@@ -1842,7 +1894,7 @@ function verificationFacade(options: {
     resolveWorkspaceRootAccess:
       options.workspaceRoot === undefined
         ? resolveWorkspaceRootAccess
-        : () => ({
+        : (): WorkspaceRootAccess => ({
             kind: "managed-task" as const,
             canonicalRoot: options.workspaceRoot ?? "/managed/worktree",
             fs: nodeWorkspaceFs,
