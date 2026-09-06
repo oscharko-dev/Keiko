@@ -2142,6 +2142,7 @@ async function runHandleCodingSidecarGatewayChatCompletions(
   if (isRouteResult(parsed)) {
     return parsed;
   }
+  logValidatedRequestBounds(ctx, authentication.runId, parsed, resolved.result.runMetadata);
   const admission = runtimeGatewayAdmissionResponse(
     ctx,
     deps,
@@ -2160,6 +2161,26 @@ async function runHandleCodingSidecarGatewayChatCompletions(
     ...(authentication.reasoningEffort === undefined
       ? {}
       : { reasoningEffort: authentication.reasoningEffort }),
+  });
+}
+
+function logValidatedRequestBounds(
+  ctx: RouteContext,
+  runId: string,
+  request: CodingSidecarGatewayChatCompletionRequest,
+  bounds: CodingWorkbenchSidecarGatewayRunMetadata,
+): void {
+  getServerLogger().info({
+    category: "gateway",
+    op: "coding-sidecar.gateway.request-validated",
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    extra: {
+      runId,
+      maxRequestBytes: bounds.maxRequestBytes,
+      maxPromptTokens: bounds.maxPromptTokens,
+      estimatedPromptTokens: promptTokenEstimate(request),
+      inputMessageCount: request.messages.length,
+    },
   });
 }
 

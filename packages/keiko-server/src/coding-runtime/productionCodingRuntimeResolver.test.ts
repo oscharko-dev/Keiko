@@ -145,6 +145,30 @@ describe("production coding runtime resolver", () => {
     expect(researchUnavailable(host, request.runId)).toBe(false);
   });
 
+  it("keeps child-agent unavailable when its per-run provider model cannot be resolved", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const childModelPortFactory = vi.fn(() => undefined);
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer, undefined, {
+        childModelId: () => "coding-safe-model",
+        childModelPortFactory,
+      }),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+    host.launchResolver.resolve(request);
+
+    expect(childUnavailable(host, request.runId)).toBe(true);
+    expect(childUnavailable(host, request.runId)).toBe(true);
+    expect(childModelPortFactory).toHaveBeenCalledOnce();
+    expect(childModelPortFactory).toHaveBeenCalledWith("coding-safe-model");
+  });
+
   // #3399 (epic #3384 correction 4): threaded through the exact same chain
   // `gitDeliveryAuthority` already uses. Before this change the resolver's composed runtime
   // carried no `gitDeliveryDescriptionAuthority` field at all, so it never reached the host.
@@ -472,6 +496,12 @@ function researchUnavailable(
   return host.runtimeCapabilityAuthenticator
     ?.unavailableOptionalTools?.(runId)
     ?.has("keiko_research_fetch");
+}
+
+function childUnavailable(host: ProductionCodingRuntimeHost, runId: string): boolean | undefined {
+  return host.runtimeCapabilityAuthenticator
+    ?.unavailableOptionalTools?.(runId)
+    ?.has("keiko_child_agent");
 }
 
 function resolverFor(

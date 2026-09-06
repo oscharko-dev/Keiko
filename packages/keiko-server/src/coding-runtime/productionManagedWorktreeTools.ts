@@ -148,6 +148,11 @@ export type OptionalToolAvailabilityInput = Pick<
   | "childModelPortFactory"
 >;
 
+export interface ResolvedChildModelInput {
+  readonly modelId?: string | undefined;
+  readonly childModelPortFactory?: ((modelId: string) => ModelPort | undefined) | undefined;
+}
+
 export function deriveOptionalToolAvailability(
   input: OptionalToolAvailabilityInput,
 ): ReadonlySet<OpenCodeOptionalToolName> {
@@ -169,36 +174,71 @@ function hasResearchApprovalHandler(input: OptionalToolAvailabilityInput): boole
       input.researchGrantRegistry.activeGrants(input.authorityRef.runId, Date.now()).length > 0;
     return input.gatewayEgress() !== undefined && (hasApprovalPath || hasLiveGrant);
   } catch (error) {
-    (input.activityLog ?? processServerLogSink()).write({
-      category: "gateway",
-      op: "coding-runtime.tool-availability.failed",
-      correlationId: isValidCorrelationId(input.authorityRef.runId)
-        ? input.authorityRef.runId
-        : UNKNOWN_CORRELATION_ID,
-      level: "warn",
-      errorKind: contentFreeErrorClass(error),
-      extra: {
-        runId: input.authorityRef.runId,
-        optionalTool: "keiko_research_fetch",
-        stage: "research-egress-config",
-        reason: "configuration-resolution-failed",
-        frames: keikoStackFrames(error),
-        causeChain: causeChain(error),
-      },
-    });
+    logOptionalToolAvailabilityFailure(
+      input,
+      "keiko_research_fetch",
+      "research-egress-config",
+      error,
+    );
     return false;
   }
 }
 
-// Mirrors `auxiliaryPorts`' own fail-closed comment: an empty modelId means "no coding-safe
-// provider model resolved," so the child-agent port stays unmounted regardless of whether a
-// factory was supplied.
+function logOptionalToolAvailabilityFailure(
+  input: OptionalToolAvailabilityInput,
+  optionalTool: OpenCodeOptionalToolName,
+  stage: "research-egress-config" | "child-model-resolution",
+  error: unknown,
+): void {
+  (input.activityLog ?? processServerLogSink()).write({
+    category: "gateway",
+    op: "coding-runtime.tool-availability.failed",
+    correlationId: isValidCorrelationId(input.authorityRef.runId)
+      ? input.authorityRef.runId
+      : UNKNOWN_CORRELATION_ID,
+    level: "warn",
+    errorKind: contentFreeErrorClass(error),
+    extra: {
+      runId: input.authorityRef.runId,
+      optionalTool,
+      stage,
+      reason: "configuration-resolution-failed",
+      frames: keikoStackFrames(error),
+      causeChain: causeChain(error),
+    },
+  });
+}
+
+function resolvedChildModelPort(input: OptionalToolAvailabilityInput): ModelPort | undefined {
+  const modelId = input.modelId;
+  const factory = input.childModelPortFactory;
+  if (modelId === undefined || modelId.length === 0 || factory === undefined) return undefined;
+  try {
+    return factory(modelId);
+  } catch (error) {
+    logOptionalToolAvailabilityFailure(input, "keiko_child_agent", "child-model-resolution", error);
+    return undefined;
+  }
+}
+
+// Resolve once per run, then retain the exact port for both advertised readiness and execution.
+// The production factory constructs a GatewayModelPort, so probing it again on every catalog offer
+// would allocate a different port from the one the child runner ultimately uses.
+export function resolveChildModelForRun(
+  input: OptionalToolAvailabilityInput,
+): ResolvedChildModelInput {
+  const modelId = input.modelId;
+  const model = resolvedChildModelPort(input);
+  if (modelId === undefined || model === undefined) return {};
+  return {
+    modelId,
+    childModelPortFactory: (requestedModelId): ModelPort | undefined =>
+      requestedModelId === modelId ? model : undefined,
+  };
+}
+
 function hasResolvableChildAgentModel(input: OptionalToolAvailabilityInput): boolean {
-  return (
-    input.modelId !== undefined &&
-    input.modelId.length > 0 &&
-    input.childModelPortFactory !== undefined
-  );
+  return resolvedChildModelPort(input) !== undefined;
 }
 
 export function createProductionManagedWorktreeToolFacade(

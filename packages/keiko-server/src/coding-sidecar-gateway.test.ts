@@ -3163,6 +3163,60 @@ describe("coding-sidecar gateway", () => {
     expect(seenRequests).toHaveLength(0);
   });
 
+  it("accepts a bounded coding transcript beyond 64 KB within the profile token allowance", async () => {
+    const sink = captureServerLog("info");
+    const seen: GatewayRequest[] = [];
+    const deps = depsValue(configValue(provider(), capability()), (_config, modelId) => {
+      return (request: GatewayRequest): Promise<NormalizedResponse> => {
+        seen.push(request);
+        return Promise.resolve(assistantResponse(modelId));
+      };
+    });
+    const content = "bounded source context\n".repeat(3_500);
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content }] }),
+      deps,
+    );
+    assertRouteResult(result);
+    expect(result.status).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.messages).toEqual([{ role: "user", content }]);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "coding-sidecar.gateway.request-validated",
+        correlationId: expect.any(String),
+        extra: expect.objectContaining({
+          maxRequestBytes: 1_048_576,
+          inputMessageCount: 1,
+          estimatedPromptTokens: expect.any(Number),
+        }),
+      }),
+    );
+    expect(JSON.stringify(sink.events)).not.toContain("bounded source context");
+  });
+
+  it("retains a hard transport cap and body-free rejection before model dispatch", async () => {
+    const sink = captureServerLog("warn");
+    const calls = vi.fn((_request: GatewayRequest) =>
+      Promise.resolve(assistantResponse("azure-coding-model")),
+    );
+    const deps = depsValue(configValue(provider(), capability()), () => calls);
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "private-overflow".repeat(100_000) }] }),
+      deps,
+    );
+    assertRouteResult(result);
+    expect(result.status).toBe(413);
+    expect(calls).not.toHaveBeenCalled();
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "coding-sidecar.gateway.rejected",
+        extra: expect.objectContaining({ reason: "request-too-large" }),
+      }),
+    );
+    expect(JSON.stringify(sink.events)).not.toContain("private-overflow");
+  });
+
   it("returns BAD_REQUEST when estimated prompt tokens exceed the advertised maxPromptTokens", async () => {
     const seenRequests: GatewayRequest[] = [];
     const deps = depsValue(

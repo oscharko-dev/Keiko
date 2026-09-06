@@ -91,7 +91,9 @@ import {
 import {
   createProductionManagedWorktreeToolFacade,
   deriveOptionalToolAvailability,
+  resolveChildModelForRun,
   type ProductionManagedWorktreeToolInput,
+  type ResolvedChildModelInput,
 } from "./productionManagedWorktreeTools.js";
 import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
 import {
@@ -685,17 +687,16 @@ interface RunToolSurfaceInput {
 // advertisement and the actual dispatch-side ports agree on which optional tool is really available
 // (#3384 wave-3 W3-1 redirect).
 function unavailableOptionalToolsFor(
-  input: ProductionCodingRuntimeResolverInput,
   minted: MintedRuntime,
   researchOptions: ReturnType<typeof managedResearchOptions>,
   skillCatalog: SkillCatalog,
+  childModel: ResolvedChildModelInput,
 ): ReadonlySet<OpenCodeOptionalToolName> {
   return deriveOptionalToolAvailability({
     ...researchOptions,
+    ...childModel,
     authorityRef: minted.authorityRef,
     skillCatalog,
-    modelId: input.childModelId?.(),
-    childModelPortFactory: input.childModelPortFactory,
   });
 }
 
@@ -715,6 +716,11 @@ function createRunToolSurface(args: RunToolSurfaceInput): RunToolSurface {
   const { leases, skillCatalog, explicitSkills, resolveWorkspaceRootAccess } =
     prepareRunToolContext(input, request, context, invocationRegistry);
   const researchOptions = managedResearchOptions(input, context, minted, research, onRuntimeEvent);
+  const childModel = resolveChildModelForRun({
+    authorityRef: minted.authorityRef,
+    modelId: input.childModelId?.(),
+    childModelPortFactory: input.childModelPortFactory,
+  });
   const toolFacade = createManagedToolFacade({
     input,
     context,
@@ -729,6 +735,7 @@ function createRunToolSurface(args: RunToolSurfaceInput): RunToolSurface {
     onRuntimeEvent,
     resolveWorkspaceRootAccess,
     researchOptions,
+    childModel,
   });
   return {
     invocationRegistry,
@@ -739,7 +746,7 @@ function createRunToolSurface(args: RunToolSurfaceInput): RunToolSurface {
     codingToolApprovals,
     resolveWorkspaceRootAccess,
     unavailableOptionalTools: () =>
-      unavailableOptionalToolsFor(input, minted, researchOptions, skillCatalog),
+      unavailableOptionalToolsFor(minted, researchOptions, skillCatalog, childModel),
   };
 }
 
@@ -957,6 +964,7 @@ interface ManagedToolFacadeInput {
   readonly codingToolApprovals: CodingToolApprovalBridge;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
+  readonly childModel: ResolvedChildModelInput;
 }
 
 function runtimeGitFacadeOptions({
@@ -1013,8 +1021,8 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     codingToolApprovals,
     onRuntimeEvent,
     resolveWorkspaceRootAccess,
+    childModel,
   } = options;
-  const childModelId = input.childModelId?.();
   return createProductionManagedWorktreeToolFacade({
     authority,
     ...(options.ciRepairBudget === undefined ? {} : { ciRepairBudget: options.ciRepairBudget }),
@@ -1022,7 +1030,7 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     taskId: context.taskId,
     // The child agent talks to the gateway directly, so it needs the resolved PROVIDER model id —
     // never the run's launch-profile identifier, which the gateway cannot resolve.
-    ...(childModelId === undefined ? {} : { modelId: childModelId }),
+    ...childModel,
     adapterKind: adapterKind(context),
     workspaceRoot: context.workspaceRoot,
     resolveWorkspaceRootAccess,
@@ -1042,7 +1050,6 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     ...runtimeGitFacadeOptions(options),
     skillCatalog,
     explicitSkillInvocations: explicitSkills,
-    childModelPortFactory: input.childModelPortFactory,
     ...(input.commandRunner === undefined ? {} : { commandRunner: input.commandRunner }),
     verificationRunner: input.verificationRunner,
     onRuntimeEvent,

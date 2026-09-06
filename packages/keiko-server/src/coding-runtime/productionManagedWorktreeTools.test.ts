@@ -21,6 +21,7 @@ import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import {
   createProductionManagedWorktreeToolFacade,
   deriveOptionalToolAvailability,
+  resolveChildModelForRun,
 } from "./productionManagedWorktreeTools.js";
 import type { SkillCatalog } from "./skillCatalog.js";
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
@@ -1376,7 +1377,7 @@ describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
     expect(nonEmpty.has("keiko_skill")).toBe(false);
   });
 
-  it("marks child-agent available only when modelId is non-empty AND a factory is supplied", () => {
+  it("marks child-agent available only when the configured model resolves through the factory", () => {
     const noModel = deriveOptionalToolAvailability({
       authorityRef: { runId, envelopeDigest: DIGEST },
       childModelPortFactory: () => undefined,
@@ -1396,12 +1397,71 @@ describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
     });
     expect(noFactory.has("keiko_child_agent")).toBe(true);
 
-    const resolvable = deriveOptionalToolAvailability({
+    const unresolved = deriveOptionalToolAvailability({
       authorityRef: { runId, envelopeDigest: DIGEST },
       modelId: "coding-safe-model",
       childModelPortFactory: () => undefined,
     });
+    expect(unresolved.has("keiko_child_agent")).toBe(true);
+
+    const resolvable = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      modelId: "coding-safe-model",
+      childModelPortFactory: () => ({
+        call: (): Promise<never> => Promise.reject(new Error("unused test model")),
+      }),
+    });
     expect(resolvable.has("keiko_child_agent")).toBe(false);
+  });
+
+  it("resolves and reuses one child model port for a run", () => {
+    const model = {
+      call: (): Promise<never> => Promise.reject(new Error("unused test model")),
+    };
+    const factory = vi.fn(() => model);
+    const childModel = resolveChildModelForRun({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      modelId: "coding-safe-model",
+      childModelPortFactory: factory,
+    });
+
+    expect(factory).toHaveBeenCalledOnce();
+    expect(
+      deriveOptionalToolAvailability({
+        authorityRef: { runId, envelopeDigest: DIGEST },
+        ...childModel,
+      }).has("keiko_child_agent"),
+    ).toBe(false);
+    expect(childModel.childModelPortFactory?.("coding-safe-model")).toBe(model);
+    expect(childModel.childModelPortFactory?.("other-model")).toBeUndefined();
+    expect(factory).toHaveBeenCalledOnce();
+  });
+
+  it("fails child-model resolution closed with body-free activity evidence", () => {
+    const events: ServerLogEvent[] = [];
+    const childModel = resolveChildModelForRun({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      modelId: "coding-safe-model",
+      childModelPortFactory: () => {
+        throw new Error("private child configuration failure");
+      },
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+
+    expect(childModel).toEqual({});
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "coding-runtime.tool-availability.failed",
+      correlationId: runId,
+      errorKind: "Error",
+      extra: {
+        runId,
+        optionalTool: "keiko_child_agent",
+        stage: "child-model-resolution",
+        reason: "configuration-resolution-failed",
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain("private child configuration failure");
   });
 });
 

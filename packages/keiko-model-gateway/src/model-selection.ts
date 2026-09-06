@@ -209,7 +209,9 @@ function codingSidecarProjection(
       maxPromptTokens: contextProfile.maxInputTokens,
       maxOutputTokens: contextProfile.reservedOutputTokens,
       maxInputMessages: 64,
-      maxRequestBytes: 64_000,
+      // The wire envelope includes JSON-escaped tool transcripts and schemas. A 64 KB cap
+      // rejected ordinary coding context long before the separate prompt-token ceiling.
+      maxRequestBytes: 1_048_576,
     },
     verification,
   };
