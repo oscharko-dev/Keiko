@@ -795,7 +795,11 @@ export function worktreeSharesRepositoryTrustBasis(
 }
 
 function isRunnableTestFramework(workspace: WorkspaceInfo): boolean {
-  return workspace.testFramework === "vitest" || workspace.testFramework === "jest";
+  return (
+    workspace.testFramework === "vitest" ||
+    workspace.testFramework === "jest" ||
+    workspace.testFramework === "node-test"
+  );
 }
 
 function catalogEntry(

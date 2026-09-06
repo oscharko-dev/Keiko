@@ -111,9 +111,9 @@ interface Invocation {
   readonly args: readonly string[];
 }
 
-// Builds the framework-appropriate invocation that runs ONLY the given test files. vitest and jest
-// both accept positional file paths. Returns undefined for an unknown framework, so no targeted
-// step is added rather than guessing. The `npx <runner> ...` shape passes the #6 allowlist.
+// Builds the framework-appropriate invocation that runs ONLY the given test files. vitest, jest,
+// and Node's native test runner accept positional file paths. Returns undefined for an unknown
+// framework, so no targeted step is added rather than guessing.
 function targetedInvocation(
   workspace: WorkspaceInfo,
   files: readonly string[],
@@ -123,6 +123,9 @@ function targetedInvocation(
   }
   if (workspace.testFramework === "jest") {
     return { command: "npx", args: ["jest", ...files] };
+  }
+  if (workspace.testFramework === "node-test") {
+    return { command: "node", args: ["--test", ...files] };
   }
   return undefined;
 }

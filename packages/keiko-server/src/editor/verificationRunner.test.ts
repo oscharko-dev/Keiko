@@ -817,6 +817,27 @@ describe("VerificationRunnerManager — runToReport shares the human run's lifec
 });
 
 describe("VerificationRunnerManager — catalog + edge cases", () => {
+  it("plans a Node native targeted test instead of reporting no runnable steps", async () => {
+    writeFileSync(
+      join(workspaceRoot, "package.json"),
+      JSON.stringify({ name: "fixture", scripts: { test: "node --test" } }),
+      "utf8",
+    );
+    writeFileSync(join(workspaceRoot, "src", "native.test.js"), "", "utf8");
+    const port = fakePort(report(["targeted-test"]));
+    const manager = makeManager({ execute: port.port });
+
+    await manager.runToReport(
+      input({ kinds: ["targeted-test"], targetPath: "src/native.test.js" }),
+      new AbortController().signal,
+    );
+
+    expect(manager.discover(workspaceRoot).kinds).toContainEqual(
+      expect.objectContaining({ kind: "targeted-test", available: true }),
+    );
+    expect(port.calls).toBe(1);
+  });
+
   it("projects available kinds and trust state; targeted-test is trusted and framework-gated", () => {
     const manager = makeManager();
     const catalog = manager.discover(workspaceRoot);

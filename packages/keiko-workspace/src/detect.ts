@@ -260,6 +260,13 @@ function detectFramework(record: Record<string, unknown>): TestFramework {
   if (names.has("mocha")) {
     return "mocha";
   }
+  if (
+    isRecord(record.scripts) &&
+    Object.hasOwn(record.scripts, "test") &&
+    record.scripts.test === "node --test"
+  ) {
+    return "node-test";
+  }
   return "unknown";
 }
 

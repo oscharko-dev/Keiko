@@ -102,6 +102,21 @@ describe("detectWorkspace", () => {
     expect(detectWorkspace(dir).testFramework).toBe("mocha");
   });
 
+  it("detects only the exact Node native test script", () => {
+    writePkg(dir, { name: "demo", scripts: { test: "node --test" } });
+    expect(detectWorkspace(dir).testFramework).toBe("node-test");
+
+    for (const test of [
+      "node --test --watch",
+      "node --test tests/a.test.js",
+      "node --eval test",
+      "node --test; echo unsafe",
+    ]) {
+      writePkg(dir, { name: "demo", scripts: { test } });
+      expect(detectWorkspace(dir).testFramework).toBe("unknown");
+    }
+  });
+
   it("returns unknown framework when none is declared", () => {
     writePkg(dir, { name: "demo" });
     expect(detectWorkspace(dir).testFramework).toBe("unknown");
