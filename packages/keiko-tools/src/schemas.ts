@@ -1,8 +1,22 @@
 // Finite legacy-native transport materialization. Canonical descriptors own every schema.
 import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
-import { createInitialToolCatalog, gatewayToolDefinitions } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  compileToolProjection,
+  computeHandlerSetDigest,
+  createInitialToolCatalog,
+  gatewayToolDefinitions,
+} from "@oscharko-dev/keiko-tool-catalog";
 
-export const TOOL_DEFINITIONS: readonly ToolDefinition[] = gatewayToolDefinitions(
-  createInitialToolCatalog(),
-  { id: "legacy-native", version: 1 },
-);
+const CATALOG = createInitialToolCatalog();
+const PROFILE = { id: "legacy-native", version: 1 } as const;
+const PROJECTION = compileToolProjection(CATALOG, PROFILE);
+
+export const TOOL_DEFINITIONS: readonly ToolDefinition[] = gatewayToolDefinitions(CATALOG, PROFILE);
+
+/** Canonical dry-run projection with an intentionally empty productive handler set. */
+export const UNAVAILABLE_TOOL_CATALOG_BINDING = Object.freeze({
+  catalogRevision: CATALOG.catalogRevision,
+  profile: PROJECTION.profile,
+  projectionDigest: PROJECTION.projectionDigest,
+  handlerSetDigest: computeHandlerSetDigest(PROJECTION.projectionDigest, []),
+});

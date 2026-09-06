@@ -5,6 +5,7 @@ import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/k
 import { EvidenceWriteError } from "@oscharko-dev/keiko-evidence";
 import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { writeToolCatalogQualificationObservation } from "../../../scripts/lib/tool-catalog-qualification-observation.mjs";
 
 // Replace every filesystem write entry point with a throwing stub. With these mocked, any code path
 // that touched the disk would throw. The run command now writes evidence by DEFAULT, so the tests
@@ -317,6 +318,7 @@ describe("runAgentCli dry-run", () => {
       expect(capturedDeps).toHaveLength(1);
       const deps = capturedDeps[0];
       expect(deps).not.toHaveProperty("bindToolCatalog");
+      expect(deps?.tools).toBeInstanceOf(actualHarness.DryRunToolPort);
       const advertised = deps?.tools.listTools() ?? [];
       expect(advertised.length).toBeGreaterThan(0);
       const first = advertised[0];
@@ -329,6 +331,16 @@ describe("runAgentCli dry-run", () => {
           signal: new AbortController().signal,
         }),
       ).rejects.toThrow("unavailable");
+      writeToolCatalogQualificationObservation({
+        consumer: "cli-server-sdk",
+        component: "cli",
+        binding: (
+          deps?.tools as InstanceType<typeof actualHarness.DryRunToolPort>
+        ).catalogBinding(),
+        terminalStatus: "unavailable",
+        settlementCount: 0,
+        proof: { kind: "closed-unavailable" },
+      });
     } finally {
       vi.doUnmock("@oscharko-dev/keiko-harness");
       vi.resetModules();

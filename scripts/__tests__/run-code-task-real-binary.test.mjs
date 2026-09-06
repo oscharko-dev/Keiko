@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -13,10 +21,12 @@ import {
   missingRealBinaryEvidence,
   readGatewayObservation,
   readH1SearchEvidence,
+  readManagedCatalogEvidence,
   retainJourneyActivityLog,
   processIdsForExecutable,
   readMaterializedLimits,
   realBinaryEvidenceComplete,
+  writeManagedCatalogObservation,
 } from "../run-code-task-real-binary.mjs";
 
 const H1_SEARCH = {
@@ -30,6 +40,23 @@ const H1_SEARCH = {
   readTargetDerivedFromResult: true,
 };
 const ACTIVITY_LOG = { status: "retained", sha256: "c".repeat(64) };
+const CATALOG_BINDING = {
+  catalogRevision: "d".repeat(64),
+  profile: { id: "opencode", version: 1 },
+  projectionDigest: "e".repeat(64),
+  handlerSetDigest: "f".repeat(64),
+};
+const MANAGED_CATALOG = {
+  binding: CATALOG_BINDING,
+  correlationId: "real-binary-correlation",
+  settlementCount: 3,
+  proof: {
+    kind: "managed-search-read",
+    searchSettled: true,
+    boundedReadSettled: true,
+    causalHandoff: true,
+  },
+};
 
 /**
  * Whether `candidate` really lives under `root`, separator-aware.
@@ -155,6 +182,7 @@ describe("#2483 real-binary observation helpers", () => {
       },
       missingPayload: { passed: true, unavailableReason: "payload-missing" },
       h1Search: H1_SEARCH,
+      managedCatalog: MANAGED_CATALOG,
       activityLog: ACTIVITY_LOG,
     };
 
@@ -178,6 +206,7 @@ describe("#2483 real-binary observation helpers", () => {
       },
       missingPayload: { passed: true, unavailableReason: "payload-missing" },
       h1Search: H1_SEARCH,
+      managedCatalog: MANAGED_CATALOG,
       activityLog: ACTIVITY_LOG,
     };
 
@@ -214,6 +243,46 @@ describe("#2483 real-binary observation helpers", () => {
     ).toEqual(["payload-missing probe reported runtime-unqualified"]);
   });
 
+  it("writes managed qualification only after the whole real-binary journey is complete", () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-managed-observation-"));
+    const complete = {
+      journey: { exitCode: 0 },
+      limits: {
+        materializedChildLimits: [{ context: 32_768, output: 4_096 }],
+        gatewayRequestCount: 1,
+        observedGatewayOutputTokenLimits: [4_096],
+      },
+      missingPayload: { passed: true, unavailableReason: "payload-missing" },
+      h1Search: H1_SEARCH,
+      managedCatalog: MANAGED_CATALOG,
+      activityLog: ACTIVITY_LOG,
+    };
+    process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_DIR = directory;
+    process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_HEAD = "1".repeat(40);
+    try {
+      expect(writeManagedCatalogObservation({ ...complete, h1Search: undefined })).toBe(false);
+      expect(readdirSync(directory)).toEqual([]);
+      expect(writeManagedCatalogObservation(complete)).toBe(true);
+      expect(
+        JSON.parse(
+          readFileSync(
+            join(directory, "managed-opencode.managed-opencode.observation.json"),
+            "utf8",
+          ),
+        ),
+      ).toMatchObject({
+        component: "managed-opencode",
+        binding: CATALOG_BINDING,
+        settlementCount: 3,
+        proof: MANAGED_CATALOG.proof,
+      });
+    } finally {
+      delete process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_DIR;
+      delete process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_HEAD;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("reports every gap at once rather than only the first", () => {
     const gaps = missingRealBinaryEvidence({
       journey: { exitCode: 1 },
@@ -225,7 +294,7 @@ describe("#2483 real-binary observation helpers", () => {
       missingPayload: undefined,
     });
 
-    expect(gaps).toHaveLength(7);
+    expect(gaps).toHaveLength(8);
     expect(gaps).toContain("no useful H1 search-to-read result evidence");
   });
 
@@ -270,12 +339,77 @@ describe("#2483 real-binary observation helpers", () => {
       JSON.stringify({ requestCount: 3, outputTokenLimits: [4096, "x", 8192] }),
     );
 
-    expect(readGatewayObservation(absent)).toEqual({ requestCount: 0, outputTokenLimits: [] });
+    expect(readGatewayObservation(absent)).toEqual({
+      requestCount: 0,
+      outputTokenLimits: [],
+      catalogBinding: undefined,
+      catalogBindingRequestCount: 0,
+    });
     // Non-integer entries are dropped rather than admitted into the evidence.
     expect(readGatewayObservation(partial)).toEqual({
       requestCount: 3,
       outputTokenLimits: [4096, 8192],
+      catalogBinding: undefined,
+      catalogBindingRequestCount: 0,
     });
+  });
+
+  it("joins actual gateway binding to successful search and derived bounded-read settlements", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-managed-catalog-"));
+    const logPath = join(stateDir, "activity", "logs", "server.log");
+    const correlationId = "real-binary-correlation";
+    const settled = (canonicalId, invocationId, status = "completed") => ({
+      op: "tool-catalog.invocation-settled",
+      correlationId,
+      invocationId,
+      status,
+      toolRef: { canonicalId, contractVersion: 1 },
+      catalogRevision: CATALOG_BINDING.catalogRevision,
+      profile: CATALOG_BINDING.profile,
+      projectionDigest: CATALOG_BINDING.projectionDigest,
+    });
+    try {
+      mkdirSync(dirname(logPath), { recursive: true });
+      writeFileSync(
+        logPath,
+        [
+          settled("keiko.repo.search", "search-invocation"),
+          settled("keiko.workspace.edit", "edit-invocation"),
+          settled("keiko.workspace.read", "read-invocation"),
+        ]
+          .map((event) => JSON.stringify(event))
+          .join("\n"),
+      );
+      const gateway = {
+        requestCount: 4,
+        outputTokenLimits: [4096],
+        catalogBinding: CATALOG_BINDING,
+        catalogBindingRequestCount: 4,
+      };
+
+      expect(readManagedCatalogEvidence(stateDir, gateway, H1_SEARCH)).toEqual(MANAGED_CATALOG);
+      expect(
+        readManagedCatalogEvidence(
+          stateDir,
+          { ...gateway, catalogBindingRequestCount: 3 },
+          H1_SEARCH,
+        ),
+      ).toBeUndefined();
+      writeFileSync(
+        logPath,
+        [
+          settled("keiko.workspace.read", "read-invocation"),
+          settled("keiko.repo.search", "search-invocation"),
+        ]
+          .map((event) => JSON.stringify(event))
+          .join("\n"),
+      );
+      expect(readManagedCatalogEvidence(stateDir, gateway, H1_SEARCH)).toBeUndefined();
+      writeFileSync(logPath, '{"op":"tool-catalog.invocation-settled"\n');
+      expect(readManagedCatalogEvidence(stateDir, gateway, H1_SEARCH)).toBeUndefined();
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("derives a run-scoped journey context without leaking it into the repository", () => {
@@ -306,6 +440,7 @@ describe("#2483 real-binary observation helpers", () => {
       limits: [{ context: 32_768, output: 4_096 }],
       missingPayload: { passed: true, unavailableReason: "payload-missing" },
       h1Search: H1_SEARCH,
+      managedCatalog: MANAGED_CATALOG,
       activityLog: ACTIVITY_LOG,
       observer: createNetworkObserver("/nonexistent/opencode"),
       target: "macos-arm64",

@@ -22,10 +22,17 @@ import { clearInterval, setInterval } from "node:timers";
 import { fileURLToPath } from "node:url";
 
 import { hostDevLaneTarget } from "./stage-dev-coding-runtime.mjs";
+import {
+  captureToolCatalogQualificationBinding,
+  validToolCatalogQualificationOutcome,
+  writeToolCatalogQualificationObservation,
+} from "./lib/tool-catalog-qualification-observation.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const MAX_DISTINCT_CONNECTIONS = 4_096;
+const MAX_ACTIVITY_LOG_BYTES = 32 * 1_024 * 1_024;
 const REAL_BINARY_VERSION = "1.17.17";
+const EVIDENCE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 
 // Absolute, fixed system paths — never a bare name resolved through PATH. This runner samples
 // process and socket facts on a developer or CI machine whose PATH may contain writable
@@ -172,14 +179,26 @@ function runPlaywright(env, observer, limitObserver) {
 }
 
 export function readGatewayObservation(path) {
-  if (!existsSync(path)) return { requestCount: 0, outputTokenLimits: [] };
-  const parsed = JSON.parse(readFileSync(path, "utf8"));
-  return {
-    requestCount: Number(parsed.requestCount ?? 0),
-    outputTokenLimits: Array.isArray(parsed.outputTokenLimits)
-      ? parsed.outputTokenLimits.filter((value) => Number.isSafeInteger(value))
-      : [],
+  const empty = {
+    requestCount: 0,
+    outputTokenLimits: [],
+    catalogBinding: undefined,
+    catalogBindingRequestCount: 0,
   };
+  if (!existsSync(path)) return empty;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    return {
+      requestCount: Number(parsed.requestCount ?? 0),
+      outputTokenLimits: Array.isArray(parsed.outputTokenLimits)
+        ? parsed.outputTokenLimits.filter((value) => Number.isSafeInteger(value))
+        : [],
+      catalogBinding: captureToolCatalogQualificationBinding(parsed.catalogBinding),
+      catalogBindingRequestCount: Number(parsed.catalogBindingRequestCount ?? 0),
+    };
+  } catch {
+    return empty;
+  }
 }
 
 function materializedConfigPaths(stateDir) {
@@ -330,6 +349,7 @@ export function buildJourneyReport(input) {
     egress: input.observer.report(),
     missingPayload: input.missingPayload,
     h1Search: input.h1Search,
+    managedCatalog: input.managedCatalog,
     activityLog: input.activityLog,
   };
 }
@@ -383,6 +403,139 @@ export function readH1SearchEvidence(stateDir) {
   };
 }
 
+function readActivityRecords(stateDir) {
+  const path = join(stateDir, "activity", "logs", "server.log");
+  if (!existsSync(path) || statSync(path).size > MAX_ACTIVITY_LOG_BYTES) return undefined;
+  const records = readFileSync(path, "utf8")
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      try {
+        const value = JSON.parse(line);
+        return value !== null && typeof value === "object" ? value : undefined;
+      } catch {
+        return undefined;
+      }
+    });
+  return records.some((value) => value === undefined) ? undefined : records;
+}
+
+function catalogSettlement(value, expectedBinding) {
+  const toolRef = value.toolRef;
+  const valid = [
+    value.op === "tool-catalog.invocation-settled",
+    typeof value.correlationId === "string" && EVIDENCE_ID.test(value.correlationId),
+    toolRef !== null && typeof toolRef === "object",
+    typeof toolRef?.canonicalId === "string" && EVIDENCE_ID.test(toolRef.canonicalId),
+    typeof value.status === "string",
+    typeof value.invocationId === "string" && EVIDENCE_ID.test(value.invocationId),
+  ].every(Boolean);
+  if (!valid) {
+    return undefined;
+  }
+  const binding = captureToolCatalogQualificationBinding({
+    catalogRevision: value.catalogRevision,
+    profile: value.profile,
+    projectionDigest: value.projectionDigest,
+    handlerSetDigest: expectedBinding.handlerSetDigest,
+  });
+  if (binding === undefined) return undefined;
+  return {
+    correlationId: value.correlationId,
+    invocationId: value.invocationId,
+    status: value.status,
+    canonicalId: value.toolRef.canonicalId,
+    catalogRevision: binding.catalogRevision,
+    profile: binding.profile,
+    projectionDigest: binding.projectionDigest,
+  };
+}
+
+function removeJourneyState(context) {
+  rmSync(context.stateDir, { recursive: true, force: true });
+  rmSync(context.probeState, { recursive: true, force: true });
+}
+
+function settlementUsesBinding(settlement, binding) {
+  return (
+    settlement.catalogRevision === binding.catalogRevision &&
+    settlement.profile.id === binding.profile.id &&
+    settlement.profile.version === binding.profile.version &&
+    settlement.projectionDigest === binding.projectionDigest
+  );
+}
+
+function completedToolIndex(settlements, canonicalId, after = -1) {
+  return settlements.findIndex(
+    (settlement, index) =>
+      index > after && settlement.status === "completed" && settlement.canonicalId === canonicalId,
+  );
+}
+
+export function readManagedCatalogEvidence(stateDir, gateway, h1Search) {
+  const binding = captureToolCatalogQualificationBinding(gateway.catalogBinding);
+  if (
+    binding === undefined ||
+    gateway.requestCount <= 0 ||
+    gateway.catalogBindingRequestCount !== gateway.requestCount ||
+    !validH1SearchEvidence(h1Search)
+  ) {
+    return undefined;
+  }
+  const activity = readActivityRecords(stateDir);
+  if (activity === undefined) return undefined;
+  const terminalRecords = activity.filter(
+    (value) => value.op === "tool-catalog.invocation-settled",
+  );
+  const settlements = terminalRecords.flatMap((value) => {
+    const captured = catalogSettlement(value, binding);
+    return captured === undefined ? [] : [captured];
+  });
+  if (settlements.length !== terminalRecords.length) return undefined;
+  const correlations = [...new Set(settlements.map(({ correlationId }) => correlationId))];
+  const candidates = correlations.flatMap((correlationId) => {
+    const scoped = settlements.filter((item) => item.correlationId === correlationId);
+    if (
+      !scoped.every((item) => settlementUsesBinding(item, binding)) ||
+      new Set(scoped.map(({ invocationId }) => invocationId)).size !== scoped.length
+    ) {
+      return [];
+    }
+    const search = completedToolIndex(scoped, "keiko.repo.search");
+    const read = completedToolIndex(scoped, "keiko.workspace.read", search);
+    if (search < 0 || read < 0) return [];
+    return [{ correlationId, settlementCount: scoped.length }];
+  });
+  if (candidates.length !== 1) return undefined;
+  const candidate = candidates[0];
+  return {
+    binding,
+    correlationId: candidate.correlationId,
+    settlementCount: candidate.settlementCount,
+    proof: {
+      kind: "managed-search-read",
+      searchSettled: true,
+      boundedReadSettled: true,
+      causalHandoff: true,
+    },
+  };
+}
+
+function validManagedCatalogEvidence(value) {
+  return (
+    value !== undefined &&
+    captureToolCatalogQualificationBinding(value.binding) !== undefined &&
+    typeof value.correlationId === "string" &&
+    EVIDENCE_ID.test(value.correlationId) &&
+    validToolCatalogQualificationOutcome(
+      "managed-opencode",
+      "completed",
+      value.settlementCount,
+      value.proof,
+    )
+  );
+}
+
 /**
  * Names every observation the evidence predicate requires but the report does not carry. Empty means
  * the report is complete; the list is the operator-facing explanation of a failed run.
@@ -402,6 +555,9 @@ export function missingRealBinaryEvidence(report) {
   gaps.push(...missingPayloadEvidence(report.missingPayload));
   if (!validH1SearchEvidence(report.h1Search))
     gaps.push("no useful H1 search-to-read result evidence");
+  if (!validManagedCatalogEvidence(report.managedCatalog)) {
+    gaps.push("no stable managed catalog binding with completed search and bounded read");
+  }
   if (!hasRetainedActivity(report)) gaps.push("no retained canonical activity log");
   return gaps;
 }
@@ -427,8 +583,30 @@ export function realBinaryEvidenceComplete(report) {
     report.missingPayload?.passed === true &&
     report.missingPayload.unavailableReason === "payload-missing" &&
     validH1SearchEvidence(report.h1Search) &&
+    validManagedCatalogEvidence(report.managedCatalog) &&
     hasRetainedActivity(report)
   );
+}
+
+export function writeManagedCatalogObservation(report) {
+  if (!realBinaryEvidenceComplete(report)) return false;
+  writeToolCatalogQualificationObservation({
+    consumer: "managed-opencode",
+    component: "managed-opencode",
+    binding: report.managedCatalog.binding,
+    terminalStatus: "completed",
+    settlementCount: report.managedCatalog.settlementCount,
+    proof: report.managedCatalog.proof,
+  });
+  return true;
+}
+
+function reportMissingEvidence(report) {
+  if (realBinaryEvidenceComplete(report)) return;
+  for (const gap of missingRealBinaryEvidence(report)) {
+    console.error(`[code-task-real-binary] incomplete evidence: ${gap}`);
+  }
+  process.exitCode = 1;
 }
 
 export async function runRealBinaryJourney() {
@@ -454,30 +632,28 @@ export async function runRealBinaryJourney() {
   );
   const missingPayload =
     exitCode === 0 ? runMissingPayloadProbe(target, context.probeState) : undefined;
+  const gateway = readGatewayObservation(context.gatewayObservation);
+  const h1Search = readH1SearchEvidence(context.stateDir);
+  const managedCatalog = readManagedCatalogEvidence(context.stateDir, gateway, h1Search);
   const activityLog = retainJourneyActivityLog(context);
   const report = buildJourneyReport({
     context,
     exitCode,
-    gateway: readGatewayObservation(context.gatewayObservation),
+    gateway,
     limits: limitObserver.report(),
     missingPayload,
-    h1Search: readH1SearchEvidence(context.stateDir),
+    h1Search,
+    managedCatalog,
     activityLog,
     observer,
     target,
     wallClockMs: Date.now() - startedAt,
   });
   writeEvidence(context.evidencePath, report);
-  rmSync(context.stateDir, { recursive: true, force: true });
-  rmSync(context.probeState, { recursive: true, force: true });
-  if (!realBinaryEvidenceComplete(report)) {
-    // Name the missing observation. A bare nonzero exit forces the next reader to diff the evidence
-    // file against the predicate by hand to learn which half of the proof did not hold.
-    for (const gap of missingRealBinaryEvidence(report)) {
-      console.error(`[code-task-real-binary] incomplete evidence: ${gap}`);
-    }
-    process.exitCode = 1;
-  }
+  writeManagedCatalogObservation(report);
+  removeJourneyState(context);
+  // A bare nonzero exit forces the next reader to diff the evidence file against the predicate.
+  reportMissingEvidence(report);
   return report;
 }
 

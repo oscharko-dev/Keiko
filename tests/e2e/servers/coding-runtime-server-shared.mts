@@ -656,14 +656,60 @@ function journeyScript(config: CodingRuntimeJourneyServerConfig, stateDir: strin
   };
 }
 
-function gatewayObserver(): ((request: GatewayRequest) => void) | undefined {
+interface ObservedGatewayCatalogBinding {
+  readonly catalogRevision: string;
+  readonly profile: { readonly id: string; readonly version: number };
+  readonly projectionDigest: string;
+  readonly handlerSetDigest: string;
+}
+
+function observedGatewayCatalogBinding(
+  request: GatewayRequest,
+): ObservedGatewayCatalogBinding | undefined {
+  const binding = request.toolCatalog?.offered.binding;
+  if (binding === undefined) return undefined;
+  return {
+    catalogRevision: binding.catalogRevision,
+    profile: { id: binding.profile.id, version: binding.profile.version },
+    projectionDigest: binding.projectionDigest,
+    handlerSetDigest: binding.handlerSetDigest,
+  };
+}
+
+function sameGatewayCatalogBinding(
+  left: ObservedGatewayCatalogBinding,
+  right: ObservedGatewayCatalogBinding,
+): boolean {
+  return (
+    left.catalogRevision === right.catalogRevision &&
+    left.profile.id === right.profile.id &&
+    left.profile.version === right.profile.version &&
+    left.projectionDigest === right.projectionDigest &&
+    left.handlerSetDigest === right.handlerSetDigest
+  );
+}
+
+export function gatewayObserver(): ((request: GatewayRequest) => void) | undefined {
   const outputPath = process.env.KEIKO_2483_GATEWAY_OBSERVATION_PATH;
   if (outputPath === undefined || outputPath.length === 0) return undefined;
   let requestCount = 0;
+  let catalogBindingRequestCount = 0;
+  let catalogBinding: ObservedGatewayCatalogBinding | undefined;
   const outputLimits = new Set<number>();
   return (request): void => {
     requestCount += 1;
     if (request.maxOutputTokens !== undefined) outputLimits.add(request.maxOutputTokens);
+    const observedBinding = observedGatewayCatalogBinding(request);
+    if (observedBinding !== undefined) {
+      if (
+        catalogBinding !== undefined &&
+        !sameGatewayCatalogBinding(catalogBinding, observedBinding)
+      ) {
+        throw new TypeError("Real-binary gateway catalog binding changed during one journey");
+      }
+      catalogBinding = observedBinding;
+      catalogBindingRequestCount += 1;
+    }
     mkdirSync(dirname(outputPath), { recursive: true, mode: 0o700 });
     writeFileSync(
       outputPath,
@@ -671,6 +717,8 @@ function gatewayObserver(): ((request: GatewayRequest) => void) | undefined {
         schemaVersion: 1,
         requestCount,
         outputTokenLimits: [...outputLimits].sort((left, right) => left - right),
+        catalogBinding: catalogBinding ?? null,
+        catalogBindingRequestCount,
         contentFieldsRecorded: false,
       })}\n`,
       { mode: 0o600 },

@@ -20,7 +20,7 @@ import {
   type NormalizedResponse,
   type ToolDefinition,
 } from "@oscharko-dev/keiko-model-gateway";
-import { TOOL_DEFINITIONS } from "@oscharko-dev/keiko-tools";
+import { TOOL_DEFINITIONS, UNAVAILABLE_TOOL_CATALOG_BINDING } from "@oscharko-dev/keiko-tools";
 import { HarnessCatalogError } from "./catalog-errors.js";
 import { HARNESS_CODES } from "./errors.js";
 import type { ModelPort, ToolCallRequest, ToolCallResult, ToolPort } from "./ports.js";
@@ -67,7 +67,19 @@ export interface RecordedToolCall {
   readonly arguments: Record<string, unknown>;
 }
 
+export interface DryRunCatalogBinding {
+  readonly catalogRevision: string;
+  readonly profile: { readonly id: string; readonly version: number };
+  readonly projectionDigest: string;
+  readonly handlerSetDigest: string;
+}
+
 export class DryRunToolPort implements ToolPort {
+  /** Body-free identity of this port's canonical projection and deliberately empty handler set. */
+  catalogBinding(): DryRunCatalogBinding {
+    return UNAVAILABLE_TOOL_CATALOG_BINDING;
+  }
+
   execute(request: ToolCallRequest): Promise<ToolCallResult> {
     if (request.signal.aborted) {
       return Promise.reject(new CancelledError("tool execution aborted before start"));

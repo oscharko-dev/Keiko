@@ -11,16 +11,46 @@ import {
   buildToolCatalogCloseout,
   validateToolCatalogCloseout,
   CATALOG_CLOSEOUT_CHECKS,
+  CATALOG_CLOSEOUT_CONSUMER_PROOF_COUNTS,
   CATALOG_CLOSEOUT_CONSUMERS,
   catalogCloseoutHead,
   readCatalogCloseoutReceipts,
   requireExternalManifest,
 } from "../check-tool-catalog-closeout.mjs";
+import { TOOL_CATALOG_QUALIFICATION_PACKAGES } from "../lib/tool-catalog-qualification-observation.mjs";
 
 const roots = [];
+const UNAVAILABLE_COMPONENTS = new Set(["cli", "server", "sdk"]);
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+
+function fixtureComponents(id, consumer) {
+  if (!consumer) return null;
+  const components = id === "cli-server-sdk" ? [...UNAVAILABLE_COMPONENTS] : [id];
+  return components.map((component) => {
+    if (id === "managed-opencode")
+      return {
+        component,
+        terminalStatus: "completed",
+        settlementCount: 2,
+        proof: {
+          kind: "managed-search-read",
+          searchSettled: true,
+          boundedReadSettled: true,
+          causalHandoff: true,
+        },
+      };
+    const unavailable = UNAVAILABLE_COMPONENTS.has(component);
+    return {
+      component,
+      terminalStatus: unavailable ? "unavailable" : "completed",
+      settlementCount: unavailable ? 0 : 1,
+      proof: { kind: unavailable ? "closed-unavailable" : "single-settlement" },
+    };
+  });
+}
+
 async function fixture() {
   const producer = await generatedToolCatalogManifest();
   const binding = {
@@ -57,10 +87,19 @@ async function fixture() {
             ? "production-composition"
             : "qualification-gate",
       status: "passed",
-      passed: 1,
+      passed: consumer ? CATALOG_CLOSEOUT_CONSUMER_PROOF_COUNTS[id] : 1,
       failed: 0,
       skipped: 0,
       binding: consumer ? binding : null,
+      components: fixtureComponents(id, consumer),
+      packages: consumer
+        ? TOOL_CATALOG_QUALIFICATION_PACKAGES[id].map((name) => ({
+            name,
+            archiveDigest: sha256(`${name} archive`),
+            fileCount: 1,
+            filesDigest: sha256(`${name} files`),
+          }))
+        : null,
     };
     reports.set(id, structuredClone(report));
     writeFileSync(join(root, `${id}.artifact`), JSON.stringify(report));
@@ -205,6 +244,11 @@ describe("exact-head catalog closeout artifact", () => {
       Object.assign(f.reports.get("editor"), mutation);
       expect(() => check(f)).toThrow();
     }
+  });
+  it("rejects a grouped consumer report that omits a production component", async () => {
+    const f = await fixture();
+    f.reports.get("cli-server-sdk").passed = 2;
+    expect(() => check(f)).toThrow("cli-server-sdk has incomplete executed proof");
   });
   it("rejects an H1 handler binding that differs from actual consumer evidence", async () => {
     const f = await fixture();

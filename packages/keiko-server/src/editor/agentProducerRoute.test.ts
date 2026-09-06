@@ -41,6 +41,7 @@ import { validateCodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-co
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { GatewayCallRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import { createToolInvocationNormalizer } from "@oscharko-dev/keiko-tool-catalog";
+import { writeToolCatalogQualificationObservation } from "../../../../scripts/lib/tool-catalog-qualification-observation.mjs";
 import {
   createFetchEditorAgentHttpTransport,
   DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS,
@@ -442,6 +443,25 @@ async function postProducerTurn(
   return { status: response.status, body };
 }
 
+function writeEditorQualificationObservation(
+  binding: ProducerTurnResponse["body"]["catalog"],
+): void {
+  if (binding === undefined) throw new TypeError("Missing editor catalog binding");
+  writeToolCatalogQualificationObservation({
+    consumer: "editor",
+    component: "editor",
+    binding: {
+      catalogRevision: binding.catalogRevision,
+      profile: binding.profile,
+      projectionDigest: binding.projectionDigest,
+      handlerSetDigest: binding.handlerSetDigest,
+    },
+    terminalStatus: "completed",
+    settlementCount: 1,
+    proof: { kind: "single-settlement" },
+  });
+}
+
 // Asserts the producer genuinely reached a SUCCEEDED dispatch, not merely an invoked-but-conflicted
 // one (e.g. NO_ACTIVE_SESSION still counts as an invoked, completed harness tool call).
 //
@@ -554,6 +574,7 @@ describe("editor-agent producer turn reachability (#2489 Findings 1/2)", () => {
       effectStarted: true,
       budgetDisposition: "committed",
     });
+    writeEditorQualificationObservation(response.body.catalog);
   });
 
   it("drives editor_search_workspace to real production dispatch", async () => {

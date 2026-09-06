@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DryRunToolPort, MemoryEventSink } from "@oscharko-dev/keiko-harness";
 import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import { runAgent } from "./run-agent.js";
+import { writeToolCatalogQualificationObservation } from "../../../scripts/lib/tool-catalog-qualification-observation.mjs";
 
 describe("SDK native catalog readiness", () => {
   it("keeps the real default session unavailable and advertises no productive tools", async () => {
@@ -42,7 +43,27 @@ describe("SDK native catalog readiness", () => {
     expect((await session.result).outcome).toBe("completed");
     expect(requests[0]).not.toHaveProperty("tools");
     expect(requests[0]).not.toHaveProperty("toolCatalog");
-    expect(execute).not.toHaveBeenCalled();
+    const advertised = tools.listTools();
+    expect(advertised.length).toBeGreaterThan(0);
+    const first = advertised[0];
+    if (first === undefined) throw new TypeError("Expected an advertised legacy tool");
+    await expect(
+      tools.execute({
+        toolCallId: "tc-sdk-dry-run",
+        toolName: first.name,
+        arguments: {},
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("unavailable");
+    expect(execute).toHaveBeenCalledTimes(1);
     expect(bindToolCatalog).not.toHaveBeenCalled();
+    writeToolCatalogQualificationObservation({
+      consumer: "cli-server-sdk",
+      component: "sdk",
+      binding: tools.catalogBinding(),
+      terminalStatus: "unavailable",
+      settlementCount: 0,
+      proof: { kind: "closed-unavailable" },
+    });
   });
 });

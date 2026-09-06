@@ -24,6 +24,7 @@ import { editorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js
 import type { VerificationReport } from "@oscharko-dev/keiko-verification";
 import type { NetworkIsolationProbe } from "./editor/verificationExecution.js";
 import { closeFileServerLogSinks } from "./observability/index.js";
+import { writeToolCatalogQualificationObservation } from "../../../scripts/lib/tool-catalog-qualification-observation.mjs";
 
 const REJECT_MODEL: ModelPort = {
   call: (): Promise<NormalizedResponse> =>
@@ -421,6 +422,7 @@ describe("startRun explain-plan dispatch", () => {
       expect(capturedDeps).toHaveLength(1);
       const deps = capturedDeps[0];
       expect(deps).not.toHaveProperty("bindToolCatalog");
+      expect(deps?.tools).toBeInstanceOf(actualHarness.DryRunToolPort);
       const advertised = deps?.tools.listTools() ?? [];
       expect(advertised.length).toBeGreaterThan(0);
       const first = advertised[0];
@@ -433,6 +435,16 @@ describe("startRun explain-plan dispatch", () => {
           signal: new AbortController().signal,
         }),
       ).rejects.toThrow("unavailable");
+      writeToolCatalogQualificationObservation({
+        consumer: "cli-server-sdk",
+        component: "server",
+        binding: (
+          deps?.tools as InstanceType<typeof actualHarness.DryRunToolPort>
+        ).catalogBinding(),
+        terminalStatus: "unavailable",
+        settlementCount: 0,
+        proof: { kind: "closed-unavailable" },
+      });
     } finally {
       vi.doUnmock("@oscharko-dev/keiko-harness");
       vi.resetModules();

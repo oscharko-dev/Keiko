@@ -17,6 +17,11 @@ import { sha256File } from "./lib/digest.mjs";
 import { REQUIRED_INTERFACE_FIELDS } from "./lib/governed-tool-contract-shape.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
+import {
+  TOOL_CATALOG_QUALIFICATION_COMPONENTS,
+  TOOL_CATALOG_QUALIFICATION_PACKAGES,
+  validToolCatalogQualificationOutcome,
+} from "./lib/tool-catalog-qualification-observation.mjs";
 
 export const CATALOG_CLOSEOUT_CONSUMERS = Object.freeze([
   "native-harness-gateway",
@@ -25,6 +30,13 @@ export const CATALOG_CLOSEOUT_CONSUMERS = Object.freeze([
   "read-only-child",
   "editor",
 ]);
+export const CATALOG_CLOSEOUT_CONSUMER_PROOF_COUNTS = Object.freeze({
+  "native-harness-gateway": 1,
+  "cli-server-sdk": 3,
+  "managed-opencode": 1,
+  "read-only-child": 1,
+  editor: 1,
+});
 export const CATALOG_CLOSEOUT_CHECKS = Object.freeze([
   ...CATALOG_CLOSEOUT_CONSUMERS,
   "catalog-conformance",
@@ -101,6 +113,8 @@ function validateReport(id, report, context) {
     "failed",
     "skipped",
     "binding",
+    "components",
+    "packages",
   ]);
   requireEvidence(report.schemaVersion === 1 && report.status === "passed", `${id} did not pass`);
   requireEvidence(report.currentHead === context.currentHead, `${id} has stale currentHead`);
@@ -119,12 +133,65 @@ function validateReport(id, report, context) {
   if (consumer) {
     for (const field of ["artifactDigest", "platform", "runtime"])
       requireEvidence(isDeepStrictEqual(report[field], context[field]), `${id} has stale ${field}`);
-    requireEvidence(report.passed > 0, `${id} has no executed proof`);
+    requireEvidence(
+      report.passed === CATALOG_CLOSEOUT_CONSUMER_PROOF_COUNTS[id],
+      `${id} has incomplete executed proof`,
+    );
     validateBinding(report.binding);
+    validateConsumerComponents(id, report.components);
+    validateConsumerPackages(id, report.packages);
   } else validateGateReport(id, report, context);
+}
+function validateConsumerComponents(consumer, components) {
+  requireEvidence(Array.isArray(components), `${consumer} has no component proof`);
+  const expected = TOOL_CATALOG_QUALIFICATION_COMPONENTS[consumer];
+  requireEvidence(expected !== undefined, `${consumer} has no component inventory`);
+  requireEvidence(
+    isDeepStrictEqual(
+      components.map((entry) => entry.component).sort(compareStrings),
+      [...expected].sort(compareStrings),
+    ),
+    `${consumer} has incomplete component proof`,
+  );
+  for (const entry of components) {
+    exactFields(entry, ["component", "terminalStatus", "settlementCount", "proof"]);
+    requireEvidence(
+      validToolCatalogQualificationOutcome(
+        entry.component,
+        entry.terminalStatus,
+        entry.settlementCount,
+        entry.proof,
+      ),
+      `${consumer} has invalid component proof`,
+    );
+  }
+}
+function validateConsumerPackages(consumer, packages) {
+  requireEvidence(Array.isArray(packages), `${consumer} has no packaged proof`);
+  const expected = TOOL_CATALOG_QUALIFICATION_PACKAGES[consumer];
+  requireEvidence(expected !== undefined, `${consumer} has no packaged inventory`);
+  requireEvidence(
+    isDeepStrictEqual(
+      packages.map((entry) => entry.name),
+      expected,
+    ),
+    `${consumer} has incomplete packaged proof`,
+  );
+  for (const entry of packages) {
+    exactFields(entry, ["name", "archiveDigest", "fileCount", "filesDigest"]);
+    requireEvidence(
+      DIGEST.test(entry.archiveDigest) &&
+        DIGEST.test(entry.filesDigest) &&
+        Number.isSafeInteger(entry.fileCount) &&
+        entry.fileCount > 0,
+      `${consumer} has invalid packaged proof`,
+    );
+  }
 }
 function validateGateReport(id, report, context) {
   requireEvidence(report.binding === null, `${id} has unexpected binding metadata`);
+  requireEvidence(report.components === null, `${id} has unexpected component proof`);
+  requireEvidence(report.packages === null, `${id} has unexpected packaged proof`);
   // Hosted Linux checks qualify source. Preserve their actual runtime and platform; never relabel
   // them as a locally tested package or manufacture a package digest they did not inspect.
   requireEvidence(

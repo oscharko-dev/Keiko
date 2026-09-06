@@ -6,6 +6,10 @@ import {
   CHILD_WORKSPACE_READ_ALIAS,
   createToolInvocationNormalizer,
 } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  writeToolCatalogQualificationObservation,
+  type ToolCatalogQualificationBinding,
+} from "../../../../scripts/lib/tool-catalog-qualification-observation.mjs";
 
 import { createProductionReadOnlyChildRunner } from "./productionReadOnlyChildRunner.js";
 import type { ReadOnlyChildGateDecision } from "./readOnlyChildOrchestrator.js";
@@ -118,14 +122,20 @@ describe("createProductionReadOnlyChildRunner", () => {
 
   it("executes an approved keiko_child_workspace_read call through the parent's secure read port", async () => {
     const requested: string[] = [];
-    let handlerSetDigest: string | undefined;
-    let projectionDigest: string | undefined;
+    let binding: ToolCatalogQualificationBinding | undefined;
     const scripted = toolThenFinish(CHILD_WORKSPACE_READ_ALIAS, { relativePath: "src/index.ts" });
 
     const outcome = await runChild({
       call: (request): Promise<NormalizedResponse> => {
-        handlerSetDigest = request.toolCatalog?.offered.binding.handlerSetDigest;
-        projectionDigest = request.toolCatalog?.projection.projectionDigest;
+        const observed = request.toolCatalog?.offered.binding;
+        if (observed !== undefined) {
+          binding = {
+            catalogRevision: observed.catalogRevision,
+            profile: observed.profile,
+            projectionDigest: observed.projectionDigest,
+            handlerSetDigest: observed.handlerSetDigest,
+          };
+        }
         return scripted(request);
       },
       read: {
@@ -138,8 +148,17 @@ describe("createProductionReadOnlyChildRunner", () => {
 
     expect(requested).toEqual(["src/index.ts"]);
     expect(outcome.resultCount).toBe(1);
-    expect(handlerSetDigest).toMatch(/^[a-f0-9]{64}$/u);
-    expect(handlerSetDigest).not.toBe(projectionDigest);
+    expect(binding?.handlerSetDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(binding?.handlerSetDigest).not.toBe(binding?.projectionDigest);
+    if (binding === undefined) throw new TypeError("Missing child catalog binding");
+    writeToolCatalogQualificationObservation({
+      consumer: "read-only-child",
+      component: "read-only-child",
+      binding,
+      terminalStatus: "completed",
+      settlementCount: 1,
+      proof: { kind: "single-settlement" },
+    });
   });
 
   it("reserves every child prompt immediately before dispatch and never calls the provider after exhaustion", async () => {

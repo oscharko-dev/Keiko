@@ -133,7 +133,7 @@ export { parseUnifiedDiff, PatchParseError, type ParsedPatch } from "./patch-par
 export { computeFileContent, type ApplyOutcome, type HunkConflict } from "./patch-content.js";
 
 // ─── Tool definitions (model-facing JSON-Schema table) ──────────────────────────────
-export { TOOL_DEFINITIONS } from "./schemas.js";
+export { TOOL_DEFINITIONS, UNAVAILABLE_TOOL_CATALOG_BINDING } from "./schemas.js";
 export { EDITOR_AGENT_TOOL_DEFINITIONS } from "./editor-agent-schemas.js";
 
 // ─── Tool host implementation ───────────────────────────────────────────────────────

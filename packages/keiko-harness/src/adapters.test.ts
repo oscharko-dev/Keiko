@@ -7,7 +7,7 @@ import {
   type ModelGatewayLogContext,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
-import { TOOL_DEFINITIONS } from "@oscharko-dev/keiko-tools";
+import { TOOL_DEFINITIONS, UNAVAILABLE_TOOL_CATALOG_BINDING } from "@oscharko-dev/keiko-tools";
 import { DryRunToolPort, GatewayModelPort } from "./adapters.js";
 import { HARNESS_CODES } from "./errors.js";
 
@@ -186,6 +186,8 @@ describe("DryRunToolPort", () => {
     const port = new DryRunToolPort();
     const advertised = port.listTools();
     expect(advertised).toEqual(TOOL_DEFINITIONS);
+    expect(port.catalogBinding()).toBe(UNAVAILABLE_TOOL_CATALOG_BINDING);
+    expect(port.catalogBinding().handlerSetDigest).not.toBe(port.catalogBinding().projectionDigest);
     expect(advertised.length).toBeGreaterThan(0);
     for (const tool of advertised) {
       const outcome = port.execute({

@@ -235,6 +235,7 @@
     "check:tool-catalog-conformance": "node scripts/check-tool-catalog-conformance.mjs",
     "check:tool-catalog-performance": "node scripts/check-tool-catalog-performance.mjs",
     "check:tool-catalog-closeout": "node scripts/check-tool-catalog-closeout.mjs",
+    "qualify:tool-catalog-consumers": "npm run build:packages && node scripts/qualify-tool-catalog-consumers.mjs --run-nonmanaged",
     "generate:tool-catalog": "node scripts/check-tool-catalog-conformance.mjs --write",
     "test:e2e:coding-issue-publish": "playwright test --config tests/e2e/config/playwright.coding-issue-publish.config.ts --project=chromium",
     "test:e2e:coding-issue-ci": "playwright test --config tests/e2e/config/playwright.coding-issue-ci.config.ts --project=chromium",
