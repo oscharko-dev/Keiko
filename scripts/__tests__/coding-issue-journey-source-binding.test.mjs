@@ -43,7 +43,7 @@ function commit(root, message) {
 function descriptor(scenarioId = "egress-confinement-macos-arm64") {
   return {
     scenarios: [{ scenarioId, evidenceClass: "production-functional" }],
-    flows: [{ flowId: "issue-to-pr-flow-01" }],
+    flows: [{ flowId: "issue-to-pr-flow-01", ordinal: 1, mode: "governed-assist" }],
   };
 }
 
@@ -145,6 +145,23 @@ describe("coding issue journey evidence-only source binding", () => {
     commit(input.root, "change frozen input");
     expect(inspect(input).failures).toContain(
       `qualification source changed outside evidence outputs: ${path}`,
+    );
+  });
+
+  it("rejects a source deletion hidden by a rename into an allowed evidence path", () => {
+    const input = fixture();
+    commitEvidence(input);
+    const sourcePath = "packages/keiko-server/src/runtime.ts";
+    const allowedArtifact = `${CODING_ISSUE_JOURNEY_RECEIPTS_PATH}/issue-to-pr-flow-01.artifact`;
+    rmSync(join(input.root, allowedArtifact));
+    git(input.root, "mv", sourcePath, allowedArtifact);
+    git(input.root, "commit", "--quiet", "-m", "hide source deletion as evidence output");
+
+    expect(git(input.root, "diff", "--name-status", `${input.sourceCommitSha}...HEAD`)).toMatch(
+      /^R\d+\s+packages\/keiko-server\/src\/runtime\.ts\s+/mu,
+    );
+    expect(inspect(input).failures).toContain(
+      `qualification source changed outside evidence outputs: ${sourcePath}`,
     );
   });
 

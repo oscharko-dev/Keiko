@@ -154,7 +154,9 @@ function validateConsumerComponents(consumer, components) {
     `${consumer} has incomplete component proof`,
   );
   for (const entry of components) {
-    exactFields(entry, ["component", "terminalStatus", "settlementCount", "proof"]);
+    const fields = ["component", "terminalStatus", "settlementCount", "proof"];
+    if (consumer === "managed-opencode") fields.push("runBinding");
+    exactFields(entry, fields);
     requireEvidence(
       validToolCatalogQualificationOutcome(
         entry.component,
@@ -164,7 +166,16 @@ function validateConsumerComponents(consumer, components) {
       ),
       `${consumer} has invalid component proof`,
     );
+    if (consumer === "managed-opencode") validateManagedRunBinding(entry.runBinding);
   }
+}
+function validateManagedRunBinding(binding) {
+  exactFields(binding, ["correlationId", "activityLogSha256"]);
+  requireEvidence(
+    /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(binding.correlationId) &&
+      DIGEST.test(binding.activityLogSha256),
+    "managed consumer has invalid run binding",
+  );
 }
 function validateConsumerPackages(consumer, packages) {
   requireEvidence(Array.isArray(packages), `${consumer} has no packaged proof`);

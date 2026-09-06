@@ -7,6 +7,7 @@ import { generatedToolCatalogManifest } from "../check-tool-catalog-conformance.
 import { readReceipts } from "../check-coding-issue-journey-evidence.mjs";
 import { sha256 } from "../lib/digest.mjs";
 import { resolveHostExecutable } from "../lib/host-executable.mjs";
+import { buildToolCatalogConsumerReports } from "../qualify-tool-catalog-consumers.mjs";
 import {
   buildToolCatalogCloseout,
   validateToolCatalogCloseout,
@@ -39,6 +40,10 @@ function fixtureComponents(id, consumer) {
           searchSettled: true,
           boundedReadSettled: true,
           causalHandoff: true,
+        },
+        runBinding: {
+          correlationId: "run-managed-closeout",
+          activityLogSha256: sha256("managed activity log fixture"),
         },
       };
     const unavailable = UNAVAILABLE_COMPONENTS.has(component);
@@ -171,6 +176,54 @@ describe("exact-head catalog closeout artifact", () => {
     );
     expect(readCatalogCloseoutReceipts(f.root)).not.toEqual(snapshot);
     expect(snapshot.reports.get("editor").passed).toBe(1);
+  });
+  it("retains the managed run binding from the consumer producer through closeout", async () => {
+    const f = await fixture();
+    const managed = f.reports.get("managed-opencode");
+    const runBinding = {
+      correlationId: "run-managed-closeout",
+      activityLogSha256: sha256("managed activity log fixture"),
+    };
+    const produced = buildToolCatalogConsumerReports({
+      currentHead: f.context.currentHead,
+      artifactDigest: f.context.artifactDigest,
+      platform: f.context.platform,
+      runtime: f.context.runtime,
+      observations: new Map([
+        [
+          "managed-opencode",
+          {
+            binding: managed.binding,
+            observations: [{ ...managed.components[0], binding: managed.binding, runBinding }],
+          },
+        ],
+      ]),
+      packageEvidence: new Map([["managed-opencode", managed.packages]]),
+    });
+    writeFileSync(
+      join(f.root, "managed-opencode.artifact"),
+      JSON.stringify(produced.get("managed-opencode")),
+    );
+    const snapshot = readCatalogCloseoutReceipts(f.root);
+
+    expect(buildToolCatalogCloseout(f.context, snapshot.receipts, snapshot.reports)).toMatchObject({
+      schemaVersion: 1,
+    });
+    expect(snapshot.reports.get("managed-opencode").components[0].runBinding).toEqual(runBinding);
+  });
+  it.each([
+    undefined,
+    { correlationId: "run-managed", activityLogSha256: "not-a-digest" },
+    {
+      correlationId: "run-managed",
+      activityLogSha256: sha256("managed activity log fixture"),
+      rawLog: "private fixture body",
+    },
+  ])("rejects an invalid managed run binding %#", async (runBinding) => {
+    const f = await fixture();
+    if (runBinding === undefined) delete f.reports.get("managed-opencode").components[0].runBinding;
+    else f.reports.get("managed-opencode").components[0].runBinding = runBinding;
+    expect(() => check(f)).toThrow();
   });
   it("preserves a source-only Linux CI check without claiming it tested the local package", async () => {
     const f = await fixture();
