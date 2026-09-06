@@ -50,6 +50,13 @@ changing only the generated native description leaves the model with stale instr
 now uses the shared Git descriptions and explicitly distinguishes a fresh `approvalDisposition`
 from an immutable proposal receipt. Both paths have regressions across the production integration.
 
+The same provider-description loss affected bounded reads and changesets. The native plugin now
+uses the canonical catalog descriptions for every managed tool. The provider receives the whole-file
+hash and read-continuation instructions, the required nested changeset fields, and the existing
+new-file convention (a `/dev/null` source diff with the empty-content SHA-256). Five regressions
+failed against the previous actual provider request body and pass with the shared descriptions.
+These instructions do not relax content-hash validation or admit a rejected edit.
+
 ## Additional native capabilities assessed
 
 OpenCode's LSP tool provides definitions, references, symbols, and call hierarchy. Keiko already

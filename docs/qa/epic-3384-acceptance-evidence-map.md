@@ -99,6 +99,24 @@ criterion, issue closure or final qualification may be inferred from a retained 
 successor. A later attempt must repair the independently observed arithmetic and continuation defects and
 complete the real delivery flow.
 
+Subsequent qualification attempts preserve the same distinction between runtime activity and actual
+GitHub delivery:
+
+| Attempt | Exact source | Observed result                                                                                                                                                                                                                                         |
+| ------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 21      | `bb1d6b79`   | Actual staging and passing candidate verification completed, but the model ended after a commit proposal. No commit, PR, merge or closure.                                                                                                              |
+| 22      | `a883c8a0`   | Issue intake was hidden after a terminal run with retained activity. Startup failed before a model call.                                                                                                                                                |
+| 23      | `3f5d6ba5`   | The UI build rejected a test query option during TypeScript checking, before model execution.                                                                                                                                                           |
+| 24      | `3e4dcba5`   | The real model edited and verified retained work. A mixed already-staged/unstaged selection was refused; operator-paused follow-up then hit the still-armed native turn. The operator stopped the run; no delivery.                                     |
+| 25      | `267c7a7e`   | A fresh state directory still shared the original Git repository and its occupied task branch. Binding failed before a model call; the prior workspace was retained.                                                                                    |
+| 26      | `b9d97a0c`   | A separate clean clone admitted a real run. A target-digest-bound failed regression was observed before partial production edits. Three malformed changeset responses were rejected; unchanged-context retries then exhausted. No PR, merge or closure. |
+| 27      | `eda83253`   | Same-issue reacceptance was cleared by the historical terminal-run cleanup, leaving Bind disabled. No new model call or workspace mutation.                                                                                                             |
+
+The identified runtime, schema-guidance and UI defects are being repaired through their owning
+layers with regression tests. A failed attempt and its retained work are not a qualified flow.
+The source and evidence map must not be interpreted as permission to close the epic or any pending
+qualification criterion.
+
 The mandatory catalog audit at `ab45f20d` adds every criterion of #3408 and #3411–#3415 below.
 It identified concrete Editor offer/evidence gaps and missing H1/closeout qualification; those
 remain explicit until their repairs and evidence pass. No issue is closeable merely because a

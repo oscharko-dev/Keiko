@@ -319,7 +319,10 @@ function decodeFailurePath(file: string, workspaceRoot: string): string | undefi
   }
 }
 
-function validFailurePath(candidate: string | undefined, workspaceRoot: string): candidate is string {
+function validFailurePath(
+  candidate: string | undefined,
+  workspaceRoot: string,
+): candidate is string {
   return (
     candidate !== undefined &&
     candidate.length > 0 &&
