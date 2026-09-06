@@ -36,10 +36,10 @@ receipts and screenshots.
 - `visual-proof.json` records each capture's screenshot hash, exact UI source hashes, actual
   browser axe findings and a horizontal-overflow check, plus the shared `sourceHashes` map
   (spec/config/support files and the component/client files this surface actually exercises).
-- `journey-proof.json` binds three successful cases — "server-held proposal reviewed before
-  approval", "exact final body displayed", "one-use approval applied once" — to one review, one
-  approve and one apply observation, confirms the exact final body was displayed and the applied
-  control is disabled afterward, and records the applied-state screenshot hash.
+- `journey-proof.json` binds the two-turn refinement, exact held-proposal review, server-resolved
+  fork target, one-use approval/application, and persisted disconnect cases to the mounted route
+  observations. It confirms one provider body update, rejects the apply replay, records the exact
+  final-body display and the applied-state screenshot hash, and retains no raw repository identity.
   `modelQualification` and `liveAuthenticationQualification` are both `false`: this is
   production-composed deterministic browser evidence, not a live-model or
   live-GitHub-authentication qualification.

@@ -276,6 +276,8 @@ test("reviews, approves and applies the held description through the connected p
   await expect(chatWindow.getByTestId("git-change-description-state")).toHaveText(
     "Current (applied)",
   );
+  await expect(chatWindow.getByText("Current", { exact: true })).toBeVisible();
+  await expect(chatWindow.getByText("Blocked", { exact: true })).toHaveCount(0);
   const appliedCapture = await capturePrDescriptionState(
     page,
     3400,

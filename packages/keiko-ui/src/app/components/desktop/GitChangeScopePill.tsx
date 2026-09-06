@@ -217,7 +217,6 @@ interface GitChangeDescriptionActionsState {
   readonly busy: boolean;
   readonly error: string | null;
   readonly result: PrDescriptionApplicationResultWire | undefined;
-  readonly applied: boolean;
   readonly canReview: boolean;
   readonly canApprove: boolean;
   readonly canApply: boolean;
@@ -244,7 +243,6 @@ interface DescriptionRunnerState {
   readonly reviewedProposalId: string | undefined;
   readonly setResult: (result: PrDescriptionApplicationResultWire) => void;
   readonly setApprovedProposalId: (id: string | undefined) => void;
-  readonly setApplied: (applied: boolean) => void;
 }
 
 // Extracted so useGitChangeDescriptionActions stays under the max-lines-per-function bar. The
@@ -294,7 +292,6 @@ function buildDescriptionRunners(
       () => fns.apply(chat, scope.relationshipId, proposalId),
       (next) => {
         state.setResult(next);
-        state.setApplied(true);
         state.setApprovedProposalId(undefined);
       },
     );
@@ -340,6 +337,30 @@ function canApplyDescription(state: {
   return !state.busy && !state.stale && state.approvedProposalId !== undefined;
 }
 
+interface ScopedDescriptionState {
+  readonly result: PrDescriptionApplicationResultWire | undefined;
+  readonly approvedProposalId: string | undefined;
+  readonly setResult: (result: PrDescriptionApplicationResultWire) => void;
+  readonly setApprovedProposalId: (id: string | undefined) => void;
+}
+
+function useScopedDescriptionState(scope: ChatGitChangeScope): ScopedDescriptionState {
+  const scopeKey = `${scope.relationshipId}:${scope.snapshotDigest}:${scope.descriptionProposalId ?? ""}:${scope.descriptionStatus}`;
+  const [observed, setObserved] = useState<
+    { readonly scopeKey: string; readonly result: PrDescriptionApplicationResultWire } | undefined
+  >(undefined);
+  const [approval, setApproval] = useState<
+    { readonly scopeKey: string; readonly proposalId: string } | undefined
+  >(undefined);
+  return {
+    result: observed?.scopeKey === scopeKey ? observed.result : undefined,
+    approvedProposalId: approval?.scopeKey === scopeKey ? approval.proposalId : undefined,
+    setResult: (result): void => setObserved({ scopeKey, result }),
+    setApprovedProposalId: (proposalId): void =>
+      setApproval(proposalId === undefined ? undefined : { scopeKey, proposalId }),
+  };
+}
+
 // Extracted from GitChangePillItem so it stays under the max-lines-per-function bar; mirrors
 // useGitChangePillActions' busy/error shape one level up.
 function useGitChangeDescriptionActions(
@@ -348,9 +369,8 @@ function useGitChangeDescriptionActions(
   const { chat, scope, approveDescription, applyDescription, reviewDescription, t } = props;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<PrDescriptionApplicationResultWire | undefined>(undefined);
-  const [approvedProposalId, setApprovedProposalId] = useState<string | undefined>(undefined);
-  const [applied, setApplied] = useState(false);
+  const { result, approvedProposalId, setResult, setApprovedProposalId } =
+    useScopedDescriptionState(scope);
   const ctx: DescriptionRunContext = { chat, scope, t, setBusy, setError };
   const proposalId = scope.descriptionProposalId ?? descriptionProposalId(result);
   const reviewedProposalId = descriptionProposalId(result);
@@ -366,7 +386,6 @@ function useGitChangeDescriptionActions(
       reviewedProposalId,
       setResult,
       setApprovedProposalId,
-      setApplied,
     },
   );
   const actionState = { busy, stale, proposalId, reviewedProposalId, approvedProposalId };
@@ -375,7 +394,6 @@ function useGitChangeDescriptionActions(
     busy,
     error,
     result,
-    applied,
     canReview: canReviewDescription(actionState),
     canApprove: canApproveDescription(actionState),
     canApply: canApplyDescription(actionState),
@@ -491,28 +509,14 @@ function DescriptionResultStatus({
  * second vocabulary. Renders nothing for a comparison-only scope (no pull request to describe).
  */
 function GitChangeDescriptionPanel({
-  chat,
   scope,
-  approveDescription,
-  applyDescription,
-  reviewDescription,
+  actions,
   t,
 }: {
-  readonly chat: Chat;
   readonly scope: ChatGitChangeScope;
-  readonly approveDescription: ApproveGitChangeDescriptionFn;
-  readonly applyDescription: ApplyGitChangeDescriptionFn;
-  readonly reviewDescription: ReviewGitChangeDescriptionFn;
+  readonly actions: GitChangeDescriptionActionsState;
   readonly t: I18nTranslate;
 }): ReactNode {
-  const actions = useGitChangeDescriptionActions({
-    chat,
-    scope,
-    approveDescription,
-    applyDescription,
-    reviewDescription,
-    t,
-  });
   if (scope.pullRequestNumber === undefined || scope.descriptionProposalId === undefined)
     return null;
   return (
@@ -653,6 +657,7 @@ function useGitChangePillActions(props: GitChangePillItemProps): GitChangePillAc
 
 function GitChangePillRow({
   scope,
+  status,
   busy,
   disconnectRef,
   handleDisconnect,
@@ -660,6 +665,7 @@ function GitChangePillRow({
   t,
 }: {
   readonly scope: ChatGitChangeScope;
+  readonly status: ChatGitChangeDescriptionStatus;
   readonly busy: boolean;
   readonly disconnectRef: RefObject<HTMLButtonElement | null>;
   readonly handleDisconnect: () => void;
@@ -671,9 +677,7 @@ function GitChangePillRow({
     <span className="scope-pill">
       <span aria-hidden="true">⇄</span>
       <span aria-label={accessibleLabel}>{scope.comparisonLabel}</span>
-      <span className={STATUS_BADGE_CLASS[scope.descriptionStatus]}>
-        {t(STATUS_LABEL_KEY[scope.descriptionStatus])}
-      </span>
+      <span className={STATUS_BADGE_CLASS[status]}>{t(STATUS_LABEL_KEY[status])}</span>
       <button
         type="button"
         className="scope-pill-disconnect"
@@ -703,11 +707,22 @@ function GitChangePillItem(props: GitChangePillItemProps): ReactNode {
   const { chat, scope, t, approveDescription, applyDescription, reviewDescription } = props;
   const { busy, error, disconnectRef, handleDisconnect, handleRefresh } =
     useGitChangePillActions(props);
+  const descriptionActions = useGitChangeDescriptionActions({
+    chat,
+    scope,
+    approveDescription,
+    applyDescription,
+    reviewDescription,
+    t,
+  });
+  const displayedStatus =
+    descriptionResultState(descriptionActions.result) ?? scope.descriptionStatus;
 
   return (
     <span className="scope-pill-wrap">
       <GitChangePillRow
         scope={scope}
+        status={displayedStatus}
         busy={busy}
         disconnectRef={disconnectRef}
         handleDisconnect={handleDisconnect}
@@ -720,14 +735,7 @@ function GitChangePillItem(props: GitChangePillItemProps): ReactNode {
           {error}
         </span>
       ) : null}
-      <GitChangeDescriptionPanel
-        chat={chat}
-        scope={scope}
-        approveDescription={approveDescription}
-        applyDescription={applyDescription}
-        reviewDescription={reviewDescription}
-        t={t}
-      />
+      <GitChangeDescriptionPanel scope={scope} actions={descriptionActions} t={t} />
     </span>
   );
 }

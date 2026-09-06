@@ -1,33 +1,42 @@
 {
   "schemaVersion": 1,
   "issue": 3400,
-  "checkedAt": "2026-09-06T02:38:03.200Z",
+  "checkedAt": "2026-09-06T05:32:52.844Z",
   "passed": true,
   "evidenceClass": "production-ui-deterministic-browser-fixture",
   "modelQualification": false,
   "liveAuthenticationQualification": false,
   "cases": [
+    "two normal Chat turns refine one connected pull request",
     "server-held proposal reviewed before approval",
     "exact final body displayed",
-    "one-use approval applied once"
+    "fork and upstream remote ordering cannot author the target",
+    "repeated approval still permits only one apply",
+    "disconnect persists through the mounted PATCH route"
   ],
   "observations": {
-    "review": 1,
-    "approve": 1,
-    "apply": 1,
+    "connectedChatTurns": 2,
+    "reviewRequests": 1,
+    "browserApprovalRequests": 1,
+    "directDuplicateApprovals": 1,
+    "applyRequests": 1,
+    "rejectedApplyReplays": 1,
+    "providerUpdates": 1,
+    "serverResolvedOrigin": true,
     "exactFinalBodyDisplayed": true,
     "appliedControlDisabled": true,
+    "disconnectPersisted": true,
     "appliedCapture": {
       "screenshot": "docs/design-system/evidence/3400/09-applied.png",
-      "screenshotSha256": "dd5150b129c585cc94771258381c9521fd6b7a35034ce9748f9330454cfb8e29"
+      "screenshotSha256": "ab9c9532f964bf46194844b923662abd7555fae74d7a46c841503727bfd8f824"
     }
   },
   "sourceHashes": {
-    "tests/e2e/git-change-chat-3400.spec.ts": "5c6371e3da76b94da259f12b374849031a73f972f3d42bb561ea365e0b3af913",
-    "tests/e2e/config/playwright.git-change-chat-3400.config.ts": "8efa57b0b895d603017867d9a3e522d95ef0cd0e570ee321ff7f8e3510ed55d2",
-    "tests/e2e/support/git-change-chat-3400.ts": "e4fa7c64dece10251ed4b8177f3bd24eebcc82f6bd57c7fa4bd258e6ca5f7762",
+    "tests/e2e/git-change-chat-3400.spec.ts": "7b0d6366d307a2c3ad54e8e1b8871987d61ad7c2c3e052209b6f25113c9a014e",
+    "tests/e2e/config/playwright.git-change-chat-3400.config.ts": "c07c3b11cf51b6685b5592a530636d5c973f85c022d9652553f20fc34266cf46",
+    "tests/e2e/support/git-change-chat-3400.ts": "3dc35f2495b8d05589978d0d9c7c98d1692cc91a6c0b3744cf102be6a8cc0354",
     "tests/e2e/support/pr-description-visual-evidence.ts": "48ea6e2dee3b8a50c80dddb633512400a06dcb0a2100aeac85efe81a0ced6368",
-    "packages/keiko-ui/src/app/components/desktop/GitChangeScopePill.tsx": "c6469ce683b630c46cee4237debeb0cff39ba195eeb312a9fae2dce46f68e4dc",
+    "packages/keiko-ui/src/app/components/desktop/GitChangeScopePill.tsx": "5e8c1ce44afc4c50e91a9ad24d0be2058e64ecc8218b4e10951d00b490072f37",
     "packages/keiko-ui/src/app/components/desktop/ChatWindow.tsx": "32d119badfe7b60b854472aa16f6162b44dcae9d7a247fe10775a46498d44198",
     "packages/keiko-ui/src/lib/api.ts": "e067374bd73181ff2a5abe5cb25c2aa3761df187b2c9db592d1648a2d6dc7344",
     "packages/keiko-ui/src/lib/coding-workbench-lazy-fetchers.ts": "ee098fa12d955ed5c6c12bea5e712eebd327d1dc430b02a022ba8997b20dbe6b"
