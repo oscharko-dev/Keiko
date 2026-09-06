@@ -531,8 +531,13 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         runnerId: workspace.testFramework,
         verificationStatus: report.overallStatus,
         stepCount: report.results.length,
-        deniedCount: report.counts.denied,
+        passedCount: report.counts.passed,
         failedCount: report.counts.failed,
+        skippedCount: report.counts.skipped,
+        deniedCount: report.counts.denied,
+        timedOutCount: report.counts["timed-out"],
+        cancelledCount: report.counts.cancelled,
+        resourceExceededCount: report.counts["resource-exceeded"],
       },
     });
   }

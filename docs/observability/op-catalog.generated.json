@@ -2033,20 +2033,20 @@
     {
       "op": "editor.verification.execute",
       "category": "process",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:550",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:555",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.execute",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:644",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:649",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.subscriber",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:846",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:851",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

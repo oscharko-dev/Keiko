@@ -818,6 +818,49 @@ describe("VerificationRunnerManager — runToReport shares the human run's lifec
 });
 
 describe("VerificationRunnerManager — catalog + edge cases", () => {
+  it("records every closed terminal status count in the completion activity", async () => {
+    const base = report(["typecheck", "lint"]);
+    const terminalFailures: VerificationReport = {
+      ...base,
+      results: base.results.map((result, index) => ({
+        ...result,
+        status: index === 0 ? "timed-out" : "resource-exceeded",
+      })),
+      counts: counts({ "timed-out": 1, "resource-exceeded": 1 }),
+    };
+    const events: ServerLogEvent[] = [];
+    const manager = makeManager({
+      activityLog: { write: (event): void => void events.push(event) },
+      execute: fakePort(terminalFailures).port,
+      isWorkspaceTrustedForPackageScripts: () => true,
+    });
+
+    await manager.runToReport(
+      input({ kinds: ["typecheck", "lint"], correlationId: "terminal-status-counts" }),
+      new AbortController().signal,
+    );
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "editor.verification.execute",
+        correlationId: "terminal-status-counts",
+        extra: {
+          state: "completed",
+          runnerId: "vitest",
+          verificationStatus: "failed",
+          stepCount: 2,
+          passedCount: 0,
+          failedCount: 0,
+          skippedCount: 0,
+          deniedCount: 0,
+          timedOutCount: 1,
+          cancelledCount: 0,
+          resourceExceededCount: 1,
+        },
+      }),
+    );
+  });
+
   it("records the selected Node runner and successful completion in the activity timeline", async () => {
     writeFileSync(
       join(workspaceRoot, "package.json"),
