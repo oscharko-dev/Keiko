@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, linkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -94,7 +95,12 @@ describe("production coding repository handler composition", () => {
     ]);
     expect(events[1]).toMatchObject({
       correlationId: context().correlationId,
-      extra: { state: "completed", filesScanned: 1, resultCount: 1 },
+      extra: {
+        state: "completed",
+        filesScanned: 1,
+        resultCount: 1,
+        resultPathSha256: [createHash("sha256").update("src/example.ts").digest("hex")],
+      },
     });
     const lines = events.map((event) => formatServerLogLine(event)).join("\n");
     expect(JSON.parse(terminalLine(events))).toMatchObject({

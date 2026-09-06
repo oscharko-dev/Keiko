@@ -1182,6 +1182,32 @@ describe("validateCodingWorkbenchAuthorityEnvelope", () => {
 });
 
 describe("validateCodingWorkbenchRuntimeEvent", () => {
+  it("accepts only a body-free target digest on verification summaries", () => {
+    const event = {
+      schemaVersion: "1",
+      eventId: "evt-1",
+      runId: "run-1986",
+      occurredAt: "2026-07-07T12:00:00Z",
+      kind: "verification-summarized",
+      verificationKind: "verification-command",
+      verificationStatus: "failed",
+      passedCount: 0,
+      failedCount: 1,
+      skippedCount: 0,
+      verificationTargetDigest: "d".repeat(64),
+    } as const;
+
+    expect(validateCodingWorkbenchRuntimeEvent(event)).toEqual({ ok: true, value: event });
+    const invalid = validateCodingWorkbenchRuntimeEvent({
+      ...event,
+      verificationTargetDigest: "src/private.test.ts",
+    });
+    expect(invalid).toEqual({
+      ok: false,
+      errors: ["event.verificationTargetDigest must be a 64-character lowercase hex digest"],
+    });
+  });
+
   it("keeps runtimeSource and modelSource vocabularies separate", () => {
     expect(validateCodingWorkbenchRuntimeEvent(baseRuntimeEvent()).ok).toBe(true);
 

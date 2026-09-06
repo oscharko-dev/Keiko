@@ -372,6 +372,7 @@ function recordRuntimeVerificationSummary(
       skippedCount: event.skippedCount,
       failureLocationCount: event.failureLocationCount,
       failureLocationsTruncated: event.failureLocationsTruncated,
+      verificationTargetDigest: event.verificationTargetDigest,
     },
   });
 }

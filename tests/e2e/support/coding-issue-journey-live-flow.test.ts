@@ -18,6 +18,7 @@ import {
   assertQualificationSpendEnvelope,
   buildQualificationFlowArtifact,
   hasRedGreenVerificationSequence,
+  hasUsefulRepositorySearchSequence,
   isUsefulRepositorySearchEvent,
   qualifiedCiRepairAssertions,
   resolveFinalDeliveredPullRequest,
@@ -59,8 +60,15 @@ const QUALIFICATION_OBSERVATIONS = {
     requestedMode: "governed-assist",
     effectiveMode: "governed-assist",
     approvalRequestCount: 1,
+    approvalRequests: [
+      { actionClass: "workspace-write", actionKind: "file-edit", requestCount: 1 },
+    ],
+    approvedProposalActions: [],
     toolInvocationCount: 2,
     effectStartedCount: 1,
+    effectStartedTools: [
+      { canonicalId: "keiko.changeset.edit", contractVersion: 1, invocationCount: 1 },
+    ],
     completedToolCount: 2,
     deniedToolCount: 0,
     failedToolCount: 0,
@@ -520,22 +528,73 @@ describe("completed live qualification flow evidence", () => {
   });
 
   it("requires an observed failed verifier result before a later passing result", () => {
+    const targetDigest = "d".repeat(64);
     const failed = {
       op: "coding-runtime.verification-summarized",
       verificationStatus: "failed",
       passedCount: 0,
       failedCount: 1,
+      verificationTargetDigest: targetDigest,
     } as const;
     const passed = {
       op: "coding-runtime.verification-summarized",
       verificationStatus: "passed",
       passedCount: 4,
       failedCount: 0,
+      verificationTargetDigest: targetDigest,
+    } as const;
+    const edit = {
+      op: "coding-runtime.editor-mutation.settled",
+      state: "succeeded",
     } as const;
 
-    expect(hasRedGreenVerificationSequence([failed, passed])).toBe(true);
+    expect(hasRedGreenVerificationSequence([failed, edit, passed])).toBe(true);
+    expect(hasRedGreenVerificationSequence([failed, passed])).toBe(false);
+    expect(
+      hasRedGreenVerificationSequence([
+        failed,
+        edit,
+        { ...passed, verificationTargetDigest: "e".repeat(64) },
+      ]),
+    ).toBe(false);
     expect(hasRedGreenVerificationSequence([passed, failed])).toBe(false);
     expect(hasRedGreenVerificationSequence([passed])).toBe(false);
+  });
+
+  it("requires repository search first and a later bounded read of one returned path digest", () => {
+    const hit = "a".repeat(64);
+    const other = "b".repeat(64);
+    const searchStart = {
+      op: "tool-catalog.invocation-started",
+      toolRef: { canonicalId: "keiko.repo.search", contractVersion: 1 },
+    } as const;
+    const searchSettled = {
+      op: "coding-repository-handler.settled",
+      state: "completed",
+      resultCount: 1,
+      resultPathSha256: [hit],
+    } as const;
+    const read = {
+      op: "coding-runtime.workspace-read",
+      state: "completed",
+      targetPathSha256: hit,
+    } as const;
+    expect(hasUsefulRepositorySearchSequence([searchStart, searchSettled, read])).toBe(true);
+    expect(
+      hasUsefulRepositorySearchSequence([
+        { ...searchStart, toolRef: { canonicalId: "keiko.workspace.read", contractVersion: 1 } },
+        searchStart,
+        searchSettled,
+        read,
+      ]),
+    ).toBe(false);
+    expect(
+      hasUsefulRepositorySearchSequence([
+        searchStart,
+        searchSettled,
+        { ...read, targetPathSha256: other },
+      ]),
+    ).toBe(false);
   });
 
   it("completes a green-first flow without fabricating CI-repair evidence", () => {

@@ -1080,6 +1080,7 @@ describe("CodingRuntimeOrchestrator", () => {
 
   it("records body-free failed and passed verifier summaries under the originating run", async () => {
     const runId = "run-verification-proof";
+    const verificationTargetDigest = "d".repeat(64);
     const captured = captureActivityLog();
     const f = fixture(
       undefined,
@@ -1111,6 +1112,7 @@ describe("CodingRuntimeOrchestrator", () => {
         skippedCount: 0,
         failureLocationCount: verificationStatus === "failed" ? 1 : 0,
         failureLocationsTruncated: verificationStatus === "failed",
+        verificationTargetDigest,
       });
     }
 
@@ -1131,6 +1133,7 @@ describe("CodingRuntimeOrchestrator", () => {
           skippedCount: 0,
           failureLocationCount: 1,
           failureLocationsTruncated: true,
+          verificationTargetDigest,
         },
       },
       {
@@ -1147,6 +1150,7 @@ describe("CodingRuntimeOrchestrator", () => {
           skippedCount: 0,
           failureLocationCount: 0,
           failureLocationsTruncated: false,
+          verificationTargetDigest,
         },
       },
     ]);

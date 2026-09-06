@@ -674,6 +674,7 @@ const CODING_WORKBENCH_RUNTIME_EVENT_ALLOWED_KEYS_BY_KIND: Readonly<
     "skippedCount",
     "failureLocationCount",
     "failureLocationsTruncated",
+    "verificationTargetDigest",
   ),
   "artifact-produced": runtimeEventAllowedKeys(
     "artifactKind",
@@ -1003,6 +1004,9 @@ function validateOptionalFailureLocationEvidence(
     typeof value.failureLocationsTruncated !== "boolean"
   ) {
     errors.push("event.failureLocationsTruncated must be a boolean");
+  }
+  if (value.verificationTargetDigest !== undefined) {
+    validateDigest(value.verificationTargetDigest, "event.verificationTargetDigest", errors);
   }
 }
 

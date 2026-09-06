@@ -702,31 +702,87 @@ export function isUsefulRepositorySearchEvent(event: Readonly<Record<string, unk
   );
 }
 
-export function hasRedGreenVerificationSequence(
+export function hasUsefulRepositorySearchSequence(
   events: readonly Readonly<Record<string, unknown>>[],
 ): boolean {
-  const failedIndex = events.findIndex(
-    (event) =>
-      event.op === "coding-runtime.verification-summarized" &&
-      event.verificationStatus === "failed" &&
-      Number(event.failedCount) > 0,
+  const firstTool = events.findIndex((event) => event.op === "tool-catalog.invocation-started");
+  if (firstTool < 0 || canonicalToolId(events[firstTool]) !== "keiko.repo.search") return false;
+  const search = events.findIndex(
+    (event, index) => index > firstTool && isUsefulRepositorySearchEvent(event),
   );
+  if (search < 0) return false;
+  const paths = digestSet(events[search]?.resultPathSha256);
   return (
-    failedIndex >= 0 &&
+    paths.size > 0 &&
     events
-      .slice(failedIndex + 1)
+      .slice(search + 1)
       .some(
         (event) =>
-          event.op === "coding-runtime.verification-summarized" &&
-          event.verificationStatus === "passed" &&
-          Number(event.passedCount) > 0 &&
-          Number(event.failedCount) === 0,
+          event.op === "coding-runtime.workspace-read" &&
+          event.state === "completed" &&
+          typeof event.targetPathSha256 === "string" &&
+          paths.has(event.targetPathSha256),
       )
   );
 }
 
+function canonicalToolId(event: Readonly<Record<string, unknown>> | undefined): string | undefined {
+  const toolRef = event?.toolRef;
+  return typeof toolRef === "object" && toolRef !== null && !Array.isArray(toolRef)
+    ? String((toolRef as Readonly<Record<string, unknown>>).canonicalId)
+    : undefined;
+}
+
+function digestSet(value: unknown): ReadonlySet<string> {
+  return new Set(
+    Array.isArray(value)
+      ? value.filter(
+          (item): item is string => typeof item === "string" && /^[a-f0-9]{64}$/u.test(item),
+        )
+      : [],
+  );
+}
+
+export function hasRedGreenVerificationSequence(
+  events: readonly Readonly<Record<string, unknown>>[],
+): boolean {
+  return events.some((event, failedIndex) => {
+    const target = verificationTarget(event, "failed");
+    if (target === undefined) return false;
+    const following = events.slice(failedIndex + 1);
+    const editIndex = following.findIndex(isSuccessfulEditorMutation);
+    return (
+      editIndex >= 0 &&
+      following
+        .slice(editIndex + 1)
+        .some((candidate) => verificationTarget(candidate, "passed") === target)
+    );
+  });
+}
+
+function verificationTarget(
+  event: Readonly<Record<string, unknown>>,
+  status: "failed" | "passed",
+): string | undefined {
+  const digest = event.verificationTargetDigest;
+  const count = status === "failed" ? Number(event.failedCount) : Number(event.passedCount);
+  const opposite = status === "failed" ? Number(event.passedCount) : Number(event.failedCount);
+  return event.op === "coding-runtime.verification-summarized" &&
+    event.verificationStatus === status &&
+    count > 0 &&
+    opposite === 0 &&
+    typeof digest === "string" &&
+    /^[a-f0-9]{64}$/u.test(digest)
+    ? digest
+    : undefined;
+}
+
+function isSuccessfulEditorMutation(event: Readonly<Record<string, unknown>>): boolean {
+  return event.op === "coding-runtime.editor-mutation.settled" && event.state === "succeeded";
+}
+
 function assertUsefulRepositorySearch(events: readonly Readonly<Record<string, unknown>>[]): void {
-  if (!events.some(isUsefulRepositorySearchEvent)) {
+  if (!hasUsefulRepositorySearchSequence(events)) {
     throw new Error("model run did not consume a useful governed repository-search result");
   }
 }

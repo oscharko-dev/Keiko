@@ -298,6 +298,7 @@ async function executeRead(
   if (!readPostflight(deps, result, binding, signal, mutationGuard)) return { status: "failed" };
   if (Buffer.byteLength(result.text, "utf8") > MAX_READ_BYTES) return { status: "failed" };
   const window = readWindow(result.text, request.startLine, request.maxLines);
+  recordCompletedRead(deps, binding, request);
   return {
     status: "completed",
     read: {
@@ -310,6 +311,24 @@ async function executeRead(
       ...(window.nextStartLine === undefined ? {} : { nextStartLine: window.nextStartLine }),
     },
   };
+}
+
+function recordCompletedRead(
+  deps: CodingToolReadEditPortDeps,
+  binding: RuntimeProducerBinding | undefined,
+  request: RepositoryReadRequest,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    op: "coding-runtime.workspace-read",
+    correlationId: correlationIdOrUnknown(binding?.runId),
+    extra: {
+      state: "completed",
+      targetPathSha256: createHash("sha256").update(request.relativePath, "utf8").digest("hex"),
+      startLine: request.startLine ?? 1,
+      maxLines: request.maxLines ?? 0,
+    },
+  });
 }
 
 /**

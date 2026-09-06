@@ -22,6 +22,7 @@ import { VerificationRunnerError } from "../editor/verificationRunnerErrors.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import {
   createProductionManagedWorktreeToolFacade,
+  codingVerificationTargetDigest,
   deriveOptionalToolAvailability,
   resolveChildModelForRun,
 } from "./productionManagedWorktreeTools.js";
@@ -421,6 +422,7 @@ describe("production managed worktree tools", () => {
         kind: "verification-summarized",
         failureLocationCount: 1,
         failureLocationsTruncated: true,
+        verificationTargetDigest: codingVerificationTargetDigest("test"),
       }),
     );
   });

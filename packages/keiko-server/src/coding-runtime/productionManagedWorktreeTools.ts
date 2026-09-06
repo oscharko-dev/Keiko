@@ -840,7 +840,7 @@ function buildVerificationRunner(
         return verificationPortRefusal(input, "verification-authority-revoked");
       }
       verificationSequence += 1;
-      publishVerification(input, verificationSequence, report);
+      publishVerification(input, verificationSequence, report, request);
       return verificationOutcome(input, report, guard, signal, commitProof);
     },
   };
@@ -1058,6 +1058,10 @@ function publishVerification(
   input: ProductionManagedWorktreeToolInput,
   sequence: number,
   report: VerificationReport,
+  request: Extract<
+    import("./codingToolIpc.js").CodingToolActionRequest,
+    { readonly action: "verification" }
+  >,
 ): void {
   const failure = modelVerificationFailure(report);
   const event: CodingWorkbenchRuntimeEvent = {
@@ -1073,11 +1077,23 @@ function publishVerification(
     skippedCount: report.counts.skipped,
     failureLocationCount: failure?.locations.length ?? 0,
     failureLocationsTruncated: failure?.truncated ?? false,
+    verificationTargetDigest: codingVerificationTargetDigest(
+      request.verifierId,
+      request.targetPath,
+    ),
   };
   if (!validateCodingWorkbenchRuntimeEvent(event).ok) {
     throw new Error("runtime-verification-event-invalid");
   }
   input.onRuntimeEvent(event);
+}
+
+export function codingVerificationTargetDigest(verifierId: string, targetPath?: string): string {
+  return createHash("sha256")
+    .update(verifierId, "utf8")
+    .update("\0", "utf8")
+    .update(targetPath ?? "", "utf8")
+    .digest("hex");
 }
 
 function verificationStatus(

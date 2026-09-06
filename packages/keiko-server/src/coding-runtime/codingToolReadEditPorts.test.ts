@@ -15,6 +15,7 @@ import { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
 import type { CodingRuntimeEditorMutationLeaseRegistration } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import {
   createCodingToolReadEditPorts,
@@ -356,9 +357,11 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
       Promise.resolve({ ok: true as const, text: "const value = 1;\n" }),
     );
     const editorAction = vi.fn();
+    const events: ServerLogEvent[] = [];
     const ports = createCodingToolReadEditPorts({
       secureWorkspaceTextRead: { readText },
       editorAgentClient: { action: editorAction },
+      activityLog: { write: (event): void => void events.push(event) },
       resolveEditorActionContext: () => ({
         sessionId: "session-2332",
         authorityRef: { runId: "run-2332", envelopeDigest: DIGEST },
@@ -374,6 +377,17 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
 
     expect(readText).toHaveBeenCalledWith({ relativePath: "src/a.ts", signal: undefined });
     expect(editorAction).not.toHaveBeenCalled();
+    expect(events).toEqual([
+      expect.objectContaining({
+        op: "coding-runtime.workspace-read",
+        extra: {
+          state: "completed",
+          targetPathSha256: createHash("sha256").update("src/a.ts").digest("hex"),
+          startLine: 1,
+          maxLines: 0,
+        },
+      }),
+    ]);
     expect(result).toEqual({
       status: "completed",
       read: {

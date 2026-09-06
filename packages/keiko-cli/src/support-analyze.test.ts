@@ -774,6 +774,7 @@ describe("analyzeLogText — extra fields and frames", () => {
   it("reconstructs run-correlated failed and passed coding verifier summaries", () => {
     const correlationId = "originating-verification-run";
     const op = "coding-runtime.verification-summarized";
+    const verificationTargetDigest = "d".repeat(64);
     const serialized = serializedActivityLog("keiko-support-coding-verification-", (sink) => {
       for (const [eventId, verificationStatus, passedCount, failedCount] of [
         ["verification-1", "failed", 0, 1],
@@ -791,6 +792,7 @@ describe("analyzeLogText — extra fields and frames", () => {
             passedCount,
             failedCount,
             skippedCount: 0,
+            verificationTargetDigest,
           },
         });
       }
@@ -808,6 +810,7 @@ describe("analyzeLogText — extra fields and frames", () => {
           passedCount: 0,
           failedCount: 1,
           skippedCount: 0,
+          verificationTargetDigest,
         },
       },
       {
@@ -820,9 +823,29 @@ describe("analyzeLogText — extra fields and frames", () => {
           passedCount: 4,
           failedCount: 0,
           skippedCount: 0,
+          verificationTargetDigest,
         },
       },
     ]);
+  });
+
+  it("reconstructs the body-free target of a bounded workspace read", () => {
+    const correlationId = "originating-workspace-read";
+    const op = "coding-runtime.workspace-read";
+    const targetPathSha256 = "e".repeat(64);
+    const serialized = serializedActivityLog("keiko-support-workspace-read-", (sink) => {
+      sink.write({
+        category: productionLogCategory(op),
+        op,
+        correlationId,
+        extra: { state: "completed", targetPathSha256, startLine: 4, maxLines: 20 },
+      });
+    });
+
+    expect(findTimeline(analyzeLogText(serialized), correlationId)?.lines[0]).toMatchObject({
+      op,
+      extra: { state: "completed", targetPathSha256, startLine: 4, maxLines: 20 },
+    });
   });
 
   it("omits extra entirely when no unknown key survives (never emits an empty object)", () => {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   captureCodingRepositoryRequest,
   type CodingRepositoryResult,
@@ -60,6 +61,13 @@ function terminalEvent(
             resultCount: result.kind === "search" ? result.hits.length : 1,
             outputBytes: Buffer.byteLength(JSON.stringify(result)),
             truncationCount: result.truncationReasons.length,
+            ...(result.kind === "search"
+              ? {
+                  resultPathSha256: result.hits.map((hit) =>
+                    createHash("sha256").update(hit.path, "utf8").digest("hex"),
+                  ),
+                }
+              : {}),
           }
         : {}),
       ...(error === undefined
