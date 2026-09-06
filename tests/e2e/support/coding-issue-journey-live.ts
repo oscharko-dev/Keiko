@@ -450,10 +450,10 @@ export async function driveIssueToDraftPullRequest(
   input: DriveToDraftPrInput,
 ): Promise<DeliveredPullRequest> {
   await openLiveWorkbench(page, input.repositoryRoot);
-  await ensureWorkflowEligibleModel(page);
   await grantGithubAccess(page, input.repositoryRoot);
-  await assertRuntimeReady(page, input.mode);
   await previewAndBindIssue(page, input.issueRef);
+  await ensureWorkflowEligibleModel(page);
+  await assertRuntimeReady(page, input.mode);
   await startCodingRun(page, input.mode);
   await expect(workbenchSurface(page)).toHaveAttribute("data-state", "running", {
     timeout: 60_000,
