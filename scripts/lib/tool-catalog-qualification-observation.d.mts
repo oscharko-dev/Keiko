@@ -49,10 +49,6 @@ export function writeToolCatalogQualificationObservation(
   input: WriteToolCatalogQualificationObservationInput,
 ): void;
 
-export function validToolCatalogQualificationProof(
-  proof: WriteToolCatalogQualificationObservationInput["proof"],
-  settlementCount: number,
-): boolean;
 export function validToolCatalogQualificationOutcome(
   component: WriteToolCatalogQualificationObservationInput["component"],
   terminalStatus: WriteToolCatalogQualificationObservationInput["terminalStatus"],

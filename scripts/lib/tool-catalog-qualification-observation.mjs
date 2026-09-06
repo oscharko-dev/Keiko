@@ -117,7 +117,7 @@ const PROOF_VALIDATORS = Object.freeze({
     settlementCount >= 2,
 });
 
-export function validToolCatalogQualificationProof(proof, settlementCount) {
+function validToolCatalogQualificationProof(proof, settlementCount) {
   if (proof === null || typeof proof !== "object" || Array.isArray(proof)) return false;
   const validate = PROOF_VALIDATORS[proof.kind];
   return validate?.(proof, settlementCount) === true;

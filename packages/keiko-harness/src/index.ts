@@ -79,7 +79,6 @@ export {
   DryRunToolPort,
   GatewayModelPort,
   type ChatModel,
-  type DryRunCatalogBinding,
   type RecordedToolCall,
 } from "./adapters.js";
 
