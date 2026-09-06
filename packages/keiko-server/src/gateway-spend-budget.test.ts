@@ -23,7 +23,14 @@ const capability: ModelCapability = {
   toolCalling: false,
   structuredOutput: false,
   streaming: true,
+  supportsImageInput: false,
+  supportsDocumentInput: false,
+  workflowEligible: false,
   costClass: "low",
+  latencyClass: "fast",
+  throughputHint: "test",
+  preferredUseCases: [],
+  knownLimitations: [],
   pricing: { inputUsdPerMillionTokens: 1_000_000, outputUsdPerMillionTokens: 1_000_000 },
 };
 const request = {
@@ -67,8 +74,10 @@ function expectStructuredRejection(reason: string): void {
   const event = events.at(-1);
   expect(event?.op).toBe("gateway.spend.rejected");
   expect(event?.extra?.reason).toBe(reason);
-  expect(Array.isArray(event?.extra?.frames)).toBe(true);
-  expect((event?.extra?.frames as readonly unknown[] | undefined)?.length).toBeGreaterThan(0);
+  const frames = event?.extra?.frames;
+  expect(Array.isArray(frames)).toBe(true);
+  if (!Array.isArray(frames)) throw new TypeError("expected rejection frames");
+  expect(frames.length).toBeGreaterThan(0);
   expect(Array.isArray(event?.extra?.causeChain)).toBe(true);
 }
 const config: GatewayConfig = {
@@ -96,11 +105,7 @@ afterEach(() => {
 describe("shared persistent model spend admission", () => {
   it("records reconstructable diagnostics for caught and locally-constructed rejections", () => {
     expect(() =>
-      budget().reserve(
-        { ...capability, pricing: undefined },
-        request,
-        "pricing-rejection",
-      ),
+      budget().reserve({ ...capability, pricing: undefined }, request, "pricing-rejection"),
     ).toThrow("spend-pricing-unavailable");
     expectStructuredRejection("spend-pricing-unavailable");
 

@@ -96,11 +96,13 @@ function processIo(): CliIo {
 export function launchedEnv(
   baseEnv: Readonly<Record<string, string | undefined>>,
   spendBudgetUsd: number,
+  spendLedgerPath: string,
   launcherSecret: string,
 ): Record<string, string | undefined> {
   return {
     ...baseEnv,
     KEIKO_QUALIFICATION_SPEND_BUDGET_USD: String(spendBudgetUsd),
+    KEIKO_QUALIFICATION_SPEND_LEDGER_PATH: spendLedgerPath,
     [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: launcherSecret,
   };
 }
@@ -149,7 +151,12 @@ async function main(): Promise<number> {
   return runUiCli(
     args,
     processIo(),
-    launchedEnv(process.env, resolved.config.spendBudgetUsd, launcherSecret),
+    launchedEnv(
+      process.env,
+      resolved.config.spendBudgetUsd,
+      resolved.config.spendLedgerPath,
+      launcherSecret,
+    ),
     { cwd: resolved.config.controlledRepositoryRoot },
   );
 }

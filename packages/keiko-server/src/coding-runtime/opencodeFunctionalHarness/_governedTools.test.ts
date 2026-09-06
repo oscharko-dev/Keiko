@@ -152,7 +152,6 @@ describe("scripted child executes the production generated approval shim", () =>
           approvalDigest: codingToolApprovalBindingDigest(RUN, {
             action: "git",
             operation: "ci",
-            forceFresh: true,
             actionId: `${SESSION}:ci-1`,
             idempotencyKey: `${SESSION}:ci-1`,
           }),

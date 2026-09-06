@@ -1,14 +1,35 @@
 import { describe, expect, it, vi } from "vitest";
 import { ConfigInvalidError, TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
-import { Gateway, type GatewaySpendReservation } from "./gateway.js";
+import { Gateway, type GatewayCallRequest, type GatewaySpendReservation } from "./gateway.js";
 import type {
   GatewayConfig,
+  GatewayRequest,
+  ModelCapability,
   GatewayStreamChunk,
   NormalizedResponse,
   ProviderAdapter,
 } from "./types.js";
 
 const config: GatewayConfig = {
+  capabilities: [
+    {
+      id: "example-chat-model",
+      kind: "chat",
+      contextWindow: 64_000,
+      maxOutputTokens: 4_096,
+      toolCalling: true,
+      structuredOutput: true,
+      streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: false,
+      costClass: "medium",
+      latencyClass: "standard",
+      throughputHint: "fixture",
+      preferredUseCases: [],
+      knownLimitations: [],
+    },
+  ],
   providers: [
     {
       modelId: "example-chat-model",
@@ -72,6 +93,29 @@ describe("Gateway attempt spend admission", () => {
       expect(call).not.toHaveBeenCalled();
       expect(callStream).not.toHaveBeenCalled();
       expect(spendBudget.reserve).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["chat", "stream"])(
+    "forwards the reserved default output bound through %s",
+    async (mode) => {
+      const forwarded: GatewayRequest[] = [];
+      const reserve = vi.fn(
+        (_capability: ModelCapability, _request: GatewayCallRequest): GatewaySpendReservation => ({
+          settle: vi.fn(),
+        }),
+      );
+      const call = (input: GatewayRequest): Promise<NormalizedResponse> => {
+        forwarded.push(input);
+        return Promise.resolve(response);
+      };
+      const gateway = new Gateway(config, { adapter: { call }, spendBudget: { reserve } });
+      if (mode === "chat") await gateway.chat(request);
+      else await consume(gateway.chatStream(request));
+      const admittedCapability = reserve.mock.calls[0]?.[0];
+      if (admittedCapability === undefined) throw new TypeError("missing admission");
+      expect(forwarded[0]?.maxOutputTokens).toBe(admittedCapability.maxOutputTokens);
+      expect(forwarded[0]?.maxOutputTokens).toBeGreaterThan(0);
     },
   );
 

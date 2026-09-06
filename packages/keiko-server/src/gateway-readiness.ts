@@ -29,6 +29,7 @@ import { rerankSelection } from "./grounded-rerank-facade.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { readBoundedRequestBody, RequestBodyTooLargeError } from "./bounded-request-body.js";
 import {
+  admittedGatewayProbeOutputLimit,
   probeGatewayToolCalling,
   probeUsage,
   reserveGatewayProbeSpend,
@@ -226,9 +227,7 @@ async function providerRequest(
         ? { fetchImpl: deps.gatewayReadinessFetch }
         : {}),
       ...(options.stream === true ? { stream: true } : {}),
-      ...(spend.capability === undefined
-        ? {}
-        : { maxOutputTokens: spend.capability.maxOutputTokens }),
+      ...admittedGatewayProbeOutputLimit(reservation, spend),
       maxResponseBytes: MAX_PROVIDER_RESPONSE_BYTES,
     });
   } catch (error) {

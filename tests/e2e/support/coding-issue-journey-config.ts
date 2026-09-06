@@ -12,12 +12,15 @@
 //     `packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts` uses.
 //   - `KEIKO_QUALIFICATION_SPEND_BUDGET_USD`, a positive bounded evaluation budget (issue #3390:
 //     "Do not provision paid resources ... spend beyond operator-approved evaluation budgets").
+//   - `KEIKO_QUALIFICATION_SPEND_LEDGER_PATH`, an absolute durable SQLite target whose parent
+//     already exists. Production reserves against this ledger before every provider attempt.
 //
 // Any missing input resolves to `qualification-input-unavailable` with the closed, named list of
 // what is missing — never a silent fallback to scripted composition.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { hasConfiguredEnvModelProvider } from "@oscharko-dev/keiko-model-gateway";
 
 export interface CodingIssueJourneyQualificationConfig {
@@ -25,6 +28,7 @@ export interface CodingIssueJourneyQualificationConfig {
   readonly controlledRepositoryRoot: string;
   readonly controlledRepositorySlug: string;
   readonly spendBudgetUsd: number;
+  readonly spendLedgerPath: string;
 }
 
 export type CodingIssueJourneyQualificationResolution =
@@ -119,6 +123,29 @@ function resolveSpendBudgetUsd(
   return parsed;
 }
 
+function resolveSpendLedgerPath(
+  env: Readonly<Record<string, string | undefined>>,
+  missing: string[],
+): string | undefined {
+  const raw = env.KEIKO_QUALIFICATION_SPEND_LEDGER_PATH;
+  let resolved: string | undefined;
+  try {
+    if (raw !== undefined && raw.length > 0 && isAbsolute(raw)) {
+      const parent = realpathSync(dirname(raw));
+      if (!existsSync(raw) || statSync(raw).isFile()) resolved = join(parent, basename(raw));
+    }
+  } catch {
+    resolved = undefined;
+  }
+  if (resolved === undefined) {
+    missing.push(
+      "KEIKO_QUALIFICATION_SPEND_LEDGER_PATH (an absolute durable ledger path with an existing parent)",
+    );
+    return undefined;
+  }
+  return resolved;
+}
+
 /**
  * Resolves the qualification inputs, or reports the closed `qualification-input-unavailable`
  * reason with every missing input named. Never throws and never reads a secret value — only
@@ -136,8 +163,14 @@ export function resolveCodingIssueJourneyQualificationConfig(
   }
   const repository = resolveControlledRepository(env, missing);
   const spendBudgetUsd = resolveSpendBudgetUsd(env, missing);
+  const spendLedgerPath = resolveSpendLedgerPath(env, missing);
 
-  if (missing.length > 0 || repository === undefined || spendBudgetUsd === undefined) {
+  if (
+    missing.length > 0 ||
+    repository === undefined ||
+    spendBudgetUsd === undefined ||
+    spendLedgerPath === undefined
+  ) {
     return { ok: false, reason: "qualification-input-unavailable", missing };
   }
   return {
@@ -147,6 +180,7 @@ export function resolveCodingIssueJourneyQualificationConfig(
       controlledRepositoryRoot: repository.root,
       controlledRepositorySlug: repository.slug,
       spendBudgetUsd,
+      spendLedgerPath,
     },
   };
 }

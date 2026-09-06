@@ -210,16 +210,13 @@ function isCatalogProfileRef(value) {
   );
 }
 
-// The real, single source of "H1's owned source paths": every currently-registered row of this
-// file's own migration inventory (GOVERNED_TOOL_CONTRACT_PINS.inventory) whose ownerIssue matches
-// pendingH1.owner (#3386's H1 local repository-search handler). Never a second, hand-authored path
-// list — extending or narrowing H1's real ownership means editing that one inventory, and this
+// The real, single source of "H1's owned source paths": the complete implementation annex beside
+// pendingH1 in the canonical pins. It deliberately does not reuse or enlarge the immutable 43-row
+// architecture census: migration ownership and source-content ownership answer different questions
+// (#3386 review). Extending or narrowing H1's implementation means editing that one annex, and this
 // derives from it automatically (AGENTS.md §5).
 export const H1_OWNED_SOURCE_PATHS = Object.freeze(
-  GOVERNED_TOOL_CONTRACT_PINS.inventory
-    .filter((row) => row.ownerIssue === GOVERNED_TOOL_CONTRACT_PINS.pendingH1.owner)
-    .map((row) => row.path)
-    .sort(),
+  [...GOVERNED_TOOL_CONTRACT_PINS.pendingH1.ownedImplementation].sort(),
 );
 
 // One row per H1Provenance field: `test` reads the whole record so a check can span more than one

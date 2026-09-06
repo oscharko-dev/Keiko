@@ -26,6 +26,36 @@ function jsonResponse(body: unknown): Response {
 }
 
 describe("requestGatewayReadinessChatCompletion", () => {
+  it("overrides raw body defaults with the admitted provider-specific output bound", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchImpl: typeof fetch = (_url, init) => {
+      if (typeof init?.body === "string") {
+        bodies.push(JSON.parse(init.body) as Record<string, unknown>);
+      }
+      return Promise.resolve(jsonResponse({ choices: [] }));
+    };
+
+    await requestGatewayReadinessChatCompletion({
+      config: CONFIG,
+      provider: PROVIDER,
+      body: { messages: [], max_tokens: 128_000, max_completion_tokens: 128_000 },
+      maxOutputTokens: 17,
+      fetchImpl,
+    });
+    await requestGatewayReadinessChatCompletion({
+      config: CONFIG,
+      provider: { ...PROVIDER, outputTokenParameter: "max_completion_tokens" },
+      body: { messages: [], max_tokens: 128_000, max_completion_tokens: 128_000 },
+      maxOutputTokens: 19,
+      fetchImpl,
+    });
+
+    expect(bodies).toEqual([
+      { model: PROVIDER.modelId, messages: [], max_tokens: 17 },
+      { model: PROVIDER.modelId, messages: [], max_completion_tokens: 19 },
+    ]);
+  });
+
   it("trims a trailing slash from the base URL before joining /chat/completions", async () => {
     // LiteLLM production audit: a file/env-authored 'https://litellm.example.com/v1/' produced
     // '/v1//chat/completions', which LiteLLM answers with a 404 — the probe must trim exactly

@@ -18,17 +18,23 @@ import {
 describe("launchedEnv", () => {
   it("threads the resolved spend budget into the launched process env", () => {
     const result = launchedEnv(
-      { PATH: "/usr/bin", KEIKO_QUALIFICATION_SPEND_BUDGET_USD: "bogus" },
+      {
+        PATH: "/usr/bin",
+        KEIKO_QUALIFICATION_SPEND_BUDGET_USD: "bogus",
+        KEIKO_QUALIFICATION_SPEND_LEDGER_PATH: "relative/untrusted.db",
+      },
       25,
+      "/tmp/qualification/spend.db",
       "a-resolved-launcher-secret",
     );
     expect(result.KEIKO_QUALIFICATION_SPEND_BUDGET_USD).toBe("25");
+    expect(result.KEIKO_QUALIFICATION_SPEND_LEDGER_PATH).toBe("/tmp/qualification/spend.db");
     expect(result.PATH).toBe("/usr/bin");
   });
 
   it("does not mutate the base env", () => {
     const base = { KEIKO_QUALIFICATION_SPEND_BUDGET_USD: "10" };
-    launchedEnv(base, 40, "a-resolved-launcher-secret");
+    launchedEnv(base, 40, "/tmp/qualification/spend.db", "a-resolved-launcher-secret");
     expect(base.KEIKO_QUALIFICATION_SPEND_BUDGET_USD).toBe("10");
   });
 
@@ -39,7 +45,12 @@ describe("launchedEnv", () => {
   // `@oscharko-dev/keiko-server`, the SAME producer the pairing port itself exports the key
   // from -- never a restated literal) is what makes a minted attestation verifiable at all.
   it("threads the resolved launcher secret under the real pairing port's env key", () => {
-    const result = launchedEnv({ PATH: "/usr/bin" }, 10, "resolved-secret-value");
+    const result = launchedEnv(
+      { PATH: "/usr/bin" },
+      10,
+      "/tmp/qualification/spend.db",
+      "resolved-secret-value",
+    );
     expect(result[SESSION_PAIRING_LAUNCHER_SECRET_ENV]).toBe("resolved-secret-value");
   });
 });

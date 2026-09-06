@@ -320,8 +320,11 @@ function scriptedModelDeps(
     await commit?.beforeResponse(response);
     return response;
   };
-  return {
-    ...deps,
+  // Keep the exact graph identity captured by the production automatic-description dispatcher.
+  // The PR-description application cache is scoped to that graph, so returning a spread clone
+  // would retain the generated artifact in one cache and make the mounted HTTP review route read
+  // an empty cache even though both resolve the same authority binding.
+  return Object.assign(deps, {
     config: scriptedGatewayConfig(),
     configPresent: true,
     gatewayConfig: undefined,
@@ -330,7 +333,7 @@ function scriptedModelDeps(
       async function* (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> {
         yield { type: "done" as const, response: await chat(request) };
       },
-  };
+  });
 }
 
 function scriptedGatewayConfig(): GatewayConfig {
@@ -460,14 +463,18 @@ function scriptedRuntimeDeps(
   runtimeMutationLeaseBroker: ReturnType<typeof createCodingRuntimeEditorMutationLeaseBroker>,
 ): UiHandlerDeps {
   const assembled = buildUiHandlerDeps(options);
-  return {
-    ...assembled,
+  const dispose = assembled.dispose;
+  // The production description dispatcher is attached during `buildUiHandlerDeps` and retains its
+  // application service in a WeakMap keyed by this exact deps object. Cloning the graph here made
+  // HTTP review resolve against a second empty cache even though runtime status still saw the held
+  // proposal. Attach the fixture's shared lease broker without changing the graph's identity.
+  return Object.assign(assembled, {
     runtimeMutationLease: runtimeMutationLeaseBroker,
     dispose: async (): Promise<void> => {
-      await assembled.dispose?.();
+      await dispose?.();
       runtimeMutationLeaseBroker.dispose();
     },
-  };
+  });
 }
 
 function scriptedComposition(

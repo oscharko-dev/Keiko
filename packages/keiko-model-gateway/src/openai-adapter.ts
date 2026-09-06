@@ -35,6 +35,7 @@ import {
 } from "./normalize.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import { assertValidGatewaySamplingParameters } from "./types.js";
+import { providerOutputTokenLimit } from "./output-token-limit.js";
 import {
   logEndpointHost,
   logLevelEnabled,
@@ -200,23 +201,6 @@ function buildMessage(
   };
 }
 
-const COMPLETION_TOKEN_PARAMETER_MODEL_RE = /^(?:gpt-5|o[134])(?:[.-]|$)/iu;
-
-function outputTokenLimit(
-  request: GatewayRequest,
-  config: ModelProviderConfig,
-): Pick<ChatRequestBody, "max_tokens" | "max_completion_tokens"> {
-  if (request.maxOutputTokens === undefined) return {};
-  const parameter =
-    config.outputTokenParameter ??
-    (COMPLETION_TOKEN_PARAMETER_MODEL_RE.test(config.modelId)
-      ? "max_completion_tokens"
-      : "max_tokens");
-  return parameter === "max_completion_tokens"
-    ? { max_completion_tokens: request.maxOutputTokens }
-    : { max_tokens: request.maxOutputTokens };
-}
-
 type ProviderGatewayRequest = GatewayRequest & {
   readonly tools?: readonly ToolDefinition[] | undefined;
 };
@@ -269,7 +253,7 @@ function buildBody(request: ProviderGatewayRequest, config: ModelProviderConfig)
     ...toolsField(request.tools),
     ...responseFormatField(request),
     ...samplingFields(request),
-    ...outputTokenLimit(request, config),
+    ...providerOutputTokenLimit(request.maxOutputTokens, config),
   };
 }
 

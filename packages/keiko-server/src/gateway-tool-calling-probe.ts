@@ -116,6 +116,15 @@ export function settleGatewayProbeSpend(
   if (reservation !== undefined) reservation.settle(usage);
 }
 
+export function admittedGatewayProbeOutputLimit(
+  reservation: GatewaySpendReservation | undefined,
+  context: GatewayProbeSpendContext | undefined,
+): { readonly maxOutputTokens?: number } {
+  return reservation === undefined || context?.capability === undefined
+    ? {}
+    : { maxOutputTokens: context.capability.maxOutputTokens };
+}
+
 function nonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
@@ -157,9 +166,7 @@ export async function probeGatewayToolCalling(
       provider,
       body: toolCallingBody(),
       ...(fetchImpl === undefined ? {} : { fetchImpl }),
-      ...(spend?.capability === undefined
-        ? {}
-        : { maxOutputTokens: spend.capability.maxOutputTokens }),
+      ...admittedGatewayProbeOutputLimit(reservation, spend),
       maxResponseBytes: MAX_PROVIDER_RESPONSE_BYTES,
     });
   } catch (error) {

@@ -328,7 +328,9 @@ async function expectGeneratedDescription(
   });
   expect(staleReview.status()).toBe(403);
   expect(await staleReview.json()).toMatchObject({
-    error: { code: "GIT_DELIVERY_PR_DESCRIPTION_UNAVAILABLE" },
+    // The retained description authority is bound to the generated snapshot. A substituted digest
+    // must fail at admission before the proposal holder can reveal whether that key exists.
+    error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" },
   });
   const generatedReview = await page.request.post("/api/git-delivery/pr-description/review", {
     headers: CSRF,

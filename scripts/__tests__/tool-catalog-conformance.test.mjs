@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -627,12 +627,37 @@ describe("review 3941891302: sourceHead must resolve against real Git and bind t
     workDir = undefined;
   });
 
-  it("H1_OWNED_SOURCE_PATHS derives from the real single migration inventory and names real, existing files", () => {
+  it("H1_OWNED_SOURCE_PATHS derives from the canonical implementation annex and names real, existing files", () => {
     expect(H1_OWNED_SOURCE_PATHS.length).toBeGreaterThan(0);
     expect(H1_OWNED_SOURCE_PATHS).toEqual([...H1_OWNED_SOURCE_PATHS].sort());
     for (const path of H1_OWNED_SOURCE_PATHS) {
       expect(() => readFileSync(join(ROOT, path), "utf8")).not.toThrow();
     }
+  });
+
+  // Fails before the ownership-annex fix: changing the actual H1 request/authority handler left
+  // the default owned-source digest unchanged because the historical 43-row migration census
+  // named only four older integration helpers. The census remains immutable; the canonical pins
+  // now carry a separate complete implementation annex used by this production digest helper.
+  it("binds the default owned-source digest to the actual H1 handler implementation", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-owned-handler-"));
+    workDir = root;
+    initHermeticRepo(root);
+    const handlerPath = "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts";
+    for (const path of new Set([...H1_OWNED_SOURCE_PATHS, handlerPath])) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), `// initial ${path}\n`);
+    }
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "H1 implementation"]);
+    const sourceHead = git(root, ["rev-parse", "HEAD"]);
+    const sourceDigest = ownedSourceDigestAt(sourceHead, root, execFileSync);
+    writeFileSync(join(root, handlerPath), "// changed handler authority guard\n");
+    git(root, ["add", handlerPath]);
+    git(root, ["commit", "-m", "change H1 handler"]);
+    const changedHead = git(root, ["rev-parse", "HEAD"]);
+    expect(ownedSourceDigestAt(changedHead, root, execFileSync)).not.toBe(sourceDigest);
+    expect(H1_OWNED_SOURCE_PATHS).toContain(handlerPath);
   });
 
   // Fails before the fix: the reviewer's exact repro (real dev tip, current producer projection,

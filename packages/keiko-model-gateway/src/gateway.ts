@@ -205,6 +205,15 @@ export class Gateway {
     this.logConfigResolved();
   }
 
+  private prepareRequest(
+    request: GatewayCallRequest,
+    capability: ModelCapability,
+  ): GatewayCallRequest {
+    assertValidGatewaySamplingParameters(request);
+    if (this.spendBudget === undefined || request.maxOutputTokens !== undefined) return request;
+    return { ...request, maxOutputTokens: capability.maxOutputTokens };
+  }
+
   // ONE-TIME configuration snapshot, written once per Gateway construction (the process-wide
   // instance cache in keiko-server constructs exactly one Gateway per distinct GatewayConfig, so
   // this line does not repeat on every call). Answers "what did the gateway actually resolve to
@@ -228,7 +237,7 @@ export class Gateway {
 
   async chat(request: GatewayCallRequest): Promise<NormalizedResponse> {
     const route = this.route(request.modelId, request.logContext?.correlationId);
-    assertValidGatewaySamplingParameters(request);
+    request = this.prepareRequest(request, route.capability);
     const breaker = this.breakerFor(route.provider);
     const requestId = randomUUID();
     const ids = callIds(requestId, request);
@@ -275,7 +284,7 @@ export class Gateway {
   // single delta+done synthesised from its buffered call().
   async *chatStream(request: GatewayCallRequest): AsyncGenerator<GatewayStreamChunk> {
     const route = this.route(request.modelId, request.logContext?.correlationId);
-    assertValidGatewaySamplingParameters(request);
+    request = this.prepareRequest(request, route.capability);
     const breaker = this.breakerFor(route.provider);
     const ids = callIds(randomUUID(), request);
     breaker.assertAllowed(ids.correlationId);

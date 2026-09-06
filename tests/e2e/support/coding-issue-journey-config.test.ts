@@ -51,6 +51,7 @@ function fullyConfiguredEnv(repositoryRoot: string): Record<string, string | und
     KEIKO_MODEL_CODING_ISSUE_JOURNEY_BASE_URL: "https://gateway.internal.example/v1",
     KEIKO_QUALIFICATION_CONTROLLED_REPOSITORY_ROOT: repositoryRoot,
     KEIKO_QUALIFICATION_SPEND_BUDGET_USD: "5",
+    KEIKO_QUALIFICATION_SPEND_LEDGER_PATH: join(repositoryRoot, "spend.db"),
   };
 }
 
@@ -60,10 +61,11 @@ describe("resolveCodingIssueJourneyQualificationConfig", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe("qualification-input-unavailable");
-    expect(result.missing).toHaveLength(3);
+    expect(result.missing).toHaveLength(4);
     expect(result.missing.some((entry) => entry.includes("Model Gateway"))).toBe(true);
     expect(result.missing.some((entry) => entry.includes("CONTROLLED_REPOSITORY_ROOT"))).toBe(true);
     expect(result.missing.some((entry) => entry.includes("SPEND_BUDGET_USD"))).toBe(true);
+    expect(result.missing.some((entry) => entry.includes("SPEND_LEDGER_PATH"))).toBe(true);
   });
 
   it("resolves ok when a real env-only model profile, a real controlled checkout, and a budget are all present", () => {
@@ -77,6 +79,7 @@ describe("resolveCodingIssueJourneyQualificationConfig", () => {
     expect(result.config.controlledRepositoryRoot).toBe(realpathSync(root));
     expect(result.config.controlledRepositorySlug).toBe("example-org/controlled-repo");
     expect(result.config.spendBudgetUsd).toBe(5);
+    expect(result.config.spendLedgerPath).toBe(join(realpathSync(root), "spend.db"));
     expect(result.config.gatewayConfigPath).toBeUndefined();
   });
 
@@ -114,6 +117,7 @@ describe("resolveCodingIssueJourneyQualificationConfig", () => {
       KEIKO_QUALIFICATION_GATEWAY_CONFIG_PATH: configPath,
       KEIKO_QUALIFICATION_CONTROLLED_REPOSITORY_ROOT: root,
       KEIKO_QUALIFICATION_SPEND_BUDGET_USD: "1.5",
+      KEIKO_QUALIFICATION_SPEND_LEDGER_PATH: join(root, "spend.db"),
     };
     const result = resolveCodingIssueJourneyQualificationConfig(env);
     expect(result.ok).toBe(true);
@@ -127,6 +131,7 @@ describe("resolveCodingIssueJourneyQualificationConfig", () => {
       KEIKO_QUALIFICATION_GATEWAY_CONFIG_PATH: join(root, "does-not-exist.json"),
       KEIKO_QUALIFICATION_CONTROLLED_REPOSITORY_ROOT: root,
       KEIKO_QUALIFICATION_SPEND_BUDGET_USD: "1",
+      KEIKO_QUALIFICATION_SPEND_LEDGER_PATH: join(root, "spend.db"),
     };
     const result = resolveCodingIssueJourneyQualificationConfig(env);
     expect(result.ok).toBe(false);
@@ -160,6 +165,21 @@ describe("resolveCodingIssueJourneyQualificationConfig", () => {
       expect(result.ok).toBe(false);
       if (result.ok) continue;
       expect(result.missing.some((entry) => entry.includes("SPEND_BUDGET_USD"))).toBe(true);
+    }
+  });
+
+  it("rejects a missing, relative, or parentless durable spend ledger path", () => {
+    const root = trackedGithubCheckout();
+    const invalidPaths = [undefined, "relative/spend.db", join(root, "missing-parent", "spend.db")];
+    for (const ledgerPath of invalidPaths) {
+      const env = {
+        ...fullyConfiguredEnv(root),
+        KEIKO_QUALIFICATION_SPEND_LEDGER_PATH: ledgerPath,
+      };
+      const result = resolveCodingIssueJourneyQualificationConfig(env);
+      expect(result.ok).toBe(false);
+      if (result.ok) continue;
+      expect(result.missing.some((entry) => entry.includes("SPEND_LEDGER_PATH"))).toBe(true);
     }
   });
 });

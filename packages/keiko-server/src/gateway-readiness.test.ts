@@ -220,7 +220,7 @@ describe("gateway readiness route", () => {
     const fetchImpl = vi.fn(() =>
       Promise.resolve(
         jsonResponse({
-          ...chatPayload("OK"),
+          choices: [{ message: { role: "assistant", content: "OK" } }],
           usage: { prompt_tokens: 1, completion_tokens: 1 },
         }),
       ),

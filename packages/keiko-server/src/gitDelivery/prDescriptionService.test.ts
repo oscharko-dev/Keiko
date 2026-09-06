@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import { createPrDescriptionApplicationService } from "./prDescriptionService.js";
 import { DescriptionFixture } from "./prDescriptionTestSupport.js";
 import type { PrDescriptionPreview } from "./prDescriptionTypes.js";
@@ -545,9 +546,10 @@ describe("snapshot reservation lifecycle (wave-3 W3-4 item 3)", () => {
     Object.assign(fixture.options, {
       execution: {
         ...fixture.options.execution,
-        snapshotReader: async () => {
+        snapshotReader: async (workspace: WorkspaceInfo) => {
           await captureUnrelatedSnapshots(33);
-          return snapshotReader?.();
+          if (snapshotReader === undefined) throw new Error("snapshot reader fixture is missing");
+          return snapshotReader(workspace);
         },
       },
     });
