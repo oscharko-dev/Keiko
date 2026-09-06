@@ -1199,6 +1199,7 @@ describe("production managed worktree tools", () => {
           root: "/managed/worktree",
           selectedRoot: "/managed/worktree",
           name: "test",
+          version: undefined,
           testFramework: "vitest",
           sourceDirs: [],
           testDirs: [],
