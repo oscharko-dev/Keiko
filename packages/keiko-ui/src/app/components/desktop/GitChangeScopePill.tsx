@@ -20,6 +20,7 @@
 // (WCAG 2.5.8), matching the sibling pills exactly.
 
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import type { ClientDiagnosticGitChangeDescription } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   applyGitChangeChatDescription,
   approveGitChangeChatDescription,
@@ -393,12 +394,19 @@ function reportDescriptionResponse(input: {
   readonly scope: ChatGitChangeScope;
   readonly proposalId: string;
   readonly correlationId: string;
-  readonly outcome: string;
+  readonly outcome: ClientDiagnosticGitChangeDescription["outcome"];
 }): void {
-  reportClientDiagnostic(
-    `[keiko] git-change description response: action=${input.action}, disposition=${input.disposition}, relationshipId=${input.scope.relationshipId}, snapshotDigest=${input.scope.snapshotDigest}, proposalId=${input.proposalId}, outcome=${input.outcome}`,
-    { correlationId: input.correlationId },
-  );
+  reportClientDiagnostic("[keiko] git-change description response settled", {
+    correlationId: input.correlationId,
+    gitChangeDescription: {
+      action: input.action,
+      disposition: input.disposition,
+      relationshipId: input.scope.relationshipId,
+      snapshotDigest: input.scope.snapshotDigest,
+      proposalId: input.proposalId,
+      outcome: input.outcome,
+    },
+  });
 }
 
 function useScopedDescriptionState(scope: ChatGitChangeScope): ScopedDescriptionState {

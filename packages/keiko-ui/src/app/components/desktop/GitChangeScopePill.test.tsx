@@ -593,8 +593,18 @@ describe("GitChangeScopePill — description apply affordance (#3400 final-audit
     const applyCorrelationId = applyDescription.mock.calls[0]?.[3];
     expect(applyCorrelationId).toEqual(expect.any(String));
     expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
-      `[keiko] git-change description response: action=apply, disposition=discarded, relationshipId=rel-1, snapshotDigest=${"e".repeat(64)}, proposalId=prop-1, outcome=observed`,
-      { correlationId: applyCorrelationId },
+      "[keiko] git-change description response settled",
+      {
+        correlationId: applyCorrelationId,
+        gitChangeDescription: {
+          action: "apply",
+          disposition: "discarded",
+          relationshipId: "rel-1",
+          snapshotDigest: "e".repeat(64),
+          proposalId: "prop-1",
+          outcome: "observed",
+        },
+      },
     );
   });
 

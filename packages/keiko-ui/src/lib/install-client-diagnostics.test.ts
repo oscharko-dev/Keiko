@@ -218,6 +218,30 @@ describe("fanOutClientDiagnostic correlationId handling", () => {
     expect(body["correlationId"]).toBe("original-request-id-01");
   });
 
+  it("keeps a bounded git-change response identity structured on the diagnostic wire", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const gitChangeDescription = {
+      action: "apply" as const,
+      disposition: "discarded" as const,
+      relationshipId: "rel-1",
+      snapshotDigest: "a".repeat(64),
+      proposalId: "prop-1",
+      outcome: "observed" as const,
+    };
+
+    fanOutClientDiagnostic("[keiko] git-change description response", {
+      correlationId: "original-apply-request-id",
+      gitChangeDescription,
+    });
+
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      correlationId: "original-apply-request-id",
+      gitChangeDescription,
+    });
+  });
+
   it("omits correlationId from the wire body when the caller supplies none", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
     vi.stubGlobal("fetch", fetchMock);

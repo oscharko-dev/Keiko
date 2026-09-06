@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "issue": 3401,
-  "checkedAt": "2026-09-06T05:55:29.989Z",
+  "checkedAt": "2026-09-06T06:06:47.653Z",
   "evidenceClass": "production-ui-deterministic-browser-fixture",
   "modelQualification": false,
   "liveAuthenticationQualification": false,
@@ -20,7 +20,7 @@
       "theme": "dark",
       "state": "generic-held-draft-after-response-race",
       "screenshot": "docs/design-system/evidence/3401/01-dark.png",
-      "screenshotSha256": "441e510e44742cec3563eab0a7e8fbe7b0f072b85b1be3fd3e59ed6131871139",
+      "screenshotSha256": "ce128d945cfe162ddbf738b5731385dcc29ea5fbe67bacf8bf2d3c3b77b61a4d",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -30,7 +30,7 @@
       "theme": "light",
       "state": "generic-held-draft-after-response-race",
       "screenshot": "docs/design-system/evidence/3401/02-light.png",
-      "screenshotSha256": "1a4bf9490103316551f58d97cbd8f01e54aed88df24c23dc8a9dfbd90820388c",
+      "screenshotSha256": "5465f0b6dd5fd2a75c2270fac2e8c5ece9d5fd9405ed515d53f8dcf5425a3886",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -41,7 +41,7 @@
       "highContrast": true,
       "state": "generic-held-draft-after-response-race",
       "screenshot": "docs/design-system/evidence/3401/03-dark-high-contrast.png",
-      "screenshotSha256": "3045c98dcf685505c97afd4e93f22d52929ee052963b74c36931a2209995ce69",
+      "screenshotSha256": "834eeeb17af8b39629be888a70645c2c03ced6356f2f9bf53fc2cdbabe8fcfa0",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -52,7 +52,7 @@
       "highContrast": true,
       "state": "generic-held-draft-after-response-race",
       "screenshot": "docs/design-system/evidence/3401/04-light-high-contrast.png",
-      "screenshotSha256": "29203112657b1acfc3c807779ccc6a2bbf7636900cec0eb85ebb2642878f0b1e",
+      "screenshotSha256": "896610909232c3e9ab440ca4d49385f41528f02dd8eed253574b159bdc9a58b1",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -63,7 +63,7 @@
       "contrast": "more",
       "state": "generic-held-draft-after-response-race",
       "screenshot": "docs/design-system/evidence/3401/05-prefers-contrast.png",
-      "screenshotSha256": "3045c98dcf685505c97afd4e93f22d52929ee052963b74c36931a2209995ce69",
+      "screenshotSha256": "834eeeb17af8b39629be888a70645c2c03ced6356f2f9bf53fc2cdbabe8fcfa0",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -74,7 +74,7 @@
       "forcedColors": "active",
       "state": "generic-held-draft-after-response-race",
       "screenshot": "docs/design-system/evidence/3401/06-forced-colors.png",
-      "screenshotSha256": "341d07e6fadda9e2acb551518b3beb079a33d7d439f2b7e8e0839e5fb19d69b7",
+      "screenshotSha256": "638ad98727f8d22be8f916f6d2b2fd0d3e846e764115eaa825d57228d429820a",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -85,7 +85,7 @@
       "reducedMotion": "reduce",
       "state": "generic-held-draft-after-response-race",
       "screenshot": "docs/design-system/evidence/3401/07-reduced-motion.png",
-      "screenshotSha256": "dc3cf842ba43e33c42e010d20ebe752c25d9f7278f4fe1af5982ccabbe586eb6",
+      "screenshotSha256": "ce128d945cfe162ddbf738b5731385dcc29ea5fbe67bacf8bf2d3c3b77b61a4d",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -96,7 +96,7 @@
       "width": 360,
       "state": "generic-held-draft-after-response-race",
       "screenshot": "docs/design-system/evidence/3401/08-compact.png",
-      "screenshotSha256": "c1dbdafc467aede65bf5b3c3b791be43eb682e48dde1b40f2f1dc687ffd93ebf",
+      "screenshotSha256": "b40116bb32f5fd68c9b0d444ee8bc2e1af1118f3bb3537f6d2dcfe8bcced93d5",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []

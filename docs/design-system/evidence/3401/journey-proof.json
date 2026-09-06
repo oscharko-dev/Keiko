@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "issue": 3401,
-  "checkedAt": "2026-09-06T05:55:30.049Z",
+  "checkedAt": "2026-09-06T06:06:47.718Z",
   "passed": true,
   "evidenceClass": "production-ui-deterministic-browser-fixture",
   "modelQualification": false,
@@ -21,7 +21,7 @@
     "olderResponseDiscarded": true,
     "currentCapture": {
       "screenshot": "docs/design-system/evidence/3401/09-response-race-current.png",
-      "screenshotSha256": "dc3cf842ba43e33c42e010d20ebe752c25d9f7278f4fe1af5982ccabbe586eb6"
+      "screenshotSha256": "ce128d945cfe162ddbf738b5731385dcc29ea5fbe67bacf8bf2d3c3b77b61a4d"
     }
   },
   "sourceHashes": {

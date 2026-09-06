@@ -9,6 +9,8 @@
 //   * `correlationId` is only ever trusted after `isValidCorrelationId` — the same server-side
 //     policy every other correlation id on this server goes through (`correlation.ts`) — so a
 //     browser cannot inject an arbitrary join key onto another request's timeline;
+//   * the optional Git-change response identity is a closed, body-free contract and is projected
+//     field-by-field; unknown browser fields can never enter the activity log;
 //   * the message text is written under `extra.clientNote`, NEVER `extra.message`: `"message"` is
 //     on `log-redaction.ts`'s `DENIED_FIELD_NAMES` and would collapse to `[redacted:key]` even
 //     though the value is already length-bounded by the wire guard. `clientNote` normalises to
@@ -115,6 +117,14 @@ function logClientDiagnostic(
   const extra: Record<string, unknown> = { clientNote: request.message };
   if (request.readyState !== undefined) extra.readyState = request.readyState;
   if (request.kind !== undefined) extra.clientKind = request.kind;
+  if (request.gitChangeDescription !== undefined) {
+    extra.action = request.gitChangeDescription.action;
+    extra.disposition = request.gitChangeDescription.disposition;
+    extra.relationshipId = request.gitChangeDescription.relationshipId;
+    extra.snapshotDigest = request.gitChangeDescription.snapshotDigest;
+    extra.proposalId = request.gitChangeDescription.proposalId;
+    extra.outcome = request.gitChangeDescription.outcome;
+  }
   const correlationId =
     request.correlationId !== undefined && isValidCorrelationId(request.correlationId)
       ? request.correlationId

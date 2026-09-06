@@ -112,6 +112,35 @@ describe("POST /api/diagnostics/client", () => {
     expect(line.clientNote).toBe("boundary caught TypeError");
   });
 
+  it("preserves a validated git-change response identity on the originating timeline", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "git-change description response",
+      clientTs: CLIENT_TS,
+      correlationId: "original-apply-request-id",
+      gitChangeDescription: {
+        action: "apply",
+        disposition: "discarded",
+        relationshipId: "rel-1",
+        snapshotDigest: "a".repeat(64),
+        proposalId: "prop-1",
+        outcome: "observed",
+      },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticLine(sink)).toMatchObject({
+      op: "client.diagnostic",
+      correlationId: "original-apply-request-id",
+      action: "apply",
+      disposition: "discarded",
+      relationshipId: "rel-1",
+      snapshotDigest: "a".repeat(64),
+      proposalId: "prop-1",
+      outcome: "observed",
+    });
+  });
+
   it("rejects an invalid correlationId and retains the validated ingest correlation", async () => {
     const sink = captureServerLog();
     // Fails `isValidCorrelationId`'s alphabet (spaces and `!` are not in [A-Za-z0-9._-]), but is a
