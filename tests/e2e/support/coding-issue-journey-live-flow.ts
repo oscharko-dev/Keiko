@@ -618,15 +618,45 @@ function parseActivityLine(line: string): Readonly<Record<string, unknown>> | un
   }
 }
 
-function activityEventsForRun(runId: string): readonly Readonly<Record<string, unknown>>[] {
+export function activityEventTree(
+  events: readonly Readonly<Record<string, unknown>>[],
+  rootCorrelationId: string,
+): readonly Readonly<Record<string, unknown>>[] {
+  const children = new Map<string, Set<string>>();
+  for (const event of events) {
+    const parent = event.parentCorrelationId;
+    const correlation = event.correlationId;
+    if (typeof parent !== "string" || typeof correlation !== "string") continue;
+    const siblings = children.get(parent) ?? new Set<string>();
+    siblings.add(correlation);
+    children.set(parent, siblings);
+  }
+  const related = new Set([rootCorrelationId]);
+  const pending = [rootCorrelationId];
+  for (const correlation of pending) {
+    for (const child of children.get(correlation) ?? []) {
+      if (related.has(child)) continue;
+      related.add(child);
+      pending.push(child);
+    }
+  }
+  return events.filter(
+    (event) =>
+      (typeof event.correlationId === "string" && related.has(event.correlationId)) ||
+      (typeof event.parentCorrelationId === "string" && related.has(event.parentCorrelationId)),
+  );
+}
+
+export function activityEventsForRun(runId: string): readonly Readonly<Record<string, unknown>>[] {
   const path = process.env.KEIKO_QUALIFICATION_ACTIVITY_LOG_PATH;
   if (path === undefined || path.length === 0) {
     throw new Error("qualification activity log path is unavailable");
   }
-  return readFileSync(path, "utf8")
+  const events = readFileSync(path, "utf8")
     .split("\n")
     .map(parseActivityLine)
-    .filter((event): event is Readonly<Record<string, unknown>> => event?.correlationId === runId);
+    .filter((event): event is Readonly<Record<string, unknown>> => event !== undefined);
+  return activityEventTree(events, runId);
 }
 
 export function isUsefulRepositorySearchEvent(event: Readonly<Record<string, unknown>>): boolean {

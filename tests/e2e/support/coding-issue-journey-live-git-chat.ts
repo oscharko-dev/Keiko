@@ -12,7 +12,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import { grantGithubAccess } from "./coding-issue-journey-live.js";
-import { createChatForFixture, seedWorkspace } from "./git-change-chat-3400.js";
+import {
+  createChatForFixture,
+  fetchGitChangeScopes,
+  seedWorkspace,
+} from "./git-change-chat-3400.js";
 
 // Matches `seedWorkspace`'s own hardcoded window ids (support/git-change-chat-3400.ts) -- these
 // are arbitrary DOM window identifiers this test author chose, not scripted-server fixture data,
@@ -93,6 +97,19 @@ export function attachDisposableBranchCheckout(
 
 export interface ConnectedGitChatSession {
   readonly chatId: string;
+  readonly relationshipId: string;
+}
+
+async function readExactConnectedRelationship(
+  request: APIRequestContext,
+  repositoryRoot: string,
+  chatId: string,
+): Promise<string> {
+  const scopes = await fetchGitChangeScopes(request, repositoryRoot, chatId);
+  if (scopes?.length !== 1 || scopes[0] === undefined) {
+    throw new Error("connected Chat did not persist exactly one Git relationship");
+  }
+  return scopes[0].relationshipId;
 }
 
 /** Connects the checked-out branch's real open pull request to a real Chat -- the exact real
@@ -121,7 +138,8 @@ export async function connectControlledPullRequestToChat(
   await dialog.getByRole("button", { name: "Connect" }).click();
   await expect(dialog).toBeHidden();
   await expect(page.locator(`[data-window-id="${CHAT_WINDOW_ID}"]`)).toBeVisible();
-  return { chatId: chat.id };
+  const relationshipId = await readExactConnectedRelationship(request, repositoryRoot, chat.id);
+  return { chatId: chat.id, relationshipId };
 }
 
 const TERMINAL_SEND_STATUSES = new Set(["completed", "failed", "cancelled"]);

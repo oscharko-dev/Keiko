@@ -26,7 +26,7 @@ import {
 } from "./coding-issue-journey-live-git-chat.js";
 import {
   assertGitChangeChatExposesNoMutatingAffordance,
-  assertNoForbiddenSessionToolEvents,
+  observeBoundGitChatSessionActivity,
   observeNoForbiddenSessionRequests,
 } from "./coding-issue-journey-live-git-chat-negative.js";
 
@@ -152,10 +152,15 @@ export async function runGitToChatScenario(
   let toolEventAssertion: string;
   try {
     toolEventAssertion = await observeNoForbiddenSessionRequests(page, async () => {
-      await connectControlledPullRequestToChat(page, request, worktree.root);
-      await refineDescriptionOverChat(page, GIT_TO_CHAT_TURNS);
+      const session = await connectControlledPullRequestToChat(page, request, worktree.root);
+      const activity = await observeBoundGitChatSessionActivity(
+        page,
+        session,
+        GIT_TO_CHAT_TURNS.length,
+        () => refineDescriptionOverChat(page, GIT_TO_CHAT_TURNS),
+      );
       await reviewApproveApplyGitChangeDescription(page);
-      return assertNoForbiddenSessionToolEvents(page);
+      return activity.assertion;
     });
   } finally {
     worktree.release();

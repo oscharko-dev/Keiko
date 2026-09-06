@@ -1,9 +1,10 @@
 // #3390 — the git-chat-negative-effects scenario. Adds two partial live observations to the
 // existing route-contract proof: malformed empty bodies are rejected at the product's mounted
 // effect boundaries, and the connected Chat renders no matching mutation controls. Neither claim
-// establishes full session-authority isolation. The companion positive two-turn scenario is
-// instrumented to observe the browser request stream and rendered tool events across the actual
-// model-backed session; qualification still requires that real journey to execute successfully.
+// establishes full session-authority isolation. The companion positive two-turn scenario binds
+// each real Chat stream request to the persisted Git relationship and its correlation-scoped
+// admission, gateway completion, and absence of server-side effect operations; qualification still
+// requires that real journey to execute successfully.
 // Reuses the same real
 // hermetic git fixture and Chat-connect flow the `git-change-chat-3400.spec.ts` sibling already
 // builds (`buildGitChangeChatFixture`) rather than a second one.
@@ -15,6 +16,7 @@ import {
   removeGitChangeChatFixture,
   seedWorkspace,
 } from "./git-change-chat-3400.js";
+import { activityEventsForRun, activityEventTree } from "./coding-issue-journey-live-flow.js";
 
 const GIT_WINDOW_ID = "issue-3400-git-window";
 const CHAT_WINDOW_ID = "issue-3400-chat-window";
@@ -52,6 +54,37 @@ const FORBIDDEN_SESSION_ROUTE_PREFIXES = [
   "/api/commands/",
   "/api/coding-sidecar/gateway/",
 ] as const;
+
+const FORBIDDEN_SESSION_ACTIVITY_PREFIXES = [
+  "coding-repository-handler.",
+  "coding-runtime.",
+  "coding-sidecar.",
+  "command.",
+  "gateway.tool-catalog.",
+  "git.",
+  "runtime.confinement.",
+  "tool-catalog.",
+] as const;
+
+const CHAT_STREAM_ROUTE = "/api/desktop/chat/stream";
+const STREAM_TERMINAL_OPS = new Set([
+  "gateway.stream.abandoned",
+  "gateway.stream.completed",
+  "gateway.stream.failed",
+]);
+
+export interface ObservedGitChatStreamRequest {
+  readonly chatId: string;
+  readonly correlationId: string;
+}
+
+export interface GitChatSessionActivityEvidence {
+  readonly chatId: string;
+  readonly relationshipId: string;
+  readonly expectedTurnCount: number;
+  readonly requests: readonly ObservedGitChatStreamRequest[];
+  readonly activityEvents: readonly Readonly<Record<string, unknown>>[];
+}
 
 /** Observes the browser's real request stream across one connected-Chat action. Server-internal
  * gateway calls do not appear here; a browser request to one of these effect boundaries would be
@@ -97,15 +130,119 @@ function observesForbiddenSessionRoute(request: Request): boolean {
   return FORBIDDEN_SESSION_ROUTE_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
-export async function assertNoForbiddenSessionToolEvents(page: Page): Promise<string> {
-  const events = await page.locator('[data-timeline-kind="tool"]').allTextContents();
-  const offending = events.filter((event) =>
-    FORBIDDEN_KEYWORDS.some((keyword) => event.toLowerCase().includes(keyword)),
+function requestEvidence(
+  request: Request,
+  chatId: string,
+): ObservedGitChatStreamRequest | undefined {
+  if (new URL(request.url()).pathname !== CHAT_STREAM_ROUTE) return undefined;
+  const body = request.postData();
+  if (body === null) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    !("chatId" in parsed) ||
+    parsed.chatId !== chatId
+  ) {
+    return undefined;
+  }
+  return {
+    chatId,
+    correlationId: request.headers()["x-keiko-correlation-id"] ?? "",
+  };
+}
+
+function eventCount(events: readonly Readonly<Record<string, unknown>>[], op: string): number {
+  return events.filter((event) => event.op === op).length;
+}
+
+function isForbiddenSessionActivity(event: Readonly<Record<string, unknown>>): boolean {
+  const op = event.op;
+  return (
+    typeof op === "string" &&
+    FORBIDDEN_SESSION_ACTIVITY_PREFIXES.some((prefix) => op.startsWith(prefix))
   );
-  if (offending.length > 0) {
-    throw new Error("Git-connected Chat emitted a forbidden effect tool event");
+}
+
+function assertCompletedBoundTurn(
+  request: ObservedGitChatStreamRequest,
+  events: readonly Readonly<Record<string, unknown>>[],
+  relationshipId: string,
+): void {
+  if (request.correlationId.length === 0) {
+    throw new Error("observed Chat stream request had no correlation identity");
+  }
+  const turnEvents = activityEventTree(events, request.correlationId);
+  const admitted = turnEvents.filter((event) => event.op === "pr-description.chat.turn.admitted");
+  if (admitted.length !== 1 || admitted[0]?.relationshipId !== relationshipId) {
+    throw new Error("Chat turn was not admitted for the exact connected Git relationship");
+  }
+  if (
+    eventCount(turnEvents, "gateway.stream.started") !== 1 ||
+    eventCount(turnEvents, "gateway.stream.completed") !== 1 ||
+    turnEvents.filter((event) => STREAM_TERMINAL_OPS.has(String(event.op))).length !== 1
+  ) {
+    throw new Error("Chat turn did not produce one completed Model Gateway stream");
+  }
+  const forbidden = turnEvents.some(isForbiddenSessionActivity);
+  if (forbidden) throw new Error("Git-connected Chat emitted forbidden server-side tool activity");
+}
+
+export function assertNoForbiddenSessionToolEvents(
+  evidence: GitChatSessionActivityEvidence,
+): string {
+  if (evidence.requests.length !== evidence.expectedTurnCount) {
+    throw new Error("did not observe the expected number of Chat stream requests");
+  }
+  const correlations = new Set(evidence.requests.map((request) => request.correlationId));
+  if (correlations.size !== evidence.expectedTurnCount) {
+    throw new Error("Chat turns did not carry distinct correlation identities");
+  }
+  for (const request of evidence.requests) {
+    if (request.chatId !== evidence.chatId) {
+      throw new Error("observed Chat stream request belonged to another Chat session");
+    }
+    assertCompletedBoundTurn(request, evidence.activityEvents, evidence.relationshipId);
   }
   return "no-forbidden-session-tool-events:true";
+}
+
+/** Captures only this connected Chat's stream requests, then joins their client correlation ids
+ * to the synchronous production activity log. An empty UI timeline cannot satisfy this proof: all
+ * expected turns must have an admitted relationship-bound server event and a completed gateway
+ * stream before the absence of correlated repository/tool effects is asserted. */
+export async function observeBoundGitChatSessionActivity<T>(
+  page: Page,
+  session: { readonly chatId: string; readonly relationshipId: string },
+  expectedTurnCount: number,
+  action: () => Promise<T>,
+): Promise<{ readonly result: T; readonly assertion: string }> {
+  const requests: ObservedGitChatStreamRequest[] = [];
+  const observeRequest = (request: Request): void => {
+    const evidence = requestEvidence(request, session.chatId);
+    if (evidence !== undefined) requests.push(evidence);
+  };
+  page.on("request", observeRequest);
+  try {
+    const result = await action();
+    const activityEvents = requests.flatMap((request) =>
+      activityEventsForRun(request.correlationId),
+    );
+    const assertion = assertNoForbiddenSessionToolEvents({
+      ...session,
+      expectedTurnCount,
+      requests,
+      activityEvents,
+    });
+    return { result, assertion };
+  } finally {
+    page.off("request", observeRequest);
+  }
 }
 
 async function connectFixtureToChat(page: Page, baseRef: string, chatTitle: string): Promise<void> {
