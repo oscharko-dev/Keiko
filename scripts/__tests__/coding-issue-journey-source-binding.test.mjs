@@ -164,14 +164,13 @@ describe("coding issue journey evidence-only source binding", () => {
       "issue-to-pr-flow-03",
       "issue-to-pr-flow-04",
       "issue-to-pr-flow-05",
-      "issue-to-pr-flow-01.ci-repair-loop",
-      "issue-to-pr-flow-02.ci-repair-loop",
-      "issue-to-pr-flow-03.ci-repair-loop",
-      "issue-to-pr-flow-04.ci-repair-loop",
-      "issue-to-pr-flow-05.ci-repair-loop",
     ]);
+    expect(inspect(input).failures).toEqual([]);
+
     const registeredPath = `${CODING_ISSUE_JOURNEY_RECEIPTS_PATH}/issue-to-pr-flow-05.ci-repair-loop.artifact`;
+    const registeredReceiptPath = `${CODING_ISSUE_JOURNEY_RECEIPTS_PATH}/issue-to-pr-flow-05.ci-repair-loop.receipt.json`;
     write(input.root, registeredPath, '{"repaired":true}\n');
+    write(input.root, registeredReceiptPath, '{"outcome":"passed"}\n');
     commit(input.root, "land fifth flow CI repair evidence");
     expect(inspect(input).failures).toEqual([]);
 
@@ -180,6 +179,20 @@ describe("coding issue journey evidence-only source binding", () => {
     commit(input.root, "forge unregistered flow CI repair evidence");
     expect(inspect(input).failures).toContain(
       `qualification source changed outside evidence outputs: ${unregisteredPath}`,
+    );
+  });
+
+  it("rejects a present optional CI-repair stage that is a Git symlink", () => {
+    const input = fixture(descriptor("ci-repair-loop"));
+    commitEvidence(input, ["ci-repair-loop", "issue-to-pr-flow-01"]);
+    replaceWithGitSymlink(
+      input.root,
+      `${CODING_ISSUE_JOURNEY_RECEIPTS_PATH}/issue-to-pr-flow-01.ci-repair-loop.artifact`,
+      "../../outside-ci-repair.json",
+    );
+
+    expect(inspect(input).failures).toContain(
+      "qualification evidence inputs must be tracked regular Git blobs",
     );
   });
 

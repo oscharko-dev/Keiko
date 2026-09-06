@@ -22,6 +22,7 @@ import type {
 import {
   createCodingRuntimeOrchestrator,
   MAX_APPROVAL_CHALLENGE_TTL_MS,
+  MAX_QUEUED_APPROVALS_PER_RUN,
   type CodingRuntimeDescriptionSupport,
   type CodingRuntimeIssueIntake,
   type CodingRuntimeOrchestratorResult,
@@ -416,6 +417,25 @@ const start = {
   taskIntent: "fix the bounded issue",
   requestedMode: "supervised-coding",
 } as const;
+
+function verificationPermission(requestId: string, expiresAt = "2026-01-01T00:01:00.000Z") {
+  return {
+    schemaVersion: "1" as const,
+    eventId: `event-${requestId}`,
+    runId: "run-1",
+    occurredAt: "2026-01-01T00:00:00.000Z",
+    kind: "permission-requested" as const,
+    permissionRequest: {
+      requestId,
+      kind: "command-execution" as const,
+      actionClass: "command-execution" as const,
+      reasonCode: "approval-required" as const,
+      actionKind: "verification-command" as const,
+      commandLabel: "test",
+      expiresAt,
+    },
+  };
+}
 
 const ACTIVE_REPOSITORY_ROOT = mkdtempSync(
   join(realpathSync(tmpdir()), "keiko-orchestrator-issue-"),
@@ -1302,18 +1322,181 @@ describe("CodingRuntimeOrchestrator", () => {
       },
     });
     f.permissionPort.resolve.mockResolvedValueOnce(false);
+    let finishStop: (() => void) | undefined;
+    f.manager.stop.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishStop = (): void => {
+            resolve({ ok: true, status: "stopped" });
+          };
+        }),
+    );
 
+    const decision = f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-failure",
+      decision: "approved",
+      expectedRevision: 5,
+    });
+    await vi.waitFor(() => {
+      expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+    });
+    expect(f.orchestrator.status()).toMatchObject({ state: "stopping", revision: 6 });
+    expect(f.orchestrator.status()).not.toHaveProperty("pendingPermission");
+    if (finishStop === undefined) throw new Error("expected deferred runtime stop");
+    finishStop();
+    expect(await decision).toMatchObject({
+      ok: true,
+      snapshot: { state: "failed", failureCode: "authority-resolution-failed" },
+    });
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+  });
+
+  it("queues concurrent permission asks without orphaning the operator-visible challenge", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "task-concurrent-permissions",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "task-submitted",
+    });
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "permission-first",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-1",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "approval-required",
+        actionKind: "verification-command",
+        commandLabel: "typecheck",
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+    const second = await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "permission-second",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-2",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "approval-required",
+        actionKind: "verification-command",
+        commandLabel: "test",
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+    expect(successfulSnapshot(second)).toMatchObject({
+      state: "awaiting-approval",
+      pendingPermission: { requestId: "permission-1" },
+    });
+    expect(f.orchestrator.status()).toMatchObject({
+      state: "awaiting-approval",
+      pendingPermission: { requestId: "permission-1" },
+    });
+    const firstDecision = await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-1",
+      decision: "approved",
+      expectedRevision: 5,
+    });
+    expect(successfulSnapshot(firstDecision)).toMatchObject({
+      state: "awaiting-approval",
+      pendingPermission: { requestId: "permission-2" },
+    });
+    expect(f.approvalAuthority.issue).toHaveBeenCalledTimes(1);
+    const secondDecision = await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-2",
+      decision: "approved",
+      expectedRevision: 7,
+    });
+    expect(successfulSnapshot(secondDecision)).toMatchObject({ state: "running", revision: 8 });
+    expect(f.approvalAuthority.issue).toHaveBeenCalledTimes(2);
     expect(
-      await f.orchestrator.decideApproval("run-1", {
-        requestId: "permission-failure",
-        decision: "approved",
-        expectedRevision: 5,
-      }),
+      captured.records.find(
+        (record) =>
+          record.op === "coding-runtime.approval.waiting" &&
+          record.extra?.requestId === "permission-2",
+      )?.extra,
+    ).toMatchObject({ queuePosition: 1 });
+  });
+
+  it("preserves the active challenge on duplicates and contains queue overflow", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest(verificationPermission("permission-1"));
+    expect(await f.orchestrator.ingest(verificationPermission("permission-1"))).toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+    expect(f.orchestrator.status().pendingPermission?.requestId).toBe("permission-1");
+    for (let index = 0; index < MAX_QUEUED_APPROVALS_PER_RUN; index += 1) {
+      expect(
+        (await f.orchestrator.ingest(verificationPermission(`permission-${String(index + 2)}`))).ok,
+      ).toBe(true);
+    }
+    expect(
+      await f.orchestrator.ingest(
+        verificationPermission(`permission-${String(MAX_QUEUED_APPROVALS_PER_RUN + 2)}`),
+      ),
     ).toMatchObject({
       ok: true,
       snapshot: { state: "failed", failureCode: "authority-resolution-failed" },
     });
     expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+  });
+
+  it("contains an expired queued challenge instead of exposing an undecidable approval", async () => {
+    let nowMs = FIXTURE_NOW_MS;
+    const f = fixture(undefined, () => new Date(nowMs));
+    await f.orchestrator.start(start);
+    const first = await f.orchestrator.ingest(
+      verificationPermission("permission-1", "2026-01-01T00:04:00.000Z"),
+    );
+    await f.orchestrator.ingest(verificationPermission("permission-2", "2026-01-01T00:01:00.000Z"));
+    nowMs += 2 * 60 * 1_000;
+
+    expect(
+      await f.orchestrator.decideApproval("run-1", {
+        requestId: "permission-1",
+        decision: "approved",
+        expectedRevision: successfulSnapshot(first).revision,
+      }),
+    ).toMatchObject({
+      ok: true,
+      snapshot: { state: "failed", failureCode: "authority-expired" },
+    });
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+  });
+
+  it("queues a second permission received while paused and promotes it after resume", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "task-before-pause",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "task-submitted",
+    });
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    await f.orchestrator.ingest(verificationPermission("permission-1"));
+    await f.orchestrator.ingest(verificationPermission("permission-2"));
+    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+    expect(successfulSnapshot(resumed).pendingPermission?.requestId).toBe("permission-1");
+    const decided = await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-1",
+      decision: "approved",
+      expectedRevision: 6,
+    });
+    expect(successfulSnapshot(decided).pendingPermission?.requestId).toBe("permission-2");
   });
 
   it("rejects stale route/body pairs and stops after approval activation fails", async () => {

@@ -317,6 +317,7 @@ function recordRuntimeApprovalWaiting(
   runId: string,
   revision: number,
   permission: CodingWorkbenchRuntimePendingPermission,
+  queuePosition?: number,
 ): void {
   activityLog?.write({
     category: "process",
@@ -329,6 +330,7 @@ function recordRuntimeApprovalWaiting(
       permissionKind: permission.kind,
       actionClass: permission.actionClass,
       actionKind: permission.actionKind,
+      ...(queuePosition === undefined ? {} : { queuePosition }),
     },
   });
 }
@@ -445,6 +447,7 @@ const TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
  * clamped instant, so the card can never display a deadline the server does not enforce.
  */
 export const MAX_APPROVAL_CHALLENGE_TTL_MS = 5 * 60 * 1_000;
+export const MAX_QUEUED_APPROVALS_PER_RUN = 64;
 
 const DIGEST = (value: string): string => createHash("sha256").update(value).digest("hex");
 const GRANT_VISIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
@@ -473,6 +476,7 @@ export class CodingRuntimeOrchestrator {
   /** Last accepted mode retained only for same-process post-terminal description work. */
   private readonly settledEffectiveModes = new Map<string, CodingWorkbenchMode>();
   private readonly approvals = new Map<string, ApprovalChallenge>();
+  private readonly queuedApprovals = new Map<string, ApprovalChallenge[]>();
   private readonly operations: CodingRuntimeOperationCoordinator;
   private readonly projection: CodingRuntimeOrchestratorState;
   private readonly now: () => Date;
@@ -858,22 +862,13 @@ export class CodingRuntimeOrchestrator {
         challenge.permission.requestId,
         decision,
       );
-      if (!permissionSettled) {
-        this.approvals.delete(current.runId);
-        return this.stopAfterIssueFailure(current);
-      }
+      if (!permissionSettled) return this.stopAfterApprovalFailure(current);
+      if (decision === "denied") return this.stopAfterPermissionDenied(current);
       this.approvals.delete(current.runId);
-      if (decision === "denied") {
-        const stopped = await this.deps.manager.stop(current.runId);
-        if (!stopped.ok) {
-          return this.transition(current, "recovery-required", "recovery-required");
-        }
-      }
-      return this.transition(
-        current,
-        decision === "approved" ? "running" : "failed",
-        decision === "approved" ? undefined : "revoked",
-      );
+      const running = this.transition(current, "running");
+      if (!running.ok) return running;
+      const live = this.current();
+      return live === undefined ? running : await this.promoteQueuedApproval(live);
     });
   }
 
@@ -942,7 +937,7 @@ export class CodingRuntimeOrchestrator {
     request: CodingWorkbenchRuntimeApprovalDecisionRequest,
   ): Promise<CodingRuntimeOrchestratorResult | undefined> {
     const principal = this.deps.serverPrincipal();
-    if (!principal) return this.stopAfterIssueFailure(current, "authority-resolution-failed");
+    if (!principal) return this.stopAfterApprovalFailure(current);
     let issued: CodingRuntimeApprovalIssueResult;
     try {
       issued = this.deps.approvalAuthority.issue({
@@ -964,11 +959,10 @@ export class CodingRuntimeOrchestrator {
         boundRevision: challenge.revision,
       });
     } catch {
-      this.approvals.delete(current.runId);
-      return this.stopAfterIssueFailure(current, "authority-resolution-failed");
+      return this.stopAfterApprovalFailure(current);
     }
     if (!issued.ok) {
-      return this.stopAfterIssueFailure(
+      return this.stopAfterApprovalFailure(
         current,
         runtimeApprovalIssueFailureCode(issued.failureCode),
       );
@@ -988,6 +982,41 @@ export class CodingRuntimeOrchestrator {
     } catch {
       return this.transition(current, "recovery-required", "recovery-required");
     }
+  }
+
+  private async stopAfterPermissionDenied(
+    current: CodingRuntimeSnapshot,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    const stopping = this.transition(current, "stopping");
+    if (!stopping.ok) return stopping;
+    this.approvals.delete(current.runId);
+    try {
+      const stopped = await this.deps.manager.stop(current.runId);
+      const live = this.current();
+      if (live === undefined) return this.fail("runtime-failed");
+      return stopped.ok
+        ? this.transition(live, "failed", "revoked")
+        : this.transition(live, "recovery-required", "recovery-required");
+    } catch {
+      const live = this.current();
+      return live === undefined
+        ? this.fail("runtime-failed")
+        : this.transition(live, "recovery-required", "recovery-required");
+    }
+  }
+
+  private stopAfterApprovalFailure(
+    current: CodingRuntimeSnapshot,
+    failureCode: CodingWorkbenchRuntimeFailureCode = "authority-resolution-failed",
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    const stopping = this.transition(current, "stopping");
+    if (!stopping.ok) return Promise.resolve(stopping);
+    this.approvals.delete(current.runId);
+    this.queuedApprovals.delete(current.runId);
+    const live = this.current();
+    return live === undefined
+      ? Promise.resolve(this.fail("runtime-failed"))
+      : this.stopAfterIssueFailure(live, failureCode);
   }
 
   stop(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
@@ -1035,28 +1064,31 @@ export class CodingRuntimeOrchestrator {
       recordRuntimeLifecycleFailure(this.deps.diagnostics, current.runId, "failure-redacted");
       return this.stopAfterIssueFailure(current, "runtime-failed");
     }
-    const paused = this.ingestPausedEvent(current, event);
+    const paused = await this.ingestPausedEvent(current, event);
     return paused ?? this.ingestActiveEvent(current, event);
   }
 
-  private ingestPausedEvent(
+  private async ingestPausedEvent(
     current: CodingRuntimeSnapshot,
     event: CodingWorkbenchRuntimeEvent,
-  ): CodingRuntimeOrchestratorResult | undefined {
+  ): Promise<CodingRuntimeOrchestratorResult | undefined> {
     const terminal = event.kind === "runtime-stopped" || event.kind === "failure-redacted";
     if (current.state !== "paused" || terminal) return undefined;
-    if (event.kind === "permission-requested" && !this.stashApproval(current, event)) {
-      return this.fail("invalid-intent");
+    if (event.kind === "permission-requested") {
+      const challenge = this.approvalChallenge(current, event);
+      if (challenge === undefined) return this.fail("invalid-intent");
+      if (this.approvals.has(current.runId)) return await this.queueApproval(current, challenge);
+      this.approvals.set(current.runId, challenge);
     }
     return { ok: true, snapshot: this.publicSnapshotWithDescription(current) };
   }
 
-  private ingestActiveEvent(
+  private async ingestActiveEvent(
     current: CodingRuntimeSnapshot,
     event: CodingWorkbenchRuntimeEvent,
-  ): CodingRuntimeOrchestratorResult {
+  ): Promise<CodingRuntimeOrchestratorResult> {
     if (event.kind === "permission-requested") {
-      return this.ingestPermissionRequested(current, event);
+      return await this.ingestPermissionRequested(current, event);
     }
     if (event.kind === "task-submitted") return this.ingestTaskSubmitted(current);
     if (event.kind === "runtime-stopped") return this.ingestRuntimeStopped(current);
@@ -1090,14 +1122,16 @@ export class CodingRuntimeOrchestrator {
     return this.transition(current, "failed", "runtime-failed");
   }
 
-  private ingestPermissionRequested(
+  private async ingestPermissionRequested(
     current: CodingRuntimeSnapshot,
     event: CodingWorkbenchRuntimeEvent,
-  ): CodingRuntimeOrchestratorResult {
-    const permission = event.permissionRequest;
-    if (permission === undefined || !this.stashApproval(current, event)) {
-      return this.fail("invalid-intent");
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    const challenge = this.approvalChallenge(current, event);
+    if (challenge === undefined) return this.fail("invalid-intent");
+    if (current.state === "awaiting-approval") {
+      return await this.queueApproval(current, challenge);
     }
+    this.approvals.set(current.runId, challenge);
     const next = this.transition(current, "awaiting-approval");
     if (!next.ok) {
       this.approvals.delete(current.runId);
@@ -1106,31 +1140,92 @@ export class CodingRuntimeOrchestrator {
         this.deps.activityLog,
         current.runId,
         next.snapshot.revision,
-        permission,
+        challenge.permission,
       );
     }
     return next;
   }
 
-  private stashApproval(
+  private approvalChallenge(
     current: CodingRuntimeSnapshot,
     event: CodingWorkbenchRuntimeEvent,
-  ): boolean {
-    if (!event.permissionRequest?.actionKind) return false;
+  ): ApprovalChallenge | undefined {
+    if (!event.permissionRequest?.actionKind) return undefined;
     const requested = Date.parse(event.permissionRequest.expiresAt);
     const nowMs = this.now().getTime();
-    if (!Number.isFinite(requested) || requested <= nowMs) return false;
+    if (!Number.isFinite(requested) || requested <= nowMs) return undefined;
     // Clamp the child-declared lifetime to the server ceiling and re-publish the clamped instant on
     // the permission itself, so the challenge expiry, the operator-visible deadline, and the minted
     // approval TTL are one value the server owns (MAX_APPROVAL_CHALLENGE_TTL_MS).
     const expiresAt = Math.min(requested, nowMs + MAX_APPROVAL_CHALLENGE_TTL_MS);
-    this.approvals.set(current.runId, {
+    return {
       revision: current.revision + 1,
       expiresAt,
       permission: { ...event.permissionRequest, expiresAt: new Date(expiresAt).toISOString() },
       used: false,
-    });
-    return true;
+    };
+  }
+
+  private async queueApproval(
+    current: CodingRuntimeSnapshot,
+    challenge: ApprovalChallenge,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    if (!this.approvals.has(current.runId)) {
+      return this.stopAfterApprovalFailure(current);
+    }
+    const queued = this.queuedApprovals.get(current.runId) ?? [];
+    const requestId = challenge.permission.requestId;
+    if (
+      this.approvals.get(current.runId)?.permission.requestId === requestId ||
+      queued.some((candidate) => candidate.permission.requestId === requestId)
+    ) {
+      return this.fail("invalid-intent");
+    }
+    if (queued.length >= MAX_QUEUED_APPROVALS_PER_RUN) {
+      return this.stopAfterApprovalFailure(current);
+    }
+    queued.push(challenge);
+    this.queuedApprovals.set(current.runId, queued);
+    recordRuntimeApprovalWaiting(
+      this.deps.activityLog,
+      current.runId,
+      current.revision,
+      challenge.permission,
+      queued.length,
+    );
+    return { ok: true, snapshot: this.publicSnapshotWithDescription(current) };
+  }
+
+  private async promoteQueuedApproval(
+    current: CodingRuntimeSnapshot,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    const queued = this.queuedApprovals.get(current.runId);
+    if (queued === undefined) {
+      this.queuedApprovals.delete(current.runId);
+      return { ok: true, snapshot: this.publicSnapshotWithDescription(current) };
+    }
+    const challenge = queued.shift();
+    if (challenge === undefined) {
+      this.queuedApprovals.delete(current.runId);
+      return { ok: true, snapshot: this.publicSnapshotWithDescription(current) };
+    }
+    if (challenge.expiresAt <= this.now().getTime()) {
+      this.queuedApprovals.delete(current.runId);
+      return this.stopAfterApprovalFailure(current, "authority-expired");
+    }
+    if (queued.length === 0) this.queuedApprovals.delete(current.runId);
+    const promoted = { ...challenge, revision: current.revision + 1 };
+    this.approvals.set(current.runId, promoted);
+    const waiting = this.transition(current, "awaiting-approval");
+    if (!waiting.ok) this.approvals.delete(current.runId);
+    else
+      recordRuntimeApprovalWaiting(
+        this.deps.activityLog,
+        current.runId,
+        waiting.snapshot.revision,
+        promoted.permission,
+      );
+    return waiting;
   }
 
   private ingestTaskSubmitted(current: CodingRuntimeSnapshot): CodingRuntimeOrchestratorResult {
@@ -2037,6 +2132,7 @@ export class CodingRuntimeOrchestrator {
     if (TERMINAL_STATES.has(state) || state === "recovery-required")
       this.activeEffectiveMode = undefined;
     this.approvals.delete(next.runId);
+    this.queuedApprovals.delete(next.runId);
     this.operations.clear(next.runId);
     this.pruneSettled();
   }

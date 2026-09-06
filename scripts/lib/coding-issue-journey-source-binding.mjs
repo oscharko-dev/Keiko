@@ -86,6 +86,19 @@ function worktreeEvidenceFailures(root, allowed) {
   return failures;
 }
 
+function presentWorktreePaths(root, paths) {
+  return new Set(
+    [...paths].filter((path) => {
+      try {
+        lstatSync(resolve(root, path));
+        return true;
+      } catch {
+        return false;
+      }
+    }),
+  );
+}
+
 function gitEvidenceFailures(root, landingCommitSha, allowed) {
   try {
     readGitSourceContent(
@@ -144,21 +157,23 @@ export function readCodingIssueJourneyEvidenceAtLanding({
       contentByPath: new Map(),
     };
   }
-  const allowed = allowedEvidencePaths(descriptor);
-  if (allowed === null) {
+  const binding = evidencePathBinding(descriptor);
+  if (binding === null) {
     return {
       failures: ["qualification descriptor contains an unsafe evidence id"],
       descriptor,
       contentByPath: new Map(),
     };
   }
+  const presentOptional = presentWorktreePaths(root, binding.optional);
+  const readable = new Set([...binding.required, ...presentOptional]);
   failures.push(
-    ...worktreeEvidenceFailures(root, allowed),
-    ...gitEvidenceFailures(root, landingCommitSha, allowed),
+    ...worktreeEvidenceFailures(root, readable),
+    ...gitEvidenceFailures(root, landingCommitSha, readable),
   );
   if (failures.length > 0) return { failures, descriptor, contentByPath: new Map() };
   try {
-    const paths = [CODING_ISSUE_JOURNEY_DESCRIPTOR_PATH, ...allowed];
+    const paths = [CODING_ISSUE_JOURNEY_DESCRIPTOR_PATH, ...readable];
     const files = readGitSourceContent(landingCommitSha, paths, root, execFileSync);
     return { failures, descriptor, contentByPath: contentMap(root, files) };
   } catch {
@@ -191,22 +206,26 @@ function validFlowStageBinding(flow) {
 
 function flowStageEvidenceIds(descriptor, availableScenarios) {
   const flows = Array.isArray(descriptor?.flows) ? descriptor.flows : [];
-  const ids = [];
+  const required = [];
+  const optional = [];
   for (const flow of flows) {
     if (!validFlowStageBinding(flow)) return null;
-    const scenarioIds = [
-      `issue-to-pr-${flow.mode}`,
-      ...COMMON_FLOW_STAGE_SCENARIOS,
-      "ci-repair-loop",
-    ];
-    for (const scenarioId of scenarioIds) {
-      if (availableScenarios.has(scenarioId)) ids.push(`${flow.flowId}.${scenarioId}`);
+    for (const scenarioId of [`issue-to-pr-${flow.mode}`, ...COMMON_FLOW_STAGE_SCENARIOS]) {
+      if (availableScenarios.has(scenarioId)) required.push(`${flow.flowId}.${scenarioId}`);
     }
+    if (availableScenarios.has("ci-repair-loop")) optional.push(`${flow.flowId}.ci-repair-loop`);
   }
-  return ids;
+  return { required, optional };
 }
 
-function allowedEvidencePaths(descriptor) {
+function addEvidencePaths(paths, ids) {
+  for (const id of ids) {
+    paths.add(`${CODING_ISSUE_JOURNEY_RECEIPTS_PATH}/${id}.artifact`);
+    paths.add(`${CODING_ISSUE_JOURNEY_RECEIPTS_PATH}/${id}.receipt.json`);
+  }
+}
+
+function evidencePathBinding(descriptor) {
   const ids = descriptorEvidenceIds(descriptor);
   if (ids === null) return null;
   const scenarios = new Set(
@@ -216,12 +235,11 @@ function allowedEvidencePaths(descriptor) {
   );
   const flowStageIds = flowStageEvidenceIds(descriptor, scenarios);
   if (flowStageIds === null) return null;
-  const paths = new Set([CODING_ISSUE_JOURNEY_MANIFEST_PATH, ...GENERATED_D12_EVIDENCE_PATHS]);
-  for (const id of [...ids, ...flowStageIds]) {
-    paths.add(`${CODING_ISSUE_JOURNEY_RECEIPTS_PATH}/${id}.artifact`);
-    paths.add(`${CODING_ISSUE_JOURNEY_RECEIPTS_PATH}/${id}.receipt.json`);
-  }
-  return paths;
+  const required = new Set([CODING_ISSUE_JOURNEY_MANIFEST_PATH, ...GENERATED_D12_EVIDENCE_PATHS]);
+  const optional = new Set();
+  addEvidencePaths(required, [...ids, ...flowStageIds.required]);
+  addEvidencePaths(optional, flowStageIds.optional);
+  return { required, optional, allowed: new Set([...required, ...optional]) };
 }
 
 function gitIdentity(root, sourceCommitSha, landingCommitSha, sourceTreeSha) {
@@ -260,12 +278,14 @@ export function inspectCodingIssueJourneySourceBinding({
   descriptor,
 }) {
   const failures = canonicalPathFailures(root, manifestPath, receiptsDir, descriptorPath);
-  const allowed = allowedEvidencePaths(descriptor);
-  if (allowed === null) failures.push("qualification descriptor contains an unsafe evidence id");
-  if (allowed !== null) {
+  const binding = evidencePathBinding(descriptor);
+  if (binding === null) failures.push("qualification descriptor contains an unsafe evidence id");
+  if (binding !== null) {
+    const presentOptional = presentWorktreePaths(root, binding.optional);
+    const readable = new Set([...binding.required, ...presentOptional]);
     failures.push(
-      ...worktreeEvidenceFailures(root, allowed),
-      ...gitEvidenceFailures(root, landingCommitSha, allowed),
+      ...worktreeEvidenceFailures(root, readable),
+      ...gitEvidenceFailures(root, landingCommitSha, readable),
     );
   }
   const identity = gitIdentity(root, sourceCommitSha, landingCommitSha, sourceTreeSha);
@@ -274,9 +294,9 @@ export function inspectCodingIssueJourneySourceBinding({
     if (git(root, ["status", "--porcelain=v1", "--untracked-files=all"]).length > 0) {
       failures.push("qualification landing worktree is not clean");
     }
-    if (allowed !== null && identity.failures.length === 0) {
+    if (binding !== null && identity.failures.length === 0) {
       for (const changedPath of listChangedGitPaths(sourceCommitSha, root)) {
-        if (!allowed.has(changedPath)) {
+        if (!binding.allowed.has(changedPath)) {
           failures.push(`qualification source changed outside evidence outputs: ${changedPath}`);
         }
       }
