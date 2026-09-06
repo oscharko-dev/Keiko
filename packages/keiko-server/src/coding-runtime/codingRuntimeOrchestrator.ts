@@ -312,6 +312,26 @@ function recordRuntimeRunStarted(
   });
 }
 
+function recordRuntimeApprovalWaiting(
+  activityLog: ServerLogSink | undefined,
+  snapshot: CodingRuntimeSnapshot,
+  permission: CodingWorkbenchRuntimePendingPermission,
+): void {
+  activityLog?.write({
+    category: "policy",
+    op: "coding-runtime.approval.waiting",
+    correlationId: runtimeDiagnosticCorrelationId(snapshot.runId),
+    extra: {
+      runId: snapshot.runId,
+      revision: snapshot.revision,
+      requestId: permission.requestId,
+      permissionKind: permission.kind,
+      actionClass: permission.actionClass,
+      actionKind: permission.actionKind,
+    },
+  });
+}
+
 function recordRuntimeRunSettled(
   activityLog: ServerLogSink | undefined,
   snapshot: CodingRuntimeSnapshot,
@@ -644,6 +664,13 @@ export class CodingRuntimeOrchestrator {
     const resumeFailure = await this.resumeManagerAfterTransition(runId, effectiveMode);
     if (resumeFailure !== undefined) return resumeFailure;
     this.activeEffectiveMode = effectiveModeAfterResume(transitioned, effectiveMode);
+    if (approval !== undefined) {
+      recordRuntimeApprovalWaiting(
+        this.deps.activityLog,
+        transitioned.snapshot,
+        approval.permission,
+      );
+    }
     return transitioned;
   }
 
@@ -1045,7 +1072,11 @@ export class CodingRuntimeOrchestrator {
   ): CodingRuntimeOrchestratorResult {
     if (!this.stashApproval(current, event)) return this.fail("invalid-intent");
     const next = this.transition(current, "awaiting-approval");
-    if (!next.ok) this.approvals.delete(current.runId);
+    if (!next.ok) {
+      this.approvals.delete(current.runId);
+    } else {
+      recordRuntimeApprovalWaiting(this.deps.activityLog, next.snapshot, event.permissionRequest);
+    }
     return next;
   }
 

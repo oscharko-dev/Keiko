@@ -1085,6 +1085,52 @@ describe("CodingRuntimeOrchestrator", () => {
     });
   });
 
+  it("logs the bounded permission identity when a run waits for CI consent", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-ci-task",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "task-submitted",
+    });
+
+    const waiting = await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-ci-consent",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-7",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "approval-required",
+        actionKind: "ci-observe",
+        commandLabel: "ci",
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+
+    expect(successfulSnapshot(waiting).state).toBe("awaiting-approval");
+    const event = captured.records.find(
+      (candidate) => candidate.op === "coding-runtime.approval.waiting",
+    );
+    if (event === undefined) throw new Error("expected CI consent wait activity");
+    expect(event.category).toBe("policy");
+    expect(event.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(event.extra).toEqual({
+      runId: "run-1",
+      revision: 5,
+      requestId: "permission-7",
+      permissionKind: "command-execution",
+      actionClass: "command-execution",
+      actionKind: "ci-observe",
+    });
+  });
+
   it("#2802: serves the approval review only for the live, unconsumed challenge", async () => {
     const f = fixture();
     const review = {

@@ -1418,6 +1418,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-runtime.approval.waiting",
+      "category": "policy",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:322",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-runtime.authority.mint-failed",
       "category": "security",
       "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:496",
@@ -1432,7 +1438,7 @@
     {
       "op": "coding-runtime.description",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1912",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1943",
       "package": "keiko-server"
     },
     {
@@ -1599,19 +1605,19 @@
     {
       "op": "coding-runtime.run.issue-context-attached",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1289",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1320",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.run.recovery-acknowledged",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:966",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:993",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.run.settled",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:323",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:343",
       "package": "keiko-server"
     },
     {
@@ -3298,6 +3304,7 @@
     "coding-repository-handler.settled",
     "coding-repository-handler.started",
     "coding-runtime.approval-revocation",
+    "coding-runtime.approval.waiting",
     "coding-runtime.authority.mint-failed",
     "coding-runtime.authority.minted",
     "coding-runtime.description",
