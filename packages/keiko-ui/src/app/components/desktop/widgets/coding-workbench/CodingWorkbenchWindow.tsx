@@ -469,8 +469,12 @@ function validatedRunTrustBinding(
   runWorkspace: CodingWorkbenchRunWorkspaceBinding,
 ): CodingWorkbenchRepositoryTrustBinding | null {
   const current = runWorkspace.bound;
-  if (current === null || current.trust === null || current.workspace === null) return null;
-  return current.trust.workspaceId === current.workspace.workspaceId ? current.trust : null;
+  const trust = current?.trust;
+  const workspace = current?.workspace;
+  if (trust === undefined || trust === null || workspace === undefined || workspace === null) {
+    return null;
+  }
+  return trust.workspaceId === workspace.workspaceId ? trust : null;
 }
 
 /** The trust target named by the visible run. A live shell switch cannot retarget it. */

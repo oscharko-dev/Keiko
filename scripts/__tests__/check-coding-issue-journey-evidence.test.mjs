@@ -22,7 +22,11 @@ import {
   checkCodingIssueJourneyEvidence,
   readFlowReceipts,
 } from "../check-coding-issue-journey-evidence.mjs";
-import { deriveGateVerdict, platformKeyFor } from "../lib/coding-issue-journey-evidence.mjs";
+import {
+  canonicalJson,
+  deriveGateVerdict,
+  platformKeyFor,
+} from "../lib/coding-issue-journey-evidence.mjs";
 import { writeCodingIssueJourneyFlowEvidenceReceipt } from "../lib/qualification-evidence-receipt.mjs";
 
 const GATE_PATH = fileURLToPath(
@@ -37,6 +41,10 @@ const FIXTURES_ROOT = fileURLToPath(
   new URL("fixtures/coding-issue-journey-evidence/", import.meta.url),
 );
 const TEMP_ROOTS = [];
+
+it("keeps receipt comparison on canonical UTF-16 code-unit key order", () => {
+  expect(canonicalJson({ b2: 2, b10: 10, a: 0, b1: 1 })).toBe('{"a":0,"b1":1,"b10":10,"b2":2}');
+});
 
 afterEach(() => {
   for (const root of TEMP_ROOTS.splice(0)) rmSync(root, { recursive: true, force: true });

@@ -6,6 +6,8 @@
 // current git head commit/tree SHAs, and the receipts discovered on disk; this module only
 // combines what it is handed.
 
+import { compareStrings } from "./compare-strings.mjs";
+
 const PLATFORM_KEY_BY_OS_ARCH = Object.freeze({
   "darwin:arm64": "macos-arm64",
   "darwin:x64": "macos-x64",
@@ -102,11 +104,11 @@ function flowArtifactProjection(flow) {
   };
 }
 
-function canonicalJson(value) {
+export function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (value !== null && typeof value === "object") {
     return `{${Object.keys(value)
-      .sort()
+      .sort(compareStrings)
       .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
       .join(",")}}`;
   }

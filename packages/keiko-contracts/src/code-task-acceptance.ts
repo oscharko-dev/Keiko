@@ -3,8 +3,7 @@
 // one contribution bound to its final source/tree SHA. The payload is content-free by contract:
 // ids, digests, counts, outcomes, and repo-relative paths only — never file bodies, prompts,
 // commands, endpoints, or credentials.
-import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
-import type { CodingWorkbenchMode } from "./coding-workbench.js";
+import type { CodingWorkbenchMode, CodingWorkbenchValidationResult } from "./coding-workbench.js";
 
 export const CODE_TASK_ACCEPTANCE_SCHEMA_VERSION = 1;
 
@@ -1083,8 +1082,10 @@ function qualificationFlowArtifactErrors(
     errors.push(`${path}.evidenceKind is invalid`);
   }
   if (ownField(value, "schemaVersion") !== 1) errors.push(`${path}.schemaVersion must be 1`);
-  errors.push(...qualificationFlowIdentityErrors(value, path));
-  errors.push(...qualificationFlowCompletionErrors(value, path));
+  errors.push(
+    ...qualificationFlowIdentityErrors(value, path),
+    ...qualificationFlowCompletionErrors(value, path),
+  );
   return errors;
 }
 
