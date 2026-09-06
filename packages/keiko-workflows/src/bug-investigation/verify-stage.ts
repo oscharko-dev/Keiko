@@ -12,13 +12,13 @@ import { type WorkspaceFs, type WorkspaceInfo } from "@oscharko-dev/keiko-worksp
 import {
   buildVerificationPlan,
   detectScripts,
+  planDirectTargetedTests,
   resolveTargetedTests,
   runVerification,
   summarizeForAudit,
   DEFAULT_VERIFICATION_LIMITS,
   type VerificationAuditSummary,
   type VerificationPlan,
-  type VerificationStep,
 } from "@oscharko-dev/keiko-verification";
 import { isSensitivePath } from "./guard.js";
 import type { BugRunState } from "./internal.js";
@@ -48,42 +48,14 @@ function buildPlanFallback(workspace: WorkspaceInfo, fs: WorkspaceFs): Verificat
   return buildVerificationPlan(workspace, catalog, { only: ["test"] }, fs);
 }
 
-function targetedChangedTests(
-  workspace: WorkspaceInfo,
-  testFiles: readonly string[],
-): VerificationStep | undefined {
-  if (testFiles.length === 0) {
-    return undefined;
-  }
-  if (workspace.testFramework === "vitest") {
-    return {
-      kind: "targeted-test",
-      scriptName: undefined,
-      command: "npx",
-      args: ["vitest", "run", ...testFiles],
-      limits: DEFAULT_VERIFICATION_LIMITS,
-    };
-  }
-  if (workspace.testFramework === "jest") {
-    return {
-      kind: "targeted-test",
-      scriptName: undefined,
-      command: "npx",
-      args: ["jest", ...testFiles],
-      limits: DEFAULT_VERIFICATION_LIMITS,
-    };
-  }
-  return undefined;
-}
-
 function resolveVerificationPlan(
   workspace: WorkspaceInfo,
   changedFiles: readonly PatchFileChange[],
   fs: WorkspaceFs,
 ): VerificationPlan | undefined {
-  const directTests = targetedChangedTests(workspace, changedTestFiles(changedFiles));
-  if (directTests !== undefined) {
-    return { workspaceRoot: workspace.root, steps: [directTests] };
+  const directTests = planDirectTargetedTests(workspace, changedTestFiles(changedFiles), fs);
+  if (directTests.length > 0) {
+    return { workspaceRoot: workspace.root, steps: directTests };
   }
   const targeted = resolveTargetedTests(
     workspace,

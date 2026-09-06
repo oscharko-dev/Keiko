@@ -142,7 +142,11 @@ export function deniedVerificationSummary(): EditorPatchVerificationSummary {
 }
 
 function isRunnableTestFramework(workspace: WorkspaceInfo): boolean {
-  return workspace.testFramework === "vitest" || workspace.testFramework === "jest";
+  return (
+    workspace.testFramework === "vitest" ||
+    workspace.testFramework === "jest" ||
+    workspace.testFramework === "node-test"
+  );
 }
 
 // Statuses that count as an actual test failure. `denied` is deliberately excluded: a denied step was
@@ -212,6 +216,9 @@ function verificationCommand(workspace: WorkspaceInfo): string {
   }
   if (workspace.testFramework === "jest") {
     return "npx jest";
+  }
+  if (workspace.testFramework === "node-test") {
+    return "node --test";
   }
   return "none";
 }
