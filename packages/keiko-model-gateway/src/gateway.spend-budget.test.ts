@@ -66,7 +66,7 @@ const response: NormalizedResponse = {
   },
 };
 
-function deniedBudget(): GatewaySpendBudget {
+function deniedBudget(): { readonly reserve: () => never } {
   return {
     reserve: vi.fn(() => {
       throw new ConfigInvalidError("spend-budget-exceeded");
