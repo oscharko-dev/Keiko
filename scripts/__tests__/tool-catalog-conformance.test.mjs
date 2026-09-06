@@ -36,6 +36,7 @@ import {
   deriveLookupIterations,
   measureToolCatalogOverflowRejection,
   measureToolCatalogPerformance,
+  measureToolCatalogPerformanceInFreshProcess,
   toolCatalogPerformanceBudgets,
   TOOL_CATALOG_OVERFLOW_TOOL_COUNT,
   TOOL_CATALOG_SYNTHETIC_TOOL_COUNT,
@@ -256,6 +257,23 @@ describe("compiler measurements reuse the existing sample and percentile convent
       samples[0] = { ...samples[0], ...change };
       expect(validateToolCatalogPerformanceSamples(samples).length).toBeGreaterThan(0);
     }
+  }, 45_000);
+  it("isolates calibration and candidate measurements in separate fresh processes", async () => {
+    const source = readFileSync(join(ROOT, "scripts/check-tool-catalog-performance.mjs"), "utf8");
+    expect(source).toContain(
+      "const calibrationRaw = await measureToolCatalogPerformanceInFreshProcess(root);",
+    );
+    expect(source).toContain(
+      "const measurementRaw = await measureToolCatalogPerformanceInFreshProcess(root);",
+    );
+
+    const evidence = await measureToolCatalogPerformanceInFreshProcess(ROOT);
+    expect(evidence.environment).toEqual({
+      platform: process.platform,
+      architecture: process.arch,
+      nodeVersion: process.version,
+    });
+    expect(Object.values(evidence.cases).every(({ samples }) => samples.length === 30)).toBe(true);
   }, 45_000);
   it("derives lookup iteration counts from a fixed operation budget, never a wall-clock duration", () => {
     expect(deriveLookupIterations(6)).toBeGreaterThan(

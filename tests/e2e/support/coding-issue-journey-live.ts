@@ -145,6 +145,20 @@ interface LiveModelQualificationClient {
   readonly enableWorkflow: (modelId: string) => Promise<void>;
 }
 
+export interface LiveWorkbenchIdentity {
+  readonly workspaceId: string | null;
+  readonly taskId: string | null;
+  readonly taskBranch: string | null;
+  readonly repositoryControlName: string;
+  readonly branchControlName: string;
+}
+
+interface LiveWorkbenchReloadClient {
+  readonly reload: () => Promise<void>;
+  readonly waitForWorkbench: () => Promise<void>;
+  readonly waitForWorkspaceIdentity: (identity: LiveWorkbenchIdentity) => Promise<void>;
+}
+
 export async function qualifyLiveModel(client: LiveModelQualificationClient): Promise<boolean> {
   let changed = false;
   let model = qualificationChatModel(await client.loadModels());
@@ -168,12 +182,105 @@ export async function qualifyLiveModel(client: LiveModelQualificationClient): Pr
   return true;
 }
 
+export async function reconcileLiveWorkbenchAfterModelChange(
+  changed: boolean,
+  workspaceIdentity: LiveWorkbenchIdentity,
+  client: LiveWorkbenchReloadClient,
+): Promise<void> {
+  if (!changed) return;
+  await client.reload();
+  await client.waitForWorkbench();
+  await client.waitForWorkspaceIdentity(workspaceIdentity);
+}
+
+interface ActiveTaskWorkspaceResponse {
+  readonly active: {
+    readonly instance: {
+      readonly workspaceId: string;
+      readonly taskId: string;
+      readonly taskBranch: string;
+    };
+  } | null;
+}
+
+async function activeTaskWorkspace(page: Page): Promise<ActiveTaskWorkspaceResponse["active"]> {
+  const response = await page.request.get("/api/task-workspaces/active");
+  expect(
+    response.ok(),
+    `the active-workspace read failed with HTTP ${String(response.status())}`,
+  ).toBe(true);
+  return ((await response.json()) as ActiveTaskWorkspaceResponse).active;
+}
+
+async function controlName(locator: Locator, kind: string): Promise<string> {
+  await expect(locator).toBeVisible();
+  const name = await locator.getAttribute("aria-label");
+  if (name === null) throw new Error(`${kind} control identity was unavailable`);
+  return name;
+}
+
+async function waitForWorkbenchResources(page: Page): Promise<void> {
+  const status = workbenchSurface(page)
+    .getByRole("status")
+    .filter({ hasText: "Model source ready." });
+  await expect(status).toContainText("Workspace ready.", { timeout: 60_000 });
+  await expect(status).toContainText("Runtime available", { timeout: 60_000 });
+}
+
+async function waitForWorkbenchWorkspace(page: Page): Promise<void> {
+  const status = workbenchSurface(page).getByRole("status").filter({ hasText: "Workspace ready." });
+  await expect(status).toBeVisible({ timeout: 60_000 });
+}
+
+async function currentLiveWorkbenchIdentity(page: Page): Promise<LiveWorkbenchIdentity> {
+  // ActiveWorkspaceContext publishes "Workspace ready" only after it has reconciled the server
+  // instance and the rendered repository binding. Read the server identity after that boundary,
+  // then re-read it after capturing the controls so a concurrent restoration cannot be mistaken
+  // for a stable pre-setup identity.
+  await waitForWorkbenchWorkspace(page);
+  const active = await activeTaskWorkspace(page);
+  const taskName = active === null ? "no active workspace" : active.instance.taskId;
+  await expect(page.getByRole("button", { name: `Task workspaces: ${taskName}` })).toBeVisible();
+  const identity = {
+    workspaceId: active?.instance.workspaceId ?? null,
+    taskId: active?.instance.taskId ?? null,
+    taskBranch: active?.instance.taskBranch ?? null,
+    repositoryControlName: await controlName(
+      page.locator('button[aria-label^="Manage repository "]'),
+      "repository",
+    ),
+    branchControlName: await controlName(
+      page.locator('button[aria-label^="Manage branch "]'),
+      "branch",
+    ),
+  };
+  expect(await activeTaskWorkspace(page)).toEqual(active);
+  return identity;
+}
+
+async function waitForLiveWorkbenchIdentity(
+  page: Page,
+  identity: LiveWorkbenchIdentity,
+): Promise<void> {
+  await expect
+    .poll(async () => (await activeTaskWorkspace(page))?.instance.workspaceId ?? null, {
+      timeout: 60_000,
+    })
+    .toBe(identity.workspaceId);
+  const taskName = identity.taskId ?? "no active workspace";
+  await expect(page.getByRole("button", { name: `Task workspaces: ${taskName}` })).toBeVisible();
+  await waitForWorkbenchResources(page);
+  await expect(page.getByRole("button", { name: identity.repositoryControlName })).toBeVisible();
+  await expect(page.getByRole("button", { name: identity.branchControlName })).toBeVisible();
+}
+
 // Live-run blocker (B): the real gateway config may hold a chat model whose previously verified
 // tool-calling proof has expired, or one that has not yet been marked workflow-eligible. Refreshing
 // an expired proof must go through the production readiness route, which is protected by the same
 // durable qualification-spend admission as every subsequent provider request. Filtering the stale
 // model out before that call made a valid configured profile impossible to qualify.
 export async function ensureWorkflowEligibleModel(page: Page): Promise<void> {
+  const workspaceIdentity = await currentLiveWorkbenchIdentity(page);
   const changed = await qualifyLiveModel({
     loadModels: () => liveModels(page),
     refreshToolCalling: (modelId) => refreshToolCallingProof(page, modelId),
@@ -188,9 +295,11 @@ export async function ensureWorkflowEligibleModel(page: Page): Promise<void> {
       ).toBe(true);
     },
   });
-  if (!changed) return;
-  await page.reload();
-  await expect(workbenchSurface(page)).toBeVisible();
+  await reconcileLiveWorkbenchAfterModelChange(changed, workspaceIdentity, {
+    reload: () => page.reload().then(() => undefined),
+    waitForWorkbench: () => expect(workbenchSurface(page)).toBeVisible(),
+    waitForWorkspaceIdentity: (identity) => waitForLiveWorkbenchIdentity(page, identity),
+  });
 }
 
 export async function grantGithubAccess(page: Page, repositoryRoot: string): Promise<void> {

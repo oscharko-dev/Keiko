@@ -1,6 +1,9 @@
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import { describe, expect, it, vi } from "vitest";
-import { qualifyLiveModel } from "./coding-issue-journey-live.js";
+import {
+  qualifyLiveModel,
+  reconcileLiveWorkbenchAfterModelChange,
+} from "./coding-issue-journey-live.js";
 
 function chatModel(overrides: Partial<ModelCapability> = {}): ModelCapability {
   return {
@@ -149,5 +152,68 @@ describe("live journey model qualification", () => {
     ).rejects.toThrow("publish the refreshed tool-calling proof");
 
     expect(enableWorkflow).not.toHaveBeenCalled();
+  });
+});
+
+describe("live journey model-change reload", () => {
+  it("waits for the pre-reload task workspace identity after the workbench renders", async () => {
+    const identity = {
+      workspaceId: "ws-1",
+      taskId: "issue-1",
+      taskBranch: "keiko/issue-1",
+      repositoryControlName: "Manage repository ws-1",
+      branchControlName: "Manage branch keiko/issue-1",
+    };
+    let stage: "initial" | "reloaded" | "rendered" | "restored" = "initial";
+    const reload = vi.fn(() => {
+      expect(stage).toBe("initial");
+      stage = "reloaded";
+      return Promise.resolve();
+    });
+    const waitForWorkbench = vi.fn(() => {
+      expect(stage).toBe("reloaded");
+      stage = "rendered";
+      return Promise.resolve();
+    });
+    const waitForWorkspaceIdentity = vi.fn((received) => {
+      expect(stage).toBe("rendered");
+      expect(received).toEqual(identity);
+      stage = "restored";
+      return Promise.resolve();
+    });
+
+    await reconcileLiveWorkbenchAfterModelChange(true, identity, {
+      reload,
+      waitForWorkbench,
+      waitForWorkspaceIdentity,
+    });
+
+    expect(stage).toBe("restored");
+    expect(reload).toHaveBeenCalledExactlyOnceWith();
+    expect(waitForWorkbench).toHaveBeenCalledExactlyOnceWith();
+    expect(waitForWorkspaceIdentity).toHaveBeenCalledExactlyOnceWith(identity);
+  });
+
+  it("does not reload when the model profile was already qualified", async () => {
+    const identity = {
+      workspaceId: null,
+      taskId: null,
+      taskBranch: null,
+      repositoryControlName: "Manage repository fixture",
+      branchControlName: "Manage branch master",
+    };
+    const reload = vi.fn<() => Promise<void>>();
+    const waitForWorkbench = vi.fn<() => Promise<void>>();
+    const waitForWorkspaceIdentity = vi.fn<() => Promise<void>>();
+
+    await reconcileLiveWorkbenchAfterModelChange(false, identity, {
+      reload,
+      waitForWorkbench,
+      waitForWorkspaceIdentity,
+    });
+
+    expect(reload).not.toHaveBeenCalled();
+    expect(waitForWorkbench).not.toHaveBeenCalled();
+    expect(waitForWorkspaceIdentity).not.toHaveBeenCalled();
   });
 });

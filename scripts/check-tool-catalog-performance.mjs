@@ -35,11 +35,13 @@ import { compareStrings } from "./lib/compare-strings.mjs";
 // (same tool count, same digests across every sample of one run); lookup iteration counts are
 // derived from a fixed total-comparison budget (`LOOKUP_OPERATION_BUDGET`) divided by catalog
 // size, not a wall-clock duration, so this gate cannot flake on a slow or shared CI runner.
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
+import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import { hashHelperSourceTree } from "./stage-dev-coding-runtime.mjs";
@@ -285,6 +287,35 @@ export async function measureToolCatalogPerformance(
     },
     cases,
   };
+}
+
+const FRESH_MEASUREMENT_SOURCE = `
+const moduleUrl = process.argv[2];
+const root = process.argv[3];
+if (!moduleUrl || !root) throw new TypeError("catalog measurement child arguments are missing");
+const { measureToolCatalogPerformance } = await import(moduleUrl);
+process.stdout.write(JSON.stringify(await measureToolCatalogPerformance(root)));
+`;
+
+/**
+ * Runs one complete measurement in a new VM and heap. Calibration's synthetic-catalog allocation
+ * therefore cannot perturb the candidate through retained JIT or garbage-collector state.
+ */
+export async function measureToolCatalogPerformanceInFreshProcess(root = process.cwd()) {
+  const moduleUrl = pathToFileURL(join(root, "scripts/check-tool-catalog-performance.mjs")).href;
+  const output = execFileSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      FRESH_MEASUREMENT_SOURCE,
+      "tool-catalog-measurement-child",
+      moduleUrl,
+      root,
+    ],
+    { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+  );
+  return JSON.parse(output);
 }
 
 export function toolCatalogPerformanceSubject(root = process.cwd()) {
@@ -596,7 +627,7 @@ function writeJson(root, path, value) {
 export async function writeToolCatalogPerformanceReference(root = process.cwd()) {
   const environment = referenceEnvironment();
   const measurementHarnessSha256 = toolCatalogPerformanceRulerDigest(root);
-  const calibrationRaw = await measureToolCatalogPerformance(root);
+  const calibrationRaw = await measureToolCatalogPerformanceInFreshProcess(root);
   const calibration = buildToolCatalogPerformanceDocument(calibrationRaw, {
     role: "calibration",
     measuredAtIso: new Date().toISOString(),
@@ -604,7 +635,7 @@ export async function writeToolCatalogPerformanceReference(root = process.cwd())
     environment,
   });
   const budget = toolCatalogPerformanceBudgets(calibration);
-  const measurementRaw = await measureToolCatalogPerformance(root);
+  const measurementRaw = await measureToolCatalogPerformanceInFreshProcess(root);
   const measurement = buildToolCatalogPerformanceDocument(measurementRaw, {
     role: "measurement",
     measuredAtIso: new Date().toISOString(),
