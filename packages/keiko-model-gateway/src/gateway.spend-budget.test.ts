@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { ConfigInvalidError, TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
-import { Gateway, type GatewayCallRequest, type GatewaySpendReservation } from "./gateway.js";
+import {
+  Gateway,
+  type GatewayCallRequest,
+  type GatewaySpendBudget,
+  type GatewaySpendReservation,
+} from "./gateway.js";
 import type {
   GatewayConfig,
   GatewayRequest,
@@ -61,7 +66,7 @@ const response: NormalizedResponse = {
   },
 };
 
-function deniedBudget(): { reserve: ReturnType<typeof vi.fn> } {
+function deniedBudget(): GatewaySpendBudget {
   return {
     reserve: vi.fn(() => {
       throw new ConfigInvalidError("spend-budget-exceeded");
