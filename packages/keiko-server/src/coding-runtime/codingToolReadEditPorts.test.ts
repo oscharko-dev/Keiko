@@ -21,6 +21,7 @@ import {
   createCodingToolReadEditPorts,
   NO_ACTIVE_SESSION_MESSAGE,
 } from "./codingToolReadEditPorts.js";
+import type { SecureWorkspaceTextReadResult } from "./secureWorkspaceTextRead.js";
 
 const DIGEST = "a".repeat(64);
 const SENTINEL = "RAW_PATH_CONTENT_PATCH_CAPABILITY_SENTINEL";
@@ -91,6 +92,55 @@ function singleUseManagedAccess(root: string): () =>
     available = false;
     return { kind: "managed-task", canonicalRoot: root, fs: nodeWorkspaceFs, repositoryRoot: root };
   };
+}
+
+type WorkspaceReadFailureFixture =
+  "exception" | "oversize" | "postflight" | "preflight" | "secure-refusal";
+
+async function observedWorkspaceReadFailure(kind: WorkspaceReadFailureFixture): Promise<{
+  readonly diagnostics: readonly ServerDiagnosticRecord[];
+  readonly events: readonly ServerLogEvent[];
+  readonly result: unknown;
+}> {
+  const binding = { ...liveDiscoveryBinding(), runId: "run-read-failure" };
+  const diagnostics: ServerDiagnosticRecord[] = [];
+  const events: ServerLogEvent[] = [];
+  let contextReads = 0;
+  const readText = vi.fn((): Promise<SecureWorkspaceTextReadResult> => {
+    if (kind === "exception") return Promise.reject(new Error(SENTINEL));
+    if (kind === "secure-refusal") {
+      return Promise.resolve({ ok: false, reason: "process-failed" });
+    }
+    return Promise.resolve({
+      ok: true,
+      text: kind === "oversize" ? "x".repeat(65_537) : "safe\n",
+    });
+  });
+  const ports = createCodingToolReadEditPorts({
+    secureWorkspaceTextRead: { readText },
+    editorAgentClient: { action: vi.fn() },
+    resolveEditorActionContext: vi.fn(),
+    resolveRepositoryReadContext: () => {
+      contextReads += 1;
+      return kind === "postflight" && contextReads > 1
+        ? { ...binding, workspaceId: "other-workspace" }
+        : binding;
+    },
+    diagnostics: { record: (record): void => void diagnostics.push(record) },
+    activityLog: { write: (event): void => void events.push(event) },
+    enforceProducerBinding: true,
+  });
+  const result = await ports.repositoryRead.execute(
+    {
+      action: "read",
+      actionId: "read-failure",
+      idempotencyKey: "read-failure-key",
+      relativePath: "src/private-name.ts",
+    },
+    kind === "preflight" ? AbortSignal.abort() : undefined,
+    { check: (): true => true, binding },
+  );
+  return { diagnostics, events, result };
 }
 
 describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
@@ -482,6 +532,49 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     expect(JSON.stringify(result)).not.toContain(SENTINEL);
     expect(editorAction).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["preflight", "preflight-refused"],
+    ["secure-refusal", "process-failed"],
+    ["postflight", "postflight-refused"],
+    ["oversize", "response-too-large"],
+    ["exception", "exception"],
+  ] as const)(
+    "records a correlated body-free workspace-read failure for the %s boundary",
+    async (kind, reason) => {
+      const observed = await observedWorkspaceReadFailure(kind);
+
+      expect(observed.result).toEqual({ status: "failed" });
+      expect(observed.events).toEqual([
+        expect.objectContaining({
+          op: "coding-runtime.workspace-read",
+          correlationId: "run-read-failure",
+          level: "warn",
+          extra: expect.objectContaining({
+            state: "failed",
+            reason,
+            targetPathSha256: createHash("sha256").update("src/private-name.ts").digest("hex"),
+          }) as unknown,
+        }),
+      ]);
+      expect(JSON.stringify(observed)).not.toContain("src/private-name.ts");
+      expect(JSON.stringify(observed)).not.toContain(SENTINEL);
+      if (kind === "exception") {
+        expect(observed.events[0]?.extra?.frames).toEqual(expect.any(Array));
+        expect(observed.events[0]?.extra?.causeChain).toEqual(expect.any(Array));
+        expect(observed.diagnostics).toEqual([
+          expect.objectContaining({
+            operation: "coding-runtime.workspace-read",
+            correlationId: "run-read-failure",
+            errorClass: "Error",
+            message: "workspace-read-failed",
+          }),
+        ]);
+      } else {
+        expect(observed.diagnostics).toEqual([]);
+      }
+    },
+  );
 
   it("fails closed when a compromised read port returns more than 65,536 bytes", async () => {
     const editorAction = vi.fn();

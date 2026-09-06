@@ -32,8 +32,12 @@ import type {
   CodingRuntimeMutationOutcome,
 } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import type { ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
+import type {
+  SecureWorkspaceTextReadFailure,
+  SecureWorkspaceTextReadPort,
+} from "./secureWorkspaceTextRead.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 const MAX_READ_BYTES = 65_536;
@@ -288,16 +292,42 @@ async function executeRead(
   | { readonly status: "completed"; readonly read: CodingToolReadResult }
   | { readonly status: "failed" }
 > {
-  const preflight = readPreflight(deps, request, signal, mutationGuard);
-  if (!preflight.ok) return { status: "failed" };
-  const binding = preflight.binding;
-  const result = await deps.secureWorkspaceTextRead.readText({
-    relativePath: request.relativePath,
-    signal,
-  });
-  if (!readPostflight(deps, result, binding, signal, mutationGuard)) return { status: "failed" };
-  if (Buffer.byteLength(result.text, "utf8") > MAX_READ_BYTES) return { status: "failed" };
-  const window = readWindow(result.text, request.startLine, request.maxLines);
+  let binding = safeMutationBinding(mutationGuard);
+  try {
+    const preflight = readPreflight(deps, request, signal, mutationGuard);
+    if (!preflight.ok) return failedRead(deps, binding, request, "preflight-refused");
+    binding = preflight.binding;
+    const result = await deps.secureWorkspaceTextRead.readText({
+      relativePath: request.relativePath,
+      signal,
+    });
+    if (!result.ok) return failedRead(deps, binding, request, result.reason);
+    if (!readPostflight(deps, result, binding, signal, mutationGuard)) {
+      return failedRead(deps, binding, request, "postflight-refused");
+    }
+    if (Buffer.byteLength(result.text, "utf8") > MAX_READ_BYTES) {
+      return failedRead(deps, binding, request, "response-too-large");
+    }
+    return completedRead(deps, binding, request, result.text);
+  } catch (error) {
+    return failedRead(deps, binding, request, "exception", error);
+  }
+}
+
+type WorkspaceReadFailureReason =
+  | SecureWorkspaceTextReadFailure
+  | "exception"
+  | "postflight-refused"
+  | "preflight-refused"
+  | "response-too-large";
+
+function completedRead(
+  deps: CodingToolReadEditPortDeps,
+  binding: RuntimeProducerBinding | undefined,
+  request: RepositoryReadRequest,
+  text: string,
+): { readonly status: "completed"; readonly read: CodingToolReadResult } {
+  const window = readWindow(text, request.startLine, request.maxLines);
   recordCompletedRead(deps, binding, request);
   return {
     status: "completed",
@@ -306,7 +336,7 @@ async function executeRead(
       byteCount: Buffer.byteLength(window.text, "utf8"),
       // The digest always covers the WHOLE file so a later changeset's expectedContentHash stays
       // anchored to the governed read even when the model only saw a window of it.
-      digest: createHash("sha256").update(result.text, "utf8").digest("hex"),
+      digest: createHash("sha256").update(text, "utf8").digest("hex"),
       totalLines: window.totalLines,
       ...(window.nextStartLine === undefined ? {} : { nextStartLine: window.nextStartLine }),
     },
@@ -328,6 +358,48 @@ function recordCompletedRead(
       startLine: request.startLine ?? 1,
       maxLines: request.maxLines ?? 0,
     },
+  });
+}
+
+function failedRead(
+  deps: CodingToolReadEditPortDeps,
+  binding: RuntimeProducerBinding | undefined,
+  request: RepositoryReadRequest,
+  reason: WorkspaceReadFailureReason,
+  error?: unknown,
+): { readonly status: "failed" } {
+  const correlationId = correlationIdOrUnknown(binding?.runId);
+  (deps.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    op: "coding-runtime.workspace-read",
+    correlationId,
+    level: "warn",
+    ...(error === undefined ? {} : { errorKind: contentFreeErrorClass(error) }),
+    extra: {
+      state: "failed",
+      reason,
+      targetPathSha256: createHash("sha256").update(request.relativePath, "utf8").digest("hex"),
+      ...(error === undefined
+        ? {}
+        : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
+    },
+  });
+  if (error !== undefined) emitReadFailureDiagnostic(deps.diagnostics, correlationId, error);
+  return { status: "failed" };
+}
+
+function emitReadFailureDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.workspace-read",
+    source: "coding-tool-read-edit-ports.read",
+    errorClass: contentFreeErrorClass(error),
+    message: "workspace-read-failed",
   });
 }
 
@@ -863,6 +935,16 @@ function mutationBinding(
   const record = mutationGuard as unknown as Record<string, unknown>;
   if (!("binding" in record)) return undefined;
   return isRuntimeProducerBinding(record.binding) ? record.binding : null;
+}
+
+function safeMutationBinding(
+  mutationGuard: CodingToolMutationGuard,
+): RuntimeProducerBinding | undefined {
+  try {
+    return mutationBinding(mutationGuard) ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function isRuntimeProducerBinding(value: unknown): value is RuntimeProducerBinding {
