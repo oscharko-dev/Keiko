@@ -968,7 +968,7 @@
     {
       "op": "<dynamic>",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:554",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:580",
       "package": "keiko-server"
     },
     {
@@ -1503,7 +1503,7 @@
     {
       "op": "coding-runtime.follow-up.dispatch-failed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:125",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:127",
       "package": "keiko-server"
     },
     {
@@ -1537,13 +1537,13 @@
     {
       "op": "coding-runtime.initial-turn.dispatch-failed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:250",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:262",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.initial-turn.stop-failed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:268",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:280",
       "package": "keiko-server"
     },
     {
@@ -1576,19 +1576,25 @@
     {
       "op": "coding-runtime.question.authority-resolution-failed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:321",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:333",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.question.authority-resolution-failed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:353",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:365",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.question.list-failed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:160",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:172",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.question.list-revision-rebound",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:604",
       "package": "keiko-server"
     },
     {
@@ -3365,6 +3371,7 @@
     "coding-runtime.operation.refused",
     "coding-runtime.question.authority-resolution-failed",
     "coding-runtime.question.list-failed",
+    "coding-runtime.question.list-revision-rebound",
     "coding-runtime.read-only-child.completed",
     "coding-runtime.read-only-child.runner-failed",
     "coding-runtime.readiness.failed",

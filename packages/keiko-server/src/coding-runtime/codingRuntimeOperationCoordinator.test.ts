@@ -212,6 +212,69 @@ describe("CodingRuntimeOperationCoordinator", () => {
     ).resolves.toEqual({ ok: false, failureCode: "authority-resolution-failed" });
   });
 
+  it("lists questions after internal activity advances beyond the rendered revision", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const list = vi.fn(() =>
+      Promise.resolve({
+        questions: [
+          {
+            id: "que_1",
+            questions: [{ question: "private-question-sentinel", header: "Choice", options: [] }],
+          },
+        ],
+      }),
+    );
+    const answer = vi.fn(() => Promise.resolve(true));
+    const reject = vi.fn(() => Promise.resolve(true));
+    const subject = coordinator({
+      port: questionPort({ list, answer, reject }),
+      current: () => ({ ...runningSnapshot(), revision: 23 }),
+      activityLog,
+    });
+
+    await expect(
+      subject.listQuestions(
+        "run-1",
+        { requestId: "question-list-stale", expectedRevision: 22 },
+        "question-list-correlation",
+      ),
+    ).resolves.toMatchObject({ ok: true, snapshot: { revision: 23 } });
+    expect(list).toHaveBeenCalledWith({
+      runId: "run-1",
+      requestId: "question-list-stale",
+      expectedRevision: 23,
+    });
+    expect(activityLog.events).toContainEqual({
+      category: "process",
+      level: "info",
+      op: "coding-runtime.question.list-revision-rebound",
+      correlationId: "question-list-correlation",
+      extra: { runId: "run-1", expectedRevision: 22, currentRevision: 23 },
+    });
+    expect(JSON.stringify(activityLog.events)).not.toContain("private-question-sentinel");
+    await expect(
+      subject.listQuestions("run-1", { requestId: "question-list-future", expectedRevision: 24 }),
+    ).resolves.toEqual({ ok: false, failureCode: "invalid-intent" });
+    await expect(
+      subject.answerQuestion("run-1", {
+        requestId: "question-answer-stale",
+        expectedRevision: 22,
+        questionId: "que_1",
+        answers: [["Continue"]],
+      }),
+    ).resolves.toEqual({ ok: false, failureCode: "invalid-intent" });
+    await expect(
+      subject.rejectQuestion("run-1", {
+        requestId: "question-reject-stale",
+        expectedRevision: 22,
+        questionId: "que_1",
+      }),
+    ).resolves.toEqual({ ok: false, failureCode: "invalid-intent" });
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(answer).not.toHaveBeenCalled();
+    expect(reject).not.toHaveBeenCalled();
+  });
+
   it.each(["missing-run", "missing-port", "revoked", "runtime-refusal", "runtime-error"])(
     "preserves authority failure for a production question %s",
     async (condition) => {

@@ -82,6 +82,8 @@ type QuestionMutationOutcome =
         "invalid-intent" | "authority-resolution-failed" | "question-answer-rejected";
     };
 
+type RuntimeOperationRevisionPolicy = "exact" | "stale-read";
+
 const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
   "running",
   "paused",
@@ -146,11 +148,21 @@ export class CodingRuntimeOperationCoordinator {
     correlationId?: string,
   ): Promise<CodingRuntimeQuestionOperationResult> {
     return this.deps.serial<CodingRuntimeQuestionOperationResult>(async () => {
-      const operation = this.prepare(runId, input, ["requestId", "expectedRevision"]);
+      // A paired question list is a read. Runtime activity may advance after the UI renders its
+      // snapshot, so admit an older revision and bind the downstream guard to the current one.
+      const operation = this.prepare(runId, input, ["requestId", "expectedRevision"], "stale-read");
       if (!operation.ok) {
         return failure(
           operation.reason === "replay-cap-exhausted" ? "replay-cap-exhausted" : "invalid-intent",
         );
+      }
+      if (operation.value.expectedRevision < operation.current.revision) {
+        recordQuestionListRevisionRebound(this.deps.activityLog, {
+          runId,
+          correlationId,
+          expectedRevision: operation.value.expectedRevision,
+          currentRevision: operation.current.revision,
+        });
       }
       let questions: CodingWorkbenchRuntimeQuestionsResponse | undefined;
       try {
@@ -388,8 +400,9 @@ export class CodingRuntimeOperationCoordinator {
     runId: string,
     input: unknown,
     keys: readonly string[],
+    revisionPolicy: RuntimeOperationRevisionPolicy = "exact",
   ): PreparedRuntimeOperation {
-    const admitted = admitRuntimeOperation(input, keys, this.deps.current(), runId);
+    const admitted = admitRuntimeOperation(input, keys, this.deps.current(), runId, revisionPolicy);
     if (admitted === undefined) return { ok: false };
     const reserveOutcome = this.replay.reserve(
       runId,
@@ -422,6 +435,7 @@ function admitRuntimeOperation(
   keys: readonly string[],
   current: CodingRuntimeSnapshot | undefined,
   runId: string,
+  revisionPolicy: RuntimeOperationRevisionPolicy,
 ):
   | {
       readonly current: CodingRuntimeSnapshot;
@@ -442,8 +456,7 @@ function admitRuntimeOperation(
   // revision, so a second concurrent follow-up fails closed instead of queueing.
   if (
     !validRequestId(input.requestId) ||
-    !Number.isSafeInteger(input.expectedRevision) ||
-    input.expectedRevision !== current.revision
+    !revisionAdmitted(input.expectedRevision, current.revision, revisionPolicy)
   ) {
     return undefined;
   }
@@ -454,6 +467,19 @@ function admitRuntimeOperation(
       readonly expectedRevision: number;
     },
   };
+}
+
+function revisionAdmitted(
+  candidate: unknown,
+  current: number,
+  policy: RuntimeOperationRevisionPolicy,
+): boolean {
+  return (
+    typeof candidate === "number" &&
+    Number.isSafeInteger(candidate) &&
+    candidate >= 0 &&
+    (candidate === current || (policy === "stale-read" && candidate < current))
+  );
 }
 
 // Per-run replay/duplicate-detection budget. Sized well above any plausible single-run operation
@@ -559,6 +585,28 @@ function recordRuntimeOperationTransportFailure(
       operation: input.operation,
       frames: keikoStackFrames(input.error),
       causeChain: causeChain(input.error),
+    },
+  });
+}
+
+function recordQuestionListRevisionRebound(
+  activityLog: ServerLogSink | undefined,
+  input: {
+    readonly runId: string;
+    readonly correlationId?: string | undefined;
+    readonly expectedRevision: number;
+    readonly currentRevision: number;
+  },
+): void {
+  (activityLog ?? processServerLogSink()).write({
+    category: "process",
+    level: "info",
+    op: "coding-runtime.question.list-revision-rebound",
+    correlationId: correlationIdOrUnknown(input.correlationId ?? input.runId),
+    extra: {
+      runId: input.runId,
+      expectedRevision: input.expectedRevision,
+      currentRevision: input.currentRevision,
     },
   });
 }
