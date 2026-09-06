@@ -225,7 +225,7 @@ function isCatalogProfileRef(value) {
 // (#3386 review). Extending or narrowing H1's implementation means editing that one annex, and this
 // derives from it automatically (AGENTS.md §5).
 export const H1_OWNED_SOURCE_PATHS = Object.freeze(
-  [...GOVERNED_TOOL_CONTRACT_PINS.pendingH1.ownedImplementation].sort(),
+  [...GOVERNED_TOOL_CONTRACT_PINS.pendingH1.ownedImplementation].sort(compareStrings),
 );
 
 // One row per H1Provenance field: `test` reads the whole record so a check can span more than one
@@ -266,8 +266,11 @@ const H1_PROVENANCE_FIELD_CHECKS = Object.freeze([
 
 export function h1ProvenanceShapeFailures(record) {
   const fields = REQUIRED_INTERFACE_FIELDS.H1Provenance.split(",");
-  const keys = Object.keys(record).sort();
-  if (keys.length !== fields.length || ![...fields].sort().every((field, i) => field === keys[i]))
+  const keys = Object.keys(record).sort(compareStrings);
+  if (
+    keys.length !== fields.length ||
+    ![...fields].sort(compareStrings).every((field, i) => field === keys[i])
+  )
     return [
       "H1 handoff evidence malformed: durable record does not carry exactly the H1Provenance fields",
     ];
@@ -569,7 +572,7 @@ async function landedEvidenceFailures(root, landedDevCommit, landedTreeDigest, d
 }
 
 export async function checkH1HandoffEvidence(
-  root = process.cwd(),
+  root,
   pendingH1,
   {
     execute = execFileSync,
@@ -578,11 +581,13 @@ export async function checkH1HandoffEvidence(
     provenancePath = H1_PROVENANCE_PATH,
   } = {},
 ) {
-  const migration = pendingH1 ?? JSON.parse(await toolCatalogMigrationBytes(root)).pendingH1;
+  const repositoryRoot = root === undefined ? process.cwd() : root;
+  const migration =
+    pendingH1 ?? JSON.parse(await toolCatalogMigrationBytes(repositoryRoot)).pendingH1;
   const { landedDevCommit, landedTreeDigest } = migration;
   const early = pendingFieldFailures(landedDevCommit, landedTreeDigest);
   if (early !== null) return early;
-  return landedEvidenceFailures(root, landedDevCommit, landedTreeDigest, {
+  return landedEvidenceFailures(repositoryRoot, landedDevCommit, landedTreeDigest, {
     execute,
     identityFailures,
     sourceHeadFailures,

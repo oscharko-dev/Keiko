@@ -3,7 +3,6 @@ import { ConfigInvalidError, TransportError } from "@oscharko-dev/keiko-security
 import {
   Gateway,
   type GatewayCallRequest,
-  type GatewaySpendBudget,
   type GatewaySpendReservation,
 } from "./gateway.js";
 import type {

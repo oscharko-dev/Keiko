@@ -93,6 +93,7 @@ for (const mode of ISSUE_TO_PR_MODES) {
   test(`#3390 @coding-issue-journey a real model resolves the controlled issue to a draft PR in ${mode}`, async ({
     page,
   }) => {
+    // Each paid invocation selects explicit mode rows; a selected row can never skip its drive.
     test.skip(!isScenarioSelected(scenarioId), `scenario ${scenarioId} not selected`);
     await recordOutcome(page, scenarioId, () => runIssueToPrScenario(page, mode));
   });
@@ -101,6 +102,7 @@ for (const mode of ISSUE_TO_PR_MODES) {
 test("#3390 @coding-issue-journey ci-repair-loop observes and repairs real CI", async ({
   page,
 }) => {
+  // The paid orchestrator runs this downstream row only after a draft-delivery run is available.
   test.skip(!isScenarioSelected("ci-repair-loop"), "scenario ci-repair-loop not selected");
   await recordOutcome(page, "ci-repair-loop", () => runCiRepairScenario(page));
 });
@@ -108,6 +110,7 @@ test("#3390 @coding-issue-journey ci-repair-loop observes and repairs real CI", 
 test("#3390 @coding-issue-journey description-auto-draft-and-apply through the governed PR card", async ({
   page,
 }) => {
+  // Scenario selection bounds provider spend; selecting this row still requires a real artifact.
   test.skip(
     !isScenarioSelected("description-auto-draft-and-apply"),
     "scenario description-auto-draft-and-apply not selected",
@@ -118,6 +121,7 @@ test("#3390 @coding-issue-journey description-auto-draft-and-apply through the g
 test("#3390 @coding-issue-journey mark-ready-intent proposes ready without merging", async ({
   page,
 }) => {
+  // This paid row is selected separately so its governed transition has an independent receipt.
   test.skip(!isScenarioSelected("mark-ready-intent"), "scenario mark-ready-intent not selected");
   await recordOutcome(page, "mark-ready-intent", () => runMarkReadyScenario(page));
 });
@@ -126,6 +130,7 @@ test("#3390 @coding-issue-journey git-to-chat-connect-refine-apply on the extern
   page,
   request,
 }) => {
+  // This external-PR fixture is independent of issue delivery and runs only when selected.
   test.skip(
     !isScenarioSelected("git-to-chat-connect-refine-apply"),
     "scenario git-to-chat-connect-refine-apply not selected",
@@ -139,6 +144,7 @@ test("#3390 @coding-issue-journey git-chat-negative-effects exposes no mutating 
   page,
   request,
 }) => {
+  // This negative row is independently selectable and still fails on any reachable mutation.
   test.skip(
     !isScenarioSelected("git-chat-negative-effects"),
     "scenario git-chat-negative-effects not selected",

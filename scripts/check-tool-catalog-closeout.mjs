@@ -12,6 +12,7 @@ import {
   checkToolCatalogMigrationCloseout,
   H1_PRODUCER_CHECKPOINT_PATH,
 } from "./check-tool-catalog-conformance.mjs";
+import { compareStrings } from "./lib/compare-strings.mjs";
 import { sha256File } from "./lib/digest.mjs";
 import { REQUIRED_INTERFACE_FIELDS } from "./lib/governed-tool-contract-shape.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
@@ -45,7 +46,7 @@ export const CATALOG_CLOSEOUT_CHECKS = Object.freeze([
 const H1_EVIDENCE_REFS = new Set(["h1-producer-checkpoint.v1", "h1-provenance.v1"]);
 const DIGEST = /^[a-f0-9]{64}$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
-const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/u;
+const VERSION = /^\d+\.\d+\.\d+$/u;
 const PLATFORMS = new Set(["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64"]);
 
 function requireEvidence(condition, message) {
@@ -56,7 +57,7 @@ function exactFields(value, fields) {
     value !== null &&
       typeof value === "object" &&
       !Array.isArray(value) &&
-      isDeepStrictEqual(Object.keys(value).sort(), [...fields].sort()),
+      isDeepStrictEqual(Object.keys(value).sort(compareStrings), [...fields].sort(compareStrings)),
     "unexpected evidence fields",
   );
 }
@@ -111,12 +112,9 @@ function validateReport(id, report, context) {
     `${id} has incomplete qualification`,
   );
   const consumer = CATALOG_CLOSEOUT_CONSUMERS.includes(id);
-  const kind =
-    id === "managed-opencode"
-      ? "real-runtime"
-      : consumer
-        ? "production-composition"
-        : "qualification-gate";
+  let kind = "qualification-gate";
+  if (consumer) kind = "production-composition";
+  if (id === "managed-opencode") kind = "real-runtime";
   requireEvidence(report.executionKind === kind, `${id} is not production qualification evidence`);
   if (consumer) {
     for (const field of ["artifactDigest", "platform", "runtime"])

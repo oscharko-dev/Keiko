@@ -3,7 +3,7 @@ import { ApiError } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 
-export type JourneyAction = "refresh" | "propose-ready";
+type JourneyAction = "refresh" | "propose-ready";
 
 /**
  * A body-free description of why a journey action failed (B5-2, epic #3384 audit finding

@@ -178,6 +178,15 @@ function messageContentParts(
   );
 }
 
+function messageContent(
+  message: GatewayRequest["messages"][number],
+  hasToolCalls: boolean,
+): ChatRequestMessageContent | null {
+  if (message.role === "assistant" && hasToolCalls) return null;
+  if (message.contentParts === undefined) return message.content;
+  return messageContentParts(message.contentParts);
+}
+
 function buildMessage(
   message: GatewayRequest["messages"][number],
 ): ChatRequestBody["messages"][number] {
@@ -186,18 +195,14 @@ function buildMessage(
     type: "function" as const,
     function: { name: call.name, arguments: JSON.stringify(call.arguments) },
   }));
+  const hasToolCalls = toolCalls !== undefined && toolCalls.length > 0;
   return {
     role: message.role,
-    content:
-      message.role === "assistant" && toolCalls !== undefined && toolCalls.length > 0
-        ? null
-        : message.contentParts === undefined
-          ? message.content
-          : messageContentParts(message.contentParts),
+    content: messageContent(message, hasToolCalls),
     ...(message.role === "tool" && message.toolCallId !== undefined
       ? { tool_call_id: message.toolCallId }
       : {}),
-    ...(toolCalls !== undefined && toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+    ...(hasToolCalls ? { tool_calls: toolCalls } : {}),
   };
 }
 

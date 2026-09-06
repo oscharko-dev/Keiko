@@ -21,6 +21,7 @@ import {
   resolveCostClass,
   type EnvSource,
   type GatewayRequest,
+  type GatewaySpendBudget,
   type GatewayStreamChunk,
   type GatewayConfig,
   type LiteLLMRerankRequest,
@@ -89,7 +90,6 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "n
 import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
 import { gatewaySpendBudgetForEnv } from "./gateway-spend-budget.js";
-import type { GatewaySpendBudget } from "@oscharko-dev/keiko-model-gateway";
 import { gatewayForConfig, gatewayForRuntimeConfig } from "./gateway-instance-cache.js";
 import {
   createConversationAttachmentStore,

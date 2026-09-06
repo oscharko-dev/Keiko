@@ -233,7 +233,6 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set([
   "repair",
   "replace-apply",
   "replace-preview",
-  "repo-search",
   "repositories",
   "research",
   "resolve",

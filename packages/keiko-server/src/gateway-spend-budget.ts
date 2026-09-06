@@ -195,7 +195,8 @@ class PersistentGatewaySpendBudget implements GatewaySpendBudget {
     if (this.path === undefined || !isAbsolute(this.path))
       reject(this.log, correlationId, "spend-ledger-unavailable");
     try {
-      return (this.store ??= new ModelSpendStore(this.path, this.ceiling));
+      this.store ??= new ModelSpendStore(this.path, this.ceiling);
+      return this.store;
     } catch (error) {
       reject(this.log, correlationId, "spend-ledger-unavailable", error);
     }
@@ -233,7 +234,7 @@ export function createGatewaySpendBudget(
 ): GatewaySpendBudget | undefined {
   const raw = env[QUALIFICATION_SPEND_BUDGET_USD_ENV];
   if (raw === undefined) return undefined;
-  const ceiling = raw.trim() === "" ? NaN : Number(raw) * NANO_USD;
+  const ceiling = raw.trim() === "" ? Number.NaN : Number(raw) * NANO_USD;
   return new PersistentGatewaySpendBudget(ceiling, env[QUALIFICATION_SPEND_LEDGER_PATH_ENV], log);
 }
 

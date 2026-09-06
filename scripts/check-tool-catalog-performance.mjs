@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { compareStrings } from "./lib/compare-strings.mjs";
 // check:tool-catalog-performance — #3415 closeout.
 //
 // Measures the ONE producer every consumer compiles against
@@ -317,7 +318,7 @@ function assertEvidence(condition, reason) {
 function exactKeys(value, expected, label) {
   assertEvidence(value !== null && typeof value === "object", `${label} must be an object`);
   assertEvidence(
-    isDeepStrictEqual(Object.keys(value).sort(), [...expected].sort()),
+    isDeepStrictEqual(Object.keys(value).sort(compareStrings), [...expected].sort(compareStrings)),
     `${label} has unexpected fields`,
   );
 }
@@ -652,8 +653,10 @@ export async function checkToolCatalogPerformanceReference(
     if (!isDeepStrictEqual(measurement.subject, currentSubject))
       result.defects.push("catalog performance evidence does not describe the current producer");
     const currentEvidence = current ?? (await measureToolCatalogPerformance(root));
-    result.defects.push(...currentIdentityDefects(calibration, currentEvidence));
-    result.defects.push(...currentIdentityDefects(measurement, currentEvidence));
+    result.defects.push(
+      ...currentIdentityDefects(calibration, currentEvidence),
+      ...currentIdentityDefects(measurement, currentEvidence),
+    );
     return result;
   } catch (error) {
     return {

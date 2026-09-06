@@ -323,15 +323,33 @@ function memSameDescriptorReader(
     );
 }
 
+function findMemoryFileKey(
+  root: string,
+  files: Readonly<Record<string, string>>,
+  index: ReadonlyMap<string, string>,
+  absolutePath: string,
+): string | undefined {
+  const path = canonicalPath(absolutePath);
+  const indexed = index.get(path);
+  if (indexed !== undefined && Object.hasOwn(files, indexed)) return indexed;
+  // Fixture callers mutate the original relative-POSIX map to model workspace membership changes.
+  // Resolve that current key directly: the initial lookup cache must neither hide additions nor
+  // resurrect deletions, and scanning the complete map per stat would make large fixtures quadratic.
+  const prefix = `${root}/`;
+  if (!path.startsWith(prefix)) return undefined;
+  const relativePath = path.slice(prefix.length);
+  return Object.hasOwn(files, relativePath) ? relativePath : undefined;
+}
+
 export function memFs(root: string, files: Readonly<Record<string, string>>): WorkspaceFs {
   const keyByAbsolutePath = new Map<string, string>();
   for (const key of Object.keys(files)) {
     const absolutePath = toAbs(root, key);
     if (!keyByAbsolutePath.has(absolutePath)) keyByAbsolutePath.set(absolutePath, key);
   }
-  const findKey = (absolutePath: string): string | undefined =>
-    keyByAbsolutePath.get(canonicalPath(absolutePath));
   const canonicalRoot = canonicalPath(root);
+  const findKey = (absolutePath: string): string | undefined =>
+    findMemoryFileKey(canonicalRoot, files, keyByAbsolutePath, absolutePath);
   return {
     readFileUtf8: (absolutePath: string): string => {
       const key = findKey(absolutePath);

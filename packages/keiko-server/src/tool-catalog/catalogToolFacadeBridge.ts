@@ -3,9 +3,9 @@ import type {
   CatalogJsonValue,
   ToolDescriptor,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { captureCatalogJson, lookupCatalogTool } from "@oscharko-dev/keiko-tool-catalog";
-import type { CodingToolResult } from "../coding-runtime/codingToolIpc.js";
-import type { CodingToolActionRequest } from "../coding-runtime/codingToolIpc.js";
+import type { CodingToolActionRequest, CodingToolResult } from "../coding-runtime/codingToolIpc.js";
 import type {
   CodingToolAuthorityPort,
   CodingToolFacadeInput,
@@ -538,7 +538,7 @@ interface PreparedDispatchBinder {
 }
 
 function unavailableKey(unavailable: ReadonlySet<OpenCodeOptionalToolName>): string {
-  return [...unavailable].sort().join(",");
+  return [...unavailable].sort(compareStrings).join(",");
 }
 
 function prepareDispatchBinder(
@@ -677,9 +677,8 @@ export function createCanonicalCatalogFacadeBridge(
   const preparation = prepareDispatchBinder(bridgeInput);
   return {
     covers: (request): boolean => catalogActionFor(request) !== undefined,
-    recordUnbound: (request, facadeInput): void => {
+    recordUnbound: (request, _facadeInput): void => {
       recordUnbound(bridgeInput, request);
-      void facadeInput;
     },
     execute: (request, facadeInput, run): Promise<CodingToolResult> =>
       executeCanonical(bridgeInput, preparation, request, facadeInput, run),

@@ -19,6 +19,7 @@ import type {
   ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
 import { estimateTokensForSegments } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   MODEL_REASONING_EFFORTS,
@@ -688,10 +689,10 @@ function resolveToolCatalogHandlerCoverage(
   if (unavailable === undefined) return undefined;
   const unavailableOptionalTools = [...OPENCODE_OPTIONAL_TOOL_NAMES]
     .filter((name) => unavailable.has(name as OpenCodeOptionalToolName))
-    .sort();
+    .sort(compareStrings);
   const offeredOptionalTools = [...OPENCODE_OPTIONAL_TOOL_NAMES]
     .filter((name) => !unavailable.has(name as OpenCodeOptionalToolName))
-    .sort();
+    .sort(compareStrings);
   const coverage = createCanonicalOpenCodeHandlerCoverage(unavailable);
   getServerLogger().info({
     category: "gateway",
@@ -1440,6 +1441,16 @@ interface PinnedGatewayBinding {
   readonly gateway: Gateway;
 }
 
+interface GatewayChatDispatchContext {
+  readonly deps: UiHandlerDeps;
+  readonly binding: PinnedGatewayBinding;
+  readonly modelAlias: string;
+  readonly request: GatewayRequest;
+  readonly runId: string;
+  readonly cancellationSignal: AbortSignal;
+  readonly promptTokenReservation: PromptTokenReservation;
+}
+
 function requestForGatewayDelivery(
   ctx: RouteContext,
   parsed: CodingSidecarGatewayChatCompletionRequest,
@@ -1499,31 +1510,22 @@ async function dispatchGatewayChat(
 ): Promise<RouteResult | typeof STREAMING> {
   const { modelAlias, upstreamStreamingSupported } = delivery;
   const request = requestForGatewayDelivery(ctx, parsed, delivery, cancellationSignal);
+  const dispatch = {
+    deps,
+    binding,
+    modelAlias,
+    request,
+    runId,
+    cancellationSignal,
+    promptTokenReservation: delivery.promptTokenReservation,
+  } satisfies GatewayChatDispatchContext;
   let bufferedStream: BufferedOpenAiStreamSession | undefined;
   try {
     if (parsed.stream && upstreamStreamingSupported) {
-      return await streamGatewayChat(
-        ctx,
-        deps,
-        binding,
-        modelAlias,
-        request,
-        runId,
-        cancellationSignal,
-        delivery,
-      );
+      return await streamGatewayChat(ctx, dispatch);
     }
     if (parsed.stream) bufferedStream = beginBufferedOpenAiStream(ctx, modelAlias);
-    return await executeBufferedGatewayChat(
-      deps,
-      binding,
-      modelAlias,
-      request,
-      runId,
-      cancellationSignal,
-      bufferedStream,
-      delivery,
-    );
+    return await executeBufferedGatewayChat(dispatch, bufferedStream);
   } catch (error) {
     return settleFailedGatewayChat(
       ctx,
@@ -1561,17 +1563,13 @@ function settleFailedGatewayChat(
 }
 
 async function executeBufferedGatewayChat(
-  deps: UiHandlerDeps,
-  binding: PinnedGatewayBinding,
-  modelAlias: string,
-  request: GatewayRequest,
-  runId: string,
-  cancellationSignal: AbortSignal,
+  dispatch: GatewayChatDispatchContext,
   stream: BufferedOpenAiStreamSession | undefined,
-  delivery: Pick<GatewayChatDelivery, "promptTokenReservation">,
 ): Promise<RouteResult | typeof STREAMING> {
+  const { deps, binding, modelAlias, request, runId, cancellationSignal, promptTokenReservation } =
+    dispatch;
   const response = await chatFactoryFor(deps, binding.gateway)(binding.config, modelAlias)(request);
-  settlePromptTokenReservation(deps, delivery.promptTokenReservation, response.usage.promptTokens);
+  settlePromptTokenReservation(deps, promptTokenReservation, response.usage.promptTokens);
   const metrics = outputMetrics(response);
   if (cancellationSignal.aborted) {
     recordGatewayOutcome(deps, runId, "cancelled", metrics.completionTokens, metrics.outputBytes);
@@ -1600,36 +1598,22 @@ async function executeBufferedGatewayChat(
 // Closed stream state machine keeps iterator, cancellation, and SSE backpressure transitions together.
 async function streamGatewayChat(
   ctx: RouteContext,
-  deps: UiHandlerDeps,
-  binding: PinnedGatewayBinding,
-  modelId: string,
-  request: GatewayRequest,
-  runId: string,
-  cancellationSignal: AbortSignal,
-  delivery: Pick<GatewayChatDelivery, "promptTokenReservation">,
+  dispatch: GatewayChatDispatchContext,
 ): Promise<RouteResult | typeof STREAMING> {
+  const { deps, binding, modelAlias, request, runId, promptTokenReservation } = dispatch;
   let iterator: AsyncIterator<GatewayStreamChunk>;
   try {
     iterator = chatStreamFactoryFor(deps, binding.gateway)(
       binding.config,
-      modelId,
+      modelAlias,
     )(request)[Symbol.asyncIterator]();
   } catch (error) {
     recordGatewayOutcome(deps, runId, "failed", 0, 0);
     emitGatewayFailureDiagnostic(ctx, deps, error);
-    settlePromptTokenReservation(deps, delivery.promptTokenReservation);
+    settlePromptTokenReservation(deps, promptTokenReservation);
     return unavailableError();
   }
-  const session = createGatewayStreamSession(
-    ctx,
-    deps,
-    modelId,
-    request,
-    runId,
-    cancellationSignal,
-    iterator,
-    delivery.promptTokenReservation,
-  );
+  const session = createGatewayStreamSession(ctx, dispatch, iterator);
   try {
     if (beginGatewayStream(session)) await pumpGatewayStreamWithCancellation(ctx, deps, session);
     return STREAMING;
@@ -1682,20 +1666,16 @@ interface GatewayStreamSession {
 
 function createGatewayStreamSession(
   ctx: RouteContext,
-  deps: UiHandlerDeps,
-  modelId: string,
-  request: GatewayRequest,
-  runId: string,
-  cancellationSignal: AbortSignal,
+  dispatch: GatewayChatDispatchContext,
   iterator: AsyncIterator<GatewayStreamChunk>,
-  promptTokenReservation: PromptTokenReservation,
 ): GatewayStreamSession {
+  const { deps, modelAlias, request, runId, cancellationSignal, promptTokenReservation } = dispatch;
   return {
     ctx,
     deps,
     id: `chatcmpl-${randomUUID()}`,
     created: Math.floor(Date.now() / 1000),
-    modelId,
+    modelId: modelAlias,
     request,
     runId,
     cancellationSignal,
