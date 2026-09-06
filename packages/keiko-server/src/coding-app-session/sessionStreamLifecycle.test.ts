@@ -1,5 +1,7 @@
 import { EventEmitter } from "node:events";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { IncomingMessage, ServerResponse } from "node:http";
+import type { Socket } from "node:net";
+import { Duplex } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodingSafeActivityProjection } from "../coding-runtime/codingSafeActivityProjection.js";
 import {
@@ -10,8 +12,19 @@ import {
   type BufferedServerLogSink,
 } from "../observability/index.js";
 import { createFakeSessionPairingPort, fakePairingRequestBody } from "./_support.js";
-import { openCodingAppSessionStream } from "./codingAppSessionRoutes.js";
-import { createCodingAppSessionChannel } from "./sessionChannel.js";
+import {
+  CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS,
+  openCodingAppSessionStream,
+} from "./codingAppSessionRoutes.js";
+import {
+  CODING_APP_SESSION_CHANNEL_BODY_MAX_CHARS,
+  type CodingAppSessionChannelContent,
+} from "./channelContract.js";
+import {
+  CODING_APP_SESSION_MAX_LIVE_STREAMS,
+  createCodingAppSessionChannel,
+  type CodingAppSessionContentSource,
+} from "./sessionChannel.js";
 import { createSessionRegistry } from "./sessionRegistry.js";
 
 const CORRELATION = "session-stream-lifecycle";
@@ -40,6 +53,43 @@ class StreamResponse extends EventEmitter {
     // ServerResponse.destroy(error) closes its socket without a response error event.
     this.emit("close");
   }
+}
+
+class NonDrainingTransport extends Duplex {
+  public constructor() {
+    super({ readableHighWaterMark: 1_024, writableHighWaterMark: 1_024 });
+  }
+  public override _read(): void {
+    // The transport deliberately never produces inbound bytes.
+  }
+  public override _write(
+    _chunk: Buffer,
+    _encoding: BufferEncoding,
+    _callback: (error?: Error | null) => void,
+  ): void {
+    // Holding the callback makes this a deterministic slow peer with a bounded writable buffer.
+  }
+}
+
+function liveContentSource(): {
+  readonly source: CodingAppSessionContentSource;
+  readonly emit: (content: CodingAppSessionChannelContent) => void;
+} {
+  const listeners = new Set<(content: CodingAppSessionChannelContent | null) => void>();
+  return {
+    source: {
+      contentFor: () => ({ kind: "probe", body: "initial" }),
+      subscribeContent: (
+        listener,
+      ): ReturnType<NonNullable<CodingAppSessionContentSource["subscribeContent"]>> => {
+        listeners.add(listener);
+        return { admitted: true, detach: (): void => void listeners.delete(listener) };
+      },
+    },
+    emit: (content): void => {
+      for (const listener of [...listeners]) listener(content);
+    },
+  };
 }
 
 const responses: StreamResponse[] = [];
@@ -236,6 +286,49 @@ describe("app-session stream transport and completion remain distinct", () => {
     },
   );
 
+  it("bounds a real non-draining response and retains admission until transport close", async () => {
+    const live = liveContentSource();
+    const record = vi.fn();
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+      diagnostics: { record },
+      contentSource: live.source,
+    });
+    const paired = channel.pair(fakePairingRequestBody());
+    if (!paired.paired) throw new Error("pairing failed");
+    const transport = new NonDrainingTransport();
+    const socket = transport as unknown as Socket;
+    const request = new IncomingMessage(socket);
+    const response = new ServerResponse(request);
+    response.assignSocket(socket);
+    openCodingAppSessionStream(response, request, channel, paired.cookieToken, CORRELATION, {
+      record,
+    });
+
+    live.emit({ kind: "probe", body: "x".repeat(CODING_APP_SESSION_CHANNEL_BODY_MAX_CHARS) });
+    vi.runAllTicks();
+    await Promise.resolve();
+
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ message: "sse-backpressure" }));
+    expect(response.writableEnded).toBe(true);
+    expect(response.writableFinished).toBe(false);
+    expect(response.destroyed).toBe(false);
+    const admitted = Array.from({ length: CODING_APP_SESSION_MAX_LIVE_STREAMS - 1 }, () =>
+      channel.subscribe(paired.cookieToken, () => true),
+    );
+    expect(channel.subscribe(paired.cookieToken, () => true).live).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS);
+    expect(response.destroyed).toBe(true);
+    const afterClose = channel.subscribe(paired.cookieToken, () => true);
+    expect(afterClose.live).toBe(true);
+
+    afterClose.detach();
+    for (const subscription of admitted) subscription.detach();
+    transport.destroy();
+  });
+
   it("retains a body-free listener failure and releases the HTTP lifecycle", async () => {
     const { projection, response, record, sessionId } = fixture();
     response.failure = new TypeError("private body /private/workspace token=secret");
@@ -271,6 +364,10 @@ describe("app-session stream transport and completion remain distinct", () => {
       expect(response.frames).toHaveLength(1);
       projection.purge("run-stream", "stop");
       expect(record).not.toHaveBeenCalled();
+      if (state === "writableEnded") {
+        expect(vi.getTimerCount()).toBe(1);
+        response.emit("close");
+      }
       expect(vi.getTimerCount()).toBe(0);
     },
   );

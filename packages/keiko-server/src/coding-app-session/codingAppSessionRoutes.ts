@@ -38,6 +38,7 @@ import {
 } from "./sessionCookie.js";
 
 const MAX_PAIRING_BODY_BYTES = 8 * 1_024;
+export const CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS = 1_000;
 
 // KEIKO-0838: rate-limited aggregate diagnostic for pairing/rotate denials so an operator can
 // notice a systemic launcher-pairing failure without turning each attempt into a pairing-attempt
@@ -177,6 +178,42 @@ export function handleCodingAppSessionChannelStream(
   return STREAMING;
 }
 
+function bindLiveStreamDrain(
+  res: ServerResponse,
+  req: IncomingMessage,
+  stop: () => void,
+  detach: () => void,
+  heartbeat: ReturnType<typeof setInterval>,
+): () => void {
+  let drainTimer: ReturnType<typeof setTimeout> | undefined;
+  let released = false;
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    clearInterval(heartbeat);
+    if (drainTimer !== undefined) clearTimeout(drainTimer);
+    detach();
+  };
+  const drain = (): void => {
+    clearInterval(heartbeat);
+    stop();
+    if (!res.writableEnded && !res.destroyed) res.end();
+    if (released || res.destroyed || res.writableFinished || drainTimer !== undefined) return;
+    drainTimer = setTimeout(() => {
+      if (!res.destroyed && !res.writableFinished) res.destroy();
+    }, CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS);
+    drainTimer.unref();
+  };
+  res.once("finish", (): void => {
+    if (drainTimer !== undefined) clearTimeout(drainTimer);
+  });
+  res.once("close", release);
+  req.once("aborted", (): void => {
+    if (!res.destroyed) res.destroy();
+  });
+  return drain;
+}
+
 export function openCodingAppSessionStream(
   res: ServerResponse,
   req: IncomingMessage,
@@ -200,7 +237,9 @@ export function openCodingAppSessionStream(
     },
     correlationId,
   );
-  const subscription = channel.subscribe(cookieToken, writer.publish);
+  const subscription = channel.subscribe(cookieToken, writer.publish, {
+    deferAdmissionReleaseOnBackpressure: true,
+  });
   if (writer.isClosing() || !transport.write(subscription.snapshot) || !subscription.live) {
     subscription.detach();
     if (!res.writableEnded && !res.destroyed) res.end();
@@ -208,17 +247,7 @@ export function openCodingAppSessionStream(
   }
   const heartbeat = setInterval(transport.heartbeat, 15_000);
   heartbeat.unref();
-  let closed = false;
-  const close = (): void => {
-    if (closed) return;
-    closed = true;
-    clearInterval(heartbeat);
-    subscription.detach();
-    if (!res.writableEnded && !res.destroyed) res.end();
-  };
-  closeStream = close;
-  res.once("close", close);
-  req.once("aborted", close);
+  closeStream = bindLiveStreamDrain(res, req, subscription.stop, subscription.detach, heartbeat);
 }
 
 /** POST /rotate — rotate the presented session's secret; the prior cookie stops working. */
