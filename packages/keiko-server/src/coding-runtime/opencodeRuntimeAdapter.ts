@@ -507,45 +507,45 @@ async function startAdapter(
   }>,
 ): Promise<OpenCodeAdapterReady | OpenCodeAdapterFailure> {
   const { readiness } = ports;
-  let phase: OpenCodeReadinessPhase = "target-attestation";
+  let phase = recordReadinessPhase(ports, "target-attestation");
   try {
     if (!validTarget(readiness) || !(await readiness.verifyTargetAttestation())) {
       return fail("target-attestation");
     }
-    phase = "config-materialization";
+    phase = recordReadinessPhase(ports, "config-materialization");
     if (!(await readiness.materialize(createGeneratedOpenCodeBundle()))) {
       return fail("config-materialization");
     }
-    phase = "endpoint";
+    phase = recordReadinessPhase(ports, "endpoint");
     const endpoint = parseStartupEndpoint(await readiness.startupLine());
     if (endpoint === undefined) return fail("endpoint");
-    phase = "authenticated-health";
+    phase = recordReadinessPhase(ports, "authenticated-health");
     const authenticated = await readiness.health("basic");
     if (authenticated.status !== 200) return fail("authenticated-health");
     if (authenticated.version !== OPENCODE_PINNED_VERSION)
       return fail("authenticated-health-version");
-    phase = "unauthenticated-health";
+    phase = recordReadinessPhase(ports, "unauthenticated-health");
     const unauthenticated = await readiness.health("none");
     if (unauthenticated.status !== 401) return fail("unauthenticated-health");
-    phase = "openapi-digest";
+    phase = recordReadinessPhase(ports, "openapi-digest");
     if ((await readiness.openApiDigest()) !== readiness.verifiedTarget.attestationDigest) {
       return fail("openapi-digest");
     }
-    phase = "sse-history-reconciliation";
+    phase = recordReadinessPhase(ports, "sse-history-reconciliation");
     const firstHint = await openSubscription();
-    phase = "session-echo";
+    phase = recordReadinessPhase(ports, "session-echo");
     const sessionId = await readiness.sessionEcho();
     if (!SESSION_ID.test(sessionId)) return fail("session-echo");
-    phase = "sse-history-reconciliation";
+    phase = recordReadinessPhase(ports, "sse-history-reconciliation");
     if (!(await reconcileHint(ports, state, firstHint.hint, firstHint.signal))) {
       return fail("sse-history-reconciliation");
     }
     if (!state.checkpoints.has(sessionId)) return fail("session-echo");
-    phase = "gateway-challenge";
+    phase = recordReadinessPhase(ports, "gateway-challenge");
     if (!(await readiness.gatewayChallenge())) return fail("gateway-challenge");
-    phase = "tool-facade-challenge";
+    phase = recordReadinessPhase(ports, "tool-facade-challenge");
     if (!(await readiness.toolFacadeChallenge())) return fail("tool-facade-challenge");
-    phase = "sse-history-reconciliation";
+    phase = recordReadinessPhase(ports, "sse-history-reconciliation");
     if (!(await reconcileHistory(ports, state, firstHint.signal))) {
       return fail("sse-history-reconciliation");
     }
@@ -561,6 +561,20 @@ async function startAdapter(
     });
     return fail(phase);
   }
+}
+
+function recordReadinessPhase(
+  ports: OpenCodeRuntimeAdapterPorts,
+  phase: OpenCodeReadinessPhase,
+): OpenCodeReadinessPhase {
+  (ports.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    level: "info",
+    op: "coding-runtime.readiness.phase",
+    correlationId: correlationIdOrUnknown(ports.correlationId),
+    extra: { phase },
+  });
+  return phase;
 }
 
 function validTarget(readiness: OpenCodeRuntimeAdapterPorts["readiness"]): boolean {

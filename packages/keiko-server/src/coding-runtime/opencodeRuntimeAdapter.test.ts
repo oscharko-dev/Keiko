@@ -282,6 +282,44 @@ function readinessPorts(failAt?: ReadinessPhase): {
 }
 
 describe("OpenCode runtime adapter readiness", () => {
+  it("records the entered phase while the real readiness operation is still pending", async () => {
+    const harness = readinessPorts();
+    const events: ServerLogEvent[] = [];
+    let resolvePending: ((result: IteratorResult<OpenCodeSyncHint>) => void) | undefined;
+    const pending = new Promise<IteratorResult<OpenCodeSyncHint>>((resolve) => {
+      resolvePending = resolve;
+    });
+    const next = vi.fn((): Promise<IteratorResult<OpenCodeSyncHint>> => pending);
+    harness.ports.readiness.subscribe = (): AsyncIterable<OpenCodeSyncHint> => ({
+      [Symbol.asyncIterator]: (): AsyncIterator<OpenCodeSyncHint> => ({ next }),
+    });
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      correlationId: "run-pending-handshake",
+      activityLog: {
+        write: (entry): void => {
+          events.push(entry);
+        },
+      },
+    });
+    const starting = adapter.start();
+    try {
+      await vi.waitFor(() => {
+        expect(next).toHaveBeenCalledOnce();
+      });
+      expect(events.at(-1)).toMatchObject({
+        op: "coding-runtime.readiness.phase",
+        correlationId: "run-pending-handshake",
+        extra: { phase: "sse-history-reconciliation" },
+      });
+      expect(JSON.stringify(events)).not.toContain(SECRET);
+    } finally {
+      resolvePending?.({ done: true, value: undefined });
+      await starting;
+      await adapter.close();
+    }
+  });
+
   it("records the failing readiness phase and body-free cause before cleanup", async () => {
     const harness = readinessPorts();
     const events: ServerLogEvent[] = [];
@@ -304,8 +342,9 @@ describe("OpenCode runtime adapter readiness", () => {
       ok: false,
       phase: "sse-history-reconciliation",
     });
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
+    const failures = events.filter((event) => event.op === "coding-runtime.readiness.failed");
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
       op: "coding-runtime.readiness.failed",
       correlationId: "run-handshake-1",
       errorKind: "internal",

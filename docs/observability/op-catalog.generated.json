@@ -1597,6 +1597,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-runtime.readiness.phase",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:573",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-runtime.run.issue-binding-refused",
       "category": "process",
       "site": "packages/keiko-server/src/coding-runtime/codingRuntimeIssueIntake.ts:83",
@@ -3336,6 +3342,7 @@
     "coding-runtime.read-only-child.completed",
     "coding-runtime.read-only-child.runner-failed",
     "coding-runtime.readiness.failed",
+    "coding-runtime.readiness.phase",
     "coding-runtime.run.issue-binding-refused",
     "coding-runtime.run.issue-context-attached",
     "coding-runtime.run.recovery-acknowledged",
