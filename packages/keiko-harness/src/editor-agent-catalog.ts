@@ -144,7 +144,10 @@ function projectScalar(schema: Record<string, unknown>, type: string): CatalogJs
 }
 
 function editorEffect(canonicalId: string): CatalogEffect {
-  return canonicalId === "keiko.editor.verify" ? "verification" : "workspace-read";
+  if (canonicalId === "keiko.editor.verify") return "verification";
+  return canonicalId === "keiko.editor.edit" || canonicalId === "keiko.editor.changeset"
+    ? "workspace-write"
+    : "workspace-read";
 }
 
 function editorEntry(definition: ToolDefinition, canonicalId: string): CatalogSetEntry {

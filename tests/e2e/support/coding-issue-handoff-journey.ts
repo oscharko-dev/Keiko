@@ -25,6 +25,11 @@ export const HANDOFF_WINDOW_ID = "issue-handoff-proof";
 const stateDir = handoffStateDir();
 export const HANDOFF_REPOSITORY_ROOT = deliveryRepository(stateDir);
 
+export interface StartedHandoffDraft {
+  readonly runId: string;
+  readonly projectId: string;
+}
+
 interface HandoffObservation {
   readonly phase: string;
   readonly lastControl: number;
@@ -97,7 +102,7 @@ async function pushCandidate(page: Page): Promise<void> {
 }
 /** Reaches a confirmed accepted PR through the real production flow: intake, start, verified
  * commit, push and PR creation — the exact prerequisite the journey route requires. */
-export async function startHandoffDraft(page: Page, issue: number): Promise<string> {
+export async function startHandoffDraft(page: Page, issue: number): Promise<StartedHandoffDraft> {
   await openCodingIssueWorkbench(page, {
     repository: HANDOFF_REPOSITORY_ROOT,
     windowId: HANDOFF_WINDOW_ID,
@@ -130,5 +135,20 @@ export async function startHandoffDraft(page: Page, issue: number): Promise<stri
   const snapshot = await handoffSnapshot(page);
   const runId = snapshot.runId;
   if (runId === undefined) throw new Error("Expected an active run id after PR creation");
-  return runId;
+  // The refresh control is rendered from a persisted outcome, so establish the first exact bound
+  // observation before proving subsequent refreshes through the visible control.
+  const primed = await page.request.post("/api/git-delivery/journey/refresh", {
+    headers: { "X-Keiko-CSRF": "1" },
+    data: { schemaVersion: "1", runId },
+  });
+  expect(primed.ok(), await primed.text()).toBe(true);
+  await expect(page.getByRole("region", { name: "Issue handoff", exact: true })).toBeVisible();
+  const active = await page.request.get("/api/task-workspaces/active");
+  expect(active.ok(), await active.text()).toBe(true);
+  const projectId = (
+    (await active.json()) as {
+      readonly active: { readonly binding: { readonly activeRoot: string } };
+    }
+  ).active.binding.activeRoot;
+  return { runId, projectId };
 }

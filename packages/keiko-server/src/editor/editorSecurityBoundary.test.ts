@@ -23,7 +23,7 @@ import type { RouteContext, UiHandlerDeps } from "../index.js";
 import type { UiStore } from "../store/index.js";
 import { handleEditorCompletion } from "./completionRoutes.js";
 import { handleEditorInlineCompletion } from "./inlineCompletionRoutes.js";
-import { handleEditorContext, handleEditorRepoSearch } from "./contextRoutes.js";
+import { handleEditorContext } from "./contextRoutes.js";
 import { handleEditorLanguage } from "./languageRoutes.js";
 import { handleEditorTestGeneration } from "./testGenerationRoutes.js";
 import { breakpointStoreWorkspaceFingerprint } from "./dap/breakpointStore.js";
@@ -188,14 +188,6 @@ const PATH_ACCEPTING_ROUTES: readonly PathAcceptingRoute[] = [
     handler: handleEditorContext,
     env: {},
     bodyForPath: (p) => ({ schemaVersion: "1", purpose: "completion", root, documentPath: p }),
-    expected: CONTAINMENT_FIRST,
-  },
-  {
-    name: "POST /api/editor/repo-search",
-    path: "/api/editor/repo-search",
-    handler: handleEditorRepoSearch,
-    env: {},
-    bodyForPath: (p) => ({ root, queryText: "x", paths: [p] }),
     expected: CONTAINMENT_FIRST,
   },
   {
@@ -499,7 +491,9 @@ describe("editor trust boundary (#1206): path containment is uniform across ever
   it("covers every path-accepting editor route (regression guard for new routes)", () => {
     // If a new editor route accepts a workspace path, add it to PATH_ACCEPTING_ROUTES so its
     // containment is proven here too. This count is the human-maintained completeness anchor.
-    expect(PATH_ACCEPTING_ROUTES).toHaveLength(11);
+    // #3408 removed the private repo-search route after proving it had no production caller; its
+    // unreachable handwritten contract must not remain in this route census.
+    expect(PATH_ACCEPTING_ROUTES).toHaveLength(10);
   });
 
   it("rejects hostile identifiers across every registered debug route without reflection", async () => {

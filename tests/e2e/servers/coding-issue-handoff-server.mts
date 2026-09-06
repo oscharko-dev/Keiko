@@ -19,5 +19,4 @@ writeFileSync(
   handoffProviderPath(stateDir),
   JSON.stringify({ mode: "open", reads: 0, deniedCalls: 0 }),
 );
-await runIssueDeliveryServer({ port: HANDOFF_PORT });
-installHandoffTransport(stateDir);
+await runIssueDeliveryServer({ port: HANDOFF_PORT, installTransport: installHandoffTransport });

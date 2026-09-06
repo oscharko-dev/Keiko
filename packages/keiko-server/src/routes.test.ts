@@ -133,6 +133,10 @@ describe("API route contract", () => {
     }
   });
 
+  it("does not mount the retired private Editor repo-search contract (#3408)", () => {
+    expect(matchRoute("POST", "/api/editor/repo-search")).toBeUndefined();
+  });
+
   it("includes the Quality Intelligence UI read routes (#280)", () => {
     const list = API_ROUTES.find(
       (r) => r.method === "GET" && r.pattern === "/api/quality-intelligence/runs",

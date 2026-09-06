@@ -523,7 +523,12 @@ export class CodingRuntimeAuthorityService {
     this.activeGitDeliveryAuthority = {
       runId,
       envelopeDigest: authorityRef.envelopeDigest,
-      projectId: context.projectId,
+      // Git-delivery's `projectId` is the canonical workspace root its route resolves and then
+      // compares with `workspaceRoot` at admission. The runtime context's `projectId` is the
+      // repository identity used by runtime-fact projection, so projecting it here made every
+      // managed-worktree delivery request fail `workspace-out-of-envelope` even when the exact
+      // active root matched. Preserve both meanings at their owning boundaries.
+      projectId: context.workspaceRoot,
       workspaceRoot: context.workspaceRoot,
       branch: context.branch,
       authority: envelope.authority,

@@ -244,11 +244,7 @@ import {
   handleEditorWorkspaceWatchHealth,
   handleEditorWorkspaceWatchSnapshot,
 } from "./editor/watch/workspaceWatchRoutes.js";
-import {
-  handleEditorContext,
-  handleEditorLocalKnowledgeRetrieve,
-  handleEditorRepoSearch,
-} from "./editor/contextRoutes.js";
+import { handleEditorContext, handleEditorLocalKnowledgeRetrieve } from "./editor/contextRoutes.js";
 import {
   handleEditorWorkspaceReplaceApply,
   handleEditorWorkspaceReplacePreview,
@@ -846,12 +842,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     handler: (ctx, deps) => handleEditorLanguage(ctx, deps, deps.editorLanguageRouteOptions),
   },
   // Issue #1211 — governed coding-context retrieval (ADR-0042 D6). The context route assembles a
-  // bounded, redacted pack (repo-search always; Local Knowledge + memory only for explicit,
-  // embedding-eligible purposes) and returns the content-free wire pack; the repo-search and
-  // local-knowledge routes expose the governed building blocks (EvidenceAtom[] and query-only
-  // retrieval references). No browser-side retrieval, embedding, or model access.
+  // bounded, redacted pack (repository context always; Local Knowledge + memory only for explicit,
+  // embedding-eligible purposes) and returns the content-free wire pack. The Local Knowledge route
+  // exposes query-only retrieval references. No browser-side retrieval, embedding, or model access.
   { method: "POST", pattern: "/api/editor/context", handler: handleEditorContext },
-  { method: "POST", pattern: "/api/editor/repo-search", handler: handleEditorRepoSearch },
   {
     method: "POST",
     pattern: "/api/editor/workspace-search",

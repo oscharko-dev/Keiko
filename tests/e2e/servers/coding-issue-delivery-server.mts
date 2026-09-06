@@ -28,12 +28,13 @@ import { runCodingRuntimeJourneyServer } from "./coding-runtime-server-shared.mj
 export async function runIssueDeliveryServer(
   options: {
     readonly ciReader?: DraftDeliveryDependencies["ciReader"];
+    readonly installTransport?: (stateDir: string) => { readonly realGit: string };
     readonly port?: number;
   } = {},
 ): Promise<void> {
   const stateDir = deliveryStateDir();
   mkdirSync(stateDir, { recursive: true });
-  const transport = installDeliveryTransport(stateDir);
+  const transport = (options.installTransport ?? installDeliveryTransport)(stateDir);
   const port = options.port ?? DELIVERY_PORT;
   const modelPort = port - 1;
   await startDeliveryDescriptionModel(stateDir, modelPort);

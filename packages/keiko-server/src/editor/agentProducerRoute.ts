@@ -25,11 +25,20 @@ import {
   EditorAgentToolHost,
   type EditorAgentToolOutput,
 } from "@oscharko-dev/keiko-tools";
-import type { EditorAgentSessionSnapshot } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  EditorAgentActionType,
+  EditorAgentSessionSnapshot,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_AGENT_SCHEMA_VERSION,
   isEditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
+  EDITOR_AGENT_ACTION_APPROVAL_RISK,
+  classifyEditorAgentAction,
+  composeEditorAgentActionPolicyDecision,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent-governance";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
@@ -60,12 +69,13 @@ type ProducerCatalogObservation = Parameters<ProducerCatalogObserver>[0];
 // dispatch is server-resolved (navigateSymbol/searchWorkspace/queryGit) or synchronously governed
 // (requestVerification). The five review-gated mutation tools (openFile/.../applyChangeset) need a
 // live human reviewer attached to the browser bridge and stay out of this slice.
-const PRODUCER_TOOL_NAMES: ReadonlySet<string> = new Set([
-  "editor_navigate_symbol",
-  "editor_search_workspace",
-  "editor_git_context",
-  "editor_request_verification",
-]);
+const PRODUCER_ACTION_BY_TOOL_NAME = {
+  editor_navigate_symbol: "navigateSymbol",
+  editor_search_workspace: "searchWorkspace",
+  editor_git_context: "queryGit",
+  editor_request_verification: "requestVerification",
+} as const satisfies Readonly<Record<string, EditorAgentActionType>>;
+const PRODUCER_TOOL_NAMES: ReadonlySet<string> = new Set(Object.keys(PRODUCER_ACTION_BY_TOOL_NAME));
 
 const MAX_PRODUCER_BODY_BYTES = 65_536;
 const MAX_GOAL_CHARS = 4_000;
@@ -168,11 +178,12 @@ function outOfScopeToolResult(request: { toolCallId: string; toolName: string })
 function scopedProducerToolPort(
   host: EditorAgentToolHost,
   outcomes: ProducerToolOutcome[],
+  eligibleToolNames: ReadonlySet<string> = PRODUCER_TOOL_NAMES,
 ): ToolPort {
   return {
-    listTools: () => host.listTools().filter((tool) => PRODUCER_TOOL_NAMES.has(tool.name)),
+    listTools: () => host.listTools().filter((tool) => eligibleToolNames.has(tool.name)),
     execute: async (request): Promise<ToolCallResult> => {
-      if (!PRODUCER_TOOL_NAMES.has(request.toolName)) {
+      if (!eligibleToolNames.has(request.toolName)) {
         const rejection = outOfScopeToolResult(request);
         outcomes.push(producerToolOutcome(request.toolName, rejection.output));
         return rejection;
@@ -181,6 +192,38 @@ function scopedProducerToolPort(
       outcomes.push(producerToolOutcome(request.toolName, result.output));
       return result;
     },
+  };
+}
+
+function producerEligibleToolNames(
+  authority: CodingWorkbenchAuthorityEnvelope,
+): ReadonlySet<string> {
+  const eligible = new Set<string>();
+  for (const [toolName, actionType] of Object.entries(PRODUCER_ACTION_BY_TOOL_NAME)) {
+    const baseline = classifyEditorAgentAction(actionType, {
+      targetPath: null,
+      targetSensitive: false,
+      origin: "agent",
+    });
+    const decision = composeEditorAgentActionPolicyDecision(
+      baseline,
+      authority,
+      EDITOR_AGENT_ACTION_APPROVAL_RISK[actionType],
+      "trusted",
+    );
+    if (decision.disposition === "allowed") eligible.add(toolName);
+  }
+  return eligible;
+}
+
+function producerRuntimePorts(
+  host: EditorAgentToolHost,
+  authority: CodingWorkbenchAuthorityEnvelope,
+): { readonly outcomes: ProducerToolOutcome[]; readonly scopedTools: ToolPort } {
+  const outcomes: ProducerToolOutcome[] = [];
+  return {
+    outcomes,
+    scopedTools: scopedProducerToolPort(host, outcomes, producerEligibleToolNames(authority)),
   };
 }
 
@@ -295,14 +338,18 @@ async function runProducerTurn(
   workspaceRoot: string,
   model: ModelPort,
   host: EditorAgentToolHost,
+  authority: CodingWorkbenchAuthorityEnvelope,
   requestCorrelationId: string | undefined,
   activityLog: ServerLogSink = processServerLogSink(),
 ): Promise<ProducerTurnResult> {
-  const outcomes: ProducerToolOutcome[] = [];
   // The SAME scoped port both feeds the (now dispatch-inert) legacy `tools` field and selects the
   // exact ready catalog projection. Dispatch still executes through scopedProducerToolPort.execute(),
   // the one place PRODUCER_TOOL_NAMES is enforced, before EditorAgentToolHost can be reached.
-  const scopedTools = scopedProducerToolPort(host, outcomes);
+  // This producer has no approval/resume channel. Therefore Ask-mode approval-required operations
+  // cannot be truthfully offered as currently executable; supervised and full modes keep the
+  // operations the shared policy classifies allowed. Concrete arguments, authority freshness, and
+  // workspace policy are still rechecked by the downstream route.
+  const { outcomes, scopedTools } = producerRuntimePorts(host, authority);
   const correlationId = requestCorrelationId ?? UNKNOWN_CORRELATION_ID;
   const catalog = createEditorAgentCatalogFactory(
     scopedTools,
@@ -475,7 +522,11 @@ function producerCatalogObserver(
 }
 
 type ProducerAdmission =
-  | { readonly ok: true; readonly snapshot: EditorAgentSessionSnapshot }
+  | {
+      readonly ok: true;
+      readonly snapshot: EditorAgentSessionSnapshot;
+      readonly authority: CodingWorkbenchAuthorityEnvelope;
+    }
   | { readonly ok: false; readonly response: RouteResult };
 
 function producerAdmission(
@@ -512,6 +563,7 @@ function producerAdmission(
   }
   return {
     ok: true,
+    authority: authority.envelope,
     snapshot:
       rooted.root.workspaceRoot === snapshot.workspaceRoot
         ? snapshot
@@ -571,6 +623,7 @@ export async function handleEditorAgentProducerTurn(
     rootedSnapshot.workspaceRoot,
     model,
     hostOutcome.host,
+    admission.authority,
     ctx.correlationId,
     deps.activityLog,
   );

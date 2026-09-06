@@ -570,6 +570,8 @@ describe("CodingRuntimeAuthorityService", () => {
     });
 
     expect(authority.gitDeliveryAuthorityPort().current(NOW)).toMatchObject({
+      projectId: ROOT,
+      workspaceRoot: ROOT,
       authority: { effectiveMode: "governed-assist" },
     });
   });

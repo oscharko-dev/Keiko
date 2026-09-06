@@ -22,11 +22,7 @@ import {
   type HandoffFixtureMode,
   type HandoffProviderState,
 } from "./support/coding-issue-handoff.js";
-import {
-  HANDOFF_REPOSITORY_ROOT,
-  startHandoffDraft,
-  handoffControl,
-} from "./support/coding-issue-handoff-journey.js";
+import { startHandoffDraft, handoffControl } from "./support/coding-issue-handoff-journey.js";
 import { assessGitCiFacts } from "../../packages/keiko-tools/src/git-ci-assessment.js";
 import { collectGitCiRequirements } from "../../packages/keiko-tools/src/git-ci-requirements.js";
 import type { GitCiProviderFacts } from "../../packages/keiko-tools/src/git-ci-facts.js";
@@ -92,11 +88,15 @@ interface JourneyRefreshResponse {
   readonly reason?: string;
 }
 async function refresh(page: Page, runId: string): Promise<JourneyRefreshResponse> {
-  const response = await page.request.post("/api/git-delivery/journey/refresh", {
-    headers: { "X-Keiko-CSRF": "1" },
-    data: { schemaVersion: "1", runId },
-  });
+  const responsePromise = page.waitForResponse(
+    (candidate) =>
+      new URL(candidate.url()).pathname === "/api/git-delivery/journey/refresh" &&
+      candidate.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Refresh observed status", exact: true }).click();
+  const response = await responsePromise;
   expect(response.ok(), await response.text()).toBe(true);
+  expect(response.request().postData()).toBe(JSON.stringify({ schemaVersion: "1", runId }));
   return (await response.json()) as JourneyRefreshResponse;
 }
 
@@ -104,7 +104,7 @@ test("#3389 @coding-issue-handoff observes a human merge distinctly from the bou
   page,
 }) => {
   mode("open");
-  const runId = await startHandoffDraft(page, 44);
+  const { runId } = await startHandoffDraft(page, 44);
   await expect(page.getByRole("region", { name: "Issue handoff", exact: true })).toBeVisible();
 
   const open = await refresh(page, runId);
@@ -144,7 +144,7 @@ test("#3389 @coding-issue-handoff keeps a PR closed without a merge distinct fro
   page,
 }) => {
   mode("open");
-  const runId = await startHandoffDraft(page, 45);
+  const { runId } = await startHandoffDraft(page, 45);
 
   mode("blocked-review");
   const blocked = await refresh(page, runId);
@@ -170,7 +170,7 @@ test("#3389 @coding-issue-handoff renders the ready-for-review control as closed
   page,
 }) => {
   mode("open");
-  const runId = await startHandoffDraft(page, 46);
+  const { runId } = await startHandoffDraft(page, 46);
   await refresh(page, runId);
   await page.reload();
   await expect(page.getByRole("region", { name: "Issue handoff", exact: true })).toBeVisible();
@@ -274,11 +274,11 @@ async function executeMarkReady(
   });
 }
 
-test("#3389 @coding-issue-handoff pr-mark-ready: the ready-approval race — two minted proposals, only the first execution ever performs the transition", async ({
+test("#3389 @coding-issue-handoff pr-mark-ready: the ready-approval race — two minted proposals, only the newest claim performs the transition once", async ({
   page,
 }) => {
   mode("open");
-  const runId = await startHandoffDraft(page, 47);
+  const { runId, projectId } = await startHandoffDraft(page, 47);
 
   const before = await refresh(page, runId);
   const identity = before.outcome?.remote?.identity;
@@ -287,7 +287,7 @@ test("#3389 @coding-issue-handoff pr-mark-ready: the ready-approval race — two
 
   const markReadyBody: MarkReadyBody = {
     schemaVersion: "1",
-    projectId: HANDOFF_REPOSITORY_ROOT,
+    projectId,
     ownerAndRepo: identity.repository,
     prExternalId: String(identity.number),
     headSha: identity.headSha,
@@ -298,31 +298,31 @@ test("#3389 @coding-issue-handoff pr-mark-ready: the ready-approval race — two
 
   // Two independently minted proposals ("two proposals") for the identical draft->ready
   // transition — as if the human clicked "propose ready" twice before the first request settled.
+  // The approval store deliberately rotates an exact binding, so the second mint revokes the first
+  // claim before either can dispatch.
   const firstApproval = await mintMarkReadyApproval(page, markReadyBody);
   const secondApproval = await mintMarkReadyApproval(page, markReadyBody);
 
-  // The first claim actually performs the transition.
+  // The superseded claim is refused outright and performs no transition.
   const firstExecute = await executeMarkReady(page, markReadyBody, firstApproval);
-  expect(firstExecute.ok(), await firstExecute.text()).toBe(true);
-  const firstBody = (await firstExecute.json()) as MarkReadyExecuteResponse;
-  expect(firstBody.status).toBe("succeeded");
+  expect(firstExecute.status()).toBe(400);
+
+  const beforeSecond = await refresh(page, runId);
+  expect(beforeSecond.outcome?.remote?.identity.isDraft).toBe(true);
+
+  // The newest claim performs the single transition.
+  const secondExecute = await executeMarkReady(page, markReadyBody, secondApproval);
+  expect(secondExecute.ok(), await secondExecute.text()).toBe(true);
+  const secondBody = (await secondExecute.json()) as MarkReadyExecuteResponse;
+  expect(secondBody.status).toBe("succeeded");
 
   // The re-read observes the real transition through the shared fixture state — never assumed.
   const after = await refresh(page, runId);
   expect(after.outcome?.remote?.identity.isDraft).toBe(false);
 
-  // The second, still-unredeemed claim is refused with drift: the live PR is no longer the draft
-  // it was minted against, so it performs nothing further — "one claim" is whichever executes
-  // first, never both.
-  const secondExecute = await executeMarkReady(page, markReadyBody, secondApproval);
-  expect(secondExecute.ok(), await secondExecute.text()).toBe(true);
-  const secondBody = (await secondExecute.json()) as MarkReadyExecuteResponse;
-  expect(secondBody.status).toBe("failed");
-  expect(secondBody.executionErrorCode).toBe("precondition-failed");
-
-  // The first claim is strictly one-use independent of drift: redeeming it again is refused
-  // outright (already consumed) rather than re-dispatching.
-  const replay = await executeMarkReady(page, markReadyBody, firstApproval);
+  // The claim that performed the transition is strictly one-use: replay is refused rather than
+  // reaching the provider and relying on its already-ready state.
+  const replay = await executeMarkReady(page, markReadyBody, secondApproval);
   expect(replay.status()).toBe(400);
 
   await handoffControl("finish");
@@ -332,14 +332,14 @@ test("#3389 @coding-issue-handoff pr-mark-ready: execute refuses without a consu
   page,
 }) => {
   mode("open");
-  const runId = await startHandoffDraft(page, 48);
+  const { runId, projectId } = await startHandoffDraft(page, 48);
   const observed = await refresh(page, runId);
   const identity = observed.outcome?.remote?.identity;
   if (identity === undefined) throw new Error("Expected an observed remote identity");
 
   const markReadyBody: MarkReadyBody = {
     schemaVersion: "1",
-    projectId: HANDOFF_REPOSITORY_ROOT,
+    projectId,
     ownerAndRepo: identity.repository,
     prExternalId: String(identity.number),
     headSha: identity.headSha,
@@ -360,7 +360,7 @@ test("#3389 @coding-issue-handoff pr-mark-ready: execute refuses without a consu
     headers: { "X-Keiko-CSRF": "1" },
     data: {
       schemaVersion: "1",
-      projectId: HANDOFF_REPOSITORY_ROOT,
+      projectId,
       kind: "pr-update",
       ownerAndRepo: identity.repository,
       prExternalId: String(identity.number),

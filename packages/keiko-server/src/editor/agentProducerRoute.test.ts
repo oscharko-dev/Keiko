@@ -31,7 +31,6 @@ import type {
   VerificationReport,
 } from "@oscharko-dev/keiko-contracts";
 import {
-  CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_MODE_POLICIES,
   CODING_WORKBENCH_SCHEMA_VERSION,
   resolveEffectiveCodingWorkbenchMode,
@@ -135,7 +134,7 @@ function snapshot(root: string): EditorAgentSessionSnapshot {
 function authority(
   root: string,
   requestedMode: CodingWorkbenchMode = CEILING,
-  runId = "run-2489",
+  runId = "run-2490",
 ): EditorAgentGovernedAuthorityReference {
   const envelope: CodingWorkbenchAuthorityEnvelope = {
     schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
@@ -713,10 +712,59 @@ describe("editor-agent producer turn error paths (#2489 coverage)", () => {
 // rejected before it ever reaches the tool host, so the mutation action never reaches
 // agentRoutes.ts (asserted via the empty audit ledger for the session).
 describe("editor-agent producer tool-scope enforcement (#2489 security hardening)", () => {
-  it("withholds verification in Ask mode because this producer has no approval-resume channel", async () => {
+  it.each([
+    {
+      toolName: "editor_navigate_symbol",
+      runId: "run-2486",
+      expectedStatus: "succeeded",
+      args: {
+        sessionId: SESSION_ID,
+        idempotencyKey: "idem-ask-navigate",
+        file: "src/main.ts",
+        operation: "definition",
+        position: { line: 1, character: 19 },
+        languageId: "typescript",
+        text: MAIN_TEXT,
+      },
+    },
+    {
+      toolName: "editor_search_workspace",
+      runId: "run-2485",
+      expectedStatus: "succeeded",
+      args: {
+        sessionId: SESSION_ID,
+        idempotencyKey: "idem-ask-search",
+        query: "producer-reachability-needle",
+        mode: "text",
+        maxResults: 5,
+      },
+    },
+    {
+      toolName: "editor_git_context",
+      runId: "run-2484",
+      expectedStatus: "succeeded",
+      args: {
+        sessionId: SESSION_ID,
+        idempotencyKey: "idem-ask-git",
+        path: "src/a.ts",
+        aspects: ["status", "diff"],
+      },
+    },
+  ])("executes allowed Ask-mode read $toolName", async (testCase) => {
     const current = fixture;
     if (current === undefined) throw new Error("fixture missing");
-    const askAuthority = authority(current.root, "governed-assist", "run-2489-ask");
+    const askAuthority = authority(current.root, "governed-assist", testCase.runId);
+    current.setModel(toolCallThenStop(testCase.toolName, testCase.args));
+
+    const response = await postProducerTurn(current.port, { authorityRef: askAuthority });
+
+    expectSucceededToolOutcome(response, testCase.toolName, testCase.expectedStatus);
+  });
+
+  it("offers Ask-mode reads but withholds verification without an approval-resume channel", async () => {
+    const current = fixture;
+    if (current === undefined) throw new Error("fixture missing");
+    const askAuthority = authority(current.root, "governed-assist", "run-2488");
     current.setModel(
       toolCallThenStop("editor_request_verification", {
         sessionId: SESSION_ID,
@@ -728,12 +776,48 @@ describe("editor-agent producer tool-scope enforcement (#2489 security hardening
 
     expect(response.status).toBe(200);
     expect(response.body.outcome).toBe("failed");
-    expect(response.body.catalog?.toolRefs).not.toContainEqual({
+    expect(response.body.catalog?.toolRefs).toEqual([
+      { canonicalId: "keiko.editor.git", contractVersion: 1 },
+      { canonicalId: "keiko.editor.search", contractVersion: 1 },
+      { canonicalId: "keiko.editor.symbol", contractVersion: 1 },
+    ]);
+    expect(response.body.toolCallCount).toBe(0);
+    expect(current.verificationRunner.calls).toBe(0);
+    const projection = current.activityLogEvents.find(
+      (event) => event.op === "tool-catalog.projection",
+    );
+    expect(projection).toMatchObject({
+      op: "tool-catalog.projection",
+      extra: {
+        profile: { id: "editor", version: 1 },
+        projectionDigest: response.body.catalog?.projectionDigest,
+        resultCount: 3,
+      },
+    });
+    expect(
+      current.activityLogEvents.some((event) => event.op === "tool-catalog.invocation-started"),
+    ).toBe(false);
+  });
+
+  it("keeps verification offerable when Supervised policy allows it without approval", async () => {
+    const current = fixture;
+    if (current === undefined) throw new Error("fixture missing");
+    const supervisedAuthority = authority(current.root, "supervised-coding", "run-2487");
+    current.setModel(
+      toolCallThenStop("editor_request_verification", {
+        sessionId: SESSION_ID,
+        kind: "typecheck",
+      }),
+    );
+
+    const response = await postProducerTurn(current.port, { authorityRef: supervisedAuthority });
+
+    expectSucceededToolOutcome(response, "editor_request_verification", "completed");
+    expect(response.body.catalog?.toolRefs).toContainEqual({
       canonicalId: "keiko.editor.verify",
       contractVersion: 1,
     });
-    expect(response.body.toolCallCount).toBe(0);
-    expect(current.verificationRunner.calls).toBe(0);
+    expect(current.verificationRunner.calls).toBe(1);
   });
 
   it("rejects a tool call outside the advertised producer surface before it reaches the host", async () => {

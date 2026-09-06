@@ -28,7 +28,6 @@ import {
   type HandoffProviderState,
 } from "../support/coding-issue-handoff.js";
 
-const ISSUE_NUMBER = 44;
 const REPOSITORY_DATABASE_ID = 4139;
 
 function readHandoffState(stateDir: string): HandoffProviderState {
@@ -80,7 +79,7 @@ function journeyPullRequest(
     state: merged ? "MERGED" : mode === "closed-unmerged" ? "CLOSED" : "OPEN",
     // #3389 (correction 7): the REAL, mutable per-PR draft flag — not a mode-derived guess — so a
     // journey re-read genuinely observes the pr-mark-ready mutation's effect once it has run.
-    isDraft: pr.isDraft,
+    isDraft: merged ? false : pr.isDraft,
     baseRefName: pr.baseRef,
     baseRefOid: pr.baseSha,
     headRefName: pr.headRef,
@@ -101,6 +100,7 @@ function journeyPullRequest(
 function journeyResponse(
   mode: HandoffFixtureMode,
   pr: DeliveryProviderState["pullRequests"][number],
+  issueNumber: number,
 ): unknown {
   const issueClosed = mode === "merged-closed";
   return {
@@ -110,8 +110,8 @@ function journeyResponse(
         databaseId: REPOSITORY_DATABASE_ID,
         defaultBranchRef: { name: pr.baseRef },
         issue: {
-          id: `I_fixture_${String(ISSUE_NUMBER)}`,
-          number: ISSUE_NUMBER,
+          id: `I_fixture_${String(issueNumber)}`,
+          number: issueNumber,
           state: issueClosed ? "CLOSED" : "OPEN",
           closedAt: issueClosed ? "2026-09-05T00:05:00Z" : null,
           repository: { nameWithOwner: DELIVERY_REPOSITORY },
@@ -122,13 +122,20 @@ function journeyResponse(
   };
 }
 
-function answerJourneyQuery(stateDir: string): never {
+function answerJourneyQuery(stateDir: string, args: readonly string[]): never {
   const handoff = readHandoffState(stateDir);
   const delivery = readDeliveryState(stateDir);
   const pr = delivery.pullRequests.find((candidate) => candidate.headRef === delivery.headRef);
-  if (pr === undefined) deny(stateDir);
+  const issueNumber = Number(fieldValue(args, "issue"));
+  if (
+    !Number.isSafeInteger(issueNumber) ||
+    issueNumber < 42 ||
+    issueNumber > 51 ||
+    pr === undefined
+  )
+    deny(stateDir);
   writeHandoffState(stateDir, { ...handoff, reads: handoff.reads + 1 });
-  process.stdout.write(JSON.stringify(journeyResponse(handoff.mode, pr)));
+  process.stdout.write(JSON.stringify(journeyResponse(handoff.mode, pr, issueNumber)));
   process.exit(0);
 }
 
@@ -307,7 +314,7 @@ export function runHandoffGh(input: {
 }): void {
   const args = process.argv.slice(2);
   if (isJourneyQuery(args)) {
-    answerJourneyQuery(input.stateDir);
+    answerJourneyQuery(input.stateDir, args);
     return;
   }
   if (isNodeIdLookup(args)) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_AGENT_TOOL_DEFINITIONS } from "@oscharko-dev/keiko-tools";
+import { EDITOR_AGENT_ACTION_EFFECT_CLASS } from "@oscharko-dev/keiko-contracts/runtime/editor-agent-governance";
 import { compileToolProjection, createKeikoToolCatalog } from "@oscharko-dev/keiko-tool-catalog";
 import { createHarnessCatalogBudget } from "./catalog-budget.js";
 import { newCounters } from "./context.js";
@@ -62,14 +63,23 @@ describe("editor agent registration set", () => {
     );
   });
 
-  it("classifies verification as its own effect and every other tool as workspace-read", () => {
+  it("derives mutation, verification, and read effects from the existing Editor semantics", () => {
+    expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.applyTextEdits).toBe("content-mutation");
+    expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.applyChangeset).toBe("content-mutation");
     const set = editorAgentRegistrationSet();
-    const verification = set.entries.find((entry) => entry.alias === "editor_request_verification");
-    expect(verification?.descriptor.effects).toEqual(["verification"]);
-    for (const entry of set.entries) {
-      if (entry.alias === "editor_request_verification") continue;
-      expect(entry.descriptor.effects).toEqual(["workspace-read"]);
-    }
+    expect(
+      Object.fromEntries(set.entries.map((entry) => [entry.alias, entry.descriptor.effects])),
+    ).toEqual({
+      editor_list_sessions: ["workspace-read"],
+      editor_snapshot: ["workspace-read"],
+      editor_navigate: ["workspace-read"],
+      editor_navigate_symbol: ["workspace-read"],
+      editor_search_workspace: ["workspace-read"],
+      editor_git_context: ["workspace-read"],
+      editor_propose_edit: ["workspace-write"],
+      editor_propose_changeset: ["workspace-write"],
+      editor_request_verification: ["verification"],
+    });
   });
 
   it("widens rather than narrows a real schema with unsupported keywords (search_workspace)", () => {
