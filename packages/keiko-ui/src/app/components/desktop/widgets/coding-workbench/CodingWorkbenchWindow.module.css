@@ -59,6 +59,29 @@
   color: var(--feedback-danger);
 }
 
+.header {
+  min-width: 0;
+}
+
+.trustNotice {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--space-2) var(--space-4);
+  background: var(--surface-inset);
+}
+
+.trustNoticeText {
+  min-width: 0;
+  flex: 1 1 24rem;
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+  overflow-wrap: anywhere;
+}
+
 .contextBar {
   display: flex;
   min-width: 0;

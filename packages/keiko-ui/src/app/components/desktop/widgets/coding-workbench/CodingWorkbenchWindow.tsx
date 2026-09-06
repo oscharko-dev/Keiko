@@ -697,13 +697,15 @@ function WorkbenchContent({
       data-state={state.run.value?.state ?? "idle"}
     >
       <h2 className="sr-only">{workbenchLabel}</h2>
-      <SessionContextBar
-        state={state}
-        workspace={sessionWorkspaceProjection(state, runWorkspace)}
-      />
-      <CodingWorkbenchTrustAffordance
-        binding={sessionRepositoryTrustBinding(state, runWorkspace, activeWorkspace)}
-      />
+      <header className={styles.header}>
+        <SessionContextBar
+          state={state}
+          workspace={sessionWorkspaceProjection(state, runWorkspace)}
+        />
+        <CodingWorkbenchTrustAffordance
+          binding={sessionRepositoryTrustBinding(state, runWorkspace, activeWorkspace)}
+        />
+      </header>
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {lifecycleAnnouncement(state, t, research.grant)}
       </p>

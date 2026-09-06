@@ -12,6 +12,7 @@ import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contr
 import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 import { evidenceArtifactPath, evidenceScreenshotPath } from "./support/evidence.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
+import { assertWorkbenchTrustLayout } from "./support/coding-issue-commit-evidence.js";
 import {
   prepareBoundIssueForRun,
   reacceptBoundIssue,
@@ -309,6 +310,7 @@ async function startBoundIssue(
   await expect(page.getByTestId("coding-workbench-composer-issue")).toBeVisible();
   const chip = await page.getByTestId("coding-workbench-composer-issue").boundingBox();
   expect(chip?.height).toBeLessThan(100);
+  await assertWorkbenchTrustLayout(page, SURFACE);
   await page.locator(`section.window[data-window-id="${WINDOW_ID}"]`).screenshot({
     path: evidenceScreenshotPath("docs/design-system/evidence/3385/09-accepted.png"),
     animations: "disabled",

@@ -74,8 +74,8 @@ function TrustRestrictedNotice({
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   return (
-    <div className={styles.controls} data-testid="coding-workbench-trust-affordance">
-      <span className={styles.contextValue}>{t("codingWorkbench.trust.restrictedNotice")}</span>
+    <div className={styles.trustNotice} data-testid="coding-workbench-trust-affordance">
+      <span className={styles.trustNoticeText}>{t("codingWorkbench.trust.restrictedNotice")}</span>
       <button type="button" className={styles.button} disabled={granting} onClick={onAllow}>
         {granting ? t("codingWorkbench.trust.allowing") : t("codingWorkbench.trust.allow")}
       </button>

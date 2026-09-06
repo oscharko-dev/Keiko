@@ -14,6 +14,64 @@ interface ColorMode {
   readonly reducedMotion?: "reduce";
   readonly width?: number;
 }
+
+interface WorkbenchTrustLayoutEvidence {
+  readonly noticeHeight: number;
+  readonly bodyTop: number;
+  readonly approvalTop?: number;
+}
+
+async function visibleBox(
+  locator: ReturnType<Page["locator"]>,
+  label: string,
+): Promise<NonNullable<Awaited<ReturnType<typeof locator.boundingBox>>>> {
+  await expect(locator, `${label} is visible`).toBeVisible();
+  const box = await locator.boundingBox();
+  expect(box, `${label} has rendered bounds`).not.toBeNull();
+  if (box === null) throw new TypeError(`${label} has no rendered bounds`);
+  return box;
+}
+
+/** Pins the trust notice to the header and keeps it clear of the scrollable workbench body. */
+export async function assertWorkbenchTrustLayout(
+  page: Page,
+  surface: string,
+  approvalLabel?: string,
+): Promise<WorkbenchTrustLayoutEvidence> {
+  const workbench = page.locator(surface);
+  const notice = await visibleBox(
+    workbench.getByTestId("coding-workbench-trust-affordance"),
+    "repository trust notice",
+  );
+  const button = workbench.getByRole("button", {
+    name: "Allow package scripts for verification",
+    exact: true,
+  });
+  await visibleBox(button, "repository trust action");
+  const controlHeight = await button.evaluate((element) =>
+    Number.parseFloat(getComputedStyle(element).minHeight),
+  );
+  expect(Number.isFinite(controlHeight) && controlHeight > 0).toBe(true);
+  const body = await visibleBox(workbench.locator(":scope > div").last(), "workbench body");
+  expect(
+    notice.height,
+    "repository trust notice stays a bounded header control",
+  ).toBeLessThanOrEqual(controlHeight * 3);
+  expect(
+    notice.y + notice.height,
+    "workbench body starts below repository trust notice",
+  ).toBeLessThanOrEqual(body.y + 1);
+  if (approvalLabel === undefined) return { noticeHeight: notice.height, bodyTop: body.y };
+  const approval = await visibleBox(
+    workbench.getByRole("region", { name: approvalLabel }),
+    "approval review",
+  );
+  expect(
+    notice.y + notice.height,
+    "approval review starts below repository trust notice",
+  ).toBeLessThanOrEqual(approval.y + 1);
+  return { noticeHeight: notice.height, bodyTop: body.y, approvalTop: approval.y };
+}
 const MODES: readonly ColorMode[] = [
   { name: "01-dark", theme: "dark" },
   { name: "02-light", theme: "light" },
@@ -24,6 +82,10 @@ const MODES: readonly ColorMode[] = [
   { name: "07-reduced-motion", theme: "dark", reducedMotion: "reduce" },
   { name: "08-compact", theme: "dark", width: 360 },
 ];
+const APPROVAL_REVIEW_LABELS = {
+  commit: "Reviewed commit message",
+  delivery: "Reviewed pull request description",
+} as const;
 export function artifactDigest(file: string): string {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
@@ -79,8 +141,7 @@ async function captureApprovalModes(
   await page.setViewportSize({ width: 1440, height: 2200 });
   if (kind === "commit") await page.getByText("Exact commit binding", { exact: true }).click();
   const issue = kind === "commit" ? 3386 : 3387;
-  const reviewLabel =
-    kind === "commit" ? "Reviewed commit message" : "Reviewed pull request description";
+  const reviewLabel = APPROVAL_REVIEW_LABELS[kind];
   for (const mode of MODES) {
     await applyMode(page, frameSelector, mode);
     await page.getByRole("region", { name: reviewLabel }).scrollIntoViewIfNeeded();
@@ -97,6 +158,7 @@ async function captureApprovalModes(
     expect(overflow, `${mode.name} horizontal overflow`).toBe(false);
     if (mode.width === 360) await proveReviewKeyboard(kind, page, surface);
     await page.locator('section[aria-labelledby="permission-title"]').scrollIntoViewIfNeeded();
+    const trustLayout = await assertWorkbenchTrustLayout(page, surface, reviewLabel);
     const screenshot = `docs/design-system/evidence/${String(issue)}/${mode.name}.png`;
     await page
       .locator(frameSelector)
@@ -112,6 +174,7 @@ async function captureApprovalModes(
         nodeCount: violation.nodes.length,
       })),
       horizontalOverflow: overflow,
+      trustLayout,
     });
   }
   writeCommitVisualReceipt(captures, issue);

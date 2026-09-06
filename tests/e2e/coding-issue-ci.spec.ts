@@ -93,10 +93,10 @@ test("#3388 @coding-issue-ci pending failure approved repair new head and techni
   await expect(ci.getByRole("button")).toHaveCount(0);
   await captureCiModes(page);
   await page.clock.fastForward(60_001);
-  await expect(page.getByText("CI observation is stale", { exact: true })).toBeVisible();
+  await expect(ci.getByText("CI observation is stale", { exact: true })).toBeVisible();
   await stopCiRun(page);
   await page.reload();
-  await expect(page.getByText("CI observation is stale", { exact: true })).toBeVisible();
+  await expect(ci.getByText("CI observation is stale", { exact: true })).toBeVisible();
 });
 
 test("#3388 @coding-issue-ci incomplete visibility and wrong PR or head never become ready", async ({
