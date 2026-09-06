@@ -635,16 +635,22 @@ export interface CodeTaskQualificationFlowArtifactV1 {
   readonly issueReference: string;
   readonly issueNumber: number;
   readonly issueState: "closed";
+  /** Provider-observed issue closure instant. */
+  readonly issueClosedAt: CodeTaskIsoInstant;
   readonly mode: CodingWorkbenchMode;
   readonly taskRunId: string;
   readonly pullRequestReference: string;
   readonly pullRequestNumber: number;
   readonly pullRequestHeadSha: CodeTaskGitCommitSha;
   readonly pullRequestState: "merged";
+  /** Provider-observed pull-request merge instant. */
+  readonly pullRequestMergedAt: CodeTaskIsoInstant;
   readonly mergeCommitSha: CodeTaskGitCommitSha;
   readonly requiredChecks: CodeTaskQualificationRequiredChecksV1;
   readonly transitions: readonly CodeTaskQualificationFlowTransition[];
   readonly sourceCommitSha: CodeTaskGitCommitSha;
+  /** Instant the product's journey observer produced the completed outcome. */
+  readonly observedAt: CodeTaskIsoInstant;
   readonly spend: CodeTaskQualificationFlowSpendV1;
 }
 
@@ -740,16 +746,19 @@ const QUALIFICATION_FLOW_ARTIFACT_KEYS = [
   "issueReference",
   "issueNumber",
   "issueState",
+  "issueClosedAt",
   "mode",
   "taskRunId",
   "pullRequestReference",
   "pullRequestNumber",
   "pullRequestHeadSha",
   "pullRequestState",
+  "pullRequestMergedAt",
   "mergeCommitSha",
   "requiredChecks",
   "transitions",
   "sourceCommitSha",
+  "observedAt",
   "spend",
 ] as const;
 
@@ -1015,6 +1024,17 @@ function qualificationFlowIdentityErrors(
   return errors;
 }
 
+function qualificationFlowTimestampErrors(
+  value: Record<string, unknown>,
+  path: string,
+): readonly string[] {
+  const errors: string[] = [];
+  for (const field of ["issueClosedAt", "pullRequestMergedAt", "observedAt"] as const) {
+    if (!isCodeTaskIsoInstant(ownField(value, field))) errors.push(`${path}.${field} is invalid`);
+  }
+  return errors;
+}
+
 function qualificationFlowCompletionErrors(
   value: Record<string, unknown>,
   path: string,
@@ -1024,6 +1044,7 @@ function qualificationFlowCompletionErrors(
   if (ownField(value, "pullRequestState") !== "merged") {
     errors.push(`${path}.pullRequestState must be merged`);
   }
+  errors.push(...qualificationFlowTimestampErrors(value, path));
   for (const field of ["pullRequestHeadSha", "mergeCommitSha", "sourceCommitSha"] as const) {
     if (!isCodeTaskGitCommitSha(ownField(value, field))) errors.push(`${path}.${field} is invalid`);
   }

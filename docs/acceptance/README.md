@@ -136,7 +136,10 @@ required-check summary (including an honest observed total of zero on an unprote
 complete product transition list, and nano-USD ledger delta/cumulative/remaining values. The first
 delta starts at the evaluation ledger's zero baseline, so failed attempts and qualification probes
 before the first successful flow remain charged. The checker rejects missing, reordered, duplicate,
-stale, tampered, non-monotonic, or over-budget flow evidence.
+stale, tampered, non-monotonic, or over-budget flow evidence. The artifact retains the provider's
+pull-request merge and issue-closure instants plus the product journey observer's completion
+instant; the live producer records these values from the observed outcome instead of synthesizing
+them.
 
 Generator invocation:
 

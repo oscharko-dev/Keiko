@@ -606,12 +606,14 @@ function validQualificationFlow(
     issueReference: `https://github.com/oscharko/Wegwerf-Repo/issues/${String(ordinal)}`,
     issueNumber: ordinal,
     issueState: "closed",
+    issueClosedAt: QUALIFICATION_RECORDED_AT,
     mode: ordinal === 1 ? "governed-assist" : "supervised-coding",
     taskRunId: `run-${String(ordinal)}`,
     pullRequestReference: `https://github.com/oscharko/Wegwerf-Repo/pull/${String(ordinal)}`,
     pullRequestNumber: ordinal,
     pullRequestHeadSha,
     pullRequestState: "merged",
+    pullRequestMergedAt: QUALIFICATION_RECORDED_AT,
     mergeCommitSha,
     requiredChecks: {
       observation: "observed",
@@ -623,6 +625,7 @@ function validQualificationFlow(
     },
     transitions: CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
     sourceCommitSha: COMMIT_SHA as CodeTaskQualificationFlowArtifactV1["sourceCommitSha"],
+    observedAt: QUALIFICATION_RECORDED_AT,
     spend: {
       budgetNanoUsd: 50_000_000_000,
       chargedDeltaNanoUsd,
@@ -831,6 +834,18 @@ describe("validateCodeTaskQualificationManifest", () => {
         requiredChecks: { ...base.requiredChecks, total: 1, pending: 1 },
       }).ok,
     ).toBe(false);
+  });
+
+  it("requires the provider and journey-observer timestamps from the completed lifecycle", () => {
+    const base = validQualificationFlow();
+    for (const field of ["issueClosedAt", "pullRequestMergedAt", "observedAt"] as const) {
+      expect(validateCodeTaskQualificationFlowArtifact({ ...base, [field]: undefined }).ok).toBe(
+        false,
+      );
+      expect(
+        validateCodeTaskQualificationFlowArtifact({ ...base, [field]: "not-an-instant" }).ok,
+      ).toBe(false);
+    }
   });
 
   it("rejects incomplete transitions and a checks snapshot from another PR head", () => {

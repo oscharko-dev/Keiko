@@ -89,12 +89,14 @@ function flowArtifact(
     issueReference: `https://github.com/oscharko/Wegwerf-Repo/issues/${String(issueNumber)}`,
     issueNumber,
     issueState: "closed",
+    issueClosedAt: "2026-09-06T05:30:00.000Z",
     mode: FLOW_MODES[index],
     taskRunId: `run-${String(ordinal)}`,
     pullRequestReference: `https://github.com/oscharko/Wegwerf-Repo/pull/${String(pullRequestNumber)}`,
     pullRequestNumber,
     pullRequestHeadSha,
     pullRequestState: "merged",
+    pullRequestMergedAt: "2026-09-06T05:29:00.000Z",
     mergeCommitSha: ["6", "7", "8", "9", "d"][index].repeat(40),
     requiredChecks: {
       observation: "observed",
@@ -106,6 +108,7 @@ function flowArtifact(
     },
     transitions: CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
     sourceCommitSha,
+    observedAt: "2026-09-06T05:31:00.000Z",
     spend: {
       budgetNanoUsd: 50_000_000_000,
       chargedDeltaNanoUsd: cumulativeChargedNanoUsd - priorCumulative,

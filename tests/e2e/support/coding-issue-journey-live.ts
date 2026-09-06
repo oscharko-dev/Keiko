@@ -352,11 +352,13 @@ export async function previewAndBindIssue(page: Page, issueRef: string): Promise
 export function issueResolutionTaskInstructions(): string {
   return [
     "Resolve the linked issue end to end, using your available tools:",
-    "1) Implement the required fix across the affected modules and add regression test coverage.",
-    "2) Run the project's verification and confirm it passes before proceeding.",
-    "3) Stage and commit the verified change.",
-    "4) Push the commit to a new branch and open a draft pull request describing the change.",
-    "5) Observe the pull request's CI status; if a required check fails, diagnose and repair it,",
+    "1) Use keiko_repository_search first to locate the existing production implementation and tests, and use at least one returned hit to choose the files you read.",
+    "2) Add the regression test before the production fix, run that targeted test, and observe it fail for the issue's stated behavior.",
+    "3) Implement the required fix across the affected production modules without a pre-recorded patch.",
+    "4) Rerun the targeted regression and the project's complete verification, and proceed only when both pass.",
+    "5) Stage and commit the verification-backed change.",
+    "6) Push the commit to a new branch and open a draft pull request describing the change.",
+    "7) Observe the pull request's CI status; if a required check fails, diagnose and repair it,",
     "push the fix, and re-observe CI until every required check reports passing.",
     "Leave the workspace clean throughout.",
   ].join(" ");
@@ -421,7 +423,9 @@ export interface DeliveredPullRequest {
   readonly runId: string;
   readonly repository: string;
   readonly number: number;
+  readonly baseRef: string;
   readonly headRef: string;
+  readonly headSha: string;
 }
 
 export interface DriveToDraftPrInput {
@@ -467,6 +471,8 @@ export async function driveIssueToDraftPullRequest(
     runId,
     repository: pullRequest.repository,
     number: pullRequest.number,
+    baseRef: pullRequest.baseRef,
     headRef: pullRequest.headRef,
+    headSha: pullRequest.headSha,
   };
 }

@@ -1,4 +1,4 @@
-import { test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import {
   isScenarioSelected,
@@ -14,6 +14,10 @@ import {
   runMarkReadyScenario,
   type ScenarioRunResult,
 } from "./support/coding-issue-journey-live-runners.js";
+import {
+  runSelectedQualificationFlow,
+  selectedQualificationFlow,
+} from "./support/coding-issue-journey-live-flow.js";
 
 // Issue #3390: the real-model production-composition journey. This spec is deliberately the only
 // one in `tests/e2e/` that installs NO `page.route()` interception and imports NO scripted server
@@ -33,9 +37,10 @@ import {
 // (`isScenarioSelected`) so an orchestrator can run one scenario at a time within the operator's
 // USD spend budget, rather than every registered scenario on every invocation.
 //
-// `human-merge-and-closure` is intentionally NOT among the ids this file drives: issue #3390 AC5
-// requires that transition to stay a real, separate human GitHub action, and no receipt is ever
-// minted for it here (see `support/coding-issue-journey-scenarios.ts`'s own comment).
+// The original human-merge-and-closure scenario remains a separately attested scenario. The
+// operator-authorized five-flow qualification is an additional lane: it drives the real governed
+// merge approval surface and records a distinct receipt only after provider merge and issue closure
+// are observed for that flow.
 
 test.describe.configure({ mode: "serial" });
 
@@ -87,6 +92,23 @@ const MODE_SCENARIO_IDS: Record<CodingWorkbenchMode, CodingIssueJourneyScenarioI
   "supervised-coding": "issue-to-pr-supervised-coding",
   "autonomous-delivery": "issue-to-pr-autonomous-delivery",
 };
+
+const selectedFlow = selectedQualificationFlow();
+
+test("#3390 @coding-issue-journey completes one selected real issue-to-closure qualification flow", async ({
+  page,
+}) => {
+  // Repeated-flow qualification is selected independently; ordinary scenario runs intentionally
+  // omit KEIKO_QUALIFICATION_FLOW_ORDINAL and therefore do not execute a second paid journey.
+  test.skip(selectedFlow === undefined, "no five-flow qualification ordinal selected");
+  if (selectedFlow === undefined) {
+    throw new Error("selected qualification flow was unavailable after selection");
+  }
+  const artifact = await runSelectedQualificationFlow(page, selectedFlow);
+  expect(artifact.flowId).toBe(selectedFlow.flowId);
+  expect(artifact.pullRequestState).toBe("merged");
+  expect(artifact.issueState).toBe("closed");
+});
 
 for (const mode of ISSUE_TO_PR_MODES) {
   const scenarioId = MODE_SCENARIO_IDS[mode];

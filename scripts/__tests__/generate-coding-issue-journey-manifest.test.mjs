@@ -153,12 +153,14 @@ describe("buildCodingIssueJourneyManifest", () => {
       issueReference: "https://github.com/oscharko/Wegwerf-Repo/issues/1",
       issueNumber: 1,
       issueState: "closed",
+      issueClosedAt: "2026-09-06T05:30:00.000Z",
       mode: "governed-assist",
       taskRunId: "run-1",
       pullRequestReference: "https://github.com/oscharko/Wegwerf-Repo/pull/2",
       pullRequestNumber: 2,
       pullRequestHeadSha: TREE_SHA,
       pullRequestState: "merged",
+      pullRequestMergedAt: "2026-09-06T05:29:00.000Z",
       mergeCommitSha: COMMIT_SHA,
       requiredChecks: {
         observation: "observed",
@@ -170,6 +172,7 @@ describe("buildCodingIssueJourneyManifest", () => {
       },
       transitions: CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
       sourceCommitSha: COMMIT_SHA,
+      observedAt: "2026-09-06T05:31:00.000Z",
       spend: {
         budgetNanoUsd: 50_000_000_000,
         chargedDeltaNanoUsd: 3_240_000,
