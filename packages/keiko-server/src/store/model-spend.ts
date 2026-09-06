@@ -42,6 +42,12 @@ export class ModelSpendStore {
     if (result.changes !== 1) throw new TypeError("spend-ledger-invalid");
   }
 
+  exhaust(additionalNanoUsd: number): void {
+    this.db
+      .prepare("UPDATE model_spend SET charged = charged + ?, ceiling = 0 WHERE id = 1")
+      .run(additionalNanoUsd);
+  }
+
   close(): void {
     this.db.close();
   }

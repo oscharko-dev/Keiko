@@ -117,6 +117,22 @@ describe("shared persistent model spend admission", () => {
     expect(JSON.stringify(events)).not.toContain(directory);
   });
 
+  it("records a violated provider cost bound and closes the ledger against further calls", () => {
+    const hold = budget().reserve(capability, request, "bounded");
+    expect(() => hold.settle({ ...response.usage, promptTokens: 200 })).toThrow(
+      "spend-bound-unavailable",
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "gateway.spend.settled",
+        extra: expect.objectContaining({ chargedNanoUsd: 210_000_000_000, boundExceeded: true }),
+      }),
+    );
+    expect(() => budget().reserve(capability, request, "after-bound-violation")).toThrow(
+      "spend-budget-exceeded",
+    );
+  });
+
   it("does not enlarge an existing budget when configuration is raised after restart", () => {
     budget().reserve(capability, request, "before-restart");
     expect(() => budget("500").reserve(capability, request, "after-restart")).toThrow(

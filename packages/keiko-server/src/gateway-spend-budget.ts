@@ -31,7 +31,7 @@ const REJECTION_REASONS = new Set<Rejection>([
   "spend-ledger-unavailable",
 ]);
 
-export function gatewaySpendRejectionReason(error: unknown): string | undefined {
+export function gatewaySpendRejectionReason(error: unknown): Rejection | undefined {
   if (!(error instanceof ConfigInvalidError)) return undefined;
   return [...REJECTION_REASONS].find((reason) => reason === error.message);
 }
@@ -96,7 +96,7 @@ function measuredCharge(
     usage.promptTokens + usage.completionTokens === 0
   )
     return upper;
-  return Math.min(upper, cost(pricing, usage.promptTokens, usage.completionTokens));
+  return cost(pricing, usage.promptTokens, usage.completionTokens);
 }
 
 function reject(
@@ -135,7 +135,8 @@ function reservation(
       settled = true;
       const charged = measuredCharge(pricing, usage, upper);
       try {
-        store.refund(upper - charged);
+        if (charged > upper) store.exhaust(charged - upper);
+        else store.refund(upper - charged);
       } catch (error) {
         reject(log, correlationId, "spend-ledger-unavailable", error);
       }
@@ -144,8 +145,13 @@ function reservation(
         level: "info",
         op: "gateway.spend.settled",
         correlationId,
-        extra: { chargedNanoUsd: charged, measured: usage !== undefined && charged !== upper },
+        extra: {
+          chargedNanoUsd: charged,
+          measured: usage !== undefined && charged !== upper,
+          boundExceeded: charged > upper,
+        },
       });
+      if (charged > upper) reject(log, correlationId, "spend-bound-unavailable");
     },
   };
 }
@@ -233,4 +239,17 @@ export function gatewaySpendBudgetForEnv(
 ): GatewaySpendBudget | undefined {
   if (!budgetsByEnvironment.has(env)) budgetsByEnvironment.set(env, createGatewaySpendBudget(env));
   return budgetsByEnvironment.get(env);
+}
+
+export function reserveGatewaySpendForAttempt(
+  env: Readonly<Record<string, string | undefined>>,
+  capability: ModelCapability | undefined,
+  request: GatewayCallRequest,
+  correlationId: string,
+): GatewaySpendReservation | undefined {
+  const budget = gatewaySpendBudgetForEnv(env);
+  if (budget === undefined) return undefined;
+  if (capability === undefined)
+    reject(processServerLogSink(), correlationId, "spend-bound-unavailable");
+  return budget.reserve(capability, request, correlationId);
 }

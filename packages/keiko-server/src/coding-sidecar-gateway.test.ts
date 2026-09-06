@@ -19,11 +19,9 @@ import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
   _classifyBadRequestReasonForTests,
-  _resetCumulativeSpendUsdForTests,
   createOpenCodeGatewayReadinessRegistry,
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
-  QUALIFICATION_SPEND_BUDGET_USD_ENV,
 } from "./coding-sidecar-gateway.js";
 import { mockRequest, mockResponse, probeVerifiedGatewayConfig } from "./_support.js";
 import {
@@ -855,8 +853,12 @@ describe("coding-sidecar gateway", () => {
   // #3384 wave-3 W3-1 redirect (reviewer 3941816393 / B1): a tool whose real handler binding is
   // reported unavailable for this run must be ABSENT from the advertised (and therefore forwarded)
   // tool set, not merely denied if the model ever tries to call it (#3413-AC1/#3414-AC4/AC9).
-  it("omits an optional tool from the advertised catalog once its real handler is reported unavailable", async () => {
+  it("omits unavailable optional tools and logs each effective offer distinctly", async () => {
     resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    let unavailable = new Set<"keiko_research_fetch" | "keiko_child_agent">([
+      "keiko_research_fetch",
+    ]);
     let requestBody:
       { tools?: readonly { function: { name: string; parameters: unknown } }[] } | undefined;
     vi.stubGlobal(
@@ -878,19 +880,20 @@ describe("coding-sidecar gateway", () => {
         authenticate: () => ({ ok: true, binding: { runId: "run-real" } }),
         reservePromptTokens: () => ({ ok: true, runId: "run-real" }),
         unavailableOptionalTools: (runId: string) =>
-          runId === "run-real" ? new Set(["keiko_research_fetch"]) : undefined,
+          runId === "run-real" ? unavailable : undefined,
       },
       openCodeGatewayReadinessRegistry: createOpenCodeGatewayReadinessRegistry(),
     } as unknown as UiHandlerDeps;
     try {
-      const result = await handleCodingSidecarGatewayChatCompletions(
-        authenticatedContext({
+      const request = (): RouteContext => ({
+        ...authenticatedContext({
           model: "coding",
           messages: [{ role: "user", content: "continue" }],
           tools: modelVisibleTools(),
         }),
-        deps,
-      );
+        correlationId: "correlation-tool-availability",
+      });
+      const result = await handleCodingSidecarGatewayChatCompletions(request(), deps);
       assertRouteResult(result);
       expect(result.status).toBe(200);
       const sentToolNames = new Set((requestBody?.tools ?? []).map((tool) => tool.function.name));
@@ -900,9 +903,43 @@ describe("coding-sidecar gateway", () => {
           OPENCODE_MODEL_VISIBLE_TOOL_NAMES.filter((name) => name !== "keiko_research_fetch"),
         ),
       );
+
+      unavailable = new Set(["keiko_child_agent"]);
+      const second = await handleCodingSidecarGatewayChatCompletions(request(), deps);
+      assertRouteResult(second);
+      expect(second.status).toBe(200);
+
+      const availabilityEvents = sink.events.filter(
+        (event) => event.op === "coding-sidecar.gateway.tool-availability",
+      );
+      expect(availabilityEvents).toHaveLength(2);
+      expect(availabilityEvents[0]).toMatchObject({
+        correlationId: "correlation-tool-availability",
+        extra: {
+          runId: "run-real",
+          unavailableOptionalTools: ["keiko_research_fetch"],
+          unavailableOptionalToolCount: 1,
+          offeredOptionalTools: ["keiko_child_agent", "keiko_skill"],
+          offeredOptionalToolCount: 2,
+        },
+      });
+      expect(availabilityEvents[1]).toMatchObject({
+        correlationId: "correlation-tool-availability",
+        extra: {
+          runId: "run-real",
+          unavailableOptionalTools: ["keiko_child_agent"],
+          unavailableOptionalToolCount: 1,
+          offeredOptionalTools: ["keiko_research_fetch", "keiko_skill"],
+          offeredOptionalToolCount: 2,
+        },
+      });
+      expect(availabilityEvents[0]?.extra?.handlerSetDigest).not.toBe(
+        availabilityEvents[1]?.extra?.handlerSetDigest,
+      );
     } finally {
       vi.unstubAllGlobals();
       resetGatewayInstanceCacheForTests();
+      resetServerLogger();
     }
   });
 
@@ -3919,197 +3956,10 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
   });
 });
 
-// ─── live-journey-readiness-1: pre-call monetary ceiling ────────────────────────
-
-describe("coding-sidecar gateway spend budget", () => {
-  afterEach(() => {
-    _resetCumulativeSpendUsdForTests();
-  });
-
-  function pricedCapability(overrides: Partial<ModelCapability> = {}): ModelCapability {
-    return capability({
-      pricing: { inputUsdPerMillionTokens: 1_000_000, outputUsdPerMillionTokens: 1_000_000 },
-      ...overrides,
-    });
-  }
-
-  function chatRequest(): RouteContext {
-    return authenticatedContext({
-      model: "azure-coding-model",
-      messages: [{ role: "user", content: "continue" }],
-      tools: [],
-    });
-  }
-
-  it("fails closed with spend-pricing-unavailable when a budget is configured but the model declares no pricing", async () => {
-    const sink = captureServerLog("warn");
-    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
-    const deps = depsValue(configValue(provider(), capability()), () => chat, {
-      [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "50",
-    });
-
-    const result = await handleCodingSidecarGatewayChatCompletions(chatRequest(), deps);
-
-    expect(result).toMatchObject({ status: 403 });
-    expect(chat).not.toHaveBeenCalled();
-    expect(sink.events).toEqual([
-      expect.objectContaining({
-        op: "coding-sidecar.gateway.rejected",
-        status: 403,
-        extra: { reason: "spend-pricing-unavailable", runId: "run-gateway-test" },
-      }),
-    ]);
-  });
-
-  it("fails closed with spend-budget-exceeded before dispatch once the estimated cost would exceed the budget", async () => {
-    const sink = captureServerLog("warn");
-    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
-    const deps = depsValue(configValue(provider(), pricedCapability()), () => chat, {
-      [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0.000001",
-    });
-
-    const result = await handleCodingSidecarGatewayChatCompletions(chatRequest(), deps);
-
-    expect(result).toMatchObject({ status: 403 });
-    expect(chat).not.toHaveBeenCalled();
-    expect(sink.events).toEqual([
-      expect.objectContaining({
-        op: "coding-sidecar.gateway.rejected",
-        status: 403,
-        extra: { reason: "spend-budget-exceeded", runId: "run-gateway-test" },
-      }),
-    ]);
-  });
-
-  it("does not enforce any ceiling when no spend budget is configured", async () => {
-    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
-    const deps = depsValue(configValue(provider(), pricedCapability()), () => chat);
-
-    const result = await handleCodingSidecarGatewayChatCompletions(chatRequest(), deps);
-
-    expect(result).toMatchObject({ status: 200 });
-    expect(chat).toHaveBeenCalledTimes(1);
-  });
-
-  // Regression differentiator: budget covers a bit more than ONE call's pre-call estimate
-  // (dominated by maxOutputTokens(4096) * outputUsdPerMillionTokens(1)/1e6 ≈ $4,096) but strictly
-  // less than TWO such estimates stacked. `assistantResponse`'s real usage (promptTokens: 12,
-  // completionTokens: 8) costs only a few cents against this pricing — a tiny fraction of the
-  // pre-call estimate. If the ledger wrongly booked the pre-call ESTIMATE instead of the provider's
-  // real reported usage, the second call's pre-check would see roughly double the estimate and
-  // reject it.
-  it("accumulates the ledger from the provider's real reported usage, never the pre-call estimate", async () => {
-    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
-    const priced = pricedCapability({
-      maxOutputTokens: 4_096,
-      pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1_000_000 },
-    });
-    const deps = depsValue(configValue(provider(), priced), () => chat, {
-      [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "6144",
-    });
-
-    const first = await handleCodingSidecarGatewayChatCompletions(chatRequest(), deps);
-    const second = await handleCodingSidecarGatewayChatCompletions(chatRequest(), deps);
-
-    expect(first).toMatchObject({ status: 200 });
-    expect(second).toMatchObject({ status: 200 });
-    expect(chat).toHaveBeenCalledTimes(2);
-  });
-
-  // reviewer 3941877971: the ceiling must see OUTSTANDING (in-flight) reservations, not only
-  // completed spend. Budget covers one call's pre-call estimate (~$4,096, dominated by
-  // maxOutputTokens(4096) * outputUsdPerMillionTokens(1_000_000)/1e6) but strictly less than two
-  // stacked estimates. The first call is held in flight (never resolved) while the second is
-  // dispatched; without a pre-dispatch reservation both would be admitted against the same
-  // completed-only ledger and the provider would be called twice.
-  it("reserves the estimated cost before dispatch, so an overlapping in-flight call cannot also be admitted", async () => {
-    const sink = captureServerLog("warn");
-    let resolveFirst: ((response: NormalizedResponse) => void) | undefined;
-    const firstProvider = new Promise<NormalizedResponse>((resolve) => {
-      resolveFirst = resolve;
-    });
-    const chat = vi
-      .fn()
-      .mockImplementationOnce(() => firstProvider)
-      .mockImplementationOnce(() => Promise.resolve(assistantResponse("azure-coding-model")));
-    const priced = pricedCapability({
-      maxOutputTokens: 4_096,
-      pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1_000_000 },
-    });
-    const deps = depsValue(configValue(provider(), priced), () => chat, {
-      [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "6144",
-    });
-
-    const first = handleCodingSidecarGatewayChatCompletions(chatRequest(), deps);
-    await vi.waitFor(() => {
-      expect(chat).toHaveBeenCalledOnce();
-    });
-
-    const second = await handleCodingSidecarGatewayChatCompletions(chatRequest(), deps);
-
-    expect(second).toMatchObject({ status: 403 });
-    expect(chat).toHaveBeenCalledOnce();
-    expect(sink.events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          op: "coding-sidecar.gateway.rejected",
-          status: 403,
-          extra: { reason: "spend-budget-exceeded", runId: "run-gateway-test" },
-        }),
-      ]),
-    );
-
-    resolveFirst?.(assistantResponse("azure-coding-model"));
-    await expect(first).resolves.toMatchObject({ status: 200 });
-  });
-
-  // reviewer 3941877974: absence of a configured ceiling (unrestricted) must never be conflated
-  // with a present-but-unusable one (fail closed).
-  describe("invalid configured ceiling", () => {
-    it("denies spending outright rather than silently disabling the ceiling when set to zero", async () => {
-      const sink = captureServerLog("warn");
-      const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
-      const deps = depsValue(configValue(provider(), pricedCapability()), () => chat, {
-        [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0",
-      });
-
-      const result = await handleCodingSidecarGatewayChatCompletions(chatRequest(), deps);
-
-      expect(result).toMatchObject({ status: 403 });
-      expect(chat).not.toHaveBeenCalled();
-      expect(sink.events).toEqual([
-        expect.objectContaining({
-          op: "coding-sidecar.gateway.rejected",
-          status: 403,
-          extra: { reason: "spend-budget-exceeded", runId: "run-gateway-test" },
-        }),
-      ]);
-    });
-
-    it.each(["-1", "invalid", "50oops"])(
-      "fails closed with spend-budget-invalid rather than disabling enforcement for %s",
-      async (rawValue) => {
-        const sink = captureServerLog("warn");
-        const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
-        const deps = depsValue(configValue(provider(), pricedCapability()), () => chat, {
-          [QUALIFICATION_SPEND_BUDGET_USD_ENV]: rawValue,
-        });
-
-        const result = await handleCodingSidecarGatewayChatCompletions(chatRequest(), deps);
-
-        expect(result).toMatchObject({ status: 403 });
-        expect(chat).not.toHaveBeenCalled();
-        expect(sink.events).toEqual([
-          expect.objectContaining({
-            op: "coding-sidecar.gateway.rejected",
-            status: 403,
-            extra: { reason: "spend-budget-invalid", runId: "run-gateway-test" },
-          }),
-        ]);
-      },
-    );
-  });
-});
+// Monetary admission regression pins now live at the shared owning boundary:
+// gateway-spend-budget.test.ts and keiko-model-gateway/src/gateway.spend-budget.test.ts.
+// Those tests use real Gateway dispatch, including independent sources, retries and restart;
+// a codingSidecarGatewayChatFactory replacement would bypass that production boundary.
 
 // ─── #3384 wave-3 W3-3 "needs": runtime prompt-token settlement wiring ──────────
 // `settleRuntimePromptTokens` (agentAuthorityRegistry.ts) had zero production callers before this

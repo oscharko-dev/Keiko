@@ -44,11 +44,10 @@ receipts and screenshots.
   production-composed deterministic browser evidence, not a live-model or
   live-GitHub-authentication qualification.
 
-The evidence in this directory was captured at `checkedAt` `2026-09-05T18:05:42.024Z`
-(`journey-proof.json`), consistent with the same run that produced sibling directory `3389/`.
-**This must be re-captured on the final head before any release claim**: re-run the command above
-and re-diff `sourceHashes` against the corresponding files' current content whenever any of them
-changes.
+The exact capture time is the `checkedAt` value in each JSON receipt, from the same serial run that
+produces sibling directories `3389/` and `3401/`. **This must be re-captured on the final head before
+any release claim**: re-run the command above and re-diff `sourceHashes` against the corresponding
+files' current content whenever any of them changes.
 
 Screenshots and receipts contain synthetic fixture text only — no real PR body, diff, prompt, or
 approval token (`rawContentRecorded: false`).

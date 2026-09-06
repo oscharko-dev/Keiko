@@ -142,7 +142,7 @@ test("connects the Git window's current branch to a Chat and shows the scope pil
   const composer = chatWindow.getByRole("textbox", { name: "Chat message" });
   await composer.click();
   await composer.fill("Please refine the description");
-  await chatWindow.getByRole("button", { name: "Send message" }).click();
+  await activateWithKeyboard(chatWindow.getByRole("button", { name: "Send message" }));
   await expect(
     chatWindow.getByText(
       "The description authority for this connected Git change is missing or has expired.",
@@ -157,7 +157,7 @@ test("connects the Git window's current branch to a Chat and shows the scope pil
   // gitChangeRoutes.test.ts), not only the unchanged-comparison case proven above.
   advanceGitChangeChatFixtureHead(fixture);
   await chatWindow.getByRole("button", { name: `Refresh ${label}` }).click();
-  await expect(chatWindow.getByText("Stale")).toBeVisible();
+  await expect(chatWindow.getByText("Stale", { exact: true })).toBeVisible();
   await expect(chatWindow.getByText(label)).toBeVisible();
 
   // T25 — actually click Disconnect (not just assert visibility) and prove the PATCH landed on
@@ -358,7 +358,7 @@ test("keeps the current generic Workbench draft visible when an older response l
     issue: 3401,
     page,
     windowId: "issue-3401-workbench-window",
-    surface: '[aria-label="Pull request description draft"]',
+    surface: 'section[aria-label="Pull request description draft"]',
     state: "generic-held-draft-after-response-race",
     sources: WORKBENCH_VISUAL_SOURCES,
     keyboardTarget: '[data-testid="cwb-description-review"]',

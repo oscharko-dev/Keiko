@@ -1,4 +1,5 @@
 import { expect, type Page, type Route } from "@playwright/test";
+import { activeWorkspace } from "./coding-workbench-live-runtime-fixtures.js";
 
 const RUN_ID = "run-description-race-3401";
 const OLD_PROPOSAL = "proposal-old-3401";
@@ -144,6 +145,30 @@ async function fulfillJson(route: Route, body: unknown): Promise<void> {
 }
 
 export async function seedWorkbenchDescriptionWindow(page: Page, root: string): Promise<void> {
+  const fixture = activeWorkspace();
+  const instance = {
+    ...fixture.instance,
+    repositoryRoot: root,
+    managedWorktreePath: root,
+    taskBranch: "feature/x",
+  };
+  const binding = {
+    ...fixture.binding,
+    activeRoot: root,
+    gitDeliveryRoot: root,
+    editorProjectRoot: root,
+  };
+  await page.route("**/api/task-workspaces", (route) =>
+    fulfillJson(route, { instances: [instance] }),
+  );
+  await page.route("**/api/task-workspaces/reconciliation", (route) =>
+    fulfillJson(route, {
+      report: { entries: [{ workspaceId: instance.workspaceId, status: "healthy" }] },
+    }),
+  );
+  await page.route("**/api/task-workspaces/active", (route) =>
+    fulfillJson(route, { active: { instance, binding, pointer: fixture.pointer } }),
+  );
   await page.addInitScript(
     ({ repositoryRoot }) => {
       window.localStorage.setItem(

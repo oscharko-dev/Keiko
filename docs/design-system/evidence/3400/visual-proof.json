@@ -1,18 +1,18 @@
 {
   "schemaVersion": 1,
   "issue": 3400,
-  "checkedAt": "2026-09-05T18:05:41.911Z",
+  "checkedAt": "2026-09-06T02:38:03.081Z",
   "evidenceClass": "production-ui-deterministic-browser-fixture",
   "modelQualification": false,
   "liveAuthenticationQualification": false,
   "sourceHashes": {
-    "tests/e2e/git-change-chat-3400.spec.ts": "ce9b0c51cc0b7c444f00e149479dd642cd33e2a1d55720360b4a6e9dac2214ee",
+    "tests/e2e/git-change-chat-3400.spec.ts": "5c6371e3da76b94da259f12b374849031a73f972f3d42bb561ea365e0b3af913",
     "tests/e2e/config/playwright.git-change-chat-3400.config.ts": "8efa57b0b895d603017867d9a3e522d95ef0cd0e570ee321ff7f8e3510ed55d2",
-    "tests/e2e/support/git-change-chat-3400.ts": "2797daa9624e717f0674678512128c9df25f3d133d3010434c3dbe2917b3c2b9",
-    "tests/e2e/support/pr-description-visual-evidence.ts": "d82214431242443002a1e36235dfa6911bc95e9ce57dbaab087d8f1a44d9cf30",
-    "packages/keiko-ui/src/app/components/desktop/GitChangeScopePill.tsx": "9043b36c33623d54115b4e0f3c71b659bd26bfe35e976a393eedb665152ed9e8",
-    "packages/keiko-ui/src/app/components/desktop/ChatWindow.tsx": "811c7222053b288f6672ae22148a0bdbad04f44b32a11daa84c86e0558c6c1eb",
-    "packages/keiko-ui/src/lib/api.ts": "ba080175c22d1b8cb146275d96c840b050cbc184003b31712fee60185e5e39f8",
+    "tests/e2e/support/git-change-chat-3400.ts": "e4fa7c64dece10251ed4b8177f3bd24eebcc82f6bd57c7fa4bd258e6ca5f7762",
+    "tests/e2e/support/pr-description-visual-evidence.ts": "48ea6e2dee3b8a50c80dddb633512400a06dcb0a2100aeac85efe81a0ced6368",
+    "packages/keiko-ui/src/app/components/desktop/GitChangeScopePill.tsx": "c6469ce683b630c46cee4237debeb0cff39ba195eeb312a9fae2dce46f68e4dc",
+    "packages/keiko-ui/src/app/components/desktop/ChatWindow.tsx": "32d119badfe7b60b854472aa16f6162b44dcae9d7a247fe10775a46498d44198",
+    "packages/keiko-ui/src/lib/api.ts": "e067374bd73181ff2a5abe5cb25c2aa3761df187b2c9db592d1648a2d6dc7344",
     "packages/keiko-ui/src/lib/coding-workbench-lazy-fetchers.ts": "ee098fa12d955ed5c6c12bea5e712eebd327d1dc430b02a022ba8997b20dbe6b"
   },
   "captures": [
@@ -21,7 +21,7 @@
       "theme": "dark",
       "state": "held-preview",
       "screenshot": "docs/design-system/evidence/3400/01-dark.png",
-      "screenshotSha256": "815cce2b3b45acd5429d82a63aba8e4811ad604f8a7d7ce579e306cf5cffa1f3",
+      "screenshotSha256": "a1fbdaa7abe926f4615ba25d1379e2c98c4bb17db86d2d51ced08f5f4184df8f",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -31,7 +31,7 @@
       "theme": "light",
       "state": "held-preview",
       "screenshot": "docs/design-system/evidence/3400/02-light.png",
-      "screenshotSha256": "4091d205f8a5112801613d7eba74bac1450a8365040dde141ac61992fe1b08fe",
+      "screenshotSha256": "370eb618e89dd9a313e185a12d42b2f0359db7beb0c57d7f491929325d381859",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -42,7 +42,7 @@
       "highContrast": true,
       "state": "held-preview",
       "screenshot": "docs/design-system/evidence/3400/03-dark-high-contrast.png",
-      "screenshotSha256": "5652ebd839dbbef713a9527247c637aef89cda66d89009192d879a0be35ccb39",
+      "screenshotSha256": "0686986a8bf6f47ed4a6cd5bba74ae7dd917bdd360bd41dd0fc204ffa20ee6bb",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -53,7 +53,7 @@
       "highContrast": true,
       "state": "held-preview",
       "screenshot": "docs/design-system/evidence/3400/04-light-high-contrast.png",
-      "screenshotSha256": "26d14d1919add7729f9fcc63342fc004c51283f17dfe5cc079d29ac8b28bbd67",
+      "screenshotSha256": "84b247b111bd2f22f8587f6b78e8c72c691dd3b76aa326578235b6f8352d65b2",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -64,7 +64,7 @@
       "contrast": "more",
       "state": "held-preview",
       "screenshot": "docs/design-system/evidence/3400/05-prefers-contrast.png",
-      "screenshotSha256": "5652ebd839dbbef713a9527247c637aef89cda66d89009192d879a0be35ccb39",
+      "screenshotSha256": "0686986a8bf6f47ed4a6cd5bba74ae7dd917bdd360bd41dd0fc204ffa20ee6bb",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -75,7 +75,7 @@
       "forcedColors": "active",
       "state": "held-preview",
       "screenshot": "docs/design-system/evidence/3400/06-forced-colors.png",
-      "screenshotSha256": "e2d05498fe2dd5bd337699c4282ef5e48f4429d0df79fafcd3efdfc6ee7ddb68",
+      "screenshotSha256": "b4bdb660eec399a46e6dec367b9c20fc38e82df7f5c89553b104adcb49ef1a05",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -86,7 +86,7 @@
       "reducedMotion": "reduce",
       "state": "held-preview",
       "screenshot": "docs/design-system/evidence/3400/07-reduced-motion.png",
-      "screenshotSha256": "c13a7ce24d0850d2a4c96438a57936aed40d7f003f8ee62cec9dfa88caae7ac1",
+      "screenshotSha256": "2c83454955cd5f0009bf0f4b705e7c9a6fea7d8c9433855e1966812ff25ac0af",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []
@@ -97,7 +97,7 @@
       "width": 360,
       "state": "held-preview",
       "screenshot": "docs/design-system/evidence/3400/08-compact.png",
-      "screenshotSha256": "3a275a47d96195a793d1ff990ae7bf08216e93de26c2a918e27f9380e26c129c",
+      "screenshotSha256": "29d3ec1508d389e29960d6d9e517823016a14fd4628e8ab7e4a93df69588c1eb",
       "seriousOrCriticalViolations": 0,
       "horizontalOverflow": false,
       "violations": []

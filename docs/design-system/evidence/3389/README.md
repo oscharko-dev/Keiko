@@ -45,11 +45,10 @@ receipts and screenshots.
   `liveAuthenticationQualification` are both `false`: this is production-composed deterministic
   browser evidence, not a live-model or live-GitHub-authentication qualification.
 
-The evidence in this directory was captured at `checkedAt` `2026-09-05T18:05:44Z`
-(`journey-proof.json`) / `...:44.250Z` (`visual-proof.json`). **This must be re-captured on the
-final head before any release claim**: re-run the command above and re-diff `sourceHashes` against
-the corresponding files' current content whenever any of them changes — component tests passing is
-not evidence that this captured browser proof still reflects the current source.
+The exact capture time is the `checkedAt` value in each JSON receipt. **This must be re-captured on
+the final head before any release claim**: re-run the command above and re-diff `sourceHashes`
+against the corresponding files' current content whenever any of them changes — component tests
+passing is not evidence that this captured browser proof still reflects the current source.
 
 Screenshots and receipts contain synthetic fixture text only — no real PR body, diff, prompt, or
 approval token (`rawContentRecorded: false`).

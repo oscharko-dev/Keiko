@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "issue": 3400,
-  "checkedAt": "2026-09-05T18:05:42.024Z",
+  "checkedAt": "2026-09-06T02:38:03.200Z",
   "passed": true,
   "evidenceClass": "production-ui-deterministic-browser-fixture",
   "modelQualification": false,
@@ -19,17 +19,17 @@
     "appliedControlDisabled": true,
     "appliedCapture": {
       "screenshot": "docs/design-system/evidence/3400/09-applied.png",
-      "screenshotSha256": "62370c9ad3f6fa3cc8213e48ae1d41a084573e92f60e26054a92d86429cb94f6"
+      "screenshotSha256": "dd5150b129c585cc94771258381c9521fd6b7a35034ce9748f9330454cfb8e29"
     }
   },
   "sourceHashes": {
-    "tests/e2e/git-change-chat-3400.spec.ts": "ce9b0c51cc0b7c444f00e149479dd642cd33e2a1d55720360b4a6e9dac2214ee",
+    "tests/e2e/git-change-chat-3400.spec.ts": "5c6371e3da76b94da259f12b374849031a73f972f3d42bb561ea365e0b3af913",
     "tests/e2e/config/playwright.git-change-chat-3400.config.ts": "8efa57b0b895d603017867d9a3e522d95ef0cd0e570ee321ff7f8e3510ed55d2",
-    "tests/e2e/support/git-change-chat-3400.ts": "2797daa9624e717f0674678512128c9df25f3d133d3010434c3dbe2917b3c2b9",
-    "tests/e2e/support/pr-description-visual-evidence.ts": "d82214431242443002a1e36235dfa6911bc95e9ce57dbaab087d8f1a44d9cf30",
-    "packages/keiko-ui/src/app/components/desktop/GitChangeScopePill.tsx": "9043b36c33623d54115b4e0f3c71b659bd26bfe35e976a393eedb665152ed9e8",
-    "packages/keiko-ui/src/app/components/desktop/ChatWindow.tsx": "811c7222053b288f6672ae22148a0bdbad04f44b32a11daa84c86e0558c6c1eb",
-    "packages/keiko-ui/src/lib/api.ts": "ba080175c22d1b8cb146275d96c840b050cbc184003b31712fee60185e5e39f8",
+    "tests/e2e/support/git-change-chat-3400.ts": "e4fa7c64dece10251ed4b8177f3bd24eebcc82f6bd57c7fa4bd258e6ca5f7762",
+    "tests/e2e/support/pr-description-visual-evidence.ts": "48ea6e2dee3b8a50c80dddb633512400a06dcb0a2100aeac85efe81a0ced6368",
+    "packages/keiko-ui/src/app/components/desktop/GitChangeScopePill.tsx": "c6469ce683b630c46cee4237debeb0cff39ba195eeb312a9fae2dce46f68e4dc",
+    "packages/keiko-ui/src/app/components/desktop/ChatWindow.tsx": "32d119badfe7b60b854472aa16f6162b44dcae9d7a247fe10775a46498d44198",
+    "packages/keiko-ui/src/lib/api.ts": "e067374bd73181ff2a5abe5cb25c2aa3761df187b2c9db592d1648a2d6dc7344",
     "packages/keiko-ui/src/lib/coding-workbench-lazy-fetchers.ts": "ee098fa12d955ed5c6c12bea5e712eebd327d1dc430b02a022ba8997b20dbe6b"
   },
   "rawContentRecorded": false

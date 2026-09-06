@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "issue": 3401,
+  "checkedAt": "2026-09-06T02:38:07.376Z",
+  "passed": true,
+  "evidenceClass": "production-ui-deterministic-browser-fixture",
+  "modelQualification": false,
+  "liveAuthenticationQualification": false,
+  "cases": [
+    "generic no-PR artifact remains reviewable",
+    "exact server-held final markdown is displayed",
+    "late older response cannot replace the current proposal"
+  ],
+  "observations": {
+    "oldDraft": 1,
+    "newDraft": 1,
+    "status": 2,
+    "stream": 1,
+    "hasPullRequestTarget": false,
+    "exactCurrentMarkdownDisplayed": true,
+    "olderResponseDiscarded": true,
+    "currentCapture": {
+      "screenshot": "docs/design-system/evidence/3401/09-response-race-current.png",
+      "screenshotSha256": "f2e01ac66cf66d14e8ec34088a2190ccb5cbdc87618f102ae89eb7df7b753cc0"
+    }
+  },
+  "sourceHashes": {
+    "tests/e2e/git-change-chat-3400.spec.ts": "5c6371e3da76b94da259f12b374849031a73f972f3d42bb561ea365e0b3af913",
+    "tests/e2e/config/playwright.git-change-chat-3400.config.ts": "8efa57b0b895d603017867d9a3e522d95ef0cd0e570ee321ff7f8e3510ed55d2",
+    "tests/e2e/support/pr-description-visual-evidence.ts": "48ea6e2dee3b8a50c80dddb633512400a06dcb0a2100aeac85efe81a0ced6368",
+    "tests/e2e/support/workbench-description-3401.ts": "f0c07608c88aa0ef8ff74ebbaadab3ae18786de772b493499864167c97c604e2",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchDraftDelivery.tsx": "3f528a6ad658582bdc11f65954f88045852e7ac5b003899189b1d8f45b24637c",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css": "9f23120ee44e6d8b82b6fcd23a72a7c2c2c5cb0c65675e9a55b4c57c297e34c2",
+    "packages/keiko-ui/src/lib/coding-workbench-runtime-api.ts": "efcd25ddd9ae3013f4b487cf7c713a60ee87d3b644e1f4f7f911cc0f214abe2d"
+  },
+  "rawContentRecorded": false
+}

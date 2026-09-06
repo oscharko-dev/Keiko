@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "issue": 3401,
+  "checkedAt": "2026-09-06T02:38:07.302Z",
+  "evidenceClass": "production-ui-deterministic-browser-fixture",
+  "modelQualification": false,
+  "liveAuthenticationQualification": false,
+  "sourceHashes": {
+    "tests/e2e/git-change-chat-3400.spec.ts": "5c6371e3da76b94da259f12b374849031a73f972f3d42bb561ea365e0b3af913",
+    "tests/e2e/config/playwright.git-change-chat-3400.config.ts": "8efa57b0b895d603017867d9a3e522d95ef0cd0e570ee321ff7f8e3510ed55d2",
+    "tests/e2e/support/pr-description-visual-evidence.ts": "48ea6e2dee3b8a50c80dddb633512400a06dcb0a2100aeac85efe81a0ced6368",
+    "tests/e2e/support/workbench-description-3401.ts": "f0c07608c88aa0ef8ff74ebbaadab3ae18786de772b493499864167c97c604e2",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchDraftDelivery.tsx": "3f528a6ad658582bdc11f65954f88045852e7ac5b003899189b1d8f45b24637c",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css": "9f23120ee44e6d8b82b6fcd23a72a7c2c2c5cb0c65675e9a55b4c57c297e34c2",
+    "packages/keiko-ui/src/lib/coding-workbench-runtime-api.ts": "efcd25ddd9ae3013f4b487cf7c713a60ee87d3b644e1f4f7f911cc0f214abe2d"
+  },
+  "captures": [
+    {
+      "name": "01-dark",
+      "theme": "dark",
+      "state": "generic-held-draft-after-response-race",
+      "screenshot": "docs/design-system/evidence/3401/01-dark.png",
+      "screenshotSha256": "6cbc83b9df0fe00086b73fb137b83a4bdc7f4acd48844d1f53c70ea2e4ad8d5f",
+      "seriousOrCriticalViolations": 0,
+      "horizontalOverflow": false,
+      "violations": []
+    },
+    {
+      "name": "02-light",
+      "theme": "light",
+      "state": "generic-held-draft-after-response-race",
+      "screenshot": "docs/design-system/evidence/3401/02-light.png",
+      "screenshotSha256": "339f15669ce17699d619267c99b772b95ec8686a5041c2025341f6afbe621b1a",
+      "seriousOrCriticalViolations": 0,
+      "horizontalOverflow": false,
+      "violations": []
+    },
+    {
+      "name": "03-dark-high-contrast",
+      "theme": "dark",
+      "highContrast": true,
+      "state": "generic-held-draft-after-response-race",
+      "screenshot": "docs/design-system/evidence/3401/03-dark-high-contrast.png",
+      "screenshotSha256": "37d3401719ff58fe3c42d867c77e3b74c202a81adf7b4585a2f712d85a0fc177",
+      "seriousOrCriticalViolations": 0,
+      "horizontalOverflow": false,
+      "violations": []
+    },
+    {
+      "name": "04-light-high-contrast",
+      "theme": "light",
+      "highContrast": true,
+      "state": "generic-held-draft-after-response-race",
+      "screenshot": "docs/design-system/evidence/3401/04-light-high-contrast.png",
+      "screenshotSha256": "09712988ea032df1237483745528d10b26d53c456945bedc680377d486127f0f",
+      "seriousOrCriticalViolations": 0,
+      "horizontalOverflow": false,
+      "violations": []
+    },
+    {
+      "name": "05-prefers-contrast",
+      "theme": "dark",
+      "contrast": "more",
+      "state": "generic-held-draft-after-response-race",
+      "screenshot": "docs/design-system/evidence/3401/05-prefers-contrast.png",
+      "screenshotSha256": "fdc201d350f53c5d8acba840539cd763a44480602258c872fa79deb389aef4b5",
+      "seriousOrCriticalViolations": 0,
+      "horizontalOverflow": false,
+      "violations": []
+    },
+    {
+      "name": "06-forced-colors",
+      "theme": "dark",
+      "forcedColors": "active",
+      "state": "generic-held-draft-after-response-race",
+      "screenshot": "docs/design-system/evidence/3401/06-forced-colors.png",
+      "screenshotSha256": "0430be509602955536a3ada027011cf728a6c9ba7dd494f576efcfff0318c9f3",
+      "seriousOrCriticalViolations": 0,
+      "horizontalOverflow": false,
+      "violations": []
+    },
+    {
+      "name": "07-reduced-motion",
+      "theme": "dark",
+      "reducedMotion": "reduce",
+      "state": "generic-held-draft-after-response-race",
+      "screenshot": "docs/design-system/evidence/3401/07-reduced-motion.png",
+      "screenshotSha256": "f2e01ac66cf66d14e8ec34088a2190ccb5cbdc87618f102ae89eb7df7b753cc0",
+      "seriousOrCriticalViolations": 0,
+      "horizontalOverflow": false,
+      "violations": []
+    },
+    {
+      "name": "08-compact",
+      "theme": "dark",
+      "width": 360,
+      "state": "generic-held-draft-after-response-race",
+      "screenshot": "docs/design-system/evidence/3401/08-compact.png",
+      "screenshotSha256": "02138c471d771d3f605f22f038342bfb240986f480cd4be6026d4f10941e8b16",
+      "seriousOrCriticalViolations": 0,
+      "horizontalOverflow": false,
+      "violations": []
+    }
+  ]
+}
