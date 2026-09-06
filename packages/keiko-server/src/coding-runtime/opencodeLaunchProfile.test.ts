@@ -311,7 +311,11 @@ describe("OpenCode launch profile", () => {
       maxInputTokens: 40_960,
       maxOutputTokens: 32_000,
     });
-    expect(40_960 * 24 + 65_536).toBe(1_048_576);
+    if (smaller === undefined) throw new Error("expected admitted context geometry");
+    const escapedTranscript = JSON.stringify({
+      messages: [{ role: "user", content: "\0".repeat(smaller.maxInputTokens * 4) }],
+    });
+    expect(Buffer.byteLength(escapedTranscript, "utf8")).toBeLessThan(1_048_576);
   });
 
   it("fails closed when admitted model or transport geometry is unknown or contradictory", () => {
