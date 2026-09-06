@@ -43,6 +43,7 @@ import {
 } from "./runtimeProcessSupervisor.js";
 import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
 import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
+import { processServerLogSink } from "../process-log-sink.js";
 
 const OPEN_CODE_START_TIMEOUT_MS = 120_000;
 
@@ -100,7 +101,10 @@ export function createProductionOpenCodeBackend(
 ): ProductionRuntimeBackendResolver {
   const safeActivityProjection =
     input.safeActivityProjection ??
-    createCodingSafeActivityProjection({ diagnostics: input.diagnostics });
+    createCodingSafeActivityProjection({
+      diagnostics: input.diagnostics,
+      activityLog: processServerLogSink(),
+    });
   return {
     safeActivityProjection,
     createRun: (run): QualifiedProductionRuntimeRun =>

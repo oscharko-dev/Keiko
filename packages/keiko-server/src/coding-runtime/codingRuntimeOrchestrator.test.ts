@@ -549,7 +549,7 @@ describe("CodingRuntimeOrchestrator", () => {
 
     expect(
       successfulSnapshot(await f.orchestrator.stop("run-1", { requestId: "run-1" })),
-    ).toMatchObject({ runId: "run-1", state: "succeeded" });
+    ).toMatchObject({ state: "idle" });
     expect(f.safeActivityProjection.purge).toHaveBeenCalledWith("run-1", "stop");
 
     await f.orchestrator.stop("run-other", { requestId: "run-other" });

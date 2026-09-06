@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import { createBufferedServerLogSink } from "../observability/server-log.js";
 import {
   createCodingSafeActivityProjection,
   type CodingSafeActivityContent,
@@ -659,9 +660,11 @@ describe("bounded coding safe-activity projection", () => {
 
   it("records a content-free diagnostic for explicit purge reasons", () => {
     const records: ServerDiagnosticRecord[] = [];
+    const activityLog = createBufferedServerLogSink();
     const projection = createCodingSafeActivityProjection({
       now: () => 1_721_323_200_000,
       diagnostics: { record: (record) => void records.push(record) },
+      activityLog,
     });
     projection.open({
       runId: RUN_ID,
@@ -675,11 +678,17 @@ describe("bounded coding safe-activity projection", () => {
     expect(records).toContainEqual(
       expect.objectContaining({
         code: "CODING_SAFE_ACTIVITY_PURGED",
+        correlationId: RUN_ID,
         errorClass: "SafeActivityProjectionPurge",
       }),
     );
     expect(JSON.stringify(records)).toContain("takeover");
-    expect(JSON.stringify(records)).not.toContain(RUN_ID);
+    expect(activityLog.events).toContainEqual({
+      category: "process",
+      op: "coding-runtime.safe-activity",
+      correlationId: RUN_ID,
+      extra: { event: "purged", reason: "takeover" },
+    });
   });
 
   it("replaces the plan snapshot with monotonic revisions and purges it with the feed", () => {

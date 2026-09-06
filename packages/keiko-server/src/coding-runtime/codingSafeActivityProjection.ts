@@ -31,6 +31,8 @@ import {
   type ServerDiagnosticSink,
   type ServerDiagnosticSummary,
 } from "../diagnostics-log.js";
+import { correlationIdOrUnknown } from "../correlation.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 
 const DEFAULT_TTL_MS = 30 * 60_000;
 const DEFAULT_MAX_SUBSCRIBERS = 32;
@@ -121,6 +123,7 @@ export interface CodingSafeActivityProjectionOptions {
   readonly now?: (() => number) | undefined;
   readonly ttlMs?: number | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
   readonly limits?: CodingSafeActivityProjectionLimits | undefined;
   readonly maxDroppedEventCount?: number | undefined;
   readonly maxSubscribers?: number | undefined;
@@ -219,6 +222,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   private readonly now: () => number;
   private readonly ttlMs: number;
   private readonly diagnostics: ServerDiagnosticSink | undefined;
+  private readonly activityLog: ServerLogSink | undefined;
   private readonly limits: ResolvedLimits;
   private readonly maxDroppedEventCount: number;
   private readonly maxSubscribers: number;
@@ -233,6 +237,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     this.now = options.now ?? Date.now;
     this.ttlMs = positive(options.ttlMs, DEFAULT_TTL_MS);
     this.diagnostics = options.diagnostics;
+    this.activityLog = options.activityLog;
     this.limits = resolvedLimits(options.limits);
     this.maxDroppedEventCount = boundedCounterLimit(options.maxDroppedEventCount);
     this.maxSubscribers = positive(options.maxSubscribers, DEFAULT_MAX_SUBSCRIBERS);
@@ -415,13 +420,22 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
 
   private purgeCurrent(reason: CodingSafeActivityPurgeReason): void {
     const retained = this.entry !== undefined || this.subscribers.size > 0;
+    const correlationId = correlationIdOrUnknown(this.entry?.runId ?? this.subscriberRunId);
     const notify = this.entry !== undefined;
     const subscribers = [...this.subscribers];
     this.clearCurrentEntry();
     this.subscribers.clear();
     this.subscriberRunId = undefined;
     if (notify) this.notifySubscribers(subscribers, null);
-    if (retained) emitPurgeDiagnostic(this.diagnostics, this.now, reason);
+    if (retained) {
+      emitPurgeDiagnostic(this.diagnostics, this.now, correlationId, reason);
+      this.activityLog?.write({
+        category: "process",
+        op: "coding-runtime.safe-activity",
+        correlationId,
+        extra: { event: "purged", reason },
+      });
+    }
   }
 
   private clearCurrentEntry(): void {
@@ -1008,10 +1022,11 @@ function emitDropDiagnostic(
 function emitPurgeDiagnostic(
   sink: ServerDiagnosticSink | undefined,
   now: () => number,
+  correlationId: string,
   reason: CodingSafeActivityPurgeReason,
 ): void {
   emitServerDiagnostic(sink, {
-    correlationId: `safe-activity-purge-${reason}`,
+    correlationId,
     timestamp: instant(now()),
     operation: "coding-runtime.safe-activity",
     source: "opencode.safe-activity",

@@ -1533,7 +1533,7 @@ export class CodingRuntimeOrchestrator {
       return { ok: true, snapshot: this.projection.idle() };
     }
     this.deps.safeActivityProjection?.purge(runId, "stop");
-    return { ok: true, snapshot: this.publicSnapshotWithDescription(settled) };
+    return { ok: true, snapshot: this.projection.idle() };
   }
 
   private completeEndRequest(
