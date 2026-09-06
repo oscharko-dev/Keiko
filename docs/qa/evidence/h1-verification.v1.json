@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "status": "verified",
+  "verificationKind": "deterministic-production-managed",
+  "sourceHead": "f3e4f4367bc9ed946d3c13df1efc06a10d93b0d3",
+  "ownedSourceDigest": "a1f299ce1f88339d349e5717ce5d5b28e98b59e002c6d1940457b4e9c6bc084f",
+  "command": "npx vitest run packages/keiko-workspace/src/codingRepositorySearch.test.ts packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.test.ts packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts --reporter=dot",
+  "testFiles": 3,
+  "testCount": 70,
+  "result": "passed"
+}

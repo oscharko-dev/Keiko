@@ -20,24 +20,28 @@ qualified yet; the historical table below must not be read as a current green ba
 - Editor terminal verdicts, read-only Ask policy, actual active-port advertisement and the
   managed delivery project identity are repaired through `9a58125c`. The six-file focused
   Editor/governance run passed 186 tests; managed mark-ready rotation and negative-path browser
-  journeys passed. The real Chat/connect/disconnect journey remains under repair.
+  journeys passed. The real mounted Chat/connect/disconnect lane is repaired at 700fd4c0: four browser tests pass, including two Chat turns, exact-body apply, repeated-approval/replay guards and persisted disconnect. External model/Git provider responses in this lane remain hermetic.
 - The managed runtime now delegates to the canonical catalog binder (`dc913a63`), with shared
   handler identity attestation and retained timeout outcomes (`dfa10ab6`). Review follow-up
   identified per-call recompilation, a supported read payload boundary, and erased original
-  exception diagnostics. Their integrated corrections are being verified before live qualification.
+  exception diagnostics. Their integrated corrections passed 540 focused tests at a910122c. A further failure-first optional-port disappearance regression is fixed at 700fd4c0; all 120 catalog tests and server TypeScript passed.
 - Root typecheck passed on the subsequent binder/result/effects working tree, and 539 targeted
   catalog/runtime tests passed. An independent three-file facade/settlement run passed 129 tests.
   These are checkpoint results; the final immutable full-server and complete quality runs remain open.
 - H1's active duplicate inventory is zero. The premerge producer checkpoint validator is
-  implemented, and `b39c6705` adds an exact-source final CatalogCloseout validator. Neither is a
-  substitute for the pending real receipts. No future merge identity has been fabricated.
+  implemented, and `b39c6705` adds an exact-source final CatalogCloseout validator. The retained
+  H1 producer checkpoint pins the independently reviewed f3e4f436 source and its actual 70-test
+  verification receipt. This is deterministic producer evidence, not live-runtime or postmerge
+  proof. No future merge identity has been fabricated.
 - Catalog and native reference performance measurements, real-model qualification, complete
   final gates, exact-head PR checks, postmerge `dev` checks and completed issue closure remain open.
 - The owner requires five successful real Issue → task → PR → merge → issue-closed runs. The
   controlled repository has five prepared task issues (#1, #3, #4, #5 and #6), spanning Ask,
-  Supervised and Full access. No successful run is claimed. Two attempts stopped before provider
-  admission: a canonical-path mismatch and stale tool capability verification. Their failed receipts
-  are retained separately. No paid call has been admitted; all attempts and retries share USD 50.
+  Supervised and Full access. No successful run is claimed. Four attempts have retained failure
+  receipts: path binding, stale tool proof, canonical vault persistence and missing Coding use case.
+  The first two admitted no paid call; actual readiness probes in attempts 3 and 4 consumed a
+  combined USD 0.003240. Attempt 5 starts from immutable 700fd4c0 with the supported setup fix and
+  reuses the fresh provider proof. All attempts, probes and retries share one durable USD 50 ledger.
 
 ## Historical pause checkpoint — September 5
 
@@ -54,8 +58,9 @@ Apple, Windows and other platform signing/notarization and Atlassian work from t
 accepted delivery. Separate release qualification issues remain open. Coding
 confinement and performance remain in scope. The approved controlled repository is
 `oscharko/Wegwerf-Repo`; the aggregate budget for all real-model attempts and retries
-is USD 50. No paid model request was launched during this resumed audit. Existing
-configuration availability does not constitute a live qualification receipt.
+is USD 50. At the historical September 5 pause no paid model request had been launched. The active
+September 6 checkpoint above records the resumed probe spend and attempts. Configuration
+availability does not constitute a live qualification receipt.
 
 ## Preserved work
 

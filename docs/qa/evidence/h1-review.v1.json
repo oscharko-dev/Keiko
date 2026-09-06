@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "status": "accepted",
+  "reviewKind": "independent-source-and-evidence-audit",
+  "integrationPr": 3394,
+  "ownerIssue": 3386,
+  "sourceHead": "f3e4f4367bc9ed946d3c13df1efc06a10d93b0d3",
+  "ownedSourceDigest": "a1f299ce1f88339d349e5717ce5d5b28e98b59e002c6d1940457b4e9c6bc084f",
+  "producerIdentity": {
+    "profile": {
+      "id": "opencode",
+      "version": 1
+    },
+    "catalogRevision": "7227eaf74908b14365d7b9bed229223f9d2034d5b454b7da528735d93e0b59d1",
+    "projectionDigest": "48660db1167eaa8a3030006091f29e0ea1c6f6c0259c582b5a416f1f319a6ebe",
+    "canonicalTool": {
+      "canonicalId": "keiko.repo.search",
+      "contractVersion": 1
+    },
+    "descriptorDigest": "4787614c5e3fbc43a065df9265115ee0d35fe1cf7d121b0ea065ee4f9336c4a3",
+    "handlerRequirement": {
+      "id": "opencode-repository-search-port",
+      "contractVersion": 1
+    },
+    "handlerSetDigest": "fa22e13880b409d9dd971baa3672e3ed46d469ee228470b822e85f32ce1a68a5",
+    "readiness": "ready"
+  },
+  "criteria": [
+    {
+      "label": "production-facade-and-existing-owner",
+      "result": "verified"
+    },
+    {
+      "label": "closed-schema-capture-before-async-work",
+      "result": "verified"
+    },
+    {
+      "label": "raw-coordinates-and-redacted-snippets",
+      "result": "verified"
+    },
+    {
+      "label": "deny-realpath-symlink-hardlink-before-bytes",
+      "result": "verified"
+    },
+    {
+      "label": "independent-search-and-output-bounds",
+      "result": "verified"
+    },
+    {
+      "label": "cancellation-deadline-authority-freshness",
+      "result": "verified"
+    },
+    {
+      "label": "readiness-fails-closed",
+      "result": "verified"
+    },
+    {
+      "label": "correlated-body-free-activity-evidence",
+      "result": "verified"
+    },
+    {
+      "label": "complete-canonical-owned-source-binding",
+      "result": "verified"
+    },
+    {
+      "label": "catalog-projection-and-handler-identity",
+      "result": "verified"
+    }
+  ],
+  "verification": {
+    "kind": "deterministic-production-managed",
+    "testFiles": 3,
+    "testCount": 70,
+    "result": "passed"
+  },
+  "limitations": [
+    "Deterministic source and production-managed tests do not establish live-model qualification.",
+    "Final merge-head gates and the real pinned H1 journey remain separate acceptance evidence."
+  ],
+  "ownership": {
+    "result": "verified",
+    "ownedSourcePathCount": 12,
+    "historicalInventoryRowCount": 43,
+    "generatedMigrationChanged": false
+  }
+}
