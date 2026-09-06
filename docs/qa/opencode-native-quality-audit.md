@@ -25,7 +25,8 @@ workspace-relative failure locations. Before this audit, a failed run reached th
 `VERIFICATION_FAILED`. The model projection now carries a deterministic summary plus at most eight
 revalidated locations for an actually executed failed verifier. Refused, skipped, denied,
 cancelled, timed-out, and resource-exceeded outcomes retain their distinct closed reason codes.
-Activity and evidence payloads are unchanged. [Verification report
+The activity projection also records the body-free failure-location count and truncation flag;
+raw diagnostic output remains excluded. [Verification report
 contract](../../packages/keiko-contracts/src/verification.ts), [model
 projection](../../packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts)
 
@@ -34,6 +35,37 @@ locations. This audit added the actual Node test-runner `AssertionError` form: i
 re-redacted assertion message, simple expected/actual comparison, rule ID, and a decoded,
 workspace-contained file URL. Unrecognized formats still fail closed to zero locations rather than
 exposing raw tool output. [Failure parser](../../packages/keiko-verification/src/failure-location.ts)
+
+Native overflow recovery was exercised with the actual pinned OpenCode binary and a deterministic
+provider: an oversized message history receives the typed context-overflow response, OpenCode
+compacts the history, and the retry completes. An uncompactable oversized turn instead terminates
+with the native overflow error. These tests prove native protocol integration; they are not real
+model issue-to-merge qualification. The gateway retains its independent hard limits and never
+relabels authority or budget refusals as retryable context errors.
+
+The audit also found two integration defects outside native configuration. Targeted verification
+must retain its path through the generated native tool, provider schema, IPC, canonical catalog,
+and actual verifier. Delivery instructions must come from the provider-visible canonical catalog:
+changing only the generated native description leaves the model with stale instructions. Keiko
+now uses the shared Git descriptions and explicitly distinguishes a fresh `approvalDisposition`
+from an immutable proposal receipt. Both paths have regressions across the production integration.
+
+## Additional native capabilities assessed
+
+OpenCode's LSP tool provides definitions, references, symbols, and call hierarchy. Keiko already
+owns a managed language-service lifecycle and provider policy under `keiko-server/src/editor/lsp`.
+Enabling OpenCode's separate LSP lifecycle would introduce a second process and file-access path.
+Any future model-facing semantic lookup should reuse Keiko's existing service through its governed
+catalog. It is not a configuration-only improvement for the current issue-to-PR acceptance scope.
+[Pinned native LSP tool](https://github.com/anomalyco/opencode/blob/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/opencode/src/tool/lsp.ts)
+
+Native general/explore agents use OpenCode's `task` tool and their own tool permissions. Keiko
+already exposes a bounded, read-only `keiko_child_agent` when the accepted run has a resolvable
+profile and authority. Retain that owning path: advertising an unavailable child or enabling native
+`task` would not supply Keiko's authority and evidence bindings. Todo plans, operator questions,
+compaction, pruning, bounded outputs, and typed retry handling remain the immediately reusable
+native features for this epic.
+[Keiko optional-tool admission](../../packages/keiko-server/src/coding-runtime/opencodeLaunchProfile.ts)
 
 ## Verified native features not admitted
 

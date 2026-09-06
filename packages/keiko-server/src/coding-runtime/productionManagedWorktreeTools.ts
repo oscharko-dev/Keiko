@@ -948,7 +948,7 @@ function recordVerificationTarget(
   kind: VerificationKind,
 ): void {
   if (request.targetPath === undefined) return;
-  input.activityLog?.write({
+  (input.activityLog ?? processServerLogSink()).write({
     category: "process",
     op: "coding-runtime.verification",
     correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID,

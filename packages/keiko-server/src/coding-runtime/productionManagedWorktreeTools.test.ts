@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Script } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -44,6 +45,13 @@ import {
 } from "../editor/verificationRunner.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { createGeneratedOpenCodeBundle } from "./opencodeRuntimeAdapter.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "../observability/index.js";
 
 const DIGEST = "a".repeat(64);
 const resolveWorkspaceRootAccess = (): WorkspaceRootAccess => ({
@@ -859,6 +867,61 @@ describe("production managed worktree tools", () => {
     expect(JSON.stringify(log)).not.toContain("src/math.test.ts");
     store.close();
     rmSync(workspaceRoot, { recursive: true, force: true });
+  });
+
+  it("writes the body-free target binding through the production process sink fallback", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      const facade = verificationFacade({
+        runToReport: () => Promise.resolve(verificationReport("passed")),
+        records: [],
+      });
+      await facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-target-log",
+          idempotencyKey: "verification-target-log-key",
+          verifierId: "targeted-test",
+          targetPath: "src/math.test.ts",
+        }),
+      });
+      const targetEvent = sink.events.find(
+        (event) =>
+          event.op === "coding-runtime.verification" && event.extra?.state === "target-bound",
+      );
+      expect(targetEvent).toMatchObject({
+        correlationId: "run-verification-3",
+        extra: {
+          state: "target-bound",
+          targetCount: 1,
+          targetPathSha256: createHash("sha256").update("src/math.test.ts").digest("hex"),
+        },
+      });
+      expect(JSON.stringify(sink.events)).not.toContain("src/math.test.ts");
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("routes the generated native target through IPC, catalog admission, and the real verifier port", async () => {
+    const runToReport = vi.fn(() => Promise.resolve(verificationReport("passed")));
+    const facade = verificationFacade({ runToReport, records: [] });
+    const tool = loadGeneratedVerificationTool((_url, init) => {
+      if (typeof init?.body !== "string") throw new TypeError("Expected generated request body");
+      return facade
+        .execute({ capability: "runtime-capability", body: init.body })
+        .then((result) => new Response(JSON.stringify(result)));
+    });
+    await tool.execute(
+      { verifierId: "targeted-test", targetPath: "src/math.test.ts" },
+      generatedToolContext("native-targeted"),
+    );
+    expect(runToReport).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ kinds: ["targeted-test"], targetPath: "src/math.test.ts" }),
+      expect.any(AbortSignal),
+    );
   });
 
   it.each([
@@ -1948,6 +2011,59 @@ function verificationFacade(options: {
       options.events?.push(event);
     },
   });
+}
+
+interface GeneratedVerificationTool {
+  readonly execute: (
+    args: { readonly verifierId: string; readonly targetPath: string },
+    context: {
+      readonly sessionID: string;
+      readonly callID: string;
+      readonly abort: AbortSignal;
+      readonly ask: (request: Record<string, unknown>) => Promise<void>;
+    },
+  ) => Promise<unknown>;
+}
+
+function generatedToolContext(callID: string): Parameters<GeneratedVerificationTool["execute"]>[1] {
+  return {
+    sessionID: "session-native-target",
+    callID,
+    abort: new AbortController().signal,
+    ask: (): Promise<void> => Promise.resolve(),
+  };
+}
+
+function loadGeneratedVerificationTool(fetchImpl: typeof fetch): GeneratedVerificationTool {
+  const source = createGeneratedOpenCodeBundle().toolSources.keiko_verification;
+  if (source === undefined) throw new Error("keiko_verification tool source missing");
+  const value: unknown = new Script(
+    `${source.replace("export default", "const generated =")}\ngenerated;`,
+  ).runInNewContext({
+    process: {
+      env: {
+        KEIKO_CODING_MODE: "autonomous-delivery",
+        KEIKO_TOOL_FACADE_URL: "https://tool-facade.internal/invoke",
+        KEIKO_TOOL_FACADE_CAPABILITY: "runtime-capability",
+      },
+    },
+    fetch: fetchImpl,
+    AbortController,
+    TextEncoder,
+    TextDecoder,
+    Uint8Array,
+    setTimeout,
+    clearTimeout,
+  });
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("execute" in value) ||
+    typeof value.execute !== "function"
+  ) {
+    throw new Error("generated verification tool invalid");
+  }
+  return value as GeneratedVerificationTool;
 }
 
 function verificationService(): VerifiedCommitService {
