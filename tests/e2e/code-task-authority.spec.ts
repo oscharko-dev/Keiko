@@ -430,7 +430,11 @@ async function proveLiveActivityTimeline(
   if (realBinaryJourney) await proveRepositorySearchConsumption(timeline);
   await expect(timeline.getByRole("region", { name: "Runtime questions" })).toBeVisible();
   await expect(timeline.getByText(FUNCTIONAL_PLAN_STEP_READ, { exact: true })).toBeVisible();
-  await expect(timeline.locator('[data-tool-state="succeeded"]')).toContainText("workspace");
+  const completedRead = timeline
+    .locator('[data-tool-state="succeeded"]')
+    .filter({ hasText: "workspace" });
+  await expect(completedRead).toHaveCount(1);
+  await expect(completedRead).toContainText("workspace");
   await proveUnpairedClientReadsNoQuestionText(request, new URL(page.url()).origin, runId);
   await answerVisibleQuestion(page);
   await openRealBinaryEditorBridge(page);
