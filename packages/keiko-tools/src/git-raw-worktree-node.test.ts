@@ -37,7 +37,7 @@ beforeEach(() => {
   writeFileSync(join(root, "code.txt"), "base\n");
   git(["add", "code.txt"]);
   git(["commit", "-qm", "base"]);
-  git(["init", "--bare", "-q", remote]);
+  git(["init", "--bare", "-q", "-b", "master", remote]);
   git(["remote", "add", "origin", remote]);
   git(["push", "-q", "-u", "origin", "master"]);
   // Advance the remote independently of the local worktree so the local branch is behind.
@@ -50,6 +50,8 @@ beforeEach(() => {
   git(["-C", clone, "commit", "-qm", "advance"]);
   git(["-C", clone, "push", "-q", "origin", "master"]);
   git(["fetch", "-q", "origin"]);
+  git(["branch", "--set-upstream-to=origin/master", "master"]);
+  expect(git(["rev-parse", "@{upstream}"])).toBe(git(["rev-parse", "origin/master"]));
   rmSync(clone, { recursive: true, force: true });
   workspace = {
     root,

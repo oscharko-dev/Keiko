@@ -129,6 +129,9 @@ function initOriginFixture(projectRoot: string): void {
   execFileSync("git", ["init", "-q"], { cwd: projectRoot });
   execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: projectRoot });
   execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: projectRoot });
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "initial"], {
+    cwd: projectRoot,
+  });
   execFileSync("git", ["remote", "add", "origin", "https://github.com/owner/repo.git"], {
     cwd: projectRoot,
   });

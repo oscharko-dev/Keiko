@@ -35,9 +35,9 @@ function makeLocalBranchBehindUpstream(): void {
   fixture.git(["checkout", "-q", headRef]);
   fixture.git(["branch", "-qD", "advance-scratch"]);
   fixture.git(["update-ref", `refs/remotes/origin/${headRef}`, advanced]);
-  fixture.git(["config", `branch.${headRef}.remote`, "origin"]);
-  fixture.git(["config", `branch.${headRef}.merge`, `refs/heads/${headRef}`]);
+  fixture.git(["branch", `--set-upstream-to=origin/${headRef}`, headRef]);
   expect(fixture.git(["rev-parse", "HEAD"])).toBe(localHead);
+  expect(fixture.git(["rev-parse", "@{upstream}"])).toBe(advanced);
 }
 
 describe("push effect preflight snapshot", () => {

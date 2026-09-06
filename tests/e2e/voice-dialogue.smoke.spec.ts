@@ -765,7 +765,10 @@ async function expectDialogueOnlyControls(page: Page): Promise<void> {
   await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Leave voice dialogue" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Interrupt the assistant" })).toHaveCount(0);
+  // KEIKO-0217/#2894 keeps barge-in reachable while the fake provider's output is active.
+  const interrupt = page.getByRole("button", { name: "Interrupt the assistant" });
+  await expect(interrupt).toBeVisible();
+  await expect(interrupt).toHaveAttribute("aria-disabled", "false");
   await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Start speaking" })).toHaveCount(0);
 }
@@ -783,8 +786,8 @@ async function dialogueTurnFlow(page: Page, request: APIRequestContext): Promise
   await dialogSwitch.click();
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
 
-  await expectDialogueOnlyControls(page);
   await expectActiveComposerSettled(page);
+  await expectDialogueOnlyControls(page);
 
   await page.screenshot({
     path: evidenceScreenshotPath("docs/voice/evidence/1560-dialogue-session.png"),
