@@ -471,7 +471,7 @@ function catalogFacadeBridgeFor(
 ): CanonicalCatalogFacadeBridge | undefined {
   const invocationRegistry =
     options.invocationRegistry ??
-    createCodingToolInvocationRegistry({ now: () => Date.parse(context().nowIso) });
+    createCodingToolInvocationRegistry({ now: lazyContextClock(context) });
   return createCanonicalCatalogFacadeBridge({
     authority: authorityPort,
     previewAuthority: createCodingToolAuthorityPreview(authority, context, {
@@ -504,6 +504,20 @@ function catalogFacadeBridgeFor(
       ? {}
       : { unavailableOptionalTools: options.unavailableOptionalTools }),
   });
+}
+
+function lazyContextClock(context: CodingToolAuthorityContextProvider): () => number {
+  let anchor: { readonly epoch: number; readonly elapsed: number } | undefined;
+  return (): number => {
+    const current =
+      anchor ??
+      ({
+        epoch: Date.parse(context().nowIso),
+        elapsed: performance.now(),
+      } as const);
+    anchor = current;
+    return current.epoch + Math.max(0, Math.floor(performance.now() - current.elapsed));
+  };
 }
 
 function revalidate(

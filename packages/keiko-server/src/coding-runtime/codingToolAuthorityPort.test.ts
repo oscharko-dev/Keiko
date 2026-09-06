@@ -1263,6 +1263,39 @@ describe("CodingToolAuthorityPort", () => {
       })),
     };
 
+    it("does not read an unavailable context at construction when a registry is supplied", async () => {
+      let available = false;
+      const contextProvider = vi.fn(() => {
+        if (!available) throw new Error("context-not-ready-private");
+        return runtimeContext();
+      });
+      const repositoryDiscover = vi.fn(() =>
+        Promise.resolve({ status: "completed" as const, evidence: [] }),
+      );
+      const runtime = createRuntimeCodingToolFacade(
+        authority,
+        contextProvider,
+        { ...governedPorts(), repositoryDiscover: { execute: repositoryDiscover } },
+        { invocationRegistry: createCodingToolInvocationRegistry({ now: () => 0 }) },
+      );
+      expect(contextProvider).not.toHaveBeenCalled();
+
+      available = true;
+      await expect(
+        runtime.execute({
+          body: JSON.stringify({
+            action: "discover",
+            actionId: "lazy-context",
+            idempotencyKey: "lazy-context",
+            query: "needle",
+            maxResults: 1,
+          }),
+          capability: "runtime-capability-secret",
+        }),
+      ).resolves.toMatchObject({ status: "completed" });
+      expect(repositoryDiscover).toHaveBeenCalledOnce();
+    });
+
     it("emits real tool-catalog.* binding + settlement lines with a correlation id and no bodies for a real discover dispatch", async () => {
       const log = createBufferedServerLogSink();
       const repositoryDiscover = vi.fn(() =>

@@ -23,7 +23,7 @@ vi.mock("@oscharko-dev/keiko-tool-catalog", async (importOriginal) => {
   };
 });
 
-import type { CodingToolActionRequest } from "../coding-runtime/codingToolIpc.js";
+import type { CodingToolActionRequest, CodingToolResult } from "../coding-runtime/codingToolIpc.js";
 import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
 import type { OpenCodeOptionalToolName } from "../coding-runtime/opencodeLaunchProfile.js";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
@@ -53,6 +53,19 @@ const context: CanonicalCatalogContext = {
   now: 0,
 };
 
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  return {
+    promise: new Promise<T>((accept) => {
+      resolve = accept;
+    }),
+    resolve,
+  };
+}
+
 function createBridge(overrides: Partial<CanonicalCatalogFacadeBridgeInput> = {}): {
   readonly bridge: ReturnType<typeof createCanonicalCatalogFacadeBridge>;
   readonly log: ReturnType<typeof createBufferedServerLogSink>;
@@ -68,6 +81,7 @@ function createBridge(overrides: Partial<CanonicalCatalogFacadeBridgeInput> = {}
     previewAuthority: () => ({ ok: true }),
     invocationRegistry: createCodingToolInvocationRegistry({ now: () => 0 }),
     context: () => context,
+    elapsedNow: () => context.now,
     logPort: { primary: log, diagnostics: defaultServerDiagnosticSink },
     approvalAvailable: false,
     ...overrides,
@@ -276,12 +290,99 @@ describe("canonical catalog facade bridge", () => {
         return Promise.resolve(failure);
       }),
     ).resolves.toEqual(failure);
-    expect(log.events.at(-1)?.extra).toMatchObject({
-      status: "failed",
-      reason: "handler-failed",
-      effectStarted: true,
-      budgetDisposition: "committed",
+    expect(log.events.at(-1)).toMatchObject({
+      op: "tool-catalog.invocation-settled",
+      correlationId: context.correlationId,
+      extra: {
+        status: "failed",
+        reason: "handler-failed",
+        effectStarted: true,
+        budgetDisposition: "committed",
+        errorKind: "CatalogDispatchFault",
+      },
     });
+  });
+
+  it("settles a governed failure without re-entering a revoked live context for its clock", async () => {
+    const started = deferred<undefined>();
+    const finish = deferred<undefined>();
+    let available = true;
+    const liveContext = vi.fn((): CanonicalCatalogContext => {
+      if (!available) throw new Error("runtime-workspace-drift-private-path");
+      return context;
+    });
+    const { bridge, log } = createBridge({ context: liveContext });
+    const failure = {
+      status: "failed" as const,
+      evidence: [{ kind: "governed-delegate", code: "authority-denied" }],
+      reasonCode: "AUTHORITY_DENIED",
+    };
+
+    const pending = bridge.execute(discoverRequest, facadeInput(), async (_signal, guard) => {
+      expect(guard.check()).toBe(true);
+      started.resolve(undefined);
+      await finish.promise;
+      return failure;
+    });
+    await started.promise;
+    const contextReadsBeforeRevocation = liveContext.mock.calls.length;
+    available = false;
+    finish.resolve(undefined);
+
+    await expect(pending).resolves.toEqual(failure);
+    expect(liveContext).toHaveBeenCalledTimes(contextReadsBeforeRevocation);
+    expect(log.events.at(-1)).toMatchObject({
+      op: "tool-catalog.invocation-settled",
+      correlationId: context.correlationId,
+      extra: {
+        status: "failed",
+        reason: "handler-failed",
+        effectStarted: true,
+        budgetDisposition: "committed",
+        errorKind: "CatalogDispatchFault",
+      },
+    });
+    expect(JSON.stringify(log.events)).not.toContain("runtime-workspace-drift-private-path");
+  });
+
+  it("settles cancellation without re-entering a revoked live context for its clock", async () => {
+    const started = deferred<undefined>();
+    const finish = deferred<CodingToolResult>();
+    const controller = new AbortController();
+    let available = true;
+    const liveContext = vi.fn((): CanonicalCatalogContext => {
+      if (!available) throw new Error("runtime-workspace-drift-private-path");
+      return context;
+    });
+    const { bridge, log } = createBridge({ context: liveContext });
+    const pending = bridge.execute(
+      discoverRequest,
+      { ...facadeInput(), signal: controller.signal },
+      async (_signal, guard) => {
+        expect(guard.check()).toBe(true);
+        started.resolve(undefined);
+        return finish.promise;
+      },
+    );
+    await started.promise;
+    const contextReadsBeforeRevocation = liveContext.mock.calls.length;
+    available = false;
+    controller.abort();
+
+    await expect(pending).resolves.toEqual({ status: "cancelled", evidence: [] });
+    expect(liveContext).toHaveBeenCalledTimes(contextReadsBeforeRevocation);
+    expect(log.events.at(-1)).toMatchObject({
+      op: "tool-catalog.invocation-settled",
+      correlationId: context.correlationId,
+      extra: {
+        status: "cancelled",
+        reason: "parent-cancelled",
+        effectStarted: true,
+        budgetDisposition: "committed",
+      },
+    });
+    expect(JSON.stringify(log.events)).not.toContain("runtime-workspace-drift-private-path");
+    finish.resolve({ status: "completed", evidence: [] });
   });
 
   it("records one body-free event when an unsupported authority surface uses its existing path", () => {
@@ -348,6 +449,7 @@ describe("canonical catalog facade bridge", () => {
         authorityExpiresAt: new Date(5_000).toISOString(),
         now,
       }),
+      elapsedNow: () => now,
     });
 
     const pending = bridge.execute(discoverRequest, facadeInput(), () => {

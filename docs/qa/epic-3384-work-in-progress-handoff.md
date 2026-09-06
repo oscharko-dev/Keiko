@@ -1,132 +1,122 @@
-# Epic #3384: work-in-progress handoff
+# Epic #3384: paused work checkpoint — September 6, 2026
 
-**Active again on 2026-09-06:** the owner authorizes completion, gated merge to `dev`,
-postmerge verification, completed issue closure and branch cleanup. Agents and the five-minute
-checkpoint/review heartbeat are running. The September 5 record below is historical; it does
-not describe current agent state or final qualification.
+The owner requested a clean end of work for today and continuation from this checkpoint tomorrow.
+This is a preservation checkpoint, not epic completion, merge readiness, or issue-closeout evidence.
+No real-model continuation was started during shutdown. The local PR audit automation is already
+paused. PR #3394 remains open; native auto-merge is not armed. No issue or working branch is closed
+or deleted by this checkpoint.
 
-## Active audit checkpoint — September 6
+The earlier handoff records remain available in this file's Git history. They are historical;
+especially their attempt numbers, USD 100 allowance and active-automation statements must not be
+used as the current operating state.
 
-The branch is progressing through verified repair checkpoints. The complete final tree is not
-qualified yet; the historical table below must not be read as a current green bar.
+## Accepted objective and authority
 
-- Native and Linux Git fixture suites: 58 tests passed with stronger deterministic setup.
-- Shared monetary admission now covers model execution and capability probes. The bounded SSE
-  drain retains admission until actual close. Rerank batches fail closed under the qualification
-  budget when no verified aggregate billing bound exists; 82 focused regression tests passed.
-- UI coverage: 447 files, 8,006 tests passed, one skipped; lines 92.93%, branches 82.60%.
-- The supervised production-composition delivery journey passed through retained HTTP review
-  at checkpoint `a203482b`. Other modes and the real Chat/connect/disconnect journey remain open.
-- Editor terminal verdicts, read-only Ask policy, actual active-port advertisement and the
-  managed delivery project identity are repaired through `9a58125c`. The six-file focused
-  Editor/governance run passed 186 tests; managed mark-ready rotation and negative-path browser
-  journeys passed. The real mounted Chat/connect/disconnect lane is repaired at 700fd4c0: four browser tests pass, including two Chat turns, exact-body apply, repeated-approval/replay guards and persisted disconnect. External model/Git provider responses in this lane remain hermetic.
-- The managed runtime now delegates to the canonical catalog binder (`dc913a63`), with shared
-  handler identity attestation and retained timeout outcomes (`dfa10ab6`). Review follow-up
-  identified per-call recompilation, a supported read payload boundary, and erased original
-  exception diagnostics. Their integrated corrections passed 540 focused tests at a910122c. A further failure-first optional-port disappearance regression is fixed at 700fd4c0; all 120 catalog tests and server TypeScript passed.
-- Root typecheck passed on the subsequent binder/result/effects working tree, and 539 targeted
-  catalog/runtime tests passed. An independent three-file facade/settlement run passed 129 tests.
-  These are checkpoint results; the final immutable full-server and complete quality runs remain open.
-- H1's active duplicate inventory is zero. At exact `2658956c`, the independent producer
-  verification passed 70 production-managed tests and rederived the canonical 647-path Git-byte
-  digest. The real pinned OpenCode composition then completed causally linked repository-search and
-  bounded-read settlements with one actual handler-set binding across all eight gateway requests.
-  The source checkpoint and reviewed receipts bind those facts without inventing postmerge provenance.
-- Catalog reference performance is measured in the committed calibrated Linux arm64 evidence at
-  `9889d9d3`. At exact `2658956c`, six nonmanaged production test files passed 81 tests, the real
-  managed runtime completed successfully, and the five-consumer qualifier matched all seven
-  observations to byte-identical staged-package files. Coding-runtime performance under #2952,
-  final exact-head gates, postmerge `dev` checks and completed issue closure remain open.
-- The owner requires five successful real Issue → task → PR → merge → issue-closed runs. The
-  controlled repository has five prepared task issues (#1, #3, #4, #5 and #6), spanning Ask,
-  Supervised and Full access. The live matrix remains **0/5 complete**. Attempt 11b for issue #1
-  reached real search/read/discover/edit/verification effects, applied an edit and observed one
-  failing verifier, then stopped on an invalid-arguments/GATEWAY_MALFORMED_TOOL_CALL response. It
-  created no PR, commit or qualification receipt; its two modified tracked files are preserved for
-  recovery. The durable ledger now retains a conservative USD 7.330651500 admission charge,
-  including a USD 6.502752000 unknown-cost upper bound; this is not represented as measured or
-  provider-invoiced usage. USD 92.669348500 remains under the single USD 100 ceiling. The retained
-  body-free attempt receipt is `/tmp/keiko-3384-audit/attempt-11b-failure.json` (SHA-256
-  `4835db693abf387736ab2152b24d51eec29f44d3d68ef1c515a2eefeccf60d48`).
+Complete Epic #3384 and the applicable issues referenced by PR #3394, including mandatory #3408.
+The criterion-level inventory is [the acceptance map](epic-3384-acceptance-evidence-map.md).
+The operator permits normal feature-branch commits/pushes, review replies, validated fixes,
+protected integration into `dev`, actual `dev` verification, fulfilled-issue closure, and deletion
+of the merged working branch. Those delivery actions remain pending. Never force-push, push
+straight to `dev`, bypass checks, or resolve a finding merely to obtain green status.
 
-## Historical pause checkpoint — September 5
+The controlled real-model repository is `oscharko/Wegwerf-Repo`. Five complete flows are required:
+issues #1/#3/#4/#5/#6 in Ask/Supervised/Full/Supervised/Full order. At least one must observe an
+actual required-CI failure and a model-authored repair on a different, passing head. Signing and
+notarization on all platforms and unrelated Atlassian work are excluded. Runtime confinement
+remains required. The existing durable model ledger enforces one aggregate USD 50 ceiling;
+retain all attempts and reservations. Its admission charges are not provider invoices.
 
-The owner requested an immediate checkpoint and stop on 2026-09-05 at 18:23 UTC.
-All current source and preliminary evidence are preserved in PR #3394 on
-`epic/3384-issue-to-pr`. This checkpoint is incomplete and is not a merge-readiness
-or issue-closeout claim. Agents are stopped and the five-minute heartbeat is paused.
-No merge, auto-merge, direct push to `dev`, or force push was performed.
+## Current implementation and executed verification
 
-## Accepted scope
+The earlier cold ESM import hazard, issue intake, governed Git delivery, CI continuation,
+description handling and runtime recovery have received extensive repairs. This checkpoint adds
+a fix for a newly observed process crash after workspace revocation: catalog settlement used the
+live authority context as a clock, then threw again while handling an already-denied operation.
+Settlement now advances an anchored monotonic clock independently of that context. The fallback
+invocation registry anchors lazily, preserving construction order and authority checks at effects.
+Failure, cancellation, deadline and deferred-context regressions preserve body-free lifecycle
+logging. The operation catalog is regenerated from its producer.
 
-Complete Epic #3384 and the referenced technical dependencies. The owner excludes
-Apple, Windows and other platform signing/notarization and Atlassian work from this
-accepted delivery. Separate release qualification issues remain open. Coding
-confinement and performance remain in scope. The approved controlled repository is
-`oscharko/Wegwerf-Repo`; the aggregate budget for all real-model attempts and retries
-is USD 100, raised from USD 50 by explicit owner authorization on 2026-09-06. At the historical
-September 5 pause no paid model request had been launched. The active
-September 6 checkpoint above records the resumed probe spend and attempts. Configuration
-availability does not constitute a live qualification receipt.
+Actual results, with their source limits:
 
-## Preserved work
+| Verification                               | Result                                             | Source / limitation                                                                       |
+| ------------------------------------------ | -------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Full package coverage                      | 1,981 files; 40,468 tests passed; 51 tests skipped | Exact clean `f8088db2`; before the final clock repair                                     |
+| Full UI coverage                           | 447 files; 8,028 tests passed; one skipped         | `44cf0537`; UI source unchanged afterward                                                 |
+| Script coverage                            | 207 files; 5,234 tests passed; 26 skipped          | `b844b272`; covered script source unchanged afterward                                     |
+| Full server suite on Node 24               | 713 files; 13,699 tests passed                     | `b844b272`; before the final clock repair                                                 |
+| Cold route entry imports on Node 24        | 12 passed                                          | `b844b272`                                                                                |
+| Final clock repair regression target       | 70 tests passed                                    | Both affected bridge/authority suites; ESLint, Prettier and server TypeScript also passed |
+| Browser publication                        | All 12 cases passed                                | Actual `5be376e6` producer output retained; source hashes verified                        |
+| Browser CI and Git-connected Chat fixtures | 2 and 4 cases passed                               | `5be376e6`; deterministic fixtures, not real-model qualification                          |
+| Final intake and affected visual captures  | Four selected targets passed                       | `f8088db2`; actual redirected producer artifacts archived and verified                    |
 
-- Cold ESM imports are repaired through leaf route error/outcome modules and fresh
-  process regression coverage.
-- Issue intake, authority/approval routes, durable outcomes, CI repair, shared PR
-  description generation/application, Chat and Workbench integration have substantial
-  implementation and regression repairs. See the acceptance evidence map for criteria.
-- The V32 forward migration preserves original V27 outcome rows. The shared rewind
-  fixture now restores the real historical blob schema and refuses to invent lost
-  outcome facts from populated bounded projections.
-- Question controls distinguish a typed incompatible answer from unavailable,
-  revoked, missing or failed runtime controls. The latter retain their authority
-  failure instead of instructing the operator to change a valid answer.
-- The latest unfinalized changes remove legacy name-only gateway/tool compatibility,
-  preserve the historical 43-entry ownership census, derive the active migration
-  register from live source, and give concurrent delivery an explicit in-flight reason.
-- Sandbox Git attestation and Workbench artifact-digest binding are preserved as
-  interrupted P1 repairs. They require completed verification after resuming.
-- PR-description retention preserves symbolic refs and rejects a same-SHA PR retarget.
-  The positive journey reached generated output, but retained HTTP review remains
-  blocked by a cached operation AbortSignal. This final composition repair is unfinished.
-- Preliminary browser captures for #3389/#3400 are preserved. Their current source
-  hashes and README/qualification disposition need final verification; #3401 remains
-  incomplete. Scripted browser captures are not real-model evidence.
+The final complete six-case commit-browser rerun on `f8088db2` failed with the workspace-revocation
+crash after two passing cases; three did not run. Its failure log and trace are retained. The clock
+repair has targeted red/green proof, but that full browser lane must be rerun tomorrow. The older
+tracked #3386 journey receipt is historical and must not be represented as this missing rerun.
 
-## Executed verification and its limits
+The fresh #2952 calibration/candidate pair and H1 checkpoint passed before the clock repair.
+The repair changes their owned source closure, so both now need requalification. The #3415 Linux
+catalog performance subject/ruler does not own the bridge change; its checker still passes.
+Do not repeat that Linux measurement merely because a different source file changed.
 
-These are actual checkpoint results, not claims about the complete final tree:
+The final pause checkpoint also passed full root TypeScript checking, the generated operation
+catalog check, and the local Sonar analyzer. These results do not replace the pending full
+commit-browser rerun, refreshed H1/native-performance evidence or current-head GitHub checks.
 
-| Checkpoint / scope                                                      | Result                                                                                                                                                                            |
-| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Package coverage at `9b617173`                                          | 39,711 passed; 3 failed; 49 skipped. Two inventory failures and the real-OS test fixture failure were subsequently repaired in focused runs.                                      |
-| Package coverage floors at `9b617173`                                   | All four package metric gates, strict UI/CLI release targets, and 68 per-file floors passed.                                                                                      |
-| Updated coverage inventory                                              | 66 tests passed; enforced package/per-file thresholds preserved or raised.                                                                                                        |
-| UI coverage at `a9869962`                                               | 444 files, 7,992 tests passed; 1 skipped. Lines 92.92%, branches 82.59%.                                                                                                          |
-| Script coverage at `a9869962`                                           | 196 files, 5,042 tests passed; 26 skipped.                                                                                                                                        |
-| Full lint / architecture / negative architecture / format at `9b617173` | Passed.                                                                                                                                                                           |
-| Local Sonar at `ca664db2`                                               | Passed; rerun required for later changes.                                                                                                                                         |
-| Exact `2658956c` H1 and packaged five-consumer qualification            | H1: 3 files/70 tests and canonical 647-path digest passed. Consumers: 6 nonmanaged files/81 tests plus one real managed runtime observation; staged-package byte matching passed. |
-| Question/migration targeted suites                                      | 196 tests passed; additional production question/route coverage 84 passed.                                                                                                        |
-| CI export/package-surface regression repair at `2658956c`               | `check:knip`, root typecheck and trusted assembled package-surface check passed; package surface contained 5,610 files.                                                           |
-| Complete final gate set                                                 | Still pending after the latest evidence-only changes; exact-head CI, coverage, Sonar, coding-performance and postmerge checks remain required.                                    |
+## Real-model delivery: 0/5 completed
 
-## Work to resume
+[Wegwerf-Repo PR #7](https://github.com/oscharko/Wegwerf-Repo/pull/7) is an actual draft for
+[issue #1](https://github.com/oscharko/Wegwerf-Repo/issues/1), with verified commit
+`aec3a459ea09f2efb939c21f3b35395e91b811c9`, an actual push and previously passing required `ci`
+on that head. It has not been merged and the issue is open. Independent review found opposite-sign
+maximum-value overflow in its average implementation; that model-authored repair is still required.
 
-1. Complete five successful real-model Issue → task → PR → merge → closed-issue flows in
-   the controlled repository. Retain every failure and retry in the one durable ledger and keep the
-   conservative total below USD 100; the current state is 0/5 and USD 7.330651500 admitted.
-2. Finish the remaining #2952 coding-runtime measurement and the applicable current-head
-   visual/accessibility evidence. Catalog performance and five-consumer packaged qualification are
-   complete at their recorded checkpoints and must remain distinct from these open lanes.
-3. Finish all non-CodeRabbit review conversations, run the full final local gate matrix and obtain
-   exact-head required CI. CodeRabbit's oversized-PR limit is the sole ignored review failure.
-4. Merge through the authorized guarded path, verify the exact merged `dev` head, then write the
-   real postmerge H1 provenance and close the completed in-scope issues. Do not qualify excluded
-   signing/notarization or Atlassian work, and delete the delivery branch only after closure.
+Attempt 32 failed before editing because recovered PR/CI binding admission was unavailable.
+That product defect was repaired in earlier commits. The next prepared continuation is attempt 33,
+using the preserved attempt-31 workspace and attempt-32 predecessor through normal recovery.
+Do not recreate the workspace, discard its Git history, manually author the fixture repair, or
+claim a completed run from the runtime's terminal status alone.
 
-The detailed local execution logs and review disposition ledgers are under
-`/tmp/keiko-3384-audit/` on the audit machine. They are transient local diagnostics;
-only checked-in evidence and the relevant GitHub replies are durable PR artifacts.
+## Resume sequence
+
+1. Read this checkpoint and the private resume packet. Verify local/remote PR heads, current review
+   comments and check results. Resume the five-minute checkpoint/review cadence only when work is
+   actually resumed. Preserve the known workspace and existing draft PR.
+2. Rerun the six-case commit browser lane through the clock fix. Retain its actual redirected
+   `test-results/e2e-evidence` output before another lane clears that directory. Never substitute
+   an older checkout's `docs` artifact for a producer output. Revalidate every recorded source hash
+   and screenshot digest before copying canonical evidence.
+3. Requalify H1 and #2952 native calibration/candidate evidence for the repaired source. Complete
+   any remaining non-#3390 source/evidence corrections, then freeze one clean source F for all five
+   flows. A later landing descendant may contain only the validator's allowed qualification
+   artifacts; never restamp an old run or broaden that allowlist to conceal source drift.
+4. Start the prepared real attempt 33 at F and follow the activity log first. Observe real failing
+   regressions, model repair, passing verification, actual governed delivery and independent
+   exact-head rubric review. Drive description application, ready intent, explicit governed merge
+   and actual issue closure through Keiko. Then complete the other four issues from each actual
+   merged base. Preserve the shared ledger and per-flow receipts.
+5. Before accepting flow 2, the prepared legitimate median CI fixture may be introduced through
+   a normally checked fixture PR. Its amendment must predate acceptance. A first-head-correct model
+   result is not CI-repair evidence; do not manufacture a failure or suppress a check.
+6. In the prepared clean isolated F checkout, run real-binary qualification, same-run macOS
+   confinement, fresh packaged-artifact/five-consumer proofs, and the three actual-native
+   compaction/lifecycle tests. Retain private outputs separately from real-model receipts. Complete
+   the real two-turn Git-connected Chat refinement/application and negative-effect scenarios.
+7. Complete the final source-bound acceptance audit, full applicable gates, required GitHub checks
+   and review settlement. Only then integrate through the protected path, verify actual `dev`,
+   record genuine H1 postmerge provenance, close fulfilled issues and delete the merged branch.
+
+All 322 review conversations were resolved at the last pre-pause observation. New comments and
+checks after the final preservation push require a fresh read tomorrow. Only CodeRabbit's
+oversized-PR coverage failure is excluded; concrete findings and other reviewers remain in scope.
+
+## Private restoration material
+
+The operator-local checkpoint directory `.codex/task-checkpoints/keiko-3384-2026-09-06` contains
+restoration instructions, retained live state, the shared ledger, selected audit logs/receipts,
+fixture-preparation scripts and the failed browser trace. It is private and is not committed or
+uploaded. It deliberately excludes dependency installations and unrelated repository copies.
+Configuration is read from the operator's existing local files; no credentials belong in this
+handoff, Git history, review comments or qualification evidence.

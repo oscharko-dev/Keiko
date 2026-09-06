@@ -72,6 +72,8 @@ export interface CanonicalCatalogFacadeBridgeInput {
   readonly approvalAvailable: boolean;
   readonly budgetPort?: CatalogToolBudgetPort | undefined;
   readonly unavailableOptionalTools?: () => ReadonlySet<OpenCodeOptionalToolName>;
+  /** Monotonic elapsed-time source; settlement must never re-enter the live authority context. */
+  readonly elapsedNow?: (() => number) | undefined;
 }
 
 export interface CanonicalCatalogFacadeBridge {
@@ -609,6 +611,8 @@ function createDispatchBinder(
 ): ReturnType<typeof createCatalogToolBinderFromPreparation> {
   const current = bridgeInput.context();
   if (current === undefined) throw new TypeError("Catalog context unavailable");
+  const elapsedNow = bridgeInput.elapsedNow ?? ((): number => performance.now());
+  const elapsedStartedAt = elapsedNow();
   const unavailable = bridgeInput.unavailableOptionalTools?.() ?? new Set();
   return createCatalogToolBinderFromPreparation(
     prepared.preparationFor(unavailable),
@@ -620,7 +624,7 @@ function createDispatchBinder(
         if (trusted === undefined) throw new TypeError("Catalog context unavailable");
         return trusted;
       },
-      now: () => bridgeInput.context()?.now ?? current.now,
+      now: () => current.now + Math.max(0, Math.floor(elapsedNow() - elapsedStartedAt)),
       mintId: randomUUID,
       invocationRegistry: bridgeInput.invocationRegistry,
     },
