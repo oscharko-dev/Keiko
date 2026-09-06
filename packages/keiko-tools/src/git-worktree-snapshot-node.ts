@@ -134,6 +134,7 @@ interface ReadContext {
   readonly runDeps: RunCommandDeps;
   readonly signal: AbortSignal;
   readonly timeoutMs: number | undefined;
+  readonly rejectRedactedMetadata?: boolean;
 }
 
 function immutableReadPolicy(policy: SandboxPolicy): SandboxPolicy {
@@ -439,6 +440,8 @@ export async function ensureGitLazyFetchGuardSupported(
 async function runRead(ctx: ReadContext, argv: readonly string[]): Promise<string> {
   const result = await runReadResult(ctx, argv);
   if (result.truncated) throw new GitWorktreeReadError("git inspection output was truncated");
+  if (ctx.rejectRedactedMetadata === true && result.stdout.includes("[REDACTED]"))
+    throw new GitWorktreeReadError("git metadata was redacted");
   return result.stdout;
 }
 
@@ -551,12 +554,15 @@ function parseLines(stdout: string): readonly string[] {
     .filter((l) => l.length > 0);
 }
 
-function snapshotReadDeps(deps: NodeGitWorktreeReaderDeps): NodeGitWorktreeReaderDeps {
+function machineReadContext(deps: NodeGitWorktreeReaderDeps): ReadContext {
   return {
-    ...deps,
-    // Machine-readable Git headers overlap ordinary CI context values (GITHUB_REF_TYPE=branch).
-    // Use the existing credential scrub, keeping child environment and execution limits intact.
-    policy: { ...(deps.policy ?? DEFAULT_SANDBOX_POLICY), outputScrub: "credentials-only" },
+    ...buildReadContext({
+      ...deps,
+      // Ordinary task/CI context can equal a Git identity. Credential values and patterns remain
+      // scrubbed; reject their marker before parsing or hashing. Child authority is unchanged.
+      policy: { ...(deps.policy ?? DEFAULT_SANDBOX_POLICY), outputScrub: "credentials-only" },
+    }),
+    rejectRedactedMetadata: true,
   };
 }
 
@@ -570,23 +576,18 @@ function snapshotReadDeps(deps: NodeGitWorktreeReaderDeps): NodeGitWorktreeReade
 export async function readGitWorktreeSnapshot(
   deps: NodeGitWorktreeReaderDeps,
 ): Promise<GitWorktreeSnapshot> {
-  const reader = snapshotReadDeps(deps);
-  const ctx = buildReadContext(reader);
+  const ctx = machineReadContext(deps);
   const [statusOut, branchOut, remoteOut, indexOut] = await Promise.all([
     runRead(ctx, ["status", "--porcelain=v2", "--branch"]),
     runRead(ctx, ["branch", "--list", "--format=%(refname:short)"]),
     runRead(ctx, ["remote"]),
     runRead(ctx, ["ls-files", "--stage", "-z"]),
   ]);
-  // A credential can itself overlap the protocol or a ref. Never interpret scrubbed metadata as
-  // an absent upstream/clean worktree: that would weaken the caller's mutation preflight.
-  if ([statusOut, branchOut, remoteOut, indexOut].some((output) => output.includes("[REDACTED]")))
-    throw new GitWorktreeReadError("git snapshot metadata was redacted");
   const c = parsePorcelain(statusOut);
   return {
     ...(statusOut.includes("# branch.oid (initial)")
       ? {}
-      : { headSha: await readGitRevision(reader, "HEAD") }),
+      : { headSha: await readGitRevision(deps, "HEAD") }),
     stagedTreeDigest: gitIndexTreeDigest(indexOut),
     headDetached: c.headDetached,
     ...(c.currentBranchName !== undefined ? { currentBranchName: c.currentBranchName } : {}),
@@ -604,7 +605,7 @@ export async function readGitWorktreeSnapshot(
 /** Bounded configured aliases only; this never contacts a remote. */
 function metadataReadContext(deps: NodeGitWorktreeReaderDeps): ReadContext {
   const policy = deps.policy ?? DEFAULT_SANDBOX_POLICY;
-  return buildReadContext({
+  return machineReadContext({
     ...deps,
     policy: {
       ...policy,
@@ -670,7 +671,7 @@ export async function readGitBlobText(
 export async function readGitRemoteAliases(
   deps: NodeGitWorktreeReaderDeps,
 ): Promise<readonly string[]> {
-  return parseLines(await runRead(buildReadContext(deps), ["remote"]));
+  return parseLines(await runRead(machineReadContext(deps), ["remote"]));
 }
 
 /** Resolves a caller-validated ref to an exact immutable commit; never permits revision options. */
@@ -680,7 +681,7 @@ export async function readGitRevision(
 ): Promise<string> {
   if (!isSafeGitRefName(ref)) throw new GitWorktreeReadError("git revision is unsafe");
   const value = (
-    await runRead(buildReadContext(deps), [
+    await runRead(machineReadContext(deps), [
       "rev-parse",
       "--verify",
       "--end-of-options",
@@ -700,7 +701,7 @@ export async function readGitFullRef(
 ): Promise<string> {
   if (!isSafeGitRefName(ref)) throw new GitWorktreeReadError("git revision is unsafe");
   const value = (
-    await runRead(buildReadContext(deps), [
+    await runRead(machineReadContext(deps), [
       "rev-parse",
       "--symbolic-full-name",
       "--verify",
@@ -721,7 +722,7 @@ export async function readGitTreeDigest(
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(objectId))
     throw new GitWorktreeReadError("git tree identity is invalid");
   return gitIndexTreeDigest(
-    await runRead(buildReadContext(deps), ["ls-tree", "-r", "-z", "--full-tree", objectId]),
+    await runRead(machineReadContext(deps), ["ls-tree", "-r", "-z", "--full-tree", objectId]),
     true,
   );
 }
@@ -739,7 +740,7 @@ export async function readGitCommitIdentity(
   ref: string,
 ): Promise<GitCommitIdentity> {
   const headSha = await readGitRevision(deps, ref);
-  const output = await runRead(buildReadContext(deps), ["cat-file", "commit", headSha]);
+  const output = await runRead(machineReadContext(deps), ["cat-file", "commit", headSha]);
   const boundary = output.indexOf("\n\n");
   if (boundary < 0) throw new GitWorktreeReadError("git commit object is incomplete");
   const parentShas = output
@@ -777,7 +778,7 @@ export async function readGitStagedDiff(deps: NodeGitWorktreeReaderDeps): Promis
 }
 
 export async function readStagedPaths(deps: NodeGitWorktreeReaderDeps): Promise<readonly string[]> {
-  const ctx = buildReadContext(deps);
+  const ctx = machineReadContext(deps);
   const out = await runRead(ctx, ["diff", "--cached", "--name-only"]);
   return parseLines(out);
 }

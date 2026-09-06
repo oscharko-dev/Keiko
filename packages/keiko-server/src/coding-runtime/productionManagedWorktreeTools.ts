@@ -31,6 +31,7 @@ import type {
 import { VerificationRunnerError } from "../editor/verificationRunnerErrors.js";
 import {
   contentFreeErrorClass,
+  describeError,
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
@@ -690,14 +691,18 @@ function emitVerificationDiagnostic(
   input: ProductionManagedWorktreeToolInput,
   errorClass: string,
   message: "verification-refused" | "verification-failed",
+  error?: unknown,
 ): void {
+  const detail = error === undefined ? undefined : describeError(error);
   emitServerDiagnostic(input.diagnostics, {
     correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID,
     timestamp: new Date().toISOString(),
-    operation: "coding-runtime.verification",
     source: "production-managed-worktree-tools.verification",
     errorClass,
     message,
+    ...(detail?.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail?.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+    operation: "coding-runtime.verification",
   });
 }
 
@@ -716,6 +721,7 @@ function verificationRefused(
     input,
     code ?? contentFreeErrorClass(error),
     code === undefined ? "verification-failed" : "verification-refused",
+    error,
   );
   return code === undefined ? { status: "failed" } : { status: "failed", reasonCode: code };
 }

@@ -351,10 +351,12 @@ Tool `output` strings are redacted at two points:
 
    Internal typed Git readers use the existing `credentials-only` output scrub when ordinary
    environment values overlap their protocol or configured identity: remote URL reads and
-   `readGitWorktreeSnapshot` retain context such as `GITHUB_REF_TYPE=branch`. Credential names,
+   machine-parsed refs, revisions, index/tree entries and commit identities retain context such as
+   `GITHUB_REF_TYPE=branch` or an accepted task's commit SHA. Credential names,
    declared credential values and built-in secret patterns remain scrubbed, and child environment
-   isolation is unchanged. A snapshot containing a redaction marker is rejected before parsing;
-   corrupted tracking headers must never become an apparently absent upstream or permit a push.
+   isolation is unchanged. Machine metadata containing a redaction marker is rejected before
+   parsing or hashing; corrupted identities must never become verification facts or permit a push.
+   Content-bearing blob and patch readers retain the default all-environment-value scrub.
 
 2. **ToolCallResult.output** — the `WorkspaceToolHost.execute` method returns `output` that is
    already the redacted string from step 1 (or the structured JSON from read/list/patch tools,

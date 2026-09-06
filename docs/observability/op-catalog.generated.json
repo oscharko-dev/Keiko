@@ -1709,7 +1709,7 @@
     {
       "op": "coding-runtime.tool-availability.failed",
       "category": "gateway",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:172",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:173",
       "package": "keiko-server"
     },
     {
@@ -1728,7 +1728,7 @@
     {
       "op": "coding-runtime.verification",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:697",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:705",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

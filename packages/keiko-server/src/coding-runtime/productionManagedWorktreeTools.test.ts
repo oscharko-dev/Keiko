@@ -12,6 +12,7 @@ import type {
   VerificationStatus,
 } from "@oscharko-dev/keiko-contracts";
 import type { GatewayFetchOptions } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import { GitWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-worktree-snapshot-node";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
@@ -694,6 +695,38 @@ describe("production managed worktree tools", () => {
     ]);
     expect(JSON.stringify(records)).not.toContain("SENSITIVE");
     expect(JSON.stringify(records)).not.toContain("boom");
+  });
+
+  it("retains body-free stack and cause evidence for a worktree read failure", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const secret = "SENSITIVE-/Users/someone/private-worktree";
+    const failure = new GitWorktreeReadError(secret);
+    Object.defineProperty(failure, "cause", { value: new TypeError(secret) });
+    const facade = verificationFacade({ runToReport: () => Promise.reject(failure), records });
+
+    await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "verification-read-failure",
+        idempotencyKey: "verification-read-failure-key",
+        verifierId: "test",
+      }),
+    });
+
+    expect(records).toHaveLength(1);
+    const record = records[0];
+    expect(record).toBeDefined();
+    if (record === undefined) return;
+    expect(record).toMatchObject({
+      operation: "coding-runtime.verification",
+      errorClass: "GitWorktreeReadError",
+      correlationId: "run-verification-3",
+      causeChain: ["TypeError"],
+    });
+    expect(record.frames).toHaveLength(1);
+    expect(record.frames?.[0]).toMatch(/^packages\/keiko-server\/src\//u);
+    expect(JSON.stringify(records)).not.toContain(secret);
   });
 
   it("revokes liveness the instant resolveWorkspaceRootAccess stops proving managed authority, even before expiry (#3347)", async () => {

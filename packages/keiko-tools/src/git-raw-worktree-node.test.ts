@@ -5,7 +5,23 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { readGitRawWorktreeSnapshot } from "./git-raw-worktree-node.js";
-import { GitWorktreeReadError, readGitWorktreeSnapshot } from "./git-worktree-snapshot-node.js";
+import {
+  GitWorktreeReadError,
+  readGitBlobText,
+  readGitCommitIdentity,
+  readGitFullRef,
+  readGitIndexEntries,
+  readGitIndexStat,
+  readGitIndexTreeDigest,
+  readGitRemoteAliases,
+  readGitRevision,
+  readGitStagedDiff,
+  readGitTreeDigest,
+  readGitTreeEntries,
+  readGitUntrackedPaths,
+  readGitWorktreeSnapshot,
+  readStagedPaths,
+} from "./git-worktree-snapshot-node.js";
 import { indexStatMatches, readGitIndexWriteTimeNs } from "./git-index-stat.js";
 
 // Owner audit finding b2-7: the racy-clean guard in `indexStatMatches` existed but was never
@@ -71,6 +87,71 @@ afterEach(() => {
 });
 
 describe("readGitRawWorktreeSnapshot documented tracking limits", () => {
+  it("preserves machine identities when accepted task context contains the same values", async () => {
+    writeFileSync(join(root, "code.txt"), "updated\n");
+    git(["add", "code.txt"]);
+    writeFileSync(join(root, "untracked.txt"), "new\n");
+    const clean = { workspace, processEnv: { PATH: process.env.PATH } };
+    const headSha = await readGitRevision(clean, "HEAD");
+    const contextual = {
+      workspace,
+      processEnv: {
+        ...clean.processEnv,
+        KEIKO_QUALIFICATION_RESUME_HEAD_SHA: headSha,
+        GITHUB_REF: "refs/heads/master",
+        GITHUB_HEAD_REF: "master",
+        GITHUB_REF_TYPE: "branch",
+        TASK_SOURCE_PATH: "code.txt",
+        TASK_NEW_PATH: "untracked.txt",
+        TASK_REMOTE_ALIAS: "origin",
+      },
+    };
+    const readers = [
+      readGitRawWorktreeSnapshot,
+      readGitIndexEntries,
+      readGitIndexStat,
+      readGitIndexTreeDigest,
+      readGitRemoteAliases,
+      readGitUntrackedPaths,
+      readGitWorktreeSnapshot,
+      readStagedPaths,
+      (deps: typeof clean): ReturnType<typeof readGitRevision> => readGitRevision(deps, "HEAD"),
+      (deps: typeof clean): ReturnType<typeof readGitFullRef> => readGitFullRef(deps, "master"),
+      (deps: typeof clean): ReturnType<typeof readGitTreeDigest> =>
+        readGitTreeDigest(deps, headSha),
+      (deps: typeof clean): ReturnType<typeof readGitTreeEntries> =>
+        readGitTreeEntries(deps, headSha),
+      (deps: typeof clean): ReturnType<typeof readGitCommitIdentity> =>
+        readGitCommitIdentity(deps, "HEAD"),
+    ];
+    for (const read of readers) expect(await read(contextual)).toEqual(await read(clean));
+  });
+
+  it("refuses credential-redacted metadata without disabling content redaction", async () => {
+    const clean = { workspace, processEnv: { PATH: process.env.PATH } };
+    const headSha = await readGitRevision(clean, "HEAD");
+    const credential = { ...clean, processEnv: { ...clean.processEnv, MY_DEPLOY_TOKEN: headSha } };
+    await expect(readGitRevision(credential, "HEAD")).rejects.toBeInstanceOf(GitWorktreeReadError);
+    const pathCredential = {
+      ...clean,
+      processEnv: { ...clean.processEnv, MY_DEPLOY_TOKEN: "code.txt" },
+    };
+    await expect(readGitIndexTreeDigest(pathCredential)).rejects.toBeInstanceOf(
+      GitWorktreeReadError,
+    );
+    writeFileSync(join(root, "code.txt"), "private-environment-value\n");
+    git(["add", "code.txt"]);
+    const content = {
+      ...clean,
+      processEnv: { ...clean.processEnv, TASK_CONTEXT: "private-environment-value" },
+    };
+    const blob = git(["rev-parse", ":code.txt"]);
+    expect(await readGitBlobText(content, blob)).toContain("[REDACTED]");
+    expect(await readGitStagedDiff(content)).toContain("[REDACTED]");
+    expect(await readGitBlobText(content, blob)).not.toContain("private-environment-value");
+    expect(await readGitStagedDiff(content)).not.toContain("private-environment-value");
+  });
+
   it("retains tracking headers when CI context values overlap the Git protocol", async () => {
     const real = await readGitWorktreeSnapshot({
       workspace,
