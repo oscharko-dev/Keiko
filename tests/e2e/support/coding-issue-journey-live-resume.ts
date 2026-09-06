@@ -28,6 +28,7 @@ import {
   reacceptBoundIssue,
   runtimeSnapshot,
   waitWhileAnsweringApprovals,
+  readSnapshotWhileAwaitingDraft,
   workbenchSurface,
   type DeliveredPullRequest,
 } from "./coding-issue-journey-live.js";
@@ -504,23 +505,26 @@ export function assertContinuationCanReachDraft(
   runId: string,
 ): void {
   if (snapshot.runId !== runId || snapshot.draftDelivery?.phase === "draft-created") return;
+  if (snapshot.state === "stopped") {
+    throw new Error(`continued run ${runId} reached stopped before creating a draft pull request`);
+  }
   if (
-    snapshot.state !== "failed" &&
-    snapshot.state !== "cancelled" &&
-    snapshot.state !== "recovery-required" &&
-    snapshot.state !== "succeeded"
-  )
-    return;
-  throw new Error(
-    `continued run ${runId} reached ${snapshot.state} before creating a draft pull request`,
-  );
+    snapshot.state === "failed" ||
+    snapshot.state === "cancelled" ||
+    snapshot.state === "recovery-required" ||
+    snapshot.state === "succeeded"
+  ) {
+    throw new Error(
+      `continued run ${runId} reached ${snapshot.state} before creating a draft pull request`,
+    );
+  }
 }
 
 async function waitForDraftPullRequest(page: Page, runId: string): Promise<DeliveredPullRequest> {
   const snapshot = await waitWhileAnsweringApprovals(
     page,
     async () => {
-      const current = await runtimeSnapshot(page);
+      const current = await readSnapshotWhileAwaitingDraft(() => runtimeSnapshot(page), runId);
       assertContinuationCanReachDraft(current, runId);
       return current;
     },

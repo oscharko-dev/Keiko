@@ -1,12 +1,94 @@
-import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchRuntimeSnapshot,
+  ModelCapability,
+} from "@oscharko-dev/keiko-contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
   prepareBoundIssueForRun,
   prepareTrustedIssueWorkspace,
   qualifyLiveModel,
+  readSnapshotWhileAwaitingDraft,
   reconcileLiveWorkbenchAfterModelChange,
   registerTrustedRepositoryProject,
 } from "./coding-issue-journey-live.js";
+
+function runtimeSnapshot(
+  state: CodingWorkbenchRuntimeSnapshot["state"],
+  override: Partial<CodingWorkbenchRuntimeSnapshot> = {},
+): CodingWorkbenchRuntimeSnapshot {
+  return {
+    schemaVersion: "1",
+    state,
+    revision: 1,
+    updatedAt: "2026-09-06T16:51:00.000Z",
+    runId: "run-terminal",
+    ...override,
+  };
+}
+
+describe("live journey draft wait", () => {
+  it.each(["stopped", "failed", "cancelled", "recovery-required", "succeeded"] as const)(
+    "stops after one read when the live run reaches %s without a draft",
+    async (state) => {
+      const read = vi.fn(() => Promise.resolve(runtimeSnapshot(state)));
+
+      await expect(readSnapshotWhileAwaitingDraft(read)).rejects.toThrow(
+        `coding run run-terminal reached ${state} before creating a draft pull request`,
+      );
+      expect(read).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("retains a created draft when the runtime becomes terminal later", async () => {
+    const snapshot = runtimeSnapshot("failed", {
+      failureCode: "runtime-failed",
+      draftDelivery: {
+        schemaVersion: "1",
+        revision: 1,
+        phase: "draft-created",
+        reason: "completed",
+        proposalId: "pull-request-1",
+        proposalDigest: "b".repeat(64),
+        recordedAt: "2026-09-06T16:51:00.000Z",
+        binding: {
+          runId: "run-terminal",
+          workspaceDigest: "c".repeat(64),
+          runtimeAuthorityDigest: "d".repeat(64),
+          envelopeDigest: "e".repeat(64),
+          remoteDigest: "f".repeat(64),
+          issueBindingDigest: "1".repeat(64),
+          issueIdDigest: "2".repeat(64),
+          issueNumber: 1,
+          repository: "owner/repository",
+          remoteAlias: "origin",
+          baseRef: "master",
+          baseSha: "3".repeat(40),
+          headRef: "keiko/task",
+          headSha: "4".repeat(40),
+          verifiedCommitProposalId: "commit-1",
+          recoveryId: "delivery-1",
+        },
+        pullRequest: {
+          number: 1,
+          externalId: "PR_1",
+          url: "https://example.test/pull/1",
+          repository: "owner/repository",
+          headRepository: "owner/repository",
+          headRef: "keiko/task",
+          headSha: "4".repeat(40),
+          baseRef: "master",
+          baseSha: "3".repeat(40),
+          state: "open",
+          isDraft: true,
+        },
+      },
+    });
+
+    await expect(readSnapshotWhileAwaitingDraft(() => Promise.resolve(snapshot))).resolves.toBe(
+      snapshot,
+    );
+  });
+});
 
 function chatModel(overrides: Partial<ModelCapability> = {}): ModelCapability {
   return {

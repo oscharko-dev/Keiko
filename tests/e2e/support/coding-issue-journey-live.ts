@@ -548,6 +548,33 @@ export interface DriveToDraftPrInput {
   readonly mode: CodingWorkbenchMode;
 }
 
+const DRAFT_WAIT_TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeSnapshot["state"]> = new Set([
+  "stopped",
+  "failed",
+  "cancelled",
+  "recovery-required",
+  "succeeded",
+]);
+
+export async function readSnapshotWhileAwaitingDraft(
+  read: () => Promise<CodingWorkbenchRuntimeSnapshot>,
+  expectedRunId?: string,
+): Promise<CodingWorkbenchRuntimeSnapshot> {
+  const snapshot = await read();
+  if (
+    (expectedRunId !== undefined && snapshot.runId !== expectedRunId) ||
+    snapshot.draftDelivery?.phase === "draft-created" ||
+    !DRAFT_WAIT_TERMINAL_STATES.has(snapshot.state)
+  ) {
+    return snapshot;
+  }
+  const runId = snapshot.runId ?? "unavailable";
+  const failure = snapshot.failureCode === undefined ? "" : ` (${snapshot.failureCode})`;
+  throw new Error(
+    `coding run ${runId} reached ${snapshot.state}${failure} before creating a draft pull request`,
+  );
+}
+
 /**
  * Drives one live run from a bare, paired browser session through a real committed, pushed, draft
  * pull request (issue #3390 AC3's issue-to-PR effects). Every step below is the SAME real,
@@ -578,7 +605,7 @@ export async function driveIssueToDraftPullRequest(
   });
   const snapshot = await waitWhileAnsweringApprovals(
     page,
-    () => runtimeSnapshot(page),
+    () => readSnapshotWhileAwaitingDraft(() => runtimeSnapshot(page)),
     (value) => value.draftDelivery?.phase === "draft-created",
     {
       timeoutMs: 25 * 60_000,

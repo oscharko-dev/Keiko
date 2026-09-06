@@ -172,7 +172,7 @@ describe("live qualification continuation", () => {
     }
   });
 
-  it.each(["failed", "cancelled", "recovery-required", "succeeded"] as const)(
+  it.each(["stopped", "failed", "cancelled", "recovery-required", "succeeded"] as const)(
     "stops waiting when the continued run reaches %s without a draft pull request",
     (state) => {
       expect(() => {
