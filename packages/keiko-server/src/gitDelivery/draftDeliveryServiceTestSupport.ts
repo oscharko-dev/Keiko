@@ -323,7 +323,7 @@ export class DraftDeliveryFixture {
     const at = new Date(this.now).toISOString();
     this.snapshots.markNonterminalRecoveryRequired(at);
     this.snapshots.acknowledgeRecovery("run-1", at);
-    this.snapshots.releaseRecoveryForRetry("run-1", at);
+    // Linked successor creation settles this acknowledged predecessor atomically with its insert.
     const prior = this.snapshots.get("run-1");
     if (prior === undefined) throw new Error("missing predecessor");
     const omitted = new Set([

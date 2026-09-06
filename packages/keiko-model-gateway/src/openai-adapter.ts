@@ -40,6 +40,11 @@ import { redact } from "@oscharko-dev/keiko-security";
 import { assertValidGatewaySamplingParameters } from "./types.js";
 import { providerOutputTokenLimit } from "./output-token-limit.js";
 import {
+  openAiCompatiblePromptMessage,
+  openAiCompatiblePromptTools,
+  type OpenAiCompatiblePromptMessage,
+} from "./prompt-token-accounting.js";
+import {
   logEndpointHost,
   logLevelEnabled,
   resolveLogSink,
@@ -48,7 +53,6 @@ import {
   type ModelGatewayLogSink,
 } from "./observability.js";
 import type {
-  ChatMessageContentPart,
   CostClass,
   FinishReason,
   GatewayRequest,
@@ -122,18 +126,7 @@ function logChatDispatch(log: ModelGatewayLogSink, op: string, fields: ChatDispa
 
 interface ChatRequestBody {
   readonly model: string;
-  readonly messages: readonly {
-    readonly role: string;
-    readonly content: ChatRequestMessageContent | null;
-    readonly tool_call_id?: string | undefined;
-    readonly tool_calls?:
-      | readonly {
-          readonly id: string;
-          readonly type: "function";
-          readonly function: { readonly name: string; readonly arguments: string };
-        }[]
-      | undefined;
-  }[];
+  readonly messages: readonly OpenAiCompatiblePromptMessage[];
   readonly tools?: unknown;
   readonly response_format?: unknown;
   readonly temperature?: number;
@@ -145,12 +138,6 @@ interface ChatRequestBody {
   readonly stream?: boolean;
   readonly stream_options?: { readonly include_usage: boolean };
 }
-
-type ChatRequestMessageContentParts = readonly (
-  | { readonly type: "text"; readonly text: string }
-  | { readonly type: "image_url"; readonly image_url: { readonly url: string } }
-)[];
-type ChatRequestMessageContent = string | ChatRequestMessageContentParts;
 
 // GEN-AI-GATEWAY-002 (RB-4): honor Azure deployment routing for chat providers instead of silently
 // misrouting an Azure-configured provider to the OpenAI-compatible path. Mirrors the voice adapters'
@@ -171,56 +158,13 @@ function chatCompletionsUrl(config: ModelProviderConfig): string {
 
 // Always returns the array shape: the plain-string case is handled at the call site so this
 // helper itself never mixes return types (sonarjs/function-return-type).
-function messageContentParts(
-  parts: readonly ChatMessageContentPart[],
-): ChatRequestMessageContentParts {
-  return parts.map((part) =>
-    part.type === "text"
-      ? { type: "text" as const, text: part.text }
-      : { type: "image_url" as const, image_url: { url: part.image_url.url } },
-  );
-}
-
-function messageContent(
-  message: GatewayRequest["messages"][number],
-  hasToolCalls: boolean,
-): ChatRequestMessageContent | null {
-  if (message.role === "assistant" && hasToolCalls) return null;
-  if (message.contentParts === undefined) return message.content;
-  return messageContentParts(message.contentParts);
-}
-
-function buildMessage(
-  message: GatewayRequest["messages"][number],
-): ChatRequestBody["messages"][number] {
-  const toolCalls = message.toolCalls?.map((call) => ({
-    id: call.id,
-    type: "function" as const,
-    function: { name: call.name, arguments: JSON.stringify(call.arguments) },
-  }));
-  const hasToolCalls = toolCalls !== undefined && toolCalls.length > 0;
-  return {
-    role: message.role,
-    content: messageContent(message, hasToolCalls),
-    ...(message.role === "tool" && message.toolCallId !== undefined
-      ? { tool_call_id: message.toolCallId }
-      : {}),
-    ...(hasToolCalls ? { tool_calls: toolCalls } : {}),
-  };
-}
-
 type ProviderGatewayRequest = GatewayRequest & {
   readonly tools?: readonly ToolDefinition[] | undefined;
 };
 
 function toolsField(tools: readonly ToolDefinition[] | undefined): Pick<ChatRequestBody, "tools"> {
   if (tools === undefined) return {};
-  return {
-    tools: tools.map((t) => ({
-      type: "function",
-      function: { name: t.name, description: t.description, parameters: t.parameters },
-    })),
-  };
+  return { tools: openAiCompatiblePromptTools(tools) };
 }
 
 function responseFormatField(
@@ -257,7 +201,7 @@ function buildBody(request: ProviderGatewayRequest, config: ModelProviderConfig)
   assertValidGatewaySamplingParameters(request);
   return {
     model: request.modelId,
-    messages: request.messages.map(buildMessage),
+    messages: request.messages.map(openAiCompatiblePromptMessage),
     ...toolsField(request.tools),
     ...responseFormatField(request),
     ...samplingFields(request),

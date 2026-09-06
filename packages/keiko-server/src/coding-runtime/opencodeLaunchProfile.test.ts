@@ -13,6 +13,7 @@ import {
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
   OPENCODE_PINNED_BUILT_IN_TOOLS,
 } from "./opencodeToolSchemas.js";
+import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 
 const CONTEXT_GEOMETRY = {
   contextWindowTokens: 65_536,
@@ -195,6 +196,11 @@ describe("OpenCode launch profile", () => {
         "deny",
       );
     }
+  });
+
+  it("aligns native tool-output truncation with the governed response ceiling", () => {
+    const config = createFixedOpenCodeConfig(CONTEXT_GEOMETRY);
+    expect(config.tool_output).toEqual({ max_bytes: CODING_TOOL_MAX_BODY_BYTES });
   });
 
   it("keeps wildcard denial before exact governed allows through v1.17.17 tools migration", () => {

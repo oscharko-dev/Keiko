@@ -5,6 +5,7 @@ import type { ServerLogSink } from "../observability/server-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
+import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 
 import {
   createFixedOpenCodeConfig,
@@ -76,6 +77,7 @@ export interface GeneratedOpenCodeBundle {
     readonly agent: Readonly<Record<string, { readonly prompt: string }>>;
     readonly provider: Readonly<Record<string, unknown>>;
     readonly compaction: Readonly<Record<string, boolean | number>>;
+    readonly tool_output: Readonly<{ readonly max_bytes: number }>;
     readonly tools: Readonly<Record<string, boolean>>;
     readonly permission: Readonly<Record<string, string>>;
   };
@@ -1152,7 +1154,7 @@ function toolSource(
   // override below), so it deliberately keeps the descriptive `action` literal here.
   const wire = wireRequestFor(action) ?? { action, literal: {} };
   return [
-    "const MAX_RESPONSE_BYTES = 262144;",
+    `const MAX_RESPONSE_BYTES = ${String(CODING_TOOL_MAX_BODY_BYTES)};`,
     `const TIMEOUT_MS = ${String(OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS)};`,
     `const action = ${JSON.stringify(action)};`,
     `const wireAction = ${JSON.stringify(wire.action)};`,

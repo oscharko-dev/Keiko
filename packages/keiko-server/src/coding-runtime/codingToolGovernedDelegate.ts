@@ -19,6 +19,7 @@ import type {
   CodingToolActionRequest,
   CodingToolEgressReadResult,
   CodingToolReadResult,
+  CodingToolVerificationFailure,
   CodingToolVerificationResult,
 } from "./codingToolIpc.js";
 
@@ -50,7 +51,11 @@ export type GovernedCodingToolResult =
     }
   // `reasonCode` is a closed-vocabulary marker. The facade forwards only its own allowlisted,
   // body-free codes and collapses every unrecognized value to a bare failed outcome.
-  | { readonly status: "failed"; readonly reasonCode?: string | undefined };
+  | {
+      readonly status: "failed";
+      readonly reasonCode?: string | undefined;
+      readonly verificationFailure?: CodingToolVerificationFailure | undefined;
+    };
 
 export interface CodingToolGovernedPorts {
   readonly repositoryRead: GovernedCodingToolPort<"read">;
@@ -149,10 +154,7 @@ function governedOutcome(
   action: CodingToolActionRequest["action"],
   result: GovernedCodingToolResult,
 ): unknown {
-  if (result.status === "failed" && result.reasonCode !== undefined) {
-    return { outcome: "failed", reasonCode: result.reasonCode };
-  }
-  if (result.status !== "completed") return { outcome: result.status };
+  if (result.status === "failed") return governedFailureOutcome(action, result);
   const domain = gitOutcome(action, result);
   if (domain !== undefined) return domain;
   if (READ_BEARING_ACTIONS.has(action) && result.read !== undefined) {
@@ -161,7 +163,21 @@ function governedOutcome(
   if (AUXILIARY_BEARING_ACTIONS.has(action) && result.auxiliary !== undefined) {
     return { outcome: "completed", auxiliary: result.auxiliary };
   }
-  return { outcome: result.status };
+  return { outcome: "completed" };
+}
+
+function governedFailureOutcome(
+  action: CodingToolActionRequest["action"],
+  result: Extract<GovernedCodingToolResult, { readonly status: "failed" }>,
+): unknown {
+  if (result.reasonCode === undefined) return { outcome: "failed" };
+  return action === "verification" && result.verificationFailure !== undefined
+    ? {
+        outcome: "failed",
+        reasonCode: result.reasonCode,
+        verificationFailure: result.verificationFailure,
+      }
+    : { outcome: "failed", reasonCode: result.reasonCode };
 }
 
 function gitOutcome(

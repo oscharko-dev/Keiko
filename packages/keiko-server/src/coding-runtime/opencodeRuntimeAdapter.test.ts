@@ -156,11 +156,22 @@ interface GeneratedOpenCodeBundle {
     readonly agent: Readonly<Record<string, { readonly prompt: string }>>;
     readonly provider: Readonly<Record<string, unknown>>;
     readonly compaction: Readonly<Record<string, boolean | number>>;
+    readonly tool_output: { readonly max_bytes: number };
     readonly tools: Readonly<Record<string, boolean>>;
     readonly permission: Readonly<Record<string, string>>;
   };
   readonly toolSources: Readonly<Record<string, string>>;
 }
+
+describe("generated OpenCode bundle", () => {
+  it("uses the governed response ceiling for native custom-tool output", () => {
+    const bundle = createGeneratedOpenCodeBundle();
+    expect(bundle.config.tool_output).toEqual({ max_bytes: CODING_TOOL_MAX_BODY_BYTES });
+    expect(bundle.toolSources.keiko_verification).toContain(
+      `const MAX_RESPONSE_BYTES = ${String(CODING_TOOL_MAX_BODY_BYTES)};`,
+    );
+  });
+});
 
 async function adapterModule(): Promise<OpenCodeRuntimeAdapterModule> {
   return await import("./opencodeRuntimeAdapter.js");

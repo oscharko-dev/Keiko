@@ -1,6 +1,7 @@
 import { gatewaySpendRejectionReason } from "./gateway-spend-budget.js";
 import { randomUUID } from "node:crypto";
 import {
+  findConfiguredCapability,
   resolveCodingSafeSidecarGatewayProfile,
   type Gateway,
   type GatewayCallRequest,
@@ -11,6 +12,10 @@ import {
   type NormalizedResponse,
   type ToolDefinition,
 } from "@oscharko-dev/keiko-model-gateway";
+import {
+  countGatewayPromptTokens,
+  type ModelTokenAccounting,
+} from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type {
   CodingWorkbenchModelSource,
   CodingWorkbenchSidecarGatewayRunMetadata,
@@ -18,7 +23,6 @@ import type {
   CodingWorkbenchSidecarGatewayUnavailableReason,
   ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
-import { estimateTokensForSegments } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
@@ -939,22 +943,25 @@ function samplingValidationMessage(
   return `Request body ${issue.message.replace("topP", "top_p")}.`;
 }
 
-function promptTokenEstimate(parsed: CodingSidecarGatewayChatCompletionRequest): number {
-  const segments = parsed.messages.map((message) => `${message.role}\n${message.content}`);
-  if (parsed.tools === undefined) {
-    return estimateTokensForSegments(segments);
-  }
-  return estimateTokensForSegments([...segments, JSON.stringify(parsed.tools)]);
+function promptTokenEstimate(
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  accounting: ModelTokenAccounting | undefined,
+): number {
+  return countGatewayPromptTokens(parsed, accounting);
+}
+
+function promptTokenAccounting(profile: AvailableGatewayProfile): ModelTokenAccounting | undefined {
+  return findConfiguredCapability(profile.config, profile.result.modelAlias)?.tokenAccounting;
 }
 
 function budgetValidationMessage(
   parsed: CodingSidecarGatewayChatCompletionRequest,
   runMetadata: CodingWorkbenchSidecarGatewayRunMetadata,
+  estimatedPromptTokens: number,
 ): string | undefined {
   if (parsed.messages.length > runMetadata.maxInputMessages) {
     return `Request body messages exceed profile maxInputMessages (${String(runMetadata.maxInputMessages)}).`;
   }
-  const estimatedPromptTokens = promptTokenEstimate(parsed);
   if (estimatedPromptTokens > runMetadata.maxPromptTokens) {
     return `Request body estimated prompt tokens exceed profile maxPromptTokens (${String(runMetadata.maxPromptTokens)}).`;
   }
@@ -984,6 +991,7 @@ function validationErrorForChatRequest(
   modelAlias: string,
   runMetadata: CodingWorkbenchSidecarGatewayRunMetadata,
   runtimeAuthenticated: boolean,
+  estimatedPromptTokens: number,
 ): RouteResult | undefined {
   if (isRouteResult(parsed)) {
     return parsed;
@@ -992,7 +1000,7 @@ function validationErrorForChatRequest(
   if (invalidSamplingMessage !== undefined) {
     return badRequest(invalidSamplingMessage);
   }
-  const invalidBudgetMessage = budgetValidationMessage(parsed, runMetadata);
+  const invalidBudgetMessage = budgetValidationMessage(parsed, runMetadata, estimatedPromptTokens);
   if (invalidBudgetMessage !== undefined) {
     return badRequest(invalidBudgetMessage);
   }
@@ -1312,9 +1320,8 @@ function reserveGatewayPromptBudget(
   deps: UiHandlerDeps,
   capability: string,
   runId: string,
-  parsed: CodingSidecarGatewayChatCompletionRequest,
+  reservedPromptTokens: number,
 ): PromptTokenReservation | undefined {
-  const reservedPromptTokens = promptTokenEstimate(parsed);
   const reserved = runtimeCapabilityAuthenticator(deps)?.reservePromptTokens?.(
     capability,
     reservedPromptTokens,
@@ -2115,6 +2122,35 @@ function logChatRequestRejection(
   );
 }
 
+interface ValidatedChatRequest {
+  readonly parsed: CodingSidecarGatewayChatCompletionRequest;
+  readonly estimatedPromptTokens: number;
+}
+
+async function readValidatedChatRequest(
+  ctx: RouteContext,
+  resolved: AvailableGatewayProfile,
+  authentication: AuthenticatedGatewayRequest,
+): Promise<RouteResult | ValidatedChatRequest> {
+  const parsed = await readChatCompletionRequest(ctx, resolved.result.runMetadata.maxRequestBytes);
+  const estimatedPromptTokens = isRouteResult(parsed)
+    ? 0
+    : promptTokenEstimate(parsed, promptTokenAccounting(resolved));
+  const validationError = validationErrorForChatRequest(
+    parsed,
+    resolved.result.modelAlias,
+    resolved.result.runMetadata,
+    authentication.runtimeAuthenticated,
+    estimatedPromptTokens,
+  );
+  if (validationError !== undefined) {
+    logChatRequestRejection(ctx, authentication.runId, validationError);
+    return validationError;
+  }
+  if (isRouteResult(parsed)) return parsed;
+  return { parsed, estimatedPromptTokens };
+}
+
 async function runHandleCodingSidecarGatewayChatCompletions(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -2125,24 +2161,18 @@ async function runHandleCodingSidecarGatewayChatCompletions(
     deps,
     gatewayProfileModelIdForAuthentication(authentication),
   );
-  if (!isAvailableGatewayProfile(resolved)) {
+  if (!isAvailableGatewayProfile(resolved))
     return unavailableGatewayProfile(ctx, deps, resolved, authentication);
-  }
-  const parsed = await readChatCompletionRequest(ctx, resolved.result.runMetadata.maxRequestBytes);
-  const validationError = validationErrorForChatRequest(
+  const validated = await readValidatedChatRequest(ctx, resolved, authentication);
+  if (isRouteResult(validated)) return validated;
+  const { parsed, estimatedPromptTokens } = validated;
+  logValidatedRequestBounds(
+    ctx,
+    authentication.runId,
     parsed,
-    resolved.result.modelAlias,
     resolved.result.runMetadata,
-    authentication.runtimeAuthenticated,
+    estimatedPromptTokens,
   );
-  if (validationError !== undefined) {
-    logChatRequestRejection(ctx, authentication.runId, validationError);
-    return validationError;
-  }
-  if (isRouteResult(parsed)) {
-    return parsed;
-  }
-  logValidatedRequestBounds(ctx, authentication.runId, parsed, resolved.result.runMetadata);
   const admission = runtimeGatewayAdmissionResponse(
     ctx,
     deps,
@@ -2151,17 +2181,25 @@ async function runHandleCodingSidecarGatewayChatCompletions(
     resolved.result.modelAlias,
   );
   if (admission.kind === "handled") return admission.result;
-  return executeBudgetedGatewayChat(ctx, deps, resolved, parsed, authentication, {
-    modelAlias: resolved.result.modelAlias,
-    maxOutputTokens: resolved.result.runMetadata.maxOutputTokens,
-    upstreamStreamingSupported: upstreamGatewayStreamingSupported(
-      deps,
-      resolved.result.supportsStreaming,
-    ),
-    ...(authentication.reasoningEffort === undefined
-      ? {}
-      : { reasoningEffort: authentication.reasoningEffort }),
-  });
+  return executeBudgetedGatewayChat(
+    ctx,
+    deps,
+    resolved,
+    parsed,
+    authentication,
+    estimatedPromptTokens,
+    {
+      modelAlias: resolved.result.modelAlias,
+      maxOutputTokens: resolved.result.runMetadata.maxOutputTokens,
+      upstreamStreamingSupported: upstreamGatewayStreamingSupported(
+        deps,
+        resolved.result.supportsStreaming,
+      ),
+      ...(authentication.reasoningEffort === undefined
+        ? {}
+        : { reasoningEffort: authentication.reasoningEffort }),
+    },
+  );
 }
 
 function logValidatedRequestBounds(
@@ -2169,6 +2207,7 @@ function logValidatedRequestBounds(
   runId: string,
   request: CodingSidecarGatewayChatCompletionRequest,
   bounds: CodingWorkbenchSidecarGatewayRunMetadata,
+  estimatedPromptTokens: number,
 ): void {
   getServerLogger().info({
     category: "gateway",
@@ -2178,7 +2217,7 @@ function logValidatedRequestBounds(
       runId,
       maxRequestBytes: bounds.maxRequestBytes,
       maxPromptTokens: bounds.maxPromptTokens,
-      estimatedPromptTokens: promptTokenEstimate(request),
+      estimatedPromptTokens,
       inputMessageCount: request.messages.length,
     },
   });
@@ -2190,6 +2229,7 @@ function executeBudgetedGatewayChat(
   binding: PinnedGatewayBinding,
   parsed: CodingSidecarGatewayChatCompletionRequest,
   authentication: { readonly capability: string; readonly runId: string },
+  estimatedPromptTokens: number,
   profile: {
     readonly modelAlias: string;
     readonly maxOutputTokens: number;
@@ -2200,7 +2240,7 @@ function executeBudgetedGatewayChat(
     deps,
     authentication.capability,
     authentication.runId,
-    parsed,
+    estimatedPromptTokens,
   );
   if (promptTokenReservation === undefined) {
     logGatewayRejection(ctx, authentication.runId, 403, "runtime-prompt-budget-denied");

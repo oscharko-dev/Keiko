@@ -53,6 +53,7 @@ import type {
 import {
   buildRedactor,
   buildUiHandlerDeps,
+  createLiveCodingChildModelPortFactory,
   createOperatorProvisioningQualification,
   currentGatewayEgressConfig,
   currentRedactionSecrets,
@@ -1879,6 +1880,47 @@ describe("buildUiHandlerDeps — coding-sidecar model-source wiring", () => {
     );
 
     expect(deps.codingSidecarGatewayModelSourceResolver?.()).toBe("openai-api-key-through-gateway");
+  });
+
+  it("stops resolving a removed child model while another gateway provider remains", () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-child-model-generation-"),
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+    const removed: ModelProviderConfig = {
+      modelId: "removed-coding-model",
+      baseUrl: "https://removed.example.invalid/v1",
+      apiKey: "fake-removed-key",
+      timeoutMs: 30_000,
+      maxRetries: 2,
+      retryBaseDelayMs: 500,
+    };
+    const retained: ModelProviderConfig = {
+      ...removed,
+      modelId: "retained-coding-model",
+      baseUrl: "https://retained.example.invalid/v1",
+      apiKey: "fake-retained-key",
+    };
+    const gatewayConfig = (providers: readonly ModelProviderConfig[]): GatewayConfig =>
+      parseGatewayConfig({
+        providers,
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: providers.map(verifiedCodingCapability),
+      });
+
+    const runtimeConfig = deps.gatewayConfig;
+    if (runtimeConfig === undefined) throw new Error("expected runtime gateway config");
+    const childModelPortFactory = createLiveCodingChildModelPortFactory(
+      runtimeConfig,
+      deps.modelPortFactory,
+    );
+    runtimeConfig.set(gatewayConfig([removed, retained]), true);
+    expect(childModelPortFactory(removed.modelId)).toBeDefined();
+    runtimeConfig.set(gatewayConfig([retained]), true);
+    expect(childModelPortFactory(removed.modelId)).toBeUndefined();
+    expect(childModelPortFactory(retained.modelId)).toBeDefined();
   });
 });
 

@@ -7,23 +7,30 @@ import { isCodingRepositoryResult } from "./codingRepositorySearchHandler.js";
 import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 
-import type { AuxiliaryCapabilityOutcomeV1 } from "@oscharko-dev/keiko-contracts";
+import type {
+  AuxiliaryCapabilityOutcomeV1,
+  VerificationFailureLocation,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_AGENT_CONFLICT_CODES,
   EDITOR_AGENT_FAILURE_CODES,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { validateAuxiliaryCapabilityOutcomeV1 } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
+import { isVerificationFailureLocation } from "@oscharko-dev/keiko-contracts/runtime/verification";
 
 import {
   CODING_TOOL_MAX_BODY_BYTES,
   CODING_TOOL_MAX_IN_FLIGHT,
   CODING_TOOL_MAX_READ_BYTES,
+  CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS,
+  CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS,
   isPermissionObservation,
   parseCodingToolRequest,
   type CodingToolActionRequest,
   type CodingToolEgressReadResult,
   type CodingToolReadResult,
   type CodingToolResult,
+  type CodingToolVerificationFailure,
   type CodingToolVerificationResult,
 } from "./codingToolIpc.js";
 // KEIKO-0695: hoisted from below EDIT_FAILURE_REASON_CODES to the top-of-file import block.
@@ -40,6 +47,8 @@ import {
 } from "../editor/verificationRunnerErrors.js";
 
 const READ_DIGEST = /^[a-f0-9]{64}$/u;
+const VERIFICATION_FAILURE_SUMMARY =
+  /^(?:test|targeted-test|typecheck|lint|build) failed; (?:0|[2-8]) structured failure locations$|^(?:test|targeted-test|typecheck|lint|build) failed; 1 structured failure location$/u;
 
 // The closed vocabulary an edit failure's `reasonCode` may carry: the two contract-owned closed
 // enums (EditorAgentConflictCode + EditorAgentFailureCode) plus this port's own transport /
@@ -342,7 +351,7 @@ function project(request: CodingToolActionRequest, input: unknown): CodingToolRe
   if (value === undefined) return projected("failed");
   const editFailure = projectEditFailure(request, value);
   if (editFailure !== undefined) return editFailure;
-  if (value.outcome === "failed") return projectGovernedFailure(value);
+  if (value.outcome === "failed") return projectGovernedFailure(request, value);
   const domain = projectDomainResult(request, value);
   if (domain !== undefined) return domain;
   const auxiliary = projectAuxiliary(request, value.auxiliary);
@@ -475,11 +484,67 @@ function projectSearch(
     : projected("failed");
 }
 
-function projectGovernedFailure(value: Record<string, unknown>): CodingToolResult {
+function projectGovernedFailure(
+  request: CodingToolActionRequest,
+  value: Record<string, unknown>,
+): CodingToolResult {
   const reasonCode = value.reasonCode;
-  return typeof reasonCode === "string" && GOVERNED_FAILURE_REASON_CODES.has(reasonCode)
-    ? projected("failed", reasonCode, true)
-    : projected("failed");
+  if (typeof reasonCode !== "string" || !GOVERNED_FAILURE_REASON_CODES.has(reasonCode)) {
+    return projected("failed");
+  }
+  const result = projected("failed", reasonCode, true);
+  const verificationFailure =
+    request.action === "verification" && reasonCode === "VERIFICATION_FAILED"
+      ? codingToolVerificationFailure(value.verificationFailure)
+      : undefined;
+  return verificationFailure === undefined
+    ? result
+    : {
+        status: "failed",
+        reasonCode,
+        evidence: [{ kind: "governed-delegate", code: reasonCode }],
+        verificationFailure,
+      };
+}
+
+function codingToolVerificationFailure(value: unknown): CodingToolVerificationFailure | undefined {
+  if (!isRecord(value) || Object.keys(value).length !== 3) return undefined;
+  if (
+    !validVerificationFailureHeader(value) ||
+    !validVerificationFailureLocations(value.locations)
+  ) {
+    return undefined;
+  }
+  return {
+    summary: value.summary,
+    locations: value.locations,
+    truncated: value.truncated,
+  };
+}
+
+function validVerificationFailureHeader(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & { readonly summary: string; readonly truncated: boolean } {
+  if (typeof value.summary !== "string") return false;
+  return (
+    value.summary.length > 0 &&
+    value.summary.length <= CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS &&
+    VERIFICATION_FAILURE_SUMMARY.test(value.summary) &&
+    typeof value.truncated === "boolean"
+  );
+}
+
+function validVerificationFailureLocations(
+  value: unknown,
+): value is readonly VerificationFailureLocation[] {
+  if (
+    !Array.isArray(value) ||
+    value.length > CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS ||
+    Object.keys(value).length !== value.length
+  ) {
+    return false;
+  }
+  return value.every(isVerificationFailureLocation);
 }
 
 function projectEditFailure(

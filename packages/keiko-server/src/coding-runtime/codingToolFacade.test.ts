@@ -24,6 +24,12 @@ function requestBody(value: Readonly<Record<string, unknown>>): string {
   return JSON.stringify({ actionId: "action-1", idempotencyKey: "idempotency-1", ...value });
 }
 
+function sparseVerificationLocations(): readonly unknown[] {
+  const locations: unknown[] = [];
+  locations.length = 1;
+  return locations;
+}
+
 // The three runner codes only the HTTP verification routes can mint (a malformed body, an oversized
 // body, a run id naming no in-flight run). `runToReport` — the single runner entry point the
 // governed verification port calls — cannot answer one, so the facade deliberately keeps them out
@@ -739,6 +745,93 @@ describe("CodingToolFacade", () => {
       reasonCode: code,
       evidence: [{ kind: "governed-delegate", code }],
     });
+  });
+
+  it("forwards only the bounded structured diagnostics of a failed verifier", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "failed",
+        reasonCode: "VERIFICATION_FAILED",
+        verificationFailure: {
+          summary: "test failed; 1 structured failure location",
+          locations: [
+            {
+              file: "ci/numerical-stability.test.js",
+              line: 19,
+              column: 5,
+              message: "expected the stable average to remain finite",
+            },
+          ],
+          truncated: false,
+        },
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "verification", verifierId: "test" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      reasonCode: "VERIFICATION_FAILED",
+      evidence: [{ kind: "governed-delegate", code: "VERIFICATION_FAILED" }],
+      verificationFailure: {
+        summary: "test failed; 1 structured failure location",
+        locations: [
+          {
+            file: "ci/numerical-stability.test.js",
+            line: 19,
+            column: 5,
+            message: "expected the stable average to remain finite",
+          },
+        ],
+        truncated: false,
+      },
+    });
+  });
+
+  it.each([
+    {
+      summary: "test failed; 1 structured failure location",
+      locations: [{ file: "/private/customer.test.js", message: "PRIVATE_FAILURE_CANARY" }],
+      truncated: false,
+    },
+    {
+      summary: "PRIVATE_FAILURE_CANARY",
+      locations: [],
+      truncated: false,
+      rawOutput: "PRIVATE_FAILURE_CANARY",
+    },
+    {
+      summary: "test failed; 1 structured failure location",
+      locations: sparseVerificationLocations(),
+      truncated: false,
+    },
+  ])("drops malformed verification diagnostics instead of exposing them", async (diagnostics) => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "failed",
+        reasonCode: "VERIFICATION_FAILED",
+        verificationFailure: diagnostics,
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({ action: "verification", verifierId: "test" }),
+      capability,
+    });
+
+    expect(result).toEqual({
+      status: "failed",
+      reasonCode: "VERIFICATION_FAILED",
+      evidence: [{ kind: "governed-delegate", code: "VERIFICATION_FAILED" }],
+    });
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_FAILURE_CANARY");
   });
 
   it.each([

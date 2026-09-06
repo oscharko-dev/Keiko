@@ -3,6 +3,7 @@ import { isAbsolute, join } from "node:path";
 
 import type { CodingWorkbenchSidecarGatewayRunMetadata } from "@oscharko-dev/keiko-contracts";
 
+import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
@@ -252,6 +253,7 @@ export function createFixedOpenCodeConfig(
   readonly agent: Readonly<Record<string, { readonly prompt: string }>>;
   readonly provider: Readonly<Record<string, unknown>>;
   readonly compaction: Readonly<Record<string, boolean | number>>;
+  readonly tool_output: Readonly<{ readonly max_bytes: number }>;
   readonly tools: Readonly<Record<string, boolean>>;
   readonly permission: Readonly<Record<string, string>>;
 } {
@@ -268,6 +270,9 @@ export function createFixedOpenCodeConfig(
     },
     provider: fixedOpenCodeProvider(contextGeometry),
     compaction: fixedOpenCodeCompaction(contextGeometry),
+    // OpenCode truncates every custom-tool response after execution. Match the already enforced
+    // governed IPC body ceiling so a valid JSON result keeps its continuation and diagnostics.
+    tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
     tools: fixedOpenCodeTools(unavailable),
     permission: fixedOpenCodePermission(unavailable),
   };

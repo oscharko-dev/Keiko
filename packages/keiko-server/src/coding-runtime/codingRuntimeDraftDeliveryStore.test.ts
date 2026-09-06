@@ -248,7 +248,7 @@ function successor(
 ): CodingRuntimeSnapshot {
   store.markNonterminalRecoveryRequired(at);
   store.acknowledgeRecovery(predecessorRunId, at);
-  store.releaseRecoveryForRetry(predecessorRunId, at);
+  // Linked successor creation settles this acknowledged predecessor atomically with its insert.
   const prior = store.get(predecessorRunId);
   if (prior === undefined) throw new Error("missing test predecessor");
   const shared = Object.fromEntries(

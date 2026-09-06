@@ -292,6 +292,42 @@ describe("production managed worktree tools", () => {
     },
   );
 
+  it("returns bounded actionable diagnostics for a failed verifier without exposing its workspace root", async () => {
+    const facade = verificationFacade({
+      runToReport: () => Promise.resolve(failedVerificationReport()),
+      records: [],
+    });
+
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "verification-diagnostics",
+        idempotencyKey: "verification-diagnostics-key",
+        verifierId: "test",
+      }),
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      reasonCode: "VERIFICATION_FAILED",
+      verificationFailure: {
+        summary: "test failed; 1 structured failure location",
+        locations: [
+          {
+            file: "ci/numerical-stability.test.js",
+            line: 19,
+            column: 5,
+            message: "expected the stable average to remain finite",
+          },
+        ],
+        truncated: true,
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("/managed/worktree");
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_FAILURE_CANARY");
+  });
+
   it("threads live proxy and CA settings into the governed research transport", async () => {
     const registry = createResearchGrantRegistry();
     const now = Date.now();
@@ -1414,27 +1450,54 @@ describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
     expect(resolvable.has("keiko_child_agent")).toBe(false);
   });
 
-  it("resolves and reuses one child model port for a run", () => {
+  it("removes child-agent readiness when the run's model stops resolving", () => {
     const model = {
       call: (): Promise<never> => Promise.reject(new Error("unused test model")),
     };
-    const factory = vi.fn(() => model);
+    let current: typeof model | undefined = model;
+    const factory = vi.fn(() => current);
     const childModel = resolveChildModelForRun({
       authorityRef: { runId, envelopeDigest: DIGEST },
       modelId: "coding-safe-model",
       childModelPortFactory: factory,
     });
 
-    expect(factory).toHaveBeenCalledOnce();
     expect(
       deriveOptionalToolAvailability({
         authorityRef: { runId, envelopeDigest: DIGEST },
         ...childModel,
       }).has("keiko_child_agent"),
     ).toBe(false);
-    expect(childModel.childModelPortFactory?.("coding-safe-model")).toBe(model);
+    current = undefined;
+    expect(
+      deriveOptionalToolAvailability({
+        authorityRef: { runId, envelopeDigest: DIGEST },
+        ...childModel,
+      }).has("keiko_child_agent"),
+    ).toBe(true);
     expect(childModel.childModelPortFactory?.("other-model")).toBeUndefined();
-    expect(factory).toHaveBeenCalledOnce();
+    expect(factory).toHaveBeenCalledTimes(3);
+  });
+
+  it("uses rotated child-model provider state at dispatch", () => {
+    const first = {
+      call: (): Promise<never> => Promise.reject(new Error("unused first test model")),
+    };
+    const rotated = {
+      call: (): Promise<never> => Promise.reject(new Error("unused rotated test model")),
+    };
+    let current = first;
+    const factory = vi.fn(() => current);
+    const childModel = resolveChildModelForRun({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      modelId: "coding-safe-model",
+      childModelPortFactory: factory,
+    });
+
+    expect(childModel.childModelPortFactory?.("coding-safe-model")).toBe(first);
+    current = rotated;
+    expect(childModel.childModelPortFactory?.("coding-safe-model")).toBe(rotated);
+    expect(factory).toHaveBeenCalledTimes(3);
   });
 
   it("fails child-model resolution closed with body-free activity evidence", () => {
@@ -1480,6 +1543,45 @@ function verificationReport(overallStatus: VerificationStatus): VerificationRepo
       "timed-out": 0,
       cancelled: 0,
       "resource-exceeded": 0,
+    },
+  };
+}
+
+function failedVerificationReport(): VerificationReport {
+  return {
+    ...verificationReport("failed"),
+    results: [
+      {
+        kind: "test",
+        scriptName: "test",
+        command: "npm",
+        args: ["run", "test"],
+        status: "failed",
+        exitCode: 1,
+        signal: null,
+        durationMs: 2,
+        truncated: false,
+        redacted: true,
+        outputSummary: "command output captured (320 bytes) and omitted from summary",
+        appliedLimits: [],
+        locations: [
+          {
+            file: "ci/numerical-stability.test.js",
+            line: 19,
+            column: 5,
+            message: "expected the stable average to remain finite",
+          },
+          {
+            file: "/managed/worktree/private/customer.test.js",
+            line: 1,
+            message: "PRIVATE_FAILURE_CANARY",
+          },
+        ],
+      },
+    ],
+    counts: {
+      ...verificationReport("failed").counts,
+      failed: 1,
     },
   };
 }

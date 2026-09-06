@@ -3190,6 +3190,63 @@ describe("coding-sidecar gateway", () => {
     expect(JSON.stringify(sink.events)).not.toContain("bounded source context");
   });
 
+  it("rejects an over-limit assistant tool-call continuation before provider dispatch or spend", async () => {
+    const providerCall = vi.fn((_request: GatewayRequest) =>
+      Promise.resolve(assistantResponse("azure-coding-model")),
+    );
+    const reservePromptTokens = vi.fn(() => ({ ok: true, runId: "run-tool-context" }));
+    const base = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-tool-context" } }),
+      () => providerCall,
+    );
+    const deps = {
+      ...base,
+      runtimeCapabilityAuthenticator: {
+        ...base.runtimeCapabilityAuthenticator,
+        reservePromptTokens,
+      },
+    } as UiHandlerDeps;
+    const privateArguments = { patch: "x".repeat(600_000) };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [
+          { role: "user", content: "continue" },
+          {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: "call-large",
+                type: "function",
+                function: {
+                  name: "keiko_changeset_edit",
+                  arguments: JSON.stringify(privateArguments),
+                },
+              },
+            ],
+          },
+          { role: "tool", content: "rejected", tool_call_id: "call-large" },
+        ],
+        tools: modelVisibleTools(),
+      }),
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: {
+          code: "BAD_REQUEST",
+          message: "Request body estimated prompt tokens exceed profile maxPromptTokens (128000).",
+        },
+      },
+    });
+    expect(providerCall).not.toHaveBeenCalled();
+    expect(reservePromptTokens).not.toHaveBeenCalled();
+  });
+
   it("retains a hard transport cap and body-free rejection before model dispatch", async () => {
     const sink = captureServerLog("warn");
     const calls = vi.fn((_request: GatewayRequest) =>

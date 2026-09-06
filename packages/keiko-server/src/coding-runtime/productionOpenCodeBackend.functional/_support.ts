@@ -10,10 +10,14 @@ import {
 } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchSidecarGatewayRunMetadata,
+  WorkspaceInfo,
+} from "@oscharko-dev/keiko-contracts";
 import { CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
+  resolveCodingSafeSidecarGatewayProfile,
   toolCallingConfigurationFingerprint,
   type GatewayConfig,
   type GatewayRequest,
@@ -188,7 +192,7 @@ export function createFunctionalRuntimeResolver(
       readWorkspaceHead: input.readWorkspaceHead,
       verifiedCommitResult: (runId) =>
         input.verifiedCommit?.snapshots.getLastSuccessfulVerifiedCommit?.(runId),
-      resolveManagedModelProfile: input.resolveManagedModelProfile,
+      resolveManagedModelProfile: input.resolveManagedModelProfile ?? functionalManagedModelProfile,
       researchEgressEnabled: input.researchEgressEnabled,
     },
     ...(input.researchFetchImpl ? { researchFetchImpl: input.researchFetchImpl } : {}),
@@ -223,6 +227,16 @@ export function createFunctionalRuntimeResolver(
   };
 }
 
+function functionalManagedModelProfile(modelId: string | undefined): {
+  readonly profileId: string;
+} {
+  const resolved = resolveCodingSafeSidecarGatewayProfile(functionalGatewayConfig(), {
+    ...(modelId === undefined ? {} : { modelId }),
+  });
+  if (resolved.status !== "available") throw new Error("functional model is unavailable");
+  return { profileId: resolved.modelAlias };
+}
+
 function functionalBackend(
   input: FunctionalRuntimeResolverInput,
   readiness: ReturnType<typeof createOpenCodeGatewayReadinessRegistry>,
@@ -231,6 +245,10 @@ function functionalBackend(
     portable: input.portable,
     runtimeStateRoot: input.runtimeStateRoot,
     gatewayUrl: input.gatewayUrl,
+    resolveGatewayRunMetadata: (modelId): CodingWorkbenchSidecarGatewayRunMetadata | undefined => {
+      const result = resolveCodingSafeSidecarGatewayProfile(functionalGatewayConfig(), { modelId });
+      return result.status === "available" ? result.runMetadata : undefined;
+    },
     // ADR-0043 D11-D14 (#3390): the SAME single attested loopback origin as `gatewayUrl` above,
     // never a second listener's own port -- derived from it exactly the way
     // productionOpenCodeActivation.ts derives both from ONE `loopback` origin.

@@ -16,6 +16,7 @@ import type {
   VerificationReport,
   VerificationStatus,
 } from "@oscharko-dev/keiko-contracts";
+import { isVerificationFailureLocation } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { codingWorkbenchPolicyEffectFor } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
@@ -47,7 +48,11 @@ import type {
   CodingToolGovernedPorts,
   GovernedCodingToolPort,
 } from "./codingToolGovernedDelegate.js";
-import type { CodingToolVerificationResult } from "./codingToolIpc.js";
+import {
+  CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS,
+  type CodingToolVerificationFailure,
+  type CodingToolVerificationResult,
+} from "./codingToolIpc.js";
 import {
   createCodingRepositorySearchHandler,
   type CodingRepositorySearchHandler,
@@ -221,9 +226,9 @@ function resolvedChildModelPort(input: OptionalToolAvailabilityInput): ModelPort
   }
 }
 
-// Resolve once per run, then retain the exact port for both advertised readiness and execution.
-// The production factory constructs a GatewayModelPort, so probing it again on every catalog offer
-// would allocate a different port from the one the child runner ultimately uses.
+// Prove the model is available when the run surface is built, then resolve it again for every
+// readiness offer and dispatch. The production factory follows the live gateway-config generation;
+// retaining this first port would keep removed providers and rotated credentials alive for the run.
 export function resolveChildModelForRun(
   input: OptionalToolAvailabilityInput,
 ): ResolvedChildModelInput {
@@ -233,7 +238,7 @@ export function resolveChildModelForRun(
   return {
     modelId,
     childModelPortFactory: (requestedModelId): ModelPort | undefined =>
-      requestedModelId === modelId ? model : undefined,
+      requestedModelId === modelId ? resolvedChildModelPort(input) : undefined,
   };
 }
 
@@ -589,7 +594,11 @@ type VerificationPortResult =
       readonly status: "completed";
       readonly verification?: CodingToolVerificationResult;
     }
-  | { readonly status: "failed"; readonly reasonCode?: string | undefined };
+  | {
+      readonly status: "failed";
+      readonly reasonCode?: string | undefined;
+      readonly verificationFailure?: CodingToolVerificationFailure | undefined;
+    };
 
 // What a finished run that did not pass tells the model. Exhaustive by TYPE, not by convention:
 // `Record<Exclude<VerificationStatus, "passed">, …>` stops compiling the day the contract gains an
@@ -666,15 +675,34 @@ function verificationOutcome(
   commitProof: CodingToolVerificationResult | undefined,
 ): VerificationPortResult {
   if (report.overallStatus !== "passed") {
+    const verificationFailure = modelVerificationFailure(report);
     return {
       status: "failed",
       reasonCode: VERIFICATION_OUTCOME_REASON_CODES[report.overallStatus],
+      ...(verificationFailure === undefined ? {} : { verificationFailure }),
     };
   }
   // A passing runner whose authority lapsed is a refusal, never a failed test run.
   return verificationCompletionLive(input, guard, signal)
     ? { status: "completed", ...(commitProof === undefined ? {} : { verification: commitProof }) }
     : verificationPortRefusal(input, "verification-authority-revoked");
+}
+
+function modelVerificationFailure(
+  report: VerificationReport,
+): CodingToolVerificationFailure | undefined {
+  if (report.overallStatus !== "failed") return undefined;
+  const failed = report.results.find((result) => result.status === "failed");
+  if (failed === undefined) return undefined;
+  const candidates = failed.locations ?? [];
+  const locations = candidates
+    .filter(isVerificationFailureLocation)
+    .slice(0, CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS);
+  return {
+    summary: `${failed.kind} failed; ${String(locations.length)} structured failure location${locations.length === 1 ? "" : "s"}`,
+    locations,
+    truncated: failed.truncated || candidates.length > locations.length,
+  };
 }
 
 async function completeCandidateVerification(

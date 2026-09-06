@@ -98,7 +98,7 @@ function recover(snapshots: CodingRuntimeSnapshotStore): CodingRuntimeSnapshot {
   if (source?.draftDelivery === undefined) throw new Error("Missing initial draft");
   snapshots.markNonterminalRecoveryRequired(AT);
   snapshots.acknowledgeRecovery("run-1", AT);
-  snapshots.releaseRecoveryForRetry("run-1", AT);
+  // Linked successor creation settles this acknowledged predecessor atomically with its insert.
   const {
     draftDelivery,
     verifiedCommitResult: _receipt,

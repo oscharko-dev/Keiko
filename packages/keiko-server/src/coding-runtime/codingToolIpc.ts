@@ -13,6 +13,7 @@ import type {
   AuxiliaryCapabilityOutcomeV1,
   CodingWorkbenchRuntimeAuthorityEnvelope,
   EditorAgentChangeset,
+  VerificationFailureLocation,
   VerifiedCommitResult,
   CodingRuntimeGitResult,
 } from "@oscharko-dev/keiko-contracts";
@@ -29,6 +30,8 @@ export const CODING_TOOL_READ_MAX_START_LINE = 1_000_000;
 export const CODING_TOOL_READ_MAX_WINDOW_LINES = 5_000;
 /** Largest model-visible repository-path discovery result. */
 export const CODING_TOOL_DISCOVER_MAX_RESULTS = 100;
+export const CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS = 8;
+export const CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS = 1_024;
 
 export type CodingToolAction =
   | "read"
@@ -61,6 +64,13 @@ export type CodingToolVerificationResult =
       readonly reasonCode: "candidate-not-staged" | "candidate-drift";
       readonly nextAction: "stage-then-verify" | "verify-again";
     };
+
+/** Bounded, model-only diagnostics for a verifier that executed and failed. */
+export interface CodingToolVerificationFailure {
+  readonly summary: string;
+  readonly locations: readonly VerificationFailureLocation[];
+  readonly truncated: boolean;
+}
 
 export type CodingToolActionRequest =
   | (CodingToolRequestIdentity & {
@@ -202,6 +212,7 @@ export type CodingToolResult =
       readonly status: "failed";
       readonly evidence: readonly CodingToolEvidence[];
       readonly reasonCode?: string | undefined;
+      readonly verificationFailure?: CodingToolVerificationFailure | undefined;
     }
   | {
       readonly status: "completed";

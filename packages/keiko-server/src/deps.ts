@@ -1720,6 +1720,28 @@ function defaultModelPortFactory(runtimeConfig: RuntimeGatewayConfig): ModelPort
   };
 }
 
+// Child agents require a coding-safe provider, while the shared default factory also serves
+// ordinary chat and embedding callers. Revalidate that narrower eligibility on every child
+// readiness/dispatch resolution without narrowing the process-wide model-port contract.
+export function createLiveCodingChildModelPortFactory(
+  runtimeConfig: RuntimeGatewayConfig,
+  modelPortFactory: ModelPortFactory = defaultModelPortFactory(runtimeConfig),
+): ModelPortFactory {
+  return (modelId): ModelPort | undefined => {
+    const generation = runtimeConfig.generation();
+    const config = runtimeConfig.current();
+    const selected = resolveCodingSafeSidecarGatewayProfile(config, { modelId });
+    if (selected.status !== "available" || selected.modelAlias !== modelId) {
+      return undefined;
+    }
+    const model = modelPortFactory(modelId);
+    if (model === undefined || runtimeConfig.generation() !== generation) {
+      return undefined;
+    }
+    return model;
+  };
+}
+
 function buildTerminalManager(options: {
   readonly store: UiStore;
   readonly evidenceStore: EvidenceStore;
@@ -4915,7 +4937,7 @@ function qualifiedRuntimeResolver(
     resolveWorkspaceRootAccess: collapsedWorkspaceRootAccessResolver(resolveWorkspaceRootAccess),
     gatewayEgress: () => args.runtimeConfig.current()?.egress ?? args.egress,
     childModelPortFactory:
-      args.options.modelPortFactory ?? defaultModelPortFactory(args.runtimeConfig),
+      args.options.modelPortFactory ?? createLiveCodingChildModelPortFactory(args.runtimeConfig),
     // #2387: a read-only child agent calls the gateway directly, so it needs the same resolved
     // coding-safe PROVIDER model id the sidecar gateway maps the runtime's "coding" alias onto.
     // Resolved per call because the gateway config can change while the server is up.

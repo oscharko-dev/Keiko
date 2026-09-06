@@ -134,7 +134,7 @@ function successor(runId: string, headSha?: string): CiRepairBudgetContext {
   const old = snapshots.get(context.runId);
   if (old?.draftDelivery === undefined) throw new Error("missing predecessor");
   snapshots.acknowledgeRecovery(old.runId, "2026-09-05T00:00:00.000Z");
-  snapshots.releaseRecoveryForRetry(old.runId, "2026-09-05T00:00:00.000Z");
+  // Linked successor creation settles this acknowledged predecessor atomically with its insert.
   const {
     verifiedCommitResult: _receipt,
     terminalAt: _terminal,
