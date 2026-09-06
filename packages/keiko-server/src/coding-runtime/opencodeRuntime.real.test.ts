@@ -375,7 +375,7 @@ function realPortableRuntime(testRoot: string): {
   return { resourceRoot, verification, target: platform.target };
 }
 
-function gatewayConfig(): GatewayConfig {
+function gatewayConfig(contextWindow = 128_000): GatewayConfig {
   const provider = {
     modelId: "functional-coding-model",
     baseUrl: "https://provider.invalid/v1",
@@ -394,7 +394,7 @@ function gatewayConfig(): GatewayConfig {
       {
         id: "functional-coding-model",
         kind: "chat",
-        contextWindow: 128_000,
+        contextWindow,
         maxOutputTokens: 4_096,
         toolCalling: true,
         toolCallingVerification: {
@@ -464,9 +464,12 @@ function scriptedProductiveResponse(): ProductiveResponseControl {
       if (requestContainsText(request, "Continue after the prepared change.")) {
         return new Promise<NormalizedResponse>((resolve) => {
           held = true;
-          releaseResponse = (): void => {
+          const settle = (): void => {
+            request.cancellationSignal?.removeEventListener("abort", settle);
             resolve({ ...normalResponse(), content: "Cancelled turn settled." });
           };
+          request.cancellationSignal?.addEventListener("abort", settle, { once: true });
+          releaseResponse = settle;
         });
       }
       if (requestContainsToolCall(request, "keiko_changeset_edit")) {
@@ -515,6 +518,7 @@ function requestContainsToolCall(request: GatewayRequest, name: string): boolean
 async function createGatewayHarness(
   script: GatewayResponseScript = (): Promise<NormalizedResponse> =>
     Promise.resolve(normalResponse()),
+  config = gatewayConfig(),
 ): Promise<GatewayHarness> {
   const readiness = createOpenCodeGatewayReadinessRegistry();
   const requests: GatewayRequest[] = [];
@@ -525,7 +529,6 @@ async function createGatewayHarness(
   const responses: string[] = [];
   const summaries: string[] = [];
   const terminalFrames: string[] = [];
-  const config = gatewayConfig();
   const deps = {
     config,
     configPresent: true,
@@ -1029,26 +1032,38 @@ interface NativeCompactionHarness {
   readonly productiveActions: string[];
 }
 
+interface NativeContextGeometry {
+  readonly contextWindowTokens: number;
+  readonly maxInputTokens: number;
+  readonly maxOutputTokens: number;
+}
+
+const DEFAULT_NATIVE_CONTEXT_GEOMETRY: NativeContextGeometry = {
+  contextWindowTokens: 65_536,
+  maxInputTokens: 61_440,
+  maxOutputTokens: 4_096,
+};
+
 async function createNativeCompactionHarness(
   script: GatewayResponseScript,
+  contextGeometry: NativeContextGeometry = DEFAULT_NATIVE_CONTEXT_GEOMETRY,
 ): Promise<NativeCompactionHarness> {
   const root = mkdtempSync(join(tmpdir(), "keiko-opencode-compaction-"));
   const workspaceRoot = join(root, "workspace");
   const stateBaseRoot = join(root, "state");
   mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 });
   const portable = realPortableRuntime(root);
-  const gateway = await createGatewayHarness(script);
+  const gateway = await createGatewayHarness(
+    script,
+    gatewayConfig(contextGeometry.contextWindowTokens),
+  );
   const toolFacade = await createToolFacadeHarness();
   const productiveActions: string[] = [];
   const backend = new DirectChildRuntimeBackend(functionalPlatform().qualification);
   const runtime = createOpenCodeRuntimeComposition({
     portable,
     stateBaseRoot,
-    contextGeometry: {
-      contextWindowTokens: 65_536,
-      maxInputTokens: 61_440,
-      maxOutputTokens: 4_096,
-    },
+    contextGeometry,
     capabilities: {
       modelGatewayCapability: MODEL_CAPABILITY,
       toolFacadeCapability: TOOL_CAPABILITY,
@@ -1181,21 +1196,28 @@ describe("[functional-only] real staged OpenCode runtime", () => {
   );
 
   it.skipIf(!FUNCTIONAL_ENABLED)(
-    "stops after the native compactor rejects an uncompactable long turn",
+    "stops when one native compaction cannot reduce an uncompactable long turn",
     async () => {
       const state: NativeCompactionState = {
         rounds: 0,
         roundsInTurn: 0,
-        assistantContentChars: 100_000,
+        assistantContentChars: 0,
         turnSize: Number.MAX_SAFE_INTEGER,
         compactionMessageCounts: [],
         recoveryMessageCounts: [],
       };
-      const harness = await createNativeCompactionHarness(nativeCompactionResponseScript(state));
+      const harness = await createNativeCompactionHarness(nativeCompactionResponseScript(state), {
+        contextWindowTokens: 16_000,
+        maxInputTokens: 12_000,
+        maxOutputTokens: 4_000,
+      });
       try {
         await startNativeCompactionHarness(harness);
         await expect(
-          harness.runtime.runPort.submitTask(RUN_ID, "Exercise bounded uncompactable history."),
+          harness.runtime.runPort.submitTask(
+            RUN_ID,
+            `Exercise bounded uncompactable history.${"x".repeat(60_000)}`,
+          ),
         ).resolves.toBe(true);
         const terminal = await harness.runtime.runPort.waitForTerminal(
           RUN_ID,
@@ -1209,10 +1231,10 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         expect(Math.max(...messageCounts)).toBeLessThanOrEqual(512);
         expect(
           harness.gateway.responses().filter((response) => response.endsWith(" 400")),
-        ).toHaveLength(2);
-        expect(state.compactionMessageCounts).toEqual([]);
+        ).toHaveLength(3);
+        expect(state.compactionMessageCounts).toEqual([3]);
         expect(state.recoveryMessageCounts).toEqual([]);
-        expect(state.rounds).toBeGreaterThan(1);
+        expect(state.rounds).toBe(0);
         const databasePath = join(harness.runRoot, "state", "opencode.db");
         expect(runtimeDatabasePartTypes(databasePath)).toContain("compaction");
         expect(runtimeDatabaseProjection(databasePath)).toContain("ContextOverflowError");
@@ -1382,18 +1404,12 @@ describe("[functional-only] real staged OpenCode runtime", () => {
             `functional-opencode-second-turn-dispatch-missing:accepted=${String(secondAccepted)}:status-before-submit=${statusBeforeSecondSubmit}:arrival-latency-ms=${String(heldArrivalLatencyMs)}:gateway-calls=${String(gateway.calls())}:gateway-requests=${String(gateway.requests.length)}:gateway-summaries=${gateway.summaries().join(",")}:status-after-submit=${sessionStatuses.slice(statusSampleOffset).join(",")}:manager-health=${runtime.manager.health().status}:stderr=${backend.redactedStderr()}:${runtimeDatabaseProjection(databasePath)}`,
           );
         }
-        // The live idle control may settle the turn before a final status poll samples the
-        // cleared entry, so the last observation is either already empty or the stale busy
-        // sample; the accepted second submit and the fresh busy observation below carry the
-        // actual settled-session proof.
+        // The held model response is direct in-flight evidence: the gateway has accepted the
+        // productive request but has not closed it. `abortTask` below is the only terminal waiter,
+        // avoiding two consumers racing to settle the same native turn.
         expect(["status=", "status=busy"]).toContain(statusBeforeSecondSubmit);
-        await expect(
-          waitForCondition(
-            () =>
-              sessionStatuses.slice(statusSampleOffset).some((status) => status.includes("busy")),
-            AbortSignal.timeout(5_000),
-          ),
-        ).resolves.toBe(true);
+        expect(sessionStatuses.slice(statusSampleOffset)).toEqual([]);
+        expect(gateway.responseCloses()).toBeLessThan(gateway.calls());
         expect(gateway.requests).toHaveLength(5);
         expect(gateway.requests.at(-1)?.toolCatalog?.projection.projectionDigest).toBe(
           expectedProjection.projectionDigest,

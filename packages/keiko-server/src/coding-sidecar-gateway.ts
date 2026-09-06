@@ -2120,13 +2120,24 @@ function logChatRequestRejection(
   ctx: RouteContext,
   runId: string,
   validationError: RouteResult,
+  observed?: {
+    readonly parsed: CodingSidecarGatewayChatCompletionRequest;
+    readonly bounds: CodingWorkbenchSidecarGatewayRunMetadata;
+    readonly estimatedPromptTokens: number;
+  },
 ): void {
-  logGatewayRejection(
-    ctx,
-    runId,
-    validationError.status,
-    classifyBadRequestReason(validationError),
-  );
+  const reason = classifyBadRequestReason(validationError);
+  const boundedEvidence =
+    observed !== undefined &&
+    (reason === "input-messages-exceeded" || reason === "prompt-tokens-exceeded")
+      ? {
+          estimatedPromptTokens: observed.estimatedPromptTokens,
+          maxPromptTokens: observed.bounds.maxPromptTokens,
+          inputMessageCount: observed.parsed.messages.length,
+          maxInputMessages: observed.bounds.maxInputMessages,
+        }
+      : undefined;
+  logGatewayRejection(ctx, runId, validationError.status, reason, boundedEvidence);
 }
 
 interface ValidatedChatRequest {
@@ -2151,7 +2162,14 @@ async function readValidatedChatRequest(
     estimatedPromptTokens,
   );
   if (validationError !== undefined) {
-    logChatRequestRejection(ctx, authentication.runId, validationError);
+    logChatRequestRejection(
+      ctx,
+      authentication.runId,
+      validationError,
+      isRouteResult(parsed)
+        ? undefined
+        : { parsed, bounds: resolved.result.runMetadata, estimatedPromptTokens },
+    );
     return validationError;
   }
   if (isRouteResult(parsed)) return parsed;

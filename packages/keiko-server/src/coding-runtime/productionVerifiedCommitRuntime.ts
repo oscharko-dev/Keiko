@@ -16,7 +16,7 @@ import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
 
 export interface VerifiedCommitRuntimeDependencies extends Omit<
   VerifiedCommitServiceOptions,
-  "context"
+  "context" | "policyAllowsWithoutApproval"
 > {
   readonly resolveWorkspace: (root: string) => WorkspaceInfo | undefined;
   readonly buffersClean: (root: string, runId: string) => boolean;
@@ -26,6 +26,7 @@ export interface VerifiedCommitRuntimeBinding {
   readonly envelopeDigest: string;
   readonly context: CodingRuntimeTrustedContext;
   readonly stillAuthorized: () => boolean;
+  readonly policyAllowsWithoutApproval?: (() => boolean) | undefined;
   readonly signal: AbortSignal;
 }
 export function createProductionVerifiedCommitService(
@@ -37,6 +38,7 @@ export function createProductionVerifiedCommitService(
     : createVerifiedCommitService({
         ...deps,
         context: () => resolveVerifiedCommitContext(deps, binding),
+        policyAllowsWithoutApproval: binding.policyAllowsWithoutApproval ?? (() => false),
       });
 }
 export function resolveVerifiedCommitContext(

@@ -370,6 +370,8 @@ function recordRuntimeVerificationSummary(
       passedCount: event.passedCount,
       failedCount: event.failedCount,
       skippedCount: event.skippedCount,
+      failureLocationCount: event.failureLocationCount,
+      failureLocationsTruncated: event.failureLocationsTruncated,
     },
   });
 }

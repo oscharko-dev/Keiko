@@ -276,6 +276,11 @@ function finishAdmission(
   } = input;
   if (request.action === "delivery" && request.phase === "execute") {
     if (trusted.runId === undefined) return { ok: false, reason: "action-not-authorized" };
+    // Full access reaches this branch only after both admission passes accepted the exact live
+    // delivery envelope without an approval proof. Preserve that policy authorization as an
+    // approval-free guard; the delivery service rechecks the live mode and this guard at its
+    // effect edge before it can pass `{ required: false }` to the Git kernel.
+    if (!approvalMatched) return guarded(authority, context, capability, request, binding, false);
     if (isDraftToolRequest(request)) {
       const lease = approvalProofVerifier?.consumeDelivery?.(trusted.runId, request);
       if (lease === undefined) return { ok: false, reason: "action-not-authorized" };
@@ -638,15 +643,36 @@ function commitPolicyAllowed(
   approved: boolean,
 ): boolean {
   if (request.phase === "propose" || request.phase === "reconcile") return true;
-  if (request.phase !== "execute" || !approved) return false;
+  if (request.phase !== "execute") return false;
   const mode = envelope.authority.effectiveMode;
   const effect = codingWorkbenchPolicyEffectFor(mode, "delivery", "high");
-  if (effect === "denied") return false;
+  if (effect === "denied" || (!approved && mode !== "autonomous-delivery")) return false;
   return (
     mode !== "autonomous-delivery" ||
     (isDraftToolRequest(request)
       ? deliveryAllowed(envelope, request.intent)
       : hasScope(envelope.authority.connectorScopes, "source-control.write"))
+  );
+}
+
+/**
+ * True only when the current server-resolved envelope authorizes this exact Code-task delivery
+ * execute without a per-action approval. Proposal handlers use this to decide whether they can
+ * expose a model-only ready disposition without opening an operator approval request.
+ */
+export function codingToolFullAccessDeliveryAllowed(
+  authority: CodingWorkbenchAuthorityEnvelope,
+  request: Extract<CodingToolActionRequest, { readonly action: "delivery" }>,
+): boolean {
+  const executeRequest = { ...request, phase: "execute" } as const;
+  return (
+    authority.effectiveMode === "autonomous-delivery" &&
+    hasClasses(authority.actionClasses, codingToolRequiredActionClasses(executeRequest)) &&
+    hasScope(authority.connectorScopes, "source-control.write") &&
+    (request.intent === "commit" ||
+      (authority.networkPolicy.mode !== "deny-all" &&
+        hasClasses(authority.actionClasses, ["network-egress"]) &&
+        hasScope(authority.networkPolicy.connectorScopes, "source-control.write")))
   );
 }
 

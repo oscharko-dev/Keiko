@@ -40,6 +40,7 @@ export function createProductionDraftDeliveryService(
     onChanged: (record): void => {
       publishDraftDeliveryRecord(record, onEvent);
     },
+    policyAllowsWithoutApproval: binding.policyAllowsWithoutApproval ?? (() => false),
   });
 }
 export function resolveDraftDeliveryContext(
@@ -141,11 +142,6 @@ export async function runDraftDeliveryRequest(
   if (service === undefined)
     return { status: "failed", reasonCode: "capability-backend-unavailable" };
   const result = await dispatchDraft(service, request, guard, signal);
-  if (
-    result.status === "recorded" &&
-    (result.record.phase === "push-proposed" || result.record.phase === "pr-proposed")
-  )
-    input.requestDraftDeliveryApproval?.(result.record.proposalId);
   if (result.status === "unavailable") return { status: "failed", reasonCode: result.reason };
   return { status: "completed", draftDelivery: result };
 }
@@ -160,10 +156,9 @@ function dispatchDraft(
     return request.intent === "push"
       ? service.proposePush()
       : service.proposePullRequest(request.title ?? "");
-  return guard.deliveryApproval === undefined
-    ? Promise.resolve({ status: "unavailable", reason: "proposal-unavailable" })
-    : service.executeApproved(request.proposalId ?? "", guard.deliveryApproval, {
-        check: guard.check,
-        signal,
-      });
+  return service.executeApproved(request.proposalId ?? "", guard.deliveryApproval, {
+    check: guard.check,
+    intent: request.intent,
+    signal,
+  });
 }

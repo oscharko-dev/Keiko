@@ -3716,6 +3716,8 @@ describe("coding sidecar gateway rejection activity log", () => {
     );
 
     expect(result).toMatchObject({ status: 400 });
+    const estimatedPromptTokens = sink.events[0]?.extra?.estimatedPromptTokens;
+    expect(typeof estimatedPromptTokens).toBe("number");
     expect(sink.events).toEqual([
       {
         level: "warn",
@@ -3725,9 +3727,48 @@ describe("coding sidecar gateway rejection activity log", () => {
         durationMs: undefined,
         status: 400,
         errorKind: undefined,
-        extra: { reason: "prompt-tokens-exceeded", runId: "run-gateway-test" },
+        extra: {
+          reason: "prompt-tokens-exceeded",
+          runId: "run-gateway-test",
+          estimatedPromptTokens,
+          maxPromptTokens: 16,
+          inputMessageCount: 1,
+          maxInputMessages: 512,
+        },
       },
     ]);
+    expect(JSON.stringify(sink.events)).not.toContain("x".repeat(100));
+  });
+
+  it("logs body-free observed bounds when the input message count exceeds the profile", async () => {
+    const sink = captureServerLog("warn");
+    const deps = depsValue(configValue(provider(), capability()));
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({
+        messages: Array.from({ length: 513 }, () => ({ role: "user", content: "private" })),
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 400 });
+    const estimatedPromptTokens = sink.events[0]?.extra?.estimatedPromptTokens;
+    expect(typeof estimatedPromptTokens).toBe("number");
+    expect(sink.events).toEqual([
+      expect.objectContaining({
+        op: "coding-sidecar.gateway.rejected",
+        status: 400,
+        extra: {
+          reason: "input-messages-exceeded",
+          runId: "run-gateway-test",
+          estimatedPromptTokens,
+          maxPromptTokens: 128_000,
+          inputMessageCount: 513,
+          maxInputMessages: 512,
+        },
+      }),
+    ]);
+    expect(JSON.stringify(sink.events)).not.toContain("private");
   });
 
   it("logs a body-free rejection line naming the mismatching tool identifiers for a tool-contract-drift rejection", async () => {

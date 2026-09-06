@@ -540,6 +540,62 @@ describe("CodingToolAuthorityPort", () => {
       expect(admitted.ok && admitted.mutationGuard.deliveryApproval).toEqual({ claim: undefined });
     },
   );
+  it("admits approval-free Full access delivery only from the complete live policy envelope", () => {
+    const request = {
+      action: "delivery" as const,
+      actionId: "full-access-commit",
+      idempotencyKey: "full-access-commit",
+      intent: "commit" as const,
+      phase: "execute" as const,
+      proposalId: "commit-proposal",
+    };
+    const envelope = restrictedEnvelope({
+      effectiveMode: "autonomous-delivery",
+      actionClasses: ["workspace-read", "delivery-substrate"],
+      connectorScopes: ["source-control.write"],
+    });
+    let currentEnvelope = envelope;
+    const authority = {
+      revalidateCapabilityForMutation: vi.fn(() => ({
+        ok: true as const,
+        envelope: currentEnvelope,
+      })),
+      resolveCapabilityForDelegation: vi.fn(() => ({
+        ok: true as const,
+        envelope: currentEnvelope,
+      })),
+    };
+    const port = createCodingToolAuthorityPort(authority, runtimeContext);
+
+    const admitted = port.admit("capability", request);
+    expect(admitted.ok).toBe(true);
+    currentEnvelope = restrictedEnvelope({
+      effectiveMode: "autonomous-delivery",
+      actionClasses: ["workspace-read", "delivery-substrate"],
+      connectorScopes: [],
+    });
+    expect(admitted.ok && admitted.mutationGuard.check()).toBe(false);
+    for (const incomplete of [
+      restrictedEnvelope({
+        effectiveMode: "autonomous-delivery",
+        actionClasses: ["workspace-read"],
+        connectorScopes: ["source-control.write"],
+      }),
+      restrictedEnvelope({
+        effectiveMode: "autonomous-delivery",
+        actionClasses: ["workspace-read", "delivery-substrate"],
+        connectorScopes: [],
+      }),
+      restrictedEnvelope({
+        effectiveMode: "supervised-coding",
+        actionClasses: ["workspace-read", "delivery-substrate"],
+        connectorScopes: ["source-control.write"],
+      }),
+    ]) {
+      currentEnvelope = incomplete;
+      expect(port.admit("capability", request).ok).toBe(false);
+    }
+  });
   it("previews live authority without reserving delegation or returning mutation authority", () => {
     const resolveCapabilityForDelegation = vi.fn(() => ({
       ok: true as const,

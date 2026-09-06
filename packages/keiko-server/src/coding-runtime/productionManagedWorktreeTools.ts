@@ -39,6 +39,7 @@ import {
 } from "../diagnostics-log.js";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
+  codingToolFullAccessDeliveryAllowed,
   createRuntimeCodingToolFacade,
   type CommitExecutionApproval,
 } from "./codingToolAuthorityPort.js";
@@ -493,6 +494,14 @@ async function completeDraftDeliveryRequest(
   const service = input.draftDeliveryService;
   if (service === undefined) return { status: "failed", reasonCode: "delivery-authority-revoked" };
   const actionKind = proposal.record.phase === "push-proposed" ? "push" : "pull-request";
+  if (
+    service.review(proposal.record.proposalId) !== undefined &&
+    fullAccessProposalReady(guard, request, proposal.record.proposalId)
+  ) {
+    recordPolicyAuthorizedProposal(input, actionKind, proposal.record.proposalId);
+    return { status: "completed", draftDelivery: proposal, approvalDisposition: "ready" };
+  }
+  input.requestDraftDeliveryApproval?.(proposal.record.proposalId);
   const outcome = await waitForRuntimeProposalApproval(service, proposal.record.proposalId, signal);
   recordProposalApprovalWait(input, actionKind, proposal.record.proposalId, outcome);
   return outcome === "approved"
@@ -515,12 +524,50 @@ async function completeVerifiedCommitRequest(
   const result = await runCommitRequest(service, request, guard, signal);
   if (result === undefined) return { status: "failed", reasonCode: "delivery-authority-revoked" };
   if (result.status !== "approval-required") return { status: "completed", verifiedCommit: result };
+  if (
+    service.review(result.proposalId) !== undefined &&
+    fullAccessProposalReady(guard, request, result.proposalId)
+  ) {
+    recordPolicyAuthorizedProposal(input, "commit", result.proposalId);
+    return { status: "completed", verifiedCommit: result, approvalDisposition: "ready" };
+  }
   input.requestCommitApproval?.(result.proposalId);
   const outcome = await waitForRuntimeProposalApproval(service, result.proposalId, signal);
   recordProposalApprovalWait(input, "commit", result.proposalId, outcome);
   return outcome === "approved"
     ? { status: "completed", verifiedCommit: result, approvalDisposition: "ready" }
     : { status: "failed", reasonCode: "delivery-authority-revoked" };
+}
+
+function fullAccessProposalReady(
+  guard: CodingToolMutationGuard,
+  request: Extract<
+    import("./codingToolIpc.js").CodingToolActionRequest,
+    { readonly action: "delivery" }
+  >,
+  proposalId: string,
+): boolean {
+  const envelope = guard.resolveParentAuthority?.();
+  return (
+    envelope !== undefined &&
+    guard.check() &&
+    codingToolFullAccessDeliveryAllowed(envelope, { ...request, phase: "execute", proposalId })
+  );
+}
+
+function recordPolicyAuthorizedProposal(
+  input: ProductionManagedWorktreeToolInput,
+  actionKind: "commit" | "push" | "pull-request",
+  proposalId: string,
+): void {
+  (input.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    op: "coding-runtime.tool-result",
+    correlationId: isValidCorrelationId(input.authorityRef.runId)
+      ? input.authorityRef.runId
+      : UNKNOWN_CORRELATION_ID,
+    extra: { actionKind, proposalId, state: "proposal-ready", reason: "policy-authorized" },
+  });
 }
 
 function recordProposalApprovalWait(
@@ -554,14 +601,13 @@ function runCommitRequest(
 ): ReturnType<VerifiedCommitService["execute"]> {
   if (request.phase === "propose" && request.message !== undefined)
     return service.propose(request.message);
-  if (request.proposalId === undefined || guard.deliveryApproval === undefined)
-    return Promise.resolve(undefined);
+  if (request.proposalId === undefined) return Promise.resolve(undefined);
   // #3384 F4: `deliveryApproval` carries the un-consumed commit claim built by
   // codingToolAuthorityPort.ts's finishAdmission (never a pre-consumed lease) — execute()'s own
   // preflightBlock -> consumeApproval -> executeConsumed order decides whether it gets spent,
   // only after every legitimate pre-commit block has had a chance to fire.
-  const { claim } = guard.deliveryApproval as CommitExecutionApproval;
-  return service.execute(request.proposalId, claim, { check: guard.check, signal });
+  const approval = guard.deliveryApproval as CommitExecutionApproval | undefined;
+  return service.execute(request.proposalId, approval?.claim, { check: guard.check, signal });
 }
 
 function buildCommandRunner(
@@ -1000,6 +1046,7 @@ function publishVerification(
   sequence: number,
   report: VerificationReport,
 ): void {
+  const failure = modelVerificationFailure(report);
   const event: CodingWorkbenchRuntimeEvent = {
     schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
     eventId: `event-verification-${String(sequence)}`,
@@ -1011,6 +1058,8 @@ function publishVerification(
     passedCount: report.counts.passed,
     failedCount: failedCount(report),
     skippedCount: report.counts.skipped,
+    failureLocationCount: failure?.locations.length ?? 0,
+    failureLocationsTruncated: failure?.truncated ?? false,
   };
   if (!validateCodingWorkbenchRuntimeEvent(event).ok) {
     throw new Error("runtime-verification-event-invalid");

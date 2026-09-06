@@ -519,6 +519,13 @@ class VerifiedCommitController implements VerifiedCommitService {
     const { context, binding } = proposal;
     const blocked = await this.preflightBlock(proposal);
     if (blocked !== undefined) return blocked;
+    if (this.options.policyAllowsWithoutApproval?.() === true) {
+      this.log(context, "approval", {
+        proposalId: binding.proposalId,
+        state: "policy-authorized",
+      });
+      return this.executeConsumed(proposal, { required: false });
+    }
     const lease = this.consumeApproval(binding.proposalId, approval);
     const claim = lease === undefined ? undefined : this.executionLeases.get(lease)?.claim;
     if (lease !== undefined) this.executionLeases.delete(lease);
@@ -536,6 +543,8 @@ class VerifiedCommitController implements VerifiedCommitService {
     // caller's own checks and this call still gets one last live look before the effect.
     const blocked = await this.preflightBlock(proposal);
     if (blocked !== undefined) return blocked;
+    if (claim.required === false && this.options.policyAllowsWithoutApproval?.() !== true)
+      return this.record(context, binding, "blocked", "approval-invalid");
     this.proposals.delete(binding.proposalId);
     this.proof = undefined;
     // Review finding (comment 3941793530, #3384 audit): the write-ahead recovery-required marker

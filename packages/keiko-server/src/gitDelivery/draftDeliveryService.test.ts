@@ -6,7 +6,7 @@ import { publishDraftDeliveryRecord } from "../coding-runtime/productionDraftDel
 import { redactLogFields } from "../observability/log-redaction.js";
 import { validateCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
 import { parseCodingToolRequest } from "../coding-runtime/codingToolIpc.js";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import { DraftDeliveryFixture } from "./draftDeliveryServiceTestSupport.js";
 import { DraftDeliveryController } from "./draftDeliveryService.js";
@@ -107,6 +107,42 @@ describe("issue-bound draft delivery controller", () => {
       record: { phase: "draft-created", pullRequest: { number: 17 } },
     });
     expect(fixture.createCount).toBe(1);
+  });
+  it("uses Full access policy authorization for push without a local-operator approval", async () => {
+    const service = new DraftDeliveryController({
+      ...fixture.options,
+      policyAllowsWithoutApproval: (): boolean => true,
+    });
+    const proposal = await service.proposePush();
+    const proposalId = id(proposal);
+    expect(service.matchesApproval(proposalId)).toBe(false);
+
+    expect(
+      await service.executeApproved(proposalId, undefined, { check: () => true, intent: "push" }),
+    ).toMatchObject({ record: { phase: "pushed" } });
+    expect(fixture.pushCount).toBe(1);
+    expect(
+      fixture.events.some(
+        (event) =>
+          event.op === "git.draft-delivery" &&
+          event.extra?.phase === "approval" &&
+          event.extra.reason === "policy-authorized",
+      ),
+    ).toBe(true);
+  });
+  it("fails closed when Full access policy authorization is withdrawn before push execute", async () => {
+    let policyAllowsWithoutApproval = true;
+    const service = new DraftDeliveryController({
+      ...fixture.options,
+      policyAllowsWithoutApproval: (): boolean => policyAllowsWithoutApproval,
+    });
+    const proposal = await service.proposePush();
+    policyAllowsWithoutApproval = false;
+
+    expect(
+      await service.executeApproved(id(proposal), undefined, { check: () => true, intent: "push" }),
+    ).toMatchObject({ record: { phase: "recovery-required", reason: "approval-invalid" } });
+    expect(fixture.pushCount).toBe(0);
   });
 });
 
@@ -285,6 +321,10 @@ describe.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as
   "productive draft facade in %s",
   (mode) => {
     it("requires different exact push and PR approvals and rejects cross-operation grants, revoked runs and replay", async () => {
+      const draftService = new DraftDeliveryController({
+        ...fixture.options,
+        policyAllowsWithoutApproval: (): boolean => mode === "autonomous-delivery",
+      });
       const commitService = createVerifiedCommitService({
         ...fixture.options,
         snapshots: fixture.snapshots,
@@ -293,7 +333,7 @@ describe.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as
       });
       const runtime = commitFacadeFixture({
         service: commitService,
-        draftDeliveryService: fixture.service,
+        draftDeliveryService: draftService,
         root: fixture.root,
         mode,
         live: () => fixture.live,
@@ -320,34 +360,48 @@ describe.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as
           }),
         });
       };
-      const proposal = await call("push", "propose");
+      const pendingPush = call("push", "propose");
+      if (mode !== "autonomous-delivery") {
+        await vi.waitFor(() => {
+          expect(runtime.events.at(-1)?.permissionRequest?.actionKind).toBe("push");
+        });
+        const pendingId = runtime.events.at(-1)?.permissionRequest?.requestId;
+        if (pendingId === undefined) throw new Error("push permission missing");
+        expect(runtime.bridge.issueDelivery?.("run-1", pendingId)).toBeDefined();
+      }
+      const proposal = await pendingPush;
       expect(proposal, JSON.stringify(fixture.events)).toMatchObject({
         status: "completed",
         draftDelivery: { record: { phase: "push-proposed" } },
       });
       if (!("draftDelivery" in proposal)) throw new Error("missing delivery result");
       const proposalId = id(proposal.draftDelivery);
-      expect(await call("push", "execute", { proposalId })).toMatchObject({ status: "denied" });
       expect(runtime.bridge.issueDelivery?.("other-run", proposalId)).toBeUndefined();
-      expect(runtime.bridge.issueDelivery?.("run-1", proposalId)).toBeDefined();
-      expect(await call("pull-request", "execute", { proposalId })).toMatchObject({
-        status: "denied",
-      });
+      if (mode !== "autonomous-delivery")
+        expect(await call("pull-request", "execute", { proposalId })).toMatchObject({
+          status: "denied",
+        });
+      else expect(draftService.matchesApproval(proposalId)).toBe(false);
       expect(await call("push", "execute", { proposalId })).toMatchObject({
         draftDelivery: { record: { phase: "pushed" } },
       });
-      const pr = await call("pull-request", "propose", { title: "feat: bounded change" });
+      const pendingPr = call("pull-request", "propose", { title: "feat: bounded change" });
+      if (mode !== "autonomous-delivery") {
+        await vi.waitFor(() => {
+          expect(runtime.events.at(-1)?.permissionRequest?.actionKind).toBe("pull-request");
+        });
+        const pendingId = runtime.events.at(-1)?.permissionRequest?.requestId;
+        if (pendingId === undefined) throw new Error("PR permission missing");
+        expect(runtime.bridge.issueDelivery?.("run-1", pendingId)).toBeDefined();
+      }
+      const pr = await pendingPr;
       if (!("draftDelivery" in pr)) throw new Error("missing PR result");
       const prId = id(pr.draftDelivery);
-      expect(await call("pull-request", "execute", { proposalId: prId })).toMatchObject({
-        status: "denied",
-      });
-      expect(runtime.bridge.issueDelivery?.("run-1", prId)).toBeDefined();
       expect(await call("pull-request", "execute", { proposalId: prId })).toMatchObject({
         draftDelivery: { record: { phase: "draft-created" } },
       });
       expect(await call("pull-request", "execute", { proposalId: prId })).toMatchObject({
-        status: "denied",
+        status: mode === "autonomous-delivery" ? "failed" : "denied",
       });
       fixture.live = false;
       expect(await call("push", "reconcile")).toMatchObject({ status: "denied" });
@@ -355,7 +409,7 @@ describe.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as
         runtime.events
           .filter((event) => event.kind === "permission-requested")
           .map((event) => event.permissionRequest?.actionKind),
-      ).toEqual(["push", "pull-request"]);
+      ).toEqual(mode === "autonomous-delivery" ? [] : ["push", "pull-request"]);
       expect(fixture.pushCount).toBe(1);
       expect(fixture.createCount).toBe(1);
     });

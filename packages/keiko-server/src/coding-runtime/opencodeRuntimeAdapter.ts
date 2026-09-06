@@ -1,3 +1,4 @@
+import { opencodeRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
 import { isAbsolute } from "node:path";
 import { correlationIdOrUnknown } from "../correlation.js";
 import { describeError } from "../diagnostics-log.js";
@@ -1028,42 +1029,28 @@ function wireRequestFor(
   }
 }
 
-// Data, not branching logic: keeping the git/delivery descriptions in a table (rather than more
-// `if` arms in `toolDescription`) is what keeps that function under the repository's complexity
-// and line-count ceilings while still documenting all eight actions individually.
-const PROPOSAL_EXECUTION_GUIDANCE =
-  " This call waits while an operator decision is pending. Call keiko_git_execute when the " +
-  "recorded status is ready or the fresh approvalDisposition is ready; an immutable recorded " +
-  "receipt may retain status approval-required after that fresh approval check. A denied proposal " +
-  "authorizes no effect.";
-const GIT_ACTION_DESCRIPTIONS: Readonly<Partial<Record<GeneratedToolAction, string>>> = {
-  "git-status": "Read the workspace's current Git status through Keiko governance.",
-  "git-diff":
-    "Read one bounded Git diff (working-tree or staged) for the given workspace-relative paths.",
-  "git-stage":
-    "Propose staging one or more workspace-relative paths. This proposes only." +
-    PROPOSAL_EXECUTION_GUIDANCE,
-  "git-commit":
-    "Propose a commit with the given message over the currently staged changes. This proposes " +
-    "only." +
-    PROPOSAL_EXECUTION_GUIDANCE,
-  "git-push":
-    "Propose pushing the last verified commit by its exact SHA. This proposes only." +
-    PROPOSAL_EXECUTION_GUIDANCE,
-  "git-pull-request":
-    "Propose opening a draft pull request with the given title. This proposes only." +
-    PROPOSAL_EXECUTION_GUIDANCE,
-  "git-execute":
-    "Redeem one ready stage, commit, push or pull-request proposal by its kind and the proposalId " +
-    "returned by the matching propose call. A denied proposal authorizes no effect, and a " +
-    "proposal still awaiting approval cannot be redeemed.",
-  "git-ci":
-    "Observe the accepted run's CI readiness (required checks, review/merge state). Set " +
-    "forceFresh to bypass the cached snapshot.",
-};
+// The gateway advertises the central catalog description to the actual model. Reuse that same
+// owner here so the native plugin cannot describe a different approval/execute workflow.
+function gitToolDescription(action: GeneratedToolAction): string | undefined {
+  const aliases: Readonly<Partial<Record<GeneratedToolAction, string>>> = {
+    "git-status": "keiko_git_status",
+    "git-diff": "keiko_git_diff",
+    "git-stage": "keiko_git_stage",
+    "git-commit": "keiko_git_commit",
+    "git-push": "keiko_git_push",
+    "git-pull-request": "keiko_pull_request",
+    "git-execute": "keiko_git_execute",
+    "git-ci": "keiko_ci_status",
+  };
+  const alias = aliases[action];
+  if (alias === undefined) return undefined;
+  const entry = opencodeRegistrationSet().entries.find((candidate) => candidate.alias === alias);
+  if (entry === undefined) throw new TypeError("OpenCode Git tool is missing from the catalog");
+  return entry.descriptor.description;
+}
 
 function toolDescription(action: GeneratedToolAction): string {
-  const gitDescription = GIT_ACTION_DESCRIPTIONS[action];
+  const gitDescription = gitToolDescription(action);
   if (gitDescription !== undefined) return gitDescription;
   if (action === "discover") {
     return (
@@ -1136,7 +1123,7 @@ function toolApprovalProofSource(): readonly string[] {
     '    if (typeof request.targetPath !== "string") throw new Error("keiko-tool-invalid");',
     '    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(request.targetPath));',
     '    const targetPathHash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");',
-    '    return { targetId: `targeted-test:${targetPathHash}`, targetPathHash };',
+    "    return { targetId: `targeted-test:${targetPathHash}`, targetPathHash };",
     "  }",
     '  if (request.action === "verification") return { targetId: request.verifierId };',
     '  if (request.action === "command") return { targetId: request.commandId };',

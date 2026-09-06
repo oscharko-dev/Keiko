@@ -46,6 +46,7 @@ import { processServerLogSink } from "../process-log-sink.js";
 
 interface DeliveryGuard {
   readonly check: () => boolean;
+  readonly intent?: "push" | "pull-request" | undefined;
   readonly signal?: AbortSignal | undefined;
 }
 function recorded(record: DraftDeliveryRecord): CodingRuntimeDeliveryResult {
@@ -127,10 +128,10 @@ export class DraftDeliveryController implements DraftDeliveryService {
   }
   public executeApproved(
     id: string,
-    lease: object,
+    lease: object | undefined,
     guard: DeliveryGuard,
   ): Promise<CodingRuntimeDeliveryResult> {
-    return this.run((context) => this.executeCurrent(context, id, lease), guard);
+    return this.run((context) => this.executeCurrent(context, id, lease, guard.intent), guard);
   }
   private context(guard?: DeliveryGuard): DraftDeliveryRunContext | undefined {
     const context = this.options.context();
@@ -339,18 +340,24 @@ export class DraftDeliveryController implements DraftDeliveryService {
   private async executeCurrent(
     context: DraftDeliveryRunContext,
     id: string,
-    lease: object,
+    lease: object | undefined,
+    intent: "push" | "pull-request" | undefined,
   ): Promise<CodingRuntimeDeliveryResult> {
     const proposal = this.review(id);
-    const approved = this.leases.get(lease);
-    this.leases.delete(lease);
     if (proposal === undefined) return unavailable("proposal-unavailable");
-    if (approved?.proposal !== proposal) throw new DraftDeliveryFailure("approval-invalid");
+    if (
+      intent !== undefined &&
+      (proposal.command.kind === "push" ? "push" : "pull-request") !== intent
+    )
+      throw new DraftDeliveryFailure("approval-invalid");
+    const claim = this.executionClaim(context, proposal, lease);
     if (
       draftProposalDigest(proposal.record.binding, proposal.command) !==
       proposal.record.proposalDigest
     )
       throw new DraftDeliveryFailure("payload-changed");
+    if (claim.required === false && this.options.policyAllowsWithoutApproval?.() !== true)
+      throw new DraftDeliveryFailure("approval-invalid");
     const current = advanceDraft(
       this.options,
       context,
@@ -360,8 +367,31 @@ export class DraftDeliveryController implements DraftDeliveryService {
     );
     this.proposal = undefined;
     return recorded(
-      await executeDraftDeliveryEffect(this.options, context, current, proposal, approved.claim),
+      await executeDraftDeliveryEffect(this.options, context, current, proposal, claim),
     );
+  }
+  private executionClaim(
+    context: DraftDeliveryRunContext,
+    proposal: PreparedDraftDelivery,
+    lease: object | undefined,
+  ): GitDeliveryApprovalRequirement {
+    const approved = lease === undefined ? undefined : this.leases.get(lease);
+    if (lease !== undefined) this.leases.delete(lease);
+    if (approved?.proposal === proposal) return approved.claim;
+    if (this.options.policyAllowsWithoutApproval?.() !== true)
+      throw new DraftDeliveryFailure("approval-invalid");
+    (this.options.execution?.activityLog ?? processServerLogSink()).write({
+      category: "process",
+      op: "git.draft-delivery",
+      correlationId: context.correlationId,
+      extra: {
+        runId: context.runId,
+        phase: "approval",
+        reason: "policy-authorized",
+        proposalId: proposal.record.proposalId,
+      },
+    });
+    return { required: false };
   }
   private async reconcileCurrent(
     context: DraftDeliveryRunContext,

@@ -1109,6 +1109,8 @@ describe("CodingRuntimeOrchestrator", () => {
         passedCount,
         failedCount,
         skippedCount: 0,
+        failureLocationCount: verificationStatus === "failed" ? 1 : 0,
+        failureLocationsTruncated: verificationStatus === "failed",
       });
     }
 
@@ -1127,6 +1129,8 @@ describe("CodingRuntimeOrchestrator", () => {
           passedCount: 0,
           failedCount: 1,
           skippedCount: 0,
+          failureLocationCount: 1,
+          failureLocationsTruncated: true,
         },
       },
       {
@@ -1141,6 +1145,8 @@ describe("CodingRuntimeOrchestrator", () => {
           passedCount: 4,
           failedCount: 0,
           skippedCount: 0,
+          failureLocationCount: 0,
+          failureLocationsTruncated: false,
         },
       },
     ]);

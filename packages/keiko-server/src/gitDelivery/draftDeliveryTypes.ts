@@ -64,6 +64,8 @@ export interface DraftDeliveryDependencies {
 
 export interface DraftDeliveryServiceOptions extends DraftDeliveryDependencies {
   readonly context: () => DraftDeliveryRunContext | undefined;
+  /** See VerifiedCommitServiceOptions.policyAllowsWithoutApproval. */
+  readonly policyAllowsWithoutApproval?: (() => boolean) | undefined;
   /** Existing runtime event ingestion refreshes the public snapshot after every durable phase. */
   readonly onChanged: (record: DraftDeliveryRecord) => void;
 }
@@ -90,8 +92,12 @@ export interface DraftDeliveryService {
   consumeApproval(proposalId: string): object | undefined;
   executeApproved(
     proposalId: string,
-    lease: object,
-    guard: { readonly check: () => boolean; readonly signal?: AbortSignal | undefined },
+    lease: object | undefined,
+    guard: {
+      readonly check: () => boolean;
+      readonly intent?: "push" | "pull-request" | undefined;
+      readonly signal?: AbortSignal | undefined;
+    },
   ): Promise<CodingRuntimeDeliveryResult>;
   invalidate(): void;
 }

@@ -134,7 +134,7 @@ describe("OpenCode visible tool contract", () => {
     },
   );
 
-  it("requires a bounded targetPath exactly for targeted-test", () => {
+  it("requires a bounded targetPath sentinel on the native provider wire", () => {
     const verification = OPENCODE_MODEL_VISIBLE_TOOLS.find(
       (tool) => tool.name === "keiko_verification",
     );
@@ -142,17 +142,11 @@ describe("OpenCode visible tool contract", () => {
       properties: {
         targetPath: {
           type: "string",
-          minLength: 1,
+          minLength: 0,
           maxLength: 4096,
         },
       },
-      allOf: [
-        {
-          if: { properties: { verifierId: { const: "targeted-test" } } },
-          then: { required: ["targetPath"] },
-          else: { not: { required: ["targetPath"] } },
-        },
-      ],
+      required: ["targetPath", "verifierId"],
     });
   });
 

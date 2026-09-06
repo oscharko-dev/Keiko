@@ -672,6 +672,8 @@ const CODING_WORKBENCH_RUNTIME_EVENT_ALLOWED_KEYS_BY_KIND: Readonly<
     "passedCount",
     "failedCount",
     "skippedCount",
+    "failureLocationCount",
+    "failureLocationsTruncated",
   ),
   "artifact-produced": runtimeEventAllowedKeys(
     "artifactKind",
@@ -982,6 +984,25 @@ function validateRuntimeEventCounts(value: Record<string, unknown>, errors: stri
   }
   if (value.retryable !== undefined && typeof value.retryable !== "boolean") {
     errors.push("event.retryable must be a boolean");
+  }
+  validateOptionalFailureLocationEvidence(value, errors);
+}
+
+function validateOptionalFailureLocationEvidence(
+  value: Record<string, unknown>,
+  errors: string[],
+): void {
+  if (
+    value.failureLocationCount !== undefined &&
+    !isSafeIntegerOrZero(value.failureLocationCount)
+  ) {
+    errors.push("event.failureLocationCount must be a non-negative safe integer");
+  }
+  if (
+    value.failureLocationsTruncated !== undefined &&
+    typeof value.failureLocationsTruncated !== "boolean"
+  ) {
+    errors.push("event.failureLocationsTruncated must be a boolean");
   }
 }
 

@@ -523,16 +523,22 @@ function gitDiffSpec(): OpenCodeToolSpec {
   };
 }
 
+const PROPOSAL_EXECUTION_GUIDANCE =
+  ' This call waits for any required operator decision. When approvalDisposition: "ready" is ' +
+  "present, approval has already been granted: immediately call keiko_git_execute with the " +
+  "matching kind and proposalId. The immutable receipt may still say approval-required; the " +
+  "fresh approvalDisposition is authoritative for this continuation. A ready stage status also " +
+  "permits execute. A denied result authorizes no effect. Proposing never executes the effect.";
+
 function gitStageSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.git.stage",
     alias: "keiko_git_stage",
     description:
       "Create a non-mutating proposal to stage one or more workspace-relative paths. This call " +
-      "does not mutate the Git index. If the result is ready, call keiko_git_execute with kind " +
-      "stage and the returned proposalId. If the result is approval-required, wait for approval " +
-      "before calling that execute tool. Execute staging before rerunning verification for commit " +
-      "proof.",
+      "does not mutate the Git index. Execute staging before rerunning verification for commit " +
+      "proof." +
+      PROPOSAL_EXECUTION_GUIDANCE,
     inputSchema: managedObjectSchema(
       {
         paths: {
@@ -555,10 +561,10 @@ function gitCommitSpec(): OpenCodeToolSpec {
     canonicalId: "keiko.git.commit",
     alias: "keiko_git_commit",
     description:
-      "Create an approval-required commit proposal over the staged changes. This call does not " +
+      "Create a commit proposal over the staged changes. This call does not " +
       "create a commit. First complete staging and rerun verification until it reports " +
-      'verification: { commitProof: "recorded" }. After commit approval, call ' +
-      "keiko_git_execute with kind commit and the returned proposalId.",
+      'verification: { commitProof: "recorded" }.' +
+      PROPOSAL_EXECUTION_GUIDANCE,
     inputSchema: managedObjectSchema(
       { message: { type: "string", minLength: 1, maxLength: 8_192 } },
       ["message"],
@@ -573,7 +579,8 @@ function gitPushSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.git.push",
     alias: "keiko_git_push",
-    description: "Propose pushing the last verified commit by its exact SHA.",
+    description:
+      "Propose pushing the last verified commit by its exact SHA." + PROPOSAL_EXECUTION_GUIDANCE,
     inputSchema: managedObjectSchema({}, []),
     effects: ["delivery-substrate", "network-egress"],
     idempotency: "server-key-required",
@@ -585,7 +592,8 @@ function gitPullRequestSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.git.pullrequest",
     alias: "keiko_pull_request",
-    description: "Propose opening a draft pull request with the given title.",
+    description:
+      "Propose opening a draft pull request with the given title." + PROPOSAL_EXECUTION_GUIDANCE,
     inputSchema: managedObjectSchema({ title: { type: "string", minLength: 1, maxLength: 256 } }, [
       "title",
     ]),
@@ -600,9 +608,10 @@ function gitExecuteSpec(): OpenCodeToolSpec {
     canonicalId: "keiko.git.execute",
     alias: "keiko_git_execute",
     description:
-      "Execute a stage, commit, push or pull-request proposal when its result is ready, or after " +
-      "approval when its result is approval-required, using its matching kind and returned " +
-      "proposalId. Stage execution mutates the Git index and must complete before commit-grade " +
+      "Execute a stage, commit, push or pull-request proposal using its matching kind and returned " +
+      'proposalId when its status is ready or approvalDisposition: "ready" is present. The fresh ' +
+      "disposition means approval has already been granted even if an immutable receipt still " +
+      "says approval-required. Stage execution mutates the Git index and must complete before commit-grade " +
       "verification; proposal tools alone perform no Git mutation.",
     inputSchema: managedObjectSchema(
       {

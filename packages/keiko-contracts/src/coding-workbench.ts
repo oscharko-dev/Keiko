@@ -635,6 +635,8 @@ export interface CodingWorkbenchRuntimeEvent {
   readonly passedCount?: number | undefined;
   readonly failedCount?: number | undefined;
   readonly skippedCount?: number | undefined;
+  readonly failureLocationCount?: number | undefined;
+  readonly failureLocationsTruncated?: boolean | undefined;
   readonly artifactKind?: string | undefined;
   readonly artifactLabel?: string | undefined;
   readonly artifactDigest?: string | undefined;

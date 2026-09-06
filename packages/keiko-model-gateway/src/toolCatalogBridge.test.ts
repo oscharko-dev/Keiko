@@ -107,6 +107,81 @@ async function collectToolCallStream(
 }
 
 describe("production gateway catalog bridge", () => {
+  it.each([
+    "keiko_git_stage",
+    "keiko_git_commit",
+    "keiko_git_push",
+    "keiko_pull_request",
+    "keiko_git_execute",
+  ])("sends current approval continuation instructions to the provider for %s", async (name) => {
+    let body: unknown;
+    const fetchImpl: typeof fetch = (_url, init) => {
+      if (typeof init?.body !== "string") throw new TypeError("Expected serialized request");
+      body = JSON.parse(init.body) as unknown;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "done" } }] }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+    };
+    await adapter(fetchImpl).call(
+      { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
+      CONFIG,
+    );
+    expect(body).toMatchObject({
+      tools: expect.arrayContaining([
+        {
+          type: "function",
+          function: expect.objectContaining({
+            name,
+            description: expect.stringContaining('approvalDisposition: "ready"'),
+          }),
+        },
+      ]),
+    });
+  });
+
+  it("advertises the required bounded verification target sentinel to the actual provider", async () => {
+    let body: unknown;
+    const fetchImpl: typeof fetch = (_url, init) => {
+      if (typeof init?.body !== "string") throw new TypeError("Expected serialized request");
+      body = JSON.parse(init.body) as unknown;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "done" } }] }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+    };
+    await adapter(fetchImpl).call(
+      { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
+      CONFIG,
+    );
+    expect(body).toMatchObject({
+      tools: expect.arrayContaining([
+        {
+          type: "function",
+          function: {
+            name: "keiko_verification",
+            description: expect.any(String),
+            parameters: {
+              type: "object",
+              properties: expect.objectContaining({
+                targetPath: expect.objectContaining({
+                  type: "string",
+                  minLength: 0,
+                  maxLength: 4096,
+                }),
+              }),
+              required: ["targetPath", "verifierId"],
+            },
+          },
+        },
+      ]),
+    });
+  });
+
   it("rejects unbound handwritten advertisement before transport", async () => {
     const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(response()));
     const adapter = new OpenAiAdapter({

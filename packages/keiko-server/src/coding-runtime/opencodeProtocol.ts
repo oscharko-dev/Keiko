@@ -713,7 +713,9 @@ function compactionSummaryProjection(
   if (info.error === undefined && info.finish === "stop") {
     return { compaction: { event: "completed", compactionIdSha256 } };
   }
-  if (!FAILED_TERMINAL_FINISH_REASONS.has(String(info.finish))) return {};
+  const statedFinishReason = String(info.finish);
+  const failedFinishReason = FAILED_TERMINAL_FINISH_REASONS.has(statedFinishReason);
+  if (info.error === undefined && !failedFinishReason) return {};
   const errorKind =
     isRecord(info.error) && typeof info.error.name === "string"
       ? info.error.name
@@ -723,7 +725,7 @@ function compactionSummaryProjection(
       event: "failed",
       compactionIdSha256,
       errorKind,
-      finishReason: String(info.finish),
+      finishReason: failedFinishReason ? statedFinishReason : "error",
     },
   };
 }

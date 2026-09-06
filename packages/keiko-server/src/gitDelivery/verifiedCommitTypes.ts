@@ -48,6 +48,11 @@ export interface VerifiedCommitProposal {
 
 export interface VerifiedCommitServiceOptions {
   readonly context: () => VerifiedCommitRunContext | undefined;
+  /**
+   * Trusted live mode decision. This is necessary but never sufficient: callers must also supply
+   * the exact coding-tool mutation guard, which revalidates the complete Authority Envelope.
+   */
+  readonly policyAllowsWithoutApproval?: (() => boolean) | undefined;
   readonly snapshots: Pick<
     CodingRuntimeSnapshotStore,
     "get" | "recordVerifiedCommit" | "getLastSuccessfulVerifiedCommit"

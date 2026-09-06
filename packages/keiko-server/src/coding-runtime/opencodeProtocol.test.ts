@@ -548,6 +548,28 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
       ],
     });
     expect(JSON.stringify(failed)).not.toContain("SENTINEL_PRIVATE_PROVIDER_BODY");
+    const failedWithoutFinish = parseOpenCodeHistory([
+      row({
+        error: {
+          name: "ContextOverflowError",
+          data: { message: "SENTINEL_PRIVATE_PROVIDER_BODY" },
+        },
+      }),
+    ]);
+    expect(failedWithoutFinish).toMatchObject({
+      ok: true,
+      value: [
+        {
+          kind: "terminal-failure",
+          compaction: {
+            event: "failed",
+            errorKind: "ContextOverflowError",
+            finishReason: "error",
+          },
+        },
+      ],
+    });
+    expect(JSON.stringify(failedWithoutFinish)).not.toContain("SENTINEL_PRIVATE_PROVIDER_BODY");
     const ordinary = parseOpenCodeHistory([
       row({ finish: "stop", mode: "build", agent: "build", summary: true }),
     ]);

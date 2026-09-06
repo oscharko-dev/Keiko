@@ -562,6 +562,7 @@ function commitServiceFor(
     context,
     signal,
     stillAuthorized: () => runtimeMutationLive(input, context, minted, authority),
+    policyAllowsWithoutApproval: () => authority.effectiveMode() === "autonomous-delivery",
   });
 }
 
@@ -588,6 +589,7 @@ function runtimeGitServices(
     context,
     signal,
     stillAuthorized: (): boolean => runtimeMutationLive(input, context, minted, authority),
+    policyAllowsWithoutApproval: (): boolean => authority.effectiveMode() === "autonomous-delivery",
   };
   const verifiedCommitService = commitServiceFor(input, context, minted, authority, signal);
   const { ciRepairBudget, ciObservationService } = runtimeCiServices(

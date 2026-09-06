@@ -463,10 +463,18 @@ function createAbortTask(readyRun: ReadyRunLookup): OpenCodeRunPort["abortTask"]
         run.runtimeAdapter.cancelTurn();
         return false;
       }
-      const settled = await run.runtimeAdapter.waitForTerminal(
+      const settled = await fixedSessionIsTerminal(
+        run.client,
+        run.sessionId,
         AbortSignal.timeout(ABORT_SETTLEMENT_TIMEOUT_MS),
       );
-      if (!settled) run.runtimeAdapter.cancelTurn();
+      if (settled) {
+        await run.runtimeAdapter.waitForTerminal(
+          AbortSignal.timeout(ABORT_SETTLEMENT_TIMEOUT_MS),
+        );
+      } else {
+        run.runtimeAdapter.cancelTurn();
+      }
       return settled && run.ready;
     } catch {
       run.runtimeAdapter.cancelTurn();

@@ -87,6 +87,20 @@ describe("opencode registration set", () => {
     for (const alias of GIT_DELIVERY_ALIASES) expect(aliases).toContain(alias);
   });
 
+  it("requires the verification target sentinel on the managed provider wire", () => {
+    const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
+    const verification = compileToolProjection(catalog, OPENCODE_PROFILE).tools.find(
+      (tool) => tool.alias === "keiko_verification",
+    );
+    expect(verification?.inputSchema).toMatchObject({
+      type: "object",
+      properties: {
+        targetPath: { type: "string", minLength: 0, maxLength: 4096 },
+      },
+      required: ["targetPath", "verifierId"],
+    });
+  });
+
   it("declares exactly sixteen governed tools with unique canonical identities and aliases", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);

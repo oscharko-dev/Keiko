@@ -336,6 +336,46 @@ describe("verified Code-task commit service", () => {
       ),
     ).toBe(true);
   });
+  it("uses Full access policy authorization without minting a local-operator approval", async () => {
+    let policyAllowsWithoutApproval = true;
+    service = createVerifiedCommitService({
+      ...options,
+      policyAllowsWithoutApproval: (): boolean => policyAllowsWithoutApproval,
+    });
+    const proposalId = await verifiedProposal();
+    expect(service.matchesApproval(proposalId)).toBe(false);
+
+    const result = await service.execute(proposalId, undefined, { check: () => true });
+
+    expect(result?.status, JSON.stringify(events)).toBe("succeeded");
+    expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("1");
+    expect(
+      events.some(
+        (event) =>
+          event.op === "git.verified-commit" &&
+          event.extra?.phase === "approval" &&
+          event.extra.state === "policy-authorized",
+      ),
+    ).toBe(true);
+
+    policyAllowsWithoutApproval = false;
+  });
+  it("fails closed when Full access policy authorization is withdrawn before commit execute", async () => {
+    let policyAllowsWithoutApproval = true;
+    service = createVerifiedCommitService({
+      ...options,
+      policyAllowsWithoutApproval: (): boolean => policyAllowsWithoutApproval,
+    });
+    const proposalId = await verifiedProposal();
+    const before = git(["rev-parse", "HEAD"]);
+    policyAllowsWithoutApproval = false;
+
+    expect(await service.execute(proposalId, undefined, { check: () => true })).toMatchObject({
+      status: "blocked",
+      reason: "approval-invalid",
+    });
+    expect(git(["rev-parse", "HEAD"])).toBe(before);
+  });
   it("requires verification and refuses forged or cross-proposal approvals without a Git effect", async () => {
     const before = git(["rev-parse", "HEAD"]);
     expect((await service.propose("feat: no verification"))?.status).toBe("verification-failed");
@@ -416,6 +456,10 @@ describe("verified Code-task commit service", () => {
   it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
     "routes actual verification, review, approval and commit through the runtime facade in %s",
     async (mode) => {
+      service = createVerifiedCommitService({
+        ...options,
+        policyAllowsWithoutApproval: (): boolean => mode === "autonomous-delivery",
+      });
       const {
         facade,
         bridge,
@@ -425,7 +469,7 @@ describe("verified Code-task commit service", () => {
       const invoke = (body: unknown): ReturnType<typeof facade.execute> =>
         facade.execute({ capability: "server-capability", body: JSON.stringify(body) });
       expect((await invoke(verification)).status).toBe("completed");
-      const proposed = await invoke({
+      const pendingProposal = invoke({
         action: "delivery",
         intent: "commit",
         phase: "propose",
@@ -433,6 +477,15 @@ describe("verified Code-task commit service", () => {
         idempotencyKey: "propose-1",
         message: "feat: reviewed runtime commit",
       });
+      if (mode !== "autonomous-delivery") {
+        await vi.waitFor(() => {
+          expect(runtimeEvents.at(-1)?.permissionRequest?.actionKind).toBe("commit");
+        });
+        const pendingId = runtimeEvents.at(-1)?.permissionRequest?.requestId;
+        if (pendingId === undefined) throw new Error("commit permission missing");
+        expect(bridge.issueCommit?.("run-1", pendingId)).toBeDefined();
+      }
+      const proposed = await pendingProposal;
       expect(proposed.status).toBe("completed");
       if (!("verifiedCommit" in proposed))
         throw new Error("receipt missing from runtime observation");
@@ -446,7 +499,7 @@ describe("verified Code-task commit service", () => {
           (event) =>
             event.kind === "permission-requested" && event.permissionRequest?.requestId === id,
         ),
-      ).toBe(true);
+      ).toBe(mode !== "autonomous-delivery");
       const execute = {
         action: "delivery",
         intent: "commit",
@@ -455,17 +508,21 @@ describe("verified Code-task commit service", () => {
         actionId: "commit-1",
         idempotencyKey: "commit-1",
       };
-      expect((await invoke(execute)).status).toBe("denied");
-      expect(bridge.issueCommit?.("other-run", id)).toBeUndefined();
-      expect(bridge.issueCommit?.("run-1", id)).toBeDefined();
-      const result = await invoke({ ...execute, actionId: "commit-2", idempotencyKey: "commit-2" });
+      if (mode !== "autonomous-delivery") {
+        // The operator decision above released the pending proposal response but has not executed
+        // the effect. Its exact one-use approval is consumed only by this execute call.
+        expect(bridge.issueCommit?.("other-run", id)).toBeUndefined();
+      } else {
+        expect(service.matchesApproval(id)).toBe(false);
+      }
+      const result = await invoke(execute);
       expect(result).toMatchObject({
         status: "completed",
         verifiedCommit: { status: "succeeded", headSha: git(["rev-parse", "HEAD"]) },
       });
       expect(
         (await invoke({ ...execute, actionId: "commit-3", idempotencyKey: "commit-3" })).status,
-      ).toBe("denied");
+      ).toBe(mode === "autonomous-delivery" ? "failed" : "denied");
       expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("1");
     },
   );
@@ -783,7 +840,17 @@ describe("productive runtime status/diff/stage lane", () => {
         status: "completed",
         git: { kind: "diff", diff: { files: [{ path: "code.js" }], truncated: false } },
       });
-      const proposed = await invoke({ operation: "stage", phase: "propose", paths: ["code.js"] });
+      const pendingStage = invoke({ operation: "stage", phase: "propose", paths: ["code.js"] });
+      if (mode === "governed-assist") {
+        await vi.waitFor(() => {
+          expect(fixture.events.at(-1)?.permissionRequest?.actionKind).toBe("git-stage");
+        });
+        const pendingId = fixture.events.at(-1)?.permissionRequest?.requestId;
+        if (pendingId === undefined) throw new Error("stage permission missing");
+        expect(fixture.bridge.issueStage?.("foreign-run", pendingId)).toBeUndefined();
+        expect(fixture.bridge.issueStage?.("run-1", pendingId)).toBeDefined();
+      }
+      const proposed = await pendingStage;
       if (!("git" in proposed) || proposed.git.kind !== "stage")
         throw new Error("stage proposal missing");
       const id = proposed.git.proposalId;
@@ -793,8 +860,6 @@ describe("productive runtime status/diff/stage lane", () => {
           kind: "permission-requested",
           permissionRequest: { actionKind: "git-stage", requestId: id },
         });
-        expect(fixture.bridge.issueStage?.("foreign-run", id)).toBeUndefined();
-        expect(fixture.bridge.issueStage?.("run-1", id)).toBeDefined();
       }
       const staged = await invoke({ operation: "stage", phase: "execute", proposalId: id });
       expect(staged).toMatchObject({

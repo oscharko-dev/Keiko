@@ -4,6 +4,7 @@ import { Script } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import { OPENCODE_PINNED_BUILT_IN_TOOLS } from "./opencodeToolSchemas.js";
+import { parseOpenCodeHistory } from "./opencodeProtocol.js";
 import { createGeneratedOpenCodeBundle } from "./opencodeRuntimeAdapter.js";
 import { CODING_TOOL_MAX_BODY_BYTES, parseCodingToolRequest } from "./codingToolIpc.js";
 import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
@@ -258,6 +259,49 @@ function record(value: unknown): Readonly<Record<string, unknown>> {
     throw new Error("expected object");
   }
   return value as Readonly<Record<string, unknown>>;
+}
+
+function parsedNoFinishCompactionFailure(): GovernedEvent {
+  const parsed = parseOpenCodeHistory([
+    {
+      id: "evt_compaction_no_finish",
+      aggregate_id: "ses_1",
+      seq: 6,
+      type: "message.updated.1",
+      data: {
+        sessionID: "ses_1",
+        info: {
+          id: "msg_assistant",
+          sessionID: "ses_1",
+          role: "assistant",
+          time: { created: 1, completed: 2 },
+          parentID: "msg_compaction_no_finish",
+          modelID: "coding",
+          providerID: "keiko-runtime",
+          mode: "compaction",
+          agent: "compaction",
+          path: { cwd: "/private/workspace", root: "/" },
+          cost: 0,
+          tokens: {
+            total: 0,
+            input: 0,
+            output: 0,
+            reasoning: 0,
+            cache: { read: 0, write: 0 },
+          },
+          summary: true,
+          error: {
+            name: "ContextOverflowError",
+            data: { message: "SENTINEL_PRIVATE_PROVIDER_BODY" },
+          },
+        },
+      },
+    },
+  ]);
+  if (!parsed.ok || parsed.value[0] === undefined) {
+    throw new Error("expected valid no-finish compaction failure");
+  }
+  return parsed.value[0];
 }
 
 function readinessPorts(failAt?: ReadinessPhase): {
@@ -883,6 +927,7 @@ describe("OpenCode runtime adapter readiness", () => {
     const compactionIdSha256 = "b".repeat(64);
     const failedCompactionIdSha256 = "d".repeat(64);
     const tailStartIdSha256 = "c".repeat(64);
+    const noFinishFailure = parsedNoFinishCompactionFailure();
     const lifecycle: readonly GovernedEvent[] = [
       {
         ...event(1),
@@ -929,6 +974,7 @@ describe("OpenCode runtime adapter readiness", () => {
           finishReason: "error",
         },
       },
+      noFinishFailure,
     ];
     const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
       ...harness.ports,
@@ -989,6 +1035,16 @@ describe("OpenCode runtime adapter readiness", () => {
         extra: {
           event: "failed",
           compactionIdSha256: failedCompactionIdSha256,
+          finishReason: "error",
+        },
+      }),
+      expect.objectContaining({
+        level: "error",
+        correlationId: "run-native-compaction",
+        errorKind: "ContextOverflowError",
+        extra: {
+          event: "failed",
+          compactionIdSha256: createHash("sha256").update("msg_compaction_no_finish").digest("hex"),
           finishReason: "error",
         },
       }),

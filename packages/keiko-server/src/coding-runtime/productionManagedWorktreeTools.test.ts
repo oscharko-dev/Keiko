@@ -373,9 +373,11 @@ describe("production managed worktree tools", () => {
   );
 
   it("returns bounded actionable diagnostics for a failed verifier without exposing its workspace root", async () => {
+    const events: CodingWorkbenchRuntimeEvent[] = [];
     const facade = verificationFacade({
       runToReport: () => Promise.resolve(failedVerificationReport()),
       records: [],
+      events,
     });
 
     const result = await facade.execute({
@@ -406,6 +408,13 @@ describe("production managed worktree tools", () => {
     });
     expect(JSON.stringify(result)).not.toContain("/managed/worktree");
     expect(JSON.stringify(result)).not.toContain("PRIVATE_FAILURE_CANARY");
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "verification-summarized",
+        failureLocationCount: 1,
+        failureLocationsTruncated: true,
+      }),
+    );
   });
 
   it("threads live proxy and CA settings into the governed research transport", async () => {
@@ -1224,6 +1233,7 @@ describe("production managed worktree tools", () => {
       },
     };
     const requestCommitApproval = vi.fn();
+    const activityLog: ServerLogEvent[] = [];
     const service = {
       ...verificationService(),
       propose: vi.fn((message: string) =>
@@ -1272,6 +1282,7 @@ describe("production managed worktree tools", () => {
       },
       invocationRegistry: createCodingToolInvocationRegistry(),
       verificationRunner: { runToReport: vi.fn() },
+      activityLog: { write: (event): void => void activityLog.push(event) },
       onRuntimeEvent: vi.fn(),
     });
     await expect(
@@ -1312,7 +1323,18 @@ describe("production managed worktree tools", () => {
       verifiedCommit: approvalRequiredResult,
       approvalDisposition: "ready",
     });
-    expect(requestCommitApproval).toHaveBeenCalledExactlyOnceWith("commit-3390-ready");
+    expect(requestCommitApproval).not.toHaveBeenCalled();
+    expect(activityLog).toContainEqual(
+      expect.objectContaining({
+        op: "coding-runtime.tool-result",
+        extra: {
+          actionKind: "commit",
+          proposalId: "commit-3390-ready",
+          state: "proposal-ready",
+          reason: "policy-authorized",
+        },
+      }),
+    );
 
     service.review.mockReturnValue(undefined);
     await expect(
