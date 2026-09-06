@@ -151,11 +151,10 @@ export function probeUsage(
   };
 }
 
-export async function probeGatewayToolCalling(
+async function executeGatewayToolCallingProbe(
   config: GatewayConfig,
   provider: ModelProviderConfig,
   fetchImpl?: typeof fetch,
-  reportFailure?: GatewayToolCallingProbeFailureReporter,
   spend?: GatewayProbeSpendContext,
 ): Promise<GatewayToolCallingProbeStatus> {
   const reservation = reserveGatewayProbeSpend(provider, spend);
@@ -171,8 +170,7 @@ export async function probeGatewayToolCalling(
     });
   } catch (error) {
     settleGatewayProbeSpend(reservation, undefined);
-    reportFailure?.(error);
-    return "unverified";
+    throw error;
   }
   if (!response.ok) {
     settleGatewayProbeSpend(reservation, undefined);
@@ -183,9 +181,23 @@ export async function probeGatewayToolCalling(
     payload = await readJsonCapped(response, MAX_PROVIDER_RESPONSE_BYTES);
   } catch (error) {
     settleGatewayProbeSpend(reservation, undefined);
-    reportFailure?.(error);
-    return "unverified";
+    throw error;
   }
   settleGatewayProbeSpend(reservation, probeUsage(payload, spend));
   return hasExpectedToolCall(payload) ? "verified" : "unsupported";
+}
+
+export async function probeGatewayToolCalling(
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+  fetchImpl?: typeof fetch,
+  reportFailure?: GatewayToolCallingProbeFailureReporter,
+  spend?: GatewayProbeSpendContext,
+): Promise<GatewayToolCallingProbeStatus> {
+  try {
+    return await executeGatewayToolCallingProbe(config, provider, fetchImpl, spend);
+  } catch (error) {
+    reportFailure?.(error);
+    return "unverified";
+  }
 }

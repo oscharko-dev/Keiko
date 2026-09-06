@@ -1,4 +1,4 @@
-import { gatewaySpendBudgetForEnv } from "./gateway-spend-budget.js";
+import { gatewaySpendBudgetForEnv, reserveGatewaySpendForAttempt } from "./gateway-spend-budget.js";
 // First-run gateway setup for non-technical UI users. The browser provides a base URL, API token,
 // and optionally a Figma PAT; the loopback BFF builds the local provider config, performs a real
 // chat-completions smoke call, stores the resulting config on disk with private permissions, and
@@ -1908,26 +1908,43 @@ const EMBEDDING_PROBE_INPUT = "Keiko embedding setup probe";
 // persist with — an Azure deployment path must not be probed at the OpenAI-compatible URL, or the
 // probe measures a 404 that production would never see.
 async function embedOnceForProbe(
+  config: GatewayConfig,
   provider: ModelProviderConfig,
   modelId: string,
+  env: EnvSource,
+  correlationId: string,
 ): Promise<OpenAIEmbeddingOutcome> {
-  return requestOpenAIEmbedding({
-    endpoint: provider.baseUrl,
-    apiKey: provider.apiKey,
-    ...(provider.apiKeyHeaderName !== undefined
-      ? { apiKeyHeaderName: provider.apiKeyHeaderName }
-      : {}),
-    ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
-    ...(provider.endpointStyle !== undefined ? { endpointStyle: provider.endpointStyle } : {}),
-    ...(provider.apiVersion !== undefined ? { apiVersion: provider.apiVersion } : {}),
-    modelId,
-    input: EMBEDDING_PROBE_INPUT,
-    timeoutMs: provider.timeoutMs,
-    // The probe exists because an embedding model used to be persisted on a classification alone.
-    // The sink is what turns a rejected probe into a line naming the status and the error kind,
-    // rather than a model that silently fails to make the candidate list.
-    log: processServerLogSink(),
-  });
+  const reservation = reserveGatewaySpendForAttempt(
+    env,
+    findConfiguredCapability(config, modelId),
+    {
+      modelId,
+      messages: [{ role: "user", content: "Gateway embedding setup probe." }],
+      maxOutputTokens: 0,
+    },
+    correlationId,
+  );
+  try {
+    return await requestOpenAIEmbedding({
+      endpoint: provider.baseUrl,
+      apiKey: provider.apiKey,
+      ...(provider.apiKeyHeaderName !== undefined
+        ? { apiKeyHeaderName: provider.apiKeyHeaderName }
+        : {}),
+      ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
+      ...(provider.endpointStyle !== undefined ? { endpointStyle: provider.endpointStyle } : {}),
+      ...(provider.apiVersion !== undefined ? { apiVersion: provider.apiVersion } : {}),
+      modelId,
+      input: EMBEDDING_PROBE_INPUT,
+      timeoutMs: provider.timeoutMs,
+      // The probe exists because an embedding model used to be persisted on a classification alone.
+      // The sink is what turns a rejected probe into a line naming the status and the error kind,
+      // rather than a model that silently fails to make the candidate list.
+      log: processServerLogSink(),
+    });
+  } finally {
+    reservation?.settle(undefined);
+  }
 }
 
 // Transient kinds get exactly ONE retry, matching the chat lane's `maxRetries: 1`: a single
@@ -1942,19 +1959,21 @@ const RETRYABLE_PROBE_KINDS: ReadonlySet<string> = new Set([
 // request and change nothing. One short pause, matching the chat lane's backoff base.
 const EMBEDDING_PROBE_RETRY_DELAY_MS = 500;
 
-async function defaultGatewayEmbeddingProbe(
+export async function defaultGatewayEmbeddingProbe(
   config: GatewayConfig,
   candidateModelIds: readonly string[],
+  env: EnvSource,
+  correlationId: string,
 ): Promise<readonly string[]> {
   return passingCandidates(
     candidateModelIds,
     async (modelId) => {
       const provider = config.providers.find((entry) => entry.modelId === modelId);
       if (provider === undefined) throw new Error("embedding candidate has no provider entry");
-      let outcome = await embedOnceForProbe(provider, modelId);
+      let outcome = await embedOnceForProbe(config, provider, modelId, env, correlationId);
       if (!outcome.ok && RETRYABLE_PROBE_KINDS.has(outcome.kind)) {
         await new Promise((resolve) => setTimeout(resolve, EMBEDDING_PROBE_RETRY_DELAY_MS));
-        outcome = await embedOnceForProbe(provider, modelId);
+        outcome = await embedOnceForProbe(config, provider, modelId, env, correlationId);
       }
       // The per-model verdict is what the operator acts on, and it travels in
       // droppedEmbeddingModelIds / unverifiedEmbeddingModelIds. passingCandidates drops the
@@ -1967,8 +1986,19 @@ async function defaultGatewayEmbeddingProbe(
   );
 }
 
-function gatewayEmbeddingProbe(deps: UiHandlerDeps): GatewayEmbeddingProbe {
-  return deps.gatewayEmbeddingProbe ?? defaultGatewayEmbeddingProbe;
+function gatewayEmbeddingProbe(
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): GatewayEmbeddingProbe {
+  const override = deps.gatewayEmbeddingProbe;
+  if (override !== undefined) return override;
+  return (config, candidateModelIds) =>
+    defaultGatewayEmbeddingProbe(
+      config,
+      candidateModelIds,
+      deps.env,
+      correlationId ?? UNKNOWN_CORRELATION_ID,
+    );
 }
 
 // The seam type (UiHandlerDeps["gatewaySetupTester"]) is a fixed 2-arg shape shared by every
@@ -5866,7 +5896,7 @@ async function verifyAndSaveGatewaySetup(
 ): Promise<RouteResult> {
   const seams: SetupSeams = {
     tester: gatewaySetupTester(deps, request.correlationId),
-    embeddingProbe: gatewayEmbeddingProbe(deps),
+    embeddingProbe: gatewayEmbeddingProbe(deps, request.correlationId),
     discovery: deps.gatewayModelDiscovery ?? defaultGatewayModelDiscovery,
   };
   const figmaFailure = await verifySubmittedFigmaCredential(request, deps);

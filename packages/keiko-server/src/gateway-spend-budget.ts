@@ -240,14 +240,15 @@ export function createGatewaySpendBudget(
 const budgetsByEnvironment = new WeakMap<object, GatewaySpendBudget | undefined>();
 
 export function gatewaySpendBudgetForEnv(
-  env: Readonly<Record<string, string | undefined>>,
+  env: Readonly<Record<string, string | undefined>> | undefined,
 ): GatewaySpendBudget | undefined {
+  if (env === undefined) return undefined;
   if (!budgetsByEnvironment.has(env)) budgetsByEnvironment.set(env, createGatewaySpendBudget(env));
   return budgetsByEnvironment.get(env);
 }
 
 export function reserveGatewaySpendForAttempt(
-  env: Readonly<Record<string, string | undefined>>,
+  env: Readonly<Record<string, string | undefined>> | undefined,
   capability: ModelCapability | undefined,
   request: GatewayCallRequest,
   correlationId: string,

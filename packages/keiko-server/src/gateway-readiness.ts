@@ -406,6 +406,7 @@ async function probeReranker(
       ...(deps.gatewayReadinessFetch !== undefined
         ? { fetchImpl: deps.gatewayReadinessFetch }
         : {}),
+      correlationId,
       fallbackMode: "slice-topN",
     });
     return rerankerSelectionResult(selection, documents[0], start);

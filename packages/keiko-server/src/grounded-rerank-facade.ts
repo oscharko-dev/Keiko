@@ -1,5 +1,6 @@
 import type { GroundedRerankerDiagnostics } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  findConfiguredCapability,
   requestLiteLLMRerank,
   resolveOutboundHttpEgressConfig,
   type GatewayConfig,
@@ -13,6 +14,8 @@ import {
 
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig } from "./deps.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { reserveGatewaySpendForAttempt } from "./gateway-spend-budget.js";
 import { getServerLogger, startLogTimer } from "./observability/index.js";
 
 export type RerankFallbackMode = "slice-topN" | "identity";
@@ -49,6 +52,7 @@ export interface RerankSelectionInput<T> {
    */
   // `null` pins an observed absence; `undefined` asks the facade to capture the live generation.
   readonly gatewayConfig?: GatewayConfig | null | undefined;
+  readonly correlationId?: string | undefined;
 }
 
 export interface RerankSelection<T> {
@@ -65,6 +69,7 @@ interface MaterializedRerankInput {
   readonly timeoutMs?: number | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
   readonly gatewayConfig?: GatewayConfig | undefined;
+  readonly correlationId?: string | undefined;
 }
 
 interface SafeRerankTransportResult {
@@ -238,10 +243,24 @@ async function requestRerankTransport(
   const request = input.deps.rerankRequest ?? requestLiteLLMRerank;
   const egress = rerankEgress(input, reranker);
   try {
-    return {
-      outcome: await request(buildRerankRequest(input, reranker, egress)),
-      latencyMs: Math.max(0, Date.now() - startedAt),
-    };
+    const reservation = reserveGatewaySpendForAttempt(
+      input.deps.env,
+      input.gatewayConfig === undefined
+        ? undefined
+        : findConfiguredCapability(input.gatewayConfig, reranker.modelId),
+      {
+        modelId: reranker.modelId,
+        messages: [{ role: "user", content: "Gateway reranker request." }],
+      },
+      input.correlationId ?? UNKNOWN_CORRELATION_ID,
+    );
+    let outcome: RerankOutcome;
+    try {
+      outcome = await request(buildRerankRequest(input, reranker, egress));
+    } finally {
+      reservation?.settle(undefined);
+    }
+    return { outcome, latencyMs: Math.max(0, Date.now() - startedAt) };
   } catch {
     return {
       thrownKind: thrownRerankKind(input),
@@ -292,6 +311,7 @@ async function configuredSelection<T>(
     ...(input.signal === undefined ? {} : { signal: input.signal }),
     ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
     ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
+    correlationId: input.correlationId,
     gatewayConfig,
   };
   const transport = await requestRerankTransport(requestInput, reranker);

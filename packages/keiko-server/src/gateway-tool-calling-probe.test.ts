@@ -50,9 +50,10 @@ describe("probeGatewayToolCalling", () => {
   it("reserves the shared spend ceiling before dispatching the paid probe", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-tool-probe-budget-"));
     const fetchImpl = vi.fn(() => Promise.resolve(jsonResponse({ choices: [] }))) as typeof fetch;
+    const reportFailure = vi.fn();
     try {
       await expect(
-        probeGatewayToolCalling(CONFIG, PROVIDER, fetchImpl, undefined, {
+        probeGatewayToolCalling(CONFIG, PROVIDER, fetchImpl, reportFailure, {
           env: {
             [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0",
             [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.json"),
@@ -60,8 +61,12 @@ describe("probeGatewayToolCalling", () => {
           capability: CAPABILITY,
           correlationId: "request-correlation-abcdefg",
         }),
-      ).rejects.toThrow("spend-budget-exceeded");
+      ).resolves.toBe("unverified");
       expect(fetchImpl).not.toHaveBeenCalled();
+      expect(reportFailure).toHaveBeenCalledOnce();
+      expect(reportFailure.mock.calls[0]?.[0]).toMatchObject({
+        message: "spend-budget-exceeded",
+      });
     } finally {
       rmSync(stateDir, { recursive: true, force: true });
     }
