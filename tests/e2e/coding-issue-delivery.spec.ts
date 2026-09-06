@@ -642,7 +642,7 @@ test("#3387 @coding-issue-delivery explicit push denial revokes all remote effec
   const pending = await startPendingProposal(page, "push-propose", "push");
   await page.getByRole("button", { name: "Deny", exact: true }).click();
   await expect.poll(async () => (await snapshot(page)).state).toBe("failed");
-  expect((await waitControl(pending.controlId)).result?.status).toBe("failed");
+  expect((await waitControl(pending.controlId)).result?.status).toBe("cancelled");
   await expectDenied("push-execute", pending.proposalId);
   expect(provider()).toMatchObject({ pushes: before.pushes, creates: before.creates });
   await finish(page, true);
@@ -769,7 +769,7 @@ test("#3387 @coding-issue-delivery PR denial keeps the pushed commit but creates
   const pending = await startPendingProposal(page, "pr-propose", "pull-request");
   await page.getByRole("button", { name: "Deny", exact: true }).click();
   await expect.poll(async () => (await snapshot(page)).state).toBe("failed");
-  expect((await waitControl(pending.controlId)).result?.status).toBe("failed");
+  expect((await waitControl(pending.controlId)).result?.status).toBe("cancelled");
   await expectDenied("pr-execute", pending.proposalId);
   expect(provider()).toMatchObject({ pushes: before.pushes + 1, creates: before.creates });
   await finish(page, true);

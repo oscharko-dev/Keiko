@@ -750,6 +750,13 @@ function WorkbenchColumns({
   const activeIssueRepository = activeWorkspace.activeInstance?.repositoryId;
   const activeIssueTask = activeWorkspace.activeBinding?.taskId;
   useEffect(() => {
+    if (terminalRunMatchesAcceptedIssue(state.run.value, acceptedIssue)) {
+      reportClientDiagnostic(
+        "[keiko] coding workbench issue selection released after terminal run",
+      );
+      setAcceptedIssue(null);
+      return;
+    }
     if (
       acceptedIssue !== null &&
       !issueSetup &&
@@ -758,7 +765,7 @@ function WorkbenchColumns({
         activeIssueRepository !== acceptedIssue.binding.repositoryId)
     )
       setAcceptedIssue(null);
-  }, [acceptedIssue, activeIssueTask, activeIssueRepository, issueSetup]);
+  }, [acceptedIssue, activeIssueTask, activeIssueRepository, issueSetup, state.run.value]);
   const [resumeSelection, setResumeSelection] = useState<ResumeModeSelection | null>(null);
   // The bootstrap Code setup (#2385) renders whenever no active task-workspace binding exists, so a
   // hand-bound repository can be bound → verified → started entirely from the UI (#2476). It no longer
@@ -1064,6 +1071,24 @@ function welcomeEligibleState(state: CodingWorkbenchRuntimeStateName | undefined
     state === "failed" ||
     state === "cancelled" ||
     state === "taken-over"
+  );
+}
+
+function terminalRunState(state: CodingWorkbenchRuntimeStateName): boolean {
+  return (
+    state === "succeeded" || state === "failed" || state === "cancelled" || state === "taken-over"
+  );
+}
+
+function terminalRunMatchesAcceptedIssue(
+  run: CodingWorkbenchRuntimeState["run"]["value"],
+  acceptedIssue: AcceptedWorkbenchIssue | null,
+): boolean {
+  return (
+    acceptedIssue !== null &&
+    run?.runId !== undefined &&
+    run.issueBinding?.bindingDigest === acceptedIssue.binding.bindingDigest &&
+    terminalRunState(run.state)
   );
 }
 

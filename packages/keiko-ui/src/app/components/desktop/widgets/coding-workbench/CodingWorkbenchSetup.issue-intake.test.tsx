@@ -215,7 +215,7 @@ function actions(): CodingWorkbenchRuntimeActions {
 }
 
 interface Rendered {
-  readonly rerender: (api: ActiveWorkspaceApi) => void;
+  readonly rerender: (api: ActiveWorkspaceApi, state?: CodingWorkbenchRuntimeState) => void;
   readonly container: HTMLElement;
   readonly onOpenGit: ReturnType<typeof vi.fn>;
   readonly runtimeActions: CodingWorkbenchRuntimeActions;
@@ -237,7 +237,8 @@ function renderWorkbench(
     container: view.container,
     onOpenGit,
     runtimeActions,
-    rerender: (next: ActiveWorkspaceApi): void => {
+    rerender: (next: ActiveWorkspaceApi, nextState = state): void => {
+      runtimeHookMock.mockReturnValue({ state: nextState, actions: runtimeActions });
       view.rerender(
         <ActiveWorkspaceProvider value={next}>
           <CodingWorkbenchWindow onOpenGit={onOpenGit} />
@@ -474,6 +475,76 @@ describe("CodingWorkbenchSetup issue intake (#3385)", () => {
       "aria-disabled",
       "true",
     );
+  });
+
+  it("releases the accepted issue after a terminal run and can preview the next issue", async () => {
+    const user = userEvent.setup();
+    const bound = workspaceApi(boundWorkspace(codingWorkbenchIssueTaskId(42)));
+    const view = renderWorkbench(workspaceApi());
+    await previewReady(user);
+    await user.click(screen.getByRole("button", { name: "Use this issue" }));
+    view.rerender(bound);
+    await user.type(screen.getByLabelText("Task instructions"), "Implement the issue");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    expect(view.runtimeActions.start).toHaveBeenCalledTimes(1);
+
+    const binding = previewResponse().binding;
+    const terminalState: CodingWorkbenchRuntimeState = {
+      ...liveState(),
+      run: {
+        status: "ready",
+        error: null,
+        value: {
+          schemaVersion: "1",
+          state: "succeeded",
+          revision: 2,
+          updatedAt: "2026-09-06T16:00:00.000Z",
+          runId: "run-42",
+          issueBinding: {
+            ...binding,
+            schemaVersion: "1",
+            contentRevisionDigest: "d".repeat(64),
+          },
+        },
+      },
+    };
+    view.rerender(bound, terminalState);
+    const nextIssue = await screen.findByRole("button", { name: "Start from a GitHub issue" });
+    const historical = screen.getByTestId("coding-workbench-composer-issue");
+    expect(historical).toHaveTextContent("Issue #42 · base dev");
+    expect(within(historical).queryByRole("button")).not.toBeInTheDocument();
+    expect(diagnostics).toContainEqual({
+      message: "[keiko] coding workbench issue selection released after terminal run",
+      meta: undefined,
+    });
+    view.rerender(workspaceApi(), terminalState);
+    previewMock.mockResolvedValueOnce({
+      ...previewResponse({
+        provenance: {
+          ownerAndRepo: "oscharko-dev/Keiko",
+          issueNumber: 43,
+          url: "https://github.com/oscharko-dev/Keiko/issues/43",
+        },
+      }),
+      binding: {
+        ...previewResponse().binding,
+        issueNumber: 43,
+        issueIdDigest: "f".repeat(64),
+        bindingDigest: "1".repeat(64),
+      },
+    });
+    await user.type(screen.getByLabelText("Repository path"), REPOSITORY_PATH);
+    await user.clear(issueField());
+    await user.type(issueField(), "#43");
+    await user.click(previewButton());
+    await waitFor(() => {
+      expect(previewMock).toHaveBeenLastCalledWith(
+        { repositoryPath: REPOSITORY_PATH, issueRef: "#43" },
+        expect.any(AbortSignal),
+      );
+    });
+    await user.click(screen.getByRole("button", { name: "Use this issue" }));
+    expect(screen.getByRole("button", { name: "Bind workspace" })).toBeEnabled();
   });
 
   it("refuses a generic bind while an entered issue is unresolved or failed", async () => {

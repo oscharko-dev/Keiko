@@ -334,7 +334,7 @@ test("#3386 @coding-issue-commit actual UI denial revokes the execution path", a
   await page.getByRole("button", { name: "Deny", exact: true }).click();
   await expect(page.locator(SURFACE)).toHaveAttribute("data-state", "failed");
   expect(await snapshot(page)).toMatchObject({ failureCode: "revoked" });
-  expect((await waitControl(pending.controlId)).result?.status).toBe("failed");
+  expect((await waitControl(pending.controlId)).result?.status).toBe("cancelled");
   expect((await control("execute", pending.proposalId)).result?.status).toBe("denied");
   expect(git(root, ["rev-parse", "HEAD"])).toBe(before);
   await expect(page.getByRole("region", { name: "Reviewed commit message" })).toHaveCount(0);
