@@ -17,23 +17,27 @@ qualified yet; the historical table below must not be read as a current green ba
 - UI coverage: 447 files, 8,006 tests passed, one skipped; lines 92.93%, branches 82.60%.
 - The supervised production-composition delivery journey passed through retained HTTP review
   at checkpoint `a203482b`. Other modes and the real Chat/connect/disconnect journey remain open.
-- Editor active-port projection and durable lifecycle wiring passed 131 focused tests. A new
-  review found that structured Editor conflicts/failures can still be logged as completed;
-  its terminal-verdict correction remains in progress.
-- A deeper composition audit found that the managed runtime still used a smaller parallel
-  catalog bridge instead of the canonical binder. Actual handler coverage, dispatch drift,
-  all-action idempotency, result validation and cursor semantics therefore require production
-  integration and qualification. Reference-binder unit coverage does not close these criteria.
-- Root typecheck passed at `b87050f5`. The full server run passed 704 files and 13,574 tests but
-  had 12 failures in six files; targeted repairs passed afterward. A final full run is pending.
-- H1's active duplicate inventory is zero. The premerge producer checkpoint validator is now
-  implemented with 11 regression tests; its real receipt must be regenerated after the binder
-  repair. No merge identity or final integration provenance has been fabricated.
-- The catalog performance ruler and drift checks are implemented. Reference measurement,
-  native performance, paid model qualification, full final gates, exact-head PR checks,
-  postmerge `dev` checks and completed issue closure remain outstanding.
-- No paid model call has been launched. Paid qualification is on hold until the production
-  catalog integration is verified; the aggregate USD 50 budget remains available.
+- Editor terminal verdicts, read-only Ask policy, actual active-port advertisement and the
+  managed delivery project identity are repaired through `9a58125c`. The six-file focused
+  Editor/governance run passed 186 tests; managed mark-ready rotation and negative-path browser
+  journeys passed. The real Chat/connect/disconnect journey remains under repair.
+- The managed runtime now delegates to the canonical catalog binder (`dc913a63`), with shared
+  handler identity attestation and retained timeout outcomes (`dfa10ab6`). Review follow-up
+  identified per-call recompilation, a supported read payload boundary, and erased original
+  exception diagnostics. Their integrated corrections are being verified before live qualification.
+- Root typecheck passed on the subsequent binder/result/effects working tree, and 539 targeted
+  catalog/runtime tests passed. An independent three-file facade/settlement run passed 129 tests.
+  These are checkpoint results; the final immutable full-server and complete quality runs remain open.
+- H1's active duplicate inventory is zero. The premerge producer checkpoint validator is
+  implemented, and `b39c6705` adds an exact-source final CatalogCloseout validator. Neither is a
+  substitute for the pending real receipts. No future merge identity has been fabricated.
+- Catalog and native reference performance measurements, real-model qualification, complete
+  final gates, exact-head PR checks, postmerge `dev` checks and completed issue closure remain open.
+- The owner requires five successful real Issue → task → PR → merge → issue-closed runs. The
+  controlled repository has five prepared task issues (#1, #3, #4, #5 and #6), spanning Ask,
+  Supervised and Full access. No successful run is claimed. Two attempts stopped before provider
+  admission: a canonical-path mismatch and stale tool capability verification. Their failed receipts
+  are retained separately. No paid call has been admitted; all attempts and retries share USD 50.
 
 ## Historical pause checkpoint — September 5
 

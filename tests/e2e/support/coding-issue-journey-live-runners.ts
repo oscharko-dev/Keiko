@@ -5,6 +5,7 @@
 
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import { realpathSync } from "node:fs";
 import { driveOrReuseDraftPullRequest } from "./coding-issue-journey-live-cache.js";
 import type { DeliveredPullRequest } from "./coding-issue-journey-live.js";
 import {
@@ -47,7 +48,11 @@ export function resolveLiveJourneyEnv(): LiveJourneyEnv {
   if (repositoryRoot === undefined || issueRef === undefined) {
     throw new Error("coding-issue-journey: missing live journey environment");
   }
-  return { repositoryRoot, issueRef };
+  // The server resolves the controlled checkout through the canonical workspace boundary before
+  // rendering it. Preserve that same identity in the Playwright process: on macOS `/tmp` aliases
+  // `/private/tmp`, and comparing the raw operator spelling with the rendered canonical root made
+  // the live lane fail before its first model request despite naming the exact same checkout.
+  return { repositoryRoot: realpathSync(repositoryRoot), issueRef };
 }
 
 export interface ScenarioRunResult {
