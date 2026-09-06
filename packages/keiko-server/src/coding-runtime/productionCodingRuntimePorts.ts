@@ -7,8 +7,14 @@ import {
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
-import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  correlationIdOrUnknown,
+  isValidCorrelationId,
+  UNKNOWN_CORRELATION_ID,
+} from "../correlation.js";
 import { getServerLogger } from "../observability/index.js";
+import { errorKindOf } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import type {
   CodingRuntimeTaskDispatchResult,
   CodingRuntimeTaskDispatchRequest,
@@ -495,12 +501,13 @@ async function dispatchRuntimeTask(
   diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<CodingRuntimeTaskDispatchResult> {
   const record = runs.get(request.runId);
-  if (record === undefined) return rejectedDispatch(diagnostics, request.runId, "no-record");
+  if (record === undefined)
+    return rejectedDispatch(diagnostics, request.runId, "no-record", request.correlationId);
   if (record.controller.signal.aborted)
-    return rejectedDispatch(diagnostics, request.runId, "aborted");
+    return rejectedDispatch(diagnostics, request.runId, "aborted", request.correlationId);
   const reservation = record.operationGuard.reserve(request);
   if (reservation === undefined)
-    return rejectedDispatch(diagnostics, request.runId, "no-reservation");
+    return rejectedDispatch(diagnostics, request.runId, "no-reservation", request.correlationId);
   return submitReservedRuntimeTask(record, request, reservation, diagnostics);
 }
 
@@ -509,17 +516,16 @@ async function replaceRuntimeTask(
   request: CodingRuntimeTaskDispatchRequest,
   diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<CodingRuntimeTaskDispatchResult> {
+  recordRuntimeReplacementActivity(request, "started");
   const record = runs.get(request.runId);
-  if (record === undefined) return rejectedDispatch(diagnostics, request.runId, "no-record");
-  if (record.controller.signal.aborted)
-    return rejectedDispatch(diagnostics, request.runId, "aborted");
+  if (record === undefined) return rejectedReplacement(diagnostics, request, "no-record");
+  if (record.controller.signal.aborted) return rejectedReplacement(diagnostics, request, "aborted");
   const reservation = record.operationGuard.reserve(request);
-  if (reservation === undefined)
-    return rejectedDispatch(diagnostics, request.runId, "no-reservation");
+  if (reservation === undefined) return rejectedReplacement(diagnostics, request, "no-reservation");
   try {
     if (!(await record.turnPort.abortTurn(request.runId))) {
       reservation.release();
-      return rejectedDispatch(diagnostics, request.runId, "interrupt-rejected");
+      return rejectedReplacement(diagnostics, request, "interrupt-rejected");
     }
     // OpenCode's abort port already waits for session settlement, while Codex reports interrupt
     // acceptance before its run-bound turn id is cleared. Waiting through the shared terminal port
@@ -529,31 +535,65 @@ async function replaceRuntimeTask(
     record.controller.signal.throwIfAborted();
   } catch (error) {
     reservation.release();
-    recordRuntimeDispatchFailure(diagnostics, request.runId, "interrupt-exception", error);
-    return { ok: false };
+    return rejectedReplacement(diagnostics, request, "interrupt-exception", error);
   }
-  return submitReservedRuntimeTask(record, request, reservation, diagnostics);
+  const result = await submitReservedRuntimeTask(
+    record,
+    request,
+    reservation,
+    diagnostics,
+    (reason, error): void => {
+      recordRuntimeReplacementActivity(request, "rejected", reason, error);
+    },
+  );
+  if (result.ok) recordRuntimeReplacementActivity(request, "accepted");
+  return result;
 }
+
+type RuntimeDispatchFailureObserver = (
+  reason: RuntimeDispatchFailureReason,
+  error?: unknown,
+) => void;
 
 async function submitReservedRuntimeTask(
   record: ProductionRuntimeRunRecord,
   request: CodingRuntimeTaskDispatchRequest,
   reservation: ProductionRuntimeOperationReservation,
   diagnostics: ServerDiagnosticSink | undefined,
+  observeFailure?: RuntimeDispatchFailureObserver,
 ): Promise<CodingRuntimeTaskDispatchResult> {
   try {
     if (
       !(await record.turnPort.submitTurn(request.runId, request.taskIntent, request.initialContext))
     ) {
       reservation.release();
-      return rejectedDispatch(diagnostics, request.runId, "adapter-rejected");
+      return rejectedDispatch(
+        diagnostics,
+        request.runId,
+        "adapter-rejected",
+        request.correlationId,
+        observeFailure,
+      );
     }
     if (!reservation.commit()) {
-      return rejectedDispatch(diagnostics, request.runId, "commit-rejected");
+      return rejectedDispatch(
+        diagnostics,
+        request.runId,
+        "commit-rejected",
+        request.correlationId,
+        observeFailure,
+      );
     }
   } catch (error) {
     reservation.release();
-    recordRuntimeDispatchFailure(diagnostics, request.runId, "exception", error);
+    recordRuntimeDispatchFailure(
+      diagnostics,
+      request.runId,
+      "exception",
+      error,
+      request.correlationId,
+    );
+    observeFailure?.("exception", error);
     return { ok: false };
   }
   return { ok: true, completion: terminalCompletion(record, request.runId, diagnostics) };
@@ -563,8 +603,22 @@ function rejectedDispatch(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
   reason: RuntimeDispatchFailureReason,
+  correlationId?: string,
+  observeFailure?: RuntimeDispatchFailureObserver,
 ): CodingRuntimeTaskDispatchResult {
-  recordRuntimeDispatchFailure(diagnostics, runId, reason);
+  recordRuntimeDispatchFailure(diagnostics, runId, reason, undefined, correlationId);
+  observeFailure?.(reason);
+  return { ok: false };
+}
+
+function rejectedReplacement(
+  diagnostics: ServerDiagnosticSink | undefined,
+  request: CodingRuntimeTaskDispatchRequest,
+  reason: RuntimeDispatchFailureReason,
+  error?: unknown,
+): CodingRuntimeTaskDispatchResult {
+  recordRuntimeDispatchFailure(diagnostics, request.runId, reason, error, request.correlationId);
+  recordRuntimeReplacementActivity(request, "rejected", reason, error);
   return { ok: false };
 }
 
@@ -618,9 +672,10 @@ function recordRuntimeDispatchFailure(
   runId: string,
   reason: RuntimeDispatchFailureReason,
   error?: unknown,
+  correlationId?: string,
 ): void {
   emitServerDiagnostic(diagnostics, {
-    correlationId: runId,
+    correlationId: correlationIdOrUnknown(correlationId ?? runId),
     timestamp: new Date().toISOString(),
     operation: "coding-runtime.task-dispatch",
     source: "runtime.dispatcher",
@@ -628,6 +683,32 @@ function recordRuntimeDispatchFailure(
     message: "runtime-turn-failed",
     code: `stage=dispatch:reason=${reason}`,
   });
+}
+
+function recordRuntimeReplacementActivity(
+  request: CodingRuntimeTaskDispatchRequest,
+  state: "accepted" | "rejected" | "started",
+  reason?: RuntimeDispatchFailureReason,
+  error?: unknown,
+): void {
+  const event = {
+    category: "process" as const,
+    op: "coding-runtime.task-replacement",
+    correlationId: correlationIdOrUnknown(request.correlationId ?? request.runId),
+    ...(error === undefined ? {} : { errorKind: errorKindOf(error) }),
+    extra: {
+      runId: request.runId,
+      requestId: request.requestId,
+      expectedRevision: request.expectedRevision,
+      state,
+      ...(reason === undefined ? {} : { reason }),
+      ...(error === undefined
+        ? {}
+        : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
+    },
+  };
+  if (state === "rejected") getServerLogger().warn(event);
+  else getServerLogger().info(event);
 }
 
 async function abortRuntimeTask(

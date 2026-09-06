@@ -153,6 +153,74 @@ describe("production coding runtime turn ports", () => {
     expect(submitTurn).not.toHaveBeenCalled();
   });
 
+  it("logs correlated body-free start and terminal outcomes for replacement", async () => {
+    const sink = createBufferedServerLogSink();
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const abortTurn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("private interrupt failure"))
+      .mockResolvedValueOnce(true);
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([
+        [
+          "run-replace",
+          record("run-replace", {
+            submitTurn: () => Promise.resolve(true),
+            abortTurn,
+            waitForTerminal: () => Promise.resolve("cancelled" as const),
+          }),
+        ],
+      ]),
+      { record: (diagnostic): void => void diagnostics.push(diagnostic) },
+    );
+    const request = {
+      ...operation("run-replace", "follow-up-1", 2, "private operator correction"),
+      correlationId: "request-correlation-id-1",
+    };
+    if (dispatcher.replace === undefined) throw new Error("replace dispatcher is unavailable");
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      await expect(dispatcher.replace(request)).resolves.toEqual({ ok: false });
+      await expect(
+        dispatcher.replace({ ...request, requestId: "follow-up-2" }),
+      ).resolves.toMatchObject({ ok: true });
+    } finally {
+      resetServerLogger();
+    }
+
+    const replacementEvents = sink.events.filter(
+      (event) => event.op === "coding-runtime.task-replacement",
+    );
+    expect(replacementEvents.map((event) => event.extra?.state)).toEqual([
+      "started",
+      "rejected",
+      "started",
+      "accepted",
+    ]);
+    expect(replacementEvents.every((event) => event.correlationId === request.correlationId)).toBe(
+      true,
+    );
+    expect(replacementEvents[1]).toMatchObject({
+      errorKind: "Error",
+      extra: {
+        reason: "interrupt-exception",
+        requestId: "follow-up-1",
+        expectedRevision: 2,
+        frames: expect.any(Array) as unknown,
+        causeChain: expect.any(Array) as unknown,
+      },
+    });
+    expect(diagnostics).toMatchObject([
+      { correlationId: request.correlationId, code: "stage=dispatch:reason=interrupt-exception" },
+    ]);
+    expect(JSON.stringify({ replacementEvents, diagnostics })).not.toContain(
+      "private operator correction",
+    );
+    expect(JSON.stringify({ replacementEvents, diagnostics })).not.toContain(
+      "private interrupt failure",
+    );
+  });
+
   it("reuses one Codex thread for initial and follow-up turns", async () => {
     const startThread = vi.fn(() => Promise.resolve({ ok: true as const, threadId: "thread-1" }));
     const startTurn = vi

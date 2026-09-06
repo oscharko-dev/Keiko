@@ -229,6 +229,48 @@ describe("CodingRuntimeOperationCoordinator", () => {
     expect(taskDispatcher.replace).toHaveBeenCalledOnce();
   });
 
+  it("restores a predecessor settlement when its paused-turn replacement is rejected", async () => {
+    let resolveInitial: ((outcome: "failed") => void) | undefined;
+    const settleTask = vi.fn();
+    const taskDispatcher = dispatcher({
+      dispatch: () =>
+        Promise.resolve({
+          ok: true,
+          completion: new Promise<"failed">((resolve) => {
+            resolveInitial = resolve;
+          }),
+        }),
+      replace: vi.fn(async () => {
+        resolveInitial?.("failed");
+        await Promise.resolve();
+        return { ok: false as const };
+      }),
+    });
+    const subject = coordinator({
+      settleTask,
+      taskDispatcher,
+      current: () => ({ ...runningSnapshot(), state: "paused" }),
+    });
+    await subject.startInitialTurn({
+      runId: "run-1",
+      requestId: "initial-1",
+      expectedRevision: 1,
+      taskIntent: "Initial task",
+    });
+
+    await expect(
+      subject.submitFollowUp("run-1", followUp(), "request-correlation-id-1"),
+    ).resolves.toEqual({
+      ok: false,
+      failureCode: "authority-resolution-failed",
+    });
+
+    expect(settleTask).toHaveBeenCalledExactlyOnceWith("run-1", "failed");
+    expect(taskDispatcher.replace).toHaveBeenCalledWith(
+      expect.objectContaining({ correlationId: "request-correlation-id-1" }),
+    );
+  });
+
   it("fails closed when the task dispatcher throws and frees the request id", async () => {
     let calls = 0;
     const taskDispatcher = dispatcher({

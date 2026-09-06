@@ -14,6 +14,8 @@ export interface CodingRuntimeRunOperation {
 
 export interface CodingRuntimeTaskDispatchRequest extends CodingRuntimeRunOperation {
   readonly taskIntent: string;
+  /** Request-scoped diagnostic join; never persisted or forwarded to the model. */
+  readonly correlationId?: string | undefined;
   /** Transient server-owned context; never user intent, persistence or skill authorization. */
   readonly initialContext?: string | undefined;
 }

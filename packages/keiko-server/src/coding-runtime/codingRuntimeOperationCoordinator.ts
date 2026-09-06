@@ -87,7 +87,35 @@ type RuntimeOperationRevisionPolicy = "exact" | "stale-read";
 
 interface FollowUpDispatchOutcome {
   readonly result: CodingRuntimeTaskDispatchResult;
-  readonly generation?: number | undefined;
+  readonly generation?: RuntimeTaskGenerationReservation | undefined;
+}
+
+interface RuntimeTaskGenerationReservation {
+  readonly generation: number;
+  readonly commit: () => void;
+  readonly release: () => void;
+}
+
+interface PendingTaskGeneration {
+  readonly previousGeneration: number;
+  readonly generation: number;
+  active: boolean;
+  predecessorOutcome?: CodingRuntimeTaskOutcome | undefined;
+}
+
+function settleGenerationReservation(
+  reservation: RuntimeTaskGenerationReservation | undefined,
+  accepted: boolean,
+): void {
+  if (reservation === undefined) return;
+  if (accepted) reservation.commit();
+  else reservation.release();
+}
+
+function reservedGeneration(
+  reservation: RuntimeTaskGenerationReservation | undefined,
+): number | undefined {
+  return reservation === undefined ? undefined : reservation.generation;
 }
 
 const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
@@ -98,6 +126,7 @@ const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
 export class CodingRuntimeOperationCoordinator {
   private readonly replay = new RuntimeOperationReplayCoordinator();
   private readonly taskGenerations = new Map<string, number>();
+  private readonly pendingTaskGenerations = new Map<string, PendingTaskGeneration>();
 
   public constructor(private readonly deps: RuntimeOperationCoordinatorDeps) {}
 
@@ -128,11 +157,17 @@ export class CodingRuntimeOperationCoordinator {
         correlationId,
       );
       if (!dispatched.result.ok) {
+        settleGenerationReservation(dispatched.generation, false);
         operation.reservation.release();
         return failure("authority-resolution-failed");
       }
+      settleGenerationReservation(dispatched.generation, true);
       operation.reservation.commit();
-      this.observeTaskCompletion(runId, dispatched.result.completion, dispatched.generation);
+      this.observeTaskCompletion(
+        runId,
+        dispatched.result.completion,
+        reservedGeneration(dispatched.generation),
+      );
       return this.deps.advanceRevision(operation.current, "task-submitted");
     });
   }
@@ -144,7 +179,7 @@ export class CodingRuntimeOperationCoordinator {
     correlationId?: string,
   ): Promise<FollowUpDispatchOutcome> {
     const replacing = operation.current.state === "paused";
-    const generation = replacing ? this.nextTaskGeneration(runId) : undefined;
+    const generation = replacing ? this.reserveTaskGeneration(runId) : undefined;
     const dispatch = replacing
       ? this.deps.taskDispatcher.replace
       : this.deps.taskDispatcher.dispatch;
@@ -155,6 +190,7 @@ export class CodingRuntimeOperationCoordinator {
         requestId: operation.value.requestId,
         expectedRevision: operation.current.revision,
         taskIntent,
+        ...(correlationId === undefined ? {} : { correlationId }),
       });
       return { result, generation };
     } catch (error) {
@@ -316,6 +352,7 @@ export class CodingRuntimeOperationCoordinator {
   public clear(runId: string): void {
     this.replay.clear(runId);
     this.taskGenerations.delete(runId);
+    this.pendingTaskGenerations.delete(runId);
   }
 
   private observeTaskCompletion(
@@ -325,12 +362,63 @@ export class CodingRuntimeOperationCoordinator {
   ): void {
     void completion.then(
       (outcome): void => {
-        if (this.taskGenerations.get(runId) === generation) this.deps.settleTask(runId, outcome);
+        this.settleTaskCompletion(runId, generation, outcome);
       },
       (): void => {
-        if (this.taskGenerations.get(runId) === generation) this.deps.settleTask(runId, "failed");
+        this.settleTaskCompletion(runId, generation, "failed");
       },
     );
+  }
+
+  private settleTaskCompletion(
+    runId: string,
+    generation: number,
+    outcome: CodingRuntimeTaskOutcome,
+  ): void {
+    if (this.taskGenerations.get(runId) === generation) {
+      this.deps.settleTask(runId, outcome);
+      return;
+    }
+    const pending = this.pendingTaskGenerations.get(runId);
+    if (pending?.active === true && pending.previousGeneration === generation) {
+      pending.predecessorOutcome = outcome;
+    }
+  }
+
+  private reserveTaskGeneration(runId: string): RuntimeTaskGenerationReservation {
+    const previousGeneration = this.taskGenerations.get(runId) ?? 0;
+    const pending: PendingTaskGeneration = {
+      previousGeneration,
+      generation: previousGeneration + 1,
+      active: true,
+    };
+    this.pendingTaskGenerations.set(runId, pending);
+    this.taskGenerations.set(runId, pending.generation);
+    return {
+      generation: pending.generation,
+      commit: (): void => {
+        this.commitTaskGeneration(runId, pending);
+      },
+      release: (): void => {
+        this.releaseTaskGeneration(runId, pending);
+      },
+    };
+  }
+
+  private commitTaskGeneration(runId: string, pending: PendingTaskGeneration): void {
+    if (!pending.active || this.pendingTaskGenerations.get(runId) !== pending) return;
+    pending.active = false;
+    this.pendingTaskGenerations.delete(runId);
+  }
+
+  private releaseTaskGeneration(runId: string, pending: PendingTaskGeneration): void {
+    if (!pending.active || this.pendingTaskGenerations.get(runId) !== pending) return;
+    pending.active = false;
+    this.pendingTaskGenerations.delete(runId);
+    this.taskGenerations.set(runId, pending.previousGeneration);
+    if (pending.predecessorOutcome !== undefined) {
+      this.deps.settleTask(runId, pending.predecessorOutcome);
+    }
   }
 
   private nextTaskGeneration(runId: string): number {
