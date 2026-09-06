@@ -25,6 +25,7 @@ import { driveOrReuseDraftPullRequest } from "./coding-issue-journey-live-cache.
 import {
   applyAutoDraftDescriptionThroughPrCard,
   mountGovernedPullRequestCard,
+  reconcileAppliedDescriptionAfterMarkReady,
   waitForAutoDraftDescription,
 } from "./coding-issue-journey-live-description.js";
 import { waitForCiRepairOutcome } from "./coding-issue-journey-live-ci.js";
@@ -755,6 +756,7 @@ async function driveFlowToCompletedOutcome(
   );
   await applyAutoDraftDescriptionThroughPrCard(page, retained);
   await proposeJourneyReady(page);
+  await reconcileAppliedDescriptionAfterMarkReady(page, repositoryRoot, finalDelivered);
   const readiness = await waitForPreMergeReadiness(page, finalDelivered);
   await executeGovernedMerge(page, repositoryRoot, finalDelivered);
   const outcome = await waitForCompletedJourney(page, finalDelivered.runId);

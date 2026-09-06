@@ -3,6 +3,7 @@ import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts";
 import { CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS } from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
 import { JourneyObservationController } from "../../../packages/keiko-server/src/gitDelivery/journeyObservationService.js";
 import { journeyFixture } from "../../../packages/keiko-server/src/gitDelivery/journeyOutcomeTest/_support.js";
+import { DescriptionFixture } from "../../../packages/keiko-server/src/gitDelivery/prDescriptionTestSupport.js";
 import {
   assertQualificationSpendEnvelope,
   buildQualificationFlowArtifact,
@@ -248,75 +249,125 @@ describe("completed live qualification flow evidence", () => {
   it("binds pre-merge readiness to the production observer's completed outcome", async () => {
     const source = journeyFixture();
     const sourceReadiness = source.readiness;
-    const sourceDescription = source.description;
-    if (sourceReadiness === null || sourceDescription === null) {
+    if (sourceReadiness === null) {
       throw new Error("journey fixture must expose open-PR evidence");
     }
-    const context = {
-      draft: source.draft,
-      accessScope: {},
-      correlationId: "run-1",
-      stillAuthorized: (): boolean => true,
-    };
-    let facts = structuredClone(source.facts);
-    let description = sourceDescription;
-    const readiness = {
-      ...sourceReadiness,
-      requiredChecks: {
-        total: 1,
-        passed: 1,
-        failed: 0,
-        pending: 0,
-        blocked: 0,
-        unknown: 0,
-      },
-    };
-    const observe = async (): Promise<JourneyOutcome> => {
-      const result = await new JourneyObservationController({
-        context: (): typeof context => context,
-        reader: (): { readonly readJourney: () => Promise<typeof facts> } => ({
-          readJourney: (): Promise<typeof facts> => Promise.resolve(facts),
-        }),
-        readiness: (): Promise<typeof readiness> => Promise.resolve(readiness),
-        description: (): Promise<typeof description> => Promise.resolve(description),
-        recordOutcome: (): boolean => true,
-        now: (): number => source.observedAtMs,
-        activityLog: { write: (): void => undefined },
-      }).observe();
-      if (result.status !== "observed") throw new Error("fixture observation was unavailable");
-      return result.outcome;
-    };
-    const beforeMerge = await observe();
-    facts = {
-      ...facts,
-      identity: { ...facts.identity, state: "closed", isDraft: false },
-      mergedAt: "2026-09-06T05:59:00Z",
-      mergeCommitSha: MERGE_SHA,
-      issue: { ...facts.issue, state: "closed", closedAt: "2026-09-06T05:59:30Z" },
-    };
-    description = {
-      ...sourceDescription,
-      binding: { ...sourceDescription.binding, isDraft: false },
-    };
-    const afterMerge = await observe();
-
-    expect(afterMerge.readiness).toBeNull();
-    if (beforeMerge.readiness === null) throw new Error("pre-merge readiness was unavailable");
-    expect(
-      buildQualificationFlowArtifact({
-        flow: {
-          ...FLOW,
-          repository: afterMerge.binding.repository,
-          issueNumber: afterMerge.binding.issueNumber,
+    const descriptionFixture = new DescriptionFixture();
+    try {
+      const artifact = await descriptionFixture.generateArtifact();
+      const preview = await descriptionFixture.service.previewArtifact(artifact);
+      if (preview.outcome !== "preview") throw new Error("description preview was unavailable");
+      const approval = descriptionFixture.service.issueApproval(preview.preview.proposalId);
+      const lease = descriptionFixture.service.consumeApproval(preview.preview.proposalId);
+      if (approval === undefined || lease === undefined) {
+        throw new Error("description approval was unavailable");
+      }
+      const applied = await descriptionFixture.service.executeApproved(
+        preview.preview.proposalId,
+        lease,
+      );
+      if (applied.outcome !== "observed") throw new Error("description apply was unavailable");
+      descriptionFixture.remote = {
+        ...descriptionFixture.remote,
+        identity: { ...descriptionFixture.remote.identity, isDraft: false },
+      };
+      const reconciled = await descriptionFixture.service.reconcile();
+      if (reconciled.outcome !== "observed") {
+        throw new Error("description reconciliation was unavailable");
+      }
+      expect(reconciled.status.binding.isDraft).toBe(false);
+      const identity = descriptionFixture.remote.identity;
+      const draft = {
+        ...source.draft,
+        binding: {
+          ...source.draft.binding,
+          remoteDigest: reconciled.status.binding.remoteDigest,
+          repository: identity.repository,
+          baseRef: identity.baseRef,
+          baseSha: identity.baseSha,
+          headRef: identity.headRef,
+          headSha: identity.headSha,
         },
-        outcome: afterMerge,
-        readiness: beforeMerge.readiness,
-        sourceCommitSha: SOURCE_SHA,
-        budgetNanoUsd: 50_000_000_000,
-        previousCumulativeChargedNanoUsd: 0,
-        cumulativeChargedNanoUsd: 3_240_000,
-      }),
-    ).toMatchObject({ pullRequestHeadSha: afterMerge.binding.headSha });
+        pullRequest: { ...identity, isDraft: true },
+      };
+      const context = {
+        draft,
+        accessScope: {},
+        correlationId: "run-1",
+        stillAuthorized: (): boolean => true,
+      };
+      let facts = {
+        ...structuredClone(source.facts),
+        identity,
+        defaultBranchRef: identity.baseRef,
+      };
+      const description = reconciled.status;
+      const readiness = {
+        ...sourceReadiness,
+        remoteDigest: draft.binding.remoteDigest,
+        repository: draft.binding.repository,
+        prNumber: identity.number,
+        baseRef: identity.baseRef,
+        baseSha: identity.baseSha,
+        headRef: identity.headRef,
+        headSha: identity.headSha,
+        pullRequest: { ...sourceReadiness.pullRequest, isDraft: false },
+        requiredChecks: {
+          total: 1,
+          passed: 1,
+          failed: 0,
+          pending: 0,
+          blocked: 0,
+          unknown: 0,
+        },
+      };
+      const observe = async (): Promise<JourneyOutcome> => {
+        const result = await new JourneyObservationController({
+          context: (): typeof context => context,
+          reader: (): { readonly readJourney: () => Promise<typeof facts> } => ({
+            readJourney: (): Promise<typeof facts> => Promise.resolve(facts),
+          }),
+          readiness: (): Promise<typeof readiness> => Promise.resolve(readiness),
+          description: (): Promise<typeof description> => Promise.resolve(description),
+          recordOutcome: (): boolean => true,
+          now: (): number => source.observedAtMs,
+          activityLog: { write: (): void => undefined },
+        }).observe();
+        if (result.status !== "observed") {
+          throw new Error(`fixture observation was unavailable: ${result.reason}`);
+        }
+        return result.outcome;
+      };
+      const beforeMerge = await observe();
+      facts = {
+        ...facts,
+        identity: { ...facts.identity, state: "closed", isDraft: false },
+        mergedAt: "2026-09-06T05:59:00Z",
+        mergeCommitSha: MERGE_SHA,
+        issue: { ...facts.issue, state: "closed", closedAt: "2026-09-06T05:59:30Z" },
+      };
+      const afterMerge = await observe();
+
+      expect(afterMerge.readiness).toBeNull();
+      if (beforeMerge.readiness === null) throw new Error("pre-merge readiness was unavailable");
+      expect(
+        buildQualificationFlowArtifact({
+          flow: {
+            ...FLOW,
+            repository: afterMerge.binding.repository,
+            issueNumber: afterMerge.binding.issueNumber,
+          },
+          outcome: afterMerge,
+          readiness: beforeMerge.readiness,
+          sourceCommitSha: SOURCE_SHA,
+          budgetNanoUsd: 50_000_000_000,
+          previousCumulativeChargedNanoUsd: 0,
+          cumulativeChargedNanoUsd: 3_240_000,
+        }),
+      ).toMatchObject({ pullRequestHeadSha: afterMerge.binding.headSha });
+    } finally {
+      descriptionFixture.close();
+    }
   });
 
   it("makes an ordinal-only invocation exclusive from legacy paid scenarios", () => {

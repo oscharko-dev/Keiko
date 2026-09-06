@@ -32,6 +32,26 @@ export function matchesDescriptionIdentity(
     identity.isDraft === binding.isDraft
   );
 }
+
+function matchesObservedReadyTransition(
+  binding: PrDescriptionApplicationBinding,
+  body: GitPrBody,
+): boolean {
+  return (
+    binding.isDraft &&
+    !body.identity.isDraft &&
+    matchesDescriptionIdentity({ ...binding, isDraft: false }, body)
+  );
+}
+
+function reconciledBinding(
+  binding: PrDescriptionApplicationBinding,
+  remote: GitPrBody,
+): PrDescriptionApplicationBinding | undefined {
+  if (matchesDescriptionIdentity(binding, remote)) return binding;
+  if (!matchesObservedReadyTransition(binding, remote)) return undefined;
+  return { ...binding, isDraft: false, providerUpdatedAt: remote.updatedAt };
+}
 export async function assertDescriptionUnchanged(
   options: PrDescriptionServiceOptions,
   proposal: PreparedPrDescription,
@@ -103,9 +123,9 @@ export function reconciledDescriptionStatus(
   confirmed: boolean,
   now: number,
 ): PrDescriptionApplicationStatus {
-  const binding = previous.binding;
-  if (!matchesDescriptionIdentity(binding, remote))
-    return applicationStatus(binding, previous.completeness, "stale-pr", "uncertain", now);
+  const binding = reconciledBinding(previous.binding, remote);
+  if (binding === undefined)
+    return applicationStatus(previous.binding, previous.completeness, "stale-pr", "uncertain", now);
   const digest = sha256Hex(remote.body);
   if (digest === binding.finalBodyDigest) {
     const reason =

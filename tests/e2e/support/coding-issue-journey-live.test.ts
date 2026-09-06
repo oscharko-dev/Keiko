@@ -1,6 +1,7 @@
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
+  prepareBoundIssueForRun,
   qualifyLiveModel,
   reconcileLiveWorkbenchAfterModelChange,
 } from "./coding-issue-journey-live.js";
@@ -156,6 +157,35 @@ describe("live journey model qualification", () => {
 });
 
 describe("live journey model-change reload", () => {
+  it("re-accepts the exact issue after a qualification reload before the run can start", async () => {
+    const order: string[] = [];
+    await prepareBoundIssueForRun({
+      previewAndBind: (): Promise<void> => {
+        order.push("bound");
+        return Promise.resolve();
+      },
+      qualifyModel: (): Promise<boolean> => {
+        order.push("qualified-and-reloaded");
+        return Promise.resolve(true);
+      },
+      previewAndAccept: (): Promise<void> => {
+        order.push("issue-reaccepted");
+        return Promise.resolve();
+      },
+    });
+    expect(order).toEqual(["bound", "qualified-and-reloaded", "issue-reaccepted"]);
+  });
+
+  it("keeps the accepted issue when qualification does not reload the page", async () => {
+    const previewAndAccept = vi.fn<() => Promise<void>>();
+    await prepareBoundIssueForRun({
+      previewAndBind: (): Promise<void> => Promise.resolve(),
+      qualifyModel: (): Promise<boolean> => Promise.resolve(false),
+      previewAndAccept,
+    });
+    expect(previewAndAccept).not.toHaveBeenCalled();
+  });
+
   it("waits for the pre-reload task workspace identity after the workbench renders", async () => {
     const identity = {
       workspaceId: "ws-1",

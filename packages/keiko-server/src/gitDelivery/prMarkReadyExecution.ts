@@ -30,6 +30,7 @@
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { GitDeliveryApprovalClaim } from "@oscharko-dev/keiko-contracts";
+import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type {
@@ -55,6 +56,7 @@ import {
 } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
+import { produceCiReadinessSnapshot } from "./ciReadinessSnapshot.js";
 import { gitDeliveryTerminationHandler, logGitDeliveryNoSpawnRefusal } from "./execution.js";
 import {
   DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
@@ -316,13 +318,9 @@ interface LiveReadinessCheck {
 }
 
 async function liveReadinessDrifted(
-  workspace: WorkspaceInfo,
-  options: GitDeliveryPrMarkReadyRouteOptions,
-  correlationId: string,
+  reader: GitCiProviderReader,
   command: PrMarkReadyCommand,
-  stillAuthorized: () => boolean,
 ): Promise<LiveReadinessCheck> {
-  const reader = ciReaderFor(workspace, options, correlationId, stillAuthorized);
   let facts: GitCiFactsResult;
   try {
     facts = await reader.readFacts({
@@ -342,6 +340,73 @@ async function liveReadinessDrifted(
       assessment.requirementsDigest !== command.readinessDigest ||
       assessment.pullRequest.conflict === "conflicting",
   };
+}
+
+interface PostTransitionObservationInput {
+  readonly deps: UiHandlerDeps;
+  readonly options: GitDeliveryPrMarkReadyRouteOptions;
+  readonly correlationId: string;
+  readonly runId: string;
+  readonly command: PrMarkReadyCommand;
+  readonly reader: GitCiProviderReader;
+  readonly stillAuthorized: () => boolean;
+}
+
+function logPostTransitionObservation(
+  input: PostTransitionObservationInput,
+  recorded: boolean,
+  reason: string,
+): void {
+  log(
+    input.options.activityLog,
+    "git.delivery.pr-mark-ready.readiness-refreshed",
+    input.correlationId,
+    200,
+    { runId: input.runId, recorded, reason },
+  );
+}
+
+function postTransitionSubject(input: PostTransitionObservationInput):
+  | {
+      readonly draft: DraftDeliveryRecord;
+      readonly store: NonNullable<
+        NonNullable<UiHandlerDeps["codingRuntimeSnapshotStore"]>["ciReadiness"]
+      >;
+    }
+  | undefined {
+  const snapshots = input.deps.codingRuntimeSnapshotStore;
+  const draft = snapshots?.get(input.runId)?.draftDelivery;
+  const store = snapshots?.ciReadiness;
+  return draft?.pullRequest === undefined || store === undefined ? undefined : { draft, store };
+}
+
+async function refreshPostTransitionReadiness(
+  input: PostTransitionObservationInput,
+): Promise<void> {
+  if (!input.stillAuthorized()) {
+    logPostTransitionObservation(input, false, "authority-denied");
+    return;
+  }
+  const subject = postTransitionSubject(input);
+  if (subject === undefined) {
+    logPostTransitionObservation(input, false, "store-unavailable");
+    return;
+  }
+  const facts = await input.reader.readFacts({
+    ownerAndRepo: input.command.ownerAndRepo,
+    prExternalId: input.command.prExternalId,
+    baseBranchName: input.command.baseRef,
+    headSha: input.command.headSha,
+  });
+  if (facts.status !== "observed") {
+    logPostTransitionObservation(input, false, facts.failure.reason);
+    return;
+  }
+  const now = input.options.now ?? Date.now;
+  const { snapshot } = produceCiReadinessSnapshot(subject.draft, facts, now());
+  const recorded = subject.store.recordPostDeliveryObservation(input.runId, snapshot);
+  const reason = recorded ? "observed" : "stale-observation";
+  logPostTransitionObservation(input, recorded, reason);
 }
 
 // ─── Logging ────────────────────────────────────────────────────────────────────────────────────
@@ -365,7 +430,7 @@ function log(
 function logMarkReadyFailure(
   activityLog: ServerLogSink | undefined,
   correlationId: string,
-  phaseReached: "readiness" | "dispatch",
+  phaseReached: "readiness" | "dispatch" | "post-observation",
   error: unknown,
 ): void {
   (activityLog ?? processServerLogSink()).write({
@@ -381,6 +446,21 @@ function logMarkReadyFailure(
       causeChain: causeChain(error),
     },
   });
+}
+
+function reportPostObservationFailure(input: PostTransitionObservationInput, error: unknown): void {
+  logMarkReadyFailure(input.options.activityLog, input.correlationId, "post-observation", error);
+  emitServerDiagnostic(
+    input.deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: input.correlationId,
+      operation: "POST /api/git-delivery/pr/mark-ready/execute",
+      source: "pr-mark-ready-post-observation",
+      error,
+      summary: "The bounded status read was unavailable.",
+      redact: (value): string => String(input.deps.redactor(value)),
+    }),
+  );
 }
 
 // Shared by approve and execute — both run the identical prologue (read/validate/resolve-workspace
@@ -488,6 +568,8 @@ function markReadyApprovalRequiredBlock(deps: Pick<UiHandlerDeps, "redactor">): 
 }
 
 interface GovernedMarkReadyDispatch {
+  readonly deps: UiHandlerDeps;
+  readonly runId: string;
   readonly command: PrMarkReadyCommand;
   readonly workspace: WorkspaceInfo;
   readonly options: GitDeliveryPrMarkReadyRouteOptions;
@@ -527,13 +609,8 @@ async function dispatchGovernedMarkReady(
     );
     return { schemaVersion: "1", outcome: "aborted", durationMs: 0 };
   }
-  const readiness = await liveReadinessDrifted(
-    workspace,
-    options,
-    correlationId,
-    command,
-    continuityGuard,
-  );
+  const reader = ciReaderFor(workspace, options, correlationId, continuityGuard);
+  const readiness = await liveReadinessDrifted(reader, command);
   if (readiness.readFailure !== undefined) {
     reportReadinessFailure(input, readiness.readFailure.error);
   }
@@ -546,12 +623,29 @@ async function dispatchGovernedMarkReady(
     };
   }
   const adapter = markReadyAdapterFor(workspace, options, correlationId);
-  return adapter.markPullRequestReady({
+  const result = await adapter.markPullRequestReady({
     ownerAndRepo: command.ownerAndRepo,
     prExternalId: command.prExternalId,
     expectedHeadSha: command.headSha,
     expectedBaseSha: command.baseSha,
   });
+  if (result.outcome === "succeeded") {
+    const observation = {
+      deps: input.deps,
+      options,
+      correlationId,
+      runId: input.runId,
+      command,
+      reader,
+      stillAuthorized: continuityGuard,
+    };
+    try {
+      await refreshPostTransitionReadiness(observation);
+    } catch (error) {
+      reportPostObservationFailure(observation, error);
+    }
+  }
+  return result;
 }
 
 function logMarkReadyOutcome(
@@ -601,6 +695,8 @@ async function dispatchOrBlock(
   });
   try {
     const result = await dispatchGovernedMarkReady({
+      deps,
+      runId: authority.runId,
       command,
       workspace,
       options,

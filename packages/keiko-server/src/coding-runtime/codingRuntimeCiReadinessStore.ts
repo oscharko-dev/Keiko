@@ -20,6 +20,7 @@ export interface CodingRuntimeCiReadinessStore {
   begin(runId: string): CiObservationTicket;
   invalidate(runId: string): boolean;
   complete(ticket: CiObservationTicket, readiness: ReadinessSnapshot): boolean;
+  recordPostDeliveryObservation(runId: string, readiness: ReadinessSnapshot): boolean;
   get(runId: string): ReadinessSnapshot | undefined;
 }
 function live(snapshot: CodingRuntimeSnapshot | undefined): snapshot is CodingRuntimeSnapshot {
@@ -122,6 +123,69 @@ function complete(
       ).changes === 1
   );
 }
+
+function postDeliverySubjectMatches(
+  current: CodingRuntimeSnapshot | undefined,
+  draft: DraftDeliveryRecord | undefined,
+  readiness: ReadinessSnapshot,
+): current is CodingRuntimeSnapshot {
+  return (
+    current?.state === "succeeded" &&
+    current.terminalAt !== undefined &&
+    draft?.phase === "draft-created" &&
+    draft.pullRequest !== undefined &&
+    !readiness.pullRequest.isDraft &&
+    readinessMatchesDraft(readiness, draft)
+  );
+}
+
+function currentReadinessRecord(db: DatabaseSync, runId: string): string | null | undefined {
+  const row = db
+    .prepare("SELECT ci_readiness_record FROM coding_runtime_snapshots WHERE run_id = ?")
+    .get(runId) as { ci_readiness_record: string | null } | undefined;
+  return row?.ci_readiness_record;
+}
+
+function observationRegresses(priorRecord: string | null, readiness: ReadinessSnapshot): boolean {
+  const prior = ciReadinessFromRow(priorRecord).ciReadiness;
+  return prior !== undefined && Date.parse(prior.observedAt) > Date.parse(readiness.observedAt);
+}
+
+/**
+ * Records the read-only observation made by the governed draft-to-ready owner after the coding run
+ * has succeeded. This deliberately does not reopen runtime authority: it can only replace evidence
+ * on an already-terminal successful run, and the unchanged persisted draft delivery remains the
+ * CAS identity for the observed repository, PR and published head.
+ */
+function recordPostDeliveryObservation(
+  db: DatabaseSync,
+  snapshots: Pick<CodingRuntimeSnapshotStore, "get">,
+  runId: string,
+  readiness: ReadinessSnapshot,
+): boolean {
+  if (!isReadinessSnapshot(readiness)) throw new TypeError("Invalid CI readiness result");
+  const current = snapshots.get(runId);
+  const draft = current?.draftDelivery;
+  if (!postDeliverySubjectMatches(current, draft, readiness) || draft === undefined) return false;
+  const encoded = JSON.stringify(readiness);
+  if (Buffer.byteLength(encoded, "utf8") > 8192)
+    throw new TypeError("CI readiness result exceeds storage bound");
+  const priorRecord = currentReadinessRecord(db, runId);
+  if (priorRecord === undefined || observationRegresses(priorRecord, readiness)) return false;
+  return (
+    db
+      .prepare(
+        `UPDATE coding_runtime_snapshots SET ci_readiness_record = ?,
+      ci_observation_revision = ci_observation_revision + 1 WHERE run_id = ?
+      AND draft_delivery_record = ? AND authority_digest = ?
+      AND state = 'succeeded' AND terminal_at IS NOT NULL
+      AND ci_readiness_record IS ?
+      AND ci_observation_revision < 1000000`,
+      )
+      .run(encoded, runId, JSON.stringify(draft), current.authorityDigest, priorRecord).changes ===
+    1
+  );
+}
 export function createCodingRuntimeCiReadinessStore(
   db: DatabaseSync,
   snapshots: Pick<CodingRuntimeSnapshotStore, "get">,
@@ -138,6 +202,8 @@ export function createCodingRuntimeCiReadinessStore(
         )
         .run(runId).changes === 1,
     complete: (ticket, readiness) => complete(db, snapshots, ticket, readiness),
+    recordPostDeliveryObservation: (runId, readiness): boolean =>
+      recordPostDeliveryObservation(db, snapshots, runId, readiness),
     get: (runId): ReadinessSnapshot | undefined => {
       const current = snapshots.get(runId);
       if (current === undefined) return undefined;

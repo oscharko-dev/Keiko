@@ -1219,14 +1219,21 @@
     {
       "op": "POST /api/git-delivery/pr/mark-ready/execute",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:506",
+      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:457",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/git-delivery/pr/mark-ready/execute",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:621",
+      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:588",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/git-delivery/pr/mark-ready/execute",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:717",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2214,7 +2221,7 @@
     {
       "op": "git.delivery.mutation.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:373",
+      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:438",
       "package": "keiko-server"
     },
     {

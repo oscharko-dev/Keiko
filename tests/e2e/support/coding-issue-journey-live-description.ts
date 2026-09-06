@@ -25,6 +25,8 @@ import type { DeliveredPullRequest } from "./coding-issue-journey-live.js";
 const GOVERNED_PR_WINDOW_ID = "coding-issue-journey-governed-pr";
 const REVIEW_ENDPOINT = "/api/git-delivery/pr-description/review";
 const APPLY_ENDPOINT = "/api/git-delivery/pr-description/apply";
+const STATUS_ENDPOINT = "/api/git-delivery/pr-description/status";
+const CSRF = { "X-Keiko-CSRF": "1" };
 
 /** The exact retained artifact identity #3401 already generated -- captured once from the
  * automatic status and carried through review/approve/apply so every step can be checked against
@@ -47,6 +49,48 @@ interface PrDescriptionReviewWireBody {
 interface PrDescriptionApplyWireBody {
   readonly outcome: string;
   readonly status?: { readonly binding: { readonly draftDigest: string } };
+}
+
+interface PrDescriptionStatusBinding {
+  readonly repository: string;
+  readonly prNumber: number;
+  readonly headRef: string;
+  readonly headSha: string;
+  readonly isDraft: boolean;
+}
+
+interface PrDescriptionStatusWireBody {
+  readonly outcome: string;
+  readonly status?: {
+    readonly state: string;
+    readonly effect: string;
+    readonly binding: PrDescriptionStatusBinding;
+  };
+}
+
+function readyDescriptionBindingMatches(
+  binding: PrDescriptionStatusBinding | undefined,
+  pullRequest: DeliveredPullRequest,
+): boolean {
+  return (
+    binding?.repository === pullRequest.repository &&
+    binding.prNumber === pullRequest.number &&
+    binding.headRef === pullRequest.headRef &&
+    binding.headSha === pullRequest.headSha &&
+    !binding.isDraft
+  );
+}
+
+function descriptionReconciledToReadyPullRequest(
+  body: PrDescriptionStatusWireBody,
+  pullRequest: DeliveredPullRequest,
+): boolean {
+  return (
+    body.outcome === "observed" &&
+    body.status?.state === "current" &&
+    (body.status.effect === "confirmed" || body.status.effect === "reconciled") &&
+    readyDescriptionBindingMatches(body.status.binding, pullRequest)
+  );
 }
 
 /** Waits for the run's own terminal-run hook to record a GENERATED retained description proposal
@@ -208,4 +252,32 @@ export async function applyAutoDraftDescriptionThroughPrCard(
   await expect(card.getByTestId("gpr-description-state")).toHaveAttribute("data-state", "current", {
     timeout: 60_000,
   });
+}
+
+/** Reconciles the already-applied description after the governed draft-to-ready transition. The
+ * transition changes the provider's `isDraft` identity, so the pre-transition applied status is
+ * deliberately stale until this production status owner re-reads the remote body and persists the
+ * same confirmed content against the ready PR identity. */
+export async function reconcileAppliedDescriptionAfterMarkReady(
+  page: Page,
+  repositoryRoot: string,
+  pullRequest: DeliveredPullRequest,
+): Promise<void> {
+  const response = await page.request.post(STATUS_ENDPOINT, {
+    headers: CSRF,
+    data: {
+      schemaVersion: "1",
+      projectId: repositoryRoot,
+      ownerAndRepo: pullRequest.repository,
+      prNumber: pullRequest.number,
+    },
+  });
+  expect(
+    response.ok(),
+    `description reconciliation failed with HTTP ${String(response.status())}`,
+  ).toBe(true);
+  const body = (await response.json()) as PrDescriptionStatusWireBody;
+  if (!descriptionReconciledToReadyPullRequest(body, pullRequest)) {
+    throw new Error("description was not reconciled to the exact ready pull request identity");
+  }
 }

@@ -72,6 +72,47 @@ describe("CI readiness in the existing runtime snapshot row", () => {
       ),
     ).toThrow();
   });
+  it("records a ready-PR observation after successful delivery without reopening runtime authority", () => {
+    const test = fixture();
+    const current = test.snapshots.get("run-1");
+    if (!current) throw new Error("missing fixture snapshot");
+    test.snapshots.transition("run-1", {
+      state: "succeeded",
+      revision: current.revision + 1,
+      updatedAt: AT,
+      terminalAt: AT,
+    });
+    const readyPullRequest = {
+      ...readySnapshot(),
+      pullRequest: { ...readySnapshot().pullRequest, isDraft: false },
+    };
+    expect(test.ci.recordPostDeliveryObservation("run-1", readyPullRequest)).toBe(true);
+    expect(test.ci.get("run-1")).toEqual(readyPullRequest);
+    expect(() => test.ci.begin("run-1")).toThrow("live confirmed draft");
+  });
+  it.each([
+    { state: "cancelled" as const, readiness: readySnapshot() },
+    {
+      state: "succeeded" as const,
+      readiness: {
+        ...readySnapshot(),
+        pullRequest: { ...readySnapshot().pullRequest, isDraft: true },
+      },
+    },
+    { state: "succeeded" as const, readiness: { ...readySnapshot(), headSha: "4".repeat(40) } },
+  ])("rejects an ineligible post-delivery observation %#", ({ state, readiness }) => {
+    const test = fixture();
+    const current = test.snapshots.get("run-1");
+    if (!current) throw new Error("missing fixture snapshot");
+    test.snapshots.transition("run-1", {
+      state,
+      revision: current.revision + 1,
+      updatedAt: AT,
+      terminalAt: AT,
+    });
+    expect(test.ci.recordPostDeliveryObservation("run-1", readiness)).toBe(false);
+    expect(test.ci.get("run-1")).toBeUndefined();
+  });
   it.each([
     { remoteDigest: "b".repeat(64) },
     { prNumber: 18 },

@@ -13,6 +13,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
+import { DatabaseSync } from "node:sqlite";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -20,6 +21,7 @@ import type {
   GitDeliveryRepoPolicyPack,
 } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import type { GitPullRequestCommand, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type {
   GitPrCreateExecRequest,
@@ -89,6 +91,7 @@ import {
 } from "./prExecution.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
+import { createDraftRun } from "./ciObservationTest/_support.js";
 
 const PREVIEW = "/api/git-delivery/pr/preview";
 const EXECUTE = "/api/git-delivery/pr/execute";
@@ -1316,6 +1319,99 @@ describe("pr mark-ready routes (#3389)", () => {
         expectedBaseSha: BASE_SHA,
       },
     ]);
+  });
+
+  it("persists a fresh ready-PR CI observation after the governed transition", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = await mintMarkReadyApproval(approvalStore);
+    const adapter = recordingMarkReadyAdapter({
+      schemaVersion: "1",
+      outcome: "succeeded",
+      durationMs: 5,
+    });
+    const db = new DatabaseSync(":memory:");
+    const activity: ServerLogEvent[] = [];
+    try {
+      const snapshots = createDraftRun(db);
+      const source = snapshots.get("run-1");
+      const ciReadiness = snapshots.ciReadiness;
+      if (source?.draftDelivery?.pullRequest === undefined || ciReadiness === undefined)
+        throw new Error("missing fixture draft or CI store");
+      const draftDelivery = {
+        ...source.draftDelivery,
+        binding: {
+          ...source.draftDelivery.binding,
+          runId: "test-run",
+          repository: "oscharko-dev/Keiko",
+          baseRef: BASE_REF,
+          baseSha: BASE_SHA,
+          headRef: "claude/issue-3389-x",
+          headSha: HEAD_SHA,
+        },
+        pullRequest: READY_CI_FACTS.identity,
+      };
+      const recordedSnapshots: ReadinessSnapshot[] = [];
+      const recordPostDeliveryObservation = vi.fn(
+        (_runId: string, readiness: ReadinessSnapshot): boolean => {
+          recordedSnapshots.push(readiness);
+          return true;
+        },
+      );
+      const runtimeStore = {
+        ...snapshots,
+        get: (runId: string): ReturnType<typeof snapshots.get> =>
+          runId === "test-run"
+            ? {
+                ...source,
+                runId,
+                state: "succeeded",
+                terminalAt: source.updatedAt,
+                draftDelivery,
+              }
+            : snapshots.get(runId),
+        ciReadiness: {
+          ...ciReadiness,
+          recordPostDeliveryObservation,
+        },
+      };
+      const observedReady = readyCiFacts({
+        identity: { ...READY_CI_FACTS.identity, isDraft: false },
+      });
+      const reads = [READY_CI_FACTS, observedReady];
+      const ciReaderFactory = (): GitCiProviderReader => ({
+        readFacts: (): Promise<GitCiFactsResult> => Promise.resolve(reads.shift() ?? observedReady),
+      });
+      const result = await createHandlePrMarkReadyExecute({
+        approvalStore,
+        now: () => 1_700_000_000_001,
+        adapterFactory: () => adapter.adapter,
+        ciReaderFactory,
+        activityLog: { write: (event): void => void activity.push(event) },
+      })(
+        {
+          ...ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })),
+          correlationId: "corr-post-ready",
+        },
+        deps({ codingRuntimeSnapshotStore: runtimeStore }),
+      );
+      expect(result.body).toMatchObject({ status: "succeeded" });
+      expect(reads).toHaveLength(0);
+      expect(recordPostDeliveryObservation).toHaveBeenCalledOnce();
+      expect(recordedSnapshots[0]).toMatchObject({
+        runId: "test-run",
+        headSha: HEAD_SHA,
+        pullRequest: { isDraft: false },
+      });
+      const refreshed = activity.find(
+        (event) => event.op === "git.delivery.pr-mark-ready.readiness-refreshed",
+      );
+      expect(refreshed).toMatchObject({
+        correlationId: "corr-post-ready",
+        extra: { recorded: true, reason: "observed" },
+      });
+    } finally {
+      db.close();
+    }
   });
 
   it("refuses execute with approval-required when no claim is attached, and never calls the adapter", async () => {

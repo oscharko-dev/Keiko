@@ -279,7 +279,7 @@ async function waitForLiveWorkbenchIdentity(
 // an expired proof must go through the production readiness route, which is protected by the same
 // durable qualification-spend admission as every subsequent provider request. Filtering the stale
 // model out before that call made a valid configured profile impossible to qualify.
-export async function ensureWorkflowEligibleModel(page: Page): Promise<void> {
+export async function ensureWorkflowEligibleModel(page: Page): Promise<boolean> {
   const workspaceIdentity = await currentLiveWorkbenchIdentity(page);
   const changed = await qualifyLiveModel({
     loadModels: () => liveModels(page),
@@ -300,6 +300,7 @@ export async function ensureWorkflowEligibleModel(page: Page): Promise<void> {
     waitForWorkbench: () => expect(workbenchSurface(page)).toBeVisible(),
     waitForWorkspaceIdentity: (identity) => waitForLiveWorkbenchIdentity(page, identity),
   });
+  return changed;
 }
 
 export async function grantGithubAccess(page: Page, repositoryRoot: string): Promise<void> {
@@ -331,7 +332,7 @@ export async function assertRuntimeReady(page: Page, mode: CodingWorkbenchMode):
     .toBe(true);
 }
 
-export async function previewAndBindIssue(page: Page, issueRef: string): Promise<void> {
+async function previewAndAcceptIssue(page: Page, issueRef: string): Promise<void> {
   const issueField = page.getByLabel("Issue URL or #number");
   if (!(await issueField.isVisible())) {
     await page.getByRole("button", { name: "Start from a GitHub issue", exact: true }).click();
@@ -343,8 +344,23 @@ export async function previewAndBindIssue(page: Page, issueRef: string): Promise
     timeout: 60_000,
   });
   await page.getByRole("button", { name: "Use this issue", exact: true }).click();
+}
+
+export async function previewAndBindIssue(page: Page, issueRef: string): Promise<void> {
+  await previewAndAcceptIssue(page, issueRef);
   await page.getByRole("button", { name: "Bind workspace", exact: true }).click();
   await expect(page.getByRole("region", { name: "Code setup", exact: true })).toHaveCount(0);
+}
+
+export interface BoundIssueRunPreparation {
+  readonly previewAndBind: () => Promise<void>;
+  readonly qualifyModel: () => Promise<boolean>;
+  readonly previewAndAccept: () => Promise<void>;
+}
+
+export async function prepareBoundIssueForRun(steps: BoundIssueRunPreparation): Promise<void> {
+  await steps.previewAndBind();
+  if (await steps.qualifyModel()) await steps.previewAndAccept();
 }
 
 /**
@@ -369,7 +385,23 @@ export function issueResolutionTaskInstructions(): string {
   ].join(" ");
 }
 
-export async function startCodingRun(page: Page, mode: CodingWorkbenchMode): Promise<void> {
+function assertBoundIssueStartPayload(payload: unknown, issueRef: string): void {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload))
+    throw new TypeError("coding-run start payload was unavailable");
+  const value = payload as Record<string, unknown>;
+  if (
+    value.issueRef !== issueRef ||
+    typeof value.expectedIssueBindingDigest !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(value.expectedIssueBindingDigest)
+  )
+    throw new Error("coding-run start payload was not bound to the accepted issue");
+}
+
+export async function startCodingRun(
+  page: Page,
+  mode: CodingWorkbenchMode,
+  issueRef: string,
+): Promise<void> {
   await selectCodingIssueMode(page, mode);
   await page.getByLabel("Task instructions").fill(issueResolutionTaskInstructions());
   const startButton = page.getByRole("button", { name: "Start coding run", exact: true });
@@ -381,6 +413,11 @@ export async function startCodingRun(page: Page, mode: CodingWorkbenchMode): Pro
   );
   await startButton.click();
   const response = await started;
+  const encodedPayload = response.request().postData();
+  assertBoundIssueStartPayload(
+    encodedPayload === null ? null : JSON.parse(encodedPayload),
+    issueRef,
+  );
   expect(
     response.ok(),
     `the coding-run start call failed with HTTP ${String(response.status())}`,
@@ -451,10 +488,13 @@ export async function driveIssueToDraftPullRequest(
 ): Promise<DeliveredPullRequest> {
   await openLiveWorkbench(page, input.repositoryRoot);
   await grantGithubAccess(page, input.repositoryRoot);
-  await previewAndBindIssue(page, input.issueRef);
-  await ensureWorkflowEligibleModel(page);
+  await prepareBoundIssueForRun({
+    previewAndBind: () => previewAndBindIssue(page, input.issueRef),
+    qualifyModel: () => ensureWorkflowEligibleModel(page),
+    previewAndAccept: () => previewAndAcceptIssue(page, input.issueRef),
+  });
   await assertRuntimeReady(page, input.mode);
-  await startCodingRun(page, input.mode);
+  await startCodingRun(page, input.mode, input.issueRef);
   await expect(workbenchSurface(page)).toHaveAttribute("data-state", "running", {
     timeout: 60_000,
   });

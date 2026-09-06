@@ -223,6 +223,36 @@ describe("body-only description application", () => {
     expect(fresh.consumeApproval(review.proposalId)).toBeUndefined();
     expect(fixture.writes).toHaveLength(1);
   });
+  it.each(["reverse", "head", "base"] as const)(
+    "keeps an applied description stale after a ready transition followed by %s drift",
+    async (drift) => {
+      const { review, lease } = await approved();
+      expect(await fixture.service.executeApproved(review.proposalId, lease)).toMatchObject({
+        outcome: "observed",
+      });
+      fixture.remote = {
+        ...fixture.remote,
+        identity: { ...fixture.remote.identity, isDraft: false },
+      };
+      expect(await fixture.service.reconcile()).toMatchObject({
+        outcome: "observed",
+        status: { state: "current", binding: { isDraft: false } },
+      });
+      fixture.remote = {
+        ...fixture.remote,
+        identity: {
+          ...fixture.remote.identity,
+          ...(drift === "reverse" ? { isDraft: true } : {}),
+          ...(drift === "head" ? { headSha: "c".repeat(40) } : {}),
+          ...(drift === "base" ? { baseRef: "release" } : {}),
+        },
+      };
+      expect(await fixture.service.reconcile()).toMatchObject({
+        outcome: "observed",
+        status: { state: "stale", reason: "stale-pr" },
+      });
+    },
+  );
   it.each(["old", "third"] as const)(
     "classifies %s body after uncertain response without blind retry",
     async (body) => {
