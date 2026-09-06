@@ -344,6 +344,7 @@ export function buildJourneyReport(input) {
     limits: {
       materializedChildLimits: input.limits,
       gatewayRequestCount: input.gateway.requestCount,
+      gatewayCatalogBindingRequestCount: input.gateway.catalogBindingRequestCount,
       observedGatewayOutputTokenLimits: input.gateway.outputTokenLimits,
     },
     egress: input.observer.report(),
@@ -536,6 +537,13 @@ function validManagedCatalogEvidence(value) {
   );
 }
 
+function hasStableGatewayCatalogBinding(limits) {
+  return (
+    limits.gatewayRequestCount > 0 &&
+    limits.gatewayCatalogBindingRequestCount === limits.gatewayRequestCount
+  );
+}
+
 /**
  * Names every observation the evidence predicate requires but the report does not carry. Empty means
  * the report is complete; the list is the operator-facing explanation of a failed run.
@@ -549,6 +557,9 @@ export function missingRealBinaryEvidence(report) {
     gaps.push("no materialized child limits of context 32768 / output 4096");
   }
   if (limits.gatewayRequestCount <= 0) gaps.push("no gateway request was observed");
+  if (!hasStableGatewayCatalogBinding(limits)) {
+    gaps.push("not every gateway request carried the stable productive catalog binding");
+  }
   if (!limits.observedGatewayOutputTokenLimits.includes(4_096)) {
     gaps.push("no gateway request carried the effective output limit 4096");
   }
@@ -578,7 +589,7 @@ export function realBinaryEvidenceComplete(report) {
     limits.materializedChildLimits.some(
       (limit) => limit.context === 32_768 && limit.output === 4_096,
     ) &&
-    limits.gatewayRequestCount > 0 &&
+    hasStableGatewayCatalogBinding(limits) &&
     limits.observedGatewayOutputTokenLimits.includes(4_096) &&
     report.missingPayload?.passed === true &&
     report.missingPayload.unavailableReason === "payload-missing" &&

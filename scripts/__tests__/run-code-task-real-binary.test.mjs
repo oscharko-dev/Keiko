@@ -178,6 +178,7 @@ describe("#2483 real-binary observation helpers", () => {
       limits: {
         materializedChildLimits: [{ context: 32_768, output: 4_096 }],
         gatewayRequestCount: 1,
+        gatewayCatalogBindingRequestCount: 1,
         observedGatewayOutputTokenLimits: [4_096],
       },
       missingPayload: { passed: true, unavailableReason: "payload-missing" },
@@ -202,6 +203,7 @@ describe("#2483 real-binary observation helpers", () => {
       limits: {
         materializedChildLimits: [{ context: 32_768, output: 4_096 }],
         gatewayRequestCount: 1,
+        gatewayCatalogBindingRequestCount: 1,
         observedGatewayOutputTokenLimits: [4_096],
       },
       missingPayload: { passed: true, unavailableReason: "payload-missing" },
@@ -219,7 +221,10 @@ describe("#2483 real-binary observation helpers", () => {
         ...complete,
         limits: { ...complete.limits, gatewayRequestCount: 0 },
       }),
-    ).toEqual(["no gateway request was observed"]);
+    ).toEqual([
+      "no gateway request was observed",
+      "not every gateway request carried the stable productive catalog binding",
+    ]);
     expect(
       missingRealBinaryEvidence({
         ...complete,
@@ -250,6 +255,7 @@ describe("#2483 real-binary observation helpers", () => {
       limits: {
         materializedChildLimits: [{ context: 32_768, output: 4_096 }],
         gatewayRequestCount: 1,
+        gatewayCatalogBindingRequestCount: 1,
         observedGatewayOutputTokenLimits: [4_096],
       },
       missingPayload: { passed: true, unavailableReason: "payload-missing" },
@@ -294,7 +300,7 @@ describe("#2483 real-binary observation helpers", () => {
       missingPayload: undefined,
     });
 
-    expect(gaps).toHaveLength(8);
+    expect(gaps).toHaveLength(9);
     expect(gaps).toContain("no useful H1 search-to-read result evidence");
   });
 
@@ -436,7 +442,11 @@ describe("#2483 real-binary observation helpers", () => {
   it("assembles an evidence report that carries counts and outcomes only", () => {
     const report = buildJourneyReport({
       exitCode: 0,
-      gateway: { requestCount: 7, outputTokenLimits: [4096] },
+      gateway: {
+        requestCount: 7,
+        outputTokenLimits: [4096],
+        catalogBindingRequestCount: 7,
+      },
       limits: [{ context: 32_768, output: 4_096 }],
       missingPayload: { passed: true, unavailableReason: "payload-missing" },
       h1Search: H1_SEARCH,
