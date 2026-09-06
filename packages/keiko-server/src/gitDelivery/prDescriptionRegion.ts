@@ -33,25 +33,32 @@ function stripFenceIndent(line: string): string {
 // tildes, optionally followed by an info string. A backtick fence's info string may not itself
 // contain a backtick (that would be ambiguous with the fence run); a tilde fence has no such
 // restriction.
-function matchOpeningFence(line: string): OpenFence | undefined {
-  const match = /^(`{3,}|~{3,})(.*)$/.exec(stripFenceIndent(line));
-  const run = match?.[1];
-  const infoString = match?.[2];
-  if (run === undefined || infoString === undefined) return undefined;
-  const char = run.charAt(0) as "`" | "~";
-  if (char === "`" && infoString.includes("`")) return undefined;
-  return { char, length: run.length };
+function fenceRun(line: string): OpenFence | undefined {
+  const char = line.charAt(0);
+  if (char !== "`" && char !== "~") return undefined;
+  let length = 1;
+  while (line.charAt(length) === char) length += 1;
+  return { char, length };
 }
 
-// A fence closes only on a line (after up to 3 leading spaces) consisting solely of a run of the
-// SAME delimiter character, at least as long as the opening run, followed by nothing but trailing
-// whitespace. Anything else — including a shorter or different-character run, or trailing text —
-// is ordinary fenced content, not a close.
+function matchOpeningFence(line: string): OpenFence | undefined {
+  const stripped = stripFenceIndent(line);
+  const run = fenceRun(stripped);
+  if (run === undefined || run.length < 3) return undefined;
+  if (run.char === "`" && stripped.slice(run.length).includes("`")) return undefined;
+  return run;
+}
+
+// Count the delimiter once, then inspect only the suffix. Adjacent greedy expressions can
+// backtrack on hostile long fence lines; CommonMark allows only spaces/tabs after a close.
 function isClosingFence(line: string, open: OpenFence): boolean {
-  // `open.char` is always "`" or "~", neither a regex metacharacter, so no escaping is needed.
-  const match = new RegExp(`^(${open.char}+)([ \\t]*)$`).exec(stripFenceIndent(line));
-  const run = match?.[1];
-  return run !== undefined && run.length >= open.length;
+  const stripped = stripFenceIndent(line);
+  const run = fenceRun(stripped);
+  return (
+    run?.char === open.char &&
+    run.length >= open.length &&
+    /^[ \t]*$/u.test(stripped.slice(run.length))
+  );
 }
 
 // #3384 B5-7: a maintainer's own fenced-code-block quote of the marker syntax (e.g. a README-style

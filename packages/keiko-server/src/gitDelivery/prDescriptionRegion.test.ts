@@ -43,6 +43,15 @@ describe("managed PR region byte preservation", () => {
     expect(() => reconcilePrDescriptionRegion("", START + START + END)).toThrow();
   });
 
+  it("preserves fenced marker examples with a Unicode line separator in the info string", () => {
+    const fence = "~".repeat(8192);
+    const documentation = `${fence}\u2028text\n${START}\nexample\n${END}\n${fence}`;
+    const replacement = `${START}\nnew content\n${END}`;
+    const result = reconcilePrDescriptionRegion(documentation, replacement);
+    expect(result.prefix).toBe(documentation);
+    expect(result.finalBody).toBe(`${documentation}\n\n${replacement}`);
+  });
+
   // #3384 B5-7: a maintainer's own fenced-code-block quote of the exact marker syntax (a
   // README-style example) must be treated as documentation, not the real managed region — it must
   // never be silently spliced out and replaced on the next generated-description write.
