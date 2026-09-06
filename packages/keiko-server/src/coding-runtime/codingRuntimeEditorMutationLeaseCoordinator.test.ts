@@ -109,7 +109,7 @@ describe("coding-runtime editor mutation lease coordinator (Issue #2332)", () =>
   });
 
   it.each(["abort", "revoke", "dispose"] as const)(
-    "cancels the exact mutation waiter on %s",
+    "cancels the exact unclaimed mutation and wakes idle waiters on %s",
     async (kind) => {
       const coordinator = createCodingRuntimeEditorMutationLeaseCoordinator({
         invocationRegistry: createCodingToolInvocationRegistry(),
@@ -118,11 +118,19 @@ describe("coding-runtime editor mutation lease coordinator (Issue #2332)", () =>
       const controller = new AbortController();
       coordinator.register(registration(() => !controller.signal.aborted));
       const result = coordinator.waitForMutation(request(), controller.signal);
+      const idle = coordinator.waitForIdle(new AbortController().signal);
       if (kind === "abort") controller.abort();
       if (kind === "revoke") coordinator.revokeRun(RUN_ID);
       if (kind === "dispose") coordinator.dispose();
       await expect(result).resolves.toBe("cancelled");
-      expect(coordinator.lease.claim(request())).toBe(false);
+      expect(coordinator.lease.matches(request())).toBe(false);
+      await expect(idle).resolves.toBe(
+        {
+          abort: "idle-succeeded",
+          revoke: "idle-failed",
+          dispose: "not-idle",
+        }[kind],
+      );
       coordinator.dispose();
     },
   );
@@ -160,7 +168,7 @@ describe("coding-runtime editor mutation lease coordinator (Issue #2332)", () =>
     await expect(coordinator.waitForMutation(request(), controller.signal)).resolves.toBe(
       "cancelled",
     );
-    expect(coordinator.lease.complete(request(), true)).toBe(true);
+    expect(coordinator.lease.matches(request())).toBe(false);
     coordinator.dispose();
   });
 

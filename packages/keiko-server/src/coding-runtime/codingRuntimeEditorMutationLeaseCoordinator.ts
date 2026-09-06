@@ -236,7 +236,13 @@ export function createCodingRuntimeEditorMutationLeaseCoordinator(
     waitForIdle: (signal): Promise<CodingRuntimeMutationIdleOutcome> =>
       waitForIdle(records, idleWaiters, outcome, signal, disposed),
     waitForMutation: (request, signal): Promise<CodingRuntimeMutationOutcome> =>
-      waitForMutation(findRecord(records, request, disposed), signal),
+      waitForMutation(
+        records,
+        idleWaiters,
+        outcome,
+        findRecord(records, request, disposed),
+        signal,
+      ),
     dispose: (): void => {
       disposed = true;
       for (const record of records.values()) settleMutation(record, "cancelled");
@@ -368,14 +374,21 @@ function revokeRun(
 }
 
 function waitForMutation(
+  records: Map<string, LeaseRecord>,
+  idleWaiters: Set<IdleWaiter>,
+  outcome: MutationOutcome,
   record: LeaseRecord | undefined,
   signal: AbortSignal,
 ): Promise<CodingRuntimeMutationOutcome> {
   if (record === undefined) return Promise.resolve("failed");
-  if (signal.aborted) return Promise.resolve("cancelled");
+  if (signal.aborted) {
+    cancelUnclaimedMutation(records, idleWaiters, outcome, record);
+    return Promise.resolve("cancelled");
+  }
   return new Promise((resolve) => {
     const onAbort = (): void => {
       record.waiters.delete(onComplete);
+      cancelUnclaimedMutation(records, idleWaiters, outcome, record);
       resolve("cancelled");
     };
     const onComplete = (result: CodingRuntimeMutationOutcome): void => {
@@ -385,6 +398,18 @@ function waitForMutation(
     record.waiters.add(onComplete);
     signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+function cancelUnclaimedMutation(
+  records: Map<string, LeaseRecord>,
+  idleWaiters: Set<IdleWaiter>,
+  outcome: MutationOutcome,
+  record: LeaseRecord,
+): void {
+  if (record.claimed || records.get(record.key) !== record) return;
+  records.delete(record.key);
+  settleMutation(record, "cancelled");
+  settleIfIdle(records, idleWaiters, outcome);
 }
 
 function settleMutation(record: LeaseRecord, outcome: CodingRuntimeMutationOutcome): void {

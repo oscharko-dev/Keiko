@@ -168,9 +168,11 @@ describe("queued editor effects keep their canonical invocation live", () => {
     const task = dispatch(test, controller.signal);
     try {
       await test.queued.promise;
+      const idle = test.coordinator.waitForIdle(new AbortController().signal);
       controller.abort();
       expect((await task).status).toBe("cancelled");
-      expect(test.coordinator.lease.claim(leaseRequest)).toBe(false);
+      expect(test.coordinator.lease.matches(leaseRequest)).toBe(false);
+      await expect(idle).resolves.toBe("idle-succeeded");
       await setImmediate();
       expect(
         test.log.events.filter((event) => event.op === "tool-catalog.invocation-settled"),
@@ -178,6 +180,27 @@ describe("queued editor effects keep their canonical invocation live", () => {
     } finally {
       test.coordinator.dispose();
       await task;
+    }
+  });
+
+  it("releases an unclaimed editor lease when the canonical tool deadline expires", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const test = fixture();
+    const task = dispatch(test);
+    try {
+      await test.queued.promise;
+      const idle = test.coordinator.waitForIdle(new AbortController().signal);
+      await vi.runAllTimersAsync();
+      expect((await task).status).toBe("timeout");
+      expect(test.coordinator.lease.matches(leaseRequest)).toBe(false);
+      await expect(idle).resolves.toBe("idle-succeeded");
+      expect(
+        test.log.events.filter((event) => event.op === "tool-catalog.invocation-settled"),
+      ).toMatchObject([{ correlationId: binding.runId, extra: { status: "timeout" } }]);
+    } finally {
+      test.coordinator.dispose();
+      await task;
+      vi.useRealTimers();
     }
   });
 });
