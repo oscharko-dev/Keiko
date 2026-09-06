@@ -23,6 +23,10 @@ import { join } from "node:path";
 import { writeCodingIssueJourneyFlowEvidenceReceipt } from "../../../scripts/lib/qualification-evidence-receipt.mjs";
 import { driveOrReuseDraftPullRequest } from "./coding-issue-journey-live-cache.js";
 import {
+  qualificationResumeBinding,
+  resumeIssueToDraftPullRequest,
+} from "./coding-issue-journey-live-resume.js";
+import {
   applyAutoDraftDescriptionThroughPrCard,
   mountGovernedPullRequestCard,
   reconcileAppliedDescriptionAfterMarkReady,
@@ -716,6 +720,25 @@ function qualificationSpendLedgerPath(): string {
   return path;
 }
 
+async function driveSelectedDraftPullRequest(
+  page: Page,
+  flow: QualificationFlowBinding,
+  repositoryRoot: string,
+  issueRef: string,
+): Promise<DeliveredPullRequest> {
+  const resume = qualificationResumeBinding();
+  if (resume === undefined) {
+    return driveOrReuseDraftPullRequest(page, { repositoryRoot, issueRef, mode: flow.mode });
+  }
+  return resumeIssueToDraftPullRequest(page, {
+    repositoryRoot,
+    issueRef,
+    issueNumber: flow.issueNumber,
+    mode: flow.mode,
+    resume,
+  });
+}
+
 async function driveFlowToCompletedOutcome(
   page: Page,
   flow: QualificationFlowBinding,
@@ -725,11 +748,7 @@ async function driveFlowToCompletedOutcome(
   readonly readiness: NonNullable<JourneyOutcome["readiness"]>;
 }> {
   const issueRef = `https://github.com/${flow.repository}/issues/${String(flow.issueNumber)}`;
-  const delivered = await driveOrReuseDraftPullRequest(page, {
-    repositoryRoot,
-    issueRef,
-    mode: flow.mode,
-  });
+  const delivered = await driveSelectedDraftPullRequest(page, flow, repositoryRoot, issueRef);
   const ci = await waitForCiRepairOutcome(page);
   if (ci.finalState !== "technical-ready") {
     throw new Error("qualification flow did not reach exact-head technical readiness");

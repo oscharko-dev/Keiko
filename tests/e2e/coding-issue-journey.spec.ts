@@ -76,7 +76,7 @@ async function recordOutcome(
   recordScenarioReceipt({
     scenarioId,
     result: failure === undefined ? "passed" : "failed",
-    assertions: outcome?.assertions ?? [`error:${toError(failure).message}`],
+    assertions: outcome?.assertions ?? ["scenario-execution-failed:true"],
     usage: {
       spendObservability: "unknown",
       observedToolCallEvents: await observedToolCallEvents(page),
