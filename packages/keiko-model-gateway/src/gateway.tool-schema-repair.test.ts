@@ -1,4 +1,5 @@
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { describe, expect, it, vi } from "vitest";
 import { openCodeGatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import { Gateway, type GatewayCallRequest, type GatewaySpendReservation } from "./gateway.js";
@@ -116,6 +117,22 @@ function invalidArguments(callId: string): Response {
       selectedFiles: [],
     },
   });
+}
+
+async function observedRepairPromptTokens(): Promise<number> {
+  const events: ModelGatewayLogEvent[] = [];
+  let calls = 0;
+  await new Gateway(config(), {
+    clock: clock(),
+    random: (): number => 1,
+    fetchImpl: (): Promise<Response> =>
+      Promise.resolve(++calls === 1 ? invalidArguments("call-margin") : successfulResponse()),
+    log: { write: (event): void => void events.push(event) },
+  }).chat(request());
+  const tokens = events.find((event) => event.op === "gateway.tool-catalog.repair")?.extra
+    ?.promptTokens;
+  if (typeof tokens !== "number") throw new TypeError("Expected measured repair token count");
+  return tokens;
 }
 
 describe("Gateway bounded tool-schema repair", () => {
@@ -252,7 +269,11 @@ describe("Gateway bounded tool-schema repair", () => {
       },
     });
     expect(repair?.extra?.promptTokens).toBeLessThan(contextWindow);
-    expect(repair?.extra?.maxPromptTokens).toBe(contextWindow - 4_096);
+    const capability = config(contextWindow).capabilities?.[0];
+    if (capability === undefined) throw new TypeError("Expected fixture capability");
+    expect(repair?.extra?.maxPromptTokens).toBe(
+      deriveContextProfileFromCapability(capability).effectiveInputBudget,
+    );
     expect(JSON.stringify(events)).not.toContain(INVALID_ARGUMENT_SECRET);
   });
 
@@ -267,5 +288,36 @@ describe("Gateway bounded tool-schema repair", () => {
         arguments: argumentsWithCycle,
       }),
     ).toThrow(expect.objectContaining({ repair: undefined }));
+  });
+
+  it("refuses a repair inside the reserved safety margin before another provider call", async () => {
+    const promptTokens = await observedRepairPromptTokens();
+    const boundedConfig = config(promptTokens + 4_096);
+    const capability = boundedConfig.capabilities?.[0];
+    if (capability === undefined) throw new TypeError("Expected fixture capability");
+    const context = deriveContextProfileFromCapability(capability);
+    expect(context.safetyMarginTokens).toBeGreaterThan(0);
+    expect(promptTokens).toBe(context.maxInputTokens - context.reservedOutputTokens);
+    expect(promptTokens).toBeGreaterThan(context.effectiveInputBudget);
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(invalidArguments("call-margin")));
+    const events: ModelGatewayLogEvent[] = [];
+    const gateway = new Gateway(boundedConfig, {
+      fetchImpl,
+      clock: clock(),
+      random: (): number => 1,
+      log: { write: (event): void => void events.push(event) },
+    });
+
+    await expect(gateway.chat(request())).rejects.toBeInstanceOf(ContextOverflowError);
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(events.find((event) => event.op === "gateway.tool-catalog.repair")).toMatchObject({
+      extra: {
+        state: "denied",
+        promptTokens,
+        safetyMarginTokens: context.safetyMarginTokens,
+        effectStarted: false,
+      },
+    });
   });
 });

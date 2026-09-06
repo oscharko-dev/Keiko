@@ -181,6 +181,7 @@ interface RepairPromptBudget {
   readonly promptTokens: number;
   readonly maxPromptTokens: number;
   readonly maxOutputTokens: number;
+  readonly safetyMarginTokens: number;
 }
 
 const TOOL_SCHEMA_REPAIR_PREFIX =
@@ -399,8 +400,12 @@ export class Gateway {
       },
       capability.tokenAccounting,
     );
-    const maxPromptTokens = Math.max(0, context.maxInputTokens - maxOutputTokens);
-    const budget = { promptTokens, maxPromptTokens, maxOutputTokens };
+    const { safetyMarginTokens } = context;
+    const maxPromptTokens = Math.max(
+      0,
+      context.maxInputTokens - maxOutputTokens - safetyMarginTokens,
+    );
+    const budget = { promptTokens, maxPromptTokens, maxOutputTokens, safetyMarginTokens };
     const repair = error instanceof GatewayToolCatalogError ? error.repair : undefined;
     if (promptTokens > maxPromptTokens) {
       this.logToolSchemaRepair(correlationId, repair, "denied", budget);
