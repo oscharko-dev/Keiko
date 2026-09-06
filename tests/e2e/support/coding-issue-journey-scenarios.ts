@@ -32,16 +32,21 @@ export type CodingIssueJourneyScenarioId = (typeof CODING_ISSUE_JOURNEY_SCENARIO
 
 /**
  * `KEIKO_QUALIFICATION_SCENARIOS=<comma list>` narrows which scenario `test()`s actually drive a
- * real (paid) journey this invocation -- unset or empty means "every scenario in this file",
- * matching how every other qualification env input in this harness defaults to the widest reading
- * rather than silently running nothing.
+ * real (paid) journey this invocation. Unset or empty means "every scenario in this file" only
+ * when no five-flow ordinal is selected; ordinal-only execution is exclusive by default.
  */
 export function isScenarioSelected(
   scenarioId: CodingIssueJourneyScenarioId,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): boolean {
   const raw = env.KEIKO_QUALIFICATION_SCENARIOS;
-  if (raw === undefined || raw.trim().length === 0) return true;
+  if (raw === undefined || raw.trim().length === 0) {
+    // A selected five-flow ordinal is an exclusive paid lane by default. Without this guard an
+    // ordinal-only invocation completes its one governed issue flow and then starts every legacy
+    // paid scenario against the PR it has just merged. Operators can still request a deliberate
+    // combined run by naming the legacy scenarios explicitly.
+    return env.KEIKO_QUALIFICATION_FLOW_ORDINAL === undefined;
+  }
   return raw
     .split(",")
     .map((id) => id.trim())

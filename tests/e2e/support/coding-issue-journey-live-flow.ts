@@ -56,6 +56,7 @@ export interface QualificationFlowBinding {
 interface FlowArtifactInput {
   readonly flow: QualificationFlowBinding;
   readonly outcome: JourneyOutcome;
+  readonly readiness: NonNullable<JourneyOutcome["readiness"]>;
   readonly sourceCommitSha: string;
   readonly budgetNanoUsd: number;
   readonly previousCumulativeChargedNanoUsd: number;
@@ -113,19 +114,31 @@ function outcomeMatchesFlow(outcome: JourneyOutcome, flow: QualificationFlowBind
   );
 }
 
-function readinessMatchesCompletedHead(outcome: JourneyOutcome): boolean {
-  const readiness = outcome.readiness;
+function readinessMatchesCompletedHead(
+  readiness: NonNullable<JourneyOutcome["readiness"]>,
+  outcome: JourneyOutcome,
+): boolean {
   return (
-    readiness !== null &&
+    readiness.runId === outcome.binding.runId &&
+    readiness.repository === outcome.binding.repository &&
+    readiness.prNumber === outcome.binding.prNumber &&
+    readiness.baseRef === outcome.binding.baseRef &&
+    readiness.headRef === outcome.binding.headRef &&
+    readiness.headSha === outcome.binding.headSha
+  );
+}
+
+function readinessHasPassingChecks(readiness: NonNullable<JourneyOutcome["readiness"]>): boolean {
+  const checks = readiness.requiredChecks;
+  return (
     readiness.complete &&
     readiness.state === "technical-ready" &&
-    readiness.headSha === outcome.binding.headSha &&
-    readiness.requiredChecks.total > 0 &&
-    readiness.requiredChecks.passed === readiness.requiredChecks.total &&
-    readiness.requiredChecks.failed === 0 &&
-    readiness.requiredChecks.pending === 0 &&
-    readiness.requiredChecks.blocked === 0 &&
-    readiness.requiredChecks.unknown === 0
+    checks.total > 0 &&
+    checks.passed === checks.total &&
+    checks.failed === 0 &&
+    checks.pending === 0 &&
+    checks.blocked === 0 &&
+    checks.unknown === 0
   );
 }
 
@@ -140,8 +153,8 @@ function completedOutcome(input: FlowArtifactInput): {
   if (!outcomeMatchesFlow(outcome, flow)) {
     throw new Error("qualification flow outcome does not match its issue binding");
   }
-  const readiness = outcome.readiness;
-  if (!readinessMatchesCompletedHead(outcome) || readiness === null) {
+  const { readiness } = input;
+  if (!readinessMatchesCompletedHead(readiness, outcome) || !readinessHasPassingChecks(readiness)) {
     throw new Error("qualification flow requires passing checks on the exact merged head");
   }
   if (!outcome.keikoDescriptionApplied) {
@@ -513,6 +526,32 @@ async function waitForCompletedJourney(page: Page, runId: string): Promise<Journ
   return observed;
 }
 
+async function waitForPreMergeReadiness(
+  page: Page,
+  delivered: DeliveredPullRequest,
+): Promise<NonNullable<JourneyOutcome["readiness"]>> {
+  const observed = await waitWhileAnsweringApprovals(
+    page,
+    () => readJourneyOutcome(page, delivered.runId),
+    (outcome) =>
+      outcome?.readiness?.state === "technical-ready" &&
+      outcome.readiness.complete &&
+      outcome.readiness.repository === delivered.repository &&
+      outcome.readiness.prNumber === delivered.number &&
+      outcome.readiness.baseRef === delivered.baseRef &&
+      outcome.readiness.headRef === delivered.headRef &&
+      outcome.readiness.headSha === delivered.headSha,
+    {
+      timeoutMs: 2 * 60_000,
+      message: "expected exact-head readiness before governed merge",
+    },
+  );
+  if (observed?.readiness === null || observed?.readiness === undefined) {
+    throw new Error("pre-merge readiness evidence was unavailable");
+  }
+  return observed.readiness;
+}
+
 function assertConfiguredIssue(flow: QualificationFlowBinding, configured: string): void {
   const expectedUrl = `https://github.com/${flow.repository}/issues/${String(flow.issueNumber)}`;
   if (configured !== expectedUrl && configured !== `#${String(flow.issueNumber)}`) {
@@ -680,7 +719,10 @@ async function driveFlowToCompletedOutcome(
   page: Page,
   flow: QualificationFlowBinding,
   repositoryRoot: string,
-): Promise<JourneyOutcome> {
+): Promise<{
+  readonly outcome: JourneyOutcome;
+  readonly readiness: NonNullable<JourneyOutcome["readiness"]>;
+}> {
   const issueRef = `https://github.com/${flow.repository}/issues/${String(flow.issueNumber)}`;
   const delivered = await driveOrReuseDraftPullRequest(page, {
     repositoryRoot,
@@ -713,13 +755,16 @@ async function driveFlowToCompletedOutcome(
   );
   await applyAutoDraftDescriptionThroughPrCard(page, retained);
   await proposeJourneyReady(page);
+  const readiness = await waitForPreMergeReadiness(page, finalDelivered);
   await executeGovernedMerge(page, repositoryRoot, finalDelivered);
-  return waitForCompletedJourney(page, finalDelivered.runId);
+  const outcome = await waitForCompletedJourney(page, finalDelivered.runId);
+  return { outcome, readiness };
 }
 
 function recordFlowArtifact(
   flow: QualificationFlowBinding,
   outcome: JourneyOutcome,
+  readiness: NonNullable<JourneyOutcome["readiness"]>,
   budgetNanoUsd: number,
   previousCumulativeChargedNanoUsd: number,
   after: SpendSnapshot,
@@ -727,6 +772,7 @@ function recordFlowArtifact(
   const artifact = buildQualificationFlowArtifact({
     flow,
     outcome,
+    readiness,
     sourceCommitSha: sourceCommitSha(),
     budgetNanoUsd,
     previousCumulativeChargedNanoUsd,
@@ -761,8 +807,15 @@ export async function runSelectedQualificationFlow(
     throw new Error("durable spend ledger predates the prior completed qualification flow");
   }
   await updateControlledBaseThroughGovernedGit(page, flow, env.repositoryRoot);
-  const outcome = await driveFlowToCompletedOutcome(page, flow, env.repositoryRoot);
+  const completed = await driveFlowToCompletedOutcome(page, flow, env.repositoryRoot);
   const after = spendSnapshot(ledgerPath);
   assertQualificationSpendEnvelope(before, after, process.env);
-  return recordFlowArtifact(flow, outcome, budgetNanoUsd, previousCumulativeChargedNanoUsd, after);
+  return recordFlowArtifact(
+    flow,
+    completed.outcome,
+    completed.readiness,
+    budgetNanoUsd,
+    previousCumulativeChargedNanoUsd,
+    after,
+  );
 }

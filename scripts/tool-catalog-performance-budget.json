@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "target": "tool-catalog",
+  "policy": "observed-maximum-plus-full-range-v1",
+  "calibrationSha256": "6814612c35143747c7e62fa466ec86fa7fe71642a61dc3ead3c71f84486f6067",
+  "maximumP95Ms": {
+    "legacy-native-6-tool": {
+      "coldCompileMs": 9.067874999999958,
+      "lookupBatchMs": 2.4896250000000464
+    },
+    "synthetic-300-tool": {
+      "coldCompileMs": 140.21575000000075,
+      "lookupBatchMs": 99.96112399999947
+    }
+  }
+}

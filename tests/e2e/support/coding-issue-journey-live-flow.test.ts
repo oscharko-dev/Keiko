@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts";
 import { CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS } from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
+import { JourneyObservationController } from "../../../packages/keiko-server/src/gitDelivery/journeyObservationService.js";
+import { journeyFixture } from "../../../packages/keiko-server/src/gitDelivery/journeyOutcomeTest/_support.js";
 import {
   assertQualificationSpendEnvelope,
   buildQualificationFlowArtifact,
@@ -10,6 +12,7 @@ import {
   selectedQualificationFlow,
   type QualificationFlowBinding,
 } from "./coding-issue-journey-live-flow.js";
+import { isScenarioSelected } from "./coding-issue-journey-scenarios.js";
 
 const HEAD_SHA = "1".repeat(40);
 const MERGE_SHA = "2".repeat(40);
@@ -23,6 +26,43 @@ const FLOW: QualificationFlowBinding = {
   issueNumber: 1,
   mode: "governed-assist",
 };
+
+function technicalReadiness(): NonNullable<JourneyOutcome["readiness"]> {
+  return {
+    schemaVersion: "1",
+    runId: "run-1",
+    remoteDigest: "a".repeat(64),
+    repository: "oscharko/Wegwerf-Repo",
+    prNumber: 7,
+    baseRef: "master",
+    baseSha: "4".repeat(40),
+    headRef: "keiko/issue-1",
+    headSha: HEAD_SHA,
+    requirementsVersion: "1",
+    requirementsDigest: "e".repeat(64),
+    strictBaseRequired: false,
+    observedAt: "2026-09-06T05:58:00Z",
+    expiresAt: "2026-09-06T06:00:30Z",
+    evidenceRef: "ci-run-1",
+    complete: true,
+    state: "technical-ready",
+    reason: "required-checks-passed",
+    requiredChecks: { total: 1, passed: 1, failed: 0, pending: 0, blocked: 0, unknown: 0 },
+    advisoryChecks: { total: 0, passed: 0, failed: 0, pending: 0, blocked: 0, unknown: 0 },
+    pullRequest: {
+      status: "open",
+      isDraft: false,
+      conflict: "clear",
+      baseCurrency: "current",
+    },
+    humanReview: {
+      visibility: "complete",
+      requiredCount: 0,
+      approvedCount: 0,
+      changesRequestedCount: 0,
+    },
+  };
+}
 
 function completedOutcome(): JourneyOutcome {
   return {
@@ -70,40 +110,9 @@ function completedOutcome(): JourneyOutcome {
       factsDigest: "d".repeat(64),
     },
     observationFailure: null,
-    readiness: {
-      schemaVersion: "1",
-      runId: "run-1",
-      remoteDigest: "a".repeat(64),
-      repository: "oscharko/Wegwerf-Repo",
-      prNumber: 7,
-      baseRef: "master",
-      baseSha: "4".repeat(40),
-      headRef: "keiko/issue-1",
-      headSha: HEAD_SHA,
-      requirementsVersion: "1",
-      requirementsDigest: "e".repeat(64),
-      strictBaseRequired: false,
-      observedAt: "2026-09-06T05:58:00Z",
-      expiresAt: "2026-09-06T06:00:30Z",
-      evidenceRef: "ci-run-1",
-      complete: true,
-      state: "technical-ready",
-      reason: "required-checks-passed",
-      requiredChecks: { total: 1, passed: 1, failed: 0, pending: 0, blocked: 0, unknown: 0 },
-      advisoryChecks: { total: 0, passed: 0, failed: 0, pending: 0, blocked: 0, unknown: 0 },
-      pullRequest: {
-        status: "open",
-        isDraft: false,
-        conflict: "clear",
-        baseCurrency: "current",
-      },
-      humanReview: {
-        visibility: "complete",
-        requiredCount: 0,
-        approvedCount: 0,
-        changesRequestedCount: 0,
-      },
-    },
+    // Production deliberately omits readiness once the remote PR is merged. The separately
+    // captured exact-head pre-merge snapshot is supplied to the artifact builder.
+    readiness: null,
     description: null,
     keikoDescriptionApplied: true,
   };
@@ -128,6 +137,7 @@ describe("completed live qualification flow evidence", () => {
     const artifact = buildQualificationFlowArtifact({
       flow: FLOW,
       outcome: completedOutcome(),
+      readiness: technicalReadiness(),
       sourceCommitSha: SOURCE_SHA,
       budgetNanoUsd: 50_000_000_000,
       previousCumulativeChargedNanoUsd: 0,
@@ -171,6 +181,7 @@ describe("completed live qualification flow evidence", () => {
       buildQualificationFlowArtifact({
         flow: FLOW,
         outcome: incomplete,
+        readiness: technicalReadiness(),
         sourceCommitSha: SOURCE_SHA,
         budgetNanoUsd: 50_000_000_000,
         previousCumulativeChargedNanoUsd: 0,
@@ -184,6 +195,7 @@ describe("completed live qualification flow evidence", () => {
       buildQualificationFlowArtifact({
         flow: FLOW,
         outcome: completedOutcome(),
+        readiness: technicalReadiness(),
         sourceCommitSha: SOURCE_SHA,
         budgetNanoUsd: 50_000_000_000,
         previousCumulativeChargedNanoUsd: 4_000_000,
@@ -194,13 +206,12 @@ describe("completed live qualification flow evidence", () => {
     const outcome = completedOutcome();
     const mismatched = {
       ...outcome,
-      readiness:
-        outcome.readiness === null ? null : { ...outcome.readiness, headSha: "5".repeat(40) },
     };
     expect(() =>
       buildQualificationFlowArtifact({
         flow: FLOW,
         outcome: mismatched,
+        readiness: { ...technicalReadiness(), headSha: "5".repeat(40) },
         sourceCommitSha: SOURCE_SHA,
         budgetNanoUsd: 50_000_000_000,
         previousCumulativeChargedNanoUsd: 0,
@@ -210,34 +221,116 @@ describe("completed live qualification flow evidence", () => {
   });
 
   it("refuses a zero-check completion for the protected controlled repository", () => {
-    const outcome = completedOutcome();
     const noChecks = {
-      ...outcome,
-      readiness:
-        outcome.readiness === null
-          ? null
-          : {
-              ...outcome.readiness,
-              requiredChecks: {
-                total: 0,
-                passed: 0,
-                failed: 0,
-                pending: 0,
-                blocked: 0,
-                unknown: 0,
-              },
-            },
+      ...technicalReadiness(),
+      requiredChecks: {
+        total: 0,
+        passed: 0,
+        failed: 0,
+        pending: 0,
+        blocked: 0,
+        unknown: 0,
+      },
     };
     expect(() =>
       buildQualificationFlowArtifact({
         flow: FLOW,
-        outcome: noChecks,
+        outcome: completedOutcome(),
+        readiness: noChecks,
         sourceCommitSha: SOURCE_SHA,
         budgetNanoUsd: 50_000_000_000,
         previousCumulativeChargedNanoUsd: 0,
         cumulativeChargedNanoUsd: 3_240_000,
       }),
     ).toThrow("passing checks on the exact merged head");
+  });
+
+  it("binds pre-merge readiness to the production observer's completed outcome", async () => {
+    const source = journeyFixture();
+    const sourceReadiness = source.readiness;
+    const sourceDescription = source.description;
+    if (sourceReadiness === null || sourceDescription === null) {
+      throw new Error("journey fixture must expose open-PR evidence");
+    }
+    const context = {
+      draft: source.draft,
+      accessScope: {},
+      correlationId: "run-1",
+      stillAuthorized: (): boolean => true,
+    };
+    let facts = structuredClone(source.facts);
+    let description = sourceDescription;
+    const readiness = {
+      ...sourceReadiness,
+      requiredChecks: {
+        total: 1,
+        passed: 1,
+        failed: 0,
+        pending: 0,
+        blocked: 0,
+        unknown: 0,
+      },
+    };
+    const observe = async (): Promise<JourneyOutcome> => {
+      const result = await new JourneyObservationController({
+        context: (): typeof context => context,
+        reader: (): { readonly readJourney: () => Promise<typeof facts> } => ({
+          readJourney: (): Promise<typeof facts> => Promise.resolve(facts),
+        }),
+        readiness: (): Promise<typeof readiness> => Promise.resolve(readiness),
+        description: (): Promise<typeof description> => Promise.resolve(description),
+        recordOutcome: (): boolean => true,
+        now: (): number => source.observedAtMs,
+        activityLog: { write: (): void => undefined },
+      }).observe();
+      if (result.status !== "observed") throw new Error("fixture observation was unavailable");
+      return result.outcome;
+    };
+    const beforeMerge = await observe();
+    facts = {
+      ...facts,
+      identity: { ...facts.identity, state: "closed", isDraft: false },
+      mergedAt: "2026-09-06T05:59:00Z",
+      mergeCommitSha: MERGE_SHA,
+      issue: { ...facts.issue, state: "closed", closedAt: "2026-09-06T05:59:30Z" },
+    };
+    description = {
+      ...sourceDescription,
+      binding: { ...sourceDescription.binding, isDraft: false },
+    };
+    const afterMerge = await observe();
+
+    expect(afterMerge.readiness).toBeNull();
+    if (beforeMerge.readiness === null) throw new Error("pre-merge readiness was unavailable");
+    expect(
+      buildQualificationFlowArtifact({
+        flow: {
+          ...FLOW,
+          repository: afterMerge.binding.repository,
+          issueNumber: afterMerge.binding.issueNumber,
+        },
+        outcome: afterMerge,
+        readiness: beforeMerge.readiness,
+        sourceCommitSha: SOURCE_SHA,
+        budgetNanoUsd: 50_000_000_000,
+        previousCumulativeChargedNanoUsd: 0,
+        cumulativeChargedNanoUsd: 3_240_000,
+      }),
+    ).toMatchObject({ pullRequestHeadSha: afterMerge.binding.headSha });
+  });
+
+  it("makes an ordinal-only invocation exclusive from legacy paid scenarios", () => {
+    expect(
+      isScenarioSelected("issue-to-pr-governed-assist", {
+        KEIKO_QUALIFICATION_FLOW_ORDINAL: "1",
+      }),
+    ).toBe(false);
+    expect(
+      isScenarioSelected("issue-to-pr-governed-assist", {
+        KEIKO_QUALIFICATION_FLOW_ORDINAL: "1",
+        KEIKO_QUALIFICATION_SCENARIOS: "issue-to-pr-governed-assist",
+      }),
+    ).toBe(true);
   });
 
   it("uses the product's final delivery binding after a legitimate CI repair", () => {
