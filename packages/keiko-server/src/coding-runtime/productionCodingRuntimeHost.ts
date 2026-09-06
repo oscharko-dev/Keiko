@@ -22,6 +22,10 @@ export interface CodingRuntimeTaskDispatcher {
   readonly dispatch: (
     request: CodingRuntimeTaskDispatchRequest,
   ) => Promise<CodingRuntimeTaskDispatchResult>;
+  /** Replaces one operator-paused turn after interrupting it at the native adapter boundary. */
+  readonly replace?:
+    | ((request: CodingRuntimeTaskDispatchRequest) => Promise<CodingRuntimeTaskDispatchResult>)
+    | undefined;
   readonly abort: (request: CodingRuntimeRunOperation) => Promise<boolean>;
 }
 

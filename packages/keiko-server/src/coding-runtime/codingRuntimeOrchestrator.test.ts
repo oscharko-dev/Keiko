@@ -259,8 +259,15 @@ function fixture(
       completion: new Promise<"succeeded">(() => undefined),
     }),
   );
+  const replace = vi.fn<NonNullable<CodingRuntimeTaskDispatcher["replace"]>>(() =>
+    Promise.resolve({
+      ok: true as const,
+      completion: new Promise<"succeeded">(() => undefined),
+    }),
+  );
   const taskDispatcher = {
     dispatch,
+    replace,
     abort: vi.fn(() => Promise.resolve(true)),
   } satisfies CodingRuntimeTaskDispatcher;
   const launchResolver = {
@@ -2164,7 +2171,7 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     });
 
     expect(successfulSnapshot(followUp)).toMatchObject({ state: "paused", revision: 6 });
-    expect(f.taskDispatcher.dispatch).toHaveBeenLastCalledWith({
+    expect(f.taskDispatcher.replace).toHaveBeenLastCalledWith({
       runId: "run-1",
       requestId: "follow-up-paused",
       expectedRevision: successfulSnapshot(paused).revision,

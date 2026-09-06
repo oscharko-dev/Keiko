@@ -484,6 +484,7 @@ export function createProductionRuntimeTaskDispatcher(
 ): CodingRuntimeTaskDispatcher {
   return {
     dispatch: (request) => dispatchRuntimeTask(runs, request, diagnostics),
+    replace: (request) => replaceRuntimeTask(runs, request, diagnostics),
     abort: (request) => abortRuntimeTask(runs, request),
   };
 }
@@ -500,6 +501,46 @@ async function dispatchRuntimeTask(
   const reservation = record.operationGuard.reserve(request);
   if (reservation === undefined)
     return rejectedDispatch(diagnostics, request.runId, "no-reservation");
+  return submitReservedRuntimeTask(record, request, reservation, diagnostics);
+}
+
+async function replaceRuntimeTask(
+  runs: ReadonlyMap<string, ProductionRuntimeRunRecord>,
+  request: CodingRuntimeTaskDispatchRequest,
+  diagnostics: ServerDiagnosticSink | undefined,
+): Promise<CodingRuntimeTaskDispatchResult> {
+  const record = runs.get(request.runId);
+  if (record === undefined) return rejectedDispatch(diagnostics, request.runId, "no-record");
+  if (record.controller.signal.aborted)
+    return rejectedDispatch(diagnostics, request.runId, "aborted");
+  const reservation = record.operationGuard.reserve(request);
+  if (reservation === undefined)
+    return rejectedDispatch(diagnostics, request.runId, "no-reservation");
+  try {
+    if (!(await record.turnPort.abortTurn(request.runId))) {
+      reservation.release();
+      return rejectedDispatch(diagnostics, request.runId, "interrupt-rejected");
+    }
+    // OpenCode's abort port already waits for session settlement, while Codex reports interrupt
+    // acceptance before its run-bound turn id is cleared. Waiting through the shared terminal port
+    // gives both adapters the same replacement boundary and prevents the successor submission from
+    // racing the predecessor's still-active turn slot.
+    await record.turnPort.waitForTerminal(request.runId, record.controller.signal);
+    record.controller.signal.throwIfAborted();
+  } catch (error) {
+    reservation.release();
+    recordRuntimeDispatchFailure(diagnostics, request.runId, "interrupt-exception", error);
+    return { ok: false };
+  }
+  return submitReservedRuntimeTask(record, request, reservation, diagnostics);
+}
+
+async function submitReservedRuntimeTask(
+  record: ProductionRuntimeRunRecord,
+  request: CodingRuntimeTaskDispatchRequest,
+  reservation: ProductionRuntimeOperationReservation,
+  diagnostics: ServerDiagnosticSink | undefined,
+): Promise<CodingRuntimeTaskDispatchResult> {
   try {
     if (
       !(await record.turnPort.submitTurn(request.runId, request.taskIntent, request.initialContext))
@@ -563,6 +604,8 @@ type RuntimeDispatchFailureReason =
   | "adapter-rejected"
   | "commit-rejected"
   | "exception"
+  | "interrupt-exception"
+  | "interrupt-rejected"
   | "mutation-failed"
   | "no-record"
   | "no-reservation"

@@ -81,6 +81,78 @@ describe("production coding runtime turn ports", () => {
     ).resolves.toEqual({ ok: false });
   });
 
+  it("interrupts an active turn before replacing it and releases a rejected attempt", async () => {
+    const controller = new AbortController();
+    const abortTurn = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true);
+    const waitForTerminal = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("private terminal failure"))
+      .mockResolvedValueOnce("cancelled" as const)
+      .mockResolvedValue("succeeded" as const);
+    const submitTurn = vi.fn(() => Promise.resolve(true));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([
+        [
+          "run-replace",
+          {
+            controller,
+            operationGuard: createProductionRuntimeOperationGuard("run-replace", () => true),
+            turnPort: {
+              submitTurn,
+              abortTurn,
+              waitForTerminal,
+            },
+          },
+        ],
+      ]),
+    );
+    const request = operation("run-replace", "follow-up-1", 2, "operator correction");
+    if (dispatcher.replace === undefined) throw new Error("replace dispatcher is unavailable");
+
+    await expect(dispatcher.replace(request)).resolves.toEqual({ ok: false });
+    await expect(dispatcher.replace(request)).resolves.toEqual({ ok: false });
+    await expect(dispatcher.replace(request)).resolves.toMatchObject({ ok: true });
+    expect(abortTurn).toHaveBeenCalledTimes(3);
+    expect(waitForTerminal).toHaveBeenCalledTimes(3);
+    expect(waitForTerminal.mock.invocationCallOrder[1]).toBeLessThan(
+      submitTurn.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(controller.signal.aborted).toBe(false);
+  });
+
+  it("refuses a replacement when the run stops during predecessor settlement", async () => {
+    const controller = new AbortController();
+    const submitTurn = vi.fn(() => Promise.resolve(true));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([
+        [
+          "run-replace",
+          {
+            controller,
+            operationGuard: createProductionRuntimeOperationGuard("run-replace", () => true),
+            turnPort: {
+              submitTurn,
+              abortTurn: () => Promise.resolve(true),
+              waitForTerminal: () => {
+                controller.abort();
+                return Promise.resolve("cancelled" as const);
+              },
+            },
+          },
+        ],
+      ]),
+    );
+    const request = operation("run-replace", "follow-up-1", 2, "operator correction");
+    if (dispatcher.replace === undefined) throw new Error("replace dispatcher is unavailable");
+
+    await expect(dispatcher.replace(request)).resolves.toEqual({ ok: false });
+    expect(submitTurn).not.toHaveBeenCalled();
+  });
+
   it("reuses one Codex thread for initial and follow-up turns", async () => {
     const startThread = vi.fn(() => Promise.resolve({ ok: true as const, threadId: "thread-1" }));
     const startTurn = vi

@@ -71,6 +71,9 @@ function dispatcher(
     dispatch: vi.fn(() =>
       Promise.resolve({ ok: true as const, completion: Promise.resolve("succeeded" as const) }),
     ),
+    replace: vi.fn(() =>
+      Promise.resolve({ ok: true as const, completion: Promise.resolve("succeeded" as const) }),
+    ),
     abort: vi.fn(() => Promise.resolve(true)),
     ...overrides,
   };
@@ -180,6 +183,50 @@ describe("CodingRuntimeOperationCoordinator", () => {
     await vi.waitFor(() => {
       expect(settleTask).toHaveBeenCalledWith("run-1", "failed");
     });
+  });
+
+  it("replaces a paused turn and ignores the superseded turn settlement", async () => {
+    let resolveInitial: ((outcome: "cancelled") => void) | undefined;
+    let resolveReplacement: ((outcome: "succeeded") => void) | undefined;
+    const settleTask = vi.fn();
+    const taskDispatcher = dispatcher({
+      dispatch: () =>
+        Promise.resolve({
+          ok: true,
+          completion: new Promise<"cancelled">((resolve) => {
+            resolveInitial = resolve;
+          }),
+        }),
+      replace: vi.fn(() =>
+        Promise.resolve({
+          ok: true,
+          completion: new Promise<"succeeded">((resolve) => {
+            resolveReplacement = resolve;
+          }),
+        }),
+      ),
+    });
+    const subject = coordinator({
+      settleTask,
+      taskDispatcher,
+      current: () => ({ ...runningSnapshot(), state: "paused" }),
+    });
+
+    await subject.startInitialTurn({
+      runId: "run-1",
+      requestId: "initial-1",
+      expectedRevision: 1,
+      taskIntent: "Initial task",
+    });
+    await expect(subject.submitFollowUp("run-1", followUp())).resolves.toMatchObject({ ok: true });
+    resolveInitial?.("cancelled");
+    await Promise.resolve();
+    expect(settleTask).not.toHaveBeenCalled();
+    resolveReplacement?.("succeeded");
+    await vi.waitFor(() => {
+      expect(settleTask).toHaveBeenCalledWith("run-1", "succeeded");
+    });
+    expect(taskDispatcher.replace).toHaveBeenCalledOnce();
   });
 
   it("fails closed when the task dispatcher throws and frees the request id", async () => {

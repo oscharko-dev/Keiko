@@ -13,6 +13,7 @@ import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
 import type {
   CodingRuntimeTaskDispatcher,
   CodingRuntimeTaskDispatchRequest,
+  CodingRuntimeTaskDispatchResult,
   CodingRuntimeTaskOutcome,
 } from "./productionCodingRuntimeHost.js";
 import type {
@@ -84,6 +85,11 @@ type QuestionMutationOutcome =
 
 type RuntimeOperationRevisionPolicy = "exact" | "stale-read";
 
+interface FollowUpDispatchOutcome {
+  readonly result: CodingRuntimeTaskDispatchResult;
+  readonly generation?: number | undefined;
+}
+
 const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
   "running",
   "paused",
@@ -91,6 +97,7 @@ const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
 
 export class CodingRuntimeOperationCoordinator {
   private readonly replay = new RuntimeOperationReplayCoordinator();
+  private readonly taskGenerations = new Map<string, number>();
 
   public constructor(private readonly deps: RuntimeOperationCoordinatorDeps) {}
 
@@ -114,32 +121,52 @@ export class CodingRuntimeOperationCoordinator {
             : "invalid-intent",
         );
       }
-      let dispatched: Awaited<ReturnType<CodingRuntimeTaskDispatcher["dispatch"]>>;
-      try {
-        dispatched = await this.deps.taskDispatcher.dispatch({
-          runId,
-          requestId: operation.value.requestId,
-          expectedRevision: operation.current.revision,
-          taskIntent: operation.value.taskIntent,
-        });
-      } catch (error) {
-        recordRuntimeOperationTransportFailure(this.deps.activityLog, {
-          op: "coding-runtime.follow-up.dispatch-failed",
-          runId,
-          correlationId,
-          operation: "follow-up",
-          error,
-        });
-        dispatched = { ok: false };
-      }
-      if (!dispatched.ok) {
+      const dispatched = await this.dispatchFollowUp(
+        runId,
+        operation,
+        operation.value.taskIntent,
+        correlationId,
+      );
+      if (!dispatched.result.ok) {
         operation.reservation.release();
         return failure("authority-resolution-failed");
       }
       operation.reservation.commit();
-      this.observeTaskCompletion(runId, dispatched.completion);
+      this.observeTaskCompletion(runId, dispatched.result.completion, dispatched.generation);
       return this.deps.advanceRevision(operation.current, "task-submitted");
     });
+  }
+
+  private async dispatchFollowUp(
+    runId: string,
+    operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
+    taskIntent: string,
+    correlationId?: string,
+  ): Promise<FollowUpDispatchOutcome> {
+    const replacing = operation.current.state === "paused";
+    const generation = replacing ? this.nextTaskGeneration(runId) : undefined;
+    const dispatch = replacing
+      ? this.deps.taskDispatcher.replace
+      : this.deps.taskDispatcher.dispatch;
+    if (dispatch === undefined) return { result: { ok: false }, generation };
+    try {
+      const result = await dispatch({
+        runId,
+        requestId: operation.value.requestId,
+        expectedRevision: operation.current.revision,
+        taskIntent,
+      });
+      return { result, generation };
+    } catch (error) {
+      recordRuntimeOperationTransportFailure(this.deps.activityLog, {
+        op: "coding-runtime.follow-up.dispatch-failed",
+        runId,
+        correlationId,
+        operation: "follow-up",
+        error,
+      });
+      return { result: { ok: false }, generation };
+    }
   }
 
   public listQuestions(
@@ -288,20 +315,28 @@ export class CodingRuntimeOperationCoordinator {
 
   public clear(runId: string): void {
     this.replay.clear(runId);
+    this.taskGenerations.delete(runId);
   }
 
   private observeTaskCompletion(
     runId: string,
     completion: Promise<CodingRuntimeTaskOutcome>,
+    generation = this.nextTaskGeneration(runId),
   ): void {
     void completion.then(
       (outcome): void => {
-        this.deps.settleTask(runId, outcome);
+        if (this.taskGenerations.get(runId) === generation) this.deps.settleTask(runId, outcome);
       },
       (): void => {
-        this.deps.settleTask(runId, "failed");
+        if (this.taskGenerations.get(runId) === generation) this.deps.settleTask(runId, "failed");
       },
     );
+  }
+
+  private nextTaskGeneration(runId: string): number {
+    const generation = (this.taskGenerations.get(runId) ?? 0) + 1;
+    this.taskGenerations.set(runId, generation);
+    return generation;
   }
 
   // Issues the answer port call for an already-admitted, contract-validated answer operation.
