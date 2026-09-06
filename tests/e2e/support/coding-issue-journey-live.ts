@@ -430,11 +430,17 @@ export async function runtimeSnapshot(page: Page): Promise<CodingWorkbenchRuntim
   return (await response.json()) as CodingWorkbenchRuntimeSnapshot;
 }
 
-async function clickApproveOnceIfVisible(page: Page): Promise<void> {
-  const approve = page.getByRole("button", { name: "Approve once", exact: true });
-  const visible = await approve.isVisible().catch(() => false);
-  if (!visible) return;
-  await approve.click().catch(() => undefined);
+async function clickIfVisible(control: Locator): Promise<void> {
+  if (await control.isVisible()) await control.click();
+}
+
+async function answerVisibleApproval(page: Page): Promise<void> {
+  await clickIfVisible(page.getByRole("button", { name: "Approve once", exact: true }));
+  const changeReview = page.getByRole("region", {
+    name: "Review the proposed file change",
+    exact: true,
+  });
+  await clickIfVisible(changeReview.getByRole("button", { name: "Apply change", exact: true }));
 }
 
 /**
@@ -456,7 +462,7 @@ export async function waitWhileAnsweringApprovals<T>(
     const value = await read();
     if (isDone(value)) return value;
     if (Date.now() > deadline) throw new Error(options.message);
-    await clickApproveOnceIfVisible(page);
+    await answerVisibleApproval(page);
     await page.waitForTimeout(2_000);
   }
 }
