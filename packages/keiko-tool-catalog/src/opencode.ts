@@ -186,6 +186,40 @@ interface OpenCodeToolSpec {
   readonly handlerId: string;
 }
 
+const OPENCODE_RESULT_SCHEMA: CatalogJsonObject = {
+  type: "object",
+  properties: {
+    status: {
+      type: "string",
+      enum: [
+        "completed",
+        "failed",
+        "denied",
+        "invalid",
+        "cancelled",
+        "timeout",
+        "busy",
+        "observed",
+      ],
+    },
+    evidence: {
+      type: "array",
+      maxItems: 128,
+      items: {
+        type: "object",
+        properties: {
+          kind: { type: "string", maxLength: 256 },
+          code: { type: "string", maxLength: 256 },
+        },
+        required: ["kind", "code"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["status", "evidence"],
+  additionalProperties: true,
+};
+
 function entryFor(spec: OpenCodeToolSpec): CatalogSetEntry {
   return {
     alias: spec.alias,
@@ -193,7 +227,7 @@ function entryFor(spec: OpenCodeToolSpec): CatalogSetEntry {
       toolRef: createToolRef(spec.canonicalId, 1),
       description: spec.description,
       inputSchema: spec.inputSchema,
-      resultSchema: { type: "string", maxLength: TOOL_CATALOG_LIMITS.maxStringBytes },
+      resultSchema: OPENCODE_RESULT_SCHEMA,
       effects: spec.effects,
       actionMapping: [{ action: spec.alias, effects: spec.effects }],
       policyReferences: spec.effects,
@@ -441,8 +475,8 @@ function childRunSpec(): OpenCodeToolSpec {
 // classification exactly (the live authority-envelope classification this catalog must never
 // disagree with) -- status/diff read-only, stage a local write, commit delivery-substrate,
 // push/pull-request delivery-substrate plus network-egress. gitOperationRequirements.ts has no CI
-// entry at all -- CI observation's effects instead mirror that file's FETCH_REQUIREMENT, its
-// closest analog for a delivery-substrate network read. None of these five schemas can express the
+// entry; CI observation instead mirrors codingToolIpc.ts's concrete read-only provider poll:
+// workspace-read plus connector-access and network-egress. None of these five schemas can express the
 // format-level regexes
 // (proposalId prefix, control-character-free title) the real OpenCode wire schemas pin in
 // packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts -- the same documented
@@ -499,7 +533,7 @@ function gitStageSpec(): OpenCodeToolSpec {
       },
       ["paths"],
     ),
-    effects: ["workspace-read"],
+    effects: ["workspace-write"],
     idempotency: "server-key-required",
     handlerId: "opencode-git-stage-port",
   };

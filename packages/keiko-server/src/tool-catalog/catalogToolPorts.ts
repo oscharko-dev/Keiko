@@ -77,6 +77,12 @@ export interface CatalogToolHandlerBinding {
     context: CatalogHandlerContext,
   ) => Promise<CatalogHandlerResult>;
 }
+/** Invocation-local behavior for a statically verified production handler identity. */
+export interface CatalogToolExecutionOverride {
+  readonly toolRef: ToolRef;
+  readonly actionFor: CatalogToolHandlerBinding["actionFor"];
+  readonly execute: CatalogToolHandlerBinding["execute"];
+}
 export type CatalogToolBudgetReservation = ToolInvocationBudgetReservation;
 export type CatalogToolBudgetPort = ToolInvocationBudgetPort<CatalogTrustedContext>;
 export interface CatalogToolApprovalPort {
@@ -114,6 +120,8 @@ export interface CatalogToolBinder {
   ) => Promise<CatalogToolDispatchOutcome>;
   readonly binding: () => BoundToolSet;
   readonly offer: () => OfferedToolSet;
+  /** Build a live, invocation-local offer without enumerating unrelated catalog entries. */
+  readonly offerTool: (toolRef: ToolRef) => OfferedToolSet;
   readonly dispatch: (
     input: unknown,
     identity: CatalogActionIdentity,

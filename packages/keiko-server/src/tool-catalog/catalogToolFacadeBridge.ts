@@ -26,12 +26,17 @@ import {
   computeHandlerSetDigest,
   type CatalogBoundHandler,
 } from "./catalogToolBinder.js";
-import { createCatalogToolBinder } from "./catalogToolDispatch.js";
+import {
+  createCatalogToolBinderFromPreparation,
+  deriveCatalogBindingPreparation,
+  prepareCatalogToolBinder,
+} from "./catalogToolDispatch.js";
 import type {
   CatalogActionIdentity,
   CatalogHandlerContext,
   CatalogHandlerResult,
   CatalogToolBudgetPort,
+  CatalogToolExecutionOverride,
   CatalogToolHandlerBinding,
   CatalogTrustedContext,
 } from "./catalogToolPorts.js";
@@ -43,6 +48,9 @@ const OPENCODE_CATALOG_DESCRIPTORS = OPENCODE_CATALOG_ADVERTISEMENT.projection.t
     const descriptor = lookupCatalogTool(OPENCODE_CATALOG_ADVERTISEMENT.catalog, tool.toolRef);
     return descriptor === undefined ? [] : [descriptor];
   },
+);
+const OPENCODE_DESCRIPTOR_BY_ID: ReadonlyMap<string, ToolDescriptor> = new Map(
+  OPENCODE_CATALOG_DESCRIPTORS.map((descriptor) => [descriptor.toolRef.canonicalId, descriptor]),
 );
 
 export interface CanonicalCatalogContext {
@@ -348,7 +356,7 @@ function bindingFor(
   request: CodingToolActionRequest,
   run: (signal: AbortSignal, mutationGuard: CodingToolMutationGuard) => Promise<CodingToolResult>,
   recordResult: (result: CodingToolResult) => void,
-  unavailable: ReadonlySet<OpenCodeOptionalToolName>,
+  unavailable: () => ReadonlySet<OpenCodeOptionalToolName>,
 ): CatalogToolHandlerBinding {
   return {
     toolRef: descriptor.toolRef,
@@ -357,7 +365,7 @@ function bindingFor(
     handlerVersion: descriptor.handlerRequirement.contractVersion,
     catalogAction: descriptor.actionMapping[0]?.action ?? "",
     readiness: () =>
-      optionalUnavailable(descriptor.toolRef.canonicalId, unavailable) ? "unavailable" : "ready",
+      optionalUnavailable(descriptor.toolRef.canonicalId, unavailable()) ? "unavailable" : "ready",
     previewAction: (identity) => representative(descriptor.toolRef.canonicalId, identity),
     actionFor: (_argumentsValue, identity) =>
       descriptor.toolRef.canonicalId === catalogActionFor(request)?.toolId
@@ -371,7 +379,33 @@ function bindingFor(
       recordResult(result);
       if (result.status === "failed") throw new CatalogDispatchFault("failed", "handler-failed");
       return {
-        data: JSON.stringify(result),
+        data: captureCatalogJson(result),
+        resultCount: 1,
+        page: { truncated: false, reason: "none", cursor: null },
+      };
+    },
+  };
+}
+
+function executionOverride(
+  descriptor: ToolDescriptor,
+  request: CodingToolActionRequest,
+  run: (signal: AbortSignal, mutationGuard: CodingToolMutationGuard) => Promise<CodingToolResult>,
+  recordResult: (result: CodingToolResult) => void,
+): CatalogToolExecutionOverride {
+  return {
+    toolRef: descriptor.toolRef,
+    actionFor: (_argumentsValue, identity) => ({
+      ...request,
+      actionId: identity.actionId,
+      idempotencyKey: identity.idempotencyKey,
+    }),
+    execute: async (_argumentsValue, context): Promise<CatalogHandlerResult> => {
+      const result = await run(context.signal, context.mutationGuard);
+      recordResult(result);
+      if (result.status === "failed") throw new CatalogDispatchFault("failed", "handler-failed");
+      return {
+        data: captureCatalogJson(result),
         resultCount: 1,
         page: { truncated: false, reason: "none", cursor: null },
       };
@@ -380,7 +414,7 @@ function bindingFor(
 }
 
 type CatalogDispatchOutcome = Awaited<
-  ReturnType<ReturnType<typeof createCatalogToolBinder>["dispatch"]>
+  ReturnType<ReturnType<typeof createCatalogToolBinderFromPreparation>["dispatch"]>
 >;
 
 function preservedExecutedResult(
@@ -409,12 +443,7 @@ function resultFor(
   if (outcome.result.status !== "completed") {
     return { status: outcome.result.status, evidence: [] };
   }
-  if (typeof outcome.result.data !== "string") return { status: "failed", evidence: [] };
-  try {
-    return JSON.parse(outcome.result.data) as CodingToolResult;
-  } catch {
-    return { status: "failed", evidence: [] };
-  }
+  return { status: "failed", evidence: [] };
 }
 
 function expiredResult(request: CodingToolActionRequest): CodingToolResult {
@@ -449,7 +478,20 @@ function composedBindings(
   return descriptors.flatMap((descriptor) =>
     optionalUnavailable(descriptor.toolRef.canonicalId, unavailable)
       ? []
-      : [bindingFor(descriptor, request, run, recordResult, unavailable)],
+      : [bindingFor(descriptor, request, run, recordResult, () => unavailable)],
+  );
+}
+
+function preparedBindings(request: CodingToolActionRequest): readonly CatalogToolHandlerBinding[] {
+  return OPENCODE_CATALOG_DESCRIPTORS.map((descriptor) =>
+    bindingFor(
+      descriptor,
+      request,
+      (): Promise<CodingToolResult> =>
+        Promise.reject(new CatalogDispatchFault("failed", "handler-unavailable")),
+      () => undefined,
+      () => new Set(),
+    ),
   );
 }
 
@@ -488,26 +530,28 @@ export function createCanonicalOpenCodeHandlerCoverage(
   };
 }
 
-function createDispatchBinder(
+interface PreparedDispatchBinder {
+  readonly preparation: ReturnType<typeof prepareCatalogToolBinder>;
+  readonly preparationFor: (
+    unavailable: ReadonlySet<OpenCodeOptionalToolName>,
+  ) => ReturnType<typeof prepareCatalogToolBinder>;
+}
+
+function unavailableKey(unavailable: ReadonlySet<OpenCodeOptionalToolName>): string {
+  return [...unavailable].sort().join(",");
+}
+
+function prepareDispatchBinder(
   bridgeInput: CanonicalCatalogFacadeBridgeInput,
-  request: CodingToolActionRequest,
-  facadeInput: CodingToolFacadeInput,
-  run: (signal: AbortSignal, mutationGuard: CodingToolMutationGuard) => Promise<CodingToolResult>,
-  recordResult: (result: CodingToolResult) => void,
-): ReturnType<typeof createCatalogToolBinder> {
-  const current = bridgeInput.context();
-  if (current === undefined) throw new TypeError("Catalog context unavailable");
-  const unavailable = bridgeInput.unavailableOptionalTools?.() ?? new Set();
-  return createCatalogToolBinder(
+): PreparedDispatchBinder {
+  const fallback = representative("keiko.workspace.discover", {
+    actionId: "catalog-composition",
+    idempotencyKey: "catalog-composition",
+  });
+  const preparation = prepareCatalogToolBinder(
     {
       projection: OPENCODE_CATALOG_ADVERTISEMENT.projection,
-      handlerBindings: composedBindings(
-        OPENCODE_CATALOG_DESCRIPTORS,
-        request,
-        run,
-        recordResult,
-        unavailable,
-      ),
+      handlerBindings: preparedBindings(fallback),
       authorityPort: {
         preview: bridgeInput.previewAuthority,
         admit: bridgeInput.authority.admit,
@@ -519,6 +563,42 @@ function createDispatchBinder(
       },
       logPort: bridgeInput.logPort,
     },
+    OPENCODE_CATALOG_ADVERTISEMENT.catalog,
+  );
+  const preparationsByAvailability = new Map<string, typeof preparation>([["", preparation]]);
+  const preparationFor = (
+    unavailable: ReadonlySet<OpenCodeOptionalToolName>,
+  ): typeof preparation => {
+    const key = unavailableKey(unavailable);
+    const cached = preparationsByAvailability.get(key);
+    if (cached !== undefined) return cached;
+    const unavailableToolRefs = preparation.handlers.flatMap((handler) =>
+      optionalUnavailable(handler.descriptor.toolRef.canonicalId, unavailable)
+        ? [handler.descriptor.toolRef]
+        : [],
+    );
+    const variant = deriveCatalogBindingPreparation(preparation, unavailableToolRefs);
+    preparationsByAvailability.set(key, variant);
+    return variant;
+  };
+  preparationFor(bridgeInput.unavailableOptionalTools?.() ?? new Set());
+  return { preparation, preparationFor };
+}
+
+function createDispatchBinder(
+  bridgeInput: CanonicalCatalogFacadeBridgeInput,
+  prepared: PreparedDispatchBinder,
+  descriptor: ToolDescriptor,
+  request: CodingToolActionRequest,
+  facadeInput: CodingToolFacadeInput,
+  run: (signal: AbortSignal, mutationGuard: CodingToolMutationGuard) => Promise<CodingToolResult>,
+  recordResult: (result: CodingToolResult) => void,
+): ReturnType<typeof createCatalogToolBinderFromPreparation> {
+  const current = bridgeInput.context();
+  if (current === undefined) throw new TypeError("Catalog context unavailable");
+  const unavailable = bridgeInput.unavailableOptionalTools?.() ?? new Set();
+  return createCatalogToolBinderFromPreparation(
+    prepared.preparationFor(unavailable),
     {
       catalog: OPENCODE_CATALOG_ADVERTISEMENT.catalog,
       context: () => {
@@ -531,11 +611,13 @@ function createDispatchBinder(
       mintId: randomUUID,
       invocationRegistry: bridgeInput.invocationRegistry,
     },
+    executionOverride(descriptor, request, run, recordResult),
   );
 }
 
 async function executeCanonical(
   bridgeInput: CanonicalCatalogFacadeBridgeInput,
+  preparation: PreparedDispatchBinder,
   request: CodingToolActionRequest,
   facadeInput: CodingToolFacadeInput,
   run: (signal: AbortSignal, mutationGuard: CodingToolMutationGuard) => Promise<CodingToolResult>,
@@ -548,15 +630,21 @@ async function executeCanonical(
     emitExpiredBinding(OPENCODE_CATALOG_ADVERTISEMENT, current, bridgeInput.logPort);
     return expiredResult(request);
   }
-  let executed: CodingToolResult | undefined;
-  const binder = createDispatchBinder(bridgeInput, request, facadeInput, run, (result) => {
-    executed = result;
-  });
-  const offer = binder.offer();
-  const descriptor = OPENCODE_CATALOG_DESCRIPTORS.find(
-    (item) => item.toolRef.canonicalId === action.toolId,
-  );
+  const descriptor = OPENCODE_DESCRIPTOR_BY_ID.get(action.toolId);
   if (descriptor === undefined) return { status: "denied", evidence: [] };
+  let executed: CodingToolResult | undefined;
+  const binder = createDispatchBinder(
+    bridgeInput,
+    preparation,
+    descriptor,
+    request,
+    facadeInput,
+    run,
+    (result) => {
+      executed = result;
+    },
+  );
+  const offer = binder.offerTool(descriptor.toolRef);
   const outcome = await binder.dispatch(
     {
       kind: "bound",
@@ -586,6 +674,7 @@ function recordUnbound(
 export function createCanonicalCatalogFacadeBridge(
   bridgeInput: CanonicalCatalogFacadeBridgeInput,
 ): CanonicalCatalogFacadeBridge {
+  const preparation = prepareDispatchBinder(bridgeInput);
   return {
     covers: (request): boolean => catalogActionFor(request) !== undefined,
     recordUnbound: (request, facadeInput): void => {
@@ -593,6 +682,6 @@ export function createCanonicalCatalogFacadeBridge(
       void facadeInput;
     },
     execute: (request, facadeInput, run): Promise<CodingToolResult> =>
-      executeCanonical(bridgeInput, request, facadeInput, run),
+      executeCanonical(bridgeInput, preparation, request, facadeInput, run),
   };
 }

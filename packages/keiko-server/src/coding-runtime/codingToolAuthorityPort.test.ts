@@ -1250,6 +1250,38 @@ describe("CodingToolAuthorityPort", () => {
       expect(settled.status).toBe("completed");
     });
 
+    it("preserves an escaped 65,536-byte read through the structured canonical result bound", async () => {
+      const text = '"'.repeat(65_536);
+      const repositoryRead = vi.fn(() =>
+        Promise.resolve({
+          status: "completed" as const,
+          read: { text, byteCount: 65_536, digest: DIGEST, totalLines: 1 },
+        }),
+      );
+      const runtime = createRuntimeCodingToolFacade(authority, runtimeContext, {
+        ...governedPorts(),
+        repositoryRead: { execute: repositoryRead },
+      });
+
+      const result = await runtime.execute({
+        body: JSON.stringify({
+          action: "read",
+          actionId: "read-max-window",
+          idempotencyKey: "read-max-window",
+          relativePath: "src/quoted.ts",
+          startLine: 1,
+          maxLines: 1,
+        }),
+        capability: "runtime-capability-secret",
+      });
+
+      expect(result).toMatchObject({
+        status: "completed",
+        read: { text, byteCount: 65_536 },
+      });
+      expect(repositoryRead).toHaveBeenCalledOnce();
+    });
+
     it("fails closed before the handler runs when the catalog budget disposition denies the call", async () => {
       const log = createBufferedServerLogSink();
       const repositoryDiscover = vi.fn(() =>
@@ -1298,7 +1330,9 @@ describe("CodingToolAuthorityPort", () => {
 
     it("records handler-failed and charges started governed work when the delegate throws", async () => {
       const log = createBufferedServerLogSink();
-      const repositoryDiscover = vi.fn(() => Promise.reject(new Error("discover blew up")));
+      const repositoryDiscover = vi.fn(() =>
+        Promise.reject(new Error("discover blew up", { cause: new TypeError("private cause") })),
+      );
       const runtime = createRuntimeCodingToolFacade(
         authority,
         runtimeContext,
@@ -1329,7 +1363,14 @@ describe("CodingToolAuthorityPort", () => {
       // ADR-0175 D6: started work consumes its reservation even when its result fails.
       expect(fields?.effectStarted).toBe(true);
       expect(fields?.budgetDisposition).toBe("committed");
+      expect(fields?.frames).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("coding-runtime/codingToolAuthorityPort.test.ts:"),
+        ]),
+      );
+      expect(fields?.causeChain).toEqual(["TypeError"]);
       expect(JSON.stringify(settled)).not.toContain("discover blew up");
+      expect(JSON.stringify(settled)).not.toContain("private cause");
     });
 
     it("settles a second covered action family (verification) end to end, not only discover", async () => {

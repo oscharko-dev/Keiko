@@ -168,17 +168,22 @@ async function executeCatalogRequest(
 ): Promise<CodingToolResult> {
   const bridge = context.catalogBridge;
   if (bridge === undefined) return empty("denied");
+  const delegateState = { threw: false };
   try {
-    return await bridge.execute(request, input, async (signal, mutationGuard) => {
+    const result = await bridge.execute(request, input, async (signal, mutationGuard) => {
       try {
         return project(
           request,
           await context.ports.delegate.execute(request, signal, mutationGuard),
         );
-      } catch {
-        return projected("failed");
+      } catch (error) {
+        // The canonical settlement owner needs the original stack and cause for ADR-0173.
+        // Preserve only the old opaque failure marker here, after that owner has settled.
+        delegateState.threw = true;
+        throw error;
       }
     });
+    return delegateState.threw && result.status === "failed" ? projected("failed") : result;
   } finally {
     if (request.action === "edit" && Buffer.isBuffer(input.body)) input.body.fill(0);
   }

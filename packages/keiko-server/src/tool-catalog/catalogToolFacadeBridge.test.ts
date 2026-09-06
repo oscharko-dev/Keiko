@@ -1,10 +1,34 @@
 import { describe, expect, it, vi } from "vitest";
 
+const catalogWork = vi.hoisted(() => ({
+  compileProjection: vi.fn(),
+  computeHandlerDigest: vi.fn(),
+}));
+vi.mock("@oscharko-dev/keiko-tool-catalog", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@oscharko-dev/keiko-tool-catalog")>();
+  return {
+    ...actual,
+    compileToolProjection: (
+      ...args: Parameters<typeof actual.compileToolProjection>
+    ): ReturnType<typeof actual.compileToolProjection> => {
+      catalogWork.compileProjection();
+      return actual.compileToolProjection(...args);
+    },
+    computeHandlerSetDigest: (
+      ...args: Parameters<typeof actual.computeHandlerSetDigest>
+    ): ReturnType<typeof actual.computeHandlerSetDigest> => {
+      catalogWork.computeHandlerDigest();
+      return actual.computeHandlerSetDigest(...args);
+    },
+  };
+});
+
 import type { CodingToolActionRequest } from "../coding-runtime/codingToolIpc.js";
 import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import { createBufferedServerLogSink } from "../observability/server-log.js";
 import {
+  createCanonicalOpenCodeHandlerCoverage,
   createCanonicalCatalogFacadeBridge,
   type CanonicalCatalogContext,
   type CanonicalCatalogFacadeBridgeInput,
@@ -267,5 +291,105 @@ describe("canonical catalog facade bridge", () => {
       reason: "deadline-exceeded",
     });
     vi.useRealTimers();
+  });
+
+  it("prepares the real projection and handler digest once across sequential and concurrent calls", async () => {
+    catalogWork.compileProjection.mockClear();
+    catalogWork.computeHandlerDigest.mockClear();
+    const { bridge } = createBridge();
+
+    const execute = (
+      suffix: string,
+      run: (
+        signal: AbortSignal,
+        mutationGuard: { readonly check: () => boolean },
+      ) => Promise<{
+        readonly status: "completed";
+        readonly evidence: readonly [
+          { readonly kind: "governed-delegate"; readonly code: "completed" },
+        ];
+      }>,
+    ): Promise<unknown> =>
+      bridge.execute(
+        {
+          ...discoverRequest,
+          actionId: `action-${suffix}`,
+          idempotencyKey: `key-${suffix}`,
+        },
+        facadeInput(),
+        run,
+      );
+    const completed = (
+      _signal: AbortSignal,
+      mutationGuard: { readonly check: () => boolean },
+    ): Promise<{
+      readonly status: "completed";
+      readonly evidence: readonly [
+        { readonly kind: "governed-delegate"; readonly code: "completed" },
+      ];
+    }> => {
+      expect(mutationGuard.check()).toBe(true);
+      return Promise.resolve({
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+      });
+    };
+    const sequentialRun = vi.fn(completed);
+    const leftRun = vi.fn(completed);
+    const rightRun = vi.fn(completed);
+    const first = await execute("sequential", sequentialRun);
+    const concurrent = await Promise.all([execute("left", leftRun), execute("right", rightRun)]);
+
+    expect(catalogWork.compileProjection).toHaveBeenCalledOnce();
+    expect(catalogWork.computeHandlerDigest).toHaveBeenCalledOnce();
+    expect(first).toMatchObject({ status: "completed" });
+    expect(concurrent).toEqual([
+      expect.objectContaining({ status: "completed" }),
+      expect.objectContaining({ status: "completed" }),
+    ]);
+    expect(sequentialRun).toHaveBeenCalledOnce();
+    expect(leftRun).toHaveBeenCalledOnce();
+    expect(rightRun).toHaveBeenCalledOnce();
+  });
+
+  it("rechecks optional handler readiness live without recompiling the prepared catalog", async () => {
+    const unavailable = new Set<"keiko_research_fetch">(["keiko_research_fetch"]);
+    const unavailableDigest = createCanonicalOpenCodeHandlerCoverage(unavailable).handlerSetDigest;
+    const readyDigest = createCanonicalOpenCodeHandlerCoverage(new Set()).handlerSetDigest;
+    catalogWork.compileProjection.mockClear();
+    catalogWork.computeHandlerDigest.mockClear();
+    const { bridge, log } = createBridge({ unavailableOptionalTools: () => unavailable });
+    const run = vi.fn((_signal: AbortSignal, mutationGuard: { readonly check: () => boolean }) => {
+      expect(mutationGuard.check()).toBe(true);
+      return Promise.resolve({
+        status: "completed" as const,
+        evidence: [{ kind: "governed-delegate" as const, code: "completed" as const }],
+      });
+    });
+    const request = (suffix: string): CodingToolActionRequest => ({
+      action: "egress",
+      actionId: `egress-${suffix}`,
+      idempotencyKey: `egress-${suffix}`,
+      target: "https://example.invalid/",
+    });
+
+    await expect(bridge.execute(request("unavailable"), facadeInput(), run)).resolves.toMatchObject(
+      {
+        status: "invalid",
+      },
+    );
+    expect(run).not.toHaveBeenCalled();
+    unavailable.clear();
+    await expect(bridge.execute(request("ready"), facadeInput(), run)).resolves.toMatchObject({
+      status: "completed",
+    });
+
+    expect(catalogWork.compileProjection).toHaveBeenCalledOnce();
+    expect(catalogWork.computeHandlerDigest).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenCalledOnce();
+    const bindings = log.events.filter((event) => event.op.startsWith("tool-catalog.bind-"));
+    expect(unavailableDigest).not.toBe(readyDigest);
+    expect(bindings[0]?.extra?.handlerSetDigest).toBeUndefined();
+    expect(bindings[1]?.extra?.handlerSetDigest).toBe(readyDigest);
   });
 });

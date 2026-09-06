@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseCodingToolRequest } from "./codingToolIpc.js";
+import { codingToolRequiredActionClasses, parseCodingToolRequest } from "./codingToolIpc.js";
 
 const changeset = {
   patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
@@ -17,6 +17,32 @@ describe("coding tool IPC exact changesets", () => {
     });
 
     expect(parseCodingToolRequest(body, 262_144)).toBeUndefined();
+  });
+});
+
+describe("coding tool IPC authority effects", () => {
+  it("requires workspace-write for both proposing and redeeming a stage operation", () => {
+    const base = {
+      action: "git",
+      operation: "stage",
+      actionId: "stage-1",
+      paths: ["src/a.ts"],
+    } as const;
+    expect(
+      codingToolRequiredActionClasses({
+        ...base,
+        idempotencyKey: "stage-propose",
+        phase: "propose",
+      }),
+    ).toEqual(["workspace-write"]);
+    expect(
+      codingToolRequiredActionClasses({
+        ...base,
+        idempotencyKey: "stage-execute",
+        phase: "execute",
+        proposalId: "stage-1",
+      }),
+    ).toEqual(["workspace-write"]);
   });
 });
 

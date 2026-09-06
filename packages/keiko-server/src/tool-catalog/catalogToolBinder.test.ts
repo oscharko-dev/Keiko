@@ -9,6 +9,8 @@ import {
   catalogBoundToolSet,
   computeHandlerSetDigest,
   createCatalogBinding,
+  createCatalogBindingFromPreparation,
+  createCatalogBindingPreparation,
   createCatalogOffer,
   lifecycleIdentity,
 } from "./catalogToolBinder.js";
@@ -153,6 +155,24 @@ describe("catalog handler binding and offered projection", () => {
     expect(readiness).toHaveBeenCalledOnce();
     expect(offer.binding.readiness).toBe("ready");
     expect(offer.toolRefs).toEqual([fixture.pure.descriptor.toolRef]);
+  });
+  it("captures prepared handler identities before caller-owned input mutation", () => {
+    const fixture = catalogToolFixture();
+    const sourceHandler = { ...fixture.handler };
+    const sourceBindings = [sourceHandler];
+    const preparation = createCatalogBindingPreparation(
+      { ...fixture.input, handlerBindings: sourceBindings },
+      fixture.options.catalog,
+    );
+    const digest = preparation.handlerSetDigest;
+
+    sourceHandler.handlerId = "mutated-handler";
+    sourceBindings.splice(0);
+    const state = createCatalogBindingFromPreparation(preparation, fixture.options);
+
+    expect(state.handlers[0]?.binding?.handlerId).toBe(fixture.handler.handlerId);
+    expect(state.handlerSetDigest).toBe(digest);
+    expect(createCatalogOffer(state).toolRefs).toEqual([fixture.pure.descriptor.toolRef]);
   });
   it("falls back an invalid correlation id to the unknown sentinel and drops an invalid parent id (b3-17)", () => {
     const fixture = catalogToolFixture();

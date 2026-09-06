@@ -18,6 +18,7 @@ import {
 } from "../coding-runtime/codingToolIpc.js";
 import {
   assertCatalogCompatibility,
+  catalogHandlerFor,
   catalogHandlerReadiness,
   type CatalogBindingState,
   type CatalogBoundHandler,
@@ -25,6 +26,7 @@ import {
 import type {
   BoundToolInvocation,
   CatalogActionIdentity,
+  CatalogToolExecutionOverride,
   CatalogTrustedContext,
 } from "./catalogToolPorts.js";
 
@@ -89,7 +91,7 @@ export function captureCatalogInvocation(
     "unoffered-tool",
   );
   const ref = captureRef(object.toolRef);
-  const handler = state.handlers.find((item) => sameRef(item.descriptor.toolRef, ref));
+  const handler = catalogHandlerFor(state, ref);
   requireDispatch(handler !== undefined, "invalid", "unknown-tool");
   if (!state.latestOffer.toolRefs.some((item) => sameRef(item, ref))) {
     const current = catalogDispatchContext(state);
@@ -194,9 +196,17 @@ export function captureHandlerAction(
   handler: CatalogBoundHandler,
   args: CatalogJsonValue,
   identity: CatalogActionIdentity,
+  executionOverride?: CatalogToolExecutionOverride,
 ): CodingToolActionRequest {
   requireDispatch(handler.binding !== undefined, "failed", "handler-unavailable");
-  const captured = captureCatalogJson(handler.binding.actionFor(args, identity));
+  requireDispatch(
+    executionOverride === undefined ||
+      sameRef(executionOverride.toolRef, handler.descriptor.toolRef),
+    "failed",
+    "handler-mismatch",
+  );
+  const actionFor = executionOverride?.actionFor ?? handler.binding.actionFor;
+  const captured = captureCatalogJson(actionFor(args, identity));
   const parsed = parseCodingToolRequest(
     JSON.stringify(captured),
     handler.descriptor.bounds.maxArgumentBytes,

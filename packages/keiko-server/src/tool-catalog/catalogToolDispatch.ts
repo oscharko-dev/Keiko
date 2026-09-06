@@ -8,8 +8,13 @@ import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   catalogBoundToolSet,
+  catalogHandlerFor,
   createCatalogBinding,
+  createCatalogBindingFromPreparation,
+  createCatalogBindingPreparation,
   createCatalogOffer,
+  createCatalogOfferForTool,
+  type CatalogBindingPreparation,
   type CatalogBindingState,
 } from "./catalogToolBinder.js";
 import {
@@ -20,7 +25,6 @@ import {
   catalogDispatchContext,
   requireDispatch,
   revalidateCatalogContext,
-  sameRef,
 } from "./catalogToolRuntimeAuthority.js";
 import { CATALOG_CURSOR_ID_PREFIX } from "./catalogToolCursor.js";
 import { CatalogContinuation } from "./catalogToolContinuation.js";
@@ -34,6 +38,7 @@ import type {
   CatalogToolBinderInput,
   CatalogToolBinderOptions,
   CatalogToolDispatchOutcome,
+  CatalogToolExecutionOverride,
   CatalogTrustedContext,
 } from "./catalogToolPorts.js";
 
@@ -74,7 +79,12 @@ function claimInvocation(
 function revalidateReplay(invocation: CatalogInvocation, request: BoundToolInvocation): void {
   const context = currentContext(invocation);
   requireDispatch(invocation.handler !== undefined, "failed", "handler-unavailable");
-  const action = captureHandlerAction(invocation.handler, request.arguments, invocation.identity);
+  const action = captureHandlerAction(
+    invocation.handler,
+    request.arguments,
+    invocation.identity,
+    invocation.state.executionOverride,
+  );
   const preview = invocation.state.input.authorityPort.preview(context.authority, action);
   // Receipt-only replay performs no new action; it neither consumes an old approval nor requests another.
   requireDispatch(preview.ok || preview.reason === "approval-required", "denied", "hard-denial");
@@ -116,7 +126,12 @@ async function executeInvocation(
     const initial = currentContext(invocation);
     const handler = invocation.handler;
     requireDispatch(handler?.binding !== undefined, "failed", "handler-unavailable");
-    const action = captureHandlerAction(handler, input.arguments, invocation.identity);
+    const action = captureHandlerAction(
+      handler,
+      input.arguments,
+      invocation.identity,
+      invocation.state.executionOverride,
+    );
     const approved = await approveCatalogAction(invocation.state, action, initial);
     if (invocation.checkStopped()) return;
     const current = currentContext(invocation);
@@ -131,7 +146,8 @@ async function executeInvocation(
     const context = handlerContext(invocation, approved);
     if (invocation.checkStopped()) return;
     invocation.started();
-    const result = await handler.binding.execute(input.arguments, context);
+    const execute = invocation.state.executionOverride?.execute ?? handler.binding.execute;
+    const result = await execute(input.arguments, context);
     invocation.complete(result);
   } catch (error) {
     invocation.fail(error);
@@ -178,9 +194,7 @@ function dispatchCatalogInvocation(
       "invalid-arguments",
     );
     const input = captureCatalogInvocation(state, source);
-    invocation.handler = state.handlers.find((handler) =>
-      sameRef(handler.descriptor.toolRef, input.toolRef),
-    );
+    invocation.handler = catalogHandlerFor(state, input.toolRef);
     invocation.inputBytes = catalogJsonBytes(input.arguments);
     const replay = claimInvocation(invocation, input);
     if (replay !== undefined) return Promise.resolve(replay);
@@ -198,7 +212,29 @@ export function createCatalogToolBinder(
   input: CatalogToolBinderInput,
   options: CatalogToolBinderOptions,
 ): CatalogToolBinder {
-  const state = createCatalogBinding(input, options);
+  return binderForState(createCatalogBinding(input, options));
+}
+
+export function prepareCatalogToolBinder(
+  input: CatalogToolBinderInput,
+  catalog: CatalogToolBinderOptions["catalog"],
+): CatalogBindingPreparation {
+  return createCatalogBindingPreparation(input, catalog);
+}
+
+export { deriveCatalogBindingPreparation } from "./catalogToolBinder.js";
+
+export function createCatalogToolBinderFromPreparation(
+  preparation: CatalogBindingPreparation,
+  options: CatalogToolBinderOptions,
+  executionOverride: CatalogToolExecutionOverride,
+): CatalogToolBinder {
+  return binderForState(
+    createCatalogBindingFromPreparation(preparation, options, executionOverride),
+  );
+}
+
+function binderForState(state: CatalogBindingState): CatalogToolBinder {
   return Object.freeze({
     dispatchPage: (
       source: unknown,
@@ -208,6 +244,9 @@ export function createCatalogToolBinder(
       dispatchCatalogInvocation(state, source, identity, cursor),
     binding: (): ReturnType<typeof catalogBoundToolSet> => catalogBoundToolSet(state),
     offer: (): ReturnType<typeof createCatalogOffer> => createCatalogOffer(state),
+    offerTool: (
+      toolRef: BoundToolInvocation["toolRef"],
+    ): ReturnType<typeof createCatalogOfferForTool> => createCatalogOfferForTool(state, toolRef),
     dispatch: (
       source: unknown,
       identity: CatalogActionIdentity,

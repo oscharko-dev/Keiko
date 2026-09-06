@@ -33,6 +33,7 @@ import type {
   BoundToolSet,
   CatalogToolBinderInput,
   CatalogToolBinderOptions,
+  CatalogToolExecutionOverride,
   CatalogToolHandlerBinding,
   CatalogTrustedContext,
   OfferedToolSet,
@@ -47,11 +48,25 @@ export interface CatalogBindingState {
   readonly projection: CompiledToolProjection;
   readonly profile: CatalogProfile;
   readonly handlers: readonly CatalogBoundHandler[];
+  readonly handlersByRef: ReadonlyMap<string, CatalogBoundHandler>;
   readonly handlerSetDigest: CatalogDigest;
+  readonly bindingReadiness: BoundToolSet["readiness"] | undefined;
   readonly input: CatalogToolBinderInput;
   readonly options: CatalogToolBinderOptions;
+  readonly executionOverride: CatalogToolExecutionOverride | undefined;
   latestOffer: OfferedToolSet | undefined;
   offerContext: CatalogTrustedContext | undefined;
+}
+/** Immutable catalog compilation and handler identities prepared once by production composition. */
+export interface CatalogBindingPreparation {
+  readonly catalog: CatalogToolBinderOptions["catalog"];
+  readonly projection: CompiledToolProjection;
+  readonly profile: CatalogProfile;
+  readonly handlers: readonly CatalogBoundHandler[];
+  readonly handlersByRef: ReadonlyMap<string, CatalogBoundHandler>;
+  readonly handlerSetDigest: CatalogDigest;
+  readonly bindingReadiness: BoundToolSet["readiness"] | undefined;
+  readonly input: CatalogToolBinderInput;
 }
 const READINESS: ReadonlySet<string> = new Set(TOOL_HANDLER_READINESS);
 function requireBinding(condition: boolean): asserts condition {
@@ -65,8 +80,11 @@ function captureHandlers(
   descriptors: readonly ToolDescriptor[],
 ): readonly CatalogBoundHandler[] {
   const seen = new Set<string>();
+  const descriptorsByRef = new Map(
+    descriptors.map((descriptor) => [refKey(descriptor.toolRef), descriptor]),
+  );
   const captured = input.handlerBindings.map((binding) => {
-    const descriptor = descriptors.find((item) => refKey(item.toolRef) === refKey(binding.toolRef));
+    const descriptor = descriptorsByRef.get(refKey(binding.toolRef));
     requireBinding(descriptor !== undefined && !seen.has(refKey(descriptor.toolRef)));
     seen.add(refKey(descriptor.toolRef));
     requireBinding(
@@ -84,10 +102,13 @@ function captureHandlers(
     );
     return { ...binding, toolRef: descriptor.toolRef };
   });
-  return descriptors.map((descriptor) => ({
-    descriptor,
-    binding: captured.find((binding) => refKey(binding.toolRef) === refKey(descriptor.toolRef)),
-  }));
+  const capturedByRef = new Map(captured.map((binding) => [refKey(binding.toolRef), binding]));
+  return Object.freeze(
+    descriptors.map((descriptor) => ({
+      descriptor,
+      binding: capturedByRef.get(refKey(descriptor.toolRef)),
+    })),
+  );
 }
 /**
  * The one formula for "what handler set is actually bound," reused wherever a real
@@ -111,11 +132,12 @@ export function computeHandlerSetDigest(
   }));
   return computeCanonicalHandlerSetDigest(projection.projectionDigest, bindings);
 }
-function buildCatalogBinding(
+function buildCatalogPreparation(
   input: CatalogToolBinderInput,
-  options: CatalogToolBinderOptions,
-): CatalogBindingState {
-  const catalog = verifyToolCatalogSnapshot(options.catalog);
+  sourceCatalog: CatalogToolBinderOptions["catalog"],
+  observeReadiness: boolean,
+): CatalogBindingPreparation {
+  const catalog = verifyToolCatalogSnapshot(sourceCatalog);
   const projection = compileToolProjection(catalog, input.projection.profile);
   requireBinding(canonicalise(captureCatalogJson(input.projection)) === canonicalise(projection));
   const profile = catalog.profiles.find(
@@ -130,11 +152,17 @@ function buildCatalogBinding(
     return descriptor;
   });
   const handlers = captureHandlers(input, descriptors);
-  return {
+  const handlersByRef = new Map(
+    handlers.map((handler) => [refKey(handler.descriptor.toolRef), handler]),
+  );
+  return Object.freeze({
+    catalog,
     projection,
     profile,
     handlers,
+    handlersByRef,
     handlerSetDigest: computeHandlerSetDigest(projection, handlers),
+    bindingReadiness: observeReadiness ? catalogBoundToolSetReadiness(handlers) : undefined,
     input: {
       ...input,
       projection,
@@ -142,7 +170,24 @@ function buildCatalogBinding(
         handler.binding === undefined ? [] : [handler.binding],
       ),
     },
-    options: { ...options, catalog },
+  });
+}
+function bindingFromPreparation(
+  preparation: CatalogBindingPreparation,
+  options: CatalogToolBinderOptions,
+  executionOverride?: CatalogToolExecutionOverride,
+): CatalogBindingState {
+  requireBinding(options.catalog.catalogRevision === preparation.catalog.catalogRevision);
+  return {
+    projection: preparation.projection,
+    profile: preparation.profile,
+    handlers: preparation.handlers,
+    handlersByRef: preparation.handlersByRef,
+    handlerSetDigest: preparation.handlerSetDigest,
+    bindingReadiness: preparation.bindingReadiness,
+    input: preparation.input,
+    options: { ...options, catalog: preparation.catalog },
+    executionOverride,
     latestOffer: undefined,
     offerContext: undefined,
   };
@@ -170,16 +215,87 @@ export function createCatalogBinding(
   let correlationId = UNKNOWN_CORRELATION_ID;
   try {
     correlationId = options.context().correlationId;
-    return buildCatalogBinding(input, options);
+    return bindingFromPreparation(buildCatalogPreparation(input, options.catalog, false), options);
   } catch (error) {
     bindingFailure(input, error, correlationId);
     throw new TypeError("Invalid catalog handler binding", { cause: error });
   }
 }
+export function createCatalogBindingPreparation(
+  input: CatalogToolBinderInput,
+  catalog: CatalogToolBinderOptions["catalog"],
+): CatalogBindingPreparation {
+  try {
+    return buildCatalogPreparation(input, catalog, true);
+  } catch (error) {
+    bindingFailure(input, error, UNKNOWN_CORRELATION_ID);
+    throw new TypeError("Invalid catalog handler binding", { cause: error });
+  }
+}
+export function createCatalogBindingFromPreparation(
+  preparation: CatalogBindingPreparation,
+  options: CatalogToolBinderOptions,
+  executionOverride?: CatalogToolExecutionOverride,
+): CatalogBindingState {
+  try {
+    return bindingFromPreparation(preparation, options, executionOverride);
+  } catch (error) {
+    bindingFailure(preparation.input, error, UNKNOWN_CORRELATION_ID);
+    throw new TypeError("Invalid catalog handler binding", { cause: error });
+  }
+}
+/** Derive an attested unavailable-handler variant without compiling again or installing handlers. */
+export function deriveCatalogBindingPreparation(
+  preparation: CatalogBindingPreparation,
+  unavailableToolRefs: readonly ToolRef[],
+): CatalogBindingPreparation {
+  const unavailable = new Set<string>();
+  for (const toolRef of unavailableToolRefs) {
+    const key = refKey(toolRef);
+    requireBinding(preparation.handlersByRef.has(key) && !unavailable.has(key));
+    unavailable.add(key);
+  }
+  const handlers = Object.freeze(
+    preparation.handlers.map((handler) =>
+      unavailable.has(refKey(handler.descriptor.toolRef))
+        ? Object.freeze({ descriptor: handler.descriptor, binding: undefined })
+        : handler,
+    ),
+  );
+  const handlersByRef = new Map(
+    handlers.map((handler) => [refKey(handler.descriptor.toolRef), handler]),
+  );
+  return Object.freeze({
+    ...preparation,
+    handlers,
+    handlersByRef,
+    handlerSetDigest: computeHandlerSetDigest(preparation.projection, handlers),
+    bindingReadiness: catalogBoundToolSetReadiness(handlers),
+    input: Object.freeze({
+      ...preparation.input,
+      handlerBindings: Object.freeze(
+        handlers.flatMap((handler) => (handler.binding === undefined ? [] : [handler.binding])),
+      ),
+    }),
+  });
+}
 export function catalogHandlerReadiness(handler: CatalogBoundHandler): ToolHandlerReadiness {
   if (handler.binding === undefined) return "unavailable";
   const readiness = handler.binding.readiness();
   return READINESS.has(readiness) ? readiness : "mismatch";
+}
+function catalogBoundToolSetReadiness(
+  handlers: readonly CatalogBoundHandler[],
+): BoundToolSet["readiness"] {
+  return handlers.every((handler) => catalogHandlerReadiness(handler) === "ready")
+    ? "ready"
+    : "unavailable";
+}
+export function catalogHandlerFor(
+  state: CatalogBindingState,
+  ref: ToolRef,
+): CatalogBoundHandler | undefined {
+  return state.handlersByRef.get(refKey(ref));
 }
 export function assertCatalogCompatibility(state: CatalogBindingState): void {
   const now = state.options.now();
@@ -307,6 +423,60 @@ function buildCatalogOffer(state: CatalogBindingState): OfferedToolSet {
   state.latestOffer = offer;
   return offer;
 }
+function selectedBindingReadiness(
+  state: CatalogBindingState,
+  selectedReady: boolean,
+): BoundToolSet["readiness"] {
+  if (!selectedReady) return "unavailable";
+  return state.bindingReadiness ?? "ready";
+}
+function buildCatalogOfferForTool(state: CatalogBindingState, toolRef: ToolRef): OfferedToolSet {
+  const context = state.options.context();
+  assertCatalogCompatibility(state);
+  const now = state.options.now();
+  const expiry = Math.min(Date.parse(context.authorityExpiresAt), now + 30_000);
+  requireBinding(Number.isSafeInteger(expiry) && expiry > now);
+  const offerId = state.options.mintId();
+  requireBinding(/^[A-Za-z0-9_-]{1,128}$/u.test(offerId));
+  const handler = catalogHandlerFor(state, toolRef);
+  requireBinding(handler !== undefined);
+  const readiness = catalogHandlerReadiness(handler);
+  const ready = readiness === "ready";
+  const toolRefs =
+    ready && canOffer(state, handler, context, offerId) ? [handler.descriptor.toolRef] : [];
+  const binding: BoundToolSet = deepFreeze({
+    catalogRevision: state.projection.catalogRevision,
+    profile: state.projection.profile,
+    projectionDigest: state.projection.projectionDigest,
+    handlerSetDigest: state.handlerSetDigest,
+    readiness: selectedBindingReadiness(state, ready),
+  });
+  const offer: OfferedToolSet = deepFreeze({
+    binding,
+    offerId,
+    toolRefs,
+    expiresAt: new Date(expiry).toISOString(),
+  });
+  const identity = lifecycleIdentity(state, context);
+  const bindingReady = binding.readiness === "ready";
+  emitToolLifecycleEvent(state.input.logPort, {
+    ...identity,
+    op: bindingReady ? "tool-catalog.bind-ready" : "tool-catalog.bind-unavailable",
+    readiness: bindingReady ? "ready" : "unavailable",
+    ...(bindingReady
+      ? { handlerSetDigest: binding.handlerSetDigest }
+      : { reason: "handler-unavailable" as const }),
+  });
+  emitToolLifecycleEvent(state.input.logPort, {
+    ...identity,
+    op: "tool-catalog.projection",
+    readiness: toolRefs.length === 1 ? "ready" : "unavailable",
+    resultCount: toolRefs.length,
+  });
+  state.offerContext = Object.freeze({ ...context });
+  state.latestOffer = offer;
+  return offer;
+}
 export function createCatalogOffer(state: CatalogBindingState): OfferedToolSet {
   state.latestOffer = undefined;
   state.offerContext = undefined;
@@ -314,6 +484,21 @@ export function createCatalogOffer(state: CatalogBindingState): OfferedToolSet {
   try {
     correlationId = state.options.context().correlationId;
     return buildCatalogOffer(state);
+  } catch (error) {
+    bindingFailure(state.input, error, correlationId);
+    throw new TypeError("Invalid catalog handler binding", { cause: error });
+  }
+}
+export function createCatalogOfferForTool(
+  state: CatalogBindingState,
+  toolRef: ToolRef,
+): OfferedToolSet {
+  state.latestOffer = undefined;
+  state.offerContext = undefined;
+  let correlationId = UNKNOWN_CORRELATION_ID;
+  try {
+    correlationId = state.options.context().correlationId;
+    return buildCatalogOfferForTool(state, toolRef);
   } catch (error) {
     bindingFailure(state.input, error, correlationId);
     throw new TypeError("Invalid catalog handler binding", { cause: error });

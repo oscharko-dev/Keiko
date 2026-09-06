@@ -97,14 +97,18 @@ describe("opencode registration set", () => {
     expect(new Set(aliases).size).toBe(16);
   });
 
-  it("classifies push, pull-request and CI observation as delivery-substrate with network-egress, matching gitOperationRequirements.ts", () => {
+  it("keeps Git mutation, CI observation, and local skill effects distinct", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
-    for (const alias of ["keiko_git_push", "keiko_pull_request", "keiko_ci_status"]) {
+    for (const alias of ["keiko_git_push", "keiko_pull_request"]) {
       const tool = projection.tools.find((entry) => entry.alias === alias);
       if (tool === undefined) throw new Error(`Missing tool: ${alias}`);
       expect([...tool.effects].sort()).toEqual(["delivery-substrate", "network-egress"].sort());
     }
+    const ci = projection.tools.find((entry) => entry.alias === "keiko_ci_status");
+    expect([...(ci?.effects ?? [])].sort()).toEqual(
+      ["workspace-read", "connector-access", "network-egress"].sort(),
+    );
     const stage = projection.tools.find((entry) => entry.alias === "keiko_git_stage");
     expect(stage?.effects).toEqual(["workspace-write"]);
     const status = projection.tools.find((entry) => entry.alias === "keiko_git_status");
@@ -113,6 +117,8 @@ describe("opencode registration set", () => {
     // delivery-substrate but never network-egress (the model proposes; it never touches a remote).
     const commit = projection.tools.find((entry) => entry.alias === "keiko_git_commit");
     expect(commit?.effects).toEqual(["delivery-substrate"]);
+    const skill = projection.tools.find((entry) => entry.alias === "keiko_skill");
+    expect(skill?.effects).toEqual(["workspace-read"]);
     // The redemption descriptor must conservatively cover every kind it can dispatch. Inner
     // per-kind authority checks remain required; they cannot repair an incomplete advertisement.
     const redeemedAliases = new Set([
