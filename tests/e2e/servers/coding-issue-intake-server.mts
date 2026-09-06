@@ -23,6 +23,7 @@ await runCodingRuntimeJourneyServer({
   fixtureLabel: "Issue intake 3385",
   runtime: "scripted",
   includeQuestion: false,
+  holdAfterVerification: true,
   defaultPort: ISSUE_INTAKE_PORT,
   originalContent: ISSUE_INTAKE_ORIGINAL,
   editedContent: ISSUE_INTAKE_EDITED,

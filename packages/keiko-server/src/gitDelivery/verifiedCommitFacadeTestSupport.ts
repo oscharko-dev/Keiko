@@ -29,6 +29,7 @@ interface CommitFacadeFixtureInput {
   readonly mode: CodingWorkbenchMode;
   readonly live: () => boolean;
   readonly report: () => VerificationReport;
+  readonly onRuntimeEvent?: (event: CodingWorkbenchRuntimeEvent) => void;
 }
 interface CommitFacadeFixtureResult {
   readonly facade: import("../coding-runtime/codingToolFacadePorts.js").CodingToolFacade;
@@ -97,6 +98,7 @@ function fixtureFacade(
   const facts = fixtureFacts(envelope);
   const onEvent = (event: CodingWorkbenchRuntimeEvent): void => {
     events.push(event);
+    input.onRuntimeEvent?.(event);
   };
   return createProductionManagedWorktreeToolFacade({
     authority: {

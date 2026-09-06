@@ -171,25 +171,62 @@ function lastToolResult(
 }
 
 type TranscriptDeliveryMode = "supervised-coding" | "autonomous-delivery";
+type TranscriptApprovalKind = "commit" | "push" | "pull-request";
+
+interface TranscriptApprovals {
+  readonly observe: (event: CodingWorkbenchRuntimeEvent) => void;
+  readonly waitFor: (kind: TranscriptApprovalKind) => Promise<string>;
+}
+
+function approvalSignal(): {
+  readonly promise: Promise<string>;
+  readonly resolve: (requestId: string) => void;
+} {
+  let resolve: (requestId: string) => void = () => undefined;
+  const promise = new Promise<string>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+function transcriptApprovals(): TranscriptApprovals {
+  const pending = {
+    commit: approvalSignal(),
+    push: approvalSignal(),
+    "pull-request": approvalSignal(),
+  };
+  return {
+    observe: (event): void => {
+      const request = event.permissionRequest;
+      if (
+        request?.actionKind === "commit" ||
+        request?.actionKind === "push" ||
+        request?.actionKind === "pull-request"
+      ) {
+        pending[request.actionKind].resolve(request.requestId);
+      }
+    },
+    waitFor: (kind): Promise<string> => pending[kind].promise,
+  };
+}
 
 async function approveTranscriptProposal(
   mode: TranscriptDeliveryMode,
-  events: readonly CodingWorkbenchRuntimeEvent[],
-  actionKind: "commit" | "push" | "pull-request",
+  approvals: TranscriptApprovals,
+  actionKind: TranscriptApprovalKind,
+  turn: Promise<readonly ScriptedGovernedTranscriptToolResult[]>,
   approve: (requestId: string) => unknown,
 ): Promise<void> {
   if (mode === "autonomous-delivery") return;
-  await vi.waitFor(
-    () => {
-      expect(events.some((event) => event.permissionRequest?.actionKind === actionKind)).toBe(true);
-    },
-    { timeout: 5_000 },
-  );
-  const pending = events.find(
-    (event) => event.permissionRequest?.actionKind === actionKind,
-  )?.permissionRequest;
-  if (pending === undefined) throw new TypeError("missing pending transcript approval");
-  expect(approve(pending.requestId)).toBeDefined();
+  // Observe the real event without a second wall-clock deadline that races coverage work.
+  // The test deadline still bounds a stalled turn; a completed turn without approval fails early.
+  const requestId = await Promise.race([
+    approvals.waitFor(actionKind),
+    turn.then(() => {
+      throw new Error(`transcript ended without ${actionKind} approval`);
+    }),
+  ]);
+  expect(approve(requestId)).toBeDefined();
 }
 
 type ScriptedStep = (last: Record<string, unknown> | undefined) => FakeToolCall;
@@ -285,6 +322,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
     readonly facadeFetch: typeof globalThis.fetch;
     readonly bridge: ReturnType<typeof commitFacadeFixture>["bridge"];
     readonly events: CodingWorkbenchRuntimeEvent[];
+    readonly approvals: TranscriptApprovals;
   } {
     const db = new DatabaseSync(":memory:");
     runMigrations(db);
@@ -370,6 +408,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       mode: (): TranscriptDeliveryMode => mode,
       invalidateVerification: (): void => undefined,
     });
+    const approvals = transcriptApprovals();
     const { facade, bridge, events } = commitFacadeFixture({
       service,
       gitService,
@@ -377,6 +416,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       mode,
       live: () => true,
       report: () => passingReport(root),
+      onRuntimeEvent: approvals.observe,
     });
     const facadeFetch: typeof globalThis.fetch = async (_input, init) => {
       const result = await facade.execute({
@@ -385,14 +425,14 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       });
       return new Response(JSON.stringify(result));
     };
-    return { facadeFetch, bridge, events };
+    return { facadeFetch, bridge, events, approvals };
   }
 
   it.each(["supervised-coding", "autonomous-delivery"] as const)(
     "routes a scripted-model stage/commit cycle through the production facade in %s",
     async (mode) => {
       const root = repo();
-      const { facadeFetch, bridge, events } = fixture(root, mode);
+      const { facadeFetch, bridge, events, approvals } = fixture(root, mode);
       const plan = swappableModelTurn();
       const child = createScriptedGovernedTranscriptChild({
         runId: "run-3386",
@@ -425,7 +465,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       ]);
       const turn1Pending = child.runTurn("stage and commit the pending workspace change");
       const beforeHead = git(root, ["rev-parse", "HEAD"]);
-      await approveTranscriptProposal(mode, events, "commit", (id) =>
+      await approveTranscriptProposal(mode, approvals, "commit", turn1Pending, (id) =>
         bridge.issueCommit?.("run-1", id),
       );
       const turn1 = await turn1Pending;
@@ -1064,6 +1104,7 @@ describe("scripted OpenCode transcript reaches DraftDeliveryController for push/
           ...draft.options,
           policyAllowsWithoutApproval: (): boolean => mode === "autonomous-delivery",
         });
+        const approvals = transcriptApprovals();
         const { facade, bridge, events } = commitFacadeFixture({
           service: unusedVerifiedCommitService(draft.root),
           root: draft.root,
@@ -1071,6 +1112,7 @@ describe("scripted OpenCode transcript reaches DraftDeliveryController for push/
           live: () => true,
           report: () => passingReport(draft.root),
           draftDeliveryService: deliveryService,
+          onRuntimeEvent: approvals.observe,
         });
         const facadeFetch: typeof globalThis.fetch = async (_input, init) => {
           const result = await facade.execute({
@@ -1089,7 +1131,7 @@ describe("scripted OpenCode transcript reaches DraftDeliveryController for push/
         plan.use([(): FakeToolCall => toolCall("keiko_git_push", {}, "call-push-propose")]);
         const turn1Pending = child.runTurn("push the verified commit");
         expect(draft.pushCount).toBe(0);
-        await approveTranscriptProposal(mode, events, "push", (id) =>
+        await approveTranscriptProposal(mode, approvals, "push", turn1Pending, (id) =>
           bridge.issueDelivery?.("run-1", id),
         );
         const turn1 = await turn1Pending;
@@ -1140,7 +1182,7 @@ describe("scripted OpenCode transcript reaches DraftDeliveryController for push/
         ]);
         const turn3Pending = prChild.runTurn("open a pull request for the pushed branch");
         expect(draft.createCount).toBe(0);
-        await approveTranscriptProposal(mode, events, "pull-request", (id) =>
+        await approveTranscriptProposal(mode, approvals, "pull-request", turn3Pending, (id) =>
           bridge.issueDelivery?.("run-1", id),
         );
         const turn3 = await turn3Pending;

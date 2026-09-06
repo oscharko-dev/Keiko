@@ -57,6 +57,17 @@ describe("nextScriptedTurn question-skip ceiling (KEIKO-0902)", () => {
     expect(response.toolCalls[0]?.name).toBe("question");
   });
 
+  it("retains the cancellable hold after an emitted verification", () => {
+    const script = {
+      calls: 6,
+      mode: "productive",
+      holdAfterVerification: true,
+      verificationIssued: true,
+    } as unknown as ScriptStateStub;
+    const response = nextScriptedTurn(script, false, "");
+    expect(response.toolCalls[0]?.name).toBe("question");
+  });
+
   it("retains one stable body-free production catalog binding across gateway requests", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-gateway-binding-"));
     const outputPath = join(root, "gateway.json");

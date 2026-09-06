@@ -151,6 +151,8 @@ export interface CodingRuntimeJourneyServerConfig {
   readonly fixtureLabel: string;
   readonly runtime: "scripted" | "production-discovery";
   readonly includeQuestion: boolean;
+  /** Hold after the real verification tool completes so the journey can prove cancellation. */
+  readonly holdAfterVerification?: boolean;
   /** Actual runtime search result must determine the model boundary's subsequent read. */
   readonly proveRepositorySearch?: boolean;
   readonly defaultPort: number;
@@ -305,6 +307,13 @@ export function nextScriptedTurn(
   transcript: string,
 ): NormalizedResponse {
   let response = scriptedResponse(script, transcript);
+  if (
+    script.holdAfterVerification === true &&
+    script.verificationIssued === true &&
+    response.toolCalls.some((call) => call.name === "question")
+  ) {
+    return response;
+  }
   let skips = 0;
   while (!includeQuestion && response.toolCalls.some((call) => call.name === "question")) {
     skips += 1;
@@ -643,6 +652,7 @@ function journeyScript(config: CodingRuntimeJourneyServerConfig, stateDir: strin
       calls: 0,
       old: config.originalContent,
       next: config.editedContent,
+      ...(config.holdAfterVerification === true ? { holdAfterVerification: true } : {}),
       ...(config.proveRepositorySearch === true
         ? {
             observeRepositorySearch: (proof): void => {

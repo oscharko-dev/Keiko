@@ -90,6 +90,9 @@ export interface ScriptState {
   /** Invoked with every scripted tool name so a journey can assert what the model REQUESTED. */
   readonly observeToolCall?: (name: string) => void;
   readonly observeRepositorySearch?: (proof: RepositorySearchConsumptionProof) => void;
+  /** Keeps a completed verification turn cancellable for browser journeys that prove Stop. */
+  readonly holdAfterVerification?: boolean;
+  verificationIssued?: boolean;
 }
 
 type FunctionalEditorAgentClient = ProductionCodingRuntimeResolverInput["editorAgentClient"];
@@ -748,7 +751,14 @@ function productiveResponse(step: number, script: ScriptState): NormalizedRespon
   if (step === 2) return tool("question", question());
   if (step === 3) return tool("keiko_changeset_edit", edit(script));
   if (step === 4) return tool("todowrite", planUpdate(2));
-  return step === 5 ? tool("keiko_verification", { verifierId: "typecheck" }) : normal();
+  if (step === 5) {
+    script.verificationIssued = true;
+    return tool("keiko_verification", { verifierId: "typecheck" });
+  }
+  if (script.holdAfterVerification === true && script.verificationIssued === true) {
+    return tool("question", question());
+  }
+  return normal();
 }
 
 function productiveSearchResponse(
