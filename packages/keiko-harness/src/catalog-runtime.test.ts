@@ -10,7 +10,6 @@ import {
   createInitialToolCatalog,
   lookupCatalogTool,
 } from "@oscharko-dev/keiko-tool-catalog";
-import { writeToolCatalogQualificationObservation } from "../../../scripts/lib/tool-catalog-qualification-observation.mjs";
 import { createSession, type HarnessDeps } from "./session.js";
 import { MemoryEventSink } from "./sinks.js";
 import { GatewayModelPort } from "./adapters.js";
@@ -124,19 +123,6 @@ describe("native harness catalog consumer", () => {
     expect(result).toMatchObject({ outcome: "completed" });
     expect(providerCalls).toBe(2);
     expect(executed).toEqual(["read_file"]);
-    writeToolCatalogQualificationObservation({
-      consumer: "native-harness-gateway",
-      component: "native-harness-gateway",
-      binding: {
-        catalogRevision: binding.evidence.catalogRevision,
-        profile: binding.evidence.profile,
-        projectionDigest: binding.evidence.projectionDigest,
-        handlerSetDigest: binding.evidence.handlerSetDigest,
-      },
-      terminalStatus: "completed",
-      settlementCount: 1,
-      proof: { kind: "single-settlement" },
-    });
   });
   it("default dry-run does not bind or advertise productive tools", async () => {
     const model = scriptedModel([response()]);

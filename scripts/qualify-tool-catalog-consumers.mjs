@@ -18,7 +18,7 @@ import {
 const MAX_ARCHIVE_OUTPUT_BYTES = 128 * 1024 * 1024;
 
 const CONSUMER_TEST_FILES = Object.freeze([
-  "packages/keiko-harness/src/catalog-runtime.test.ts",
+  "packages/keiko-server/src/tool-catalog/nativeCatalogToolPort.test.ts",
   "packages/keiko-cli/src/run.test.ts",
   "packages/keiko-server/src/run-engine.test.ts",
   "packages/keiko-sdk/src/run-agent-catalog.test.ts",
@@ -211,7 +211,7 @@ function filesUnder(directory) {
     }
   };
   visit(directory);
-  return files;
+  return files.sort(compareStrings);
 }
 
 function packageDirectory(name) {

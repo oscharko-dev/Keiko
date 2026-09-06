@@ -11,6 +11,10 @@ import type { CatalogActionIdentity } from "./catalogToolPorts.js";
 import type { CodingToolActionRequest } from "../coding-runtime/codingToolIpc.js";
 import { createNativeCatalogToolPort } from "./nativeCatalogToolPort.js";
 import { catalogRuntimeFixture } from "./__fixtures__/catalogRuntimeFixture.js";
+import {
+  writeToolCatalogQualificationObservation,
+  type ToolCatalogQualificationBinding,
+} from "../../../../scripts/lib/tool-catalog-qualification-observation.mjs";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -83,6 +87,7 @@ describe("native catalog composition through genuine runtime owners", () => {
       );
       if (descriptor === undefined) throw new TypeError("Missing canonical read descriptor");
       const seenBodies: unknown[] = [];
+      const observedBindings: ToolCatalogQualificationBinding[] = [];
       const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
         if (typeof init?.body !== "string") throw new TypeError("Expected provider request");
         seenBodies.push(JSON.parse(init.body) as unknown);
@@ -104,6 +109,18 @@ describe("native catalog composition through genuine runtime owners", () => {
         },
         { fetchImpl, clock: clock(fixture.now) },
       );
+      const callGateway = gateway.chat.bind(gateway);
+      vi.spyOn(gateway, "chat").mockImplementation((request) => {
+        const binding = request.toolCatalog?.offered.binding;
+        if (binding === undefined) throw new TypeError("Expected native catalog binding");
+        observedBindings.push({
+          catalogRevision: binding.catalogRevision,
+          profile: binding.profile,
+          projectionDigest: binding.projectionDigest,
+          handlerSetDigest: binding.handlerSetDigest,
+        });
+        return callGateway(request);
+      });
       const admit = vi.spyOn(fixture.input.authorityPort, "admit");
       const session = createSession(
         { taskType: "investigate-bug", input: { description: "Read accepted workspace" } },
@@ -161,11 +178,26 @@ describe("native catalog composition through genuine runtime owners", () => {
       expect(fetchImpl).toHaveBeenCalledTimes(2);
       expect(seenBodies[0]).toMatchObject({ tools: [{ function: { name: "read_file" } }] });
       expect(JSON.stringify(seenBodies[1])).toContain("export const valid = true");
-      expect(
-        fixture.primary.events.filter((event) => event.op === "tool-catalog.invocation-settled"),
-      ).toHaveLength(1);
+      const settlements = fixture.primary.events.filter(
+        (event) => event.op === "tool-catalog.invocation-settled",
+      );
+      expect(settlements).toHaveLength(1);
       expect(JSON.stringify(fixture.primary.events)).not.toContain("export const valid = true");
       expect(result.events.filter((event) => event.type === "tool:call:completed")).toHaveLength(1);
+      expect(observedBindings).toHaveLength(2);
+      expect(observedBindings[1]).toEqual(observedBindings[0]);
+      if (mode === "autonomous-delivery") {
+        const binding = observedBindings[0];
+        if (binding === undefined) throw new TypeError("Expected observed native binding");
+        writeToolCatalogQualificationObservation({
+          consumer: "native-harness-gateway",
+          component: "native-harness-gateway",
+          binding,
+          terminalStatus: "completed",
+          settlementCount: settlements.length,
+          proof: { kind: "single-settlement" },
+        });
+      }
     },
   );
 });

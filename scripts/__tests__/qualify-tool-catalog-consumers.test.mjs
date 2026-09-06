@@ -79,9 +79,25 @@ function packagedFixture() {
       join(sourceDist, "index.js"),
       `export const packageName = ${JSON.stringify(name)};\n`,
     );
+    if (directory === "keiko-server") {
+      mkdirSync(join(sourceDist, "store"), { recursive: true });
+      writeFileSync(join(sourceDist, "store", "example.js"), "export const nested = true;\n");
+      writeFileSync(join(sourceDist, "store-fingerprints.js"), "export const sibling = true;\n");
+    }
     const nested = join(stage, `nested-${directory}`, "package");
     mkdirSync(join(nested, "dist"), { recursive: true });
     writeFileSync(join(nested, "dist", "index.js"), readFileSync(join(sourceDist, "index.js")));
+    if (directory === "keiko-server") {
+      mkdirSync(join(nested, "dist", "store"), { recursive: true });
+      writeFileSync(
+        join(nested, "dist", "store", "example.js"),
+        readFileSync(join(sourceDist, "store", "example.js")),
+      );
+      writeFileSync(
+        join(nested, "dist", "store-fingerprints.js"),
+        readFileSync(join(sourceDist, "store-fingerprints.js")),
+      );
+    }
     writeFileSync(join(nested, "package.json"), JSON.stringify({ name, version: "0.3.17" }));
     const archiveName = `${directory}.tgz`;
     execFileSync(resolveHostExecutable("tar"), ["-czf", join(vendorRoot, archiveName), "package"], {
