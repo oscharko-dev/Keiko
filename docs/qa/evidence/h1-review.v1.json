@@ -4,8 +4,8 @@
   "reviewKind": "independent-source-and-evidence-audit",
   "integrationPr": 3394,
   "ownerIssue": 3386,
-  "sourceHead": "d6854025a1c6caa68ab7ee640b30d7b083a8bd4f",
-  "ownedSourceDigest": "2a853e9b5bc7c6ad08672b1c72d62275f980555b8360be0a1424743d79800c23",
+  "sourceHead": "2658956cf5dd5387c0fa4310c97f7c9e529ec149",
+  "ownedSourceDigest": "06bb2d55a91c9e5d025354fc3b8906e5dc0be00e6e966bf507b044b6fe764f1e",
   "producerIdentity": {
     "profile": {
       "id": "opencode",
@@ -22,7 +22,7 @@
       "id": "opencode-repository-search-port",
       "contractVersion": 1
     },
-    "handlerSetDigest": "fa22e13880b409d9dd971baa3672e3ed46d469ee228470b822e85f32ce1a68a5",
+    "handlerSetDigest": "7b89ee45a37c68a485428d33d9937684c92bdd64de40b1e43094d6bbe98c5c2b",
     "readiness": "ready"
   },
   "criteria": [
@@ -74,8 +74,8 @@
     "result": "passed"
   },
   "limitations": [
-    "Deterministic source and production-managed tests do not establish live-model qualification.",
-    "Final merge-head gates and the real pinned H1 journey remain separate acceptance evidence."
+    "The successful packaged real-runtime qualification uses the pinned scripted model; it does not establish live-provider qualification.",
+    "Final merge-head gates remain separate acceptance evidence."
   ],
   "ownership": {
     "result": "verified",
