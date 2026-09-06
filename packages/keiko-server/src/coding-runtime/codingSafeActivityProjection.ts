@@ -500,7 +500,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     for (let milestone = 1; milestone <= next; milestone *= 2) {
       if (milestone <= previous || milestone <= this.lastEmittedDropCount) continue;
       this.lastEmittedDropCount = milestone;
-      emitDropDiagnostic(this.diagnostics, this.now, reason, milestone);
+      emitDropDiagnostic(this.diagnostics, this.now, runId, reason, milestone);
     }
   }
 
@@ -1076,11 +1076,12 @@ const SAFE_ACTIVITY_PURGE_SUMMARY: Readonly<
 function emitDropDiagnostic(
   sink: ServerDiagnosticSink | undefined,
   now: () => number,
+  runId: string,
   reason: CodingSafeActivityDropReason,
   count: number,
 ): void {
   emitServerDiagnostic(sink, {
-    correlationId: `safe-activity-drop-${String(count)}`,
+    correlationId: correlationIdOrUnknown(runId),
     timestamp: instant(now()),
     operation: "coding-runtime.safe-activity",
     source: "opencode.safe-activity",

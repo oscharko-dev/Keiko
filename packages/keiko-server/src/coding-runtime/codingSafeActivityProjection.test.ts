@@ -644,6 +644,7 @@ describe("bounded coding safe-activity projection", () => {
       expect.objectContaining({
         code: "CODING_SAFE_ACTIVITY_EVENT_DROPPED",
         occurrenceCount: 1,
+        correlationId: RUN_ID,
       }),
     );
     expect(JSON.stringify(activityLog.events)).not.toMatch(/Old progress|Newest progress/u);
