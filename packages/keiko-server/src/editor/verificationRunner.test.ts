@@ -30,6 +30,7 @@ import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
+import type { ServerLogEvent } from "../observability/index.js";
 
 const PACKAGE_JSON = JSON.stringify({
   name: "fixture",
@@ -817,6 +818,78 @@ describe("VerificationRunnerManager — runToReport shares the human run's lifec
 });
 
 describe("VerificationRunnerManager — catalog + edge cases", () => {
+  it("records the selected Node runner and successful completion in the activity timeline", async () => {
+    writeFileSync(
+      join(workspaceRoot, "package.json"),
+      JSON.stringify({ name: "fixture", scripts: { test: "node --test" } }),
+      "utf8",
+    );
+    writeFileSync(join(workspaceRoot, "src", "native.test.js"), "", "utf8");
+    const events: ServerLogEvent[] = [];
+    const manager = makeManager({
+      activityLog: { write: (event): void => void events.push(event) },
+      execute: fakePort({ ...report(["targeted-test"]), overallStatus: "passed" }).port,
+    });
+
+    await manager.runToReport(
+      input({
+        kinds: ["targeted-test"],
+        targetPath: "src/native.test.js",
+        correlationId: "node-runner-success",
+      }),
+      new AbortController().signal,
+    );
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "editor.verification.execute",
+        correlationId: "node-runner-success",
+        extra: expect.objectContaining({
+          state: "completed",
+          runnerId: "node-test",
+          verificationStatus: "passed",
+        }) as unknown,
+      }),
+    );
+  });
+
+  it("records a closed Node runner refusal before execution", () => {
+    writeFileSync(
+      join(workspaceRoot, "package.json"),
+      JSON.stringify({ name: "fixture", scripts: { test: "node --test" } }),
+      "utf8",
+    );
+    const events: ServerLogEvent[] = [];
+    const port = fakePort(report(["targeted-test"]));
+    const manager = makeManager({
+      activityLog: { write: (event): void => void events.push(event) },
+      execute: port.port,
+    });
+
+    expect(() =>
+      manager.execute(
+        input({
+          kinds: ["targeted-test"],
+          targetPath: "src/missing.test.js",
+          correlationId: "node-runner-refused",
+        }),
+      ),
+    ).toThrow(expect.objectContaining({ code: "NO_RUNNABLE_STEPS" }));
+    expect(port.calls).toBe(0);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "editor.verification.execute",
+        correlationId: "node-runner-refused",
+        errorKind: "NO_RUNNABLE_STEPS",
+        extra: expect.objectContaining({
+          state: "refused",
+          runnerId: "node-test",
+          reason: "NO_RUNNABLE_STEPS",
+        }) as unknown,
+      }),
+    );
+  });
+
   it("plans a Node native targeted test instead of reporting no runnable steps", async () => {
     writeFileSync(
       join(workspaceRoot, "package.json"),

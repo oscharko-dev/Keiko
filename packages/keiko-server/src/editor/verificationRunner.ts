@@ -49,11 +49,15 @@ import {
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
 import type { Project, UiStore } from "../store/index.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
+import type { ServerLogSink } from "../observability/index.js";
 import {
+  describeError,
   evidenceRetentionDiagnosticObserver,
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 
 const DEFAULT_MAX_CONCURRENT_RUNS = 4;
 const CATALOG_KINDS: readonly VerificationKind[] = [
@@ -126,6 +130,7 @@ export interface VerificationRunnerManagerOptions {
   readonly evidenceStore?: EvidenceStore | undefined;
   readonly redactor?: ((input: string) => string) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
   readonly resolveWorkspaceRootAccess?: VerificationWorkspaceRootAccessResolver | undefined;
 }
 
@@ -179,6 +184,11 @@ interface ResolvedVerificationWorkspace {
   readonly trustBasisRepositoryRoot: string | undefined;
 }
 
+interface PreparedVerificationRun {
+  readonly resolved: ResolvedVerificationWorkspace;
+  readonly plan: VerificationPlan;
+}
+
 class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private readonly store: UiStore;
   private readonly fs: WorkspaceFs;
@@ -189,6 +199,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private readonly evidenceStore: EvidenceStore | undefined;
   private readonly redactor: (input: string) => string;
   private readonly diagnostics: ServerDiagnosticSink | undefined;
+  private readonly activityLog: ServerLogSink;
   private readonly rootAccessResolver: VerificationWorkspaceRootAccessResolver | undefined;
   private readonly runs = new Map<string, InFlightRun>();
   private readonly subscribers = new Set<VerificationRunnerEventEmitter>();
@@ -203,6 +214,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     this.evidenceStore = opts.evidenceStore;
     this.redactor = opts.redactor ?? ((input: string): string => input);
     this.diagnostics = opts.diagnostics;
+    this.activityLog = opts.activityLog ?? processServerLogSink();
     this.rootAccessResolver = opts.resolveWorkspaceRootAccess;
   }
 
@@ -237,10 +249,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   };
 
   public readonly execute = (input: VerificationRunInput): VerificationRunStart => {
-    const resolved = this.resolveWorkspace(input.projectId, input.correlationId);
-    const plan = this.buildPlan(resolved, input);
-    this.assertRunnable(plan);
-    this.assertWorkspaceTrustAtEffect(resolved, input);
+    const { resolved, plan } = this.prepare(input);
     const runId = randomUUID();
     const controller = new AbortController();
     this.runs.set(runId, {
@@ -273,11 +282,8 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     input: VerificationRunInput,
     signal: AbortSignal,
   ): Promise<VerificationReport> => {
-    const resolved = this.resolveWorkspace(input.projectId, input.correlationId);
+    const { resolved, plan } = this.prepare(input);
     const { workspace } = resolved;
-    const plan = this.buildPlan(resolved, input);
-    this.assertRunnable(plan);
-    this.assertWorkspaceTrustAtEffect(resolved, input);
     const runId = randomUUID();
     const controller = new AbortController();
     const forwardAbort = (): void => {
@@ -308,8 +314,10 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       // surfaced both as the terminal SSE event AND a thrown error, so the caller receives a real
       // failure instead of a redacted report the ledger has no record of.
       this.persistAndEmitTerminalOrThrow(runId, workspace.root, report, startedAtMs, entry);
+      this.recordRunnerCompletion(workspace, entry.correlationId, report);
       return report;
     } catch (error) {
+      this.recordRunnerFailure(workspace, entry.correlationId, error);
       if (!(error instanceof VerificationRunnerError && error.code === "EVIDENCE_WRITE_FAILED")) {
         this.settleThrownExecution(runId, startedAtMs, entry, error);
       }
@@ -319,6 +327,22 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       this.runs.delete(runId);
     }
   };
+
+  private prepare(input: VerificationRunInput): PreparedVerificationRun {
+    let workspace: WorkspaceInfo | undefined;
+    try {
+      const resolved = this.resolveWorkspace(input.projectId, input.correlationId);
+      workspace = resolved.workspace;
+      const plan = this.buildPlan(resolved, input);
+      this.recordRunnerSelection(workspace, input.correlationId, plan.steps.length);
+      this.assertRunnable(plan);
+      this.assertWorkspaceTrustAtEffect(resolved, input);
+      return { resolved, plan };
+    } catch (error) {
+      this.recordRunnerFailure(workspace, input.correlationId, error);
+      throw error;
+    }
+  }
 
   private assertRunnable(plan: VerificationPlan): void {
     if (plan.steps.length === 0) {
@@ -467,14 +491,73 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       try {
         this.persistEvidence(runId, resolved.workspace.root, report, startedAtMs);
         this.emitTerminalOnce(runId, entry, report);
-      } catch {
+        this.recordRunnerCompletion(resolved.workspace, entry.correlationId, report);
+      } catch (error) {
+        this.recordRunnerFailure(resolved.workspace, entry.correlationId, error);
         this.emitEvidenceWriteFailure(runId, entry);
       }
     } catch (error) {
+      this.recordRunnerFailure(resolved.workspace, entry.correlationId, error);
       this.settleThrownExecution(runId, startedAtMs, entry, error);
     } finally {
       this.runs.delete(runId);
     }
+  }
+
+  private recordRunnerSelection(
+    workspace: WorkspaceInfo,
+    correlationId: string | undefined,
+    stepCount: number,
+  ): void {
+    this.activityLog.write({
+      category: "process",
+      op: "editor.verification.execute",
+      correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+      extra: { state: "selected", runnerId: workspace.testFramework, stepCount },
+    });
+  }
+
+  private recordRunnerCompletion(
+    workspace: WorkspaceInfo,
+    correlationId: string,
+    report: VerificationReport,
+  ): void {
+    this.activityLog.write({
+      category: "process",
+      op: "editor.verification.execute",
+      correlationId,
+      extra: {
+        state: "completed",
+        runnerId: workspace.testFramework,
+        verificationStatus: report.overallStatus,
+        stepCount: report.results.length,
+        deniedCount: report.counts.denied,
+        failedCount: report.counts.failed,
+      },
+    });
+  }
+
+  private recordRunnerFailure(
+    workspace: WorkspaceInfo | undefined,
+    correlationId: string | undefined,
+    error: unknown,
+  ): void {
+    const detail = describeError(error);
+    const reason = error instanceof VerificationRunnerError ? error.code : "INTERNAL";
+    this.activityLog.write({
+      level: "warn",
+      category: "process",
+      op: "editor.verification.execute",
+      correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+      errorKind: reason,
+      extra: {
+        state: "refused",
+        runnerId: workspace?.testFramework ?? "unknown",
+        reason,
+        ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+        ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+      },
+    });
   }
 
   private emitStepCompletions(runId: string, report: VerificationReport): void {

@@ -117,6 +117,16 @@ describe("detectWorkspace", () => {
     }
   });
 
+  it("prefers the exact Node native test script over incidental test dependencies", () => {
+    writePkg(dir, {
+      name: "demo",
+      scripts: { test: "node --test" },
+      devDependencies: { vitest: "^4.0.0", jest: "^29.0.0", mocha: "^10.0.0" },
+    });
+
+    expect(detectWorkspace(dir).testFramework).toBe("node-test");
+  });
+
   it("returns unknown framework when none is declared", () => {
     writePkg(dir, { name: "demo" });
     expect(detectWorkspace(dir).testFramework).toBe("unknown");
