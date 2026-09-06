@@ -337,6 +337,72 @@ describe("compiler measurements reuse the existing sample and percentile convent
     expect(
       evaluateToolCatalogPerformanceEvidence(withinBudget, calibration, alteredBudget).defects,
     ).toEqual(["catalog performance budget differs from calibration"]);
+    const renamedRaw = structuredClone(calibrationRaw);
+    renamedRaw.cases = {
+      renamed: renamedRaw.cases["legacy-native-6-tool"],
+      [`synthetic-${String(TOOL_CATALOG_SYNTHETIC_TOOL_COUNT)}-tool`]:
+        renamedRaw.cases[`synthetic-${String(TOOL_CATALOG_SYNTHETIC_TOOL_COUNT)}-tool`],
+    };
+    expect(() =>
+      buildToolCatalogPerformanceDocument(renamedRaw, {
+        role: "calibration",
+        measuredAtIso: "2026-09-06T00:00:00.000Z",
+        measurementHarnessSha256: "a".repeat(64),
+        environment,
+      }),
+    ).toThrow("catalog performance cases has unexpected fields");
+    const mismatchedCountRaw = structuredClone(calibrationRaw);
+    mismatchedCountRaw.cases["legacy-native-6-tool"].toolCount += 1;
+    expect(() =>
+      buildToolCatalogPerformanceDocument(mismatchedCountRaw, {
+        role: "calibration",
+        measuredAtIso: "2026-09-06T00:00:00.000Z",
+        measurementHarnessSha256: "a".repeat(64),
+        environment,
+      }),
+    ).toThrow("catalog performance case tool count differs from its samples");
+    const wrongOverflowRaw = structuredClone(calibrationRaw);
+    wrongOverflowRaw.overflow.attemptedToolCount -= 1;
+    expect(() =>
+      buildToolCatalogPerformanceDocument(wrongOverflowRaw, {
+        role: "calibration",
+        measuredAtIso: "2026-09-06T00:00:00.000Z",
+        measurementHarnessSha256: "a".repeat(64),
+        environment,
+      }),
+    ).toThrow("catalog overflow fixture count differs");
+    const driftedRaw = structuredClone(calibrationRaw);
+    driftedRaw.subject.sourceTreeSha256 = "b".repeat(64);
+    const sourceDrift = buildToolCatalogPerformanceDocument(driftedRaw, {
+      role: "measurement",
+      measuredAtIso: "2026-09-06T00:01:00.000Z",
+      measurementHarnessSha256: "a".repeat(64),
+      calibrationSha256: calibration.documentSha256,
+      environment,
+    });
+    expect(
+      evaluateToolCatalogPerformanceEvidence(sourceDrift, calibration, budget).defects,
+    ).toContain("catalog performance subject differs from calibration");
+    const rulerDrift = buildToolCatalogPerformanceDocument(calibrationRaw, {
+      role: "measurement",
+      measuredAtIso: "2026-09-06T00:01:00.000Z",
+      measurementHarnessSha256: "b".repeat(64),
+      calibrationSha256: calibration.documentSha256,
+      environment,
+    });
+    expect(
+      evaluateToolCatalogPerformanceEvidence(rulerDrift, calibration, budget).defects,
+    ).toContain("catalog performance subject differs from calibration");
+    const environmentDrift = buildToolCatalogPerformanceDocument(calibrationRaw, {
+      role: "measurement",
+      measuredAtIso: "2026-09-06T00:01:00.000Z",
+      measurementHarnessSha256: "a".repeat(64),
+      calibrationSha256: calibration.documentSha256,
+      environment: { ...environment, totalMemoryBytes: environment.totalMemoryBytes + 1 },
+    });
+    expect(
+      evaluateToolCatalogPerformanceEvidence(environmentDrift, calibration, budget).defects,
+    ).toContain("catalog performance environment differs from calibration");
   }, 45_000);
 });
 describe("#3415 catalog-semantic negative-fixture matrix", () => {

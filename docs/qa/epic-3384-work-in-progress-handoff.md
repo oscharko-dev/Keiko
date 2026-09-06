@@ -11,18 +11,29 @@ The branch is progressing through verified repair checkpoints. The complete fina
 qualified yet; the historical table below must not be read as a current green bar.
 
 - Native and Linux Git fixture suites: 58 tests passed with stronger deterministic setup.
-- Shared monetary admission: direct, streaming, retry and durable-store regression suites pass;
-  direct capability probes are still being connected before any paid qualification attempt.
+- Shared monetary admission now covers model execution and capability probes. The bounded SSE
+  drain retains admission until actual close. Rerank batches fail closed under the qualification
+  budget when no verified aggregate billing bound exists; 82 focused regression tests passed.
 - UI coverage: 447 files, 8,006 tests passed, one skipped; lines 92.93%, branches 82.60%.
-- Current-source visual/accessibility receipts for #3389, #3400 and #3401 are checked in.
-- Authoritative Linux editor bundle verification passed against the existing committed receipt.
-- Authority/optional-tool refinements: 259 tests and scoped lint passed. Consent waiting logging:
-  114 tests, scoped lint and server typecheck passed after the public-snapshot type correction.
-- The real production-composition positive journey still needs completed retained-review proof.
-  Real-model journeys, native performance, full final gates, exact-head PR checks, postmerge `dev`
-  checks and completed issue closure remain outstanding. No paid model call has been launched.
-- H1's active duplicate inventory is zero. Independent producer checkpoint and final integration
-  provenance must still be completed; a null postmerge identity is not evidence of a merge.
+- The supervised production-composition delivery journey passed through retained HTTP review
+  at checkpoint `a203482b`. Other modes and the real Chat/connect/disconnect journey remain open.
+- Editor active-port projection and durable lifecycle wiring passed 131 focused tests. A new
+  review found that structured Editor conflicts/failures can still be logged as completed;
+  its terminal-verdict correction remains in progress.
+- A deeper composition audit found that the managed runtime still used a smaller parallel
+  catalog bridge instead of the canonical binder. Actual handler coverage, dispatch drift,
+  all-action idempotency, result validation and cursor semantics therefore require production
+  integration and qualification. Reference-binder unit coverage does not close these criteria.
+- Root typecheck passed at `b87050f5`. The full server run passed 704 files and 13,574 tests but
+  had 12 failures in six files; targeted repairs passed afterward. A final full run is pending.
+- H1's active duplicate inventory is zero. The premerge producer checkpoint validator is now
+  implemented with 11 regression tests; its real receipt must be regenerated after the binder
+  repair. No merge identity or final integration provenance has been fabricated.
+- The catalog performance ruler and drift checks are implemented. Reference measurement,
+  native performance, paid model qualification, full final gates, exact-head PR checks,
+  postmerge `dev` checks and completed issue closure remain outstanding.
+- No paid model call has been launched. Paid qualification is on hold until the production
+  catalog integration is verified; the aggregate USD 50 budget remains available.
 
 ## Historical pause checkpoint — September 5
 

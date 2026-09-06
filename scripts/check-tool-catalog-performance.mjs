@@ -73,6 +73,8 @@ const SYNTHETIC_HANDLER_ID = "tool-catalog-performance-fixture";
 const SHA256 = /^[a-f0-9]{64}$/u;
 const TOOL_CATALOG_PERFORMANCE_CLASS = "functional-performance-reference-container";
 const TOOL_CATALOG_PERFORMANCE_METRICS = ["coldCompileMs", "lookupBatchMs"];
+const LEGACY_PERFORMANCE_CASE_ID = "legacy-native-6-tool";
+const SYNTHETIC_PERFORMANCE_CASE_ID = `synthetic-${String(TOOL_CATALOG_SYNTHETIC_TOOL_COUNT)}-tool`;
 const TOOL_CATALOG_REFERENCE_IMAGE =
   "node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059";
 const TOOL_CATALOG_RULER_PATHS = [
@@ -130,12 +132,12 @@ export function buildSyntheticRegistrationSet(producer, toolCount) {
 function toolCatalogCases(producer) {
   return [
     {
-      id: "legacy-native-6-tool",
+      id: LEGACY_PERFORMANCE_CASE_ID,
       profile: { id: "legacy-native", version: 1 },
       buildCatalog: () => producer.createInitialToolCatalog(),
     },
     {
-      id: `synthetic-${String(TOOL_CATALOG_SYNTHETIC_TOOL_COUNT)}-tool`,
+      id: SYNTHETIC_PERFORMANCE_CASE_ID,
       profile: { id: "performance-synthetic", version: 1 },
       buildCatalog: () =>
         producer.createKeikoToolCatalog([
@@ -366,6 +368,14 @@ function validatePerformanceCase(testCase) {
     isDeepStrictEqual(testCase.aggregates, performanceAggregates(testCase.samples)),
     "catalog performance aggregates differ",
   );
+  assertEvidence(
+    testCase.toolCount === testCase.samples[0].toolCount,
+    "catalog performance case tool count differs from its samples",
+  );
+}
+
+function expectedPerformanceCaseIds() {
+  return [LEGACY_PERFORMANCE_CASE_ID, SYNTHETIC_PERFORMANCE_CASE_ID];
 }
 
 function validatePerformanceDocumentHeader(document) {
@@ -426,7 +436,16 @@ function validatePerformanceDocumentContent(document) {
     document.overflow?.rejected === true && document.overflow.reason === "input-bound",
     "catalog overflow evidence is invalid",
   );
-  assertEvidence(Object.keys(document.cases).length === 2, "catalog performance cases differ");
+  exactKeys(
+    document.overflow,
+    ["attemptedToolCount", "rejected", "reason"],
+    "catalog overflow evidence",
+  );
+  assertEvidence(
+    document.overflow.attemptedToolCount === TOOL_CATALOG_OVERFLOW_TOOL_COUNT,
+    "catalog overflow fixture count differs",
+  );
+  exactKeys(document.cases, expectedPerformanceCaseIds(), "catalog performance cases");
   for (const testCase of Object.values(document.cases)) validatePerformanceCase(testCase);
   if (document.role === "measurement")
     assertEvidence(SHA256.test(document.calibrationSha256), "invalid catalog calibration binding");
@@ -584,7 +603,28 @@ export async function writeToolCatalogPerformanceReference(root = process.cwd())
   return { calibration, measurement, budget, result };
 }
 
-export function checkToolCatalogPerformanceReference(root = process.cwd()) {
+function currentIdentityDefects(document, current) {
+  const defects = [];
+  for (const id of expectedPerformanceCaseIds()) {
+    const recorded = document.cases[id];
+    const expected = current.cases[id];
+    const recordedSample = recorded.samples[0];
+    const expectedSample = expected.samples[0];
+    if (recorded.toolCount !== expected.toolCount)
+      defects.push(`${id} tool count differs from the current producer`);
+    if (
+      recordedSample.catalogRevision !== expectedSample.catalogRevision ||
+      recordedSample.projectionDigest !== expectedSample.projectionDigest
+    )
+      defects.push(`${id} identity differs from the current producer`);
+  }
+  return defects;
+}
+
+export async function checkToolCatalogPerformanceReference(
+  root = process.cwd(),
+  current = undefined,
+) {
   try {
     const calibration = readJson(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration);
     const measurement = readJson(root, TOOL_CATALOG_PERFORMANCE_FILES.measurement);
@@ -596,6 +636,9 @@ export function checkToolCatalogPerformanceReference(root = process.cwd()) {
     };
     if (!isDeepStrictEqual(measurement.subject, currentSubject))
       result.defects.push("catalog performance evidence does not describe the current producer");
+    const currentEvidence = current ?? (await measureToolCatalogPerformance(root));
+    result.defects.push(...currentIdentityDefects(calibration, currentEvidence));
+    result.defects.push(...currentIdentityDefects(measurement, currentEvidence));
     return result;
   } catch (error) {
     return {
@@ -621,7 +664,7 @@ if (isMainModule(import.meta.url)) {
       if (!output) throw new TypeError("Missing catalog performance output path");
       writeFileSync(output, canonicalD12ArtifactBytes(evidence));
     }
-    const result = checkToolCatalogPerformanceReference();
+    const result = await checkToolCatalogPerformanceReference(process.cwd(), evidence);
     if (result.defects.length > 0 || result.verdicts.length > 0)
       throw new TypeError([...result.defects, ...result.verdicts].join("; "));
     const summary = Object.fromEntries(
