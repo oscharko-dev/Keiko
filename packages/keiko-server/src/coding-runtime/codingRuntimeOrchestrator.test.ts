@@ -136,7 +136,23 @@ function fixture(
     // #3401: the durable last-successful-head reader the description dispatch hook reads (never
     // the mutable `verifiedCommitResult` field above, which can show a later failed proposal).
     getLastSuccessfulVerifiedCommit: (id) => verifiedCommits?.get(id),
-    create: (row) => (rows.set(row.runId, row), row),
+    create: (row) => {
+      if (row.predecessorRunId !== undefined) {
+        const prior = rowFor(rows, row.predecessorRunId);
+        if (prior.terminalAt === undefined) {
+          if (prior.state !== "recovery-required" || prior.recoveryAcknowledgedAt === undefined)
+            throw new Error("acknowledged recovery runtime snapshot was not found");
+          rows.set(prior.runId, {
+            ...prior,
+            terminalAt: row.updatedAt,
+            updatedAt: row.updatedAt,
+            revision: prior.revision + 1,
+          });
+        }
+      }
+      rows.set(row.runId, row);
+      return row;
+    },
     transition: (id, change) => {
       const current = rowFor(rows, id);
       const next = { ...current, ...change } as CodingRuntimeSnapshot;
@@ -1616,6 +1632,7 @@ describe("CodingRuntimeOrchestrator", () => {
       runtimePreference: "codex-subscription",
     });
     expect(f.rows.get("run-2")?.predecessorRunId).toBe("run-1");
+    expect(f.safeActivityProjection.purge).toHaveBeenCalledWith("run-1", "stop");
     expect(f.launchResolver.resolve).toHaveBeenLastCalledWith(
       expect.objectContaining({ runtimePreference: "codex-subscription" }),
     );

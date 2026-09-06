@@ -251,8 +251,12 @@ async function continueRecoveryRequired(
   expected: QualificationResumeBinding,
   priorIssue: CodingWorkbenchIssueBinding,
   mode: CodingWorkbenchMode,
+  priorSnapshot: CodingWorkbenchRuntimeSnapshot,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
-  const acknowledged = await client.acknowledgeRecovery();
+  const acknowledged =
+    priorSnapshot.recoveryAcknowledged === true
+      ? priorSnapshot
+      : await client.acknowledgeRecovery();
   assertRecoveryAcknowledged(acknowledged, expected, priorIssue);
   await assertWorkspaceUnchanged(client, expected, "recovery acknowledgement");
   const started = await client.retry();
@@ -273,11 +277,8 @@ export async function resumeExistingIssueWorkspace(
   if (activeBefore === null || !sameWorkspace(activeBefore, expected)) {
     throw new Error("qualification continuation active workspace identity changed");
   }
-  const priorIssue = assertPriorRun(
-    await client.readPriorRun(expected.priorRunId),
-    expected,
-    issueNumber,
-  );
+  const priorSnapshot = await client.readPriorRun(expected.priorRunId);
+  const priorIssue = assertPriorRun(priorSnapshot, expected, issueNumber);
   if (priorIssue.repositoryId !== expected.repositoryId) {
     throw new Error("qualification continuation repository binding changed");
   }
@@ -286,7 +287,7 @@ export async function resumeExistingIssueWorkspace(
     throw new Error("qualification continuation worktree changed before issue bind");
   }
   if (expected.priorState === "recovery-required") {
-    return continueRecoveryRequired(client, expected, priorIssue, mode);
+    return continueRecoveryRequired(client, expected, priorIssue, mode, priorSnapshot);
   }
   await client.bindIssue();
   await assertWorkspaceUnchanged(client, expected, "issue bind");

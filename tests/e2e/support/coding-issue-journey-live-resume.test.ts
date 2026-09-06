@@ -337,6 +337,22 @@ describe("live qualification continuation", () => {
       resumeExistingIssueWorkspace(unlinked.subject, resume, 1, "governed-assist"),
     ).rejects.toThrow("predecessor binding is unavailable");
   });
+
+  it("retains the acknowledged recovery after a failed successor admission", async () => {
+    const resume = { ...RESUME, priorState: "recovery-required" as const };
+    const fixture = client({
+      prior: {
+        ...snapshot(PRIOR_RUN_ID, "recovery-required"),
+        recoveryAcknowledged: true,
+      },
+    });
+    fixture.acknowledgeRecovery.mockRejectedValue(new Error("already acknowledged"));
+    await expect(
+      resumeExistingIssueWorkspace(fixture.subject, resume, 1, "governed-assist"),
+    ).resolves.toMatchObject({ runId: "run-new" });
+    expect(fixture.acknowledgeRecovery).not.toHaveBeenCalled();
+    expect(fixture.retry).toHaveBeenCalledOnce();
+  });
 });
 
 const temporaryRepositories: string[] = [];

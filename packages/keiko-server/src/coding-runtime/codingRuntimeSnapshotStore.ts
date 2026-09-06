@@ -146,6 +146,7 @@ export interface CodingRuntimeSnapshotStore {
   ) => CodingRuntimeSnapshot;
   /** Internal successful HEAD lineage, separate from the latest public proposal/result. */
   readonly getLastSuccessfulVerifiedCommit?: (runId: string) => VerifiedCommitResult | undefined;
+  /** Linked recovery successors settle their acknowledged predecessor in the same transaction. */
   readonly create: (snapshot: CodingRuntimeSnapshot) => CodingRuntimeSnapshot;
   readonly transition: (
     runId: string,
@@ -270,8 +271,31 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
       assertSnapshot(snapshot);
       if (snapshot.ciReadiness !== undefined)
         throw new TypeError("CI readiness requires its owning observation operation");
-      insert.run(...values(snapshot));
-      return snapshot;
+      if (snapshot.predecessorRunId === undefined) {
+        insert.run(...values(snapshot));
+        return snapshot;
+      }
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const predecessor = one(snapshot.predecessorRunId);
+        if (predecessor === undefined)
+          throw new Error("predecessor runtime snapshot was not found");
+        if (predecessor.terminalAt === undefined) {
+          if (
+            releaseRecovery.run(snapshot.updatedAt, snapshot.updatedAt, snapshot.predecessorRunId)
+              .changes !== 1
+          )
+            throw new Error("acknowledged recovery runtime snapshot was not found");
+        } else if (!SETTLED.has(predecessor.state)) {
+          throw new Error("predecessor runtime snapshot was not settled");
+        }
+        insert.run(...values(snapshot));
+        db.exec("COMMIT");
+        return snapshot;
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
     },
     // The closed store operation keeps SQL binding adjacent to its validated state transition.
     // eslint-disable-next-line complexity

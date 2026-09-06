@@ -166,6 +166,86 @@ describe("CodingRuntimeSnapshotStore", () => {
       "acknowledged recovery runtime snapshot was not found",
     );
   });
+
+  it("atomically admits a successor from an acknowledged recovery slot", () => {
+    const s = store();
+    s.create(snapshot());
+    s.markNonterminalRecoveryRequired("2026-07-13T10:01:00.000Z");
+    s.acknowledgeRecovery("run-1", "2026-07-13T10:02:00.000Z");
+
+    const successor = {
+      ...snapshot("run-2"),
+      createdAt: "2026-07-13T10:03:00.000Z",
+      updatedAt: "2026-07-13T10:03:00.000Z",
+      predecessorRunId: "run-1",
+    } satisfies CodingRuntimeSnapshot;
+    expect(s.create(successor)).toEqual(successor);
+    expect(s.get("run-1")).toMatchObject({
+      state: "recovery-required",
+      terminalAt: "2026-07-13T10:03:00.000Z",
+      revision: 3,
+    });
+    expect(s.listRecentActive()).toEqual([successor]);
+  });
+
+  it("admits a linked successor without rewriting an ordinary terminal predecessor", () => {
+    const s = store();
+    s.create(snapshot());
+    const failed = s.transition("run-1", {
+      state: "failed",
+      revision: 1,
+      updatedAt: "2026-07-13T10:01:00.000Z",
+      terminalAt: "2026-07-13T10:01:00.000Z",
+    });
+
+    expect(
+      s.create({
+        ...snapshot("run-2"),
+        createdAt: "2026-07-13T10:02:00.000Z",
+        updatedAt: "2026-07-13T10:02:00.000Z",
+        predecessorRunId: "run-1",
+      }).predecessorRunId,
+    ).toBe("run-1");
+    expect(s.get("run-1")).toEqual(failed);
+  });
+
+  it("refuses a linked successor from an unacknowledged recovery slot", () => {
+    const s = store();
+    s.create(snapshot());
+    const recovering = s.markNonterminalRecoveryRequired("2026-07-13T10:01:00.000Z");
+
+    expect(() =>
+      s.create({
+        ...snapshot("run-2"),
+        createdAt: "2026-07-13T10:02:00.000Z",
+        updatedAt: "2026-07-13T10:02:00.000Z",
+        predecessorRunId: "run-1",
+      }),
+    ).toThrow("acknowledged recovery runtime snapshot was not found");
+    expect(s.listRecentActive().map(({ runId }) => runId)).toEqual(recovering);
+    expect(s.get("run-2")).toBeUndefined();
+  });
+
+  it("retains the acknowledged recovery slot when successor insertion fails", () => {
+    const s = store();
+    s.create(snapshot("run-2"));
+    s.transition("run-2", { state: "succeeded", revision: 1, updatedAt: at, terminalAt: at });
+    s.create(snapshot());
+    s.markNonterminalRecoveryRequired("2026-07-13T10:01:00.000Z");
+    const acknowledged = s.acknowledgeRecovery("run-1", "2026-07-13T10:02:00.000Z");
+
+    expect(() =>
+      s.create({
+        ...snapshot("run-2"),
+        createdAt: "2026-07-13T10:03:00.000Z",
+        updatedAt: "2026-07-13T10:03:00.000Z",
+        predecessorRunId: "run-1",
+      }),
+    ).toThrow();
+    expect(s.get("run-1")).toEqual(acknowledged);
+    expect(s.listRecentActive()).toEqual([acknowledged]);
+  });
+
   it("prunes oldest settled entries in one bounded transaction", () => {
     const s = store();
     for (let i = 0; i < 10_001; i += 1) {

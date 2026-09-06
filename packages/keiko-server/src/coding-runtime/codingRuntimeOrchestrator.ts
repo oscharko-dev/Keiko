@@ -609,11 +609,12 @@ export class CodingRuntimeOrchestrator {
     this.activeRunId = runId;
   }
 
-  /** Settles the retried predecessor once — and only once — its successor holds the active slot. */
+  /** Finalizes recovery cleanup once — and only once — its successor holds the active slot. */
   private settlePredecessorRecovery(predecessorRunId: string): void {
     const prior = this.deps.snapshots.get(predecessorRunId);
-    if (prior?.state !== "recovery-required" || prior.terminalAt !== undefined) return;
-    this.deps.snapshots.releaseRecoveryForRetry(predecessorRunId, this.now().toISOString());
+    if (prior?.state !== "recovery-required") return;
+    if (prior.terminalAt === undefined)
+      this.deps.snapshots.releaseRecoveryForRetry(predecessorRunId, this.now().toISOString());
     this.deps.safeActivityProjection?.purge(predecessorRunId, "stop");
     this.pruneSettled();
   }
