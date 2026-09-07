@@ -26,6 +26,7 @@ import { createPortableUpdateActivator } from "./update-portable-activation.js";
 import {
   activationIdFor,
   attestPortableManagedRegistration,
+  attestPortableManagedRegistrationFacts,
   refreshPortableRegistration,
   type PortableActivationLayout,
 } from "./update-portable-activation-files.js";
@@ -264,6 +265,15 @@ describe("portable update activation handoff", () => {
         expectedSha256: createHash("sha256").update(registration).digest("hex"),
       }),
     ).toBe(true);
+    expect(
+      attestPortableManagedRegistrationFacts({
+        stateDir: install.stateDir,
+        managedRoot: install.managedRoot,
+        target: TARGET,
+        version: OLD_VERSION,
+        expectedSha256: createHash("sha256").update(registration).digest("hex"),
+      }),
+    ).toEqual({ windowsGeneration: install.currentLayout.windowsGeneration });
     const replaced = JSON.parse(registration.toString("utf8")) as Record<string, unknown>;
     const windowsGeneration = replaced.windowsGeneration;
     if (

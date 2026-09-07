@@ -20,17 +20,19 @@ import {
 
 const roots: string[] = [];
 
+interface RecoveryFixture {
+  readonly activationId: string;
+  readonly planSha256: string;
+  readonly sessionId: string;
+  readonly stateDir: string;
+}
+
 afterEach(async () => {
   const { rm } = await import("node:fs/promises");
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
 });
 
-function prepare(): {
-  readonly activationId: string;
-  readonly planSha256: string;
-  readonly sessionId: string;
-  readonly stateDir: string;
-} {
+function prepare(): RecoveryFixture {
   const root = mkdtempSync(join(tmpdir(), "keiko-handoff-recovery-"));
   roots.push(root);
   const stateDir = join(root, "state");
@@ -93,7 +95,68 @@ function prepare(): {
   return { activationId, planSha256, sessionId, stateDir };
 }
 
-function appendThroughStart(fixture: ReturnType<typeof prepare>): string {
+function prepareWindows(): RecoveryFixture {
+  const root = mkdtempSync(join(tmpdir(), "keiko-windows-handoff-recovery-"));
+  roots.push(root);
+  const stateDir = join(root, "state");
+  const parent = join(root, "install-parent");
+  const managedRoot = join(parent, "Keiko");
+  const stageRoot = join(parent, ".keiko-portable-updates", "stage-1");
+  const candidateRoot = join(stageRoot, "Keiko");
+  const activationId = "a".repeat(32);
+  const sessionId = "session-windows-1";
+  const plan = createPortableHandoffPlan({
+    activationId,
+    sessionId,
+    stageId: "stage-1",
+    target: "windows-x64",
+    targetVersion: "1.2.3",
+    newLaunchId: "2".repeat(32),
+    restoreLaunchId: "3".repeat(32),
+    aggregateRevision: 7,
+    previousRegistrationState: "present",
+    oldProcess: {
+      pid: 123,
+      launchId: "1".repeat(32),
+      host: "127.0.0.1",
+      port: 1983,
+      version: "1.2.2",
+    },
+    paths: {
+      managedRoot,
+      stageRoot,
+      candidateRoot,
+      backupRoot: join(parent, `.keiko-previous-${activationId}`),
+      candidateLauncher: join(candidateRoot, "Keiko.exe"),
+      candidateSupervisor: join(candidateRoot, "runtime", "native", "keiko-runtime-supervisor.exe"),
+    },
+    digests: {
+      currentTreeSha256: "c".repeat(64),
+      candidateTreeSha256: "d".repeat(64),
+      currentLauncherSha256: "3".repeat(64),
+      currentSupervisorSha256: "4".repeat(64),
+      candidateLauncherSha256: "e".repeat(64),
+      candidateSupervisorSha256: "f".repeat(64),
+      previousRegistrationSha256: "0".repeat(64),
+      preparedRegistrationSha256: "1".repeat(64),
+    },
+    deadlines: {
+      oldExitAt: 1_800_000_000_000,
+      startAt: 1_800_000_030_000,
+      verifyAt: 1_800_000_060_000,
+      cleanupAt: 1_800_000_090_000,
+    },
+    cutoverKind: "windows-generation-v1",
+    currentGenerationTreeSha256: "5".repeat(64),
+    candidateGenerationTreeSha256: "6".repeat(64),
+    currentSetupManifestSha256: "7".repeat(64),
+    candidateSetupManifestSha256: "8".repeat(64),
+  });
+  const { sha256: planSha256 } = writePortableHandoffPlan({ stateDir, plan });
+  return { activationId, planSha256, sessionId, stateDir };
+}
+
+function appendThroughStart(fixture: RecoveryFixture): string {
   const entries: readonly (readonly [PortableHandoffReceiptKind, "intent" | "completed"])[] = [
     ["prepared", "completed"],
     ["old-exit", "intent"],
@@ -118,7 +181,7 @@ function appendThroughStart(fixture: ReturnType<typeof prepare>): string {
   return previousSha256 ?? "";
 }
 
-function initialWal(fixture: ReturnType<typeof prepare>): UpdateActivationWalState {
+function initialWal(fixture: RecoveryFixture): UpdateActivationWalState {
   return {
     activationId: fixture.activationId,
     planSha256: fixture.planSha256,
@@ -130,6 +193,44 @@ function initialWal(fixture: ReturnType<typeof prepare>): UpdateActivationWalSta
 }
 
 describe("portable handoff startup recovery", () => {
+  it("attests the Windows candidate generation and root setup instead of a synthetic whole root", async () => {
+    const fixture = prepareWindows();
+    appendThroughStart(fixture);
+    let wal = initialWal(fixture);
+    const attest = vi.fn(() => Promise.resolve(true));
+    const recovery = createUpdateStartupRecovery({
+      stateDir: fixture.stateDir,
+      readActivation: () => ({ sessionId: fixture.sessionId, activationWal: wal }),
+      persistActivation: ({ activationWal }) => {
+        wal = activationWal;
+        return Promise.resolve();
+      },
+      settleRestored: () => Promise.resolve(),
+      attestActiveTree: attest,
+    });
+
+    await expect(
+      recovery.reconcile({
+        phase: "pre-listen",
+        current: {
+          pid: process.pid,
+          launchId: "2".repeat(32),
+          host: "127.0.0.1",
+          port: 1983,
+          version: "1.2.3",
+        },
+      }),
+    ).resolves.toMatchObject({ status: "ready" });
+    expect(attest).toHaveBeenCalledWith({
+      kind: "windows-generation-v1",
+      activationId: fixture.activationId,
+      expectedGenerationTreeSha256: "6".repeat(64),
+      expectedSetupManifestSha256: "8".repeat(64),
+      expectedRegistrationSha256: "1".repeat(64),
+      expectedVersion: "1.2.3",
+    });
+  });
+
   it("folds native start receipts pre-listen and verifies exact replacement post-listen", async () => {
     const fixture = prepare();
     appendThroughStart(fixture);

@@ -64,11 +64,12 @@ function sameFileIdentity(left: Stats, right: Stats): boolean {
     left.dev === right.dev &&
     left.ino === right.ino &&
     left.size === right.size &&
-    left.mtimeMs === right.mtimeMs
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
   );
 }
 
-function assertOpenedFile(before: Stats, opened: Stats): void {
+function assertOpenedFile(before: Stats, opened: Stats, maximumBytes: number): void {
   if (
     !before.isFile() ||
     before.isSymbolicLink() ||
@@ -77,7 +78,7 @@ function assertOpenedFile(before: Stats, opened: Stats): void {
     opened.nlink !== 1 ||
     before.dev !== opened.dev ||
     before.ino !== opened.ino ||
-    opened.size > MAX_FILE_BYTES
+    opened.size > maximumBytes
   ) {
     fail("portable handoff artifact is unsafe");
   }
@@ -86,6 +87,7 @@ function assertOpenedFile(before: Stats, opened: Stats): void {
 async function readFileDigest(
   handle: FileHandle,
   expectedSize: number,
+  maximumBytes: number,
   operation: PortableHandoffOperation,
 ): Promise<{ readonly bytes: number; readonly digest: Buffer }> {
   const hash = createHash("sha256");
@@ -97,7 +99,7 @@ async function readFileDigest(
     const result = await handle.read(buffer, 0, buffer.length, null);
     if (result.bytesRead === 0) return { bytes, digest: hash.digest() };
     bytes += result.bytesRead;
-    if (bytes > expectedSize || bytes > MAX_FILE_BYTES) fail("portable handoff artifact changed");
+    if (bytes > expectedSize || bytes > maximumBytes) fail("portable handoff artifact changed");
     hash.update(buffer.subarray(0, result.bytesRead));
     reads += 1;
     if (reads % 64 === 0) await operation.yieldControl();
@@ -107,9 +109,13 @@ async function readFileDigest(
 function assertStableFile(opened: Stats, after: Stats, current: Stats, bytes: number): void {
   if (
     bytes !== opened.size ||
+    !after.isFile() ||
+    after.nlink !== 1 ||
     !sameFileIdentity(after, opened) ||
-    current.dev !== opened.dev ||
-    current.ino !== opened.ino
+    !current.isFile() ||
+    current.isSymbolicLink() ||
+    current.nlink !== 1 ||
+    !sameFileIdentity(current, opened)
   ) {
     fail("portable handoff artifact changed");
   }
@@ -118,14 +124,18 @@ function assertStableFile(opened: Stats, after: Stats, current: Stats, bytes: nu
 export async function digestPortableHandoffFile(
   path: string,
   operation: PortableHandoffOperation,
+  maximumBytes = MAX_FILE_BYTES,
 ): Promise<Buffer> {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1 || maximumBytes > MAX_FILE_BYTES) {
+    fail("portable handoff artifact byte limit is invalid");
+  }
   assertPortableHandoffOperation(operation);
+  const before = await lstat(path);
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
-    const before = await lstat(path);
     const opened = await handle.stat();
-    assertOpenedFile(before, opened);
-    const result = await readFileDigest(handle, opened.size, operation);
+    assertOpenedFile(before, opened, maximumBytes);
+    const result = await readFileDigest(handle, opened.size, maximumBytes, operation);
     assertStableFile(opened, await handle.stat(), await lstat(path), result.bytes);
     return result.digest;
   } finally {

@@ -775,7 +775,6 @@ describe("governed updater integration", () => {
         configPath: undefined,
         evidenceDir: join(staticRoot, "evidence"),
         env: { KEIKO_STATE_DIR: stateDir },
-        gatewayReadinessFetch: metadata.fetchImpl,
         uiDbPath: join(staticRoot, "ui.db"),
         modelPortFactory: (): undefined => undefined,
         updateRuntimeFacts: () => facts,

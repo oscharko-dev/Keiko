@@ -1086,6 +1086,22 @@ The subsequent complete `npm run typecheck` also passed with official Node 24.18
 7.0.2 (`/tmp/keiko-3405-current-canonical-typecheck.log`). Actual Windows PowerShell 5.1 and mapped
 SMB behavior remain pending in the native locality diagnostic; static approval is not that proof.
 
+## Windows startup recovery review settlement (2026-09-07)
+
+The twelve-file Windows generation startup/recovery slice received independent security approval
+with **zero findings**. The review traced canonical receipt validation and WAL anchoring before
+phase-specific inspection allowances, exact generation/setup/registration/launcher attestation,
+Windows `coordinator.exe` selection and unchanged KUR1 raw-state/lock binding, observed native exit
+versus ambiguous teardown, and retention of verified N. It confirmed that macOS continues using
+its whole-root attestation and that no package-root export exposes the new internal allowance.
+
+The reviewed normal-startup test hash is
+`56ceaeaba86ede05781ca397f7e773e669412f25bfec24deabd6e3e854d3361f`; the other eleven reviewed
+files match the frozen B3b slice. The lead's 148-test combined replay, the owner's final 68-test
+startup/session replay, and the now-green complete canonical typecheck support this checkpoint.
+Native process seams in these host tests are unit/integration fixtures, not real-artifact updater
+qualification. Final integrated verification, issue audit and platform evidence remain required.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification

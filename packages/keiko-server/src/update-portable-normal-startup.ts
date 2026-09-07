@@ -26,6 +26,11 @@ import {
   validatePortableHandoffReceiptSequence,
   type PortableHandoffReceipt,
 } from "./update-portable-handoff-receipts.js";
+import {
+  attestWindowsGenerationInstallation,
+  windowsGenerationInspectionAllowance,
+  type WindowsGenerationInspectionAllowance,
+} from "./update-portable-windows-inspection-allowance.js";
 import { createUpdateLocalStateManager } from "./update-local-state.js";
 import {
   adoptStateDirUpdateSessionLockForRecovery,
@@ -55,8 +60,15 @@ export interface PortableRecoveredLaunchDescriptor extends UpdateSessionRecovery
 }
 
 export type PortableNormalStartupRecoveryResult =
-  | { readonly status: "normal" }
-  | { readonly status: "recovered"; readonly descriptor: PortableRecoveredLaunchDescriptor }
+  | {
+      readonly status: "normal";
+      readonly inspectionAllowance?: WindowsGenerationInspectionAllowance;
+    }
+  | {
+      readonly status: "recovered";
+      readonly descriptor: PortableRecoveredLaunchDescriptor;
+      readonly inspectionAllowance?: WindowsGenerationInspectionAllowance;
+    }
   | { readonly status: "recovery-required" };
 
 function validPattern(value: unknown, pattern: RegExp): value is string {
@@ -331,6 +343,9 @@ async function initialStateAttested(
   stateDir: string,
 ): Promise<boolean> {
   const { plan } = authority;
+  if (plan.target === "windows-x64") {
+    return attestWindowsGenerationInstallation({ plan, selection: "current", stateDir });
+  }
   return (
     attestPortableManagedRegistration({
       stateDir,
@@ -618,6 +633,25 @@ interface NativeRecoveryAttempt {
   readonly nativePidPublished: boolean;
 }
 
+function recordConfirmedNativeRecoveryFailure(
+  options: PortableNormalStartupRecoveryOptions,
+  authority: RecoveryAuthority,
+  ownedLock: ReturnType<typeof createStateDirUpdateSessionLock>,
+  attempt: NativeRecoveryAttempt,
+): void {
+  if (
+    attempt.outcome.status === "failed" &&
+    attempt.outcome.process === "confirmed-dead" &&
+    !attempt.nativePidPublished
+  ) {
+    ownedLock.updateChildPid(authority.session.sessionId, options.currentPid ?? process.pid);
+  }
+}
+
+function recoveryCoordinatorName(plan: PortableHandoffPlan): string {
+  return plan.target === "windows-x64" ? "coordinator.exe" : "coordinator";
+}
+
 async function runAcceptedNativeRecovery(
   options: PortableNormalStartupRecoveryOptions,
   authority: RecoveryAuthority,
@@ -629,7 +663,7 @@ async function runAcceptedNativeRecovery(
     const outcome = await (options.runNative ?? runPortableNativeRecoveryProcess)({
       coordinator: join(
         portableHandoffRoot(options.stateDir, authority.plan.activationId),
-        "coordinator",
+        recoveryCoordinatorName(authority.plan),
       ),
       activationId: authority.plan.activationId,
       control: encodeControl(authority, ownership),
@@ -661,20 +695,30 @@ async function recoverAccepted(
 ): Promise<PortableNormalStartupRecoveryResult> {
   const { authority, ownership } = claimed;
   const wal = authority.state.activationWal;
-  const coordinator = join(portableHandoffRoot(options.stateDir, wal.activationId), "coordinator");
+  const coordinator = join(
+    portableHandoffRoot(options.stateDir, wal.activationId),
+    recoveryCoordinatorName(authority.plan),
+  );
   if (!SHA256.test(wal.coordinatorSha256) || digestFile(coordinator) !== wal.coordinatorSha256)
     return recoveryRequired(options, localState, "coordinator-invalid", authority);
   const ownedLock = createStateDirUpdateSessionLock(options.stateDir);
   const attempt = await runAcceptedNativeRecovery(options, authority, ownership, ownedLock);
   if (attempt.outcome.status === "failed") {
-    if (attempt.outcome.process === "confirmed-dead" && !attempt.nativePidPublished) {
-      ownedLock.updateChildPid(authority.session.sessionId, options.currentPid ?? process.pid);
-    }
+    recordConfirmedNativeRecoveryFailure(options, authority, ownedLock, attempt);
     return recoveryRequired(options, localState, "native-recovery-failed", authority);
   }
+  return attestRecoveredStartup(options, localState, authority, ownership);
+}
+
+async function attestRecoveredStartup(
+  options: PortableNormalStartupRecoveryOptions,
+  localState: ReturnType<typeof createUpdateLocalStateManager>,
+  priorAuthority: RecoveryAuthority,
+  ownership: UpdateSessionRecoveryOwnership,
+): Promise<PortableNormalStartupRecoveryResult> {
   const refreshed = localState.inspectRuntimeState();
   if (refreshed.status !== "ok")
-    return recoveryRequired(options, localState, "post-native-authority-invalid", authority);
+    return recoveryRequired(options, localState, "post-native-authority-invalid", priorAuthority);
   const refreshedAuthority = loadAuthority(
     options.stateDir,
     refreshed.state,
@@ -684,21 +728,55 @@ async function recoverAccepted(
     refreshedAuthority === undefined
       ? undefined
       : recoveredDescriptor(refreshedAuthority, ownership);
-  return descriptor === undefined
-    ? recoveryRequired(options, localState, "post-native-authority-invalid", authority)
-    : { status: "recovered", descriptor };
+  if (descriptor === undefined || refreshedAuthority === undefined) {
+    return recoveryRequired(options, localState, "post-native-authority-invalid", priorAuthority);
+  }
+  if (!(await recoveredWindowsInstallAttested(refreshedAuthority, options.stateDir))) {
+    return recoveryRequired(options, localState, "post-native-authority-invalid", priorAuthority);
+  }
+  return recoveredStartupResult(refreshedAuthority, descriptor);
+}
+
+async function recoveredWindowsInstallAttested(
+  authority: RecoveryAuthority,
+  stateDir: string,
+): Promise<boolean> {
+  if (authority.plan.target !== "windows-x64") return true;
+  const restored = hasCompletedReceipt(authority, "restore");
+  return attestWindowsGenerationInstallation({
+    plan: authority.plan,
+    selection: restored ? "current" : "candidate",
+    stateDir,
+  });
+}
+
+function hasCompletedReceipt(
+  authority: RecoveryAuthority,
+  kind: PortableHandoffReceipt["kind"],
+): boolean {
+  return authority.receipts.some(
+    (receipt) => receipt.kind === kind && receipt.outcome === "completed",
+  );
+}
+
+function recoveredStartupResult(
+  authority: RecoveryAuthority,
+  descriptor: PortableRecoveredLaunchDescriptor,
+): PortableNormalStartupRecoveryResult {
+  if (authority.plan.target !== "windows-x64") return { status: "recovered", descriptor };
+  return {
+    status: "recovered",
+    descriptor,
+    inspectionAllowance: windowsGenerationInspectionAllowance(authority.plan, authority.receipts),
+  };
 }
 
 function recoveredDescriptor(
   authority: RecoveryAuthority,
   ownership: UpdateSessionRecoveryOwnership,
 ): PortableRecoveredLaunchDescriptor | undefined {
-  const restored = authority.receipts.some(
-    (receipt) => receipt.kind === "restore" && receipt.outcome === "completed",
-  );
-  const targetStarted = authority.receipts.some(
-    (receipt) => receipt.kind === "start" && receipt.outcome === "completed",
-  );
+  const restored = hasCompletedReceipt(authority, "restore");
+  const targetStarted = hasCompletedReceipt(authority, "start");
   if (!restored && !targetStarted) return undefined;
   return {
     ...ownership,
@@ -714,7 +792,6 @@ function recoveredDescriptor(
 export async function reconcilePortableNormalStartup(
   options: PortableNormalStartupRecoveryOptions,
 ): Promise<PortableNormalStartupRecoveryResult> {
-  if (options.target === "windows-x64") return { status: "normal" };
   const now = options.now ?? Date.now;
   const localState = createUpdateLocalStateManager({
     stateDir: options.stateDir,

@@ -1,8 +1,20 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { UpdateRuntimeState, UpdateSession } from "@oscharko-dev/keiko-contracts";
+import type {
+  UpdateActivationWalCheckpoint,
+  UpdateRuntimeState,
+  UpdateSession,
+} from "@oscharko-dev/keiko-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { digestUpdateCandidate } from "./update-candidate-authority.js";
 import { hashPortableHandoffTree } from "./update-portable-handoff-builder.js";
@@ -11,6 +23,7 @@ import {
   portableHandoffRoot,
   writePortableHandoffPlan,
   type PortableHandoffPlan,
+  type WindowsPortableHandoffPlan,
 } from "./update-portable-handoff-plan.js";
 import {
   appendPortableHandoffReceipt,
@@ -32,6 +45,7 @@ import {
   updateSessionLockPath,
   type UpdateSessionLock,
 } from "./update-session-lock.js";
+import type { WindowsGenerationBinding } from "./update-portable-windows-generation.js";
 
 const roots: string[] = [];
 const NOW = Date.parse("2026-09-07T10:00:00.000Z");
@@ -46,6 +60,13 @@ interface NormalStartupFixture {
   readonly session: UpdateSession;
   readonly state: UpdateRuntimeState;
   readonly stateDir: string;
+}
+
+interface WindowsNormalStartupFixture extends NormalStartupFixture {
+  readonly activeGenerationFile: string;
+  readonly candidateGenerationTreeSha256: string;
+  readonly currentGenerationTreeSha256: string;
+  readonly plan: WindowsPortableHandoffPlan;
 }
 
 afterEach(() => {
@@ -267,23 +288,193 @@ async function prepare(terminal = false): Promise<NormalStartupFixture> {
   };
 }
 
-function appendComplete(fixture: Awaited<ReturnType<typeof prepare>>): string {
-  const entries: readonly (readonly [PortableHandoffReceiptKind, "intent" | "completed"])[] = [
-    ["prepared", "completed"],
-    ["old-exit", "intent"],
-    ["old-exit", "completed"],
-    ["promote", "intent"],
-    ["promote", "completed"],
-    ["register", "intent"],
-    ["register", "completed"],
-    ["start", "intent"],
-    ["start", "completed"],
-    ["verify", "intent"],
-    ["verify", "completed"],
-    ["cleanup", "intent"],
-    ["cleanup", "completed"],
-    ["complete", "completed"],
-  ];
+function sha256(value: string | Buffer): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+async function writeWindowsGeneration(
+  managedRoot: string,
+  label: string,
+): Promise<{ readonly file: string; readonly treeSha256: string }> {
+  const generations = join(managedRoot, ".portable", "generations");
+  const staged = join(generations, `.fixture-${label}`);
+  mkdirSync(staged, { recursive: true });
+  writeFileSync(join(staged, "runtime.txt"), `${label} generation bytes`);
+  const treeSha256 = await hashPortableHandoffTree(staged, { deadline: Date.now() + 30_000 });
+  const generationRoot = join(generations, treeSha256);
+  renameSync(staged, generationRoot);
+  return { file: join(generationRoot, "runtime.txt"), treeSha256 };
+}
+
+function windowsGenerationBinding(
+  treeSha256: string,
+  launcherSha256: string,
+): WindowsGenerationBinding {
+  return {
+    schemaVersion: 1 as const,
+    resourceRoot: `.portable/generations/${treeSha256}`,
+    treeHashSchema: "KHT1" as const,
+    treeSha256,
+    launcherPath: "Keiko.exe" as const,
+    launcherSha256,
+  };
+}
+
+type WindowsActiveSelection = "candidate" | "current" | "third";
+
+interface GeneratedWindowsGeneration {
+  readonly file: string;
+  readonly treeSha256: string;
+}
+
+interface WindowsActiveFacts {
+  readonly binding: WindowsGenerationBinding;
+  readonly file: string;
+  readonly launcher: string;
+  readonly version: string;
+}
+
+function selectedWindowsFacts(
+  active: WindowsActiveSelection,
+  current: GeneratedWindowsGeneration,
+  candidate: GeneratedWindowsGeneration,
+  third: GeneratedWindowsGeneration | undefined,
+): WindowsActiveFacts {
+  if (active === "current") {
+    return {
+      binding: windowsGenerationBinding(current.treeSha256, sha256("current signed launcher")),
+      file: current.file,
+      launcher: "current signed launcher",
+      version: "1.2.2",
+    };
+  }
+  if (active === "candidate") {
+    return {
+      binding: windowsGenerationBinding(candidate.treeSha256, sha256("candidate signed launcher")),
+      file: candidate.file,
+      launcher: "candidate signed launcher",
+      version: "1.2.3",
+    };
+  }
+  if (third === undefined) throw new TypeError("expected third Windows generation");
+  return {
+    binding: windowsGenerationBinding(third.treeSha256, sha256("third signed launcher")),
+    file: third.file,
+    launcher: "third signed launcher",
+    version: "1.2.3",
+  };
+}
+
+async function optionalThirdGeneration(
+  managedRoot: string,
+  active: WindowsActiveSelection,
+): Promise<GeneratedWindowsGeneration | undefined> {
+  return active === "third" ? writeWindowsGeneration(managedRoot, "third") : undefined;
+}
+
+function selectedRegistrationDigests(
+  active: WindowsActiveSelection,
+  registrationSha256: string,
+): { readonly prepared: string; readonly previous: string } {
+  return active === "current"
+    ? { prepared: "1".repeat(64), previous: registrationSha256 }
+    : { prepared: registrationSha256, previous: "0".repeat(64) };
+}
+
+function windowsSetup(
+  version: string,
+  windowsGeneration: ReturnType<typeof windowsGenerationBinding>,
+): string {
+  return JSON.stringify({
+    schemaVersion: 2,
+    platformTarget: "windows-x64",
+    packageName: "@oscharko-dev/keiko",
+    packageVersion: version,
+    stable: true,
+    bootstrapUpdateEligible: false,
+    primaryLauncher: "Keiko.exe",
+    runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+    windowsGeneration,
+  });
+}
+
+function windowsRegistration(input: {
+  readonly managedRoot: string;
+  readonly setup: string;
+  readonly version: string;
+  readonly windowsGeneration: ReturnType<typeof windowsGenerationBinding>;
+}): string {
+  return JSON.stringify({
+    schemaVersion: 2,
+    status: "managed",
+    updateEligible: true,
+    stable: true,
+    platformTarget: "windows-x64",
+    packageVersion: input.version,
+    installRootIdentitySha256: sha256(realpathSync(input.managedRoot)),
+    setupManifestSha256: sha256(input.setup),
+    launcherIdentitySha256: input.windowsGeneration.launcherSha256,
+    windowsGeneration: input.windowsGeneration,
+  });
+}
+
+const FORWARD_COMPLETE_RECEIPTS = [
+  ["prepared", "completed"],
+  ["old-exit", "intent"],
+  ["old-exit", "completed"],
+  ["promote", "intent"],
+  ["promote", "completed"],
+  ["register", "intent"],
+  ["register", "completed"],
+  ["start", "intent"],
+  ["start", "completed"],
+  ["verify", "intent"],
+  ["verify", "completed"],
+  ["cleanup", "intent"],
+  ["cleanup", "completed"],
+  ["complete", "completed"],
+] as const;
+
+const RESTORED_RECEIPTS = [
+  ...FORWARD_COMPLETE_RECEIPTS.slice(0, 9),
+  ["restore", "intent"],
+  ["restore", "completed"],
+] as const;
+
+function receiptEntriesFor(
+  active: WindowsActiveSelection,
+): readonly (readonly [PortableHandoffReceiptKind, "intent" | "completed"])[] {
+  return active === "current" ? RESTORED_RECEIPTS : FORWARD_COMPLETE_RECEIPTS;
+}
+
+function walCheckpointsFor(
+  active: WindowsActiveSelection,
+): readonly (readonly [UpdateActivationWalCheckpoint, number])[] {
+  return active === "current"
+    ? ([
+        ["old-exited", 3],
+        ["promoted", 5],
+        ["registered", 7],
+        ["new-started", 9],
+        ["restoring", 10],
+        ["restoring", 11],
+      ] as const)
+    : ([
+        ["old-exited", 3],
+        ["promoted", 5],
+        ["registered", 7],
+        ["new-started", 9],
+        ["verified", 11],
+        ["cleanup-pending", 12],
+        ["complete", 14],
+      ] as const);
+}
+
+function appendReceiptSequence(
+  fixture: NormalStartupFixture,
+  entries: readonly (readonly [PortableHandoffReceiptKind, "intent" | "completed"])[],
+): readonly string[] {
+  const sha256s: string[] = [];
   let previousSha256: string | undefined;
   for (const [kind, outcome] of entries) {
     previousSha256 = appendPortableHandoffReceipt({
@@ -295,8 +486,208 @@ function appendComplete(fixture: Awaited<ReturnType<typeof prepare>>): string {
       at: NOW,
       ...(previousSha256 === undefined ? {} : { previousSha256 }),
     }).sha256;
+    sha256s.push(previousSha256);
   }
-  return previousSha256 ?? "";
+  return sha256s;
+}
+
+async function prepareWindows(
+  active: WindowsActiveSelection = "candidate",
+): Promise<WindowsNormalStartupFixture> {
+  const root = mkdtempSync(join(tmpdir(), "keiko-windows-normal-startup-"));
+  roots.push(root);
+  const stateDir = join(root, "state");
+  const managedRoot = join(root, "install", "Keiko");
+  mkdirSync(managedRoot, { recursive: true });
+  mkdirSync(stateDir, { recursive: true });
+  const localState = createUpdateLocalStateManager({ stateDir, now: () => NOW });
+  const initial = localState.writeRuntimeState(localState.readRuntimeState());
+  const currentGeneration = await writeWindowsGeneration(managedRoot, "current");
+  const candidateGeneration = await writeWindowsGeneration(managedRoot, "candidate");
+  const thirdGeneration = await optionalThirdGeneration(managedRoot, active);
+  const currentLauncher = "current signed launcher";
+  const candidateLauncher = "candidate signed launcher";
+  const currentBinding = windowsGenerationBinding(
+    currentGeneration.treeSha256,
+    sha256(currentLauncher),
+  );
+  const candidateBinding = windowsGenerationBinding(
+    candidateGeneration.treeSha256,
+    sha256(candidateLauncher),
+  );
+  const selected = selectedWindowsFacts(
+    active,
+    currentGeneration,
+    candidateGeneration,
+    thirdGeneration,
+  );
+  const setup = windowsSetup(selected.version, selected.binding);
+  const registration = windowsRegistration({
+    managedRoot,
+    setup,
+    version: selected.version,
+    windowsGeneration: selected.binding,
+  });
+  writeFileSync(join(managedRoot, "Keiko.exe"), selected.launcher);
+  writeFileSync(join(managedRoot, ".portable", "setup-manifest.json"), setup);
+  writeFileSync(join(stateDir, "portable-install-state.json"), registration);
+  const activationId = "a".repeat(32);
+  const sessionId = "session-windows-normal-startup";
+  const stageRoot = join(root, "install", ".keiko-portable-updates", "stage-1");
+  const candidateRoot = join(stageRoot, "Keiko");
+  const currentSetup = windowsSetup("1.2.2", currentBinding);
+  const candidateSetup = active === "third" ? setup : windowsSetup("1.2.3", candidateBinding);
+  const registrationDigests = selectedRegistrationDigests(active, sha256(registration));
+  const plan = createPortableHandoffPlan({
+    activationId,
+    sessionId,
+    stageId: "stage-1",
+    target: "windows-x64",
+    targetVersion: "1.2.3",
+    newLaunchId: "2".repeat(32),
+    restoreLaunchId: "3".repeat(32),
+    aggregateRevision: initial.revision + 1,
+    previousRegistrationState: "present",
+    oldProcess: {
+      pid: 101,
+      launchId: "1".repeat(32),
+      host: "127.0.0.1",
+      port: 1983,
+      version: "1.2.2",
+    },
+    paths: {
+      managedRoot,
+      stageRoot,
+      candidateRoot,
+      backupRoot: join(root, "install", `.keiko-previous-${activationId}`),
+      candidateLauncher: join(candidateRoot, "Keiko.exe"),
+      candidateSupervisor: join(candidateRoot, "runtime", "native", "keiko-runtime-supervisor.exe"),
+    },
+    digests: {
+      currentTreeSha256: "c".repeat(64),
+      candidateTreeSha256: "d".repeat(64),
+      currentLauncherSha256: currentBinding.launcherSha256,
+      currentSupervisorSha256: "4".repeat(64),
+      candidateLauncherSha256: candidateBinding.launcherSha256,
+      candidateSupervisorSha256: "f".repeat(64),
+      previousRegistrationSha256: registrationDigests.previous,
+      preparedRegistrationSha256: registrationDigests.prepared,
+    },
+    deadlines: {
+      oldExitAt: NOW - 120_000,
+      startAt: NOW - 90_000,
+      verifyAt: NOW - 60_000,
+      cleanupAt: NOW - 30_000,
+    },
+    cutoverKind: "windows-generation-v1",
+    currentGenerationTreeSha256: currentGeneration.treeSha256,
+    candidateGenerationTreeSha256: candidateGeneration.treeSha256,
+    currentSetupManifestSha256: sha256(currentSetup),
+    candidateSetupManifestSha256: sha256(candidateSetup),
+  });
+  if (plan.target !== "windows-x64") throw new TypeError("expected Windows plan");
+  const { sha256: planSha256 } = writePortableHandoffPlan({ stateDir, plan });
+  const coordinatorBytes = "Windows native recovery fixture";
+  const coordinator = join(portableHandoffRoot(stateDir, activationId), "coordinator.exe");
+  writeFileSync(coordinator, coordinatorBytes);
+  const coordinatorSha256 = sha256(coordinatorBytes);
+  const candidate = {
+    schemaVersion: "1" as const,
+    candidateId: "candidate-1.2.3",
+    currentVersion: "1.2.2",
+    targetVersion: "1.2.3",
+    channel: "stable" as const,
+    install: {
+      packageName: "@oscharko-dev/keiko",
+      installKind: "package-manager" as const,
+      packageManager: "npm" as const,
+      installIdentitySha256: "8".repeat(64),
+    },
+    release: { source: "github-release" as const, tag: "v1.2.3" },
+    releaseImpactDigest: "7".repeat(64),
+    issuedAt: "2026-09-07T09:00:00.000Z",
+    expiresAt: "2026-09-07T11:00:00.000Z",
+  };
+  const session: UpdateSession = {
+    schemaVersion: "1",
+    sessionId,
+    candidateId: candidate.candidateId,
+    candidateDigest: digestUpdateCandidate(candidate),
+    correlationId: "corr-windows-normal-startup",
+    packageName: "@oscharko-dev/keiko",
+    targetVersion: "1.2.3",
+    phase: "restart-required",
+    lifecycle: {
+      phase: "handoff-pending",
+      progress: { completedBytes: 1, totalBytes: 1 },
+      cancellationCutoff: "handoff-committed",
+    },
+    failureReason: "none",
+    packageManager: "npm",
+    startedAt: "2026-09-07T09:00:00.000Z",
+    updatedAt: "2026-09-07T09:00:00.000Z",
+    cancelable: false,
+    retryable: false,
+    restartRequired: true,
+    message: "Native handoff pending.",
+  };
+  const state = localState.writeRuntimeState({
+    ...initial,
+    activeSession: session,
+    activeCandidate: candidate,
+    activationWal: {
+      activationId,
+      planSha256,
+      coordinatorSha256,
+      coordinatorId: coordinatorSha256,
+      intentRevision: plan.aggregateRevision,
+      checkpoint: "prepared",
+      receiptSequence: 0,
+    },
+  });
+  const lock = createStateDirUpdateSessionLock(stateDir, {
+    processIdentity: "windows-old-owner",
+    pidAlive: () => false,
+  });
+  const fixture = {
+    activationId,
+    activeGenerationFile: selected.file,
+    candidateGenerationTreeSha256: candidateGeneration.treeSha256,
+    coordinatorSha256,
+    currentGenerationTreeSha256: currentGeneration.treeSha256,
+    localState,
+    lock,
+    managedRoot,
+    plan,
+    session,
+    state,
+    stateDir,
+  } satisfies WindowsNormalStartupFixture;
+  const entries = receiptEntriesFor(active);
+  const receiptSha256s = appendReceiptSequence(fixture, entries);
+  let terminalState = state;
+  for (const [checkpoint, receiptSequence] of walCheckpointsFor(active)) {
+    const activationWal = terminalState.activationWal;
+    if (activationWal === undefined) throw new TypeError("expected Windows activation WAL");
+    terminalState = localState.writeRuntimeState({
+      ...terminalState,
+      activationWal: {
+        ...activationWal,
+        checkpoint,
+        receiptSequence,
+        receiptSha256: receiptSha256s[receiptSequence - 1],
+      },
+    });
+  }
+  expect(
+    lock.acquire({ sessionId, targetVersion: "1.2.3", startedAt: session.startedAt, pid: 101 }),
+  ).toBe(true);
+  expect(lock.updateChildPid(sessionId, 202)).toBe(true);
+  return { ...fixture, lock, state: terminalState };
+}
+
+function appendComplete(fixture: Awaited<ReturnType<typeof prepare>>): string {
+  return appendReceiptSequence(fixture, FORWARD_COMPLETE_RECEIPTS).at(-1) ?? "";
 }
 
 function prepareAcceptedRecovery(fixture: NormalStartupFixture): void {
@@ -327,10 +718,140 @@ function prepareAcceptedRecovery(fixture: NormalStartupFixture): void {
 }
 
 describe("portable normal startup recovery", () => {
+  it("treats a Windows installation with no WAL as selected-only normal startup", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-windows-normal-startup-fresh-"));
+    roots.push(stateDir);
+    const runNative = vi.fn(() => Promise.resolve({ status: "succeeded" as const }));
+
+    await expect(
+      reconcilePortableNormalStartup({
+        stateDir,
+        target: "windows-x64",
+        expectedManagedRoot: stateDir,
+        runNative,
+      }),
+    ).resolves.toEqual({ status: "normal" });
+    expect(runNative).not.toHaveBeenCalled();
+  });
+
+  it("recovers the verified Windows candidate through coordinator.exe and grants only N", async () => {
+    const fixture = await prepareWindows("candidate");
+    const runNative = vi.fn((input: PortableNativeRecoveryInput) => {
+      expect(input.coordinator).toBe(
+        join(portableHandoffRoot(fixture.stateDir, fixture.activationId), "coordinator.exe"),
+      );
+      expect(input.control.toString("ascii").split("\n")[0]).toBe("KUR1");
+      expect(input.onSpawn(404)).toBe(true);
+      return Promise.resolve({ status: "succeeded" as const });
+    });
+
+    await expect(
+      reconcilePortableNormalStartup({
+        stateDir: fixture.stateDir,
+        target: "windows-x64",
+        expectedManagedRoot: fixture.managedRoot,
+        currentPid: 303,
+        processIdentity: "windows-recovery-cli",
+        pidAlive: () => false,
+        runNative,
+      }),
+    ).resolves.toMatchObject({
+      status: "recovered",
+      descriptor: {
+        launchId: fixture.plan.newLaunchId,
+        expectedVersion: fixture.plan.targetVersion,
+      },
+      inspectionAllowance: {
+        kind: "windows-generation-v1",
+        managedRoot: fixture.managedRoot,
+        activationId: fixture.activationId,
+        allowedResourceRoots: [`.portable/generations/${fixture.candidateGenerationTreeSha256}`],
+      },
+    });
+    expect(runNative).toHaveBeenCalledOnce();
+  });
+
+  it("recovers a restored Windows N-1 without granting candidate rollback access", async () => {
+    const fixture = await prepareWindows("current");
+    const runNative = vi.fn((input: PortableNativeRecoveryInput) => {
+      expect(input.onSpawn(404)).toBe(true);
+      return Promise.resolve({ status: "succeeded" as const });
+    });
+
+    await expect(
+      reconcilePortableNormalStartup({
+        stateDir: fixture.stateDir,
+        target: "windows-x64",
+        expectedManagedRoot: fixture.managedRoot,
+        currentPid: 303,
+        processIdentity: "windows-restore-cli",
+        pidAlive: () => false,
+        runNative,
+      }),
+    ).resolves.toMatchObject({
+      status: "recovered",
+      descriptor: {
+        launchId: fixture.plan.restoreLaunchId,
+        expectedVersion: fixture.plan.oldProcess.version,
+      },
+      inspectionAllowance: {
+        allowedResourceRoots: [`.portable/generations/${fixture.currentGenerationTreeSha256}`],
+      },
+    });
+  });
+
+  it("rejects a non-prefix Windows receipt journal before native recovery", async () => {
+    const fixture = await prepareWindows("candidate");
+    const receiptRoot = join(
+      portableHandoffRoot(fixture.stateDir, fixture.activationId),
+      "receipts",
+    );
+    writeFileSync(join(receiptRoot, "000001.khr"), readFileSync(join(receiptRoot, "000002.khr")));
+    const runNative = vi.fn(() => Promise.resolve({ status: "succeeded" as const }));
+
+    await expect(
+      reconcilePortableNormalStartup({
+        stateDir: fixture.stateDir,
+        target: "windows-x64",
+        expectedManagedRoot: fixture.managedRoot,
+        pidAlive: () => false,
+        runNative,
+      }),
+    ).resolves.toEqual({ status: "recovery-required" });
+    expect(runNative).not.toHaveBeenCalled();
+  });
+
+  it.each(["generation drift", "third generation"] as const)(
+    "withholds a Windows inspection allowance after %s",
+    async (failure) => {
+      const fixture = await prepareWindows(failure === "third generation" ? "third" : "candidate");
+      if (failure === "generation drift") {
+        writeFileSync(fixture.activeGenerationFile, "drifted generation bytes");
+      }
+      const runNative = vi.fn((input: PortableNativeRecoveryInput) => {
+        expect(input.onSpawn(404)).toBe(true);
+        return Promise.resolve({ status: "succeeded" as const });
+      });
+
+      await expect(
+        reconcilePortableNormalStartup({
+          stateDir: fixture.stateDir,
+          target: "windows-x64",
+          expectedManagedRoot: fixture.managedRoot,
+          currentPid: 303,
+          processIdentity: "windows-invalid-root-cli",
+          pidAlive: () => false,
+          runNative,
+        }),
+      ).resolves.toEqual({ status: "recovery-required" });
+      expect(runNative).toHaveBeenCalledOnce();
+    },
+  );
+
   it("treats an installation with no aggregate or interrupted anchors as fresh", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-normal-startup-fresh-"));
     roots.push(stateDir);
-    const runNative = vi.fn(() => Promise.resolve(true));
+    const runNative = vi.fn(() => Promise.resolve({ status: "succeeded" as const }));
     await expect(
       reconcilePortableNormalStartup({
         stateDir,
@@ -539,7 +1060,7 @@ describe("portable normal startup recovery", () => {
     mkdirSync(otherManagedRoot, { recursive: true });
     const beforeLock = readFileSync(updateSessionLockPath(fixture.stateDir), "utf8");
     const beforeState = fixture.localState.readRuntimeState();
-    const runNative = vi.fn(() => Promise.resolve(true));
+    const runNative = vi.fn(() => Promise.resolve({ status: "succeeded" as const }));
 
     await expect(
       reconcilePortableNormalStartup({
@@ -563,7 +1084,7 @@ describe("portable normal startup recovery", () => {
     expect(fixture.lock.updateChildPid(fixture.session.sessionId, 202)).toBe(true);
     const beforeLock = readFileSync(updateSessionLockPath(fixture.stateDir), "utf8");
     const beforeState = fixture.localState.readRuntimeState();
-    const runNative = vi.fn(() => Promise.resolve(true));
+    const runNative = vi.fn(() => Promise.resolve({ status: "succeeded" as const }));
 
     await expect(
       reconcilePortableNormalStartup({
