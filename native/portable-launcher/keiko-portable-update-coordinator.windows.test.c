@@ -25,10 +25,24 @@
 
 static int test_atomic_flush_allowed = 1;
 static unsigned int test_atomic_flush_calls = 0;
+static const wchar_t *test_atomic_writer_path = NULL;
+static HANDLE test_atomic_writer = INVALID_HANDLE_VALUE;
 
 static int test_atomic_replace_checkpoint(const char *name) {
   if (strcmp(name, "post-rename-before-flush") == 0) {
     test_atomic_flush_calls += 1u;
+    if (test_atomic_writer_path != NULL) {
+      test_atomic_writer = CreateFileW(
+          test_atomic_writer_path,
+          GENERIC_WRITE,
+          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+          NULL,
+          OPEN_EXISTING,
+          FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+          NULL
+      );
+      if (test_atomic_writer == INVALID_HANDLE_VALUE || test_atomic_writer == NULL) return 0;
+    }
     return test_atomic_flush_allowed;
   }
   return 1;
@@ -529,6 +543,32 @@ static void test_productive_file_cutovers_flush_and_recover(void) {
   test_write(paths->fault_snapshot, "registration-fault-candidate\n");
   test_file_hash(paths->previous, previous_digest);
   test_file_hash(paths->fault_snapshot, fault_digest);
+  test_atomic_writer_path = paths->destination[2];
+  assert(!keiko_windows_update_replace_file(
+      paths->fault_snapshot,
+      paths->state,
+      paths->fault_temporary,
+      paths->destination[2],
+      fault_digest,
+      GetTickCount64() + 10000u
+  ));
+  assert(test_atomic_writer != INVALID_HANDLE_VALUE && test_atomic_writer != NULL);
+  assert(CloseHandle(test_atomic_writer));
+  test_atomic_writer = INVALID_HANDLE_VALUE;
+  test_atomic_writer_path = NULL;
+  assert(keiko_windows_update_file_digest_matches(
+      paths->destination[2],
+      fault_digest,
+      GetTickCount64() + 10000u
+  ));
+  assert(keiko_windows_update_replace_file(
+      paths->previous,
+      paths->state,
+      paths->restore_temporary,
+      paths->destination[2],
+      previous_digest,
+      GetTickCount64() + 10000u
+  ));
   test_atomic_flush_allowed = 0;
   assert(!keiko_windows_update_replace_file(
       paths->fault_snapshot,
@@ -557,7 +597,7 @@ static void test_productive_file_cutovers_flush_and_recover(void) {
       previous_digest,
       GetTickCount64() + 10000u
   ));
-  assert(test_atomic_flush_calls == 5u);
+  assert(test_atomic_flush_calls == 7u);
   assert(keiko_windows_update_remove_tree(paths->root, GetTickCount64() + 10000u));
   free(paths);
 }

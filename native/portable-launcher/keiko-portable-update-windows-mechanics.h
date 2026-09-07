@@ -206,7 +206,10 @@ static inline int keiko_windows_update_replace_file(
     const char *expected_sha256,
     uint64_t deadline_ms
 ) {
+  HANDLE flush_handle = INVALID_HANDLE_VALUE;
   HANDLE published = INVALID_HANDLE_VALUE;
+  keiko_windows_atomic_file_fact flushed_fact;
+  keiko_windows_atomic_file_fact published_fact;
   char published_sha256[65];
   int temporary_created = 0;
   int result = 0;
@@ -234,12 +237,25 @@ static inline int keiko_windows_update_replace_file(
           temporary_path,
           destination_path,
           deadline_ms,
-          &published
-      ) || published == INVALID_HANDLE_VALUE || published == NULL ||
+          &flush_handle
+      ) || flush_handle == INVALID_HANDLE_VALUE || flush_handle == NULL ||
+      !keiko_windows_atomic_query_fact(flush_handle, &flushed_fact)) goto cleanup;
+  CloseHandle(flush_handle);
+  flush_handle = INVALID_HANDLE_VALUE;
+  published = keiko_windows_atomic_open_regular(
+      destination_path,
+      GENERIC_READ,
+      FILE_SHARE_READ
+  );
+  if (published == INVALID_HANDLE_VALUE || published == NULL ||
+      !keiko_windows_atomic_query_fact(published, &published_fact) ||
+      !keiko_windows_atomic_same_file(&flushed_fact, &published_fact) ||
+      flushed_fact.standard.EndOfFile.QuadPart != published_fact.standard.EndOfFile.QuadPart ||
       !keiko_windows_update_handle_hash(published, deadline_ms, published_sha256) ||
       strcmp(published_sha256, expected_sha256) != 0) goto cleanup;
   result = 1;
 cleanup:
+  if (flush_handle != INVALID_HANDLE_VALUE && flush_handle != NULL) CloseHandle(flush_handle);
   if (published != INVALID_HANDLE_VALUE && published != NULL) CloseHandle(published);
   if (!result && temporary_created) {
     DWORD attributes = GetFileAttributesW(temporary_path);

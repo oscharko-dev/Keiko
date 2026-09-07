@@ -172,7 +172,7 @@ static inline int keiko_windows_atomic_replace_existing(
   HANDLE parent = INVALID_HANDLE_VALUE;
   HANDLE source = INVALID_HANDLE_VALUE;
   HANDLE destination = INVALID_HANDLE_VALUE;
-  HANDLE published = INVALID_HANDLE_VALUE;
+  HANDLE namespace_handle = INVALID_HANDLE_VALUE;
   FILE_RENAME_INFO *rename_info = NULL;
   keiko_windows_atomic_file_fact parent_fact;
   keiko_windows_atomic_file_fact source_fact;
@@ -193,7 +193,7 @@ static inline int keiko_windows_atomic_replace_existing(
   );
   source = keiko_windows_atomic_open_regular(
       source_path,
-      DELETE | FILE_READ_ATTRIBUTES,
+      GENERIC_READ | GENERIC_WRITE | DELETE,
       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
   );
   destination = keiko_windows_atomic_open_regular(
@@ -241,20 +241,24 @@ static inline int keiko_windows_atomic_replace_existing(
             rename_info,
             (DWORD)rename_size
         )) {
+      keiko_windows_atomic_file_fact renamed_source_fact;
       keiko_windows_atomic_file_fact published_fact;
-      published = keiko_windows_atomic_open_regular(
+      namespace_handle = keiko_windows_atomic_open_regular(
           destination_path,
-          GENERIC_READ | GENERIC_WRITE,
-          FILE_SHARE_READ | FILE_SHARE_DELETE
+          FILE_READ_ATTRIBUTES,
+          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
       );
-      if (published != INVALID_HANDLE_VALUE && published != NULL &&
-          keiko_windows_atomic_query_fact(published, &published_fact) &&
-          keiko_windows_atomic_same_file(&source_fact, &published_fact) &&
-          source_fact.standard.EndOfFile.QuadPart ==
+      if (namespace_handle != INVALID_HANDLE_VALUE && namespace_handle != NULL &&
+          keiko_windows_atomic_query_fact(source, &renamed_source_fact) &&
+          keiko_windows_atomic_query_fact(namespace_handle, &published_fact) &&
+          keiko_windows_atomic_same_file(&source_fact, &renamed_source_fact) &&
+          keiko_windows_atomic_same_file(&renamed_source_fact, &published_fact) &&
+          renamed_source_fact.standard.EndOfFile.QuadPart ==
               published_fact.standard.EndOfFile.QuadPart &&
+          keiko_windows_atomic_parent_matches(destination_path, &parent_fact) &&
           GetTickCount64() <= deadline_ms &&
           KEIKO_WINDOWS_ATOMIC_REPLACE_CHECKPOINT("post-rename-before-flush") &&
-          FlushFileBuffers(published)) result = 1;
+          FlushFileBuffers(source)) result = 1;
       break;
     }
     error = GetLastError();
@@ -264,10 +268,11 @@ static inline int keiko_windows_atomic_replace_existing(
 cleanup:
   free(rename_info);
   if (result) {
-    *published_handle = published;
-    published = INVALID_HANDLE_VALUE;
+    *published_handle = source;
+    source = INVALID_HANDLE_VALUE;
   }
-  if (published != INVALID_HANDLE_VALUE && published != NULL) CloseHandle(published);
+  if (namespace_handle != INVALID_HANDLE_VALUE && namespace_handle != NULL)
+    CloseHandle(namespace_handle);
   if (destination != INVALID_HANDLE_VALUE && destination != NULL) CloseHandle(destination);
   if (source != INVALID_HANDLE_VALUE && source != NULL) CloseHandle(source);
   if (parent != INVALID_HANDLE_VALUE && parent != NULL) CloseHandle(parent);
