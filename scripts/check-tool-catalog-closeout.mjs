@@ -1,7 +1,7 @@
 // #3415's final artifact joins existing receipt/artifact pairs and the independently validated
 // H1 handoff. It is generated outside the source tree after qualification: committing a manifest
 // that claims its own future commit would make exact-head evidence impossible.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -14,6 +14,7 @@ import {
 } from "./check-tool-catalog-conformance.mjs";
 import { compareStrings } from "./lib/compare-strings.mjs";
 import { sha256File } from "./lib/digest.mjs";
+import { resolveGithubRepository } from "./lib/github-repository.mjs";
 import { REQUIRED_INTERFACE_FIELDS } from "./lib/governed-tool-contract-shape.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
@@ -93,6 +94,15 @@ function validateContext(context) {
   requireEvidence(DIGEST.test(context.h1EvidenceDigest), "invalid H1 evidence digest");
   requireEvidence(H1_EVIDENCE_REFS.has(context.h1EvidenceRef), "invalid H1 evidence reference");
   requireEvidence(PLATFORMS.has(context.platform), "unsupported qualification platform");
+  requireEvidence(
+    GITHUB_REPOSITORY.test(context.requiredCiRepository),
+    "invalid expected required-CI repository",
+  );
+  requireEvidence(
+    Number.isSafeInteger(context.requiredCiPullRequestNumber) &&
+      context.requiredCiPullRequestNumber > 0,
+    "invalid expected required-CI pull request number",
+  );
   validateRuntime(context.runtime);
 }
 function validateRuntime(runtime) {
@@ -179,7 +189,14 @@ function validateManagedRunBinding(binding) {
     "managed consumer has invalid run binding",
   );
 }
-function validateRequiredCiBinding(binding, currentHead) {
+function sameRepository(left, right) {
+  return left.toLowerCase() === right.toLowerCase();
+}
+// A byte-hashed required-ci.artifact can otherwise name any well-formed repository/PR that
+// happens to share this checkout's exact head SHA. Tying repository and pullRequestNumber to
+// the closeout's own expected identity (never re-derived from the artifact itself) closes that
+// gap; headSha is already tied to context.currentHead and baseRef to the literal "dev" below.
+function validateRequiredCiBinding(binding, context) {
   exactFields(binding, [
     "kind",
     "repository",
@@ -195,13 +212,15 @@ function validateRequiredCiBinding(binding, currentHead) {
   const valid = [
     binding.kind === "required-ci",
     GITHUB_REPOSITORY.test(binding.repository),
+    sameRepository(binding.repository, context.requiredCiRepository),
     Number.isSafeInteger(binding.repositoryId),
     binding.repositoryId > 0,
     Number.isSafeInteger(binding.pullRequestNumber),
     binding.pullRequestNumber > 0,
+    binding.pullRequestNumber === context.requiredCiPullRequestNumber,
     GITHUB_REPOSITORY.test(binding.headRepository),
     GIT_REF.test(binding.headRef),
-    binding.headSha === currentHead,
+    binding.headSha === context.currentHead,
     binding.baseRef === "dev",
     COMMIT.test(binding.baseSha),
     DIGEST.test(binding.requirementsDigest),
@@ -231,7 +250,7 @@ function validateConsumerPackages(consumer, packages) {
   }
 }
 function validateGateReport(id, report, context) {
-  if (id === "required-ci") validateRequiredCiBinding(report.binding, report.currentHead);
+  if (id === "required-ci") validateRequiredCiBinding(report.binding, context);
   else requireEvidence(report.binding === null, `${id} has unexpected binding metadata`);
   requireEvidence(report.components === null, `${id} has unexpected component proof`);
   requireEvidence(report.packages === null, `${id} has unexpected packaged proof`);
@@ -352,11 +371,22 @@ async function qualifiedH1(root, h1Path) {
   return { h1, evidenceRef };
 }
 
+function expectedRequiredCiRepository(root) {
+  const repository = resolveGithubRepository({
+    env: process.env,
+    runGit: (args) =>
+      spawnSync(resolveHostExecutable("git"), args, { cwd: root, encoding: "utf8" }),
+  });
+  requireEvidence(repository !== undefined, "could not determine the expected GitHub repository");
+  return repository;
+}
+
 export async function checkToolCatalogCloseoutFiles({
   root = process.cwd(),
   artifactPath,
   receiptsDir,
   manifestPath,
+  pullRequestNumber,
   h1Path = join(root, H1_PRODUCER_CHECKPOINT_PATH),
   write = false,
 }) {
@@ -376,6 +406,8 @@ export async function checkToolCatalogCloseoutFiles({
         h1[key],
       ]),
     ),
+    requiredCiRepository: expectedRequiredCiRepository(root),
+    requiredCiPullRequestNumber: positiveInteger(pullRequestNumber),
     platform: `${process.platform}-${process.arch}`,
     runtime: { node: process.versions.node, product: readJson(join(root, "package.json")).version },
   };
@@ -420,6 +452,16 @@ function requiredPath(argv, flag) {
   requireEvidence(index >= 0 && typeof argv[index + 1] === "string", `missing ${flag}`);
   return resolve(argv[index + 1]);
 }
+function requiredArgument(argv, flag) {
+  const index = argv.indexOf(flag);
+  requireEvidence(index >= 0 && typeof argv[index + 1] === "string", `missing ${flag}`);
+  return argv[index + 1];
+}
+function positiveInteger(value) {
+  const parsed = Number(value);
+  requireEvidence(Number.isSafeInteger(parsed) && parsed > 0, "invalid pull request number");
+  return parsed;
+}
 if (isMainModule(import.meta.url)) {
   const argv = process.argv.slice(2);
   await checkToolCatalogCloseoutFiles({
@@ -427,6 +469,7 @@ if (isMainModule(import.meta.url)) {
     receiptsDir: requiredPath(argv, "--receipts"),
     manifestPath: requiredPath(argv, "--manifest"),
     h1Path: requiredPath(argv, "--h1"),
+    pullRequestNumber: requiredArgument(argv, "--pull-request"),
     write: argv.includes("--write"),
   });
   console.log("Tool catalog closeout: PASS");

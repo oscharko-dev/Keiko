@@ -59,10 +59,10 @@ function fixtureComponents(id, consumer) {
 function fixtureRequiredCiBinding(context) {
   return {
     kind: "required-ci",
-    repository: "oscharko-dev/Keiko",
+    repository: context.requiredCiRepository,
     repositoryId: 41,
-    pullRequestNumber: 3394,
-    headRepository: "oscharko-dev/Keiko",
+    pullRequestNumber: context.requiredCiPullRequestNumber,
+    headRepository: context.requiredCiRepository,
     headRef: "feature/epic-3384",
     headSha: context.currentHead,
     baseRef: "dev",
@@ -86,6 +86,8 @@ async function fixture() {
     h1EvidenceRef: "h1-provenance.v1",
     h1EvidenceDigest: sha256("unit fixture H1 receipt"),
     h1Binding: binding,
+    requiredCiRepository: "oscharko-dev/Keiko",
+    requiredCiPullRequestNumber: 3394,
     platform: "darwin-arm64",
     runtime: { node: "26.8.1", product: "0.3.17" },
   };
@@ -277,6 +279,17 @@ describe("exact-head catalog closeout artifact", () => {
     Object.assign(f.reports.get("required-ci").binding, mutation);
     expect(() => check(f)).toThrow();
   });
+  it.each([{ repository: "other-org/other-repo" }, { pullRequestNumber: 4200 }])(
+    "rejects a required-CI binding for a different repository or pull request %#",
+    async (mutation) => {
+      // A well-formed binding.repository/pullRequestNumber is not enough: closeout must reject
+      // evidence that names a different (but still well-formed) repository or PR than the one
+      // actually being closed out, even though headSha and baseRef still match this checkout.
+      const f = await fixture();
+      Object.assign(f.reports.get("required-ci").binding, mutation);
+      expect(() => check(f)).toThrow("required-ci has invalid exact identity binding");
+    },
+  );
   it("retains reviewed premerge H1 evidence without claiming a future dev merge", async () => {
     const f = await fixture();
     f.context.h1EvidenceRef = "h1-producer-checkpoint.v1";
