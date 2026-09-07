@@ -143,112 +143,59 @@ static void test_create_root(wchar_t root[TEST_PATH_CAP]) {
   free(temporary);
 }
 
-static void test_print_directory_security_class(const wchar_t *path) {
-  HANDLE directory = INVALID_HANDLE_VALUE;
-  HANDLE token = NULL;
-  TOKEN_USER *token_user = NULL;
-  TOKEN_OWNER *token_owner = NULL;
-  DWORD user_bytes = 0;
-  DWORD owner_bytes = 0;
-  PSID owner = NULL;
-  PACL dacl = NULL;
-  PSECURITY_DESCRIPTOR descriptor = NULL;
+static void test_directory_owner_policy(void) {
+  BYTE user_storage[SECURITY_MAX_SID_SIZE];
   BYTE system_storage[SECURITY_MAX_SID_SIZE];
   BYTE administrators_storage[SECURITY_MAX_SID_SIZE];
+  BYTE users_storage[SECURITY_MAX_SID_SIZE];
+  DWORD user_size = sizeof(user_storage);
   DWORD system_size = sizeof(system_storage);
   DWORD administrators_size = sizeof(administrators_storage);
-  DWORD status = ERROR_INVALID_DATA;
-  DWORD owner_class = 0;
-  DWORD writable_classes = 0;
-  DWORD index;
-  const DWORD write_mask = FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_WRITE_DATA |
-                           FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES |
-                           FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER |
-                           GENERIC_WRITE | GENERIC_ALL;
-  directory = keiko_windows_atomic_open_directory(
-      path,
-      FILE_READ_ATTRIBUTES | READ_CONTROL,
-      FILE_SHARE_READ | FILE_SHARE_WRITE
-  );
-  if (directory == INVALID_HANDLE_VALUE || directory == NULL ||
-      !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) goto report;
-  (void)GetTokenInformation(token, TokenUser, NULL, 0, &user_bytes);
-  (void)GetTokenInformation(token, TokenOwner, NULL, 0, &owner_bytes);
-  if (user_bytes == 0 || owner_bytes == 0) goto report;
-  token_user = (TOKEN_USER *)calloc(1u, user_bytes);
-  token_owner = (TOKEN_OWNER *)calloc(1u, owner_bytes);
-  if (token_user == NULL || token_owner == NULL ||
-      !GetTokenInformation(token, TokenUser, token_user, user_bytes, &user_bytes) ||
-      !GetTokenInformation(token, TokenOwner, token_owner, owner_bytes, &owner_bytes) ||
-      !CreateWellKnownSid(WinLocalSystemSid, NULL, system_storage, &system_size) ||
-      !CreateWellKnownSid(
-          WinBuiltinAdministratorsSid,
-          NULL,
-          administrators_storage,
-          &administrators_size
-      )) goto report;
-  status = GetSecurityInfo(
-      directory,
-      SE_FILE_OBJECT,
-      OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-      &owner,
+  DWORD users_size = sizeof(users_storage);
+  assert(CreateWellKnownSid(WinCreatorOwnerSid, NULL, user_storage, &user_size));
+  assert(CreateWellKnownSid(WinLocalSystemSid, NULL, system_storage, &system_size));
+  assert(CreateWellKnownSid(
+      WinBuiltinAdministratorsSid,
       NULL,
-      &dacl,
-      NULL,
-      &descriptor
-  );
-  if (status != ERROR_SUCCESS || owner == NULL || dacl == NULL) goto report;
-  if (EqualSid(owner, token_user->User.Sid)) owner_class |= 1u;
-  if (EqualSid(owner, token_owner->Owner)) owner_class |= 2u;
-  if (EqualSid(owner, system_storage)) owner_class |= 4u;
-  if (EqualSid(owner, administrators_storage)) owner_class |= 8u;
-  if (owner_class == 0u) owner_class = 16u;
-  for (index = 0; index < dacl->AceCount; ++index) {
-    ACE_HEADER *header = NULL;
-    ACCESS_ALLOWED_ACE *allowed;
-    PSID sid;
-    if (!GetAce(dacl, index, (LPVOID *)&header) || header == NULL ||
-        (header->AceFlags & INHERIT_ONLY_ACE) != 0) continue;
-    if (header->AceType == ACCESS_ALLOWED_OBJECT_ACE_TYPE ||
-        header->AceType == ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE) {
-      ACCESS_ALLOWED_OBJECT_ACE *object = (ACCESS_ALLOWED_OBJECT_ACE *)header;
-      if ((object->Mask & write_mask) != 0u) writable_classes |= 32u;
-      continue;
-    }
-    if (header->AceType == ACCESS_ALLOWED_CALLBACK_ACE_TYPE) {
-      ACCESS_ALLOWED_ACE *callback = (ACCESS_ALLOWED_ACE *)header;
-      if ((callback->Mask & write_mask) != 0u) writable_classes |= 32u;
-      continue;
-    }
-    if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) continue;
-    allowed = (ACCESS_ALLOWED_ACE *)header;
-    if ((allowed->Mask & write_mask) == 0u) continue;
-    sid = (PSID)&allowed->SidStart;
-    if (!IsValidSid(sid)) {
-      writable_classes |= 16u;
-    } else if (EqualSid(sid, token_user->User.Sid)) {
-      writable_classes |= 1u;
-    } else if (EqualSid(sid, system_storage)) {
-      writable_classes |= 4u;
-    } else if (EqualSid(sid, administrators_storage)) {
-      writable_classes |= 8u;
-    } else {
-      writable_classes |= 16u;
-    }
-  }
-report:
-  fprintf(
-      stderr,
-      "windows-directory-security: status=%lu owner-class=%lu writable-classes=%lu\n",
-      (unsigned long)status,
-      (unsigned long)owner_class,
-      (unsigned long)writable_classes
-  );
-  if (descriptor != NULL) LocalFree(descriptor);
-  free(token_owner);
-  free(token_user);
-  if (token != NULL) CloseHandle(token);
-  if (directory != INVALID_HANDLE_VALUE && directory != NULL) CloseHandle(directory);
+      administrators_storage,
+      &administrators_size
+  ));
+  assert(CreateWellKnownSid(WinBuiltinUsersSid, NULL, users_storage, &users_size));
+  assert(keiko_coordinator_windows_owner_private(
+      user_storage,
+      user_storage,
+      user_storage,
+      system_storage,
+      administrators_storage
+  ));
+  assert(keiko_coordinator_windows_owner_private(
+      administrators_storage,
+      user_storage,
+      administrators_storage,
+      system_storage,
+      administrators_storage
+  ));
+  assert(keiko_coordinator_windows_owner_private(
+      system_storage,
+      user_storage,
+      system_storage,
+      system_storage,
+      administrators_storage
+  ));
+  assert(!keiko_coordinator_windows_owner_private(
+      users_storage,
+      user_storage,
+      users_storage,
+      system_storage,
+      administrators_storage
+  ));
+  assert(!keiko_coordinator_windows_owner_private(
+      administrators_storage,
+      user_storage,
+      user_storage,
+      system_storage,
+      administrators_storage
+  ));
 }
 
 static int test_create_junction(const wchar_t *link, const wchar_t *target) {
@@ -742,10 +689,7 @@ static void test_capsule_and_receipt_junctions_are_refused(void) {
   assert(CreateDirectoryW(paths->outside_receipts, NULL));
   assert(test_create_junction(paths->receipts_link, paths->outside_receipts));
   context.capsule = paths->capsule;
-  if (!keiko_coordinator_windows_pin_capsule(&context)) {
-    test_print_directory_security_class(paths->capsule);
-    assert(0 && "private capsule fixture was rejected");
-  }
+  assert(keiko_coordinator_windows_pin_capsule(&context));
   assert(!keiko_coordinator_windows_pin_receipts(&context, 0));
   context.plan.field[KEIKO_KHP_ACTIVATION_ID] =
       _strdup("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
@@ -1103,6 +1047,7 @@ static void test_pipe_writes_are_deadline_bounded(void) {
 }
 
 int wmain(void) {
+  test_directory_owner_policy();
   test_copy_walk_budget_is_bounded();
   test_recovery_runtime_and_lock_binding();
   test_shared_recovery_control_parser();

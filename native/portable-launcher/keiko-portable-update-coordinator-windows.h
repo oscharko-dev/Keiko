@@ -150,10 +150,28 @@ static uint64_t keiko_coordinator_windows_wall_ms(void) {
   return (ticks.QuadPart - UINT64_C(116444736000000000)) / UINT64_C(10000);
 }
 
+static int keiko_coordinator_windows_owner_private(
+    PSID owner,
+    PSID token_user,
+    PSID token_owner,
+    PSID system_sid,
+    PSID administrators_sid
+) {
+  if (owner == NULL || token_user == NULL || token_owner == NULL || system_sid == NULL ||
+      administrators_sid == NULL || !IsValidSid(owner) || !IsValidSid(token_user) ||
+      !IsValidSid(token_owner) || !IsValidSid(system_sid) ||
+      !IsValidSid(administrators_sid)) return 0;
+  if (EqualSid(owner, token_user)) return 1;
+  return EqualSid(owner, token_owner) &&
+         (EqualSid(owner, system_sid) || EqualSid(owner, administrators_sid));
+}
+
 static int keiko_coordinator_windows_directory_private(HANDLE directory) {
   HANDLE token = NULL;
   TOKEN_USER *token_user = NULL;
+  TOKEN_OWNER *token_owner = NULL;
   DWORD token_bytes = 0;
+  DWORD token_owner_bytes = 0;
   PSID owner = NULL;
   PACL dacl = NULL;
   PSECURITY_DESCRIPTOR descriptor = NULL;
@@ -171,10 +189,19 @@ static int keiko_coordinator_windows_directory_private(HANDLE directory) {
   if (directory == NULL || directory == INVALID_HANDLE_VALUE ||
       !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) goto cleanup;
   (void)GetTokenInformation(token, TokenUser, NULL, 0, &token_bytes);
-  if (token_bytes == 0) goto cleanup;
+  (void)GetTokenInformation(token, TokenOwner, NULL, 0, &token_owner_bytes);
+  if (token_bytes == 0 || token_owner_bytes == 0) goto cleanup;
   token_user = (TOKEN_USER *)calloc(1u, token_bytes);
-  if (token_user == NULL ||
+  token_owner = (TOKEN_OWNER *)calloc(1u, token_owner_bytes);
+  if (token_user == NULL || token_owner == NULL ||
       !GetTokenInformation(token, TokenUser, token_user, token_bytes, &token_bytes) ||
+      !GetTokenInformation(
+          token,
+          TokenOwner,
+          token_owner,
+          token_owner_bytes,
+          &token_owner_bytes
+      ) ||
       !CreateWellKnownSid(WinLocalSystemSid, NULL, system_storage, &system_size) ||
       !CreateWellKnownSid(
           WinBuiltinAdministratorsSid,
@@ -193,7 +220,13 @@ static int keiko_coordinator_windows_directory_private(HANDLE directory) {
       &descriptor
   );
   if (status != ERROR_SUCCESS || owner == NULL || dacl == NULL ||
-      !EqualSid(owner, token_user->User.Sid)) goto cleanup;
+      !keiko_coordinator_windows_owner_private(
+          owner,
+          token_user->User.Sid,
+          token_owner->Owner,
+          system_storage,
+          administrators_storage
+      )) goto cleanup;
   for (index = 0; index < dacl->AceCount; ++index) {
     ACE_HEADER *header = NULL;
     ACCESS_ALLOWED_ACE *allowed;
@@ -222,6 +255,7 @@ static int keiko_coordinator_windows_directory_private(HANDLE directory) {
   result = 1;
 cleanup:
   if (descriptor != NULL) LocalFree(descriptor);
+  free(token_owner);
   free(token_user);
   if (token != NULL) CloseHandle(token);
   return result;
