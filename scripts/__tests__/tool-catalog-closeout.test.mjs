@@ -62,11 +62,11 @@ function fixtureRequiredCiBinding(context) {
     repository: context.requiredCiRepository,
     repositoryId: 41,
     pullRequestNumber: context.requiredCiPullRequestNumber,
-    headRepository: context.requiredCiRepository,
-    headRef: "feature/epic-3384",
+    headRepository: context.requiredCiHeadRepository,
+    headRef: context.requiredCiHeadRef,
     headSha: context.currentHead,
     baseRef: "dev",
-    baseSha: "b".repeat(40),
+    baseSha: context.requiredCiBaseSha,
     requirementsDigest: sha256("effective required checks"),
   };
 }
@@ -88,6 +88,9 @@ async function fixture() {
     h1Binding: binding,
     requiredCiRepository: "oscharko-dev/Keiko",
     requiredCiPullRequestNumber: 3394,
+    requiredCiHeadRepository: "oscharko-dev/Keiko",
+    requiredCiHeadRef: "feature/epic-3384",
+    requiredCiBaseSha: "b".repeat(40),
     platform: "darwin-arm64",
     runtime: { node: "26.8.1", product: "0.3.17" },
   };
@@ -279,12 +282,19 @@ describe("exact-head catalog closeout artifact", () => {
     Object.assign(f.reports.get("required-ci").binding, mutation);
     expect(() => check(f)).toThrow();
   });
-  it.each([{ repository: "other-org/other-repo" }, { pullRequestNumber: 4200 }])(
-    "rejects a required-CI binding for a different repository or pull request %#",
+  it.each([
+    { repository: "other-org/other-repo" },
+    { pullRequestNumber: 4200 },
+    { headRepository: "other-org/other-repo" },
+    { headRef: "feature/other-branch" },
+    { baseSha: "c".repeat(40) },
+  ])(
+    "rejects a required-CI binding for a different repository, pull request, head repository, head ref, or base sha %#",
     async (mutation) => {
-      // A well-formed binding.repository/pullRequestNumber is not enough: closeout must reject
-      // evidence that names a different (but still well-formed) repository or PR than the one
-      // actually being closed out, even though headSha and baseRef still match this checkout.
+      // A well-formed binding.repository/pullRequestNumber/headRepository/headRef/baseSha is not
+      // enough: closeout must reject evidence that names a different (but still well-formed)
+      // repository, PR, head repository, head ref, or base sha than the one actually being closed
+      // out, even though headSha and baseRef still match this checkout.
       const f = await fixture();
       Object.assign(f.reports.get("required-ci").binding, mutation);
       expect(() => check(f)).toThrow("required-ci has invalid exact identity binding");
@@ -304,6 +314,13 @@ describe("exact-head catalog closeout artifact", () => {
     f.context.h1EvidenceRef = "narrated-h1-ready";
     expect(() => buildToolCatalogCloseout(f.context, f.receipts, f.reports)).toThrow(
       "invalid H1 evidence reference",
+    );
+  });
+  it("rejects an invalid expected required-CI base sha in the closeout context", async () => {
+    const f = await fixture();
+    f.context.requiredCiBaseSha = "not-a-commit";
+    expect(() => buildToolCatalogCloseout(f.context, f.receipts, f.reports)).toThrow(
+      "invalid expected required-CI base sha",
     );
   });
   it("joins the real producer identity with byte-hashed receipt artifacts", async () => {

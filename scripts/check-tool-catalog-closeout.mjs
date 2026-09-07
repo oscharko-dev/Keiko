@@ -103,6 +103,12 @@ function validateContext(context) {
       context.requiredCiPullRequestNumber > 0,
     "invalid expected required-CI pull request number",
   );
+  requireEvidence(
+    GITHUB_REPOSITORY.test(context.requiredCiHeadRepository),
+    "invalid expected required-CI head repository",
+  );
+  requireEvidence(GIT_REF.test(context.requiredCiHeadRef), "invalid expected required-CI head ref");
+  requireEvidence(COMMIT.test(context.requiredCiBaseSha), "invalid expected required-CI base sha");
   validateRuntime(context.runtime);
 }
 function validateRuntime(runtime) {
@@ -192,10 +198,11 @@ function validateManagedRunBinding(binding) {
 function sameRepository(left, right) {
   return left.toLowerCase() === right.toLowerCase();
 }
-// A byte-hashed required-ci.artifact can otherwise name any well-formed repository/PR that
-// happens to share this checkout's exact head SHA. Tying repository and pullRequestNumber to
-// the closeout's own expected identity (never re-derived from the artifact itself) closes that
-// gap; headSha is already tied to context.currentHead and baseRef to the literal "dev" below.
+// A byte-hashed required-ci.artifact can otherwise name any well-formed repository/PR/head/base
+// that happens to share this checkout's exact head SHA. Tying repository, pullRequestNumber,
+// headRepository, headRef and baseSha to the closeout's own expected identity (never re-derived
+// from the artifact itself) closes that gap; headSha is already tied to context.currentHead and
+// baseRef to the literal "dev" below.
 function validateRequiredCiBinding(binding, context) {
   exactFields(binding, [
     "kind",
@@ -219,10 +226,13 @@ function validateRequiredCiBinding(binding, context) {
     binding.pullRequestNumber > 0,
     binding.pullRequestNumber === context.requiredCiPullRequestNumber,
     GITHUB_REPOSITORY.test(binding.headRepository),
+    sameRepository(binding.headRepository, context.requiredCiHeadRepository),
     GIT_REF.test(binding.headRef),
+    binding.headRef === context.requiredCiHeadRef,
     binding.headSha === context.currentHead,
     binding.baseRef === "dev",
     COMMIT.test(binding.baseSha),
+    binding.baseSha === context.requiredCiBaseSha,
     DIGEST.test(binding.requirementsDigest),
   ];
   requireEvidence(valid.every(Boolean), "required-ci has invalid exact identity binding");
@@ -380,6 +390,17 @@ function expectedRequiredCiRepository(root) {
   requireEvidence(repository !== undefined, "could not determine the expected GitHub repository");
   return repository;
 }
+// The caller's own known identity for the pull request being closed out — never re-derived from
+// the required-ci artifact under validation. See validateRequiredCiBinding for the cross-check.
+function requiredCiExpectations(root, { pullRequestNumber, headRepository, headRef, baseSha }) {
+  return {
+    requiredCiRepository: expectedRequiredCiRepository(root),
+    requiredCiPullRequestNumber: positiveInteger(pullRequestNumber),
+    requiredCiHeadRepository: headRepository,
+    requiredCiHeadRef: headRef,
+    requiredCiBaseSha: baseSha,
+  };
+}
 
 export async function checkToolCatalogCloseoutFiles({
   root = process.cwd(),
@@ -387,6 +408,9 @@ export async function checkToolCatalogCloseoutFiles({
   receiptsDir,
   manifestPath,
   pullRequestNumber,
+  headRepository,
+  headRef,
+  baseSha,
   h1Path = join(root, H1_PRODUCER_CHECKPOINT_PATH),
   write = false,
 }) {
@@ -406,8 +430,7 @@ export async function checkToolCatalogCloseoutFiles({
         h1[key],
       ]),
     ),
-    requiredCiRepository: expectedRequiredCiRepository(root),
-    requiredCiPullRequestNumber: positiveInteger(pullRequestNumber),
+    ...requiredCiExpectations(root, { pullRequestNumber, headRepository, headRef, baseSha }),
     platform: `${process.platform}-${process.arch}`,
     runtime: { node: process.versions.node, product: readJson(join(root, "package.json")).version },
   };
@@ -470,6 +493,9 @@ if (isMainModule(import.meta.url)) {
     manifestPath: requiredPath(argv, "--manifest"),
     h1Path: requiredPath(argv, "--h1"),
     pullRequestNumber: requiredArgument(argv, "--pull-request"),
+    headRepository: requiredArgument(argv, "--head-repository"),
+    headRef: requiredArgument(argv, "--head-ref"),
+    baseSha: requiredArgument(argv, "--base-sha"),
     write: argv.includes("--write"),
   });
   console.log("Tool catalog closeout: PASS");

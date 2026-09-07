@@ -214,8 +214,15 @@ resistance. H1 and subsequent owners must deliver production-port tests for thei
 
 The final `CatalogCloseout` artifact is produced with `npm run check:tool-catalog-closeout --
 --artifact <qualified-package> --receipts <receipt-directory> --h1 <reviewed-h1-record>
---manifest <external-manifest> --write`. The manifest must be outside the clean source checkout;
-symlink redirection back into the checkout is rejected. Before integration, supply
+--manifest <external-manifest> --pull-request <pr-number> --head-repository <owner/repo>
+--head-ref <branch> --base-sha <base-commit> --write`. `--pull-request`, `--head-repository`, and
+`--head-ref` name the exact PR, head repository, and head branch this closeout is for; `--base-sha`
+names the `dev` tip the required-CI evidence was read against. The closeout validator rejects a
+required-CI binding whose repository, pull request number, head repository, head ref, or base sha
+differ from these expected values, even when the binding is otherwise well-formed and shares this
+checkout's exact head SHA — never re-derived from the artifact under validation. The manifest must
+be outside the clean source checkout; symlink redirection back into the checkout is rejected.
+Before integration, supply
 `h1-producer-checkpoint.v1.json`: the existing checkpoint validator verifies the real producer and
 consumer history, current owned contents, recomputed producer identity, and pinned verification
 and independent review receipts. The manifest explicitly retains `h1-producer-checkpoint.v1` as its
