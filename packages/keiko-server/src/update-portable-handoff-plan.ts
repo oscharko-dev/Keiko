@@ -12,6 +12,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  type Stats,
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -36,8 +37,7 @@ export const PORTABLE_HANDOFF_ACTIONS = Object.freeze([
   "cleanup",
 ] as const);
 
-export interface PortableHandoffPlan {
-  readonly schemaVersion: 2;
+interface PortableHandoffPlanFields {
   readonly activationId: string;
   readonly sessionId: string;
   readonly stageId: string;
@@ -81,7 +81,27 @@ export interface PortableHandoffPlan {
   readonly actions: typeof PORTABLE_HANDOFF_ACTIONS;
 }
 
-export type PortableHandoffPlanInput = Omit<PortableHandoffPlan, "schemaVersion" | "actions">;
+type CommonPortableHandoffPlanInput = Omit<PortableHandoffPlanFields, "actions">;
+
+export interface MacosPortableHandoffPlan extends PortableHandoffPlanFields {
+  readonly schemaVersion: 2;
+  readonly target: "macos-arm64" | "macos-x64";
+}
+
+export interface WindowsPortableHandoffPlan extends PortableHandoffPlanFields {
+  readonly schemaVersion: 3;
+  readonly target: "windows-x64";
+  readonly cutoverKind: "windows-generation-v1";
+  readonly currentGenerationTreeSha256: string;
+  readonly candidateGenerationTreeSha256: string;
+  readonly currentSetupManifestSha256: string;
+  readonly candidateSetupManifestSha256: string;
+}
+
+export type PortableHandoffPlan = MacosPortableHandoffPlan | WindowsPortableHandoffPlan;
+export type PortableHandoffPlanInput =
+  | Omit<MacosPortableHandoffPlan, "schemaVersion" | "actions">
+  | Omit<WindowsPortableHandoffPlan, "schemaVersion" | "actions">;
 
 export class PortableHandoffPlanError extends Error {
   public constructor(message: string) {
@@ -99,6 +119,23 @@ function assertRegularSingleLink(path: string, label: string): void {
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) fail(`${label} is unsafe`);
 }
 
+function sameOpenedFile(before: Stats, after: Stats): boolean {
+  return (
+    after.dev === before.dev &&
+    after.ino === before.ino &&
+    after.size === before.size &&
+    after.mtimeMs === before.mtimeMs
+  );
+}
+
+function safeOpenedFile(stat: Stats, maximumBytes: number): boolean {
+  return stat.isFile() && stat.nlink === 1 && stat.size <= maximumBytes;
+}
+
+function currentPathMatchesOpened(current: Stats, opened: Stats): boolean {
+  return current.dev === opened.dev && current.ino === opened.ino && !current.isSymbolicLink();
+}
+
 function readBoundedRegularFile(path: string, maximumBytes: number, label: string): Buffer {
   let descriptor: number;
   try {
@@ -108,7 +145,7 @@ function readBoundedRegularFile(path: string, maximumBytes: number, label: strin
   }
   try {
     const before = fstatSync(descriptor);
-    if (!before.isFile() || before.nlink !== 1 || before.size > maximumBytes) {
+    if (!safeOpenedFile(before, maximumBytes)) {
       fail(`${label} is unsafe`);
     }
     const content = Buffer.alloc(before.size);
@@ -120,15 +157,7 @@ function readBoundedRegularFile(path: string, maximumBytes: number, label: strin
     }
     const after = fstatSync(descriptor);
     const current = lstatSync(path);
-    if (
-      after.dev !== before.dev ||
-      after.ino !== before.ino ||
-      after.size !== before.size ||
-      after.mtimeMs !== before.mtimeMs ||
-      current.dev !== before.dev ||
-      current.ino !== before.ino ||
-      current.isSymbolicLink()
-    ) {
+    if (!sameOpenedFile(before, after) || !currentPathMatchesOpened(current, before)) {
       fail(`${label} changed while reading`);
     }
     return content;
@@ -182,6 +211,15 @@ function isTarget(value: unknown): value is UpdatePortableTarget {
   return value === "windows-x64" || value === "macos-arm64" || value === "macos-x64";
 }
 
+function hasValidLaunchIdentity(plan: PortableHandoffPlan): boolean {
+  return (
+    BOUNDED_ID.test(plan.newLaunchId) &&
+    BOUNDED_ID.test(plan.restoreLaunchId) &&
+    plan.restoreLaunchId !== plan.newLaunchId &&
+    plan.restoreLaunchId !== plan.oldProcess.launchId
+  );
+}
+
 function assertPlanIdentity(plan: PortableHandoffPlan): void {
   if (!ACTIVATION_ID.test(plan.activationId)) fail("portable handoff activation id is invalid");
   if (!BOUNDED_ID.test(plan.sessionId) || !BOUNDED_ID.test(plan.stageId)) {
@@ -189,13 +227,7 @@ function assertPlanIdentity(plan: PortableHandoffPlan): void {
   }
   if (!isTarget(plan.target) || !VERSION.test(plan.targetVersion))
     fail("portable handoff target is invalid");
-  if (
-    !BOUNDED_ID.test(plan.newLaunchId) ||
-    !BOUNDED_ID.test(plan.restoreLaunchId) ||
-    plan.restoreLaunchId === plan.newLaunchId ||
-    plan.restoreLaunchId === plan.oldProcess.launchId
-  )
-    fail("portable handoff launch identity is invalid");
+  if (!hasValidLaunchIdentity(plan)) fail("portable handoff launch identity is invalid");
   if (!Number.isSafeInteger(plan.aggregateRevision) || plan.aggregateRevision < 1) {
     fail("portable handoff revision is invalid");
   }
@@ -219,11 +251,31 @@ function assertOldProcess(plan: PortableHandoffPlan): void {
     fail("portable handoff old process identity is invalid");
 }
 
+function appendWindowsDigests(plan: WindowsPortableHandoffPlan, digests: string[]): void {
+  if (plan.previousRegistrationState !== "present") {
+    fail("portable Windows handoff requires a previous registration");
+  }
+  digests.push(
+    plan.currentGenerationTreeSha256,
+    plan.candidateGenerationTreeSha256,
+    plan.currentSetupManifestSha256,
+    plan.candidateSetupManifestSha256,
+  );
+  // Parsed protocol bytes are untrusted despite the literal caller-facing type.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+  if (plan.cutoverKind !== "windows-generation-v1") {
+    fail("portable handoff cutover kind is invalid");
+  }
+}
+
 function assertDigestsAndDeadlines(plan: PortableHandoffPlan): void {
-  if (plan.previousRegistrationState !== "present" && plan.previousRegistrationState !== "absent") {
+  if (!new Set<string>(["present", "absent"]).has(plan.previousRegistrationState)) {
     fail("portable handoff registration state is invalid");
   }
   const digests = Object.values(plan.digests);
+  if (plan.target === "windows-x64") {
+    appendWindowsDigests(plan, digests);
+  }
   if (!digests.every((value) => HEX_SHA256.test(value))) fail("portable handoff digest is invalid");
   const deadlines = Object.values(plan.deadlines);
   if (!deadlines.every((value) => Number.isSafeInteger(value) && value > 0)) {
@@ -262,13 +314,17 @@ function assertPlan(plan: PortableHandoffPlan): void {
 }
 
 export function createPortableHandoffPlan(input: PortableHandoffPlanInput): PortableHandoffPlan {
-  const plan = { schemaVersion: 2 as const, ...input, actions: PORTABLE_HANDOFF_ACTIONS };
+  const plan = {
+    schemaVersion: input.target === "windows-x64" ? (3 as const) : (2 as const),
+    ...input,
+    actions: PORTABLE_HANDOFF_ACTIONS,
+  } as PortableHandoffPlan;
   assertPlan(plan);
   return plan;
 }
 
 function planFields(plan: PortableHandoffPlan): readonly string[] {
-  return [
+  const common = [
     plan.activationId,
     plan.sessionId,
     plan.stageId,
@@ -302,14 +358,24 @@ function planFields(plan: PortableHandoffPlan): readonly string[] {
     String(plan.deadlines.verifyAt),
     String(plan.deadlines.cleanupAt),
   ];
+  return plan.target === "windows-x64"
+    ? [
+        ...common,
+        plan.cutoverKind,
+        plan.currentGenerationTreeSha256,
+        plan.candidateGenerationTreeSha256,
+        plan.currentSetupManifestSha256,
+        plan.candidateSetupManifestSha256,
+      ]
+    : common;
 }
 
-function canonicalPlan(plan: PortableHandoffPlan): Buffer {
+export function encodePortableHandoffPlan(plan: PortableHandoffPlan): Buffer {
   assertPlan(plan);
   const fields = planFields(plan).map((field) => Buffer.from(field, "utf8"));
   const header = Buffer.alloc(8);
   header.write("KHP1", 0, "ascii");
-  header.writeUInt16LE(2, 4);
+  header.writeUInt16LE(plan.schemaVersion, 4);
   header.writeUInt16LE(fields.length, 6);
   return Buffer.concat([
     header,
@@ -322,7 +388,7 @@ function canonicalPlan(plan: PortableHandoffPlan): Buffer {
 }
 
 export function portableHandoffPlanSha256(plan: PortableHandoffPlan): string {
-  return createHash("sha256").update(canonicalPlan(plan)).digest("hex");
+  return createHash("sha256").update(encodePortableHandoffPlan(plan)).digest("hex");
 }
 
 export function portableHandoffRoot(stateDir: string, activationId: string): string {
@@ -364,7 +430,7 @@ export function writePortableHandoffPlan(input: {
   const path = join(root, PLAN_FILE);
   const digestPath = join(root, PLAN_DIGEST_FILE);
   if (existsSync(path) || existsSync(digestPath)) fail("portable handoff plan already exists");
-  const content = canonicalPlan(input.plan);
+  const content = encodePortableHandoffPlan(input.plan);
   if (content.byteLength > MAX_PLAN_BYTES) fail("portable handoff plan is too large");
   const sha256 = createHash("sha256").update(content).digest("hex");
   const temporary = join(root, `.plan-${String(process.pid)}.tmp`);
@@ -377,23 +443,29 @@ export function writePortableHandoffPlan(input: {
   return { path, sha256 };
 }
 
-function assertPlanHeader(content: Buffer): void {
+function planHeader(content: Buffer): { readonly version: 2 | 3; readonly fieldCount: 32 | 37 } {
+  const version = content.length >= 8 ? content.readUInt16LE(4) : 0;
+  const fieldCount = content.length >= 8 ? content.readUInt16LE(6) : 0;
   if (
     content.length < 8 ||
     content.subarray(0, 4).toString("ascii") !== "KHP1" ||
-    content.readUInt16LE(4) !== 2 ||
-    content.readUInt16LE(6) !== 32 ||
     content.length > MAX_PLAN_BYTES
   ) {
     fail("portable handoff plan is malformed");
   }
+  if (version === 2 && fieldCount === 32) return { version, fieldCount };
+  if (version === 3 && fieldCount === 37) return { version, fieldCount };
+  fail("portable handoff plan is malformed");
 }
 
-function readPlanFields(content: Buffer): readonly string[] {
-  assertPlanHeader(content);
+function readPlanFields(content: Buffer): {
+  readonly version: 2 | 3;
+  readonly fields: readonly string[];
+} {
+  const header = planHeader(content);
   const fields: string[] = [];
   let offset = 8;
-  for (let index = 0; index < 32; index += 1) {
+  for (let index = 0; index < header.fieldCount; index += 1) {
     if (offset + 4 > content.length) fail("portable handoff plan is malformed");
     const length = content.readUInt32LE(offset);
     offset += 4;
@@ -410,7 +482,7 @@ function readPlanFields(content: Buffer): readonly string[] {
     offset += length;
   }
   if (offset !== content.length) fail("portable handoff plan is malformed");
-  return fields;
+  return { version: header.version, fields };
 }
 
 function numericField(value: string | undefined): number {
@@ -427,9 +499,8 @@ function requiredField(fields: readonly string[], index: number): string {
   return value;
 }
 
-function parsePlan(content: Buffer): PortableHandoffPlan {
-  const field = readPlanFields(content);
-  return createPortableHandoffPlan({
+function parseCommonPlanFields(field: readonly string[]): CommonPortableHandoffPlanInput {
+  return {
     activationId: requiredField(field, 0),
     sessionId: requiredField(field, 1),
     stageId: requiredField(field, 2),
@@ -470,6 +541,28 @@ function parsePlan(content: Buffer): PortableHandoffPlan {
       verifyAt: numericField(field[30]),
       cleanupAt: numericField(field[31]),
     },
+  } as const;
+}
+
+function parsePlan(content: Buffer): PortableHandoffPlan {
+  const parsed = readPlanFields(content);
+  const field = parsed.fields;
+  const common = parseCommonPlanFields(field);
+  const target = common.target;
+  if (parsed.version === 2) {
+    if (target !== "macos-arm64" && target !== "macos-x64")
+      fail("portable handoff plan is malformed");
+    return createPortableHandoffPlan({ ...common, target });
+  }
+  if (target !== "windows-x64") fail("portable handoff plan is malformed");
+  return createPortableHandoffPlan({
+    ...common,
+    target,
+    cutoverKind: requiredField(field, 32) as "windows-generation-v1",
+    currentGenerationTreeSha256: requiredField(field, 33),
+    candidateGenerationTreeSha256: requiredField(field, 34),
+    currentSetupManifestSha256: requiredField(field, 35),
+    candidateSetupManifestSha256: requiredField(field, 36),
   });
 }
 
@@ -490,7 +583,8 @@ export function readPortableHandoffPlan(
   if (!HEX_SHA256.test(expected) || expected !== actual)
     fail("portable handoff plan digest mismatch");
   const plan = parsePlan(content);
-  if (!canonicalPlan(plan).equals(content)) fail("portable handoff plan is not canonical");
+  if (!encodePortableHandoffPlan(plan).equals(content))
+    fail("portable handoff plan is not canonical");
   if (plan.activationId !== activationId) fail("portable handoff activation id mismatch");
   return plan;
 }

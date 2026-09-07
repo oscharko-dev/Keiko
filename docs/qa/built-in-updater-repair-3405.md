@@ -177,8 +177,20 @@ active setup/launcher checks also apply to Mac. The checkpoint is held for contr
 repair and independent re-review; the narrower green runs do not settle this regression.
 Static review confirms that Mac behavior regression and a second medium availability finding:
 the new Windows active-registration check reads setup/launcher bytes without bounds before its
-caller reaches bounded KHT1 attestation. Both require owner repairs and focused failure regressions;
-no B2 acceptance is claimed.
+caller reaches bounded KHT1 attestation. The owner repairs both findings: Mac keeps its reviewed
+schema-1 authority, while Windows setup reads are capped at 64 KiB and launcher hashing streams
+64 KiB chunks with a 64 MiB ceiling under one 15-second deadline. No-follow/single-link reads and
+identity, size, mtime and ctime checks reject oversized, changed and rebound files. Independent
+security re-review approves the production repair with zero findings. Initial adversarial tests
+fail three cases because their copied fixture is read-only; only temporary fixture permissions
+are corrected. A later official-Node replay passes 38 tests and fails two because copying that
+120,965,360-byte executable exceeds the deliberate native ceiling. The unit fixture now uses
+deterministic bounded launcher bytes; its existing mocked process/verifier boundaries and real
+capsule operations are unchanged. The lead verifies final source/test hashes and independently
+passes all 40 activation, normal-startup, production-handoff and recovery tests with official
+Node 24.18.0 (14.28 seconds). The five Mac regression cases pass unchanged. Scoped lint/format,
+server workspace typecheck and B2 test typing fixes are green. This reviewed development checkpoint
+does not settle B3 consumers, root-wide test typings or native replacement qualification.
 
 Native filesystem mechanics are snapshotted separately in diagnostic commit
 `8e1ffb09c492eed84f3879dcd957a34f395014c9`, based on reviewed child checkpoint `52ac76881`.

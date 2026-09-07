@@ -24,6 +24,7 @@ import {
   portableHandoffRoot,
   writePortableHandoffPlan,
   type PortableHandoffPlan,
+  type WindowsPortableHandoffPlan,
 } from "./update-portable-handoff-plan.js";
 import {
   assertPortableHandoffOperation,
@@ -173,6 +174,7 @@ function requiredPreviousRegistration(input: {
       .digest("hex"),
     expectedTarget: input.activation.stage.target,
     expectedVersion: input.options.currentVersion,
+    expectedWindowsGeneration: input.layouts.current.windowsGeneration,
   });
   if (previous.state === "present") return previous;
   cleanupPortableRegistrationSnapshot({
@@ -226,6 +228,7 @@ export async function preparePortableHandoffPlan(
     activationId,
     currentVersion: options.currentVersion,
   });
+  assertWindowsDestinationsVacant(layouts, activationId);
   const identities = processIdentities(options);
   const previousRegistration = requiredPreviousRegistration({
     options,
@@ -255,6 +258,25 @@ export async function preparePortableHandoffPlan(
   assertPortableHandoffOperation(operation);
   const published = writePortableHandoffPlan({ stateDir: options.stateDir, plan });
   return { activationId, plan, planSha256: published.sha256 };
+}
+
+function assertWindowsDestinationsVacant(layouts: HandoffLayouts, activationId: string): void {
+  if (layouts.current.windowsGeneration === undefined) return;
+  const candidate = layouts.candidate.windowsGeneration;
+  if (
+    candidate === undefined ||
+    candidate.treeSha256 === layouts.current.windowsGeneration.treeSha256
+  ) {
+    fail("portable Windows handoff generation identity is invalid");
+  }
+  const generations = join(layouts.paths.managedRoot, ".portable", "generations");
+  if (
+    existsSync(layouts.paths.backupRoot) ||
+    existsSync(join(generations, candidate.treeSha256)) ||
+    existsSync(join(generations, `.incoming-${activationId}`))
+  ) {
+    fail("portable Windows handoff destination is occupied");
+  }
 }
 
 interface BuildPortableHandoffPlanInput {
@@ -298,11 +320,56 @@ async function portableHandoffDigests(
   };
 }
 
+type WindowsPlanBinding = Pick<
+  WindowsPortableHandoffPlan,
+  | "cutoverKind"
+  | "currentGenerationTreeSha256"
+  | "candidateGenerationTreeSha256"
+  | "currentSetupManifestSha256"
+  | "candidateSetupManifestSha256"
+>;
+
+async function windowsPlanBinding(
+  input: BuildPortableHandoffPlanInput,
+): Promise<WindowsPlanBinding> {
+  const { layouts } = input;
+  const currentGeneration = layouts.current.windowsGeneration;
+  const candidateGeneration = layouts.candidate.windowsGeneration;
+  if (currentGeneration === undefined || candidateGeneration === undefined) {
+    fail("portable Windows handoff generation binding is unavailable");
+  }
+  const currentGenerationTreeSha256 = await hashPortableHandoffTree(
+    layouts.current.resourceRoot,
+    input.operation,
+  );
+  const candidateGenerationTreeSha256 = await hashPortableHandoffTree(
+    layouts.candidate.resourceRoot,
+    input.operation,
+  );
+  if (
+    currentGenerationTreeSha256 !== currentGeneration.treeSha256 ||
+    candidateGenerationTreeSha256 !== candidateGeneration.treeSha256
+  ) {
+    fail("portable Windows handoff generation digest mismatch");
+  }
+  return {
+    cutoverKind: "windows-generation-v1",
+    currentGenerationTreeSha256,
+    candidateGenerationTreeSha256,
+    currentSetupManifestSha256: (
+      await digestPortableHandoffFile(layouts.current.setupManifestPath, input.operation)
+    ).toString("hex"),
+    candidateSetupManifestSha256: (
+      await digestPortableHandoffFile(layouts.candidate.setupManifestPath, input.operation)
+    ).toString("hex"),
+  };
+}
+
 async function buildPortableHandoffPlan(
   input: BuildPortableHandoffPlanInput,
 ): Promise<PortableHandoffPlan> {
   const { activation, aggregateRevision, activationId, layouts } = input;
-  return createPortableHandoffPlan({
+  const common = {
     activationId,
     sessionId: activation.sessionId,
     stageId: activation.stage.stageId,
@@ -323,6 +390,14 @@ async function buildPortableHandoffPlan(
     },
     digests: await portableHandoffDigests(input),
     deadlines: deadlines(input.operation.now()),
+  } as const;
+  if (activation.stage.target !== "windows-x64") {
+    return createPortableHandoffPlan({ ...common, target: activation.stage.target });
+  }
+  return createPortableHandoffPlan({
+    ...common,
+    target: "windows-x64",
+    ...(await windowsPlanBinding(input)),
   });
 }
 

@@ -1150,6 +1150,11 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 20
         run: npm run build:packages
+      - name: Verify the Windows portable handoff protocol fixture
+        # KHP v3 uses Windows path semantics. Run the full plan suite on a genuine Windows host so
+        # its native-consumer golden bytes cannot remain covered only by a skipped cross-host case.
+        if: runner.os == 'Windows'
+        run: npx vitest run packages/keiko-server/src/update-portable-handoff-plan.test.ts
       - name: Verify Git executable Windows reparse containment
         # Direct execution is deliberate: Vitest exits zero when every selected test is skipped.
         # This smoke asserts the real host is Win32, creates a genuine directory junction, and calls
