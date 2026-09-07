@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "issue": 3386,
-  "checkedAt": "2026-09-05T01:07:51.530Z",
+  "checkedAt": "2026-09-07T03:16:25.753Z",
   "passed": true,
   "evidenceClass": "production-composed-deterministic-browser",
   "modelQualification": false,
@@ -13,6 +13,6 @@
     "staged-drift-refused",
     "explicit-ui-denial-revokes-execution"
   ],
-  "correlatedCommitLogCount": 27,
+  "correlatedCommitLogCount": 24,
   "rawContentRecorded": false
 }

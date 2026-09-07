@@ -427,6 +427,8 @@ type FixtureSafeActivity = NonNullable<
   >[0]["safeActivity"]
 >;
 
+type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
+
 interface StartBridgeControl {
   readonly startTimeoutMs?: number;
   readonly historyResponse?: Promise<Response>;
@@ -446,6 +448,7 @@ interface StartBridgeControl {
     readonly promptBodies: string[];
     readonly abortSessions: string[];
     readonly statusResponses: unknown[];
+    readonly statusResponseForReadinessPhase?: (phase: ReadinessChallengePhase) => unknown;
     readonly questionResponses?: unknown[];
     readonly onQuestionListFetch?: () => Promise<void> | void;
     readonly permissionResponses?: unknown[];
@@ -556,7 +559,7 @@ async function startBridgeFixture(
     control?.sseFrame ??
       'data: {"payload":{"id":"evt_server","type":"server.connected","properties":{}}}\n\n',
   );
-  let readinessAbortPending = false;
+  let readinessChallengePhase: ReadinessChallengePhase = "before-prompt";
   // eslint-disable-next-line complexity -- finite mock endpoint table is intentionally explicit.
   const fetch = vi.fn((url: URL | RequestInfo, init?: RequestInit) => {
     const path = requestPath(url);
@@ -614,14 +617,14 @@ async function startBridgeFixture(
     }
     if (path.endsWith("/prompt_async")) {
       if (typeof init?.body === "string" && init.body.includes("runtime readiness handshake")) {
-        readinessAbortPending = true;
+        readinessChallengePhase = "prompt-pending";
       } else if (typeof init?.body === "string") {
         control?.runControl?.promptBodies.push(init.body);
       }
       return Promise.resolve(new Response(null, { status: 204 }));
     }
     if (path.endsWith("/abort")) {
-      if (readinessAbortPending) readinessAbortPending = false;
+      if (readinessChallengePhase === "prompt-pending") readinessChallengePhase = "aborted";
       else control?.runControl?.abortSessions.push(path.split("/")[2] ?? "");
       return Promise.resolve(
         new Response("true", { headers: { "content-type": "application/json" } }),
@@ -629,7 +632,9 @@ async function startBridgeFixture(
     }
     if (path === "/session/status") {
       const statuses = control?.runControl?.statusResponses;
-      const value = statuses?.length === 1 ? statuses[0] : statuses?.shift();
+      const value =
+        control?.runControl?.statusResponseForReadinessPhase?.(readinessChallengePhase) ??
+        (statuses?.length === 1 ? statuses[0] : statuses?.shift());
       return Promise.resolve(
         new Response(JSON.stringify(value ?? {}), {
           headers: { "content-type": "application/json" },
@@ -1288,15 +1293,20 @@ describe("private OpenCode run control", () => {
   });
 
   it("isolates the live startup challenge from user task submissions", async () => {
+    const statusPhases: ReadinessChallengePhase[] = [];
     const runControl = {
       promptBodies: [],
       abortSessions: [],
-      statusResponses: [{ ses_tool: { type: "busy" } }, {}],
+      statusResponses: [],
+      statusResponseForReadinessPhase: (phase: ReadinessChallengePhase): unknown => {
+        statusPhases.push(phase);
+        return phase === "aborted" ? {} : { ses_tool: { type: "busy" } };
+      },
     };
     const fixture = await startBridgeFixture(facade, undefined, { runControl });
     expect(runControl.promptBodies).toEqual([]);
     expect(runControl.abortSessions).toEqual([]);
-    expect(runControl.statusResponses).toEqual([{}]);
+    expect(statusPhases.at(-1)).toBe("aborted");
     expect(fixture.runtime.manager.health()).toMatchObject({
       status: "ready",
       activeRunId: FIXTURE_RUN_ID,

@@ -29,6 +29,7 @@ import { runMigrations } from "../store/schema.js";
 import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import { CodingRuntimeCiRepairController } from "./codingRuntimeCiRepairController.js";
+import { createCodingRuntimeCiRepairBudgetStore } from "./codingRuntimeCiRepairBudgetStore.js";
 import { createProductionManagedWorktreeToolFacade } from "./productionManagedWorktreeTools.js";
 import { createInMemoryGitDeliveryApprovalStore } from "../gitDelivery/approvalStore.js";
 import { createVerifiedCommitService } from "../gitDelivery/verifiedCommitService.js";
@@ -560,18 +561,20 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
     // the existing gitDelivery test-support fixture (a verified commit + a completed push/PR
     // draft delivery record for run-1) instead of re-deriving that precondition by hand.
     const snapshots = createDraftRun(db);
-    // `createDraftRun` always attaches both stores (they back the CI-repair budget and readiness
-    // machinery this test exercises); the store type only declares them optional for
-    // implementations that omit them.
-    const ciRepairBudget = snapshots.ciRepairBudget;
     const ciReadiness = snapshots.ciReadiness;
-    if (ciRepairBudget === undefined || ciReadiness === undefined) {
-      throw new Error("expected ciRepairBudget and ciReadiness stores from createDraftRun");
+    if (ciReadiness === undefined) {
+      throw new Error("expected ciReadiness store from createDraftRun");
     }
-    // The production budget store timestamps its own rows against the real wall clock
-    // (`Date.now()`); the controller's `now()` must stay on that same clock or every freshness and
-    // receipt check compares two unrelated timelines and fails closed for the wrong reason.
-    let nowMs = Date.now();
+    // Share one controlled clock between the real budget store and controller. Advancing only
+    // the controller from Date.now() lets a slower child process overtake its clock: otherwise
+    // receiptWithinBudget rejects every repair before the verifier runs on a loaded CI worker.
+    let nowMs = Date.parse("2026-09-05T00:00:00.000Z");
+    const ciRepairBudget = createCodingRuntimeCiRepairBudgetStore({
+      db,
+      snapshots,
+      now: (): number => nowMs,
+      activityLog: { write: (): void => undefined },
+    });
     const repairContext = (): {
       readonly runId: string;
       readonly remoteDigest: string;
