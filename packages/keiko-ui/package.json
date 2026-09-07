@@ -18,7 +18,7 @@
     "satisfied for a long time: Array.prototype.at(-n) appears 35 times across 22 production files",
     "(Firefox 90, Safari 15.4), crypto.randomUUID 24 times across 13 (Firefox 95, Safari 15.4),",
     "Object.hasOwn 9 times across 6 (Firefox 92), and lib/api.ts uses AbortSignal.timeout (Firefox",
-    "100, Safari 16) \u2014 every one beyond the old floor, so the declaration promised engines on which",
+    "100, Safari 16) — every one beyond the old floor, so the declaration promised engines on which",
     "the app cannot start. Counts are occurrences and files stated separately on purpose: the",
     "gate's own messages report FILES, and conflating the two produced three wrong numbers here.",
     "AbortSignal.any is feature-detected with a fallback in first-party lib/api.ts. The declared",
@@ -26,7 +26,7 @@
     "they are not presented as one Baseline release set. check:browser-baseline enforces that closure.",
     "CSS also contributes real floors: 32 :has() rules across 6 stylesheets",
     "DEFINE custom properties that later declarations consume (absent, not merely unstyled, below 121),",
-    "and globals.css uses oklch() 190x and color-mix() 590x (Firefox 113) with no @supports fallback \u2014",
+    "and globals.css uses oklch() 190x and color-mix() 590x (Firefox 113) with no @supports fallback —",
     "an engine that cannot parse a colour value drops the whole declaration, which for a theme built on",
     "them means unreadable text, not a cosmetic shift. Declarations that DO degrade gracefully",
     "(text-wrap: balance) are deliberately not gated: listing them would manufacture pressure to raise",
@@ -50,7 +50,7 @@
   ],
   "dependencies": {
     "@monaco-editor/react": "4.7.0",
-    "@noble/hashes": "2.3.0",
+    "@noble/hashes": "2.4.0",
     "@oscharko-dev/keiko-contracts": "0.3.17",
     "@oscharko-dev/keiko-editor": "0.3.17",
     "diff": "9.0.0",
@@ -62,10 +62,10 @@
   "devDependencies": {
     "@testing-library/dom": "10.4.1",
     "@testing-library/jest-dom": "7.0.1",
-    "@testing-library/react": "16.3.2",
+    "@testing-library/react": "16.3.3",
     "@testing-library/user-event": "14.6.5",
     "@types/jest-axe": "3.5.9",
-    "@types/node": "26.3.0",
+    "@types/node": "26.4.0",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "@vitejs/plugin-react": "6.0.5",
@@ -82,8 +82,8 @@
     "vitest": "4.1.11"
   },
   "engines": {
-    "node": ">=24.18.0 <25",
-    "npm": "11.16.0"
+    "node": ">=24.18.0 <25 || >=26.3.0 <27",
+    "npm": ">=11.16.0 <12"
   },
   "private": true
 }

@@ -20,7 +20,7 @@ remaining drift.
 ## 1. What Keiko is (and the one rule you cannot break)
 
 Keiko is a **governed, local-first agentic workspace** for regulated engineering and knowledge
-work. It is a TypeScript monorepo (npm workspaces, Node >=24.18.0 <25) that ships as one bundled
+work. It is a TypeScript monorepo (npm workspaces, Node >=24.18.0 <25 or >=26.3.0 <27) that ships as one bundled
 product.
 
 **The human-control invariant — non-negotiable:**

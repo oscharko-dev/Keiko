@@ -22,7 +22,7 @@ final closure comment on GitHub issue #121. It is not committed to the repositor
 
 ## Prerequisites
 
-- Node.js `>=24.18.0 <25` and npm 11.16.0 installed (the governed line; see
+- Node.js `>=24.18.0 <25 || >=26.3.0 <27` and npm `>=11.16.0 <12` installed (see
   [`runtime-toolchain.md`](runtime-toolchain.md)).
 - Keiko installed: `npm install -g @oscharko-dev/keiko` or from the local build via `npm start`.
 - One of the following browsers at the specified minimum version:

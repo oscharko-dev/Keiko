@@ -4,7 +4,7 @@ This guide is for teams validating Keiko before broader rollout.
 
 ## Prepare
 
-1. Install Node.js 24.18.0 or newer within the 24 line (the product requires `>=24.18.0 <25`).
+1. Install Node.js in `>=24.18.0 <25 || >=26.3.0 <27` with npm `>=11.16.0 <12`.
 2. Install Keiko in the project:
 
 ```bash

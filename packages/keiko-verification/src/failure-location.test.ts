@@ -405,6 +405,11 @@ describe("extractFailureLocations — regex safety (S8786 regression guards)", (
     const newMs = Date.now() - newStart;
 
     expect(newMs).toBeLessThan(2000);
-    expect(oldMs).toBeGreaterThan(newMs * 1.5);
+    // Node 26's V8 optimizes the historical pattern enough that a relative wall-clock ratio is no
+    // longer stable. Keep the original Node 24 regression demonstration while both supported
+    // runtimes enforce the production-relevant absolute plateau for the bounded pattern.
+    if (process.versions.node.startsWith("24.")) {
+      expect(oldMs).toBeGreaterThan(newMs * 1.5);
+    }
   });
 });

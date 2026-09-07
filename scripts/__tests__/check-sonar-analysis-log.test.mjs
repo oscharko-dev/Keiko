@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -12,6 +12,10 @@ import {
 } from "../check-sonar-analysis-log.mjs";
 
 const scriptPath = resolve(import.meta.dirname, "..", "check-sonar-analysis-log.mjs");
+const scanner81PrFullLog = readFileSync(
+  resolve(import.meta.dirname, "fixtures", "sonar-analysis", "scanner-8.1-pr-full.txt"),
+  "utf8",
+);
 
 function freshJavascriptAnalysis(eligible) {
   return [
@@ -160,6 +164,97 @@ describe("Sonar scanner warning gate", () => {
     ].join("\n");
 
     expect(fullAnalysisEvidenceFailures(hosted)).toEqual([]);
+  });
+
+  it("accepts Scanner 8.1 PR architecture receipts when the legacy plan is omitted", () => {
+    expect(fullAnalysisEvidenceFailures(scanner81PrFullLog)).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a large partial fresh-source inventory",
+      scanner81PrFullLog.replaceAll("4799", "4400").replaceAll("4855", "4400"),
+    ],
+    [
+      "zero-source sensor receipts",
+      scanner81PrFullLog.replaceAll('"191"', '"0"').replaceAll('"2087"', '"0"'),
+    ],
+    [
+      "a truncated sensor lifecycle",
+      scanner81PrFullLog.replace("Sensor TsArchitectureSensor [architecture] (done)\n", ""),
+    ],
+    [
+      "a receipt without its language-specific producer location",
+      scanner81PrFullLog.replace(
+        'Found 1 potential Udg file location(s) for "js"',
+        'Found 1 potential Udg file location(s) for "ts"',
+      ),
+    ],
+    [
+      "a receipt without its producer read",
+      scanner81PrFullLog.replace(
+        "* Reading SonarArchitecture UDG data from directory <redacted>/architecture/js\n",
+        "",
+      ),
+    ],
+    [
+      "a producer read for the wrong language",
+      scanner81PrFullLog.replace(
+        "* Reading SonarArchitecture UDG data from directory <redacted>/architecture/js",
+        "* Reading SonarArchitecture UDG data from directory <redacted>/architecture/ts",
+      ),
+    ],
+    [
+      "a malformed sensor receipt",
+      scanner81PrFullLog.replace(
+        'Files successfully loaded: "2087" out of "2087"',
+        "Files successfully loaded: malformed",
+      ),
+    ],
+    [
+      "a mismatched sensor receipt",
+      scanner81PrFullLog.replace(
+        'Files successfully loaded: "2087" out of "2087"',
+        'Files successfully loaded: "2086" out of "2087"',
+      ),
+    ],
+    [
+      "receipts outside the architecture sensors",
+      scanner81PrFullLog
+        .replaceAll("JsArchitectureSensor", "UnrelatedJsSensor")
+        .replaceAll("TsArchitectureSensor", "UnrelatedTsSensor"),
+    ],
+    [
+      "duplicate sensor receipts",
+      scanner81PrFullLog.replace(
+        'Files successfully loaded: "191" out of "191"',
+        'Files successfully loaded: "191" out of "191"\n' +
+          'Files successfully loaded: "191" out of "191"',
+      ),
+    ],
+    [
+      "a malformed receipt outside the architecture sensors",
+      `${scanner81PrFullLog}\nFiles successfully loaded: "abc" out of "1"\n`,
+    ],
+    [
+      "an unexpected legacy UDG-cache inventory",
+      `${scanner81PrFullLog}\nArchitecture JS/TS UDG cache: 2278 source file(s) without a UDG\n`,
+    ],
+    [
+      "stale JavaScript cache evidence",
+      scanner81PrFullLog
+        .replace("Hit the cache for 0 out of 4799", "Hit the cache for 1 out of 4799")
+        .replace(
+          "Miss the cache for 4799 out of 4799: FILE_CHANGED [4799/4799]",
+          "Miss the cache for 4798 out of 4799: FILE_CHANGED [4798/4799]",
+        ),
+    ],
+    [
+      "a missing architecture upload receipt",
+      scanner81PrFullLog.replace("Successfully sent architecture data\n", ""),
+    ],
+  ])("rejects Scanner 8.1 PR evidence with %s", (_name, contents) => {
+    expect(fullAnalysisEvidenceFailures(contents)).not.toEqual([]);
   });
 
   it.each([

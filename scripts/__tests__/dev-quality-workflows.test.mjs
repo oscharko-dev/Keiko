@@ -43,6 +43,7 @@ function runCiAggregate(overrides = {}) {
       CROSS_PLATFORM_RESULT: "success",
       DOCUMENTATION_ONLY: "false",
       EDITOR_FAST_PR: "false",
+      NODE_26_COMPATIBILITY_RESULT: "success",
       PROTECTED_BRANCH_RESULT: "success",
       SECRET_SCAN_RESULT: "success",
       SEMANTIC_DUPLICATION_RESULT: "success",
@@ -433,11 +434,13 @@ describe("dev quality workflows", () => {
     expect(aggregateJob).toContain("- build-scan-sbom-smoke");
     expect(aggregateJob).toContain("- coverage-sonar");
     expect(aggregateJob).toContain("- cross-platform-smoke");
+    expect(aggregateJob).toContain("- node-26-compatibility");
     expect(aggregateJob).toContain("- ui");
     expect(aggregateJob).toContain("BUILD_SCAN_SBOM_SMOKE_RESULT");
     expect(aggregateJob).toContain("CHANGE_SCOPE_RESULT");
     expect(aggregateJob).toContain("CROSS_PLATFORM_RESULT");
     expect(aggregateJob).toContain("EDITOR_FAST_PR");
+    expect(aggregateJob).toContain("NODE_26_COMPATIBILITY_RESULT");
     expect(aggregateJob).toContain("UI_RESULT");
     expect(aggregateJob).toContain('if [ "$result" != "success" ]');
   });
