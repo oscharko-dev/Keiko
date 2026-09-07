@@ -18,7 +18,9 @@ import {
 } from "./update-portable-handoff-receipts.js";
 import {
   reconcilePortableNormalStartup,
+  runPortableNativeRecoveryProcess,
   type PortableNativeRecoveryInput,
+  type PortableNativeRecoveryProcess,
 } from "./update-portable-normal-startup.js";
 import {
   createUpdateLocalStateManager,
@@ -26,6 +28,7 @@ import {
 } from "./update-local-state.js";
 import {
   createStateDirUpdateSessionLock,
+  inspectStateDirUpdateSessionLockForRecovery,
   updateSessionLockPath,
   type UpdateSessionLock,
 } from "./update-session-lock.js";
@@ -46,8 +49,68 @@ interface NormalStartupFixture {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
 });
+
+function fakeNativeProcess(pid: number | "missing" = 404): {
+  readonly child: PortableNativeRecoveryProcess;
+  readonly destroyControl: ReturnType<typeof vi.fn>;
+  readonly emitControlError: () => void;
+  readonly emitError: () => void;
+  readonly emitExit: (code: number | null, signal: NodeJS.Signals | null) => void;
+  readonly endControl: ReturnType<typeof vi.fn>;
+  readonly terminate: ReturnType<typeof vi.fn>;
+} {
+  let onError: ((error: Error) => void) | undefined;
+  let onControlError: ((error: Error) => void) | undefined;
+  let onExit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+  const destroyControl = vi.fn();
+  const endControl = vi.fn();
+  const terminate = vi.fn();
+  return {
+    child: {
+      pid: pid === "missing" ? undefined : pid,
+      destroyControl,
+      endControl,
+      onControlError: (listener): void => {
+        onControlError = listener;
+      },
+      onError: (listener): void => {
+        onError = listener;
+      },
+      onExit: (listener): void => {
+        onExit = listener;
+      },
+      terminate,
+    },
+    destroyControl,
+    emitControlError: (): void => {
+      onControlError?.(new Error("control pipe failed"));
+    },
+    emitError: (): void => {
+      onError?.(new Error("spawn failed"));
+    },
+    emitExit: (code, signal): void => {
+      onExit?.(code, signal);
+    },
+    endControl,
+    terminate,
+  };
+}
+
+function nativeInput(
+  onSpawn: PortableNativeRecoveryInput["onSpawn"] = () => true,
+): PortableNativeRecoveryInput {
+  return {
+    coordinator: "/fixture/coordinator",
+    activationId: "a".repeat(32),
+    control: Buffer.from("KUR1\n", "ascii"),
+    stateDir: "/fixture/state",
+    timeoutMs: 100,
+    onSpawn,
+  };
+}
 
 async function prepare(terminal = false): Promise<NormalStartupFixture> {
   const root = mkdtempSync(join(tmpdir(), "keiko-normal-startup-recovery-"));
@@ -236,6 +299,33 @@ function appendComplete(fixture: Awaited<ReturnType<typeof prepare>>): string {
   return previousSha256 ?? "";
 }
 
+function prepareAcceptedRecovery(fixture: NormalStartupFixture): void {
+  const preparedSha256 = appendPortableHandoffReceipt({
+    stateDir: fixture.stateDir,
+    activationId: fixture.activationId,
+    planSha256: fixture.state.activationWal?.planSha256 ?? "",
+    kind: "prepared",
+    outcome: "completed",
+    at: NOW,
+  }).sha256;
+  appendPortableHandoffReceipt({
+    stateDir: fixture.stateDir,
+    activationId: fixture.activationId,
+    planSha256: fixture.state.activationWal?.planSha256 ?? "",
+    kind: "old-exit",
+    outcome: "intent",
+    at: NOW,
+    previousSha256: preparedSha256,
+  });
+  const activationWal = fixture.state.activationWal;
+  if (activationWal === undefined) throw new TypeError("expected activation WAL");
+  fixture.localState.writeRuntimeState({
+    ...fixture.localState.readRuntimeState(),
+    activationWal: { ...activationWal, coordinatorId: fixture.coordinatorSha256 },
+  });
+  expect(fixture.lock.updateChildPid(fixture.session.sessionId, 202)).toBe(true);
+}
+
 describe("portable normal startup recovery", () => {
   it("treats an installation with no aggregate or interrupted anchors as fresh", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-normal-startup-fresh-"));
@@ -275,6 +365,104 @@ describe("portable normal startup recovery", () => {
     }).not.toThrow();
   });
 
+  it("settles the exact one-receipt preacceptance crash and starts normally afterward", async () => {
+    const fixture = await prepare();
+    appendPortableHandoffReceipt({
+      stateDir: fixture.stateDir,
+      activationId: fixture.activationId,
+      planSha256: fixture.state.activationWal?.planSha256 ?? "",
+      kind: "prepared",
+      outcome: "completed",
+      at: NOW,
+    });
+    expect(fixture.lock.updateChildPid(fixture.session.sessionId, 202)).toBe(true);
+    const runNative = vi.fn(() => Promise.resolve({ status: "succeeded" as const }));
+    const options = {
+      stateDir: fixture.stateDir,
+      target: "macos-arm64" as const,
+      expectedManagedRoot: fixture.managedRoot,
+      currentPid: 303,
+      processIdentity: "recovery-cli",
+      pidAlive: (): boolean => false,
+      runNative,
+    };
+
+    await expect(reconcilePortableNormalStartup(options)).resolves.toEqual({ status: "normal" });
+    await expect(reconcilePortableNormalStartup(options)).resolves.toEqual({ status: "normal" });
+    expect(runNative).not.toHaveBeenCalled();
+    expect(fixture.localState.readRuntimeState()).toMatchObject({
+      activeSession: { sessionId: fixture.session.sessionId },
+      recovery: { status: "settled", sessionId: fixture.session.sessionId },
+    });
+  });
+
+  it("rejects a prepared-only crash whose published child PID is missing", async () => {
+    const fixture = await prepare();
+    appendPortableHandoffReceipt({
+      stateDir: fixture.stateDir,
+      activationId: fixture.activationId,
+      planSha256: fixture.state.activationWal?.planSha256 ?? "",
+      kind: "prepared",
+      outcome: "completed",
+      at: NOW,
+    });
+    const beforeLock = readFileSync(updateSessionLockPath(fixture.stateDir), "utf8");
+    const beforeState = fixture.localState.readRuntimeState();
+    const runNative = vi.fn(() => Promise.resolve({ status: "succeeded" as const }));
+
+    await expect(
+      reconcilePortableNormalStartup({
+        stateDir: fixture.stateDir,
+        target: "macos-arm64",
+        expectedManagedRoot: fixture.managedRoot,
+        currentPid: 303,
+        processIdentity: "recovery-cli",
+        pidAlive: () => false,
+        runNative,
+      }),
+    ).resolves.toEqual({ status: "recovery-required" });
+
+    expect(readFileSync(updateSessionLockPath(fixture.stateDir), "utf8")).toBe(beforeLock);
+    expect(fixture.localState.readRuntimeState()).toEqual(beforeState);
+    expect(runNative).not.toHaveBeenCalled();
+  });
+
+  it.each(["old-tree", "previous-registration"] as const)(
+    "rejects one-receipt preacceptance settlement when %s no longer attests",
+    async (mismatch) => {
+      const fixture = await prepare();
+      appendPortableHandoffReceipt({
+        stateDir: fixture.stateDir,
+        activationId: fixture.activationId,
+        planSha256: fixture.state.activationWal?.planSha256 ?? "",
+        kind: "prepared",
+        outcome: "completed",
+        at: NOW,
+      });
+      expect(fixture.lock.updateChildPid(fixture.session.sessionId, 202)).toBe(true);
+      if (mismatch === "old-tree") {
+        writeFileSync(join(fixture.managedRoot, "installed.txt"), "mutated old tree");
+      } else {
+        writeFileSync(join(fixture.stateDir, "portable-install-state.json"), "{}\n");
+      }
+      const runNative = vi.fn(() => Promise.resolve({ status: "succeeded" as const }));
+
+      await expect(
+        reconcilePortableNormalStartup({
+          stateDir: fixture.stateDir,
+          target: "macos-arm64",
+          expectedManagedRoot: fixture.managedRoot,
+          currentPid: 303,
+          processIdentity: "recovery-cli",
+          pidAlive: () => false,
+          runNative,
+        }),
+      ).resolves.toEqual({ status: "recovery-required" });
+      expect(runNative).not.toHaveBeenCalled();
+      expect(fixture.localState.readRuntimeState().activationWal).toBeDefined();
+    },
+  );
+
   it("recovers a complete receipt chain anchored by a terminal last session", async () => {
     const fixture = await prepare(true);
     const receiptSha256 = appendComplete(fixture);
@@ -291,13 +479,14 @@ describe("portable normal startup recovery", () => {
       },
     });
     expect(fixture.lock.updateChildPid(fixture.session.sessionId, 202)).toBe(true);
-    const runNative = vi.fn((input: PortableNativeRecoveryInput): Promise<boolean> => {
+    const runNative = vi.fn((input: PortableNativeRecoveryInput) => {
       const runtimeBytes = readFileSync(join(fixture.stateDir, "updates", "runtime-state.json"));
+      expect(input.control.toString("ascii").split("\n")[0]).toBe("KUR1");
       expect(input.control.toString("ascii").split("\n")[7]).toBe(
         createHash("sha256").update(runtimeBytes).digest("hex"),
       );
       expect(input.onSpawn(404)).toBe(true);
-      return Promise.resolve(true);
+      return Promise.resolve({ status: "succeeded" as const });
     });
     await expect(
       reconcilePortableNormalStartup({
@@ -391,5 +580,148 @@ describe("portable normal startup recovery", () => {
     expect(runNative).not.toHaveBeenCalled();
     expect(readFileSync(updateSessionLockPath(fixture.stateDir), "utf8")).toBe(beforeLock);
     expect(fixture.localState.readRuntimeState()).toEqual(beforeState);
+  });
+
+  it("waits for a delayed exit after timeout before confirming native recovery death", async () => {
+    vi.useFakeTimers();
+    const fixture = fakeNativeProcess();
+    const result = runPortableNativeRecoveryProcess(nativeInput(), () => fixture.child);
+    let settled = false;
+    void result.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(fixture.destroyControl).toHaveBeenCalledOnce();
+    expect(fixture.terminate).toHaveBeenCalledWith("SIGKILL");
+    expect(settled).toBe(false);
+    fixture.emitExit(null, "SIGKILL");
+
+    await expect(result).resolves.toEqual({ status: "failed", process: "confirmed-dead" });
+  });
+
+  it("reports an ambiguous live process when timeout teardown has no exit", async () => {
+    vi.useFakeTimers();
+    const fixture = fakeNativeProcess();
+    const result = runPortableNativeRecoveryProcess(nativeInput(), () => fixture.child);
+
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    await expect(result).resolves.toEqual({ status: "failed", process: "ambiguous-live" });
+    expect(fixture.destroyControl).toHaveBeenCalledOnce();
+    expect(fixture.terminate).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("fails closed when native PID publication fails and process exit stays ambiguous", async () => {
+    vi.useFakeTimers();
+    const onSpawn = vi.fn(() => false);
+    const fixture = fakeNativeProcess();
+    const result = runPortableNativeRecoveryProcess(nativeInput(onSpawn), () => fixture.child);
+
+    expect(onSpawn).toHaveBeenCalledWith(404);
+    expect(fixture.destroyControl).toHaveBeenCalledOnce();
+    expect(fixture.terminate).toHaveBeenCalledWith("SIGKILL");
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await expect(result).resolves.toEqual({ status: "failed", process: "ambiguous-live" });
+  });
+
+  it("contains asynchronous control-pipe errors through bounded native teardown", async () => {
+    vi.useFakeTimers();
+    const fixture = fakeNativeProcess();
+    const result = runPortableNativeRecoveryProcess(nativeInput(), () => fixture.child);
+
+    fixture.emitControlError();
+    expect(fixture.destroyControl).toHaveBeenCalledOnce();
+    expect(fixture.terminate).toHaveBeenCalledWith("SIGKILL");
+    fixture.emitExit(null, "SIGKILL");
+
+    await expect(result).resolves.toEqual({ status: "failed", process: "confirmed-dead" });
+  });
+
+  it("does not arm an ambiguity timer when termination synchronously observes exit", async () => {
+    vi.useFakeTimers();
+    const fixture = fakeNativeProcess();
+    fixture.terminate.mockImplementation(() => {
+      fixture.emitExit(null, "SIGKILL");
+    });
+
+    await expect(
+      runPortableNativeRecoveryProcess(
+        nativeInput(() => false),
+        () => fixture.child,
+      ),
+    ).resolves.toEqual({ status: "failed", process: "confirmed-dead" });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("treats a spawn failure without a PID as confirmed dead", async () => {
+    const onSpawn = vi.fn(() => true);
+    const fixture = fakeNativeProcess("missing");
+
+    await expect(
+      runPortableNativeRecoveryProcess(nativeInput(onSpawn), () => fixture.child),
+    ).resolves.toEqual({ status: "failed", process: "confirmed-dead" });
+    expect(onSpawn).not.toHaveBeenCalled();
+    expect(fixture.endControl).not.toHaveBeenCalled();
+  });
+
+  it("does not reclaim while an ambiguously live native recovery PID remains published", async () => {
+    const fixture = await prepare();
+    prepareAcceptedRecovery(fixture);
+    const runNative = vi.fn((input: PortableNativeRecoveryInput) => {
+      expect(input.onSpawn(404)).toBe(true);
+      return Promise.resolve({ status: "failed" as const, process: "ambiguous-live" as const });
+    });
+
+    await expect(
+      reconcilePortableNormalStartup({
+        stateDir: fixture.stateDir,
+        target: "macos-arm64",
+        expectedManagedRoot: fixture.managedRoot,
+        currentPid: 303,
+        processIdentity: "recovery-cli",
+        pidAlive: () => false,
+        runNative,
+      }),
+    ).resolves.toEqual({ status: "recovery-required" });
+
+    const retryNative = vi.fn(() => Promise.resolve({ status: "succeeded" as const }));
+    await expect(
+      reconcilePortableNormalStartup({
+        stateDir: fixture.stateDir,
+        target: "macos-arm64",
+        expectedManagedRoot: fixture.managedRoot,
+        currentPid: 505,
+        processIdentity: "retry-cli",
+        pidAlive: (pid) => pid === 404,
+        runNative: retryNative,
+      }),
+    ).resolves.toEqual({ status: "recovery-required" });
+    expect(runNative).toHaveBeenCalledOnce();
+    expect(retryNative).not.toHaveBeenCalled();
+  });
+
+  it("retains a confirmed-dead native PID instead of replacing its durable sidecar", async () => {
+    const fixture = await prepare();
+    prepareAcceptedRecovery(fixture);
+    const runNative = vi.fn((input: PortableNativeRecoveryInput) => {
+      expect(input.onSpawn(404)).toBe(true);
+      return Promise.resolve({ status: "failed" as const, process: "confirmed-dead" as const });
+    });
+
+    await expect(
+      reconcilePortableNormalStartup({
+        stateDir: fixture.stateDir,
+        target: "macos-arm64",
+        expectedManagedRoot: fixture.managedRoot,
+        currentPid: 303,
+        processIdentity: "recovery-cli",
+        pidAlive: () => false,
+        runNative,
+      }),
+    ).resolves.toEqual({ status: "recovery-required" });
+
+    expect(inspectStateDirUpdateSessionLockForRecovery(fixture.stateDir)?.childPid).toBe(404);
   });
 });

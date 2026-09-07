@@ -39,6 +39,7 @@ import {
 
 const MAX_NATIVE_BYTES = 64 * 1024 * 1024;
 const RECOVERY_TIMEOUT_MS = 15 * 60_000;
+const RECOVERY_TEARDOWN_TIMEOUT_MS = 5_000;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const ID = /^[a-f0-9]{32}$/u;
 const VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/u;
@@ -128,6 +129,20 @@ export interface PortableNativeRecoveryInput {
   readonly onSpawn: (pid: number) => boolean;
 }
 
+export type PortableNativeRecoveryOutcome =
+  | { readonly status: "succeeded" }
+  | { readonly status: "failed"; readonly process: "confirmed-dead" | "ambiguous-live" };
+
+export interface PortableNativeRecoveryProcess {
+  readonly pid: number | undefined;
+  readonly destroyControl: () => void;
+  readonly endControl: (control: Buffer) => void;
+  readonly onControlError: (listener: (error: Error) => void) => void;
+  readonly onError: (listener: (error: Error) => void) => void;
+  readonly onExit: (listener: (code: number | null, signal: NodeJS.Signals | null) => void) => void;
+  readonly terminate: (signal: NodeJS.Signals) => void;
+}
+
 export interface PortableNormalStartupRecoveryOptions {
   readonly stateDir: string;
   readonly target: PortableHandoffPlan["target"];
@@ -136,7 +151,8 @@ export interface PortableNormalStartupRecoveryOptions {
   readonly processIdentity?: string | undefined;
   readonly currentPid?: number | undefined;
   readonly now?: (() => number) | undefined;
-  readonly runNative?: ((input: PortableNativeRecoveryInput) => Promise<boolean>) | undefined;
+  readonly runNative?:
+    ((input: PortableNativeRecoveryInput) => Promise<PortableNativeRecoveryOutcome>) | undefined;
   readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
@@ -360,7 +376,7 @@ function encodeControl(
   const wal = authority.state.activationWal;
   return Buffer.from(
     [
-      "KRC1",
+      "KUR1",
       wal.activationId,
       wal.planSha256,
       wal.coordinatorSha256,
@@ -375,35 +391,129 @@ function encodeControl(
   );
 }
 
-function defaultRunNative(input: PortableNativeRecoveryInput): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    const child = spawn(input.coordinator, ["--recover-update", input.activationId], {
-      env: { KEIKO_STATE_DIR: input.stateDir },
-      stdio: ["pipe", "ignore", "ignore"],
+function spawnNativeRecoveryProcess(
+  input: PortableNativeRecoveryInput,
+): PortableNativeRecoveryProcess {
+  const child = spawn(input.coordinator, ["--recover-update", input.activationId], {
+    env: { KEIKO_STATE_DIR: input.stateDir },
+    stdio: ["pipe", "ignore", "ignore"],
+  });
+  return {
+    pid: child.pid,
+    destroyControl: (): void => {
+      child.stdin.destroy();
+    },
+    endControl: (control): void => {
+      child.stdin.end(control);
+    },
+    onControlError: (listener): void => {
+      child.stdin.once("error", listener);
+    },
+    onError: (listener): void => {
+      child.once("error", listener);
+    },
+    onExit: (listener): void => {
+      child.once("exit", listener);
+    },
+    terminate: (signal): void => {
+      child.kill(signal);
+    },
+  };
+}
+
+interface NativeRecoveryLifecycle {
+  readonly beginTeardown: () => void;
+  readonly finish: (outcome: PortableNativeRecoveryOutcome) => void;
+  readonly isTearingDown: () => boolean;
+  readonly startTimeout: (timeoutMs: number) => void;
+}
+
+function createNativeRecoveryLifecycle(
+  child: PortableNativeRecoveryProcess,
+  resolveOutcome: (outcome: PortableNativeRecoveryOutcome) => void,
+): NativeRecoveryLifecycle {
+  let settled = false;
+  let tearingDown = false;
+  let recoveryTimer: NodeJS.Timeout | undefined;
+  let teardownTimer: NodeJS.Timeout | undefined;
+  const finish = (outcome: PortableNativeRecoveryOutcome): void => {
+    if (settled) return;
+    settled = true;
+    if (recoveryTimer !== undefined) clearTimeout(recoveryTimer);
+    if (teardownTimer !== undefined) clearTimeout(teardownTimer);
+    resolveOutcome(outcome);
+  };
+  const beginTeardown = (): void => {
+    if (tearingDown || settled) return;
+    tearingDown = true;
+    if (recoveryTimer !== undefined) clearTimeout(recoveryTimer);
+    try {
+      child.destroyControl();
+    } catch {
+      // Process exit remains the ownership authority when closing the pipe fails.
+    }
+    teardownTimer = setTimeout(() => {
+      finish({ status: "failed", process: "ambiguous-live" });
+    }, RECOVERY_TEARDOWN_TIMEOUT_MS);
+    try {
+      child.terminate("SIGKILL");
+    } catch {
+      // The bounded exit wait distinguishes confirmed death from ambiguity.
+    }
+  };
+  return {
+    beginTeardown,
+    finish,
+    isTearingDown: (): boolean => tearingDown,
+    startTimeout: (timeoutMs): void => {
+      recoveryTimer = setTimeout(beginTeardown, timeoutMs);
+    },
+  };
+}
+
+export function runPortableNativeRecoveryProcess(
+  input: PortableNativeRecoveryInput,
+  spawnProcess: (
+    input: PortableNativeRecoveryInput,
+  ) => PortableNativeRecoveryProcess = spawnNativeRecoveryProcess,
+): Promise<PortableNativeRecoveryOutcome> {
+  let child: PortableNativeRecoveryProcess;
+  try {
+    child = spawnProcess(input);
+  } catch {
+    return Promise.resolve({ status: "failed", process: "confirmed-dead" });
+  }
+  return new Promise<PortableNativeRecoveryOutcome>((resolve) => {
+    const lifecycle = createNativeRecoveryLifecycle(child, resolve);
+    lifecycle.startTimeout(input.timeoutMs);
+    child.onError(() => {
+      if (child.pid === undefined) {
+        lifecycle.finish({ status: "failed", process: "confirmed-dead" });
+        return;
+      }
+      lifecycle.beginTeardown();
     });
-    let settled = false;
-    const finish = (result: boolean): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      finish(false);
-    }, input.timeoutMs);
-    child.once("error", () => {
-      finish(false);
+    child.onControlError(lifecycle.beginTeardown);
+    child.onExit((code, signal) => {
+      lifecycle.finish(
+        code === 0 && signal === null && !lifecycle.isTearingDown()
+          ? { status: "succeeded" }
+          : { status: "failed", process: "confirmed-dead" },
+      );
     });
-    child.once("exit", (code, signal) => {
-      finish(code === 0 && signal === null);
-    });
-    if (child.pid === undefined || !input.onSpawn(child.pid)) {
-      child.kill("SIGKILL");
-      finish(false);
+    if (child.pid === undefined) {
+      lifecycle.finish({ status: "failed", process: "confirmed-dead" });
       return;
     }
-    child.stdin.end(input.control);
+    try {
+      if (!input.onSpawn(child.pid)) {
+        lifecycle.beginTeardown();
+        return;
+      }
+      child.endControl(input.control);
+    } catch {
+      lifecycle.beginTeardown();
+    }
   });
 }
 
@@ -433,9 +543,15 @@ function loadStartupAuthority(
 }
 
 function isUnaccepted(authority: RecoveryAuthority): boolean {
+  const [prepared] = authority.receipts;
+  const preacceptanceReceipts =
+    authority.receipts.length === 0 ||
+    (authority.receipts.length === 1 &&
+      prepared?.kind === "prepared" &&
+      prepared.outcome === "completed");
   return (
     authority.state.activeSession?.sessionId === authority.session.sessionId &&
-    authority.receipts.length === 0 &&
+    preacceptanceReceipts &&
     authority.state.activationWal.coordinatorId === undefined
   );
 }
@@ -450,7 +566,7 @@ function validRecoveryLock(
   if (lock.sessionId !== authority.session.sessionId) return false;
   if (lock.targetVersion !== authority.session.targetVersion) return false;
   if (lock.childPid !== undefined) return !isAlive(lock.childPid);
-  return unaccepted;
+  return unaccepted && authority.receipts.length === 0;
 }
 
 function claimStartupOwnership(
@@ -497,6 +613,47 @@ async function recoverUnaccepted(
   }
 }
 
+interface NativeRecoveryAttempt {
+  readonly outcome: PortableNativeRecoveryOutcome;
+  readonly nativePidPublished: boolean;
+}
+
+async function runAcceptedNativeRecovery(
+  options: PortableNormalStartupRecoveryOptions,
+  authority: RecoveryAuthority,
+  ownership: UpdateSessionRecoveryOwnership,
+  ownedLock: ReturnType<typeof createStateDirUpdateSessionLock>,
+): Promise<NativeRecoveryAttempt> {
+  const publishedNativePids = new Set<number>();
+  try {
+    const outcome = await (options.runNative ?? runPortableNativeRecoveryProcess)({
+      coordinator: join(
+        portableHandoffRoot(options.stateDir, authority.plan.activationId),
+        "coordinator",
+      ),
+      activationId: authority.plan.activationId,
+      control: encodeControl(authority, ownership),
+      stateDir: options.stateDir,
+      timeoutMs: RECOVERY_TIMEOUT_MS,
+      onSpawn: (nativePid) => {
+        const published = ownedLock.updateChildPid(authority.session.sessionId, nativePid);
+        if (published) publishedNativePids.add(nativePid);
+        return published;
+      },
+    });
+    return { outcome, nativePidPublished: publishedNativePids.size > 0 };
+  } catch {
+    const nativePidPublished = publishedNativePids.size > 0;
+    return {
+      outcome: {
+        status: "failed",
+        process: nativePidPublished ? "ambiguous-live" : "confirmed-dead",
+      },
+      nativePidPublished,
+    };
+  }
+}
+
 async function recoverAccepted(
   options: PortableNormalStartupRecoveryOptions,
   localState: ReturnType<typeof createUpdateLocalStateManager>,
@@ -508,16 +665,11 @@ async function recoverAccepted(
   if (!SHA256.test(wal.coordinatorSha256) || digestFile(coordinator) !== wal.coordinatorSha256)
     return recoveryRequired(options, localState, "coordinator-invalid", authority);
   const ownedLock = createStateDirUpdateSessionLock(options.stateDir);
-  const ran = await (options.runNative ?? defaultRunNative)({
-    coordinator,
-    activationId: wal.activationId,
-    control: encodeControl(authority, ownership),
-    stateDir: options.stateDir,
-    timeoutMs: RECOVERY_TIMEOUT_MS,
-    onSpawn: (nativePid) => ownedLock.updateChildPid(authority.session.sessionId, nativePid),
-  });
-  if (!ran) {
-    ownedLock.updateChildPid(authority.session.sessionId, options.currentPid ?? process.pid);
+  const attempt = await runAcceptedNativeRecovery(options, authority, ownership, ownedLock);
+  if (attempt.outcome.status === "failed") {
+    if (attempt.outcome.process === "confirmed-dead" && !attempt.nativePidPublished) {
+      ownedLock.updateChildPid(authority.session.sessionId, options.currentPid ?? process.pid);
+    }
     return recoveryRequired(options, localState, "native-recovery-failed", authority);
   }
   const refreshed = localState.inspectRuntimeState();

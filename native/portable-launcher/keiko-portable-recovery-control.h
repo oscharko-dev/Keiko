@@ -54,7 +54,7 @@ static int keiko_recovery_parse_control(char *content, keiko_recovery_control *c
     *newline = '\0';
     cursor = newline + 1;
   }
-  if (*cursor != '\0' || strcmp(field[0], "KRC1") != 0 ||
+  if (*cursor != '\0' || strcmp(field[0], "KUR1") != 0 ||
       !keiko_khp_is_lower_hex(field[1], 32u) || !keiko_khp_is_lower_hex(field[2], 64u) ||
       !keiko_khp_is_lower_hex(field[3], 64u) ||
       !keiko_khp_decimal_value(field[4], UINT32_MAX, &number)) return 0;

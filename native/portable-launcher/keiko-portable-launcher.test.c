@@ -405,17 +405,23 @@ static void test_restore_handles_post_exchange_shape(void) {
 
 static void test_recovery_control_is_fixed_and_bounded(void) {
   char valid[] =
-      "KRC1\n0123456789abcdef0123456789abcdef\n"
+      "KUR1\n0123456789abcdef0123456789abcdef\n"
       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
       "7\n0\n-\ncccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n"
       "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\n";
   char trailing[] =
-      "KRC1\n0123456789abcdef0123456789abcdef\n"
+      "KUR1\n0123456789abcdef0123456789abcdef\n"
       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
       "7\n0\n-\ncccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n"
       "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\nX";
+  char runtime_control_magic[] =
+      "KRC1\n0123456789abcdef0123456789abcdef\n"
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+      "7\n0\n-\ncccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n"
+      "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\n";
   keiko_recovery_control control;
   memset(&control, 0, sizeof(control));
   assert(keiko_recovery_parse_control(valid, &control) == 1);
@@ -423,6 +429,8 @@ static void test_recovery_control_is_fixed_and_bounded(void) {
   assert(control.receipt_sequence == 0u);
   memset(&control, 0, sizeof(control));
   assert(keiko_recovery_parse_control(trailing, &control) == 0);
+  memset(&control, 0, sizeof(control));
+  assert(keiko_recovery_parse_control(runtime_control_magic, &control) == 0);
 }
 
 static void test_recovery_runtime_requires_exact_validated_snapshot(void) {

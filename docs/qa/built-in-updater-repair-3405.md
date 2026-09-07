@@ -99,17 +99,40 @@ timeout teardown can replace the child PID before confirmed native exit. These r
 repairs and additional crash/teardown regressions before the Mac slice is accepted. A dedicated
 owner is repairing those gaps and distinguishing the unreleased KUR1 recovery control from the
 unchanged binary supervisor KRC1 protocol. The review reports no critical, high or low findings.
+The resulting four-file repair is frozen for independent re-review. It attests the old tree and
+registration before settling the prepared-only prefix, waits up to five seconds for observed native
+exit after teardown, retains published child ownership on failure, and handles asynchronous control
+pipe errors. Owner verification passes all 17 focused tests, scoped lint/format and arm64 native
+quality. The lead confirms all four frozen hashes and independently passes 79 tests in the same seven
+complete recovery/activation suites (16.64 seconds). The first shared typecheck failed only on the
+concurrent Windows staging argument; after that owner repaired its data flow, server workspace
+typecheck passes. Re-review closes timeout/PID handling but identifies one remaining classification
+gap: prepared-only recovery must reject an absent child record. The final narrow repair permits an
+absent child only with zero receipts, preserving the prepared-only/dead-published-child positive
+case. Independent security re-review now approves all four files with zero findings. Owner and lead
+both pass all 18 focused startup tests; the lead replay takes 12.70 seconds and confirms the frozen
+hashes. The independent arm64 native replay also passes. Later integrated delivery verification and
+native N−1/N proof remain required.
 
 The independent Windows architecture review freezes the remaining consumer/cutover contract in
 [ADR-0121](../adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md#windows-generation-consumer-and-cutover-contract-3405).
 Mac keeps KHP2/32; Windows uses KHP3/37 with exact appended generation/setup identities and shared
 cross-language byte fixtures. A single native lifecycle owns both platform adapters. TypeScript
-and native implementation have disjoint file scopes and start after Mac review settlement, with
-the native parser depending on the TypeScript fixture checkpoint. This is a design contract, not
+and native integration have disjoint file scopes after Mac review settlement, with
+the native parser depending on the TypeScript fixture checkpoint. An initial Windows schema/layout/
+staging slice can proceed alongside the narrow Mac fixes: it excludes every handoff, startup,
+registration, maintenance and native file. Those shared integration surfaces remain gated on Mac
+settlement. This is a design contract, not
 Windows consumer execution evidence or approval of the pending native-proof amendment.
-The architect approves the final recorded contract after clarifying the exact incoming path and
-the common KUR1 raw-snapshot validation. Parsers remain within existing package boundaries, without
-new public exports.
+The architect approves the recorded contract after clarifying the exact incoming path and
+the common KUR1 raw-snapshot validation. B1 implementation then identifies one concrete reuse gap:
+synchronous CLI validation cannot attest generation contents through the asynchronous server-only
+KHT1 helper, and direct Node invocation cannot inherit the native launcher's proof. A subsequent
+architecture review resolves it with one shared TypeScript KHT1 authority in a narrow internal
+security-package subpath, synchronous/asynchronous drivers over one bounded state machine, and
+the existing server module retained as a compatibility facade. Parsers stay at existing boundaries;
+no product-facing or package-root API, duplicate hasher or trust switch is introduced. A separate
+owner implements this extraction before B1's final CLI attestation hookup and independent review.
 
 The frozen Windows generation producer passes independent security re-review with zero findings.
 The prior medium stale-inventory finding and low fresh-verification finding are closed. Production staging uses the
@@ -148,8 +171,16 @@ freshness and all three existing budgets pass. These development results still r
 integrated-head verification and do not qualify native replacement.
 After the integrated dependency refresh, full UI coverage independently passes again: all 432
 files, 7,516 passing tests and one skip (156.75 seconds). Coverage is 89.91% statements, 82.35%
-branches, 91.49% functions and 92.79% lines. The production UI rebuild is running to refresh its
-bundle evidence against the updated dependency tree.
+branches, 91.49% functions and 92.79% lines. The production UI rebuild passes, and bundle evidence
+is refreshed from that export. Its measurement remains `0db0d23ace092a039530d18d6d522a1b63170f2e1f221bfd451054b300e3e83d`:
+first-load editor markers zero, shipped lazy editor runtime 1,000.5 KiB against 2,560 KiB, and
+largest worker 109.3 KiB against 750 KiB. Freshness and all three budgets pass.
+Integrated version consistency and current release-impact metadata checks pass. Release alignment
+initially stops because the executable guard rejects the group-writable Homebrew `bin` directory;
+using the existing protected `gh` Cellar directory in PATH passes without changing the guard.
+Checkout, npm latest, newest tag, GitHub Latest and npm-publish deployment all agree on `0.3.17`.
+The 15 operation-catalog drift tests pass again (4.41 seconds), and the existing observability gate
+passes its 11 registered call sites; that latter result is not coverage of the new startup diagnostic.
 
 The required local `npm run gates:sonar` attempt stops before analysis because Docker rejects
 the pinned image pull with a registry authentication error, including an isolated anonymous

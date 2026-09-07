@@ -274,8 +274,14 @@ only the strict six-field `windowsGeneration` binding from the artifact contract
 launcher digest, package version, target, stable managed eligibility, root identity and registration
 must agree with disk. Flat Windows schema 1 stays readable for launch/manual setup and cannot
 become one-click eligible through automatic migration. Mac schema 1 is unchanged.
-Keep the server parser/resolver internal and CLI authority parsing within its existing boundary;
-introduce no new public package export. Shared frozen fixtures prevent boundary-local parser drift.
+Keep the server parser/resolver internal and CLI authority parsing within its existing boundary.
+Shared frozen fixtures prevent boundary-local parser drift. KHT1 has one reviewed TypeScript
+authority in the internal security package, exposed only through a narrow workspace subpath to
+existing CLI/server dependants. Synchronous CLI attestation and asynchronous server hashing share
+the same bounded traversal/hash state machine; preserve cancellation, deadlines and server yielding.
+The server's existing handoff-tree module remains a compatibility facade for its current callers
+and producer scripts. Introduce no product-facing or package-root API, trust switch, verifier
+injection or user command.
 
 Before prepared WAL or native acceptance, the capsule durably snapshots and revalidates the
 current launcher as `coordinator.exe`, current supervisor, `launcher.next`, previous/next setup
