@@ -107,6 +107,24 @@ export interface DraftRemoteState {
   readonly pullRequest: GitPullRequestIdentity | undefined;
 }
 
+function remoteCommitEvidence(
+  binding: DraftDeliveryBinding,
+  result: GitPrInspectionResult<string>,
+  phase: "base-read" | "head-read",
+): Readonly<Record<string, string | boolean>> {
+  return phase === "base-read"
+    ? {
+        expectedBaseSha: binding.baseSha,
+        ...(result.ok ? { observedBaseSha: result.value } : {}),
+        baseMatchesExpected: result.ok && result.value === binding.baseSha,
+      }
+    : {
+        expectedHeadSha: binding.headSha,
+        ...(result.ok ? { observedHeadSha: result.value } : {}),
+        headMatchesExpected: result.ok && result.value === binding.headSha,
+      };
+}
+
 function recordDraftRemoteHeadRead(
   options: DraftDeliveryDependencies,
   context: DraftDeliveryRunContext,
@@ -124,13 +142,7 @@ function recordDraftRemoteHeadRead(
       phase,
       state: result.ok ? "observed" : "unavailable",
       reason: result.ok ? "completed" : result.reason,
-      ...(phase === "base-read"
-        ? { baseMatchesExpected: result.ok && result.value === binding.baseSha }
-        : {
-            expectedHeadSha: binding.headSha,
-            ...(result.ok ? { observedHeadSha: result.value } : {}),
-            headMatchesExpected: result.ok && result.value === binding.headSha,
-          }),
+      ...remoteCommitEvidence(binding, result, phase),
     },
   });
 }

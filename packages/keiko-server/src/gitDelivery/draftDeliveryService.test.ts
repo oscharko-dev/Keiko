@@ -177,6 +177,31 @@ describe("draft delivery runtime admission", () => {
 });
 
 describe("draft delivery hard boundaries", () => {
+  it("records the observed and expected remote base commit before refusing drift", async () => {
+    const proposal = await fixture.service.proposePush();
+    if (proposal.status !== "recorded") throw new Error("missing draft binding");
+    const expectedBaseSha = proposal.record.binding.baseSha;
+    const observedBaseSha = "e".repeat(40);
+    vi.spyOn(fixture.adapter, "readBranchHead").mockResolvedValue({
+      ok: true,
+      value: observedBaseSha,
+    });
+    fixture.events.length = 0;
+    expect(await execute(proposal)).toMatchObject({
+      record: { phase: "recovery-required", reason: "remote-drift" },
+    });
+    const event = fixture.events.find(
+      (candidate) =>
+        candidate.op === "git.draft-remote.observed" && candidate.extra?.phase === "base-read",
+    );
+    expect(event).toMatchObject({
+      correlationId: fixture.context.correlationId,
+      extra: { observedBaseSha, expectedBaseSha, baseMatchesExpected: false },
+    });
+    expect(redactLogFields(event?.extra ?? {})).toEqual(event?.extra);
+    expect(fixture.pushCount).toBe(0);
+  });
+
   it("records the observed and expected remote commit when the published head drifts", async () => {
     const expectedHeadSha = fixture.git(["rev-parse", "HEAD"]);
     const observedHeadSha = "f".repeat(40);

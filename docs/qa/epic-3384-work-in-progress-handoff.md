@@ -41,7 +41,11 @@ no ledger entry or aggregate ceiling was reset or widened. Attempt 39 preserved
 the prior test edits and produced an implementation repair; independent functional and CI
 checks passed 10/10 and 3/3. Its next model request was refused by the durable spend ceiling
 before staging or commit. The model-authored files remain in the managed workspace. The
-completed-flow count remains 0/5; additional model allowance awaits explicit owner authorization.
+completed-flow count remains 0/5; additional model allowance awaits explicit owner authorization. The final
+post-run model bytes still fail the independent triple-MAX boundary: three `Number.MAX_VALUE`
+inputs yield `Infinity` instead of finite `Number.MAX_VALUE`. Existing tests do not cover this
+case. No approval artifact was issued. The preserved next-run guidance requires a genuine
+failing regression before repairing this defect and completing delivery.
 
 Reviewer comment 3946898238 is addressed by retaining both expected and observed remote-head
 SHAs in the existing body-free reconciliation event. The mismatch regression failed before
