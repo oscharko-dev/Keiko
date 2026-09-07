@@ -4,10 +4,21 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import { VERIFICATION_RUNNER_ERROR_CODES } from "../editor/verificationRunnerErrors.js";
 import { DraftDeliveryFixture } from "../gitDelivery/draftDeliveryServiceTestSupport.js";
+import { createBufferedServerLogSink } from "../observability/server-log.js";
+import {
+  createCanonicalCatalogFacadeBridge,
+  type CanonicalCatalogContext,
+} from "../tool-catalog/catalogToolFacadeBridge.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
-import type { CodingToolAuthorityPort, CodingToolDelegatePort } from "./codingToolFacadePorts.js";
+import type {
+  CodingToolAuthorityPort,
+  CodingToolDelegatePort,
+  CodingToolFacade,
+} from "./codingToolFacadePorts.js";
+import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
 
 const capability = "capability-1-opaque-runtime-secret";
@@ -960,5 +971,114 @@ describe("CodingToolFacade", () => {
         evidence: [{ kind: "governed-delegate", code: "failed" }],
       });
     }
+  });
+
+  // #3390 rubric: the coding model must observe the RED state (which check failed and why) before
+  // it may claim a fix. `keiko_verification` is bound through the governed catalog in production
+  // (catalogToolFacadeBridge.ts), which settles ANY `status: "failed"` handler result -- a genuine
+  // dispatch fault AND a verifier that ran and reported failing tests alike -- as a
+  // `CatalogDispatchFault` for its own governance bookkeeping (tool-catalog.invocation-settled,
+  // errorKind "CatalogDispatchFault", empty data). `catalogToolFacadeBridge.ts`'s
+  // `preservedExecutedResult` rescues the original executed result for the first case; these tests
+  // pin that the rescued payload actually survives THIS file's own catalog composition
+  // (`executeCatalogRequest`'s `delegateState.threw` guard) all the way to the value returned to
+  // the caller -- the same value `opencodeRuntimeComposition.ts` JSON-serializes as the HTTP 200
+  // body the coding model's tool call receives -- and that a handler which never ran at all still
+  // collapses to the pre-existing opaque marker.
+  describe("catalog-bound verification failure delivery", () => {
+    const catalogContext: CanonicalCatalogContext = {
+      runId: "run-1",
+      correlationId: "c".repeat(36),
+      workspaceRoot: "/workspace",
+      workspaceIdentity: "workspace-1",
+      workspaceRevision: "d".repeat(64),
+      authorityExpiresAt: "2030-01-01T00:00:00.000Z",
+      now: 0,
+    };
+
+    function catalogBoundFacade(): {
+      readonly subject: CodingToolFacade;
+      readonly ports: MutableFacadePorts;
+      readonly log: ReturnType<typeof createBufferedServerLogSink>;
+    } {
+      const ports = facade();
+      const log = createBufferedServerLogSink();
+      const bridge = createCanonicalCatalogFacadeBridge({
+        authority: {
+          admit: (): {
+            readonly ok: true;
+            readonly mutationGuard: { readonly check: () => boolean };
+          } => ({ ok: true, mutationGuard: { check: () => true } }),
+        },
+        previewAuthority: () => ({ ok: true }),
+        invocationRegistry: createCodingToolInvocationRegistry({ now: () => 0 }),
+        context: () => catalogContext,
+        elapsedNow: () => catalogContext.now,
+        logPort: { primary: log, diagnostics: defaultServerDiagnosticSink },
+        approvalAvailable: true,
+      });
+      return { subject: createCodingToolFacade(ports, { catalogBridge: bridge }), ports, log };
+    }
+
+    it("carries the structured failure payload through a red run instead of a bare dispatch fault", async () => {
+      const { subject, ports, log } = catalogBoundFacade();
+      const verificationFailure = {
+        summary: "test failed; 1 structured failure location",
+        locations: [
+          {
+            file: "ci/numerical-stability.test.js",
+            line: 19,
+            column: 5,
+            message: "expected the stable average to remain finite",
+          },
+        ],
+        truncated: false,
+      };
+      ports.delegate.execute = vi.fn(() =>
+        Promise.resolve({
+          outcome: "failed",
+          reasonCode: "VERIFICATION_FAILED",
+          verificationFailure,
+        }),
+      );
+
+      const result = await subject.execute({
+        body: requestBody({ action: "verification", verifierId: "test" }),
+        capability,
+      });
+
+      expect(result).toEqual({
+        status: "failed",
+        reasonCode: "VERIFICATION_FAILED",
+        evidence: [{ kind: "governed-delegate", code: "VERIFICATION_FAILED" }],
+        verificationFailure,
+      });
+      // The catalog's own settlement log records this as a dispatch fault for its governance
+      // accounting (budget commit, effectStarted) -- an internal audit artifact of that layer, not
+      // evidence the payload asserted above was lost to the caller.
+      expect(log.events.at(-1)).toMatchObject({
+        op: "tool-catalog.invocation-settled",
+        extra: { status: "failed", reason: "handler-failed", errorKind: "CatalogDispatchFault" },
+      });
+    });
+
+    it("keeps a handler that never ran the opaque failure marker, never a fabricated payload", async () => {
+      const { subject, ports, log } = catalogBoundFacade();
+      ports.delegate.execute = vi.fn(() => Promise.reject(new Error("workspace gone")));
+
+      const result = await subject.execute({
+        body: requestBody({ action: "verification", verifierId: "test" }),
+        capability,
+      });
+
+      expect(result).toEqual({
+        status: "failed",
+        evidence: [{ kind: "governed-delegate", code: "failed" }],
+      });
+      expect(log.events.at(-1)).toMatchObject({
+        op: "tool-catalog.invocation-settled",
+        extra: { status: "failed", reason: "handler-failed" },
+      });
+    });
   });
 });
