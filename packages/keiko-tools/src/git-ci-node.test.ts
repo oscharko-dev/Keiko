@@ -53,7 +53,7 @@ interface Fixture {
   readonly calls: string[][];
   readonly onTerminated: Mock;
 }
-function fixture(onRespond?: () => void): Fixture {
+function fixture(onRespond?: () => void, stderr?: string): Fixture {
   const { root, info } = makeWorkspace();
   roots.push(root);
   const calls: string[][] = [];
@@ -62,6 +62,7 @@ function fixture(onRespond?: () => void): Fixture {
     const child = makeFakeChild();
     setImmediate(() => {
       child.stdout.emit("data", Buffer.from(JSON.stringify(content(args))));
+      if (stderr !== undefined) child.stderr.emit("data", Buffer.from(stderr));
       onRespond?.();
       child.emit("close", 0, null);
     });
@@ -93,6 +94,19 @@ describe("CI facts through the existing Node governed command boundary", () => {
       },
     });
     expect(await reader.readFacts(TARGET)).toMatchObject({ status: "observed" });
+  });
+
+  it("rejects CI metadata when redaction changed only stderr", async () => {
+    const credential = "provider-secret-stderr-only";
+    const test = fixture(undefined, credential);
+    const reader = createNodeGitCiReader({
+      ...test.deps,
+      processEnv: { ...test.deps.processEnv, CUSTOM_API_KEY: credential },
+    });
+    expect(await reader.readFacts(TARGET)).toMatchObject({
+      status: "unavailable",
+      failure: { reason: "provider-unavailable" },
+    });
   });
 
   it("retains the original observation deadline when fetching failure details", async () => {

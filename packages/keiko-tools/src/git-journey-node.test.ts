@@ -10,7 +10,10 @@ const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
-function fixture(afterRespond?: () => void): {
+function fixture(
+  afterRespond?: () => void,
+  stderr?: string,
+): {
   readonly deps: NodeGitCiReaderDeps;
   readonly calls: string[][];
 } {
@@ -22,6 +25,7 @@ function fixture(afterRespond?: () => void): {
     const child = makeFakeChild();
     setImmediate(() => {
       child.stdout.emit("data", Buffer.from(JSON.stringify(payload())));
+      if (stderr !== undefined) child.stderr.emit("data", Buffer.from(stderr));
       afterRespond?.();
       child.emit("close", 0, null);
     });
@@ -49,6 +53,19 @@ describe("journey observation through the existing governed Node boundary", () =
     expect(await reader.readJourney(TARGET)).toMatchObject({
       status: "observed",
       reviewConversations: { unresolved: 1 },
+    });
+  });
+
+  it("rejects journey metadata when redaction changed only stderr", async () => {
+    const credential = "provider-secret-stderr-only";
+    const f = fixture(undefined, credential);
+    const reader = createNodeGitJourneyReader({
+      ...f.deps,
+      processEnv: { ...f.deps.processEnv, CUSTOM_API_KEY: credential },
+    });
+    expect(await reader.readJourney(TARGET)).toMatchObject({
+      status: "unavailable",
+      failure: { reason: "provider-unavailable" },
     });
   });
 

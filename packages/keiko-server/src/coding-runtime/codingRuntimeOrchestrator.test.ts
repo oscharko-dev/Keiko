@@ -140,7 +140,9 @@ function fixture(
     },
     // #3401: the durable last-successful-head reader the description dispatch hook reads (never
     // the mutable `verifiedCommitResult` field above, which can show a later failed proposal).
-    getLastSuccessfulVerifiedCommit: (id) => verifiedCommits?.get(id),
+    ...(verifiedCommits === undefined
+      ? {}
+      : { getLastSuccessfulVerifiedCommit: (id: string) => verifiedCommits.get(id) }),
     create: (row) => {
       if (row.predecessorRunId !== undefined) {
         const prior = rowFor(rows, row.predecessorRunId);
@@ -574,7 +576,10 @@ function historicalVerifiedCommit(run: CodingRuntimeSnapshot): VerifiedCommitRes
   };
 }
 
-async function failedSuccessorWithDraftLineage(activityLog?: ServerLogSink) {
+async function failedSuccessorWithDraftLineage(
+  activityLog?: ServerLogSink,
+  includeVerifiedSource = true,
+) {
   const verifiedCommits = new Map<string, VerifiedCommitResult>();
   const f = fixture(
     undefined,
@@ -584,12 +589,12 @@ async function failedSuccessorWithDraftLineage(activityLog?: ServerLogSink) {
     activityLog,
     issueIntake(),
     undefined,
-    verifiedCommits,
+    includeVerifiedSource ? verifiedCommits : undefined,
   );
   await f.orchestrator.start({ ...start, issueRef: ISSUE_REF });
   const first = rowFor(f.rows, "run-1");
   f.rows.set(first.runId, { ...first, draftDelivery: historicalDraft(first) });
-  verifiedCommits.set(first.runId, historicalVerifiedCommit(first));
+  if (includeVerifiedSource) verifiedCommits.set(first.runId, historicalVerifiedCommit(first));
   await f.orchestrator.startupReconcile();
   await f.orchestrator.acknowledgeRecovery("run-1", {
     requestId: "run-1",
@@ -607,7 +612,7 @@ async function failedSuccessorWithDraftLineage(activityLog?: ServerLogSink) {
     occurredAt: "2026-01-01T00:00:00.000Z",
     kind: "runtime-stopped",
   });
-  return f;
+  return { ...f, verifiedCommits };
 }
 
 function issueIntake(
@@ -1950,6 +1955,22 @@ describe("CodingRuntimeOrchestrator", () => {
     });
   });
 
+  it("does not inherit a local draft without its durable verified source", async () => {
+    const captured = captureActivityLog();
+    const f = await failedSuccessorWithDraftLineage(captured.activityLog, false);
+
+    await f.orchestrator.start({ ...start, requestId: "request-3", issueRef: ISSUE_REF });
+
+    expect(f.rows.get("run-3")?.predecessorRunId).toBeUndefined();
+    expect(
+      captured.records.find(
+        (event) => event.op === "coding-runtime.run.started" && event.extra?.runId === "run-3",
+      ),
+    ).toMatchObject({
+      extra: { hasPredecessor: false, predecessorSelectionReason: "no-bounded-lineage" },
+    });
+  });
+
   it("recovers a unique local historical draft after a settled run severed its edge", async () => {
     const prior = await failedSuccessorWithDraftLineage();
     const second = rowFor(prior.rows, "run-2");
@@ -1986,6 +2007,45 @@ describe("CodingRuntimeOrchestrator", () => {
     ).toMatchObject({
       extra: { hasPredecessor: true, predecessorSelectionReason: "historical-local-draft" },
     });
+  });
+
+  it("rejects ambiguous local historical drafts after a settled run severed its edge", async () => {
+    const prior = await failedSuccessorWithDraftLineage();
+    const first = rowFor(prior.rows, "run-1");
+    const second = rowFor(prior.rows, "run-2");
+    const duplicate: CodingRuntimeSnapshot = {
+      ...first,
+      runId: "run-duplicate",
+      draftDelivery: undefined,
+    };
+    const orphan: CodingRuntimeSnapshot = {
+      ...second,
+      runId: "run-3",
+      state: "succeeded",
+      predecessorRunId: undefined,
+      updatedAt: "2026-01-01T00:00:01.000Z",
+      terminalAt: "2026-01-01T00:00:01.000Z",
+    };
+    const duplicateWithDraft = { ...duplicate, draftDelivery: historicalDraft(duplicate) };
+    const verifiedCommits = new Map([
+      [first.runId, historicalVerifiedCommit(first)],
+      [duplicate.runId, historicalVerifiedCommit(duplicate)],
+    ]);
+    const f = fixture(
+      undefined,
+      undefined,
+      [...prior.rows.values(), duplicateWithDraft, orphan],
+      undefined,
+      undefined,
+      issueIntake(),
+      undefined,
+      verifiedCommits,
+      () => "run-4",
+    );
+
+    await f.orchestrator.start({ ...start, requestId: "request-4", issueRef: ISSUE_REF });
+
+    expect(f.rows.get("run-4")?.predecessorRunId).toBeUndefined();
   });
 
   it("still fails a plain start closed against an unacknowledged recovery-required predecessor", async () => {

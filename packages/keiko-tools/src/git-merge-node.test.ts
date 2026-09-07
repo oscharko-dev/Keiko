@@ -51,11 +51,14 @@ function scriptedSpawn(steps: readonly SpawnStep[]): ScriptedSpawn {
   return { fn, calls: () => calls };
 }
 
-function makeAdapter(spawn: ScriptedSpawn): GitMergeAdapter {
+function makeAdapter(
+  spawn: ScriptedSpawn,
+  processEnv: NodeJS.ProcessEnv = { PATH: "/usr/bin" },
+): GitMergeAdapter {
   const { info } = makeWorkspace();
   return createNodeGitMergeAdapter({
     workspace: info,
-    processEnv: { PATH: "/usr/bin" },
+    processEnv,
     now: () => 0,
     spawn: spawn.fn,
     home: FAKE_HOME,
@@ -221,6 +224,31 @@ describe("readMergeReadiness", () => {
       "api",
       "/repos/oscharko-dev/Keiko/pulls/42",
     ]);
+  });
+
+  it("rejects merge metadata when redaction changed only an ignored field", async () => {
+    const credential = "provider-secret-ignored-field";
+    const spawn = scriptedSpawn([
+      {
+        stdout: JSON.stringify({
+          state: "open",
+          merged: false,
+          draft: false,
+          mergeable: true,
+          mergeable_state: "clean",
+          base: "main",
+          head: "abcdef1234567",
+          headRef: "feat/x",
+          ignored: credential,
+        }),
+      },
+    ]);
+    const readiness = await makeAdapter(spawn, {
+      PATH: "/usr/bin",
+      CUSTOM_API_KEY: credential,
+    }).readMergeReadiness(READINESS_REQ);
+    expect(readiness).toEqual({ providerCapableStrategies: [], providerError: true });
+    expect(spawn.calls()).toHaveLength(1);
   });
 
   it("reads the head checks for a blocked PR via the modern Checks API and maps a failing state", async () => {

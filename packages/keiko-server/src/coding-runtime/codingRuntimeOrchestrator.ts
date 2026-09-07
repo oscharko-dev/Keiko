@@ -1486,7 +1486,7 @@ export class CodingRuntimeOrchestrator {
       this.deps.snapshots.get(runId),
     );
     if (!isAcknowledgedDraftLineage(lineage) || lineage === undefined) return undefined;
-    const source = this.deps.snapshots.getLastSuccessfulVerifiedCommit(lineage.snapshot.runId);
+    const source = this.deps.snapshots.getLastSuccessfulVerifiedCommit?.(lineage.snapshot.runId);
     return localDraftDeliverySource(lineage.snapshot, lineage.record, source) === undefined
       ? undefined
       : candidate.runId;
@@ -1512,7 +1512,7 @@ export class CodingRuntimeOrchestrator {
       !sameDraftRecoveryTask(snapshot, candidate)
     )
       return false;
-    const source = this.deps.snapshots.getLastSuccessfulVerifiedCommit(candidate.runId);
+    const source = this.deps.snapshots.getLastSuccessfulVerifiedCommit?.(candidate.runId);
     return localDraftDeliverySource(candidate, draft, source) !== undefined;
   }
 

@@ -389,6 +389,15 @@ record. Restart validates the retained proof through the acknowledged bounded pr
 and never restores approval. Schema v25 adds the bounded internal receipt column; the existing
 v23/v24 migration text remains unchanged, and the source receipt is absent from public snapshots.
 
+An explicit new start preserves that lineage when an intervening linked run failed before adopting
+the draft. If an older version already lost the link, start may select one unique locally retained
+draft from the most recent 32 snapshots: its recovery must have been acknowledged and released,
+its task, workspace and canonical issue binding must match, and its known PR must have a matching
+successful internal commit receipt. Missing proof or multiple candidates leaves the new run
+unlinked. This creates only a new predecessor edge; it never rewrites historical rows, discovers
+ownership from a remote branch, restores approval, or publishes anything. The new run receives fresh
+authority and delivery still verifies the current local candidate and live remote identity.
+
 For a pre-v25 row whose latest result is still a valid successful commit, the existing validated
 receipt can seed this retained source. If an earlier version already replaced that success with a
 failed or pending result and stored no source receipt, migration cannot reconstruct the missing

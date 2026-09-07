@@ -244,6 +244,28 @@ describe("node PR adapter — canonical reconciliation reads", () => {
     expect(JSON.stringify(result)).not.toContain(PR_IDENTITY.headSha);
   });
 
+  it("rejects typed branch metadata when redaction changed only an ignored field", async () => {
+    const credential = "provider-secret-ignored-field";
+    const spawn = scriptedSpawn([
+      {
+        stdout: JSON.stringify({
+          ref: `refs/heads/${CREATE.headBranchName}`,
+          sha: PR_IDENTITY.headSha,
+          type: "commit",
+          ignored: credential,
+        }),
+      },
+    ]);
+    const result = await makeAdapter(spawn, {
+      PATH: "/usr/bin",
+      CUSTOM_API_KEY: credential,
+    }).readBranchHead({
+      ownerAndRepo: CREATE.ownerAndRepo,
+      headBranchName: CREATE.headBranchName,
+    });
+    expect(result).toEqual({ ok: false, reason: "invalid-response" });
+  });
+
   it.each([
     { ref: "refs/tags/other", sha: PR_IDENTITY.headSha, type: "commit" },
     { ref: `refs/heads/${CREATE.headBranchName}`, sha: PR_IDENTITY.headSha, type: "tag" },
