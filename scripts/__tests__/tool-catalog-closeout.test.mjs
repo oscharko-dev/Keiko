@@ -283,21 +283,36 @@ describe("exact-head catalog closeout artifact", () => {
     expect(() => check(f)).toThrow();
   });
   it.each([
-    { repository: "other-org/other-repo" },
-    { pullRequestNumber: 4200 },
-    { headRepository: "other-org/other-repo" },
-    { headRef: "feature/other-branch" },
-    { baseSha: "c".repeat(40) },
+    {
+      mutation: { repository: "other-org/other-repo" },
+      message: "required-ci binding names a different repository",
+    },
+    {
+      mutation: { pullRequestNumber: 4200 },
+      message: "required-ci binding names a different pull request",
+    },
+    {
+      mutation: { headRepository: "other-org/other-repo" },
+      message: "required-ci binding names a different head repository",
+    },
+    {
+      mutation: { headRef: "feature/other-branch" },
+      message: "required-ci binding names a different head ref",
+    },
+    {
+      mutation: { baseSha: "c".repeat(40) },
+      message: "required-ci binding names a different base sha",
+    },
   ])(
     "rejects a required-CI binding for a different repository, pull request, head repository, head ref, or base sha %#",
-    async (mutation) => {
+    async ({ mutation, message }) => {
       // A well-formed binding.repository/pullRequestNumber/headRepository/headRef/baseSha is not
       // enough: closeout must reject evidence that names a different (but still well-formed)
       // repository, PR, head repository, head ref, or base sha than the one actually being closed
       // out, even though headSha and baseRef still match this checkout.
       const f = await fixture();
       Object.assign(f.reports.get("required-ci").binding, mutation);
-      expect(() => check(f)).toThrow("required-ci has invalid exact identity binding");
+      expect(() => check(f)).toThrow(message);
     },
   );
   it("retains reviewed premerge H1 evidence without claiming a future dev merge", async () => {
@@ -321,6 +336,16 @@ describe("exact-head catalog closeout artifact", () => {
     f.context.requiredCiBaseSha = "not-a-commit";
     expect(() => buildToolCatalogCloseout(f.context, f.receipts, f.reports)).toThrow(
       "invalid expected required-CI base sha",
+    );
+  });
+  it("rejects a non-numeric expected required-CI pull request number in the closeout context", async () => {
+    // Mirrors what the CLI's --pull-request coercion produces for a non-numeric argument
+    // (Number("not-a-number") is NaN): validateContext is the single source of truth for the
+    // range check, so this must fail here rather than in a separate CLI-side helper.
+    const f = await fixture();
+    f.context.requiredCiPullRequestNumber = Number("not-a-number");
+    expect(() => buildToolCatalogCloseout(f.context, f.receipts, f.reports)).toThrow(
+      "invalid expected required-CI pull request number",
     );
   });
   it("joins the real producer identity with byte-hashed receipt artifacts", async () => {

@@ -198,11 +198,53 @@ function validateManagedRunBinding(binding) {
 function sameRepository(left, right) {
   return left.toLowerCase() === right.toLowerCase();
 }
+// binding.repository/headRepository/headRef/pullRequestNumber/baseSha are equality-checked
+// against context.requiredCi* below; validateContext already format-validates those context
+// fields, so re-checking the binding's own format for the same field would be dead code once the
+// equality check runs. Only fields with no context counterpart (kind, repositoryId, the literal
+// baseRef "dev", requirementsDigest) still need their own format check — see validateRequiredCiShape.
+function validateRequiredCiShape(binding) {
+  requireEvidence(binding.kind === "required-ci", "required-ci binding kind is invalid");
+  requireEvidence(
+    Number.isSafeInteger(binding.repositoryId) && binding.repositoryId > 0,
+    "required-ci binding repository id is invalid",
+  );
+  requireEvidence(binding.baseRef === "dev", "required-ci binding base ref is not dev");
+  requireEvidence(
+    DIGEST.test(binding.requirementsDigest),
+    "required-ci binding requirements digest is invalid",
+  );
+}
 // A byte-hashed required-ci.artifact can otherwise name any well-formed repository/PR/head/base
 // that happens to share this checkout's exact head SHA. Tying repository, pullRequestNumber,
 // headRepository, headRef and baseSha to the closeout's own expected identity (never re-derived
-// from the artifact itself) closes that gap; headSha is already tied to context.currentHead and
-// baseRef to the literal "dev" below.
+// from the artifact itself) closes that gap; headSha is tied to context.currentHead here too.
+function validateRequiredCiIdentity(binding, context) {
+  requireEvidence(
+    sameRepository(binding.repository, context.requiredCiRepository),
+    "required-ci binding names a different repository",
+  );
+  requireEvidence(
+    binding.pullRequestNumber === context.requiredCiPullRequestNumber,
+    "required-ci binding names a different pull request",
+  );
+  requireEvidence(
+    sameRepository(binding.headRepository, context.requiredCiHeadRepository),
+    "required-ci binding names a different head repository",
+  );
+  requireEvidence(
+    binding.headRef === context.requiredCiHeadRef,
+    "required-ci binding names a different head ref",
+  );
+  requireEvidence(
+    binding.headSha === context.currentHead,
+    "required-ci binding head sha is not the current head",
+  );
+  requireEvidence(
+    binding.baseSha === context.requiredCiBaseSha,
+    "required-ci binding names a different base sha",
+  );
+}
 function validateRequiredCiBinding(binding, context) {
   exactFields(binding, [
     "kind",
@@ -216,26 +258,8 @@ function validateRequiredCiBinding(binding, context) {
     "baseSha",
     "requirementsDigest",
   ]);
-  const valid = [
-    binding.kind === "required-ci",
-    GITHUB_REPOSITORY.test(binding.repository),
-    sameRepository(binding.repository, context.requiredCiRepository),
-    Number.isSafeInteger(binding.repositoryId),
-    binding.repositoryId > 0,
-    Number.isSafeInteger(binding.pullRequestNumber),
-    binding.pullRequestNumber > 0,
-    binding.pullRequestNumber === context.requiredCiPullRequestNumber,
-    GITHUB_REPOSITORY.test(binding.headRepository),
-    sameRepository(binding.headRepository, context.requiredCiHeadRepository),
-    GIT_REF.test(binding.headRef),
-    binding.headRef === context.requiredCiHeadRef,
-    binding.headSha === context.currentHead,
-    binding.baseRef === "dev",
-    COMMIT.test(binding.baseSha),
-    binding.baseSha === context.requiredCiBaseSha,
-    DIGEST.test(binding.requirementsDigest),
-  ];
-  requireEvidence(valid.every(Boolean), "required-ci has invalid exact identity binding");
+  validateRequiredCiShape(binding);
+  validateRequiredCiIdentity(binding, context);
 }
 function validateConsumerPackages(consumer, packages) {
   requireEvidence(Array.isArray(packages), `${consumer} has no packaged proof`);
@@ -395,7 +419,9 @@ function expectedRequiredCiRepository(root) {
 function requiredCiExpectations(root, { pullRequestNumber, headRepository, headRef, baseSha }) {
   return {
     requiredCiRepository: expectedRequiredCiRepository(root),
-    requiredCiPullRequestNumber: positiveInteger(pullRequestNumber),
+    // A non-numeric value becomes NaN here; validateContext is the single source of truth for
+    // the safe-integer/positive shape, matching how headRepository/headRef/baseSha are handled.
+    requiredCiPullRequestNumber: Number(pullRequestNumber),
     requiredCiHeadRepository: headRepository,
     requiredCiHeadRef: headRef,
     requiredCiBaseSha: baseSha,
@@ -470,20 +496,13 @@ export function requireExternalManifest(root, manifestPath) {
     "manifest output must be outside the source checkout",
   );
 }
-function requiredPath(argv, flag) {
-  const index = argv.indexOf(flag);
-  requireEvidence(index >= 0 && typeof argv[index + 1] === "string", `missing ${flag}`);
-  return resolve(argv[index + 1]);
-}
 function requiredArgument(argv, flag) {
   const index = argv.indexOf(flag);
   requireEvidence(index >= 0 && typeof argv[index + 1] === "string", `missing ${flag}`);
   return argv[index + 1];
 }
-function positiveInteger(value) {
-  const parsed = Number(value);
-  requireEvidence(Number.isSafeInteger(parsed) && parsed > 0, "invalid pull request number");
-  return parsed;
+function requiredPath(argv, flag) {
+  return resolve(requiredArgument(argv, flag));
 }
 if (isMainModule(import.meta.url)) {
   const argv = process.argv.slice(2);
