@@ -40,8 +40,8 @@ replaceOnce(
   "$stage = 'existing'; mark $stage\ntry {\n  $stage = 'assembly'; mark $stage\n  $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly",
 );
 replaceOnce(
-  "(New-Object Reflection.AssemblyName('KeikoLocalVolume'))",
-  "($stage = 'assembly-name'; mark $stage; $name = New-Object Reflection.AssemblyName('KeikoLocalVolume'); $stage = 'assembly-define'; mark $stage; $name)",
+  "  $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly((New-Object Reflection.AssemblyName('KeikoLocalVolume')), [Reflection.Emit.AssemblyBuilderAccess]::Run)",
+  "  $stage = 'assembly-name'; mark $stage\n  $name = New-Object Reflection.AssemblyName('KeikoLocalVolume')\n  $stage = 'assembly-define'; mark $stage\n  $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly($name, [Reflection.Emit.AssemblyBuilderAccess]::Run)",
 );
 replaceOnce(
   "  $module = $assembly.DefineDynamicModule('KeikoLocalVolume')",
@@ -59,7 +59,7 @@ replaceOnce("    $tag =", "    $stage = 'tag'; mark $stage\n    $tag =");
 replaceOnce("    $final =", "    $stage = 'final'; mark $stage\n    $final =");
 replaceOnce("    $volume =", "    $stage = 'volume'; mark $stage\n    $volume =");
 replaceOnce("[Console]::Out.Write('KEIKO_LOCAL_VOLUME_OK')", "mark 'success'");
-query = `function mark($value) { [Console]::Out.Write('KLV_DIAG:' + $value + ';'); [Console]::Out.Flush() }\n${query}`;
+query = `function mark($value) { [Console]::Out.Write('K:' + $value + ';'); [Console]::Out.Flush() }\n${query}`;
 const exitStages = [
   [
     "if ([string]::IsNullOrWhiteSpace($encoded) -or $encoded.Length -gt 65536) { exit 1 }",
@@ -135,7 +135,7 @@ const result = spawnSync(
 const output = result.stdout ?? "";
 const stages = [
   ...output.matchAll(
-    /KLV_DIAG:(read|input|decode|path|fullpath|directory|ancestor|ancestor-limit|existing|assembly|assembly-name|assembly-define|module|type|open|handle|tag|final|canonical|volume|drive|success);/gu,
+    /K:(read|input|decode|path|fullpath|directory|ancestor|ancestor-limit|existing|assembly|assembly-name|assembly-define|module|type|open|handle|tag|final|canonical|volume|drive|success);/gu,
   ),
 ];
 const lastStage = stages.at(-1)?.[1];
