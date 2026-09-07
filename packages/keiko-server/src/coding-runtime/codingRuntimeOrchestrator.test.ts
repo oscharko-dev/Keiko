@@ -5,9 +5,10 @@ import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueRead
 import { renderInitialTurnContext } from "./productionCodingRuntimePorts.js";
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local test fixture callbacks are contextually typed. */
 import { afterAll, describe, expect, it, vi } from "vitest";
-import type {
-  CodingRuntimeSnapshot,
-  CodingRuntimeSnapshotStore,
+import {
+  createCodingRuntimeSnapshotStore,
+  type CodingRuntimeSnapshot,
+  type CodingRuntimeSnapshotStore,
 } from "./codingRuntimeSnapshotStore.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
@@ -121,11 +122,12 @@ function fixture(
   // 8-character floor) can mint ids that satisfy it, without changing every other describe block's
   // established "run-1"/"run-2" convention.
   newRunId?: () => string,
+  snapshotStore?: CodingRuntimeSnapshotStore,
 ) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
   const deletePruned = vi.fn();
-  const store: CodingRuntimeSnapshotStore = {
+  const fixtureStore: CodingRuntimeSnapshotStore = {
     adoptDraftDeliveryFromPredecessor: vi.fn(() => {
       throw new Error("unexpected draft adoption");
     }),
@@ -218,6 +220,7 @@ function fixture(
     listPrunableSettled,
     deletePruned,
   };
+  const store = snapshotStore ?? fixtureStore;
   let terminalResultStatus: "cancelled" | "failed" | "succeeded" | undefined;
   const manager = {
     start: vi.fn<CodingRuntimeManager["start"]>((request) => ({
@@ -399,6 +402,8 @@ function expectRuntimeStartedEvent(records: readonly ServerLogEvent[]): void {
   expect(extra.runtimeSource).toBe("codex-cli-adapter");
   expect(extra.modelSource).toBe("keiko-model-gateway");
   expect(extra.hasPredecessor).toBe(false);
+  expect(extra.predecessorSelectionReason).toBe("no-bounded-lineage");
+  expect(extra).not.toHaveProperty("predecessorRunId");
 }
 
 function expectRuntimeSettledEvent(records: readonly ServerLogEvent[]): void {
@@ -569,11 +574,47 @@ function historicalVerifiedCommit(run: CodingRuntimeSnapshot): VerifiedCommitRes
     baseSha: "1".repeat(40),
     parentSha: "1".repeat(40),
     stagedTreeDigest: "7".repeat(64),
+    committedTreeDigest: "7".repeat(64),
     verificationEvidenceId: "verified-known-draft",
     messageDigest: "8".repeat(64),
     issueBindingDigest: ISSUE_BINDING.bindingDigest,
     headSha: "2".repeat(40),
   };
+}
+
+function persistHistoricalDraft(
+  snapshots: CodingRuntimeSnapshotStore,
+  run: CodingRuntimeSnapshot,
+): void {
+  const completed = historicalDraft(run);
+  let current: DraftDeliveryRecord = {
+    schemaVersion: completed.schemaVersion,
+    binding: completed.binding,
+    proposalId: completed.proposalId,
+    proposalDigest: completed.proposalDigest,
+    recordedAt: completed.recordedAt,
+    revision: 0,
+    phase: "push-proposed",
+    reason: "approval-required",
+  };
+  snapshots.recordDraftDelivery(current, null);
+  const reasonByPhase = {
+    pushing: "in-flight",
+    pushed: "completed",
+    "pr-proposed": "approval-required",
+    "creating-pr": "in-flight",
+  } as const;
+  for (const phase of ["pushing", "pushed", "pr-proposed", "creating-pr"] as const) {
+    const next = {
+      ...current,
+      revision: current.revision + 1,
+      phase,
+      reason: reasonByPhase[phase],
+    } satisfies DraftDeliveryRecord;
+    snapshots.recordDraftDelivery(next, current.revision);
+    current = next;
+  }
+  snapshots.recordDraftDelivery(completed, current.revision);
 }
 
 async function failedSuccessorWithDraftLineage(
@@ -1908,6 +1949,7 @@ describe("CodingRuntimeOrchestrator", () => {
       extra: {
         hasPredecessor: true,
         predecessorSelectionReason: "failed-successor-lineage",
+        predecessorRunId: "run-2",
       },
     });
     expect(sameDraftRecoveryTask(rowFor(f.rows, "run-3"), rowFor(f.rows, "run-2"))).toBe(true);
@@ -2007,8 +2049,111 @@ describe("CodingRuntimeOrchestrator", () => {
         (event) => event.op === "coding-runtime.run.started" && event.extra?.runId === "run-4",
       ),
     ).toMatchObject({
-      extra: { hasPredecessor: true, predecessorSelectionReason: "historical-local-draft" },
+      extra: {
+        hasPredecessor: true,
+        predecessorSelectionReason: "historical-local-draft",
+        predecessorRunId: "run-1",
+      },
     });
+  });
+
+  it("admits the unique acknowledged historical draft through the real SQLite store", async () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const snapshots = createCodingRuntimeSnapshotStore(db);
+    let runOrdinal = 0;
+    const nextRunId = (): string => {
+      runOrdinal += 1;
+      return `run-${String(runOrdinal)}`;
+    };
+    const firstRuntime = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      issueIntake(),
+      undefined,
+      undefined,
+      nextRunId,
+      snapshots,
+    ).orchestrator;
+    await firstRuntime.start({ ...start, issueRef: ISSUE_REF });
+    const first = snapshots.get("run-1");
+    if (first === undefined) throw new Error("first persisted run unavailable");
+    snapshots.recordVerifiedCommit(historicalVerifiedCommit(first));
+    persistHistoricalDraft(snapshots, first);
+    await firstRuntime.startupReconcile();
+    await firstRuntime.acknowledgeRecovery("run-1", {
+      requestId: "run-1",
+      acknowledged: true,
+    });
+    await firstRuntime.retry("run-1", {
+      ...start,
+      requestId: "request-2",
+      issueRef: ISSUE_REF,
+    });
+    await firstRuntime.ingest({
+      schemaVersion: "1",
+      eventId: "run-2-terminal-failure",
+      runId: "run-2",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "runtime-stopped",
+    });
+    const second = snapshots.get("run-2");
+    if (second === undefined) throw new Error("failed persisted successor unavailable");
+    snapshots.create({
+      ...second,
+      runId: "run-3",
+      state: "succeeded",
+      revision: 1,
+      createdAt: "2026-01-01T00:00:01.000Z",
+      updatedAt: "2026-01-01T00:00:01.000Z",
+      terminalAt: "2026-01-01T00:00:01.000Z",
+      predecessorRunId: undefined,
+      failureCode: undefined,
+      result: undefined,
+    });
+    const resumed = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      issueIntake(),
+      undefined,
+      undefined,
+      () => "run-4",
+      snapshots,
+    ).orchestrator;
+
+    await expect(
+      resumed.start({ ...start, requestId: "request-4", issueRef: ISSUE_REF }),
+    ).resolves.toMatchObject({ ok: true, snapshot: { runId: "run-4" } });
+    expect(snapshots.get("run-4")?.predecessorRunId).toBe("run-1");
+    const fourth = snapshots.get("run-4");
+    if (fourth === undefined) throw new Error("resumed persisted run unavailable");
+    const source = historicalDraft(first);
+    const adopted = snapshots.adoptDraftDeliveryFromPredecessor({
+      ...source,
+      revision: 0,
+      phase: "recovery-required",
+      reason: "restart-reconciliation",
+      proposalId: "delivery-fresh-recovery",
+      proposalDigest: "9".repeat(64),
+      binding: {
+        ...source.binding,
+        runId: fourth.runId,
+        workspaceDigest: fourth.workspaceDigest,
+        runtimeAuthorityDigest: fourth.authorityDigest,
+        envelopeDigest: "a".repeat(64),
+      },
+    });
+    expect(adopted.draftDelivery).toMatchObject({
+      phase: "recovery-required",
+      pullRequest: { number: 7 },
+    });
+    db.close();
   });
 
   it("rejects ambiguous local historical drafts after a settled run severed its edge", async () => {

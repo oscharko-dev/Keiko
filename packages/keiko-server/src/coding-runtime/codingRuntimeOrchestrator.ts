@@ -334,6 +334,9 @@ function recordRuntimeRunStarted(
       modelSource: snapshot.modelSource,
       hasPredecessor: snapshot.predecessorRunId !== undefined,
       predecessorSelectionReason,
+      ...(snapshot.predecessorRunId === undefined
+        ? {}
+        : { predecessorRunId: snapshot.predecessorRunId }),
     },
   });
 }

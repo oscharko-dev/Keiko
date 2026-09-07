@@ -1433,7 +1433,7 @@
     {
       "op": "coding-runtime.approval.waiting",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:384",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:387",
       "package": "keiko-server"
     },
     {
@@ -1457,7 +1457,7 @@
     {
       "op": "coding-runtime.description",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:2212",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:2215",
       "package": "keiko-server"
     },
     {
@@ -1642,19 +1642,19 @@
     {
       "op": "coding-runtime.run.issue-context-attached",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1577",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1580",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.run.recovery-acknowledged",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1110",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1113",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.run.settled",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:430",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:433",
       "package": "keiko-server"
     },
     {
@@ -1803,7 +1803,7 @@
     {
       "op": "coding-runtime.verification-summarized",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:405",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:408",
       "package": "keiko-server"
     },
     {
@@ -2596,7 +2596,7 @@
     {
       "op": "git.verified-commit.authority",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeSnapshotStore.ts:527",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeSnapshotStore.ts:536",
       "package": "keiko-server"
     },
     {

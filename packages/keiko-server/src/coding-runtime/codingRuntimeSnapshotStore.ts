@@ -72,6 +72,15 @@ const SETTLED = new Set<CodingWorkbenchRuntimeStateName>([
   "taken-over",
 ]);
 
+function isAdmissibleClosedPredecessor(snapshot: CodingRuntimeSnapshot): boolean {
+  return (
+    SETTLED.has(snapshot.state) ||
+    (snapshot.state === "recovery-required" &&
+      snapshot.terminalAt !== undefined &&
+      snapshot.recoveryAcknowledgedAt !== undefined)
+  );
+}
+
 export interface CodingRuntimeSnapshot {
   readonly ciReadiness?: ReadinessSnapshot;
   readonly draftDelivery?: DraftDeliveryRecord;
@@ -286,7 +295,7 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
               .changes !== 1
           )
             throw new Error("acknowledged recovery runtime snapshot was not found");
-        } else if (!SETTLED.has(predecessor.state)) {
+        } else if (!isAdmissibleClosedPredecessor(predecessor)) {
           throw new Error("predecessor runtime snapshot was not settled");
         }
         insert.run(...values(snapshot));

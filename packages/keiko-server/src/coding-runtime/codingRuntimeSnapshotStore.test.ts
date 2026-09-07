@@ -209,6 +209,23 @@ describe("CodingRuntimeSnapshotStore", () => {
     expect(s.get("run-1")).toEqual(failed);
   });
 
+  it("admits a linked successor from an acknowledged recovery row released earlier", () => {
+    const s = store();
+    s.create(snapshot());
+    s.markNonterminalRecoveryRequired("2026-07-13T10:01:00.000Z");
+    s.acknowledgeRecovery("run-1", "2026-07-13T10:02:00.000Z");
+    const released = s.releaseRecoveryForRetry("run-1", "2026-07-13T10:03:00.000Z");
+    const successor = {
+      ...snapshot("run-2"),
+      createdAt: "2026-07-13T10:04:00.000Z",
+      updatedAt: "2026-07-13T10:04:00.000Z",
+      predecessorRunId: "run-1",
+    } satisfies CodingRuntimeSnapshot;
+
+    expect(s.create(successor)).toEqual(successor);
+    expect(s.get("run-1")).toEqual(released);
+  });
+
   it("refuses a linked successor from an unacknowledged recovery slot", () => {
     const s = store();
     s.create(snapshot());
@@ -225,6 +242,21 @@ describe("CodingRuntimeSnapshotStore", () => {
     expect(s.listRecentActive().map(({ runId }) => runId)).toEqual(recovering);
     expect(s.get("run-2")).toBeUndefined();
   });
+
+  it.each(["recovery-required", "running"] as const)(
+    "does not treat a terminal timestamp alone as released %s authority",
+    (state) => {
+      const s = store();
+      const prior = { ...snapshot(), state, terminalAt: at };
+      s.create(prior);
+
+      expect(() => s.create({ ...snapshot("run-2"), predecessorRunId: prior.runId })).toThrow(
+        "predecessor runtime snapshot was not settled",
+      );
+      expect(s.get(prior.runId)).toEqual(prior);
+      expect(s.get("run-2")).toBeUndefined();
+    },
+  );
 
   it("retains the acknowledged recovery slot when successor insertion fails", () => {
     const s = store();
