@@ -35,7 +35,7 @@ import { describeError } from "../diagnostics-log.js";
 import type {
   createProductionJourneyCiReader as ProductionJourneyCiReaderFn,
   createProductionJourneyReader as ProductionJourneyReaderFn,
-  resolveJourneyCheckoutRoot as ResolveJourneyCheckoutRootFn,
+  resolveJourneyDescriptionCheckoutRoots as ResolveJourneyDescriptionCheckoutRootsFn,
 } from "../coding-runtime/productionDraftDeliveryDependencies.js";
 import { hasOnlyAllowedKeys, isPlainObject, readParsedGitDeliveryBody } from "./requestGuards.js";
 import {
@@ -190,7 +190,7 @@ function outcomesFor(
 interface DraftDeliveryReaderModule {
   readonly createProductionJourneyReader: typeof ProductionJourneyReaderFn;
   readonly createProductionJourneyCiReader: typeof ProductionJourneyCiReaderFn;
-  readonly resolveJourneyCheckoutRoot: typeof ResolveJourneyCheckoutRootFn;
+  readonly resolveJourneyDescriptionCheckoutRoots: typeof ResolveJourneyDescriptionCheckoutRootsFn;
 }
 let draftDeliveryReaderModule: Promise<DraftDeliveryReaderModule> | undefined;
 function loadDraftDeliveryReaderModule(): Promise<DraftDeliveryReaderModule> {
@@ -441,22 +441,28 @@ function descriptionFor(
   repositoryId: string,
   repository: string,
   prNumber: number,
-  resolveCheckoutRoot: typeof ResolveJourneyCheckoutRootFn,
+  resolveCheckoutRoots: typeof ResolveJourneyDescriptionCheckoutRootsFn,
 ): JourneyObservationOptions["description"] {
   if (options.description !== undefined) return options.description;
   return (context): Promise<PrDescriptionApplicationStatus | null> => {
-    const root = resolveCheckoutRoot(deps, repositoryId);
-    if (root === undefined) return Promise.resolve(null);
-    return Promise.resolve(
-      readDescriptionStatus(
+    // Tries every local checkout that could hold this repository's receipt (#3389 AC9 correction,
+    // epic #3384 issue-to-PR), not only the durable, run-independent registered project: a
+    // worktree-isolated run's description apply is scoped to its OWN managed worktree, a different
+    // local root than the one `repositoryId` (captured from the original repository) resolves to.
+    // Read-only and safe to try in order — a wrong candidate can only ever come back "not found",
+    // never a fabricated or foreign status (see `resolveJourneyDescriptionCheckoutRoots`).
+    for (const root of resolveCheckoutRoots(deps, repositoryId)) {
+      const status = readDescriptionStatus(
         deps,
         contentFreeReadWorkspace(root),
         repository,
         prNumber,
         context.correlationId,
         context.stillAuthorized,
-      ),
-    );
+      );
+      if (status !== null) return Promise.resolve(status);
+    }
+    return Promise.resolve(null);
   };
 }
 
@@ -558,7 +564,7 @@ function buildJourneyObservationOptions(
       repositoryId,
       draft.binding.repository,
       draft.pullRequest.number,
-      draftDelivery.resolveJourneyCheckoutRoot,
+      draftDelivery.resolveJourneyDescriptionCheckoutRoots,
     ),
     recordOutcome: (observeContext, outcome): boolean =>
       recordJourneyOutcome(deps, outcomesFor(deps, options), observeContext.correlationId, outcome),

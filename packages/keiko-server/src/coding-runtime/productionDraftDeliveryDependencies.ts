@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import { canonicalise } from "@oscharko-dev/keiko-security";
 import {
@@ -101,7 +102,12 @@ export function createProductionDraftDeliveryDependencies(
 
 export type JourneyReadCompositionDeps = Pick<
   UiHandlerDeps,
-  "store" | "env" | "managedTaskWorkspaceRoot" | "workspaceProvisioning" | "activityLog"
+  | "store"
+  | "env"
+  | "managedTaskWorkspaceRoot"
+  | "workspaceProvisioning"
+  | "workspaceLifecycle"
+  | "activityLog"
 >;
 
 export interface ProductionJourneyReadRequest {
@@ -148,6 +154,66 @@ export function resolveJourneyCheckoutRoot(
   repositoryId: string,
 ): string | undefined {
   return journeyReaderRoot(deps, repositoryId);
+}
+
+/**
+ * Every LOCAL checkout that could hold this repository's PR-description receipt (#3389 AC9,
+ * epic #3384 issue-to-PR).
+ *
+ * The receipt store scopes its digest to the EXACT local root the apply actually ran in
+ * (`scopeFor` in `prDescriptionReceiptStore.ts` hashes `realpathSync(context.workspace.root)`) —
+ * deliberately, so a description generated against one checkout's diff can never be read back as
+ * "applied" from an unrelated one. For a worktree-isolated coding run that root is the run's own
+ * MANAGED WORKTREE, never the repository root `issueBinding.repositoryId` above is keyed to: that
+ * id is captured once, from the ORIGINAL repository the issue was accepted against
+ * (`githubIssueReaderRepositoryId(instance.repositoryRoot)`), specifically so it survives the
+ * worktree's own eventual archival — but that also means `journeyReaderRoot`'s single-root
+ * resolution can only ever land back on the ordinary/original project, never on the worktree the
+ * description apply actually used. Reading the receipt therefore needs every plausible LOCAL root,
+ * not just the one identity-stable anchor:
+ *
+ *  1. the ordinary registered-project root `resolveJourneyCheckoutRoot` already resolves (kept
+ *     first so an ordinary, non-worktree-isolated deployment is unaffected), and
+ *  2. every managed worktree `workspaceLifecycle.list` reports for that SAME root
+ *     (`ensureManagedTaskWorkspaceIdentity` registers one project per accepted task), each
+ *     re-verified through the SAME strong managed-root prover `resolveProjectWorkspace` already
+ *     applies to an ordinary project — never the raw persisted path taken on faith.
+ *
+ * Trying every candidate mints no authority and fabricates nothing: each root is independently
+ * admitted through the existing prover, and the receipt store's own scope/binding check
+ * (`statusMatchesScope`) refuses any document that is not genuinely and consistently keyed to the
+ * candidate actually queried — a wrong candidate can only ever come back "not found." Step 2 needs
+ * no repository-wide store pick of its own: `workspaceLifecycle.list` keys by the SAME canonical
+ * root step 1 already proved resolves to `repositoryId`, so it is threaded straight through.
+ */
+function managedWorktreeCandidates(
+  deps: JourneyReadCompositionDeps,
+  ordinaryRoot: string,
+): readonly WorkspaceInfo[] {
+  if (deps.workspaceLifecycle === undefined) return [];
+  try {
+    const instances = deps.workspaceLifecycle.list(realpathSync(ordinaryRoot));
+    return instances
+      .map((instance) => resolveProjectWorkspace(deps, instance.managedWorktreePath))
+      .filter((resolved) => resolved !== undefined);
+  } catch {
+    // A vanished ordinary root or an unavailable lifecycle store yields no worktree candidates —
+    // never a thrown failure that would take the whole journey refresh down with it (fail closed
+    // to "no additional candidates", exactly like an unresolved ordinary root already does).
+    return [];
+  }
+}
+export function resolveJourneyDescriptionCheckoutRoots(
+  deps: JourneyReadCompositionDeps,
+  repositoryId: string,
+): readonly string[] {
+  const roots = new Set<string>();
+  const ordinary = resolveJourneyCheckoutRoot(deps, repositoryId);
+  if (ordinary !== undefined) {
+    roots.add(ordinary);
+    for (const candidate of managedWorktreeCandidates(deps, ordinary)) roots.add(candidate.root);
+  }
+  return [...roots];
 }
 
 /**
