@@ -1,10 +1,9 @@
-# Epic #3384: paused work checkpoint — September 6, 2026
+# Epic #3384: resumed work checkpoint — September 7, 2026
 
-The owner requested a clean end of work for today and continuation from this checkpoint tomorrow.
-This is a preservation checkpoint, not epic completion, merge readiness, or issue-closeout evidence.
-No real-model continuation was started during shutdown. The local PR audit automation is already
-paused. PR #3394 remains open; native auto-merge is not armed. No issue or working branch is closed
-or deleted by this checkpoint.
+Work resumed on September 7 from the clean September 6 preservation checkpoint. This remains a
+work-in-progress record, not epic completion, merge readiness, or issue-closeout evidence. PR
+#3394 remains open and unmerged; native auto-merge is not armed. No issue or working branch is
+closed or deleted by this checkpoint, and the controlled-repository matrix remains 0/5.
 
 The earlier handoff records remain available in this file's Git history. They are historical;
 especially their attempt numbers, USD 100 allowance and active-automation statements must not be
@@ -51,19 +50,34 @@ Actual results, with their source limits:
 | Browser CI and Git-connected Chat fixtures | 2 and 4 cases passed                               | `5be376e6`; deterministic fixtures, not real-model qualification                          |
 | Final intake and affected visual captures  | Four selected targets passed                       | `f8088db2`; actual redirected producer artifacts archived and verified                    |
 
-The final complete six-case commit-browser rerun on `f8088db2` failed with the workspace-revocation
-crash after two passing cases; three did not run. Its failure log and trace are retained. The clock
-repair has targeted red/green proof, but that full browser lane must be rerun tomorrow. The older
-tracked #3386 journey receipt is historical and must not be represented as this missing rerun.
+The complete six-case commit-browser rerun was repeated after the workspace-revocation repair at
+exact source `344e835a`. All six cases passed, including Ask, Supervised and Full approval
+semantics, staged-drift refusal and explicit denial. The tracked
+`docs/design-system/evidence/3386/journey-proof.json` records this as
+production-composed deterministic browser evidence with `modelQualification: false`; it does not
+replace a real-model flow.
 
-The fresh #2952 calibration/candidate pair and H1 checkpoint passed before the clock repair.
-The repair changes their owned source closure, so both now need requalification. The #3415 Linux
-catalog performance subject/ruler does not own the bridge change; its checker still passes.
-Do not repeat that Linux measurement merely because a different source file changed.
+The #2952 native calibration/candidate pair and H1 checkpoint were regenerated at exact source
+`344e835a` after the repair. The native pair used pinned Node 24.18.0, completed two warmups and 30
+measured samples per arm, and passed its owning performance gate. The H1 verification passed three
+production-managed files / 83 tests; independent review accepted all ten criteria and bound the
+660-path owned-source closure. These are exact-source prequalification facts. H1 explicitly does
+not establish packaged real-runtime, live-provider or final merge-head qualification, and either
+receipt must be regenerated if its owned source changes.
 
-The final pause checkpoint also passed full root TypeScript checking, the generated operation
-catalog check, and the local Sonar analyzer. These results do not replace the pending full
-commit-browser rerun, refreshed H1/native-performance evidence or current-head GitHub checks.
+The tracked visual receipts for #3385, #3386, #3388, #3389, #3400 and #3401 were rechecked on
+September 7. All 47 recorded source hashes match the checkout: 5/5, 8/8, 11/11, 8/8, 8/8 and 7/7
+respectively. The #3385/#3386 captures were produced at `f8088db2`; the other retained captures
+remain source-valid because their recorded owners are byte-identical. They are deterministic
+browser evidence, not live-model or final frozen-source qualification.
+
+The September 6 checkpoint also passed full root TypeScript checking, the generated operation
+catalog check, and the local Sonar analyzer. On the September 7 resume audit, exact PR head
+`344e835a` had no unresolved review threads but required CI was red: deterministic OpenCode startup
+timing, scripted CI-repair budget expectations and a UI debugging fixture failed. The coverage
+aggregate therefore stopped before producing the required SonarCloud context. These concrete
+failures must be repaired and the required checks rerun; the refreshed browser, H1 and native
+evidence does not override them.
 
 ## Real-model delivery: 0/5 completed
 
@@ -74,24 +88,23 @@ on that head. It has not been merged and the issue is open. Independent review f
 maximum-value overflow in its average implementation; that model-authored repair is still required.
 
 Attempt 32 failed before editing because recovered PR/CI binding admission was unavailable.
-That product defect was repaired in earlier commits. The next prepared continuation is attempt 33,
-using the preserved attempt-31 workspace and attempt-32 predecessor through normal recovery.
+That product defect was repaired in earlier commits. The next continuation remains attempt 33,
+using the preserved attempt-31 workspace and attempt-32 predecessor through normal recovery after
+the source and required prequalification inputs are frozen.
 Do not recreate the workspace, discard its Git history, manually author the fixture repair, or
 claim a completed run from the runtime's terminal status alone.
 
-## Resume sequence
+## Active sequence
 
-1. Read this checkpoint and the private resume packet. Verify local/remote PR heads, current review
-   comments and check results. Resume the five-minute checkpoint/review cadence only when work is
-   actually resumed. Preserve the known workspace and existing draft PR.
-2. Rerun the six-case commit browser lane through the clock fix. Retain its actual redirected
-   `test-results/e2e-evidence` output before another lane clears that directory. Never substitute
-   an older checkout's `docs` artifact for a producer output. Revalidate every recorded source hash
-   and screenshot digest before copying canonical evidence.
-3. Requalify H1 and #2952 native calibration/candidate evidence for the repaired source. Complete
-   any remaining non-#3390 source/evidence corrections, then freeze one clean source F for all five
-   flows. A later landing descendant may contain only the validator's allowed qualification
-   artifacts; never restamp an old run or broaden that allowlist to conceal source drift.
+1. Settle the three known current-head CI regressions and rerun their exact failing lanes. Verify
+   local/remote PR heads, review comments and required checks before freezing; do not treat a
+   missing SonarCloud context as a pass.
+2. Verify that the six-case #3386 journey receipt, all tracked visual source hashes, current H1
+   checkpoint and #2952 pair still bind the chosen source. Rerun only an owning producer whose
+   source closure changed. Never substitute an older checkout's artifact or restamp a prior run.
+3. Complete any remaining non-#3390 source/evidence corrections, then freeze one clean source F for
+   all five flows. A later landing descendant may contain only the validator's allowed
+   qualification artifacts; never broaden that allowlist to conceal source drift.
 4. Start the prepared real attempt 33 at F and follow the activity log first. Observe real failing
    regressions, model repair, passing verification, actual governed delivery and independent
    exact-head rubric review. Drive description application, ready intent, explicit governed merge
@@ -108,9 +121,10 @@ claim a completed run from the runtime's terminal status alone.
    and review settlement. Only then integrate through the protected path, verify actual `dev`,
    record genuine H1 postmerge provenance, close fulfilled issues and delete the merged branch.
 
-All 322 review conversations were resolved at the last pre-pause observation. New comments and
-checks after the final preservation push require a fresh read tomorrow. Only CodeRabbit's
-oversized-PR coverage failure is excluded; concrete findings and other reviewers remain in scope.
+All 322 historical review conversations were resolved at the pre-pause observation, and the
+September 7 audit found zero unresolved review threads. New comments and checks after that audit
+require another read. Only CodeRabbit's oversized-PR coverage failure is excluded; concrete
+findings and other reviewers remain in scope.
 
 ## Private restoration material
 

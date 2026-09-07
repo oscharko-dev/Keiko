@@ -756,7 +756,7 @@ function editorWindow(page: Page): Locator {
 }
 
 type DebugSessionStartSettlement =
-  | { readonly kind: "response"; readonly response: PlaywrightResponse }
+  | { readonly kind: "response"; readonly status: number; readonly body: string }
   | { readonly kind: "aborted"; readonly errorText: string | undefined };
 
 function isDebugSessionStartRequest(request: Request): boolean {
@@ -766,7 +766,7 @@ function isDebugSessionStartRequest(request: Request): boolean {
 }
 
 function waitForDebugSessionStart(page: Page): Promise<DebugSessionStartSettlement> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let startRequest: Request | undefined;
     const cleanup = (): void => {
       page.off("request", onRequest);
@@ -781,7 +781,17 @@ function waitForDebugSessionStart(page: Page): Promise<DebugSessionStartSettleme
       if (startRequest === undefined && isDebugSessionStartRequest(request)) startRequest = request;
     };
     const onResponse = (response: PlaywrightResponse): void => {
-      if (response.request() === startRequest) finish({ kind: "response", response });
+      if (response.request() !== startRequest) return;
+      cleanup();
+      const status = response.status();
+      void response.text().then(
+        (body) => {
+          resolve({ kind: "response", status, body });
+        },
+        (error: unknown) => {
+          reject(error instanceof Error ? error : new Error("DEBUG_SESSION_RESPONSE_UNREADABLE"));
+        },
+      );
     };
     const onRequestFailed = (request: Request): void => {
       if (request === startRequest) {
@@ -803,8 +813,8 @@ async function startedSessionId(
     expect(settlement.errorText).toBe("net::ERR_ABORTED");
     return await capturedStartedSessionId(page, observedStartCount);
   }
-  expect(settlement.response.status(), await settlement.response.text()).toBe(201);
-  const session = debugSession(await settlement.response.json());
+  expect(settlement.status, settlement.body).toBe(201);
+  const session = debugSession(JSON.parse(settlement.body) as unknown);
   return await capturedStartedSessionId(page, observedStartCount, session.sessionId);
 }
 
