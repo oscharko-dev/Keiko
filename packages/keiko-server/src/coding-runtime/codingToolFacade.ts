@@ -81,6 +81,7 @@ const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   ...EDITOR_AGENT_FAILURE_CODES,
   ...EDIT_TRANSPORT_REASON_CODES,
   ...EDIT_PORT_REFUSAL_REASON_CODES,
+  "ci-observation-required",
 ]);
 // The verification PORT's own closed markers (productionManagedWorktreeTools.ts), as opposed to the
 // runner vocabulary sourced below. The first two are raised BEFORE the runner is called: the run's
@@ -113,6 +114,7 @@ const HTTP_ONLY_VERIFICATION_RUNNER_CODES: ReadonlySet<VerificationRunnerErrorCo
 ]);
 const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   "ci-repair-budget-blocked",
+  "ci-observation-required",
   "capability-backend-unavailable",
   "command-backend-unavailable",
   "command-authority-revoked",
@@ -564,12 +566,11 @@ function projectEditFailure(
 ): CodingToolResult | undefined {
   if (request.action !== "edit" || value.outcome !== "failed") return undefined;
   const reasonCode = value.reasonCode;
-  return projected(
-    "failed",
+  const safeReasonCode =
     typeof reasonCode === "string" && EDIT_FAILURE_REASON_CODES.has(reasonCode)
       ? reasonCode
-      : undefined,
-  );
+      : undefined;
+  return projected("failed", safeReasonCode, safeReasonCode === "ci-observation-required");
 }
 
 function projectAuxiliary(

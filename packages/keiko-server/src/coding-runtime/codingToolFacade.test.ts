@@ -606,6 +606,25 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  it("forwards the recoverable CI observation requirement on an edit refusal", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "ci-observation-required" }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "edit", changeset }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      reasonCode: "ci-observation-required",
+      evidence: [{ kind: "governed-delegate", code: "ci-observation-required" }],
+    });
+  });
+
   it("drops an edit reasonCode outside the closed vocabulary instead of forwarding it verbatim", async () => {
     const ports = facade();
     ports.delegate.execute = vi.fn(() =>

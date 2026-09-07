@@ -29,6 +29,30 @@ import {
 } from "./codingRuntimeCiReadinessStore.js";
 import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 
+function recordObservationRequirement(
+  deps: DraftDeliveryDependencies,
+  verified: VerifiedCommitRuntimeDependencies,
+  binding: VerifiedCommitRuntimeBinding,
+): () => void {
+  return (): void => {
+    (
+      deps.execution?.activityLog ??
+      verified.execution?.activityLog ??
+      processServerLogSink()
+    ).write({
+      category: "process",
+      op: "git.ci-repair.budget",
+      correlationId: correlationIdOrUnknown(binding.runId),
+      extra: {
+        phase: "admission",
+        state: "blocked",
+        reason: "ci-observation-required",
+        runId: binding.runId,
+      },
+    });
+  };
+}
+
 export function createProductionCiRepairBudget(
   deps: DraftDeliveryDependencies | undefined,
   verified: VerifiedCommitRuntimeDependencies | undefined,
@@ -72,6 +96,7 @@ export function createProductionCiRepairBudget(
       allowConfirmed: true,
       reason: "invalid-binding",
     }),
+    recordObservationRequirement(deps, verified, binding),
   );
 }
 function budgetContext(
@@ -175,6 +200,7 @@ function availabilityGuard(input: AvailabilityInput): () => boolean {
 function gateBudget(
   budget: CiRepairExecutionBudget,
   allowed: () => boolean,
+  recordObservationRequired: () => void,
 ): CiRepairExecutionBudget {
   return {
     admitTool: (request): CiRepairExecutionLease | undefined => {
@@ -187,6 +213,11 @@ function gateBudget(
     canChargePrompt: (tokens) => allowed() && budget.canChargePrompt(tokens),
     chargePrompt: (tokens) => allowed() && budget.chargePrompt(tokens),
     chargeDelegatedRead: (id, key) => allowed() && budget.chargeDelegatedRead?.(id, key) === true,
+    ciObservationRequired: (): boolean => {
+      const required = allowed() && budget.ciObservationRequired?.() === true;
+      if (required) recordObservationRequired();
+      return required;
+    },
     observed: (snapshot): void => {
       if (allowed()) budget.observed(snapshot);
     },

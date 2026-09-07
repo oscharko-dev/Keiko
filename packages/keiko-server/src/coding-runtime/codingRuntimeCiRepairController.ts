@@ -26,6 +26,8 @@ export interface CiRepairExecutionBudget {
   readonly chargePrompt: (promptTokens: number) => boolean;
   readonly chargeDelegatedRead?: (delegationId: string, idempotencyKey: string) => boolean;
   readonly observed: (snapshot: ReadinessSnapshot) => void;
+  /** True only when a fresh CI observation is the supported next step for refused post-PR work. */
+  readonly ciObservationRequired?: () => boolean;
   /**
    * The raw exhaustion fact behind this run's repair ledger (#3384 B5-1): true when the store
    * reports the deadline, tool-call, prompt-token, or attempt-count budget spent. A read-only
@@ -208,6 +210,18 @@ export class CodingRuntimeCiRepairController implements CiRepairExecutionBudget 
         toolCalls: 1,
         promptTokens: 0,
       }) !== undefined
+    );
+  }
+  public ciObservationRequired(): boolean {
+    const context = this.deps.context();
+    if (context?.stillAuthorized() !== true) return false;
+    const budget = this.deps.store.read(context);
+    if (budget.status !== "available" || active(budget.record) !== undefined) return false;
+    const snapshot = this.deps.readiness.get(context.runId);
+    const now = this.deps.now();
+    return (
+      !currentFailure(snapshot, now) &&
+      !(snapshot?.state === "technical-ready" && fresh(snapshot, now))
     );
   }
   /** Read-only raw fact for `produceCiReadinessSnapshot` (#3384 B5-1); never mutates the ledger. */

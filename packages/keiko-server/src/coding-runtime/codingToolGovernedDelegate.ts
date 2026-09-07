@@ -74,6 +74,12 @@ export interface CodingToolGovernedPorts {
   readonly childAgentAuthority?: GovernedCodingToolPort<"child-agent"> | undefined;
 }
 
+function repairBudgetRefusalReason(budget: CiRepairExecutionBudget): string {
+  return budget.ciObservationRequired?.() === true
+    ? "ci-observation-required"
+    : "ci-repair-budget-blocked";
+}
+
 export function createCodingToolGovernedDelegate(
   ports: CodingToolGovernedPorts,
   budget?: CiRepairExecutionBudget,
@@ -85,7 +91,10 @@ export function createCodingToolGovernedDelegate(
       if (!mutationGuard.check()) return { outcome: "failed" };
       const lease = budget?.admitTool(request);
       if (budget !== undefined && lease === undefined)
-        return { outcome: "failed", reasonCode: "ci-repair-budget-blocked" };
+        return {
+          outcome: "failed",
+          reasonCode: repairBudgetRefusalReason(budget),
+        };
       const guard = withRepairLease(mutationGuard, lease, budget);
       let result: GovernedCodingToolResult | undefined;
       try {

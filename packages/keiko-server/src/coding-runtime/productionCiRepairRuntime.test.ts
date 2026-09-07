@@ -263,6 +263,15 @@ const request = {
   actionId: "next",
   idempotencyKey: "next",
 } as const;
+const editRequest = {
+  action: "edit",
+  changeset: {
+    patch: "--- a/index.js\n+++ b/index.js\n@@\n-old\n+new\n",
+    files: [{ file: "index.js", expectedContentHash: DIGEST }],
+  },
+  actionId: "edit-next",
+  idempotencyKey: "edit-next",
+} as const;
 describe("production CI repair accounting availability", () => {
   it.each([
     [false, "ciRepairBudget"],
@@ -391,6 +400,67 @@ describe("production CI repair accounting availability", () => {
     );
     expect(budget?.chargePrompt(1)).toBe(true);
     expect(budget?.admitTool(request)?.check()).toBe(true);
+  });
+  it("requires a fresh CI observation for inherited post-PR work and admits the retry", async () => {
+    const stale = {
+      ...readySnapshot(),
+      observedAt: "2026-09-04T23:58:00.000Z",
+      expiresAt: "2026-09-04T23:59:00.000Z",
+    } satisfies ReadinessSnapshot;
+    const test = fixture(true, { predecessorReadiness: stale, seedExhaustedBudget: false });
+    const budget = createProductionCiRepairBudget(test.deps, test.verified, test.current);
+    const run = vi.fn(() => Promise.resolve({ status: "completed" as const }));
+    const delegate = createCodingToolGovernedDelegate(ports(run), budget);
+
+    await expect(delegate.execute(editRequest, undefined, { check: () => true })).resolves.toEqual({
+      outcome: "failed",
+      reasonCode: "ci-observation-required",
+    });
+    expect(run).not.toHaveBeenCalled();
+    expect(test.events).toContainEqual(
+      expect.objectContaining({
+        op: "git.ci-repair.budget",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        extra: {
+          phase: "admission",
+          state: "blocked",
+          reason: "ci-observation-required",
+          runId: "run-2",
+        },
+      }),
+    );
+    const current = test.snapshots.get("run-2");
+    const readiness = test.snapshots.ciReadiness;
+    if (current?.draftDelivery === undefined || readiness === undefined) {
+      throw new Error("Missing recovered draft or readiness store");
+    }
+    const fresh = {
+      ...readySnapshot(),
+      runId: current.runId,
+      evidenceRef: "ci-observation-run-2",
+      observedAt: AT,
+      expiresAt: "2026-09-05T00:01:00.000Z",
+    } satisfies ReadinessSnapshot;
+    expect(readiness.complete(readiness.begin(current.runId), fresh)).toBe(true);
+
+    await expect(delegate.execute(editRequest, undefined, { check: () => true })).resolves.toEqual({
+      outcome: "completed",
+    });
+    expect(run).toHaveBeenCalledOnce();
+    expect(
+      test.ciRepairBudget.read({
+        runId: current.runId,
+        remoteDigest: current.draftDelivery.binding.remoteDigest,
+        prNumber: current.draftDelivery.pullRequest?.number ?? 0,
+        correlationId: current.runId,
+        stillAuthorized: () => true,
+        limits: {
+          maxRuntimeMs: test.current.context.budget.maxRuntimeMs,
+          maxToolCalls: test.current.context.budget.maxToolCalls,
+          maxPromptTokens: test.current.context.budget.maxPromptTokens,
+        },
+      }).record,
+    ).toBeUndefined();
   });
   it("retains cumulative exhaustion across an exact technical-ready successor lineage", () => {
     const test = fixture(true, { predecessorReadiness: readySnapshot() });

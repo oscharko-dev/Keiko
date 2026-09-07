@@ -71,6 +71,23 @@ describe("CodingToolGovernedDelegate", () => {
     expect(ports.verificationRunner.execute).not.toHaveBeenCalled();
     expect(budget.admitTool).toHaveBeenCalledOnce();
   });
+  it("tells the model to refresh CI when post-PR work lacks a fresh observation", async () => {
+    const ports = governedPorts();
+    const budget = {
+      admitTool: vi.fn(() => undefined),
+      canChargePrompt: vi.fn(() => false),
+      chargePrompt: vi.fn(() => false),
+      observed: vi.fn(),
+      ciObservationRequired: vi.fn(() => true),
+    };
+    const delegate = createCodingToolGovernedDelegate(ports, budget);
+
+    await expect(
+      delegate.execute({ ...identity, action: "edit", changeset }, undefined, liveGuard),
+    ).resolves.toEqual({ outcome: "failed", reasonCode: "ci-observation-required" });
+    expect(ports.editorChangeset.execute).not.toHaveBeenCalled();
+    expect(budget.ciObservationRequired).toHaveBeenCalledOnce();
+  });
   it("checks repair liveness at the existing handler boundary and settles the actual outcome once", async () => {
     const settle = vi.fn();
     let allowed = true;
