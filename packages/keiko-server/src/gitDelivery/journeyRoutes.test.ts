@@ -530,7 +530,14 @@ describe("journey readiness renewal after the run has settled (regression, epic 
         // `createProductionJourneyCiReader`, proving the refresh renews readiness through a fresh
         // read instead of ever reusing the frozen snapshot seeded above.
         ciReader: (): GitCiProviderReader => ({
-          readFacts: (): Promise<GitCiFactsResult> => Promise.resolve(greenCiFacts(h.draft)),
+          readFacts: (target): Promise<GitCiFactsResult> => {
+            // The provider read matches the pull request by NUMBER (`revisionMatches` in
+            // git-ci-facts.ts compares `identity.number === Number(target.prExternalId)`), so a
+            // node id here silently yields NaN and every read reports revision-changed.
+            expect(target.prExternalId).toBe(String(h.draft.pullRequest?.number));
+            expect(target.headSha).toBe(h.draft.binding.headSha);
+            return Promise.resolve(greenCiFacts(h.draft));
+          },
         }),
       });
       const result = (await group[0]?.handler(

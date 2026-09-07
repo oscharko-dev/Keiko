@@ -252,7 +252,12 @@ function journeyCiTarget(draft: ConfirmedDraftDeliveryRecord): {
 } {
   return {
     ownerAndRepo: draft.binding.repository,
-    prExternalId: draft.pullRequest.externalId,
+    // The provider read matches the pull request by NUMBER: `revisionMatches` in
+    // `keiko-tools/git-ci-facts.ts` compares `identity.number === Number(target.prExternalId)`.
+    // The record's `externalId` is the provider's opaque node id, which coerces to NaN and makes
+    // every read report `revision-changed`; the mark-ready path passes the number for the same
+    // reason (`isPrNumberString` guards its own command).
+    prExternalId: String(draft.pullRequest.number),
     baseBranchName: draft.binding.baseRef,
     headSha: draft.binding.headSha,
   };
