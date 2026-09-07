@@ -615,6 +615,15 @@ describe("description application against the pull request's own base branch", (
       expect(result.outcome, JSON.stringify(result)).toBe("preview");
       if (result.outcome !== "preview") return;
       expect(result.preview.status.binding.baseRef).toBe("master");
+      // The apply effect runs the same pr-update lifecycle; it must be admitted against the same
+      // base too, or the approved proposal dies at the lifecycle policy gate with policy-blocked.
+      trunk.service.issueApproval(result.preview.proposalId);
+      const lease = trunk.service.consumeApproval(result.preview.proposalId);
+      expect(lease).toBeDefined();
+      if (lease === undefined) return;
+      const applied = await trunk.service.executeApproved(result.preview.proposalId, lease);
+      expect(applied.outcome, JSON.stringify(applied)).toBe("observed");
+      expect(trunk.writes[0]?.body).toContain(artifact.markdown);
     } finally {
       trunk.close();
     }

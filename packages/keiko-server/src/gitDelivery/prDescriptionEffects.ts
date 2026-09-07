@@ -5,6 +5,7 @@ import type {
   PrDescriptionApplicationStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import type { GitPrBody, GitPrExecResult, GitPullRequestAdapter } from "@oscharko-dev/keiko-tools";
+import { basePinnedPrPolicyPacks } from "./basePinnedPrPolicy.js";
 import { executeGovernedPullRequest } from "./prExecution.js";
 import { applicationStatus } from "./prDescriptionProjection.js";
 import { assertSafeDescriptionBody, readDescriptionBody } from "./prDescriptionPreparation.js";
@@ -107,7 +108,16 @@ export async function applyDescription(
     approval,
     proposal.context.workspace,
     options.mutationDeps,
-    { ...options.execution, prAdapterFactory: () => adapter, beforeRemoteDispatch: check },
+    {
+      ...options.execution,
+      // The lifecycle's own policy gate must admit the same pull-request base the preview was
+      // admitted against (basePinnedPrPolicy.ts); a configured deployment pack still wins.
+      policyPacks:
+        options.execution.policyPacks ??
+        basePinnedPrPolicyPacks("pr-update", proposal.review.status.binding.baseRef),
+      prAdapterFactory: () => adapter,
+      beforeRemoteDispatch: check,
+    },
     proposal.context.correlationId,
   );
   if (progress.refusal !== undefined) throw progress.refusal;
