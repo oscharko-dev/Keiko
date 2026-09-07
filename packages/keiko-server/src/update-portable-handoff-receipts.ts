@@ -15,7 +15,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { portableHandoffRoot } from "./update-portable-handoff-plan.js";
+import {
+  portableHandoffRoot,
+  syncPortableHandoffDirectory,
+} from "./update-portable-handoff-plan.js";
 
 const HEX_SHA256 = /^[a-f0-9]{64}$/u;
 const RECEIPT_NAME = /^(?<sequence>[0-9]{6})\.khr$/u;
@@ -113,15 +116,6 @@ function readVerifiedAck(path: string, expectedLinks = 1): Buffer {
   }
 }
 
-function fsyncDirectory(path: string): void {
-  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    fsyncSync(descriptor);
-  } finally {
-    closeSync(descriptor);
-  }
-}
-
 function reconcileLinkedVerifiedAck(root: string, destination: string, expected: Buffer): boolean {
   let destinationStat: ReturnType<typeof lstatSync>;
   try {
@@ -169,7 +163,7 @@ function reconcileLinkedVerifiedAck(root: string, destination: string, expected:
   });
   if (matching.length !== 1) return false;
   unlinkSync(join(root, matching[0]!));
-  fsyncDirectory(root);
+  syncPortableHandoffDirectory(root);
   return readVerifiedAck(destination).equals(expected);
 }
 
@@ -207,7 +201,7 @@ export function publishPortableHandoffVerifiedAck(input: {
     closeSync(descriptor);
     descriptor = undefined;
     linkSync(temporary, destination);
-    fsyncDirectory(root);
+    syncPortableHandoffDirectory(root);
   } catch (error) {
     if (existsSync(destination) && readVerifiedAck(destination).equals(expected)) return;
     throw error;
@@ -537,6 +531,7 @@ export function appendPortableHandoffReceipt(input: {
   } finally {
     closeSync(descriptor);
   }
+  syncPortableHandoffDirectory(root);
   return {
     receipt,
     sha256: portableHandoffReceiptSha256(receipt),

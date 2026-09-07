@@ -178,6 +178,9 @@ describe("CI test/gate wiring guard", () => {
     expect(fixtureGate).toContain(
       "npx vitest run packages/keiko-server/src/update-portable-handoff-plan.test.ts",
     );
+    expect(fixtureGate).toContain(
+      "packages/keiko-server/src/update-portable-handoff-receipts.test.ts",
+    );
   });
 
   it("refreshes workspace evidence without replacing the immutable D12 comparison", () => {

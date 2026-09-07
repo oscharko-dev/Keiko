@@ -76,6 +76,22 @@ static int keiko_recovery_parse_control(char *content, keiko_recovery_control *c
   return 1;
 }
 
+static int keiko_recovery_copy_json_value(const char **cursor, const char *prefix,
+                                          char *output, size_t capacity) {
+  const char *start, *end;
+  size_t length;
+  if (strncmp(*cursor, prefix, strlen(prefix)) != 0) return 0;
+  start = *cursor + strlen(prefix);
+  end = strchr(start, '"');
+  if (end == NULL) return 0;
+  length = (size_t)(end - start);
+  if (length == 0u || length >= capacity || memchr(start, '\\', length) != NULL) return 0;
+  memcpy(output, start, length);
+  output[length] = '\0';
+  *cursor = end + 1;
+  return 1;
+}
+
 #if !defined(_WIN32)
 
 static int keiko_recovery_validate_runtime(const keiko_coordinator_context *context,
@@ -103,22 +119,6 @@ cleanup:
   if (updates != -1) close(updates);
   if (state != -1) close(state);
   return result;
-}
-
-static int keiko_recovery_copy_json_value(const char **cursor, const char *prefix,
-                                          char *output, size_t capacity) {
-  const char *start, *end;
-  size_t length;
-  if (strncmp(*cursor, prefix, strlen(prefix)) != 0) return 0;
-  start = *cursor + strlen(prefix);
-  end = strchr(start, '"');
-  if (end == NULL) return 0;
-  length = (size_t)(end - start);
-  if (length == 0u || length >= capacity || memchr(start, '\\', length) != NULL) return 0;
-  memcpy(output, start, length);
-  output[length] = '\0';
-  *cursor = end + 1;
-  return 1;
 }
 
 static int keiko_recovery_validate_lock(const keiko_coordinator_context *context,

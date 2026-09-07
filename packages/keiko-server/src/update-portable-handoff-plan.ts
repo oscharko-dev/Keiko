@@ -17,6 +17,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import { PORTABLE_STAGE_DIR_PREFIX } from "./update-portable-staging-shared.js";
 
 const ACTIVATION_ID = /^[a-f0-9]{32}$/u;
@@ -411,13 +412,38 @@ function durableWrite(path: string, content: string | Uint8Array): void {
   }
 }
 
-function syncDirectory(path: string): void {
-  const descriptor = openSync(path, constants.O_RDONLY);
+export interface PortableHandoffSyncOps {
+  readonly close: (descriptor: number) => void;
+  readonly fsync: (descriptor: number) => void;
+  readonly openDirectory: (path: string) => number;
+  readonly platform: NodeJS.Platform;
+}
+
+const HANDOFF_SYNC_OPS: PortableHandoffSyncOps = {
+  close: closeSync,
+  fsync: fsyncSync,
+  openDirectory: (path) => openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW),
+  platform: process.platform,
+};
+
+export function syncPortableHandoffDirectory(
+  path: string,
+  ops: PortableHandoffSyncOps = HANDOFF_SYNC_OPS,
+): void {
+  let descriptor: number | undefined;
   try {
-    fsyncSync(descriptor);
+    descriptor = ops.openDirectory(path);
+    ops.fsync(descriptor);
+  } catch (error) {
+    if (!windowsDirectorySyncUnsupported(error, ops.platform)) throw error;
   } finally {
-    closeSync(descriptor);
+    if (descriptor !== undefined) ops.close(descriptor);
   }
+}
+
+function windowsDirectorySyncUnsupported(error: unknown, platform: NodeJS.Platform): boolean {
+  const code = error instanceof Error && "code" in error ? String(error.code) : "";
+  return platform === "win32" && ["EACCES", "EINVAL", "EISDIR", "ENOTSUP", "EPERM"].includes(code);
 }
 
 export function writePortableHandoffPlan(input: {
@@ -435,9 +461,9 @@ export function writePortableHandoffPlan(input: {
   const sha256 = createHash("sha256").update(content).digest("hex");
   const temporary = join(root, `.plan-${String(process.pid)}.tmp`);
   durableWrite(temporary, content);
-  renameSync(temporary, path);
+  atomicPublishRename(temporary, path, { rename: renameSync });
   durableWrite(digestPath, `${sha256}\n`);
-  syncDirectory(root);
+  syncPortableHandoffDirectory(root);
   assertRegularSingleLink(path, "portable handoff plan");
   assertRegularSingleLink(digestPath, "portable handoff digest");
   return { path, sha256 };

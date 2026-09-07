@@ -8,6 +8,7 @@ import {
   encodePortableHandoffPlan,
   portableHandoffPlanSha256,
   readPortableHandoffPlan,
+  syncPortableHandoffDirectory,
   writePortableHandoffPlan,
   type PortableHandoffPlanInput,
 } from "./update-portable-handoff-plan.js";
@@ -247,14 +248,65 @@ function rewritePublishedBytes(path: string, content: Buffer): void {
 }
 
 describe("portable handoff plan", () => {
-  it("keeps canonical Mac KHP version 2 at 32 fields and byte-identical to the fixture", () => {
-    const plan = createPortableHandoffPlan(goldenMacInput());
-    const encoded = encodePortableHandoffPlan(plan);
-    expect(encoded.readUInt16LE(4)).toBe(2);
-    expect(encoded.readUInt16LE(6)).toBe(32);
-    expect(encoded).toEqual(encodeLegacyMacPlan(plan));
-    expect(encoded).toEqual(fixtureBytes("khp-v2-macos.hex"));
+  it("tolerates only the Windows directory-sync refusal after closing the handle", () => {
+    const events: string[] = [];
+    expect(() => {
+      syncPortableHandoffDirectory("C:\\state", {
+        platform: "win32",
+        openDirectory: () => {
+          events.push("open");
+          return 42;
+        },
+        fsync: () => {
+          events.push("fsync");
+          throw Object.assign(new Error("directory fsync unsupported"), { code: "EPERM" });
+        },
+        close: () => events.push("close"),
+      });
+    }).not.toThrow();
+    expect(events).toEqual(["open", "fsync", "close"]);
+
+    expect(() => {
+      syncPortableHandoffDirectory("/state", {
+        platform: "darwin",
+        openDirectory: () => 42,
+        fsync: () => {
+          throw Object.assign(new Error("directory fsync failed"), { code: "EPERM" });
+        },
+        close: () => undefined,
+      });
+    }).toThrow("directory fsync failed");
   });
+
+  it("keeps both canonical fixture envelopes byte-framed on every host", () => {
+    const mac = fixtureBytes("khp-v2-macos.hex");
+    const windows = fixtureBytes("khp-v3-windows.hex");
+    expect(mac.subarray(0, 4).toString("ascii")).toBe("KHP1");
+    expect(mac.readUInt16LE(4)).toBe(2);
+    expect(mac.readUInt16LE(6)).toBe(32);
+    expect(readKhpFields(mac)).toHaveLength(32);
+    expect(readKhpFields(mac)[3]).toBe("macos-arm64");
+    expect(windows.subarray(0, 4).toString("ascii")).toBe("KHP1");
+    expect(windows.readUInt16LE(4)).toBe(3);
+    expect(windows.readUInt16LE(6)).toBe(37);
+    expect(readKhpFields(windows).slice(32)).toEqual([
+      "windows-generation-v1",
+      "6".repeat(64),
+      "7".repeat(64),
+      "8".repeat(64),
+      "9".repeat(64),
+    ]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "keeps canonical Mac KHP version 2 byte-identical on POSIX hosts",
+    () => {
+      const plan = createPortableHandoffPlan(goldenMacInput());
+      const encoded = encodePortableHandoffPlan(plan);
+      expect(encoded).toEqual(encodeLegacyMacPlan(plan));
+      expect(encoded).toEqual(fixtureBytes("khp-v2-macos.hex"));
+    },
+  );
 
   it("appends only the five frozen Windows KHP version 3 fields", () => {
     const root = fixtureRoot();

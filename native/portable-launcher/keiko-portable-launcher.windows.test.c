@@ -257,6 +257,21 @@ int wmain(void) {
   assert(buffers != NULL);
   assert(sizeof(buffers->root) / sizeof(buffers->root[0]) == (size_t)KEIKO_PATH_CAP);
   assert(sizeof(buffers->command) / sizeof(buffers->command[0]) == (size_t)KEIKO_COMMAND_CAP);
+#if defined(KEIKO_PORTABLE_GENERATION_ID)
+  wcscpy_s(buffers->quoted_node, KEIKO_PATH_CAP, L"\"C:\\Keiko\\node.exe\"");
+  wcscpy_s(buffers->quoted_cli, KEIKO_PATH_CAP, L"\"C:\\Keiko\\index.js\"");
+  assert(build_resume_command_windows(
+      buffers,
+      L"43110",
+      L"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  ));
+  assert(wcscmp(
+             buffers->command,
+             L"\"C:\\Keiko\\node.exe\" \"C:\\Keiko\\index.js\" ui --host "
+             L"127.0.0.1 --port 43110 --launch-id bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+         ) == 0);
+  assert(wcsstr(buffers->command, L"portable launch") == NULL);
+#endif
   free_launcher_buffers(buffers);
 
   wchar_t path[64] = L"C:\\Keiko\\runtime\\node.exe";

@@ -384,6 +384,105 @@ static void test_plan_paths_bind_exact_generation_names(void) {
   keiko_coordinator_windows_paths_clear(&paths);
 }
 
+static void test_recovery_runtime_and_lock_binding(void) {
+  wchar_t root[TEST_PATH_CAP];
+  wchar_t updates[TEST_PATH_CAP];
+  wchar_t runtime_path[TEST_PATH_CAP];
+  wchar_t lock_path[TEST_PATH_CAP];
+  wchar_t *child_stem;
+  wchar_t *child_path;
+  char identity_json[1024];
+  char child_json[1024];
+  char identity[65];
+  char runtime_sha256[65];
+  char session_sha256[65];
+  keiko_coordinator_context context;
+  keiko_recovery_control control;
+  HANDLE file;
+  int written;
+  memset(&context, 0, sizeof(context));
+  memset(&control, 0, sizeof(control));
+  test_create_root(root);
+  assert(test_join(updates, root, L"\\updates"));
+  assert(CreateDirectoryW(updates, NULL));
+  assert(test_join(runtime_path, updates, L"\\runtime-state.json"));
+  assert(test_join(lock_path, updates, L"\\update-session.lock"));
+  test_write(runtime_path, "{\"activationWal\":{}}\n");
+  file = keiko_windows_atomic_open_regular(runtime_path, GENERIC_READ, FILE_SHARE_READ);
+  assert(file != INVALID_HANDLE_VALUE);
+  assert(keiko_windows_update_handle_hash(
+      file,
+      GetTickCount64() + 10000u,
+      runtime_sha256
+  ));
+  assert(CloseHandle(file));
+  written = snprintf(
+      identity_json,
+      sizeof(identity_json),
+      "{\"sessionId\":\"session-1\",\"targetVersion\":\"1.2.3\","
+      "\"startedAt\":\"2026-09-07T00:00:00.000Z\",\"pid\":42,"
+      "\"processIdentity\":\"process-1\"}"
+  );
+  assert(written > 0 && (size_t)written < sizeof(identity_json));
+  assert(keiko_coordinator_windows_hash_bytes(identity_json, (size_t)written, identity));
+  assert(keiko_coordinator_windows_hash_bytes(
+      "session-1",
+      strlen("session-1"),
+      session_sha256
+  ));
+  assert(_snwprintf_s(
+             lock_path,
+             TEST_PATH_CAP,
+             _TRUNCATE,
+             L"%ls\\update-session.lock",
+             updates
+         ) > 0);
+  written = snprintf(identity_json + written, sizeof(identity_json) - (size_t)written, "\n");
+  assert(written == 1);
+  test_write(lock_path, identity_json);
+  child_stem = keiko_coordinator_windows_ascii_path(
+      updates,
+      L"\\update-session.lock.",
+      session_sha256
+  );
+  assert(child_stem != NULL);
+  child_path = keiko_windows_update_path_join(child_stem, L".child");
+  assert(child_path != NULL);
+  written = snprintf(
+      child_json,
+      sizeof(child_json),
+      "{\"sessionId\":\"session-1\",\"lockIdentity\":\"%s\",\"childPid\":%lu}\n",
+      identity,
+      (unsigned long)GetCurrentProcessId()
+  );
+  assert(written > 0 && (size_t)written < sizeof(child_json));
+  test_write(child_path, child_json);
+  context.state_dir = root;
+  context.plan.field[KEIKO_KHP_SESSION_ID] = "session-1";
+  context.plan.field[KEIKO_KHP_TARGET_VERSION] = "1.2.3";
+  control.runtime_state_sha256 = runtime_sha256;
+  control.lock_identity = identity;
+  assert(keiko_recovery_validate_runtime_windows(
+      &context,
+      &control,
+      GetTickCount64() + 10000u
+  ));
+  assert(keiko_recovery_validate_lock_windows(
+      &context,
+      &control,
+      GetTickCount64() + 10000u
+  ));
+  control.lock_identity = runtime_sha256;
+  assert(!keiko_recovery_validate_lock_windows(
+      &context,
+      &control,
+      GetTickCount64() + 10000u
+  ));
+  free(child_path);
+  free(child_stem);
+  assert(keiko_windows_update_remove_tree(root, GetTickCount64() + 10000u));
+}
+
 static void test_shared_recovery_control_parser(void) {
   char control[] =
       "KUR1\n"
@@ -403,9 +502,73 @@ static void test_shared_recovery_control_parser(void) {
   assert(parsed.receipt_sequence == 0u);
 }
 
+static const char *test_krp_string(
+    const unsigned char **cursor,
+    size_t *remaining
+) {
+  uint32_t length;
+  const char *value;
+  assert(*remaining >= 4u);
+  length = keiko_khp_read_u32(*cursor);
+  *cursor += 4u;
+  *remaining -= 4u;
+  assert((size_t)length < *remaining);
+  value = (const char *)*cursor;
+  assert((*cursor)[length] == 0);
+  *cursor += (size_t)length + 1u;
+  *remaining -= (size_t)length + 1u;
+  return value;
+}
+
+static void test_supervisor_packet_is_unchanged_krp1(void) {
+  keiko_coordinator_context context;
+  unsigned char *packet = NULL;
+  const unsigned char *cursor;
+  size_t packet_length = 0;
+  size_t remaining;
+  memset(&context, 0, sizeof(context));
+  context.plan.field[KEIKO_KHP_ACTIVATION_ID] =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  context.plan.field[KEIKO_KHP_MANAGED_ROOT] = "C:\\Keiko";
+  context.state_dir_utf8 = "C:\\KeikoState";
+  assert(keiko_coordinator_windows_launch_packet(
+      &context,
+      "C:\\Keiko\\Keiko.exe",
+      0,
+      &packet,
+      &packet_length
+  ));
+  assert(packet_length >= KEIKO_COORDINATOR_KRP_HEADER_BYTES + 4u);
+  assert(memcmp(packet, "KRP1", 4u) == 0);
+  assert(keiko_khp_read_u16(packet + 4u) == 1u);
+  assert(keiko_khp_read_u16(packet + 6u) == 1u);
+  assert(keiko_khp_read_u32(packet + 8u) ==
+         packet_length - KEIKO_COORDINATOR_KRP_HEADER_BYTES);
+  cursor = packet + KEIKO_COORDINATOR_KRP_HEADER_BYTES;
+  remaining = packet_length - KEIKO_COORDINATOR_KRP_HEADER_BYTES;
+  assert(keiko_khp_read_u16(cursor) == 2u);
+  assert(keiko_khp_read_u16(cursor + 2u) == 1u);
+  cursor += 4u;
+  remaining -= 4u;
+  assert(strcmp(test_krp_string(&cursor, &remaining),
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") == 0);
+  assert(strcmp(test_krp_string(&cursor, &remaining), "C:\\Keiko\\Keiko.exe") == 0);
+  assert(strcmp(test_krp_string(&cursor, &remaining), "C:\\Keiko") == 0);
+  assert(strcmp(test_krp_string(&cursor, &remaining), "--resume-update") == 0);
+  assert(strcmp(test_krp_string(&cursor, &remaining),
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") == 0);
+  assert(strcmp(test_krp_string(&cursor, &remaining), "KEIKO_STATE_DIR") == 0);
+  assert(strcmp(test_krp_string(&cursor, &remaining), "C:\\KeikoState") == 0);
+  assert(remaining == 0u);
+  SecureZeroMemory(packet, packet_length);
+  free(packet);
+}
+
 int wmain(void) {
   test_copy_walk_budget_is_bounded();
+  test_recovery_runtime_and_lock_binding();
   test_shared_recovery_control_parser();
+  test_supervisor_packet_is_unchanged_krp1();
   test_plan_paths_bind_exact_generation_names();
   test_generation_publish_and_file_replace();
   return 0;

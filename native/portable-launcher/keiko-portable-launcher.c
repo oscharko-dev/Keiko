@@ -9,6 +9,9 @@
 #ifndef _UNICODE
 #define _UNICODE
 #endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <stdarg.h>
 #include <stdio.h>
 #include <wchar.h>
@@ -48,6 +51,7 @@ static int keiko_snwprintf_s(wchar_t *out, size_t cap, size_t truncate, const wc
 #endif
 
 #include "keiko-portable-update-coordinator.h"
+#include "keiko-portable-recovery-control.h"
 
 static int dirname_in_place(wchar_t *path) {
   wchar_t *last = NULL;
@@ -327,6 +331,81 @@ static int update_activation_argument(const wchar_t *value, char activation_id[3
   return 1;
 }
 
+#if defined(KEIKO_PORTABLE_GENERATION_ID)
+static int build_resume_command_windows(
+    keiko_launcher_buffers *buffers,
+    const wchar_t *port,
+    const wchar_t *launch_id
+) {
+  int written = _snwprintf_s(
+      buffers->command,
+      KEIKO_COMMAND_CAP,
+      _TRUNCATE,
+      L"%ls %ls ui --host 127.0.0.1 --port %ls --launch-id %ls",
+      buffers->quoted_node,
+      buffers->quoted_cli,
+      port,
+      launch_id
+  );
+  return written > 0 && (size_t)written < KEIKO_COMMAND_CAP;
+}
+#endif
+
+static int resume_update_windows(
+    keiko_coordinator_context *coordinator,
+    const wchar_t *executable,
+    int restoring
+) {
+#if defined(KEIKO_PORTABLE_GENERATION_ID)
+  keiko_launcher_buffers *buffers = allocate_launcher_buffers();
+  keiko_generation_pins pins;
+  wchar_t *port = NULL;
+  wchar_t *launch_id = NULL;
+  DWORD exit_code = 1;
+  size_t executable_length = wcslen(executable);
+  int result = 1;
+  memset(&pins, 0, sizeof(pins));
+  if (buffers == NULL || executable_length >= KEIKO_PATH_CAP) goto cleanup;
+  memcpy(
+      buffers->root,
+      executable,
+      (executable_length + 1u) * sizeof(wchar_t)
+  );
+  if (!dirname_in_place(buffers->root) ||
+      !select_generation_resources(buffers, &pins) ||
+      !quote_arg(buffers->quoted_node, KEIKO_PATH_CAP, buffers->node) ||
+      !quote_arg(buffers->quoted_cli, KEIKO_PATH_CAP, buffers->cli)) goto cleanup;
+  port = keiko_coordinator_windows_wide_utf8(
+      coordinator->plan.field[KEIKO_KHP_OLD_PORT]
+  );
+  launch_id = keiko_coordinator_windows_wide_utf8(
+      coordinator->plan.field[restoring ? KEIKO_KHP_RESTORE_LAUNCH_ID
+                                        : KEIKO_KHP_NEW_LAUNCH_ID]
+  );
+  if (port == NULL || launch_id == NULL ||
+      !SetEnvironmentVariableW(L"KEIKO_STATE_DIR", coordinator->state_dir)) goto cleanup;
+  if (!build_resume_command_windows(buffers, port, launch_id) ||
+      !run_hidden_and_wait(
+          buffers->node,
+          buffers->command,
+          buffers->root,
+          &exit_code
+      )) goto cleanup;
+  result = (int)exit_code;
+cleanup:
+  free(launch_id);
+  free(port);
+  close_generation_pins(&pins);
+  free_launcher_buffers(buffers);
+  return result;
+#else
+  (void)coordinator;
+  (void)executable;
+  (void)restoring;
+  return 74;
+#endif
+}
+
 int wmain(int argc, wchar_t **argv) {
   if (argc == 3 && wcscmp(argv[1], L"--coordinate-update") == 0) {
     wchar_t executable[KEIKO_PATH_CAP];
@@ -340,6 +419,36 @@ int wmain(int argc, wchar_t **argv) {
      * real Windows executor/recovery qualification run. */
     keiko_coordinator_clear(&coordinator);
     return 74;
+  }
+  if (argc == 3 && wcscmp(argv[1], L"--recover-update") == 0) {
+    wchar_t executable[KEIKO_PATH_CAP];
+    char activation_id[33];
+    DWORD length = GetModuleFileNameW(NULL, executable, KEIKO_PATH_CAP);
+    if (length == 0 || length >= KEIKO_PATH_CAP ||
+        !update_activation_argument(argv[2], activation_id) ||
+        !keiko_recovery_control_windows(activation_id, executable)) return 74;
+    return 0;
+  }
+  if (argc == 3 &&
+      (wcscmp(argv[1], L"--resume-update") == 0 ||
+       wcscmp(argv[1], L"--resume-restored-update") == 0)) {
+    wchar_t executable[KEIKO_PATH_CAP];
+    char activation_id[33];
+    keiko_coordinator_context coordinator;
+    DWORD length = GetModuleFileNameW(NULL, executable, KEIKO_PATH_CAP);
+    int restoring = wcscmp(argv[1], L"--resume-restored-update") == 0;
+    int result;
+    if (length == 0 || length >= KEIKO_PATH_CAP ||
+        !update_activation_argument(argv[2], activation_id) ||
+        !keiko_coordinator_prepare_resume_windows(
+            &coordinator,
+            activation_id,
+            executable,
+            restoring
+        )) return 74;
+    result = resume_update_windows(&coordinator, executable, restoring);
+    keiko_coordinator_clear(&coordinator);
+    return result;
   }
   if (argc != 1) return 1;
   keiko_launcher_buffers *buffers = allocate_launcher_buffers();
