@@ -475,11 +475,25 @@ export function handleCodingRuntimeFollowUp(
 // same existence-concealing not-found result an unknown run yields — never a distinct auth error,
 // so no probe can tell "not paired" from "does not exist" (ADR-0141 D6). Loopback, Origin, CSRF,
 // and runId knowledge remain routing facts and never grant these routes (ADR-0141 D1).
+//
+// Epic #3384 defect B follow-up: answer/reject resolve this precheck themselves, before ever
+// calling mutation() below, so the funnel's own denial log (added for defect B) never ran for
+// them -- an unpaired caller could attempt either state-changing mutation and leave no
+// `coding-runtime.operation.refused` evidence at all. The HTTP response stays the same
+// existence-concealing 404; the two handlers now emit the identical body-free denial line the
+// funnel emits for an unpaired `start`, closing the gap.
 export function handleCodingRuntimeQuestionAnswer(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    logRuntimeOperationRefusal(
+      deps,
+      ctx.correlationId,
+      "answer",
+      undefined,
+      "authority-resolution-failed",
+    );
     return Promise.resolve(notFound(ctx.correlationId));
   }
   const runId = ctx.params.runId;
@@ -495,6 +509,13 @@ export function handleCodingRuntimeQuestionReject(
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    logRuntimeOperationRefusal(
+      deps,
+      ctx.correlationId,
+      "reject",
+      undefined,
+      "authority-resolution-failed",
+    );
     return Promise.resolve(notFound(ctx.correlationId));
   }
   const runId = ctx.params.runId;

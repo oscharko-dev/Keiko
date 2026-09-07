@@ -1440,6 +1440,54 @@ describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
     expect(JSON.stringify(records)).not.toContain("secret");
   });
 
+  // Epic #3384 defect B follow-up: handleCodingRuntimeQuestionAnswer/Reject resolve the app-session
+  // precheck themselves, before ever calling mutation() above, so the funnel's own denial log used
+  // to never run for them -- an unpaired caller could attempt either state-changing question
+  // mutation and leave zero `coding-runtime.operation.refused` evidence. The HTTP response must stay
+  // the existing-concealing 404 (unchanged from the #2478 boundary), but the body-free activity line
+  // must now be recorded exactly like the sibling unpaired-`start` case above.
+  it.each([
+    ["answer", handleCodingRuntimeQuestionAnswer],
+    ["reject", handleCodingRuntimeQuestionReject],
+  ] as const)(
+    "logs the unpaired question %s precheck denial before returning the concealing not-found",
+    async (operation, handler) => {
+      const { channel } = pairedAppSession();
+      const records: unknown[] = [];
+      const deps = runtime({
+        codingAppSessionChannel: channel,
+        activityLog: { write: (event: unknown) => void records.push(event) },
+      });
+      const denied = await handler(
+        context(
+          "{}",
+          { runId: "run-1" },
+          "/api/coding-workbench/runtime/runs",
+          undefined,
+          `unpaired-${operation}-correlation`,
+        ),
+        deps,
+      );
+      // Byte-identical to the pre-existing #2478 boundary: still a concealing 404, never a distinct
+      // auth error and never a 200.
+      expect(denied).toMatchObject({
+        status: 404,
+        body: { error: { code: "CODING_RUNTIME_RUN_NOT_FOUND" } },
+      });
+      expect(records).toEqual([
+        expect.objectContaining({
+          level: "warn",
+          category: "process",
+          op: "coding-runtime.operation.refused",
+          correlationId: `unpaired-${operation}-correlation`,
+          // No runId: the precheck fails before a per-run identifier is resolved, matching the
+          // unpaired-start log shape above.
+          extra: { operation, reason: "authority-resolution-failed" },
+        }),
+      ]);
+    },
+  );
+
   // The recorded attack, end to end: the unauthenticated status route publishes the pending
   // permission's requestId and the snapshot revision — the two values `approvalChallengeMatches`
   // binds on. Knowing them is now worthless, because the challenge is only spendable by a caller
