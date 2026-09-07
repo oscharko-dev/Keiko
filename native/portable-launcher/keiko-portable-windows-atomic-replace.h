@@ -133,7 +133,7 @@ static int keiko_windows_atomic_parent_matches(
       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
   );
   free(parent);
-  if (handle == INVALID_HANDLE_VALUE) return 0;
+  if (handle == INVALID_HANDLE_VALUE || handle == NULL) return 0;
   result = keiko_windows_atomic_query_fact(handle, &actual) &&
            keiko_windows_atomic_same_file(&actual, expected_parent);
   CloseHandle(handle);
@@ -193,8 +193,9 @@ static inline int keiko_windows_atomic_replace_existing(
       FILE_READ_ATTRIBUTES,
       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
   );
-  if (parent == INVALID_HANDLE_VALUE || source == INVALID_HANDLE_VALUE ||
-      destination == INVALID_HANDLE_VALUE ||
+  if (parent == INVALID_HANDLE_VALUE || parent == NULL ||
+      source == INVALID_HANDLE_VALUE || source == NULL ||
+      destination == INVALID_HANDLE_VALUE || destination == NULL ||
       !keiko_windows_atomic_query_fact(parent, &parent_fact) ||
       !keiko_windows_atomic_query_fact(source, &source_fact) ||
       !keiko_windows_atomic_query_fact(destination, &destination_fact) ||
@@ -241,9 +242,9 @@ static inline int keiko_windows_atomic_replace_existing(
 
 cleanup:
   free(rename_info);
-  if (destination != INVALID_HANDLE_VALUE) CloseHandle(destination);
-  if (source != INVALID_HANDLE_VALUE) CloseHandle(source);
-  if (parent != INVALID_HANDLE_VALUE) CloseHandle(parent);
+  if (destination != INVALID_HANDLE_VALUE && destination != NULL) CloseHandle(destination);
+  if (source != INVALID_HANDLE_VALUE && source != NULL) CloseHandle(source);
+  if (parent != INVALID_HANDLE_VALUE && parent != NULL) CloseHandle(parent);
   return result;
 }
 
@@ -277,7 +278,8 @@ static inline int keiko_windows_atomic_publish_directory(
       DELETE | FILE_READ_ATTRIBUTES,
       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
   );
-  if (parent == INVALID_HANDLE_VALUE || source == INVALID_HANDLE_VALUE ||
+  if (parent == INVALID_HANDLE_VALUE || parent == NULL ||
+      source == INVALID_HANDLE_VALUE || source == NULL ||
       !keiko_windows_atomic_query_fact(parent, &parent_fact) ||
       !keiko_windows_atomic_query_fact(source, &source_fact) ||
       source_fact.identity.VolumeSerialNumber != parent_fact.identity.VolumeSerialNumber ||
@@ -322,8 +324,8 @@ static inline int keiko_windows_atomic_publish_directory(
 
 cleanup:
   free(rename_info);
-  if (source != INVALID_HANDLE_VALUE) CloseHandle(source);
-  if (parent != INVALID_HANDLE_VALUE) CloseHandle(parent);
+  if (source != INVALID_HANDLE_VALUE && source != NULL) CloseHandle(source);
+  if (parent != INVALID_HANDLE_VALUE && parent != NULL) CloseHandle(parent);
   return result;
 }
 

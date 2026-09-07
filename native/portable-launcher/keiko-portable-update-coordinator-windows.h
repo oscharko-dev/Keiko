@@ -181,7 +181,7 @@ static int keiko_coordinator_windows_parent_pid(DWORD *parent_pid) {
   HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
   PROCESSENTRY32W entry;
   int result = 0;
-  if (snapshot == INVALID_HANDLE_VALUE) return 0;
+  if (snapshot == INVALID_HANDLE_VALUE || snapshot == NULL) return 0;
   memset(&entry, 0, sizeof(entry));
   entry.dwSize = sizeof(entry);
   if (Process32FirstW(snapshot, &entry)) {
@@ -271,12 +271,14 @@ static int keiko_coordinator_windows_roots_same_volume(
         FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ
     );
-  result = managed_handle != INVALID_HANDLE_VALUE && stage_handle != INVALID_HANDLE_VALUE &&
+  result = managed_handle != INVALID_HANDLE_VALUE && managed_handle != NULL &&
+           stage_handle != INVALID_HANDLE_VALUE && stage_handle != NULL &&
            keiko_windows_atomic_query_fact(managed_handle, &managed_fact) &&
            keiko_windows_atomic_query_fact(stage_handle, &stage_fact) &&
            managed_fact.identity.VolumeSerialNumber == stage_fact.identity.VolumeSerialNumber;
-  if (stage_handle != INVALID_HANDLE_VALUE) CloseHandle(stage_handle);
-  if (managed_handle != INVALID_HANDLE_VALUE) CloseHandle(managed_handle);
+  if (stage_handle != INVALID_HANDLE_VALUE && stage_handle != NULL) CloseHandle(stage_handle);
+  if (managed_handle != INVALID_HANDLE_VALUE && managed_handle != NULL)
+    CloseHandle(managed_handle);
   free(stage);
   free(managed);
   return result;
@@ -331,7 +333,8 @@ static int keiko_coordinator_windows_read_file(
   unsigned char *content = NULL;
   size_t offset = 0;
   int result = 0;
-  if (file == INVALID_HANDLE_VALUE || !keiko_windows_atomic_query_fact(file, &before) ||
+  if (file == INVALID_HANDLE_VALUE || file == NULL ||
+      !keiko_windows_atomic_query_fact(file, &before) ||
       before.standard.EndOfFile.QuadPart < 0 ||
       (uint64_t)before.standard.EndOfFile.QuadPart > maximum) goto cleanup;
   content = (unsigned char *)malloc((size_t)before.standard.EndOfFile.QuadPart + 1u);
@@ -357,7 +360,7 @@ cleanup:
     SecureZeroMemory(content, offset);
     free(content);
   }
-  if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+  if (file != INVALID_HANDLE_VALUE && file != NULL) CloseHandle(file);
   return result;
 }
 
@@ -813,14 +816,15 @@ static int keiko_coordinator_windows_append_receipt(
       FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH | FILE_FLAG_OPEN_REPARSE_POINT,
       NULL
   );
-  if (file == INVALID_HANDLE_VALUE || !WriteFile(file, content, (DWORD)offset, &written, NULL) ||
+  if (file == INVALID_HANDLE_VALUE || file == NULL ||
+      !WriteFile(file, content, (DWORD)offset, &written, NULL) ||
       written != offset || !FlushFileBuffers(file) || !CloseHandle(file)) goto cleanup;
   file = INVALID_HANDLE_VALUE;
   memcpy(context->receipt_sha256, digest, sizeof(context->receipt_sha256));
   context->receipt_sequence += 1u;
   result = 1;
 cleanup:
-  if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+  if (file != INVALID_HANDLE_VALUE && file != NULL) CloseHandle(file);
   free(path);
   free(receipts);
   SecureZeroMemory(content, sizeof(content));

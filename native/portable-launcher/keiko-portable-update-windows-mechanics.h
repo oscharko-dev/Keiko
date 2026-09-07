@@ -100,10 +100,10 @@ static inline int keiko_windows_update_file_digest_matches(
       FILE_SHARE_READ
   );
   char actual[65];
-  int result = file != INVALID_HANDLE_VALUE &&
+  int result = file != INVALID_HANDLE_VALUE && file != NULL &&
                keiko_windows_update_handle_hash(file, deadline_ms, actual) &&
                strcmp(actual, expected) == 0;
-  if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+  if (file != INVALID_HANDLE_VALUE && file != NULL) CloseHandle(file);
   return result;
 }
 
@@ -132,7 +132,7 @@ static int keiko_windows_update_copy_handle(
       FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH | FILE_FLAG_OPEN_REPARSE_POINT,
       NULL
   );
-  if (destination == INVALID_HANDLE_VALUE ||
+  if (destination == INVALID_HANDLE_VALUE || destination == NULL ||
       !keiko_windows_atomic_query_fact(destination, &destination_fact) ||
       destination_fact.standard.Directory || destination_fact.standard.NumberOfLinks != 1) {
     goto cleanup;
@@ -162,7 +162,7 @@ cleanup:
     SecureZeroMemory(buffer, KEIKO_WINDOWS_UPDATE_COPY_BUFFER);
     free(buffer);
   }
-  if (destination != INVALID_HANDLE_VALUE) CloseHandle(destination);
+  if (destination != INVALID_HANDLE_VALUE && destination != NULL) CloseHandle(destination);
   return result;
 }
 
@@ -176,9 +176,9 @@ static int keiko_windows_update_copy_file(
       GENERIC_READ,
       FILE_SHARE_READ
   );
-  int result = source != INVALID_HANDLE_VALUE &&
+  int result = source != INVALID_HANDLE_VALUE && source != NULL &&
                keiko_windows_update_copy_handle(source, destination_path, deadline_ms);
-  if (source != INVALID_HANDLE_VALUE) CloseHandle(source);
+  if (source != INVALID_HANDLE_VALUE && source != NULL) CloseHandle(source);
   return result;
 }
 
@@ -256,9 +256,11 @@ static int keiko_windows_update_copy_directory_contents(
       );
       HANDLE destination_child = INVALID_HANDLE_VALUE;
       int copied = 0;
-      if (source_child == INVALID_HANDLE_VALUE || destination_path == NULL ||
+      if (source_child == INVALID_HANDLE_VALUE || source_child == NULL ||
+          destination_path == NULL ||
           !keiko_tree_windows_child_path(destination_path, destination, entry.cFileName)) {
-        if (source_child != INVALID_HANDLE_VALUE) CloseHandle(source_child);
+        if (source_child != INVALID_HANDLE_VALUE && source_child != NULL)
+          CloseHandle(source_child);
         free(destination_path);
         goto cleanup;
       }
@@ -270,7 +272,7 @@ static int keiko_windows_update_copy_directory_contents(
               FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
               FILE_SHARE_READ | FILE_SHARE_WRITE
           );
-          copied = destination_child != INVALID_HANDLE_VALUE &&
+          copied = destination_child != INVALID_HANDLE_VALUE && destination_child != NULL &&
                    keiko_windows_update_copy_directory_contents(
                        source_child,
                        destination_child,
@@ -285,7 +287,8 @@ static int keiko_windows_update_copy_directory_contents(
             deadline_ms
         );
       }
-      if (destination_child != INVALID_HANDLE_VALUE) CloseHandle(destination_child);
+      if (destination_child != INVALID_HANDLE_VALUE && destination_child != NULL)
+        CloseHandle(destination_child);
       CloseHandle(source_child);
       free(destination_path);
       if (!copied) goto cleanup;
@@ -326,9 +329,9 @@ static int keiko_windows_update_remove_directory_contents(
       );
       wchar_t *path = (wchar_t *)malloc(KEIKO_TREE_WINDOWS_PATH_CAP * sizeof(wchar_t));
       int removed = 0;
-      if (child == INVALID_HANDLE_VALUE || path == NULL ||
+      if (child == INVALID_HANDLE_VALUE || child == NULL || path == NULL ||
           !keiko_tree_windows_child_path(path, directory, entry.cFileName)) {
-        if (child != INVALID_HANDLE_VALUE) CloseHandle(child);
+        if (child != INVALID_HANDLE_VALUE && child != NULL) CloseHandle(child);
         free(path);
         goto cleanup;
       }
@@ -374,7 +377,7 @@ static inline int keiko_windows_update_remove_tree(
       FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
       FILE_SHARE_READ | FILE_SHARE_WRITE
   );
-  if (directory == INVALID_HANDLE_VALUE) return 0;
+  if (directory == INVALID_HANDLE_VALUE || directory == NULL) return 0;
   result = keiko_windows_update_remove_directory_contents(directory, deadline_ms, 0u);
   CloseHandle(directory);
   return result && RemoveDirectoryW(path) != 0;
@@ -401,11 +404,11 @@ static inline int keiko_windows_update_tree_digest_matches(
   );
   keiko_tree_windows_pins pins = {0};
   char digest[65];
-  int result = root != INVALID_HANDLE_VALUE &&
+  int result = root != INVALID_HANDLE_VALUE && root != NULL &&
                keiko_windows_update_tree_hash(root, deadline_ms, digest, &pins) &&
                strcmp(digest, expected_sha256) == 0;
   keiko_tree_windows_pins_clear(&pins);
-  if (root != INVALID_HANDLE_VALUE) CloseHandle(root);
+  if (root != INVALID_HANDLE_VALUE && root != NULL) CloseHandle(root);
   return result;
 }
 
@@ -438,7 +441,7 @@ static inline int keiko_windows_update_copy_publish_generation(
       FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | DELETE,
       FILE_SHARE_READ | FILE_SHARE_DELETE
   );
-  if (source == INVALID_HANDLE_VALUE ||
+  if (source == INVALID_HANDLE_VALUE || source == NULL ||
       !keiko_windows_update_tree_hash(
           source,
           deadline_ms,
@@ -453,7 +456,7 @@ static inline int keiko_windows_update_copy_publish_generation(
       FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
       FILE_SHARE_READ | FILE_SHARE_DELETE
   );
-  if (incoming == INVALID_HANDLE_VALUE ||
+  if (incoming == INVALID_HANDLE_VALUE || incoming == NULL ||
       !keiko_windows_update_copy_directory_contents(source, incoming, deadline_ms, 0u) ||
       !keiko_windows_update_tree_hash(
           source,
@@ -492,7 +495,7 @@ static inline int keiko_windows_update_copy_publish_generation(
         FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ
     );
-    if (published_handle == INVALID_HANDLE_VALUE ||
+    if (published_handle == INVALID_HANDLE_VALUE || published_handle == NULL ||
         !keiko_windows_update_tree_hash(
             published_handle,
             deadline_ms,
@@ -500,7 +503,8 @@ static inline int keiko_windows_update_copy_publish_generation(
             &published_pins
         ) ||
         strcmp(published_digest, expected_sha256) != 0) {
-      if (published_handle != INVALID_HANDLE_VALUE) CloseHandle(published_handle);
+      if (published_handle != INVALID_HANDLE_VALUE && published_handle != NULL)
+        CloseHandle(published_handle);
       goto cleanup;
     }
     CloseHandle(published_handle);
@@ -511,8 +515,8 @@ cleanup:
   keiko_tree_windows_pins_clear(&incoming_pins);
   keiko_tree_windows_pins_clear(&second_pins);
   keiko_tree_windows_pins_clear(&source_pins);
-  if (incoming != INVALID_HANDLE_VALUE) CloseHandle(incoming);
-  if (source != INVALID_HANDLE_VALUE) CloseHandle(source);
+  if (incoming != INVALID_HANDLE_VALUE && incoming != NULL) CloseHandle(incoming);
+  if (source != INVALID_HANDLE_VALUE && source != NULL) CloseHandle(source);
   if (!result && incoming_created && !published) {
     (void)keiko_windows_update_remove_tree(incoming_path, deadline_ms);
   }
