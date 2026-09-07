@@ -818,7 +818,11 @@ static int keiko_coordinator_windows_append_receipt(
   );
   if (file == INVALID_HANDLE_VALUE || file == NULL ||
       !WriteFile(file, content, (DWORD)offset, &written, NULL) ||
-      written != offset || !FlushFileBuffers(file) || !CloseHandle(file)) goto cleanup;
+      written != offset || !FlushFileBuffers(file)) goto cleanup;
+  if (!CloseHandle(file)) {
+    file = INVALID_HANDLE_VALUE;
+    goto cleanup;
+  }
   file = INVALID_HANDLE_VALUE;
   memcpy(context->receipt_sha256, digest, sizeof(context->receipt_sha256));
   context->receipt_sequence += 1u;
