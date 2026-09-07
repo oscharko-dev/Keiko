@@ -408,46 +408,67 @@ cleanup:
 
 int wmain(int argc, wchar_t **argv) {
   if (argc == 3 && wcscmp(argv[1], L"--coordinate-update") == 0) {
-    wchar_t executable[KEIKO_PATH_CAP];
+    wchar_t *executable = (wchar_t *)calloc(KEIKO_PATH_CAP, sizeof(wchar_t));
     char activation_id[33];
-    keiko_coordinator_context coordinator;
-    DWORD length = GetModuleFileNameW(NULL, executable, KEIKO_PATH_CAP);
-    if (length == 0 || length >= KEIKO_PATH_CAP ||
+    keiko_coordinator_context *coordinator =
+        (keiko_coordinator_context *)calloc(1u, sizeof(*coordinator));
+    DWORD length = executable == NULL ? 0 :
+        GetModuleFileNameW(NULL, executable, KEIKO_PATH_CAP);
+    if (coordinator == NULL || length == 0 || length >= KEIKO_PATH_CAP ||
         !update_activation_argument(argv[2], activation_id) ||
-        !keiko_coordinator_prepare_windows(&coordinator, activation_id, executable)) return 74;
+        !keiko_coordinator_prepare_windows(coordinator, activation_id, executable)) {
+      free(coordinator);
+      free(executable);
+      return 74;
+    }
     /* KHA1 remains fail-closed pending the native acceptance amendment and a
      * real Windows executor/recovery qualification run. */
-    keiko_coordinator_clear(&coordinator);
+    keiko_coordinator_clear(coordinator);
+    free(coordinator);
+    free(executable);
     return 74;
   }
   if (argc == 3 && wcscmp(argv[1], L"--recover-update") == 0) {
-    wchar_t executable[KEIKO_PATH_CAP];
+    wchar_t *executable = (wchar_t *)calloc(KEIKO_PATH_CAP, sizeof(wchar_t));
     char activation_id[33];
-    DWORD length = GetModuleFileNameW(NULL, executable, KEIKO_PATH_CAP);
+    DWORD length = executable == NULL ? 0 :
+        GetModuleFileNameW(NULL, executable, KEIKO_PATH_CAP);
     if (length == 0 || length >= KEIKO_PATH_CAP ||
         !update_activation_argument(argv[2], activation_id) ||
-        !keiko_recovery_control_windows(activation_id, executable)) return 74;
+        !keiko_recovery_control_windows(activation_id, executable)) {
+      free(executable);
+      return 74;
+    }
+    free(executable);
     return 0;
   }
   if (argc == 3 &&
       (wcscmp(argv[1], L"--resume-update") == 0 ||
        wcscmp(argv[1], L"--resume-restored-update") == 0)) {
-    wchar_t executable[KEIKO_PATH_CAP];
+    wchar_t *executable = (wchar_t *)calloc(KEIKO_PATH_CAP, sizeof(wchar_t));
     char activation_id[33];
-    keiko_coordinator_context coordinator;
-    DWORD length = GetModuleFileNameW(NULL, executable, KEIKO_PATH_CAP);
+    keiko_coordinator_context *coordinator =
+        (keiko_coordinator_context *)calloc(1u, sizeof(*coordinator));
+    DWORD length = executable == NULL ? 0 :
+        GetModuleFileNameW(NULL, executable, KEIKO_PATH_CAP);
     int restoring = wcscmp(argv[1], L"--resume-restored-update") == 0;
     int result;
-    if (length == 0 || length >= KEIKO_PATH_CAP ||
+    if (coordinator == NULL || length == 0 || length >= KEIKO_PATH_CAP ||
         !update_activation_argument(argv[2], activation_id) ||
         !keiko_coordinator_prepare_resume_windows(
-            &coordinator,
+            coordinator,
             activation_id,
             executable,
             restoring
-        )) return 74;
-    result = resume_update_windows(&coordinator, executable, restoring);
-    keiko_coordinator_clear(&coordinator);
+        )) {
+      free(coordinator);
+      free(executable);
+      return 74;
+    }
+    result = resume_update_windows(coordinator, executable, restoring);
+    keiko_coordinator_clear(coordinator);
+    free(coordinator);
+    free(executable);
     return result;
   }
   if (argc != 1) return 1;
