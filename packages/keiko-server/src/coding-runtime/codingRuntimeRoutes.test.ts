@@ -22,6 +22,7 @@ import {
   type HandlerOutcome,
   type RouteContext,
   type RouteDefinition,
+  type RouteResult,
 } from "../routes.js";
 import {
   CODING_RUNTIME_ROUTE_GROUP,
@@ -1440,12 +1441,16 @@ describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
     expect(JSON.stringify(records)).not.toContain("secret");
   });
 
-  // Epic #3384 defect B follow-up: handleCodingRuntimeQuestionAnswer/Reject resolve the app-session
-  // precheck themselves, before ever calling mutation() above, so the funnel's own denial log used
-  // to never run for them -- an unpaired caller could attempt either state-changing question
-  // mutation and leave zero `coding-runtime.operation.refused` evidence. The HTTP response must stay
-  // the existing-concealing 404 (unchanged from the #2478 boundary), but the body-free activity line
-  // must now be recorded exactly like the sibling unpaired-`start` case above.
+  // Epic #3384 defect B follow-up / PR #3394 review: handleCodingRuntimeQuestionAnswer/Reject used
+  // to resolve the app-session precheck with their own pasted "check authority, log, return
+  // not-found" block instead of the shared mutation() funnel, so the funnel's own denial log added
+  // for defect B never ran for them -- an unpaired caller could attempt either state-changing
+  // question mutation and leave zero `coding-runtime.operation.refused` evidence. They now call
+  // mutation() directly with `{ conceal: "not-found" }` (codingRuntimeRoutes.ts) and inherit this
+  // log from the shared funnel by construction; this regression stays green across that change
+  // because the observable contract is unchanged -- still the existence-concealing 404 (#2478
+  // boundary) plus exactly the body-free activity line recorded below, matching the sibling
+  // unpaired-`start` case above.
   it.each([
     ["answer", handleCodingRuntimeQuestionAnswer],
     ["reject", handleCodingRuntimeQuestionReject],
@@ -1487,6 +1492,53 @@ describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
       ]);
     },
   );
+
+  // PR #3394 review: answer/reject must not merely look like they share the funnel -- their
+  // refusal has to BE the funnel's own logRuntimeOperationRefusal call, not a second block that
+  // happens to log something similar. `stop` has only ever gone through mutation() directly, so
+  // its refusal is the funnel's canonical shape; cross-checking against it pins that answer/reject
+  // now produce the identical shape (level, category, op, reason, and the absent runId) --
+  // differing only in the closed `operation` value each route names itself -- which is what
+  // "inherits the log by construction" has to mean from outside the module.
+  it("emits the identical funnel-shaped refusal for answer/reject as an ordinary mutation route", async () => {
+    interface RefusalRecord {
+      readonly level: string;
+      readonly category: string;
+      readonly op: string;
+      readonly extra: { readonly reason: string; readonly runId?: string };
+    }
+    const session = pairedAppSession();
+    const runPath = "/api/coding-workbench/runtime/runs";
+    const refusalOf = async (
+      handler: (ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>,
+    ): Promise<RefusalRecord> => {
+      const records: RefusalRecord[] = [];
+      const deps = runtime({
+        codingAppSessionChannel: session.channel,
+        activityLog: { write: (event: unknown) => void records.push(event as RefusalRecord) },
+      });
+      const denied = await handler(context("{}", { runId: "run-1" }, runPath), deps);
+      expect(denied.status).toBe(404);
+      expect(records).toHaveLength(1);
+      const [record] = records;
+      if (!record) throw new Error("expected exactly one refusal record");
+      return record;
+    };
+
+    const stopRefusal = await refusalOf(handleCodingRuntimeStop);
+    const answerRefusal = await refusalOf(handleCodingRuntimeQuestionAnswer);
+    const rejectRefusal = await refusalOf(handleCodingRuntimeQuestionReject);
+
+    for (const refusal of [answerRefusal, rejectRefusal]) {
+      expect(refusal).toMatchObject({
+        level: stopRefusal.level,
+        category: stopRefusal.category,
+        op: stopRefusal.op,
+        extra: { reason: "authority-resolution-failed" },
+      });
+      expect(refusal.extra.runId).toBeUndefined();
+    }
+  });
 
   // The recorded attack, end to end: the unauthenticated status route publishes the pending
   // permission's requestId and the snapshot revision — the two values `approvalChallengeMatches`

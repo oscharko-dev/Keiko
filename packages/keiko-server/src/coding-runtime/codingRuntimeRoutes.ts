@@ -192,6 +192,16 @@ async function withBody(
   }
 }
 
+// PR #3394 review: the two denial shapes below used to be selected purely by whether `runId` was
+// defined, which is exactly right for the ten lifecycle mutations (a per-run route always has one,
+// the run-creating `start` never does) but left no way for a call site to STATE the existence-
+// concealing requirement it is under. `concealment` makes that contract explicit and closed instead
+// of an incidental consequence of `runId`'s presence, so a route documented to never answer with a
+// distinct auth error (ADR-0141 D6) can declare it and inherit the shape from this one function.
+interface MutationConcealment {
+  readonly conceal: "not-found";
+}
+
 /**
  * The single authority choke point for every state-changing coding-runtime route.
  *
@@ -199,28 +209,33 @@ async function withBody(
  * as routing facts that never grant a route; D2 makes the launcher-attested app session the
  * authority. Enforcement was scoped to the content-bearing question and research reads (W1.5,
  * #2478), which left the authority-GRANTING lifecycle mutations — start, approve, stop, takeover,
- * retry, recovery-ack, pause, resume, follow-up, research revoke — reachable by any same-user local
- * process that replayed those routing facts. Every one of them funnels through this helper, so the
- * boundary lives here once: a route that cannot mutate without `mutation()` cannot forget the
- * guard, and a future lifecycle route inherits it by construction.
+ * retry, recovery-ack, pause, resume, follow-up, research revoke, answer, reject — reachable by any
+ * same-user local process that replayed those routing facts. Every one of them funnels through this
+ * helper, so the boundary lives here once: a route that cannot mutate without `mutation()` cannot
+ * forget the guard, and a future lifecycle route inherits it by construction.
  *
  * The check runs BEFORE run resolution and before the body is read (ADR-0141 F1 ordering), and it
  * fails closed: an absent channel, an absent cookie, a forged, revoked, rotated-away, or expired
  * session all resolve to no authority and are denied. The denial shape is deliberately split:
  *   - a per-run mutation answers with the existence-concealing not-found result, byte-identical to
  *     the response an unknown `runId` yields, so the denial is not a run-existence oracle
- *     (ADR-0141 D6, the same posture the question mutations already take);
+ *     (ADR-0141 D6);
  *   - the run-creating `POST /runs` names no run and conceals no existence, so it answers with the
  *     honest `authority-resolution-failed` response for a stale or hostile caller, never a
- *     silent success.
+ *     silent success;
+ *   - `concealment: { conceal: "not-found" }` forces the first shape even on a call otherwise shaped
+ *     like the second, for a route whose documented posture (ADR-0141 D6) requires it explicitly —
+ *     the question `answer`/`reject` mutations below pass it and call `mutation()` directly, so they
+ *     inherit both the concealing 404 and its refusal log from this function by construction.
  */
 function requireMutationAuthority(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string | undefined,
+  concealment?: MutationConcealment,
 ): RouteResult | undefined {
   if (resolveAppSessionReadAuthority(deps, ctx.req) !== undefined) return undefined;
-  return runId === undefined
+  return runId === undefined && concealment?.conceal !== "not-found"
     ? failureResult("authority-resolution-failed", ctx.correlationId)
     : notFound(ctx.correlationId);
 }
@@ -235,8 +250,9 @@ async function mutation(
     body: unknown,
     correlationId?: string,
   ) => ReturnType<CodingRuntimeOrchestrator["start"]>,
+  concealment?: MutationConcealment,
 ): Promise<RouteResult> {
-  const denied = requireMutationAuthority(ctx, deps, runId);
+  const denied = requireMutationAuthority(ctx, deps, runId, concealment);
   if (denied !== undefined) {
     // The request is refused before a per-run identifier can be resolved. Keep the evidence
     // content-free by logging only the closed operation and reason, never the caller-supplied id.
@@ -469,38 +485,38 @@ export function handleCodingRuntimeFollowUp(
 // snapshots, diagnostics, evidence, or persistence. The answer/reject operations bind to the
 // server-owned revision through the same serialized coordinator as every other mutation.
 //
-// All three question routes are content-bearing and therefore enforce the app-session read
-// authority (ADR-0141 D2, #2478) BEFORE any runId or runtime resolution: an unpaired list read
-// receives the one constant content-free projection, and an unpaired answer/reject receives the
-// same existence-concealing not-found result an unknown run yields — never a distinct auth error,
-// so no probe can tell "not paired" from "does not exist" (ADR-0141 D6). Loopback, Origin, CSRF,
-// and runId knowledge remain routing facts and never grant these routes (ADR-0141 D1).
+// The list read below is content-bearing and therefore enforces the app-session read authority
+// (ADR-0141 D2, #2478) itself, before any runId or runtime resolution, because an unpaired caller
+// gets a distinct 200 content-free projection that no other route shares. answer/reject are
+// state-changing mutations like every other route in this file, so they enforce authority through
+// the shared `mutation()` funnel, and their denial must still be the same existence-concealing
+// not-found result an unknown run yields — never a distinct auth error, so no probe can tell "not
+// paired" from "does not exist" (ADR-0141 D6). Loopback, Origin, CSRF, and runId knowledge remain
+// routing facts and never grant these routes (ADR-0141 D1).
 //
-// Epic #3384 defect B follow-up: answer/reject resolve this precheck themselves, before ever
-// calling mutation() below, so the funnel's own denial log (added for defect B) never ran for
-// them -- an unpaired caller could attempt either state-changing mutation and leave no
-// `coding-runtime.operation.refused` evidence at all. The HTTP response stays the same
-// existence-concealing 404; the two handlers now emit the identical body-free denial line the
-// funnel emits for an unpaired `start`, closing the gap.
+// Epic #3384 defect B follow-up / PR #3394 review: answer/reject used to resolve that concealment
+// with their own hand-rolled "check authority, log the refusal, return not-found" block, pasted
+// identically into both handlers, instead of going through the shared `mutation()` funnel that
+// already logs `coding-runtime.operation.refused` once, centrally, for every other mutation — the
+// exact gap defect B fixed everywhere else. A third route added later by copying that precheck
+// shape without also copying the inline log call would have silently reproduced it. Both handlers
+// now call `mutation()` directly with `{ conceal: "not-found" }` (see `requireMutationAuthority`),
+// so the concealing 404 and its refusal log are inherited from the funnel by construction, exactly
+// like every other per-run mutation below.
 export function handleCodingRuntimeQuestionAnswer(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-    logRuntimeOperationRefusal(
-      deps,
-      ctx.correlationId,
-      "answer",
-      undefined,
-      "authority-resolution-failed",
-    );
-    return Promise.resolve(notFound(ctx.correlationId));
-  }
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound(ctx.correlationId))
-    : mutation(ctx, deps, runId, "answer", (runtime, body, correlationId) =>
-        runtime.answerQuestion(runId, body, correlationId),
+    : mutation(
+        ctx,
+        deps,
+        runId,
+        "answer",
+        (runtime, body, correlationId) => runtime.answerQuestion(runId, body, correlationId),
+        { conceal: "not-found" },
       );
 }
 
@@ -508,21 +524,16 @@ export function handleCodingRuntimeQuestionReject(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-    logRuntimeOperationRefusal(
-      deps,
-      ctx.correlationId,
-      "reject",
-      undefined,
-      "authority-resolution-failed",
-    );
-    return Promise.resolve(notFound(ctx.correlationId));
-  }
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound(ctx.correlationId))
-    : mutation(ctx, deps, runId, "reject", (runtime, body, correlationId) =>
-        runtime.rejectQuestion(runId, body, correlationId),
+    : mutation(
+        ctx,
+        deps,
+        runId,
+        "reject",
+        (runtime, body, correlationId) => runtime.rejectQuestion(runId, body, correlationId),
+        { conceal: "not-found" },
       );
 }
 
