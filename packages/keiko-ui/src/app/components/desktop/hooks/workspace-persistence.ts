@@ -93,6 +93,16 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
   // The Coding Workbench can explicitly open the user-selected repository rather than an active
   // task worktree. Retain only this closed marker, never an arbitrary binding instruction.
   governedGit: ["rootBinding"],
+  // Epic #3384 (#3401 "Review description"): the governed pull request window carries the exact
+  // server-held retained description proposal it must review. Each key has a closed value shape
+  // (owner/repo, positive integer, opaque reference, sha256 digest) so a reload restores the same
+  // binding the Workbench opened and never a hostile or free-form value.
+  governedPullRequest: [
+    "descriptionOwnerAndRepo",
+    "descriptionPrNumber",
+    "descriptionProposalId",
+    "descriptionSnapshotDigest",
+  ],
   figma: ["snapshotRunId", "selectedScreenIdsJson", "selectedScreenName"],
   figmaView: ["snapshotRunId", "selectedScreenIdsJson", "selectedScreenName"],
   figmaJson: ["snapshotRunId", "screenId", "selectedScreenIdsJson", "selectedScreenName"],
@@ -119,8 +129,34 @@ function sanitizeCodingRepositoryBinding(value: unknown): AppWindow["cfg"][strin
   return value === "coding-repository" ? value : undefined;
 }
 
+const GITHUB_OWNER_AND_REPO = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/u;
+const SHA256_HEX_DIGEST = /^[a-f0-9]{64}$/u;
+
+function sanitizeGitHubOwnerAndRepo(value: unknown): AppWindow["cfg"][string] {
+  if (typeof value !== "string" || !GITHUB_OWNER_AND_REPO.test(value)) return undefined;
+  return value.split("/").some((segment) => segment === "." || segment === "..")
+    ? undefined
+    : value;
+}
+
+function sanitizePullRequestNumber(value: unknown): AppWindow["cfg"][string] {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+function sanitizeOpaqueReferenceValue(value: unknown): AppWindow["cfg"][string] {
+  return typeof value === "string" && isSafeOpaqueReference(value) ? value : undefined;
+}
+
+function sanitizeSha256Digest(value: unknown): AppWindow["cfg"][string] {
+  return typeof value === "string" && SHA256_HEX_DIGEST.test(value) ? value : undefined;
+}
+
 const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueSanitizer>> = {
   "governedGit:rootBinding": sanitizeCodingRepositoryBinding,
+  "governedPullRequest:descriptionOwnerAndRepo": sanitizeGitHubOwnerAndRepo,
+  "governedPullRequest:descriptionPrNumber": sanitizePullRequestNumber,
+  "governedPullRequest:descriptionProposalId": sanitizeOpaqueReferenceValue,
+  "governedPullRequest:descriptionSnapshotDigest": sanitizeSha256Digest,
 };
 
 function isFiniteNumber(value: unknown): value is number {
