@@ -2238,13 +2238,13 @@
     {
       "op": "git.ci-observation",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/ciObservationService.ts:239",
+      "site": "packages/keiko-server/src/gitDelivery/ciObservationService.ts:237",
       "package": "keiko-server"
     },
     {
       "op": "git.ci-observation",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/ciObservationService.ts:257",
+      "site": "packages/keiko-server/src/gitDelivery/ciObservationService.ts:255",
       "package": "keiko-server"
     },
     {

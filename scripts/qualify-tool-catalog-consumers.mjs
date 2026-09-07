@@ -289,7 +289,7 @@ export function inspectToolCatalogQualificationPackage(root, artifactPath) {
   );
 }
 
-function writeReports(directory, reports, recordedAt) {
+export function writeToolCatalogQualificationReports(directory, reports, recordedAt) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   for (const [consumer, report] of reports) {
     writeFileSync(join(directory, `${consumer}.artifact`), `${JSON.stringify(report, null, 2)}\n`, {
@@ -358,6 +358,6 @@ if (isMainModule(import.meta.url)) {
     observations,
     packageEvidence: inspectToolCatalogQualificationPackage(root, artifactPath),
   });
-  writeReports(receiptsDir, reports, new Date().toISOString());
+  writeToolCatalogQualificationReports(receiptsDir, reports, new Date().toISOString());
   console.log("Tool catalog consumer qualification: PASS");
 }

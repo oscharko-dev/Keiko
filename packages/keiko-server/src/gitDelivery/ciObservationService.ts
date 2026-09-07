@@ -142,9 +142,7 @@ export class CiObservationController implements CiObservationService {
     });
     return this.finishRead(observation, facts, reader);
   }
-  private observationCandidate(
-    context: DraftDeliveryRunContext,
-  ): DraftDeliveryRecord | undefined {
+  private observationCandidate(context: DraftDeliveryRunContext): DraftDeliveryRecord | undefined {
     const snapshot = this.options.snapshots.get(context.runId);
     if (snapshot === undefined) return undefined;
     const existing = snapshot.draftDelivery;

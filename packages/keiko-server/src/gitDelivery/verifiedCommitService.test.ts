@@ -3,7 +3,15 @@ import { redactLogFields } from "../observability/log-redaction.js";
 import { RuntimeGitService } from "./runtimeGitService.js";
 import { commitFacadeFixture } from "./verifiedCommitFacadeTestSupport.js";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync, existsSync, chmodSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -14,6 +22,7 @@ import type {
   GitCommitMessageValidation,
 } from "@oscharko-dev/keiko-contracts";
 import { isVerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { createCodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntimeSnapshotStore.js";
 import { runMigrations } from "../store/schema.js";
 import { createVerifiedCommitService } from "./verifiedCommitService.js";
@@ -823,6 +832,89 @@ describe("productive runtime status/diff/stage lane", () => {
       kind: "meta",
       text: "\\ No newline at end of file",
     });
+  });
+  it("expands a directory diff through bounded Git-owned changed paths", async () => {
+    mkdirSync(join(root, "nested"));
+    writeFileSync(join(root, "nested", "value.js"), "export const value = 1;\n");
+    git(["add", "nested/value.js"]);
+    git(["commit", "-qm", "test: add nested fixture", "--", "nested/value.js"]);
+    writeFileSync(join(root, "nested", "value.js"), "export const value = 2;\n");
+
+    await expect(
+      runtimeGitDiff(context(), options.execution ?? {}, "unstaged", ["nested"]),
+    ).resolves.toMatchObject({
+      files: [{ path: "nested/value.js", layer: "worktree", status: "modified" }],
+      truncated: false,
+    });
+  });
+  it("expands staged and untracked directories in their exact requested layer", async () => {
+    mkdirSync(join(root, "staged"));
+    mkdirSync(join(root, "untracked"));
+    writeFileSync(join(root, "staged", "value.js"), "export const staged = true;\n");
+    writeFileSync(join(root, "untracked", "value.js"), "export const untracked = true;\n");
+    git(["add", "staged/value.js"]);
+
+    await expect(
+      runtimeGitDiff(context(), options.execution ?? {}, "staged", ["staged"]),
+    ).resolves.toMatchObject({
+      files: [{ path: "staged/value.js", layer: "staged", status: "added" }],
+      totalFiles: 1,
+      truncated: false,
+    });
+    await expect(
+      runtimeGitDiff(context(), options.execution ?? {}, "unstaged", ["untracked"]),
+    ).resolves.toMatchObject({
+      files: [{ path: "untracked/value.js", layer: "worktree", status: "added" }],
+      totalFiles: 1,
+      truncated: false,
+    });
+  });
+  it("keeps directory boundaries exact and de-duplicates exact-plus-directory requests", async () => {
+    mkdirSync(join(root, "nested"));
+    mkdirSync(join(root, "nested-sibling"));
+    writeFileSync(join(root, "nested", "value.js"), "export const nested = true;\n");
+    writeFileSync(join(root, "nested-sibling", "value.js"), "export const sibling = true;\n");
+
+    await expect(
+      runtimeGitDiff(context(), options.execution ?? {}, "unstaged", ["nested/value.js", "nested"]),
+    ).resolves.toMatchObject({
+      files: [{ path: "nested/value.js" }],
+      totalFiles: 1,
+      truncated: false,
+    });
+  });
+  it("returns no unrelated file for an unchanged directory", async () => {
+    mkdirSync(join(root, "unchanged"));
+    writeFileSync(join(root, "unchanged", "value.js"), "export const unchanged = true;\n");
+    git(["add", "unchanged/value.js"]);
+    git(["commit", "-qm", "test: add unchanged directory", "--", "unchanged/value.js"]);
+
+    await expect(
+      runtimeGitDiff(context(), options.execution ?? {}, "unstaged", ["unchanged"]),
+    ).resolves.toMatchObject({ files: [], totalFiles: 0, truncated: false });
+  });
+  it("propagates per-file truncation from an expanded directory result", async () => {
+    mkdirSync(join(root, "large"));
+    writeFileSync(
+      join(root, "large", "value.js"),
+      `export const value = "${"x".repeat(61_000)}";\n`,
+    );
+
+    const diff = await runtimeGitDiff(context(), options.execution ?? {}, "unstaged", ["large"]);
+    expect(diff).toMatchObject({
+      files: [{ path: "large/value.js", truncated: true }],
+      totalFiles: 1,
+      truncated: true,
+    });
+  });
+  it("rejects more than the governed path cap before reading a directory diff", async () => {
+    const paths = Array.from(
+      { length: CODING_RUNTIME_GIT_MAX_PATHS + 1 },
+      (_value, index) => `path-${String(index)}.js`,
+    );
+    await expect(
+      runtimeGitDiff(context(), options.execution ?? {}, "unstaged", paths),
+    ).rejects.toThrow("git-runtime-paths-invalid");
   });
   it("reviews and stages an executable-mode-only change through the real runtime service", async () => {
     chmodSync(join(root, "code.js"), 0o755);

@@ -1,6 +1,7 @@
 import { isUtf8 } from "node:buffer";
 import type {
   CodingRuntimeGitStatus,
+  GitChangedFile,
   GitEditorDiffFile,
   GitEditorDiffResponse,
   GitEditorDiffScope,
@@ -9,6 +10,7 @@ import {
   GIT_EDITOR_DIFF_MAX_BYTES,
   GIT_EDITOR_DIFF_MAX_FILES,
 } from "@oscharko-dev/keiko-contracts/runtime/git-editor";
+import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { readGitStageFile } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import {
   readGitRevision,
@@ -185,6 +187,64 @@ async function workingSide(
   };
 }
 
+function changedInScope(change: GitChangedFile, scope: GitEditorDiffScope): boolean {
+  return scope === "staged" ? change.staged : change.unstaged || change.untracked;
+}
+
+function pathMatches(requested: string, candidate: string): boolean {
+  return candidate === requested || candidate.startsWith(`${requested}/`);
+}
+
+function expandDiffPaths(
+  requested: readonly string[],
+  changes: readonly GitChangedFile[],
+  scope: GitEditorDiffScope,
+): { readonly paths: readonly string[]; readonly truncated: boolean } {
+  const eligible = changes.filter((change) => changedInScope(change, scope));
+  const selected: string[] = [];
+  const seen = new Set<string>();
+  for (const requestedPath of requested) {
+    for (const change of eligible) {
+      if (!pathMatches(requestedPath, change.path) || seen.has(change.path)) continue;
+      if (selected.length === CODING_RUNTIME_GIT_MAX_PATHS)
+        return { paths: selected, truncated: true };
+      seen.add(change.path);
+      selected.push(change.path);
+    }
+  }
+  return { paths: selected, truncated: false };
+}
+
+async function readSelectedDiffFiles(
+  context: VerifiedCommitRunContext,
+  execution: GitDeliveryExecutionSeams,
+  scope: GitEditorDiffScope,
+  paths: readonly string[],
+  initiallyTruncated: boolean,
+): Promise<{
+  readonly files: readonly GitEditorDiffFile[];
+  readonly totalBytes: number;
+  readonly truncated: boolean;
+}> {
+  const files: GitEditorDiffFile[] = [];
+  let totalBytes = 0;
+  let truncated = initiallyTruncated;
+  for (const path of paths) {
+    if (!context.stillAuthorized() || context.signal?.aborted === true)
+      throw new Error("git-runtime-authority-denied");
+    const file = diffFile(await readSides(context, execution, path, scope), scope);
+    if (file === undefined) continue;
+    truncated ||= file.truncated;
+    totalBytes += Buffer.byteLength(JSON.stringify(file));
+    if (totalBytes > 60_000) {
+      truncated = true;
+      break;
+    }
+    files.push(file);
+  }
+  return { files, totalBytes, truncated };
+}
+
 export async function runtimeGitDiff(
   context: VerifiedCommitRunContext,
   execution: GitDeliveryExecutionSeams,
@@ -193,36 +253,27 @@ export async function runtimeGitDiff(
 ): Promise<GitEditorDiffResponse> {
   if (!runtimeGitPaths(paths)) throw new Error("git-runtime-paths-invalid");
   const deps = runtimeGitReadDeps(context, execution);
-  const head = await readGitRevision(deps, "HEAD");
-  const index = await readGitIndexTreeDigest(deps);
-  const files: GitEditorDiffFile[] = [];
-  let totalBytes = 0;
-  let truncated = false;
-  for (const path of paths) {
-    if (!context.stillAuthorized() || context.signal?.aborted === true)
-      throw new Error("git-runtime-authority-denied");
-    const sides = await readSides(context, execution, path, scope);
-    const file = diffFile(sides, scope);
-    if (file === undefined) continue;
-    totalBytes += Buffer.byteLength(JSON.stringify(file));
-    if (totalBytes > 60_000) {
-      truncated = true;
-      break;
-    }
-    files.push(file);
-  }
+  const raw = await readGitRawChanges(deps);
+  const expanded = expandDiffPaths(paths, raw.changes, scope);
+  const selection = await readSelectedDiffFiles(
+    context,
+    execution,
+    scope,
+    expanded.paths,
+    raw.truncated || expanded.truncated,
+  );
   if (
-    (await readGitRevision(deps, "HEAD")) !== head ||
-    (await readGitIndexTreeDigest(deps)) !== index
+    (await readGitRevision(deps, "HEAD")) !== raw.headSha ||
+    (await readGitIndexTreeDigest(deps)) !== raw.stagedTreeDigest
   )
     throw new Error("git-runtime-diff-drift");
   return {
     schemaVersion: "1",
     scope,
-    files,
-    totalFiles: files.length,
-    totalBytes,
-    truncated,
+    files: selection.files,
+    totalFiles: selection.files.length,
+    totalBytes: selection.totalBytes,
+    truncated: selection.truncated,
     maxBytes: GIT_EDITOR_DIFF_MAX_BYTES,
     maxFiles: GIT_EDITOR_DIFF_MAX_FILES,
   };

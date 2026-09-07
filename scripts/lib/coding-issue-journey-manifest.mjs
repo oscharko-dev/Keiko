@@ -10,7 +10,7 @@
 // its honest blocked row to receipt-backed evidence only when the operator supplies the external
 // artifact and its exact opaque reference/digest binding.
 
-export const EXTERNAL_ISSUE_AUDIT_SCENARIO_ID = "keiko-issue-audit";
+const EXTERNAL_ISSUE_AUDIT_SCENARIO_ID = "keiko-issue-audit";
 
 function fact(value) {
   return value === undefined ? { outcome: "unknown" } : { outcome: "known", value };
