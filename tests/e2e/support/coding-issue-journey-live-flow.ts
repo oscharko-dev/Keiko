@@ -4,7 +4,7 @@
 // closure on the exact run/head. Failed attempts remain represented by the durable spend delta of
 // the next completed flow.
 
-import { expect, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import type {
   CodeTaskGitCommitSha,
   CodeTaskQualificationAuthorityObservationV1,
@@ -1078,6 +1078,10 @@ async function reviewExactHead(
   if (!isCodeTaskGitCommitSha(delivered.headSha)) {
     throw new Error("qualification final pull-request head is invalid");
   }
+  // The flow parks here until the reviewer answers, so the outer Playwright clock must stop
+  // governing it; every remaining stage keeps its own bounded wait. A review is human-paced work
+  // and must never be lost to a wall-clock expiry that looks identical to a reviewer who said no.
+  test.setTimeout(0);
   return awaitIndependentQualificationReview({
     flowId: flow.flowId,
     taskRunId: delivered.runId,
