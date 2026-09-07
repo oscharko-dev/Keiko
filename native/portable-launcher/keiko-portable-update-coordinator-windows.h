@@ -6,6 +6,7 @@
 #endif
 
 #include "keiko-portable-update-windows-mechanics.h"
+#include "../keiko-windows-local-volume.h"
 
 #include <winsock2.h>
 #include <windows.h>
@@ -50,6 +51,7 @@ typedef struct {
   HANDLE supervisor_process;
   HANDLE capsule_directory;
   HANDLE receipts_directory;
+  keiko_windows_local_volume_pin managed_root;
   keiko_windows_atomic_file_fact capsule_fact;
   keiko_windows_atomic_file_fact receipts_fact;
   int supervisor_control;
@@ -498,7 +500,7 @@ static int keiko_coordinator_windows_ui_identity(
 }
 
 static int keiko_coordinator_windows_roots_same_volume(
-    const keiko_coordinator_context *context
+    keiko_coordinator_context *context
 ) {
   wchar_t *managed = keiko_coordinator_windows_wide_utf8(
       context->plan.field[KEIKO_KHP_MANAGED_ROOT]
@@ -506,34 +508,28 @@ static int keiko_coordinator_windows_roots_same_volume(
   wchar_t *stage = keiko_coordinator_windows_wide_utf8(
       context->plan.field[KEIKO_KHP_STAGE_ROOT]
   );
-  HANDLE managed_handle = INVALID_HANDLE_VALUE;
-  HANDLE stage_handle = INVALID_HANDLE_VALUE;
-  keiko_windows_atomic_file_fact managed_fact;
-  keiko_windows_atomic_file_fact stage_fact;
+  keiko_windows_local_volume_pin stage_pin;
   int result = 0;
-  if (managed != NULL)
-    managed_handle = keiko_windows_atomic_open_directory(
-        managed,
-        FILE_READ_ATTRIBUTES,
-        FILE_SHARE_READ
-    );
-  if (stage != NULL)
-    stage_handle = keiko_windows_atomic_open_directory(
-        stage,
-        FILE_READ_ATTRIBUTES,
-        FILE_SHARE_READ
-    );
-  result = managed_handle != INVALID_HANDLE_VALUE && managed_handle != NULL &&
-           stage_handle != INVALID_HANDLE_VALUE && stage_handle != NULL &&
-           keiko_windows_atomic_query_fact(managed_handle, &managed_fact) &&
-           keiko_windows_atomic_query_fact(stage_handle, &stage_fact) &&
-           managed_fact.identity.VolumeSerialNumber == stage_fact.identity.VolumeSerialNumber;
-  if (stage_handle != INVALID_HANDLE_VALUE && stage_handle != NULL) CloseHandle(stage_handle);
-  if (managed_handle != INVALID_HANDLE_VALUE && managed_handle != NULL)
-    CloseHandle(managed_handle);
+  memset(&stage_pin, 0, sizeof(stage_pin));
+  stage_pin.directory = INVALID_HANDLE_VALUE;
+  result = managed != NULL && stage != NULL &&
+           keiko_windows_local_volume_pin_path(managed, 1, &context->managed_root) &&
+           keiko_windows_local_volume_pin_path(stage, 1, &stage_pin) &&
+           context->managed_root.identity.VolumeSerialNumber ==
+               stage_pin.identity.VolumeSerialNumber &&
+           keiko_windows_local_volume_recheck(&context->managed_root) &&
+           keiko_windows_local_volume_recheck(&stage_pin);
+  keiko_windows_local_volume_clear(&stage_pin);
+  if (!result) keiko_windows_local_volume_clear(&context->managed_root);
   free(stage);
   free(managed);
   return result;
+}
+
+static int keiko_coordinator_windows_managed_root_current(
+    const keiko_coordinator_context *context
+) {
+  return context != NULL && keiko_windows_local_volume_recheck(&context->managed_root);
 }
 
 static int keiko_coordinator_windows_registration_matches(
@@ -989,6 +985,7 @@ static inline void keiko_coordinator_clear(keiko_coordinator_context *context) {
       context->capsule_directory != INVALID_HANDLE_VALUE) {
     CloseHandle(context->capsule_directory);
   }
+  keiko_windows_local_volume_clear(&context->managed_root);
   keiko_khp_clear(&context->plan);
   free(context->state_dir_utf8);
   free(context->capsule);
@@ -2366,35 +2363,33 @@ static int keiko_coordinator_windows_engine_deadline(
 }
 
 static int keiko_coordinator_windows_engine_emit_acceptance(void *opaque) {
-  return keiko_coordinator_windows_emit_acceptance(
-      (keiko_coordinator_context *)opaque
-  );
+  keiko_coordinator_context *context = (keiko_coordinator_context *)opaque;
+  return keiko_coordinator_windows_managed_root_current(context) &&
+         keiko_coordinator_windows_emit_acceptance(context);
 }
 
 static int keiko_coordinator_windows_engine_wait_old_exit(void *opaque) {
-  return keiko_coordinator_windows_wait_old_exit(
-      (keiko_coordinator_context *)opaque
-  );
+  keiko_coordinator_context *context = (keiko_coordinator_context *)opaque;
+  return keiko_coordinator_windows_managed_root_current(context) &&
+         keiko_coordinator_windows_wait_old_exit(context);
 }
 
 static int keiko_coordinator_windows_engine_promote(
     void *opaque,
     uint64_t deadline_ms
 ) {
-  return keiko_coordinator_promote_windows(
-      (keiko_coordinator_context *)opaque,
-      deadline_ms
-  );
+  keiko_coordinator_context *context = (keiko_coordinator_context *)opaque;
+  return keiko_coordinator_windows_managed_root_current(context) &&
+         keiko_coordinator_promote_windows(context, deadline_ms);
 }
 
 static int keiko_coordinator_windows_engine_publish_registration(
     void *opaque,
     uint64_t deadline_ms
 ) {
-  return keiko_coordinator_publish_registration_windows(
-      (keiko_coordinator_context *)opaque,
-      deadline_ms
-  );
+  keiko_coordinator_context *context = (keiko_coordinator_context *)opaque;
+  return keiko_coordinator_windows_managed_root_current(context) &&
+         keiko_coordinator_publish_registration_windows(context, deadline_ms);
 }
 
 static int keiko_coordinator_windows_engine_start_runtime(
@@ -2402,11 +2397,9 @@ static int keiko_coordinator_windows_engine_start_runtime(
     uint64_t deadline_ms,
     int restoring
 ) {
-  return keiko_coordinator_windows_start_runtime(
-      (keiko_coordinator_context *)opaque,
-      deadline_ms,
-      restoring
-  );
+  keiko_coordinator_context *context = (keiko_coordinator_context *)opaque;
+  return keiko_coordinator_windows_managed_root_current(context) &&
+         keiko_coordinator_windows_start_runtime(context, deadline_ms, restoring);
 }
 
 static int keiko_coordinator_windows_engine_wait_receipt(
@@ -2473,20 +2466,18 @@ static int keiko_coordinator_windows_engine_cleanup_verified(
     void *opaque,
     uint64_t deadline_ms
 ) {
-  return keiko_coordinator_cleanup_verified_windows(
-      (keiko_coordinator_context *)opaque,
-      deadline_ms
-  );
+  keiko_coordinator_context *context = (keiko_coordinator_context *)opaque;
+  return keiko_coordinator_windows_managed_root_current(context) &&
+         keiko_coordinator_cleanup_verified_windows(context, deadline_ms);
 }
 
 static int keiko_coordinator_windows_engine_restore_previous(
     void *opaque,
     uint64_t deadline_ms
 ) {
-  return keiko_coordinator_restore_previous_windows(
-      (keiko_coordinator_context *)opaque,
-      deadline_ms
-  );
+  keiko_coordinator_context *context = (keiko_coordinator_context *)opaque;
+  return keiko_coordinator_windows_managed_root_current(context) &&
+         keiko_coordinator_restore_previous_windows(context, deadline_ms);
 }
 
 static void keiko_coordinator_windows_engine_hold_runtime(void *opaque) {
@@ -2603,6 +2594,7 @@ static inline int keiko_coordinator_prepare_resume_windows(
           context->plan.field[KEIKO_KHP_CURRENT_SUPERVISOR_SHA256],
           deadline
       ) ||
+      !keiko_coordinator_windows_roots_same_volume(context) ||
       !keiko_coordinator_windows_classify(context, deadline, &prefix) ||
       prefix != (restoring ? KEIKO_WINDOWS_PREFIX_PREVIOUS
                            : KEIKO_WINDOWS_PREFIX_REGISTRATION) ||
