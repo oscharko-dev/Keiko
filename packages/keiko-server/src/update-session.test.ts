@@ -589,7 +589,9 @@ describe("UpdateSessionManager", () => {
     const lock = new MemoryUpdateSessionLock();
     const localState = {
       ...delegate,
-      writeRuntimeState: (state: Parameters<typeof delegate.writeRuntimeState>[0]): void => {
+      writeRuntimeState: (
+        state: Parameters<typeof delegate.writeRuntimeState>[0],
+      ): ReturnType<typeof delegate.writeRuntimeState> => {
         if (failWrites) throw new Error("runtime state unavailable");
         return delegate.writeRuntimeState(state);
       },

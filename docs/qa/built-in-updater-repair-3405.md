@@ -1038,6 +1038,32 @@ remediation, session, and activation suites with official Node 24.18.0: **92/92 
 12.97 seconds** (`/tmp/keiko-3405-six-lint-fixes-root-replay.log`). The owner's scoped lint passed
 with zero findings. This checkpoint does not replace the pending full lint, verification, or audit.
 
+## Startup and Windows boundary verification checkpoint (2026-09-07)
+
+The lead's official-Node replay of eleven startup, recovery, generation-allowance, CLI root-policy,
+security helper, install-mode, and runtime suites passed **148/148 tests in 45.98 seconds**
+(`/tmp/keiko-3405-b3b-locality-root-replay.log`). Subsequent test-only typing repairs preserve the
+lock-acquisition assertion order and the local-state writer's returned state; the owner replayed
+both affected suites with **68/68 tests passing**. Canonical package build and package-graph checks
+passed, followed by a successful root TypeScript 7.0.2 no-emit replay
+(`/tmp/keiko-3405-b3b-root-noemit-replay.log`). UI lint passed separately. Broad lint reduced the
+previous twenty-six server errors to four errors in the new locality helper and its test; those
+remain part of the helper repair. None of these results is a final SHA-bound delivery receipt.
+
+Windows diagnostic `eee979c77`, run `34153165932`, passed the complete native coordinator test,
+including the ACL owner fix, and the real cutover probe with all success/sharing/invalid/pre/post/
+contention checks and flush boundaries passing. It then failed MSVC C4996 in the protocol fixture's
+`fopen` call. The checked MSVC-specific `fopen_s` test repair is frozen and pushed as diagnostic
+`d8b199b6e`; run `34153596557` is pending. The complete native quality lane is not yet green.
+
+Independent security review confirmed a High defect in the uncommitted local-volume helper:
+PowerShell 5.1 CodeDOM scratch storage inherits an environment-selected temporary parent's ACL,
+which permits cross-user compiler-artifact replacement when that parent is shared. The accepted
+repair removes CodeDOM and filesystem scratch entirely through transient Reflection.Emit P/Invoke.
+It requires a fresh independent review and genuine Windows local-volume and mapped-SMB evidence.
+Native setup/coordinator directory pinning is being implemented in parallel. Production eligibility
+and KHA1 remain disabled, and the real-artifact qualification decision remains unresolved.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification
