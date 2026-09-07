@@ -110,8 +110,7 @@ async function fixture() {
       passed: consumer ? CATALOG_CLOSEOUT_CONSUMER_PROOF_COUNTS[id] : 1,
       failed: 0,
       skipped: 0,
-      binding:
-        id === "required-ci" ? fixtureRequiredCiBinding(context) : consumer ? binding : null,
+      binding: id === "required-ci" ? fixtureRequiredCiBinding(context) : consumer ? binding : null,
       components: fixtureComponents(id, consumer),
       packages: consumer
         ? TOOL_CATALOG_QUALIFICATION_PACKAGES[id].map((name) => ({
@@ -261,7 +260,9 @@ describe("exact-head catalog closeout artifact", () => {
     const f = await fixture();
     const binding = fixtureRequiredCiBinding(f.context);
     expect(f.reports.get("required-ci").binding).toEqual(binding);
-    expect(f.manifest.checks.find((entry) => entry.id === "required-ci")).toMatchObject({ binding });
+    expect(f.manifest.checks.find((entry) => entry.id === "required-ci")).toMatchObject({
+      binding,
+    });
     expect(check(f)).toEqual(f.manifest);
   });
   it.each([

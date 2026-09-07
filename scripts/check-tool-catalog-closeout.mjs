@@ -59,6 +59,8 @@ const H1_EVIDENCE_REFS = new Set(["h1-producer-checkpoint.v1", "h1-provenance.v1
 const DIGEST = /^[a-f0-9]{64}$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
 const VERSION = /^\d+\.\d+\.\d+$/u;
+const GIT_REF = /^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,254}$/u;
+const GITHUB_REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const PLATFORMS = new Set(["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64"]);
 
 function requireEvidence(condition, message) {
@@ -177,6 +179,35 @@ function validateManagedRunBinding(binding) {
     "managed consumer has invalid run binding",
   );
 }
+function validateRequiredCiBinding(binding, currentHead) {
+  exactFields(binding, [
+    "kind",
+    "repository",
+    "repositoryId",
+    "pullRequestNumber",
+    "headRepository",
+    "headRef",
+    "headSha",
+    "baseRef",
+    "baseSha",
+    "requirementsDigest",
+  ]);
+  const valid = [
+    binding.kind === "required-ci",
+    GITHUB_REPOSITORY.test(binding.repository),
+    Number.isSafeInteger(binding.repositoryId),
+    binding.repositoryId > 0,
+    Number.isSafeInteger(binding.pullRequestNumber),
+    binding.pullRequestNumber > 0,
+    GITHUB_REPOSITORY.test(binding.headRepository),
+    GIT_REF.test(binding.headRef),
+    binding.headSha === currentHead,
+    binding.baseRef === "dev",
+    COMMIT.test(binding.baseSha),
+    DIGEST.test(binding.requirementsDigest),
+  ];
+  requireEvidence(valid.every(Boolean), "required-ci has invalid exact identity binding");
+}
 function validateConsumerPackages(consumer, packages) {
   requireEvidence(Array.isArray(packages), `${consumer} has no packaged proof`);
   const expected = TOOL_CATALOG_QUALIFICATION_PACKAGES[consumer];
@@ -200,7 +231,8 @@ function validateConsumerPackages(consumer, packages) {
   }
 }
 function validateGateReport(id, report, context) {
-  requireEvidence(report.binding === null, `${id} has unexpected binding metadata`);
+  if (id === "required-ci") validateRequiredCiBinding(report.binding, report.currentHead);
+  else requireEvidence(report.binding === null, `${id} has unexpected binding metadata`);
   requireEvidence(report.components === null, `${id} has unexpected component proof`);
   requireEvidence(report.packages === null, `${id} has unexpected packaged proof`);
   // Hosted Linux checks qualify source. Preserve their actual runtime and platform; never relabel
@@ -223,7 +255,7 @@ function verifiedReports(context, receipts, reports) {
     const report = reports.get(id);
     validateReport(id, report, context);
     requireEvidence(receipt.platform === report.platform, `${id} receipt has wrong platform`);
-    return {
+    const check = {
       id,
       receiptDigest: receipt.digest,
       status: "passed",
@@ -231,6 +263,7 @@ function verifiedReports(context, receipts, reports) {
       runtime: report.runtime,
       artifactDigest: report.artifactDigest,
     };
+    return id === "required-ci" ? { ...check, binding: report.binding } : check;
   });
 }
 

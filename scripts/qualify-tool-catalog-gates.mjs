@@ -21,6 +21,10 @@ import { isMainModule } from "./lib/is-main-module.mjs";
 import { writeToolCatalogQualificationReports } from "./qualify-tool-catalog-consumers.mjs";
 
 const COMMAND_TIMEOUT_MS = 45 * 60 * 1_000;
+const COMMIT = /^[a-f0-9]{40}$/u;
+const DIGEST = /^[a-f0-9]{64}$/u;
+const GIT_REF = /^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,254}$/u;
+const GITHUB_REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const LOCAL_GATE_COMMANDS = Object.freeze({
   "catalog-conformance": [["node", "scripts/check-tool-catalog-conformance.mjs", "--closeout"]],
   "catalog-performance": [["npm", "run", "check:tool-catalog-performance"]],
@@ -134,7 +138,7 @@ function runGateCommands(id, commands, root, logsDir, deps) {
   });
 }
 
-function gateReport(currentHead, passed, root) {
+function gateReport(currentHead, passed, root, binding) {
   const product = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
   return {
     schemaVersion: 1,
@@ -147,7 +151,7 @@ function gateReport(currentHead, passed, root) {
     passed,
     failed: 0,
     skipped: 0,
-    binding: null,
+    binding,
     components: null,
     packages: null,
   };
@@ -185,7 +189,7 @@ export function qualifyLocalCatalogGate(input, deps = defaultDependencies()) {
       mode: 0o600,
     });
   }
-  const report = gateReport(currentHead, passed, input.root);
+  const report = gateReport(currentHead, passed, input.root, null);
   writeGateReport(input.receiptsDir, input.id, report, deps.now().toISOString());
   return report;
 }
@@ -235,12 +239,49 @@ function allRequiredChecksPassed(required) {
   );
 }
 
-function passedRequiredCi(facts, currentHead) {
+function sameRepository(left, right) {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
+function requiredCiBinding(facts, target, requirementsDigest) {
+  const identity = facts.identity;
+  const matches = [
+    GITHUB_REPOSITORY.test(identity.repository),
+    sameRepository(identity.repository, target.ownerAndRepo),
+    Number.isSafeInteger(facts.repositoryId),
+    facts.repositoryId > 0,
+    identity.number === target.pullRequestNumber,
+    GITHUB_REPOSITORY.test(identity.headRepository),
+    GIT_REF.test(identity.headRef),
+    identity.headSha === target.headSha,
+    identity.baseRef === target.baseBranchName,
+    COMMIT.test(identity.baseSha),
+    DIGEST.test(requirementsDigest),
+  ];
+  requireQualification(
+    matches.every(Boolean),
+    "required CI identity does not match the requested pull request",
+  );
+  return {
+    kind: "required-ci",
+    repository: identity.repository,
+    repositoryId: facts.repositoryId,
+    pullRequestNumber: identity.number,
+    headRepository: identity.headRepository,
+    headRef: identity.headRef,
+    headSha: identity.headSha,
+    baseRef: identity.baseRef,
+    baseSha: identity.baseSha,
+    requirementsDigest,
+  };
+}
+
+function passedRequiredCi(facts, target) {
   requireQualification(facts.status === "observed", "required CI evidence is unavailable");
   const assessment = assessGitCiFacts(facts);
   const required = assessment.requiredChecks;
   requireQualification(
-    facts.identity.headSha === currentHead &&
+    facts.identity.headSha === target.headSha &&
       assessment.complete &&
       assessment.reason === "required-checks-passed" &&
       assessment.requirementsDigest !== null &&
@@ -248,24 +289,33 @@ function passedRequiredCi(facts, currentHead) {
       allRequiredChecksPassed(required),
     "required CI is not complete on the exact source head",
   );
-  return { passed: required.passed, requirementsDigest: assessment.requirementsDigest };
+  return {
+    passed: required.passed,
+    binding: requiredCiBinding(facts, target, assessment.requirementsDigest),
+  };
 }
 
 async function requiredCiResult(repository, currentHead, prNumber, root, deps) {
+  const target = {
+    ownerAndRepo: `${repository.owner}/${repository.repo}`,
+    pullRequestNumber: prNumber,
+    baseBranchName: "dev",
+    headSha: currentHead,
+  };
   let facts;
   try {
     facts = await deps
       .reader(root, () => deps.cleanHead(root) === currentHead)
       .readFacts({
-        ownerAndRepo: `${repository.owner}/${repository.repo}`,
+        ownerAndRepo: target.ownerAndRepo,
         prExternalId: String(prNumber),
-        baseBranchName: "dev",
-        headSha: currentHead,
+        baseBranchName: target.baseBranchName,
+        headSha: target.headSha,
       });
   } catch {
     throw new TypeError("Tool catalog gate qualification: required CI evidence is unavailable");
   }
-  return passedRequiredCi(facts, currentHead);
+  return passedRequiredCi(facts, target);
 }
 
 export async function qualifyRequiredCi(input, deps = requiredCiDependencies()) {
@@ -284,13 +334,13 @@ export async function qualifyRequiredCi(input, deps = requiredCiDependencies()) 
     deps.cleanHead(input.root) === currentHead,
     "source changed during qualification",
   );
-  const report = gateReport(currentHead, result.passed, input.root);
+  const report = gateReport(currentHead, result.passed, input.root, result.binding);
   writeFileSync(
     join(logsDir, "required-ci-1.log"),
     `${JSON.stringify({
       exactHead: true,
       passedCount: result.passed,
-      requirementsDigest: result.requirementsDigest,
+      requirementsDigest: result.binding.requirementsDigest,
     })}\n`,
     { mode: 0o600 },
   );
