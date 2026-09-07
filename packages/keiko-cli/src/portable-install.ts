@@ -11,6 +11,7 @@ import {
   opendirSync,
   readdirSync,
   readFileSync,
+  readSync,
   realpathSync,
   renameSync,
   rmdirSync,
@@ -67,6 +68,7 @@ import {
   atomicPublishTreeSwap,
   withCwdOutsideTree,
 } from "@oscharko-dev/keiko-security/fs-atomic-rename";
+import { attestPortableTreeKht1Sync } from "@oscharko-dev/keiko-security/portable-tree-attestation";
 
 export interface ValidatedPortableRoot {
   readonly layout: PortableLayout;
@@ -137,6 +139,10 @@ class PortableManagedRegistrationRepairError extends Error {
 const STABLE_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const PORTABLE_TARGETS = ["windows-x64", "macos-arm64", "macos-x64"] as const;
 const PORTABLE_SETUP_LOCK = "portable-setup.lock";
+// Match the bounded portable staging and handoff operation budget for validation of the same payload.
+const PORTABLE_OPERATION_TIMEOUT_MS = 15 * 60_000;
+const MAX_ROOT_LAUNCHER_BYTES = 64 * 1024 * 1024;
+const PORTABLE_FILE_READ_BYTES = 64 * 1024;
 const SHA256_RE = /^[a-f0-9]{64}$/u;
 const WINDOWS_GENERATION_KEYS = [
   "schemaVersion",
@@ -276,17 +282,45 @@ function validateSetupManifest(manifest: SetupManifest, target: PortableTarget):
   }
 }
 
-function validateLayout(layout: PortableLayout, manifest: SetupManifest): void {
+function validateLayout(layout: PortableLayout, manifest: SetupManifest, deadline: number): void {
   const requiredFiles = [
-    { label: "package metadata", path: layout.packageJsonPath },
     { label: "bundled Node runtime", path: layout.runtimeNodePath },
     { label: "primary launcher", path: layout.primaryLauncherPath },
   ] as const;
   for (const file of requiredFiles) {
-    readPortableFile(file.path, `missing portable ${file.label}`);
+    assertPortableFilePresent(file.path, `missing portable ${file.label}`);
   }
-  if (manifest.schemaVersion === 2) validateWindowsGenerationLayout(layout, manifest);
+  if (manifest.schemaVersion === 2) validateWindowsGenerationLayout(layout, manifest, deadline);
   validateAppPackage(layout.packageJsonPath, manifest.packageVersion);
+}
+
+function assertPortableFilePresent(path: string, message: string): void {
+  let descriptor: number;
+  try {
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch {
+    throw new Error(message);
+  }
+  try {
+    const before = lstatSync(path);
+    const opened = fstatSync(descriptor);
+    assertPortableFileOpened(before, opened, message);
+    const after = fstatSync(descriptor);
+    const current = lstatSync(path);
+    const stable = [
+      after.dev === opened.dev,
+      after.ino === opened.ino,
+      after.size === opened.size,
+      after.mtimeMs === opened.mtimeMs,
+      current.dev === opened.dev,
+      current.ino === opened.ino,
+      current.size === opened.size,
+      current.mtimeMs === opened.mtimeMs,
+    ].every(Boolean);
+    if (!stable) throw new Error(message);
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 function readPortableFile(path: string, message: string): Buffer {
@@ -303,7 +337,45 @@ function readPortableFile(path: string, message: string): Buffer {
     const bytes = readFileSync(descriptor);
     const after = fstatSync(descriptor);
     const current = lstatSync(path);
-    assertPortableFileStable(bytes, opened, after, current, message);
+    assertPortableFileStable(bytes.byteLength, opened, after, current, message);
+    return bytes;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function readPortableFileExact(
+  path: string,
+  message: string,
+  expectedSize: number,
+  deadline: number,
+): Buffer {
+  let descriptor: number;
+  try {
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch {
+    throw new Error(message);
+  }
+  try {
+    const before = lstatSync(path);
+    const opened = fstatSync(descriptor);
+    assertPortableFileOpened(before, opened, message);
+    if (opened.size !== expectedSize) throw new Error(message);
+    assertPortableValidationDeadline(deadline);
+    const bytes = Buffer.allocUnsafe(expectedSize);
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      assertPortableValidationDeadline(deadline);
+      const read = readSync(descriptor, bytes, offset, bytes.byteLength - offset, null);
+      if (read === 0) throw new Error(message);
+      offset += read;
+    }
+    assertPortableValidationDeadline(deadline);
+    if (readSync(descriptor, Buffer.allocUnsafe(1), 0, 1, null) !== 0) throw new Error(message);
+    const after = fstatSync(descriptor);
+    const current = lstatSync(path);
+    assertPortableFileStable(bytes.byteLength, opened, after, current, message);
+    assertPortableValidationDeadline(deadline);
     return bytes;
   } finally {
     closeSync(descriptor);
@@ -325,26 +397,61 @@ function assertPortableFileOpened(before: Stats, opened: Stats, message: string)
 }
 
 function assertPortableFileStable(
-  bytes: Buffer,
+  bytes: number,
   opened: Stats,
   after: Stats,
   current: Stats,
   message: string,
 ): void {
   const stable = [
-    bytes.byteLength === opened.size,
+    bytes === opened.size,
     after.dev === opened.dev,
     after.ino === opened.ino,
     after.size === opened.size,
     after.mtimeMs === opened.mtimeMs,
     current.dev === opened.dev,
     current.ino === opened.ino,
+    current.size === opened.size,
+    current.mtimeMs === opened.mtimeMs,
   ].every(Boolean);
   if (!stable) throw new Error(message);
 }
 
-function sha256PortableFile(path: string, message: string): string {
-  return createHash("sha256").update(readPortableFile(path, message)).digest("hex");
+function assertPortableValidationDeadline(deadline: number): void {
+  if (Date.now() > deadline) throw new Error("portable validation timed out");
+}
+
+function sha256PortableFile(path: string, message: string, deadline: number): string {
+  let descriptor: number;
+  try {
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch {
+    throw new Error(message);
+  }
+  try {
+    const before = lstatSync(path);
+    const opened = fstatSync(descriptor);
+    assertPortableFileOpened(before, opened, message);
+    if (opened.size > MAX_ROOT_LAUNCHER_BYTES) throw new Error(message);
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(PORTABLE_FILE_READ_BYTES);
+    let bytes = 0;
+    for (;;) {
+      assertPortableValidationDeadline(deadline);
+      const read = readSync(descriptor, buffer, 0, buffer.byteLength, null);
+      if (read === 0) break;
+      bytes += read;
+      if (bytes > opened.size) throw new Error(message);
+      hash.update(buffer.subarray(0, read));
+    }
+    assertPortableValidationDeadline(deadline);
+    const after = fstatSync(descriptor);
+    const current = lstatSync(path);
+    assertPortableFileStable(bytes, opened, after, current, message);
+    return hash.digest("hex");
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 function requireWindowsGenerationDirectories(layout: PortableLayout): void {
@@ -369,24 +476,30 @@ function requireWindowsGenerationDirectories(layout: PortableLayout): void {
 function validateWindowsGenerationLayout(
   layout: PortableLayout,
   manifest: Extract<SetupManifest, { readonly schemaVersion: 2 }>,
+  deadline: number,
 ): void {
   requireWindowsGenerationDirectories(layout);
-  readPortableFile(layout.runtimeSupervisorPath, "missing portable runtime supervisor");
+  attestPortableTreeKht1Sync(layout.resourceRoot, manifest.windowsGeneration.treeSha256, deadline);
+  assertPortableValidationDeadline(deadline);
+  assertPortableFilePresent(layout.runtimeSupervisorPath, "missing portable runtime supervisor");
   if (
-    sha256PortableFile(layout.primaryLauncherPath, "portable root launcher is unsafe") !==
+    sha256PortableFile(layout.primaryLauncherPath, "portable root launcher is unsafe", deadline) !==
     manifest.windowsGeneration.launcherSha256
   ) {
     throw new Error("portable root launcher digest mismatch");
   }
   const supportLauncher = join(layout.installRoot, "support", "keiko-support.cmd");
   if (
-    readPortableFile(
+    readPortableFileExact(
       supportLauncher,
       "portable Windows support launcher is not canonical",
+      Buffer.byteLength(WINDOWS_SUPPORT_LAUNCHER, "utf8"),
+      deadline,
     ).toString("utf8") !== WINDOWS_SUPPORT_LAUNCHER
   ) {
     throw new Error("portable Windows support launcher is not canonical");
   }
+  assertPortableValidationDeadline(deadline);
   if (
     existsSync(join(layout.installRoot, "app")) ||
     existsSync(join(layout.installRoot, "runtime"))
@@ -610,13 +723,14 @@ function promoteToManaged(
 }
 
 export function validatePortableRoot(target: PortableTarget, root: string): ValidatedPortableRoot {
+  const deadline = Date.now() + PORTABLE_OPERATION_TIMEOUT_MS;
   const rootLayout = layoutFor(target, root);
   if (!existsSync(rootLayout.setupManifestPath))
     throw new Error("portable setup manifest is unavailable");
   const manifest = parseSetupManifest(rootLayout.setupManifestPath);
   validateSetupManifest(manifest, target);
   const layout = layoutForSetupManifest(target, root, manifest);
-  validateLayout(layout, manifest);
+  validateLayout(layout, manifest, deadline);
   return { layout, manifest };
 }
 

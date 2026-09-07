@@ -141,9 +141,18 @@ the server driver retains asynchronous filesystem operations. Security typecheck
 and built subpath import pass. Owner and lead each pass all nine shared tests; the lead additionally
 passes five selected existing server tree regressions with one explicitly filtered plan-builder
 case (12.04 seconds). Full server typecheck remains pending the concurrent B2 plan/builder fields;
-its observed failure is not counted as green. A separate CLI owner now connects the synchronous
-attestor and removes the B1 regression that read the entire Node executable for presence/type-only
-checks. No CLI attestation completion is claimed yet.
+its observed failure is not counted as green. The CLI now invokes the synchronous attestor directly
+and removes the B1 regression that read the entire Node executable for presence/type-only checks.
+Independent security review identified an additional medium availability defect in the new root
+launcher/support checks: unbounded reads could exhaust memory. The repair streams launcher hashing
+in 64 KiB chunks with a 64 MiB ceiling and shares one absolute deadline with generation attestation.
+Canonical support validation reads only its exact expected size, checks immediate EOF, and rechecks
+file identity and metadata; a lead-identified growth race after the initial size check is covered by
+a deterministic regression. Owner checks pass 22 installer tests, scoped lint and formatting.
+Independent security re-review approves the final two files with zero findings. The lead confirms
+both frozen source hashes and passes all 31 installer/shared-attestor tests (2.31 seconds), including
+oversized sparse files, support growth, bounded hashing and deadline rejection. These checks do not
+substitute for final assembled-package or native platform qualification.
 
 The shared KHP fixtures are frozen under `native/portable-launcher/fixtures/`. Independent decoding
 confirms Mac KHP2/32 (1,282 bytes; SHA-256
@@ -187,8 +196,8 @@ workspace typechecks, scoped lint, format and diff checks. Earlier attempts rema
 one mutation fixture failed at JSON parsing before the intended KHT1 check (moved to a non-PE file),
 one broad test exposed a changed malformed-schema diagnostic (restored), and CLI typecheck exposed
 type-narrowing/fs-overload errors (repaired before the green serial replay).
-This slice is not accepted as complete: direct CLI KHT1 attestation awaits the shared-security
-extraction/hookup and independent review; registration v2, maintenance, handoff and native cutover
+This slice is not accepted as complete: direct CLI KHT1 attestation has passed its shared-security
+extraction/hookup review, while staging review, registration v2, maintenance, handoff and native cutover
 remain subsequent integration work. Native implementation has a separate file owner after the Mac
 reviewed checkpoint; its KHP3 parser must consume the TypeScript owner's frozen byte fixtures.
 
