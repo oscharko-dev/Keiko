@@ -280,8 +280,10 @@ authority in the internal security package, exposed only through a narrow worksp
 existing CLI/server dependants. Synchronous CLI attestation and asynchronous server hashing share
 the same bounded traversal/hash state machine; preserve cancellation, deadlines and server yielding.
 The server's existing handoff-tree module remains a compatibility facade for its current callers
-and producer scripts. Introduce no product-facing or package-root API, trust switch, verifier
-injection or user command.
+and producer scripts. Introduce no product-facing API, new package-root entry point, trust switch,
+verifier injection or user command. The existing private CLI/server normal-startup result may
+carry a root-bound, lock-scoped, read-only generation inspection allowance as described below;
+it grants neither trust nor deletion authority.
 
 Before prepared WAL or native acceptance, the capsule durably snapshots and revalidates the
 current launcher as `coordinator.exe`, current supervisor, `launcher.next`, previous/next setup
@@ -321,6 +323,16 @@ Third generations, unrelated incoming paths and unbound content remain issues. G
 does not delete retained generations; the common recovery owner alone has plan-scoped deletion
 authority. The generation-independent support shim retains canonical producer bytes in both inputs;
 a future shim change needs a subsequent contract revision.
+
+The existing normal-startup reconciliation result transports any inspection allowance after the
+server validates its WAL, session, plan and receipt prefix. The nested allowance identifies
+`windows-generation-v1`, the managed root, activation id and exact managed-root-relative resource
+roots. The CLI consumes it only through an active inspection capability inside the existing
+managed-mutation callback; reuse after callback exit, cross-root reuse and malformed resource paths
+fail closed. Rebase the existing payload rules under each permitted resource root; admitting a root
+does not admit arbitrary contents. Generic inspection remains selected-generation-only. Repair,
+uninstall and removal APIs receive no allowance and refuse extra retained generations. No CLI
+receipt parser or additional server package-root entry point is introduced.
 
 One coordinator owns receipt policy, phase classification, deadlines, forward/restore/cleanup and
 semantic acknowledgment. Compile-selected platform adapters supply secure filesystem operations,
