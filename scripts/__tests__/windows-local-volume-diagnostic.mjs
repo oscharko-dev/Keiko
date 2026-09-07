@@ -40,6 +40,10 @@ replaceOnce(
   "$stage = 'existing'; mark $stage\ntry {\n  $stage = 'assembly'; mark $stage\n  $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly",
 );
 replaceOnce(
+  "(New-Object Reflection.AssemblyName('KeikoLocalVolume'))",
+  "($stage = 'assembly-name'; mark $stage; $name = New-Object Reflection.AssemblyName('KeikoLocalVolume'); $stage = 'assembly-define'; mark $stage; $name)",
+);
+replaceOnce(
   "  $module = $assembly.DefineDynamicModule('KeikoLocalVolume')",
   "  $stage = 'module'; mark $stage\n  $module = $assembly.DefineDynamicModule('KeikoLocalVolume')",
 );
@@ -131,7 +135,7 @@ const result = spawnSync(
 const output = result.stdout ?? "";
 const stages = [
   ...output.matchAll(
-    /KLV_DIAG:(read|input|decode|path|fullpath|directory|ancestor|ancestor-limit|existing|assembly|module|type|open|handle|tag|final|canonical|volume|drive|success);/gu,
+    /KLV_DIAG:(read|input|decode|path|fullpath|directory|ancestor|ancestor-limit|existing|assembly|assembly-name|assembly-define|module|type|open|handle|tag|final|canonical|volume|drive|success);/gu,
   ),
 ];
 const lastStage = stages.at(-1)?.[1];
