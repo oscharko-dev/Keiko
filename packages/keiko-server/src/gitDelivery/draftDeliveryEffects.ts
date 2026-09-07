@@ -24,7 +24,7 @@ import { advanceDraft, currentDraft, retainedRemoteIdentity } from "./draftDeliv
 import { executeGovernedPublish } from "./pushExecution.js";
 import { executeGovernedPullRequest } from "./prExecution.js";
 import { runtimeGitReadDeps } from "./runtimeGitRead.js";
-import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
+import { basePinnedPrPolicyPacks } from "./basePinnedPrPolicy.js";
 
 interface EffectContext {
   readonly options: DraftDeliveryServiceOptions;
@@ -71,28 +71,6 @@ function pushSnapshot(effect: EffectContext): ReturnType<typeof readGitWorktreeS
   return readGitWorktreeSnapshot(
     runtimeGitReadDeps(effect.context, effect.options.execution ?? {}),
   );
-}
-function issueBoundPrDefault(record: DraftDeliveryRecord): GitDeliveryTrustedPolicyPacks {
-  return {
-    repoPack: {
-      schemaVersion: "1",
-      repoId: "issue-bound-draft",
-      rules: [
-        {
-          actionKind: "pr-create",
-          decision: "constrained",
-          constraints: [
-            { kind: "risk-class-ceiling", maxRiskClass: "protected-or-merge" },
-            {
-              kind: "branch-pattern",
-              patterns: [{ matchKind: "exact", value: record.binding.baseRef }],
-            },
-          ],
-        },
-      ],
-      defaultRule: { decision: "blocked" },
-    },
-  };
 }
 export async function executeDraftDeliveryEffect(
   options: DraftDeliveryServiceOptions,
@@ -158,7 +136,8 @@ async function createPullRequest(effect: EffectContext): Promise<DraftDeliveryRe
     options.mutationDeps,
     {
       ...seams,
-      policyPacks: seams.policyPacks ?? issueBoundPrDefault(record),
+      policyPacks:
+        seams.policyPacks ?? basePinnedPrPolicyPacks("pr-create", record.binding.baseRef),
       snapshotReader: () => snapshot(effect),
       beforeRemoteDispatch: () => context.stillAuthorized() && context.signal?.aborted !== true,
       prAdapterFactory: () => ({

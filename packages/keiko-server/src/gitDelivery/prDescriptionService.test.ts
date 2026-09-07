@@ -598,3 +598,56 @@ describe("snapshot reservation lifecycle (wave-3 W3-4 item 3)", () => {
     expect(released).toEqual(reserved);
   });
 });
+
+// Epic #3384 live-flow defect: the issue-bound draft delivery admits the pull request against the
+// repository's OWN base branch (`master` on the controlled repository), but the description apply
+// used to re-check the same pull request against Keiko's hardcoded default base list
+// (`dev`/`main`/`release/*`/`feat/*`) and refused every repository that does not follow Keiko's
+// branch conventions with `policy-blocked` -- the PR existed, its base was already admitted, and
+// the body-only description could never be applied. Both PR-shaped effects now share one
+// base-pinned policy; an explicitly configured deployment pack still wins.
+describe("description application against the pull request's own base branch", () => {
+  it("previews a description for a pull request whose base is the repository's default branch", async () => {
+    const trunk = new DescriptionFixture({ baseRef: "master" });
+    try {
+      const artifact = await trunk.generateArtifact("Selected Chat intent");
+      const result = await trunk.service.previewArtifact(artifact);
+      expect(result.outcome, JSON.stringify(result)).toBe("preview");
+      if (result.outcome !== "preview") return;
+      expect(result.preview.status.binding.baseRef).toBe("master");
+    } finally {
+      trunk.close();
+    }
+  });
+
+  it("still fails closed under an explicitly configured pack that blocks updates to that base", async () => {
+    const restricted = new DescriptionFixture({
+      baseRef: "master",
+      policyPacks: {
+        repoPack: {
+          schemaVersion: "1",
+          repoId: "deployment-restricts-pr-update",
+          rules: [
+            {
+              actionKind: "pr-update",
+              decision: "constrained",
+              constraints: [
+                { kind: "branch-pattern", patterns: [{ matchKind: "exact", value: "main" }] },
+              ],
+            },
+          ],
+          defaultRule: { decision: "blocked" },
+        },
+      },
+    });
+    try {
+      const artifact = await restricted.generateArtifact("Selected Chat intent");
+      await expect(restricted.service.previewArtifact(artifact)).resolves.toEqual({
+        outcome: "blocked",
+        reason: "policy-blocked",
+      });
+    } finally {
+      restricted.close();
+    }
+  });
+});

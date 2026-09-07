@@ -6,8 +6,7 @@ import {
   type PrDescriptionApplicationStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { evaluateGitPullRequestEffectivePolicy } from "@oscharko-dev/keiko-tools";
-import { KEIKO_DEFAULT_PR_POLICY_PACK } from "./prExecution.js";
-import { defaultMintableRepoPack } from "./policyPackMintability.js";
+import { basePinnedPrPolicyPacks } from "./basePinnedPrPolicy.js";
 import { PrDescriptionApprovals } from "./prDescriptionApproval.js";
 import { descriptionFailureReason, logDescription } from "./prDescriptionProjection.js";
 import {
@@ -83,10 +82,12 @@ class DescriptionService implements PrDescriptionApplicationService {
       validDescriptionContext(live)
     );
   }
+  // The body-only apply is re-checked against the pull request's OWN base (the one the draft was
+  // admitted for), never Keiko's convention default list -- see basePinnedPrPolicy.ts. A configured
+  // deployment pack still wins.
   private allowed(proposal: PreparedPrDescription): boolean {
-    const packs =
-      this.options.execution.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PR_POLICY_PACK);
     const base = proposal.review.status.binding.baseRef;
+    const packs = this.options.execution.policyPacks ?? basePinnedPrPolicyPacks("pr-update", base);
     const policy = evaluateGitPolicy(packs.orgPack, packs.repoPack, {
       actionKind: "pr-update",
       targetBranchName: base,

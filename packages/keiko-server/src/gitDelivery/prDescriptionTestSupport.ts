@@ -16,6 +16,7 @@ import type {
 } from "@oscharko-dev/keiko-tools";
 import { createGitChangeSnapshotService } from "../gitChangeSnapshotService.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
+import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import { createPrDescriptionApplicationService } from "./prDescriptionService.js";
 import type { PrDescriptionContext, PrDescriptionServiceOptions } from "./prDescriptionTypes.js";
@@ -45,14 +46,27 @@ export class DescriptionFixture {
   public remote: GitPrBody;
   public readonly options: PrDescriptionServiceOptions;
   public readonly service: ReturnType<typeof createPrDescriptionApplicationService>;
-  public constructor() {
+  private readonly policyPacks: GitDeliveryTrustedPolicyPacks | undefined;
+  /**
+   * `baseRef` names the pull request's base branch (the fixture repository's own default branch);
+   * `policyPacks` supplies an explicitly configured deployment policy for the execution seams,
+   * exactly as an operator-provided pack would reach the production service.
+   */
+  public constructor(
+    setup: {
+      readonly baseRef?: string | undefined;
+      readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
+    } = {},
+  ) {
+    const baseRef = setup.baseRef ?? "main";
+    this.policyPacks = setup.policyPacks;
     this.initialize();
     this.git(["remote", "add", "origin", "https://github.com/owner/repo.git"]);
     writeFileSync(join(this.root, "code.ts"), "export const value = 1;\n");
     this.git(["add", "code.ts"]);
     this.git(["commit", "-m", "initial"]);
     const baseSha = this.git(["rev-parse", "HEAD"]);
-    this.git(["branch", "main", baseSha]);
+    this.git(["branch", baseRef, baseSha]);
     writeFileSync(join(this.root, "code.ts"), "export const value = 2;\n");
     this.git(["add", "code.ts"]);
     this.git(["commit", "-m", "change"]);
@@ -65,7 +79,7 @@ export class DescriptionFixture {
         headRepository: "owner/repo",
         headRef: "feature",
         headSha: this.git(["rev-parse", "HEAD"]),
-        baseRef: "main",
+        baseRef,
         baseSha,
         state: "open",
         isDraft: true,
@@ -196,6 +210,7 @@ export class DescriptionFixture {
       },
       execution: {
         now: () => this.now,
+        ...(this.policyPacks === undefined ? {} : { policyPacks: this.policyPacks }),
         approvalStore: createInMemoryGitDeliveryApprovalStore(),
         activityLog: { write: (event) => this.events.push(event) },
         snapshotReader: (): Promise<GitWorktreeSnapshot> =>
