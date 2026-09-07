@@ -230,32 +230,50 @@ static int keiko_khp_path_is_contained(const char *root, const char *path) {
  * paths are not authority: stage and backup must derive byte-for-byte from the
  * freshly attested managed root, activation and stage identifiers. */
 static int keiko_khp_topology_valid(const keiko_handoff_plan *plan) {
+  typedef struct keiko_khp_topology_buffers {
+    char parent[KEIKO_KHP_MAX_PATH_BYTES + 1];
+    char expected_stage[KEIKO_KHP_MAX_PATH_BYTES + 1];
+    char expected_backup[KEIKO_KHP_MAX_PATH_BYTES + 1];
+  } keiko_khp_topology_buffers;
   const char *managed = plan->field[KEIKO_KHP_MANAGED_ROOT];
   const char *stage = plan->field[KEIKO_KHP_STAGE_ROOT];
   const char *candidate = plan->field[KEIKO_KHP_CANDIDATE_ROOT];
   const char *backup = plan->field[KEIKO_KHP_BACKUP_ROOT];
-  char parent[KEIKO_KHP_MAX_PATH_BYTES + 1];
-  char expected_stage[KEIKO_KHP_MAX_PATH_BYTES + 1];
-  char expected_backup[KEIKO_KHP_MAX_PATH_BYTES + 1];
+  keiko_khp_topology_buffers *buffers =
+      (keiko_khp_topology_buffers *)calloc(1, sizeof(*buffers));
   int stage_length, backup_length;
-  if (!keiko_khp_parent_path(managed, parent, sizeof(parent))) return 0;
+  int result = 0;
+  if (buffers == NULL) return 0;
+  if (!keiko_khp_parent_path(managed, buffers->parent, sizeof(buffers->parent)))
+    goto cleanup;
 #if defined(_WIN32)
-  stage_length = snprintf(expected_stage, sizeof(expected_stage), "%s\\.keiko-portable-updates\\%s",
-                          parent, plan->field[KEIKO_KHP_STAGE_ID]);
-  backup_length = snprintf(expected_backup, sizeof(expected_backup), "%s\\.keiko-previous-%s",
-                           parent, plan->field[KEIKO_KHP_ACTIVATION_ID]);
+  stage_length = snprintf(buffers->expected_stage, sizeof(buffers->expected_stage),
+                          "%s\\.keiko-portable-updates\\%s", buffers->parent,
+                          plan->field[KEIKO_KHP_STAGE_ID]);
+  backup_length = snprintf(buffers->expected_backup, sizeof(buffers->expected_backup),
+                           "%s\\.keiko-previous-%s", buffers->parent,
+                           plan->field[KEIKO_KHP_ACTIVATION_ID]);
 #else
-  stage_length = snprintf(expected_stage, sizeof(expected_stage), "%s/.keiko-portable-updates/%s",
-                          parent, plan->field[KEIKO_KHP_STAGE_ID]);
-  backup_length = snprintf(expected_backup, sizeof(expected_backup), "%s/.keiko-previous-%s",
-                           parent, plan->field[KEIKO_KHP_ACTIVATION_ID]);
+  stage_length = snprintf(buffers->expected_stage, sizeof(buffers->expected_stage),
+                          "%s/.keiko-portable-updates/%s", buffers->parent,
+                          plan->field[KEIKO_KHP_STAGE_ID]);
+  backup_length = snprintf(buffers->expected_backup, sizeof(buffers->expected_backup),
+                           "%s/.keiko-previous-%s", buffers->parent,
+                           plan->field[KEIKO_KHP_ACTIVATION_ID]);
 #endif
-  if (stage_length <= 0 || (size_t)stage_length >= sizeof(expected_stage) ||
-      backup_length <= 0 || (size_t)backup_length >= sizeof(expected_backup)) return 0;
-  return strcmp(stage, expected_stage) == 0 && strcmp(backup, expected_backup) == 0 &&
-         strcmp(candidate, stage) != 0 && keiko_khp_path_is_contained(stage, candidate) &&
-         keiko_khp_path_is_contained(candidate, plan->field[KEIKO_KHP_CANDIDATE_LAUNCHER]) &&
-         keiko_khp_path_is_contained(candidate, plan->field[KEIKO_KHP_CANDIDATE_SUPERVISOR]);
+  if (stage_length <= 0 || (size_t)stage_length >= sizeof(buffers->expected_stage) ||
+      backup_length <= 0 || (size_t)backup_length >= sizeof(buffers->expected_backup))
+    goto cleanup;
+  result = strcmp(stage, buffers->expected_stage) == 0 &&
+           strcmp(backup, buffers->expected_backup) == 0 && strcmp(candidate, stage) != 0 &&
+           keiko_khp_path_is_contained(stage, candidate) &&
+           keiko_khp_path_is_contained(candidate, plan->field[KEIKO_KHP_CANDIDATE_LAUNCHER]) &&
+           keiko_khp_path_is_contained(candidate, plan->field[KEIKO_KHP_CANDIDATE_SUPERVISOR]);
+
+cleanup:
+  memset(buffers, 0, sizeof(*buffers));
+  free(buffers);
+  return result;
 }
 
 static void keiko_khp_clear(keiko_handoff_plan *plan) {

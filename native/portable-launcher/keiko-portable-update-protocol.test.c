@@ -102,11 +102,16 @@ static size_t encode_fields(unsigned char *out, size_t capacity,
 }
 
 static int parses(const char *const *fields) {
-  unsigned char content[KEIKO_KHP_MAX_BYTES];
+  unsigned char *content = (unsigned char *)malloc(KEIKO_KHP_MAX_BYTES);
   keiko_handoff_plan plan;
-  size_t length = encode_fields(content, sizeof(content), fields);
-  int result = keiko_khp_parse(content, length, &plan);
+  size_t length;
+  int result;
+  if (content == NULL) return 0;
+  length = encode_fields(content, KEIKO_KHP_MAX_BYTES, fields);
+  result = keiko_khp_parse(content, length, &plan);
   if (result) keiko_khp_clear(&plan);
+  memset(content, 0, KEIKO_KHP_MAX_BYTES);
+  free(content);
   return result;
 }
 
