@@ -11,42 +11,75 @@ const match = /const QUERY = String\.raw`([\s\S]*?)`;/u.exec(source);
 if (match?.[1] === undefined) process.exit(2);
 
 let query = match[1]
-  .replace("try {\n  $assembly =", "try {\n  $stage = 'assembly'\n  $assembly =")
-  .replace("  $api = $type.CreateType()", "  $stage = 'type'\n  $api = $type.CreateType()")
-  .replace("  $handle = $create.Invoke", "  $stage = 'open'\n  $handle = $create.Invoke")
-  .replace("    $tag =", "    $stage = 'tag'\n    $tag =")
-  .replace("    $final =", "    $stage = 'final'\n    $final =")
-  .replace("    $volume =", "    $stage = 'volume'\n    $volume =");
+  .replace(
+    "$encoded = [Console]::In.ReadLine()",
+    "$stage = 'read'; mark $stage\n$encoded = [Console]::In.ReadLine()\n$stage = 'input'; mark $stage",
+  )
+  .replace(
+    "if ([string]::IsNullOrWhiteSpace($p) -or",
+    "$stage = 'decode'; mark $stage\nif ([string]::IsNullOrWhiteSpace($p) -or",
+  )
+  .replace(
+    "$p = [IO.Path]::GetFullPath($p)",
+    "$stage = 'path'; mark $stage\n$p = [IO.Path]::GetFullPath($p)",
+  )
+  .replace("try {\n  $assembly =", "try {\n  $stage = 'assembly'; mark $stage\n  $assembly =")
+  .replace(
+    "  $type = $module.DefineType('KeikoLocalVolumeApi', [Reflection.TypeAttributes]'Public, Abstract, Sealed')",
+    "  $type = $module.DefineType('KeikoLocalVolumeApi', [Reflection.TypeAttributes]'Public, Abstract, Sealed')\n  $stage = 'type'; mark $stage",
+  )
+  .replace(
+    "  $handle = $create.Invoke",
+    "  $stage = 'open'; mark $stage\n  $handle = $create.Invoke",
+  )
+  .replace("    $tag =", "    $stage = 'tag'; mark $stage\n    $tag =")
+  .replace("    $final =", "    $stage = 'final'; mark $stage\n    $final =")
+  .replace("    $volume =", "    $stage = 'volume'; mark $stage\n    $volume =")
+  .replace("[Console]::Out.Write('KEIKO_LOCAL_VOLUME_OK')", "mark 'success'");
+query = `function mark($value) { [Console]::Out.Write('KLV_DIAG:' + $value + ';'); [Console]::Out.Flush() }\n${query}`;
 const exitStages = [
   [
-    "if ($handle.IsInvalid) { exit 1 }",
-    "if ($handle.IsInvalid) { [Console]::Out.Write('KLV_DIAG:handle'); exit 1 }",
+    "if ([string]::IsNullOrWhiteSpace($encoded) -or $encoded.Length -gt 65536) { exit 1 }",
+    "if ([string]::IsNullOrWhiteSpace($encoded) -or $encoded.Length -gt 65536) { mark 'input'; exit 1 }",
   ],
   [
+    "try { $p = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded)) } catch { exit 1 }",
+    "try { $p = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded)) } catch { mark 'decode'; exit 1 }",
+  ],
+  [
+    "if ([string]::IsNullOrWhiteSpace($p) -or $p.StartsWith('\\\\') -or $p.StartsWith('//')) { exit 1 }",
+    "if ([string]::IsNullOrWhiteSpace($p) -or $p.StartsWith('\\\\') -or $p.StartsWith('//')) { mark 'decode'; exit 1 }",
+  ],
+  [
+    "if ([string]::IsNullOrEmpty($parent) -or $parent -eq $p) { exit 1 }",
+    "if ([string]::IsNullOrEmpty($parent) -or $parent -eq $p) { mark 'path'; exit 1 }",
+  ],
+  ["if ($handle.IsInvalid) { exit 1 }", "if ($handle.IsInvalid) { mark 'handle'; exit 1 }"],
+  [
     "if (-not $tagInfo.Invoke($null, @($handle, [int]9, $tag, [uint32]8)) -or (([Runtime.InteropServices.Marshal]::ReadInt32($tag, 0) -band 0x400) -ne 0)) { exit 1 }",
-    "if (-not $tagInfo.Invoke($null, @($handle, [int]9, $tag, [uint32]8)) -or (([Runtime.InteropServices.Marshal]::ReadInt32($tag, 0) -band 0x400) -ne 0)) { [Console]::Out.Write('KLV_DIAG:tag'); exit 1 }",
+    "if (-not $tagInfo.Invoke($null, @($handle, [int]9, $tag, [uint32]8)) -or (([Runtime.InteropServices.Marshal]::ReadInt32($tag, 0) -band 0x400) -ne 0)) { mark 'tag'; exit 1 }",
   ],
   [
     "if ($length -eq 0 -or $length -ge $final.Capacity) { exit 1 }",
-    "if ($length -eq 0 -or $length -ge $final.Capacity) { [Console]::Out.Write('KLV_DIAG:final'); exit 1 }",
+    "if ($length -eq 0 -or $length -ge $final.Capacity) { mark 'final'; exit 1 }",
   ],
   [
     "if (-not $canonical.TrimEnd('\\').Equals($p.TrimEnd('\\'), [StringComparison]::OrdinalIgnoreCase)) { exit 1 }",
-    "if (-not $canonical.TrimEnd('\\').Equals($p.TrimEnd('\\'), [StringComparison]::OrdinalIgnoreCase)) { [Console]::Out.Write('KLV_DIAG:canonical'); exit 1 }",
+    "if (-not $canonical.TrimEnd('\\').Equals($p.TrimEnd('\\'), [StringComparison]::OrdinalIgnoreCase)) { mark 'canonical'; exit 1 }",
   ],
   [
     "if (-not $volumePath.Invoke($null, @($p, $volume, [uint32]$volume.Capacity))) { exit 1 }",
-    "if (-not $volumePath.Invoke($null, @($p, $volume, [uint32]$volume.Capacity))) { [Console]::Out.Write('KLV_DIAG:volume'); exit 1 }",
+    "if (-not $volumePath.Invoke($null, @($p, $volume, [uint32]$volume.Capacity))) { mark 'volume'; exit 1 }",
   ],
   [
     "if ($kind -ne 2 -and $kind -ne 3 -and $kind -ne 6) { exit 1 }",
-    "if ($kind -ne 2 -and $kind -ne 3 -and $kind -ne 6) { [Console]::Out.Write('KLV_DIAG:drive'); exit 1 }",
+    "if ($kind -ne 2 -and $kind -ne 3 -and $kind -ne 6) { mark 'drive'; exit 1 }",
   ],
 ];
 for (const [before, after] of exitStages) query = query.replace(before, after);
 const catchIndex = query.lastIndexOf("} catch { exit 1 }");
 if (catchIndex < 0) process.exit(3);
-query = `${query.slice(0, catchIndex)}} catch { [Console]::Out.Write('KLV_DIAG:' + $stage); exit 1 }${query.slice(catchIndex + "} catch { exit 1 }".length)}`;
+query = `${query.slice(0, catchIndex)}} catch { mark $stage; exit 1 }${query.slice(catchIndex + "} catch { exit 1 }".length)}`;
 
 const systemRoot = process.env.SystemRoot;
 if (process.platform !== "win32" || systemRoot === undefined) process.exit(4);
@@ -76,19 +109,27 @@ const result = spawnSync(
     windowsHide: true,
   },
 );
-const output = result.stdout === "KEIKO_LOCAL_VOLUME_OK" ? "KLV_DIAG:success" : result.stdout;
+const output = result.stdout ?? "";
+const stages = [
+  ...output.matchAll(
+    /KLV_DIAG:(read|input|decode|path|assembly|type|open|handle|tag|final|canonical|volume|drive|success);/gu,
+  ),
+];
+const lastStage = stages.at(-1)?.[1];
 const diagnostic =
-  /^KLV_DIAG:(assembly|type|open|handle|tag|final|canonical|volume|drive|success)$/u.test(output)
-    ? output
-    : result.error?.code === "ENOBUFS"
-      ? "KLV_DIAG:overflow"
-      : result.error !== undefined
-        ? "KLV_DIAG:spawn-error"
-        : result.status === null
-          ? "KLV_DIAG:null-status"
-          : result.stderr !== ""
-            ? "KLV_DIAG:stderr"
-            : result.stdout === ""
-              ? "KLV_DIAG:empty"
-              : "KLV_DIAG:stdout-other";
+  result.error?.code === "ETIMEDOUT"
+    ? `KLV_DIAG:timeout-${lastStage ?? "none"}`
+    : lastStage !== undefined
+      ? `KLV_DIAG:${lastStage}`
+      : result.error?.code === "ENOBUFS"
+        ? "KLV_DIAG:overflow"
+        : result.error !== undefined
+          ? "KLV_DIAG:spawn-error"
+          : result.status === null
+            ? "KLV_DIAG:null-status"
+            : result.stderr !== ""
+              ? "KLV_DIAG:stderr"
+              : result.stdout === ""
+                ? "KLV_DIAG:empty"
+                : "KLV_DIAG:stdout-other";
 process.stdout.write(`${diagnostic}\n`);
