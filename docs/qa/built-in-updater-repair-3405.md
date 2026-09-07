@@ -7,9 +7,10 @@ register; the [issue](https://github.com/oscharko-dev/Keiko/issues/3405) owns ac
 
 ## Evidence boundary
 
-The observations below were collected on the uncommitted repair working tree based on
-`acc990f1f057d9445ff781903fad69a6ae58757f`, on 2026-09-05 and 2026-09-07. They are development evidence, not
-SHA-bound final delivery evidence. Rerun the relevant commands after integration and bind every
+The observations below were collected on the repair working tree based on
+`acc990f1f057d9445ff781903fad69a6ae58757f`, on 2026-09-05 and 2026-09-07. The core implementation is
+preserved in checkpoint `6aeac08160ae9f90f58f11c0ef8e86bbe9b77167`; subsequent changes remain in progress.
+These are development observations, not SHA-bound final delivery evidence. Rerun the relevant commands after integration and bind every
 final result to the actual commit. A green #3404 documentation PR does not verify #3405 code.
 
 The historical #1960 matrix records fixture/contract coverage, not native N−1→N execution. Neither
@@ -29,14 +30,21 @@ harness hashes match. The wiring gate identifies the updater suite as
 
 Independent recovery review confirmed two additional existing crash-consistency gaps: missing
 aggregate state can discard surviving handoff ownership, and terminal session settlement spans
-two durable writes. Both repairs and focused failure-injection tests are in progress. The same
-bounded review confirmed no additional authority-binding regression from the structural refactor.
+two durable writes. Both repairs are included in the core checkpoint. Independent replay passes
+all 99 tests in six complete candidate, local-state, session, durable-session, production-handoff,
+and recovery suites (16.01 seconds). Re-review accepts both repairs and identifies one remaining
+low-severity diagnostic gap for synchronous persistence failures. That follow-up now passes
+independent replay of all 50 session/durable-session tests (13.16 seconds), and static security
+re-review approves it with no confirmed findings. Synchronous failure preserves authoritative
+ownership, projects `unwritable`, and emits one body-free diagnostic without an asynchronous duplicate.
+The bounded review confirmed no additional authority-binding regression from the structural refactor.
 
-The Windows diagnostic at `7e2f5e3eae3549d7d9c1fdd36e7d4d0926f5bb45` passes MSVC analysis
-for the product launcher and generation test fixture, then fails at directory-symlink cleanup
-in the runtime fixture. Its [Windows job](https://github.com/oscharko-dev/Keiko/actions/runs/34111626482/job/101709046926)
-is a failed diagnostic, not delivery CI. The corrected fixture is replaying at
-`5bb8acc79` in [run 34112113440](https://github.com/oscharko-dev/Keiko/actions/runs/34112113440).
+Successive Windows diagnostics repaired directory-symlink cleanup, oversized fixture/protocol
+stack allocations, strict byte/qualifier diagnostics, and a missing standalone SHA header include.
+The latest diagnostic at `37f16d070db94b84f1eff603703ab23ed4ad012a` passes the Windows native
+quality and setup-bootstrap steps; the full job is still running in
+[Windows job 101721128128](https://github.com/oscharko-dev/Keiko/actions/runs/34115445910/job/101721128128).
+Earlier failed diagnostics are not delivery CI evidence.
 The diagnostic branch's protected-branch rejection is expected and is never treated as a green
 workflow. Production KHA1 remains disabled pending startup recovery and actual native update proof.
 
@@ -44,7 +52,13 @@ The macOS atomic promotion/restoration prerequisite independently passes both
 `bash scripts/check-macos-native-quality.sh macos-arm64` and the corresponding `macos-x64`
 command on the local Apple silicon host. These compiler/analyzer/filesystem fixtures exercise
 the atomic exchange boundaries and restore shapes; local x64 execution is not an Intel release
-qualification run. Security review and real installed two-process proof remain outstanding.
+qualification run. Independent security review approves the final atomic prerequisite with no
+confirmed findings. Normal-startup recovery and real installed two-process proof remain outstanding.
+
+The full UI coverage run at the core checkpoint reports 7,512 passing tests, four failures, and
+one skip across 432 files. The four failures are shared stylesheet evidence hash assertions after
+the updater-specific rule changed `globals.css`. Component placement and affected updater evidence
+are being repaired; this run is not a passing UI gate. Normal UI lint and changed-file i18n pass.
 
 The required local `npm run gates:sonar` attempt stops before analysis because Docker rejects
 the pinned image pull with a registry authentication error, including an isolated anonymous

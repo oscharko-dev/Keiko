@@ -7,6 +7,7 @@ import type {
   UpdatePreflightReport,
   UpdateRuntimeState,
 } from "@oscharko-dev/keiko-contracts";
+import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import { createUpdateCandidateAuthority } from "./update-candidate-authority.js";
 import { createUpdateLocalStateManager } from "./update-local-state.js";
 import { createUpdateSessionManager } from "./update-session.js";
@@ -139,6 +140,7 @@ describe("durable update session lifecycle", () => {
     roots.push(root);
     const delegate = createUpdateLocalStateManager({ stateDir: root, now: () => NOW });
     const authority = createUpdateCandidateAuthority({ now: () => NOW });
+    const events: SecurityLogEvent[] = [];
     let lockHeld = false;
     const lock: UpdateSessionLock = {
       isLocked: () => lockHeld,
@@ -169,6 +171,7 @@ describe("durable update session lifecycle", () => {
       candidateAuthority: authority,
       localState,
       lock,
+      activityLog: { write: (event): void => void events.push(event) },
       beforeExecute: () => Promise.reject(new Error("hook rejected")),
     });
 
@@ -189,6 +192,15 @@ describe("durable update session lifecycle", () => {
       phase: "preparing",
       lifecycle: { phase: "preparing" },
     });
+    const persistenceFailures = events.filter(
+      (event) =>
+        event.op === "update.session.lifecycle" && event.extra?.eventKind === "persistence-failed",
+    );
+    expect(persistenceFailures).toHaveLength(1);
+    expect(persistenceFailures[0]?.extra).toMatchObject({
+      phase: "preparing",
+      eventKind: "persistence-failed",
+    });
 
     const restarted = createUpdateSessionManager({
       detector: mode,
@@ -201,6 +213,90 @@ describe("durable update session lifecycle", () => {
       persistence: "ready",
       lastSession: { phase: "failed", lifecycle: { phase: "failed" } },
     });
+  });
+
+  it("reports synchronous cancellation persistence failure and retains authoritative ownership", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-update-session-cancel-failure-"));
+    roots.push(root);
+    const delegate = createUpdateLocalStateManager({ stateDir: root, now: () => NOW });
+    const authority = createUpdateCandidateAuthority({ now: () => NOW });
+    const events: SecurityLogEvent[] = [];
+    let lockHeld = false;
+    const release = vi.fn(() => {
+      lockHeld = false;
+    });
+    const lock: UpdateSessionLock = {
+      isLocked: () => lockHeld,
+      acquire: () => {
+        lockHeld = true;
+        return true;
+      },
+      updateChildPid: () => true,
+      release,
+    };
+    const localState = {
+      ...delegate,
+      writeRuntimeState: (state: UpdateRuntimeState): UpdateRuntimeState => {
+        if (state.activeSession === undefined && state.lastSession?.phase === "cancelled") {
+          throw new Error("cancel settlement unavailable");
+        }
+        return delegate.writeRuntimeState(state);
+      },
+    };
+    const reviewed = report();
+    const claim = authority.issue(reviewed, mode());
+    const manager = createUpdateSessionManager({
+      detector: mode,
+      currentVersion: () => "0.3.17",
+      now: () => NOW,
+      candidateAuthority: authority,
+      localState,
+      lock,
+      activityLog: { write: (event): void => void events.push(event) },
+      beforeExecute: () => new Promise<void>(() => undefined),
+    });
+    const started = manager.start(
+      {
+        candidateId: claim?.candidateId ?? "missing",
+        confirmationDigest: claim?.confirmationDigest ?? "0".repeat(64),
+        executionToken: claim?.executionToken ?? "0".repeat(64),
+      },
+      reviewed,
+    ).session;
+
+    expect(() => manager.cancel()).toThrow("cancel settlement unavailable");
+
+    expect(manager.getStatus()).toMatchObject({
+      persistence: "unwritable",
+      activeSession: {
+        sessionId: started.sessionId,
+        phase: "preparing",
+        lifecycle: { phase: "preparing", cancellationCutoff: "not-reached" },
+      },
+    });
+    expect(delegate.readRuntimeState().activeSession).toMatchObject({
+      sessionId: started.sessionId,
+      phase: "preparing",
+    });
+    expect(lockHeld).toBe(true);
+    expect(release).not.toHaveBeenCalled();
+    const persistenceFailures = events.filter(
+      (event) =>
+        event.op === "update.session.lifecycle" && event.extra?.eventKind === "persistence-failed",
+    );
+    expect(persistenceFailures).toHaveLength(1);
+    expect(persistenceFailures[0]).toMatchObject({
+      category: "diagnostic",
+      correlationId: started.correlationId,
+      extra: {
+        sessionId: started.sessionId,
+        phase: "preparing",
+        cancellationCutoff: "not-reached",
+        eventKind: "persistence-failed",
+      },
+    });
+    expect(persistenceFailures[0]?.extra).not.toHaveProperty("installRoot");
+    expect(persistenceFailures[0]?.extra).not.toHaveProperty("logs");
   });
 
   it("rehydrates interrupted pre-mutation state as a failure without success fabrication", () => {

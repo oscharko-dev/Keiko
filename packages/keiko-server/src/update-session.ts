@@ -604,6 +604,8 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
       this.active = previousActive;
       this.activeCandidate = previousCandidate;
       this.last = previousLast;
+      this.persistenceStatus = "unwritable";
+      this.emitSessionEvent(this.active ?? this.last ?? session, "persistence-failed");
       throw error;
     }
     this.lock?.release(next.sessionId);
@@ -729,6 +731,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
   }
 
   private failWithoutPersistence(session: UpdateSession, reason: UpdateSessionFailureReason): void {
+    const persistenceFailureReported = this.persistenceStatus === "unwritable";
     if (session.lifecycle.cancellationCutoff !== "not-reached") {
       const recovery: UpdateSession = {
         ...session,
@@ -747,7 +750,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
       };
       this.active = recovery;
       this.persistenceStatus = "unwritable";
-      this.emitSessionEvent(recovery, "persistence-failed");
+      if (!persistenceFailureReported) this.emitSessionEvent(recovery, "persistence-failed");
       return;
     }
     const lifecycle = { ...session.lifecycle, phase: "failed" as const };
@@ -765,7 +768,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     this.active = undefined;
     this.activeCandidate = undefined;
     this.persistenceStatus = "unwritable";
-    this.emitSessionEvent(this.last, "persistence-failed");
+    if (!persistenceFailureReported) this.emitSessionEvent(this.last, "persistence-failed");
   }
 
   private emitSessionEvent(
