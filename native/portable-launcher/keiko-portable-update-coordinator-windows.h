@@ -1915,6 +1915,7 @@ static int keiko_coordinator_windows_launch_packet(
   if (content == NULL) return 0;
   memcpy(content, "KRP1", 4u);
   content[4] = 1u;
+  content[6] = 1u;
   content[KEIKO_COORDINATOR_KRP_HEADER_BYTES] = 2u;
   content[KEIKO_COORDINATOR_KRP_HEADER_BYTES + 2u] = 1u;
   if (!keiko_coordinator_windows_append_krp_string(
