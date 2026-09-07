@@ -29,6 +29,25 @@ retain all attempts and reservations. Its admission charges are not provider inv
 
 ## Current implementation and executed verification
 
+September 7, 06:00 UTC checkpoint: actual attempt 37 preserved valid model-authored
+regression tests, then the next provider request expired at the configured 30-second deadline.
+The adapter now distinguishes structured deadline expiry from operator cancellation, including
+pre-dispatch cancellation; 116 focused adapter/gateway/resilience tests passed after a failing
+regression. The private qualification profile now allows 180 seconds per request. Attempt 38
+was refused before provider dispatch because the declared 1,050,000-token context reservation
+exceeded the remaining ledger allowance. The private profile is now bounded to the actual
+49,152-token coding geometry (40,960 input plus 8,192 output), with native compaction retained;
+no ledger entry or aggregate ceiling was reset or widened. Attempt 39 is active, preserving
+the prior test edits, and has produced an implementation repair with passing targeted tests.
+It has not yet completed delivery or issue closure; the completed-flow count remains 0/5.
+
+Reviewer comment 3946898238 is addressed by retaining both expected and observed remote-head
+SHAs in the existing body-free reconciliation event. The mismatch regression failed before
+the change, then both delivery service suites passed (56 tests), including redaction checks.
+At the preceding source `4143d71a`, an isolated full server run passed 13,726 tests (16 skipped),
+all twelve cold imports passed, and targeted delivery coverage passed. These results do not
+claim final qualification for subsequent source changes.
+
 The earlier cold ESM import hazard, issue intake, governed Git delivery, CI continuation,
 description handling and runtime recovery have received extensive repairs. This checkpoint adds
 a fix for a newly observed process crash after workspace revocation: catalog settlement used the

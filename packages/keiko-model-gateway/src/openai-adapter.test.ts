@@ -348,6 +348,18 @@ describe("OpenAiAdapter.call", () => {
     ).rejects.toBeInstanceOf(CancelledError);
   });
 
+  it("distinguishes an outer request deadline from an operator cancellation", async () => {
+    const deadline = new AbortController();
+    const adapter = adapterWith((_url, init) => {
+      deadline.abort(new DOMException("deadline exceeded", "TimeoutError"));
+      expect(init?.signal?.aborted).toBe(true);
+      return Promise.reject(new DOMException("request aborted", "AbortError"));
+    });
+    await expect(
+      adapter.call({ ...REQUEST, cancellationSignal: deadline.signal }, CONFIG),
+    ).rejects.toBeInstanceOf(TimeoutError);
+  });
+
   it("never includes the raw response body verbatim in a thrown error", async () => {
     const leakedKey = ["sk-", "leak-aaaaaaaaaaaaaaaaaaaa"].join("");
     const secretBody = { error: `contains ${leakedKey} internal trace` };

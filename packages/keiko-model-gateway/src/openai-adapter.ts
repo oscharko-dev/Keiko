@@ -124,6 +124,26 @@ function logChatDispatch(log: ModelGatewayLogSink, op: string, fields: ChatDispa
   log.write({ level: "info", category: "gateway", op, extra: { ...fields } });
 }
 
+function cancellationWasDeadline(signal: AbortSignal | undefined): boolean {
+  return (
+    signal?.aborted === true &&
+    signal.reason instanceof DOMException &&
+    signal.reason.name === "TimeoutError"
+  );
+}
+
+function requestAbortError(
+  signal: AbortSignal,
+  modelId: string,
+  secrets: readonly string[],
+  phase = "",
+): CancelledError | TimeoutError {
+  const suffix = phase.length === 0 ? "" : ` ${phase}`;
+  return cancellationWasDeadline(signal)
+    ? new TimeoutError(`request for '${modelId}' timed out${suffix}`, secrets)
+    : new CancelledError(`request for '${modelId}' cancelled${suffix}`, secrets);
+}
+
 interface ChatRequestBody {
   readonly model: string;
   readonly messages: readonly OpenAiCompatiblePromptMessage[];
@@ -606,9 +626,11 @@ export class OpenAiAdapter implements ProviderAdapter {
   ): Promise<NormalizedResponse> => {
     const secrets = [config.apiKey, config.baseUrl];
     if (request.cancellationSignal?.aborted === true) {
-      throw new CancelledError(
-        `request for '${config.modelId}' cancelled before dispatch`,
+      throw requestAbortError(
+        request.cancellationSignal,
+        config.modelId,
         secrets,
+        "before dispatch",
       );
     }
     const start = this.now();
@@ -655,9 +677,11 @@ export class OpenAiAdapter implements ProviderAdapter {
   ): AsyncGenerator<GatewayStreamChunk> {
     const secrets = [config.apiKey, config.baseUrl];
     if (request.cancellationSignal?.aborted === true) {
-      throw new CancelledError(
-        `request for '${config.modelId}' cancelled before dispatch`,
+      throw requestAbortError(
+        request.cancellationSignal,
+        config.modelId,
         secrets,
+        "before dispatch",
       );
     }
     const start = this.now();
@@ -831,7 +855,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     secrets: readonly string[],
   ): Error {
     if (cancel?.aborted === true) {
-      return new CancelledError(`request for '${config.modelId}' cancelled`, secrets);
+      return requestAbortError(cancel, config.modelId, secrets);
     }
     const egressError = mapOutboundEgressError(error, secrets);
     if (egressError !== undefined) {

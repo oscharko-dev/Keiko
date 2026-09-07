@@ -126,7 +126,11 @@ function recordDraftRemoteHeadRead(
       reason: result.ok ? "completed" : result.reason,
       ...(phase === "base-read"
         ? { baseMatchesExpected: result.ok && result.value === binding.baseSha }
-        : { headMatchesExpected: result.ok && result.value === binding.headSha }),
+        : {
+            expectedHeadSha: binding.headSha,
+            ...(result.ok ? { observedHeadSha: result.value } : {}),
+            headMatchesExpected: result.ok && result.value === binding.headSha,
+          }),
     },
   });
 }

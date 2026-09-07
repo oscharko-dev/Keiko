@@ -177,6 +177,28 @@ describe("draft delivery runtime admission", () => {
 });
 
 describe("draft delivery hard boundaries", () => {
+  it("records the observed and expected remote commit when the published head drifts", async () => {
+    const expectedHeadSha = fixture.git(["rev-parse", "HEAD"]);
+    const observedHeadSha = "f".repeat(40);
+    const readBranchHead = fixture.adapter.readBranchHead.bind(fixture.adapter);
+    vi.spyOn(fixture.adapter, "readBranchHead").mockImplementation((request) =>
+      request.headBranchName === fixture.context.headRef
+        ? Promise.resolve({ ok: true, value: observedHeadSha })
+        : readBranchHead(request),
+    );
+    await fixture.service.proposePush();
+    const event = fixture.events.find(
+      (candidate) =>
+        candidate.op === "git.draft-remote.observed" && candidate.extra?.phase === "head-read",
+    );
+    expect(event).toMatchObject({
+      correlationId: fixture.context.correlationId,
+      extra: { observedHeadSha, expectedHeadSha, headMatchesExpected: false },
+    });
+    expect(redactLogFields(event?.extra ?? {})).toEqual(event?.extra);
+    expect(fixture.pushCount).toBe(0);
+  });
+
   it("distinguishes unavailable provider facts from an observed base drift without publishing", async () => {
     vi.spyOn(fixture.adapter, "readBranchHead").mockResolvedValue({
       ok: false,

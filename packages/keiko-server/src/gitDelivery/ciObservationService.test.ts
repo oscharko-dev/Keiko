@@ -274,6 +274,8 @@ describe("run-bound CI observations through existing draft authority", () => {
         phase: "head-read",
         state: "observed",
         reason: "completed",
+        expectedHeadSha: publishedHead,
+        observedHeadSha: publishedHead,
         headMatchesExpected: true,
       });
       expect(
