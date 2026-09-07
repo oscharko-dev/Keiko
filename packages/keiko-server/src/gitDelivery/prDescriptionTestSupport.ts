@@ -70,23 +70,7 @@ export class DescriptionFixture {
     writeFileSync(join(this.root, "code.ts"), "export const value = 2;\n");
     this.git(["add", "code.ts"]);
     this.git(["commit", "-m", "change"]);
-    this.remote = {
-      identity: {
-        number: 123,
-        externalId: "PR_Test",
-        url: "https://github.com/owner/repo/pull/123",
-        repository: "owner/repo",
-        headRepository: "owner/repo",
-        headRef: "feature",
-        headSha: this.git(["rev-parse", "HEAD"]),
-        baseRef,
-        baseSha,
-        state: "open",
-        isDraft: true,
-      },
-      body: "# Human template\r\n\r\nCloses #42\r\n",
-      updatedAt: new Date(this.now - 1000).toISOString(),
-    };
+    this.remote = this.initialRemote(baseRef, baseSha);
     this.context = {
       workspace: {
         root: this.root,
@@ -108,6 +92,25 @@ export class DescriptionFixture {
     };
     this.options = this.makeOptions();
     this.service = createPrDescriptionApplicationService(this.options);
+  }
+  private initialRemote(baseRef: string, baseSha: string): GitPrBody {
+    return {
+      identity: {
+        number: 123,
+        externalId: "PR_Test",
+        url: "https://github.com/owner/repo/pull/123",
+        repository: "owner/repo",
+        headRepository: "owner/repo",
+        headRef: "feature",
+        headSha: this.git(["rev-parse", "HEAD"]),
+        baseRef,
+        baseSha,
+        state: "open",
+        isDraft: true,
+      },
+      body: "# Human template\r\n\r\nCloses #42\r\n",
+      updatedAt: new Date(this.now - 1000).toISOString(),
+    };
   }
   private initialize(): void {
     this.git(["init", "--initial-branch=feature"]);
