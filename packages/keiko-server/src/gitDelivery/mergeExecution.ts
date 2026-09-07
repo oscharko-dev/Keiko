@@ -318,6 +318,9 @@ function deriveMergePreviewParts(
     command.mergeStrategy,
     strategyPolicy,
     provider.providerCapableStrategies,
+    // Same base-branch history rule the gateway applies, so the preview an operator sees and the
+    // execution path agree on which strategies the base can actually accept.
+    { linearHistoryRequired: provider.branchProtection?.linearHistoryRequired ?? false },
   );
   const readiness = gitMergeReadinessFor({
     ...(provider.pullRequest !== undefined ? { pullRequest: provider.pullRequest } : {}),

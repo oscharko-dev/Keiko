@@ -114,6 +114,42 @@ describe("deriveEligibleMergeStrategies (AC2)", () => {
     expect(result.selectedDefault).toBe("squash");
   });
 
+  // Epic #3384: the gateway read the base branch's linear-history rule and then ignored it, so a
+  // merge-commit-shaped request was dispatched into a branch that refuses merge commits and came
+  // back as a provider rejection. `provider-default` is included because the provider picks the
+  // method: an observed GitHub merge with no explicit method produced a merge commit.
+  it("refuses merge-commit-shaped strategies when the base branch requires linear history", () => {
+    const linear = deriveEligibleMergeStrategies(
+      "merge-commit",
+      { allowedStrategies: ["squash", "rebase", "merge-commit", "provider-default"] },
+      ["squash", "rebase", "merge-commit"],
+      { linearHistoryRequired: true },
+    );
+    expect(linear.eligible).toEqual(["squash", "rebase"]);
+    expect(linear.requestedEligible).toBe(false);
+    expect(linear.selectedDefault).toBe("squash");
+
+    const providerDefault = deriveEligibleMergeStrategies(
+      "provider-default",
+      { allowedStrategies: ["squash", "provider-default"] },
+      ["squash"],
+      { linearHistoryRequired: true },
+    );
+    expect(providerDefault.eligible).toEqual(["squash"]);
+    expect(providerDefault.requestedEligible).toBe(false);
+  });
+
+  it("leaves every strategy eligible when the base branch has no linear-history rule", () => {
+    const unconstrained = deriveEligibleMergeStrategies(
+      "merge-commit",
+      { allowedStrategies: ["squash", "merge-commit", "provider-default"] },
+      ["squash", "merge-commit"],
+      { linearHistoryRequired: false },
+    );
+    expect(unconstrained.eligible).toEqual(["squash", "merge-commit", "provider-default"]);
+    expect(unconstrained.requestedEligible).toBe(true);
+  });
+
   it("falls back to the first eligible strategy when the requested one is not eligible", () => {
     const result = deriveEligibleMergeStrategies(
       "merge-commit",

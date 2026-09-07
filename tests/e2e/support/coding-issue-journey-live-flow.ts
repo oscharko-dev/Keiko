@@ -507,6 +507,10 @@ async function executeGovernedMerge(
     `merge preview failed with HTTP ${String(previewResponse.status())}`,
   ).toBe(true);
   await expect(card.getByTestId("gm-readiness")).toContainText("Mergeable: yes");
+  // The controlled base requires linear history, so a merge-commit-shaped strategy is not offered
+  // (deriveEligibleMergeStrategies). Name squash explicitly, as an operator merging into such a
+  // branch does, instead of leaving the provider to choose the method.
+  await card.getByTestId("gm-strategy").selectOption("squash");
   const confirmation = card.getByLabel("I confirm this high-risk merge");
   if ((await confirmation.count()) > 0) await confirmation.check();
   await expect(card.getByTestId("gm-submit")).toBeEnabled();

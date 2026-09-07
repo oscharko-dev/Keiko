@@ -712,6 +712,10 @@ async function readReadiness(
     command.mergeStrategy,
     strategyPolicy,
     provider.providerCapableStrategies,
+    // The base branch's own history rule decides whether a merge-commit-shaped strategy can
+    // succeed at all; the gateway already reads it, and an ineligible request now surfaces as the
+    // existing user-actionable `strategy-unavailable` blocker instead of a provider rejection.
+    { linearHistoryRequired: provider.branchProtection?.linearHistoryRequired ?? false },
   );
   const summary = gitMergeReadinessFor({
     ...(provider.pullRequest !== undefined ? { pullRequest: provider.pullRequest } : {}),

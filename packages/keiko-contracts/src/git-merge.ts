@@ -156,20 +156,41 @@ export interface GitMergeStrategyEligibility {
   readonly requestedEligible: boolean;
 }
 
+/** Strategies that append a merge commit, so a base branch requiring linear history refuses them.
+ * `provider-default` is included deliberately: the provider chooses the method, so Keiko cannot
+ * promise a linear result — an observed GitHub merge with no explicit method produced a merge
+ * commit. Under linear history the operator must name a compatible strategy instead. */
+const NON_LINEAR_MERGE_STRATEGIES: ReadonlySet<GitDeliveryMergeStrategyHint> = new Set([
+  "merge-commit",
+  "provider-default",
+]);
+
+/** Base-branch rules that constrain which strategies can succeed at all. */
+export interface GitMergeStrategyBaseConstraints {
+  readonly linearHistoryRequired?: boolean | undefined;
+}
+
 // "provider-default" defers strategy choice to the provider; it is eligible iff policy permits it AND at
 // least one CONCRETE strategy is eligible (so the provider has something to default to). Concrete
-// strategies are eligible iff both policy and provider allow them.
+// strategies are eligible iff both policy and provider allow them, and iff the base branch's own
+// history rule can accept their result — a strategy the base will reject is not eligible, so the
+// existing `strategy-unavailable` blocker names it before a doomed merge is dispatched.
 export function deriveEligibleMergeStrategies(
   requested: GitDeliveryMergeStrategyHint,
   policy: GitMergeStrategyPolicy,
   providerCapable: readonly GitDeliveryMergeStrategyHint[],
+  base: GitMergeStrategyBaseConstraints = {},
 ): GitMergeStrategyEligibility {
   const policySet = new Set(policy.allowedStrategies);
   const providerSet = new Set(providerCapable);
+  const linearOnly = base.linearHistoryRequired === true;
+  const permitted = (s: GitDeliveryMergeStrategyHint): boolean =>
+    !linearOnly || !NON_LINEAR_MERGE_STRATEGIES.has(s);
   const concrete = GIT_DELIVERY_MERGE_STRATEGY_HINTS.filter(
-    (s) => s !== "provider-default" && policySet.has(s) && providerSet.has(s),
+    (s) => s !== "provider-default" && policySet.has(s) && providerSet.has(s) && permitted(s),
   );
-  const providerDefaultEligible = policySet.has("provider-default") && concrete.length > 0;
+  const providerDefaultEligible =
+    policySet.has("provider-default") && concrete.length > 0 && permitted("provider-default");
   const eligible: GitDeliveryMergeStrategyHint[] = [...concrete];
   if (providerDefaultEligible) {
     eligible.push("provider-default");
