@@ -67,6 +67,7 @@ import { createInMemoryUiStore } from "../store/index.js";
 import { STREAMING, type RouteContext } from "../routes.js";
 
 const DIGEST = "a".repeat(64);
+const SCRIPTED_TRANSCRIPT_INTEGRATION_TIMEOUT_MS = 30_000;
 const roots: string[] = [];
 
 afterEach(() => {
@@ -551,6 +552,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       );
       await child.close();
     },
+    SCRIPTED_TRANSCRIPT_INTEGRATION_TIMEOUT_MS,
   );
 
   it("bounds a scripted-model observe-then-repair loop with the same cumulative CI repair budget the production controller enforces (#3388)", async () => {
