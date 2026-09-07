@@ -118,8 +118,17 @@ prerequisite (#2198 signing/notarization, or #2951 sidecar egress/confinement en
 genuinely open on the qualified head; the operator's 2026-09-05 scope clarification additionally
 excludes only #2952's Atlassian half, so a row whose dependency is the coding-runtime half of that
 issue moves to `scenarios` once its own producer exists, rather than staying blocked on an
-exclusion that does not apply to it. A blocked row never needs a receipt, matching the evidence
-gate's own rule (`scripts/lib/coding-issue-journey-evidence.mjs`). The blocked disposition's source
+exclusion that does not apply to it. A blocked row needs no receipt while its dependency remains
+open. The `keiko-issue-audit` row is the narrow external-process exception: it stays blocked until
+the operator supplies that process's artifact receipt together with `--audit-ref` and the SHA-256
+of the exact artifact bytes. The artifact is the external process's body-free result record, not
+its private report or input data. The producer preserves those bytes opaquely and projects only
+that row as receipt-backed evidence; it does not execute, reproduce, parse, or substitute for the
+external audit. The checker requires
+the receipt's source head, platform, passing status, production-functional provenance, recorded
+time, and recomputed artifact digest to agree with the manifest. Missing evidence remains blocked;
+unpaired facts, a digest that differs from the bytes, or a receipt from another head cannot
+qualify. The blocked disposition's source
 of truth is the descriptor, not a receipts-directory marker: keeping one place that says "this row
 is blocked and why" avoids two disagreeing answers to the same question. The platform launch
 drivers (`scripts/qualify-macos-runtime-release.mjs`, `scripts/qualify-windows-runtime-release.mjs`)

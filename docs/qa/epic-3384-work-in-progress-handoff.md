@@ -119,8 +119,10 @@ artifact, and three actual native compaction/lifecycle cases. The compactable ca
 compaction and retry after a 513-message overflow; the irreducible case failed closed. These are
 source-specific scripted-gateway proofs, not paid-model flow completion. Local Sonar also passed
 on that head. The full coverage run exposed a stale generated source inventory for `keiko-tools`
-(70 recorded, 71 actual after the typed-metadata helper); its producer must refresh that evidence
-from actual measured coverage without weakening the inventory pin or lowering coverage floors.
+(70 recorded, 71 actual after the typed-metadata helper): 40,493 tests passed and that one inventory
+test failed. Fresh UI coverage and the existing coverage-quality evaluation passed. `4c8fed68`
+adds an inventory-only mode to the existing generator and produces exactly the 70-to-71 correction;
+all coverage metrics and file floors remain unchanged. Its 68 owning tests, lint and format passed.
 
 ## Real-model delivery: 0/5 completed
 

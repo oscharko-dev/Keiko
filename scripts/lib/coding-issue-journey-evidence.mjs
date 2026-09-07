@@ -54,6 +54,12 @@ function receiptBindingFailures(scenario, receipt, headCommitSha) {
       `${scenario.scenarioId}: receipt artifact digest does not match the manifest (wrong-SHA receipt)`,
     );
   }
+  if (scenario.scenarioId === "keiko-issue-audit" && receipt.provenance !== scenario.provenance) {
+    failures.push(`${scenario.scenarioId}: receipt provenance does not match the manifest`);
+  }
+  if (scenario.scenarioId === "keiko-issue-audit" && receipt.recordedAt !== scenario.recordedAt) {
+    failures.push(`${scenario.scenarioId}: receipt recordedAt does not match the manifest`);
+  }
   return failures;
 }
 

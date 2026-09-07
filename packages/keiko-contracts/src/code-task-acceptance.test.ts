@@ -584,7 +584,11 @@ describe("factErrors collects every violation instead of stopping at the first (
 const RUBRIC_DIGEST = "e".repeat(64);
 const READINESS_DIGEST = "f".repeat(64);
 const OUTCOME_DIGEST = "1".repeat(64);
-const AUDIT_DIGEST = "2".repeat(64);
+const AUDIT_DIGEST = "2".repeat(
+  64,
+) as CodeTaskQualificationManifestV1["flows"][number]["artifactDigest"];
+const AUDIT_SCENARIO_ID =
+  "keiko-issue-audit" as CodeTaskQualificationManifestV1["scenarios"][number]["scenarioId"];
 const HUMAN_MERGE_ATTESTATION_DIGEST = "3".repeat(64);
 function codeTaskIsoInstant(value: string): CodeTaskIsoInstant {
   if (!isCodeTaskIsoInstant(value)) {
@@ -725,8 +729,8 @@ function validQualificationManifest(): CodeTaskQualificationManifestV1 {
       runReference: { outcome: "known", value: "run-20260904-01" },
       readinessSnapshotDigest: { outcome: "known", value: READINESS_DIGEST },
       journeyOutcomeDigest: { outcome: "known", value: OUTCOME_DIGEST },
-      auditReference: { outcome: "known", value: "keiko-issue-audit-20260904" },
-      auditDigest: { outcome: "known", value: AUDIT_DIGEST },
+      auditReference: { outcome: "unknown" },
+      auditDigest: { outcome: "unknown" },
       humanMergeAttestationDigest: { outcome: "known", value: HUMAN_MERGE_ATTESTATION_DIGEST },
       requiredTools: CODE_TASK_QUALIFICATION_REQUIRED_TOOLS,
       spendBudgetUsd: 25,
@@ -755,6 +759,26 @@ function validQualificationManifest(): CodeTaskQualificationManifestV1 {
 
 function mutatedManifest(patch: Record<string, unknown>): unknown {
   return { ...validQualificationManifest(), ...patch };
+}
+
+function externalAuditScenario(
+  outcome: "passed" | "failed" | "blocked" = "passed",
+): CodeTaskQualificationManifestV1["scenarios"][number] {
+  return {
+    scenarioId: AUDIT_SCENARIO_ID,
+    evidenceClass: "production-functional",
+    platform: "macos-arm64",
+    provenance: outcome === "blocked" ? "scripted" : "production-functional",
+    outcome,
+    recordedAt: QUALIFICATION_RECORDED_AT,
+    blockedReason:
+      outcome === "blocked"
+        ? { outcome: "known", value: "operator-run audit receipt is absent" }
+        : { outcome: "absent" },
+    artifactDigests: outcome === "blocked" ? [] : [AUDIT_DIGEST],
+    receiptDigest:
+      outcome === "blocked" ? { outcome: "absent" } : { outcome: "known", value: AUDIT_DIGEST },
+  };
 }
 
 describe("validateCodeTaskQualificationManifest", () => {
@@ -1172,6 +1196,92 @@ describe("codeTaskQualificationManifestFailures and codeTaskQualificationVerdict
     const manifest = validQualificationManifest();
     expect(codeTaskQualificationManifestFailures(manifest, binding)).toEqual([]);
     expect(codeTaskQualificationVerdictFor(manifest, binding)).toBe("qualified");
+  });
+
+  it("requires paired audit facts bound to the passed external audit receipt", () => {
+    const base = validQualificationManifest();
+    const auditBinding: CodeTaskAcceptanceBinding = {
+      ...binding,
+      registeredScenarioIds: [...binding.registeredScenarioIds, "keiko-issue-audit"],
+      registeredProductionFunctionalScenarioIds: ["keiko-issue-audit"],
+    };
+    const passedAudit: CodeTaskQualificationManifestV1 = {
+      ...base,
+      auditReference: { outcome: "known", value: "operator-audit-20260907" },
+      auditDigest: { outcome: "known", value: AUDIT_DIGEST },
+      scenarios: [...base.scenarios, externalAuditScenario()],
+    };
+    expect(codeTaskQualificationManifestFailures(passedAudit, auditBinding)).toEqual([]);
+
+    const missingReference: CodeTaskQualificationManifestV1 = {
+      ...passedAudit,
+      auditReference: { outcome: "unknown" },
+    };
+    expect(codeTaskQualificationManifestFailures(missingReference, auditBinding)).toContain(
+      "external audit reference and digest must both be known",
+    );
+    const wrongDigest: CodeTaskQualificationManifestV1 = {
+      ...passedAudit,
+      auditDigest: { outcome: "known", value: DIGEST as typeof AUDIT_DIGEST },
+    };
+    expect(codeTaskQualificationManifestFailures(wrongDigest, auditBinding)).toContain(
+      "external audit digest must match its receipt artifact digest",
+    );
+    const foreignProvenance: CodeTaskQualificationManifestV1 = {
+      ...passedAudit,
+      scenarios: [...base.scenarios, { ...externalAuditScenario(), provenance: "real-model" }],
+    };
+    expect(codeTaskQualificationManifestFailures(foreignProvenance, auditBinding)).toContain(
+      "passed external audit requires production-functional evidence provenance",
+    );
+  });
+
+  it("does not qualify unknown audit facts or an omitted required external audit scenario", () => {
+    const base = validQualificationManifest();
+    const auditBinding: CodeTaskAcceptanceBinding = {
+      ...binding,
+      registeredScenarioIds: [...binding.registeredScenarioIds, "keiko-issue-audit"],
+      registeredProductionFunctionalScenarioIds: ["keiko-issue-audit"],
+    };
+    const unknownFacts: CodeTaskQualificationManifestV1 = {
+      ...base,
+      scenarios: [...base.scenarios, externalAuditScenario()],
+    };
+    expect(codeTaskQualificationManifestFailures(unknownFacts, auditBinding)).toContain(
+      "passed external audit requires a known reference and digest",
+    );
+    expect(codeTaskQualificationVerdictFor(unknownFacts, auditBinding)).toBe("blocked");
+    const factsWithoutScenario: CodeTaskQualificationManifestV1 = {
+      ...base,
+      auditReference: { outcome: "known", value: "operator-audit-20260907" },
+      auditDigest: { outcome: "known", value: AUDIT_DIGEST },
+    };
+    expect(codeTaskQualificationManifestFailures(factsWithoutScenario, auditBinding)).toContain(
+      "missing required scenario: keiko-issue-audit",
+    );
+  });
+
+  it("keeps the external audit honestly blocked only when no audit facts are claimed", () => {
+    const base = validQualificationManifest();
+    const auditBinding: CodeTaskAcceptanceBinding = {
+      ...binding,
+      registeredScenarioIds: [...binding.registeredScenarioIds, "keiko-issue-audit"],
+      registeredProductionFunctionalScenarioIds: ["keiko-issue-audit"],
+    };
+    const blocked: CodeTaskQualificationManifestV1 = {
+      ...base,
+      scenarios: [...base.scenarios, externalAuditScenario("blocked")],
+    };
+    expect(codeTaskQualificationManifestFailures(blocked, auditBinding)).toEqual([]);
+    expect(codeTaskQualificationVerdictFor(blocked, auditBinding)).toBe("blocked");
+    const blockedWithFacts: CodeTaskQualificationManifestV1 = {
+      ...blocked,
+      auditReference: { outcome: "known", value: "operator-audit-20260907" },
+      auditDigest: { outcome: "known", value: AUDIT_DIGEST },
+    };
+    expect(codeTaskQualificationManifestFailures(blockedWithFacts, auditBinding)).toContain(
+      "blocked external audit cannot carry completed audit facts",
+    );
   });
 
   it("fails an empty manifest and reports blocked, never qualified", () => {

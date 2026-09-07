@@ -736,9 +736,82 @@ describe("checkCodingIssueJourneyEvidence", () => {
             scenarioId: "egress-confinement-linux-windows",
             evidenceClass: "production-functional",
           },
+          {
+            scenarioId: "keiko-issue-audit",
+            evidenceClass: "production-functional",
+          },
+          {
+            scenarioId: "other-external-process",
+            evidenceClass: "production-functional",
+          },
         ],
-      }).registeredProductionFunctionalScenarioIds,
-    ).toEqual(["egress-confinement-macos-arm64"]);
+      }),
+    ).toMatchObject({
+      registeredScenarioIds: ["issue-to-pr-full-access", "keiko-issue-audit"],
+      registeredProductionFunctionalScenarioIds: [
+        "egress-confinement-macos-arm64",
+        "keiko-issue-audit",
+      ],
+    });
+  });
+
+  it.each([
+    [
+      "source head",
+      { commitSha: "f".repeat(40) },
+      `receipt is bound to a stale or foreign commit (expected ${COMMIT_SHA}, got ${"f".repeat(40)})`,
+    ],
+    ["provenance", { provenance: "scripted" }, "receipt provenance does not match the manifest"],
+    [
+      "recorded time",
+      { recordedAt: "2026-09-06T05:31:00Z" },
+      "receipt recordedAt does not match the manifest",
+    ],
+  ])("rejects an external audit receipt with foreign %s metadata", (_label, patch, failure) => {
+    const auditDigest = "c".repeat(64);
+    const scenario = {
+      scenarioId: "keiko-issue-audit",
+      evidenceClass: "production-functional",
+      platform: "macos-arm64",
+      provenance: "production-functional",
+      outcome: "passed",
+      recordedAt: "2026-09-06T05:30:00Z",
+      receiptDigest: { outcome: "known", value: auditDigest },
+    };
+    const failures = evidenceGateFailures({
+      manifestValidation: {
+        ok: true,
+        value: {
+          sourceTreeSha: TREE_SHA,
+          requiredTools: [],
+          scenarios: [scenario],
+          flows: [],
+        },
+      },
+      manifestFailures: [],
+      headCommitSha: COMMIT_SHA,
+      headTreeSha: TREE_SHA,
+      receiptsByScenarioId: new Map([
+        [
+          scenario.scenarioId,
+          {
+            scenarioId: scenario.scenarioId,
+            commitSha: COMMIT_SHA,
+            platform: "macos-arm64",
+            testStatus: "passed",
+            digest: auditDigest,
+            provenance: "production-functional",
+            recordedAt: scenario.recordedAt,
+            artifactValidationErrors: null,
+            ...patch,
+          },
+        ],
+      ]),
+      flowReceiptsById: new Map(),
+      modelVisibleToolNames: new Set(),
+    });
+
+    expect(failures).toContain(`keiko-issue-audit: ${failure}`);
   });
 
   it("passes a fully valid manifest bound to the qualified head with a matching receipt", async () => {

@@ -31,6 +31,7 @@ const GENERATED_D12_EVIDENCE_PATHS = [
   "docs/release/1209-perf-evidence.json",
   "docs/release/1209-bundle-evidence.json",
 ];
+const EXTERNAL_ISSUE_AUDIT_SCENARIO_ID = "keiko-issue-audit";
 
 function git(root, args) {
   return execFileSync(resolveHostExecutable("git"), args, {
@@ -225,6 +226,17 @@ function addEvidencePaths(paths, ids) {
   }
 }
 
+function externalIssueAuditEvidenceIds(descriptor) {
+  const blocked = Array.isArray(descriptor?.blocked) ? descriptor.blocked : [];
+  return blocked.some(
+    (scenario) =>
+      scenario?.scenarioId === EXTERNAL_ISSUE_AUDIT_SCENARIO_ID &&
+      scenario?.evidenceClass === "production-functional",
+  )
+    ? [EXTERNAL_ISSUE_AUDIT_SCENARIO_ID]
+    : [];
+}
+
 function evidencePathBinding(descriptor) {
   const ids = descriptorEvidenceIds(descriptor);
   if (ids === null) return null;
@@ -238,7 +250,10 @@ function evidencePathBinding(descriptor) {
   const required = new Set([CODING_ISSUE_JOURNEY_MANIFEST_PATH, ...GENERATED_D12_EVIDENCE_PATHS]);
   const optional = new Set();
   addEvidencePaths(required, [...ids, ...flowStageIds.required]);
-  addEvidencePaths(optional, flowStageIds.optional);
+  addEvidencePaths(optional, [
+    ...flowStageIds.optional,
+    ...externalIssueAuditEvidenceIds(descriptor),
+  ]);
   return { required, optional, allowed: new Set([...required, ...optional]) };
 }
 

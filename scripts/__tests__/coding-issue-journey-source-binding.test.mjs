@@ -50,6 +50,26 @@ function descriptor(
   };
 }
 
+function descriptorWithExternalAudit() {
+  return {
+    ...descriptor(),
+    blocked: [
+      {
+        scenarioId: "keiko-issue-audit",
+        evidenceClass: "production-functional",
+        platform: "macos-arm64",
+        blockedReason: "operator-run process is pending",
+      },
+      {
+        scenarioId: "other-external-process",
+        evidenceClass: "production-functional",
+        platform: "macos-arm64",
+        blockedReason: "unrelated external process is pending",
+      },
+    ],
+  };
+}
+
 function fixture(trustedDescriptor = descriptor()) {
   const root = mkdtempSync(join(tmpdir(), "keiko-3390-source-binding-"));
   roots.push(root);
@@ -146,6 +166,44 @@ describe("coding issue journey evidence-only source binding", () => {
     const landingCommitSha = commit(input.root, "land generated D12 evidence");
 
     expect(inspect(input)).toMatchObject({ failures: [], landingCommitSha });
+  });
+
+  it("allows only the optional external issue-audit receipt pair after source freeze", () => {
+    const input = fixture(descriptorWithExternalAudit());
+    commitEvidence(input);
+    expect(inspect(input).failures).toEqual([]);
+
+    write(
+      input.root,
+      `${CODING_ISSUE_JOURNEY_RECEIPTS_PATH}/keiko-issue-audit.artifact`,
+      "body-free external audit result\n",
+    );
+    write(
+      input.root,
+      `${CODING_ISSUE_JOURNEY_RECEIPTS_PATH}/keiko-issue-audit.receipt.json`,
+      "{}\n",
+    );
+    const landingCommitSha = commit(input.root, "land external audit receipt");
+
+    expect(inspect(input)).toMatchObject({ failures: [], landingCommitSha });
+  });
+
+  it.each([
+    [
+      "another blocked scenario",
+      `${CODING_ISSUE_JOURNEY_RECEIPTS_PATH}/other-external-process.artifact`,
+    ],
+    ["an audit-adjacent file", `${CODING_ISSUE_JOURNEY_RECEIPTS_PATH}/keiko-issue-audit.notes`],
+    ["audit-adjacent code", "scripts/lib/keiko-issue-audit-bridge.mjs"],
+  ])("rejects %s after source freeze", (_label, path) => {
+    const input = fixture(descriptorWithExternalAudit());
+    commitEvidence(input);
+    write(input.root, path, "not owned evidence\n");
+    commit(input.root, "land foreign audit-adjacent file");
+
+    expect(inspect(input).failures).toContain(
+      `qualification source changed outside evidence outputs: ${path}`,
+    );
   });
 
   it("allows the registered CI-repair stage for every flow and rejects an unregistered flow", () => {

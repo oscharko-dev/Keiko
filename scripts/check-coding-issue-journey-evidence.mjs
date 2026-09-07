@@ -29,6 +29,7 @@ import { readJsonFile } from "./lib/json.mjs";
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..");
 const RECEIPT_SUFFIX = ".receipt.json";
+const EXTERNAL_ISSUE_AUDIT_SCENARIO_ID = "keiko-issue-audit";
 const FLOW_RECEIPT_KEYS = new Set([
   "flowId",
   "commitSha",
@@ -89,8 +90,8 @@ function readScenarioArtifactEvidence(scenarioId, artifactBytes) {
  * scenario id. Exported so both this checker and the manifest producer
  * (scripts/generate-coding-issue-journey-manifest.mjs) share the one reader instead of each
  * growing its own copy (AGENTS.md §5). `recordedAt`/`provenance` are only consumed by the
- * producer -- this checker never reads them back off a receipt, since a scenario's declared
- * `recordedAt`/`provenance` are cross-referenced through the manifest itself, not the receipt.
+ * producer. The checker also compares them for the external issue-audit receipt, whose opaque
+ * bytes cannot supply repository-owned structured identity fields.
  */
 function bytesForPath(path, contentByPath) {
   if (contentByPath === undefined) return readFileSync(path);
@@ -218,14 +219,28 @@ function validatedFlowReceipts(
 }
 
 export function qualificationBinding(binding, headCommitSha, descriptor) {
-  const registeredProductionFunctionalScenarioIds = Array.isArray(descriptor?.scenarios)
+  const descriptorProductionFunctionalScenarioIds = Array.isArray(descriptor?.scenarios)
     ? descriptor.scenarios
         .filter((scenario) => scenario?.evidenceClass === "production-functional")
         .map((scenario) => scenario.scenarioId)
     : [];
+  const externalAuditRegistered = Array.isArray(descriptor?.blocked)
+    ? descriptor.blocked.some(
+        (scenario) =>
+          scenario?.scenarioId === EXTERNAL_ISSUE_AUDIT_SCENARIO_ID &&
+          scenario?.evidenceClass === "production-functional",
+      )
+    : false;
+  const registeredScenarioIds = externalAuditRegistered
+    ? [...new Set([...binding.registeredScenarioIds, EXTERNAL_ISSUE_AUDIT_SCENARIO_ID])]
+    : binding.registeredScenarioIds;
+  const registeredProductionFunctionalScenarioIds = externalAuditRegistered
+    ? [...new Set([...descriptorProductionFunctionalScenarioIds, EXTERNAL_ISSUE_AUDIT_SCENARIO_ID])]
+    : descriptorProductionFunctionalScenarioIds;
   return {
     ...binding,
     sourceCommitSha: headCommitSha,
+    registeredScenarioIds,
     registeredProductionFunctionalScenarioIds,
     registeredQualificationFlows: Array.isArray(descriptor?.flows) ? descriptor.flows : [],
   };

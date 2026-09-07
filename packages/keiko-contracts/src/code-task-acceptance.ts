@@ -2003,8 +2003,65 @@ function qualificationFlowFailures(
 //
 // #3390 audit F15: the approved evaluation budget is checked, not merely recorded -- an observed
 // spend above it is a qualification failure, never a silent overage.
+function externalAuditFactPairFailures(
+  referenceKnown: boolean,
+  digestKnown: boolean,
+): readonly string[] {
+  return referenceKnown === digestKnown
+    ? []
+    : ["external audit reference and digest must both be known"];
+}
+
+function externalAuditScenarioFactFailures(
+  scenario: CodeTaskQualificationScenarioV1 | undefined,
+  factsKnown: boolean,
+): readonly string[] {
+  if (scenario === undefined) return [];
+  if (scenario.outcome === "passed" && !factsKnown) {
+    return ["passed external audit requires a known reference and digest"];
+  }
+  if (scenario.outcome === "blocked" && factsKnown) {
+    return ["blocked external audit cannot carry completed audit facts"];
+  }
+  return [];
+}
+
+function externalAuditPassedEvidenceFailures(
+  scenario: CodeTaskQualificationScenarioV1 | undefined,
+): readonly string[] {
+  if (scenario?.outcome !== "passed") return [];
+  return scenario.evidenceClass === "production-functional" &&
+    scenario.provenance === "production-functional"
+    ? []
+    : ["passed external audit requires production-functional evidence provenance"];
+}
+
+function externalAuditDigestFailures(
+  scenario: CodeTaskQualificationScenarioV1 | undefined,
+  auditDigest: CodeTaskFact<CodeTaskSha256Digest>,
+): readonly string[] {
+  if (auditDigest.outcome !== "known" || scenario?.receiptDigest.outcome !== "known") return [];
+  return auditDigest.value === scenario.receiptDigest.value
+    ? []
+    : ["external audit digest must match its receipt artifact digest"];
+}
+
+function externalAuditBindingFailures(
+  manifest: CodeTaskQualificationManifestV1,
+): readonly string[] {
+  const scenario = manifest.scenarios.find(({ scenarioId }) => scenarioId === "keiko-issue-audit");
+  const referenceKnown = manifest.auditReference.outcome === "known";
+  const digestKnown = manifest.auditDigest.outcome === "known";
+  return [
+    ...externalAuditFactPairFailures(referenceKnown, digestKnown),
+    ...externalAuditScenarioFactFailures(scenario, referenceKnown && digestKnown),
+    ...externalAuditPassedEvidenceFailures(scenario),
+    ...externalAuditDigestFailures(scenario, manifest.auditDigest),
+  ];
+}
+
 function manifestCrossFieldFailures(manifest: CodeTaskQualificationManifestV1): readonly string[] {
-  const failures: string[] = [];
+  const failures: string[] = [...externalAuditBindingFailures(manifest)];
   if (
     manifest.journeyOutcomeDigest.outcome === "known" &&
     manifest.humanMergeAttestationDigest.outcome !== "known"

@@ -6,8 +6,11 @@
 // A descriptor names two kinds of registered scenario: `scenarios` actually run and need a
 // receipt, and `blocked` scenarios that are known, named, closed external gaps (issue #3390
 // contract-correction 1: #2951/#2952/#2198 stay open) and carry their reason directly -- they
-// never need a receipt, matching the evidence gate's own rule that a blocked scenario is never
-// cross-referenced against the receipts directory (scripts/lib/coding-issue-journey-evidence.mjs).
+// need no receipt while blocked. The one external-process bridge, `keiko-issue-audit`, moves from
+// its honest blocked row to receipt-backed evidence only when the operator supplies the external
+// artifact and its exact opaque reference/digest binding.
+
+export const EXTERNAL_ISSUE_AUDIT_SCENARIO_ID = "keiko-issue-audit";
 
 function fact(value) {
   return value === undefined ? { outcome: "unknown" } : { outcome: "known", value };
@@ -41,8 +44,9 @@ function buildRanScenario(entry, receiptsByScenarioId) {
 /**
  * Projects one descriptor `blocked` row directly: its closed reason comes from the descriptor,
  * never from a receipt (issue #3390 contract-correction 1's blocked rows are a documented,
- * reviewed disposition, not a runtime observation). `generatedAt` timestamps the determination
- * since a blocked scenario has no execution of its own to timestamp.
+ * reviewed disposition, not a runtime observation). The external audit is routed to
+ * `buildRanScenario` before this helper once its receipt exists. `generatedAt` timestamps the
+ * determination since a blocked scenario has no execution of its own to timestamp.
  */
 function buildBlockedScenario(entry, generatedAt) {
   return {
@@ -56,6 +60,35 @@ function buildBlockedScenario(entry, generatedAt) {
     artifactDigests: [],
     receiptDigest: { outcome: "absent" },
   };
+}
+
+function buildDescriptorBlockedScenario(entry, receiptsByScenarioId, generatedAt) {
+  if (
+    entry.scenarioId === EXTERNAL_ISSUE_AUDIT_SCENARIO_ID &&
+    receiptsByScenarioId.has(EXTERNAL_ISSUE_AUDIT_SCENARIO_ID)
+  ) {
+    return buildRanScenario(entry, receiptsByScenarioId);
+  }
+  return buildBlockedScenario(entry, generatedAt);
+}
+
+function externalAuditFacts(input, receiptsByScenarioId) {
+  const receipt = receiptsByScenarioId.get(EXTERNAL_ISSUE_AUDIT_SCENARIO_ID);
+  const hasReference = input.auditReference !== undefined;
+  const hasDigest = input.auditDigest !== undefined;
+  if (receipt === undefined) {
+    if (hasReference || hasDigest) {
+      throw new Error("external audit facts require an external audit receipt");
+    }
+    return { auditReference: undefined, auditDigest: undefined };
+  }
+  if (!hasReference || !hasDigest) {
+    throw new Error("external audit receipt requires both an audit reference and digest");
+  }
+  if (input.auditDigest !== receipt.digest) {
+    throw new Error("external audit digest does not match the receipt artifact bytes");
+  }
+  return { auditReference: input.auditReference, auditDigest: receipt.digest };
 }
 
 function buildFlow(entry, flowReceiptsById) {
@@ -153,7 +186,9 @@ export function buildCodingIssueJourneyManifest(input) {
   const flowReceiptsById = input.flowReceiptsById ?? new Map();
   const scenarios = [
     ...descriptor.scenarios.map((entry) => buildRanScenario(entry, receiptsByScenarioId)),
-    ...descriptor.blocked.map((entry) => buildBlockedScenario(entry, generatedAt)),
+    ...descriptor.blocked.map((entry) =>
+      buildDescriptorBlockedScenario(entry, receiptsByScenarioId, generatedAt),
+    ),
   ];
   const flows = (descriptor.flows ?? []).map((entry) => buildFlow(entry, flowReceiptsById));
   const firstFlow = flows[0];
@@ -162,11 +197,13 @@ export function buildCodingIssueJourneyManifest(input) {
     receiptsByScenarioId.get("human-merge-and-closure"),
     finalFlow,
   );
+  const auditFacts = externalAuditFacts(input, receiptsByScenarioId);
   const manifestInput =
     firstFlow === undefined
-      ? { ...input, humanMergeAttestationDigest: attestationDigest }
+      ? { ...input, ...auditFacts, humanMergeAttestationDigest: attestationDigest }
       : {
           ...input,
+          ...auditFacts,
           issueReference: firstFlow.issueReference,
           pullRequestReference: firstFlow.pullRequestReference,
           runReference: firstFlow.taskRunId,

@@ -49,6 +49,22 @@ function descriptor() {
   };
 }
 
+function descriptorWithExternalAudit() {
+  const base = descriptor();
+  return {
+    ...base,
+    blocked: [
+      ...base.blocked,
+      {
+        scenarioId: "keiko-issue-audit",
+        evidenceClass: "production-functional",
+        platform: "macos-arm64",
+        blockedReason: "keiko-issue-audit is an operator-run process outside this repository",
+      },
+    ],
+  };
+}
+
 describe("buildCodingIssueJourneyManifest", () => {
   it("derives a ran scenario's outcome and digest from its receipt, and a blocked row from the descriptor", () => {
     const receiptsByScenarioId = new Map([
@@ -144,6 +160,164 @@ describe("buildCodingIssueJourneyManifest", () => {
         spendBudgetUsd: 25,
       }),
     ).toThrow("missing receipt for issue-to-pr-full-access");
+  });
+
+  it("keeps the external audit blocked with unknown facts when no receipt exists", () => {
+    const manifest = buildCodingIssueJourneyManifest({
+      descriptor: descriptorWithExternalAudit(),
+      receiptsByScenarioId: new Map([
+        [
+          "issue-to-pr-full-access",
+          {
+            scenarioId: "issue-to-pr-full-access",
+            testStatus: "passed",
+            recordedAt: GENERATED_AT,
+            provenance: "real-model",
+            digest: DIGEST,
+          },
+        ],
+      ]),
+      generatedAt: GENERATED_AT,
+      sourceCommitSha: COMMIT_SHA,
+      sourceTreeSha: TREE_SHA,
+      runtimeIdentity: "opencode-1.17.17",
+      modelIdentity: "gateway-profile:coding-issue-journey",
+      fixtureRevision: "controlled-fixture-rev-1",
+      rubricDigest: DIGEST,
+      requiredTools: [],
+      spendBudgetUsd: 25,
+    });
+
+    expect(
+      manifest.scenarios.find(({ scenarioId }) => scenarioId === "keiko-issue-audit"),
+    ).toMatchObject({ outcome: "blocked", receiptDigest: { outcome: "absent" } });
+    expect(manifest.auditReference).toEqual({ outcome: "unknown" });
+    expect(manifest.auditDigest).toEqual({ outcome: "unknown" });
+  });
+
+  it("projects a receipt-bound external audit only when its opaque reference and actual digest agree", () => {
+    const receipt = {
+      scenarioId: "keiko-issue-audit",
+      testStatus: "passed",
+      recordedAt: GENERATED_AT,
+      provenance: "production-functional",
+      digest: DIGEST,
+    };
+    const manifest = buildCodingIssueJourneyManifest({
+      descriptor: descriptorWithExternalAudit(),
+      receiptsByScenarioId: new Map([
+        [
+          "issue-to-pr-full-access",
+          {
+            scenarioId: "issue-to-pr-full-access",
+            testStatus: "passed",
+            recordedAt: GENERATED_AT,
+            provenance: "real-model",
+            digest: "d".repeat(64),
+          },
+        ],
+        ["keiko-issue-audit", receipt],
+      ]),
+      generatedAt: GENERATED_AT,
+      sourceCommitSha: COMMIT_SHA,
+      sourceTreeSha: TREE_SHA,
+      runtimeIdentity: "opencode-1.17.17",
+      modelIdentity: "gateway-profile:coding-issue-journey",
+      fixtureRevision: "controlled-fixture-rev-1",
+      rubricDigest: DIGEST,
+      auditReference: "operator-audit-20260907",
+      auditDigest: DIGEST,
+      requiredTools: [],
+      spendBudgetUsd: 25,
+    });
+
+    expect(
+      manifest.scenarios.find(({ scenarioId }) => scenarioId === "keiko-issue-audit"),
+    ).toMatchObject({
+      outcome: "passed",
+      provenance: "production-functional",
+      receiptDigest: { outcome: "known", value: DIGEST },
+    });
+    expect(manifest.auditReference).toEqual({
+      outcome: "known",
+      value: "operator-audit-20260907",
+    });
+    expect(manifest.auditDigest).toEqual({ outcome: "known", value: DIGEST });
+  });
+
+  it.each([
+    ["missing reference", { auditDigest: DIGEST }],
+    ["missing digest", { auditReference: "operator-audit-20260907" }],
+    ["wrong digest", { auditReference: "operator-audit-20260907", auditDigest: "e".repeat(64) }],
+  ])("rejects an external audit receipt with a %s", (_label, auditBinding) => {
+    expect(() =>
+      buildCodingIssueJourneyManifest({
+        descriptor: descriptorWithExternalAudit(),
+        receiptsByScenarioId: new Map([
+          [
+            "issue-to-pr-full-access",
+            {
+              scenarioId: "issue-to-pr-full-access",
+              testStatus: "passed",
+              recordedAt: GENERATED_AT,
+              provenance: "real-model",
+              digest: "d".repeat(64),
+            },
+          ],
+          [
+            "keiko-issue-audit",
+            {
+              scenarioId: "keiko-issue-audit",
+              testStatus: "passed",
+              recordedAt: GENERATED_AT,
+              provenance: "production-functional",
+              digest: DIGEST,
+            },
+          ],
+        ]),
+        generatedAt: GENERATED_AT,
+        sourceCommitSha: COMMIT_SHA,
+        sourceTreeSha: TREE_SHA,
+        runtimeIdentity: "opencode-1.17.17",
+        modelIdentity: "gateway-profile:coding-issue-journey",
+        fixtureRevision: "controlled-fixture-rev-1",
+        rubricDigest: DIGEST,
+        ...auditBinding,
+        requiredTools: [],
+        spendBudgetUsd: 25,
+      }),
+    ).toThrow(/external audit/u);
+  });
+
+  it("rejects external audit facts when no external audit receipt exists", () => {
+    expect(() =>
+      buildCodingIssueJourneyManifest({
+        descriptor: descriptorWithExternalAudit(),
+        receiptsByScenarioId: new Map([
+          [
+            "issue-to-pr-full-access",
+            {
+              scenarioId: "issue-to-pr-full-access",
+              testStatus: "passed",
+              recordedAt: GENERATED_AT,
+              provenance: "real-model",
+              digest: "d".repeat(64),
+            },
+          ],
+        ]),
+        generatedAt: GENERATED_AT,
+        sourceCommitSha: COMMIT_SHA,
+        sourceTreeSha: TREE_SHA,
+        runtimeIdentity: "opencode-1.17.17",
+        modelIdentity: "gateway-profile:coding-issue-journey",
+        fixtureRevision: "controlled-fixture-rev-1",
+        rubricDigest: DIGEST,
+        auditReference: "operator-audit-20260907",
+        auditDigest: DIGEST,
+        requiredTools: [],
+        spendBudgetUsd: 25,
+      }),
+    ).toThrow(/external audit receipt/u);
   });
 
   it("does not derive a merge attestation without a matching completed flow", () => {
@@ -467,6 +641,73 @@ describe("generate-coding-issue-journey-manifest CLI", () => {
     );
     expect(blocked.outcome).toBe("blocked");
     expect(blocked.blockedReason).toEqual({ outcome: "known", value: "#2198" });
+  });
+
+  it("binds opaque external audit bytes through the actual CLI receipt reader", async () => {
+    const { root, descriptorPath, rubricPath, receiptsDir } = stageInputs();
+    writeFileSync(descriptorPath, JSON.stringify(descriptorWithExternalAudit()), "utf8");
+    const { mkdirSync } = await import("node:fs");
+    writeReceipt(
+      receiptsDir,
+      { mkdirSync, writeFileSync },
+      "issue-to-pr-full-access",
+      Buffer.from("journey-artifact\n"),
+    );
+    const auditBytes = Buffer.from([0, 255, 3, 128, 10]);
+    writeReceipt(receiptsDir, { mkdirSync, writeFileSync }, "keiko-issue-audit", auditBytes);
+    const auditReceiptPath = join(receiptsDir, "keiko-issue-audit.receipt.json");
+    const auditReceipt = JSON.parse(readFileSync(auditReceiptPath, "utf8"));
+    writeFileSync(
+      auditReceiptPath,
+      JSON.stringify({ ...auditReceipt, provenance: "production-functional" }),
+    );
+    const outputPath = join(root, "manifest.json");
+    process.argv = [
+      process.execPath,
+      "generate-coding-issue-journey-manifest.mjs",
+      "--descriptor",
+      descriptorPath,
+      "--receipts",
+      receiptsDir,
+      "--commit",
+      COMMIT_SHA,
+      "--tree",
+      TREE_SHA,
+      "--runtime-identity",
+      "opencode-1.17.17",
+      "--model-identity",
+      "gateway-profile:coding-issue-journey",
+      "--fixture-revision",
+      "controlled-fixture-rev-1",
+      "--rubric",
+      rubricPath,
+      "--required-tools",
+      CODE_TASK_QUALIFICATION_REQUIRED_TOOLS.join(","),
+      "--spend-budget-usd",
+      "25",
+      "--audit-ref",
+      "operator-audit-20260907",
+      "--audit-digest",
+      sha256(auditBytes),
+      "--output",
+      outputPath,
+    ];
+
+    await import(`${SCRIPT_URL}?case=audit-receipt`);
+
+    const written = JSON.parse(readFileSync(outputPath, "utf8"));
+    expect(written.auditReference).toEqual({
+      outcome: "known",
+      value: "operator-audit-20260907",
+    });
+    expect(written.auditDigest).toEqual({ outcome: "known", value: sha256(auditBytes) });
+    expect(
+      written.scenarios.find(({ scenarioId }) => scenarioId === "keiko-issue-audit"),
+    ).toMatchObject({
+      outcome: "passed",
+      provenance: "production-functional",
+      receiptDigest: { outcome: "known", value: sha256(auditBytes) },
+    });
   });
 
   it("fails loudly when a required argument is missing", async () => {
