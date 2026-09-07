@@ -1,6 +1,8 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifndef KEIKO_PORTABLE_TARGET
@@ -68,6 +70,14 @@ static const char *valid_fields[KEIKO_KHP_FIELD_COUNT] = {
   "1800000030000",
   "1800000060000",
   "1800000090000"
+#if defined(_WIN32)
+  ,
+  "windows-generation-v1",
+  "6666666666666666666666666666666666666666666666666666666666666666",
+  "7777777777777777777777777777777777777777777777777777777777777777",
+  "8888888888888888888888888888888888888888888888888888888888888888",
+  "9999999999999999999999999999999999999999999999999999999999999999"
+#endif
 };
 
 static void write_u16(unsigned char *out, uint16_t value) {
@@ -125,6 +135,110 @@ static void rejects_field(size_t field, const char *value) {
   assert(parses(fields) == 0);
 }
 
+static int hex_nibble(int byte) {
+  if (byte >= '0' && byte <= '9') return byte - '0';
+  if (byte >= 'a' && byte <= 'f') return byte - 'a' + 10;
+  return -1;
+}
+
+static void fixture_path(char *output, size_t capacity) {
+  const char *source = __FILE__;
+#if defined(_WIN32)
+  const char *fixture_name = "khp-v3-windows.hex";
+#else
+  const char *fixture_name = "khp-v2-macos.hex";
+#endif
+  const char *slash = strrchr(source, '/');
+  const char *backslash = strrchr(source, '\\');
+  const char *separator = slash;
+  size_t directory_length;
+  int written;
+  if (separator == NULL || (backslash != NULL && backslash > separator)) separator = backslash;
+  assert(separator != NULL);
+  directory_length = (size_t)(separator - source);
+  written = snprintf(
+      output,
+      capacity,
+      "%.*s/fixtures/%s",
+      (int)directory_length,
+      source,
+      fixture_name
+  );
+  assert(written > 0 && (size_t)written < capacity);
+}
+
+static void parses_canonical_fixture(void) {
+  char path[4096];
+  unsigned char *decoded = (unsigned char *)malloc(KEIKO_KHP_MAX_BYTES);
+  FILE *fixture = NULL;
+  size_t length = 0;
+  int high = -1;
+  int byte;
+  keiko_handoff_plan plan;
+  assert(decoded != NULL);
+  fixture_path(path, sizeof(path));
+#if defined(_MSC_VER)
+  assert(fopen_s(&fixture, path, "rb") == 0);
+#else
+  fixture = fopen(path, "rb");
+#endif
+  assert(fixture != NULL);
+  while ((byte = fgetc(fixture)) != EOF) {
+    int nibble;
+    if (byte == '\n' || byte == '\r') continue;
+    nibble = hex_nibble(byte);
+    assert(nibble >= 0);
+    if (high < 0) {
+      high = nibble;
+    } else {
+      assert(length < KEIKO_KHP_MAX_BYTES);
+      decoded[length++] = (unsigned char)((high << 4) | nibble);
+      high = -1;
+    }
+  }
+  assert(fclose(fixture) == 0);
+  assert(high < 0);
+  assert(keiko_khp_parse(decoded, length, &plan) == 1);
+  assert(plan.version == KEIKO_KHP_VERSION);
+  assert(plan.field_count == KEIKO_KHP_FIELD_COUNT);
+#if defined(_WIN32)
+  assert(strcmp(plan.field[KEIKO_KHP_CUTOVER_KIND], "windows-generation-v1") == 0);
+  assert(strcmp(
+             plan.field[KEIKO_KHP_CANDIDATE_GENERATION_TREE_SHA256],
+             "7777777777777777777777777777777777777777777777777777777777777777"
+         ) == 0);
+#endif
+  keiko_khp_clear(&plan);
+  memset(decoded, 0, KEIKO_KHP_MAX_BYTES);
+  free(decoded);
+}
+
+static void rejects_cross_target_headers(void) {
+  unsigned char *content = (unsigned char *)malloc(KEIKO_KHP_MAX_BYTES);
+  keiko_handoff_plan plan;
+  size_t length;
+  assert(content != NULL);
+  length = encode_fields(content, KEIKO_KHP_MAX_BYTES, valid_fields);
+  write_u16(content + 4, KEIKO_KHP_VERSION);
+  write_u16(
+      content + 6,
+      KEIKO_KHP_FIELD_COUNT == KEIKO_KHP_MAC_FIELD_COUNT
+          ? KEIKO_KHP_WINDOWS_FIELD_COUNT
+          : KEIKO_KHP_MAC_FIELD_COUNT
+  );
+  assert(keiko_khp_parse(content, length, &plan) == 0);
+  write_u16(
+      content + 4,
+      KEIKO_KHP_VERSION == KEIKO_KHP_MAC_VERSION
+          ? KEIKO_KHP_WINDOWS_VERSION
+          : KEIKO_KHP_MAC_VERSION
+  );
+  write_u16(content + 6, KEIKO_KHP_FIELD_COUNT);
+  assert(keiko_khp_parse(content, length, &plan) == 0);
+  memset(content, 0, KEIKO_KHP_MAX_BYTES);
+  free(content);
+}
+
 int main(void) {
   static const unsigned char malformed_utf8[] = {0xc0u, 0xafu, 0u};
   assert(parses(valid_fields) == 1);
@@ -143,6 +257,15 @@ int main(void) {
   rejects_field(KEIKO_KHP_MANAGED_ROOT, INVALID_RELATIVE_PATH);
   rejects_field(KEIKO_KHP_MANAGED_ROOT, INVALID_DOT_PATH);
   rejects_field(KEIKO_KHP_CANDIDATE_ROOT, FOREIGN_CANDIDATE);
+#if defined(_WIN32)
+  rejects_field(KEIKO_KHP_CUTOVER_KIND, "windows-generation-v2");
+  rejects_field(KEIKO_KHP_CURRENT_GENERATION_TREE_SHA256, "-");
+  rejects_field(KEIKO_KHP_CANDIDATE_GENERATION_TREE_SHA256, "A");
+  rejects_field(KEIKO_KHP_CURRENT_SETUP_MANIFEST_SHA256, "");
+  rejects_field(KEIKO_KHP_CANDIDATE_SETUP_MANIFEST_SHA256, "0");
+#endif
+  rejects_cross_target_headers();
+  parses_canonical_fixture();
 
   /* Parsing establishes syntax only. Product code must separately authorize every
    * root, digest, process identity, registration snapshot, and runtime capability. */

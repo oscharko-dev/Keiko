@@ -1054,7 +1054,12 @@ Windows diagnostic `eee979c77`, run `34153165932`, passed the complete native co
 including the ACL owner fix, and the real cutover probe with all success/sharing/invalid/pre/post/
 contention checks and flush boundaries passing. It then failed MSVC C4996 in the protocol fixture's
 `fopen` call. The checked MSVC-specific `fopen_s` test repair is frozen and pushed as diagnostic
-`d8b199b6e`; run `34153596557` is pending. The complete native quality lane is not yet green.
+`d8b199b6e`; run `34153596557`, Windows job `101840774198`, subsequently reported the entire
+**Verify productive native sources on Windows** step successful. This covers compiler/analyzer,
+cutover, coordinator, protocol and later native boundary fixtures at those exact frozen bytes.
+The fifteen changed native/script files are checkpointed from that diagnostic commit without
+including the concurrent locality work. The overall job/workflow is still pending; no full CI pass,
+new locality proof, or production-signed update qualification is inferred.
 
 Independent security review confirmed a High defect in the uncommitted local-volume helper:
 PowerShell 5.1 CodeDOM scratch storage inherits an environment-selected temporary parent's ACL,

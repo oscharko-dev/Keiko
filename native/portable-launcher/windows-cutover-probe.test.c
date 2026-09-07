@@ -1,12 +1,20 @@
+#ifndef UNICODE
 #define UNICODE
+#endif
+#ifndef _UNICODE
 #define _UNICODE
+#endif
+#ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0A00
+#endif
 
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
 #include <windows.h>
+
+#include "keiko-portable-windows-atomic-replace.h"
 
 enum {
   KEIKO_PATH_CAP = 32768,
@@ -248,51 +256,16 @@ static int reset_pair(const keiko_paths *paths, const unsigned char *active, DWO
 }
 
 static int rename_pending(const keiko_paths *paths) {
-  const wchar_t *target_name = paths->active;
-  const size_t target_bytes = wcslen(target_name) * sizeof(wchar_t);
-  const size_t info_size = sizeof(FILE_RENAME_INFO) + target_bytes;
-  FILE_RENAME_INFO *info = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, info_size);
-  HANDLE source = INVALID_HANDLE_VALUE;
-  HANDLE existing = INVALID_HANDLE_VALUE;
-  HANDLE directory = INVALID_HANDLE_VALUE;
-  keiko_file_fact source_fact;
-  keiko_file_fact existing_fact;
-  FILE_ID_INFO directory_id;
-  int renamed = 0;
-
-  if (info == NULL) {
-    return 0;
-  }
-  directory = open_directory(paths->root);
-  source = open_regular(
+  HANDLE published = INVALID_HANDLE_VALUE;
+  int result = keiko_windows_atomic_replace_existing(
+    paths->root,
     paths->pending,
-    GENERIC_READ | GENERIC_WRITE | DELETE,
-    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+    paths->active,
+    GetTickCount64() + KEIKO_WAIT_MS,
+    &published
   );
-  existing = open_regular(
-    paths->active, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
-  );
-  if (directory == INVALID_HANDLE_VALUE || directory == NULL || source == INVALID_HANDLE_VALUE ||
-      source == NULL || existing == INVALID_HANDLE_VALUE || existing == NULL ||
-      !query_fact(source, &source_fact) || !query_fact(existing, &existing_fact) ||
-      !query_id(directory, &directory_id) || source_fact.size.QuadPart <= 0 ||
-      existing_fact.size.QuadPart <= 0 ||
-      source_fact.id.VolumeSerialNumber != directory_id.VolumeSerialNumber ||
-      existing_fact.id.VolumeSerialNumber != directory_id.VolumeSerialNumber) {
-    goto cleanup;
-  }
-  info->Flags = FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS;
-  info->RootDirectory = NULL;
-  info->FileNameLength = (DWORD)target_bytes;
-  memcpy(info->FileName, target_name, target_bytes);
-  renamed = SetFileInformationByHandle(source, FileRenameInfoEx, info, (DWORD)info_size) != 0;
-
-cleanup:
-  close_if_valid(directory);
-  close_if_valid(existing);
-  close_if_valid(source);
-  (void)HeapFree(GetProcessHeap(), 0, info);
-  return renamed;
+  close_if_valid(published);
+  return result;
 }
 
 static int create_paths(keiko_paths *paths) {

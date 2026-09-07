@@ -160,6 +160,11 @@ describe("Windows immutable-generation native quality wiring", () => {
       'throw "MSVC tree-hash behavior build failed"',
       "& $treeHashTestOut",
       'throw "Windows tree-hash behavior verification failed"',
+      '$coordinatorTest = Join-Path $root "native/portable-launcher/keiko-portable-update-coordinator.windows.test.c"',
+      '& cl.exe @nativeFlags $windowsVersionDefine \'/DKEIKO_PORTABLE_TARGET="windows-x64"\'',
+      'throw "MSVC Windows update coordinator mechanics build failed"',
+      "& $coordinatorTestOut",
+      'throw "Windows update coordinator mechanics verification failed"',
     ];
     for (const wiring of required) expect(activeGate).toContain(wiring);
   });
@@ -260,8 +265,15 @@ describe.skipIf(!hasPwsh())("check-windows-native-quality flag derivation", () =
     return copyWith(PRODUCTION_RUNTIME_SUPERVISOR, "build-runtime-supervisor.mjs", transform);
   }
 
-  it("accepts the real production files unchanged", () => {
+  it("accepts the real production launcher with its nested generation-define arrays", () => {
     expect(derivationAccepts()).toContain("ACCEPTED");
+  });
+
+  it("does not terminate argument-list parsing at a bracket inside a quoted flag", () => {
+    const launcherSourcePath = copyLauncherWith((source) =>
+      source.replace('"/nologo",', '"/nologo]",'),
+    );
+    expect(derivationAccepts({ launcherSourcePath })).toContain("ACCEPTED");
   });
 
   // One case per required flag: dropping either from the shipped launcher command must fail the
