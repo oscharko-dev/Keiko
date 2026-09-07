@@ -110,6 +110,8 @@ static inline int keiko_windows_update_file_digest_matches(
 static int keiko_windows_update_copy_handle(
     HANDLE source,
     const wchar_t *destination_path,
+    uint64_t maximum_bytes,
+    uint64_t *total_bytes,
     uint64_t deadline_ms
 ) {
   HANDLE destination = INVALID_HANDLE_VALUE;
@@ -118,11 +120,16 @@ static int keiko_windows_update_copy_handle(
   keiko_windows_atomic_file_fact destination_fact;
   unsigned char *buffer = NULL;
   uint64_t total = 0;
+  int destination_created = 0;
   int result = 0;
   if (!keiko_windows_atomic_query_fact(source, &source_before) ||
       source_before.standard.Directory || source_before.standard.EndOfFile.QuadPart < 0 ||
-      (uint64_t)source_before.standard.EndOfFile.QuadPart >
-          KEIKO_WINDOWS_UPDATE_MAX_FILE_BYTES) return 0;
+      (uint64_t)source_before.standard.EndOfFile.QuadPart > maximum_bytes ||
+      (total_bytes != NULL &&
+       *total_bytes > KEIKO_TREE_MAX_BYTES -
+           (uint64_t)source_before.standard.EndOfFile.QuadPart)) return 0;
+  if (total_bytes != NULL)
+    *total_bytes += (uint64_t)source_before.standard.EndOfFile.QuadPart;
   destination = CreateFileW(
       destination_path,
       GENERIC_READ | GENERIC_WRITE,
@@ -132,8 +139,9 @@ static int keiko_windows_update_copy_handle(
       FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH | FILE_FLAG_OPEN_REPARSE_POINT,
       NULL
   );
-  if (destination == INVALID_HANDLE_VALUE || destination == NULL ||
-      !keiko_windows_atomic_query_fact(destination, &destination_fact) ||
+  if (destination == INVALID_HANDLE_VALUE || destination == NULL) goto cleanup;
+  destination_created = 1;
+  if (!keiko_windows_atomic_query_fact(destination, &destination_fact) ||
       destination_fact.standard.Directory || destination_fact.standard.NumberOfLinks != 1) {
     goto cleanup;
   }
@@ -163,12 +171,14 @@ cleanup:
     free(buffer);
   }
   if (destination != INVALID_HANDLE_VALUE && destination != NULL) CloseHandle(destination);
+  if (!result && destination_created) (void)DeleteFileW(destination_path);
   return result;
 }
 
 static int keiko_windows_update_copy_file(
     const wchar_t *source_path,
     const wchar_t *destination_path,
+    uint64_t maximum_bytes,
     uint64_t deadline_ms
 ) {
   HANDLE source = keiko_windows_atomic_open_regular(
@@ -177,7 +187,13 @@ static int keiko_windows_update_copy_file(
       FILE_SHARE_READ
   );
   int result = source != INVALID_HANDLE_VALUE && source != NULL &&
-               keiko_windows_update_copy_handle(source, destination_path, deadline_ms);
+               keiko_windows_update_copy_handle(
+                   source,
+                   destination_path,
+                   maximum_bytes,
+                   NULL,
+                   deadline_ms
+               );
   if (source != INVALID_HANDLE_VALUE && source != NULL) CloseHandle(source);
   return result;
 }
@@ -190,14 +206,22 @@ static inline int keiko_windows_update_replace_file(
     const char *expected_sha256,
     uint64_t deadline_ms
 ) {
+  int temporary_created = 0;
   int result = 0;
   if (!keiko_windows_atomic_destination_absent(temporary_path) ||
       !keiko_windows_update_file_digest_matches(
           snapshot_path,
           expected_sha256,
           deadline_ms
-      ) ||
-      !keiko_windows_update_copy_file(snapshot_path, temporary_path, deadline_ms) ||
+      )) goto cleanup;
+  if (!keiko_windows_update_copy_file(
+          snapshot_path,
+          temporary_path,
+          KEIKO_WINDOWS_UPDATE_MAX_FILE_BYTES,
+          deadline_ms
+      )) goto cleanup;
+  temporary_created = 1;
+  if (
       !keiko_windows_update_file_digest_matches(
           temporary_path,
           expected_sha256,
@@ -213,12 +237,10 @@ static inline int keiko_windows_update_replace_file(
           destination_path,
           expected_sha256,
           deadline_ms
-      )) {
-    goto cleanup;
-  }
+      )) goto cleanup;
   result = 1;
 cleanup:
-  if (!result) {
+  if (!result && temporary_created) {
     DWORD attributes = GetFileAttributesW(temporary_path);
     if (attributes != INVALID_FILE_ATTRIBUTES &&
         (attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0) {
@@ -231,6 +253,9 @@ cleanup:
 static int keiko_windows_update_copy_directory_contents(
     HANDLE source,
     HANDLE destination,
+    const char *relative,
+    keiko_tree_walk_budget *budget,
+    uint64_t *total_bytes,
     uint64_t deadline_ms,
     unsigned int depth
 ) {
@@ -240,7 +265,8 @@ static int keiko_windows_update_copy_directory_contents(
   keiko_tree_windows_identity source_before;
   keiko_tree_windows_identity source_after;
   int result = 0;
-  if (depth > KEIKO_TREE_MAX_DEPTH || GetTickCount64() > deadline_ms ||
+  if (relative == NULL || budget == NULL || total_bytes == NULL ||
+      depth > KEIKO_TREE_MAX_DEPTH || GetTickCount64() > deadline_ms ||
       !keiko_tree_windows_read_identity(source, 1, &source_before)) return 0;
   find = keiko_tree_windows_find_first(source, &entry, &error);
   if (find == INVALID_HANDLE_VALUE) return error == ERROR_FILE_NOT_FOUND;
@@ -249,6 +275,8 @@ static int keiko_windows_update_copy_directory_contents(
     int dot = length == 1u && entry.cFileName[0] == L'.';
     int dotdot = length == 2u && entry.cFileName[0] == L'.' && entry.cFileName[1] == L'.';
     if (!dot && !dotdot) {
+      char *component = NULL;
+      char *child_name = NULL;
       int directory = (entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
       HANDLE source_child = keiko_tree_windows_open_child(source, entry.cFileName, directory);
       wchar_t *destination_path = (wchar_t *)malloc(
@@ -256,12 +284,17 @@ static int keiko_windows_update_copy_directory_contents(
       );
       HANDLE destination_child = INVALID_HANDLE_VALUE;
       int copied = 0;
-      if (source_child == INVALID_HANDLE_VALUE || source_child == NULL ||
+      if (!keiko_tree_windows_component_utf8(entry.cFileName, length, &component) ||
+          !keiko_tree_windows_join_relative(&child_name, relative, component) ||
+          !keiko_tree_record_entry(budget, child_name) ||
+          source_child == INVALID_HANDLE_VALUE || source_child == NULL ||
           destination_path == NULL ||
           !keiko_tree_windows_child_path(destination_path, destination, entry.cFileName)) {
         if (source_child != INVALID_HANDLE_VALUE && source_child != NULL)
           CloseHandle(source_child);
         free(destination_path);
+        free(child_name);
+        free(component);
         goto cleanup;
       }
       if (directory) {
@@ -276,6 +309,9 @@ static int keiko_windows_update_copy_directory_contents(
                    keiko_windows_update_copy_directory_contents(
                        source_child,
                        destination_child,
+                       child_name,
+                       budget,
+                       total_bytes,
                        deadline_ms,
                        depth + 1u
                    );
@@ -284,6 +320,8 @@ static int keiko_windows_update_copy_directory_contents(
         copied = keiko_windows_update_copy_handle(
             source_child,
             destination_path,
+            KEIKO_TREE_MAX_FILE_BYTES,
+            total_bytes,
             deadline_ms
         );
       }
@@ -291,6 +329,8 @@ static int keiko_windows_update_copy_directory_contents(
         CloseHandle(destination_child);
       CloseHandle(source_child);
       free(destination_path);
+      free(child_name);
+      free(component);
       if (!copied) goto cleanup;
     }
     if (!FindNextFileW(find, &entry)) break;
@@ -430,6 +470,8 @@ static inline int keiko_windows_update_copy_publish_generation(
   char second_source_digest[65];
   char incoming_digest[65];
   char published_digest[65];
+  keiko_tree_walk_budget copy_budget = {0};
+  uint64_t copy_total_bytes = 0;
   int incoming_created = 0;
   int published = 0;
   int result = 0;
@@ -457,7 +499,15 @@ static inline int keiko_windows_update_copy_publish_generation(
       FILE_SHARE_READ | FILE_SHARE_DELETE
   );
   if (incoming == INVALID_HANDLE_VALUE || incoming == NULL ||
-      !keiko_windows_update_copy_directory_contents(source, incoming, deadline_ms, 0u) ||
+      !keiko_windows_update_copy_directory_contents(
+          source,
+          incoming,
+          "",
+          &copy_budget,
+          &copy_total_bytes,
+          deadline_ms,
+          0u
+      ) ||
       !keiko_windows_update_tree_hash(
           source,
           deadline_ms,
