@@ -22,14 +22,20 @@ typedef struct {
   size_t capacity;
 } keiko_tree_windows_pins;
 
+static int keiko_tree_windows_handle_valid(HANDLE handle) {
+  return handle != NULL && handle != INVALID_HANDLE_VALUE;
+}
+
 static void keiko_tree_windows_pins_clear(keiko_tree_windows_pins *pins) {
   size_t index;
-  for (index = 0; index < pins->count; ++index) CloseHandle(pins->handles[index]);
+  for (index = 0; index < pins->count; ++index)
+    if (keiko_tree_windows_handle_valid(pins->handles[index])) CloseHandle(pins->handles[index]);
   free(pins->handles);
   memset(pins, 0, sizeof(*pins));
 }
 
 static int keiko_tree_windows_pins_add(keiko_tree_windows_pins *pins, HANDLE file) {
+  if (!keiko_tree_windows_handle_valid(file)) return 0;
   if (pins->count == pins->capacity) {
     size_t next = pins->capacity == 0 ? 64u : pins->capacity * 2u;
     HANDLE *resized;
@@ -66,7 +72,7 @@ static int keiko_tree_windows_same_identity(const keiko_tree_windows_identity *l
 static int keiko_tree_windows_read_identity(HANDLE handle, int directory,
                                             keiko_tree_windows_identity *identity) {
   FILE_ATTRIBUTE_TAG_INFO tag;
-  if (handle == INVALID_HANDLE_VALUE || GetFileType(handle) != FILE_TYPE_DISK ||
+  if (!keiko_tree_windows_handle_valid(handle) || GetFileType(handle) != FILE_TYPE_DISK ||
       !GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &tag, sizeof(tag)) ||
       (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
       !GetFileInformationByHandleEx(handle, FileIdInfo, &identity->id,
@@ -114,7 +120,7 @@ static HANDLE keiko_tree_windows_open_child(HANDLE parent, const wchar_t *name, 
   child = CreateFileW(path, access, FILE_SHARE_READ, NULL, OPEN_EXISTING, flags, NULL);
   free(path);
   if (!keiko_tree_windows_read_identity(child, directory, &identity)) {
-    if (child != INVALID_HANDLE_VALUE) CloseHandle(child);
+    if (keiko_tree_windows_handle_valid(child)) CloseHandle(child);
     return INVALID_HANDLE_VALUE;
   }
   return child;
@@ -207,7 +213,7 @@ static int keiko_tree_windows_collect_directory(HANDLE directory, const char *re
           !keiko_tree_record_entry(budget, child_name)) goto entry_cleanup;
       is_directory = (entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
       child = keiko_tree_windows_open_child(directory, entry.cFileName, is_directory);
-      if (child == INVALID_HANDLE_VALUE) goto entry_cleanup;
+      if (!keiko_tree_windows_handle_valid(child)) goto entry_cleanup;
       if (is_directory) {
         HANDLE retained = child;
         /* Retain every directory from the first traversal so a hashed file's parent chain cannot
@@ -221,13 +227,13 @@ static int keiko_tree_windows_collect_directory(HANDLE directory, const char *re
           goto entry_cleanup;
       } else if (!keiko_tree_names_add(files, child_name)) goto entry_cleanup;
     }
-    if (child != INVALID_HANDLE_VALUE) CloseHandle(child);
+    if (keiko_tree_windows_handle_valid(child)) CloseHandle(child);
     free(child_name);
     free(component);
     if (!FindNextFileW(find, &entry)) break;
     continue;
 entry_cleanup:
-    if (child != INVALID_HANDLE_VALUE) CloseHandle(child);
+    if (keiko_tree_windows_handle_valid(child)) CloseHandle(child);
     free(child_name);
     free(component);
     goto cleanup;
@@ -287,7 +293,7 @@ static HANDLE keiko_tree_windows_open_relative_file(HANDLE root, const char *rel
     chain[count] = keiko_tree_windows_open_child(chain[count - 1u], component,
                                                  separator != NULL);
     free(component);
-    if (chain[count] == INVALID_HANDLE_VALUE) goto cleanup;
+    if (!keiko_tree_windows_handle_valid(chain[count])) goto cleanup;
     count += 1u;
     if (separator == NULL) {
       result = chain[count - 1u];
@@ -297,7 +303,7 @@ static HANDLE keiko_tree_windows_open_relative_file(HANDLE root, const char *rel
   }
 cleanup:
   for (index = 1u; index + 1u < count; ++index) CloseHandle(chain[index]);
-  if (result == INVALID_HANDLE_VALUE && count > 1u) CloseHandle(chain[count - 1u]);
+  if (!keiko_tree_windows_handle_valid(result) && count > 1u) CloseHandle(chain[count - 1u]);
   return result;
 }
 
@@ -342,8 +348,8 @@ static int keiko_tree_windows_digest_file(HANDLE root, const char *name, keiko_s
 hash_cleanup:
   keiko_sha256_clear(&hash);
 cleanup:
-  if (current != INVALID_HANDLE_VALUE) CloseHandle(current);
-  if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+  if (keiko_tree_windows_handle_valid(current)) CloseHandle(current);
+  if (keiko_tree_windows_handle_valid(file)) CloseHandle(file);
   return result;
 }
 
@@ -393,10 +399,10 @@ static int keiko_tree_hash_windows(const wchar_t *root_path, uint64_t deadline_m
                             FILE_SHARE_READ, NULL, OPEN_EXISTING,
                             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
   keiko_tree_windows_pins pins = {0};
-  int result = root != INVALID_HANDLE_VALUE &&
+  int result = keiko_tree_windows_handle_valid(root) &&
                keiko_tree_hash_windows_handle_pinned(root, deadline_ms, output, &pins);
   keiko_tree_windows_pins_clear(&pins);
-  if (root != INVALID_HANDLE_VALUE) CloseHandle(root);
+  if (keiko_tree_windows_handle_valid(root)) CloseHandle(root);
   return result;
 }
 #endif
