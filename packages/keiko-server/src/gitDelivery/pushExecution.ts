@@ -161,6 +161,9 @@ function publishAdapterFor(
 function pushInputsOf(command: GitPushCommand): GitDeliveryPushInputs {
   return {
     kind: "push",
+    ...(command.verifiedCommitSha === undefined
+      ? {}
+      : { verifiedCommitSha: command.verifiedCommitSha }),
     sourceBranchName: command.sourceBranchName,
     remoteAlias: command.remoteAlias,
     remoteBranchName: command.remoteBranchName,

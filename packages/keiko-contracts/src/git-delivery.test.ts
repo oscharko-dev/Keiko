@@ -37,8 +37,10 @@ import {
   parseGitDeliveryResolvedInputs,
 } from "./git-delivery.js";
 import type {
+  GitDeliveryActionEnvelope,
   GitDeliveryBranchPattern,
   GitDeliveryPolicyDecision,
+  GitDeliveryPrMarkReadyInputs,
   GitDeliveryPushInputs,
   GitDeliveryResolvedInputs,
 } from "./git-delivery.js";
@@ -86,13 +88,22 @@ describe("git-delivery action-kind / risk-class guards", () => {
     expect(isGitDeliveryActionKind(undefined)).toBe(false);
   });
 
+  // #3399 (epic #3384 correction 4): relocated from 11 to 12 members — "pr-description-apply"
+  // joined as a distinct action kind, deliberately separate from "pr-update" so the policy-pack
+  // layer can hold a decision for it that never widens to title/base/draft-state mutations.
+  // #3389 (epic #3384 correction 7): relocated from 12 to 13 members — "pr-mark-ready" joined as a
+  // distinct action kind so the draft->ready transition is approval-gated on its own claim, never
+  // reachable through the generic "pr-update" admission.
   it("GIT_DELIVERY_ACTION_KINDS pins the cardinality and includes branch-switch", () => {
-    expect(GIT_DELIVERY_ACTION_KINDS).toHaveLength(11);
+    expect(GIT_DELIVERY_ACTION_KINDS).toHaveLength(13);
     expect(GIT_DELIVERY_ACTION_KINDS).toContain("branch-switch");
+    expect(GIT_DELIVERY_ACTION_KINDS).toContain("pr-description-apply");
+    expect(GIT_DELIVERY_ACTION_KINDS).toContain("pr-mark-ready");
     expect(new Set(GIT_DELIVERY_ACTION_KINDS).size).toBe(GIT_DELIVERY_ACTION_KINDS.length);
     // The risk-default table is exhaustive over the kinds (one entry per kind).
-    expect(Object.keys(GIT_DELIVERY_ACTION_RISK_DEFAULTS)).toHaveLength(11);
+    expect(Object.keys(GIT_DELIVERY_ACTION_RISK_DEFAULTS)).toHaveLength(13);
     expect(GIT_DELIVERY_ACTION_RISK_DEFAULTS["branch-switch"]).toBe("local-mutation");
+    expect(GIT_DELIVERY_ACTION_RISK_DEFAULTS["pr-mark-ready"]).toBe("protected-or-merge");
   });
 
   it("isGitDeliveryRiskClass discriminates the four classes", () => {
@@ -388,6 +399,15 @@ describe("parseGitDeliveryResolvedInputs", () => {
         convertFromDraft: true,
       },
       {
+        kind: "pr-mark-ready",
+        prExternalId: "42",
+        headSha: "a".repeat(40),
+        baseSha: "b".repeat(40),
+        readinessDigest: "c".repeat(64),
+        currentDraftState: true,
+        transitionPayloadDigest: "d".repeat(64),
+      },
+      {
         kind: "merge",
         prExternalId: "42",
         mergeStrategyHint: "squash",
@@ -490,6 +510,40 @@ describe("parseGitDeliveryResolvedInputs", () => {
       convertFromDraft: false,
     });
     expect(neitherDraftFlag.ok).toBe(true);
+  });
+
+  it("rejects a pr-mark-ready whose SHAs are not valid git object ids", () => {
+    const base = {
+      kind: "pr-mark-ready",
+      prExternalId: "42",
+      readinessDigest: "c".repeat(64),
+      currentDraftState: true,
+      transitionPayloadDigest: "d".repeat(64),
+    };
+    const invalidHead = parseGitDeliveryResolvedInputs({
+      ...base,
+      headSha: "not-a-sha",
+      baseSha: "b".repeat(40),
+    });
+    expect(invalidHead.ok).toBe(false);
+    if (!invalidHead.ok) {
+      expect(invalidHead.errors[0]).toContain('kind "pr-mark-ready"');
+    }
+    const missingBase = parseGitDeliveryResolvedInputs({ ...base, headSha: "a".repeat(40) });
+    expect(missingBase.ok).toBe(false);
+  });
+
+  it("rejects a pr-mark-ready with a non-boolean currentDraftState", () => {
+    const result = parseGitDeliveryResolvedInputs({
+      kind: "pr-mark-ready",
+      prExternalId: "42",
+      headSha: "a".repeat(40),
+      baseSha: "b".repeat(40),
+      readinessDigest: "c".repeat(64),
+      currentDraftState: "yes",
+      transitionPayloadDigest: "d".repeat(64),
+    });
+    expect(result.ok).toBe(false);
   });
 });
 
@@ -625,6 +679,48 @@ describe("parseGitDeliveryActionEnvelope (soundness: kind === resolvedInputs.kin
     if (!result.ok) {
       expect(result.errors.some((e) => e.includes("preview"))).toBe(true);
     }
+  });
+
+  // Review finding (#3389 repair): GitDeliveryActionEnvelope's own union previously omitted the
+  // GitDeliveryActionEnvelopeFor<GitDeliveryPrMarkReadyInputs> member (it stopped at
+  // pr-description-apply), so an exhaustive switch over a parsed envelope's `kind` could silently
+  // drop this kind with no compile error. Failing before the fix: TS2367/"unreachable" style
+  // narrowing made the "pr-mark-ready" branch below dead code (its `envelope` was typed `never`
+  // there), because no union member could ever narrow to that kind.
+  it("parses a sound pr-mark-ready envelope, and its kind is a live member of the exhaustive union", () => {
+    const validMarkReadyInputs: GitDeliveryPrMarkReadyInputs = {
+      kind: "pr-mark-ready",
+      prExternalId: "1499",
+      headSha: "a".repeat(40),
+      baseSha: "b".repeat(40),
+      readinessDigest: "c".repeat(64),
+      currentDraftState: true,
+      transitionPayloadDigest: "d".repeat(64),
+    };
+    // A DIRECT structural assignment to the union type — never a cast, never routed through
+    // `parseGitDeliveryActionEnvelope`'s own `as unknown as GitDeliveryActionEnvelope` (which
+    // bypasses excess/missing-member checking and would accept this regardless of the union's
+    // completeness). This is the actual compile-time proof the finding calls for: before the fix,
+    // this assignment failed with "Type '{ ...; kind: \"pr-mark-ready\"; ... }' is not assignable to
+    // type 'GitDeliveryActionEnvelope'" because no union member's `kind` literal was "pr-mark-ready"
+    // — `tsc -p packages/keiko-contracts/tsconfig.json --noEmit` on this file is the failing-before
+    // evidence, not vitest (a runtime test cannot observe a type-only regression: switching on
+    // `envelope.kind` still dispatches correctly at runtime even when TypeScript narrows the
+    // "pr-mark-ready" case's `envelope` to `never`, since property access on `never` is permitted).
+    const envelope: GitDeliveryActionEnvelope = {
+      schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
+      actionId: "act-mark-ready-1",
+      kind: "pr-mark-ready",
+      resolvedInputs: validMarkReadyInputs,
+      policyDecision: { outcome: "allowed" },
+      approvalRequirement: { required: false },
+    };
+    expect(envelope.resolvedInputs.readinessDigest).toBe("c".repeat(64));
+    // The runtime parser accepts the identical shape too (unaffected by the type-level gap above —
+    // parseGitDeliveryActionEnvelope never switches on `.kind`, it delegates to
+    // parseGitDeliveryResolvedInputs).
+    const result = parseGitDeliveryActionEnvelope(envelope);
+    expect(result).toEqual({ ok: true, value: envelope });
   });
 });
 

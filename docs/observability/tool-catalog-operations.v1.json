@@ -1,0 +1,541 @@
+{
+  "budgetDispositionVocabulary": [
+    "committed",
+    "released",
+    "not-reserved",
+    "commit-uncertain",
+    "release-uncertain"
+  ],
+  "contracts": [
+    {
+      "op": "tool-catalog.projection",
+      "phase": "projection",
+      "provenance": {
+        "declarationOwnerIssue": 3412,
+        "digestFormat": "keiko-security-canonical-json-sha256",
+        "readiness": "contract-only",
+        "runtimeOwnerIssue": 3413,
+        "source": "docs/architecture/governed-tool-contract.v1.json",
+        "sourceDigest": "97dfe3e4dae9ab2b736b1c32c29898b98df9cdc1a80a7aa516811667c3faf52e"
+      },
+      "requiredFields": [
+        "correlationId",
+        "catalogRevision",
+        "profile",
+        "projectionDigest",
+        "readiness"
+      ],
+      "schemaVersion": 1
+    },
+    {
+      "op": "tool-catalog.bind-ready",
+      "phase": "bind-ready",
+      "provenance": {
+        "declarationOwnerIssue": 3412,
+        "digestFormat": "keiko-security-canonical-json-sha256",
+        "readiness": "contract-only",
+        "runtimeOwnerIssue": 3413,
+        "source": "docs/architecture/governed-tool-contract.v1.json",
+        "sourceDigest": "97dfe3e4dae9ab2b736b1c32c29898b98df9cdc1a80a7aa516811667c3faf52e"
+      },
+      "requiredFields": [
+        "correlationId",
+        "catalogRevision",
+        "profile",
+        "projectionDigest",
+        "readiness",
+        "handlerSetDigest"
+      ],
+      "schemaVersion": 1
+    },
+    {
+      "op": "tool-catalog.bind-unavailable",
+      "phase": "bind-unavailable",
+      "provenance": {
+        "declarationOwnerIssue": 3412,
+        "digestFormat": "keiko-security-canonical-json-sha256",
+        "readiness": "contract-only",
+        "runtimeOwnerIssue": 3413,
+        "source": "docs/architecture/governed-tool-contract.v1.json",
+        "sourceDigest": "97dfe3e4dae9ab2b736b1c32c29898b98df9cdc1a80a7aa516811667c3faf52e"
+      },
+      "requiredFields": [
+        "correlationId",
+        "catalogRevision",
+        "profile",
+        "projectionDigest",
+        "readiness",
+        "reason"
+      ],
+      "schemaVersion": 1
+    },
+    {
+      "op": "tool-catalog.invocation-started",
+      "phase": "invocation-started",
+      "provenance": {
+        "declarationOwnerIssue": 3412,
+        "digestFormat": "keiko-security-canonical-json-sha256",
+        "readiness": "contract-only",
+        "runtimeOwnerIssue": 3413,
+        "source": "docs/architecture/governed-tool-contract.v1.json",
+        "sourceDigest": "97dfe3e4dae9ab2b736b1c32c29898b98df9cdc1a80a7aa516811667c3faf52e"
+      },
+      "requiredFields": [
+        "correlationId",
+        "catalogRevision",
+        "profile",
+        "projectionDigest",
+        "invocationId",
+        "toolRef",
+        "state",
+        "reservationId",
+        "reason"
+      ],
+      "schemaVersion": 1
+    },
+    {
+      "op": "tool-catalog.invocation-settled",
+      "phase": "terminal",
+      "provenance": {
+        "declarationOwnerIssue": 3412,
+        "digestFormat": "keiko-security-canonical-json-sha256",
+        "readiness": "contract-only",
+        "runtimeOwnerIssue": 3413,
+        "source": "docs/architecture/governed-tool-contract.v1.json",
+        "sourceDigest": "97dfe3e4dae9ab2b736b1c32c29898b98df9cdc1a80a7aa516811667c3faf52e"
+      },
+      "requiredFields": [
+        "correlationId",
+        "catalogRevision",
+        "profile",
+        "projectionDigest",
+        "invocationId",
+        "toolRef",
+        "status",
+        "reason",
+        "durationMs",
+        "settlementId",
+        "effectStarted",
+        "budgetDisposition",
+        "reservationId"
+      ],
+      "schemaVersion": 1
+    },
+    {
+      "op": "tool-catalog.completion-discarded",
+      "phase": "discarded",
+      "provenance": {
+        "declarationOwnerIssue": 3412,
+        "digestFormat": "keiko-security-canonical-json-sha256",
+        "readiness": "contract-only",
+        "runtimeOwnerIssue": 3413,
+        "source": "docs/architecture/governed-tool-contract.v1.json",
+        "sourceDigest": "97dfe3e4dae9ab2b736b1c32c29898b98df9cdc1a80a7aa516811667c3faf52e"
+      },
+      "requiredFields": [
+        "correlationId",
+        "catalogRevision",
+        "profile",
+        "projectionDigest",
+        "invocationId",
+        "toolRef",
+        "settlementId",
+        "reason"
+      ],
+      "schemaVersion": 1
+    }
+  ],
+  "evidenceAllowed": [
+    "op",
+    "correlationId",
+    "parentCorrelationId",
+    "catalogRevision",
+    "profile",
+    "projectionDigest",
+    "descriptorDigest",
+    "handlerSetDigest",
+    "invocationId",
+    "toolRef",
+    "readiness",
+    "state",
+    "status",
+    "reason",
+    "reservationId",
+    "settlementId",
+    "durationMs",
+    "effectStarted",
+    "budgetDisposition",
+    "inputBytes",
+    "outputBytes",
+    "resultCount",
+    "truncated",
+    "errorKind",
+    "frames",
+    "causeChain"
+  ],
+  "evidenceForbidden": [
+    "arguments",
+    "query",
+    "path",
+    "scopePath",
+    "snippet",
+    "symbol",
+    "content",
+    "schema",
+    "output",
+    "prompt",
+    "credentials",
+    "endpoint",
+    "message",
+    "rawText"
+  ],
+  "fixtures": [
+    {
+      "classification": "synthetic-contract-fixture",
+      "evidence": {
+        "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "correlationId": "correlation-1",
+        "op": "tool-catalog.projection",
+        "profile": {
+          "id": "managed-opencode",
+          "version": 1
+        },
+        "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "readiness": "ready"
+      },
+      "phase": "projection"
+    },
+    {
+      "classification": "synthetic-contract-fixture",
+      "evidence": {
+        "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "correlationId": "correlation-1",
+        "handlerSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "op": "tool-catalog.bind-ready",
+        "profile": {
+          "id": "managed-opencode",
+          "version": 1
+        },
+        "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "readiness": "ready"
+      },
+      "phase": "bind-ready"
+    },
+    {
+      "classification": "synthetic-contract-fixture",
+      "evidence": {
+        "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "correlationId": "correlation-1",
+        "op": "tool-catalog.bind-unavailable",
+        "profile": {
+          "id": "managed-opencode",
+          "version": 1
+        },
+        "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "readiness": "unavailable",
+        "reason": "handler-unavailable"
+      },
+      "phase": "bind-unavailable"
+    },
+    {
+      "classification": "synthetic-contract-fixture",
+      "evidence": {
+        "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "correlationId": "correlation-1",
+        "invocationId": "invocation-1",
+        "op": "tool-catalog.invocation-started",
+        "profile": {
+          "id": "managed-opencode",
+          "version": 1
+        },
+        "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "none",
+        "reservationId": "reservation-1",
+        "state": "started",
+        "toolRef": {
+          "canonicalId": "keiko.repo.search",
+          "contractVersion": 1
+        }
+      },
+      "phase": "invocation-started"
+    },
+    {
+      "classification": "synthetic-contract-fixture",
+      "evidence": {
+        "budgetDisposition": "committed",
+        "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "correlationId": "correlation-1",
+        "durationMs": 10,
+        "effectStarted": true,
+        "invocationId": "invocation-1",
+        "op": "tool-catalog.invocation-settled",
+        "profile": {
+          "id": "managed-opencode",
+          "version": 1
+        },
+        "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "none",
+        "reservationId": "reservation-1",
+        "settlementId": "settlement-1",
+        "status": "completed",
+        "toolRef": {
+          "canonicalId": "keiko.repo.search",
+          "contractVersion": 1
+        }
+      },
+      "phase": "terminal"
+    },
+    {
+      "classification": "synthetic-contract-fixture",
+      "evidence": {
+        "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "correlationId": "correlation-1",
+        "invocationId": "invocation-1",
+        "op": "tool-catalog.completion-discarded",
+        "profile": {
+          "id": "managed-opencode",
+          "version": 1
+        },
+        "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "late-completion",
+        "settlementId": "settlement-1",
+        "toolRef": {
+          "canonicalId": "keiko.repo.search",
+          "contractVersion": 1
+        }
+      },
+      "phase": "discarded"
+    }
+  ],
+  "generatedBy": "scripts/generate-op-catalog.mjs",
+  "qualification": "declared-contract-only",
+  "readinessVocabulary": ["ready", "unavailable", "dry-run", "unsupported", "mismatch"],
+  "schemaVersion": 1,
+  "statusReasons": {
+    "busy": ["invocation-in-flight", "capacity-exhausted"],
+    "cancelled": ["explicit-cancellation", "parent-cancelled"],
+    "completed": ["none"],
+    "denied": [
+      "authority-invalid",
+      "authority-expired",
+      "authority-revoked",
+      "hard-denial",
+      "approval-required",
+      "approval-rejected",
+      "budget-exhausted",
+      "workspace-denied",
+      "effect-denied"
+    ],
+    "failed": [
+      "handler-unavailable",
+      "handler-mismatch",
+      "handler-failed",
+      "result-contract-failed",
+      "effect-outcome-unknown",
+      "budget-port-failed"
+    ],
+    "invalid": [
+      "unknown-tool",
+      "unoffered-tool",
+      "ambiguous-alias",
+      "invalid-arguments",
+      "version-mismatch",
+      "projection-mismatch",
+      "unsupported-capability",
+      "cursor-invalid",
+      "cursor-expired",
+      "cursor-replayed",
+      "workspace-stale",
+      "replay-conflict",
+      "recovery-required"
+    ],
+    "timeout": ["deadline-exceeded"]
+  },
+  "terminalFixtures": [
+    {
+      "classification": "synthetic-contract-fixture",
+      "evidence": {
+        "budgetDisposition": "committed",
+        "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "correlationId": "correlation-1",
+        "durationMs": 10,
+        "effectStarted": true,
+        "invocationId": "invocation-1",
+        "op": "tool-catalog.invocation-settled",
+        "profile": {
+          "id": "managed-opencode",
+          "version": 1
+        },
+        "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "none",
+        "reservationId": "reservation-1",
+        "settlementId": "settlement-1",
+        "status": "completed",
+        "toolRef": {
+          "canonicalId": "keiko.repo.search",
+          "contractVersion": 1
+        }
+      },
+      "phase": "terminal"
+    },
+    {
+      "classification": "synthetic-contract-fixture",
+      "evidence": {
+        "budgetDisposition": "not-reserved",
+        "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "correlationId": "correlation-1",
+        "durationMs": 10,
+        "effectStarted": false,
+        "invocationId": "invocation-1",
+        "op": "tool-catalog.invocation-settled",
+        "profile": {
+          "id": "managed-opencode",
+          "version": 1
+        },
+        "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "authority-invalid",
+        "reservationId": null,
+        "settlementId": "settlement-1",
+        "status": "denied",
+        "toolRef": {
+          "canonicalId": "keiko.repo.search",
+          "contractVersion": 1
+        }
+      },
+      "phase": "terminal"
+    },
+    {
+      "classification": "synthetic-contract-fixture",
+      "evidence": {
+        "budgetDisposition": "not-reserved",
+        "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "correlationId": "correlation-1",
+        "durationMs": 10,
+        "effectStarted": false,
+        "invocationId": "invocation-1",
+        "op": "tool-catalog.invocation-settled",
+        "profile": {
+          "id": "managed-opencode",
+          "version": 1
+        },
+        "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "unknown-tool",
+        "reservationId": null,
+        "settlementId": "settlement-1",
+        "status": "invalid",
+        "toolRef": {
+          "canonicalId": "keiko.repo.search",
+          "contractVersion": 1
+        }
+      },
+      "phase": "terminal"
+    },
+    {
+      "classification": "synthetic-contract-fixture",
+      "evidence": {
+        "budgetDisposition": "not-reserved",
+        "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "correlationId": "correlation-1",
+        "durationMs": 10,
+        "effectStarted": false,
+        "invocationId": "invocation-1",
+        "op": "tool-catalog.invocation-settled",
+        "profile": {
+          "id": "managed-opencode",
+          "version": 1
+        },
+        "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "invocation-in-flight",
+        "reservationId": null,
+        "settlementId": "settlement-1",
+        "status": "busy",
+        "toolRef": {
+          "canonicalId": "keiko.repo.search",
+          "contractVersion": 1
+        }
+      },
+      "phase": "terminal"
+    },
+    {
+      "classification": "synthetic-contract-fixture",
+      "evidence": {
+        "budgetDisposition": "not-reserved",
+        "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "correlationId": "correlation-1",
+        "durationMs": 10,
+        "effectStarted": false,
+        "invocationId": "invocation-1",
+        "op": "tool-catalog.invocation-settled",
+        "profile": {
+          "id": "managed-opencode",
+          "version": 1
+        },
+        "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "explicit-cancellation",
+        "reservationId": null,
+        "settlementId": "settlement-1",
+        "status": "cancelled",
+        "toolRef": {
+          "canonicalId": "keiko.repo.search",
+          "contractVersion": 1
+        }
+      },
+      "phase": "terminal"
+    },
+    {
+      "classification": "synthetic-contract-fixture",
+      "evidence": {
+        "budgetDisposition": "not-reserved",
+        "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "correlationId": "correlation-1",
+        "durationMs": 10,
+        "effectStarted": false,
+        "invocationId": "invocation-1",
+        "op": "tool-catalog.invocation-settled",
+        "profile": {
+          "id": "managed-opencode",
+          "version": 1
+        },
+        "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "deadline-exceeded",
+        "reservationId": null,
+        "settlementId": "settlement-1",
+        "status": "timeout",
+        "toolRef": {
+          "canonicalId": "keiko.repo.search",
+          "contractVersion": 1
+        }
+      },
+      "phase": "terminal"
+    },
+    {
+      "classification": "synthetic-contract-fixture",
+      "evidence": {
+        "budgetDisposition": "not-reserved",
+        "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "causeChain": [],
+        "correlationId": "correlation-1",
+        "durationMs": 10,
+        "effectStarted": false,
+        "errorKind": "TypeError",
+        "frames": [],
+        "invocationId": "invocation-1",
+        "op": "tool-catalog.invocation-settled",
+        "profile": {
+          "id": "managed-opencode",
+          "version": 1
+        },
+        "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "handler-unavailable",
+        "reservationId": null,
+        "settlementId": "settlement-1",
+        "status": "failed",
+        "toolRef": {
+          "canonicalId": "keiko.repo.search",
+          "contractVersion": 1
+        }
+      },
+      "phase": "terminal"
+    }
+  ]
+}

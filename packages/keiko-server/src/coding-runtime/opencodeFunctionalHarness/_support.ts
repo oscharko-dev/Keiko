@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { ScriptedGovernedTools, type ScriptedToolPhase } from "./_governedTools.js";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import {
   chmodSync,
@@ -22,7 +23,11 @@ import type {
   ProductionOpenCodeBackendInput,
 } from "../productionOpenCodeBackend.js";
 import { parseOpenCodeHistory } from "../opencodeProtocol.js";
-import { OPENCODE_MODEL_VISIBLE_TOOLS, OPENCODE_PINNED_VERSION } from "../opencodeToolSchemas.js";
+import {
+  OPENCODE_MODEL_VISIBLE_TOOLS,
+  OPENCODE_PINNED_VERSION,
+  projectedGatewaySchema,
+} from "../opencodeToolSchemas.js";
 import {
   OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
   projectOpenCodeProtocolSurface,
@@ -208,26 +213,24 @@ const PROTOCOL_HANDSHAKE_DIGEST = projectOpenCodeProtocolSurface(
   FUNCTIONAL_OPENCODE_OPENAPI,
 ).digest;
 
-/** OpenCode v1.17.17 strips unsupported JSON Schema keywords before forwarding this tool. */
-const VERIFICATION_PROJECTED_SCHEMA = {
-  type: "object",
-  properties: {
-    verifierId: {
-      type: "string",
-      enum: ["test", "targeted-test", "typecheck", "lint", "build"],
-    },
-  },
-  required: ["verifierId"],
-} as const;
+/** One OpenAI-compatible function-tool entry a scripted child advertises to the gateway. */
+export interface FunctionalGatewayTool {
+  readonly type: "function";
+  readonly function: { readonly name: string; readonly parameters: unknown };
+}
 
-/** The exact model-visible tool projection an OpenCode child presents to the gateway. */
-function functionalGatewayTools(): readonly Record<string, unknown>[] {
+/**
+ * The exact model-visible tool projection an OpenCode child presents to the gateway. Exported so a
+ * test can derive a deliberately incomplete projection (e.g. `.filter(...)` out one tool) for a
+ * live fail-closed proof against the real sidecar gateway route, without restating this mapping.
+ * Derives every entry's parameters from `opencodeToolSchemas.ts`'s own `projectedGatewaySchema`
+ * (the single source for OpenCode's v1.17.17 wire projection) so this scripted advertisement can
+ * never drift from the incoming trust check it is meant to satisfy.
+ */
+export function functionalGatewayTools(): readonly FunctionalGatewayTool[] {
   return OPENCODE_MODEL_VISIBLE_TOOLS.map(({ name, parameters }) => ({
     type: "function",
-    function: {
-      name,
-      parameters: name === "keiko_verification" ? VERIFICATION_PROJECTED_SCHEMA : parameters,
-    },
+    function: { name, parameters: projectedGatewaySchema(name, parameters) },
   }));
 }
 
@@ -506,13 +509,13 @@ interface FakeHistoryRow {
   readonly data: Record<string, unknown>;
 }
 
-interface FakeToolCall {
+export interface FakeToolCall {
   readonly id: string;
   readonly name: string;
   readonly args: Record<string, unknown>;
 }
 
-interface FakeGatewayTurn {
+export interface FakeGatewayTurn {
   readonly content: string;
   readonly toolCalls: readonly FakeToolCall[];
 }
@@ -543,7 +546,16 @@ const FAKE_TOOL_ACTIONS: Readonly<
  * per-run Basic-auth secret, bridges gateway tool calls to the governed tool facade, and surfaces
  * `question` tool calls through the /question endpoints — exactly the loop the real binary runs.
  */
+/** Test-only seam: plays the model's own tool-call selection for `FakeOpenCodeChild.callGateway`. */
+interface ScriptedModelTurnInput {
+  readonly modelTurn: (transcript: readonly Record<string, unknown>[]) => FakeGatewayTurn;
+  readonly toolFacadeFetch?: typeof globalThis.fetch;
+}
+
 class FakeOpenCodeChild {
+  private readonly governedTools: ScriptedGovernedTools | undefined;
+  private readonly scriptedModelTurn: ScriptedModelTurnInput["modelTurn"] | undefined;
+  private readonly gatewayToolsOverride: readonly FunctionalGatewayTool[] | undefined;
   private readonly password: string;
   private readonly gatewayUrl: string;
   private readonly gatewayCapability: string;
@@ -570,7 +582,28 @@ class FakeOpenCodeChild {
   private closed = false;
   private closing: Promise<void> | undefined;
 
-  public constructor(env: Readonly<Record<string, string>>) {
+  public constructor(
+    env: Readonly<Record<string, string>>,
+    generatedTools = false,
+    observePhase?: (event: ScriptedToolPhase) => void,
+    scriptedModel?: ScriptedModelTurnInput,
+    gatewayToolsOverride?: readonly FunctionalGatewayTool[],
+  ) {
+    this.gatewayToolsOverride = gatewayToolsOverride;
+    this.governedTools = generatedTools
+      ? new ScriptedGovernedTools({
+          env,
+          ...(observePhase === undefined ? {} : { observePhase }),
+          sessionId: FAKE_SESSION_ID,
+          broadcast: (type, properties): void => {
+            this.broadcast(type, properties);
+          },
+          ...(scriptedModel?.toolFacadeFetch === undefined
+            ? {}
+            : { fetch: scriptedModel.toolFacadeFetch }),
+        })
+      : undefined;
+    this.scriptedModelTurn = scriptedModel?.modelTurn;
     this.password = requiredEnv(env, "OPENCODE_SERVER_PASSWORD");
     this.gatewayUrl = requiredEnv(env, "KEIKO_MODEL_GATEWAY_URL");
     this.gatewayCapability = requiredEnv(env, "KEIKO_MODEL_GATEWAY_CAPABILITY");
@@ -618,6 +651,7 @@ class FakeOpenCodeChild {
   private async shutdown(): Promise<void> {
     this.closed = true;
     this.turnController?.abort();
+    this.governedTools?.close();
     for (const pending of this.questions.values()) pending.settle({ kind: "rejected" });
     this.questions.clear();
     for (const client of this.sseClients) client.destroy();
@@ -665,6 +699,8 @@ class FakeOpenCodeChild {
       json(response, [{ id: FAKE_SESSION_ID }]);
     } else if (method === "GET" && path === "/session/status") {
       json(response, this.busy ? { [FAKE_SESSION_ID]: { type: "busy" } } : {});
+    } else if (method === "GET" && path === "/permission") {
+      json(response, this.governedTools?.rows() ?? []);
     } else if (method === "GET" && path === "/question") {
       json(
         response,
@@ -672,9 +708,25 @@ class FakeOpenCodeChild {
       );
     } else if (method === "POST" && path === "/sync/history") {
       json(response, this.historyRows);
+    } else if (this.routePermission(method, path, body, response)) {
+      return;
     } else {
       this.routeDynamic(method, path, body, response);
     }
+  }
+
+  private routePermission(
+    method: string,
+    path: string,
+    body: string,
+    response: ServerResponse,
+  ): boolean {
+    const permission = /^\/permission\/([^/]+)\/reply$/u.exec(path);
+    if (method === "POST" && permission !== null) {
+      json(response, this.governedTools?.reply(permission[1] ?? "", body) ?? false);
+      return true;
+    }
+    return false;
   }
 
   private routeDynamic(method: string, path: string, body: string, response: ServerResponse): void {
@@ -702,7 +754,7 @@ class FakeOpenCodeChild {
       response.writeHead(404).end();
       return;
     }
-    const text = promptText(body);
+    const text = functionalPromptText(body);
     response.writeHead(204).end();
     const controller = new AbortController();
     this.turnController = controller;
@@ -907,7 +959,29 @@ class FakeOpenCodeChild {
     return this.fixtureTimeMs;
   }
 
+  /**
+   * Runs one user turn through the REAL agent loop (`callGateway` -> `executeToolCall` ->
+   * `callToolFacade` -> the governed generated-tool bundle) driven directly, in-process, rather
+   * than through the HTTP `prompt_async` endpoint -- the scripted model is a same-process test
+   * double, so there is no process boundary to cross. Resolves once the turn ends (the scripted
+   * model returns no further tool calls) and returns every completed tool part the turn appended
+   * to durable history, in call order -- the same tool-event evidence a real transcript produces.
+   */
+  public async runScriptedUserTurn(
+    text: string,
+  ): Promise<readonly ScriptedGovernedTranscriptToolResult[]> {
+    const before = this.historyRows.length;
+    const controller = new AbortController();
+    this.turnController = controller;
+    await this.runTurn(text, controller);
+    return this.historyRows.slice(before).flatMap((row) => completedToolResult(row));
+  }
+
   private async callGateway(signal: AbortSignal): Promise<FakeGatewayTurn> {
+    if (this.scriptedModelTurn !== undefined) {
+      if (signal.aborted) throw new Error("functional-gateway-denied");
+      return this.scriptedModelTurn([...this.transcript]);
+    }
     const response = await fetch(`${this.gatewayUrl}/chat/completions`, {
       method: "POST",
       signal,
@@ -918,7 +992,7 @@ class FakeOpenCodeChild {
       body: JSON.stringify({
         model: "coding",
         messages: this.transcript,
-        tools: functionalGatewayTools(),
+        tools: this.gatewayToolsOverride ?? functionalGatewayTools(),
       }),
     });
     if (!response.ok) throw new Error("functional-gateway-denied");
@@ -961,9 +1035,6 @@ class FakeOpenCodeChild {
   }
 
   private async callToolFacade(call: FakeToolCall, signal: AbortSignal): Promise<string> {
-    const definition = FAKE_TOOL_ACTIONS[call.name];
-    if (definition === undefined) return '{"status":"invalid"}';
-    const identity = `${FAKE_SESSION_ID}:${call.id}`;
     this.appendHistory("session.next.tool.called", {
       timestamp: new Date(this.nextFixtureTime()).toISOString(),
       sessionID: FAKE_SESSION_ID,
@@ -972,6 +1043,15 @@ class FakeOpenCodeChild {
       tool: call.name,
       provider: "keiko",
     });
+    // The generated-tool bundle is self-describing (every tool it ships is dispatchable, and it
+    // fails closed on its own for one it does not) -- FAKE_TOOL_ACTIONS is only the legacy,
+    // hand-mapped action table for the non-generated fetch path below, so it must never gate a
+    // generated-tools call. Gating on it here silently swallowed every #3386/#3387/#3388 git/CI
+    // tool name as `{"status":"invalid"}` before this call ever reached `governedTools.execute`.
+    if (this.governedTools !== undefined) return this.governedTools.execute(call, signal);
+    const definition = FAKE_TOOL_ACTIONS[call.name];
+    if (definition === undefined) return '{"status":"invalid"}';
+    const identity = `${FAKE_SESSION_ID}:${call.id}`;
     const response = await fetch(this.toolFacadeUrl, {
       method: "POST",
       signal,
@@ -1098,10 +1178,16 @@ function readBoundedBody(request: IncomingMessage): Promise<string> {
   });
 }
 
-function promptText(body: string): string {
+export function functionalPromptText(body: string): string {
   try {
-    const parsed = JSON.parse(body) as { parts?: readonly { text?: string }[] };
-    return parsed.parts?.[0]?.text ?? "";
+    const parsed: unknown = JSON.parse(body);
+    if (!isRecord(parsed) || !Array.isArray(parsed.parts) || parsed.parts.length === 0) return "";
+    const text: string[] = [];
+    for (const part of parsed.parts) {
+      if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string") return "";
+      text.push(part.text);
+    }
+    return text.join("\n\n");
   } catch {
     return "";
   }
@@ -1159,6 +1245,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Narrows one durable history row to its completed tool-call result, when it carries one. */
+function completedToolResult(row: FakeHistoryRow): readonly ScriptedGovernedTranscriptToolResult[] {
+  if (row.type !== "message.part.updated.1") return [];
+  const part = row.data.part;
+  if (!isRecord(part) || part.type !== "tool" || !isRecord(part.state)) return [];
+  if (part.state.status !== "completed") return [];
+  if (typeof part.callID !== "string" || typeof part.tool !== "string") return [];
+  if (typeof part.state.output !== "string") return [];
+  return [{ callId: part.callID, tool: part.tool, output: part.state.output }];
+}
+
 interface ScriptedTree extends RuntimeProcessTree {
   readonly child: FakeOpenCodeChild;
   readonly exits: Set<(code: number | null) => void>;
@@ -1171,12 +1268,14 @@ class ScriptedChildBackend implements RuntimeProcessBackend {
   public constructor(
     public readonly identity: RuntimeProcessBackend["identity"],
     private readonly children: FakeOpenCodeChild[],
+    private readonly generatedTools: boolean,
+    private readonly observePhase?: (event: ScriptedToolPhase) => void,
   ) {}
 
   public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
-    const child = new FakeOpenCodeChild(request.env);
+    const child = new FakeOpenCodeChild(request.env, this.generatedTools, this.observePhase);
     this.children.push(child);
     const tree: ScriptedTree = {
       treeId: request.recoveryHandle,
@@ -1248,7 +1347,12 @@ export interface ScriptedOpenCodeHarness {
 }
 
 /** Scripted supervisor seam for `createProductionOpenCodeBackend`; no real binary is required. */
-export function createScriptedOpenCodeHarness(): ScriptedOpenCodeHarness {
+export function createScriptedOpenCodeHarness(
+  options: {
+    readonly generatedTools?: boolean;
+    readonly observePhase?: (event: ScriptedToolPhase) => void;
+  } = {},
+): ScriptedOpenCodeHarness {
   const children: FakeOpenCodeChild[] = [];
   return {
     children,
@@ -1261,11 +1365,98 @@ export function createScriptedOpenCodeHarness(): ScriptedOpenCodeHarness {
             backend: portable.qualification.backend,
           },
           children,
+          options.generatedTools === true,
+          options.observePhase,
         ),
         qualifications: [portable.qualification],
       }),
     closeAll: async (): Promise<void> => {
       for (const child of children.splice(0)) await child.close();
     },
+  };
+}
+
+/** One completed tool part a scripted transcript's model-driven turn appended to durable history. */
+export interface ScriptedGovernedTranscriptToolResult {
+  readonly callId: string;
+  readonly tool: string;
+  readonly output: string;
+}
+
+export interface ScriptedGovernedTranscriptChild {
+  /**
+   * Runs one user turn through the real scripted-child agent loop (`callGateway` ->
+   * `executeToolCall` -> `callToolFacade` -> the governed generated-tool bundle): the caller's
+   * `modelTurn` plays the model's own tool-call selection -- exactly the seam a real transcript's
+   * `/chat/completions` response fills for `FakeOpenCodeChild.callGateway` -- so which tool runs
+   * next is decided outside the test body, from the accumulated transcript, the same way a real
+   * model decides from it. Resolves once the turn ends (no further tool calls) and returns every
+   * tool result the turn produced, in call order.
+   */
+  readonly runTurn: (userText: string) => Promise<readonly ScriptedGovernedTranscriptToolResult[]>;
+  readonly close: () => Promise<void>;
+}
+
+/**
+ * A scripted OpenCode child driven in-process for a MODEL-SELECTED tool-call proof. It reuses the
+ * exact same `FakeOpenCodeChild`/`ScriptedGovernedTools` machinery `createScriptedOpenCodeHarness`
+ * wires for a full pipeline run, minus the `RuntimeProcessSupervisor`/HTTP-gateway plumbing a full
+ * production composition needs only to route a real model call to this same child in a live run --
+ * the model's tool-call selection itself is supplied directly as `modelTurn`, so a caller assembles
+ * a real generated-tool-backed facade (as `createScriptedOpenCodeHarness` callers already do) and
+ * proves the SAME dispatch path a real transcript uses, without re-deriving it.
+ */
+export function createScriptedGovernedTranscriptChild(input: {
+  readonly runId: string;
+  readonly toolFacadeFetch: typeof globalThis.fetch;
+  readonly modelTurn: (transcript: readonly Record<string, unknown>[]) => FakeGatewayTurn;
+  readonly observePhase?: (event: ScriptedToolPhase) => void;
+}): ScriptedGovernedTranscriptChild {
+  const env = {
+    OPENCODE_SERVER_PASSWORD: "scripted-transcript-password",
+    KEIKO_MODEL_GATEWAY_URL: "http://scripted-transcript.invalid/model-gateway",
+    KEIKO_MODEL_GATEWAY_CAPABILITY: "scripted-transcript-model-capability",
+    KEIKO_TOOL_FACADE_URL: "http://scripted-transcript.invalid/tool-facade",
+    KEIKO_TOOL_FACADE_CAPABILITY: "scripted-transcript-tool-capability",
+    KEIKO_CODING_RUN_ID: input.runId,
+  };
+  const child = new FakeOpenCodeChild(env, true, input.observePhase, {
+    modelTurn: input.modelTurn,
+    toolFacadeFetch: input.toolFacadeFetch,
+  });
+  return {
+    runTurn: (userText): Promise<readonly ScriptedGovernedTranscriptToolResult[]> =>
+      child.runScriptedUserTurn(userText),
+    close: (): Promise<void> => child.close(),
+  };
+}
+
+/**
+ * A scripted OpenCode child whose `callGateway` performs a REAL HTTP round trip to the given
+ * gateway base URL, instead of `createScriptedGovernedTranscriptChild`'s directly-injected
+ * `modelTurn` seam (which never touches HTTP at all). Exists for exactly one purpose: proving a
+ * live child is denied by the REAL production sidecar-gateway route
+ * (`handleCodingSidecarGatewayChatCompletions`) when the tool set it advertises is incomplete --
+ * the modelTurn-based child cannot exercise that route because it never calls it.
+ */
+export function createLiveGatewayScriptedChild(input: {
+  readonly runId: string;
+  readonly gatewayUrl: string;
+  readonly gatewayCapability: string;
+  readonly gatewayToolsOverride?: readonly FunctionalGatewayTool[];
+}): ScriptedGovernedTranscriptChild {
+  const env = {
+    OPENCODE_SERVER_PASSWORD: "scripted-transcript-password",
+    KEIKO_MODEL_GATEWAY_URL: input.gatewayUrl,
+    KEIKO_MODEL_GATEWAY_CAPABILITY: input.gatewayCapability,
+    KEIKO_TOOL_FACADE_URL: "http://scripted-transcript.invalid/tool-facade",
+    KEIKO_TOOL_FACADE_CAPABILITY: "scripted-transcript-tool-capability",
+    KEIKO_CODING_RUN_ID: input.runId,
+  };
+  const child = new FakeOpenCodeChild(env, false, undefined, undefined, input.gatewayToolsOverride);
+  return {
+    runTurn: (userText): Promise<readonly ScriptedGovernedTranscriptToolResult[]> =>
+      child.runScriptedUserTurn(userText),
+    close: (): Promise<void> => child.close(),
   };
 }

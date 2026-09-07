@@ -5,6 +5,7 @@
 
 import type { ContextToolObservation } from "@oscharko-dev/keiko-contracts";
 import type { ChatMessage, Clock, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type { HarnessCatalogRuntime } from "./catalog-runtime.js";
 import { Emitter } from "./emitter.js";
 import type { ModelPort, ToolPort } from "./ports.js";
 import type { HarnessCompactionPort } from "./context-compaction-port.js";
@@ -21,6 +22,7 @@ import type {
 export interface RunContext {
   readonly model: ModelPort;
   readonly tools: ToolPort;
+  catalog?: HarnessCatalogRuntime | undefined;
   readonly emitter: Emitter;
   readonly clock: Clock;
   readonly signal: AbortSignal;

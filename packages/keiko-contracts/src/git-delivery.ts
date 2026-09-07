@@ -7,10 +7,11 @@
 // This is the CORE atom module for the git-delivery surface. It imports NOTHING from its two
 // siblings (git-delivery-policy.ts / git-delivery-provider.ts). The siblings import FROM here, so
 // the dependency graph is a one-directional DAG with no cycles (verified by arch:check). The only
-// internal import is `./workflow-handoff.js` for `isApprovalTokenShape` (a legal intra-package
-// relative import; keiko-contracts modules may reference each other).
+// internal helpers come from workflow-handoff (approval shape) and git-repository (Git identity);
+// both are legal intra-package relative imports.
 
 import { isApprovalTokenShape } from "./workflow-handoff.js";
+import { isGitObjectId } from "./git-repository.js";
 
 export const GIT_DELIVERY_SCHEMA_VERSION = "1" as const;
 
@@ -25,6 +26,8 @@ export type GitDeliveryActionKind =
   | "push"
   | "pr-create"
   | "pr-update"
+  | "pr-description-apply"
+  | "pr-mark-ready"
   | "merge"
   | "abort"
   | "recovery";
@@ -38,6 +41,8 @@ export const GIT_DELIVERY_ACTION_KINDS: readonly GitDeliveryActionKind[] = [
   "push",
   "pr-create",
   "pr-update",
+  "pr-description-apply",
+  "pr-mark-ready",
   "merge",
   "abort",
   "recovery",
@@ -82,6 +87,8 @@ export const GIT_DELIVERY_ACTION_RISK_DEFAULTS: Readonly<
   push: "publish",
   "pr-create": "protected-or-merge",
   "pr-update": "protected-or-merge",
+  "pr-description-apply": "protected-or-merge",
+  "pr-mark-ready": "protected-or-merge",
   merge: "protected-or-merge",
   abort: "local-mutation",
   recovery: "recovery-or-rewrite",
@@ -125,6 +132,7 @@ export interface GitDeliveryCommitInputs {
 
 export interface GitDeliveryPushInputs {
   readonly kind: "push";
+  readonly verifiedCommitSha?: string;
   readonly sourceBranchName: string;
   readonly remoteAlias: string;
   readonly remoteBranchName: string;
@@ -150,6 +158,35 @@ export interface GitDeliveryPrUpdateInputs {
   readonly bodyByteLength: number;
   readonly convertToDraft: boolean;
   readonly convertFromDraft: boolean;
+}
+
+// #3399 (epic #3384 correction 4): a body-only managed-description apply, deliberately a separate
+// action kind from "pr-update" so the policy-pack layer can hold a distinct decision for it — title,
+// base, and draft-state are never part of this kind's inputs, matching the body-only command the
+// gateway dispatches.
+export interface GitDeliveryPrDescriptionApplyInputs {
+  readonly kind: "pr-description-apply";
+  readonly prExternalId: string; // opaque provider-assigned ID
+  readonly headBranchName: string;
+  readonly baseBranchName: string;
+  readonly finalBodyByteLength: number;
+}
+
+// #3389 (epic #3384 correction 7): the draft->ready transition, deliberately a separate action kind
+// from "pr-update" so the transition is approval-gated to a dedicated `pr-mark-ready` claim and never
+// widened to a title/body/base mutation. The bound facts are exactly the ones re-checked immediately
+// before the transition executes: the exact commit SHAs the approval was minted against (a mismatch
+// against the live PR is drift), a digest over the readiness snapshot that justified the proposal, the
+// invariant that the PR was observed as a draft at mint time, and a digest over the transition payload
+// itself so a claim minted for one PR revision can never be redeemed against a different one.
+export interface GitDeliveryPrMarkReadyInputs {
+  readonly kind: "pr-mark-ready";
+  readonly prExternalId: string; // opaque provider-assigned ID
+  readonly headSha: string; // opaque commit SHA, re-verified immediately before execution
+  readonly baseSha: string; // opaque commit SHA, re-verified immediately before execution
+  readonly readinessDigest: string;
+  readonly currentDraftState: boolean; // must be true (still draft) for the transition to apply
+  readonly transitionPayloadDigest: string;
 }
 
 export type GitDeliveryMergeStrategyHint =
@@ -215,6 +252,8 @@ export type GitDeliveryResolvedInputs =
   | GitDeliveryPushInputs
   | GitDeliveryPrCreateInputs
   | GitDeliveryPrUpdateInputs
+  | GitDeliveryPrDescriptionApplyInputs
+  | GitDeliveryPrMarkReadyInputs
   | GitDeliveryMergeInputs
   | GitDeliveryAbortInputs
   | GitDeliveryRecoveryInputs;
@@ -445,7 +484,7 @@ export interface GitDeliveryEvidenceRef {
 // ─── Lifecycle envelope (AC1) ───────────────────────────────────────────────────
 // Sound discriminated union: kind === resolvedInputs.kind holds by construction. Each member is
 // parameterised by its per-kind resolved-input type; GitDeliveryActionEnvelope is the union over
-// all ten members.
+// all thirteen GitDeliveryActionKind members.
 
 export interface GitDeliveryActionEnvelopeFor<I extends GitDeliveryResolvedInputs> {
   readonly schemaVersion: typeof GIT_DELIVERY_SCHEMA_VERSION;
@@ -468,6 +507,8 @@ export type GitDeliveryActionEnvelope =
   | GitDeliveryActionEnvelopeFor<GitDeliveryPushInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryPrCreateInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryPrUpdateInputs>
+  | GitDeliveryActionEnvelopeFor<GitDeliveryPrDescriptionApplyInputs>
+  | GitDeliveryActionEnvelopeFor<GitDeliveryPrMarkReadyInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryMergeInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryAbortInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryRecoveryInputs>;
@@ -739,6 +780,7 @@ function isCommitInputs(value: Record<string, unknown>): boolean {
 
 function isPushInputs(value: Record<string, unknown>): boolean {
   return (
+    (value.verifiedCommitSha === undefined || isGitObjectId(value.verifiedCommitSha)) &&
     isNonEmptyString(value.sourceBranchName) &&
     isNonEmptyString(value.remoteAlias) &&
     isNonEmptyString(value.remoteBranchName) &&
@@ -770,6 +812,26 @@ function isPrUpdateInputs(value: Record<string, unknown>): boolean {
     // action cannot simultaneously ask to convert a PR to a draft and out of one. Both operands are
     // already boolean-narrowed by the two isBoolean() guards above.
     !(value.convertToDraft && value.convertFromDraft)
+  );
+}
+
+function isPrDescriptionApplyInputs(value: Record<string, unknown>): boolean {
+  return (
+    isNonEmptyString(value.prExternalId) &&
+    isNonEmptyString(value.headBranchName) &&
+    isNonEmptyString(value.baseBranchName) &&
+    isNonNegativeInteger(value.finalBodyByteLength)
+  );
+}
+
+function isPrMarkReadyInputs(value: Record<string, unknown>): boolean {
+  return (
+    isNonEmptyString(value.prExternalId) &&
+    isGitObjectId(value.headSha) &&
+    isGitObjectId(value.baseSha) &&
+    isNonEmptyString(value.readinessDigest) &&
+    isBoolean(value.currentDraftState) &&
+    isNonEmptyString(value.transitionPayloadDigest)
   );
 }
 
@@ -806,6 +868,8 @@ const RESOLVED_INPUT_GUARDS: Readonly<
   push: isPushInputs,
   "pr-create": isPrCreateInputs,
   "pr-update": isPrUpdateInputs,
+  "pr-description-apply": isPrDescriptionApplyInputs,
+  "pr-mark-ready": isPrMarkReadyInputs,
   merge: isMergeInputs,
   abort: isAbortInputs,
   recovery: isRecoveryInputs,

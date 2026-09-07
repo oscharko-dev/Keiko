@@ -11,14 +11,30 @@
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { GitRepositoryAgentOperationKind } from "@oscharko-dev/keiko-contracts";
-import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
+import type { RouteContext, RouteResult } from "../routes.js";
+import { errorBody } from "../route-error.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { CORRELATION_RESPONSE_HEADER, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/index.js";
+import { errorKindOf } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { resolveProjectWorkspace } from "./execution.js";
 import { readParsedGitDeliveryBody } from "./requestGuards.js";
-import { authorizeGitDelivery, type GitDeliveryAuthorityDenial } from "./runBoundAuthority.js";
+import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
+import { readVerifiedGitHubOwnerAndRepo } from "./verifiedRepositoryIdentity.js";
+import {
+  authorizeGitDelivery,
+  type GitDeliveryApprovalRedemption,
+  type GitDeliveryAuthorityDenial,
+  type GitDeliveryDescriptionAuthorityAdmission,
+} from "./runBoundAuthority.js";
+import {
+  DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
+  type GitDeliveryApprovalOperation,
+  type GitDeliveryApprovalStore,
+  type ParsedGitDeliveryApprovalRequest,
+} from "./approvalStore.js";
 
 // The validator each route already exposes: it maps an unknown parsed body to either a typed request
 // value (carrying the projectId) or a ready-to-return error result.
@@ -32,6 +48,12 @@ export interface GitDeliveryRequestErrors {
   readonly tooLarge: RouteResult;
   readonly badRequest: RouteResult;
   readonly unknownProject: RouteResult;
+  // #3384 B5-8: present only for the route groups whose validated request names an explicit GitHub
+  // mutation target (PR create/update, mark-ready, merge) — required together with `prepareGitDeliveryRequest`'s
+  // `ownerAndRepoOf` extractor. Returned when the resolved workspace's own `origin` remote does not
+  // resolve to the request's `ownerAndRepo` (or carries no verifiable GitHub origin at all), so a
+  // client can never redirect a governed mutation at a repository the workspace does not own.
+  readonly repositoryMismatch?: RouteResult | undefined;
 }
 
 export type PreparedGitDeliveryRequest<V> =
@@ -42,6 +64,17 @@ export interface GitDeliveryAuthorityTarget {
   readonly headBranchName?: string | undefined;
   readonly baseBranchName?: string | undefined;
   readonly remoteBranchName?: string | undefined;
+  readonly descriptionApply?: boolean | undefined;
+}
+
+// The exact per-operation approval binding this admission attempt corresponds to — the SAME
+// operation + typed command the route's own approve/execute logic mints/consumes moments later.
+// Paired with `GitDeliveryAuthorityAuditSeams.approval`/`approvalStore` for the non-consuming peek
+// in `gitDeliveryApprovalRedemption` below; never consumed here (the route's own execute-time
+// `resolveGitDeliveryApprovalRequirement` call is the single-use consumption).
+export interface GitDeliveryApprovalBindingHint {
+  readonly operation: GitDeliveryApprovalOperation;
+  readonly command: unknown;
 }
 
 export interface GitDeliveryAuthorityAuditSeams {
@@ -49,6 +82,40 @@ export interface GitDeliveryAuthorityAuditSeams {
   readonly logSink?: ServerLogSink | undefined;
   readonly expectedAuthority?: GitDeliveryAuthorityIdentity | undefined;
   readonly phase?: GitDeliveryAuthorityPhase | undefined;
+  // Final-audit F2/#3390 (ADR-0138 D2, epic #3384 correction 5): a delivery effect (commit, push,
+  // pull-request, merge, pr-mark-ready, pr-description-apply) is designed to be approval-required,
+  // never mode-denied, in every mode below `autonomous-delivery`. Every one of those operations'
+  // OWN execute path already enforces a mandatory, mode-independent consumed approval claim
+  // regardless of what the repo/org policy pack decides (policyPackMintability.ts documents each
+  // one) — so this coarse admission layer does not need a SECOND, redundant claim of its own to
+  // admit the attempt. Setting this true defers the "approval-required" disposition to that
+  // downstream enforcement, exactly mirroring how `autonomous-delivery` already bypasses the same
+  // matrix cell. It must be set at BOTH the mint (`/approve`) and execute admission calls for such
+  // an operation (minting has no delivery effect of its own — the human's actual consent is
+  // exercised once the minted claim is presented at execute — so it would be incoherent to admit
+  // execute but refuse the mint that produces what execute needs) and at the continuity re-check
+  // immediately before remote dispatch. Never set it for an operation without such downstream
+  // enforcement (workspace-contained local mutations) — see `approval`/`approvalBinding` below for
+  // that case instead.
+  readonly deliveryApprovalDeferred?: boolean | undefined;
+  // The workspace-contained-scope alternative to `deliveryApprovalDeferred` above: local mutations
+  // (branch-create/switch, stage/unstage) have no operation-independent mandatory downstream
+  // enforcement — the repo/org policy pack decides per command whether a consumed claim is even
+  // required — so a lower mode's "approval-required" disposition can only be redeemed by an actual
+  // matching claim, never by deferring unconditionally (that would let a routine local edit skip
+  // human confirmation entirely in "Ask for approval" mode). `approval` is the SAME claim the
+  // caller already parsed from its own request body; `approvalBinding` names the exact operation +
+  // command it is bound to. Both are required together; either omitted leaves "approval-required" a
+  // hard refusal. The check is a non-consuming peek (`GitDeliveryApprovalStore.matches`) — the
+  // caller's own subsequent `resolveGitDeliveryApprovalRequirement` call is what actually consumes
+  // the claim once, so it is never spent twice on the same request.
+  readonly approval?: ParsedGitDeliveryApprovalRequest | undefined;
+  readonly approvalStore?: GitDeliveryApprovalStore | undefined;
+  readonly approvalBinding?: GitDeliveryApprovalBindingHint | undefined;
+  // #3399 (epic #3384 correction 4): admits the "pull-request" body-only description apply outside
+  // a running Code task, over the server-minted description authority, when no run is active. Has
+  // no effect on any other operation — `authorizeGitDelivery` only consults it for "pull-request".
+  readonly descriptionAuthority?: GitDeliveryDescriptionAuthorityAdmission | undefined;
 }
 
 export type GitDeliveryAuthorityPhase = "admission" | "continuity";
@@ -75,7 +142,17 @@ interface GitDeliveryAuthorityContinuityInput {
   readonly target?: GitDeliveryAuthorityTarget | undefined;
   readonly admitted: GitDeliveryAuthorityIdentity;
   readonly next?: (() => boolean) | undefined;
-  readonly audit?: Pick<GitDeliveryAuthorityAuditSeams, "nowIso" | "logSink"> | undefined;
+  readonly audit?:
+    | Pick<
+        GitDeliveryAuthorityAuditSeams,
+        | "nowIso"
+        | "logSink"
+        | "deliveryApprovalDeferred"
+        | "approval"
+        | "approvalStore"
+        | "approvalBinding"
+      >
+    | undefined;
   // Optional out-parameter: when the continuity re-check denies (the admitted authority changed or
   // was revoked between admission and remote dispatch), the denial's 403 RouteResult is written here
   // — see GitDeliveryAuthorityContinuityDenialCapture for why the caller needs it.
@@ -135,7 +212,11 @@ function authorityIdentityChanged(
 export function logGitDeliveryAuthorityDenial(
   ctx: RouteContext,
   operation: GitRepositoryAgentOperationKind,
-  reason: GitDeliveryAuthorityDenial | "authority-changed" | "workspace-unresolvable",
+  reason:
+    | GitDeliveryAuthorityDenial
+    | "authority-changed"
+    | "workspace-unresolvable"
+    | "verified-commit-required",
   phase: GitDeliveryAuthorityPhase = "admission",
   logSink: ServerLogSink = processServerLogSink(),
 ): void {
@@ -175,6 +256,56 @@ function admittedAuthorityGate(
   return { allowed: true, runId: decision.runId, envelopeDigest: decision.envelopeDigest };
 }
 
+// Builds the caller-side redemption hook `authorizeGitDelivery` consults only when its own
+// mode/resource-scope/risk matrix resolves "approval-required" for a lower mode (per
+// `resolveModeDecision`'s own contract in runBoundAuthority.ts). Two independent mechanisms, never
+// combined for one call:
+//
+//   1. `deliveryApprovalDeferred` — the delivery-scope path (commit/push/pr/merge/pr-mark-ready/
+//      pr-description-apply). These operations already enforce a mandatory, mode-independent
+//      approval consumption at their OWN execute layer, so admission simply defers to it instead of
+//      demanding a second claim of its own — exactly like `autonomous-delivery` already bypasses
+//      this same matrix cell.
+//   2. `approval` + `approvalStore` + `approvalBinding` — the per-operation path used by local
+//      mutations and fetch/pull. A non-consuming peek (`GitDeliveryApprovalStore.matches`) against
+//      the SAME claim the caller already parsed from its own request body, bound to the exact
+//      operation + command it names. Never `.consume()`s the record: the caller's own subsequent
+//      `resolveGitDeliveryApprovalRequirement` call performs the single real consumption, so the
+//      claim is spent exactly once even though it is checked here first.
+//
+// Returns undefined when the caller set neither, so a route that has not been threaded through this
+// seam is unaffected: "approval-required" stays a hard refusal (fail-closed).
+function gitDeliveryApprovalRedemption(
+  projectId: string,
+  audit: GitDeliveryAuthorityAuditSeams,
+): GitDeliveryApprovalRedemption | undefined {
+  if (audit.deliveryApprovalDeferred === true) {
+    return (_active, request): boolean =>
+      request.operation === "commit" ||
+      request.operation === "fetch" ||
+      request.operation === "pull" ||
+      request.operation === "push" ||
+      request.operation === "pull-request" ||
+      request.operation === "merge";
+  }
+  if (audit.approval?.kind !== "claim" || audit.approvalBinding === undefined) return undefined;
+  const claim = audit.approval.claim;
+  const { operation, command } = audit.approvalBinding;
+  const store = audit.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;
+  const nowMs = Date.parse(audit.nowIso ?? new Date().toISOString());
+  // NOT run-bound: mirrors the EXACT binding shape `localMutationRoutes.ts`'s own subsequent
+  // `resolveGitDeliveryApprovalRequirement` call already uses for "local-mutation" (project +
+  // operation + command only, no runId/envelopeDigest) — the peek must match the same binding hash
+  // the real consumption computes, or a claim minted against that shape would never redeem either
+  // one.
+  return (): boolean =>
+    store.matches({
+      approval: claim,
+      binding: { projectId, operation, command },
+      nowMs,
+    });
+}
+
 /**
  * Applies the sole delivery-write admission decision after a project workspace has been resolved.
  * This intentionally consumes only the live server-owned runtime authority; headers, browser state,
@@ -193,6 +324,8 @@ export function gitDeliveryAuthorityGate(
     deps.gitDeliveryAuthority,
     { projectId, workspaceRoot: workspace.root, operation, ...target },
     audit.nowIso ?? new Date().toISOString(),
+    gitDeliveryApprovalRedemption(projectId, audit),
+    audit.descriptionAuthority,
   );
   const logSink = audit.logSink ?? processServerLogSink();
   const phase = authorityPhaseFor(audit);
@@ -245,14 +378,78 @@ export function gitDeliveryAuthorityDenial(
   return gate.allowed ? undefined : gate.result;
 }
 
+// #3384 B5-8: the workspace's own `origin` remote is the ONLY repository a governed Git-delivery
+// mutation may name — never the client-supplied `ownerAndRepo` alone, format-valid or not. Reuses
+// the same origin-identity read `verifiedRepositoryIdentity.ts`'s commit-path producer performs
+// (`readGitRemoteAliases`/`readGitRemoteUrl`/`githubOwnerAndRepoFromRemoteUrl`), compared with the
+// same `codingWorkbenchRemoteDigest` every PR-lifecycle command already hashes its `ownerAndRepo`
+// through — so a case-insensitive match still binds, exactly like every other repository-identity
+// comparison in this package.
+// Body-free evidence for a read failure underneath the repository-binding check (reviewer
+// 3941877976): the closed `errorKind` vocabulary, the dist-anchored Keiko-code stack, and the
+// cause chain — never the raw error message, which may embed a path or command output.
+export interface GitDeliveryRepositoryReadFailure {
+  readonly errorKind: string;
+  readonly frames: readonly string[];
+  readonly causeChain: readonly string[];
+}
+
+export async function gitDeliveryRepositoryBindingMismatch(
+  workspace: WorkspaceInfo,
+  ownerAndRepo: string,
+  onReadFailure?: (failure: GitDeliveryRepositoryReadFailure) => void,
+): Promise<boolean> {
+  // Fails closed on a read failure (an unreadable or non-Git worktree, a broken `git`) exactly like
+  // `githubRemoteOwnerAndRepoFor`'s own resolver already does for the coding-context surface: a
+  // denial that is really a broken read is still a denial, never a silent admit. The failure itself
+  // is reported to `onReadFailure` (when supplied) before translating it to the closed refusal, so
+  // the caller can preserve structured evidence instead of the exception being discarded.
+  let remote: string | undefined;
+  try {
+    remote = await readVerifiedGitHubOwnerAndRepo({ workspace });
+  } catch (error) {
+    onReadFailure?.({
+      errorKind: errorKindOf(error),
+      frames: keikoStackFrames(error),
+      causeChain: causeChain(error),
+    });
+    return true;
+  }
+  if (remote === undefined) return true;
+  return codingWorkbenchRemoteDigest(remote) !== codingWorkbenchRemoteDigest(ownerAndRepo);
+}
+
+function logGitDeliveryRepositoryMismatch(
+  ctx: RouteContext,
+  logSink: ServerLogSink,
+  readFailure?: GitDeliveryRepositoryReadFailure,
+): void {
+  logSink.write({
+    level: readFailure === undefined ? "info" : "warn",
+    category: "security",
+    op: "git.delivery.repository.mismatch",
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    status: 403,
+    ...(readFailure === undefined
+      ? {}
+      : {
+          errorKind: readFailure.errorKind,
+          extra: { frames: readFailure.frames, causeChain: readFailure.causeChain },
+        }),
+  });
+}
+
 // Runs the shared read → validate → resolve-workspace prologue. Returns the validated request value
 // together with its authorized workspace, or the first typed error result encountered. `V` must carry
-// the `projectId` the workspace is resolved (and authorized) from.
+// the `projectId` the workspace is resolved (and authorized) from. `ownerAndRepoOf`, when supplied,
+// extracts the request's own GitHub mutation target for the #3384 B5-8 repository-binding check
+// above — omitted by route groups (push/sync) whose request names no explicit repository.
 export const prepareGitDeliveryRequest = async <V extends { readonly projectId: string }>(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   errors: GitDeliveryRequestErrors,
   validate: (parsed: unknown) => GitDeliveryValidation<V>,
+  ownerAndRepoOf?: (value: V) => string,
 ): Promise<PreparedGitDeliveryRequest<V>> => {
   const read = await readParsedGitDeliveryBody(
     ctx.req,
@@ -264,5 +461,19 @@ export const prepareGitDeliveryRequest = async <V extends { readonly projectId: 
   if (validation.kind === "err") return { ok: false, result: validation.result };
   const workspace = resolveProjectWorkspace(deps, validation.value.projectId);
   if (workspace === undefined) return { ok: false, result: errors.unknownProject };
+  if (ownerAndRepoOf !== undefined) {
+    let readFailure: GitDeliveryRepositoryReadFailure | undefined;
+    const mismatch = await gitDeliveryRepositoryBindingMismatch(
+      workspace,
+      ownerAndRepoOf(validation.value),
+      (failure) => {
+        readFailure = failure;
+      },
+    );
+    if (mismatch) {
+      logGitDeliveryRepositoryMismatch(ctx, processServerLogSink(), readFailure);
+      return { ok: false, result: errors.repositoryMismatch ?? errors.badRequest };
+    }
+  }
   return { ok: true, value: validation.value, workspace };
 };

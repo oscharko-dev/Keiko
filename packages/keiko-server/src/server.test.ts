@@ -634,14 +634,18 @@ describe("unknown API routes", () => {
     expect(await response.json()).toMatchObject({ error: { code: "FORBIDDEN_CSRF" } });
   });
 
-  it("KEIKO-0885: CSRF-exempt POST route list is pinned to exactly one entry", async () => {
-    // Pin the CSRF-exempt state-changing route allowlist to a single entry so a future
-    // maintainer cannot silently add a second route without a compensating auth (see the
-    // comment on isCsrfExemptStateChange in server.ts naming authenticateGatewayRequest as the
-    // required per-request authenticator). Every other POST to state-changing routes must
-    // continue to fail closed at 403 FORBIDDEN_CSRF. Uses the beforeEach-bound server.
-
-    const exemptRoute = "/api/coding-sidecar/gateway/chat/completions";
+  it("KEIKO-0885/#3390: CSRF-exempt POST route list is pinned to exactly its two entries", async () => {
+    // Pin the CSRF-exempt state-changing route allowlist to exactly these two entries so a
+    // future maintainer cannot silently add a THIRD route without a compensating auth (see the
+    // comment on isCsrfExemptStateChange in server.ts). Every other POST to state-changing
+    // routes must continue to fail closed at 403 FORBIDDEN_CSRF. Uses the beforeEach-bound
+    // server. Each exempt route's own compensating per-request authenticator is proven in its
+    // own coverage: authenticateGatewayRequest (coding-sidecar-gateway.test.ts) and the tool
+    // bridge's bearer check (coding-sidecar-tool-facade.test.ts).
+    const exemptRoutes: readonly string[] = [
+      "/api/coding-sidecar/gateway/chat/completions",
+      "/api/coding-sidecar/tool",
+    ];
     // Second-place candidates that reviewers might reach for; each is a known state-changing
     // POST route that MUST still require CSRF (proven by the pre-existing tests above).
     const candidates: readonly string[] = ["/api/runs", "/api/editor/language"];
@@ -655,17 +659,19 @@ describe("unknown API routes", () => {
       expect(res.status).toBe(403);
       expect(await res.json()).toMatchObject({ error: { code: "FORBIDDEN_CSRF" } });
     }
-    // The exempt route stays reachable without X-Keiko-CSRF; other checks (bad payload, auth
+    // Every exempt route stays reachable without X-Keiko-CSRF; other checks (bad payload, auth
     // failure) may still reject it later, but not with FORBIDDEN_CSRF.
-    const exempt = await fetch(`${baseUrl()}${exemptRoute}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    });
-    expect(exempt.status).not.toBe(403);
-    if (exempt.status === 403) {
-      const body = (await exempt.json()) as { readonly error?: { readonly code?: string } };
-      expect(body.error?.code).not.toBe("FORBIDDEN_CSRF");
+    for (const path of exemptRoutes) {
+      const exempt = await fetch(`${baseUrl()}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(exempt.status).not.toBe(403);
+      if (exempt.status === 403) {
+        const body = (await exempt.json()) as { readonly error?: { readonly code?: string } };
+        expect(body.error?.code).not.toBe("FORBIDDEN_CSRF");
+      }
     }
   });
 

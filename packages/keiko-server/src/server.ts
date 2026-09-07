@@ -187,11 +187,23 @@ function isStateChangingMethod(method: string): boolean {
 // authenticateGatewayRequest in packages/keiko-server/src/coding-sidecar-gateway.ts (session-
 // pairing + attestation) which authenticates every request to this route before any state
 // change happens; the loopback Host/Origin check (host-check.ts:isAllowedHost) runs
-// unconditionally upstream of both. DO NOT add a second route to this exemption without
-// verifying it carries an equivalent per-request authenticator, and update the pin test in
-// server.test.ts that captures the exempt-route allowlist at exactly one entry.
+// unconditionally upstream of both. DO NOT add a route to this exemption without verifying it
+// carries an equivalent per-request authenticator, and update the pin test in server.test.ts that
+// captures the exempt-route allowlist.
+//
+// #3390 (ADR-0043 D11-D14): the coding-sidecar tool facade joins the SAME exemption for the SAME
+// reason -- the sandboxed OpenCode sidecar posting a governed tool call cannot send a
+// Keiko-defined header either. Its compensating control is the tool bridge's own bearer-capability
+// check inside `handle()` (packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts
+// `preflightToolRequest`), reached through coding-sidecar-tool-facade.ts, upstream of the same
+// unconditional loopback Host/Origin check.
+const CSRF_EXEMPT_STATE_CHANGE_ROUTES: ReadonlySet<string> = new Set([
+  "/api/coding-sidecar/gateway/chat/completions",
+  "/api/coding-sidecar/tool",
+]);
+
 function isCsrfExemptStateChange(method: string, pathname: string): boolean {
-  return method === "POST" && pathname === "/api/coding-sidecar/gateway/chat/completions";
+  return method === "POST" && CSRF_EXEMPT_STATE_CHANGE_ROUTES.has(pathname);
 }
 
 // Returns true when the request was rejected (caller should return immediately).

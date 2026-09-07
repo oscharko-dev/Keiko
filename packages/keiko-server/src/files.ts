@@ -56,13 +56,9 @@ import {
 } from "./editor/localHistory/localHistoryCapture.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
-import {
-  STREAMING,
-  errorBody,
-  type HandlerOutcome,
-  type RouteContext,
-  type RouteResult,
-} from "./routes.js";
+import { errorBody } from "./route-error.js";
+import { STREAMING } from "./route-outcome.js";
+import type { HandlerOutcome, RouteContext, RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import type { Project, UiStore } from "./store/index.js";

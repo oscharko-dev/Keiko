@@ -1,3 +1,4 @@
+import type { CodingWorkbenchIssueStartIntent } from "./coding-workbench-runtime-actions";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeApprovalDecision,
@@ -23,15 +24,14 @@ import type { CodingWorkbenchRuntimeState } from "./coding-workbench-live-state"
 
 export interface CodingWorkbenchMutationCommand {
   readonly requestId: string;
-  readonly expected?: { readonly runId: string; readonly revision: number } | undefined;
+  readonly expected?: { readonly runId: string; readonly revision: number };
   readonly mayInstallNewRun: boolean;
   readonly run: () => Promise<CodingWorkbenchRuntimeSnapshot>;
 }
 
 type RuntimeModelSelection = {
-  readonly modelId?: string | undefined;
-  readonly reasoningEffort?:
-    NonNullable<CodingWorkbenchRuntimeState["reasoningEffort"]> | undefined;
+  readonly modelId?: string;
+  readonly reasoningEffort?: NonNullable<CodingWorkbenchRuntimeState["reasoningEffort"]>;
 };
 
 function managedGatewayModelSelection(current: CodingWorkbenchRuntimeState): RuntimeModelSelection {
@@ -57,6 +57,7 @@ export function mutationResultMatchesCurrentTruth(
 export function createStartMutation(
   taskIntent: string,
   current: CodingWorkbenchRuntimeState,
+  issue?: CodingWorkbenchIssueStartIntent,
 ): CodingWorkbenchMutationCommand {
   if (!current.canStart)
     throw codingWorkbenchRuntimeActionError("The runtime is not ready to start.");
@@ -71,6 +72,7 @@ export function createStartMutation(
         requestedMode: current.requestedMode,
         runtimePreference: current.runtimePreference,
         ...managedGatewayModelSelection(current),
+        ...issue,
       }),
   };
 }

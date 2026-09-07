@@ -20,7 +20,8 @@ import {
   parseGitRepositoryAgentOperationRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository-agent";
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
-import { STREAMING, type RouteContext, type RouteDefinition, type RouteResult } from "../routes.js";
+import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
+import { STREAMING } from "../route-outcome.js";
 import { handleGitBranches, handleGitDiff, handleGitStatus } from "../gitRoutes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { createGitDeliveryCommitRouteGroup } from "./commitRoutes.js";
@@ -307,19 +308,26 @@ const WRITE_KEYS: Readonly<Record<GitRepositoryAgentOperationKind, ReadonlySet<s
   status: new Set(),
   diff: new Set(),
   "branch-list": new Set(),
-  "branch-create": new Set(["branchName", "baseBranchName", "startPointRefHash"]),
-  "branch-switch": new Set(["branchName"]),
-  stage: new Set(["pathspecs", "includeUntracked"]),
-  unstage: new Set(["pathspecs"]),
+  // "approval" (final-audit F1+F2/#3390): forwarded verbatim to the delegated route, which is the
+  // ONLY place that ever parses/consumes it (`delegatedBody` spreads `...payload` unchanged) — this
+  // facade never reads it. Allows a caller holding a claim minted through the delegated route's
+  // own `/approve` endpoint to redeem it via this facade too, exactly as if it had called the
+  // delegated route directly. Omitted only for `commit`, which is redirected to the verified
+  // runtime commit service above.
+  "branch-create": new Set(["branchName", "baseBranchName", "startPointRefHash", "approval"]),
+  "branch-switch": new Set(["branchName", "approval"]),
+  stage: new Set(["pathspecs", "includeUntracked", "approval"]),
+  unstage: new Set(["pathspecs", "approval"]),
   commit: new Set(["messageDraft", "message", "allowEmpty"]),
-  fetch: new Set(["remote"]),
-  pull: new Set(["remote"]),
+  fetch: new Set(["remote", "approval"]),
+  pull: new Set(["remote", "approval"]),
   push: new Set([
     "remoteAlias",
     "remoteBranchName",
     "sourceBranchName",
     "forcePush",
     "setUpstreamTracking",
+    "approval",
   ]),
   "pull-request": new Set([
     "kind",
@@ -332,6 +340,7 @@ const WRITE_KEYS: Readonly<Record<GitRepositoryAgentOperationKind, ReadonlySet<s
     "prExternalId",
     "convertToDraft",
     "convertFromDraft",
+    "approval",
   ]),
   merge: new Set([
     "kind",
@@ -342,6 +351,7 @@ const WRITE_KEYS: Readonly<Record<GitRepositoryAgentOperationKind, ReadonlySet<s
     "mergeStrategy",
     "deleteBranchAfterMerge",
     "expectedHeadRefHash",
+    "approval",
   ]),
 };
 
@@ -548,12 +558,32 @@ export async function handleGitAgentOperationWithDelegate(
   }
 }
 
+function verifiedCommitRequired(
+  ctx: RouteContext,
+  request: GitRepositoryAgentOperationRequest,
+): RouteResult {
+  logGitDeliveryAuthorityDenial(ctx, "commit", "verified-commit-required");
+  return {
+    status: 403,
+    body: denied(
+      request,
+      "autonomy-mode-denied",
+      "Agent commits require the verified runtime commit proposal and its one-use approval.",
+    ),
+  };
+}
+
 export async function handleGitAgentOperation(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   const parsed = await parseAgentRequest(ctx.req);
   if (!parsed.ok) return parsed.result;
+  // This server-owned route identifies delegated agent work. A run id or client payload cannot
+  // turn the manual Git client into the exact-tree, one-use approved runtime commit service.
+  if (parsed.request.operation === "commit" && parsed.request.mode === "execute") {
+    return verifiedCommitRequired(ctx, parsed.request);
+  }
   if (parsed.request.mode === "execute") {
     const workspace = resolveProjectWorkspace(deps, parsed.request.projectId);
     if (workspace === undefined) {
@@ -567,12 +597,20 @@ export async function handleGitAgentOperation(
         ),
       };
     }
+    // Final-audit F1+F2/#3390 (ADR-0138 D2): this is a pre-check ahead of delegation, not the final
+    // authority — every op below delegates to the SAME route handler that independently re-runs
+    // `gitDeliveryAuthorityGate`/`gitDeliveryAuthorityDenial` with the correct per-operation
+    // redemption (deferred for delivery ops, peeked against the forwarded `approval` for local
+    // mutations). Deferring uniformly here is therefore safe: it never widens what the delegated
+    // handler itself admits, and avoids re-deriving that same per-operation distinction twice.
     const gate = gitDeliveryAuthorityDenial(
       ctx,
       deps,
       parsed.request.projectId,
       workspace,
       parsed.request.operation,
+      {},
+      { deliveryApprovalDeferred: true },
     );
     if (gate !== undefined) {
       return {

@@ -47,6 +47,7 @@ import { GovernedPullRequestCard } from "../GovernedPullRequestCard";
 import { Icons } from "../../../Icons";
 import { RepositoryToolbar } from "./RepositoryToolbar";
 import { ConnectPanel } from "./ConnectPanel";
+import { ConnectToChatDialog } from "./ConnectToChatDialog";
 import { AddRepositoryDialog } from "./AddRepositoryDialog";
 import { ChangesPane } from "./ChangesPane";
 import type { ChangesTab } from "./ChangesPane";
@@ -152,15 +153,17 @@ export interface GitClientWindowProps {
   readonly projectId?: string | undefined;
   readonly initialPath?: string | undefined;
   readonly initialCommit?: string | undefined;
-  readonly onOpenFiles?: ((root: string) => void) | undefined;
-  readonly onOpenEditor?: ((root: string) => void) | undefined;
-  readonly onOpenEditorFile?: ((request: OpenEditorFileRequest) => void) | undefined;
+  readonly initialRepositoryDialog?: "clone" | "open" | undefined;
+  readonly onRepositoryConnected?: (root: string) => void;
+  readonly onOpenFiles?: (root: string) => void;
+  readonly onOpenEditor?: (root: string) => void;
+  readonly onOpenEditorFile?: (request: OpenEditorFileRequest) => void;
   /** Persists the selected repository into cfg.projectPath so resolveBoundRoot re-targets. */
-  readonly updateCfg?: ((patch: Record<string, WindowCfgValue>) => void) | undefined;
+  readonly updateCfg?: (patch: Record<string, WindowCfgValue>) => void;
   /** DI seam; defaults to the real BFF client. */
   readonly client?: GitClientSeam;
   /** Reconciles open editor buffers after a successful working-tree mutation. */
-  readonly reconcileEditorBuffers?: ((root: string) => Promise<void>) | undefined;
+  readonly reconcileEditorBuffers?: (root: string) => Promise<void>;
 }
 
 type RightPaneMode = "diff" | "pull-request" | "merge";
@@ -532,7 +535,7 @@ function runPushSync(
         );
         return undefined;
       }
-      return client.pushExecute(input);
+      return client.pushPropose(input);
     })
     .then(
       (result) => {
@@ -760,10 +763,21 @@ function shouldShowBranchOutcome(
   return !dialogOpen && (error !== null || (outcome !== null && outcome.status !== "succeeded"));
 }
 
+function repositoryRootForMutation(
+  status: GitRepositoryStatusResponse | null,
+  statusProjectKey: string | null,
+  selectedPath: string | null,
+): string | undefined {
+  if (statusProjectKey !== selectedPath || status?.available !== true) return undefined;
+  return status.repositoryRoot ?? status.root;
+}
+
 export function GitClientWindow({
   projectId,
   initialPath,
   initialCommit,
+  initialRepositoryDialog,
+  onRepositoryConnected,
   onOpenFiles,
   onOpenEditor,
   onOpenEditorFile,
@@ -808,7 +822,16 @@ export function GitClientWindow({
   const [commitNonce, setCommitNonce] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<"clone" | "open">("clone");
+  useEffect(() => {
+    if (initialRepositoryDialog === undefined) return;
+    setDialogMode(initialRepositoryDialog);
+    setDialogOpen(true);
+    updateCfg?.({ repositoryDialog: "" });
+    reportClientDiagnostic(`[keiko] git repository dialog handoff: ${initialRepositoryDialog}`);
+  }, [initialRepositoryDialog, updateCfg]);
   const [newBranchOpen, setNewBranchOpen] = useState(false);
+  // Issue #3400 — "Connect to Chat" dialog for the active repository comparison.
+  const [connectToChatOpen, setConnectToChatOpen] = useState(false);
   const [worktreeConfirmation, setWorktreeConfirmation] =
     useState<WorktreeMutationConfirmation | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
@@ -839,10 +862,7 @@ export function GitClientWindow({
   // Two independent governed-mutation flows: one for staging, one for the commit composer. Each
   // carries its own stale-guard so concurrent stage clicks and a later commit do not cross results.
   const projectKey = selectedPath ?? "";
-  const mutationRepositoryRoot =
-    statusProjectKey === selectedPath && status?.available === true
-      ? (status.repositoryRoot ?? status.root)
-      : undefined;
+  const mutationRepositoryRoot = repositoryRootForMutation(status, statusProjectKey, selectedPath);
   const branchActions = useGitActions(client, projectKey, mutationRepositoryRoot);
   const staging = useGitActions(client, projectKey, mutationRepositoryRoot);
   const commit = useGitActions(client, projectKey, mutationRepositoryRoot);
@@ -1203,9 +1223,10 @@ export function GitClientWindow({
       }
       setReposError(null);
       applyRepositorySelection(project.path);
+      onRepositoryConnected?.(project.path);
       return true;
     },
-    [applyRepositorySelection, optionalT],
+    [applyRepositorySelection, onRepositoryConnected, optionalT],
   );
 
   const reconnectRepository = useCallback(
@@ -1368,7 +1389,7 @@ export function GitClientWindow({
   const commitChanges = useCallback(
     (message: string): void => {
       if (selectedPath === null) return;
-      commit.runMutation(() => client.commitExecute({ projectId: selectedPath, message }));
+      commit.runMutation(() => client.commitPropose({ projectId: selectedPath, message }));
     },
     [client, commit, selectedPath],
   );
@@ -1609,6 +1630,7 @@ export function GitClientWindow({
         onRunSync={requestSync}
         onOpenEditor={onOpenEditor}
         onOpenFiles={onOpenFiles}
+        onConnectToChat={() => setConnectToChatOpen(true)}
       />
       {/* A rejected branch switch must never render as silent success: the New Branch dialog
           shows its own copy of this outcome while it is open (the create-then-switch chain runs
@@ -1755,6 +1777,15 @@ export function GitClientWindow({
           onConfirm={confirmWorktreeMutation}
         />
       )}
+      {connectToChatOpen && selectedPath !== null ? (
+        <ConnectToChatDialog
+          projectId={selectedPath}
+          currentBranch={currentBranch}
+          baseBranchName={inferredBaseBranch}
+          baseBranchChoices={activeBranches.map((branch) => branch.name)}
+          onClose={() => setConnectToChatOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

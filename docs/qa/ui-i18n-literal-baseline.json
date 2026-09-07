@@ -442,12 +442,10 @@
       "Body",
       "Convert to draft",
       "Create",
-      "Create Pull Request",
       "Draft state",
       "Enter the numeric Pull Request number, for example 1499.",
       "Head branch",
       "Linked issues:",
-      "Mark ready",
       "Metadata",
       "No change",
       "not created yet",
@@ -472,8 +470,7 @@
       "Select a project to open a pull request.",
       "Suggested labels:",
       "Title",
-      "Update",
-      "Update Pull Request"
+      "Update"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/pdf-citation-preview-session.ts": [
       "Preview changed",

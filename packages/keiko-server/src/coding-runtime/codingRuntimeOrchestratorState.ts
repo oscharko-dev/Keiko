@@ -62,7 +62,7 @@ export class CodingRuntimeOrchestratorState {
       ...(snapshot.state === "awaiting-approval" && this.deps.pendingPermission(snapshot.runId)
         ? { pendingPermission: this.deps.pendingPermission(snapshot.runId) }
         : {}),
-      ...(snapshot.result === undefined ? {} : { result: snapshot.result }),
+      ...snapshotDetail(snapshot),
     };
     const validated = validateCodingWorkbenchRuntimeSnapshot(out);
     if (!validated.ok) {
@@ -111,4 +111,16 @@ export class CodingRuntimeOrchestratorState {
           },
     ).ok;
   }
+}
+
+function snapshotDetail(snapshot: CodingRuntimeSnapshot): Partial<PublicSnapshot> {
+  return {
+    ...(snapshot.result === undefined ? {} : { result: snapshot.result }),
+    ...(snapshot.issueBinding === undefined ? {} : { issueBinding: snapshot.issueBinding }),
+    ...(snapshot.draftDelivery === undefined ? {} : { draftDelivery: snapshot.draftDelivery }),
+    ...(snapshot.ciReadiness === undefined ? {} : { ciReadiness: snapshot.ciReadiness }),
+    ...(snapshot.verifiedCommitResult === undefined
+      ? {}
+      : { verifiedCommitResult: snapshot.verifiedCommitResult }),
+  };
 }

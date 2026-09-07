@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_COMMAND_RULES } from "./tools.js";
+import {
+  DEFAULT_COMMAND_RULES,
+  DEFAULT_SANDBOX_POLICY,
+  isValidNetworkGatewayPolicy,
+  type NetworkGatewayPolicy,
+  type SandboxPolicy,
+} from "./tools.js";
 
 // Codex-sweep finding (same bug class as command-runner.ts's COMMAND_TASK_RULES, KEIKO-0139):
 // Object.freeze on the DEFAULT_COMMAND_RULES array only freezes the array's own indices, not the
@@ -27,5 +33,76 @@ describe("DEFAULT_COMMAND_RULES", () => {
   // shallow `Object.freeze` on the outer array alone), so every nested rule object is frozen too.
   it("reports every nested rule object as frozen (Object.isFrozen), not just the array", () => {
     expect(Object.isFrozen(DEFAULT_COMMAND_RULES[0])).toBe(true);
+  });
+});
+
+// #2951: the gateway-allowlist NetworkPolicy variant a long-lived coding sidecar uses to reach
+// exactly one loopback destination. Deliberately NOT a general allowlist — a loopback host and a
+// single in-range port, nothing else — so the guard must reject every shape that would widen it.
+describe("isValidNetworkGatewayPolicy", () => {
+  const valid = { mode: "gateway", host: "127.0.0.1", port: 1983 } as const;
+
+  it("accepts an IPv4 loopback host with an in-range port", () => {
+    expect(isValidNetworkGatewayPolicy(valid)).toBe(true);
+  });
+
+  it("accepts the IPv6 loopback host", () => {
+    expect(isValidNetworkGatewayPolicy({ ...valid, host: "::1" })).toBe(true);
+  });
+
+  it("accepts the boundary ports 1 and 65535", () => {
+    expect(isValidNetworkGatewayPolicy({ ...valid, port: 1 })).toBe(true);
+    expect(isValidNetworkGatewayPolicy({ ...valid, port: 65_535 })).toBe(true);
+  });
+
+  // Failing-before: before this guard existed there was no way to express "loopback-only, one
+  // port" at all, so nothing could distinguish this from a non-loopback destination.
+  it.each(["0.0.0.0", "localhost", "::ffff:127.0.0.1", "192.0.2.1", ""])(
+    "rejects a non-loopback host %s",
+    (host) => {
+      expect(isValidNetworkGatewayPolicy({ ...valid, host })).toBe(false);
+    },
+  );
+
+  it("rejects a missing port", () => {
+    const withoutPort: Record<string, unknown> = { ...valid };
+    delete withoutPort.port;
+    expect(isValidNetworkGatewayPolicy(withoutPort)).toBe(false);
+  });
+
+  it.each([0, -1, 65_536, 1.5, Number.NaN, "1983"])("rejects an invalid port %s", (port) => {
+    expect(isValidNetworkGatewayPolicy({ ...valid, port })).toBe(false);
+  });
+
+  it("rejects the wrong discriminant and extra/unknown fields", () => {
+    expect(isValidNetworkGatewayPolicy({ ...valid, mode: "none" })).toBe(false);
+    expect(isValidNetworkGatewayPolicy({ ...valid, extra: "widen-me" })).toBe(false);
+  });
+
+  it("rejects non-object and malformed inputs", () => {
+    for (const hostile of [null, undefined, "gateway", 42, [], []])
+      expect(isValidNetworkGatewayPolicy(hostile)).toBe(false);
+  });
+});
+
+// Review finding on #2951: `NetworkGatewayPolicy` must never widen `SandboxPolicy.network` (the
+// general keiko-tools spawn-boundary type). keiko-tools' exec.ts exhaustively branches on
+// `deps.policy.network !== "none"` to choose the INHERITED (unconfined) spawn path; if a gateway
+// object were ever assignable there, `!== "none"` would be true for it too (it's an object, not
+// the string "none") and a gateway-confined command would silently spawn unconfined instead. The
+// fix keeps `NetworkPolicy` (SandboxPolicy's field type) at exactly two string literals, and gives
+// the gateway shape its own keiko-sandbox-scoped union (`IsolatedRunNetworkPolicy`) instead of
+// folding it into this shared type. This is a compile-time guard: proven by asserting the
+// gateway shape is a type error here, not a runtime check (there is nothing to run — the whole
+// point is that the assignment never type-checks).
+describe("NetworkPolicy — gateway shape is excluded from SandboxPolicy.network", () => {
+  it("never accepts a NetworkGatewayPolicy value (compile-time pin)", () => {
+    const gateway: NetworkGatewayPolicy = { mode: "gateway", host: "127.0.0.1", port: 1983 };
+    // @ts-expect-error — SandboxPolicy.network is "inherit" | "none" only. Before this fix,
+    // NetworkPolicy included NetworkGatewayPolicy and this assignment type-checked, which let
+    // keiko-tools/exec.ts's `!== "none"` exhaustiveness check silently treat a gateway policy as
+    // "inherited" (unconfined) network — a fail-open widening of a trust boundary.
+    const widened: SandboxPolicy = { ...DEFAULT_SANDBOX_POLICY, network: gateway };
+    expect(widened.network).toBe(gateway);
   });
 });

@@ -692,14 +692,16 @@ describe("Atlassian connector egress posture — proxied DNS-rebinding refusal (
     // refuseUnpinnableResearchEgress throw synchronously for every proxied request, before DNS is
     // ever attempted — that is what broke every proxied Atlassian deployment the first time
     // denyLoopback was tried here. The mocked address is deliberately public (203.0.113.10, RFC
-    // 5737 TEST-NET-3) so a failure downstream of the DNS lookup (this fake proxy immediately
-    // destroys the CONNECT socket, same as the refusal test above) cannot be mistaken for the
+    // 5737 TEST-NET-3) so a failure downstream of the DNS lookup (this fake proxy returns
+    // an explicit CONNECT failure) cannot be mistaken for the
     // blanket-refusal this test exists to rule out. The discriminating signal is that `lookup` was
     // called at all: refuseUnpinnableResearchEgress's throw happens strictly before any DNS work,
     // so reaching the mock proves the request was NOT short-circuited there.
     const proxy = createHttpServer();
     proxy.on("connect", (_req, clientSocket) => {
-      clientSocket.destroy();
+      clientSocket.end(
+        ["HTTP/1.1 502 Bad Gateway", "Content-Length: 0", "Connection: close", "", ""].join("\r\n"),
+      );
     });
     const proxyPort = await listenLocal(proxy);
     try {

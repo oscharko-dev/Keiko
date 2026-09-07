@@ -48,14 +48,16 @@ export interface CodingWorkbenchRuntimeQuestionsResponse {
 /**
  * Bound to the observed revision and the exact question-request id, matching the
  * approval-decision and research-revoke request contracts (KEIKO-0411): a stale or forged answer
- * fails closed the same way a stale or forged revoke does. `questionRequestId` is the `que_...`
- * id the question surface already mints (see `isCodeTaskQuestionId` in code-task-governance.ts),
- * carried back on the answer.
+ * fails closed the same way a stale or forged revoke does. `questionId` is the `que_...` id the
+ * question surface already mints (see `isCodeTaskQuestionId` in code-task-governance.ts), carried
+ * back on the answer — the single name every layer (UI, server route, server coordinator) speaks
+ * for this field; there is no separate `questionRequestId` on the wire (defect: two parallel
+ * definitions of one body, epic #3384).
  */
 export interface CodingWorkbenchRuntimeQuestionAnswerRequest {
   readonly requestId: string;
   readonly expectedRevision: number;
-  readonly questionRequestId: string;
+  readonly questionId: string;
   readonly answers: readonly (readonly string[])[];
 }
 
@@ -92,14 +94,14 @@ export function parseCodingWorkbenchRuntimeQuestionAnswerRequest(
   if (!isRecord(value)) return invalid("question answer must be an object");
   const errors = exactKeys(
     value,
-    ["requestId", "expectedRevision", "questionRequestId", "answers"],
+    ["requestId", "expectedRevision", "questionId", "answers"],
     "questionAnswer",
   );
   validateSafeId(value.requestId, "requestId", errors, CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS);
   if (!Number.isSafeInteger(value.expectedRevision) || Number(value.expectedRevision) < 0) {
     errors.push("expectedRevision must be a non-negative safe integer");
   }
-  if (!isCodeTaskQuestionId(value.questionRequestId)) errors.push("questionRequestId is invalid");
+  if (!isCodeTaskQuestionId(value.questionId)) errors.push("questionId is invalid");
   validateAnswers(value.answers, errors);
   return result(value, errors);
 }

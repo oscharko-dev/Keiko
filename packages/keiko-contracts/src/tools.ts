@@ -4,6 +4,7 @@
 // contract. `readonly` everywhere; optional props are `| undefined` because
 // exactOptionalPropertyTypes is on. Imports end `.js`, double quotes, `type` keyword.
 
+import type { CatalogToolPort } from "./governed-tool-bridge.js";
 import type { ToolDefinition } from "./gateway.js";
 import type { ContextToolObservation } from "./context-observations.js";
 import { deepFreeze } from "./deep-freeze.js";
@@ -14,7 +15,48 @@ import { deepFreeze } from "./deep-freeze.js";
 // default egress boundary at the keiko-tools spawn boundary (ADR-0043), and a host that cannot enforce
 // it fails the command closed. `"inherit"` stays the default for the read-only command tools; a caller
 // that executes untrusted code opts into `"none"` explicitly, WITHOUT any consumer change.
+//
+// A long-lived coding sidecar (ADR-0043 D11-D14, Issue #2951) is a third shape: neither fully
+// inherited nor fully denied, it must reach exactly one loopback destination — Keiko's own
+// authenticated gateway/BFF — for its whole lifetime. `NetworkGatewayPolicy` is deliberately NOT a
+// general allowlist: a single loopback host and a single port, nothing else is expressible. A host
+// with no backend that can bind a child to exactly that destination fails the run closed rather than
+// silently widening to "inherit" or narrowing to the unusable "none".
+//
+// `NetworkGatewayPolicy` is deliberately NOT folded into `NetworkPolicy` below. `NetworkPolicy` is
+// `SandboxPolicy.network` — the general keiko-tools spawn-boundary type that every command-execution
+// caller (keiko-verification, the git/registry tool lanes, …) reads with an exhaustive `=== "none"` /
+// `!== "none"` check (see keiko-tools/src/exec.ts's resolveSpawnTarget). Widening that union to
+// include an object variant would make `!== "none"` true for a gateway policy too and silently spawn
+// it on the INHERITED (unconfined) path — a fail-open hole in a trust boundary this type does not
+// otherwise reach. Only the keiko-sandbox planning layer (`IsolatedRunPlan.network`, exported there as
+// `IsolatedRunNetworkPolicy`) accepts the gateway shape; it is a long-lived coding-sidecar concept,
+// never constructed by a `SandboxPolicy`.
+export interface NetworkGatewayPolicy {
+  readonly mode: "gateway";
+  readonly host: "127.0.0.1" | "::1";
+  readonly port: number;
+}
+
 export type NetworkPolicy = "inherit" | "none";
+
+// Structural guard, not a coercion: true only for a value shaped exactly like a
+// `NetworkGatewayPolicy` — a loopback host, an in-range TCP port, and no other fields. A
+// non-loopback host, a missing/fractional/out-of-range port, or an extra field is rejected, never
+// widened or truncated into something that would look valid.
+export function isValidNetworkGatewayPolicy(value: unknown): value is NetworkGatewayPolicy {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).length === 3 &&
+    record.mode === "gateway" &&
+    (record.host === "127.0.0.1" || record.host === "::1") &&
+    Number.isSafeInteger(record.port) &&
+    (record.port as number) > 0 &&
+    (record.port as number) <= 65_535
+  );
+}
+
 export type FilesystemPolicy = "inherit" | "execution-root";
 
 // How the spawn boundary supplies HOME/USERPROFILE to the child.
@@ -27,6 +69,8 @@ export type FilesystemPolicy = "inherit" | "execution-root";
 //                 asks to inherit an absent/empty HOME falls back to "ephemeral" so the child is
 //                 never left without a home directory.
 export type HomeIsolation = "ephemeral" | "inherit";
+
+export type OutputScrubMode = "every-non-allowlisted-value" | "credentials-only";
 
 export interface SandboxPolicy {
   // Names (never values) of parent env vars allowed to reach the child. No credential-bearing
@@ -51,6 +95,19 @@ export interface SandboxPolicy {
   readonly pinnedEnv?: Readonly<Record<string, string>> | undefined;
   // Defaults to "ephemeral" when absent.
   readonly homeIsolation?: HomeIsolation | undefined;
+  // Which parent env VALUES the spawn boundary scrubs out of captured stdout/stderr.
+  //   "every-non-allowlisted-value" (default, absent): the value of every parent var not on
+  //     `envAllowlist` (plus every credential) is replaced with the redaction marker. Right for a
+  //     command whose output is diagnostic — a stray secret must never survive into evidence.
+  //   "credentials-only": only credential values are scrubbed — the governed credential names, any
+  //     name that looks credential-bearing, and `credentialEnvAllowlist` — while ordinary context
+  //     values survive. For governed reads whose stdout IS transient source data: configured
+  //     remote URLs and GitHub issue provenance legitimately contain an owner/repository name, which is
+  //     also what a CI runner puts in GITHUB_REPOSITORY, what a user is called in USER, what a
+  //     shell exports in a dozen harmless variables. Under the default mode such a read came back
+  //     as `https://github.com/[REDACTED].git` and every consumer addressed a repository that does
+  //     not exist. Never a way to leak a token: the shape-based redaction always applies too.
+  readonly outputScrub?: OutputScrubMode | undefined;
   // Hard cap on combined stdout+stderr bytes buffered before the child is killed (flood guard).
   readonly maxOutputBytes: number;
   // Default per-command wall-time before SIGTERM/SIGKILL.
@@ -385,6 +442,8 @@ export interface CommandRunInput {
 }
 
 export interface CommandResult {
+  /** Owning runner changed captured output during redaction; exact-content readers must refuse. */
+  readonly outputRedacted?: true;
   readonly command: string;
   readonly args: readonly string[];
   readonly exitCode: number | null;
@@ -512,6 +571,7 @@ export interface ToolHostConfigInput {
 
 // ─── Hexagonal tool ports (shared between harness consumer and tools implementer) ──────
 
+/** Legacy migration transport only; new producers use GovernedToolCallRequest. */
 export interface ToolCallRequest {
   readonly toolCallId: string;
   readonly toolName: string;
@@ -573,6 +633,8 @@ export interface ToolCallResult {
 }
 
 export interface ToolPort {
+  /** Absence is unavailable for governed callers, never permission to use the legacy methods. */
+  readonly catalog?: CatalogToolPort | undefined;
   readonly execute: (request: ToolCallRequest) => Promise<ToolCallResult>;
   readonly listTools: () => readonly ToolDefinition[];
 }

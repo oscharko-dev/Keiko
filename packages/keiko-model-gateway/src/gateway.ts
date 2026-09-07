@@ -6,9 +6,12 @@
 import { randomUUID } from "node:crypto";
 import {
   CancelledError,
+  ConfigInvalidError,
+  ContextOverflowError,
   GatewayError,
   UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { findConfiguredCapability } from "./model-selection.js";
 import {
   logEndpointHost,
@@ -22,6 +25,8 @@ import {
   type ModelGatewayLogSink,
 } from "./observability.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
+import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
+import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import { CircuitBreaker, executeWithRetry, systemClock } from "./resilience.js";
 import { assertValidGatewaySamplingParameters } from "./types.js";
 import type {
@@ -37,7 +42,22 @@ import type {
   UsageMetadata,
 } from "./types.js";
 
+/** Shared, durable admission owned by the host; invoked before EVERY provider attempt. */
+export interface GatewaySpendBudget {
+  reserve(
+    capability: ModelCapability,
+    request: GatewayCallRequest,
+    correlationId: string,
+  ): GatewaySpendReservation;
+}
+
+export interface GatewaySpendReservation {
+  /** Missing usage retains the full upper reservation, including cancellation or process loss. */
+  settle(usage: UsageMetadata | undefined): void;
+}
+
 export interface GatewayDeps {
+  readonly spendBudget?: GatewaySpendBudget | undefined;
   readonly adapter?: ProviderAdapter | undefined;
   readonly clock?: Clock | undefined;
   // Randomness source for the retry backoff's equal jitter. Injectable so tests
@@ -86,6 +106,32 @@ function callIdFields(ids: CallIds): Readonly<Record<string, unknown>> {
   return ids.correlationId === ids.requestId ? {} : { requestId: ids.requestId };
 }
 
+function measuredCatalogFailureUsage(
+  error: unknown,
+  capability: ModelCapability,
+  correlationId: string,
+): UsageMetadata | undefined {
+  if (!(error instanceof GatewayToolCatalogError) || error.partialUsage === undefined) {
+    return undefined;
+  }
+  const { promptTokens, completionTokens } = error.partialUsage;
+  if (
+    !Number.isSafeInteger(promptTokens) ||
+    promptTokens < 0 ||
+    !Number.isSafeInteger(completionTokens) ||
+    completionTokens < 0
+  ) {
+    return undefined;
+  }
+  return {
+    requestId: correlationId,
+    promptTokens,
+    completionTokens,
+    latencyMs: 0,
+    costClass: capability.costClass,
+  };
+}
+
 function gatewayEvent(
   level: ModelGatewayLogLevel,
   op: string,
@@ -107,9 +153,57 @@ function attachGatewayRequestId(error: unknown, requestId: string): void {
   }
 }
 
+function recordProviderFailure(
+  breaker: CircuitBreaker,
+  error: unknown,
+  correlationId: string,
+): void {
+  if (!(error instanceof CancelledError) && !(error instanceof ConfigInvalidError)) {
+    breaker.recordFailure(correlationId);
+  }
+}
+
 interface RoutedCall {
   readonly provider: ModelProviderConfig;
   readonly capability: ModelCapability;
+}
+
+interface BufferedChatAttempt {
+  readonly route: RoutedCall;
+  readonly breaker: CircuitBreaker;
+  readonly adapter: ProviderAdapter;
+  readonly originalRequest: GatewayCallRequest;
+  readonly correlationId: string;
+  readonly state: { request: GatewayCallRequest; attemptNumber: number };
+}
+
+interface RepairPromptBudget {
+  readonly promptTokens: number;
+  readonly maxPromptTokens: number;
+  readonly maxOutputTokens: number;
+  readonly safetyMarginTokens: number;
+}
+
+const TOOL_SCHEMA_REPAIR_PREFIX =
+  "The previous tool call was rejected before execution because its arguments did not match the advertised schema.";
+
+function toolSchemaRepairMessage(error: GatewayToolCatalogError): string | undefined {
+  const repair = error.repair;
+  if (repair === undefined) return undefined;
+  return `${TOOL_SCHEMA_REPAIR_PREFIX} Retry tool call ${repair.toolCallId} for offered tool ${repair.offeredAlias} with arguments that match its advertised schema exactly.`;
+}
+
+function repairedRequest(
+  original: GatewayCallRequest,
+  error: unknown,
+): GatewayCallRequest | undefined {
+  if (!(error instanceof GatewayToolCatalogError)) return undefined;
+  const correction = toolSchemaRepairMessage(error);
+  if (correction === undefined) return undefined;
+  return {
+    ...original,
+    messages: [...original.messages, { role: "system", content: correction }],
+  };
 }
 
 // Bare hostname only — never `scheme://host:port` (that's `logEndpointHost`, used on the per-call
@@ -156,6 +250,7 @@ function streamUsageIfSupplied(usage: UsageMetadata | undefined): StreamTerminal
 }
 
 export class Gateway {
+  private readonly spendBudget: GatewaySpendBudget | undefined;
   private readonly clock: Clock;
   private readonly random: () => number;
   private readonly adapter: ProviderAdapter | undefined;
@@ -168,6 +263,7 @@ export class Gateway {
     private readonly config: GatewayConfig,
     deps: GatewayDeps = {},
   ) {
+    this.spendBudget = deps.spendBudget;
     this.clock = deps.clock ?? systemClock;
     this.random = deps.random ?? Math.random;
     this.adapter = deps.adapter;
@@ -175,6 +271,15 @@ export class Gateway {
     this.log = resolveLogSink(deps.log);
     this.providers = new Map(config.providers.map((p) => [p.modelId, p]));
     this.logConfigResolved();
+  }
+
+  private prepareRequest(
+    request: GatewayCallRequest,
+    capability: ModelCapability,
+  ): GatewayCallRequest {
+    assertValidGatewaySamplingParameters(request);
+    if (this.spendBudget === undefined || request.maxOutputTokens !== undefined) return request;
+    return { ...request, maxOutputTokens: capability.maxOutputTokens };
   }
 
   // ONE-TIME configuration snapshot, written once per Gateway construction (the process-wide
@@ -200,22 +305,26 @@ export class Gateway {
 
   async chat(request: GatewayCallRequest): Promise<NormalizedResponse> {
     const route = this.route(request.modelId, request.logContext?.correlationId);
-    assertValidGatewaySamplingParameters(request);
+    request = this.prepareRequest(request, route.capability);
     const breaker = this.breakerFor(route.provider);
     const requestId = randomUUID();
     const ids = callIds(requestId, request);
     const start = this.clock.now();
     const elapsed = logTimer();
     const adapter = this.adapterFor(requestId, route.capability, ids.correlationId);
+    const attempt: BufferedChatAttempt = {
+      route,
+      breaker,
+      adapter,
+      originalRequest: request,
+      correlationId: ids.correlationId,
+      state: { request, attemptNumber: 0 },
+    };
     this.logCallStarted(ids, route, false, request.reasoningEffort);
     let result;
     try {
       result = await executeWithRetry(
-        (attemptTimeoutMs) =>
-          this.invoke(breaker, adapter, request, ids.correlationId, {
-            ...route.provider,
-            ...(attemptTimeoutMs === undefined ? {} : { timeoutMs: attemptTimeoutMs }),
-          }),
+        (attemptTimeoutMs) => this.invokeBufferedAttempt(attempt, attemptTimeoutMs),
         route.provider,
         this.clock,
         request.cancellationSignal,
@@ -241,21 +350,106 @@ export class Gateway {
     };
   }
 
+  private async invokeBufferedAttempt(
+    attempt: BufferedChatAttempt,
+    attemptTimeoutMs: number | undefined,
+  ): Promise<NormalizedResponse> {
+    attempt.state.attemptNumber += 1;
+    try {
+      return await this.invoke(
+        attempt.breaker,
+        attempt.adapter,
+        attempt.state.request,
+        attempt.route.capability,
+        attempt.correlationId,
+        {
+          ...attempt.route.provider,
+          ...(attemptTimeoutMs === undefined ? {} : { timeoutMs: attemptTimeoutMs }),
+        },
+      );
+    } catch (error) {
+      if (attempt.state.attemptNumber <= attempt.route.provider.maxRetries) {
+        attempt.state.request = this.requestAfterToolSchemaRejection(
+          attempt.originalRequest,
+          attempt.state.request,
+          attempt.route.capability,
+          attempt.correlationId,
+          error,
+        );
+      }
+      throw error;
+    }
+  }
+
+  private requestAfterToolSchemaRejection(
+    original: GatewayCallRequest,
+    current: GatewayCallRequest,
+    capability: ModelCapability,
+    correlationId: string,
+    error: unknown,
+  ): GatewayCallRequest {
+    const candidate = repairedRequest(original, error);
+    if (candidate === undefined) return current;
+    const prepared = this.prepareRequest(candidate, capability);
+    const context = deriveContextProfileFromCapability(capability);
+    const maxOutputTokens = prepared.maxOutputTokens ?? context.reservedOutputTokens;
+    const promptTokens = countGatewayPromptTokens(
+      {
+        messages: prepared.messages,
+        tools: createGatewayToolCatalogBridge(prepared, (): number => this.clock.now()).tools,
+      },
+      capability.tokenAccounting,
+    );
+    const { safetyMarginTokens } = context;
+    const maxPromptTokens = Math.max(
+      0,
+      context.maxInputTokens - maxOutputTokens - safetyMarginTokens,
+    );
+    const budget = { promptTokens, maxPromptTokens, maxOutputTokens, safetyMarginTokens };
+    const repair = error instanceof GatewayToolCatalogError ? error.repair : undefined;
+    if (promptTokens > maxPromptTokens) {
+      this.logToolSchemaRepair(correlationId, repair, "denied", budget);
+      throw new ContextOverflowError("tool-call schema repair exceeds the model context window");
+    }
+    this.logToolSchemaRepair(correlationId, repair, "scheduled", budget);
+    return prepared;
+  }
+
+  private logToolSchemaRepair(
+    correlationId: string,
+    repair: GatewayToolCatalogError["repair"],
+    state: "denied" | "scheduled",
+    budget: RepairPromptBudget,
+  ): void {
+    if (repair === undefined) return;
+    this.log.write(
+      gatewayEvent("warn", "gateway.tool-catalog.repair", correlationId, {
+        state,
+        reason: state === "denied" ? "context-window-exceeded" : "invalid-shape",
+        toolCallId: repair.toolCallId,
+        offeredAlias: repair.offeredAlias,
+        ...budget,
+        correctionMessageCount: 1,
+        effectStarted: false,
+      }),
+    );
+  }
+
   // Streaming counterpart of chat(). Routes identically and guards with the circuit
   // breaker, but is NOT wrapped in executeWithRetry: a mid-stream retry would replay
   // already-emitted tokens. An adapter without a streaming variant falls back to a
   // single delta+done synthesised from its buffered call().
   async *chatStream(request: GatewayCallRequest): AsyncGenerator<GatewayStreamChunk> {
     const route = this.route(request.modelId, request.logContext?.correlationId);
-    assertValidGatewaySamplingParameters(request);
+    request = this.prepareRequest(request, route.capability);
     const breaker = this.breakerFor(route.provider);
-    const requestId = randomUUID();
-    const ids = callIds(requestId, request);
+    const ids = callIds(randomUUID(), request);
     breaker.assertAllowed(ids.correlationId);
     const start = this.clock.now();
     const elapsed = logTimer();
-    const adapter = this.adapterFor(requestId, route.capability, ids.correlationId);
+    const adapter = this.adapterFor(ids.requestId, route.capability, ids.correlationId);
     this.logCallStarted(ids, route, true, request.reasoningEffort);
+    let reservation: GatewaySpendReservation | undefined;
     let chunkCount = 0;
     // The moment the caller saw its first actual content, timed off the same `elapsed()` as every
     // other stream outcome. `??=` locks it in on the first non-empty delta and leaves it alone.
@@ -265,12 +459,13 @@ export class Gateway {
     // so the `finally` can tell "the consumer walked away" from the two paths that already spoke.
     let settled = false;
     try {
+      reservation = this.spendBudget?.reserve(route.capability, request, ids.correlationId);
       for await (const chunk of this.streamFrom(adapter, request, route.provider, ids)) {
         chunkCount += 1;
         firstTokenMs ??= firstNonEmptyDeltaMs(chunk, elapsed);
         if (chunk.type === "done") {
           terminalUsage = chunk.response.usage;
-          yield { type: "done", response: this.enrich(chunk.response, requestId, start, route) };
+          yield this.enrichDone(chunk.response, ids.requestId, start, route);
         } else {
           yield chunk;
         }
@@ -278,16 +473,11 @@ export class Gateway {
       breaker.recordSuccess(ids.correlationId);
       settled = true;
     } catch (error) {
-      // A client-initiated cancel is not a provider fault — skip the breaker.
-      if (!(error instanceof CancelledError)) {
-        breaker.recordFailure(ids.correlationId);
-      }
-      // RB-6: stamp the gateway request id onto the thrown error (mid-stream failure traceability).
-      attachGatewayRequestId(error, requestId);
       settled = true;
-      this.logStreamFailed(ids, route, chunkCount, elapsed(), error);
-      throw error;
+      terminalUsage = measuredCatalogFailureUsage(error, route.capability, ids.correlationId);
+      this.failStream(ids, route, breaker, chunkCount, elapsed(), error);
     } finally {
+      reservation?.settle(terminalUsage);
       // A consumer that stops iterating (client disconnect, request abort, `break`) closes this
       // generator through `return()`: the loop is left without running either outcome branch, so
       // without this line the log keeps `gateway.stream.started` with nothing after it — the exact
@@ -306,6 +496,20 @@ export class Gateway {
       firstTokenMs,
       streamUsageIfSupplied(terminalUsage),
     );
+  }
+
+  private failStream(
+    ids: CallIds,
+    route: RoutedCall,
+    breaker: CircuitBreaker,
+    chunkCount: number,
+    durationMs: number,
+    error: unknown,
+  ): never {
+    recordProviderFailure(breaker, error, ids.correlationId);
+    attachGatewayRequestId(error, ids.requestId);
+    this.logStreamFailed(ids, route, chunkCount, durationMs, error);
+    throw error;
   }
 
   // THE ATTEMPT LINE for a model call — written BEFORE the adapter is invoked, not after it
@@ -506,6 +710,15 @@ export class Gateway {
     };
   }
 
+  private enrichDone(
+    response: NormalizedResponse,
+    requestId: string,
+    start: number,
+    route: RoutedCall,
+  ): GatewayStreamChunk {
+    return { type: "done", response: this.enrich(response, requestId, start, route) };
+  }
+
   circuitStatus(modelId: string): CircuitBreakerStatus {
     const breaker = this.breakers.get(modelId);
     return (
@@ -522,20 +735,25 @@ export class Gateway {
     breaker: CircuitBreaker,
     adapter: ProviderAdapter,
     request: GatewayCallRequest,
+    capability: ModelCapability,
     correlationId: string,
     provider: ModelProviderConfig,
   ): Promise<NormalizedResponse> {
     breaker.assertAllowed(correlationId);
+    const reservation = this.spendBudget?.reserve(capability, request, correlationId);
+    let usage: UsageMetadata | undefined;
     try {
       const response = await adapter.call(request, provider);
+      usage = response.usage;
       breaker.recordSuccess(correlationId);
       return response;
     } catch (error) {
+      usage = measuredCatalogFailureUsage(error, capability, correlationId);
       // A client-initiated cancel is not a provider fault — skip the breaker.
-      if (!(error instanceof CancelledError)) {
-        breaker.recordFailure(correlationId);
-      }
+      recordProviderFailure(breaker, error, correlationId);
       throw error;
+    } finally {
+      reservation?.settle(usage);
     }
   }
 

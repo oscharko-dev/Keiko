@@ -1,19 +1,51 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local port fixtures are contextually typed. */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CodexRuntimeControl } from "./codexRuntimeComposition.js";
 import type { OpenCodeRunPort } from "./opencodeRuntimeComposition.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import type { GitChangeSnapshotService } from "../gitChangeSnapshotService.js";
+import {
+  GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION,
+  type GitChangeSnapshot,
+} from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
+import type { GitDeliveryDescriptionAuthorityPort } from "../gitDelivery/runBoundAuthority.js";
+import type { PrDescriptionArtifact } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
+import type { PrDescription } from "@oscharko-dev/keiko-model-gateway";
+import type { WorkbenchDescriptionScope } from "./codingRuntimeDescriptionJobStore.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "../observability/index.js";
 import {
   createCodexRuntimeTurnPort,
   createOpenCodeRuntimeTurnPort,
   createProductionRuntimeManager,
   createProductionRuntimeOperationGuard,
   createProductionRuntimeTaskDispatcher,
+  createProductionWorkbenchDescriptionDispatcher,
+  renderInitialTurnContext,
   type ProductionRuntimeRunRecord,
+  type ProductionWorkbenchArtifactRetention,
+  type ProductionWorkbenchDescriptionDeps,
 } from "./productionCodingRuntimePorts.js";
+
+// #3401: `createProductionWorkbenchDescriptionDispatcher` composes #3398's real
+// `PrDescription.generatePrDescription` core. Every other describe block in this file exercises
+// Codex/OpenCode ports and never touches the Model Gateway, so mocking it here is scoped to this
+// one suite (see the "generated" happy-path test) without disturbing the rest of the file.
+const generatePrDescriptionMock = vi.hoisted(() => vi.fn());
+vi.mock("@oscharko-dev/keiko-model-gateway", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@oscharko-dev/keiko-model-gateway")>();
+  return {
+    ...actual,
+    PrDescription: { ...actual.PrDescription, generatePrDescription: generatePrDescriptionMock },
+  };
+});
 
 describe("production coding runtime turn ports", () => {
   it("submits initial and follow-up OpenCode turns through the run-bound port", async () => {
@@ -49,6 +81,146 @@ describe("production coding runtime turn ports", () => {
     ).resolves.toEqual({ ok: false });
   });
 
+  it("interrupts an active turn before replacing it and releases a rejected attempt", async () => {
+    const controller = new AbortController();
+    const abortTurn = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true);
+    const waitForTerminal = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("private terminal failure"))
+      .mockResolvedValueOnce("cancelled" as const)
+      .mockResolvedValue("succeeded" as const);
+    const submitTurn = vi.fn(() => Promise.resolve(true));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([
+        [
+          "run-replace",
+          {
+            controller,
+            operationGuard: createProductionRuntimeOperationGuard("run-replace", () => true),
+            turnPort: {
+              submitTurn,
+              abortTurn,
+              waitForTerminal,
+            },
+          },
+        ],
+      ]),
+    );
+    const request = operation("run-replace", "follow-up-1", 2, "operator correction");
+    if (dispatcher.replace === undefined) throw new Error("replace dispatcher is unavailable");
+
+    await expect(dispatcher.replace(request)).resolves.toEqual({ ok: false });
+    await expect(dispatcher.replace(request)).resolves.toEqual({ ok: false });
+    await expect(dispatcher.replace(request)).resolves.toMatchObject({ ok: true });
+    expect(abortTurn).toHaveBeenCalledTimes(3);
+    expect(waitForTerminal).toHaveBeenCalledTimes(3);
+    expect(waitForTerminal.mock.invocationCallOrder[1]).toBeLessThan(
+      submitTurn.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(controller.signal.aborted).toBe(false);
+  });
+
+  it("refuses a replacement when the run stops during predecessor settlement", async () => {
+    const controller = new AbortController();
+    const submitTurn = vi.fn(() => Promise.resolve(true));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([
+        [
+          "run-replace",
+          {
+            controller,
+            operationGuard: createProductionRuntimeOperationGuard("run-replace", () => true),
+            turnPort: {
+              submitTurn,
+              abortTurn: () => Promise.resolve(true),
+              waitForTerminal: () => {
+                controller.abort();
+                return Promise.resolve("cancelled" as const);
+              },
+            },
+          },
+        ],
+      ]),
+    );
+    const request = operation("run-replace", "follow-up-1", 2, "operator correction");
+    if (dispatcher.replace === undefined) throw new Error("replace dispatcher is unavailable");
+
+    await expect(dispatcher.replace(request)).resolves.toEqual({ ok: false });
+    expect(submitTurn).not.toHaveBeenCalled();
+  });
+
+  it("logs correlated body-free start and terminal outcomes for replacement", async () => {
+    const sink = createBufferedServerLogSink();
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const abortTurn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("private interrupt failure"))
+      .mockResolvedValueOnce(true);
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([
+        [
+          "run-replace",
+          record("run-replace", {
+            submitTurn: () => Promise.resolve(true),
+            abortTurn,
+            waitForTerminal: () => Promise.resolve("cancelled" as const),
+          }),
+        ],
+      ]),
+      { record: (diagnostic): void => void diagnostics.push(diagnostic) },
+    );
+    const request = {
+      ...operation("run-replace", "follow-up-1", 2, "private operator correction"),
+      correlationId: "request-correlation-id-1",
+    };
+    if (dispatcher.replace === undefined) throw new Error("replace dispatcher is unavailable");
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      await expect(dispatcher.replace(request)).resolves.toEqual({ ok: false });
+      await expect(
+        dispatcher.replace({ ...request, requestId: "follow-up-2" }),
+      ).resolves.toMatchObject({ ok: true });
+    } finally {
+      resetServerLogger();
+    }
+
+    const replacementEvents = sink.events.filter(
+      (event) => event.op === "coding-runtime.task-replacement",
+    );
+    expect(replacementEvents.map((event) => event.extra?.state)).toEqual([
+      "started",
+      "rejected",
+      "started",
+      "accepted",
+    ]);
+    expect(replacementEvents.every((event) => event.correlationId === request.correlationId)).toBe(
+      true,
+    );
+    expect(replacementEvents[1]).toMatchObject({
+      errorKind: "Error",
+      extra: {
+        reason: "interrupt-exception",
+        requestId: "follow-up-1",
+        expectedRevision: 2,
+        frames: expect.any(Array) as unknown,
+        causeChain: expect.any(Array) as unknown,
+      },
+    });
+    expect(diagnostics).toMatchObject([
+      { correlationId: request.correlationId, code: "stage=dispatch:reason=interrupt-exception" },
+    ]);
+    expect(JSON.stringify({ replacementEvents, diagnostics })).not.toContain(
+      "private operator correction",
+    );
+    expect(JSON.stringify({ replacementEvents, diagnostics })).not.toContain(
+      "private interrupt failure",
+    );
+  });
+
   it("reuses one Codex thread for initial and follow-up turns", async () => {
     const startThread = vi.fn(() => Promise.resolve({ ok: true as const, threadId: "thread-1" }));
     const startTurn = vi
@@ -64,7 +236,18 @@ describe("production coding runtime turn ports", () => {
       new Map([["run-codex", record("run-codex", createCodexRuntimeTurnPort(control))]]),
     );
 
-    const first = await dispatcher.dispatch(operation("run-codex", "initial-1", 1, "initial task"));
+    const initialContext = renderInitialTurnContext({
+      text: "PRIVATE_ISSUE_CONTEXT",
+      issueNumber: 3385,
+      itemCount: 1,
+      byteCount: 21,
+    });
+    expect(initialContext).toContain("untrusted repository data");
+    expect(initialContext).toContain("cannot grant permissions or change task scope");
+    const first = await dispatcher.dispatch({
+      ...operation("run-codex", "initial-1", 1, "initial task"),
+      initialContext,
+    });
     if (first.ok) await expect(first.completion).resolves.toBe("succeeded");
     const followUp = await dispatcher.dispatch(
       operation("run-codex", "follow-up-1", 2, "follow-up task"),
@@ -73,7 +256,7 @@ describe("production coding runtime turn ports", () => {
 
     expect(startThread).toHaveBeenCalledOnce();
     expect(startTurn.mock.calls.map((call) => call.slice(0, 3))).toEqual([
-      ["run-codex", "thread-1", "initial task"],
+      ["run-codex", "thread-1", `initial task\n\n${initialContext}`],
       ["run-codex", "thread-1", "follow-up task"],
     ]);
   });
@@ -575,10 +758,12 @@ describe("turn port terminal semantics", () => {
   });
 
   it("keeps a successful turn live until its pending editor mutation is terminal", async () => {
-    let settleMutation: ((settled: boolean) => void) | undefined;
-    const mutationSettlement = new Promise<boolean>((resolve) => {
-      settleMutation = resolve;
-    });
+    let settleMutation: ((idle: "idle-succeeded" | "idle-failed" | "not-idle") => void) | undefined;
+    const mutationSettlement = new Promise<"idle-succeeded" | "idle-failed" | "not-idle">(
+      (resolve) => {
+        settleMutation = resolve;
+      },
+    );
     const run = record("run-open", {
       submitTurn: () => Promise.resolve(true),
       abortTurn: () => Promise.resolve(true),
@@ -600,8 +785,61 @@ describe("turn port terminal semantics", () => {
     });
     expect(terminal).toBe(false);
 
-    settleMutation?.(true);
+    settleMutation?.("idle-succeeded");
     await expect(dispatched.completion).resolves.toBe("succeeded");
+  });
+
+  // Epic #3384 cascade: a REFUSED edit that never reached the commit boundary (no live Workbench
+  // bridge) used to fail the whole run under "pending-mutations-unsettled" even though nothing was
+  // pending. The coordinator now distinguishes "idle but a CLAIMED mutation failed" from "never
+  // went idle at all" (codingRuntimeEditorMutationLeaseCoordinator.ts), and this dispatcher must
+  // report each under its own closed reason.
+  it("reports mutation-failed (not pending-mutations-unsettled) when the coordinator went idle but the latest claimed mutation failed", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const run = record("run-open", {
+      submitTurn: () => Promise.resolve(true),
+      abortTurn: () => Promise.resolve(true),
+      waitForTerminal: () => Promise.resolve("succeeded" as const),
+    });
+    const waitForPendingMutations = vi.fn(() => Promise.resolve("idle-failed" as const));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([["run-open", { ...run, waitForPendingMutations }]]),
+      { record: (diagnostic): void => void records.push(diagnostic) },
+    );
+
+    const dispatched = await dispatcher.dispatch(operation("run-open", "req-1", 1, "task"));
+    if (!dispatched.ok) throw new Error("expected accepted task");
+    await expect(dispatched.completion).resolves.toBe("failed");
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        correlationId: "run-open",
+        code: "stage=dispatch:reason=mutation-failed",
+      }),
+    );
+  });
+
+  it("reports pending-mutations-unsettled only when the coordinator never went idle", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const run = record("run-open", {
+      submitTurn: () => Promise.resolve(true),
+      abortTurn: () => Promise.resolve(true),
+      waitForTerminal: () => Promise.resolve("succeeded" as const),
+    });
+    const waitForPendingMutations = vi.fn(() => Promise.resolve("not-idle" as const));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([["run-open", { ...run, waitForPendingMutations }]]),
+      { record: (diagnostic): void => void records.push(diagnostic) },
+    );
+
+    const dispatched = await dispatcher.dispatch(operation("run-open", "req-1", 1, "task"));
+    if (!dispatched.ok) throw new Error("expected accepted task");
+    await expect(dispatched.completion).resolves.toBe("failed");
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        correlationId: "run-open",
+        code: "stage=dispatch:reason=pending-mutations-unsettled",
+      }),
+    );
   });
 
   it("aborts a task only when the adapter accepts the interruption", async () => {
@@ -675,3 +913,594 @@ function codexControl(input: {
     terminalStatus: (_runId, turnId) => input.statuses.get(turnId),
   };
 }
+
+describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
+  beforeEach(() => {
+    generatePrDescriptionMock.mockReset();
+  });
+  const REMOTE = "d".repeat(64);
+  const BASE_SHA = "1".repeat(40);
+  const HEAD_SHA = "2".repeat(40);
+  const BASE_REF = "dev";
+  const HEAD_REF = "feature/x";
+  const SCOPE: WorkbenchDescriptionScope = {
+    runId: "run-1",
+    remoteDigest: REMOTE,
+    baseSha: BASE_SHA,
+    headSha: HEAD_SHA,
+    acceptedMode: "supervised-coding",
+    baseRef: BASE_REF,
+    headRef: HEAD_REF,
+  };
+  const PR_SCOPE: WorkbenchDescriptionScope = {
+    ...SCOPE,
+    applicationTarget: {
+      projectId: "/workspace",
+      ownerAndRepo: "octo/repo",
+      prNumber: 17,
+    },
+  };
+
+  function snapshotFixture(overrides: Partial<GitChangeSnapshot> = {}): GitChangeSnapshot {
+    return {
+      schemaVersion: GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION,
+      repositoryId: "repo_fixture",
+      remoteDigest: REMOTE,
+      baseRef: "dev",
+      baseSha: BASE_SHA,
+      headRef: "feature/x",
+      headSha: HEAD_SHA,
+      mergeBaseSha: BASE_SHA,
+      capturedAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2026-01-01T00:10:00.000Z",
+      outcome: "complete",
+      limits: {
+        maxFiles: 400,
+        maxHunksPerFile: 256,
+        maxPatchBytes: 262144,
+        maxTotalBytes: 2097152,
+      },
+      completeness: {
+        totalFiles: 1,
+        files: 1,
+        hunks: 1,
+        bytes: 16,
+        omittedFiles: 0,
+        omittedHunks: 0,
+        truncatedFiles: 0,
+        kinds: {
+          add: 1,
+          modify: 0,
+          delete: 0,
+          rename: 0,
+          copy: 0,
+          "mode-change": 0,
+          binary: 0,
+          submodule: 0,
+        },
+        omissions: [],
+      },
+      entries: [],
+      localDivergence: { stagedCount: 0, unstagedCount: 0, untrackedCount: 0, conflictedCount: 0 },
+      snapshotDigest: "a".repeat(64),
+      ...overrides,
+    };
+  }
+
+  function fakeSnapshots(
+    capture: GitChangeSnapshotService["capture"] = () =>
+      Promise.reject(new Error("unexpected capture")),
+  ): GitChangeSnapshotService {
+    return {
+      capture,
+      read: () => undefined,
+      recheck: () => Promise.reject(new Error("unexpected recheck")),
+      close: () => undefined,
+    };
+  }
+
+  function admittingPort(): GitDeliveryDescriptionAuthorityPort {
+    return {
+      current: () => ({
+        scope: {
+          remoteDigest: REMOTE,
+          pr: { baseRef: BASE_REF, headRef: HEAD_REF },
+          snapshotDigest: "a".repeat(64),
+        },
+        effectiveMode: "supervised-coding",
+        expiresAt: "2026-01-01T00:10:00.000Z",
+      }),
+    };
+  }
+
+  function denyingPort(): GitDeliveryDescriptionAuthorityPort {
+    return { current: () => undefined };
+  }
+
+  // #3400/#3401 final-audit F1: a port that CAN tell a record for this exact scope existed and has
+  // since passed its `expiresAt`, distinct from `denyingPort()` above which reports no record ever
+  // having existed for the scope.
+  function expiredPort(): GitDeliveryDescriptionAuthorityPort {
+    return { current: () => undefined, expired: () => true };
+  }
+
+  function fakeDeps(
+    overrides: Partial<ProductionWorkbenchDescriptionDeps> = {},
+  ): ProductionWorkbenchDescriptionDeps {
+    return {
+      activeWorkspaceRoot: () => "/workspace",
+      snapshots: fakeSnapshots(),
+      generation: undefined,
+      descriptionAuthority: undefined,
+      now: () => Date.parse("2026-01-01T00:00:00.000Z"),
+      ...overrides,
+    };
+  }
+
+  it("reports generation-unavailable and never captures a snapshot without an active workspace", async () => {
+    const capture = vi.fn(() => Promise.resolve({ snapshot: snapshotFixture() }));
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({ activeWorkspaceRoot: () => undefined, snapshots: fakeSnapshots(capture) }),
+    );
+    const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(outcome).toEqual({ reason: "generation-unavailable" });
+    expect(capture).not.toHaveBeenCalled();
+  });
+
+  it("maps a failed snapshot capture to provider-failed", async () => {
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: fakeSnapshots(() =>
+          Promise.resolve({
+            snapshot: {
+              schemaVersion: GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION,
+              repositoryId: "repo_fixture",
+              capturedAt: "2026-01-01T00:00:00.000Z",
+              outcome: "failed",
+              reason: "git-error",
+              errorKind: "internal",
+            },
+          }),
+        ),
+      }),
+    );
+    const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(outcome).toEqual({ reason: "provider-failed" });
+  });
+
+  it("maps an unavailable snapshot capture to generation-unavailable", async () => {
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: fakeSnapshots(() =>
+          Promise.resolve({
+            snapshot: {
+              schemaVersion: GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION,
+              repositoryId: "repo_fixture",
+              capturedAt: "2026-01-01T00:00:00.000Z",
+              outcome: "unavailable",
+              reason: "missing-ref",
+            },
+          }),
+        ),
+      }),
+    );
+    const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(outcome).toEqual({ reason: "generation-unavailable" });
+  });
+
+  it("treats a captured remote digest that no longer matches the scope as generation-unavailable", async () => {
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: fakeSnapshots(() =>
+          Promise.resolve({
+            reference: "ref-1",
+            snapshot: snapshotFixture({ remoteDigest: "f".repeat(64) }),
+          }),
+        ),
+      }),
+    );
+    const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(outcome).toEqual({ reason: "generation-unavailable" });
+  });
+
+  it("denies model egress and never calls the Model Gateway when no description authority admits the scope", async () => {
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: fakeSnapshots(() =>
+          Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+        ),
+        descriptionAuthority: denyingPort(),
+      }),
+    );
+    const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(outcome).toEqual({ reason: "model-egress-denied" });
+    expect(generatePrDescriptionMock).not.toHaveBeenCalled();
+  });
+
+  // #3400/#3401 final-audit F1: before the read-port discriminant existed, `authorizeGitDelivery
+  // ModelEgress` collapsed an expired record and an absent one into the SAME `undefined`, so this
+  // dispatcher could only ever report `model-egress-denied` here — never the more specific
+  // `authority-expired` reason `WORKBENCH_DESCRIPTION_REASON_STATES` already carries. This is the
+  // failing-before case for that mapping, plus its body-free activity-log line.
+  it("reports authority-expired (not model-egress-denied) when the port reports a past record", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+        fakeDeps({
+          snapshots: fakeSnapshots(() =>
+            Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+          ),
+          descriptionAuthority: expiredPort(),
+        }),
+      );
+      const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+      expect(outcome).toEqual({ reason: "authority-expired" });
+      expect(generatePrDescriptionMock).not.toHaveBeenCalled();
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "security",
+          op: "pr-description.workbench.egress.denied",
+          errorKind: "authority-expired",
+        }),
+      );
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("reports generation-unavailable when admitted but no model profile is configured", async () => {
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: {
+          ...fakeSnapshots(() =>
+            Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+          ),
+          recheck: () => Promise.resolve({ state: "current", snapshot: snapshotFixture() }),
+        },
+        descriptionAuthority: admittingPort(),
+        generation: undefined,
+      }),
+    );
+    const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(outcome).toEqual({ reason: "generation-unavailable" });
+    expect(generatePrDescriptionMock).not.toHaveBeenCalled();
+  });
+
+  it("mints the description authority for the exact captured scope before checking admission", async () => {
+    const mint = vi.fn();
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: fakeSnapshots(() =>
+          Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+        ),
+        descriptionAuthority: denyingPort(),
+        mintDescriptionAuthority: mint,
+      }),
+    );
+    await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(mint).toHaveBeenCalledExactlyOnceWith({
+      scope: {
+        remoteDigest: REMOTE,
+        pr: { baseRef: BASE_REF, headRef: HEAD_REF },
+        snapshotDigest: "a".repeat(64),
+      },
+      requestedMode: "supervised-coding",
+      nowIso: "2026-01-01T00:00:00.000Z",
+      correlationId: "run-1",
+    });
+  });
+
+  it("does not mint when the accepted mode is unavailable", async () => {
+    const mint = vi.fn();
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: fakeSnapshots(() =>
+          Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+        ),
+        descriptionAuthority: denyingPort(),
+        mintDescriptionAuthority: mint,
+      }),
+    );
+    const unknownModeScope: WorkbenchDescriptionScope = {
+      runId: SCOPE.runId,
+      remoteDigest: SCOPE.remoteDigest,
+      baseSha: SCOPE.baseSha,
+      headSha: SCOPE.headSha,
+    };
+
+    await expect(
+      dispatcher.generate(unknownModeScope, new AbortController().signal),
+    ).resolves.toEqual({ reason: "model-egress-denied" });
+    expect(mint).not.toHaveBeenCalled();
+    expect(generatePrDescriptionMock).not.toHaveBeenCalled();
+  });
+
+  function generatedDescription(): Extract<
+    PrDescription.PrDescriptionGenerationResult,
+    { readonly status: "generated" }
+  > {
+    const artifact: PrDescriptionArtifact = {
+      schemaVersion: "1",
+      renderingVersion: "1",
+      binding: { ...snapshotFixture(), snapshotDigest: "a".repeat(64) },
+      language: "en",
+      outcome: "complete",
+      reason: "none",
+      coverage: {
+        snapshot: snapshotFixture().completeness,
+        suppliedEvidenceCount: 0,
+        processedEvidenceCount: 0,
+        omittedEvidenceCount: 0,
+      },
+      candidate: { summary: [], keyChanges: [], risks: [], reviewerFocus: [] },
+      markdown: "Summary",
+      artifactDigest: "b".repeat(64),
+    };
+    return {
+      status: "generated",
+      artifact,
+    };
+  }
+
+  it.each(["stale", "authority-expired"] as const)(
+    "discards a generated draft when the post-model check is %s",
+    async (state) => {
+      let returned = false;
+      generatePrDescriptionMock.mockImplementationOnce(() => {
+        returned = true;
+        return Promise.resolve(generatedDescription());
+      });
+      const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+        fakeDeps({
+          snapshots: {
+            ...fakeSnapshots(() =>
+              Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+            ),
+            recheck: () => Promise.resolve({ state: state === "stale" ? "stale" : "current" }),
+          },
+          descriptionAuthority: {
+            current: (...args) =>
+              returned && state === "authority-expired"
+                ? undefined
+                : admittingPort().current(...args),
+            expired: () => returned && state === "authority-expired",
+          },
+          generation: {
+            gateway: { chat: vi.fn() },
+            config: {} as PrDescription.PrDescriptionDeps["config"],
+            log: { write: () => undefined },
+          },
+        }),
+      );
+      expect(await dispatcher.generate(SCOPE, new AbortController().signal)).toEqual({
+        reason: state === "stale" ? "stale-snapshot" : "authority-expired",
+      });
+      expect(generatePrDescriptionMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["stale-snapshot", "authority-expired"] as const)(
+    "stops additional model calls when a per-call recheck reports %s",
+    async (reason) => {
+      const gatewayChat = vi.fn(() => Promise.resolve({} as never));
+      let recheckCount = 0;
+      let authorityReadCount = 0;
+      generatePrDescriptionMock.mockImplementationOnce(
+        async (
+          request: PrDescription.PrDescriptionRequest,
+          generation: PrDescription.PrDescriptionDeps,
+        ): Promise<PrDescription.PrDescriptionGenerationResult> => {
+          const signal = request.signal ?? new AbortController().signal;
+          const gatewayRequest = {} as Parameters<typeof generation.gateway.chat>[0];
+          for (let remainingCalls = 2; remainingCalls > 0; remainingCalls -= 1) {
+            if (!(await generation.revalidateAuthority(request.authority, signal))) {
+              return { status: "unavailable", reason: "authority-denied" };
+            }
+            await generation.gateway.chat(gatewayRequest);
+          }
+          return generatedDescription();
+        },
+      );
+      const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+        fakeDeps({
+          snapshots: {
+            ...fakeSnapshots(() =>
+              Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+            ),
+            recheck: () => {
+              recheckCount += 1;
+              const state = reason === "stale-snapshot" && recheckCount === 2 ? "stale" : "current";
+              return Promise.resolve({ state, snapshot: snapshotFixture() });
+            },
+          },
+          descriptionAuthority:
+            reason === "authority-expired"
+              ? {
+                  current: (...args) => {
+                    authorityReadCount += 1;
+                    return authorityReadCount < 3 ? admittingPort().current(...args) : undefined;
+                  },
+                  expired: () => authorityReadCount >= 3,
+                }
+              : admittingPort(),
+          generation: {
+            gateway: { chat: gatewayChat },
+            config: {} as PrDescription.PrDescriptionDeps["config"],
+            log: { write: () => undefined },
+          },
+        }),
+      );
+
+      await expect(dispatcher.generate(SCOPE, new AbortController().signal)).resolves.toEqual({
+        reason,
+      });
+      expect(gatewayChat).toHaveBeenCalledOnce();
+      expect(recheckCount).toBe(2);
+    },
+  );
+
+  it("generates through the Model Gateway core once admitted and maps a complete artifact", async () => {
+    const generated = generatedDescription();
+    generatePrDescriptionMock.mockResolvedValueOnce(generated);
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: {
+          ...fakeSnapshots(() =>
+            Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+          ),
+          recheck: () => Promise.resolve({ state: "current", snapshot: snapshotFixture() }),
+        },
+        descriptionAuthority: admittingPort(),
+        generation: {
+          gateway: { chat: vi.fn() },
+          config: {} as PrDescription.PrDescriptionDeps["config"],
+          log: { write: () => undefined },
+        },
+      }),
+    );
+    const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(outcome).toEqual({
+      reason: "generated",
+      snapshotDigest: "a".repeat(64),
+      draftDigest: "b".repeat(64),
+      artifactOutcome: "complete",
+    });
+    expect(generatePrDescriptionMock).toHaveBeenCalledOnce();
+  });
+
+  it("retains the exact generated artifact once and exposes that same proposal", async () => {
+    const generated = generatedDescription();
+    generatePrDescriptionMock.mockResolvedValueOnce(generated);
+    let retainedSignal: AbortSignal | undefined;
+    const retain: ProductionWorkbenchArtifactRetention["retain"] = vi.fn(
+      (
+        _scope: WorkbenchDescriptionScope,
+        _artifact: PrDescriptionArtifact,
+        signal: AbortSignal,
+      ) => {
+        retainedSignal = signal;
+        return Promise.resolve("pr-description-1");
+      },
+    );
+    const hasProposal = vi.fn(() => true);
+    const reviewDraft = vi.fn(() => undefined);
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: {
+          ...fakeSnapshots(() =>
+            Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+          ),
+          recheck: () => Promise.resolve({ state: "current", snapshot: snapshotFixture() }),
+        },
+        descriptionAuthority: admittingPort(),
+        generation: {
+          gateway: { chat: vi.fn() },
+          config: {} as PrDescription.PrDescriptionDeps["config"],
+          log: { write: () => undefined },
+        },
+        artifactRetention: { retain, hasProposal, reviewDraft },
+      }),
+    );
+    const controller = new AbortController();
+
+    await expect(dispatcher.generate(PR_SCOPE, controller.signal)).resolves.toMatchObject({
+      reason: "generated",
+      proposalId: "pr-description-1",
+    });
+    expect(retain).toHaveBeenCalledExactlyOnceWith(PR_SCOPE, generated.artifact, retainedSignal);
+    // Epic #3384 closeout ("retained HTTP review remains blocked by a cached operation
+    // AbortSignal"): retain() must never receive the run's OWN dispatch signal verbatim — that
+    // signal is later aborted independently of this artifact's retained lifecycle (supersede or
+    // eventual run pruning in codingRuntimeOrchestrator.ts), and gets baked into the retained
+    // proposal's PrDescriptionContext for the full life of the proposal (deps.ts's
+    // workbenchDescriptionContextProvider / prDescriptionService.ts's held()). Aborting the
+    // dispatch controller AFTER retention must never reach the signal retain() was given.
+    expect(retainedSignal).not.toBe(controller.signal);
+    expect(retainedSignal?.aborted).toBe(false);
+    controller.abort();
+    expect(retainedSignal?.aborted).toBe(false);
+    expect(dispatcher.hasProposal(PR_SCOPE, "pr-description-1", "a".repeat(64))).toBe(true);
+    expect(hasProposal).toHaveBeenCalledExactlyOnceWith(
+      PR_SCOPE,
+      "pr-description-1",
+      "a".repeat(64),
+    );
+    expect(generatePrDescriptionMock).toHaveBeenCalledOnce();
+  });
+
+  it("retains a generic generated artifact without inventing a PR target", async () => {
+    const generated = generatedDescription();
+    generatePrDescriptionMock.mockResolvedValueOnce(generated);
+    let retainedSignal: AbortSignal | undefined;
+    const retain: ProductionWorkbenchArtifactRetention["retain"] = vi.fn(
+      (
+        _scope: WorkbenchDescriptionScope,
+        _artifact: PrDescriptionArtifact,
+        signal: AbortSignal,
+      ) => {
+        retainedSignal = signal;
+        return Promise.resolve("draft-description-1");
+      },
+    );
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: {
+          ...fakeSnapshots(() =>
+            Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+          ),
+          recheck: () => Promise.resolve({ state: "current", snapshot: snapshotFixture() }),
+        },
+        descriptionAuthority: admittingPort(),
+        generation: {
+          gateway: { chat: vi.fn() },
+          config: {} as PrDescription.PrDescriptionDeps["config"],
+          log: { write: () => undefined },
+        },
+        artifactRetention: {
+          retain,
+          hasProposal: () => true,
+          reviewDraft: () => undefined,
+        },
+      }),
+    );
+    const controller = new AbortController();
+
+    await expect(dispatcher.generate(SCOPE, controller.signal)).resolves.toMatchObject({
+      reason: "generated",
+      proposalId: "draft-description-1",
+    });
+    expect(retain).toHaveBeenCalledExactlyOnceWith(SCOPE, generated.artifact, retainedSignal);
+    // Same decoupling requirement as the PR-targeted case above: a draft retention must also
+    // survive the run's dispatch signal being aborted after the artifact is already retained.
+    expect(retainedSignal).not.toBe(controller.signal);
+    expect(retainedSignal?.aborted).toBe(false);
+    controller.abort();
+    expect(retainedSignal?.aborted).toBe(false);
+    expect(SCOPE.applicationTarget).toBeUndefined();
+  });
+
+  it("fails closed when a PR-targeted artifact cannot be retained", async () => {
+    generatePrDescriptionMock.mockResolvedValueOnce(generatedDescription());
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: {
+          ...fakeSnapshots(() =>
+            Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+          ),
+          recheck: () => Promise.resolve({ state: "current", snapshot: snapshotFixture() }),
+        },
+        descriptionAuthority: admittingPort(),
+        generation: {
+          gateway: { chat: vi.fn() },
+          config: {} as PrDescription.PrDescriptionDeps["config"],
+          log: { write: () => undefined },
+        },
+      }),
+    );
+
+    await expect(dispatcher.generate(PR_SCOPE, new AbortController().signal)).resolves.toEqual({
+      reason: "generation-unavailable",
+    });
+  });
+});

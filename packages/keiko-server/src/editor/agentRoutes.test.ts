@@ -64,7 +64,6 @@ import { forwardWorkspaceFs, nodeWorkspaceFs } from "@oscharko-dev/keiko-workspa
 import { STREAMING, type RouteContext } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
-import { createAutonomousDeliveryApprovalStore } from "../coding-runtime/autonomousDeliveryApprovalStore.js";
 import * as workspaceSearchRoutes from "./workspaceSearchRoutes.js";
 import * as languageRoutes from "./languageRoutes.js";
 import { EDITOR_AGENT_ACTION_TIMEOUT_MS, editorAgentRegistry } from "./agentSessionRegistry.js";
@@ -74,7 +73,6 @@ import {
   applyChangesetErrorMessage,
   authorityDenyReason,
   handleEditorAgentActions as handleEditorAgentActionsRoute,
-  handleEditorAgentAuthority,
   handleEditorAgentAudit,
   handleEditorAgentEvents,
   handleEditorAgentSessions,
@@ -164,14 +162,6 @@ function responseBridgeCapability(body: unknown): string | undefined {
     : undefined;
 }
 
-function responseAuthorityRef(body: unknown): EditorAgentGovernedAuthorityReference | undefined {
-  if (!isRecord(body) || !isRecord(body.authorityRef)) return undefined;
-  const { runId, envelopeDigest } = body.authorityRef;
-  return typeof runId === "string" && typeof envelopeDigest === "string"
-    ? { runId, envelopeDigest }
-    : undefined;
-}
-
 function sha256(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
@@ -228,27 +218,6 @@ function authorityEnvelope(
     },
     expiresAt: "2099-01-01T00:00:00.000Z",
     approvalProofDigest: HASH,
-  };
-}
-
-function authorityRouteRequest(
-  envelope: CodingWorkbenchAuthorityEnvelope,
-  deploymentCeiling: CodingWorkbenchMode = "autonomous-delivery",
-): {
-  readonly body: Record<string, unknown>;
-  readonly deps: Parameters<typeof handleEditorAgentAuthority>[1];
-} {
-  const approvalStore = createAutonomousDeliveryApprovalStore();
-  return {
-    body: {
-      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-      authorityEnvelope: envelope,
-      confirmation: approvalStore.issue(envelope, "2026-07-10T00:00:00.000Z"),
-    },
-    deps: {
-      autonomousDeliveryApprovalStore: approvalStore,
-      autonomousDeliveryDeploymentCeiling: deploymentCeiling,
-    },
   };
 }
 
@@ -1848,49 +1817,6 @@ describe("server-resolved git query action (#2298)", () => {
 // ─── Original tests (unchanged) ────────────────────────────────────────────────────────────────
 
 describe("editor agent routes", () => {
-  it("registers a validated Authority Envelope and returns only its bounded reference", async () => {
-    const request = authorityRouteRequest(authorityEnvelope("/repo"));
-    const result = await handleEditorAgentAuthority(
-      context(request.body, "/api/editor/agent/authority"),
-      request.deps,
-    );
-    expect(result.status).toBe(200);
-    expect(responseAuthorityRef(result.body)).toEqual(
-      expect.objectContaining({ runId: "run-2121" }),
-    );
-    expect(JSON.stringify(result.body)).not.toContain("local-operator");
-    expect(JSON.stringify(result.body)).not.toContain("autonomous-delivery");
-    const replay = await handleEditorAgentAuthority(
-      context(request.body, "/api/editor/agent/authority"),
-      request.deps,
-    );
-    expect(replay.status).toBe(403);
-  });
-
-  it("rejects an Authority Envelope that is expired or exceeds the server ceiling", async () => {
-    const expiredEnvelope = {
-      ...authorityEnvelope("/repo"),
-      expiresAt: "2026-01-01T00:00:00.000Z",
-    };
-    const expiredRequest = authorityRouteRequest(expiredEnvelope);
-    const expired = await handleEditorAgentAuthority(
-      context(expiredRequest.body, "/api/editor/agent/authority"),
-      expiredRequest.deps,
-    );
-    const wrongCeilingEnvelope = authorityEnvelope(
-      "/repo",
-      "supervised-coding",
-      "supervised-coding",
-    );
-    const wrongCeilingRequest = authorityRouteRequest(wrongCeilingEnvelope);
-    const wrongCeiling = await handleEditorAgentAuthority(
-      context(wrongCeilingRequest.body, "/api/editor/agent/authority"),
-      wrongCeilingRequest.deps,
-    );
-    expect(expired.status).toBe(403);
-    expect(wrongCeiling.status).toBe(403);
-  });
-
   it("lists only browser sessions with a live authenticated bridge", async () => {
     const registered = await handleEditorAgentSnapshot(
       context(

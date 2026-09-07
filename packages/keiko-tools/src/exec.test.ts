@@ -516,6 +516,36 @@ describe("runCommand — timeout & cancellation (fake child)", () => {
     );
     spawn.child.emit("close", null, "SIGTERM");
     await expect(promise).rejects.toBeInstanceOf(CommandCancelledError);
+    expect(spawn.calls()).toHaveLength(0);
+  });
+
+  it("rechecks cancellation after preparation and cleans the reserved home without spawning", async () => {
+    const ctrl = controller();
+    const spawn = recordingSpawn();
+    const home = recordingHome();
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "1"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: ctrl.signal,
+      },
+      {
+        ...fakeDeps(spawn.fn),
+        home: {
+          make: (): string => {
+            const path = home.provider.make();
+            ctrl.abort();
+            return path;
+          },
+          cleanup: home.provider.cleanup,
+        },
+      },
+    );
+    await expect(promise).rejects.toBeInstanceOf(CommandCancelledError);
+    expect(spawn.calls()).toHaveLength(0);
+    expect(home.cleaned()).toEqual(home.made());
   });
 });
 
@@ -1029,6 +1059,92 @@ describe("runCommand — real node integration", () => {
   });
 });
 
+// `outputScrub: "credentials-only"` narrows the scrub set for the one read whose stdout IS the value
+// the caller needs (a configured remote URL). Both halves are pinned end to end through the real
+// spawn boundary: a context value the parent carries survives, a credential value still does not.
+describe("runCommand — outputScrub: credentials-only", () => {
+  function echoDeps(processEnv: NodeJS.ProcessEnv, credentialsOnly: boolean): RunCommandDeps {
+    return {
+      ...realDeps(processEnv),
+      policy: {
+        ...DEFAULT_SANDBOX_POLICY,
+        defaultTimeoutMs: 10_000,
+        ...(credentialsOnly ? { outputScrub: "credentials-only" as const } : {}),
+      },
+    };
+  }
+
+  const echo = (text: string): string => `process.stdout.write(${JSON.stringify(text)})`;
+
+  it("keeps a context value the parent carries in the output", async () => {
+    const result = await runCommand(
+      {
+        command: "node",
+        args: ["-e", echo("https://github.com/alicedev-team/App.git")],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      echoDeps(
+        { PATH: process.env.PATH ?? "", GITHUB_REPOSITORY: "alicedev-team/App", USER: "alicedev" },
+        true,
+      ),
+    );
+
+    expect(result.stdout).toBe("https://github.com/alicedev-team/App.git");
+  });
+
+  it("marks changed output even when secret replacement preserves byte length", async () => {
+    const secret = "1234567890";
+    const result = await runCommand(
+      {
+        command: "node",
+        args: ["-e", echo(secret)],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      echoDeps({ PATH: process.env.PATH ?? "", API_TOKEN: secret }, true),
+    );
+    expect(result.stdout).toHaveLength(secret.length);
+    expect(result.stdout).toBe("[REDACTED]");
+    expect(result.outputRedacted).toBe(true);
+  });
+
+  it("still redacts a credential value the parent carries", async () => {
+    const token = "deploy-tok3n-value-9";
+    const result = await runCommand(
+      {
+        command: "node",
+        args: ["-e", echo(`https://github.com/alicedev-team/${token}.git`)],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      echoDeps({ PATH: process.env.PATH ?? "", MY_DEPLOY_TOKEN: token }, true),
+    );
+
+    expect(result.stdout).not.toContain(token);
+    expect(result.stdout).toContain("[REDACTED]");
+  });
+
+  // The contrast that makes the mode necessary: the default policy scrubs the context value too.
+  it("is the only mode that lets the context value through", async () => {
+    const result = await runCommand(
+      {
+        command: "node",
+        args: ["-e", echo("https://github.com/alicedev-team/App.git")],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      echoDeps({ PATH: process.env.PATH ?? "", GITHUB_REPOSITORY: "alicedev-team/App" }, false),
+    );
+
+    expect(result.stdout).toContain("[REDACTED]");
+  });
+});
+
 describe("runCommand — enforced network egress (ADR-0043, network:'none')", () => {
   const NO_BACKENDS = {
     bubblewrap: false,
@@ -1154,6 +1270,41 @@ describe("runCommand — enforced network egress (ADR-0043, network:'none')", ()
     const result = await promise;
     expect(spawn.calls()[0]?.command).toBe("/abs/node");
     expect(result.attestation).toBeUndefined();
+  });
+
+  // #2951 residual finding: `SandboxPolicy.network` is `NetworkPolicy` ("inherit" | "none"), a
+  // narrower type than the long-lived coding-sidecar `NetworkGatewayPolicy` — the two are
+  // deliberately NOT unioned (see keiko-contracts/tools.ts). The old `!== "none"` check could not
+  // tell a misrouted gateway-shaped object from "inherit": ANY non-"none" value fell onto the
+  // fully unconfined path. `as unknown as NetworkPolicy` simulates a value TypeScript would never
+  // let a caller construct honestly but that could still reach this boundary at runtime (a stale
+  // cast, an `any`-typed adapter, a deserialized policy). Failing-before: with the old
+  // `!== "none"` check this ran the command directly on the inherited path and never rejected.
+  it("fails closed when a gateway-shaped policy value reaches the general network switch", async () => {
+    const spawn = recordingSpawn();
+    const misroutedGatewayPolicy = {
+      mode: "gateway",
+      host: "127.0.0.1",
+      port: 1983,
+    } as unknown as SandboxPolicy["network"];
+    const deps: RunCommandDeps = {
+      ...fakeDeps(spawn.fn),
+      policy: { ...DEFAULT_SANDBOX_POLICY, network: misroutedGatewayPolicy },
+      resolveExecutable: absResolver,
+    };
+    await expect(
+      runCommand(
+        {
+          command: "node",
+          args: ["-e", "1"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        deps,
+      ),
+    ).rejects.toBeInstanceOf(CommandDeniedError);
+    expect(spawn.calls()).toHaveLength(0);
   });
 });
 

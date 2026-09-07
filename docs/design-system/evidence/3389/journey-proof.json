@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "issue": 3389,
+  "checkedAt": "2026-09-06T20:18:22.955Z",
+  "passed": true,
+  "evidenceClass": "production-ui-deterministic-browser-fixture",
+  "modelQualification": false,
+  "liveAuthenticationQualification": false,
+  "cases": [
+    "preview displays exact server final body",
+    "managed and human regions remain visible",
+    "approval precedes one apply"
+  ],
+  "observations": {
+    "review": 1,
+    "approve": 1,
+    "apply": 1,
+    "exactFinalBodyDisplayed": true,
+    "humanRegionsDisplayed": true,
+    "appliedCapture": {
+      "screenshot": "docs/design-system/evidence/3389/09-applied.png",
+      "screenshotSha256": "b3f1713a492e21dbfc8298d2217354d07818d06af3c657a98d5182c693450ede"
+    }
+  },
+  "sourceHashes": {
+    "tests/e2e/git-change-chat-3400.spec.ts": "9047fcf321a78098b1d08a1e21a5dd26ce4cd06238094961415c78727205a20c",
+    "tests/e2e/config/playwright.git-change-chat-3400.config.ts": "d24e0151b791783a91bcc56829ed3b6ca84b72a2660304f39465ebbc3cbf2e85",
+    "tests/e2e/support/git-change-chat-3400.ts": "3dc35f2495b8d05589978d0d9c7c98d1692cc91a6c0b3744cf102be6a8cc0354",
+    "tests/e2e/support/pr-description-visual-evidence.ts": "b8fd2796d695925ac8bf2bb5e5a6442bf5a9e2940440b2c36502a14899998889",
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/GovernedPullRequestCard.tsx": "0936e3c2755854cf355db23d5dfd20e31bb520e075acd7c1d37a4c2b2f49f44f",
+    "packages/keiko-ui/src/app/components/desktop/widgets/index.tsx": "ca1a9493021033631b6313a76b72e7d303157d67deb52fdcf19de75a8c059a24",
+    "packages/keiko-ui/src/lib/api.ts": "06449c4452e62ea24a5c6fc6126de3d589ba3be99bfd65d5404d0d58ee42163a",
+    "packages/keiko-ui/src/lib/coding-workbench-lazy-fetchers.ts": "ee098fa12d955ed5c6c12bea5e712eebd327d1dc430b02a022ba8997b20dbe6b"
+  },
+  "rawContentRecorded": false
+}

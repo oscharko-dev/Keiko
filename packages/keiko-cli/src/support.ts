@@ -19,23 +19,25 @@ import { type AuditCliDeps, AuditLoadError, auditLocalStateResult } from "./audi
 // KEIKO-0655: shared argv-parsing helper replaces the byte-identical flagValue copy this file held.
 import { flagValue } from "./cli-arg-parsing.js";
 // GEN-PERF-CLI-001 — the evidence graph (and, below, the server module graph) load at dispatch,
-// and only for `export`; `analyze` never needs either. Store-fingerprint collection (ui,
+// and only for `export`; tool-lifecycle analysis lazily loads its narrow validator subpath. Store-fingerprint collection (ui,
 // local-knowledge, memory-vault) is owned by keiko-server (ADR-0019 direction rule 7: keiko-cli
 // is a leaf consumer and must not import keiko-local-knowledge directly) and reached through the
 // same lazily-loaded server module, via `server.collectStoreFingerprints`.
-import { loadEvidence, loadServer } from "./lazy-modules.js";
+import { loadEvidence, loadServer, loadToolLifecycle } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 import { resolveStateDir } from "./state-paths.js";
 import {
   analyzeLogText,
   buildReproductionSeed,
   findTimeline,
+  hasIssueToPrJourneyOps,
   renderGatewayReplayScriptFixture,
   renderHumanAllTimelines,
   renderHumanClusters,
   renderHumanReproductionSeed,
   renderHumanTimeline,
   type AnalyzeAllResult,
+  type SupportAnalyzeOptions,
   type LogTimeline,
   type OpCluster,
   type ReproductionSeed,
@@ -97,8 +99,8 @@ envelope promises no order across processes.
 a whole-file view of every parsed line grouped by (category, op, errorKind), independent of
 --correlation-id: a count and up to 5 sample correlation ids per group. --seed (requires
 --correlation-id) prints a ReproductionSeed — a gatewayScript/httpRequest/storeFingerprint/
-indexingJob/stackFrames/causeChain reconstruction for that one correlationId, plus a warnings field
-naming exactly what could not be reconstructed and why. --emit-fixture PATH (requires
+indexingJob/issueToPrJourney/stackFrames/causeChain reconstruction for that one correlationId, plus
+a warnings field naming exactly what could not be reconstructed and why. --emit-fixture PATH (requires
 --correlation-id) writes a ready-to-paste TypeScript GatewayReplayScriptEntry[] fixture, derived
 from that seed's gatewayScript, to PATH — refusing to overwrite an existing file and creating
 parent directories as needed. --seed and --emit-fixture may be combined in one invocation.
@@ -658,15 +660,20 @@ function emitClusters(clusters: readonly OpCluster[], json: boolean, io: CliIo):
   return 0;
 }
 
+// Single return statement by design (sonarjs/function-return-type): both arms assign the same
+// declared `string | number` union before one trailing return, rather than returning from inside
+// each branch, so the function's return shape reads as one type instead of two.
 function readAnalyzeSource(filePath: string, io: CliIo): string | number {
+  let result: string | number;
   try {
-    return readFileSync(filePath, "utf8");
+    result = readFileSync(filePath, "utf8");
   } catch (error) {
     // Content-free: an fs error's message can quote the path it was reading (AGENTS.md §7).
     const kind = error instanceof Error ? error.constructor.name : "Error";
     io.err(`keiko support analyze: could not read ${filePath} — ${kind}\n`);
-    return 1;
+    result = 1;
   }
+  return result;
 }
 
 function resolveFixturePath(cwd: string, path: string): string {
@@ -747,7 +754,13 @@ function emitSeedResult(
 // `--seed` / `--emit-fixture` (both require --correlation-id, enforced by `parseAnalyzeArgs`):
 // builds one `ReproductionSeed`, optionally writes the fixture derived from its `gatewayScript`,
 // then reports according to which of the two flags were actually requested.
-function runSeedAndFixture(text: string, args: AnalyzeArgs, cwd: string, io: CliIo): number {
+function runSeedAndFixture(
+  text: string,
+  args: AnalyzeArgs,
+  cwd: string,
+  io: CliIo,
+  options: SupportAnalyzeOptions,
+): number {
   const correlationId = args.correlationId;
   if (correlationId === undefined) {
     // Unreachable in practice: parseAnalyzeArgs rejects --seed/--emit-fixture without
@@ -756,7 +769,7 @@ function runSeedAndFixture(text: string, args: AnalyzeArgs, cwd: string, io: Cli
     io.err(`keiko support analyze: --seed/--emit-fixture require --correlation-id.\n${USAGE}`);
     return 2;
   }
-  const seed = buildReproductionSeed(text, correlationId, new Date());
+  const seed = buildReproductionSeed(text, correlationId, new Date(), options);
   if (seed === undefined) return reportMissingCorrelationId(correlationId, io);
 
   const fixtureOutcome = emitFixtureIfRequested(seed, args.emitFixture, correlationId, cwd, io);
@@ -771,20 +784,58 @@ function runSeedAndFixture(text: string, args: AnalyzeArgs, cwd: string, io: Cli
   return 0;
 }
 
-function runSupportAnalyze(args: AnalyzeArgs, io: CliIo, deps: SupportCliDeps): number {
+function needsToolLifecycleValidator(result: AnalyzeAllResult): boolean {
+  return result.timelines.some((timeline) =>
+    timeline.lines.some(
+      (line) =>
+        line.toolCatalog?.kind === "unavailable" ||
+        (line.toolCatalog?.kind === "sink-failure" &&
+          line.toolCatalog.diagnostics === "unavailable"),
+    ),
+  );
+}
+
+// The tool-lifecycle validator and the redaction re-verifier `hasIssueToPrJourneyOps` needs (epic
+// #3384) both live in the same lazily-loaded subpath (`loadToolLifecycle`, GEN-PERF-CLI-001), so
+// either need loads it — one module load, not two, for two unrelated consumers of the same seam.
+async function loadToolAnalysisOptions(
+  result: AnalyzeAllResult,
+  io: CliIo,
+): Promise<SupportAnalyzeOptions> {
+  if (!needsToolLifecycleValidator(result) && !hasIssueToPrJourneyOps(result)) return {};
+  try {
+    const { validateToolLifecycleEvent, redactLogFields } = await loadToolLifecycle();
+    return {
+      toolLifecycleValidator: validateToolLifecycleEvent,
+      toolDiagnosticRedactor: redactLogFields,
+    };
+  } catch (error) {
+    io.err(
+      `keiko support analyze: tool lifecycle validator unavailable — ${describeErrorKind(error)}\n`,
+    );
+    return {};
+  }
+}
+
+async function runSupportAnalyze(
+  args: AnalyzeArgs,
+  io: CliIo,
+  deps: SupportCliDeps,
+): Promise<number> {
   const cwd = deps.cwd ?? process.cwd();
   const filePath = isAbsolute(args.file) ? args.file : resolve(cwd, args.file);
   const text = readAnalyzeSource(filePath, io);
   if (typeof text === "number") return text;
 
-  if (args.clusters) {
-    return emitClusters(analyzeLogText(text).clusters, args.json, io);
-  }
+  const basic = analyzeLogText(text);
+  const options = await loadToolAnalysisOptions(basic, io);
+  const result =
+    options.toolLifecycleValidator === undefined ? basic : analyzeLogText(text, options);
+  if (args.clusters) return emitClusters(result.clusters, args.json, io);
   if (args.seed || args.emitFixture !== undefined) {
-    return runSeedAndFixture(text, args, cwd, io);
+    return runSeedAndFixture(text, args, cwd, io, options);
   }
 
-  const result = analyzeLogText(text);
   if (args.correlationId === undefined) {
     return emitAllTimelines(result, args.json, io);
   }

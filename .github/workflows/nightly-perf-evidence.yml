@@ -75,6 +75,21 @@ jobs:
             echo '```'
           } >>"${GITHUB_STEP_SUMMARY}"
           exit "${status:-0}"
+      - name: Check native coding runtime evidence against the current tree
+        id: coding-drift
+        continue-on-error: true
+        run: |
+          npm run --silent check:perf-evidence:coding-runtime -- \
+            --enforce-source-freshness --report-subject-drift >coding-evidence-check.log 2>&1 || status=$?
+          cat coding-evidence-check.log
+          {
+            echo '### Native coding runtime performance evidence'
+            echo
+            echo '```'
+            cat coding-evidence-check.log
+            echo '```'
+          } >>"${GITHUB_STEP_SUMMARY}"
+          exit "${status:-0}"
       # A repair lane that fails silently is worse than no lane: twelve consecutive failures went
       # unnoticed between 2026-07-19 and 2026-07-25, until pull requests deadlocked on evidence
       # nothing was refreshing. The drift step is `continue-on-error`, so this one reads its outcome
@@ -86,7 +101,7 @@ jobs:
       # deterministic digest check finishes in about two minutes under a 20-minute ceiling, so a
       # timeout means the runner itself is broken, which the failed workflow run reports on its own.
       - name: Report drift that only the reference environment can repair
-        if: ${{ steps.drift.outcome == 'failure' }}
+        if: ${{ steps.drift.outcome == 'failure' || steps.coding-drift.outcome == 'failure' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -106,14 +121,14 @@ jobs:
           fi
           # The format string is literal by design: values arrive as printf arguments.
           # shellcheck disable=SC2016
-          body=$(printf '%s\n\nThe committed performance evidence does not hold on `%s`: the deterministic contract found drift that a re-measurement repairs for good — a moved measurement toolchain, an unsound or unreadable document, a broken pinned baseline anchor, provenance that differs outside the lockfile, or a budget overrun. The job summary of the run names the exact findings.\n\nRun: %s\n\nOnly the declared reference environment can produce comparable numbers (linux/arm64, >=14 logical cores). Regenerate there and commit the affected evidence document as the final commit of the pull request that moved its ruler:\n\n```bash\n# Editor D12 evidence\nnpm run perf:evidence:regen\n\n# Workspace browser-performance evidence\nrm -f docs/release/1580-workspace-perf-evidence.json\nnpm run test:e2e:workspace-perf\n```\n\nSee `docs/qa/perf-evidence.md`. A pull request touching a measurement-toolchain member has no route to green until this is repaired; one that does not is unaffected (ADR-0156 D2). Ordinary subject drift — the measured product tree moving on — is reported in the same summary and deliberately does not raise this issue (ADR-0162).' "${marker}" "${GITHUB_REF_NAME}" "${RUN_URL}")
+          body=$(printf '%s\n\nThe committed performance evidence does not hold on `%s`: the deterministic contract found drift that a re-measurement repairs for good — a moved measurement toolchain, an unsound or unreadable document, a broken pinned baseline anchor, provenance that differs outside the lockfile, or a budget overrun. The job summary of the run names the exact findings.\n\nRun: %s\n\nOnly the declared reference environment for each target can produce comparable numbers: editor/workspace use linux/arm64 with >=14 logical cores; coding runtime uses the native macOS arm64 reference specified in docs/qa/perf-evidence.md. Regenerate on the matching host and commit the affected evidence document as the final commit of the pull request that moved its ruler:\n\n```bash\n# Editor D12 evidence\nnpm run perf:evidence:regen\n\n# Workspace browser-performance evidence\nrm -f docs/release/1580-workspace-perf-evidence.json\nnpm run test:e2e:workspace-perf\n\n# Coding runtime evidence on its native reference host\nnpm run perf:evidence:coding-runtime\n```\n\nSee `docs/qa/perf-evidence.md`. A pull request touching a measurement-toolchain member has no route to green until this is repaired; one that does not is unaffected (ADR-0156 D2). Ordinary subject drift — the measured product tree moving on — is reported in the same summary and deliberately does not raise this issue (ADR-0162).' "${marker}" "${GITHUB_REF_NAME}" "${RUN_URL}")
           if [ -n "${existing}" ]; then
             gh issue comment "${existing}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
           else
             gh issue create --repo "${GITHUB_REPOSITORY}" --title "${title}" --body "${body}"
           fi
       - name: Fail the lane when drift is unrepaired
-        if: ${{ steps.drift.outcome == 'failure' }}
+        if: ${{ steps.drift.outcome == 'failure' || steps.coding-drift.outcome == 'failure' }}
         run: |
           echo "Committed performance evidence does not hold on ${GITHUB_REF_NAME}; a tracking issue was filed."
           exit 1

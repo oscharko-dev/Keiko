@@ -28,6 +28,11 @@ export interface CodingRuntimeStartConfirmationFacts {
   readonly runtimeSource: CodingWorkbenchRuntimeSource;
   readonly modelSource: CodingWorkbenchModelSource;
   readonly modelProfileId: string;
+  readonly issueBindingDigest?: string | undefined;
+  readonly repositoryIdentity?: {
+    readonly kind: "github-origin" | "local";
+    readonly digest: string;
+  };
 }
 
 export interface CodingRuntimeStartConfirmationClaim {
@@ -69,7 +74,13 @@ export function codingRuntimeStartConfirmationClaim(
         },
         operator: facts.operatorId,
         task: facts.taskId,
+        ...(facts.issueBindingDigest === undefined
+          ? {}
+          : { issueBindingDigest: facts.issueBindingDigest }),
         project: { id: facts.projectId, digest: facts.projectDigest },
+        ...(facts.repositoryIdentity === undefined
+          ? {}
+          : { repositoryIdentity: facts.repositoryIdentity }),
         workspace: { id: facts.workspaceId, rootDigest: sha256Hex(facts.workspaceRoot) },
         branch: { ref: facts.branchRef, headDigest: facts.branchHeadDigest },
         mode: { requested: facts.requestedMode, ceiling: facts.deploymentCeiling },

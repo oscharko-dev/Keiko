@@ -1,0 +1,6 @@
+{
+  "scenarioId": "issue-to-pr-full-access",
+  "commitSha": "9999999999999999999999999999999999999999",
+  "platform": "macos-arm64",
+  "testStatus": "passed"
+}

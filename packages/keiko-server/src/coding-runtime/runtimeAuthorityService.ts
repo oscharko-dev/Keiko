@@ -1,4 +1,8 @@
 import { randomBytes } from "node:crypto";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 // KEIKO-0577: replace the file-local digest()/canonicalJson() with the shared, architecturally
 // correct helpers from @oscharko-dev/keiko-security so a second silently-diverging
 // implementation of a security-relevant hashing primitive cannot drift further.
@@ -11,6 +15,7 @@ import type {
   CodingWorkbenchCommandPolicy,
   CodingWorkbenchConnectorScope,
   CodingWorkbenchGate,
+  CodingWorkbenchIssueBinding,
   CodingWorkbenchMode,
   CodingWorkbenchModelProfile,
   CodingWorkbenchNetworkPolicy,
@@ -34,6 +39,7 @@ import {
   validateCodingWorkbenchRuntimeState,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import {
+  codingWorkbenchPolicyEffectFor,
   isCodingWorkbenchModeWidening,
   resolveEffectiveCodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
@@ -44,7 +50,10 @@ import {
   type EditorAgentRuntimeDelegationRequest,
 } from "../editor/agentAuthorityRegistry.js";
 import type {
+  ActiveGitDeliveryDescriptionAuthority,
   ActiveGitDeliveryRunAuthority,
+  GitDeliveryDescriptionAuthorityPort,
+  GitDeliveryDescriptionAuthorityScope,
   GitDeliveryRunAuthorityPort,
 } from "../gitDelivery/runBoundAuthority.js";
 import {
@@ -68,8 +77,166 @@ const OPERATOR_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> =
   "running",
   "paused",
 ]);
+// #3390: the real race is not in the orchestrator's own local dispatch ordering -- production
+// wiring (productionCodingRuntimePorts.ts's startProductionRuntime) already awaits the managed
+// runtime's start() to completion, including both its "ready" and "running" authority
+// transitions, before the orchestrator ever calls startInitialTurn. The actual window is earlier:
+// mint() (activateMintedRuntime / stateForMint) sets runtimeState to "starting" -- with the
+// authority ref, capability and tree binding already issued -- and that "starting" state
+// persists for the full duration of the managed runtime's own start() call. If the underlying
+// process becomes reachable and issues its own first model call before that start() promise
+// settles, the reservation lands while runtimeState.state is still "starting", not "ready" or
+// "running", and gets refused as an authority-resolution failure even though every other
+// admission fact (audience, runId, envelopeDigest) already matches. "starting" is a legal
+// interior state (LEGAL_TRANSITIONS.idle -> "starting" -> "ready" -> ...) and not a state a
+// reservation could be replayed into from anywhere else, so it is safe to admit alongside
+// "ready" and "running". Every other reservePromptTokens clause (audience, runId, envelopeDigest
+// match, paused-state refusal) stays exactly as strict; only the running-only state gate widens.
+const PROMPT_RESERVATION_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
+  "starting",
+  "ready",
+  "running",
+]);
+
+type RuntimeAuthorityMintFailureStage =
+  | "intent-binding"
+  | "approval-digest"
+  | "confirmation-consumption"
+  | "envelope-validation"
+  | "authority-registration"
+  | "capability-issuance";
+
+type RuntimeAuthorityMintFailureReason =
+  | "model-source-mismatch"
+  | "approval-digest-invalid"
+  | "confirmation-refused"
+  | "envelope-invalid"
+  | "registration-refused"
+  | "capability-issuance-refused";
+
+const MINT_FAILURE_ERROR_KIND: Readonly<Record<RuntimeAuthorityMintFailureReason, string>> = {
+  "model-source-mismatch": "CodingRuntimeAuthorityBindingFailure",
+  "approval-digest-invalid": "CodingRuntimeAuthorityValidationFailure",
+  "confirmation-refused": "CodingRuntimeAuthorityConfirmationFailure",
+  "envelope-invalid": "CodingRuntimeAuthorityValidationFailure",
+  "registration-refused": "CodingRuntimeAuthorityRegistrationFailure",
+  "capability-issuance-refused": "CodingRuntimeAuthorityCapabilityFailure",
+};
+
+function deliveryScopeGranted(mode: CodingWorkbenchMode): boolean {
+  return codingWorkbenchPolicyEffectFor(mode, "delivery", "medium") !== "denied";
+}
+
+// ADR-0138 D2: workspace-contained effects (commands included) are approval-required, never
+// denied outright, in Ask for approval. Deriving from the shared matrix -- the same pattern
+// deliveryScopeGranted already uses -- instead of hardcoding a mode exclusion keeps this mint
+// from silently diverging from the one evaluator every other workspace-contained action reads
+// (codingToolAuthorityPort.ts's workspaceMediumRiskAllowed).
+function commandExecutionGranted(mode: CodingWorkbenchMode): boolean {
+  return codingWorkbenchPolicyEffectFor(mode, "workspace-contained", "medium") !== "denied";
+}
+
+export const DELIVERY_CONNECTOR_SCOPES: readonly CodingWorkbenchConnectorScope[] = [
+  "source-control.read",
+  "source-control.write",
+];
+
+export function codingRuntimeActionClassesForMode(
+  mode: CodingWorkbenchMode,
+  researchEgressEnabled: boolean | undefined,
+): readonly CodingWorkbenchActionClass[] {
+  const actionClasses: CodingWorkbenchActionClass[] = [
+    "workspace-read",
+    "workspace-write",
+    "verification",
+  ];
+  if (commandExecutionGranted(mode)) actionClasses.push("command-execution");
+  if (deliveryScopeGranted(mode)) actionClasses.push("delivery-substrate", "connector-access");
+  if (researchEgressEnabled === true || mode === "autonomous-delivery") {
+    actionClasses.push("network-egress");
+  }
+  return actionClasses;
+}
+
+export function codingRuntimeConnectorScopesForMode(
+  mode: CodingWorkbenchMode,
+): readonly CodingWorkbenchConnectorScope[] {
+  return deliveryScopeGranted(mode) ? DELIVERY_CONNECTOR_SCOPES : [];
+}
+
+export function codingRuntimeNetworkPolicyForMode(
+  mode: CodingWorkbenchMode,
+  researchEgressEnabled: boolean | undefined,
+): CodingWorkbenchNetworkPolicy {
+  // The connector scopes a mode carries follow deliveryScopeGranted (see
+  // codingRuntimeConnectorScopesForMode), but the envelope contract
+  // (validateNetworkPolicyConnectorScopesConsistency / validateNetworkPolicyActionClassConsistency)
+  // requires networkPolicy.connectorScopes to be empty while the policy is deny-all. Below
+  // autonomous-delivery without research egress the mint therefore stays deny-all with no scopes;
+  // an approved connector-scoped request (git ci, "connector") is redeemed through the approval
+  // proof, never through a scope smuggled onto a deny-all policy.
+  const connectorScopes = codingRuntimeConnectorScopesForMode(mode);
+  if (mode === "autonomous-delivery") {
+    return { mode: "connector-scoped-egress", allowLoopback: false, connectorScopes };
+  }
+  return researchEgressEnabled === true
+    ? { mode: "governed-egress", allowLoopback: false, connectorScopes }
+    : { mode: "deny-all", allowLoopback: false, connectorScopes: [] };
+}
+
+export function codingRuntimeCommandPolicyForMode(
+  mode: CodingWorkbenchMode,
+): CodingWorkbenchCommandPolicy {
+  return {
+    mode: commandExecutionGranted(mode) ? "governed" : "deny",
+    allow: [],
+    deny: [],
+    maxCommandTimeoutMs: 120_000,
+    requirePerCommandApproval: mode !== "autonomous-delivery",
+  };
+}
+
+function narrowedCommandPolicy(
+  policy: CodingWorkbenchCommandPolicy,
+  mode: CodingWorkbenchMode,
+): CodingWorkbenchCommandPolicy {
+  const ceiling = codingRuntimeCommandPolicyForMode(mode);
+  return {
+    ...policy,
+    mode: policy.mode === "deny" || ceiling.mode === "deny" ? "deny" : policy.mode,
+    requirePerCommandApproval:
+      policy.requirePerCommandApproval || ceiling.requirePerCommandApproval,
+  };
+}
+
+function narrowAuthorityToMode(
+  authority: CodingWorkbenchAuthorityEnvelope,
+  mode: CodingWorkbenchMode,
+): CodingWorkbenchAuthorityEnvelope {
+  if (authority.effectiveMode === mode) return authority;
+  const retainGovernedResearch = authority.networkPolicy.mode === "governed-egress";
+  const allowedActionClasses = codingRuntimeActionClassesForMode(mode, retainGovernedResearch);
+  const allowedConnectorScopes = codingRuntimeConnectorScopesForMode(mode);
+  return {
+    ...authority,
+    effectiveMode: mode,
+    actionClasses: authority.actionClasses.filter((value) => allowedActionClasses.includes(value)),
+    connectorScopes: authority.connectorScopes.filter((value) =>
+      allowedConnectorScopes.includes(value),
+    ),
+    commandPolicy: narrowedCommandPolicy(authority.commandPolicy, mode),
+    networkPolicy: codingRuntimeNetworkPolicyForMode(mode, retainGovernedResearch),
+  };
+}
 
 export interface CodingRuntimeTrustedContext {
+  /** Captured before start confirmation; absent legacy contexts cannot execute verified commits. */
+  readonly repositoryIdentity?: {
+    readonly kind: "github-origin" | "local";
+    readonly digest: string;
+  };
+  /** Server-resolved launch identity; absent legacy contexts cannot adopt a committed head. */
+  readonly runId?: string;
   readonly operatorId: string;
   readonly taskId: string;
   readonly projectId: string;
@@ -78,6 +245,7 @@ export interface CodingRuntimeTrustedContext {
   readonly workspaceRoot: string;
   readonly branchRef: string;
   readonly branchHeadDigest: string;
+  readonly issueBinding?: CodingWorkbenchIssueBinding | undefined;
   readonly branch: CodingWorkbenchBranchConstraints;
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly runtimeSource: CodingWorkbenchRuntimeSource;
@@ -133,9 +301,64 @@ export type CodingRuntimeCapabilityRecheckInput = Omit<
   "delegationId" | "idempotencyKey" | "usage"
 >;
 
+// ─── Description authority (#3399, epic #3384 correction 4) ──────────────────────────────────────
+//
+// Admits exactly two effects outside a running Code task: model egress of snapshot content through
+// the Model Gateway (description generation) and the "pull-request" body-only description apply. It
+// is minted server-side for one immutable scope — never for "every PR" or "every repository" — and
+// carries no workspace-write or command action classes: it exists only to let a Chat turn or a
+// post-terminal Workbench job re-derive admission for these two narrow effects after the run that
+// produced the snapshot has ended (or never existed), never to reuse a terminated run's own
+// capabilities (runtimeAuthorityService.ts's `revokeBeforeTerminate` already clears those). The
+// scope/authority shapes live in runBoundAuthority.ts (the module that already owns every other
+// Git-delivery authority shape and consults this one at admission) so this file stays a producer
+// of that owning module's types, exactly like `ActiveGitDeliveryRunAuthority` above.
+interface StoredDescriptionAuthority {
+  readonly scope: GitDeliveryDescriptionAuthorityScope;
+  readonly effectiveMode: CodingWorkbenchMode;
+  readonly expiresAtMs: number;
+}
+export interface MintGitDeliveryDescriptionAuthorityInput {
+  readonly scope: GitDeliveryDescriptionAuthorityScope;
+  readonly requestedMode: CodingWorkbenchMode;
+  readonly deploymentCeiling: CodingWorkbenchMode;
+  readonly nowIso: string;
+  readonly ttlMs?: number;
+  readonly correlationId?: string;
+}
+
+const DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS = 10 * 60 * 1000;
+const MAX_DESCRIPTION_AUTHORITIES = 256;
+
+function descriptionAuthorityLifetime(input: MintGitDeliveryDescriptionAuthorityInput): {
+  readonly nowMs: number;
+  readonly expiresAtMs: number;
+} {
+  const nowMs = Date.parse(input.nowIso);
+  const ttlMs = input.ttlMs ?? DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS;
+  const expiresAtMs = nowMs + ttlMs;
+  if (
+    !Number.isFinite(nowMs) ||
+    !Number.isSafeInteger(ttlMs) ||
+    ttlMs <= 0 ||
+    ttlMs > DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS ||
+    !Number.isFinite(new Date(expiresAtMs).getTime())
+  ) {
+    throw new TypeError("Invalid description authority lifetime.");
+  }
+  return { nowMs, expiresAtMs };
+}
+
+export function descriptionAuthorityScopeDigest(
+  scope: GitDeliveryDescriptionAuthorityScope,
+): string {
+  return sha256Hex(canonicalise(scope));
+}
+
 export class CodingRuntimeAuthorityService {
   private activeAuthorityRef: CodingRuntimeAuthorityRef | undefined;
   private activeGitDeliveryAuthority: ActiveGitDeliveryRunAuthority | undefined;
+  private readonly descriptionAuthorities = new Map<string, StoredDescriptionAuthority>();
   private activeTreeBindingId: string | undefined;
   private activeEffectiveMode: CodingWorkbenchMode | undefined;
   private reapPending: { readonly runId: string; readonly treeBindingId: string } | undefined;
@@ -152,6 +375,7 @@ export class CodingRuntimeAuthorityService {
     private readonly newNonce: () => string = () => randomBytes(32).toString("hex"),
     private readonly approvals: SupervisedCodingApprovalStore = createInMemorySupervisedCodingApprovalStore(),
     private readonly capabilities: RuntimeCapabilityStore = createInMemoryRuntimeCapabilityStore(),
+    private readonly activityLog?: ServerLogSink,
   ) {}
 
   public confirmStart(
@@ -196,7 +420,7 @@ export class CodingRuntimeAuthorityService {
   ): CodingRuntimeMintResult {
     if (this.runtimeState.state !== "idle") return { ok: false, reason: "active-run-conflict" };
     if (intent.modelSource !== context.modelProfile.source) {
-      return { ok: false, reason: "authority-resolution-failed" };
+      return this.refuseMint(runId, "intent-binding", "model-source-mismatch");
     }
     const approvalDigest = this.consumeConfirmation(
       intent,
@@ -205,7 +429,9 @@ export class CodingRuntimeAuthorityService {
       confirmation,
       nowIso,
     );
-    if (approvalDigest === undefined) return { ok: false, reason: "authority-resolution-failed" };
+    if (approvalDigest === undefined) {
+      return this.refuseMint(runId, "confirmation-consumption", "confirmation-refused");
+    }
     return this.mintConfirmedStartForRun(runId, intent, context, approvalDigest, nowIso);
   }
 
@@ -218,11 +444,11 @@ export class CodingRuntimeAuthorityService {
     nowIso: string,
   ): CodingRuntimeMintResult {
     if (this.runtimeState.state !== "idle") return { ok: false, reason: "active-run-conflict" };
-    if (
-      intent.modelSource !== context.modelProfile.source ||
-      !/^[a-f0-9]{64}$/u.test(approvalDigest)
-    ) {
-      return { ok: false, reason: "authority-resolution-failed" };
+    if (intent.modelSource !== context.modelProfile.source) {
+      return this.refuseMint(runId, "intent-binding", "model-source-mismatch");
+    }
+    if (!/^[a-f0-9]{64}$/u.test(approvalDigest)) {
+      return this.refuseMint(runId, "approval-digest", "approval-digest-invalid");
     }
     const envelope = buildRuntimeAuthority(
       intent,
@@ -233,17 +459,22 @@ export class CodingRuntimeAuthorityService {
       approvalDigest,
     );
     if (!validateCodingWorkbenchRuntimeAuthorityEnvelope(envelope).ok) {
-      return { ok: false, reason: "authority-resolution-failed" };
+      return this.refuseMint(runId, "envelope-validation", "envelope-invalid");
     }
-    const registered = this.registry.registerRuntime(envelope, context.deploymentCeiling, nowIso);
-    if (!registered.ok) return { ok: false, reason: "authority-resolution-failed" };
+    const registered = this.registry.registerRuntime(
+      envelope,
+      context.deploymentCeiling,
+      nowIso,
+      context.issueBinding?.bindingDigest,
+    );
+    if (!registered.ok) return this.refuseRegistration(runId);
     const capabilities = this.issueCapabilities(
       envelope,
       registered.authorityRef,
       context.modelProfile,
     );
     if (capabilities === undefined) {
-      return { ok: false, reason: "authority-resolution-failed" };
+      return this.refuseMint(runId, "capability-issuance", "capability-issuance-refused");
     }
     return this.activateMintedRuntime({
       runId,
@@ -253,6 +484,26 @@ export class CodingRuntimeAuthorityService {
       context,
       nowIso,
     });
+  }
+
+  private refuseMint(
+    runId: string,
+    stage: RuntimeAuthorityMintFailureStage,
+    reason: RuntimeAuthorityMintFailureReason,
+  ): CodingRuntimeMintResult {
+    (this.activityLog ?? processServerLogSink()).write({
+      category: "security",
+      op: "coding-runtime.authority.mint-failed",
+      correlationId: runId,
+      level: "warn",
+      errorKind: MINT_FAILURE_ERROR_KIND[reason],
+      extra: { runId, stage, reason },
+    });
+    return { ok: false, reason: "authority-resolution-failed" };
+  }
+
+  private refuseRegistration(runId: string): CodingRuntimeMintResult {
+    return this.refuseMint(runId, "authority-registration", "registration-refused");
   }
 
   private activateMintedRuntime(input: {
@@ -272,7 +523,12 @@ export class CodingRuntimeAuthorityService {
     this.activeGitDeliveryAuthority = {
       runId,
       envelopeDigest: authorityRef.envelopeDigest,
-      projectId: context.projectId,
+      // Git-delivery's `projectId` is the canonical workspace root its route resolves and then
+      // compares with `workspaceRoot` at admission. The runtime context's `projectId` is the
+      // repository identity used by runtime-fact projection, so projecting it here made every
+      // managed-worktree delivery request fail `workspace-out-of-envelope` even when the exact
+      // active root matched. Preserve both meanings at their owning boundaries.
+      projectId: context.workspaceRoot,
       workspaceRoot: context.workspaceRoot,
       branch: context.branch,
       authority: envelope.authority,
@@ -280,6 +536,20 @@ export class CodingRuntimeAuthorityService {
     this.activeTreeBindingId = treeBindingId;
     this.activeEffectiveMode = envelope.authority.effectiveMode;
     this.runtimeState = stateForMint(this.runtimeState, envelope, nowIso);
+    (this.activityLog ?? processServerLogSink()).write({
+      category: "security",
+      op: "coding-runtime.authority.minted",
+      correlationId: runId,
+      level: "info",
+      extra: {
+        runId,
+        effectiveMode: envelope.authority.effectiveMode,
+        actionClasses: envelope.authority.actionClasses,
+        connectorScopes: envelope.authority.connectorScopes,
+        networkPolicyMode: envelope.authority.networkPolicy.mode,
+        maxPromptTokens: envelope.authority.budget.maxPromptTokens,
+      },
+    });
     return {
       ok: true,
       authorityRef,
@@ -317,6 +587,151 @@ export class CodingRuntimeAuthorityService {
     };
   }
 
+  // B1-3 (epic #3384): a run's git-delivery authority is minted before any pull request
+  // necessarily exists, so it carries no PR identity at mint time. Once the run's PR is created
+  // and published, the caller that learns of it (Git delivery's PR-creation path) binds that
+  // identity here so `current()`'s projection — and every admission that reads it, e.g.
+  // prDescriptionRoutes.ts's `admitDescriptionModelEgress` — can compare a request's
+  // ownerAndRepo/prNumber against the run's *actual* PR scope instead of admitting any PR in the
+  // same project. Requires the exact runId of the still-active run so a stale or mismatched
+  // caller cannot bind a PR onto a different (or already-ended) run.
+  public bindPublishedPullRequest(
+    runId: string,
+    pullRequest: { readonly ownerAndRepo: string; readonly prNumber: number },
+  ): boolean {
+    if (this.activeGitDeliveryAuthority?.runId !== runId) return false;
+    this.activeGitDeliveryAuthority = { ...this.activeGitDeliveryAuthority, pullRequest };
+    return true;
+  }
+
+  // A same-scope remint can only narrow a live grant's mode and expiry. An expired grant may
+  // be replaced only by a newly admitted caller; it cannot become live through a read.
+  public mintGitDeliveryDescriptionAuthority(
+    input: MintGitDeliveryDescriptionAuthorityInput,
+  ): ActiveGitDeliveryDescriptionAuthority {
+    let lifetime: ReturnType<typeof descriptionAuthorityLifetime>;
+    try {
+      lifetime = descriptionAuthorityLifetime(input);
+    } catch (error) {
+      this.logDescriptionAuthority(input, "rejected", {}, error);
+      throw error;
+    }
+    const digest = descriptionAuthorityScopeDigest(input.scope);
+    const prior = this.descriptionAuthorities.get(digest);
+    const live = prior !== undefined && prior.expiresAtMs > lifetime.nowMs ? prior : undefined;
+    const requested = resolveEffectiveCodingWorkbenchMode(
+      input.requestedMode,
+      input.deploymentCeiling,
+    );
+    const effectiveMode = resolveEffectiveCodingWorkbenchMode(
+      requested,
+      live?.effectiveMode ?? requested,
+    );
+    const expiresAtMs = Math.min(lifetime.expiresAtMs, live?.expiresAtMs ?? lifetime.expiresAtMs);
+    const expiresAt = new Date(expiresAtMs).toISOString();
+    this.descriptionAuthorities.set(digest, { scope: input.scope, effectiveMode, expiresAtMs });
+    const evictedCount = this.pruneDescriptionAuthorities(lifetime.nowMs);
+    this.logDescriptionAuthority(input, live === undefined ? "minted" : "narrowed", {
+      effectiveMode,
+      expiresAtMs,
+      evictedCount,
+      retainedCount: this.descriptionAuthorities.size,
+    });
+    return { scope: input.scope, effectiveMode, expiresAt };
+  }
+
+  private logDescriptionAuthority(
+    input: MintGitDeliveryDescriptionAuthorityInput,
+    event: "minted" | "narrowed" | "rejected",
+    extra: Readonly<Record<string, string | number>>,
+    error?: unknown,
+  ): void {
+    (this.activityLog ?? processServerLogSink()).write({
+      category: "security",
+      op: "coding-runtime.description-authority",
+      correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
+      level: event === "rejected" ? "warn" : "info",
+      ...(error === undefined ? {} : { errorKind: errorKindOf(error) }),
+      extra: {
+        event,
+        scopeDigest: descriptionAuthorityScopeDigest(input.scope),
+        requestedMode: input.requestedMode,
+        deploymentCeiling: input.deploymentCeiling,
+        ...extra,
+        ...(error === undefined
+          ? {}
+          : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
+      },
+    });
+  }
+
+  /**
+   * Server-private projection consumed only by `runBoundAuthority.ts`'s description-authority
+   * admission for the two operations it names. Revalidates on every read: an exact scope match
+   * (the caller's freshly re-derived snapshot/base/head digests, not a cached identity) that has
+   * not expired. A changed scope — a stale re-check, a different PR, a moved base/head — simply
+   * finds no record, which is the fail-closed default: this port never widens what it returns.
+   */
+  public gitDeliveryDescriptionAuthorityPort(): GitDeliveryDescriptionAuthorityPort {
+    return {
+      current: (scope, nowIso): ActiveGitDeliveryDescriptionAuthority | undefined =>
+        this.currentGitDeliveryDescriptionAuthority(scope, nowIso),
+      expired: (scope, nowIso): boolean =>
+        this.gitDeliveryDescriptionAuthorityExpired(scope, nowIso),
+    };
+  }
+
+  /** Explicit revocation for a scope change or stale re-check the caller has already detected. */
+  public revokeGitDeliveryDescriptionAuthority(scope: GitDeliveryDescriptionAuthorityScope): void {
+    this.descriptionAuthorities.delete(descriptionAuthorityScopeDigest(scope));
+  }
+
+  private currentGitDeliveryDescriptionAuthority(
+    scope: GitDeliveryDescriptionAuthorityScope,
+    nowIso: string,
+  ): ActiveGitDeliveryDescriptionAuthority | undefined {
+    const nowMs = Date.parse(nowIso);
+    const stored = this.descriptionAuthorities.get(descriptionAuthorityScopeDigest(scope));
+    if (stored === undefined || Number.isNaN(nowMs) || stored.expiresAtMs <= nowMs) {
+      return undefined;
+    }
+    return {
+      scope: stored.scope,
+      effectiveMode: stored.effectiveMode,
+      expiresAt: new Date(stored.expiresAtMs).toISOString(),
+    };
+  }
+
+  // #3400/#3401 final-audit F1: consulted only by `authorizeGitDeliveryModelEgress` once `current`
+  // has already returned `undefined` for this exact scope. Distinguishes a record that WAS minted
+  // for this scope but has since passed its `expiresAt` (`true`) from no record ever having
+  // existed for it (`false`) — the same map lookup `currentGitDeliveryDescriptionAuthority` already
+  // performs, read for its expiry state instead of being discarded on it.
+  private gitDeliveryDescriptionAuthorityExpired(
+    scope: GitDeliveryDescriptionAuthorityScope,
+    nowIso: string,
+  ): boolean {
+    const nowMs = Date.parse(nowIso);
+    const stored = this.descriptionAuthorities.get(descriptionAuthorityScopeDigest(scope));
+    return stored !== undefined && !Number.isNaN(nowMs) && stored.expiresAtMs <= nowMs;
+  }
+
+  // Retain expired-vs-absent evidence until the bounded map needs space. At capacity, evict
+  // expired records before still-live grants, and enforce the cap after inserting the new scope.
+  private pruneDescriptionAuthorities(nowMs: number): number {
+    let evictedCount = 0;
+    while (this.descriptionAuthorities.size > MAX_DESCRIPTION_AUTHORITIES) {
+      const expired = [...this.descriptionAuthorities].find(
+        ([, value]) => value.expiresAtMs <= nowMs,
+      );
+      const oldest = expired?.[0] ?? this.descriptionAuthorities.keys().next().value;
+      if (oldest === undefined) break;
+      this.descriptionAuthorities.delete(oldest);
+      evictedCount += 1;
+    }
+    return evictedCount;
+  }
+
   /** Authenticates and atomically reserves estimated prompt tokens before provider dispatch. */
   public reservePromptTokens(
     capability: string,
@@ -331,7 +746,7 @@ export class CodingRuntimeAuthorityService {
     if (
       authenticated.binding.audience !== "model-gateway" ||
       reference === undefined ||
-      this.runtimeState.state !== "running" ||
+      !PROMPT_RESERVATION_ADMISSIBLE_STATES.has(this.runtimeState.state) ||
       this.runtimeState.runId !== authenticated.binding.runId ||
       reference.runId !== authenticated.binding.runId ||
       reference.envelopeDigest !== authenticated.binding.envelopeDigest
@@ -344,6 +759,41 @@ export class CodingRuntimeAuthorityService {
       new Date(nowMs).toISOString(),
     );
     return reserved.ok ? { ok: true, runId: reference.runId } : reserved;
+  }
+
+  /**
+   * Authenticates and reconciles a prompt-token reservation against the provider's real reported
+   * usage for the same call, mirroring {@link reservePromptTokens}'s authentication and binding
+   * checks so a settlement can only ever land against the same run whose capability reserved it.
+   */
+  public settlePromptTokens(
+    capability: string,
+    reservedPromptTokens: number,
+    actualPromptTokens: number,
+    nowMs = Date.now(),
+  ):
+    | { readonly ok: true; readonly runId: string }
+    | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
+    const authenticated = this.capabilities.authenticate(capability, nowMs);
+    const reference = this.activeAuthorityRef;
+    if (!authenticated.ok) return capabilityFailure(authenticated.reason);
+    if (
+      authenticated.binding.audience !== "model-gateway" ||
+      reference === undefined ||
+      !PROMPT_RESERVATION_ADMISSIBLE_STATES.has(this.runtimeState.state) ||
+      this.runtimeState.runId !== authenticated.binding.runId ||
+      reference.runId !== authenticated.binding.runId ||
+      reference.envelopeDigest !== authenticated.binding.envelopeDigest
+    ) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    const settled = this.registry.settleRuntimePromptTokens(
+      reference,
+      reservedPromptTokens,
+      actualPromptTokens,
+      new Date(nowMs).toISOString(),
+    );
+    return settled.ok ? { ok: true, runId: reference.runId } : settled;
   }
 
   public pause(runId: string, nowIso: string): CodingRuntimeAuthorityBoundaryResult {
@@ -601,10 +1051,7 @@ export class CodingRuntimeAuthorityService {
       ok: true,
       envelope: {
         ...resolution.envelope,
-        authority: {
-          ...resolution.envelope.authority,
-          effectiveMode: this.activeEffectiveMode,
-        },
+        authority: narrowAuthorityToMode(resolution.envelope.authority, this.activeEffectiveMode),
       },
     };
   }
@@ -642,7 +1089,7 @@ export class CodingRuntimeAuthorityService {
     if (!this.registry.revalidateRetainedRuntime(reference, nowIso).ok) return undefined;
     return {
       ...active,
-      authority: { ...active.authority, effectiveMode: this.activeEffectiveMode },
+      authority: narrowAuthorityToMode(active.authority, this.activeEffectiveMode),
     };
   }
 

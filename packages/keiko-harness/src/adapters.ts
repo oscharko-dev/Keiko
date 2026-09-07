@@ -1,8 +1,18 @@
 // Production-side port adapters. GatewayModelPort wraps the ADR-0003 Gateway and
 // propagates the run's AbortSignal as GatewayRequest.cancellationSignal. DryRunToolPort
-// records tool calls without executing them — the Wave-1 no-op executor that keeps the
-// CLI dry-run path free of any side effect (real executors land in issue #6).
-
+// exposes no productive handlers and rejects attempts without fabricating a successful result.
+//
+// ADR-0175 D1/D6 assign bound/ready/offer/dispatch to server composition (#3413); this harness
+// retains only its outer run counters and AbortSignal/run settlement (#3409). The CLI and server
+// run engine compose their sessions with `dryRun: true` (packages/keiko-cli/src/run.ts,
+// packages/keiko-server/src/run-engine.ts) and never supply `bindToolCatalog`, so `session.ts`
+// structurally never binds a catalog for them (`resolveDryRun(config) === true` short-circuits
+// `bindHarnessCatalog`). That composition is intentionally non-productive: dry-run stays the
+// nonproductive readiness mode for those two call sites (docs/architecture/tool-catalog
+// -migration inventory rows `cli-composition`/`server-composition`, owner #3409). `listTools()`
+// still advertises the compiled `legacy-native@1` catalog projection for honest discovery — what
+// the profile declares — while `execute()` unconditionally refuses with a closed harness error so
+// no advertised tool is ever reported as available or executed.
 import {
   CancelledError,
   type GatewayCallRequest,
@@ -10,6 +20,9 @@ import {
   type NormalizedResponse,
   type ToolDefinition,
 } from "@oscharko-dev/keiko-model-gateway";
+import { TOOL_DEFINITIONS, UNAVAILABLE_TOOL_CATALOG_BINDING } from "@oscharko-dev/keiko-tools";
+import { HarnessCatalogError } from "./catalog-errors.js";
+import { HARNESS_CODES } from "./errors.js";
 import type { ModelPort, ToolCallRequest, ToolCallResult, ToolPort } from "./ports.js";
 
 // The minimal Gateway surface the model port depends on. Depending on this structural
@@ -54,28 +67,39 @@ export interface RecordedToolCall {
   readonly arguments: Record<string, unknown>;
 }
 
-export class DryRunToolPort implements ToolPort {
-  private readonly recorded: RecordedToolCall[] = [];
+export interface DryRunCatalogBinding {
+  readonly catalogRevision: string;
+  readonly profile: { readonly id: string; readonly version: number };
+  readonly projectionDigest: string;
+  readonly handlerSetDigest: string;
+}
 
-  constructor(private readonly tools: readonly ToolDefinition[] = []) {}
+export class DryRunToolPort implements ToolPort {
+  /** Body-free identity of this port's canonical projection and deliberately empty handler set. */
+  catalogBinding(): DryRunCatalogBinding {
+    return UNAVAILABLE_TOOL_CATALOG_BINDING;
+  }
 
   execute(request: ToolCallRequest): Promise<ToolCallResult> {
     if (request.signal.aborted) {
       return Promise.reject(new CancelledError("tool execution aborted before start"));
     }
-    this.recorded.push({
-      toolCallId: request.toolCallId,
-      toolName: request.toolName,
-      arguments: request.arguments,
-    });
-    return Promise.resolve({ toolCallId: request.toolCallId, output: "", durationMs: 0 });
+    return Promise.reject(
+      new HarnessCatalogError(HARNESS_CODES.TOOL_ERROR, "Dry-run tool handler unavailable"),
+    );
   }
 
+  // Advertisement only (ADR-0175 D4: "dry-run ... backends are readiness states, never
+  // productive availability"). The list is the canonical compiled legacy-native@1 projection
+  // owned by @oscharko-dev/keiko-tools (packages/keiko-tools/src/schemas.ts), reused here rather
+  // than recomputed — the same reuse pattern this package already follows for
+  // EDITOR_AGENT_TOOL_DEFINITIONS (packages/keiko-harness/src/editor-agent-catalog.ts). Never
+  // caller input, and execute() above refuses every one of these names unconditionally.
   listTools(): readonly ToolDefinition[] {
-    return this.tools;
+    return TOOL_DEFINITIONS;
   }
 
   calls(): readonly RecordedToolCall[] {
-    return this.recorded;
+    return [];
   }
 }

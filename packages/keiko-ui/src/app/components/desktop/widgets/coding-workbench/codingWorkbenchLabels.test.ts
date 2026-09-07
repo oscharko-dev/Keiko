@@ -98,6 +98,31 @@ describe("lifecycleAnnouncement source reason", () => {
     expect(announcement).toContain("codingWorkbench.source.unavailableReason.no-tool-calling");
   });
 
+  // #3390 closeout: a source can report "available" per config/probe yet still be unusable
+  // because its derived context window cannot survive one real request (epic #3384).
+  it("names the insufficient-context-window reason next to the source announcement", () => {
+    const state: CodingWorkbenchRuntimeState = {
+      ...createInitialCodingWorkbenchRuntimeState("governed-assist", "managed-gateway"),
+      source: {
+        status: "ready",
+        error: null,
+        value: {
+          runtimePreference: "managed-gateway",
+          modelSource: "keiko-model-gateway",
+          runtimeSource: "keiko-sidecar",
+          available: false,
+          unavailableReason: "model-context-window-insufficient",
+          verification: "unverified",
+        },
+      },
+    };
+    const announcement = lifecycleAnnouncement(state, t);
+    expect(announcement).toContain("codingWorkbench.announcement.modelSource.unavailable");
+    expect(announcement).toContain(
+      "codingWorkbench.source.unavailableReason.model-context-window-insufficient",
+    );
+  });
+
   it("stays silent about a reason the catalog does not know", () => {
     const state: CodingWorkbenchRuntimeState = {
       ...createInitialCodingWorkbenchRuntimeState("governed-assist", "managed-gateway"),

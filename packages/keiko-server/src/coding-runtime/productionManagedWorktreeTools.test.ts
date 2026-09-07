@@ -1,4 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Script } from "node:vm";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   CodeTaskGrantId,
@@ -9,14 +14,47 @@ import type {
   VerificationStatus,
 } from "@oscharko-dev/keiko-contracts";
 import type { GatewayFetchOptions } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import { GitWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-worktree-snapshot-node";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import { VerificationRunnerError } from "../editor/verificationRunnerErrors.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
-import { createProductionManagedWorktreeToolFacade } from "./productionManagedWorktreeTools.js";
+import {
+  createProductionManagedWorktreeToolFacade,
+  codingVerificationTargetDigest,
+  deriveOptionalToolAvailability,
+  recordProposalApprovalResolutionFailure,
+  resolveChildModelForRun,
+  waitForRuntimeProposalApproval,
+} from "./productionManagedWorktreeTools.js";
+import type { SkillCatalog } from "./skillCatalog.js";
+import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
+import type {
+  VerifiedCommitProposal,
+  VerifiedCommitService,
+} from "../gitDelivery/verifiedCommitTypes.js";
+import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
+import type { CiObservationService } from "../gitDelivery/ciObservationService.js";
+import { readySnapshot } from "../gitDelivery/ciObservationTest/_support.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
+import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
+import {
+  createVerificationRunnerManager,
+  type VerificationExecutePort,
+  type VerificationRunnerManager,
+} from "../editor/verificationRunner.js";
+import { createInMemoryUiStore } from "../store/index.js";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { createGeneratedOpenCodeBundle } from "./opencodeRuntimeAdapter.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "../observability/index.js";
 
 const DIGEST = "a".repeat(64);
 const resolveWorkspaceRootAccess = (): WorkspaceRootAccess => ({
@@ -48,6 +86,235 @@ const FACTS: CodingWorkbenchRuntimeAuthorityFacts = {
 };
 
 describe("production managed worktree tools", () => {
+  it("settles a detached approval wait when live proposal review fails closed", async () => {
+    const activity: ServerLogEvent[] = [];
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const failure = new Error("PRIVATE_WORKSPACE_PATH_SENTINEL");
+    const probe = {
+      review: (): never => {
+        throw failure;
+      },
+      matchesApproval: vi.fn(() => false),
+    };
+
+    await expect(
+      waitForRuntimeProposalApproval(probe, "proposal-drift", undefined, (error) => {
+        recordProposalApprovalResolutionFailure(
+          {
+            authorityRef: { runId: "run-proposal-drift", envelopeDigest: DIGEST },
+            activityLog: { write: (event): void => void activity.push(event) },
+            diagnostics: { record: (record): void => void diagnostics.push(record) },
+          },
+          "commit",
+          "proposal-drift",
+          error,
+        );
+      }),
+    ).resolves.toBe("unavailable");
+    expect(activity).toEqual([
+      expect.objectContaining({
+        op: "coding-runtime.tool-result",
+        correlationId: "run-proposal-drift",
+        errorKind: "Error",
+        extra: expect.objectContaining({
+          actionKind: "commit",
+          proposalId: "proposal-drift",
+          state: "approval-wait-failed",
+          reason: "authority-resolution-failed",
+          frames: expect.any(Array) as unknown,
+          causeChain: expect.any(Array) as unknown,
+        }) as unknown,
+      }),
+    ]);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        operation: "coding-runtime.tool-result",
+        correlationId: "run-proposal-drift",
+        errorClass: "Error",
+        message: "runtime-approval-resolution-failed",
+      }),
+    ]);
+    expect(JSON.stringify({ activity, diagnostics })).not.toContain(
+      "PRIVATE_WORKSPACE_PATH_SENTINEL",
+    );
+    expect(probe.matchesApproval).not.toHaveBeenCalled();
+  });
+
+  it("holds an approval-required stage proposal until its exact approval is issued", async () => {
+    vi.useFakeTimers();
+    try {
+      let approved = false;
+      const proposal = {
+        kind: "stage" as const,
+        proposalId: "stage-3384",
+        status: "approval-required" as const,
+        reason: "approval-required" as const,
+        pathCount: 1,
+      };
+      const requestStageApproval = vi.fn();
+      const log: ServerLogEvent[] = [];
+      const service = {
+        execute: vi.fn(() => Promise.resolve(proposal)),
+        review: vi.fn(() => proposal),
+        matchesApproval: vi.fn(() => approved),
+      } as unknown as RuntimeGitService;
+      const facade = verificationFacade({
+        runToReport: vi.fn(),
+        records: [],
+        runtimeGitService: service,
+        requestStageApproval,
+        log,
+      });
+
+      const pending = facade.execute({
+        capability: "runtime-capability",
+        body: JSON.stringify({
+          action: "git",
+          operation: "stage",
+          phase: "propose",
+          paths: ["src/index.ts"],
+          actionId: "stage-1",
+          idempotencyKey: "stage-1",
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(requestStageApproval).toHaveBeenCalledExactlyOnceWith("stage-3384");
+      let settled = false;
+      void pending.then((): void => {
+        settled = true;
+      });
+      expect(settled).toBe(false);
+
+      approved = true;
+      await vi.advanceTimersByTimeAsync(25);
+      await expect(pending).resolves.toMatchObject({
+        status: "completed",
+        git: { proposalId: "stage-3384", status: "ready", reason: "none" },
+      });
+      expect(log).toContainEqual(
+        expect.objectContaining({
+          op: "coding-runtime.tool-result",
+          correlationId: "run-verification-3",
+          extra: {
+            actionKind: "git-stage",
+            proposalId: "stage-3384",
+            state: "approval-wait-settled",
+            reason: "approved",
+          },
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("routes a CI tool call to the confirmed-PR observer through the existing facade", async () => {
+    const observe = vi.fn<CiObservationService["observe"]>(() =>
+      Promise.resolve({ status: "observed", snapshot: readySnapshot(), retryAfterMs: 0 }),
+    );
+    const facade = verificationFacade({
+      runToReport: vi.fn(),
+      records: [],
+      ciObservationService: { observe },
+    });
+    const result = await facade.execute({
+      capability: "runtime-capability",
+      body: JSON.stringify({
+        action: "git",
+        operation: "ci",
+        actionId: "ci-1",
+        idempotencyKey: "ci-1",
+      }),
+    });
+    expect(result).toMatchObject({
+      status: "completed",
+      ci: { status: "observed", snapshot: readySnapshot() },
+    });
+    expect(observe).toHaveBeenCalledExactlyOnceWith();
+  });
+  // #3388: keiko_ci_status's bounded optional forceFresh threads through to the observer exactly
+  // as supplied -- an omitted forceFresh keeps calling observe() with no argument at all (the
+  // prior test pins that shape), never an explicit `undefined`.
+  it("forwards an explicit forceFresh to the CI observer", async () => {
+    const observe = vi.fn<CiObservationService["observe"]>(() =>
+      Promise.resolve({ status: "observed", snapshot: readySnapshot(), retryAfterMs: 0 }),
+    );
+    const facade = verificationFacade({
+      runToReport: vi.fn(),
+      records: [],
+      ciObservationService: { observe },
+    });
+    await facade.execute({
+      capability: "runtime-capability",
+      body: JSON.stringify({
+        action: "git",
+        operation: "ci",
+        actionId: "ci-2",
+        idempotencyKey: "ci-2",
+        forceFresh: true,
+      }),
+    });
+    expect(observe).toHaveBeenCalledExactlyOnceWith(true);
+  });
+  it("keeps an unavailable CI backend explicit and rejects model-selected PR targets", async () => {
+    const facade = verificationFacade({ runToReport: vi.fn(), records: [] });
+    const request = { action: "git", operation: "ci", actionId: "ci-1", idempotencyKey: "ci-1" };
+    expect(
+      await facade.execute({ capability: "runtime-capability", body: JSON.stringify(request) }),
+    ).toMatchObject({ status: "failed", reasonCode: "capability-backend-unavailable" });
+    expect(
+      await facade.execute({
+        capability: "runtime-capability",
+        body: JSON.stringify({ ...request, prNumber: 99 }),
+      }),
+    ).toMatchObject({ status: "invalid" });
+  });
+  it("does not publish or complete verification after its repair lease expires in the runner", async () => {
+    let repairLive = true;
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const records: ServerDiagnosticRecord[] = [];
+    const completeVerification = vi.fn<VerifiedCommitService["completeVerification"]>(() =>
+      Promise.resolve(true),
+    );
+    const service = { ...verificationService(), completeVerification };
+    const settle = vi.fn();
+    const facade = verificationFacade({
+      records,
+      events,
+      verifiedCommitService: service,
+      ciRepairBudget: {
+        admitTool: () => ({ check: (): boolean => repairLive, settle }),
+        canChargePrompt: () => true,
+        chargePrompt: () => true,
+        observed: vi.fn(),
+      },
+      runToReport: async () => {
+        await Promise.resolve();
+        repairLive = false;
+        return verificationReport("passed");
+      },
+    });
+    expect(
+      await facade.execute({
+        capability: "runtime-capability",
+        body: JSON.stringify({
+          action: "verification",
+          verifierId: "test",
+          actionId: "late",
+          idempotencyKey: "late",
+        }),
+      }),
+    ).toMatchObject({ status: "failed" });
+    expect(completeVerification).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        operation: "coding-runtime.verification",
+        errorClass: "verification-authority-revoked",
+      }),
+    );
+    expect(settle).toHaveBeenCalledOnce();
+  });
   it("routes reads through the secure workspace port and rechecks live authority", async () => {
     let live = true;
     const readText = vi.fn(() => Promise.resolve({ ok: true as const, text: "private source" }));
@@ -142,7 +409,11 @@ describe("production managed worktree tools", () => {
               },
             }),
         },
-        mutationLeaseCoordinator: { register, discard: vi.fn((): boolean => true) },
+        mutationLeaseCoordinator: {
+          register,
+          discard: vi.fn((): boolean => true),
+          waitForMutation: () => Promise.resolve("succeeded"),
+        },
         invocationRegistry: createCodingToolInvocationRegistry(),
         verificationRunner: { runToReport: vi.fn() },
         onRuntimeEvent: vi.fn(),
@@ -165,6 +436,52 @@ describe("production managed worktree tools", () => {
       expect(register).toHaveBeenCalledWith(expect.objectContaining({ requiresReview }));
     },
   );
+
+  it("returns bounded actionable diagnostics for a failed verifier without exposing its workspace root", async () => {
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const facade = verificationFacade({
+      runToReport: () => Promise.resolve(failedVerificationReport()),
+      records: [],
+      events,
+    });
+
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "verification-diagnostics",
+        idempotencyKey: "verification-diagnostics-key",
+        verifierId: "test",
+      }),
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      reasonCode: "VERIFICATION_FAILED",
+      verificationFailure: {
+        summary: "test failed; 1 structured failure location",
+        locations: [
+          {
+            file: "ci/numerical-stability.test.js",
+            line: 19,
+            column: 5,
+            message: "expected the stable average to remain finite",
+          },
+        ],
+        truncated: true,
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("/managed/worktree");
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_FAILURE_CANARY");
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "verification-summarized",
+        failureLocationCount: 1,
+        failureLocationsTruncated: true,
+        verificationTargetDigest: codingVerificationTargetDigest("test"),
+      }),
+    );
+  });
 
   it("threads live proxy and CA settings into the governed research transport", async () => {
     const registry = createResearchGrantRegistry();
@@ -224,17 +541,16 @@ describe("production managed worktree tools", () => {
       },
     });
 
-    await expect(
-      facade.execute({
-        capability: "opaque-capability",
-        body: JSON.stringify({
-          action: "egress",
-          actionId: "research-1",
-          idempotencyKey: "research-key-1",
-          target: "https://docs.example.org/",
-        }),
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "egress",
+        actionId: "research-1",
+        idempotencyKey: "research-key-1",
+        target: "https://docs.example.org/",
       }),
-    ).resolves.toMatchObject({ status: "completed" });
+    });
+    expect(result).toMatchObject({ status: "completed" });
     expect(calls[0]?.egress).toMatchObject({
       httpsProxy: "https://proxy.example",
       httpProxy: "http://proxy.example",
@@ -534,6 +850,191 @@ describe("production managed worktree tools", () => {
     ).resolves.toMatchObject({ status: "completed" });
   });
 
+  it("runs targeted-test against the exact bounded target and logs only its digest", async () => {
+    const workspaceRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-targeted-tool-")));
+    mkdirSync(join(workspaceRoot, "src"), { recursive: true });
+    writeFileSync(
+      join(workspaceRoot, "package.json"),
+      `${JSON.stringify({ name: "targeted-fixture", devDependencies: { vitest: "^3.0.0" } })}\n`,
+    );
+    writeFileSync(join(workspaceRoot, "src", "math.test.ts"), "export {};\n");
+    const execute = vi.fn<VerificationExecutePort>((args) =>
+      Promise.resolve({
+        report: { ...verificationReport("passed"), workspaceRoot: args.workspace.root },
+        probe: { available: true, backend: "test-backend" },
+      }),
+    );
+    const store = createInMemoryUiStore();
+    store.createProject(workspaceRoot, "targeted-fixture");
+    const manager = createVerificationRunnerManager({
+      store,
+      evidenceStore: createInMemoryEvidenceStore(),
+      execute,
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task",
+        canonicalRoot: workspaceRoot,
+        repositoryRoot: workspaceRoot,
+        fs: nodeWorkspaceFs,
+      }),
+    });
+    const log: ServerLogEvent[] = [];
+    const facade = verificationFacade({
+      runToReport: manager.runToReport,
+      records: [],
+      log,
+      workspaceRoot,
+    });
+
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "verification-targeted",
+        idempotencyKey: "verification-targeted-key",
+        verifierId: "targeted-test",
+        targetPath: "src/math.test.ts",
+      }),
+    });
+    expect(result).toMatchObject({ status: "completed" });
+    expect(execute).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        plan: {
+          workspaceRoot,
+          steps: [
+            expect.objectContaining({
+              kind: "targeted-test",
+              command: "npx",
+              args: ["vitest", "run", "src/math.test.ts"],
+            }),
+          ],
+        },
+      }),
+    );
+    expect(log).toContainEqual(
+      expect.objectContaining({
+        op: "coding-runtime.verification",
+        correlationId: "run-verification-3",
+        extra: {
+          state: "target-bound",
+          verifierId: "targeted-test",
+          targetCount: 1,
+          targetPathSha256: createHash("sha256").update("src/math.test.ts").digest("hex"),
+        },
+      }),
+    );
+    expect(JSON.stringify(log)).not.toContain("src/math.test.ts");
+    store.close();
+    rmSync(workspaceRoot, { recursive: true, force: true });
+  });
+
+  it("writes the body-free target binding through the production process sink fallback", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      const facade = verificationFacade({
+        runToReport: () => Promise.resolve(verificationReport("passed")),
+        records: [],
+      });
+      await facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-target-log",
+          idempotencyKey: "verification-target-log-key",
+          verifierId: "targeted-test",
+          targetPath: "src/math.test.ts",
+        }),
+      });
+      const targetEvent = sink.events.find(
+        (event) =>
+          event.op === "coding-runtime.verification" && event.extra?.state === "target-bound",
+      );
+      expect(targetEvent).toMatchObject({
+        correlationId: "run-verification-3",
+        extra: {
+          state: "target-bound",
+          targetCount: 1,
+          targetPathSha256: createHash("sha256").update("src/math.test.ts").digest("hex"),
+        },
+      });
+      expect(JSON.stringify(sink.events)).not.toContain("src/math.test.ts");
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("routes the generated native target through IPC, catalog admission, and the real verifier port", async () => {
+    const runToReport = vi.fn(() => Promise.resolve(verificationReport("passed")));
+    const facade = verificationFacade({ runToReport, records: [] });
+    const tool = loadGeneratedVerificationTool((_url, init) => {
+      if (typeof init?.body !== "string") throw new TypeError("Expected generated request body");
+      return facade
+        .execute({ capability: "runtime-capability", body: init.body })
+        .then((result) => new Response(JSON.stringify(result)));
+    });
+    await tool.execute(
+      { verifierId: "targeted-test", targetPath: "src/math.test.ts" },
+      generatedToolContext("native-targeted"),
+    );
+    expect(runToReport).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ kinds: ["targeted-test"], targetPath: "src/math.test.ts" }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it.each([
+    [
+      "unstaged candidate",
+      undefined,
+      true,
+      {
+        commitProof: "unavailable",
+        reasonCode: "candidate-not-staged",
+        nextAction: "stage-then-verify",
+      },
+    ],
+    [
+      "candidate drift",
+      {},
+      false,
+      { commitProof: "unavailable", reasonCode: "candidate-drift", nextAction: "verify-again" },
+    ],
+    ["recorded proof", {}, true, { commitProof: "recorded" }],
+  ] as const)(
+    "reports a passed run with %s commit-proof status",
+    async (_label, ticket, recorded, expected) => {
+      const beginVerification = vi.fn<VerifiedCommitService["beginVerification"]>(() =>
+        Promise.resolve(ticket),
+      );
+      const completeVerification = vi.fn<VerifiedCommitService["completeVerification"]>(() =>
+        Promise.resolve(recorded),
+      );
+      const facade = verificationFacade({
+        runToReport: () => Promise.resolve(verificationReport("passed")),
+        records: [],
+        verifiedCommitService: {
+          ...verificationService(),
+          beginVerification,
+          completeVerification,
+        },
+      });
+
+      await expect(
+        facade.execute({
+          capability: "opaque-capability",
+          body: JSON.stringify({
+            action: "verification",
+            actionId: "verification-proof",
+            idempotencyKey: "verification-proof-key",
+            verifierId: "test",
+          }),
+        }),
+      ).resolves.toMatchObject({ status: "completed", verification: expected });
+      expect(beginVerification).toHaveBeenCalledOnce();
+      expect(completeVerification).toHaveBeenCalledTimes(ticket === undefined ? 0 : 1);
+    },
+  );
+
   // `Error.name` is a writable own property; a library that assigns a message or a path to it would
   // put that text on the `[keiko-server:diagnostic]` stderr line and the activity log's `errorKind`
   // verbatim, because the sink redacts neither. The repository's own hardening
@@ -570,6 +1071,38 @@ describe("production managed worktree tools", () => {
     ]);
     expect(JSON.stringify(records)).not.toContain("SENSITIVE");
     expect(JSON.stringify(records)).not.toContain("boom");
+  });
+
+  it("retains body-free stack and cause evidence for a worktree read failure", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const secret = "SENSITIVE-/Users/someone/private-worktree";
+    const failure = new GitWorktreeReadError(secret);
+    Object.defineProperty(failure, "cause", { value: new TypeError(secret) });
+    const facade = verificationFacade({ runToReport: () => Promise.reject(failure), records });
+
+    await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "verification-read-failure",
+        idempotencyKey: "verification-read-failure-key",
+        verifierId: "test",
+      }),
+    });
+
+    expect(records).toHaveLength(1);
+    const record = records[0];
+    expect(record).toBeDefined();
+    if (record === undefined) return;
+    expect(record).toMatchObject({
+      operation: "coding-runtime.verification",
+      errorClass: "GitWorktreeReadError",
+      correlationId: "run-verification-3",
+      causeChain: ["TypeError"],
+    });
+    expect(record.frames).toHaveLength(1);
+    expect(record.frames?.[0]).toMatch(/^packages\/keiko-server\/src\//u);
+    expect(JSON.stringify(records)).not.toContain(secret);
   });
 
   it("revokes liveness the instant resolveWorkspaceRootAccess stops proving managed authority, even before expiry (#3347)", async () => {
@@ -667,7 +1200,7 @@ describe("production managed worktree tools", () => {
 
   it.each([
     ["git", { operation: "read" }],
-    ["delivery", { intent: "commit" }],
+    ["delivery", { intent: "commit", phase: "propose", message: "feat: reviewed candidate" }],
     ["connector", { scope: "source-control.read" }],
   ] as const)(
     "fails closed when the governed %s backend is unavailable",
@@ -732,6 +1265,675 @@ describe("production managed worktree tools", () => {
       });
     },
   );
+  // #3390: the tool-result projection is a transparent pass-through of the verified-commit
+  // record, so the closed violation codes the pure message-policy validator computed reach the
+  // model on the SAME "completed" tool result that told the model its commit was blocked --
+  // proving the model can self-correct instead of asking the operator which format to use.
+  it("carries message-policy violation codes on the commit tool-result projection", async () => {
+    const blockedResult = {
+      schemaVersion: "1" as const,
+      proposalId: "commit-3390",
+      runId: "run-1",
+      envelopeDigest: DIGEST,
+      runtimeAuthorityDigest: DIGEST,
+      workspaceDigest: DIGEST,
+      repositoryDigest: DIGEST,
+      baseSha: "1".repeat(40),
+      parentSha: "2".repeat(40),
+      stagedTreeDigest: DIGEST,
+      verificationEvidenceId: "verification-1",
+      messageDigest: DIGEST,
+      status: "blocked" as const,
+      reason: "message-policy" as const,
+      recordedAt: "2026-09-05T13:24:40.039Z",
+      violations: ["missing-conventional-prefix" as const],
+    };
+    const approvalRequiredResult = {
+      schemaVersion: "1" as const,
+      proposalId: "commit-3390-ready",
+      runId: "run-1",
+      envelopeDigest: DIGEST,
+      runtimeAuthorityDigest: DIGEST,
+      workspaceDigest: DIGEST,
+      repositoryDigest: DIGEST,
+      baseSha: "1".repeat(40),
+      parentSha: "2".repeat(40),
+      stagedTreeDigest: DIGEST,
+      verificationEvidenceId: "verification-1",
+      messageDigest: DIGEST,
+      status: "approval-required" as const,
+      reason: "approval-required" as const,
+      recordedAt: "2026-09-05T13:24:40.039Z",
+    };
+    const commitProposal: VerifiedCommitProposal = {
+      binding: approvalRequiredResult,
+      command: {
+        kind: "commit",
+        message: "feat: approved",
+        allowEmpty: false,
+        verified: {
+          headSha: approvalRequiredResult.parentSha,
+          stagedTreeDigest: approvalRequiredResult.stagedTreeDigest,
+          branchName: "codex/task",
+          baseRef: "dev",
+          baseSha: approvalRequiredResult.baseSha,
+        },
+      },
+      context: {
+        runId: approvalRequiredResult.runId,
+        envelopeDigest: approvalRequiredResult.envelopeDigest,
+        runtimeAuthorityDigest: approvalRequiredResult.runtimeAuthorityDigest,
+        workspaceDigest: approvalRequiredResult.workspaceDigest,
+        repositoryDigest: approvalRequiredResult.repositoryDigest,
+        workspace: {
+          root: "/managed/worktree",
+          selectedRoot: "/managed/worktree",
+          name: "test",
+          version: undefined,
+          testFramework: "vitest",
+          sourceDirs: [],
+          testDirs: [],
+          languages: [],
+          ignoreLines: [],
+        },
+        baseRef: "dev",
+        headRef: "codex/task",
+        correlationId: "run-1",
+        buffersClean: () => true,
+        stillAuthorized: () => true,
+      },
+      expiresAtMs: Date.parse("2099-01-01T00:00:00.000Z"),
+      review: {
+        requestId: approvalRequiredResult.proposalId,
+        paths: ["src/index.ts"],
+        pathsTruncated: false,
+        fileCount: 1,
+        addedLines: 1,
+        deletedLines: 1,
+        verifiedCommit: { result: approvalRequiredResult, message: "feat: approved" },
+      },
+    };
+    const requestCommitApproval = vi.fn();
+    const activityLog: ServerLogEvent[] = [];
+    const service = {
+      ...verificationService(),
+      propose: vi.fn((message: string) =>
+        Promise.resolve(message === "feat: approved" ? approvalRequiredResult : blockedResult),
+      ),
+      review: vi.fn<VerifiedCommitService["review"]>(() => commitProposal),
+      matchesApproval: vi.fn(() => true),
+    };
+    const facade = createProductionManagedWorktreeToolFacade({
+      verifiedCommitService: service,
+      requestCommitApproval,
+      authority: {
+        revalidateCapabilityForMutation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(true),
+        }),
+        resolveCapabilityForDelegation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(true),
+        }),
+      },
+      authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+      workspaceRoot: "/managed/worktree",
+      resolveWorkspaceRootAccess,
+      authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+      effectiveMode: "autonomous-delivery",
+      deploymentCeiling: "autonomous-delivery",
+      liveFacts: () => ({
+        ...FACTS,
+        actionClasses: [
+          "workspace-read",
+          "workspace-write",
+          "verification",
+          "delivery-substrate",
+          "connector-access",
+        ],
+        connectorScopes: ["source-control.read", "source-control.write"],
+      }),
+      secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: false, reason: "denied" }) },
+      editorAgentClient: {
+        action: () =>
+          Promise.resolve({
+            ok: false as const,
+            error: { kind: "route" as const, code: "denied", message: "denied" },
+          }),
+      },
+      invocationRegistry: createCodingToolInvocationRegistry(),
+      verificationRunner: { runToReport: vi.fn() },
+      activityLog: { write: (event): void => void activityLog.push(event) },
+      onRuntimeEvent: vi.fn(),
+    });
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "delivery",
+          actionId: "delivery-1",
+          idempotencyKey: "delivery-key",
+          intent: "commit",
+          phase: "propose",
+          message: "rejected commit message",
+        }),
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      verifiedCommit: {
+        status: "blocked",
+        reason: "message-policy",
+        violations: blockedResult.violations,
+      },
+    });
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "delivery",
+          actionId: "delivery-2",
+          idempotencyKey: "delivery-key-2",
+          intent: "commit",
+          phase: "propose",
+          message: "feat: approved",
+        }),
+      }),
+    ).resolves.toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "approval-required" }],
+      verifiedCommit: approvalRequiredResult,
+      approvalDisposition: "ready",
+    });
+    expect(requestCommitApproval).not.toHaveBeenCalled();
+    expect(activityLog).toContainEqual(
+      expect.objectContaining({
+        op: "coding-runtime.tool-result",
+        extra: {
+          actionKind: "commit",
+          proposalId: "commit-3390-ready",
+          state: "proposal-ready",
+          reason: "policy-authorized",
+        },
+      }),
+    );
+
+    service.review.mockReturnValue(undefined);
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "delivery",
+          actionId: "delivery-3",
+          idempotencyKey: "delivery-key-3",
+          intent: "commit",
+          phase: "propose",
+          message: "feat: approved",
+        }),
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      reasonCode: "delivery-authority-revoked",
+      evidence: [{ kind: "governed-delegate", code: "delivery-authority-revoked" }],
+    });
+  });
+});
+
+describe("H1 repository search mounted into production composition (#3386)", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  function tempWorkspace(): string {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-production-"));
+    roots.push(root);
+    return root;
+  }
+
+  function searchBody(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      action: "search",
+      actionId: "search-1",
+      idempotencyKey: "search-1",
+      repositoryRequest: {
+        kind: "search",
+        mode: "literal",
+        query: "parseConfig",
+        caseSensitive: false,
+        includeGlobs: [],
+        excludeGlobs: [],
+        maxResults: 50,
+        ...overrides,
+      },
+    });
+  }
+
+  function readBody(path: string): string {
+    return JSON.stringify({
+      action: "search",
+      actionId: "search-1",
+      idempotencyKey: "search-1",
+      repositoryRequest: { kind: "read", path, startLine: 1, endLine: 1, maxBytes: 4096 },
+    });
+  }
+
+  function searchFacade(input: {
+    readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
+    readonly authorityExpiresAt?: string;
+    readonly activityLog?: { write: (event: ServerLogEvent) => void };
+  }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
+    return createProductionManagedWorktreeToolFacade({
+      authority: {
+        revalidateCapabilityForMutation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(true),
+        }),
+        resolveCapabilityForDelegation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(true),
+        }),
+      },
+      authorityRef: { runId: "run-h1-search", envelopeDigest: DIGEST },
+      workspaceRoot: "/managed/worktree",
+      resolveWorkspaceRootAccess: input.resolveWorkspaceRootAccess,
+      authorityExpiresAt: input.authorityExpiresAt ?? "2099-01-01T00:00:00.000Z",
+      effectiveMode: "autonomous-delivery",
+      deploymentCeiling: "autonomous-delivery",
+      liveFacts: () => ({
+        ...FACTS,
+        actionClasses: ["workspace-read", "workspace-write", "verification"],
+      }),
+      secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: false, reason: "denied" }) },
+      editorAgentClient: {
+        action: () =>
+          Promise.resolve({
+            ok: false as const,
+            error: { kind: "route" as const, code: "denied", message: "denied" },
+          }),
+      },
+      invocationRegistry: createCodingToolInvocationRegistry(),
+      verificationRunner: { runToReport: vi.fn() },
+      onRuntimeEvent: vi.fn(),
+      ...(input.activityLog === undefined ? {} : { activityLog: input.activityLog }),
+    });
+  }
+
+  it("returns a real bounded search result from a temp workspace through the actual production composition", async () => {
+    const root = tempWorkspace();
+    mkdirSync(join(root, "src"));
+    writeFileSync(
+      join(root, "src", "example.ts"),
+      'const token = "private-credential-value";\nexport const parseConfig = true;\n',
+    );
+    const events: ServerLogEvent[] = [];
+    const facade = searchFacade({
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task" as const,
+        canonicalRoot: root,
+        fs: nodeWorkspaceFs,
+        repositoryRoot: root,
+      }),
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+
+    const result = await facade.execute({ capability: "opaque-capability", body: searchBody() });
+
+    expect(result).toMatchObject({ status: "completed" });
+    const search = result as { search: { ok: true; hits: readonly unknown[] } };
+    expect(search.search.ok).toBe(true);
+    expect(search.search.hits[0]).toMatchObject({
+      path: "src/example.ts",
+      snippet: "export const parseConfig = true;",
+    });
+    expect(JSON.stringify(result)).not.toContain("private-credential-value");
+    // Body-free evidence reaches the activity log through the real production path. "search" is
+    // now a catalog-covered action (#3413 F8): its tool-catalog.* lifecycle pair wraps the H1
+    // search handler's own started/settled pair, both threaded with this run's correlation id.
+    expect(events.map((event) => event.op)).toEqual([
+      "tool-catalog.bind-unavailable",
+      "tool-catalog.projection",
+      "tool-catalog.invocation-started",
+      "coding-repository-handler.started",
+      "coding-repository-handler.settled",
+      "tool-catalog.invocation-settled",
+    ]);
+    for (const event of events) {
+      if (event.op.startsWith("tool-catalog.")) expect(event.correlationId).toBe("run-h1-search");
+    }
+    expect(JSON.stringify(events)).not.toContain("parseConfig");
+  });
+
+  it("denies a workspace-denylisted path as a completed domain outcome, never invented coverage", async () => {
+    const root = tempWorkspace();
+    writeFileSync(join(root, ".env"), "SECRET=sentinel-value\n");
+    const facade = searchFacade({
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task" as const,
+        canonicalRoot: root,
+        fs: nodeWorkspaceFs,
+        repositoryRoot: root,
+      }),
+    });
+
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: readBody(".env"),
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      search: { ok: false, reason: "scope-denied" },
+    });
+  });
+
+  it("reports a result-limit truncation instead of inventing exhaustive coverage", async () => {
+    const root = tempWorkspace();
+    mkdirSync(join(root, "src"));
+    for (const name of ["one.ts", "two.ts", "three.ts"]) {
+      writeFileSync(join(root, "src", name), "export const truncationProbe = true;\n");
+    }
+    const facade = searchFacade({
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task" as const,
+        canonicalRoot: root,
+        fs: nodeWorkspaceFs,
+        repositoryRoot: root,
+      }),
+    });
+
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: searchBody({ query: "truncationProbe", maxResults: 2 }),
+    });
+
+    const search = result as {
+      search: { ok: true; hits: readonly unknown[]; truncationReasons: readonly string[] };
+    };
+    expect(search.search.ok).toBe(true);
+    expect(search.search.hits).toHaveLength(2);
+    expect(search.search.truncationReasons).toContain("result-limit");
+  });
+
+  it("fails closed when authority resolves live at admission but is revoked before the handler binds", async () => {
+    const root = tempWorkspace();
+    let calls = 0;
+    const facade = searchFacade({
+      resolveWorkspaceRootAccess: (): WorkspaceRootAccess | undefined => {
+        calls += 1;
+        return calls === 1
+          ? {
+              kind: "managed-task" as const,
+              canonicalRoot: root,
+              fs: nodeWorkspaceFs,
+              repositoryRoot: root,
+            }
+          : undefined;
+      },
+    });
+
+    await expect(
+      facade.execute({ capability: "opaque-capability", body: searchBody() }),
+    ).resolves.toMatchObject({ status: "failed", reasonCode: "capability-backend-unavailable" });
+  });
+
+  it("fails closed with a distinct reason when the run's authority already expired", async () => {
+    const root = tempWorkspace();
+    const facade = searchFacade({
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task" as const,
+        canonicalRoot: root,
+        fs: nodeWorkspaceFs,
+        repositoryRoot: root,
+      }),
+      authorityExpiresAt: "2000-01-01T00:00:00.000Z",
+    });
+
+    await expect(
+      facade.execute({ capability: "opaque-capability", body: searchBody() }),
+    ).resolves.toMatchObject({ status: "failed", reasonCode: "search-authority-revoked" });
+  });
+
+  it("cancels an already-aborted search before the workspace is ever touched", async () => {
+    const root = tempWorkspace();
+    const facade = searchFacade({
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task" as const,
+        canonicalRoot: root,
+        fs: nodeWorkspaceFs,
+        repositoryRoot: root,
+      }),
+    });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: searchBody(),
+        signal: controller.signal,
+      }),
+    ).resolves.toMatchObject({ status: "cancelled" });
+  });
+});
+
+// #3414-AC9: optional research/skill/child-agent tools must be absent from what the model is told
+// exists when their real handler/readiness/policy prerequisite is unavailable, not merely denied
+// at call time. These pin `deriveOptionalToolAvailability`'s real, non-fake per-run signal against
+// the same fields the production dispatch ports already key off (`buildEgressAuthority`'s live
+// #2387 grant check, `auxiliaryPorts`' skill catalog, and the child-agent model resolution
+// comment), rather than a second, parallel policy source.
+describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
+  const runId = "run-availability-1";
+
+  function emptySkillCatalog(): SkillCatalog {
+    return {
+      has: () => false,
+      get: () => undefined,
+      list: () => [],
+      isImplicitAllowed: () => false,
+    };
+  }
+
+  it("marks research and child-agent unavailable, and skill available from the server default catalog, when nothing else is wired", () => {
+    // No explicit skillCatalog falls back to `createServerApprovedSkillCatalog()` -- the same
+    // default `auxiliaryPorts` itself falls back to -- which is non-empty, so `keiko_skill` is
+    // available by default; research and child-agent have no such non-empty default.
+    const unavailable = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+    });
+    expect(unavailable).toEqual(new Set(["keiko_research_fetch", "keiko_child_agent"]));
+  });
+
+  it("offers research only when its configured approval-capable handler is bound", () => {
+    const registry = createResearchGrantRegistry();
+    const wired = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      researchGrantRegistry: registry,
+      gatewayEgress: () => ({ noProxy: [] }),
+      requestResearchApproval: () => undefined,
+    });
+    expect(wired.has("keiko_research_fetch")).toBe(false);
+
+    // A registry and egress transport without the callback that opens the approval loop cannot
+    // serve the first ungranted request, so the tool stays hidden.
+    const noApprovalPath = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      researchGrantRegistry: registry,
+      gatewayEgress: () => ({ noProxy: [] }),
+    });
+    expect(noApprovalPath.has("keiko_research_fetch")).toBe(true);
+
+    // A bound gateway getter that currently resolves no transport remains unavailable.
+    const noEgress = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      researchGrantRegistry: registry,
+      gatewayEgress: () => undefined,
+      requestResearchApproval: () => undefined,
+    });
+    expect(noEgress.has("keiko_research_fetch")).toBe(true);
+
+    const events: ServerLogEvent[] = [];
+    const throwingConfig = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      researchGrantRegistry: registry,
+      gatewayEgress: () => {
+        throw new Error("private configuration failure");
+      },
+      requestResearchApproval: () => undefined,
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+    expect(throwingConfig.has("keiko_research_fetch")).toBe(true);
+    expect(events).toHaveLength(1);
+    const event = events[0];
+    expect(event).toBeDefined();
+    if (event === undefined) return;
+    const extra = event.extra ?? {};
+    expect(event.op).toBe("coding-runtime.tool-availability.failed");
+    expect(event.correlationId).toBe(runId);
+    expect(event.errorKind).toBe("Error");
+    expect(extra.runId).toBe(runId);
+    expect(extra.optionalTool).toBe("keiko_research_fetch");
+    expect(extra.stage).toBe("research-egress-config");
+    expect(extra.reason).toBe("configuration-resolution-failed");
+    expect(Array.isArray(extra.frames)).toBe(true);
+    expect(extra.causeChain).toEqual([]);
+    expect(JSON.stringify(events)).not.toContain("private configuration failure");
+  });
+
+  it("marks skill available only when the catalog actually lists an approved entry", () => {
+    const empty = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      skillCatalog: emptySkillCatalog(),
+    });
+    expect(empty.has("keiko_skill")).toBe(true);
+
+    const nonEmpty = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      skillCatalog: {
+        has: () => true,
+        get: () => undefined,
+        list: () => [
+          { skillId: "skl_demo@1" as never, implicitAllowed: false, category: "public-research" },
+        ],
+        isImplicitAllowed: () => false,
+      },
+    });
+    expect(nonEmpty.has("keiko_skill")).toBe(false);
+  });
+
+  it("marks child-agent available only when the configured model resolves through the factory", () => {
+    const noModel = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      childModelPortFactory: () => undefined,
+    });
+    expect(noModel.has("keiko_child_agent")).toBe(true);
+
+    const emptyModelId = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      modelId: "",
+      childModelPortFactory: () => undefined,
+    });
+    expect(emptyModelId.has("keiko_child_agent")).toBe(true);
+
+    const noFactory = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      modelId: "coding-safe-model",
+    });
+    expect(noFactory.has("keiko_child_agent")).toBe(true);
+
+    const unresolved = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      modelId: "coding-safe-model",
+      childModelPortFactory: () => undefined,
+    });
+    expect(unresolved.has("keiko_child_agent")).toBe(true);
+
+    const resolvable = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      modelId: "coding-safe-model",
+      childModelPortFactory: () => ({
+        call: (): Promise<never> => Promise.reject(new Error("unused test model")),
+      }),
+    });
+    expect(resolvable.has("keiko_child_agent")).toBe(false);
+  });
+
+  it("removes child-agent readiness when the run's model stops resolving", () => {
+    const model = {
+      call: (): Promise<never> => Promise.reject(new Error("unused test model")),
+    };
+    let current: typeof model | undefined = model;
+    const factory = vi.fn(() => current);
+    const childModel = resolveChildModelForRun({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      modelId: "coding-safe-model",
+      childModelPortFactory: factory,
+    });
+
+    expect(
+      deriveOptionalToolAvailability({
+        authorityRef: { runId, envelopeDigest: DIGEST },
+        ...childModel,
+      }).has("keiko_child_agent"),
+    ).toBe(false);
+    current = undefined;
+    expect(
+      deriveOptionalToolAvailability({
+        authorityRef: { runId, envelopeDigest: DIGEST },
+        ...childModel,
+      }).has("keiko_child_agent"),
+    ).toBe(true);
+    expect(childModel.childModelPortFactory?.("other-model")).toBeUndefined();
+    expect(factory).toHaveBeenCalledTimes(3);
+  });
+
+  it("uses rotated child-model provider state at dispatch", () => {
+    const first = {
+      call: (): Promise<never> => Promise.reject(new Error("unused first test model")),
+    };
+    const rotated = {
+      call: (): Promise<never> => Promise.reject(new Error("unused rotated test model")),
+    };
+    let current = first;
+    const factory = vi.fn(() => current);
+    const childModel = resolveChildModelForRun({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      modelId: "coding-safe-model",
+      childModelPortFactory: factory,
+    });
+
+    expect(childModel.childModelPortFactory?.("coding-safe-model")).toBe(first);
+    current = rotated;
+    expect(childModel.childModelPortFactory?.("coding-safe-model")).toBe(rotated);
+    expect(factory).toHaveBeenCalledTimes(3);
+  });
+
+  it("fails child-model resolution closed with body-free activity evidence", () => {
+    const events: ServerLogEvent[] = [];
+    const childModel = resolveChildModelForRun({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      modelId: "coding-safe-model",
+      childModelPortFactory: () => {
+        throw new Error("private child configuration failure");
+      },
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+
+    expect(childModel).toEqual({});
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "coding-runtime.tool-availability.failed",
+      correlationId: runId,
+      errorKind: "Error",
+      extra: {
+        runId,
+        optionalTool: "keiko_child_agent",
+        stage: "child-model-resolution",
+        reason: "configuration-resolution-failed",
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain("private child configuration failure");
+  });
 });
 
 function verificationReport(overallStatus: VerificationStatus): VerificationReport {
@@ -753,14 +1955,74 @@ function verificationReport(overallStatus: VerificationStatus): VerificationRepo
   };
 }
 
+function failedVerificationReport(): VerificationReport {
+  return {
+    ...verificationReport("failed"),
+    results: [
+      {
+        kind: "test",
+        scriptName: "test",
+        command: "npm",
+        args: ["run", "test"],
+        status: "failed",
+        exitCode: 1,
+        signal: null,
+        durationMs: 2,
+        truncated: false,
+        redacted: true,
+        outputSummary: "command output captured (320 bytes) and omitted from summary",
+        appliedLimits: [],
+        locations: [
+          {
+            file: "ci/numerical-stability.test.js",
+            line: 19,
+            column: 5,
+            message: "expected the stable average to remain finite",
+          },
+          {
+            file: "/managed/worktree/private/customer.test.js",
+            line: 1,
+            message: "PRIVATE_FAILURE_CANARY",
+          },
+        ],
+      },
+    ],
+    counts: {
+      ...verificationReport("failed").counts,
+      failed: 1,
+    },
+  };
+}
+
 // The minimal live-and-authorized verification wiring: authority granted, managed access proven,
 // expiry decades away, so every refusal these tests observe comes from the run OUTCOME (or the
 // thrown error) and never from a liveness or policy check.
 function verificationFacade(options: {
-  readonly runToReport: () => Promise<VerificationReport>;
+  readonly ciRepairBudget?: CiRepairExecutionBudget;
+  readonly verifiedCommitService?: VerifiedCommitService;
+  readonly runtimeGitService?: RuntimeGitService;
+  readonly requestStageApproval?: (proposalId: string) => void;
+  readonly log?: ServerLogEvent[];
+  readonly events?: CodingWorkbenchRuntimeEvent[];
+  readonly ciObservationService?: CiObservationService;
+  readonly runToReport: VerificationRunnerManager["runToReport"];
+  readonly workspaceRoot?: string;
   readonly records: ServerDiagnosticRecord[];
 }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
   return createProductionManagedWorktreeToolFacade({
+    ...(options.ciRepairBudget === undefined ? {} : { ciRepairBudget: options.ciRepairBudget }),
+    ...(options.verifiedCommitService === undefined
+      ? {}
+      : { verifiedCommitService: options.verifiedCommitService }),
+    ...(options.runtimeGitService === undefined
+      ? {}
+      : { runtimeGitService: options.runtimeGitService }),
+    ...(options.requestStageApproval === undefined
+      ? {}
+      : { requestStageApproval: options.requestStageApproval }),
+    ...(options.ciObservationService === undefined
+      ? {}
+      : { ciObservationService: options.ciObservationService }),
     authority: {
       revalidateCapabilityForMutation: () => ({
         ok: true as const,
@@ -772,8 +2034,16 @@ function verificationFacade(options: {
       }),
     },
     authorityRef: { runId: "run-verification-3", envelopeDigest: DIGEST },
-    workspaceRoot: "/managed/worktree",
-    resolveWorkspaceRootAccess,
+    workspaceRoot: options.workspaceRoot ?? "/managed/worktree",
+    resolveWorkspaceRootAccess:
+      options.workspaceRoot === undefined
+        ? resolveWorkspaceRootAccess
+        : (): WorkspaceRootAccess => ({
+            kind: "managed-task" as const,
+            canonicalRoot: options.workspaceRoot ?? "/managed/worktree",
+            fs: nodeWorkspaceFs,
+            repositoryRoot: options.workspaceRoot ?? "/managed/worktree",
+          }),
     authorityExpiresAt: "2099-01-01T00:00:00.000Z",
     effectiveMode: "autonomous-delivery",
     deploymentCeiling: "autonomous-delivery",
@@ -792,8 +2062,83 @@ function verificationFacade(options: {
     invocationRegistry: createCodingToolInvocationRegistry(),
     verificationRunner: { runToReport: options.runToReport },
     diagnostics: { record: (record): void => void options.records.push(record) },
-    onRuntimeEvent: vi.fn(),
+    ...(options.log === undefined
+      ? {}
+      : { activityLog: { write: (event): void => void options.log?.push(event) } }),
+    onRuntimeEvent: (event): void => {
+      options.events?.push(event);
+    },
   });
+}
+
+interface GeneratedVerificationTool {
+  readonly execute: (
+    args: { readonly verifierId: string; readonly targetPath: string },
+    context: {
+      readonly sessionID: string;
+      readonly callID: string;
+      readonly abort: AbortSignal;
+      readonly ask: (request: Record<string, unknown>) => Promise<void>;
+    },
+  ) => Promise<unknown>;
+}
+
+function generatedToolContext(callID: string): Parameters<GeneratedVerificationTool["execute"]>[1] {
+  return {
+    sessionID: "session-native-target",
+    callID,
+    abort: new AbortController().signal,
+    ask: (): Promise<void> => Promise.resolve(),
+  };
+}
+
+function loadGeneratedVerificationTool(fetchImpl: typeof fetch): GeneratedVerificationTool {
+  const source = createGeneratedOpenCodeBundle().toolSources.keiko_verification;
+  if (source === undefined) throw new Error("keiko_verification tool source missing");
+  const value: unknown = new Script(
+    `${source.replace("export default", "const generated =")}\ngenerated;`,
+  ).runInNewContext({
+    process: {
+      env: {
+        KEIKO_CODING_MODE: "autonomous-delivery",
+        KEIKO_TOOL_FACADE_URL: "https://tool-facade.internal/invoke",
+        KEIKO_TOOL_FACADE_CAPABILITY: "runtime-capability",
+      },
+    },
+    fetch: fetchImpl,
+    AbortController,
+    TextEncoder,
+    TextDecoder,
+    Uint8Array,
+    setTimeout,
+    clearTimeout,
+  });
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("execute" in value) ||
+    typeof value.execute !== "function"
+  ) {
+    throw new Error("generated verification tool invalid");
+  }
+  return value as GeneratedVerificationTool;
+}
+
+function verificationService(): VerifiedCommitService {
+  return {
+    beginVerification: vi.fn(() => Promise.resolve({})),
+    completeVerification: vi.fn(() => Promise.resolve(true)),
+    propose: vi.fn(),
+    approve: vi.fn(),
+    issueApproval: vi.fn(),
+    execute: vi.fn(),
+    matchesApproval: vi.fn(),
+    consumeApproval: vi.fn(),
+    executeApproved: vi.fn(),
+    review: vi.fn(),
+    invalidate: vi.fn(),
+    reconcile: vi.fn(),
+  };
 }
 
 function authorizedEnvelope(network = false): never {

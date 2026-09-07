@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "status": "accepted",
+  "reviewKind": "independent-source-and-evidence-audit",
+  "integrationPr": 3394,
+  "ownerIssue": 3386,
+  "sourceHead": "68732ec6464a758ced5f97f7cf50ddbc02e6c131",
+  "ownedSourceDigest": "026e8632a3ef791021929de2bbc9b5fe3fe66052a88d8f4de7a727a91e47dc2a",
+  "producerIdentity": {
+    "profile": {
+      "id": "opencode",
+      "version": 1
+    },
+    "catalogRevision": "713b56bb6f032cb64aae480fe7de9b07aece4b05a1e4cd645e620aae27721f4b",
+    "projectionDigest": "201df77730101f5fc1c1d16fe297314d25193f8c5463dc329e6bd5c4b0eaa8ae",
+    "canonicalTool": {
+      "canonicalId": "keiko.repo.search",
+      "contractVersion": 1
+    },
+    "descriptorDigest": "8093d74bfc1a762f7dc3b85a4c1ff324d6fb253b7deec3c874382548c20f531e",
+    "handlerRequirement": {
+      "id": "opencode-repository-search-port",
+      "contractVersion": 1
+    },
+    "handlerSetDigest": "21192a69a4c7ea069fd1b86618ddce6304ca4d2d93a5ef1f5c60efd096702d91",
+    "readiness": "ready"
+  },
+  "criteria": [
+    {
+      "label": "production-facade-and-existing-owner",
+      "result": "verified"
+    },
+    {
+      "label": "closed-schema-capture-before-async-work",
+      "result": "verified"
+    },
+    {
+      "label": "raw-coordinates-and-redacted-snippets",
+      "result": "verified"
+    },
+    {
+      "label": "deny-realpath-symlink-hardlink-before-bytes",
+      "result": "verified"
+    },
+    {
+      "label": "independent-search-and-output-bounds",
+      "result": "verified"
+    },
+    {
+      "label": "cancellation-deadline-authority-freshness",
+      "result": "verified"
+    },
+    {
+      "label": "readiness-fails-closed",
+      "result": "verified"
+    },
+    {
+      "label": "correlated-body-free-activity-evidence",
+      "result": "verified"
+    },
+    {
+      "label": "complete-canonical-owned-source-binding",
+      "result": "verified"
+    },
+    {
+      "label": "catalog-projection-and-handler-identity",
+      "result": "verified"
+    }
+  ],
+  "verification": {
+    "kind": "deterministic-production-managed",
+    "testFiles": 3,
+    "testCount": 83,
+    "result": "passed"
+  },
+  "limitations": [
+    "The deterministic producer checkpoint does not establish current-source packaged real-runtime or live-provider qualification; those remain separate evidence.",
+    "Final merge-head gates remain separate acceptance evidence."
+  ],
+  "ownership": {
+    "result": "verified",
+    "ownedSourcePathCount": 661,
+    "historicalInventoryRowCount": 43,
+    "generatedMigrationChanged": false
+  }
+}

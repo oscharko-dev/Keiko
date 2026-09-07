@@ -24,6 +24,7 @@ import {
   fetchGitBranches,
   fetchGitDeliverySyncExecute,
   fetchGitDeliverySyncPreview,
+  proposeGitDeliverySync,
   fetchGitDiff,
   fetchGitStructuredDiff,
   fetchGitBlame,
@@ -91,12 +92,40 @@ import {
   exportEditorProfile,
   previewEditorProfileImport,
   applyEditorProfileImport,
+  previewCodingWorkbenchIssue,
+  fetchGitHubIssueReaderAuthorization,
+  updateGitHubIssueReaderAuthorization,
+  fetchCodingWorkbenchJourneyRefresh,
+  connectGitChangeToChat,
+  refreshGitChangeScope,
+  fetchGitDeliveryCommitApprove,
+  fetchGitDeliveryPushApprove,
+  fetchGitDeliveryPrApprove,
+  fetchGitDeliveryPrMarkReadyApprove,
+  fetchGitDeliveryPrMarkReadyExecute,
+  proposePrMarkReady,
+  proposeCommit,
+  proposePush,
+  fetchGitDeliveryPrDescriptionPreview,
+  fetchGitDeliveryPrDescriptionReview,
+  fetchGitDeliveryPrDescriptionApprove,
+  fetchGitDeliveryPrDescriptionApply,
+  fetchGitDeliveryPrDescriptionStatus,
+  applyGitChangeChatDescription,
+  approveGitChangeChatDescription,
+  reviewGitChangeChatDescription,
+  type GitHubIssuePreviewResponseWire,
 } from "./api";
 import {
   MANAGED_LSP_TEST_LANGUAGES,
   managedLspTestConfigurationDefaults,
 } from "@/test-utils/managed-lsp-settings-fixture";
 import { CORRELATION_HEADER } from "./bff-correlation";
+import { journeyFixture } from "@/app/components/desktop/widgets/coding-workbench/_journeyOutcomeTestSupport";
+import {
+  isGitObjectId,
+  isSafeGitRefName,
+} from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 
 const API_SOURCE = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "api.ts"), "utf8");
 const MANAGED_LSP_VALIDATORS_SOURCE = readFileSync(
@@ -387,6 +416,44 @@ describe("Coding Workbench provider API isolation (issue #2639)", () => {
     expect(API_SOURCE).not.toContain("fetchCodingWorkbenchSidecarGatewayProfile");
     expect(API_SOURCE).not.toContain("fetchCodingWorkbenchCodexSubscriptionProfile");
     expect(API_SOURCE).not.toContain("prepareCodingWorkbenchCodexSubscriptionSetup");
+  });
+});
+
+describe("Coding Workbench issue/journey/PR-description lazy adapter (epic #3384 final-audit F18)", () => {
+  it("keeps the issue-preview, journey-refresh and PR-description-application validators out of api.ts's eager imports", () => {
+    // `previewCodingWorkbenchIssue`, `fetchCodingWorkbenchJourneyRefresh` and the
+    // `fetchGitDeliveryPrDescription*` fetchers keep their names, signatures and behaviour in
+    // api.ts (every existing caller — in and out of the Coding Workbench tree — is unaffected), but
+    // their contract validators moved to ./coding-workbench-lazy-fetchers, loaded only through
+    // `await import(...)` at call time (the same technique already proven by
+    // managed-lsp-response-validators.ts above). Before this fix these five bindings landed in
+    // api.ts's own eager `@oscharko-dev/keiko-contracts/runtime/*` imports, pulling
+    // `coding-workbench-runtime` (via `isGitHubOwnerAndRepo` and the issue-preview bounds),
+    // `git-journey-validation` (via `isJourneyOutcome`), `pr-description` (via
+    // `PR_DESCRIPTION_LANGUAGES`) and `pr-description-application` (via
+    // `isPrDescriptionApplicationStatus`/`PR_DESCRIPTION_APPLICATION_REASON_STATES`) into the
+    // desktop shell's first-load chunk (~11 KiB gzip).
+    const eagerContractsRuntimeImports = [
+      ...API_SOURCE.matchAll(
+        /import\s+(?:type\s+)?\{([\s\S]*?)\}\s*from\s*["']@oscharko-dev\/keiko-contracts\/runtime\/[^"']+["'];/gu,
+      ),
+    ]
+      .map((match) => match[1] ?? "")
+      .join("\n");
+
+    expect(eagerContractsRuntimeImports).not.toContain("isGitHubOwnerAndRepo");
+    expect(eagerContractsRuntimeImports).not.toContain(
+      "CODING_WORKBENCH_ISSUE_PREVIEW_TITLE_MAX_CHARS",
+    );
+    expect(eagerContractsRuntimeImports).not.toContain(
+      "CODING_WORKBENCH_ISSUE_PREVIEW_EXCERPT_MAX_CHARS",
+    );
+    expect(eagerContractsRuntimeImports).not.toContain("GITHUB_ISSUE_NUMBER_MAX");
+    expect(eagerContractsRuntimeImports).not.toContain("isJourneyOutcome");
+    expect(eagerContractsRuntimeImports).not.toContain("PR_DESCRIPTION_LANGUAGES");
+    expect(eagerContractsRuntimeImports).not.toContain("isPrDescriptionApplicationStatus");
+    expect(eagerContractsRuntimeImports).not.toContain("PR_DESCRIPTION_APPLICATION_REASON_STATES");
+    expect(API_SOURCE).toContain('import("./coding-workbench-lazy-fetchers")');
   });
 });
 
@@ -1874,6 +1941,58 @@ describe("files API helpers", () => {
       }),
     );
   });
+
+  it("proposes sync by minting the exact approval before execute", async () => {
+    const approval = {
+      schemaVersion: "1" as const,
+      approvalId: "gda_sync_1",
+      approvalToken: "t".repeat(64),
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          approval,
+          expiresAt: "2026-09-05T18:00:00.000Z",
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          operation: "pull",
+          status: "succeeded",
+          available: true,
+          truncated: false,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await proposeGitDeliverySync({ operation: "pull", projectId: "/repo", remote: "origin" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/git-delivery/pull/approve",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ schemaVersion: "1", projectId: "/repo", remote: "origin" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/git-delivery/pull/execute",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          schemaVersion: "1",
+          projectId: "/repo",
+          remote: "origin",
+          approval,
+        }),
+      }),
+    );
+  });
 });
 
 describe("fetchModels", () => {
@@ -3131,5 +3250,1363 @@ describe("M11 local-history and profile API wrappers", () => {
     for (const call of fetchMock.mock.calls) {
       expect((call[1] as RequestInit | undefined)?.signal).toBeInstanceOf(AbortSignal);
     }
+  });
+});
+
+// #3385 — the Coding Workbench issue intake and the per-checkout GitHub issue reader grant. The
+// preview response is server-resolved and content-bounded; the client re-validates its shape so a
+// malformed or oversized body fails closed instead of reaching the untrusted-content renderer.
+describe("Coding Workbench issue intake API (#3385)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function jsonOk(body: unknown, headers: Record<string, string> = {}): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json", ...headers },
+    });
+  }
+
+  function previewResponse(
+    overrides: Partial<GitHubIssuePreviewResponseWire["preview"]> = {},
+    bindingOverrides: Partial<GitHubIssuePreviewResponseWire["binding"]> = {},
+  ): GitHubIssuePreviewResponseWire {
+    return {
+      preview: {
+        untrusted: true,
+        bodyExcerptTruncated: false,
+        title: "Start a Code task from a GitHub issue",
+        bodyExcerpt: "From the existing Coding Workbench, resolve a GitHub issue URL…",
+        commentCount: 3,
+        state: "open",
+        provenance: {
+          ownerAndRepo: "oscharko-dev/Keiko",
+          issueNumber: 3385,
+          url: "https://github.com/oscharko-dev/Keiko/issues/3385",
+        },
+        ...overrides,
+      },
+      binding: {
+        repositoryId: "a".repeat(64),
+        remoteDigest: "b".repeat(64),
+        issueNumber: 3385,
+        issueIdDigest: "c".repeat(64),
+        defaultBaseRef: "dev",
+        bindingDigest: "e".repeat(64),
+        ...bindingOverrides,
+      },
+    };
+  }
+
+  it("posts the repository path and issue reference as exact keys and returns the validated preview", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk(previewResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const result = await previewCodingWorkbenchIssue(
+      { repositoryPath: "/repos/keiko", issueRef: "#3385" },
+      controller.signal,
+    );
+
+    expect(result).toEqual(previewResponse());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/coding-workbench/issue/preview");
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      repositoryPath: "/repos/keiko",
+      issueRef: "#3385",
+    });
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect((init.headers as Record<string, string>)["X-Keiko-CSRF"]).toBe("1");
+  });
+
+  it.each([
+    ["a missing preview", { preview: undefined }],
+    [
+      "a preview without an untrusted marker",
+      { preview: { ...previewResponse().preview, untrusted: undefined } },
+    ],
+    [
+      "a preview without its truncation marker",
+      { preview: { ...previewResponse().preview, bodyExcerptTruncated: undefined } },
+    ],
+    ["an unknown issue state", { preview: { ...previewResponse().preview, state: "unknown" } }],
+    [
+      "server-only binding schema",
+      { binding: { ...previewResponse().binding, schemaVersion: "1" } },
+    ],
+    [
+      "server-only content revision",
+      { binding: { ...previewResponse().binding, contentRevisionDigest: "d".repeat(64) } },
+    ],
+    ["an oversized title", { preview: { ...previewResponse().preview, title: "x".repeat(513) } }],
+    [
+      "an oversized excerpt",
+      { preview: { ...previewResponse().preview, bodyExcerpt: "x".repeat(8193) } },
+    ],
+    ["a negative comment count", { preview: { ...previewResponse().preview, commentCount: -1 } }],
+    [
+      "too many comment excerpts",
+      {
+        preview: {
+          ...previewResponse().preview,
+          comments: Array.from({ length: 9 }, () => "comment"),
+        },
+      },
+    ],
+    [
+      "an oversized comment excerpt",
+      { preview: { ...previewResponse().preview, comments: ["x".repeat(1025)] } },
+    ],
+    [
+      "a control character in a comment",
+      { preview: { ...previewResponse().preview, comments: ["bad\u0007comment"] } },
+    ],
+    [
+      "a nonboolean truncation marker",
+      { preview: { ...previewResponse().preview, commentsTruncated: "false" } },
+    ],
+    [
+      "a control character in the title",
+      { preview: { ...previewResponse().preview, title: "bad\u0007title" } },
+    ],
+    [
+      "a provenance without owner/repo shape",
+      {
+        preview: {
+          ...previewResponse().preview,
+          provenance: { ...previewResponse().preview.provenance, ownerAndRepo: "not a repo" },
+        },
+      },
+    ],
+    [
+      "a provenance url that is not https",
+      {
+        preview: {
+          ...previewResponse().preview,
+          provenance: {
+            ...previewResponse().preview.provenance,
+            url: "javascript:alert(1)",
+          },
+        },
+      },
+    ],
+    [
+      "a binding with an unsafe base ref",
+      { binding: { ...previewResponse().binding, defaultBaseRef: "../x" } },
+    ],
+    [
+      "a binding with a non-digest field",
+      { binding: { ...previewResponse().binding, bindingDigest: "nope" } },
+    ],
+    ["a binding with an extra key", { binding: { ...previewResponse().binding, title: "leak" } }],
+    [
+      "a binding whose issue number disagrees with the provenance",
+      { binding: { ...previewResponse().binding, issueNumber: 12 } },
+    ],
+    // Cursor review threads PRRT_kwDOSqilAM6fbGbS / PRRT_kwDOSqilAM6ff6k0: the client used to
+    // restate its own, wider bounds (issue number up to 2_147_483_647, title up to 512 chars)
+    // instead of importing the contract's CODING_WORKBENCH_ISSUE_NUMBER_MAX (1_000_000_000) and
+    // CODING_WORKBENCH_ISSUE_PREVIEW_TITLE_MAX_CHARS (256) — an input the server always rejects
+    // used to pass client-side validation. Both binding and provenance carry the same number so
+    // the failure below is the bound, not the preview/binding coherence check.
+    [
+      "an issue number beyond the contract's bound",
+      {
+        preview: {
+          ...previewResponse().preview,
+          provenance: { ...previewResponse().preview.provenance, issueNumber: 1_000_000_001 },
+        },
+        binding: { ...previewResponse().binding, issueNumber: 1_000_000_001 },
+      },
+    ],
+    [
+      "a title beyond the contract's bound",
+      { preview: { ...previewResponse().preview, title: "x".repeat(300) } },
+    ],
+  ] as const)("fails closed on %s", async (_label, patch) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonOk({ ...previewResponse(), ...patch })));
+
+    await expect(
+      previewCodingWorkbenchIssue({ repositoryPath: "/repos/keiko", issueRef: "#3385" }),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED", status: 502 });
+  });
+
+  it("retains the originating correlation id when a successful response fails validation", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonOk(
+          { preview: {} },
+          {
+            [CORRELATION_HEADER]: "corr-invalid-preview-3385",
+          },
+        ),
+      ),
+    );
+    await expect(
+      previewCodingWorkbenchIssue({ repositoryPath: "/repos/keiko", issueRef: "#3385" }),
+    ).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      correlationId: "corr-invalid-preview-3385",
+    });
+  });
+
+  it("surfaces the server's closed failure code and correlation id on a refused preview", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "auth-required",
+              message: "GitHub issue access is not enabled.",
+              correlationId: "corr-3385",
+            },
+          }),
+          { status: 403, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(
+      previewCodingWorkbenchIssue({ repositoryPath: "/repos/keiko", issueRef: "#3385" }),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      code: "auth-required",
+      status: 403,
+      correlationId: "corr-3385",
+    });
+  });
+
+  it("prefers the response correlation header over the envelope id", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: { code: "issue-unavailable", message: "x" } }), {
+          status: 404,
+          headers: { "Content-Type": "application/json", [CORRELATION_HEADER]: "hdr-1" },
+        }),
+      ),
+    );
+
+    await expect(
+      previewCodingWorkbenchIssue({ repositoryPath: "/repos/keiko", issueRef: "#1" }),
+    ).rejects.toMatchObject({ code: "issue-unavailable", correlationId: "hdr-1" });
+  });
+
+  it("reads the grant for the named repository through the query string and validates the projection", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonOk({ repositoryId: "f".repeat(64), authorized: true, revision: 2 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const grant = await fetchGitHubIssueReaderAuthorization("/repos/keiko a");
+
+    expect(grant).toEqual({ repositoryId: "f".repeat(64), authorized: true, revision: 2 });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "/api/coding-workbench/github-authorization?repositoryPath=%2Frepos%2Fkeiko+a",
+    );
+  });
+
+  it("rejects a grant projection whose fields are malformed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonOk({ repositoryId: "", authorized: "yes", revision: -1 })),
+    );
+
+    await expect(fetchGitHubIssueReaderAuthorization("/repos/keiko")).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+    });
+  });
+
+  it("puts the exact-key grant update with the echoed revision", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonOk({ repositoryId: "f".repeat(64), authorized: false, revision: 3 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const grant = await updateGitHubIssueReaderAuthorization(
+      { repositoryPath: "/repos/keiko", authorized: false, expectedRevision: 2 },
+      controller.signal,
+    );
+
+    expect(grant.revision).toBe(3);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/coding-workbench/github-authorization");
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(String(init.body))).toEqual({
+      repositoryPath: "/repos/keiko",
+      authorized: false,
+      expectedRevision: 2,
+    });
+    expect(init.signal).toBe(controller.signal);
+  });
+
+  it("surfaces the 409 revision conflict with its code so the caller can re-read", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "CONFLICT",
+              message: "GitHub issue access changed. Reload and retry.",
+              correlationId: "corr-409",
+            },
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(
+      updateGitHubIssueReaderAuthorization({
+        repositoryPath: "/repos/keiko",
+        authorized: true,
+        expectedRevision: 0,
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT", status: 409, correlationId: "corr-409" });
+  });
+});
+
+// #3389 — the read-only journey observation/refresh client, admitted by the per-checkout
+// GitHub-reader grant rather than a run-bound mutation gate. The client validates the observed
+// outcome through the shared contract guard and never restates its vocabulary.
+describe("Coding Workbench journey observation API (#3389)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function jsonOk(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  it("posts the exact-key refresh request and returns the validated observed outcome", async () => {
+    const { outcome } = journeyFixture();
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk({ status: "observed", outcome }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const result = await fetchCodingWorkbenchJourneyRefresh(
+      { runId: outcome.binding.runId },
+      controller.signal,
+    );
+
+    expect(result).toEqual({ status: "observed", outcome });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/git-delivery/journey/refresh");
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      schemaVersion: "1",
+      runId: outcome.binding.runId,
+    });
+    expect(init.signal).toBe(controller.signal);
+  });
+
+  it("returns the closed unavailable reason without treating it as an observed outcome", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonOk({ status: "unavailable", reason: "draft-unavailable" })),
+    );
+
+    const result = await fetchCodingWorkbenchJourneyRefresh({ runId: "run-1" });
+
+    expect(result).toEqual({ status: "unavailable", reason: "draft-unavailable" });
+  });
+
+  it("rejects a response claiming an invalid JourneyOutcome rather than rendering it", async () => {
+    const { outcome } = journeyFixture();
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonOk({ status: "observed", outcome: { ...outcome, state: "fabricated-current" } }),
+        ),
+    );
+
+    await expect(fetchCodingWorkbenchJourneyRefresh({ runId: "run-1" })).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+    });
+  });
+
+  it("rejects a runId that is not a bounded, non-empty string before any request is sent", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchCodingWorkbenchJourneyRefresh({ runId: "" })).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// Issue #3400 (epic #3384) — connect/refresh clients. The browser sends only a chat id and a
+// ref/mode selection; the server resolves the trusted repository and returns only server-issued
+// facts. These tests pin the request shape and the response-validation fail-closed behavior.
+describe("Git-to-Chat connect/refresh API (#3400)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function jsonOk(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  function gitChangeScopeFixture(): Record<string, unknown> {
+    return {
+      kind: "git-change",
+      relationshipId: "rel-1",
+      remoteDigest: "d".repeat(64),
+      comparisonLabel: "main...feature/x",
+      baseRef: "main",
+      headRef: "feature/x",
+      baseSha: "a".repeat(40),
+      headSha: "b".repeat(40),
+      mergeBaseSha: "c".repeat(40),
+      snapshotDigest: "e".repeat(64),
+      fileCount: 1,
+      totalFiles: 1,
+      omittedFiles: 0,
+      truncatedFiles: 0,
+      descriptionStatus: "current",
+      connectedAtMs: 10,
+    };
+  }
+
+  it("posts the exact comparison request and returns the validated connected scope", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonOk({ status: "connected", scope: gitChangeScopeFixture() }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await connectGitChangeToChat({
+      chatId: "chat-1",
+      mode: "comparison",
+      headRef: "feature/x",
+      baseRef: "main",
+    });
+
+    expect(result).toEqual({ status: "connected", scope: gitChangeScopeFixture() });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-change/connect");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({
+      schemaVersion: "1",
+      chatId: "chat-1",
+      mode: "comparison",
+      headRef: "feature/x",
+      baseRef: "main",
+    });
+  });
+
+  it("returns a blocked result for a known closed reason without throwing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonOk({ status: "blocked", reason: "detached-head" })),
+    );
+
+    const result = await connectGitChangeToChat({
+      chatId: "chat-1",
+      mode: "comparison",
+      headRef: "feature/x",
+      baseRef: "main",
+    });
+
+    expect(result).toEqual({ status: "blocked", reason: "detached-head" });
+  });
+
+  it("rejects a response claiming an unknown blocked reason", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonOk({ status: "blocked", reason: "not-a-real-reason" })),
+    );
+
+    await expect(
+      connectGitChangeToChat({
+        chatId: "chat-1",
+        mode: "pull-request",
+        headRef: "feature/x",
+      }),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED" });
+  });
+
+  it("rejects a connected response whose scope is malformed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonOk({
+          status: "connected",
+          scope: { ...gitChangeScopeFixture(), remoteDigest: "not-a-digest" },
+        }),
+      ),
+    );
+
+    await expect(
+      connectGitChangeToChat({ chatId: "chat-1", mode: "pull-request", headRef: "feature/x" }),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED" });
+  });
+
+  // Owner audit b1-12 — descriptionStatus was only bounded-text checked (<=16 chars), so any
+  // short string the server (or an intermediary) claimed for that field passed validation and
+  // would have reached the pill's closed STATUS_BADGE_CLASS/STATUS_LABEL_KEY lookups, which throw
+  // on an unmapped key. Failing-before: this rejected with `CONTRACT_VALIDATION_FAILED` only after
+  // the fix; before it, "not-a-real-status" (13 chars) passed bounded-text and the promise
+  // resolved instead of rejecting.
+  it("rejects a connected response whose scope has an unrecognised descriptionStatus", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonOk({
+          status: "connected",
+          scope: { ...gitChangeScopeFixture(), descriptionStatus: "unknown" },
+        }),
+      ),
+    );
+
+    await expect(
+      connectGitChangeToChat({ chatId: "chat-1", mode: "pull-request", headRef: "feature/x" }),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED" });
+  });
+
+  it("posts the refresh request with only chatId and relationshipId", async () => {
+    const staleScope = { ...gitChangeScopeFixture(), descriptionStatus: "stale" };
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk({ status: "stale", scope: staleScope }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await refreshGitChangeScope("chat-1", "rel-1");
+
+    expect(result).toEqual({ status: "stale", scope: staleScope });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-change/refresh");
+    expect(JSON.parse(init.body as string)).toEqual({
+      schemaVersion: "1",
+      chatId: "chat-1",
+      relationshipId: "rel-1",
+    });
+  });
+});
+
+// Failing-before: before this client existed, a card wanting to mint the approval
+// commit/push/pr-create/pr-update now require unconditionally (#3386 commit, #3387 push and pull
+// request; epic #3384 correction 5) had no BFF client to call, so `fetchGitDeliveryCommitApprove`
+// (and its push/pr siblings below) were undefined and every test in this block failed with
+// "fetchGitDeliveryCommitApprove is not a function" before the corresponding export was added.
+describe("Governed commit/push/pull-request approval mint (#3386/#3387)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function jsonOk(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  function approvalFixture(): Record<string, unknown> {
+    return {
+      schemaVersion: "1",
+      approval: { schemaVersion: "1", approvalId: "gda_1", approvalToken: "t".repeat(64) },
+      expiresAt: "2026-01-01T00:00:30.000Z",
+    };
+  }
+
+  it("mints a commit approval from only message/allowEmpty, never attaching an approval field", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk(approvalFixture()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchGitDeliveryCommitApprove({
+      projectId: "/repo",
+      message: "feat: x",
+      allowEmpty: true,
+    });
+
+    expect(result.approval.approvalId).toBe("gda_1");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-delivery/commit/approve");
+    expect(JSON.parse(init.body as string)).toEqual({
+      schemaVersion: "1",
+      projectId: "/repo",
+      message: "feat: x",
+      allowEmpty: true,
+    });
+  });
+
+  it("mints a push approval bound to the exact publish target", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk(approvalFixture()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchGitDeliveryPushApprove({
+      projectId: "/repo",
+      remoteAlias: "origin",
+      remoteBranchName: "feature/x",
+      sourceBranchName: "feature/x",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-delivery/push/approve");
+    expect(JSON.parse(init.body as string)).toEqual({
+      schemaVersion: "1",
+      projectId: "/repo",
+      remoteAlias: "origin",
+      remoteBranchName: "feature/x",
+      sourceBranchName: "feature/x",
+    });
+  });
+
+  it("mints a pull-request approval bound to the exact create/update command", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk(approvalFixture()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchGitDeliveryPrApprove({
+      projectId: "/repo",
+      kind: "pr-create",
+      ownerAndRepo: "oscharko-dev/Keiko",
+      headBranchName: "feature/x",
+      baseBranchName: "dev",
+      title: "feat: x",
+      body: "body",
+      isDraft: false,
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-delivery/pr/approve");
+    expect(JSON.parse(init.body as string)).toEqual({
+      schemaVersion: "1",
+      projectId: "/repo",
+      kind: "pr-create",
+      ownerAndRepo: "oscharko-dev/Keiko",
+      headBranchName: "feature/x",
+      baseBranchName: "dev",
+      title: "feat: x",
+      body: "body",
+      isDraft: false,
+    });
+  });
+});
+
+// F3 (epic #3384 final audit): commit/push through the standalone Git Client Window could never
+// satisfy the epic's own unconditional approval requirement (correction 5) — `commitChanges`/
+// `runPushSync` (GitClientWindow.tsx) called `commitExecute`/`pushExecute` directly, with no mint
+// step at all, so an accepted run's commit/push silently dead-ended every time. Failing-before:
+// before `proposeCommit`/`proposePush` existed, this whole block failed with
+// "proposeCommit is not a function" / "proposePush is not a function".
+describe("Governed commit/push mint-then-execute (#3386/#3387, F3 epic #3384 final audit)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function jsonOk(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  // The exact hard-denial shape `deniedAuthorityGate` issues for a refused mint.
+  function jsonDenied(): Response {
+    return new Response(
+      JSON.stringify({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED", message: "denied" } }),
+      {
+        status: 403,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  }
+
+  // A genuine mint failure that is NOT a policy denial — a server error, a malformed request, or a
+  // transport failure. Review finding (F3 major, epic #3384 final audit): a blanket `catch {}`
+  // relabelled this as the same static "approval-required" outcome as a real denial, discarding the
+  // actual error and its diagnostic value (AGENTS.md §7 no-silent-failures).
+  function jsonServerError(): Response {
+    return new Response(JSON.stringify({ error: { code: "INTERNAL", message: "boom" } }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  function approvalFixture(id: string): Record<string, unknown> {
+    return {
+      schemaVersion: "1",
+      approval: { schemaVersion: "1", approvalId: id, approvalToken: "t".repeat(64) },
+      expiresAt: "2026-01-01T00:00:30.000Z",
+    };
+  }
+
+  it("proposeCommit mints then redeems, in order, before reporting success", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonOk(approvalFixture("gda_commit_1")))
+      .mockResolvedValueOnce(
+        jsonOk({ schemaVersion: "1", status: "succeeded", actionKind: "commit" }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await proposeCommit({ projectId: "/repo", message: "feat: x" });
+
+    expect(result.status).toBe("succeeded");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [approveUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [executeUrl, executeInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(approveUrl).toBe("/api/git-delivery/commit/approve");
+    expect(executeUrl).toBe("/api/git-delivery/commit/execute");
+    const executeBody = JSON.parse(executeInit.body as string) as Record<string, unknown>;
+    expect(executeBody.approval).toEqual(approvalFixture("gda_commit_1").approval);
+  });
+
+  it("proposeCommit surfaces a denied mint instead of relabelling it approval-required", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonDenied());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(proposeCommit({ projectId: "/repo", message: "feat: x" })).rejects.toMatchObject({
+      code: "GIT_DELIVERY_AUTHORITY_DENIED",
+      status: 403,
+    });
+    // The denied mint never reaches execute — only the approve endpoint was called.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [approveUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(approveUrl).toBe("/api/git-delivery/commit/approve");
+  });
+
+  it("proposePush mints then redeems, in order, before reporting success", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonOk(approvalFixture("gda_push_1")))
+      .mockResolvedValueOnce(
+        jsonOk({ schemaVersion: "1", status: "succeeded", actionKind: "push" }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await proposePush({
+      projectId: "/repo",
+      remoteAlias: "origin",
+      remoteBranchName: "feature/x",
+      sourceBranchName: "feature/x",
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [approveUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [executeUrl, executeInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(approveUrl).toBe("/api/git-delivery/push/approve");
+    expect(executeUrl).toBe("/api/git-delivery/push/execute");
+    const executeBody = JSON.parse(executeInit.body as string) as Record<string, unknown>;
+    expect(executeBody.approval).toEqual(approvalFixture("gda_push_1").approval);
+  });
+
+  it("proposePush surfaces a denied mint instead of relabelling it approval-required", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonDenied());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      proposePush({
+        projectId: "/repo",
+        remoteAlias: "origin",
+        remoteBranchName: "feature/x",
+        sourceBranchName: "feature/x",
+      }),
+    ).rejects.toMatchObject({ code: "GIT_DELIVERY_AUTHORITY_DENIED", status: 403 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [approveUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(approveUrl).toBe("/api/git-delivery/push/approve");
+  });
+
+  it("proposeCommit still rejects when execute itself fails after a successful mint", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonOk(approvalFixture("gda_commit_2")))
+      .mockResolvedValueOnce(jsonDenied());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(proposeCommit({ projectId: "/repo", message: "feat: x" })).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("proposeCommit rethrows when the mint fails for a reason other than authority denial (F3 major repair)", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonServerError());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(proposeCommit({ projectId: "/repo", message: "feat: x" })).rejects.toMatchObject({
+      code: "INTERNAL",
+      status: 500,
+    });
+    // The genuine failure never reaches execute, and is never relabelled as approval-required.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("proposePush rethrows when the mint fails for a reason other than authority denial (F3 major repair)", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonServerError());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      proposePush({
+        projectId: "/repo",
+        remoteAlias: "origin",
+        remoteBranchName: "feature/x",
+        sourceBranchName: "feature/x",
+      }),
+    ).rejects.toMatchObject({ code: "INTERNAL", status: 500 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #3389 repair: a BLOCKING review finding on the pr-mark-ready intent found that the production
+// "Propose ready" UI action was broken end-to-end — `proposePrMarkReady` never sent the `baseRef`
+// field the server's mint route (`buildMarkReadyCommand`, prMarkReadyExecution.ts) unconditionally
+// requires via `isBaseBranchName`, so every real click would have failed with a clean 400. Nothing
+// in the suite caught it because every other test mocked across this exact HTTP boundary. Failing-
+// before: with the pre-repair `GitDeliveryPrMarkReadyInput` (no `baseRef` field) and
+// `gitDeliveryPrMarkReadyBody` (which never serialized it), every `toEqual` assertion below that
+// names `baseRef` failed — the posted body simply had no such key.
+describe("Governed PR mark-ready intent client (#3389 repair)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function jsonOk(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  function markReadyInput(): {
+    projectId: string;
+    ownerAndRepo: string;
+    prExternalId: string;
+    headSha: string;
+    baseSha: string;
+    baseRef: string;
+    readinessDigest: string;
+  } {
+    return {
+      projectId: "/repos/keiko-checkout",
+      ownerAndRepo: "oscharko-dev/Keiko",
+      prExternalId: "1499",
+      headSha: "3".repeat(40),
+      baseSha: "1".repeat(40),
+      baseRef: "dev",
+      readinessDigest: "c".repeat(64),
+    };
+  }
+
+  it("mints a mark-ready approval carrying the exact base branch name the server requires", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonOk({
+        schemaVersion: "1",
+        approval: { schemaVersion: "1", approvalId: "gda_mr1", approvalToken: "t".repeat(64) },
+        expiresAt: "2026-09-05T00:05:00.000Z",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchGitDeliveryPrMarkReadyApprove(markReadyInput());
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-delivery/pr/mark-ready/approve");
+    expect(JSON.parse(init.body as string)).toEqual({
+      schemaVersion: "1",
+      ...markReadyInput(),
+    });
+  });
+
+  it("redeems a mark-ready execute carrying the exact base branch name the server requires", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonOk({ schemaVersion: "1", actionKind: "pr-mark-ready", status: "succeeded" }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const approval = {
+      schemaVersion: "1" as const,
+      approvalId: "gda_mr1",
+      approvalToken: "t".repeat(64),
+    };
+
+    await fetchGitDeliveryPrMarkReadyExecute({ ...markReadyInput(), approval });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-delivery/pr/mark-ready/execute");
+    expect(JSON.parse(init.body as string)).toEqual({
+      schemaVersion: "1",
+      ...markReadyInput(),
+      approval,
+    });
+  });
+
+  it("proposePrMarkReady sends baseRef on both the mint and the execute call, unchanged", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonOk({
+          schemaVersion: "1",
+          approval: { schemaVersion: "1", approvalId: "gda_mr2", approvalToken: "u".repeat(64) },
+          expiresAt: "2026-09-05T00:05:00.000Z",
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonOk({ schemaVersion: "1", actionKind: "pr-mark-ready", status: "succeeded" }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await proposePrMarkReady(markReadyInput());
+
+    expect(result.status).toBe("succeeded");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [approveUrl, approveInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [executeUrl, executeInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(approveUrl).toBe("/api/git-delivery/pr/mark-ready/approve");
+    expect(executeUrl).toBe("/api/git-delivery/pr/mark-ready/execute");
+    const approveBody = JSON.parse(approveInit.body as string) as Record<string, unknown>;
+    const executeBody = JSON.parse(executeInit.body as string) as Record<string, unknown>;
+    expect(approveBody.baseRef).toBe("dev");
+    expect(executeBody.baseRef).toBe("dev");
+  });
+
+  // Server-agnostic parity check (#3389 repair item 3): rather than trusting the fixture's own
+  // literal values, prove the exact object the client posts would pass the same field-shape
+  // predicates the server's mint route composes its validator from — `isGitObjectId` is the very
+  // function `buildMarkReadyCommand` (prMarkReadyExecution.ts) imports from keiko-contracts for
+  // `headSha`/`baseSha`, and `isSafeGitRefName` plus "not refs/-prefixed" is the exact composition
+  // `isBaseBranchName` (server) and `GitPullRequestIdentity`'s own `baseRef` field (contracts'
+  // `validBranch`, git-pull-request-identity.ts) both apply to a base branch name. A future drift —
+  // either side starts sending/requiring a differently-shaped value — fails this assertion without
+  // either package restating the other's parser.
+  it("posts a body whose sha/ref fields satisfy the same shared keiko-contracts predicates the server's mint parser is built from", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonOk({
+        schemaVersion: "1",
+        approval: { schemaVersion: "1", approvalId: "gda_mr3", approvalToken: "v".repeat(64) },
+        expiresAt: "2026-09-05T00:05:00.000Z",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchGitDeliveryPrMarkReadyApprove(markReadyInput());
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(isGitObjectId(body.headSha)).toBe(true);
+    expect(isGitObjectId(body.baseSha)).toBe(true);
+    expect(typeof body.baseRef).toBe("string");
+    expect(isSafeGitRefName(body.baseRef as string)).toBe(true);
+    expect((body.baseRef as string).startsWith("refs/")).toBe(false);
+  });
+});
+
+// #3399: preview/approve/apply/status for the governed PR-description application. The
+// preview/apply/status responses carry the real shared PrDescriptionApplicationStatus contract, so
+// (unlike the thin approve wrappers above) these are validated client-side — a malformed body the
+// server contract refuses must never reach a component. Failing-before: before
+// `validatePrDescriptionApplicationResultWire` existed, ANY object shape (including one with an
+// unknown "outcome" or a state/reason mismatch) would have resolved successfully.
+describe("Governed PR-description application API (#3399)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function jsonOk(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  function statusFixture(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      schemaVersion: "1",
+      state: "current",
+      reason: "applied",
+      binding: {
+        repositoryId: "repo-1",
+        remoteDigest: "a".repeat(64),
+        repository: "oscharko-dev/Keiko",
+        prNumber: 1499,
+        prExternalId: "1499",
+        baseRef: "dev",
+        baseSha: "b".repeat(40),
+        headRepository: "oscharko-dev/Keiko",
+        headRef: "feature/x",
+        headSha: "c".repeat(40),
+        isDraft: false,
+        snapshotDigest: "d".repeat(64),
+        draftDigest: "e".repeat(64),
+        renderingVersion: "1",
+        expectedBodyDigest: "f".repeat(64),
+        outsideRegionDigest: "0".repeat(64),
+        finalBodyDigest: "1".repeat(64),
+        providerUpdatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      observedAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2026-01-01T00:00:30.000Z",
+      completeness: "complete",
+      effect: "confirmed",
+      concurrency: "read-check-write-verify",
+      ...overrides,
+    };
+  }
+
+  const TARGET = { projectId: "/repo", ownerAndRepo: "oscharko-dev/Keiko", prNumber: 1499 };
+
+  it("posts the preview request with the target and language, omitting refinement when absent", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonOk({
+        outcome: "preview",
+        preview: {
+          proposalId: "prop-1",
+          expiresAt: "2026-01-01T00:00:30.000Z",
+          status: statusFixture(),
+          finalBody: "<!-- keiko:managed:v1:start -->generated<!-- keiko:managed:v1:end -->",
+          managedRegion: "generated",
+          concurrencyLimitation: "GitHub cannot lock the PR body during this update.",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchGitDeliveryPrDescriptionPreview({ ...TARGET, language: "en" });
+
+    expect(result.outcome).toBe("preview");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-delivery/pr-description/preview");
+    expect(JSON.parse(init.body as string)).toEqual({
+      schemaVersion: "1",
+      projectId: "/repo",
+      ownerAndRepo: "oscharko-dev/Keiko",
+      prNumber: 1499,
+      language: "en",
+    });
+  });
+
+  it("posts the approve request with only the target and proposalId — never a bearer claim", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonOk({ schemaVersion: "1", proposalId: "prop-1", expiresAt: "2026-01-01T00:00:30.000Z" }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchGitDeliveryPrDescriptionApprove({ ...TARGET, proposalId: "prop-1" });
+
+    expect(result.proposalId).toBe("prop-1");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-delivery/pr-description/approve");
+    expect(JSON.parse(init.body as string)).toEqual({
+      schemaVersion: "1",
+      projectId: "/repo",
+      ownerAndRepo: "oscharko-dev/Keiko",
+      prNumber: 1499,
+      proposalId: "prop-1",
+    });
+  });
+
+  it("retrieves the exact held preview through the proposal-bound review route", async () => {
+    const preview = {
+      proposalId: "prop-1",
+      expiresAt: "2026-01-01T00:00:30.000Z",
+      status: statusFixture(),
+      finalBody: "<!-- keiko:managed:v1:start -->generated<!-- keiko:managed:v1:end -->",
+      managedRegion: "generated",
+      concurrencyLimitation: "GitHub cannot lock the PR body during this update.",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk({ outcome: "preview", preview }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchGitDeliveryPrDescriptionReview({ ...TARGET, proposalId: "prop-1" }),
+    ).resolves.toEqual({ outcome: "preview", preview });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-delivery/pr-description/review");
+    expect(JSON.parse(init.body as string)).toEqual({
+      schemaVersion: "1",
+      projectId: "/repo",
+      ownerAndRepo: "oscharko-dev/Keiko",
+      prNumber: 1499,
+      proposalId: "prop-1",
+    });
+  });
+
+  it("returns the observed status on a successful apply", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonOk({ outcome: "observed", status: statusFixture() })),
+    );
+
+    const result = await fetchGitDeliveryPrDescriptionApply({ ...TARGET, proposalId: "prop-1" });
+
+    expect(result).toEqual({ outcome: "observed", status: statusFixture() });
+  });
+
+  it("returns a blocked outcome with a reason in the closed vocabulary on status", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonOk({ outcome: "blocked", reason: "stale-pr" })),
+    );
+
+    const result = await fetchGitDeliveryPrDescriptionStatus(TARGET);
+
+    expect(result).toEqual({ outcome: "blocked", reason: "stale-pr" });
+  });
+
+  it("rejects a blocked outcome whose reason is outside the closed vocabulary", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonOk({ outcome: "blocked", reason: "not-a-real-reason" })),
+    );
+
+    await expect(fetchGitDeliveryPrDescriptionStatus(TARGET)).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
+  });
+
+  it("rejects a preview envelope missing the server-rendered final body", async () => {
+    const preview: Record<string, unknown> = {
+      proposalId: "prop-1",
+      expiresAt: "2026-01-01T00:00:30.000Z",
+      status: statusFixture(),
+      managedRegion: "x",
+      concurrencyLimitation: "x",
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonOk({ outcome: "preview", preview })));
+
+    await expect(
+      fetchGitDeliveryPrDescriptionPreview({ ...TARGET, language: "en" }),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED", status: 502 });
+  });
+
+  it("rejects an observed status whose declared state disagrees with its reason", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonOk({ outcome: "observed", status: statusFixture({ state: "failed" }) }),
+        ),
+    );
+
+    await expect(fetchGitDeliveryPrDescriptionStatus(TARGET)).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+    });
+  });
+
+  it("rejects an unknown outcome discriminant", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonOk({ outcome: "unknown" })));
+
+    await expect(fetchGitDeliveryPrDescriptionStatus(TARGET)).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+    });
+  });
+});
+
+// #3400 final-audit F5: Chat's apply action for a connected git-change scope. Before the
+// `/api/git-change/apply-description` route was mounted, `applyGitChangeChatDescription` was
+// undefined and every test below failed with "applyGitChangeChatDescription is not a function".
+// The request carries only chat/relationship/proposal ids -- never `ownerAndRepo` -- proving the
+// browser never re-authors the repository identity the server already re-derived at connect time.
+describe("Chat's git-change apply-description action (#3400 final-audit F5)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function jsonOk(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  function statusFixture(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      schemaVersion: "1",
+      state: "current",
+      reason: "applied",
+      binding: {
+        repositoryId: "repo-1",
+        remoteDigest: "a".repeat(64),
+        repository: "oscharko-dev/Keiko",
+        prNumber: 1499,
+        prExternalId: "1499",
+        baseRef: "dev",
+        baseSha: "b".repeat(40),
+        headRepository: "oscharko-dev/Keiko",
+        headRef: "feature/x",
+        headSha: "c".repeat(40),
+        isDraft: false,
+        snapshotDigest: "d".repeat(64),
+        draftDigest: "e".repeat(64),
+        renderingVersion: "1",
+        expectedBodyDigest: "f".repeat(64),
+        outsideRegionDigest: "0".repeat(64),
+        finalBodyDigest: "1".repeat(64),
+        providerUpdatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      observedAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2026-01-01T00:00:30.000Z",
+      completeness: "complete",
+      effect: "confirmed",
+      concurrency: "read-check-write-verify",
+      ...overrides,
+    };
+  }
+
+  const INPUT = { chatId: "chat-1", relationshipId: "rel-1", proposalId: "prop-1" };
+
+  it("approves the same server-held Chat proposal without repository identity", async () => {
+    const approved = {
+      schemaVersion: "1",
+      proposalId: "prop-1",
+      expiresAt: "2026-01-01T00:00:30.000Z",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk(approved));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      approveGitChangeChatDescription(INPUT, undefined, "ui-git-change-approve-correlation"),
+    ).resolves.toEqual(approved);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-change/approve-description");
+    expect(JSON.parse(init.body as string)).toEqual({ schemaVersion: "1", ...INPUT });
+    expect(new Headers(init.headers).get("X-Keiko-Correlation-Id")).toBe(
+      "ui-git-change-approve-correlation",
+    );
+  });
+
+  it("reviews the exact server-held Chat proposal without repository identity", async () => {
+    const preview = {
+      proposalId: "prop-1",
+      expiresAt: "2026-01-01T00:00:30.000Z",
+      status: statusFixture(),
+      finalBody: "exact held body",
+      managedRegion: "exact held body",
+      concurrencyLimitation: "GitHub cannot lock the PR body during this update.",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk({ outcome: "preview", preview }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      reviewGitChangeChatDescription(INPUT, undefined, "ui-git-change-review-correlation"),
+    ).resolves.toEqual({ outcome: "preview", preview });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-change/review-description");
+    expect(JSON.parse(init.body as string)).toEqual({ schemaVersion: "1", ...INPUT });
+    expect(new Headers(init.headers).get("X-Keiko-Correlation-Id")).toBe(
+      "ui-git-change-review-correlation",
+    );
+  });
+
+  it("posts exactly chatId, relationshipId and proposalId — never ownerAndRepo", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonOk({ outcome: "observed", status: statusFixture() }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await applyGitChangeChatDescription(
+      INPUT,
+      undefined,
+      "ui-git-change-apply-correlation",
+    );
+
+    expect(result).toEqual({ outcome: "observed", status: statusFixture() });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-change/apply-description");
+    expect(JSON.parse(init.body as string)).toEqual({ schemaVersion: "1", ...INPUT });
+    expect(new Headers(init.headers).get("X-Keiko-Correlation-Id")).toBe(
+      "ui-git-change-apply-correlation",
+    );
+  });
+
+  it("returns a blocked outcome with a reason in the closed vocabulary", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonOk({ outcome: "blocked", reason: "stale-pr" })),
+    );
+
+    const result = await applyGitChangeChatDescription(INPUT);
+
+    expect(result).toEqual({ outcome: "blocked", reason: "stale-pr" });
+  });
+
+  it("rejects a blocked outcome whose reason is outside the closed vocabulary", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonOk({ outcome: "blocked", reason: "not-a-real-reason" })),
+    );
+
+    await expect(applyGitChangeChatDescription(INPUT)).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
+  });
+
+  it("rejects an observed status whose declared state disagrees with its reason", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonOk({ outcome: "observed", status: statusFixture({ state: "failed" }) }),
+        ),
+    );
+
+    await expect(applyGitChangeChatDescription(INPUT)).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+    });
+  });
+
+  // This action never produces a preview envelope (it only ever consumes an already-approved
+  // proposal) -- a "preview" outcome from this specific route is itself a contract violation.
+  it("rejects a preview outcome as invalid for this action", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonOk({
+          outcome: "preview",
+          preview: {
+            proposalId: "prop-1",
+            expiresAt: "2026-01-01T00:00:30.000Z",
+            status: statusFixture(),
+            finalBody: "x",
+            managedRegion: "x",
+            concurrencyLimitation: "x",
+          },
+        }),
+      ),
+    );
+
+    await expect(applyGitChangeChatDescription(INPUT)).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+    });
+  });
+
+  it("rejects an unknown outcome discriminant", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ outcome: "unknown" }), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            [CORRELATION_HEADER]: "corr-malformed-apply",
+          },
+        }),
+      ),
+    );
+
+    await expect(applyGitChangeChatDescription(INPUT)).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      correlationId: "corr-malformed-apply",
+    });
   });
 });

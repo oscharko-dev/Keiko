@@ -52,9 +52,9 @@ We will introduce a new contracts leaf in keiko-contracts, a dedicated PR gatewa
 `packages/keiko-tools/src/git-pr-gateway.ts` (pure) defines:
 
 - `GitPullRequestCommand` — a discriminated union of `GitPrCreateCommand` and `GitPrUpdateCommand`. Each carries the actual title/body strings (the content the `git-delivery.ts` inputs deliberately omit), plus all structured operands (`headBranchName`, `baseBranchName`, `isDraft`, `prExternalId`, etc.). The title and body flow command → adapter → GitHub and command → UI (for the editable metadata draft); they never enter evidence.
-- `GitPullRequestAdapter` — the narrow provider port with two typed methods (`createPullRequest(req)` and `updatePullRequest(req)`). No generic `run(args)` escape hatch; the port accepts only the typed request shapes, mirroring the ADR-0081 and ADR-0085 narrow-port discipline.
-- `GIT_PULL_REQUEST_ALLOWED_SUBCOMMANDS` — a closed string array of the `gh api` REST path patterns permitted for PR operations (`/repos/{owner}/{repo}/pulls` POST, `/repos/{owner}/{repo}/pulls/{number}` PATCH, `/repos/{owner}/{repo}/pulls/{number}` GET). Structurally separate from both `GIT_MUTATION_ALLOWED_SUBCOMMANDS` and `GIT_PUBLISH_ALLOWED_SUBCOMMANDS`; adding to one never touches the others.
-- `buildPrApiArgv(req)` — pure argv builders for `gh api` invocations. Validates owner/repo operands (no NUL, no whitespace, no leading `-`, no flag injection), and emits deterministic `gh api --method POST/PATCH ... --field title=... --field body=...` argument arrays. The builder never constructs a URL from unvalidated user input; the endpoint pattern is assembled from validated, typed fields only.
+- `GitPullRequestAdapter` — the narrow provider port with two typed mutation methods (`createPullRequest(req)` and `updatePullRequest(req)`). The same Node adapter also implements `GitPullRequestInspectionAdapter`: bounded `readPullRequest`, `findPullRequestsByHead` and `readBranchHead` reads for issue-bound reconciliation. No generic `run(args)` escape hatch; the port accepts only the typed request shapes, mirroring the ADR-0081 and ADR-0085 narrow-port discipline.
+- `GIT_PULL_REQUEST_ALLOWED_SUBCOMMANDS` — a closed allowlist containing only the `api` subcommand of `gh`, and `GIT_PULL_REQUEST_COMMAND_RULES`, which denies the file-input and pagination flags that could read an arbitrary file or walk beyond the targeted resource. Structurally separate from both `GIT_MUTATION_ALLOWED_SUBCOMMANDS` and `GIT_PUBLISH_ALLOWED_SUBCOMMANDS`; adding to one never touches the others. The allowlist does not enumerate REST paths: which endpoints and methods can be reached is decided by the pure argv builders below, because every `gh api` invocation is assembled by exactly one of them.
+- `buildPrApiArgv(req)`, `buildPrReadArgv`, `buildPrReadByHeadArgv`, `buildPrReadBranchHeadArgv` and the draft-state GraphQL builders — pure argv builders for `gh api` invocations. Each builder fixes its endpoint and method: `/repos/{owner}/{repo}/pulls` POST (create), `/repos/{owner}/{repo}/pulls/{number}` PATCH (update), the three bounded GET reads (by number, by head branch, branch head), and the two `markPullRequestReadyForReview` / `convertPullRequestToDraft` GraphQL mutations. No builder exists for merge, delete or project-board endpoints, so they are unreachable. Builders validate owner/repo and branch operands (no NUL, no whitespace, no leading `-`, no flag injection) and emit deterministic `gh api --method POST/PATCH ... --field title=... --field body=...` argument arrays. A builder never constructs a URL from unvalidated user input; the endpoint is assembled from validated, typed fields only, and `gitPrArgvIsGoverned` lets tests prove structurally that no argv leaves the `api` subcommand.
 - `evaluateGitPullRequestEffectivePolicy(decision, context, inputs)` — the effective policy outcome for a specific PR target, resolving a `constrained` decision's constraints against the target branch (mirrors `evaluateGitPublishEffectivePolicy`).
 - `runGitPullRequest(request, deps)` — the PR lifecycle orchestrator. It reuses `evaluateGitPreflight` (pr-create and pr-update already map to `preflightNoLocalPrecondition`; no modification to `git-mutation-preflight.ts`), `evaluateGitPolicy`, and the `GitMutationLifecycleResult` shape (so the #474 evidence builder consumes it unchanged). It returns a `GitPullRequestLifecycleResult` wrapping the lifecycle result with the live rejection reason when the provider rejected the operation.
 
@@ -62,14 +62,26 @@ The local kernel (`runGitMutation`), the local adapter, and the publish gateway 
 
 ### D2 — Transport is `gh api` subprocess with a dedicated PR endpoint allowlist; no new npm dependency; token never handled by Keiko
 
-`packages/keiko-tools/src/internal/git-pr-node.ts` (Node executor) implements `GitPullRequestAdapter`. It:
+`packages/keiko-tools/src/git-pr-node.ts` (Node executor) implements `GitPullRequestAdapter`. It:
 
-- Shells `gh api` using the existing keiko-tools no-shell spawn boundary (`runCommand`, `exec.ts`) with a dedicated `GIT_PULL_REQUEST_COMMAND_RULES` allowlist. The allowlist permits only `gh api` invocations targeting the three PR REST paths (create, update, get) with `--method POST`, `--method PATCH`, and `--method GET` respectively. No merge, delete, or project-board endpoints are in the allowlist.
+- Shells `gh api` using the existing keiko-tools no-shell spawn boundary (`runCommand`, `exec.ts`) with the dedicated `GIT_PULL_REQUEST_COMMAND_RULES` allowlist. The allowlist admits only the `api` subcommand and denies file-input flags; the endpoint and method of every invocation come from the D1 builders (create POST, update PATCH, the bounded GET reads, and the two draft-state GraphQL mutations), which are the only way an argv is produced. No merge, delete, or project-board endpoint has a builder.
 - Passes the process environment through (`processEnv: process.env`) so `gh` reads its own token from the keyring or from `GH_TOKEN`/`GITHUB_TOKEN` in the environment. Keiko never reads the token value; it is opaque to the server process.
-- Secret-redacts subprocess stdout/stderr before any classification or logging, exactly as the publish node adapter does. Raw API responses never leave the executor.
+- Secret-redacts subprocess stdout/stderr before any classification or logging, exactly as the publish node adapter does. Raw API responses never leave the executor. A closed `GitPullRequestIdentity` projection may leave it for UI and durable reconciliation; the lifecycle evidence separately selects only `GitDeliveryExecutionResult` fields.
 - Classifies a non-OK HTTP status or non-zero exit via `classifyGitPullRequestRejection`, which matches error tokens in the redacted output and maps them to a typed `GitPullRequestRejectionReason`.
 
 `gh` is treated as an authenticated system binary. Keiko does not perform auth setup and has no auth-token lifecycle; write admission remains bound to the active server-owned runtime Authority Envelope.
+
+Issue-bound create and reconciliation explicitly select `github.com`; ambient `GH_HOST` cannot
+redirect them. `canonicalGitHubIdentity: true` selects the same bounded identity projection on
+create and returns the number, provider id, canonical URL, repository identities, base/head
+refs and full SHAs, state and draft flag. Invalid, truncated or mismatched responses never imply
+success. Requests are captured before asynchronous execution. Finding an existing PR queries
+all states for the exact owner/head, returns at most two matches, and deliberately omits a base
+filter so a retargeted or closed PR is visible. A separate exact branch-reference read returns
+only a commit SHA. Provider read failures and malformed responses stay typed; no title/body or
+credential fields enter this projection. A successful create response is one observation, not
+an atomic expected-head guarantee: the issue-bound owner must re-read remote state before
+recording exact-revision success.
 
 ### D3 — Content-free guarantee preserved; metadata synthesis produces a deterministic, user-editable draft from structured facts
 
@@ -150,6 +162,154 @@ These tests run in the `ci` job (the required gating check) and require no live 
 
 **Playwright e2e** (non-gating, coordinator evidence, `tests/e2e/config/playwright.issue-477-pr-command-center.config.ts`, `test:e2e:pr-command-center-477`): drives the real packaged app to assert the read-only preview path (policy outcome display, readiness blockers, metadata-draft editor render) and the blocked state when the base branch is outside the policy namespace. No live `gh api` calls are made in CI.
 
+### D9 — Issue-bound template seed and trusted closing reference
+
+Issue-bound Workbench draft creation resolves only repository defaults at the root, `.github`
+or `docs` through the existing governed workspace read. Discovery is capped at 1,024 directory
+entries per location; case-insensitive `pull_request_template` names with `.md`, `.txt` or no
+extension are accepted. Custom-template collections are not selected. Multiple defaults,
+unsupported defaults, read/alias/encoding failures, files larger than 32,768 UTF-8 bytes,
+redaction-changing content, unsafe format characters or existing managed markers fail closed.
+Accepted template bytes remain outside the contracts-owned empty versioned region, followed
+by one server-generated `Closes #N` from the frozen `CodingWorkbenchIssueBinding`.
+
+Untrusted title/template closing directives are rejected by the shared contracts scan; commit
+messages use that same scan. Subsequent managed-region replacement must preserve the trusted
+closing line and all other outside bytes. Branch-inferred `Refs` remain advisory in the generic
+flow and never become closing directives. An accepted server-owned issue binding is the sole
+source of an automatic closing reference. The issue-bound default base comes from the verified
+workspace provision; branch-name inference and model text cannot select it. Existing generic
+policy and metadata behavior remain available.
+
+The owning runtime snapshot schema retains a bounded `DraftDeliveryRecord` alongside the verified
+commit, with an independent compare-and-swap revision and explicit push/PR/recovery phases.
+It binds the run, authority and workspace digests, frozen issue, origin, exact base/head,
+verified proposal and recovery identity. It contains no title, body, credential or reusable
+approval. Upgrading a populated schema 23 to 24 preserves its issue and verified commit. A
+restart may restore these observations; it must not recreate authority or replay an effect.
+
+A fresh accepted retry may adopt only the matching durable intent of its acknowledged, released
+predecessor. The store follows at most 32 same-task, same-workspace, same-issue predecessor links
+to the original successful verified-commit receipt; cycles, missing provenance and target changes
+are refused. Adoption installs a new `recovery-required` record under the new run and authority,
+without copying approval or a successful commit into that run. Reconciliation must precede another
+effect proposal. Referenced predecessor snapshots are retained against pruning so retry cannot
+silently lose its verification source.
+
+### D10 — A dedicated `pr-description-apply` action kind, its own mint route, and a description authority that admits it outside a running Code task (#3399, epic #3384 correction 4)
+
+V1 places a validated, Model-Gateway-generated description into the one versioned managed body
+region without title, base, or draft-state authority. `GitPullRequestAdapter.updatePullRequest`
+always patches title, body and base together and may toggle draft state, so it is not safe for
+this body-only guarantee. The apply is a distinct `GitDeliveryActionKind` —
+`"pr-description-apply"` — never a reuse of `"pr-update"`: a shared kind would let the policy-pack
+layer hold only one decision for two operations with different blast radii (full metadata mutation
+versus a byte-bounded body region), collapsing a real authority distinction the pack exists to
+express. `KEIKO_DEFAULT_PR_POLICY_PACK` carries an explicit `approval-gated` rule for it
+(`requiredApprovers: []`, ADR-0080 D5's "any approver" shape), mirroring `pr-create`/`pr-update`'s
+entries; its real, unconditional enforcement is the description service's own approval
+continuation (`PrDescriptionApprovals`, mint via `issueApproval`, redeem via
+`consumeApproval`/`executeApproved`) at the route/service layer, exactly as the commit, push, and
+PR mint routes (`/api/git-delivery/{commit,push,pr}/approve`) enforce ADR-0138 D2 unconditionally
+rather than through the pack's own decision — `evaluateGitPullRequestEffectivePolicy`
+(keiko-tools/git-pr-gateway.ts) remains closed over `"pr-create" | "pr-update"`, so the pack rule
+does not (yet) reach that kernel evaluator; the description service's own base-branch check reuses
+the `pr-update` constraint as a documented proxy pending that kernel's own extension.
+
+The apply is reachable from two admission sources. Under a running Code task, the existing
+run-bound `gitDeliveryAuthorityGate` for the `"pull-request"` operation admits it exactly as it
+already admits `pr-create`/`pr-update`. Outside a running run — a Git-connected Chat turn or a
+post-terminal Workbench job — `authorizeGitDelivery` (runBoundAuthority.ts) additionally accepts a
+server-minted, bounded **description authority** (`CodingRuntimeAuthorityService`, the same owner
+as `ActiveGitDeliveryRunAuthority`) for this one operation only. The authority is minted for a
+single immutable `(remoteDigest, PR identity or base/head pair, snapshotDigest)` scope, its
+`effectiveMode` is `resolveEffectiveCodingWorkbenchMode(requested, deploymentCeiling)`, and it
+carries no workspace-write or command action classes — a scope change, TTL expiry, or explicit
+revocation removes it, and admission always re-derives the scope fresh rather than trusting a
+value cached at a prior call. The SAME authority separately admits model egress of snapshot
+content for description generation (`authorizeGitDeliveryModelEgress`), since that effect has no
+Git operation shape (no argv, adapter, or branch target) to gate through
+`GitDeliveryAuthorityRequest.operation`. `prDescriptionRoutes.ts` composes one stateful
+`PrDescriptionApplicationService` per (project, repository, PR), created lazily and reused across
+the preview → approve → apply lifecycle so the in-flight proposal and its approval continuation
+survive across the separate HTTP calls; the `context()` provider re-derives admission fresh on
+every internal call rather than caching it, so a revoked or drifted authority is observed on the
+very next call. Full production composition of description generation (Model Gateway config and
+capability) remains #3398's scope; until composed, the route fails closed as unavailable rather
+than degrading to a fabricated or unvalidated description.
+
+### D11 — A dedicated `pr-mark-ready` action kind and approval operation close the approval-less draft->ready transition; no title/body/base PATCH is bundled with the mutation (#3389, epic #3384 corrections 1/2/7)
+
+The generic `pr-update` command's `convertFromDraft` flag reached the draft->ready GraphQL
+mutation (`buildPrMarkReadyGraphqlArgv`) under the run-bound authority gate alone: the mint route
+that exists for `pr-create`/`pr-update` (`POST /api/git-delivery/pr/approve`, D1/D2) binds a claim
+to the exact `GitPullRequestCommand`, but that binding carries no readiness digest, no draft-state
+invariant, and no re-verified base/head SHA — it proves "this exact title/body/base/draft-flag
+combination was approved," not "the PR was observed still a draft at these exact commits when the
+human approved marking it ready." A claim minted for an ordinary metadata edit was therefore
+indistinguishable, at the approval layer, from a claim for the ready-for-review transition. Since
+D10 already established that one action kind cannot honestly carry two different blast radii under
+one policy decision, the same reasoning applies here with a sharper edge: `pr-update` is
+`constrained` by base-branch namespace (D6); `pr-mark-ready` is a one-way, human-facing readiness
+signal to the outside world that deserves its own approval-gated decision, its own bound facts, and
+its own execution path.
+
+`GitDeliveryActionKind` gains `"pr-mark-ready"`, `GitDeliveryApprovalOperation` gains a distinct
+`"pr-mark-ready"` member (never redeemable by a claim minted for the generic `"pr"` operation, and
+vice versa — a claim's binding hash covers `operation` alongside `command`), and
+`KEIKO_DEFAULT_PR_POLICY_PACK` carries an explicit `approval-gated` rule for it (`requiredApprovers:
+[]`, the same ADR-0080 D5 shape D10 uses), mirroring D10's own note that this pack rule is
+documentation and mintability parity — the real, unconditional enforcement is the mark-ready
+execute route's own claim resolution (`prMarkReadyExecution.ts`), exactly as commit, push, PR, and
+PR-description-apply enforce ADR-0138 D2 at their own route layer rather than through the pack's
+decision. `packages/keiko-server/src/gitDelivery/prRoutes.ts` closes the approval-less path at
+request validation: a `pr-update` command with `convertFromDraft: true` is rejected unconditionally
+(`GIT_DELIVERY_PR_BAD_REQUEST`), before any approval is even consulted — the transition is
+reachable only through `POST /api/git-delivery/pr/mark-ready/{approve,execute}`. `convertToDraft`
+(ready->draft) is unaffected; it remains a legitimate `pr-update` field.
+
+The mint (`/mark-ready/approve`) performs no IO: it binds the caller-supplied `ownerAndRepo`, PR
+number, base/head SHA, base branch NAME (`baseRef` — carried alongside `baseSha` purely so the live
+requirements/conflict re-read below can address GitHub's branch-keyed endpoints) and a readiness
+digest (the CI-readiness `requirementsDigest` the caller's most recent read produced) into the
+claim, plus a server-computed `remoteDigest` (`codingWorkbenchRemoteDigest`, epic #3384 correction 6
+— every same-repository match keys on the canonical remote identity, never the per-checkout
+`repositoryId`) and a `transitionPayloadDigest` scoping the claim to this exact PR's fixed transition
+shape. The execute route re-verifies BOTH halves of AC3's "re-read head/base/requirements/conflict
+immediately before execution" immediately before dispatching the mutation:
+
+1. **Identity** — `GitPullRequestMarkReadyAdapter.markPullRequestReady` (`git-pr-node.ts`), a NEW,
+   narrower port deliberately separate from `GitPullRequestAdapter`, never PATCHes title, body or
+   base. It re-reads the live `GitPullRequestIdentity` (the same canonical read D2's
+   `readPullRequest` already performs, now with `exactOutput: true` so a secret-redacted read is
+   never trusted the same way `readPullRequestBody` already treats a comparable governed read)
+   IMMEDIATELY BEFORE the mutation and refuses with `precondition-failed` (no spawn beyond the read)
+   unless the observed head/base SHA match the claim and the PR is still a draft; runs ONLY the
+   existing `buildPrMarkReadyGraphqlArgv` mutation; then re-reads the identity again and reports
+   `succeeded` only when the read-back confirms `isDraft === false` on the same head. A `gh` exit
+   code of `0` alone never proves the transition — only the read-back does.
+2. **Requirements/conflict** — `prMarkReadyExecution.ts` independently re-derives the live
+   requirements/conflict facts through `createNodeGitCiReader`/`assessGitCiFacts` (the SAME
+   read-only port the CI observation service and the journey read already use — no second formula)
+   and refuses the same way on an incomplete read, a live merge conflict, or a `requirementsDigest`
+   that no longer matches the claim's bound `readinessDigest`. The digest is never merely trusted
+   from the client, at mint or execute: a claim minted against a digest with no relationship to any
+   live read fails here the first time it is redeemed, and a claim minted against a real reading
+   that has since gone stale (required checks changed, a conflict appeared) fails here too.
+
+Any mismatch at any of these reads revokes the claim's effect and performs nothing further; the
+claim itself remains exactly one-use via the existing approval-store `consume()` regardless of the
+adapter outcome, so a claim that hits drift can never be retried against the same or a different PR
+revision.
+
+The coding runtime exposes neither merge, auto-merge scheduling, nor issue-close mutations through
+this or any other route: the mark-ready path's only possible spawns are the canonical PR-identity
+read, the bounded read-only CI-facts read, and the fixed `markPullRequestReadyForReview` mutation —
+the mutation adapter's own three fixed shapes are pinned structurally in `git-pr-node.test.ts`. The
+two route definitions live once, in `prMarkReadyExecution.ts`'s own
+`createGitDeliveryPrMarkReadyRouteGroup`; `prRoutes.ts` spreads that group into the mounted PR route
+table rather than re-listing the patterns, so the two can never drift apart.
+
 ## Consequences
 
 ### Positive
@@ -213,7 +373,33 @@ These tests run in the `ci` job (the required gating check) and require no live 
 - Issue #478: Merge governance (next child; extends provider execution; NOT in this slice)
 - Issue #470: Epic — governed end-to-end Git delivery
 - ADR-0087: Governed merge gateway (downstream merge authority and protected-branch enforcement)
+- ADR-0138: Monotonic product-wide autonomy semantics (the mint-route-plus-unconditional-approval
+  pattern D10's `pr-description-apply` follows, mirroring the commit/push/PR mint routes)
+- Epic #3384 / Issue #3399: Apply a managed Keiko description through the governed pull request
+  update path (D10's action kind, mint route, and description authority)
 
 ## Date
 
 2026-06-26
+
+
+The draft ledger retains its original successful commit receipt internally, independently of
+subsequent commit proposals. A new verified head updates that proof atomically with the draft
+record. Restart validates the retained proof through the acknowledged bounded predecessor lineage
+and never restores approval. Schema v25 adds the bounded internal receipt column; the existing
+v23/v24 migration text remains unchanged, and the source receipt is absent from public snapshots.
+
+An explicit new start preserves that lineage when an intervening linked run failed before adopting
+the draft. If an older version already lost the link, start may select one unique locally retained
+draft from the most recent 32 snapshots: its recovery must have been acknowledged and released,
+its task, workspace and canonical issue binding must match, and its known PR must have a matching
+successful internal commit receipt. Missing proof or multiple candidates leaves the new run
+unlinked. This creates only a new predecessor edge; it never rewrites historical rows, discovers
+ownership from a remote branch, restores approval, or publishes anything. The new run receives fresh
+authority and delivery still verifies the current local candidate and live remote identity.
+
+For a pre-v25 row whose latest result is still a valid successful commit, the existing validated
+receipt can seed this retained source. If an earlier version already replaced that success with a
+failed or pending result and stored no source receipt, migration cannot reconstruct the missing
+proof. Delivery fails closed and requires fresh verification and an approved commit; a pending
+proposal's parent SHA is never accepted as a substitute for a successful commit receipt.

@@ -247,6 +247,13 @@ function depKeys(value: unknown): readonly string[] {
 }
 
 function detectFramework(record: Record<string, unknown>): TestFramework {
+  if (
+    isRecord(record.scripts) &&
+    Object.hasOwn(record.scripts, "test") &&
+    record.scripts.test === "node --test"
+  ) {
+    return "node-test";
+  }
   const names = new Set<string>([
     ...depKeys(record.devDependencies),
     ...depKeys(record.dependencies),

@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ProviderError,
   resolveCodingSafeSidecarGatewayProfile,
@@ -17,16 +18,39 @@ import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
+  _classifyBadRequestReasonForTests,
   createOpenCodeGatewayReadinessRegistry,
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
 } from "./coding-sidecar-gateway.js";
 import { mockRequest, mockResponse, probeVerifiedGatewayConfig } from "./_support.js";
+import {
+  createOpenCodeGatewayToolCatalogAdvertisement,
+  OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
+} from "./coding-runtime/opencodeToolSchemas.js";
+import { proposalIdPattern } from "./gitDelivery/proposalId.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type BufferedServerLogSink,
+  type ServerLogThreshold,
+} from "./observability/index.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { STREAMING, type RouteContext, type RouteResult } from "./routes.js";
 import { resetGatewayInstanceCacheForTests } from "./gateway-instance-cache.js";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./coding-runtime/opencodeLaunchProfile.js";
+
+// Installs a buffered process logger at `level` and returns its sink, mirroring
+// `bounded-request-body.test.ts`'s helper of the same name. `resetServerLogger` in each suite's
+// own `afterEach` puts the process-wide slot back so no other suite in this file shares it.
+function captureServerLog(level: ServerLogThreshold): BufferedServerLogSink {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level }));
+  return sink;
+}
 
 function provider(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
   return {
@@ -266,6 +290,46 @@ const WORKSPACE_READ_SCHEMA = {
   required: ["relativePath", "startLine", "maxLines"],
 } as const;
 
+// #3406/#3414: mirrors opencodeToolSchemas.ts's REPOSITORY_SEARCH_SCHEMA for #3386's H1 local
+// repository-search handler, projected as keiko_repository_search.
+const REPOSITORY_SEARCH_SCHEMA = {
+  type: "object",
+  properties: {
+    mode: {
+      type: "string",
+      enum: ["lexical", "literal", "regex", "symbol"],
+      description:
+        "lexical: natural-language keyword match. literal: exact substring. regex: bounded, ReDoS-safe pattern. symbol: exact identifier (no whitespace).",
+    },
+    query: {
+      type: "string",
+      minLength: 1,
+      maxLength: 200,
+      description: "Search text for the selected mode.",
+    },
+    caseSensitive: { type: "boolean" },
+    includeGlobs: {
+      type: "array",
+      maxItems: 32,
+      items: { type: "string", minLength: 1, maxLength: 200 },
+      description: "Workspace-relative glob patterns to restrict the search to.",
+    },
+    excludeGlobs: {
+      type: "array",
+      maxItems: 32,
+      items: { type: "string", minLength: 1, maxLength: 200 },
+      description: "Workspace-relative glob patterns to exclude from the search.",
+    },
+    maxResults: {
+      type: "integer",
+      minimum: 1,
+      maximum: 50,
+      description: "Maximum number of bounded content excerpts to return.",
+    },
+  },
+  required: ["mode", "query", "caseSensitive", "includeGlobs", "excludeGlobs", "maxResults"],
+} as const;
+
 const WORKSPACE_DISCOVER_SCHEMA = {
   type: "object",
   properties: {
@@ -354,8 +418,16 @@ const VERIFICATION_PROJECTED_SCHEMA = {
       type: "string",
       enum: ["test", "targeted-test", "typecheck", "lint", "build"],
     },
+    targetPath: {
+      type: "string",
+      minLength: 0,
+      maxLength: 4096,
+      pattern: String.raw`^(?:$|(?![\\/])(?!.*(?:^|/)\.\.?(?:/|$))(?!.*\\).+)$`,
+      description:
+        "Use an empty string for ordinary gates; targeted-test requires one workspace-relative test path.",
+    },
   },
-  required: ["verifierId"],
+  required: ["verifierId", "targetPath"],
 } as const;
 
 // The built-in todowrite projection is byte-identical to its source schema (#2480).
@@ -420,15 +492,129 @@ const CHILD_AGENT_SCHEMA = {
   required: ["objective", "maxToolCalls"],
 } as const;
 
+// #3386/#3387/#3388: these are Keiko-authored managed Git/PR/CI tools, not stock OpenCode
+// built-ins. These independent fixtures exercise gateway rejection of schema drift against the
+// production handler schemas in opencodeToolSchemas.ts. Compatibility with the real binary's
+// advertisement is tested separately using the captured fixture in realOpenCodeAdvertisedTools.
+//
+// #3390 live-run evidence: OpenCode v1.17.17 does NOT advertise a zero-argument tool's source
+// shape (`{"type":"object","properties":{},"required":[]}`) verbatim -- it drops the empty
+// `required: []` array and adds a `$schema` marker instead. This is the real wire shape for
+// keiko_git_status/keiko_git_push, captured live and pinned in
+// coding-runtime/opencodeToolSchemas.opencode-1.17.17-advertised.fixture.json.
+const GIT_STATUS_SCHEMA = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  properties: {},
+} as const;
+const GIT_PUSH_SCHEMA = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  properties: {},
+} as const;
+const GIT_DIFF_SCHEMA = {
+  type: "object",
+  properties: {
+    scope: { type: "string", enum: ["working-tree", "index"] },
+    paths: {
+      type: "array",
+      minItems: 1,
+      maxItems: 50,
+      items: { type: "string", minLength: 1, maxLength: 512 },
+      description: "Workspace-relative paths to diff; denied or ignored paths never appear.",
+    },
+  },
+  required: ["scope", "paths"],
+} as const;
+const GIT_STAGE_SCHEMA = {
+  type: "object",
+  properties: {
+    paths: {
+      type: "array",
+      minItems: 1,
+      maxItems: 50,
+      items: { type: "string", minLength: 1, maxLength: 512 },
+      description: "Workspace-relative paths to propose staging.",
+    },
+  },
+  required: ["paths"],
+} as const;
+const GIT_COMMIT_SCHEMA = {
+  type: "object",
+  properties: {
+    message: {
+      type: "string",
+      minLength: 1,
+      maxLength: 8_192,
+      description: "Proposed commit message. This proposes only; a human approval is required.",
+    },
+  },
+  required: ["message"],
+} as const;
+const GIT_PULL_REQUEST_SCHEMA = {
+  type: "object",
+  properties: {
+    title: {
+      type: "string",
+      minLength: 1,
+      maxLength: 256,
+      pattern: "^[^\\0\\r\\n]+$",
+      description: "Proposed draft pull-request title.",
+    },
+  },
+  required: ["title"],
+} as const;
+const GIT_CI_STATUS_SCHEMA = {
+  type: "object",
+  properties: {
+    forceFresh: {
+      type: "boolean",
+      description:
+        "Set true to bypass the cached readiness snapshot and force one fresh provider read.",
+    },
+  },
+  required: ["forceFresh"],
+} as const;
+// Kept in exact sync with opencodeToolSchemas.ts's own GIT_EXECUTE_SCHEMA by hand (this file pins
+// the real wire schema independently of that module's export, on purpose, as its own regression
+// check) -- stage-/delivery-/commit- are the three prefixes the server actually mints, from
+// gitDelivery/proposalId.ts's PROPOSAL_ID_PREFIXES. The literal pattern below may only keep
+// restating that string because a test ("keeps the hand-typed proposalId pin in sync with the
+// derived pattern", below) asserts it equals proposalIdPattern() -- if that assertion ever fails,
+// fix this literal, not the test.
+const GIT_EXECUTE_SCHEMA = {
+  type: "object",
+  properties: {
+    kind: { type: "string", enum: ["stage", "commit", "push", "pull-request"] },
+    proposalId: {
+      type: "string",
+      minLength: 1,
+      maxLength: 64,
+      pattern: "^(?:stage|delivery|commit)-[0-9]{1,39}$",
+      description: "The proposalId returned by the matching propose-phase tool call.",
+    },
+  },
+  required: ["kind", "proposalId"],
+} as const;
+
 const PINNED_MODEL_VISIBLE_TOOLS = [
   { name: "question", parameters: QUESTION_SCHEMA },
   { name: "keiko_workspace_discover", parameters: WORKSPACE_DISCOVER_SCHEMA },
   { name: "keiko_workspace_read", parameters: WORKSPACE_READ_SCHEMA },
+  { name: "keiko_repository_search", parameters: REPOSITORY_SEARCH_SCHEMA },
   { name: "keiko_changeset_edit", parameters: CHANGESET_EDIT_SCHEMA },
   { name: "keiko_verification", parameters: VERIFICATION_PROJECTED_SCHEMA },
   { name: "keiko_research_fetch", parameters: RESEARCH_FETCH_SCHEMA },
   { name: "keiko_skill", parameters: SKILL_SCHEMA },
   { name: "keiko_child_agent", parameters: CHILD_AGENT_SCHEMA },
+  { name: "keiko_git_status", parameters: GIT_STATUS_SCHEMA },
+  { name: "keiko_git_diff", parameters: GIT_DIFF_SCHEMA },
+  { name: "keiko_git_stage", parameters: GIT_STAGE_SCHEMA },
+  { name: "keiko_git_commit", parameters: GIT_COMMIT_SCHEMA },
+  { name: "keiko_git_push", parameters: GIT_PUSH_SCHEMA },
+  { name: "keiko_pull_request", parameters: GIT_PULL_REQUEST_SCHEMA },
+  { name: "keiko_git_execute", parameters: GIT_EXECUTE_SCHEMA },
+  { name: "keiko_ci_status", parameters: GIT_CI_STATUS_SCHEMA },
   { name: "todowrite", parameters: TODO_WRITE_SCHEMA },
 ] as const;
 
@@ -464,6 +650,23 @@ function modelVisibleTools(
     type: "function",
     function: { name: tool.name, parameters: tool.parameters },
   }));
+}
+
+/**
+ * #3390 live-run evidence: the exact `tools` array the real OpenCode 1.17.17 binary sent on a
+ * macOS run, captured verbatim (schema only, no secrets). Used to prove the gateway route itself
+ * -- not just `hasExactOpenCodeVisibleToolContract` in isolation -- accepts real OpenCode traffic.
+ */
+function realOpenCodeAdvertisedTools(): ModelVisibleRequestTool[] {
+  const path = new URL(
+    "./coding-runtime/opencodeToolSchemas.opencode-1.17.17-advertised.fixture.json",
+    import.meta.url,
+  );
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as readonly {
+    readonly name: string;
+    readonly parameters: unknown;
+  }[];
+  return modelVisibleTools(parsed);
 }
 
 /**
@@ -597,6 +800,210 @@ describe("coding-sidecar gateway", () => {
     },
   );
 
+  it("produces a GatewayRequest whose toolCatalog projection canonically equals the forwarded managed tools and reaches fetch", async () => {
+    resetGatewayInstanceCacheForTests();
+    let requestBody:
+      { tools?: readonly { function: { name: string; parameters: unknown } }[] } | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        const body = typeof init?.body === "string" ? init.body : "{}";
+        requestBody = JSON.parse(body) as typeof requestBody;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }),
+    );
+    const deps = runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-real" } }));
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "continue" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+      assertRouteResult(result);
+      expect(result.status).toBe(200);
+      expect(requestBody?.tools).toBeDefined();
+      const sentTools = requestBody?.tools ?? [];
+      const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(Date.now());
+      // The forwarded set is the seven catalog-representable tools plus the two native
+      // extensions (question/todowrite), merged by the model-gateway bridge (#3414 follow-up) --
+      // canonically the full pinned OpenCode 1.17.17 model-visible set.
+      const expectedParametersByName = new Map<string, unknown>([
+        ...advertisement.projection.tools.map((tool): [string, unknown] => [
+          tool.alias,
+          tool.inputSchema,
+        ]),
+        ...PINNED_MODEL_VISIBLE_TOOLS.filter((tool) =>
+          advertisement.projection.nativeExtensions.some(
+            (extension) => extension.alias === tool.name,
+          ),
+        ).map((tool): [string, unknown] => [tool.name, tool.parameters]),
+      ]);
+      expect(new Set(sentTools.map((tool) => tool.function.name))).toEqual(
+        new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES),
+      );
+      for (const tool of sentTools) {
+        expect(tool.function.parameters).toEqual(expectedParametersByName.get(tool.function.name));
+      }
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
+  // #3384 wave-3 W3-1 redirect (reviewer 3941816393 / B1): a tool whose real handler binding is
+  // reported unavailable for this run must be ABSENT from the advertised (and therefore forwarded)
+  // tool set, not merely denied if the model ever tries to call it (#3413-AC1/#3414-AC4/AC9).
+  it("omits unavailable optional tools and logs each effective offer distinctly", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    let unavailable = new Set<"keiko_research_fetch" | "keiko_child_agent">([
+      "keiko_research_fetch",
+    ]);
+    let requestBody:
+      { tools?: readonly { function: { name: string; parameters: unknown } }[] } | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        const body = typeof init?.body === "string" ? init.body : "{}";
+        requestBody = JSON.parse(body) as typeof requestBody;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }),
+    );
+    const deps: UiHandlerDeps = {
+      ...depsValue(configValue(provider(), capability())),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-real" } }),
+        reservePromptTokens: () => ({ ok: true, runId: "run-real" }),
+        unavailableOptionalTools: (runId: string) =>
+          runId === "run-real" ? unavailable : undefined,
+      },
+      openCodeGatewayReadinessRegistry: createOpenCodeGatewayReadinessRegistry(),
+    } as unknown as UiHandlerDeps;
+    try {
+      const request = (): RouteContext => ({
+        ...authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "continue" }],
+          tools: modelVisibleTools(),
+        }),
+        correlationId: "correlation-tool-availability",
+      });
+      const result = await handleCodingSidecarGatewayChatCompletions(request(), deps);
+      assertRouteResult(result);
+      expect(result.status).toBe(200);
+      const sentToolNames = new Set((requestBody?.tools ?? []).map((tool) => tool.function.name));
+      expect(sentToolNames.has("keiko_research_fetch")).toBe(false);
+      expect(sentToolNames).toEqual(
+        new Set(
+          OPENCODE_MODEL_VISIBLE_TOOL_NAMES.filter((name) => name !== "keiko_research_fetch"),
+        ),
+      );
+
+      unavailable = new Set(["keiko_child_agent"]);
+      const second = await handleCodingSidecarGatewayChatCompletions(request(), deps);
+      assertRouteResult(second);
+      expect(second.status).toBe(200);
+
+      const availabilityEvents = sink.events.filter(
+        (event) => event.op === "coding-sidecar.gateway.tool-availability",
+      );
+      expect(availabilityEvents).toHaveLength(2);
+      expect(availabilityEvents[0]).toMatchObject({
+        correlationId: "correlation-tool-availability",
+        extra: {
+          runId: "run-real",
+          unavailableOptionalTools: ["keiko_research_fetch"],
+          unavailableOptionalToolCount: 1,
+          offeredOptionalTools: ["keiko_child_agent", "keiko_skill"],
+          offeredOptionalToolCount: 2,
+        },
+      });
+      expect(availabilityEvents[1]).toMatchObject({
+        correlationId: "correlation-tool-availability",
+        extra: {
+          runId: "run-real",
+          unavailableOptionalTools: ["keiko_child_agent"],
+          unavailableOptionalToolCount: 1,
+          offeredOptionalTools: ["keiko_research_fetch", "keiko_skill"],
+          offeredOptionalToolCount: 2,
+        },
+      });
+      expect(availabilityEvents[0]?.extra?.handlerSetDigest).not.toBe(
+        availabilityEvents[1]?.extra?.handlerSetDigest,
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+      resetServerLogger();
+    }
+  });
+
+  it("passes a native extension tool call ('question') through unbound instead of rejecting it (#3414 follow-up)", async () => {
+    resetGatewayInstanceCacheForTests();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((): Promise<Response> =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  finish_reason: "tool_calls",
+                  message: {
+                    content: "",
+                    tool_calls: [
+                      {
+                        id: "call-1",
+                        type: "function",
+                        function: {
+                          name: "question",
+                          arguments: JSON.stringify({ questions: [] }),
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        ),
+      ),
+    );
+    const deps = runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-question" } }));
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "continue" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+      assertRouteResult(result);
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({
+        choices: [{ message: { tool_calls: [{ function: { name: "question" } }] } }],
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
   it("keeps circuit-breaker failures across separate production gateway requests", async () => {
     resetGatewayInstanceCacheForTests();
     const fetchMock = vi.fn(() => Promise.reject(new Error("provider unavailable")));
@@ -625,6 +1032,7 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("fails closed when a runtime gateway route has no capability authenticator", async () => {
+    const sink = captureServerLog("warn");
     const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
     const deps = { ...depsValue(configValue(provider(), capability()), () => chat) } as Record<
       string,
@@ -642,9 +1050,41 @@ describe("coding-sidecar gateway", () => {
 
     expect(result).toMatchObject({ status: 401 });
     expect(chat).not.toHaveBeenCalled();
+    expect(sink.events).toEqual([
+      expect.objectContaining({
+        op: "coding-sidecar.gateway.rejected",
+        status: 401,
+        extra: { reason: "capability-authenticator-unavailable" },
+      }),
+    ]);
+  });
+
+  it("logs a body-free rejection line for a request missing a bearer capability", async () => {
+    const sink = captureServerLog("warn");
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const deps = depsValue(configValue(provider(), capability()), () => chat);
+    const context = authenticatedContext({
+      model: "azure-coding-model",
+      messages: [{ role: "user", content: "continue" }],
+      tools: [],
+    });
+    delete (context.req.headers as Record<string, unknown>).authorization;
+
+    const result = await handleCodingSidecarGatewayChatCompletions(context, deps);
+
+    expect(result).toMatchObject({ status: 401 });
+    expect(chat).not.toHaveBeenCalled();
+    expect(sink.events).toEqual([
+      expect.objectContaining({
+        op: "coding-sidecar.gateway.rejected",
+        status: 401,
+        extra: { reason: "capability-missing" },
+      }),
+    ]);
   });
 
   it("authenticates the model-gateway audience before parsing a body and rejects Origin", async () => {
+    const sink = captureServerLog("warn");
     const authenticate = vi.fn(() => ({ ok: false, reason: "invalid" }));
     const malformed = await handleCodingSidecarGatewayChatCompletions(
       authenticatedContext("{"),
@@ -655,6 +1095,13 @@ describe("coding-sidecar gateway", () => {
       "model-gateway",
     );
     expect(malformed).toMatchObject({ status: 401 });
+    expect(sink.events).toEqual([
+      expect.objectContaining({
+        op: "coding-sidecar.gateway.rejected",
+        status: 401,
+        extra: { reason: "capability-invalid" },
+      }),
+    ]);
 
     const browser = await handleCodingSidecarGatewayChatCompletions(
       authenticatedContext({ messages: [{ role: "user", content: "hello" }] }, "http://evil.test"),
@@ -692,6 +1139,10 @@ describe("coding-sidecar gateway", () => {
     expect(chat).not.toHaveBeenCalled();
   });
 
+  it("keeps the hand-typed proposalId pin in sync with the derived pattern", () => {
+    expect(GIT_EXECUTE_SCHEMA.properties.proposalId.pattern).toBe(proposalIdPattern());
+  });
+
   it("accepts exactly the pinned OpenCode v1.17.17 visible schemas by canonical digest", async () => {
     expect(
       PINNED_MODEL_VISIBLE_TOOLS.map((tool) => [tool.name, schemaDigest(tool.parameters)]),
@@ -702,11 +1153,34 @@ describe("coding-sidecar gateway", () => {
         "43c78833caee7bb83f746ae45cacd44d3b8cc07fc7a3b298a24caae993ba2978",
       ],
       ["keiko_workspace_read", "56d2649a7a308efdc47db2899922c9889822a17b9d9bd081ee0c099a066411ac"],
+      // #3406/#3414: keiko_repository_search projects #3386's H1 local repository-search handler
+      // (executeCodingRepositoryRequest); regenerated because the model-visible set changed.
+      [
+        "keiko_repository_search",
+        "3abb5e7d1f1fa82aabb7b821c515078bc1a2e165a1471c940d4d72b9b9fc4069",
+      ],
       ["keiko_changeset_edit", "59902a2dd9af28ed8b97d1108215c6e88bbe0fba017a4756a99e833b9af48952"],
-      ["keiko_verification", "4cd58eaead9fef3c41ef7faaacd2feb5440755e052ed67efa6b9c4860e18e988"],
+      ["keiko_verification", "bb319a7fcdf14fb30a612f9a98945c1e2a356aab2ca6924014d07cb930c580ef"],
       ["keiko_research_fetch", "8510b5132cc06c627c2b46c20df92c3fcca392f0d16a621b7006eb41d2bf02b5"],
       ["keiko_skill", "c3a50e828f78a32481ce662f8cd92e04dd6375af8df916f3c588b0628ff2de2d"],
       ["keiko_child_agent", "aa977e5c893cef8e1c7f6e5185836e039bb0a874e35c476d6a896a14441cb0ab"],
+      // #3390 live-run evidence: digests recomputed against the real OpenCode 1.17.17
+      // advertisement (opencodeToolSchemas.opencode-1.17.17-advertised.fixture.json), which drops
+      // the empty `required: []` array and adds a `$schema` marker instead of sending the
+      // zero-argument source shape verbatim -- the prior digest pinned the source shape, which the
+      // real binary never actually sends, so the sidecar gateway refused every real request.
+      ["keiko_git_status", "93ab7499dc3c616f8db8780fed0d9f69270803cda913882ad2ef3943db8d7225"],
+      ["keiko_git_diff", "fa6966974e9e03d9fb30fb9b95a9f3dd53935ba03f991ce5b6575c5d5ee17a10"],
+      ["keiko_git_stage", "647e9587fc6f6fff73280f3dca63fe3f66a7614eb14652a467acff7de2192dc4"],
+      ["keiko_git_commit", "2df8d578416a283a3a72f8c71c4102264305107ae7c4e7b0e5d1806c3b066112"],
+      ["keiko_git_push", "93ab7499dc3c616f8db8780fed0d9f69270803cda913882ad2ef3943db8d7225"],
+      ["keiko_pull_request", "459ee94f01b4f6fe7581ea0d365a6adfc702c298d8eec915c51c4da311967c0a"],
+      // Digest recomputed: proposalId.pattern gained the "commit" prefix alongside stage/delivery
+      // (fixed the commit-proposal-id pattern gap -- the prior pattern rejected every real
+      // commit-* proposal id VerifiedCommitService.propose() mints, making #3386's commit
+      // redemption unreachable through this tool's own schema).
+      ["keiko_git_execute", "e86d3180571a32cdb281eead6c9ee58e9864e6d915a3cbeea14630c8a2c735cf"],
+      ["keiko_ci_status", "ffc444855e40f3ea3f6f091de97e0f552480d929ff020bc9dc15c88c14199a80"],
       ["todowrite", "0adc662a3338db20587ec0eb8dc2c057847f940e2cd2e4e6b160abd6a68173d6"],
     ]);
     const chat = vi.fn((_request: GatewayRequest) =>
@@ -1177,7 +1651,14 @@ describe("coding-sidecar gateway", () => {
     expect(readiness.isVerified("run-1")).toBe(false);
     expect(
       await handleCodingSidecarGatewayChatCompletions(
-        request(modelVisibleTools(), OPENCODE_RUNTIME_READINESS_PROMPT),
+        authenticatedContext({
+          model: "coding",
+          messages: [
+            { role: "system", content: "native injected system instruction" },
+            { role: "user", content: OPENCODE_RUNTIME_READINESS_PROMPT },
+          ],
+          tools: modelVisibleTools(),
+        }),
         deps,
       ),
     ).toMatchObject({ status: 200 });
@@ -1235,6 +1716,28 @@ describe("coding-sidecar gateway", () => {
     expect(chat).toHaveBeenCalledTimes(2);
   });
 
+  // #3390: the real OpenCode 1.17.17 binary on macOS refused every chat completion with 403
+  // CODING_GATEWAY_TOOL_CONTRACT_DRIFT because it projects an empty-parameter tool's schema
+  // (keiko_git_status, keiko_git_push) differently from the pinned source shape. This proves the
+  // route itself now accepts that exact live-captured advertisement, not only the isolated
+  // schema-matching function (opencodeToolSchemas.test.ts covers that in unit isolation).
+  it("accepts the real OpenCode 1.17.17 live-captured advertisement (#3390 live-run evidence)", async () => {
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "real user task" }],
+        tools: realOpenCodeAdvertisedTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        () => chat,
+      ),
+    );
+    expect(result).toMatchObject({ status: 200 });
+    expect(chat).toHaveBeenCalledOnce();
+  });
+
   it("canonicalizes key order but denies empty, drifted, unknown, and productive built-in tools", async () => {
     const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
     const acceptedWithReorderedKeys = await handleCodingSidecarGatewayChatCompletions(
@@ -1260,6 +1763,21 @@ describe("coding-sidecar gateway", () => {
             },
           },
           {
+            name: "keiko_repository_search",
+            parameters: {
+              required: [
+                "mode",
+                "query",
+                "caseSensitive",
+                "includeGlobs",
+                "excludeGlobs",
+                "maxResults",
+              ],
+              properties: { ...REPOSITORY_SEARCH_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
             name: "keiko_changeset_edit",
             parameters: {
               required: ["changeset"],
@@ -1270,7 +1788,7 @@ describe("coding-sidecar gateway", () => {
           {
             name: "keiko_verification",
             parameters: {
-              required: ["verifierId"],
+              required: ["verifierId", "targetPath"],
               properties: { ...VERIFICATION_PROJECTED_SCHEMA.properties },
               type: "object",
             },
@@ -1296,6 +1814,70 @@ describe("coding-sidecar gateway", () => {
             parameters: {
               required: ["objective", "maxToolCalls"],
               properties: { ...CHILD_AGENT_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_git_status",
+            parameters: {
+              type: "object",
+              $schema: "https://json-schema.org/draft/2020-12/schema",
+              properties: {},
+            },
+          },
+          {
+            name: "keiko_git_diff",
+            parameters: {
+              required: ["scope", "paths"],
+              properties: { ...GIT_DIFF_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_git_stage",
+            parameters: {
+              required: ["paths"],
+              properties: { ...GIT_STAGE_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_git_commit",
+            parameters: {
+              required: ["message"],
+              properties: { ...GIT_COMMIT_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_git_push",
+            parameters: {
+              properties: {},
+              $schema: "https://json-schema.org/draft/2020-12/schema",
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_pull_request",
+            parameters: {
+              required: ["title"],
+              properties: { ...GIT_PULL_REQUEST_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_git_execute",
+            parameters: {
+              required: ["kind", "proposalId"],
+              properties: { ...GIT_EXECUTE_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_ci_status",
+            parameters: {
+              required: ["forceFresh"],
+              properties: { ...GIT_CI_STATUS_SCHEMA.properties },
               type: "object",
             },
           },
@@ -2430,7 +3012,7 @@ describe("coding-sidecar gateway", () => {
     });
   });
 
-  it("projects a valid OpenAI-compatible tool into the gateway request shape", async () => {
+  it("rejects a non-catalog handwritten tool before the gateway request", async () => {
     const seenRequests: GatewayRequest[] = [];
     const deps = depsValue(
       configValue(provider(), capability()),
@@ -2470,21 +3052,8 @@ describe("coding-sidecar gateway", () => {
     );
 
     assertRouteResult(result);
-    expect(result.status).toBe(200);
-    expect(seenRequests).toHaveLength(1);
-    expect(seenRequests[0]?.tools).toEqual([
-      {
-        name: "search",
-        description: "Look up files",
-        parameters: {
-          type: "object",
-          properties: {
-            query: { type: "string" },
-          },
-          required: ["query"],
-        },
-      },
-    ]);
+    expect(result.status).toBe(403);
+    expect(seenRequests).toHaveLength(0);
   });
 
   it("returns BAD_REQUEST for invalid JSON bodies via readJsonObject", async () => {
@@ -2572,7 +3141,7 @@ describe("coding-sidecar gateway", () => {
     expect(seenRequests).toHaveLength(0);
   });
 
-  it("returns BAD_REQUEST when messages exceed the advertised maxInputMessages", async () => {
+  it("returns a provider context overflow when messages exceed maxInputMessages", async () => {
     const seenRequests: GatewayRequest[] = [];
     const deps = depsValue(
       configValue(provider(), capability()),
@@ -2589,7 +3158,7 @@ describe("coding-sidecar gateway", () => {
 
     const result = await handleCodingSidecarGatewayChatCompletions(
       routeContext({
-        messages: Array.from({ length: 65 }, (_, index) => ({
+        messages: Array.from({ length: 513 }, (_, index) => ({
           role: "user",
           content: `message-${String(index)}`,
         })),
@@ -2601,15 +3170,117 @@ describe("coding-sidecar gateway", () => {
       status: 400,
       body: {
         error: {
-          code: "BAD_REQUEST",
-          message: "Request body messages exceed profile maxInputMessages (64).",
+          code: "context_length_exceeded",
+          message: "Request body messages exceed profile maxInputMessages (512).",
         },
       },
     });
     expect(seenRequests).toHaveLength(0);
   });
 
-  it("returns BAD_REQUEST when estimated prompt tokens exceed the advertised maxPromptTokens", async () => {
+  it("accepts a bounded coding transcript beyond 64 KB within the profile token allowance", async () => {
+    const sink = captureServerLog("info");
+    const seen: GatewayRequest[] = [];
+    const deps = depsValue(configValue(provider(), capability()), (_config, modelId) => {
+      return (request: GatewayRequest): Promise<NormalizedResponse> => {
+        seen.push(request);
+        return Promise.resolve(assistantResponse(modelId));
+      };
+    });
+    const content = "bounded source context\n".repeat(3_500);
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content }] }),
+      deps,
+    );
+    assertRouteResult(result);
+    expect(result.status).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.messages).toEqual([{ role: "user", content }]);
+    const validated = sink.events.find(
+      (event) => event.op === "coding-sidecar.gateway.request-validated",
+    );
+    expect(validated?.correlationId).toEqual(expect.any(String));
+    expect(validated?.extra).toMatchObject({ maxRequestBytes: 1_048_576, inputMessageCount: 1 });
+    expect(validated?.extra?.estimatedPromptTokens).toEqual(expect.any(Number));
+    expect(JSON.stringify(sink.events)).not.toContain("bounded source context");
+  });
+
+  it("rejects an over-limit assistant tool-call continuation before provider dispatch or spend", async () => {
+    const providerCall = vi.fn((_request: GatewayRequest) =>
+      Promise.resolve(assistantResponse("azure-coding-model")),
+    );
+    const reservePromptTokens = vi.fn(() => ({ ok: true, runId: "run-tool-context" }));
+    const base = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-tool-context" } }),
+      () => providerCall,
+    );
+    const deps = {
+      ...base,
+      runtimeCapabilityAuthenticator: {
+        ...base.runtimeCapabilityAuthenticator,
+        reservePromptTokens,
+      },
+    } as UiHandlerDeps;
+    const privateArguments = { patch: "x".repeat(600_000) };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [
+          { role: "user", content: "continue" },
+          {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: "call-large",
+                type: "function",
+                function: {
+                  name: "keiko_changeset_edit",
+                  arguments: JSON.stringify(privateArguments),
+                },
+              },
+            ],
+          },
+          { role: "tool", content: "rejected", tool_call_id: "call-large" },
+        ],
+        tools: modelVisibleTools(),
+      }),
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: {
+          code: "context_length_exceeded",
+          message: "Request body estimated prompt tokens exceed profile maxPromptTokens (128000).",
+        },
+      },
+    });
+    expect(providerCall).not.toHaveBeenCalled();
+    expect(reservePromptTokens).not.toHaveBeenCalled();
+  });
+
+  it("retains a hard transport cap and body-free rejection before model dispatch", async () => {
+    const sink = captureServerLog("warn");
+    const calls = vi.fn((_request: GatewayRequest) =>
+      Promise.resolve(assistantResponse("azure-coding-model")),
+    );
+    const deps = depsValue(configValue(provider(), capability()), () => calls);
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "private-overflow".repeat(100_000) }] }),
+      deps,
+    );
+    assertRouteResult(result);
+    expect(result.status).toBe(413);
+    expect(calls).not.toHaveBeenCalled();
+    const rejected = sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected");
+    expect(rejected?.extra).toMatchObject({ reason: "request-too-large" });
+    expect(JSON.stringify(sink.events)).not.toContain("private-overflow");
+  });
+
+  it("returns a provider context overflow when estimated prompt tokens exceed maxPromptTokens", async () => {
     const seenRequests: GatewayRequest[] = [];
     const deps = depsValue(
       configValue(provider(), capability({ contextWindow: 16 })),
@@ -2635,7 +3306,7 @@ describe("coding-sidecar gateway", () => {
       status: 400,
       body: {
         error: {
-          code: "BAD_REQUEST",
+          code: "context_length_exceeded",
           message: "Request body estimated prompt tokens exceed profile maxPromptTokens (16).",
         },
       },
@@ -3001,5 +3672,548 @@ describe("coding-sidecar gateway", () => {
     expect(JSON.stringify(capturedDiagnostic)).not.toContain(
       "/Users/customer/private-repo/secret-tool",
     );
+  });
+});
+
+// #3390 closeout: every 400/403 rejection the gateway route hands back must leave a body-free
+// activity-log line carrying the REASON (AGENTS.md §8) — before this the only evidence was the
+// generic `http`/`request` line's opaque status. These pin the two rejection classes the task
+// names explicitly; `classifyBadRequestReason`/`emitGatewayToolContractDiagnostic` cover the rest.
+describe("coding sidecar gateway rejection activity log", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("classifies an unknown rejection separately without changing its wire response", () => {
+    const result: RouteResult = {
+      status: 400,
+      body: { error: { code: "FUTURE_REJECTION", message: "Future fixed rejection text." } },
+    };
+    const wire = structuredClone(result);
+
+    expect(_classifyBadRequestReasonForTests(result)).toBe("unclassified-rejection");
+    expect(result).toEqual(wire);
+  });
+
+  it("keeps invalid JSON on the explicit body-not-json evidence path without changing its wire response", async () => {
+    const sink = captureServerLog("warn");
+    const deps = depsValue(configValue(provider(), capability()));
+
+    const result = await handleCodingSidecarGatewayChatCompletions(routeContext("{"), deps);
+
+    expect(result).toEqual({
+      status: 400,
+      body: { error: { code: "BAD_REQUEST", message: "Request body is not valid JSON." } },
+    });
+    expect(sink.events).toEqual([
+      expect.objectContaining({
+        op: "coding-sidecar.gateway.rejected",
+        status: 400,
+        extra: { reason: "body-not-json", runId: "run-gateway-test" },
+      }),
+    ]);
+  });
+
+  it("logs a body-free rejection line when estimated prompt tokens exceed the profile budget", async () => {
+    const sink = captureServerLog("warn");
+    const deps = depsValue(configValue(provider(), capability({ contextWindow: 16 })));
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "x".repeat(400) }] }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 400 });
+    const estimatedPromptTokens = sink.events[0]?.extra?.estimatedPromptTokens;
+    expect(typeof estimatedPromptTokens).toBe("number");
+    expect(sink.events).toEqual([
+      {
+        level: "warn",
+        category: "gateway",
+        op: "coding-sidecar.gateway.rejected",
+        correlationId: "unknown-correlation-id",
+        durationMs: undefined,
+        status: 400,
+        errorKind: undefined,
+        extra: {
+          reason: "prompt-tokens-exceeded",
+          runId: "run-gateway-test",
+          estimatedPromptTokens,
+          maxPromptTokens: 16,
+          inputMessageCount: 1,
+          maxInputMessages: 512,
+        },
+      },
+    ]);
+    expect(JSON.stringify(sink.events)).not.toContain("x".repeat(100));
+  });
+
+  it("logs body-free observed bounds when the input message count exceeds the profile", async () => {
+    const sink = captureServerLog("warn");
+    const deps = depsValue(configValue(provider(), capability()));
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({
+        messages: Array.from({ length: 513 }, () => ({ role: "user", content: "private" })),
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 400 });
+    const estimatedPromptTokens = sink.events[0]?.extra?.estimatedPromptTokens;
+    expect(typeof estimatedPromptTokens).toBe("number");
+    expect(sink.events).toEqual([
+      expect.objectContaining({
+        op: "coding-sidecar.gateway.rejected",
+        status: 400,
+        extra: {
+          reason: "input-messages-exceeded",
+          runId: "run-gateway-test",
+          estimatedPromptTokens,
+          maxPromptTokens: 128_000,
+          inputMessageCount: 513,
+          maxInputMessages: 512,
+        },
+      }),
+    ]);
+    expect(JSON.stringify(sink.events)).not.toContain("private");
+  });
+
+  it("logs a body-free rejection line naming the mismatching tool identifiers for a tool-contract-drift rejection", async () => {
+    const sink = captureServerLog("warn");
+    const deps = runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-1" } }));
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "private runtime content" }],
+        tools: modelVisibleTools().slice(0, 2),
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 403 });
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      level: "warn",
+      category: "gateway",
+      op: "coding-sidecar.gateway.rejected",
+      correlationId: "unknown-correlation-id",
+      status: 403,
+      extra: {
+        reason: "tool-contract-drift",
+        runId: "run-1",
+        expectedToolCount: 18,
+        receivedToolCount: 2,
+        unexpectedToolNames: [],
+      },
+    });
+    const extra = sink.events[0]?.extra as { missingToolNames?: readonly string[] } | undefined;
+    expect(extra?.missingToolNames).toHaveLength(16);
+    expect(JSON.stringify(sink.events)).not.toContain("private runtime content");
+  });
+
+  // #3390 root cause: the server sends the first turn as TWO text parts (opencodeHttpClient.ts
+  // `promptParts`: the task text plus the issue context as a synthetic part), so OpenCode's
+  // AI-SDK provider forwards the outgoing user message as an OpenAI content-part ARRAY instead of
+  // a bare string. `parseMessageBase` accepted only `typeof content === "string"`, dropping the
+  // entry, so `parseMessages` returned `undefined` and the request was refused 400 under the
+  // misleading `body-empty-messages` reason -- every real ISSUE-BOUND run died on its first model
+  // call while a bare-string run (no issue context) never hit this path. These four tests pin the
+  // fix: the two-text-part shape is accepted and joined, a non-text part is rejected under its own
+  // reason, an unparsable entry is distinguished from an empty array, and the two previously
+  // unlogged 403 refusals now leave the same body-free rejection line as every other one.
+  it("keeps a plain string message content unchanged (regression: the multipart fix must not alter the pre-existing single-part path)", async () => {
+    const seenRequests: GatewayRequest[] = [];
+    const deps = depsValue(
+      configValue(provider(), capability()),
+      (
+        _config: GatewayConfig,
+        modelId: string,
+      ): ((request: GatewayRequest) => Promise<NormalizedResponse>) => {
+        return (request: GatewayRequest): Promise<NormalizedResponse> => {
+          seenRequests.push(request);
+          return Promise.resolve(assistantResponse(modelId));
+        };
+      },
+    );
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({
+        model: "azure-coding-model",
+        messages: [{ role: "user", content: "bounded task" }],
+      }),
+      deps,
+    );
+
+    assertRouteResult(result);
+    expect(result.status).toBe(200);
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.messages).toEqual([{ role: "user", content: "bounded task" }]);
+  });
+
+  it("accepts a user message whose content is the OpenAI content-part ARRAY OpenCode's AI-SDK provider sends for a multi-part prompt, joining the parts into one string", async () => {
+    const seenRequests: GatewayRequest[] = [];
+    const deps = depsValue(
+      configValue(provider(), capability()),
+      (
+        _config: GatewayConfig,
+        modelId: string,
+      ): ((request: GatewayRequest) => Promise<NormalizedResponse>) => {
+        return (request: GatewayRequest): Promise<NormalizedResponse> => {
+          seenRequests.push(request);
+          return Promise.resolve(assistantResponse(modelId));
+        };
+      },
+    );
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({
+        model: "azure-coding-model",
+        messages: [
+          {
+            role: "user",
+            // Real producer shape, pinned in opencodeHttpClient.test.ts's
+            // "pins the two-part prompt shape sent for a prompt with initial context".
+            content: [
+              { type: "text", text: "bounded task" },
+              { type: "text", text: "issue context", synthetic: true },
+            ],
+          },
+        ],
+      }),
+      deps,
+    );
+
+    assertRouteResult(result);
+    expect(result.status).toBe(200);
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.messages).toEqual([
+      { role: "user", content: "bounded task\n\nissue context" },
+    ]);
+  });
+
+  it("logs a body-free rejection line and returns BAD_REQUEST content-part-unsupported for a non-text content part", async () => {
+    const sink = captureServerLog("warn");
+    const deps = depsValue(configValue(provider(), capability()));
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "bounded task" },
+              { type: "image_url", image_url: { url: "https://example.invalid/x.png" } },
+            ],
+          },
+        ],
+      }),
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: {
+          code: "BAD_REQUEST",
+          message: "Request body message content included an unsupported content part.",
+        },
+      },
+    });
+    expect(sink.events).toEqual([
+      {
+        level: "warn",
+        category: "gateway",
+        op: "coding-sidecar.gateway.rejected",
+        correlationId: "unknown-correlation-id",
+        durationMs: undefined,
+        status: 400,
+        errorKind: undefined,
+        extra: { reason: "content-part-unsupported", runId: "run-gateway-test" },
+      },
+    ]);
+  });
+
+  it("logs a body-free rejection line and returns BAD_REQUEST message-shape-invalid for an unparsable message entry, distinct from an empty messages array", async () => {
+    const sink = captureServerLog("warn");
+    const deps = depsValue(configValue(provider(), capability()));
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user" }] }),
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: {
+          code: "BAD_REQUEST",
+          message: "Request body messages must be well-formed chat messages (entries: 1).",
+        },
+      },
+    });
+    expect(sink.events).toEqual([
+      {
+        level: "warn",
+        category: "gateway",
+        op: "coding-sidecar.gateway.rejected",
+        correlationId: "unknown-correlation-id",
+        durationMs: undefined,
+        status: 400,
+        errorKind: undefined,
+        extra: { reason: "message-shape-invalid", runId: "run-gateway-test" },
+      },
+    ]);
+  });
+
+  it("logs a body-free rejection line for a browser-origin request refused before authentication runs", async () => {
+    const sink = captureServerLog("warn");
+    const deps = depsValue(configValue(provider(), capability()));
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext(
+        { messages: [{ role: "user", content: "continue" }] },
+        "https://example.invalid",
+      ),
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: 403,
+      body: { error: { code: "FORBIDDEN", message: "Coding sidecar gateway request is denied." } },
+    });
+    expect(sink.events).toEqual([
+      {
+        level: "warn",
+        category: "gateway",
+        op: "coding-sidecar.gateway.rejected",
+        correlationId: "unknown-correlation-id",
+        durationMs: undefined,
+        status: 403,
+        errorKind: undefined,
+        extra: { reason: "origin-not-allowed" },
+      },
+    ]);
+  });
+
+  it("logs a body-free rejection line when the runtime prompt-budget reservation is denied", async () => {
+    const sink = captureServerLog("warn");
+    const deps: UiHandlerDeps = {
+      ...depsValue(configValue(provider(), capability())),
+      runtimeCapabilityAuthenticator: {
+        authenticate: (capability: string, audience: "model-gateway" | "tool-facade") =>
+          capability === "gateway-capability-material-0000000001" && audience === "model-gateway"
+            ? { ok: true, binding: { runId: "run-gateway-test" } }
+            : { ok: false },
+        reservePromptTokens: () => ({ ok: false }),
+      },
+    };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "continue" }] }),
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: 403,
+      body: { error: { code: "FORBIDDEN", message: "Coding sidecar gateway request is denied." } },
+    });
+    expect(sink.events).toEqual([
+      {
+        level: "warn",
+        category: "gateway",
+        op: "coding-sidecar.gateway.rejected",
+        correlationId: "unknown-correlation-id",
+        durationMs: undefined,
+        status: 403,
+        errorKind: undefined,
+        extra: { reason: "runtime-prompt-budget-denied", runId: "run-gateway-test" },
+      },
+    ]);
+  });
+});
+
+// #3390 closeout: a profile can be "available" per config and probe yet still be unusable because
+// its derived `maxPromptTokens` cannot survive one real request. The readiness projection must
+// demote it to a closed, named reason instead of reporting "ready".
+describe("coding sidecar gateway readiness — insufficient context window", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  function profileContext(): RouteContext {
+    return {
+      req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
+      res: mockResponse().res,
+      params: {},
+      url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+      correlationId: undefined,
+    } satisfies RouteContext;
+  }
+
+  it("demotes an available profile whose setup-placeholder capability cannot survive one request", () => {
+    const sink = captureServerLog("warn");
+    // #3390 live incident: a coding-safe model configured with the setup placeholder capability
+    // (contextWindow 4096 / maxOutputTokens 0) reported "available" and died on the first gateway
+    // call with "estimated prompt tokens exceed profile maxPromptTokens (4096)".
+    const deps = depsValue(
+      configValue(provider(), capability({ contextWindow: 4_096, maxOutputTokens: 0 })),
+    );
+
+    const result = handleCodingSidecarGatewayProfile(profileContext(), deps);
+
+    expect(result).toEqual({
+      status: 200,
+      body: { status: "unavailable", reason: "model-context-window-insufficient" },
+    });
+    expect(sink.events).toEqual([
+      {
+        level: "warn",
+        category: "gateway",
+        op: "coding-sidecar.gateway.readiness-insufficient",
+        correlationId: "unknown-correlation-id",
+        parentCorrelationId: undefined,
+        durationMs: undefined,
+        status: undefined,
+        errorKind: undefined,
+        extra: {
+          reason: "model-context-window-insufficient",
+          maxPromptTokens: 4_096,
+          minimumRequiredPromptTokens: 32_000,
+        },
+      },
+    ]);
+  });
+
+  it("keeps reporting available when the derived prompt budget clears the minimum", () => {
+    const sink = captureServerLog("warn");
+    const deps = depsValue(configValue(provider(), capability()));
+
+    const result = handleCodingSidecarGatewayProfile(profileContext(), deps);
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ status: "available" });
+    expect(sink.events).toHaveLength(0);
+  });
+
+  it("keeps the repository's real 32k coding profile available", () => {
+    const sink = captureServerLog("warn");
+    const deps = depsValue(
+      configValue(provider(), capability({ contextWindow: 32_000, maxOutputTokens: 2_048 })),
+    );
+
+    const result = handleCodingSidecarGatewayProfile(profileContext(), deps);
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      status: "available",
+      runMetadata: { maxPromptTokens: 32_000 },
+    });
+    expect(sink.events).toHaveLength(0);
+  });
+});
+
+// Monetary admission regression pins now live at the shared owning boundary:
+// gateway-spend-budget.test.ts and keiko-model-gateway/src/gateway.spend-budget.test.ts.
+// Those tests use real Gateway dispatch, including independent sources, retries and restart;
+// a codingSidecarGatewayChatFactory replacement would bypass that production boundary.
+
+// ─── #3384 wave-3 W3-3 "needs": runtime prompt-token settlement wiring ──────────
+// `settleRuntimePromptTokens` (agentAuthorityRegistry.ts) had zero production callers before this
+// change — the gateway reserved the pre-call ESTIMATE before dispatch but never reconciled it
+// against the provider's real reported usage, so a run's retained authority-level prompt budget
+// permanently over-counted by (estimate - actual) on every single call.
+describe("coding-sidecar gateway runtime prompt-token settlement", () => {
+  function promptSettlementRequest(): RouteContext {
+    return authenticatedContext({
+      model: "azure-coding-model",
+      messages: [{ role: "user", content: "continue the coding task, please, thank you" }],
+      tools: [],
+    });
+  }
+
+  it(
+    "settles the runtime prompt-token reservation with the provider's real reported usage " +
+      "across repeated calls, never the pre-call estimate reused as if it were the actual",
+    async () => {
+      const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+      const reservedEstimates: number[] = [];
+      const settlements: { reservedPromptTokens: number; actualPromptTokens: number }[] = [];
+      const deps: UiHandlerDeps = {
+        ...depsValue(configValue(provider(), capability()), () => chat),
+        runtimeCapabilityAuthenticator: {
+          authenticate: (authCapability: string, audience: "model-gateway" | "tool-facade") =>
+            authCapability === "gateway-capability-material-0000000001" &&
+            audience === "model-gateway"
+              ? { ok: true, binding: { runId: "run-gateway-test" } }
+              : { ok: false },
+          reservePromptTokens: (_authCapability: string, promptTokens: number): unknown => {
+            reservedEstimates.push(promptTokens);
+            return { ok: true, runId: "run-gateway-test" };
+          },
+          settlePromptTokens: (
+            _authCapability: string,
+            reservedPromptTokens: number,
+            actualPromptTokens: number,
+          ): unknown => {
+            settlements.push({ reservedPromptTokens, actualPromptTokens });
+            return { ok: true, runId: "run-gateway-test" };
+          },
+        },
+      };
+
+      const first = await handleCodingSidecarGatewayChatCompletions(
+        promptSettlementRequest(),
+        deps,
+      );
+      const second = await handleCodingSidecarGatewayChatCompletions(
+        promptSettlementRequest(),
+        deps,
+      );
+
+      expect(first).toMatchObject({ status: 200 });
+      expect(second).toMatchObject({ status: 200 });
+      expect(chat).toHaveBeenCalledTimes(2);
+      expect(reservedEstimates).toHaveLength(2);
+      expect(settlements).toHaveLength(2);
+      // Guard the fixture itself: the estimate must differ from the provider's real usage or the
+      // assertions below could pass even with the old bug (settling the estimate as the actual).
+      expect(reservedEstimates[0]).not.toBe(assistantResponse("x").usage.promptTokens);
+      for (const [index, settlement] of settlements.entries()) {
+        expect(settlement.reservedPromptTokens).toBe(reservedEstimates[index]);
+        // assistantResponse's real usage.promptTokens is 12 on every call.
+        expect(settlement.actualPromptTokens).toBe(12);
+      }
+      const totalSettledActual = settlements.reduce((sum, s) => sum + s.actualPromptTokens, 0);
+      const totalEstimate = reservedEstimates.reduce((sum, value) => sum + value, 0);
+      expect(totalSettledActual).toBe(24);
+      expect(totalSettledActual).not.toBe(totalEstimate);
+    },
+  );
+
+  it("settles conservatively (the full reserved estimate) when the provider call fails before usage is observed", async () => {
+    const chat = vi.fn(() => Promise.reject(new Error("provider unavailable")));
+    const settlements: { reservedPromptTokens: number; actualPromptTokens: number }[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsValue(configValue(provider(), capability()), () => chat),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-gateway-test" } }),
+        reservePromptTokens: () => ({ ok: true, runId: "run-gateway-test" }),
+        settlePromptTokens: (
+          _authCapability: string,
+          reservedPromptTokens: number,
+          actualPromptTokens: number,
+        ): unknown => {
+          settlements.push({ reservedPromptTokens, actualPromptTokens });
+          return { ok: true, runId: "run-gateway-test" };
+        },
+      },
+    };
+
+    await handleCodingSidecarGatewayChatCompletions(promptSettlementRequest(), deps);
+
+    expect(settlements).toHaveLength(1);
+    expect(settlements[0]?.actualPromptTokens).toBe(settlements[0]?.reservedPromptTokens);
   });
 });

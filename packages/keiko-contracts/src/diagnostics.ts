@@ -12,8 +12,9 @@
 // (`packages/keiko-server/src/correlation.ts`), not a wire concern.
 //
 // `install-client-diagnostics.ts` is the only place a `ClientDiagnosticIngestRequest` is built.
-// `reportClientDiagnostic` (client-diagnostics.ts) takes an optional structured second argument,
-// `{ correlationId?: string }`, and every call site that catches an `ApiError` (which
+// `reportClientDiagnostic` (client-diagnostics.ts) takes optional structured metadata: the
+// originating correlation id and, for Git-change description responses, a closed body-free
+// response identity. Every call site that catches an `ApiError` (which
 // `bffFetchJson`, keiko-ui's http.ts, stamps a `.correlationId` on for every non-2xx and every
 // contract-validation failure) passes it through via `correlationIdOf(error)`
 // (client-error-summary.ts). `install-client-diagnostics.ts` re-validates the shape client-side
@@ -46,6 +47,42 @@ export const CLIENT_DIAGNOSTIC_KINDS = [
 ] as const;
 export type ClientDiagnosticKind = (typeof CLIENT_DIAGNOSTIC_KINDS)[number];
 
+export const CLIENT_DIAGNOSTIC_GIT_CHANGE_DESCRIPTION_ACTIONS = [
+  "review",
+  "approve",
+  "apply",
+] as const;
+export type ClientDiagnosticGitChangeDescriptionAction =
+  (typeof CLIENT_DIAGNOSTIC_GIT_CHANGE_DESCRIPTION_ACTIONS)[number];
+
+export const CLIENT_DIAGNOSTIC_RESPONSE_DISPOSITIONS = ["accepted", "discarded"] as const;
+export type ClientDiagnosticResponseDisposition =
+  (typeof CLIENT_DIAGNOSTIC_RESPONSE_DISPOSITIONS)[number];
+
+export const CLIENT_DIAGNOSTIC_GIT_CHANGE_DESCRIPTION_OUTCOMES = [
+  "preview",
+  "approved",
+  "observed",
+  "blocked",
+] as const;
+export type ClientDiagnosticGitChangeDescriptionOutcome =
+  (typeof CLIENT_DIAGNOSTIC_GIT_CHANGE_DESCRIPTION_OUTCOMES)[number];
+
+export interface ClientDiagnosticGitChangeDescription {
+  readonly action: ClientDiagnosticGitChangeDescriptionAction;
+  readonly disposition: ClientDiagnosticResponseDisposition;
+  readonly relationshipId: string;
+  readonly snapshotDigest: string;
+  readonly proposalId: string;
+  readonly outcome: ClientDiagnosticGitChangeDescriptionOutcome;
+}
+
+/** Body-free identity of the server-validated task-workspace repository selected for trust. */
+export interface ClientDiagnosticWorkspaceTrustBinding {
+  readonly repositoryId: string;
+  readonly workspaceId: string;
+}
+
 // The browser-side sink already bounds a diagnostic message to this length (client-diagnostics.ts,
 // `reportClientDiagnostic`); the server enforces the SAME bound independently rather than trusting
 // the browser's own promise, per this module's header.
@@ -65,6 +102,8 @@ export interface ClientDiagnosticIngestRequest {
   readonly readyState?: ClientDiagnosticReadyState | undefined;
   readonly correlationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
+  readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
+  readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -123,6 +162,51 @@ export function isClientDiagnosticKind(value: unknown): value is ClientDiagnosti
   return typeof value === "string" && CLIENT_DIAGNOSTIC_KIND_SET.has(value);
 }
 
+const GIT_CHANGE_DESCRIPTION_ACTION_SET: ReadonlySet<string> = new Set(
+  CLIENT_DIAGNOSTIC_GIT_CHANGE_DESCRIPTION_ACTIONS,
+);
+const RESPONSE_DISPOSITION_SET: ReadonlySet<string> = new Set(
+  CLIENT_DIAGNOSTIC_RESPONSE_DISPOSITIONS,
+);
+const GIT_CHANGE_DESCRIPTION_OUTCOME_SET: ReadonlySet<string> = new Set(
+  CLIENT_DIAGNOSTIC_GIT_CHANGE_DESCRIPTION_OUTCOMES,
+);
+const BODY_FREE_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/u;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+
+function isSetMember(value: unknown, values: ReadonlySet<string>): value is string {
+  return typeof value === "string" && values.has(value);
+}
+
+function isClientDiagnosticGitChangeDescription(
+  value: unknown,
+): value is ClientDiagnosticGitChangeDescription {
+  if (!isRecord(value)) return false;
+  return (
+    isSetMember(value.action, GIT_CHANGE_DESCRIPTION_ACTION_SET) &&
+    isSetMember(value.disposition, RESPONSE_DISPOSITION_SET) &&
+    typeof value.relationshipId === "string" &&
+    BODY_FREE_ID_PATTERN.test(value.relationshipId) &&
+    typeof value.snapshotDigest === "string" &&
+    SHA256_PATTERN.test(value.snapshotDigest) &&
+    typeof value.proposalId === "string" &&
+    BODY_FREE_ID_PATTERN.test(value.proposalId) &&
+    isSetMember(value.outcome, GIT_CHANGE_DESCRIPTION_OUTCOME_SET)
+  );
+}
+
+function isClientDiagnosticWorkspaceTrustBinding(
+  value: unknown,
+): value is ClientDiagnosticWorkspaceTrustBinding {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.repositoryId === "string" &&
+    BODY_FREE_ID_PATTERN.test(value.repositoryId) &&
+    typeof value.workspaceId === "string" &&
+    BODY_FREE_ID_PATTERN.test(value.workspaceId)
+  );
+}
+
 function isCorrelationIdShape(value: unknown): value is string {
   return isBoundedString(value, CORRELATION_ID_MAX_LENGTH);
 }
@@ -136,11 +220,21 @@ export function isClientDiagnosticIngestRequest(
   value: unknown,
 ): value is ClientDiagnosticIngestRequest {
   if (!isRecord(value)) return false;
-  const { message, clientTs, readyState, correlationId, kind } = value;
+  const {
+    message,
+    clientTs,
+    readyState,
+    correlationId,
+    kind,
+    gitChangeDescription,
+    workspaceTrustBinding,
+  } = value;
   if (!isBoundedString(message, CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH)) return false;
   if (!isIsoInstant(clientTs)) return false;
   if (!isOptional(readyState, isClientDiagnosticReadyState)) return false;
   if (!isOptional(correlationId, isCorrelationIdShape)) return false;
   if (!isOptional(kind, isClientDiagnosticKind)) return false;
+  if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
+  if (!isOptional(workspaceTrustBinding, isClientDiagnosticWorkspaceTrustBinding)) return false;
   return true;
 }

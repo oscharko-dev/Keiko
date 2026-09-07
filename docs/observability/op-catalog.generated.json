@@ -1,11 +1,24 @@
 {
   "$schema": "keiko-op-catalog/1",
   "generatedBy": "scripts/generate-op-catalog.mjs",
+  "operationContracts": ["docs/observability/tool-catalog-operations.v1.json"],
   "entries": [
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-analyze.ts:517",
+      "site": "packages/keiko-cli/src/support-analyze.ts:1085",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "unknown",
+      "site": "packages/keiko-cli/src/support-analyze.ts:1094",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "unknown",
+      "site": "packages/keiko-cli/src/support-analyze.ts:566",
       "package": "keiko-cli"
     },
     {
@@ -41,7 +54,7 @@
     {
       "op": "process.exiting",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:686",
+      "site": "packages/keiko-cli/src/ui.ts:688",
       "package": "keiko-cli"
     },
     {
@@ -53,19 +66,19 @@
     {
       "op": "process.fatal",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:426",
+      "site": "packages/keiko-cli/src/ui.ts:428",
       "package": "keiko-cli"
     },
     {
       "op": "process.heartbeat",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:890",
+      "site": "packages/keiko-cli/src/ui.ts:894",
       "package": "keiko-cli"
     },
     {
       "op": "process.started",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:1005",
+      "site": "packages/keiko-cli/src/ui.ts:1009",
       "package": "keiko-cli"
     },
     {
@@ -485,7 +498,7 @@
     {
       "op": "chat.request.dispatch",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:710",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:803",
       "package": "keiko-model-gateway"
     },
     {
@@ -617,19 +630,19 @@
     {
       "op": "gateway.chat.completed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:448",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:652",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.chat.failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:345",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:549",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.chat.started",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:325",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:529",
       "package": "keiko-model-gateway"
     },
     {
@@ -659,7 +672,7 @@
     {
       "op": "gateway.config.resolved",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:189",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:294",
       "package": "keiko-model-gateway"
     },
     {
@@ -689,37 +702,67 @@
     {
       "op": "gateway.route.rejected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:558",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:776",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.abandoned",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:393",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:597",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.buffered-fallback",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:481",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:685",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.completed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:365",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:569",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:418",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:622",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.started",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:325",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:529",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.tool-catalog.call-bound",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:243",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.tool-catalog.native-passthrough",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:231",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.tool-catalog.projected",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:314",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.tool-catalog.rejected",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:182",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.tool-catalog.repair",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:426",
       "package": "keiko-model-gateway"
     },
     {
@@ -762,6 +805,60 @@
       "op": "http.gateway.tls.trust-failed",
       "category": "http",
       "site": "packages/keiko-model-gateway/src/http.ts:1222",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "pr-description.authority.revalidation.failed",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/prDescription/generate.ts:234",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "pr-description.generation.completed",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/prDescription/generate.ts:394",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "pr-description.generation.failed",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/prDescription/generate.ts:479",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "pr-description.generation.started",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/prDescription/generate.ts:440",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "pr-description.generation.unavailable",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/prDescription/generate.ts:471",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "pr-description.model.completed",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/prDescription/generate.ts:200",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "pr-description.model.completed",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/prDescription/generate.ts:286",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "pr-description.model.failed",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/prDescription/generate.ts:176",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "pr-description.model.started",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/prDescription/generate.ts:147",
       "package": "keiko-model-gateway"
     },
     {
@@ -863,7 +960,109 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1617",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:57",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:703",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
       "site": "packages/keiko-server/src/diagnostics-log.ts:316",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/agentRoutes.ts:3043",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/agentRoutes.ts:3141",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/dap/dapDebugRoutes.ts:301",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/localHistory/localHistoryCapture.ts:93",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/files.ts:3130",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gateway-error-diagnostic.ts:40",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeChatContext.ts:50",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:390",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitRoutes.ts:1375",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/local-knowledge-store-open.ts:262",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/memory-handlers.ts:165",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/memory-salience.ts:291",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
@@ -891,9 +1090,205 @@
       "package": "keiko-server"
     },
     {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/sink.ts:222",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/sse-write.ts:208",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/voice-live-dictation.ts:478",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/voice-realtime.ts:532",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/workspace-manifest-routes.ts:144",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/workspace-manifest-routes.ts:154",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/coding-sidecar/gateway/chat/completions",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:1042",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/coding-sidecar/gateway/chat/completions",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:1068",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/coding-sidecar/gateway/chat/completions",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:1211",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/coding-sidecar/gateway/chat/completions",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:1251",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/coding-sidecar/gateway/chat/completions",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:1374",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/coding-sidecar/gateway/chat/completions",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:855",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/gateway/setup",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gateway-setup.ts:4243",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/gateway/setup",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gateway-setup.ts:4855",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/gateway/setup",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gateway-setup.ts:4948",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/gateway/setup",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gateway-setup.ts:4979",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/gateway/setup",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gateway-setup.ts:5199",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/gateway/setup",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gateway-setup.ts:5224",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/gateway/setup",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gateway-setup.ts:5597",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/git-delivery/pr/mark-ready/execute",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:457",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/git-delivery/pr/mark-ready/execute",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:588",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/git-delivery/pr/mark-ready/execute",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:717",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/native-file-dialog/open",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/native-file-dialog/route.ts:241",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/repositories/clone",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitRepositoryRoutes.ts:134",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/voice/transcribe",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/voice-handlers.ts:363",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "atlassian.credential.rejected",
       "category": "security",
       "site": "packages/keiko-server/src/atlassian/credentialRoutes.ts:194",
+      "package": "keiko-server"
+    },
+    {
+      "op": "atlassian.credential.rejected",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/credentialRoutes.ts:203",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "atlassian.sync-job",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/syncService.ts:775",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "chat.compaction.evidence",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/chat-compaction-evidence.ts:89",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
@@ -903,69 +1298,697 @@
       "package": "keiko-server"
     },
     {
+      "op": "chat.compaction.summary",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/chat-compaction-model-summary.ts:736",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "chat.compaction.summary.scheduled",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1888",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "chat.creation.rejected",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-handlers.ts:851",
+      "site": "packages/keiko-server/src/chat-handlers.ts:900",
+      "package": "keiko-server"
+    },
+    {
+      "op": "chat.memory.auto-maintenance",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1322",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "chat.regeneration.rejected",
-      "category": "gateway",
-      "site": "packages/keiko-server/src/chat-handlers.ts:887",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/chat-handlers.ts:936",
       "package": "keiko-server"
     },
     {
       "op": "chat.send.rejected",
-      "category": "gateway",
-      "site": "packages/keiko-server/src/chat-handlers.ts:885",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/chat-handlers.ts:934",
       "package": "keiko-server"
     },
     {
       "op": "chat.turn.started",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1765",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1814",
       "package": "keiko-server"
     },
     {
       "op": "client.diagnostic",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:120",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:138",
       "package": "keiko-server"
     },
     {
       "op": "client.diagnostic.rate-limited",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:102",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:104",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-app-session.channel.subscribe",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-app-session/sessionChannel.ts:165",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-app-session.channel.subscribe",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-app-session/sessionStreamWriter.ts:91",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-context.github-authorization.changed",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-context/githubAuthorizationRoutes.ts:178",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-context.github-authorization.evaluated",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:138",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-context.github-remote.evaluated",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:224",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-context.github.read",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-context/githubCodeContextPort.ts:246",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-context.pack",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-context/codeContextConnector.ts:337",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-context.pack",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-context/codingContextRoutes.ts:397",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-context.pack",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-context/codingRuntimeIssueIntake.ts:94",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-repository-handler.settled",
+      "category": "search",
+      "site": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:51",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-repository-handler.started",
+      "category": "search",
+      "site": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:88",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.approval-revocation",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:1722",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.approval.waiting",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:384",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.authority.mint-failed",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:496",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.authority.minted",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:541",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.compaction",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:722",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.description",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:2212",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.description-authority",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:651",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.dev-lane.activated",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:169",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:196",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.dev-lane.refused",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:184",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:211",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.editor-changeset",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:644",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.editor-changeset",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:663",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.editor-mutation.settled",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:584",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.emit",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:1641",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.exit",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:1662",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.follow-up.dispatch-failed",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:198",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.functional-workspace-read",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.ts:463",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.handshake",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2127",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.handshake",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1123",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.handshake",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:877",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.initial-turn.dispatch-failed",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:325",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.initial-turn.stop-failed",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:343",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.lifecycle",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:292",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.opencode-composition",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:358",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.opencode-composition",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:605",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.operation.refused",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.ts:133",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.question.authority-resolution-failed",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:456",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.question.authority-resolution-failed",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:488",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.question.list-failed",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:235",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.question.list-revision-rebound",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:727",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.read-only-child.completed",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/readOnlyChildOrchestrator.ts:494",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.read-only-child.runner-failed",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-runtime/readOnlyChildOrchestrator.ts:525",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.readiness.failed",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:568",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.readiness.phase",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:584",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.run.issue-binding-refused",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeIssueIntake.ts:83",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.run.issue-context-attached",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1577",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.run.recovery-acknowledged",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1110",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.run.settled",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:169",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:430",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.run.started",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:146",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:325",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.safe-activity",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1086",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.safe-activity",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1104",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.safe-activity",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:456",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.safe-activity",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:496",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.sse-fanout",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeEventHub.ts:433",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.start",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:276",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.stderr",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:1681",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.stop",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:309",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.stream-drain",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:1700",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.task-dispatch",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:680",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.task-replacement",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:696",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.tool-authority.denied",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:175",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.tool-availability.failed",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:254",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.tool-bridge",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1601",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.tool-result",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolGovernedDelegate.ts:111",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.tool-result",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:609",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.tool-result",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:625",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.tool-result",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:649",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.tool-result",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:665",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.verification",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1018",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.verification",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1059",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.verification-summarized",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:405",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.workspace-discovery",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:235",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.workspace-read",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:353",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.workspace-read",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:374",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.workspace-read",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:399",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-sidecar.gateway.readiness-insufficient",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:2016",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-sidecar.gateway.rejected",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:179",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-sidecar.gateway.request-validated",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:2250",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-sidecar.gateway.tool-availability",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:703",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-sidecar.tool-facade.rejected",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/coding-sidecar-tool-facade.ts:108",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-workbench.issue.preview",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-context/issuePreviewRoutes.ts:232",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-workbench.issue.previewed",
+      "category": "http",
+      "site": "packages/keiko-server/src/coding-context/issuePreviewRoutes.ts:215",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-workbench.issue.resolved",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-context/githubIssueResolution.ts:429",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding.runtime.discover",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:137",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "command.terminated",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/process-log-sink.ts:110",
+      "package": "keiko-server"
+    },
+    {
+      "op": "credential.migration",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/credentialPersistence.ts:164",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "dap.breakpoint-store.commit",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/dap/breakpointStore.ts:862",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "dap.debug-routes.rename-instrumentation",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/dap/dapDebugRoutes.ts:1129",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "dap.debug-routes.rename-instrumentation.old-path-clear-degraded",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/dap/dapDebugRoutes.ts:1166",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "dap.debug-routes.rename-instrumentation.re-key-rejected",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/dap/dapDebugRoutes.ts:1151",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "dap.debug-runtime.selected",
+      "category": "process",
+      "site": "packages/keiko-server/src/editor/dap/debugLaunchPlan.ts:733",
+      "package": "keiko-server"
+    },
+    {
+      "op": "dap.production.evidence-abandoned",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/dap/dapProductionService.ts:294",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "dap.production.projection-failure",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/dap/dapProductionService.ts:270",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "dap.production.runtime-failure",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/dap/dapProductionService.ts:245",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.agent.applyChangeset",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/agentRoutes.ts:1767",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.agent.applyChangeset",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/agentRoutes.ts:768",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.agent.applyPatch",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/agentRoutes.ts:890",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.agent.root-containment",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/agentRootBoundary.ts:352",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.inlineCompletion",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/inlineCompletionRoutes.ts:477",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
@@ -978,6 +2001,65 @@
       "op": "editor.local-history.rekey.failed",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/editor/localHistory/localHistoryCapture.ts:171",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.producer-turn.completed",
+      "category": "process",
+      "site": "packages/keiko-server/src/editor/agentProducerRoute.ts:414",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.testGeneration",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/testGenerationRoutes.ts:287",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.verification.execute",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/agentVerificationRoute.ts:389",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.verification.execute",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/agentVerificationRoute.ts:409",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.verification.execute",
+      "category": "process",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:514",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.verification.execute",
+      "category": "process",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:527",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.verification.execute",
+      "category": "process",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:555",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.verification.execute",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:649",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.verification.subscriber",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:851",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
@@ -1005,75 +2087,426 @@
       "package": "keiko-server"
     },
     {
+      "op": "evidence.retention",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:680",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "figma.snapshotBuild",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:790",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "gateway.instance.bound",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-instance-cache.ts:72",
+      "site": "packages/keiko-server/src/gateway-instance-cache.ts:77",
       "package": "keiko-server"
     },
     {
       "op": "gateway.instance.reset",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-instance-cache.ts:72",
+      "site": "packages/keiko-server/src/gateway-instance-cache.ts:77",
       "package": "keiko-server"
     },
     {
       "op": "gateway.instance.reused",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-instance-cache.ts:64",
+      "site": "packages/keiko-server/src/gateway-instance-cache.ts:69",
       "package": "keiko-server"
     },
     {
       "op": "gateway.instance.unavailable",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-instance-cache.ts:86",
+      "site": "packages/keiko-server/src/gateway-instance-cache.ts:91",
       "package": "keiko-server"
     },
     {
       "op": "gateway.instance.unavailable",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-instance-cache.ts:93",
+      "site": "packages/keiko-server/src/gateway-instance-cache.ts:98",
+      "package": "keiko-server"
+    },
+    {
+      "op": "gateway.readiness",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:1284",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "gateway.readiness",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:1412",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "gateway.readiness",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:491",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "gateway.spend.rejected",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/gateway-spend-budget.ts:116",
+      "package": "keiko-server"
+    },
+    {
+      "op": "gateway.spend.reserved",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/gateway-spend-budget.ts:222",
+      "package": "keiko-server"
+    },
+    {
+      "op": "gateway.spend.settled",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/gateway-spend-budget.ts:150",
       "package": "keiko-server"
     },
     {
       "op": "gateway.tool-calling.verification",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-setup.ts:6356",
+      "site": "packages/keiko-server/src/gateway-setup.ts:6400",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git-change.chat.apply",
+      "category": "process",
+      "site": "packages/keiko-server/src/chat-handlers.ts:3187",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git-change.chat.blocked",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:517",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git-change.chat.blocked",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:598",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git-change.chat.blocked",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:646",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git-change.chat.blocked",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:677",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git-change.chat.blocked",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:721",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git-change.chat.connected",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:522",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git-change.chat.description-target.denied",
+      "category": "security",
+      "site": "packages/keiko-server/src/chat-handlers.ts:3125",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git-change.chat.refreshed",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:776",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git-change.chat.stale",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:726",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.ci-observation",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/ciObservationService.ts:230",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.ci-observation",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/ciObservationService.ts:248",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.ci-repair.budget",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeCiRepairBudgetStore.ts:208",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.ci-repair.budget",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeCiRepairBudgetStore.ts:447",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.ci-repair.budget",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/productionCiRepairRuntime.ts:161",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.commit.execute.conflict-scan",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:494",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.commit.execute.mutation",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:508",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.commit.preview.branch-protection",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:466",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.preview.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:426",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:432",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.commit.preview.worktree",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:480",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.authority.admitted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:170",
+      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:251",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.authority.denied",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:144",
+      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:225",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.buffers.checked",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-runtime/productionVerifiedCommitDependencies.ts:75",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.commit.approval.minted",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:938",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.commit.approval.required",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:812",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.dispatch.no-spawn",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:458",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:462",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:776",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:783",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:807",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:814",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.mutation.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:438",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.pr-mark-ready.readiness-refreshed",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:362",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.pr.approval.minted",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitDelivery/prRoutes.ts:521",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.pr.approval.required",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitDelivery/prRoutes.ts:383",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.push.approval.minted",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitDelivery/pushRoutes.ts:403",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.push.approval.required",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitDelivery/pushRoutes.ts:290",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.readiness.observed",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/mergeExecution.ts:164",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.repository.mismatch",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:430",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.sync.approval.minted",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitDelivery/syncRoutes.ts:368",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.draft-delivery",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryLedger.ts:169",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.draft-delivery",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryLedger.ts:56",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.draft-delivery",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryService.ts:176",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.draft-delivery",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryService.ts:188",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.draft-delivery",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryService.ts:394",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.draft-push.preparation",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:330",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.draft-remote.observed",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:118",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.draft-target.resolved",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:440",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.draft-template",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryTemplate.ts:214",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.draft-template",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryTemplate.ts:229",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.journey-observation",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/journeyObservationService.ts:165",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.journey-observation",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/journeyObservationService.ts:182",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.journey-observation",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:384",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.journey-outcome.recorded",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:252",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.journey-outcome.recorded",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:268",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.pr-description",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionProjection.ts:51",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.pr-description.receipt",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionReceiptStore.ts:184",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.pr-description.receipt",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionReceiptStore.ts:240",
       "package": "keiko-server"
     },
     {
@@ -1086,6 +2519,118 @@
       "op": "git.process.refused",
       "category": "security",
       "site": "packages/keiko-server/src/gitProcessActivity.ts:239",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.runtime-action",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/runtimeGitService.ts:377",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.runtime-identity",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-runtime/productionRuntimeGitPreparation.ts:115",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.snapshot.capacity-denied",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:57",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.snapshot.capture",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeSnapshotService.ts:435",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.snapshot.expired",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:70",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.snapshot.invalidated",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:112",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.snapshot.read",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:93",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.snapshot.recheck",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeSnapshotService.ts:512",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.snapshot.released",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:146",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.snapshot.reserve-denied",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:129",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.snapshot.reserved",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:136",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.verified-commit",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:725",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.verified-commit.authority",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeSnapshotStore.ts:527",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.verified-commit.authority",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeVerifiedCommitAuthorityStore.ts:34",
+      "package": "keiko-server"
+    },
+    {
+      "op": "gitDelivery.mutationEvidence.persist",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/mutationEvidenceLedger.ts:83",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "gitDelivery.syncEvidence.persist",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/syncEvidence.ts:101",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "grounded.entailment",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/grounded-entailment-stage.ts:108",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "grounded.memory",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/grounded-qa.ts:2354",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
@@ -1167,6 +2712,13 @@
       "package": "keiko-server"
     },
     {
+      "op": "local-knowledge.indexing",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:2935",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "lsp.java.version-probe.completed",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/editor/lsp/providers/javaProvider.ts:340",
@@ -1203,15 +2755,71 @@
       "package": "keiko-server"
     },
     {
+      "op": "managed-lsp.evidence.project",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/lsp/managedLspControlFactory.ts:65",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "managed-lsp.trust.restrict",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/deps.ts:1858",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "manual-pod.job",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/manual/manual-pod-service.ts:256",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.audit.persist",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/memory-audit-handler.ts:117",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:1903",
+      "site": "packages/keiko-server/src/deps.ts:2026",
       "package": "keiko-server"
     },
     {
       "op": "memory.capture.novelty-gate",
       "category": "memory",
       "site": "packages/keiko-server/src/memory-embedding.ts:686",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.consolidation.conflict-advisory",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/memory-conflict-advisory.ts:377",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.consolidation.conflict-advisory",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/memory-conflict-advisory.ts:403",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.consolidation.conflict-advisory",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/memory-conflict-advisory.ts:544",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.consolidation.job.run",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/memory-consolidation-handlers.ts:562",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
@@ -1245,6 +2853,41 @@
       "package": "keiko-server"
     },
     {
+      "op": "memory.maintenance.autonomy-mode",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:638",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.maintenance.retention-policy",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:657",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.retrieval.semantic-disabled",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:458",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.retrieval.semantic-skipped",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:281",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.salience",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/memory-salience.ts:247",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "native-file-dialog.selection.projected",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/native-file-dialog/route.ts:172",
@@ -1263,15 +2906,114 @@
       "package": "keiko-server"
     },
     {
+      "op": "pr-description.apply.blocked",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:740",
+      "package": "keiko-server"
+    },
+    {
+      "op": "pr-description.apply.failed",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:748",
+      "package": "keiko-server"
+    },
+    {
+      "op": "pr-description.apply.started",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:724",
+      "package": "keiko-server"
+    },
+    {
+      "op": "pr-description.apply.succeeded",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:732",
+      "package": "keiko-server"
+    },
+    {
+      "op": "pr-description.chat.turn.admitted",
+      "category": "security",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2908",
+      "package": "keiko-server"
+    },
+    {
+      "op": "pr-description.chat.turn.denied",
+      "category": "security",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2908",
+      "package": "keiko-server"
+    },
+    {
+      "op": "pr-description.model-egress.denied",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:765",
+      "package": "keiko-server"
+    },
+    {
+      "op": "pr-description.repository.mismatch",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:780",
+      "package": "keiko-server"
+    },
+    {
+      "op": "pr-description.workbench.egress.denied",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:1106",
+      "package": "keiko-server"
+    },
+    {
+      "op": "project.create.trust.grant",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/store-handlers.ts:368",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "project.workspace.reconnect",
       "category": "setup",
-      "site": "packages/keiko-server/src/store-handlers.ts:476",
+      "site": "packages/keiko-server/src/store-handlers.ts:480",
+      "package": "keiko-server"
+    },
+    {
+      "op": "project.workspace.reconnect",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/store-handlers.ts:491",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "request",
       "category": "http",
-      "site": "packages/keiko-server/src/server.ts:495",
+      "site": "packages/keiko-server/src/server.ts:507",
+      "package": "keiko-server"
+    },
+    {
+      "op": "retrieval-activity.tryBuild",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2133",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "runtime.confinement.failed",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:247",
+      "package": "keiko-server"
+    },
+    {
+      "op": "runtime.confinement.failed",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:200",
+      "package": "keiko-server"
+    },
+    {
+      "op": "runtime.confinement.spawned",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:168",
+      "package": "keiko-server"
+    },
+    {
+      "op": "runtime.confinement.unavailable",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:220",
       "package": "keiko-server"
     },
     {
@@ -1313,7 +3055,7 @@
     {
       "op": "search.rerank.completed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-rerank-facade.ts:336",
+      "site": "packages/keiko-server/src/grounded-rerank-facade.ts:357",
       "package": "keiko-server"
     },
     {
@@ -1335,6 +3077,20 @@
       "package": "keiko-server"
     },
     {
+      "op": "server.composition",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/deps.ts:3730",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "server.request",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/server.ts:535",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "sse.run-events.resume",
       "category": "http",
       "site": "packages/keiko-server/src/run-handlers.ts:575",
@@ -1347,9 +3103,22 @@
       "package": "keiko-server"
     },
     {
+      "op": "store.journey-outcomes.migration",
+      "category": "setup",
+      "site": "packages/keiko-server/src/store/journeyOutcomeMigration.ts:68",
+      "package": "keiko-server"
+    },
+    {
+      "op": "store.messages.grounded-preview-citations.read",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/store/messages.ts:142",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "store.opened",
       "category": "setup",
-      "site": "packages/keiko-server/src/store/db.ts:930",
+      "site": "packages/keiko-server/src/store/db.ts:951",
       "package": "keiko-server"
     },
     {
@@ -1365,6 +3134,188 @@
       "package": "keiko-server"
     },
     {
+      "op": "task-workspace.reconcile.startup",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/deps.ts:2522",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.bind-ready",
+      "category": "process",
+      "site": "packages/keiko-server/src/editor/agentProducerRoute.ts:456",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.bind-ready",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:406",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.bind-ready",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:470",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.bind-ready",
+      "category": "security",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:245",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.bind-unavailable",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:413",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.bind-unavailable",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:470",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.bind-unavailable",
+      "category": "security",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:469",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.bind-unavailable",
+      "category": "security",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:248",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.binding-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:204",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.completion-discarded",
+      "category": "security",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:257",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.completion-discarded",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:359",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.dispatch-context-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolDispatch.ts:166",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.dispatch-unbound",
+      "category": "security",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:685",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.invocation-settled",
+      "category": "process",
+      "site": "packages/keiko-server/src/editor/agentProducerRoute.ts:485",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.invocation-settled",
+      "category": "security",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:254",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.invocation-settled",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:322",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.invocation-started",
+      "category": "process",
+      "site": "packages/keiko-server/src/editor/agentProducerRoute.ts:469",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.invocation-started",
+      "category": "security",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:251",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.invocation-started",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:154",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.lifecycle-sink-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:280",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.projection",
+      "category": "process",
+      "site": "packages/keiko-server/src/editor/agentProducerRoute.ts:450",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.projection",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:419",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.projection",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:478",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.projection",
+      "category": "security",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:242",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.settlement-emit-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:342",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update-session.lock-quarantine-prune",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-session-lock.ts:573",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.preflight.bundled-catalog.read",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-preflight-catalog.ts:215",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.remediation.execute",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-remediation.ts:295",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "voice.live-dictation.capacity-rejected",
       "category": "http",
       "site": "packages/keiko-server/src/voice-live-dictation.ts:649",
@@ -1374,6 +3325,20 @@
       "op": "voice.live-dictation.initial-frame-timeout",
       "category": "http",
       "site": "packages/keiko-server/src/voice-live-dictation.ts:663",
+      "package": "keiko-server"
+    },
+    {
+      "op": "voice.live-dictation.negotiate",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/voice-live-dictation.ts:473",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "voice.realtime.negotiate",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/voice-realtime.ts:527",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
@@ -1392,6 +3357,48 @@
       "op": "voice.realtime.session-started",
       "category": "http",
       "site": "packages/keiko-server/src/voice-realtime.ts:364",
+      "package": "keiko-server"
+    },
+    {
+      "op": "voice.speech.stream",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/voice-handlers.ts:953",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "workflow.network-isolation-probe",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/run-engine.ts:270",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "workspace.index.generation",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/workspace-index-provider.ts:217",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "workspace.index.load",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/workspace-index-provider.ts:183",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "workspace.index.open",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/workspace-index-provider.ts:166",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "workspace.index.save",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/workspace-index-provider.ts:199",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
@@ -1423,7 +3430,430 @@
       "category": "security",
       "site": "packages/keiko-server/src/workspace-root-denial-log.ts:58",
       "package": "keiko-server"
+    },
+    {
+      "op": "workspace.root.restore.reason",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/workspace-manifest-routes.ts:181",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
     }
+  ],
+  "operations": [
+    "POST /api/coding-sidecar/gateway/chat/completions",
+    "POST /api/gateway/setup",
+    "POST /api/git-delivery/pr/mark-ready/execute",
+    "POST /api/native-file-dialog/open",
+    "POST /api/repositories/clone",
+    "POST /api/voice/transcribe",
+    "atlassian.credential.rejected",
+    "atlassian.sync-job",
+    "chat.compaction.evidence",
+    "chat.compaction.facts.classified",
+    "chat.compaction.summary",
+    "chat.compaction.summary.scheduled",
+    "chat.creation.rejected",
+    "chat.memory.auto-maintenance",
+    "chat.regeneration.rejected",
+    "chat.request.dispatch",
+    "chat.send.rejected",
+    "chat.turn.started",
+    "cli.lifecycle.stop-escalated",
+    "cli.lifecycle.stop-escalation-failed",
+    "cli.lifecycle.stop-request-failed",
+    "cli.lifecycle.stop-requested",
+    "client.diagnostic",
+    "client.diagnostic.rate-limited",
+    "coding-app-session.channel.subscribe",
+    "coding-context.github-authorization.changed",
+    "coding-context.github-authorization.evaluated",
+    "coding-context.github-remote.evaluated",
+    "coding-context.github.read",
+    "coding-context.pack",
+    "coding-repository-handler.settled",
+    "coding-repository-handler.started",
+    "coding-runtime.approval-revocation",
+    "coding-runtime.approval.waiting",
+    "coding-runtime.authority.mint-failed",
+    "coding-runtime.authority.minted",
+    "coding-runtime.compaction",
+    "coding-runtime.description",
+    "coding-runtime.description-authority",
+    "coding-runtime.dev-lane.activated",
+    "coding-runtime.dev-lane.refused",
+    "coding-runtime.editor-changeset",
+    "coding-runtime.editor-mutation.settled",
+    "coding-runtime.emit",
+    "coding-runtime.exit",
+    "coding-runtime.follow-up.dispatch-failed",
+    "coding-runtime.functional-workspace-read",
+    "coding-runtime.handshake",
+    "coding-runtime.initial-turn.dispatch-failed",
+    "coding-runtime.initial-turn.stop-failed",
+    "coding-runtime.lifecycle",
+    "coding-runtime.opencode-composition",
+    "coding-runtime.operation.refused",
+    "coding-runtime.question.authority-resolution-failed",
+    "coding-runtime.question.list-failed",
+    "coding-runtime.question.list-revision-rebound",
+    "coding-runtime.read-only-child.completed",
+    "coding-runtime.read-only-child.runner-failed",
+    "coding-runtime.readiness.failed",
+    "coding-runtime.readiness.phase",
+    "coding-runtime.run.issue-binding-refused",
+    "coding-runtime.run.issue-context-attached",
+    "coding-runtime.run.recovery-acknowledged",
+    "coding-runtime.run.settled",
+    "coding-runtime.run.started",
+    "coding-runtime.safe-activity",
+    "coding-runtime.sse-fanout",
+    "coding-runtime.start",
+    "coding-runtime.stderr",
+    "coding-runtime.stop",
+    "coding-runtime.stream-drain",
+    "coding-runtime.task-dispatch",
+    "coding-runtime.task-replacement",
+    "coding-runtime.tool-authority.denied",
+    "coding-runtime.tool-availability.failed",
+    "coding-runtime.tool-bridge",
+    "coding-runtime.tool-result",
+    "coding-runtime.verification",
+    "coding-runtime.verification-summarized",
+    "coding-runtime.workspace-discovery",
+    "coding-runtime.workspace-read",
+    "coding-sidecar.gateway.readiness-insufficient",
+    "coding-sidecar.gateway.rejected",
+    "coding-sidecar.gateway.request-validated",
+    "coding-sidecar.gateway.tool-availability",
+    "coding-sidecar.tool-facade.rejected",
+    "coding-workbench.issue.preview",
+    "coding-workbench.issue.previewed",
+    "coding-workbench.issue.resolved",
+    "coding.runtime.discover",
+    "command.terminated",
+    "consolidation.log.sink-failed",
+    "consolidation.summary.fallback",
+    "credential.migration",
+    "dap.breakpoint-store.commit",
+    "dap.debug-routes.rename-instrumentation",
+    "dap.debug-routes.rename-instrumentation.old-path-clear-degraded",
+    "dap.debug-routes.rename-instrumentation.re-key-rejected",
+    "dap.debug-runtime.selected",
+    "dap.production.evidence-abandoned",
+    "dap.production.projection-failure",
+    "dap.production.runtime-failure",
+    "editor.agent.applyChangeset",
+    "editor.agent.applyPatch",
+    "editor.agent.root-containment",
+    "editor.inlineCompletion",
+    "editor.local-history.rekey.completed",
+    "editor.local-history.rekey.failed",
+    "editor.producer-turn.completed",
+    "editor.testGeneration",
+    "editor.verification.execute",
+    "editor.verification.subscriber",
+    "editor.workspace-watch.authority-revoked",
+    "embedding.batch.array-unsupported",
+    "embedding.batch.budgeting-failed",
+    "embedding.batch.cancelled",
+    "embedding.batch.completed",
+    "embedding.batch.degrade-inconclusive",
+    "embedding.batch.degrade-skipped",
+    "embedding.batch.degraded-to-scalar",
+    "embedding.batch.degrading-to-scalar",
+    "embedding.batch.dispatch",
+    "embedding.batch.failed",
+    "embedding.batch.grouped",
+    "embedding.batch.invalid-response",
+    "embedding.batch.minimal-shape-retry",
+    "embedding.batch.partial-progress",
+    "embedding.batch.persist-failed",
+    "embedding.batch.rejected",
+    "embedding.batch.retry",
+    "embedding.batch.scalar-memo-hit",
+    "embedding.batch.transport-selected",
+    "embedding.batch.transport-unavailable",
+    "embedding.chunk.retry",
+    "embedding.chunk.retry-exhausted",
+    "embedding.endpoint.strict-shape-memoized",
+    "embedding.identity.rejected",
+    "embedding.memory.failed",
+    "embedding.memory.succeeded",
+    "embedding.memory.unavailable",
+    "embedding.preflight.cache-hit",
+    "embedding.preflight.completed",
+    "embedding.preflight.failed",
+    "embedding.preflight.identity-adopted",
+    "embedding.preflight.identity-refreshed",
+    "embedding.preflight.identity-rejected",
+    "embedding.preflight.started",
+    "embedding.request.dispatch",
+    "embedding.request.failed",
+    "embedding.request.minimal-shape-failed",
+    "embedding.request.minimal-shape-retry",
+    "embedding.scalar-ladder.completed",
+    "embedding.scalar-ladder.deadline-expired",
+    "embedding.scalar-ladder.item-completed",
+    "embedding.scalar-ladder.item-failed",
+    "evidence.retention",
+    "figma.snapshotBuild",
+    "gateway.chat.completed",
+    "gateway.chat.failed",
+    "gateway.chat.started",
+    "gateway.circuit.closed",
+    "gateway.circuit.half-open",
+    "gateway.circuit.opened",
+    "gateway.circuit.rejected",
+    "gateway.config.resolved",
+    "gateway.instance.bound",
+    "gateway.instance.reset",
+    "gateway.instance.reused",
+    "gateway.instance.unavailable",
+    "gateway.log.sink-failed",
+    "gateway.readiness",
+    "gateway.retry.budget-exhausted",
+    "gateway.retry.exhausted",
+    "gateway.retry.scheduled",
+    "gateway.route.rejected",
+    "gateway.spend.rejected",
+    "gateway.spend.reserved",
+    "gateway.spend.settled",
+    "gateway.stream.abandoned",
+    "gateway.stream.buffered-fallback",
+    "gateway.stream.completed",
+    "gateway.stream.failed",
+    "gateway.stream.started",
+    "gateway.tool-calling.verification",
+    "gateway.tool-catalog.call-bound",
+    "gateway.tool-catalog.native-passthrough",
+    "gateway.tool-catalog.projected",
+    "gateway.tool-catalog.rejected",
+    "gateway.tool-catalog.repair",
+    "git-change.chat.apply",
+    "git-change.chat.blocked",
+    "git-change.chat.connected",
+    "git-change.chat.description-target.denied",
+    "git-change.chat.refreshed",
+    "git-change.chat.stale",
+    "git.ci-observation",
+    "git.ci-repair.budget",
+    "git.commit.execute.conflict-scan",
+    "git.commit.execute.mutation",
+    "git.commit.preview.branch-protection",
+    "git.commit.preview.completed",
+    "git.commit.preview.worktree",
+    "git.delivery.authority.admitted",
+    "git.delivery.authority.denied",
+    "git.delivery.buffers.checked",
+    "git.delivery.commit.approval.minted",
+    "git.delivery.commit.approval.required",
+    "git.delivery.dispatch.no-spawn",
+    "git.delivery.mutation.completed",
+    "git.delivery.mutation.failed",
+    "git.delivery.pr-mark-ready.readiness-refreshed",
+    "git.delivery.pr.approval.minted",
+    "git.delivery.pr.approval.required",
+    "git.delivery.push.approval.minted",
+    "git.delivery.push.approval.required",
+    "git.delivery.readiness.observed",
+    "git.delivery.repository.mismatch",
+    "git.delivery.sync.approval.minted",
+    "git.draft-delivery",
+    "git.draft-push.preparation",
+    "git.draft-remote.observed",
+    "git.draft-target.resolved",
+    "git.draft-template",
+    "git.journey-observation",
+    "git.journey-outcome.recorded",
+    "git.pr-description",
+    "git.pr-description.receipt",
+    "git.process.failed",
+    "git.process.refused",
+    "git.runtime-action",
+    "git.runtime-identity",
+    "git.snapshot.capacity-denied",
+    "git.snapshot.capture",
+    "git.snapshot.expired",
+    "git.snapshot.invalidated",
+    "git.snapshot.read",
+    "git.snapshot.recheck",
+    "git.snapshot.released",
+    "git.snapshot.reserve-denied",
+    "git.snapshot.reserved",
+    "git.verified-commit",
+    "git.verified-commit.authority",
+    "gitDelivery.mutationEvidence.persist",
+    "gitDelivery.syncEvidence.persist",
+    "grounded.entailment",
+    "grounded.memory",
+    "harness.context.compacted",
+    "http.gateway.egress.planned",
+    "http.gateway.fetch.completed",
+    "http.gateway.fetch.failed",
+    "http.gateway.fetch.started",
+    "http.gateway.tls.ca-bundle-fallback",
+    "http.gateway.tls.trust-failed",
+    "http.request.body.cancelled",
+    "http.request.body.failed",
+    "http.request.body.received",
+    "http.request.body.rejected",
+    "indexing.cancel.accepted",
+    "indexing.cancel.refused",
+    "indexing.cancel.requested",
+    "indexing.chunking.failed",
+    "indexing.detached-run.failed",
+    "indexing.detached-run.launched",
+    "indexing.discovery.limit-reached",
+    "indexing.discovery.scope-error",
+    "indexing.document.chunked",
+    "indexing.document.embedded",
+    "indexing.document.embedding-started",
+    "indexing.document.extracted",
+    "indexing.document.extraction-failed",
+    "indexing.document.extraction-started",
+    "indexing.document.failed",
+    "indexing.document.skipped",
+    "indexing.job.finished",
+    "indexing.job.received",
+    "indexing.job.started",
+    "indexing.source.completed",
+    "indexing.source.started",
+    "indexing.start.accepted",
+    "indexing.start.refused",
+    "knowledge.log.sink-failed",
+    "knowledge.store.encryption-rejected",
+    "knowledge.store.quarantined",
+    "local-knowledge.indexing",
+    "lsp.java.version-probe.completed",
+    "lsp.process.ownership.changed",
+    "lsp.process.runtime-error",
+    "lsp.process.terminated",
+    "lsp.spawn.completed",
+    "lsp.spawn.failed",
+    "managed-lsp.evidence.project",
+    "managed-lsp.trust.restrict",
+    "manual-pod.job",
+    "memory-vault.log.sink-failed",
+    "memory-vault.store.opened",
+    "memory-vault.store.quarantined",
+    "memory.audit.persist",
+    "memory.audit.state-cache.seeded",
+    "memory.capture.novelty-gate",
+    "memory.consolidation.conflict-advisory",
+    "memory.consolidation.job.run",
+    "memory.embedding.invalidated",
+    "memory.embedding.invalidation-failed",
+    "memory.embedding.store-rejected",
+    "memory.maintenance.autonomy-mode",
+    "memory.maintenance.retention-policy",
+    "memory.retrieval.semantic-disabled",
+    "memory.retrieval.semantic-skipped",
+    "memory.salience",
+    "native-file-dialog.selection.projected",
+    "portable.windows-alert.spawn-failed",
+    "portable.windows-authenticode.system-binary-refused",
+    "pr-description.apply.blocked",
+    "pr-description.apply.failed",
+    "pr-description.apply.started",
+    "pr-description.apply.succeeded",
+    "pr-description.authority.revalidation.failed",
+    "pr-description.chat.turn.admitted",
+    "pr-description.chat.turn.denied",
+    "pr-description.generation.completed",
+    "pr-description.generation.failed",
+    "pr-description.generation.started",
+    "pr-description.generation.unavailable",
+    "pr-description.model-egress.denied",
+    "pr-description.model.completed",
+    "pr-description.model.failed",
+    "pr-description.model.started",
+    "pr-description.repository.mismatch",
+    "pr-description.workbench.egress.denied",
+    "process.exiting",
+    "process.fatal",
+    "process.heartbeat",
+    "process.started",
+    "project.create.trust.grant",
+    "project.workspace.reconnect",
+    "repository.fingerprint-diff.completed",
+    "request",
+    "retrieval-activity.tryBuild",
+    "runtime.confinement.failed",
+    "runtime.confinement.spawned",
+    "runtime.confinement.unavailable",
+    "search.connected-context.completed",
+    "search.connected-context.failed",
+    "search.connected-context.started",
+    "search.index-invalidated-for-capsule",
+    "search.native-runtime-resolved",
+    "search.rerank.completed",
+    "security.fs.atomic-rename-failed",
+    "security.fs.atomic-rename-retried",
+    "security.fs.portable-backup-cleanup",
+    "security.keychain.fallback",
+    "security.log.sink-failed",
+    "security.vault.entries-delete-failed",
+    "security.vault.entries-deleted",
+    "security.vault.entries-merge-failed",
+    "security.vault.entries-merged",
+    "security.vault.entries-rollback-failed",
+    "security.vault.key-resolved",
+    "security.vault.shard-unreadable",
+    "security.windows-launcher.system-binary-missing",
+    "security.windows-launcher.system-root-refused",
+    "security.windows-lifecycle-opener.system-binary-missing",
+    "security.windows-lifecycle-opener.system-root-refused",
+    "security.windows-portable-alert.system-binary-missing",
+    "security.windows-portable-alert.system-root-refused",
+    "security.windows-portable-legacy-launcher.system-binary-missing",
+    "security.windows-portable-legacy-launcher.system-root-refused",
+    "security.windows-shortcut.system-binary-missing",
+    "security.windows-shortcut.system-root-refused",
+    "server-log.write-failed",
+    "server.composition",
+    "server.request",
+    "speech.stt.language.normalized",
+    "speech.tts.mime.corrected",
+    "speech.tts.stream.peek.failed",
+    "sse.run-events.resume",
+    "sse.stream.closed",
+    "store.encryption-checkpoint-degraded",
+    "store.encryption-migrated",
+    "store.journey-outcomes.migration",
+    "store.messages.grounded-preview-citations.read",
+    "store.opened",
+    "task-workspace.identity.creation-time-probe",
+    "task-workspace.lifecycle",
+    "task-workspace.reconcile.startup",
+    "tool-catalog.bind-ready",
+    "tool-catalog.bind-unavailable",
+    "tool-catalog.binding-failed",
+    "tool-catalog.completion-discarded",
+    "tool-catalog.dispatch-context-failed",
+    "tool-catalog.dispatch-unbound",
+    "tool-catalog.invocation-settled",
+    "tool-catalog.invocation-started",
+    "tool-catalog.lifecycle-sink-failed",
+    "tool-catalog.projection",
+    "tool-catalog.settlement-emit-failed",
+    "update-session.lock-quarantine-prune",
+    "update.preflight.bundled-catalog.read",
+    "update.remediation.execute",
+    "voice.live-dictation.capacity-rejected",
+    "voice.live-dictation.initial-frame-timeout",
+    "voice.live-dictation.negotiate",
+    "voice.realtime.negotiate",
+    "voice.realtime.policy-decision",
+    "voice.realtime.session-ended",
+    "voice.realtime.session-started",
+    "voice.speech.stream",
+    "workflow.network-isolation-probe",
+    "workspace.index.generation",
+    "workspace.index.load",
+    "workspace.index.open",
+    "workspace.index.save",
+    "workspace.root.denied",
+    "workspace.root.restore.reason"
   ],
   "violations": []
 }

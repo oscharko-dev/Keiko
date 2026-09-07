@@ -33,6 +33,10 @@ import type {
   GitDeliveryRepoPolicyPack,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  isGitObjectId,
+  isSafeGitRefName,
+} from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+import {
   evaluateGitDeliveryEffectivePolicy,
   evaluateGitPolicy,
   gitDeliveryPolicyTargetBranchName,
@@ -60,6 +64,8 @@ import type { CommandRule } from "./types.js";
 
 export interface GitPushCommand {
   readonly kind: "push";
+  /** Server-approved immutable source; tracking updates are a separate local action. */
+  readonly verifiedCommitSha?: string;
   readonly sourceBranchName: string;
   readonly remoteAlias: string;
   readonly remoteBranchName: string;
@@ -73,6 +79,7 @@ export interface GitPushCommand {
 // The operands handed to the executor. forcePush is intentionally ABSENT: the adapter can never force
 // push because no force operand reaches it.
 export interface GitPublishExecRequest {
+  readonly verifiedCommitSha?: string;
   readonly sourceBranchName: string;
   readonly remoteAlias: string;
   readonly remoteBranchName: string;
@@ -349,12 +356,29 @@ export function buildPushArgv(command: GitPushCommand): readonly string[] {
   const remote = assertRef(command.remoteAlias, "remoteAlias");
   const source = assertRef(command.sourceBranchName, "sourceBranchName");
   const target = assertRef(command.remoteBranchName, "remoteBranchName");
+  if (command.verifiedCommitSha !== undefined) return verifiedPushArgv(command, remote, target);
   const argv = ["push"];
   if (command.setUpstreamTracking) {
     argv.push("--set-upstream");
   }
   argv.push(remote, `${source}:${target}`);
   return argv;
+}
+
+function verifiedPushArgv(
+  command: GitPushCommand,
+  remote: string,
+  target: string,
+): readonly string[] {
+  if (
+    !isGitObjectId(command.verifiedCommitSha) ||
+    !isSafeGitRefName(target) ||
+    target.startsWith("refs/") ||
+    command.setUpstreamTracking
+  ) {
+    throw new GitPublishArgvError("verified push requires an immutable commit and a branch target");
+  }
+  return ["push", remote, `${command.verifiedCommitSha}:refs/heads/${target}`];
 }
 
 // ─── Lifecycle orchestration ─────────────────────────────────────────────────────────────────
@@ -385,6 +409,9 @@ export interface GitPublishLifecycleResult {
 function pushResolvedInputs(command: GitPushCommand): GitDeliveryPushInputs {
   return {
     kind: "push",
+    ...(command.verifiedCommitSha === undefined
+      ? {}
+      : { verifiedCommitSha: command.verifiedCommitSha }),
     sourceBranchName: command.sourceBranchName,
     remoteAlias: command.remoteAlias,
     remoteBranchName: command.remoteBranchName,
@@ -566,6 +593,9 @@ async function runPublishAdapter(
     // Build the argv eagerly so a force-push refusal (AC4) is a structured failure, never a spawn.
     buildPushArgv(command);
     return await adapter.publish({
+      ...(command.verifiedCommitSha === undefined
+        ? {}
+        : { verifiedCommitSha: command.verifiedCommitSha }),
       sourceBranchName: command.sourceBranchName,
       remoteAlias: command.remoteAlias,
       remoteBranchName: command.remoteBranchName,

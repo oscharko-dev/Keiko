@@ -161,6 +161,7 @@ function testAppSessionChannel(paired: boolean): CodingAppSessionChannel {
     subscribe: () => ({
       snapshot: contentFreeCodingAppSessionChannelSnapshot(),
       live: false,
+      stop: () => undefined,
       detach: () => undefined,
     }),
   };

@@ -199,10 +199,11 @@ describe("CodexSubscriptionAuthCard codex setup", () => {
   });
 
   it("disables setup buttons when no prepare action is wired", () => {
-    renderAuthCard(
-      codexState({ profile: ready(profile()) }),
-      modelActions({ prepareCodexSetup: undefined }),
-    );
+    // `prepareCodexSetup` is an optional action (CodingWorkbenchRuntimeActions): the key is
+    // OMITTED here, never present with an explicit `undefined` value, matching
+    // `exactOptionalPropertyTypes` (sonar no-redundant-optional / #3384 audit sonar residual).
+    const { prepareCodexSetup: _prepareCodexSetup, ...actionsWithoutPrepare } = modelActions();
+    renderAuthCard(codexState({ profile: ready(profile()) }), actionsWithoutPrepare);
     expect(screen.getByRole("button", { name: "Prepare browser login" })).toBeDisabled();
   });
 

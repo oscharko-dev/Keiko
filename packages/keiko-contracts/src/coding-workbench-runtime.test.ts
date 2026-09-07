@@ -184,6 +184,72 @@ describe("Coding Workbench runtime contracts", () => {
     ).toMatchObject({ ok: false });
   });
 
+  // Epic #3384 correction 8: the issue binding is a fact of the run's public snapshot
+  // (`CodingWorkbenchRuntimeSnapshot.issueBinding`) only. Restating it on the execution binding —
+  // embedded in both the runtime authority envelope and the runtime authority facts — would create
+  // a second source of truth for the same fact, so both validators must reject it as an unknown key
+  // even though it is a legal field name on `CodingWorkbenchIssueBinding` elsewhere in this module.
+  it("rejects issueBinding on the execution binding and the authority facts binding (epic #3384 correction 8)", () => {
+    const forgedEnvelopeBinding = {
+      ...runtimeAuthority(),
+      binding: {
+        ...runtimeAuthority().binding,
+        issueBinding: {
+          schemaVersion: "1",
+          repositoryId: "repo-1",
+          remoteDigest: DIGEST,
+          issueNumber: 1,
+          issueIdDigest: DIGEST,
+          contentRevisionDigest: DIGEST,
+          defaultBaseRef: "dev",
+          bindingDigest: DIGEST,
+        },
+      },
+    };
+    expect(validateCodingWorkbenchRuntimeAuthorityEnvelope(forgedEnvelopeBinding)).toMatchObject({
+      ok: false,
+    });
+    const forgedFactsBinding = {
+      binding: {
+        taskId: "task-1",
+        projectId: "project-1",
+        projectDigest: DIGEST,
+        workspaceId: "workspace-1",
+        workspaceRootDigest: DIGEST,
+        branchRef: "issue/2252",
+        branchHeadDigest: DIGEST,
+        issueBinding: {
+          schemaVersion: "1",
+          repositoryId: "repo-1",
+          remoteDigest: DIGEST,
+          issueNumber: 1,
+          issueIdDigest: DIGEST,
+          contentRevisionDigest: DIGEST,
+          defaultBaseRef: "dev",
+          bindingDigest: DIGEST,
+        },
+      },
+      actionClasses: [],
+      connectorScopes: [],
+      runtimeSource: "keiko-sidecar",
+      modelSource: "keiko-model-gateway",
+      budgetDigest: DIGEST,
+      commandPolicyDigest: DIGEST,
+      networkPolicyDigest: DIGEST,
+      gatesDigest: DIGEST,
+      branchConstraintsDigest: DIGEST,
+      modelProfileDigest: DIGEST,
+    };
+    expect(validateCodingWorkbenchRuntimeAuthorityFacts(forgedFactsBinding)).toMatchObject({
+      ok: false,
+    });
+    // The clean binding (no issueBinding) remains valid on both — the removal above is additive
+    // strictness, not a regression in the fields the binding legitimately carries.
+    expect(validateCodingWorkbenchRuntimeAuthorityEnvelope(runtimeAuthority())).toMatchObject({
+      ok: true,
+    });
+  });
+
   it.each([
     ["task", { binding: { ...runtimeAuthority().binding, taskId: "other" } }],
     ["workspace", { binding: { ...runtimeAuthority().binding, workspaceId: "other" } }],
@@ -412,6 +478,25 @@ describe("Coding Workbench runtime contract failure branches", () => {
     expect(
       validateCodingWorkbenchRuntimeAuthorityFacts({ ...facts(), modelSource: "external" }),
     ).toMatchObject({ ok: false, errors: ["modelSource is invalid"] });
+  });
+
+  // issueBindingDigest is optional on live facts (epic #3384 correction 8: the execution binding
+  // never carries the issue binding itself, only this content-free fingerprint the drift check
+  // compares — see agentAuthorityRegistry.ts's issueBindingDiffers).
+  it("accepts live facts with no bound issue and a valid issueBindingDigest, rejects a malformed one", () => {
+    expect(validateCodingWorkbenchRuntimeAuthorityFacts(facts())).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeAuthorityFacts({ ...facts(), issueBindingDigest: DIGEST }),
+    ).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeAuthorityFacts({
+        ...facts(),
+        issueBindingDigest: "not-a-digest",
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: ["issueBindingDigest must be a 64-character lowercase hex digest"],
+    });
   });
 
   it("rejects unknown sources on the adapter start request", () => {

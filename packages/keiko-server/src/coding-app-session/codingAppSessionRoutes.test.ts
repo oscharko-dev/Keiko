@@ -95,7 +95,8 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
     const setCookie = handleCodingAppSessionRotate(ctx(cookie), deps(channel)).headers?.[
       "Set-Cookie"
     ];
-    expect(setCookie).toHaveLength(10);
+    expect(setCookie).toHaveLength(11);
+    expect(String(setCookie)).toContain("Path=/api/task-workspaces;");
     expect(String(setCookie)).toContain(APP_SESSION_COOKIE_NAME);
     expect(String(setCookie)).toContain("Path=/api/coding-workbench");
     expect(String(setCookie)).toContain("Path=/api/git");
@@ -113,7 +114,8 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
     const setCookie = handleCodingAppSessionSignOut(ctx(cookie), deps(channel)).headers?.[
       "Set-Cookie"
     ];
-    expect(setCookie).toHaveLength(10);
+    expect(setCookie).toHaveLength(11);
+    expect(String(setCookie)).toContain("Path=/api/task-workspaces;");
     expect(String(setCookie)).toContain("Path=/api/editor/local-history");
     expect(String(setCookie)).toContain("Path=/api/runs");
     expect(String(setCookie)).toContain("Path=/api/workspaces");

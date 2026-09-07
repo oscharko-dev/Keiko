@@ -1,12 +1,18 @@
+import {
+  isVerifiedCommitResult,
+  type VerifiedCommitResult,
+} from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, sep } from "node:path";
+
+import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { validateCodingWorkbenchIssueBinding } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 
 import type {
   CodingWorkbenchActionClass,
   CodingWorkbenchConnectorScope,
   CodingWorkbenchMode,
-  CodingWorkbenchNetworkPolicy,
   CodingWorkbenchRuntimeAuthorityFacts,
   WorkspaceInstance,
   ModelReasoningEffort,
@@ -15,8 +21,12 @@ import type {
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
 import type { CodingRuntimeLaunchResolver } from "./codingRuntimeOrchestrator.js";
 import {
+  codingRuntimeActionClassesForMode,
   codingRuntimeBudgetDigest,
+  codingRuntimeCommandPolicyForMode,
+  codingRuntimeConnectorScopesForMode,
   codingRuntimeFactDigest,
+  codingRuntimeNetworkPolicyForMode,
   type CodingRuntimeTrustedContext,
 } from "./runtimeAuthorityService.js";
 import { projectRuntimeAuthorityValue } from "./runtimeAuthorityProjection.js";
@@ -26,13 +36,34 @@ import {
 } from "./launchFailure.js";
 
 const RUNTIME_TTL_MS = 30 * 60_000;
+const DEFAULT_RUNTIME_PROMPT_TOKENS = 200_000;
+const MAX_RUNTIME_PROMPT_TOKENS = 2_000_000;
+
+function checkedRuntimePromptTokenBudget(value: number): number {
+  if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_RUNTIME_PROMPT_TOKENS) {
+    throw new RangeError("Coding runtime prompt token budget is outside the supported range.");
+  }
+  return value;
+}
+
+export function configuredRuntimePromptTokenBudget(value: string | undefined): number {
+  if (value === undefined) return DEFAULT_RUNTIME_PROMPT_TOKENS;
+  if (!/^[1-9]\d*$/u.test(value)) {
+    throw new RangeError("Coding runtime prompt token budget must be a positive integer.");
+  }
+  return checkedRuntimePromptTokenBudget(Number(value));
+}
 
 type LaunchResolutionInput = Parameters<CodingRuntimeLaunchResolver["resolve"]>[0];
 
 export interface ProductionWorkspaceAuthorityInput {
-  readonly workspaceLifecycle: WorkspaceLifecycleService;
+  /** Retained last successful runtime receipt; latest proposals never replace HEAD provenance. */
+  readonly verifiedCommitResult?: (runId: string) => VerifiedCommitResult | undefined;
+  readonly workspaceLifecycle: Pick<WorkspaceLifecycleService, "getActive">;
   readonly managedTaskWorkspaceRoot: string;
   readonly deploymentCeiling: CodingWorkbenchMode;
+  /** Trusted deployment ceiling for a newly minted run; never changes an existing envelope. */
+  readonly promptTokenBudget?: number | undefined;
   readonly readWorkspaceHead: (workspaceRoot: string, repositoryRoot: string) => string | undefined;
   readonly now?: (() => Date) | undefined;
   // When the deployment activates read-only public research (#2387), the base envelope admits the
@@ -48,47 +79,32 @@ export interface ProductionWorkspaceAuthorityInput {
     | undefined;
 }
 
-// The base workspace action classes, plus network-egress only when research egress is activated.
-// Kept in lock-step with the network policy below so validateNetworkPolicyActionClassConsistency
-// holds (mode !== "deny-all" iff the action classes include network-egress).
-function runtimeActionClasses(
-  mode: CodingWorkbenchMode,
-  researchEgressEnabled: boolean | undefined,
-): readonly CodingWorkbenchActionClass[] {
-  const actionClasses: CodingWorkbenchActionClass[] = [
-    "workspace-read",
-    "workspace-write",
-    "verification",
-  ];
-  if (mode !== "governed-assist") actionClasses.push("command-execution");
-  if (mode === "autonomous-delivery") {
-    actionClasses.push("delivery-substrate", "connector-access");
-  }
-  if (researchEgressEnabled === true || mode === "autonomous-delivery") {
-    actionClasses.push("network-egress");
-  }
-  return actionClasses;
+// Exported so a caller that needs to project the SAME run-context connector-scope entitlement
+// outside a minted context (epic #3384 correction 7: coding-context/codingRuntimeIssueIntake.ts's
+// issue-context attachment) reuses this single rule rather than restating which scopes a mode
+// grants.
+export { DELIVERY_CONNECTOR_SCOPES } from "./runtimeAuthorityService.js";
+
+export interface ProductionGitDeliveryModeGrants {
+  readonly actionClasses: readonly CodingWorkbenchActionClass[];
+  readonly connectorScopes: readonly CodingWorkbenchConnectorScope[];
 }
 
-const DELIVERY_CONNECTOR_SCOPES: readonly CodingWorkbenchConnectorScope[] = [
-  "source-control.read",
-  "source-control.write",
-];
-
-function runtimeNetworkPolicy(
+// The smallest pure per-mode projection of what this module mints, exported so a Git-delivery test
+// fixture can derive the exact production shape instead of restating the formula above (AGENTS.md
+// §7 / epic #3384 correction 5, item 2: `runBoundAuthority.test-support.ts`'s
+// `productionScopedGitDeliveryAuthority` calls this rather than keeping its own copy). Holds
+// `researchEgressEnabled` at its production default (`false`): `network-egress` is therefore present
+// only for `autonomous-delivery` (matching `runtimeActionClasses`'s own unconditional branch for
+// that mode) and absent for `governed-assist`/`supervised-coding`, exactly what those modes mint
+// outside an active research-egress grant.
+export function productionGitDeliveryModeGrants(
   mode: CodingWorkbenchMode,
-  researchEgressEnabled: boolean | undefined,
-): CodingWorkbenchNetworkPolicy {
-  if (mode === "autonomous-delivery") {
-    return {
-      mode: "connector-scoped-egress",
-      allowLoopback: false,
-      connectorScopes: DELIVERY_CONNECTOR_SCOPES,
-    };
-  }
-  return researchEgressEnabled === true
-    ? { mode: "governed-egress", allowLoopback: false, connectorScopes: [] }
-    : { mode: "deny-all", allowLoopback: false, connectorScopes: [] };
+): ProductionGitDeliveryModeGrants {
+  return {
+    actionClasses: codingRuntimeActionClassesForMode(mode, false),
+    connectorScopes: codingRuntimeConnectorScopesForMode(mode),
+  };
 }
 
 export function resolveProductionRuntimeContext(
@@ -118,7 +134,20 @@ function contextFromActive(
   const branch = instance.taskBranch;
   const now = input.now?.() ?? new Date();
   const runtimeProfile = trustedRuntimeProfile(input, request);
+  // ADR-0124 D2: authority is the fail-closed MINIMUM of the requested mode and the deployment
+  // ceiling. Every capability below is derived from that minimum, never from the request. Deriving
+  // from `request.requestedMode` widened authority by request: `runtimeAuthorityService` clamps only
+  // the envelope's `effectiveMode` and copies these fields verbatim, so a run that asked for
+  // `autonomous-delivery` under a lower ceiling was minted with a clamped mode but still carried
+  // `delivery-substrate`, `connector-access`, `source-control.write` and a connector-scoped network
+  // policy — which `codingToolAuthorityPort` and `gitDelivery/runBoundAuthority` both honour,
+  // because they read the scopes, not the mode.
+  const effectiveMode = resolveEffectiveCodingWorkbenchMode(
+    request.requestedMode,
+    input.deploymentCeiling,
+  );
   return {
+    runId: request.runId,
     operatorId: request.serverPrincipal,
     taskId: instance.taskId,
     projectId: instance.repositoryId,
@@ -127,6 +156,7 @@ function contextFromActive(
     workspaceRoot: request.workspaceRoot,
     branchRef: branch,
     branchHeadDigest: digest(head),
+    ...issueBindingFromRequest(request, instance),
     branch: {
       baseRef: instance.baseBranch,
       headRef: branch,
@@ -135,9 +165,8 @@ function contextFromActive(
     },
     deploymentCeiling: input.deploymentCeiling,
     runtimeSource: runtimeProfile.runtimeSource,
-    actionClasses: runtimeActionClasses(request.requestedMode, input.researchEgressEnabled),
-    connectorScopes:
-      request.requestedMode === "autonomous-delivery" ? DELIVERY_CONNECTOR_SCOPES : [],
+    actionClasses: codingRuntimeActionClassesForMode(effectiveMode, input.researchEgressEnabled),
+    connectorScopes: codingRuntimeConnectorScopesForMode(effectiveMode),
     modelProfile: {
       profileId: runtimeProfile.profileId,
       source: runtimeProfile.modelSource,
@@ -147,23 +176,34 @@ function contextFromActive(
         ? {}
         : { reasoningEffort: runtimeProfile.reasoningEffort }),
     },
-    commandPolicy: {
-      mode: request.requestedMode === "governed-assist" ? "deny" : "governed",
-      allow: [],
-      deny: [],
-      maxCommandTimeoutMs: 120_000,
-      requirePerCommandApproval: request.requestedMode !== "autonomous-delivery",
-    },
-    networkPolicy: runtimeNetworkPolicy(request.requestedMode, input.researchEgressEnabled),
+    commandPolicy: codingRuntimeCommandPolicyForMode(effectiveMode),
+    networkPolicy: codingRuntimeNetworkPolicyForMode(effectiveMode, input.researchEgressEnabled),
     gates: ["human-approval"],
     budget: {
       maxRuntimeMs: RUNTIME_TTL_MS,
       maxToolCalls: 256,
-      maxPromptTokens: 200_000,
+      maxPromptTokens: checkedRuntimePromptTokenBudget(
+        input.promptTokenBudget ?? DEFAULT_RUNTIME_PROMPT_TOKENS,
+      ),
       maxPatchBytes: 262_144,
     },
     expiresAt: new Date(now.getTime() + RUNTIME_TTL_MS).toISOString(),
   };
+}
+
+function issueBindingFromRequest(
+  request: LaunchResolutionInput,
+  instance: WorkspaceInstance,
+): Pick<CodingRuntimeTrustedContext, "issueBinding"> {
+  if (request.issueBinding === undefined) return {};
+  const binding = validateCodingWorkbenchIssueBinding(request.issueBinding);
+  if (
+    !binding.ok ||
+    binding.value.repositoryId !== instance.repositoryId ||
+    binding.value.defaultBaseRef !== instance.baseBranch
+  )
+    invalidWorkspace();
+  return { issueBinding: structuredClone(binding.value) };
 }
 
 type TrustedRuntimeProfile = Pick<CodingRuntimeTrustedContext, "runtimeSource"> & {
@@ -262,6 +302,7 @@ export function productionRuntimeAuthorityFacts(
     gatesDigest: codingRuntimeFactDigest(context.gates),
     branchConstraintsDigest: codingRuntimeFactDigest(branch),
     modelProfileDigest: codingRuntimeFactDigest(modelProfile),
+    issueBindingDigest: context.issueBinding?.bindingDigest,
   };
 }
 
@@ -297,7 +338,7 @@ export function productionWorkspaceMatches(
     return (
       trustedIdentityMatches(active.instance, context) &&
       trustedBranchMatches(active.instance, context) &&
-      trustedHeadMatches(active.instance, context, head)
+      trustedHeadMatches(input, active.instance, context, head)
     );
   } catch {
     return false;
@@ -331,15 +372,22 @@ function trustedBranchMatches(
 }
 
 function trustedHeadMatches(
+  input: ProductionWorkspaceAuthorityInput,
   instance: WorkspaceInstance,
   context: CodingRuntimeTrustedContext,
   head: string | undefined,
 ): boolean {
-  return (
-    head !== undefined &&
-    instance.lastVerifiedHead === head &&
-    digest(head) === context.branchHeadDigest
-  );
+  if (head === undefined || instance.lastVerifiedHead !== head) return false;
+  if (digest(head) === context.branchHeadDigest) return true;
+  if (context.runId === undefined) return false;
+  const receipt = input.verifiedCommitResult?.(context.runId);
+  if (!isVerifiedCommitResult(receipt) || receipt.status !== "succeeded") return false;
+  return [
+    receipt.runId === context.runId,
+    receipt.headSha === head,
+    receipt.workspaceDigest === digest(context.workspaceRoot),
+    receipt.issueBindingDigest === context.issueBinding?.bindingDigest,
+  ].every(Boolean);
 }
 
 export function trustedManagedWorkspaceRoot(root: string): boolean {

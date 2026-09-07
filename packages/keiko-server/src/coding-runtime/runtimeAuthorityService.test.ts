@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   CodingWorkbenchRuntimeAuthorityFacts,
   CodingWorkbenchRuntimeIntent,
@@ -11,6 +11,7 @@ import {
   validateCodingWorkbenchRuntimeState,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
 import {
   createInMemoryRuntimeCapabilityStore,
   type RuntimeCapabilityBinding,
@@ -18,8 +19,12 @@ import {
 import { createInMemorySupervisedCodingApprovalStore } from "./supervisedCodingApprovalStore.js";
 import {
   CodingRuntimeAuthorityService,
+  codingRuntimeActionClassesForMode,
   codingRuntimeBudgetDigest,
+  codingRuntimeCommandPolicyForMode,
+  codingRuntimeConnectorScopesForMode,
   codingRuntimeFactDigest,
+  codingRuntimeNetworkPolicyForMode,
   type CodingRuntimeMintResult,
   type CodingRuntimeResolution,
   type CodingRuntimeTrustedContext,
@@ -237,6 +242,21 @@ function service(): CodingRuntimeAuthorityService {
   );
 }
 
+function mintFailureService(
+  activity: ServerLogEvent[],
+  registry = new EditorAgentAuthorityRegistry(),
+  capabilities = createInMemoryRuntimeCapabilityStore(),
+): CodingRuntimeAuthorityService {
+  return new CodingRuntimeAuthorityService(
+    registry,
+    () => "run-1",
+    () => "nonce-1",
+    createInMemorySupervisedCodingApprovalStore(),
+    capabilities,
+    { write: (event): void => void activity.push(event) },
+  );
+}
+
 function promptBudgetService(): CodingRuntimeAuthorityService {
   return new CodingRuntimeAuthorityService(
     new EditorAgentAuthorityRegistry(),
@@ -305,6 +325,48 @@ function serviceInState(state: CodingWorkbenchRuntimeStateName): {
 }
 
 describe("CodingRuntimeAuthorityService", () => {
+  it("logs the exact minted authority grants for lower-mode reconstruction", () => {
+    const activity: ServerLogEvent[] = [];
+    const authority = new CodingRuntimeAuthorityService(
+      new EditorAgentAuthorityRegistry(),
+      () => "run-1",
+      () => "nonce-1",
+      createInMemorySupervisedCodingApprovalStore(),
+      createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.parse(NOW) }),
+      { write: (event): void => void activity.push(event) },
+    );
+    const trusted: CodingRuntimeTrustedContext = {
+      ...context(),
+      actionClasses: [
+        "workspace-read",
+        "workspace-write",
+        "verification",
+        "command-execution",
+        "delivery-substrate",
+        "connector-access",
+      ],
+      connectorScopes: ["source-control.read", "source-control.write"],
+      networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
+    };
+    const confirmation = authority.confirmStart(intent, trusted.taskId, trusted.operatorId, NOW);
+    expect(authority.mintStart(intent, trusted, confirmation, NOW).ok).toBe(true);
+
+    expect(activity).toContainEqual({
+      category: "security",
+      op: "coding-runtime.authority.minted",
+      correlationId: "run-1",
+      level: "info",
+      extra: {
+        runId: "run-1",
+        effectiveMode: "supervised-coding",
+        actionClasses: trusted.actionClasses,
+        connectorScopes: trusted.connectorScopes,
+        networkPolicyMode: "deny-all",
+        maxPromptTokens: trusted.budget.maxPromptTokens,
+      },
+    });
+  });
+
   it("atomically charges the exact prompt budget and fails closed after exhaustion", async () => {
     const authority = promptBudgetService();
     const minted = mint(authority);
@@ -342,6 +404,103 @@ describe("CodingRuntimeAuthorityService", () => {
     expect(reservations.filter((result) => !result.ok)).toEqual([
       { ok: false, reason: "authority-budget-exceeded" },
     ]);
+  });
+
+  it("admits a prompt reservation as soon as the run reaches ready, ahead of its own running transition (#3390), while a paused run or a mismatched run id are still refused", () => {
+    // #3390: reproduces the real #3390 race -- the sidecar's first model call can reach the
+    // gateway while the orchestrator's own initial-turn dispatch is still between its "ready" and
+    // "running" transitions. A reservation issued in exactly that window must be admitted, not
+    // refused as an authority-resolution failure.
+    const capabilities = createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.parse(NOW) });
+    const authority = new CodingRuntimeAuthorityService(
+      new EditorAgentAuthorityRegistry(),
+      () => "run-1",
+      () => "nonce-1",
+      undefined,
+      capabilities,
+    );
+    const minted = mint(authority, intent, false);
+    if (!minted.ok) throw new Error("expected mint");
+    expect(authority.transition(minted.authorityRef.runId, "ready", NOW)).toBe(true);
+    expect(authority.state()).toMatchObject({ state: "ready", runId: "run-1" });
+
+    expect(
+      authority.reservePromptTokens(minted.modelGatewayCapability, 100, Date.parse(NOW)),
+    ).toEqual({ ok: true, runId: "run-1" });
+
+    // A wrong run id must still be refused: the widened state gate never substitutes for the
+    // per-run identity checks.
+    const wrongRun = capabilities.issue({
+      runId: "run-mismatch",
+      workspaceRootDigest: DIGEST,
+      envelopeDigest: DIGEST,
+      adapterKind: "model-gateway-sidecar",
+      audience: "model-gateway",
+      expiresAtMs: Date.parse(NOW) + 60_000,
+    });
+    if (!wrongRun.ok) throw new Error("expected wrong-run capability issue");
+    expect(authority.reservePromptTokens(wrongRun.capability, 1, Date.parse(NOW))).toEqual({
+      ok: false,
+      reason: "authority-resolution-failed",
+    });
+
+    // A paused run must still be refused: the widened gate covers only the "ready" dispatch
+    // window, never the sticky-pause hold.
+    expect(authority.transition("run-1", "running", NOW)).toBe(true);
+    expect(authority.pause("run-1", NOW)).toMatchObject({ ok: true });
+    expect(
+      authority.reservePromptTokens(minted.modelGatewayCapability, 1, Date.parse(NOW)),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+  });
+
+  it('admits a prompt reservation issued from inside the managed runtime\'s own start() -- while runtimeState is still "starting", ahead of any "ready"/"running" transition (#3390 real window), while a paused run or a mismatched run id are still refused', () => {
+    // #3390 (review repair): production wiring (productionCodingRuntimePorts.ts's
+    // startProductionRuntime) only transitions runtimeState to "ready" then "running" AFTER the
+    // managed runtime's own start() promise resolves. If the sidecar becomes reachable and issues
+    // its first model call while that start() call is still in flight, runtimeState is "starting"
+    // -- not "ready" -- so a reservation must be admissible in that exact state, with no
+    // transition call made at all (this is the actual real-world race window; the "ready" pin
+    // above covers the orchestrator's local, related-but-distinct dispatch ordering).
+    const capabilities = createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.parse(NOW) });
+    const authority = new CodingRuntimeAuthorityService(
+      new EditorAgentAuthorityRegistry(),
+      () => "run-1",
+      () => "nonce-1",
+      undefined,
+      capabilities,
+    );
+    const minted = mint(authority, intent, false);
+    if (!minted.ok) throw new Error("expected mint");
+    expect(authority.state()).toMatchObject({ state: "starting", runId: "run-1" });
+
+    expect(
+      authority.reservePromptTokens(minted.modelGatewayCapability, 100, Date.parse(NOW)),
+    ).toEqual({ ok: true, runId: "run-1" });
+
+    // A wrong run id must still be refused even while "starting": the widened state gate never
+    // substitutes for the per-run identity checks.
+    const wrongRun = capabilities.issue({
+      runId: "run-mismatch",
+      workspaceRootDigest: DIGEST,
+      envelopeDigest: DIGEST,
+      adapterKind: "model-gateway-sidecar",
+      audience: "model-gateway",
+      expiresAtMs: Date.parse(NOW) + 60_000,
+    });
+    if (!wrongRun.ok) throw new Error("expected wrong-run capability issue");
+    expect(authority.reservePromptTokens(wrongRun.capability, 1, Date.parse(NOW))).toEqual({
+      ok: false,
+      reason: "authority-resolution-failed",
+    });
+
+    // A paused run must still be refused: reaching "starting" never substitutes for the sticky
+    // pause hold once the run has actually progressed past it.
+    expect(authority.transition("run-1", "ready", NOW)).toBe(true);
+    expect(authority.transition("run-1", "running", NOW)).toBe(true);
+    expect(authority.pause("run-1", NOW)).toMatchObject({ ok: true });
+    expect(
+      authority.reservePromptTokens(minted.modelGatewayCapability, 1, Date.parse(NOW)),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
   });
 
   it("fails retained prompt and pause or resume operations closed after runtime exhaustion", () => {
@@ -412,7 +571,104 @@ describe("CodingRuntimeAuthorityService", () => {
     });
 
     expect(authority.gitDeliveryAuthorityPort().current(NOW)).toMatchObject({
+      projectId: ROOT,
+      workspaceRoot: ROOT,
       authority: { effectiveMode: "governed-assist" },
+    });
+  });
+
+  it("narrows every retained authority field when a Full access run resumes in Ask for approval", () => {
+    const authority = service();
+    const fullContext: CodingRuntimeTrustedContext = {
+      ...context(),
+      actionClasses: [
+        "workspace-read",
+        "workspace-write",
+        "command-execution",
+        "verification",
+        "delivery-substrate",
+        "connector-access",
+        "network-egress",
+      ],
+      connectorScopes: [
+        "source-control.read",
+        "source-control.write",
+        "issue-tracker.read",
+        "issue-tracker.write",
+      ],
+      commandPolicy: {
+        mode: "governed",
+        allow: [],
+        deny: [],
+        maxCommandTimeoutMs: 60_000,
+        requirePerCommandApproval: false,
+      },
+      networkPolicy: {
+        mode: "connector-scoped-egress",
+        allowLoopback: false,
+        connectorScopes: [
+          "source-control.read",
+          "source-control.write",
+          "issue-tracker.read",
+          "issue-tracker.write",
+        ],
+      },
+    };
+    const fullIntent = { ...intent, requestedMode: "autonomous-delivery" as const };
+    const confirmation = authority.confirmStart(
+      fullIntent,
+      fullContext.taskId,
+      fullContext.operatorId,
+      NOW,
+    );
+    const minted = authority.mintStart(fullIntent, fullContext, confirmation, NOW);
+    if (!minted.ok) throw new Error("expected mint");
+    authority.transition(minted.authorityRef.runId, "ready", NOW);
+    authority.transition(minted.authorityRef.runId, "running", NOW);
+    expect(authority.pause("run-1", NOW)).toMatchObject({ ok: true });
+    expect(authority.resume("run-1", "governed-assist", NOW)).toMatchObject({ ok: true });
+
+    const live = facts({
+      actionClasses: fullContext.actionClasses,
+      connectorScopes: fullContext.connectorScopes,
+      commandPolicyDigest: codingRuntimeFactDigest(fullContext.commandPolicy),
+      networkPolicyDigest: codingRuntimeFactDigest(fullContext.networkPolicy),
+    });
+    const resolution = resolve(authority, minted.authorityRef, live);
+    if (!resolution.ok) throw new Error("expected narrowed resolution");
+    // ADR-0138 D2: Ask for approval's workspace-contained/internet effects are approval-required,
+    // never denied outright, so a narrowed authority retains "command-execution" (gated by
+    // commandPolicy.requirePerCommandApproval, not stripped) and the authority-level connector
+    // scopes an approved request would need. The network policy itself stays deny-all with no
+    // scopes: the envelope contract forbids scopes on a deny-all policy, and an approved
+    // connector-scoped request is redeemed through its approval proof, not through the policy.
+    expect(resolution.envelope.authority).toMatchObject({
+      effectiveMode: "governed-assist",
+      actionClasses: [
+        "workspace-read",
+        "workspace-write",
+        "command-execution",
+        "verification",
+        "delivery-substrate",
+        "connector-access",
+      ],
+      connectorScopes: ["source-control.read", "source-control.write"],
+      commandPolicy: { mode: "governed", requirePerCommandApproval: true },
+      networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
+    });
+    expect(authority.gitDeliveryAuthorityPort().current(NOW)?.authority).toMatchObject({
+      effectiveMode: "governed-assist",
+      actionClasses: [
+        "workspace-read",
+        "workspace-write",
+        "command-execution",
+        "verification",
+        "delivery-substrate",
+        "connector-access",
+      ],
+      connectorScopes: ["source-control.read", "source-control.write"],
+      commandPolicy: { mode: "governed", requirePerCommandApproval: true },
+      networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
     });
   });
 
@@ -490,6 +746,52 @@ describe("CodingRuntimeAuthorityService", () => {
     expect(JSON.stringify({ state: authority.state(), delegated })).not.toContain(
       minted.treeBindingId,
     );
+  });
+
+  // Relocated for epic #3384 correction 8 (the execution binding never carries `issueBinding` —
+  // only the run's public snapshot does). The invariant this pin encodes is unchanged and must
+  // stay exactly as strict: a run minted while bound to one issue must reject a delegation that
+  // reports a different bound issue as `task-drift`. What moved is the comparison's data shape:
+  // the registry now compares the content-free `issueBindingDigest` fingerprint retained at mint
+  // time (`AuthorityRecord.runtimeIssueBindingDigest`) against the live fingerprint, never the
+  // binding object itself — so this pin is strengthened, not relaxed, with an explicit assertion
+  // that the retained envelope's binding carries no `issueBinding` at all.
+  it("binds admitted issue identity at mint time and rejects rebinding on delegation (epic #3384 correction 8)", () => {
+    const authority = service();
+    const issueBinding = {
+      schemaVersion: "1" as const,
+      repositoryId: "repo_123",
+      remoteDigest: DIGEST,
+      issueNumber: 42,
+      issueIdDigest: "b".repeat(64),
+      defaultBaseRef: "dev",
+      contentRevisionDigest: "c".repeat(64),
+      bindingDigest: "d".repeat(64),
+    };
+    const trusted = { ...context(), issueBinding };
+    const confirmation = authority.confirmStart(intent, trusted.taskId, trusted.operatorId, NOW);
+    const minted = authority.mintStart(intent, trusted, confirmation, NOW);
+    if (!minted.ok) throw new Error("expected mint");
+    authority.transition(minted.authorityRef.runId, "ready", NOW);
+    authority.transition(minted.authorityRef.runId, "running", NOW);
+    const admitted = resolve(
+      authority,
+      minted.authorityRef,
+      facts({ issueBindingDigest: issueBinding.bindingDigest }),
+    );
+    expect(admitted).toMatchObject({ ok: true });
+    expect(JSON.stringify(admitted)).not.toContain("issueBinding");
+    expect(
+      resolve(
+        authority,
+        minted.authorityRef,
+        facts({ issueBindingDigest: "e".repeat(64) }),
+        "changed-issue",
+      ),
+    ).toMatchObject({
+      ok: false,
+      reason: "task-drift",
+    });
   });
 
   it("keeps projected authority evidence separate from private runtime model binding", () => {
@@ -1105,6 +1407,159 @@ describe("CodingRuntimeAuthorityService fail-closed mint and release guards", ()
     expect(authority.state().state).toBe("idle");
   });
 
+  it("records the closed stage and reason for every start-mint refusal", () => {
+    const events: ServerLogEvent[] = [];
+    const sourceMismatch = mintFailureService(events);
+    const sourceConfirmation = sourceMismatch.confirmStart(
+      intent,
+      context().taskId,
+      context().operatorId,
+      NOW,
+    );
+    expect(
+      sourceMismatch.mintStartForRun(
+        "run-source",
+        { ...intent, modelSource: "chatgpt-codex-subscription-profile" },
+        context(),
+        sourceConfirmation,
+        NOW,
+      ),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+
+    const confirmationRefused = mintFailureService(events);
+    const rejectedConfirmation = confirmationRefused.confirmStart(
+      intent,
+      context().taskId,
+      context().operatorId,
+      NOW,
+    );
+    expect(
+      confirmationRefused.mintStartForRun(
+        "run-confirmation",
+        intent,
+        context(),
+        { ...rejectedConfirmation, taskId: "different-task" },
+        NOW,
+      ),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+
+    const mismatched = mintFailureService(events);
+    expect(
+      mismatched.mintConfirmedStartForRun(
+        "run-model",
+        { ...intent, modelSource: "chatgpt-codex-subscription-profile" },
+        context(),
+        DIGEST,
+        NOW,
+      ),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+
+    const malformedDigest = mintFailureService(events);
+    expect(
+      malformedDigest.mintConfirmedStartForRun(
+        "run-digest",
+        intent,
+        context(),
+        "not-a-digest",
+        NOW,
+      ),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+
+    const invalidEnvelope = mintFailureService(events);
+    expect(
+      invalidEnvelope.mintConfirmedStartForRun(
+        "run-envelope",
+        intent,
+        { ...context(), projectDigest: "not-a-digest" },
+        DIGEST,
+        NOW,
+      ),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+
+    const refusingRegistry = new EditorAgentAuthorityRegistry();
+    vi.spyOn(refusingRegistry, "registerRuntime").mockReturnValue({
+      ok: false,
+      reason: "invalid",
+    });
+    const registration = mintFailureService(events, refusingRegistry);
+    expect(registration.mintConfirmedStartForRun("run-1", intent, context(), DIGEST, NOW)).toEqual({
+      ok: false,
+      reason: "authority-resolution-failed",
+    });
+
+    const capabilityIssuance = mintFailureService(
+      events,
+      new EditorAgentAuthorityRegistry(),
+      createInMemoryRuntimeCapabilityStore({
+        maxRecords: 1,
+        nowMs: () => Date.parse(NOW),
+      }),
+    );
+    expect(
+      capabilityIssuance.mintConfirmedStartForRun("run-1", intent, context(), DIGEST, NOW),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+
+    expect(
+      events.map((event) => ({
+        op: event.op,
+        correlationId: event.correlationId,
+        stage: event.extra?.stage,
+        reason: event.extra?.reason,
+        errorKind: event.errorKind,
+      })),
+    ).toEqual([
+      {
+        op: "coding-runtime.authority.mint-failed",
+        correlationId: "run-source",
+        stage: "intent-binding",
+        reason: "model-source-mismatch",
+        errorKind: "CodingRuntimeAuthorityBindingFailure",
+      },
+      {
+        op: "coding-runtime.authority.mint-failed",
+        correlationId: "run-confirmation",
+        stage: "confirmation-consumption",
+        reason: "confirmation-refused",
+        errorKind: "CodingRuntimeAuthorityConfirmationFailure",
+      },
+      {
+        op: "coding-runtime.authority.mint-failed",
+        correlationId: "run-model",
+        stage: "intent-binding",
+        reason: "model-source-mismatch",
+        errorKind: "CodingRuntimeAuthorityBindingFailure",
+      },
+      {
+        op: "coding-runtime.authority.mint-failed",
+        correlationId: "run-digest",
+        stage: "approval-digest",
+        reason: "approval-digest-invalid",
+        errorKind: "CodingRuntimeAuthorityValidationFailure",
+      },
+      {
+        op: "coding-runtime.authority.mint-failed",
+        correlationId: "run-envelope",
+        stage: "envelope-validation",
+        reason: "envelope-invalid",
+        errorKind: "CodingRuntimeAuthorityValidationFailure",
+      },
+      {
+        op: "coding-runtime.authority.mint-failed",
+        correlationId: "run-1",
+        stage: "authority-registration",
+        reason: "registration-refused",
+        errorKind: "CodingRuntimeAuthorityRegistrationFailure",
+      },
+      {
+        op: "coding-runtime.authority.mint-failed",
+        correlationId: "run-1",
+        stage: "capability-issuance",
+        reason: "capability-issuance-refused",
+        errorKind: "CodingRuntimeAuthorityCapabilityFailure",
+      },
+    ]);
+  });
+
   it("rejects a tampered one-use mint confirmation", () => {
     const authority = service();
     const trusted = context();
@@ -1145,4 +1600,252 @@ describe("CodingRuntimeAuthorityService fail-closed mint and release guards", ()
   });
 
   const authority = service();
+});
+
+// #3399 (epic #3384 correction 4): the server-minted, bounded description authority that admits
+// description generation and the "pull-request" body-only apply outside a running Code task.
+describe("CodingRuntimeAuthorityService description authority", () => {
+  const SCOPE = {
+    remoteDigest: "d".repeat(64),
+    pr: { ownerAndRepo: "oscharko-dev/Keiko", prNumber: 3399 },
+    snapshotDigest: "e".repeat(64),
+  };
+
+  it("mints an effective mode clamped by the deployment ceiling, never the requested mode alone", () => {
+    const authority = service();
+    const minted = authority.mintGitDeliveryDescriptionAuthority({
+      scope: SCOPE,
+      requestedMode: "autonomous-delivery",
+      deploymentCeiling: "supervised-coding",
+      nowIso: NOW,
+    });
+    expect(minted.effectiveMode).toBe("supervised-coding");
+    expect(minted.scope).toEqual(SCOPE);
+  });
+
+  it("the port returns the live record for the exact scope and nothing for a different one", () => {
+    const authority = service();
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope: SCOPE,
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      nowIso: NOW,
+    });
+    const port = authority.gitDeliveryDescriptionAuthorityPort();
+    expect(port.current(SCOPE, NOW)?.effectiveMode).toBe("governed-assist");
+    expect(port.current({ ...SCOPE, snapshotDigest: "f".repeat(64) }, NOW)).toBeUndefined();
+  });
+
+  it("expires the record after its TTL", () => {
+    const authority = service();
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope: SCOPE,
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      nowIso: NOW,
+      ttlMs: 1_000,
+    });
+    const port = authority.gitDeliveryDescriptionAuthorityPort();
+    expect(port.current(SCOPE, "2026-07-11T12:00:00.500Z")).toBeDefined();
+    expect(port.current(SCOPE, "2026-07-11T12:00:01.500Z")).toBeUndefined();
+  });
+
+  // #3400/#3401 final-audit F1: before `expired()` existed, `current()` alone could not tell
+  // `authorizeGitDeliveryModelEgress` whether a record for this exact scope had passed its
+  // `expiresAt` or had never been minted at all — both were the SAME `undefined`. This is the
+  // failing-before case for the read path: `expired()` must report `true` once the TTL has
+  // elapsed, and `false` for a scope that was never minted, even though `current()` returns
+  // `undefined` for both.
+  it("expired() distinguishes a past record from one that was never minted for this scope", () => {
+    const authority = service();
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope: SCOPE,
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      nowIso: NOW,
+      ttlMs: 1_000,
+    });
+    const port = authority.gitDeliveryDescriptionAuthorityPort();
+    const laterIso = "2026-07-11T12:00:01.500Z";
+    expect(port.current(SCOPE, laterIso)).toBeUndefined();
+    expect(port.expired?.(SCOPE, laterIso)).toBe(true);
+    const neverMinted = { ...SCOPE, snapshotDigest: "f".repeat(64) };
+    expect(port.current(neverMinted, laterIso)).toBeUndefined();
+    expect(port.expired?.(neverMinted, laterIso)).toBe(false);
+  });
+
+  // Review repair (final-audit F1): `mintGitDeliveryDescriptionAuthority` used to sweep every
+  // expired entry out of the map on EVERY mint, for any scope. That meant a wholly unrelated mint
+  // for scope B, happening after scope A's record had passed its `expiresAt`, silently erased
+  // scope A's record before anyone asked `expired()` about it — collapsing "A had an authority
+  // that expired" back into the indistinguishable "A was never minted" case the whole audit item
+  // exists to fix. This is the failing-before case for that erasure: `expired(A)` must still
+  // report `true` after an intervening, unrelated mint for scope B.
+  it("keeps reporting authority-expired for a scope after an unrelated scope is minted", () => {
+    const authority = service();
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope: SCOPE,
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      nowIso: NOW,
+      ttlMs: 1_000,
+    });
+    const port = authority.gitDeliveryDescriptionAuthorityPort();
+    const laterIso = "2026-07-11T12:00:01.500Z";
+    expect(port.expired?.(SCOPE, laterIso)).toBe(true);
+
+    const unrelatedScope = { ...SCOPE, snapshotDigest: "c".repeat(64) };
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope: unrelatedScope,
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      nowIso: laterIso,
+      ttlMs: 1_000,
+    });
+
+    expect(port.expired?.(SCOPE, laterIso)).toBe(true);
+  });
+
+  it("revokes the record explicitly on a scope change or stale re-check the caller detected", () => {
+    const authority = service();
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope: SCOPE,
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      nowIso: NOW,
+    });
+    authority.revokeGitDeliveryDescriptionAuthority(SCOPE);
+    expect(authority.gitDeliveryDescriptionAuthorityPort().current(SCOPE, NOW)).toBeUndefined();
+  });
+
+  it("re-minting the same scope replaces the prior grant rather than accumulating records", () => {
+    const authority = service();
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope: SCOPE,
+      requestedMode: "autonomous-delivery",
+      deploymentCeiling: "autonomous-delivery",
+      nowIso: NOW,
+    });
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope: SCOPE,
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      nowIso: NOW,
+    });
+    expect(authority.gitDeliveryDescriptionAuthorityPort().current(SCOPE, NOW)?.effectiveMode).toBe(
+      "governed-assist",
+    );
+  });
+});
+
+// B3-1 / authority-matrix-1: Ask for approval (governed-assist) must mint an approval-required
+// command policy, not a hard "deny" -- ADR-0138 D2's workspace-contained row is approval-required,
+// never denied, at every mode. Regression: before the fix, codingRuntimeCommandPolicyForMode
+// hardcoded mode:"deny" for governed-assist and codingRuntimeActionClassesForMode excluded
+// "command-execution" from its envelope, so no approval proof could ever unlock a command.
+describe("codingRuntimeCommandPolicyForMode / codingRuntimeActionClassesForMode", () => {
+  it("mints an approval-required, never a hard-denied, command policy for every product mode", () => {
+    expect(codingRuntimeCommandPolicyForMode("governed-assist")).toMatchObject({
+      mode: "governed",
+      requirePerCommandApproval: true,
+    });
+    expect(codingRuntimeCommandPolicyForMode("supervised-coding")).toMatchObject({
+      mode: "governed",
+      requirePerCommandApproval: true,
+    });
+    expect(codingRuntimeCommandPolicyForMode("autonomous-delivery")).toMatchObject({
+      mode: "governed",
+      requirePerCommandApproval: false,
+    });
+  });
+
+  it("includes command-execution in governed-assist's action classes so an approved command is not double-denied", () => {
+    expect(codingRuntimeActionClassesForMode("governed-assist", undefined)).toContain(
+      "command-execution",
+    );
+    expect(codingRuntimeActionClassesForMode("supervised-coding", undefined)).toContain(
+      "command-execution",
+    );
+    expect(codingRuntimeActionClassesForMode("autonomous-delivery", undefined)).toContain(
+      "command-execution",
+    );
+  });
+});
+
+// B3-2 / authority-matrix-2: the authority-level connector scopes follow deliveryScopeGranted at
+// every mode (codingRuntimeConnectorScopesForMode), but the envelope contract
+// (validateNetworkPolicyConnectorScopesConsistency) forbids scopes on a deny-all network policy.
+// A deny-all mint therefore carries none; the policies that admit egress carry the delivery scopes.
+describe("codingRuntimeNetworkPolicyForMode", () => {
+  it("carries the delivery connector scopes only on policies that admit egress", () => {
+    expect(codingRuntimeNetworkPolicyForMode("governed-assist", undefined).connectorScopes).toEqual(
+      [],
+    );
+    expect(
+      codingRuntimeNetworkPolicyForMode("supervised-coding", undefined).connectorScopes,
+    ).toEqual([]);
+    expect(codingRuntimeNetworkPolicyForMode("governed-assist", true).connectorScopes).toEqual(
+      codingRuntimeConnectorScopesForMode("governed-assist"),
+    );
+    expect(codingRuntimeNetworkPolicyForMode("governed-assist", true).connectorScopes).toEqual([
+      "source-control.read",
+      "source-control.write",
+    ]);
+    expect(
+      codingRuntimeNetworkPolicyForMode("autonomous-delivery", undefined).connectorScopes,
+    ).toEqual(["source-control.read", "source-control.write"]);
+  });
+
+  it("still keeps deny-all/governed-egress mode gating unchanged by the scope population", () => {
+    expect(codingRuntimeNetworkPolicyForMode("governed-assist", undefined).mode).toBe("deny-all");
+    expect(codingRuntimeNetworkPolicyForMode("governed-assist", true).mode).toBe("governed-egress");
+    expect(codingRuntimeNetworkPolicyForMode("autonomous-delivery", undefined).mode).toBe(
+      "connector-scoped-egress",
+    );
+  });
+});
+
+// B1-3: a run's git-delivery authority is minted before any PR necessarily exists. Once the run's
+// PR is published, bindPublishedPullRequest lets the caller that learns of it attach that identity
+// so downstream admission (prDescriptionRoutes.ts's admitDescriptionModelEgress) can compare a
+// request's PR identity against the run's actual scope instead of admitting any PR in the project.
+describe("CodingRuntimeAuthorityService.bindPublishedPullRequest", () => {
+  it("binds the pull request identity onto the active run's projected Git-delivery authority", () => {
+    const authority = service();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+
+    expect(
+      authority.bindPublishedPullRequest(minted.authorityRef.runId, {
+        ownerAndRepo: "acme/widgets",
+        prNumber: 42,
+      }),
+    ).toBe(true);
+    expect(authority.gitDeliveryAuthorityPort().current(NOW)).toMatchObject({
+      pullRequest: { ownerAndRepo: "acme/widgets", prNumber: 42 },
+    });
+  });
+
+  it("refuses to bind onto a run that is not the currently active one", () => {
+    const authority = service();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+
+    expect(
+      authority.bindPublishedPullRequest("some-other-run", {
+        ownerAndRepo: "acme/widgets",
+        prNumber: 42,
+      }),
+    ).toBe(false);
+    expect(authority.gitDeliveryAuthorityPort().current(NOW)).not.toMatchObject({
+      pullRequest: { ownerAndRepo: "acme/widgets", prNumber: 42 },
+    });
+  });
+
+  it("refuses to bind when no run is active", () => {
+    const authority = service();
+    expect(
+      authority.bindPublishedPullRequest("run-1", { ownerAndRepo: "acme/widgets", prNumber: 42 }),
+    ).toBe(false);
+  });
 });

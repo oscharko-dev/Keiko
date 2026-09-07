@@ -87,6 +87,9 @@ const REDACTED_SECRET_TOKEN = "redacted-credential";
 // out on purpose.
 export const APPROVED_EVIDENCE_SEGMENTS = new Set<string>([
   "approval",
+  // Runtime Git stage labels carry only a closed operation name and decimal proposal id.
+  "stage",
+  "git",
   "accepted",
   "artifact",
   "assisted",
@@ -117,6 +120,11 @@ export const APPROVED_EVIDENCE_SEGMENTS = new Set<string>([
   "browser",
   "busy",
   "chatgpt",
+  // 3941816393: the `ci-observe` supervised-action-kind label splits into ["ci", "observe"];
+  // neither segment can compose into a secret, URL, path, or command fragment, and the label
+  // still passes every detector in `isCodingWorkbenchEvidenceSafeText` regardless of approval.
+  "ci",
+  "observe",
   "cli",
   "codex",
   "coding",
@@ -269,6 +277,13 @@ export const APPROVED_EVIDENCE_SEGMENTS = new Set<string>([
 //      recreate the exact "looks approved, can never actually pass" trap this finding exists to
 //      remove — just relocated instead of eliminated.
 export const APPROVED_EVIDENCE_LITERALS = new Set<string>([
+  // #3388: fixed CI artifact kind and closed state labels contain no provider content.
+  "ci-readiness",
+  "ci-readiness-technical-ready",
+  "ci-readiness-pending",
+  "ci-readiness-failed",
+  "ci-readiness-blocked",
+  "ci-readiness-unknown",
   "runtime-state",
   "codex-cli-adapter",
   "codex-login",

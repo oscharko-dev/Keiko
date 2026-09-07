@@ -21,7 +21,7 @@ interface StateOpts {
 }
 
 function runState(
-  framework: "vitest" | "unknown",
+  framework: "vitest" | "node-test" | "unknown",
   opts: StateOpts = {},
 ): {
   state: BugRunState;
@@ -37,7 +37,9 @@ function runState(
         })
       : JSON.stringify({
           name: "d",
-          ...(opts.withTestScript === true ? { scripts: { test: "node test.js" } } : {}),
+          ...(opts.withTestScript === true
+            ? { scripts: { test: framework === "node-test" ? "node --test" : "node test.js" } }
+            : {}),
         });
   const fs = memFs(ROOT, { "package.json": pkg, ...(opts.files ?? {}) });
   const workspace = detectWorkspace(ROOT, fs);
@@ -127,5 +129,21 @@ describe("runBugVerification (D11)", () => {
     expect(out.summary?.overallStatus).toBe("passed");
     expect(spawn.calls()[0]?.command).toContain("npx");
     expect(spawn.calls()[0]?.args).toEqual(["vitest", "run", "tests/buggy.test.ts"]);
+  });
+
+  it("runs a changed Node native regression file through the shared targeted planner", async () => {
+    const spawn = recordingSpawn();
+    const { state, workspace, fs } = runState("node-test", {
+      withTestScript: true,
+      files: { "test/buggy.test.js": "export {};\n" },
+      spawn: spawn.fn,
+    });
+    scriptChildClose(spawn.child, { stdout: "1 passed", exitCode: 0 });
+
+    const out = await runBugVerification(state, workspace, [changed("test/buggy.test.js")], fs);
+
+    expect(out.summary?.overallStatus).toBe("passed");
+    expect(spawn.calls()[0]?.command).toMatch(/(?:^|\/)node$/u);
+    expect(spawn.calls()[0]?.args).toEqual(["--test", "test/buggy.test.js"]);
   });
 });

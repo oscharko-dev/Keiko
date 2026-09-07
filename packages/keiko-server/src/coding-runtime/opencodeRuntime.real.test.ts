@@ -39,9 +39,14 @@ import { createRunRegistry } from "../runs.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
-import type { CodingToolResult } from "./codingToolIpc.js";
-import { createOpenCodeRuntimeComposition } from "./opencodeRuntimeComposition.js";
-import { hasExactOpenCodeVisibleToolContract } from "./opencodeToolSchemas.js";
+import { CODING_TOOL_MAX_BODY_BYTES, type CodingToolResult } from "./codingToolIpc.js";
+import {
+  createOpenCodeRuntimeComposition,
+  incomingHeaders,
+  readBoundedBody,
+  type OpenCodeToolBridge,
+} from "./opencodeRuntimeComposition.js";
+import { createOpenCodeGatewayToolCatalogAdvertisement } from "./opencodeToolSchemas.js";
 import {
   createRuntimeProcessSupervisor,
   type RuntimeProcessBackend,
@@ -370,7 +375,7 @@ function realPortableRuntime(testRoot: string): {
   return { resourceRoot, verification, target: platform.target };
 }
 
-function gatewayConfig(): GatewayConfig {
+function gatewayConfig(contextWindow = 128_000): GatewayConfig {
   const provider = {
     modelId: "functional-coding-model",
     baseUrl: "https://provider.invalid/v1",
@@ -389,7 +394,7 @@ function gatewayConfig(): GatewayConfig {
       {
         id: "functional-coding-model",
         kind: "chat",
-        contextWindow: 128_000,
+        contextWindow,
         maxOutputTokens: 4_096,
         toolCalling: true,
         toolCallingVerification: {
@@ -455,12 +460,25 @@ function scriptedProductiveResponse(): ProductiveResponseControl {
       releaseResponse?.();
       releaseResponse = undefined;
     },
-    script: (_request, callIndex): Promise<NormalizedResponse> => {
-      if (callIndex === 0)
-        return Promise.resolve(
-          toolResponse("call-read", "keiko_workspace_read", { relativePath: "src/example.ts" }),
-        );
-      if (callIndex === 1)
+    script: (request): Promise<NormalizedResponse> => {
+      if (requestContainsText(request, "Continue after the prepared change.")) {
+        return new Promise<NormalizedResponse>((resolve) => {
+          held = true;
+          const settle = (): void => {
+            request.cancellationSignal?.removeEventListener("abort", settle);
+            resolve({ ...normalResponse(), content: "Cancelled turn settled." });
+          };
+          request.cancellationSignal?.addEventListener("abort", settle, { once: true });
+          releaseResponse = settle;
+        });
+      }
+      if (requestContainsToolCall(request, "keiko_changeset_edit")) {
+        return Promise.resolve({ ...normalResponse(), content: "Completed." });
+      }
+      if (requestContainsToolCall(request, "question")) {
+        return Promise.resolve(toolResponse("call-edit", "keiko_changeset_edit", { changeset }));
+      }
+      if (requestContainsToolCall(request, "keiko_workspace_read")) {
         return Promise.resolve(
           toolResponse("call-question", "question", {
             questions: [
@@ -472,22 +490,35 @@ function scriptedProductiveResponse(): ProductiveResponseControl {
             ],
           }),
         );
-      if (callIndex === 2)
-        return Promise.resolve(toolResponse("call-edit", "keiko_changeset_edit", { changeset }));
-      if (callIndex === 3) return Promise.resolve({ ...normalResponse(), content: "Completed." });
-      return new Promise<NormalizedResponse>((resolve) => {
-        held = true;
-        releaseResponse = (): void => {
-          resolve({ ...normalResponse(), content: "Cancelled turn settled." });
-        };
-      });
+      }
+      if (!requestContainsTitleGeneration(request)) {
+        return Promise.resolve(
+          toolResponse("call-read", "keiko_workspace_read", { relativePath: "src/example.ts" }),
+        );
+      }
+      return Promise.resolve({ ...normalResponse(), content: "Prepared change" });
     },
   };
+}
+
+function requestContainsText(request: GatewayRequest, text: string): boolean {
+  return request.messages.some((message) => message.content.includes(text));
+}
+
+function requestContainsTitleGeneration(request: GatewayRequest): boolean {
+  return request.messages.some((message) =>
+    message.content.startsWith("Generate a title for this conversation:"),
+  );
+}
+
+function requestContainsToolCall(request: GatewayRequest, name: string): boolean {
+  return request.messages.some((message) => message.toolCalls?.some((call) => call.name === name));
 }
 
 async function createGatewayHarness(
   script: GatewayResponseScript = (): Promise<NormalizedResponse> =>
     Promise.resolve(normalResponse()),
+  config = gatewayConfig(),
 ): Promise<GatewayHarness> {
   const readiness = createOpenCodeGatewayReadinessRegistry();
   const requests: GatewayRequest[] = [];
@@ -498,7 +529,6 @@ async function createGatewayHarness(
   const responses: string[] = [];
   const summaries: string[] = [];
   const terminalFrames: string[] = [];
-  const config = gatewayConfig();
   const deps = {
     config,
     configPresent: true,
@@ -530,6 +560,9 @@ async function createGatewayHarness(
           requests.push(request);
           const callIndex = providerCalls;
           providerCalls += 1;
+          // Establish the same streaming response lifecycle a real provider does before a
+          // scripted final response is deliberately held for the native abort proof.
+          yield { type: "delta", token: "" };
           yield { type: "done", response: await script(request, callIndex) };
         },
       }),
@@ -577,6 +610,67 @@ async function createGatewayHarness(
     terminalFrames: (): readonly string[] => terminalFrames,
     responseFinishes: (): number => responseFinishes,
     responseCloses: (): number => responseCloses,
+    close: (): Promise<void> =>
+      new Promise((resolveClose, rejectClose) => {
+        server.close((error) => {
+          if (error === undefined) resolveClose();
+          else rejectClose(error);
+        });
+      }),
+  };
+}
+
+interface ToolFacadeHarness {
+  readonly endpoint: string;
+  /** Binds the composition's real bridge once `createOpenCodeRuntimeComposition` has returned it
+   * -- the harness must bind and listen on a port BEFORE the composition exists, so requests that
+   * arrive before `bind` is called are refused 503, the same "no run active" shape `handle()`
+   * itself returns before a run starts. */
+  bind(handle: OpenCodeToolBridge["handle"]): void;
+  close(): Promise<void>;
+}
+
+/**
+ * ADR-0043 D11-D14 (#3390): production never opens a second loopback listener for the tool
+ * facade -- the sandboxed sidecar reaches it through the BFF's `/api/coding-sidecar/tool` route,
+ * which dispatches directly to the run's bridge (`OpenCodeToolBridge.handle`). This real-binary
+ * suite spawns an ACTUAL OpenCode child that only speaks HTTP, so it needs a real socket to POST
+ * to; unlike production it owns that socket itself (mirroring `createGatewayHarness` above for
+ * the model gateway) instead of routing through the full BFF route stack, and wraps the SAME
+ * `handle` the production route calls -- never a second facade implementation.
+ */
+async function createToolFacadeHarness(): Promise<ToolFacadeHarness> {
+  let handle: OpenCodeToolBridge["handle"] | undefined;
+  const server = createServer((req, res) => {
+    void (async (): Promise<void> => {
+      if (handle === undefined) {
+        res.writeHead(503).end();
+        return;
+      }
+      // Reuses the SAME byte-budget-bounded body reader `handle()`'s own retired listener used
+      // (see opencodeRuntimeComposition.ts's comment on `readBoundedBody`) -- never a second body
+      // reader for this one still-allowed real HTTP endpoint around `handle`.
+      const body = await readBoundedBody(req, new AbortController().signal);
+      const result = await handle({
+        method: "POST",
+        headers: incomingHeaders(req.headers),
+        body: body.toString("utf8"),
+      });
+      res.writeHead(result.status, { "Content-Type": "application/json" }).end(result.body);
+    })();
+  });
+  await new Promise<void>((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    server.listen(0, "127.0.0.1", resolveListen);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string")
+    throw new Error("functional-tool-facade-bind-failed");
+  return {
+    endpoint: `http://127.0.0.1:${String(address.port)}/api/coding-sidecar/tool`,
+    bind: (boundHandle): void => {
+      handle = boundHandle;
+    },
     close: (): Promise<void> =>
       new Promise((resolveClose, rejectClose) => {
         server.close((error) => {
@@ -747,7 +841,10 @@ function functionalToolFacade(ledger: string[], statuses: string[]): CodingToolF
   };
 }
 
-function statusCapturingFetch(statuses: string[]): typeof globalThis.fetch {
+function statusCapturingFetch(
+  statuses: string[],
+  histories: string[] = [],
+): typeof globalThis.fetch {
   return async (input, init): Promise<Response> => {
     const response = await globalThis.fetch(input, init);
     const url =
@@ -758,8 +855,29 @@ function statusCapturingFetch(statuses: string[]): typeof globalThis.fetch {
           : new URL(input.url);
     if (url.pathname === "/session/status")
       statuses.push(await sessionStatusSummary(response.clone()));
+    if (url.pathname === "/sync/history")
+      histories.push(await historyEventSummary(response.clone()));
     return response;
   };
+}
+
+async function historyEventSummary(response: Response): Promise<string> {
+  try {
+    const value: unknown = await response.json();
+    if (!Array.isArray(value)) return "history=invalid";
+    return value
+      .map((entry) => {
+        if (!isRecord(entry) || !isRecord(entry.data)) return "invalid";
+        const part = isRecord(entry.data.part) ? entry.data.part : undefined;
+        const state = part !== undefined && isRecord(part.state) ? part.state : undefined;
+        return [entry.type, part?.type, part?.tool, state?.status]
+          .filter((field): field is string => typeof field === "string")
+          .join(":");
+      })
+      .join("|");
+  } catch {
+    return "history=unavailable";
+  }
 }
 
 async function sessionStatusSummary(response: Response): Promise<string> {
@@ -807,6 +925,18 @@ function runtimeDatabaseProjection(databasePath: string): string {
   }
 }
 
+function runtimeDatabasePartTypes(databasePath: string): readonly string[] {
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const rows = database
+      .prepare("SELECT DISTINCT json_extract(data, '$.type') AS type FROM part ORDER BY type")
+      .all() as readonly Record<string, unknown>[];
+    return rows.flatMap((row) => (typeof row.type === "string" ? [row.type] : []));
+  } finally {
+    database.close();
+  }
+}
+
 function runtimeDatabaseMessageSummary(row: Readonly<Record<string, unknown>>): string {
   return `role=${runtimeDatabaseScalar(row.role)}:finish=${runtimeDatabaseScalar(row.finish)}:error=${runtimeDatabaseScalar(row.error_name)}`;
 }
@@ -845,7 +975,277 @@ async function waitForQuestions(
   return [];
 }
 
+interface NativeCompactionState {
+  rounds: number;
+  roundsInTurn: number;
+  readonly assistantContentChars: number;
+  readonly turnSize: number;
+  readonly compactionMessageCounts: number[];
+  readonly recoveryMessageCounts: number[];
+}
+
+function batchedReadResponse(round: number, assistantContentChars: number): NormalizedResponse {
+  return {
+    ...normalResponse(),
+    content: "x".repeat(assistantContentChars),
+    finishReason: "tool_calls",
+    toolCalls: [
+      {
+        id: `call-${String(round)}`,
+        name: "keiko_workspace_read",
+        arguments: { relativePath: `src/fixture-${String(round)}.ts` },
+      },
+    ],
+  };
+}
+
+function nativeCompactionResponseScript(state: NativeCompactionState): GatewayResponseScript {
+  return (request): Promise<NormalizedResponse> => {
+    if (requestContainsTitleGeneration(request)) {
+      return Promise.resolve({ ...normalResponse(), content: "Compaction proof" });
+    }
+    if (request.toolCatalog === undefined) {
+      state.compactionMessageCounts.push(request.messages.length);
+      return Promise.resolve({ ...normalResponse(), content: "Retained verified task state." });
+    }
+    if (state.compactionMessageCounts.length > 0) {
+      state.recoveryMessageCounts.push(request.messages.length);
+      return Promise.resolve({ ...normalResponse(), content: "Recovered after compaction." });
+    }
+    state.rounds += 1;
+    state.roundsInTurn += 1;
+    if (state.roundsInTurn === state.turnSize) {
+      state.roundsInTurn = 0;
+      return Promise.resolve({ ...normalResponse(), content: "Turn checkpoint complete." });
+    }
+    return Promise.resolve(batchedReadResponse(state.rounds, state.assistantContentChars));
+  };
+}
+
+interface NativeCompactionHarness {
+  readonly root: string;
+  readonly runRoot: string;
+  readonly runtime: ReturnType<typeof createOpenCodeRuntimeComposition>;
+  readonly gateway: GatewayHarness;
+  readonly toolFacade: ToolFacadeHarness;
+  readonly backend: DirectChildRuntimeBackend;
+  readonly productiveActions: string[];
+}
+
+interface NativeContextGeometry {
+  readonly contextWindowTokens: number;
+  readonly maxInputTokens: number;
+  readonly maxOutputTokens: number;
+}
+
+const DEFAULT_NATIVE_CONTEXT_GEOMETRY: NativeContextGeometry = {
+  contextWindowTokens: 65_536,
+  maxInputTokens: 61_440,
+  maxOutputTokens: 4_096,
+};
+
+async function createNativeCompactionHarness(
+  script: GatewayResponseScript,
+  contextGeometry: NativeContextGeometry = DEFAULT_NATIVE_CONTEXT_GEOMETRY,
+): Promise<NativeCompactionHarness> {
+  const root = mkdtempSync(join(tmpdir(), "keiko-opencode-compaction-"));
+  const workspaceRoot = join(root, "workspace");
+  const stateBaseRoot = join(root, "state");
+  mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 });
+  const portable = realPortableRuntime(root);
+  const gateway = await createGatewayHarness(
+    script,
+    gatewayConfig(contextGeometry.contextWindowTokens),
+  );
+  const toolFacade = await createToolFacadeHarness();
+  const productiveActions: string[] = [];
+  const backend = new DirectChildRuntimeBackend(functionalPlatform().qualification);
+  const runtime = createOpenCodeRuntimeComposition({
+    portable,
+    stateBaseRoot,
+    contextGeometry,
+    capabilities: {
+      modelGatewayCapability: MODEL_CAPABILITY,
+      toolFacadeCapability: TOOL_CAPABILITY,
+    },
+    toolFacadeOrigin: toolFacade.endpoint,
+    toolFacade: functionalToolFacade(productiveActions, []),
+    governedEventSink: { execute: () => Promise.resolve("applied") },
+    gatewayReadiness: gateway.readiness,
+    fetch: globalThis.fetch,
+    supervisor: createRuntimeProcessSupervisor({
+      backend,
+      qualifications: [functionalPlatform().qualification],
+    }),
+    authorityLifecycle: {
+      revokeRuntime: () => true,
+      abortInFlightActions: () => true,
+      markRuntimeRecoveryRequired: () => true,
+      releaseRuntimeAfterReap: () => true,
+    },
+  });
+  toolFacade.bind((request) => runtime.toolBridge.handle(request));
+  return {
+    root,
+    runRoot: join(stateBaseRoot, RUN_ID),
+    runtime,
+    gateway,
+    toolFacade,
+    backend,
+    productiveActions,
+  };
+}
+
+async function startNativeCompactionHarness(harness: NativeCompactionHarness): Promise<void> {
+  const started = await harness.runtime.manager.start({
+    runId: RUN_ID,
+    treeBindingId: TREE_BINDING_ID,
+    taskRef: "issue-3384-message-limit",
+    workspaceRoot: join(harness.root, "workspace"),
+    adapterKind: "opencode-compatible",
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+    requestedMode: "supervised-coding",
+    effectiveMode: "supervised-coding",
+    executablePath: join(harness.root, "portable-resource/payload/bin/opencode"),
+    managedRoot: join(harness.root, "portable-resource/payload"),
+    gatewayUrl: harness.gateway.endpoint,
+    modelProfileId: "coding-safe-openai-compatible",
+    args: [],
+    inheritedEnvAllowlist: [],
+    shutdownTimeoutMs: 5_000,
+    startTimeoutMs: 20_000,
+    confinement: functionalPlatform().qualification,
+  });
+  if (!started.ok) {
+    throw new Error(
+      `native-compaction-start-failed:${started.failureCode}:${harness.backend.redactedStderr()}`,
+    );
+  }
+}
+
+async function closeNativeCompactionHarness(harness: NativeCompactionHarness): Promise<void> {
+  await harness.runtime.manager.stop(RUN_ID);
+  await harness.gateway.close();
+  await harness.toolFacade.close();
+  rmSync(harness.root, { recursive: true, force: true });
+}
+
+function requestMessageCount(summary: string): number | undefined {
+  const value = /:messages=(\d+):/u.exec(summary)?.[1];
+  return value === undefined ? undefined : Number(value);
+}
+
 describe("[functional-only] real staged OpenCode runtime", () => {
+  it.skipIf(!FUNCTIONAL_ENABLED)(
+    "decodes a 513-message overflow, compacts natively, and completes the retry",
+    async () => {
+      const state: NativeCompactionState = {
+        rounds: 0,
+        roundsInTurn: 0,
+        assistantContentChars: 0,
+        turnSize: 100,
+        compactionMessageCounts: [],
+        recoveryMessageCounts: [],
+      };
+      const harness = await createNativeCompactionHarness(nativeCompactionResponseScript(state));
+      try {
+        await startNativeCompactionHarness(harness);
+        const terminals: boolean[] = [];
+        for (let turn = 1; turn <= 3; turn += 1) {
+          await expect(
+            harness.runtime.runPort.submitTask(
+              RUN_ID,
+              `Exercise bounded native compaction turn ${String(turn)}.`,
+            ),
+          ).resolves.toBe(true);
+          terminals.push(
+            await harness.runtime.runPort.waitForTerminal(RUN_ID, AbortSignal.timeout(60_000)),
+          );
+        }
+
+        const messageCounts = harness.gateway.summaries().flatMap((summary) => {
+          const count = requestMessageCount(summary);
+          return count === undefined ? [] : [count];
+        });
+        expect(
+          terminals,
+          `state=${JSON.stringify(state)}:max-messages=${String(Math.max(...messageCounts))}:http-400=${String(harness.gateway.responses().filter((response) => response.endsWith(" 400")).length)}`,
+        ).toEqual([true, true, true]);
+        expect(
+          messageCounts.includes(513),
+          `rounds=${String(state.rounds)}:max-messages=${String(Math.max(...messageCounts))}`,
+        ).toBe(true);
+        expect(harness.gateway.responses().some((response) => response.endsWith(" 400"))).toBe(
+          true,
+        );
+        expect(state.compactionMessageCounts).toHaveLength(1);
+        expect(state.compactionMessageCounts[0]).toBeLessThanOrEqual(512);
+        expect(state.recoveryMessageCounts).toHaveLength(1);
+        expect(state.recoveryMessageCounts[0]).toBeLessThanOrEqual(512);
+        expect(state.rounds).toBeGreaterThan(1);
+        expect(harness.productiveActions.length).toBeGreaterThan(0);
+        expect(runtimeDatabasePartTypes(join(harness.runRoot, "state", "opencode.db"))).toContain(
+          "compaction",
+        );
+      } finally {
+        await closeNativeCompactionHarness(harness);
+      }
+    },
+    120_000,
+  );
+
+  it.skipIf(!FUNCTIONAL_ENABLED)(
+    "stops when one native compaction cannot reduce an uncompactable long turn",
+    async () => {
+      const state: NativeCompactionState = {
+        rounds: 0,
+        roundsInTurn: 0,
+        assistantContentChars: 0,
+        turnSize: Number.MAX_SAFE_INTEGER,
+        compactionMessageCounts: [],
+        recoveryMessageCounts: [],
+      };
+      const harness = await createNativeCompactionHarness(nativeCompactionResponseScript(state), {
+        contextWindowTokens: 16_000,
+        maxInputTokens: 12_000,
+        maxOutputTokens: 4_000,
+      });
+      try {
+        await startNativeCompactionHarness(harness);
+        await expect(
+          harness.runtime.runPort.submitTask(
+            RUN_ID,
+            `Exercise bounded uncompactable history.${"x".repeat(60_000)}`,
+          ),
+        ).resolves.toBe(true);
+        const terminal = await harness.runtime.runPort.waitForTerminal(
+          RUN_ID,
+          AbortSignal.timeout(60_000),
+        );
+
+        const messageCounts = harness.gateway.summaries().flatMap((summary) => {
+          const count = requestMessageCount(summary);
+          return count === undefined ? [] : [count];
+        });
+        expect(Math.max(...messageCounts)).toBeLessThanOrEqual(512);
+        expect(
+          harness.gateway.responses().filter((response) => response.endsWith(" 400")),
+        ).toHaveLength(3);
+        expect(state.compactionMessageCounts).toEqual([3]);
+        expect(state.recoveryMessageCounts).toEqual([]);
+        expect(state.rounds).toBe(0);
+        const databasePath = join(harness.runRoot, "state", "opencode.db");
+        expect(runtimeDatabasePartTypes(databasePath)).toContain("compaction");
+        expect(runtimeDatabaseProjection(databasePath)).toContain("ContextOverflowError");
+        expect(terminal).toBe(false);
+      } finally {
+        await closeNativeCompactionHarness(harness);
+      }
+    },
+    120_000,
+  );
+
   it.skipIf(!FUNCTIONAL_ENABLED)(
     "starts and reaps the explicit staged v1.17.17 binary without native qualification claims",
     // eslint-disable-next-line complexity -- the real question and abort lifecycle keeps all gates visible.
@@ -860,9 +1260,11 @@ describe("[functional-only] real staged OpenCode runtime", () => {
       const portable = realPortableRuntime(root);
       const responseControl = scriptedProductiveResponse();
       const gateway = await createGatewayHarness(responseControl.script);
+      const toolFacade = await createToolFacadeHarness();
       const productiveActions: string[] = [];
       const toolStatuses: string[] = [];
       const sessionStatuses: string[] = [];
+      const historyEvents: string[] = [];
       const governedIdentityKeys = new Set<string>();
       let duplicateGovernedEffects = 0;
       const backend = new DirectChildRuntimeBackend(functionalPlatform().qualification);
@@ -874,10 +1276,16 @@ describe("[functional-only] real staged OpenCode runtime", () => {
       const runtime = createOpenCodeRuntimeComposition({
         portable,
         stateBaseRoot,
+        contextGeometry: {
+          contextWindowTokens: 65_536,
+          maxInputTokens: 61_440,
+          maxOutputTokens: 4_096,
+        },
         capabilities: {
           modelGatewayCapability: MODEL_CAPABILITY,
           toolFacadeCapability: TOOL_CAPABILITY,
         },
+        toolFacadeOrigin: toolFacade.endpoint,
         toolFacade: functionalToolFacade(productiveActions, toolStatuses),
         governedEventSink: {
           execute: (identityKey): Promise<"applied"> => {
@@ -887,7 +1295,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
           },
         },
         gatewayReadiness: gateway.readiness,
-        fetch: statusCapturingFetch(sessionStatuses),
+        fetch: statusCapturingFetch(sessionStatuses, historyEvents),
         supervisor,
         authorityLifecycle: {
           revokeRuntime: () => true,
@@ -896,6 +1304,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
           releaseRuntimeAfterReap: () => true,
         },
       });
+      toolFacade.bind((request) => runtime.toolBridge.handle(request));
       const runRoot = join(stateBaseRoot, RUN_ID);
       try {
         const started = await Promise.resolve(
@@ -928,10 +1337,16 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         });
         if (!started.ok) {
           throw new Error(
-            `functional-opencode-start-failed:${started.failureCode}:gateway-calls=${String(gateway.calls())}:gateway-responses=${gateway.responses().join(",")}:gateway-summaries=${gateway.summaries().join(",")}:tool-statuses=${toolStatuses.join(",")}:stderr=${backend.redactedStderr()}`,
+            `functional-opencode-start-failed:${started.failureCode}:gateway-calls=${String(gateway.calls())}:gateway-responses=${gateway.responses().join(",")}:gateway-summaries=${gateway.summaries().join(",")}:tool-statuses=${toolStatuses.join(",")}:history-events=${historyEvents.join(",")}:stderr=${backend.redactedStderr()}`,
           );
         }
         expect(started).toMatchObject({ runId: RUN_ID, status: "ready" });
+        const nativeAcceptedConfig = JSON.parse(
+          readFileSync(join(runRoot, "config", "opencode", "opencode.json"), "utf8"),
+        ) as { readonly tool_output?: { readonly max_bytes?: number } };
+        expect(nativeAcceptedConfig.tool_output).toEqual({
+          max_bytes: CODING_TOOL_MAX_BODY_BYTES,
+        });
         expect(gateway.calls()).toBeGreaterThan(0);
         expect(productiveActions).toEqual([]);
         expect(runtime.manager.health()).toEqual({ status: "ready", activeRunId: RUN_ID });
@@ -959,10 +1374,18 @@ describe("[functional-only] real staged OpenCode runtime", () => {
             `functional-opencode-terminal-missing:terminal=${String(terminal)}:pending-after-answer=${String(pendingAfterAnswer)}:pending-after-final=${String(pendingAfterFinal)}:actions=${productiveActions.join(",")}:tool-statuses=${toolStatuses.join(",")}:gateway-requests=${String(gateway.requests.length)}:session-statuses=${sessionStatuses.join(",")}:stderr=${backend.redactedStderr()}:${runtimeDatabaseProjection(join(runRoot, "state", "opencode.db"))}`,
           );
         }
-        expect(productiveActions).toEqual(["read", "edit"]);
+        expect(productiveActions, gateway.summaries().join("|")).toEqual(["read", "edit"]);
         expect(gateway.requests).toHaveLength(4);
+        const expectedProjection = createOpenCodeGatewayToolCatalogAdvertisement(
+          Date.parse("2026-09-05T00:00:00.000Z"),
+        ).projection;
         expect(
-          gateway.requests.every((request) => hasExactOpenCodeVisibleToolContract(request.tools)),
+          gateway.requests.every(
+            (request) =>
+              request.toolCatalog?.kind === "bound" &&
+              request.toolCatalog.projection.projectionDigest ===
+                expectedProjection.projectionDigest,
+          ),
         ).toBe(true);
         expect(gateway.calls() - gateway.requests.length).toBe(1);
         expect(duplicateGovernedEffects).toBe(0);
@@ -973,10 +1396,6 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         const statusSampleOffset = sessionStatuses.length;
         const secondAccepted = await runtime.runPort.submitTask(RUN_ID, secondPrompt);
         expect(secondAccepted).toBe(true);
-        const abortedTerminal = runtime.runPort.waitForTerminal(
-          RUN_ID,
-          AbortSignal.timeout(20_000),
-        );
         const heldWaitStarted = Date.now();
         const held = await waitForCondition(responseControl.held, AbortSignal.timeout(5_000));
         const heldArrivalLatencyMs = Date.now() - heldWaitStarted;
@@ -985,22 +1404,25 @@ describe("[functional-only] real staged OpenCode runtime", () => {
             `functional-opencode-second-turn-dispatch-missing:accepted=${String(secondAccepted)}:status-before-submit=${statusBeforeSecondSubmit}:arrival-latency-ms=${String(heldArrivalLatencyMs)}:gateway-calls=${String(gateway.calls())}:gateway-requests=${String(gateway.requests.length)}:gateway-summaries=${gateway.summaries().join(",")}:status-after-submit=${sessionStatuses.slice(statusSampleOffset).join(",")}:manager-health=${runtime.manager.health().status}:stderr=${backend.redactedStderr()}:${runtimeDatabaseProjection(databasePath)}`,
           );
         }
-        // The live idle control may settle the turn before a final status poll samples the
-        // cleared entry, so the last observation is either already empty or the stale busy
-        // sample; the accepted second submit and the fresh busy observation below carry the
-        // actual settled-session proof.
+        // The held model response is direct in-flight evidence: the gateway has accepted the
+        // productive request but has not closed it. `abortTask` below is the only terminal waiter,
+        // avoiding two consumers racing to settle the same native turn.
         expect(["status=", "status=busy"]).toContain(statusBeforeSecondSubmit);
-        await expect(
-          waitForCondition(
-            () => sessionStatuses.some((status) => status.includes("busy")),
-            AbortSignal.timeout(5_000),
-          ),
-        ).resolves.toBe(true);
+        expect(sessionStatuses.slice(statusSampleOffset)).toEqual([]);
+        expect(gateway.responseCloses()).toBeLessThan(gateway.calls());
         expect(gateway.requests).toHaveLength(5);
-        expect(hasExactOpenCodeVisibleToolContract(gateway.requests.at(-1)?.tools)).toBe(true);
-        await expect(runtime.runPort.abortTask(RUN_ID)).resolves.toBe(true);
+        expect(gateway.requests.at(-1)?.toolCatalog?.projection.projectionDigest).toBe(
+          expectedProjection.projectionDigest,
+        );
+        const aborted = await runtime.runPort.abortTask(RUN_ID);
+        expect(
+          aborted,
+          `statuses=${sessionStatuses.join(",")}:gateway=${gateway.summaries().join("|")}`,
+        ).toBe(true);
         responseControl.release();
-        await expect(abortedTerminal).resolves.toBe(true);
+        await expect(
+          runtime.runPort.waitForTerminal(RUN_ID, AbortSignal.timeout(20_000)),
+        ).resolves.toBe(true);
         await expect(
           waitForCondition(
             () => gateway.responseCloses() === gateway.calls(),
@@ -1041,6 +1463,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         responseControl.release();
         await runtime.manager.stop(RUN_ID);
         await gateway.close();
+        await toolFacade.close();
         diagnostic.mockRestore();
         rmSync(root, { recursive: true, force: true });
       }

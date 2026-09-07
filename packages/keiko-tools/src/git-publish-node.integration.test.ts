@@ -18,6 +18,7 @@ import { buildGitDeliveryEvidenceRecord } from "./git-mutation-evidence.js";
 import { GIT_MUTATION_ALLOWED_SUBCOMMANDS } from "./git-mutation-adapter.js";
 import { readGitWorktreeSnapshot } from "./git-worktree-snapshot-node.js";
 import { createNodeGitPublishAdapter } from "./git-publish-node.js";
+import { defaultResolveExecutable, nodeSpawnFn, type SpawnFn } from "./exec.js";
 import {
   GIT_PUBLISH_ALLOWED_SUBCOMMANDS,
   runGitPublish,
@@ -31,6 +32,9 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 let remote: string;
 let work: string;
 let info: WorkspaceInfo;
+let transportError = "";
+let transportArguments: readonly string[] = [];
+const APPROVED_URL = "https://github.com/owner/repository.git";
 
 const GIT_INTEGRATION_TIMEOUT_MS = 20_000;
 
@@ -58,7 +62,7 @@ function workspaceInfo(rootPath: string): WorkspaceInfo {
   };
 }
 
-function publishAdapter(): ReturnType<typeof createNodeGitPublishAdapter> {
+function publishAdapter(beforeSpawn?: () => void): ReturnType<typeof createNodeGitPublishAdapter> {
   // Only PATH is forwarded — deliberately no HOME and no credential, so the governed remote lane
   // falls back to the ephemeral empty home and this suite stays hermetic against a local-filesystem
   // remote. The credential lane itself is pinned by the unit suite in git-publish-node.test.ts,
@@ -67,7 +71,30 @@ function publishAdapter(): ReturnType<typeof createNodeGitPublishAdapter> {
     workspace: info,
     processEnv: { PATH: process.env.PATH ?? "" },
     now: () => Date.now(),
+    verifiedRemoteUrl: APPROVED_URL,
+    // No HTTP credential subprocess runs against the substituted local transport. The separate
+    // credential-protocol suite exercises gh; keep this Git integration independent of its install.
+    resolveExecutable: (command, deps): string =>
+      command === "gh" ? process.execPath : defaultResolveExecutable(command, deps),
+    // Replace only the network transport; retain the actual Git arguments and configuration.
+    spawn: localTransport(beforeSpawn),
   });
+}
+
+function localTransport(beforeSpawn?: () => void): SpawnFn {
+  return (command, args, options) => {
+    transportArguments = [...args];
+    beforeSpawn?.();
+    const child = nodeSpawnFn(
+      command,
+      args.map((arg) => (arg === APPROVED_URL ? remote : arg)),
+      options,
+    );
+    child.stderr?.on("data", (chunk: Buffer) => {
+      transportError += chunk.toString("utf8");
+    });
+    return child;
+  };
 }
 
 // A pack permitting push to the `feat/` namespace within the publish ceiling (blocks force).
@@ -121,6 +148,8 @@ async function governedPush(
 }
 
 beforeEach(() => {
+  transportError = "";
+  transportArguments = [];
   const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-publish-")));
   remote = join(base, "remote.git");
   work = join(base, "work");
@@ -139,6 +168,68 @@ afterEach(() => {
 });
 
 describe("governed remote publish (Node) — AC5", () => {
+  it("installs only the trusted host-scoped HTTPS credential helper after the reset", async () => {
+    const commit = git(work, ["rev-parse", "HEAD"]).trim();
+    expect(
+      (await publishAdapter().publish(pushCommand({ verifiedCommitSha: commit }))).outcome,
+    ).toBe("succeeded");
+    const helper = transportArguments.find((arg) =>
+      arg.startsWith("credential.https://github.com.helper="),
+    );
+    expect(helper).toContain(" auth git-credential");
+    expect(transportArguments.indexOf(helper ?? "")).toBeGreaterThan(
+      transportArguments.lastIndexOf("credential.helper="),
+    );
+    expect(transportArguments).toContain("http.followRedirects=false");
+  });
+
+  it.each(["pushurl", "insteadOf", "pushInsteadOf", "multiple-urls"])(
+    "keeps the approved destination when live %s configuration changes at dispatch",
+    async (kind) => {
+      const commit = git(work, ["rev-parse", "HEAD"]).trim();
+      const diverted = join(work, "..", "diverted.git");
+      git(join(work, ".."), ["init", "--bare", "-q", diverted]);
+      const adapter = publishAdapter(() => {
+        if (kind === "pushurl") git(work, ["config", "remote.origin.pushurl", diverted]);
+        else if (kind === "multiple-urls") {
+          git(work, ["config", "--add", "remote.origin.pushurl", remote]);
+          git(work, ["config", "--add", "remote.origin.pushurl", diverted]);
+        } else {
+          git(work, ["config", `url.${diverted}.${kind}`, remote]);
+          git(work, ["config", "--add", `url.${diverted}.${kind}`, APPROVED_URL]);
+        }
+      });
+      const result = await adapter.publish(pushCommand({ verifiedCommitSha: commit }));
+      expect(result.outcome, JSON.stringify({ result, transportError })).toBe("succeeded");
+      expect(git(remote, ["rev-parse", "refs/heads/feat/x"]).trim()).toBe(commit);
+      expect(git(diverted, ["for-each-ref", "--format=%(refname)"])).toBe("");
+    },
+    GIT_INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    "publishes the approved commit even if the local source branch moves before dispatch",
+    async () => {
+      const verifiedCommitSha = git(work, ["rev-parse", "HEAD"]).trim();
+      expect(
+        (await governedPush(pushCommand({ setUpstreamTracking: true }))).lifecycle.outcome.status,
+      ).toBe("succeeded");
+      const approved = pushCommand({ verifiedCommitSha });
+      writeFileSync(join(work, "a.txt"), "unapproved later change\n");
+      git(work, ["add", "--", "a.txt"]);
+      git(work, ["commit", "-q", "-m", "feat(x): later"]);
+      const movedHead = git(work, ["rev-parse", "HEAD"]).trim();
+      expect(movedHead).not.toBe(verifiedCommitSha);
+
+      const result = await governedPush(approved);
+      expect(result.lifecycle.outcome.status).toBe("succeeded");
+      expect(git(remote, ["rev-parse", "refs/heads/feat/x"]).trim()).toBe(verifiedCommitSha);
+      expect(git(work, ["rev-parse", "HEAD"]).trim()).toBe(movedHead);
+      expect(result.lifecycle.envelope.resolvedInputs).toMatchObject({ verifiedCommitSha });
+    },
+    GIT_INTEGRATION_TIMEOUT_MS,
+  );
+
   it(
     "publishes the branch to the remote through the dedicated push allowlist",
     async () => {

@@ -24,9 +24,14 @@
 export const RELATIONSHIP_SCHEMA_VERSION = "1" as const;
 
 // ─── Object kinds ─────────────────────────────────────────────────────────────
-// Closed enumeration of the 14 object kinds a relationship endpoint may carry. The order
+// Closed enumeration of the 15 object kinds a relationship endpoint may carry. The order
 // of this tuple matches the column order of compatibility-matrix.md §2 (alphabetical,
 // ignoring the forward-looking suffix) so test fixtures can iterate deterministically.
+// Issue #3400 (epic #3384): "git-change" identifies a server-resolved, immutable Git
+// comparison (exact base/head or one resolved same-repository pull request) connected to a
+// Chat as a `reads-context` target. Unlike the forward-looking kinds below, it is added
+// directly to RELATIONSHIP_SUPPORTED_OBJECT_KINDS in the same change — there is no
+// not-yet-supported window for it.
 export const RELATIONSHIP_OBJECT_KINDS = [
   "agent",
   "capsule",
@@ -35,6 +40,7 @@ export const RELATIONSHIP_OBJECT_KINDS = [
   "connector",
   "data-source",
   "evidence-run",
+  "git-change",
   "mcp-tool",
   "memory",
   "patch-proposal",
@@ -55,6 +61,7 @@ export const RELATIONSHIP_SUPPORTED_OBJECT_KINDS = [
   "capsule-set",
   "chat",
   "evidence-run",
+  "git-change",
   "memory",
   "patch-proposal",
   "tool",
@@ -192,6 +199,7 @@ export const RELATIONSHIP_TYPE_DEFINITIONS: Readonly<
       "workspace-path",
       "connector",
       "data-source",
+      "git-change",
     ],
     cardinality: "N:N",
     direction: "directed",

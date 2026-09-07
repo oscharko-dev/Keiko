@@ -87,6 +87,20 @@ Evidence must not contain:
   bodies, PR bodies, provider endpoints, credentials, private URLs, token-bearing strings, or private
   filesystem paths.
 
+## Context and cumulative prompt allowance
+
+The selected model's context allowance limits one model request. OpenCode compaction reduces
+conversation history for subsequent requests; it does not erase the prompt tokens already consumed
+by a run. The run's Authority Envelope independently accounts for cumulative prompt usage.
+
+A deployment operator may set `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` before starting the server.
+The default remains 200,000; an explicit decimal integer from 1 through 2,000,000 is accepted.
+Invalid values fail closed. This setting is copied into each newly minted envelope and reported as
+`maxPromptTokens` on the existing `coding-runtime.authority.minted` activity event. It does not
+change a live or exhausted envelope, the 30-minute duration, the tool/patch ceilings, or a configured
+Model Gateway spend limit. A larger accepted task can start with a deliberately configured allowance;
+an exhausted run requires a fresh accepted run and preserves its workspace through normal recovery.
+
 ## Review Commands
 
 Run focused closeout checks:
@@ -94,7 +108,8 @@ Run focused closeout checks:
 ```sh
 npx vitest run \
   packages/keiko-server/src/coding-runtime/codingAutonomyQaMatrix.test.ts \
-  packages/keiko-server/src/coding-runtime/autonomousDeliveryPolicy.test.ts \
+  packages/keiko-server/src/gitDelivery/runBoundAuthority.test.ts \
+  packages/keiko-server/src/gitDelivery/approvalStore.test.ts \
   packages/keiko-server/src/coding-runtime/codingRuntimeManager.test.ts \
   packages/keiko-server/src/coding-sidecar-gateway.test.ts \
   packages/keiko-server/src/coding-codex-subscription.test.ts

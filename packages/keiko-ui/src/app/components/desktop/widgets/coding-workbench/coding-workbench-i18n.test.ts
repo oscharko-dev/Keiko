@@ -14,6 +14,32 @@ describe("Coding Workbench translations", () => {
     );
   });
 
+  it("describes scoped Full delivery without advertising approval-free merge", () => {
+    const en = translateCodingWorkbench(
+      "en",
+      "codingWorkbench.mode.autonomous-delivery.description",
+    );
+    const de = translateCodingWorkbench(
+      "de",
+      "codingWorkbench.mode.autonomous-delivery.description",
+    );
+    for (const text of [en, de]) {
+      expect(text).toMatch(/commit/iu);
+      expect(text).toMatch(/push/iu);
+      expect(text).toMatch(/merge/iu);
+    }
+    expect(en).toContain("draft pull request");
+    expect(en).toContain("Merge remains separately approval-gated");
+    expect(de).toContain("Draft-Pull-Request");
+    expect(de).toContain("Merge bleibt separat genehmigungspflichtig");
+    expect(translateCodingWorkbench("en", "codingWorkbench.controls.help")).toContain(
+      "server-confirmed mode",
+    );
+    expect(translateCodingWorkbench("de", "codingWorkbench.controls.help")).toContain(
+      "serverbestätigten Modus",
+    );
+  });
+
   // ADR-0163 D9: every new key resolves non-empty in BOTH catalogs and the two strings differ, so
   // a German entry copied from the English one cannot pass as a translation. The wording must never
   // present the evaluation runtime with an unqualified "ready", "verified" or "confirmed".
@@ -126,6 +152,21 @@ describe("Coding Workbench translations", () => {
   it.each([
     "codingWorkbench.composer.workspaceMismatch",
     "codingWorkbench.approval.evidenceRequired",
+    "codingWorkbench.questions.answerRejected",
+  ] as const)("localizes %s in both catalogs", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en.length).toBeGreaterThan(0);
+    expect(de.length).toBeGreaterThan(0);
+    expect(de).not.toBe(en);
+  });
+
+  // #3390 wave: the trust affordance's three strings — restated in both catalogs, not copied
+  // verbatim from one to the other.
+  it.each([
+    "codingWorkbench.trust.restrictedNotice",
+    "codingWorkbench.trust.allow",
+    "codingWorkbench.trust.allowing",
   ] as const)("localizes %s in both catalogs", (key) => {
     const en = translateCodingWorkbench("en", key);
     const de = translateCodingWorkbench("de", key);

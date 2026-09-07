@@ -8,6 +8,7 @@ import {
   type GatewayConfig,
   type ModelCapability,
   type ModelProviderConfig,
+  type UsageMetadata,
 } from "@oscharko-dev/keiko-model-gateway";
 import { readJsonCapped, readSseStream } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type {
@@ -27,7 +28,14 @@ import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-l
 import { rerankSelection } from "./grounded-rerank-facade.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { readBoundedRequestBody, RequestBodyTooLargeError } from "./bounded-request-body.js";
-import { probeGatewayToolCalling } from "./gateway-tool-calling-probe.js";
+import {
+  admittedGatewayProbeOutputLimit,
+  probeGatewayToolCalling,
+  probeUsage,
+  reserveGatewayProbeSpend,
+  settleGatewayProbeSpend,
+  type GatewayProbeSpendContext,
+} from "./gateway-tool-calling-probe.js";
 import { reconcileGatewayToolCallingReadiness } from "./gateway-setup.js";
 
 const DEFAULT_PROBES: readonly GatewayReadinessProbeName[] = [
@@ -203,17 +211,56 @@ async function providerRequest(
   deps: UiHandlerDeps,
   config: GatewayConfig,
   provider: ModelProviderConfig,
+  correlationId: string,
   body: Readonly<Record<string, unknown>>,
   options: ProviderRequestOptions = {},
 ): Promise<Response> {
-  return requestGatewayReadinessChatCompletion({
-    config,
-    provider,
-    body,
-    ...(deps.gatewayReadinessFetch !== undefined ? { fetchImpl: deps.gatewayReadinessFetch } : {}),
-    ...(options.stream === true ? { stream: true } : {}),
-    maxResponseBytes: MAX_PROVIDER_RESPONSE_BYTES,
-  });
+  const spend = probeSpendContext(deps, config, provider, correlationId);
+  const reservation = reserveGatewayProbeSpend(provider, spend);
+  let response: Response;
+  try {
+    response = await requestGatewayReadinessChatCompletion({
+      config,
+      provider,
+      body,
+      ...(deps.gatewayReadinessFetch !== undefined
+        ? { fetchImpl: deps.gatewayReadinessFetch }
+        : {}),
+      ...(options.stream === true ? { stream: true } : {}),
+      ...admittedGatewayProbeOutputLimit(reservation, spend),
+      maxResponseBytes: MAX_PROVIDER_RESPONSE_BYTES,
+    });
+  } catch (error) {
+    settleGatewayProbeSpend(reservation, undefined);
+    throw error;
+  }
+  settleGatewayProbeSpend(
+    reservation,
+    await observedProbeUsage(response, spend, options.stream === true),
+  );
+  return response;
+}
+
+function probeSpendContext(
+  deps: UiHandlerDeps,
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+  correlationId: string,
+): GatewayProbeSpendContext {
+  return { env: deps.env, capability: providerCapability(config, provider), correlationId };
+}
+
+async function observedProbeUsage(
+  response: Response,
+  spend: GatewayProbeSpendContext,
+  streaming: boolean,
+): Promise<UsageMetadata | undefined> {
+  if (!response.ok || streaming) return undefined;
+  try {
+    return probeUsage(await readJsonCapped(response.clone(), MAX_PROVIDER_RESPONSE_BYTES), spend);
+  } catch {
+    return undefined;
+  }
 }
 
 function providerCapability(
@@ -256,7 +303,10 @@ async function probeEmbedding(
   if (provider === undefined) {
     return skipped("embedding", "No embedding-capable provider is configured.");
   }
+  const spend = probeSpendContext(deps, config, provider, correlationId);
+  let reservation: ReturnType<typeof reserveGatewayProbeSpend>;
   try {
+    reservation = reserveGatewayProbeSpend(provider, spend);
     const outcome = await requestOpenAIEmbedding({
       endpoint: provider.baseUrl,
       apiKey: provider.apiKey,
@@ -271,6 +321,7 @@ async function probeEmbedding(
       timeoutMs: provider.timeoutMs,
       egress: config.egress,
     });
+    settleGatewayProbeSpend(reservation, undefined);
     if (!outcome.ok) {
       return result(
         "embedding",
@@ -291,6 +342,7 @@ async function probeEmbedding(
         : "Embedding endpoint returned an empty or zero-norm vector.",
     );
   } catch (probeError) {
+    settleGatewayProbeSpend(reservation, undefined);
     return probeFailure(
       deps,
       correlationId,
@@ -354,6 +406,7 @@ async function probeReranker(
       ...(deps.gatewayReadinessFetch !== undefined
         ? { fetchImpl: deps.gatewayReadinessFetch }
         : {}),
+      correlationId,
       fallbackMode: "slice-topN",
     });
     return rerankerSelectionResult(selection, documents[0], start);
@@ -521,7 +574,7 @@ async function probeChat(
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
-    const response = await providerRequest(deps, config, provider, {
+    const response = await providerRequest(deps, config, provider, correlationId, {
       messages: [
         { role: "system", content: "You are checking whether a chat endpoint can answer." },
         { role: "user", content: "Reply with exactly: OK" },
@@ -568,6 +621,7 @@ async function probeStreaming(
       deps,
       config,
       provider,
+      correlationId,
       {
         messages: [
           { role: "system", content: "You are a minimal streaming readiness probe." },
@@ -634,6 +688,7 @@ async function probeToolCalling(
         error,
       );
     },
+    probeSpendContext(deps, config, provider, correlationId),
   );
   if (failure !== undefined) return failure;
   if (status === "verified") {
@@ -675,7 +730,7 @@ async function probeJsonSchema(
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
-    const response = await providerRequest(deps, config, provider, jsonSchemaBody());
+    const response = await providerRequest(deps, config, provider, correlationId, jsonSchemaBody());
     if (!response.ok) {
       const status = unsupportedStatus(response) ? "unsupported" : "failed";
       return jsonSchemaResult(status, start);
@@ -745,7 +800,7 @@ async function probeReasoning(
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
-    const response = await providerRequest(deps, config, provider, {
+    const response = await providerRequest(deps, config, provider, correlationId, {
       messages: [
         { role: "system", content: "Run a reasoning readiness probe. Do not reveal private data." },
         { role: "user", content: "/think\nWhat is 1 + 1? End with FINAL: 2." },
@@ -799,7 +854,7 @@ async function probeImageInput(
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
-    const response = await providerRequest(deps, config, provider, {
+    const response = await providerRequest(deps, config, provider, correlationId, {
       messages: [
         {
           role: "user",
@@ -848,7 +903,13 @@ async function probeDocumentInput(
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
-    const response = await providerRequest(deps, config, provider, documentInputBody());
+    const response = await providerRequest(
+      deps,
+      config,
+      provider,
+      correlationId,
+      documentInputBody(),
+    );
     if (!response.ok) {
       const status = unsupportedStatus(response) ? "unsupported" : "failed";
       return documentInputResult(status, start);
@@ -980,7 +1041,7 @@ async function probeLongContext(
   const tokens = longContextTokens(options, capability);
   const { body, sentinel } = longContextBody(tokens);
   try {
-    const response = await providerRequest(deps, config, provider, body);
+    const response = await providerRequest(deps, config, provider, correlationId, body);
     if (!response.ok) {
       const status = unsupportedStatus(response) ? "unsupported" : "failed";
       return result(

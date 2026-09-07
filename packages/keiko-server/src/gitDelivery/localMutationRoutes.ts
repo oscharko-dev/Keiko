@@ -14,6 +14,7 @@
 
 import type { IncomingMessage } from "node:http";
 import type { GitMutationCommand } from "@oscharko-dev/keiko-tools";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
@@ -218,6 +219,51 @@ const readParsed = (req: IncomingMessage): Promise<GitDeliveryParsedBody<RouteRe
     () => errResult(400, "GIT_DELIVERY_LOCAL_BAD_REQUEST"),
   );
 
+// Final-audit F1/#3390 (ADR-0138 D2): a local mutation has no operation-independent mandatory
+// downstream enforcement (the policy pack decides per command), so a lower mode's
+// "approval-required" disposition is redeemed only by an actual matching claim — the SAME
+// "local-mutation" claim this route already parses from its own request body (peeked, not
+// consumed, here; the caller's `resolveGitDeliveryApprovalRequirement` call is the one real
+// single-use consumption). `nowIso` is threaded from `seams.now` so the peek's expiry check runs
+// against the SAME clock that consumption uses, rather than silently falling back to real
+// wall-clock time and disagreeing with an injected one. Extracted purely to keep the handler under
+// the repo's max-lines-per-function/complexity bar — no behavioral seam of its own.
+interface LocalMutationAuthorityDenialInput {
+  readonly ctx: RouteContext;
+  readonly deps: UiHandlerDeps;
+  readonly projectId: string;
+  readonly workspace: WorkspaceInfo;
+  readonly operation: LocalDeliveryOperation;
+  readonly command: GitMutationCommand;
+  readonly approval: ParsedGitDeliveryApprovalRequest;
+  readonly seams: GitDeliveryExecutionSeams;
+}
+function localMutationAuthorityDenial({
+  ctx,
+  deps,
+  projectId,
+  workspace,
+  operation,
+  command,
+  approval,
+  seams,
+}: LocalMutationAuthorityDenialInput): RouteResult | undefined {
+  return gitDeliveryAuthorityDenial(
+    ctx,
+    deps,
+    projectId,
+    workspace,
+    operation,
+    localMutationAuthorityTarget(command),
+    {
+      nowIso: new Date((seams.now ?? Date.now)()).toISOString(),
+      approval,
+      approvalStore: seams.approvalStore,
+      approvalBinding: { operation: "local-mutation", command },
+    },
+  );
+}
+
 export const createHandleLocalMutation = (
   spec: LocalMutationSpec,
   options: GitDeliveryLocalRouteOptions = {},
@@ -233,14 +279,16 @@ export const createHandleLocalMutation = (
     if (workspace === undefined) return errResult(404, "GIT_DELIVERY_LOCAL_UNKNOWN_PROJECT");
     const operation = spec.operation ?? localDeliveryOperationFor(command);
     if (operation === undefined) return errResult(400, "GIT_DELIVERY_LOCAL_BAD_REQUEST");
-    const authorityDenial = gitDeliveryAuthorityDenial(
+    const authorityDenial = localMutationAuthorityDenial({
       ctx,
       deps,
       projectId,
       workspace,
       operation,
-      localMutationAuthorityTarget(command),
-    );
+      command,
+      approval,
+      seams,
+    });
     if (authorityDenial !== undefined) return authorityDenial;
     const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
       store: seams.approvalStore,

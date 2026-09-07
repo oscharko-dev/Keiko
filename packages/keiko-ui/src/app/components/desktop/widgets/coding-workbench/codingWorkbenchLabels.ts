@@ -1,5 +1,6 @@
 import { gatewayVerificationContradictsReadiness } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type {
+  CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchMode,
   CodingWorkbenchModelSource,
   CodingWorkbenchRuntimeResearchGrant,
@@ -45,6 +46,10 @@ const SOURCE_UNAVAILABLE_REASON_KEYS: Readonly<Record<string, CodingWorkbenchMes
   "deployment-policy-disabled":
     "codingWorkbench.source.unavailableReason.deployment-policy-disabled",
   "subscription-source": "codingWorkbench.source.unavailableReason.subscription-source",
+  // #3390 closeout: the source reported "available" with a context window too small for one
+  // real request to survive (readiness gap, epic #3384). Appended, never renumbered.
+  "model-context-window-insufficient":
+    "codingWorkbench.source.unavailableReason.model-context-window-insufficient",
 };
 
 /** The operator-facing sentence for an unavailable source's reason, or null when it has none. */
@@ -298,8 +303,9 @@ function eventOutcomeDetail(
  * three different layers and all three get the identical treatment.
  */
 export interface CodingWorkbenchFailureFacts {
+  readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure;
   readonly code: string;
-  readonly correlationId?: string | undefined;
+  readonly correlationId?: string;
 }
 
 // F-09a: a rejected action (any non-ok result — never only one status code) must surface as a
@@ -313,7 +319,13 @@ export function actionFailureAlert(
   failure: CodingWorkbenchFailureFacts,
   t: CodingWorkbenchTranslate,
 ): string {
-  const summary = t(summaryKey, { code: failure.code });
+  const generic = t(summaryKey, { code: failure.code });
+  const issueSummary =
+    failure.issueBindingFailure === undefined
+      ? ""
+      : t(`codingWorkbench.issue.error.${failure.issueBindingFailure}`);
+  const summary =
+    failure.issueBindingFailure === undefined ? generic : `${issueSummary} ${generic}`;
   return failure.correlationId === undefined
     ? summary
     : `${summary} ${t("codingWorkbench.alert.actionFailedSupportId", {

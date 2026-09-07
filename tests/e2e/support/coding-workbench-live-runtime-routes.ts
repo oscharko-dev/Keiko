@@ -23,6 +23,7 @@ import type { LiveRuntimeFixtureOptions } from "./coding-workbench-live-runtime.
 import { parsedAutonomyPolicyUpdate } from "./autonomyPolicyRequest.js";
 import {
   activeWorkspace,
+  approvalReview,
   codexProfile,
   codexSetupPlan,
   eventStream,
@@ -203,6 +204,29 @@ async function transition(
   await fulfillJson(route, snapshot(fixture));
 }
 
+async function handleReadinessRoute(
+  route: Route,
+  searchParams: URLSearchParams,
+  options: RuntimeOptions,
+): Promise<void> {
+  const requestedMode = (searchParams.get("requestedMode") ??
+    "governed-assist") as CodingWorkbenchMode;
+  const readiness: CodingWorkbenchRuntimeReadiness = {
+    schemaVersion: "1",
+    requestedMode,
+    deploymentCeiling: options.deploymentCeiling,
+    effectiveMode: effectiveMode(requestedMode, options.deploymentCeiling),
+    runtimeAvailable: options.runtimeAvailable,
+    // #2475: an unavailable runtime must name its reason; the fixture mirrors the server.
+    // ADR-0163 D9: and an AVAILABLE runtime must name how strong its evidence is.
+    ...(options.runtimeAvailable
+      ? { runtimeEvidenceClass: "platform-qualified" }
+      : { runtimeUnavailableReason: "runtime-unqualified" }),
+  };
+  expect(validateCodingWorkbenchRuntimeReadiness(readiness).ok).toBe(true);
+  await fulfillJson(route, readiness);
+}
+
 async function handleRuntimeGet(
   route: Route,
   pathname: string,
@@ -211,26 +235,15 @@ async function handleRuntimeGet(
   fixture: RuntimeFixtureState,
 ): Promise<boolean> {
   if (pathname === "/api/coding-workbench/runtime/readiness") {
-    const requestedMode = (searchParams.get("requestedMode") ??
-      "governed-assist") as CodingWorkbenchMode;
-    const readiness: CodingWorkbenchRuntimeReadiness = {
-      schemaVersion: "1",
-      requestedMode,
-      deploymentCeiling: options.deploymentCeiling,
-      effectiveMode: effectiveMode(requestedMode, options.deploymentCeiling),
-      runtimeAvailable: options.runtimeAvailable,
-      // #2475: an unavailable runtime must name its reason; the fixture mirrors the server.
-      // ADR-0163 D9: and an AVAILABLE runtime must name how strong its evidence is.
-      ...(options.runtimeAvailable
-        ? { runtimeEvidenceClass: "platform-qualified" }
-        : { runtimeUnavailableReason: "runtime-unqualified" }),
-    };
-    expect(validateCodingWorkbenchRuntimeReadiness(readiness).ok).toBe(true);
-    await fulfillJson(route, readiness);
+    await handleReadinessRoute(route, searchParams, options);
     return true;
   }
   if (pathname === "/api/coding-workbench/runtime/status") {
     await fulfillJson(route, snapshot(fixture));
+    return true;
+  }
+  if (pathname.endsWith(`/runs/${FIXTURE_RUN_ID}/approval-review`)) {
+    await fulfillJson(route, approvalReview(fixture));
     return true;
   }
   if (pathname.endsWith(`/runs/${FIXTURE_RUN_ID}/events`)) {

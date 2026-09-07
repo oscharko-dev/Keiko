@@ -1,0 +1,32 @@
+{
+  "name": "@oscharko-dev/keiko-tool-catalog",
+  "version": "0.3.17",
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Internal pure governed-tool descriptors, schema projections, compatibility, and catalog identities.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=24.18.0 <25 || >=26.3.0 <27"
+  },
+  "dependencies": {
+    "@oscharko-dev/keiko-contracts": "0.3.17",
+    "@oscharko-dev/keiko-security": "0.3.17"
+  },
+  "private": true
+}

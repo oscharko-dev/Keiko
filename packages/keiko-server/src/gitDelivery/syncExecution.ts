@@ -38,6 +38,7 @@ import { parsePorcelainV2Branch, type PorcelainV2Status } from "../gitPorcelainS
 import { observedGitRunner } from "../gitProcessActivity.js";
 import type { ServerLogSink } from "../observability/index.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 
 const DEFAULT_SYNC_MAX_BYTES = 128 * 1024;
 const DEFAULT_SYNC_TIMEOUT_MS = 30_000;
@@ -58,6 +59,12 @@ export interface GitDeliverySyncSeams {
   readonly correlationId?: string | undefined;
   /** Activity-log sink, defaulting to the shared process log. A test seam like `runner`. */
   readonly activityLog?: ServerLogSink | undefined;
+  // Final-audit F2 repair (#3390): the approval store fetch/pull's own admission redemption (a
+  // non-consuming peek, then a single real consume — see syncRoutes.ts) reads/writes. Defaults to
+  // `DEFAULT_GIT_DELIVERY_APPROVAL_STORE` (approvalStore.ts) the same way pushExecution.ts's
+  // `GitDeliveryPublishSeams.approvalStore` does, so a mint issued into the default store is
+  // redeemable by execute without the caller wiring an explicit instance.
+  readonly approvalStore?: GitDeliveryApprovalStore | undefined;
 }
 
 interface NormalizedSyncSeams {

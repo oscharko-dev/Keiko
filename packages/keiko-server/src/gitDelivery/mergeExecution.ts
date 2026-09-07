@@ -43,6 +43,8 @@ import {
 import { createNodeGitMergeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerLogSink } from "../observability/server-log.js";
+import { describeError } from "../diagnostics-log.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
@@ -134,16 +136,41 @@ export async function readMergeProviderReadiness(
   now: () => number,
   correlationId?: string,
 ): Promise<GitMergeProviderReadiness> {
-  const adapter = mergeAdapterFor(workspace, seams, now, correlationId);
+  let result: GitMergeProviderReadiness;
+  let failure: { readonly error: unknown } | undefined;
   try {
-    return await adapter.readMergeReadiness({
+    const adapter = mergeAdapterFor(workspace, seams, now, correlationId);
+    result = await adapter.readMergeReadiness({
       ownerAndRepo: command.ownerAndRepo,
       prExternalId: command.prExternalId,
       baseBranchName: command.baseBranchName,
     });
-  } catch {
-    return { providerCapableStrategies: [], providerError: true };
+  } catch (error) {
+    failure = { error };
+    result = { providerCapableStrategies: [], providerError: true };
   }
+  logReadinessObservation(seams, result, correlationId, failure);
+  return result;
+}
+
+function logReadinessObservation(
+  seams: GitDeliveryMergeSeams,
+  result: GitMergeProviderReadiness,
+  correlationId: string | undefined,
+  failure: { readonly error: unknown } | undefined,
+): void {
+  (seams.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    op: "git.delivery.readiness.observed",
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    ...(failure === undefined ? {} : { level: "warn", errorKind: "internal" }),
+    extra: {
+      state: result.providerError === true ? "unknown" : "observed",
+      providerError: result.providerError === true,
+      count: result.checks?.total ?? 0,
+      ...(failure === undefined ? {} : describeError(failure.error)),
+    },
+  });
 }
 
 /**

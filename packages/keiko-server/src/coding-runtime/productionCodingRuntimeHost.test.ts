@@ -4,6 +4,7 @@ import {
   createProductionCodingRuntimeHost,
   type QualifiedProductionCodingRuntime,
 } from "./productionCodingRuntimeHost.js";
+import type { GitDeliveryDescriptionAuthorityPort } from "../gitDelivery/runBoundAuthority.js";
 
 function qualifiedRuntime(): QualifiedProductionCodingRuntime {
   return {
@@ -89,5 +90,44 @@ describe("production coding runtime host", () => {
         "taskDispatcher",
       ].sort(),
     );
+  });
+
+  // #3399 (epic #3384 correction 4): threaded through the exact same chain as
+  // `gitDeliveryAuthority` — see productionCodingRuntimeResolver.ts's `composeRuntime` and
+  // codingRuntimeControlPlane.ts's `runtimeHostCapabilities`.
+  it("forwards a qualified runtime's description authority onto the host", () => {
+    const port: GitDeliveryDescriptionAuthorityPort = { current: () => undefined };
+    const host = createProductionCodingRuntimeHost({
+      resolve: () => ({ ...qualifiedRuntime(), gitDeliveryDescriptionAuthority: port }),
+    });
+    expect(host?.gitDeliveryDescriptionAuthority).toBe(port);
+  });
+
+  it("omits the description authority field entirely when the runtime carries none", () => {
+    const host = createProductionCodingRuntimeHost({ resolve: () => qualifiedRuntime() });
+    expect(host).not.toHaveProperty("gitDeliveryDescriptionAuthority");
+  });
+
+  // #3401 (epic #3384 closeout, description-composition-closeout): the MINT capability and the
+  // CI-repair notify setter, threaded through the SAME optional pass-through mechanism as
+  // `gitDeliveryDescriptionAuthority` above.
+  it("forwards a qualified runtime's mint capability and notify-attach setter onto the host", () => {
+    const mint = vi.fn();
+    const attach = vi.fn();
+    const host = createProductionCodingRuntimeHost({
+      resolve: () => ({
+        ...qualifiedRuntime(),
+        mintDescriptionAuthority: mint,
+        attachVerifiedHeadNotifier: attach,
+      }),
+    });
+    expect(host?.mintDescriptionAuthority).toBe(mint);
+    expect(host?.attachVerifiedHeadNotifier).toBe(attach);
+  });
+
+  it("omits the mint capability and notify-attach setter when the runtime carries neither", () => {
+    const host = createProductionCodingRuntimeHost({ resolve: () => qualifiedRuntime() });
+    expect(host).not.toHaveProperty("mintDescriptionAuthority");
+    expect(host).not.toHaveProperty("attachVerifiedHeadNotifier");
   });
 });

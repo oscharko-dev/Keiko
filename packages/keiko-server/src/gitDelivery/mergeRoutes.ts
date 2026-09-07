@@ -55,6 +55,7 @@ import {
 import {
   hasOnlyAllowedKeys,
   isNonEmptyString,
+  isOwnerAndRepo,
   isPlainObject,
   isSafeGitRef,
   scanForbiddenStrings,
@@ -76,7 +77,8 @@ export type GitDeliveryMergeErrorCode =
   | "GIT_DELIVERY_MERGE_PAYLOAD_TOO_LARGE"
   | "GIT_DELIVERY_MERGE_FORBIDDEN_PAYLOAD"
   | "GIT_DELIVERY_MERGE_UNKNOWN_PROJECT"
-  | "GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE";
+  | "GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE"
+  | "GIT_DELIVERY_MERGE_REPOSITORY_MISMATCH";
 
 const SAFE_MESSAGES: Readonly<Record<GitDeliveryMergeErrorCode, string>> = {
   GIT_DELIVERY_MERGE_BAD_REQUEST: "The request body is not a valid governed merge.",
@@ -86,6 +88,9 @@ const SAFE_MESSAGES: Readonly<Record<GitDeliveryMergeErrorCode, string>> = {
   GIT_DELIVERY_MERGE_UNKNOWN_PROJECT: "The requested project is not a known workspace.",
   GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE:
     "The repository worktree could not be inspected. Confirm the project is a Git repository.",
+  // #3384 B5-8: the workspace's own `origin` remote does not resolve to the requested repository.
+  GIT_DELIVERY_MERGE_REPOSITORY_MISMATCH:
+    "The requested repository does not match this project's own Git remote.",
 };
 
 const errResult = (status: number, code: GitDeliveryMergeErrorCode): RouteResult => ({
@@ -97,7 +102,14 @@ const MERGE_REQUEST_ERRORS: GitDeliveryRequestErrors = {
   tooLarge: errResult(413, "GIT_DELIVERY_MERGE_PAYLOAD_TOO_LARGE"),
   badRequest: errResult(400, "GIT_DELIVERY_MERGE_BAD_REQUEST"),
   unknownProject: errResult(404, "GIT_DELIVERY_MERGE_UNKNOWN_PROJECT"),
+  repositoryMismatch: errResult(403, "GIT_DELIVERY_MERGE_REPOSITORY_MISMATCH"),
 };
+
+// #3384 B5-8: the ONE place this route group names its request's GitHub mutation target for
+// `prepareGitDeliveryRequest`'s repository-binding check.
+function mergeOwnerAndRepoOf(value: ValidatedRequest): string {
+  return value.command.ownerAndRepo;
+}
 
 // ─── Options ────────────────────────────────────────────────────────────────────────────────
 
@@ -105,13 +117,8 @@ export interface GitDeliveryMergeRouteOptions {
   readonly execution?: GitDeliveryMergeSeams;
 }
 
-const OWNER_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const PR_NUMBER_RE = /^[1-9]\d{0,9}$/;
 const SHA_RE = /^[0-9a-fA-F]{7,64}$/;
-
-function isOwnerAndRepo(value: unknown): value is string {
-  return typeof value === "string" && OWNER_REPO_RE.test(value);
-}
 
 function isPrNumberString(value: unknown): value is string {
   return typeof value === "string" && PR_NUMBER_RE.test(value);
@@ -202,6 +209,16 @@ function validate(parsed: unknown): Validation {
   return { kind: "ok", value: { projectId: parsed.projectId, command, approval } };
 }
 
+// Shared by preview/approve/execute — the identical read/validate/resolve-workspace prologue plus
+// the #3384 B5-8 repository-binding check against `mergeOwnerAndRepoOf`. Extracted purely to keep
+// each call site under the repo's max-lines-per-function bar — no behavioral seam of its own.
+function prepareMergeRequest(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): ReturnType<typeof prepareGitDeliveryRequest<ValidatedRequest>> {
+  return prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate, mergeOwnerAndRepoOf);
+}
+
 // ─── Preview handler (read-only) ────────────────────────────────────────────────────────────────
 
 export const createHandleMergePreview = (
@@ -211,7 +228,7 @@ export const createHandleMergePreview = (
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
     const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-    const prepared = await prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate);
+    const prepared = await prepareMergeRequest(ctx, deps);
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { command } = prepared.value;
@@ -249,7 +266,7 @@ export const createHandleMergeApprove = (
     // Reuses the IDENTICAL `validate()` the preview/execute handlers use, so the GitMergeCommand this
     // mints against is byte-for-byte the same typed value execute will rebuild from the same request
     // body — the binding-hash consume() already enforces then matches by construction.
-    const prepared = await prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate);
+    const prepared = await prepareMergeRequest(ctx, deps);
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { projectId, command } = prepared.value;
@@ -263,7 +280,13 @@ export const createHandleMergeApprove = (
         headBranchName: command.headBranchName,
         baseBranchName: command.baseBranchName,
       },
-      { logSink: seams.activityLog },
+      {
+        logSink: seams.activityLog,
+        // Final-audit F2/#3390 (ADR-0138 D2): merge's own execute path already enforces a
+        // mandatory, mode-independent consumed approval below, so this coarse admission layer
+        // defers to it instead of demanding a second claim.
+        deliveryApprovalDeferred: true,
+      },
     );
     if (!authority.allowed) return authority.result;
     const store = seams.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;
@@ -339,7 +362,7 @@ async function dispatchGovernedMerge(input: GovernedMergeDispatch): Promise<Rout
     admitted: authority,
     next: seams.beforeRemoteDispatch,
     denialCapture,
-    audit: { logSink: seams.activityLog },
+    audit: { logSink: seams.activityLog, deliveryApprovalDeferred: true },
   });
   try {
     const result = await executeGovernedMerge(
@@ -366,13 +389,14 @@ async function handleMergeExecute(
   seams: GitDeliveryMergeSeams,
 ): Promise<RouteResult> {
   const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-  const prepared = await prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate);
+  const prepared = await prepareMergeRequest(ctx, deps);
   if (!prepared.ok) return prepared.result;
   const { workspace } = prepared;
   const { projectId, command, approval } = prepared.value;
   const target = mergeAuthorityTarget(command);
   const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "merge", target, {
     logSink: seams.activityLog,
+    deliveryApprovalDeferred: true,
   });
   if (!authority.allowed) return authority.result;
   const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {

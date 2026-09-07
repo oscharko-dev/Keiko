@@ -17,7 +17,7 @@
 // helpers use — see `gitDeliveryTerminationHandler` in packages/keiko-server/src/gitDelivery/
 // execution.ts) and only falls back to file-scoped detection when an argument is a genuinely
 // unresolvable indirection (e.g. a typed context parameter threaded in from a caller, as
-// git-worktree-snapshot-node.ts's `runRead(ctx, …)` does) — never as a substitute for a call site this
+// git-worktree-adapter.ts's `runGit(ctx, …)` does) — never as a substitute for a call site this
 // scanner CAN read precisely. There is deliberately NO exemption list.
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
@@ -378,11 +378,11 @@ const MAX_IDENTIFIER_HOPS = 4;
 //
 // Deliberately independent of EXPECTED_SOFT_VERDICT_SITES below rather than derived from its length:
 // this number is the ratchet a reviewer edits on purpose when the set legitimately grows, and keeping
-// it hand-maintained means adding a tenth entry to the set without ALSO raising this constant still
+// it hand-maintained means adding an eighth entry to the set without ALSO raising this constant still
 // fails the budget assertion, exactly as it should.
-const SOFT_VERDICT_BUDGET = 9;
+const SOFT_VERDICT_BUDGET = 7;
 
-// The exact nine call sites the budget above ratchets — every one the SAME shape: a Node effect
+// The exact seven call sites the budget above ratchets — every one the SAME shape: a Node effect
 // module whose `runCommand` argument is a typed parameter (`ctx`, `deps`) declared in ANOTHER module,
 // which this single-file analyzer cannot follow. Each was separately confirmed wired by reading it.
 // This is the FIX for the gap the budget-only assertion left open (review finding): a length-only
@@ -401,13 +401,11 @@ const SOFT_VERDICT_BUDGET = 9;
 const EXPECTED_SOFT_VERDICT_SITES = [
   { pkg: "keiko-tools", file: "git-merge-node.ts", fn: "runGh" },
   { pkg: "keiko-tools", file: "git-mutation-node.ts", fn: "runOne" },
-  { pkg: "keiko-tools", file: "git-mutation-node.ts", fn: "globalSigningRequired" },
   { pkg: "keiko-tools", file: "git-pr-node.ts", fn: "runGh" },
   { pkg: "keiko-tools", file: "git-publish-node.ts", fn: "runPush" },
   // Reached through `ctx.runDeps` (built by `buildAdapterContext`, which spreads `deps.onTerminated`
   // in), so this single call cannot be resolved within its own file and lands on the soft verdict.
   { pkg: "keiko-tools", file: "git-worktree-adapter.ts", fn: "runGit" },
-  { pkg: "keiko-tools", file: "git-worktree-snapshot-node.ts", fn: "runRead" },
   {
     pkg: "keiko-tools",
     file: "git-worktree-snapshot-node.ts",
@@ -579,6 +577,32 @@ describe("runCommand termination-evidence wiring (PR #3354, comment 3887021650)"
     // Secondary sanity check: the exact-set assertion above already pins the count, but the explicit
     // ratchet stays legible as its own number rather than only implied by the array's length.
     expect(rendered.length).toBeLessThanOrEqual(SOFT_VERDICT_BUDGET);
+  });
+
+  it("requires direct termination evidence for immutable snapshot reads (#3386)", () => {
+    const path = join(PACKAGES_ROOT, "keiko-tools", "src", "git-worktree-snapshot-node.ts");
+    const source = readFileSync(path, "utf8");
+    expect(analyzeFile(path, source).softlyWired.map((site) => site.fn)).not.toContain(
+      "runReadResult",
+    );
+    const mutation = source.replace("onTerminated: ctx.runDeps.onTerminated", "");
+    expect(mutation).not.toBe(source);
+    expect(analyzeFile(path, mutation).softlyWired.map((site) => site.fn)).toContain(
+      "runReadResult",
+    );
+  });
+
+  it("requires direct termination evidence for the signing-policy reads (#3386)", () => {
+    const path = join(PACKAGES_ROOT, "keiko-tools", "src", "git-mutation-node.ts");
+    const source = readFileSync(path, "utf8");
+    const analysis = analyzeFile(path, source);
+    expect(analysis.callSiteCount).toBeGreaterThanOrEqual(2);
+    expect(analysis.softlyWired.map((site) => site.fn)).not.toContain("configuredSigningRequired");
+    const mutation = source.replace("onTerminated: ctx.runDeps.onTerminated,", "");
+    expect(mutation).not.toBe(source);
+    expect(analyzeFile(path, mutation).softlyWired.map((site) => site.fn)).toContain(
+      "configuredSigningRequired",
+    );
   });
 
   it("every production runCommand call site references the onTerminated evidence seam", () => {

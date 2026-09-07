@@ -9,7 +9,10 @@ import {
   parseCodingSidecarEventLine,
   type SidecarPermissionEvent,
 } from "./codingSidecarEventParser.js";
-import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
+import type {
+  OpenCodeCompactionActivity,
+  OpenCodeReconciliationEvent,
+} from "./opencodeReconciler.js";
 import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_TOOL_SOURCE_DEFINITIONS,
@@ -105,6 +108,17 @@ const ASSISTANT_MESSAGE_FIELDS = [
 const APPROVED_PRODUCTIVE_TOOLS = new Set<string>(
   OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name }) => name),
 );
+
+/**
+ * True for a tool the Keiko facade dispatches and settles itself (`keiko_*`, per
+ * `OPENCODE_TOOL_SOURCE_DEFINITIONS`). The single source of truth for "does something else
+ * already own this tool's terminal state" (#3390) -- callers must not restate the productive-tool
+ * list.
+ */
+export function isOpenCodeFacadeDispatchedTool(tool: string): boolean {
+  return APPROVED_PRODUCTIVE_TOOLS.has(tool);
+}
+
 const APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS = new Set<string>([
   "question",
   // #2480: plan carrier only — its admitted parts feed the governed plan projection and it
@@ -256,6 +270,10 @@ const GOVERNED_VERIFICATION_METADATA_KEYS = [
   "approvalId",
   "approvalDigest",
 ] as const;
+const GOVERNED_TARGETED_VERIFICATION_METADATA_KEYS = [
+  ...GOVERNED_VERIFICATION_METADATA_KEYS,
+  "targetPathHash",
+] as const;
 const GOVERNED_VERIFIERS = new Set(["test", "targeted-test", "typecheck", "lint", "build"]);
 // Colons are rejected wholesale: `C:/…` is drive-absolute under win32 resolution and
 // `file.txt:stream` names an NTFS alternate data stream — neither is a workspace-relative path.
@@ -323,8 +341,12 @@ function projectGovernedPermissionByKind(
   if (metadata.actionKind === "file-edit") {
     return projectGovernedEditPermission(properties, metadata);
   }
-  if (metadata.actionKind === "verification-command") {
-    return projectGovernedVerificationPermission(properties, metadata);
+  if (
+    metadata.actionKind === "verification-command" ||
+    metadata.actionKind === "ci-observe" ||
+    metadata.actionKind === "connector-read"
+  ) {
+    return projectGovernedCommandPermission(properties, metadata);
   }
   return undefined;
 }
@@ -360,20 +382,26 @@ function projectGovernedEditPermission(
   };
 }
 
-function projectGovernedVerificationPermission(
+function projectGovernedCommandPermission(
   properties: Record<string, unknown>,
   metadata: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
+  const actionKind = metadata.actionKind;
+  const metadataKeys =
+    actionKind === "verification-command" && metadata.commandLabel === "targeted-test"
+      ? GOVERNED_TARGETED_VERIFICATION_METADATA_KEYS
+      : GOVERNED_VERIFICATION_METADATA_KEYS;
   if (
-    !exactRecord(metadata, GOVERNED_VERIFICATION_METADATA_KEYS) ||
+    !exactRecord(metadata, metadataKeys) ||
+    typeof actionKind !== "string" ||
     !fixedPermissionMetadata(
       metadata,
       "command-execution",
       "command-execution",
-      "verification-command",
+      actionKind,
       "low",
     ) ||
-    !validVerificationApproval(properties, metadata)
+    !validCommandApproval(properties, metadata)
   ) {
     return undefined;
   }
@@ -383,20 +411,30 @@ function projectGovernedVerificationPermission(
     : { type: "permission-request", requestId, ...metadata };
 }
 
-function validVerificationApproval(
+function validCommandApproval(
   properties: Record<string, unknown>,
   metadata: Record<string, unknown>,
 ): boolean {
   const commandLabel = metadata.commandLabel;
   const approvalDigest = metadata.approvalDigest;
+  const targetPathHash = metadata.targetPathHash;
   return (
     typeof commandLabel === "string" &&
-    GOVERNED_VERIFIERS.has(commandLabel) &&
+    validGovernedCommandTarget(metadata.actionKind, commandLabel) &&
     validApprovalIdentities(metadata) &&
     typeof approvalDigest === "string" &&
     /^[0-9a-f]{64}$/u.test(approvalDigest) &&
+    (commandLabel === "targeted-test"
+      ? typeof targetPathHash === "string" && /^[0-9a-f]{64}$/u.test(targetPathHash)
+      : targetPathHash === undefined) &&
     sameStrings(properties.patterns, [commandLabel])
   );
+}
+
+function validGovernedCommandTarget(actionKind: unknown, commandLabel: string): boolean {
+  if (actionKind === "verification-command") return GOVERNED_VERIFIERS.has(commandLabel);
+  if (actionKind === "ci-observe") return commandLabel === "ci";
+  return actionKind === "connector-read" && boundedApprovalIdentity(commandLabel);
 }
 
 function validApprovalIdentities(metadata: Record<string, unknown>): boolean {
@@ -631,9 +669,85 @@ export function parseOpenCodeHistory(
       sequence,
       kind,
       digest: historyDigest(id, aggregateId, sequence, type, data),
+      ...compactionProjection(type, data),
     });
   }
   return { ok: true, value: result };
+}
+
+function compactionProjection(
+  type: string,
+  data: Record<string, unknown>,
+): { readonly compaction: OpenCodeCompactionActivity } | Record<string, never> {
+  if (type === "message.part.updated.1") return compactionPartProjection(data.part);
+  return type === "message.updated.1" ? compactionSummaryProjection(data.info) : {};
+}
+
+function compactionPartProjection(
+  value: unknown,
+): { readonly compaction: OpenCodeCompactionActivity } | Record<string, never> {
+  if (!isRecord(value) || value.type !== "compaction" || typeof value.messageID !== "string") {
+    return {};
+  }
+  const common = {
+    compactionIdSha256: structuralDigest(value.messageID),
+    auto: value.auto === true,
+    overflow: value.overflow === true,
+  };
+  return typeof value.tail_start_id === "string"
+    ? {
+        compaction: {
+          event: "tail-retained",
+          ...common,
+          retainedTail: true,
+          tailStartIdSha256: structuralDigest(value.tail_start_id),
+        },
+      }
+    : { compaction: { event: "started", ...common, retainedTail: false } };
+}
+
+function compactionSummaryProjection(
+  value: unknown,
+): { readonly compaction: OpenCodeCompactionActivity } | Record<string, never> {
+  if (!isRecord(value) || !settledCompactionSummary(value)) return {};
+  const info = value;
+  const compactionIdSha256 = structuralDigest(String(info.parentID));
+  if (info.error === undefined && info.finish === "stop") {
+    return { compaction: { event: "completed", compactionIdSha256 } };
+  }
+  const statedFinishReason = String(info.finish);
+  const failedFinishReason = FAILED_TERMINAL_FINISH_REASONS.has(statedFinishReason);
+  if (info.error === undefined && !failedFinishReason) return {};
+  const errorKind =
+    isRecord(info.error) && typeof info.error.name === "string"
+      ? info.error.name
+      : "OpenCodeCompactionFailure";
+  return {
+    compaction: {
+      event: "failed",
+      compactionIdSha256,
+      errorKind,
+      finishReason: failedFinishReason ? statedFinishReason : "error",
+    },
+  };
+}
+
+function settledCompactionSummary(info: Record<string, unknown>): boolean {
+  if (
+    info.role !== "assistant" ||
+    info.summary !== true ||
+    info.mode !== "compaction" ||
+    info.agent !== "compaction" ||
+    typeof info.parentID !== "string" ||
+    !isRecord(info.time) ||
+    !nonNegativeNumber(info.time.completed)
+  )
+    return false;
+  return true;
+}
+
+function structuralDigest(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 /** The closed allowlist is a security control, not a dispatch extension point. */
@@ -794,6 +908,8 @@ function messageUpdated(
     return undefined;
   if (data.info.role === "user") return userMessage(data.info) ? "observation" : undefined;
   if (!assistantMessage(data.info)) return undefined;
+  if (isRecord(data.info.error) && data.info.error.name === "MessageAbortedError")
+    return "terminal";
   if (data.info.error !== undefined) return "terminal-failure";
   const completed = isRecord(data.info.time) && nonNegativeNumber(data.info.time.completed);
   if (!completed) return "observation";
@@ -1060,9 +1176,10 @@ function toolState(state: Record<string, unknown>): boolean {
   }
   if (state.status === "error") {
     return (
-      exactRecord(state, ["status", "input", "error", "time"]) &&
+      allowedRecord(state, ["status", "input", "error", "metadata", "time"]) &&
       isRecord(state.input) &&
       nonEmpty(state.error) &&
+      (state.metadata === undefined || isRecord(state.metadata)) &&
       exactStartEndTime(state.time)
     );
   }

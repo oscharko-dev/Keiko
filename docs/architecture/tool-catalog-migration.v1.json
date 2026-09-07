@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "ownerIssue": 3406,
+  "closeoutIssue": 3415,
+  "sourceContract": "docs/architecture/governed-tool-contract.v1.json",
+  "sourceContractDigest": "4bb2d5e817b7b16a2cbabb60fd03fc63c0f92316b72d6e2dbdf858e773f11342",
+  "inventory": [],
+  "historicalInventory": {
+    "rowCount": 43,
+    "digest": "a994f09e81113b9060712ba7500f7e50b79df2f8c59dabcf686d3d7c47a1fbab"
+  },
+  "nonDispatchProbes": [
+    {
+      "id": "gateway-readiness-probe",
+      "ownerIssue": 3406,
+      "disposition": "non-dispatch-capability-probe",
+      "source": "packages/keiko-server/src/gateway-tool-calling-probe.ts",
+      "function": "toolCallingBody",
+      "contractDigest": "9d3dd16bff11d874ba705f8a3f10fe1e65cc7426bd8abe86f74b357f10596b17"
+    }
+  ],
+  "pendingH1": {
+    "owner": 3386,
+    "canonicalTool": {
+      "canonicalId": "keiko.repo.search",
+      "contractVersion": 1
+    },
+    "prerequisiteMerge": {
+      "issue": 3411,
+      "contractDigest": "4bb2d5e817b7b16a2cbabb60fd03fc63c0f92316b72d6e2dbdf858e773f11342"
+    },
+    "removalIssue": 3414,
+    "landedDevCommit": null,
+    "landedTreeDigest": null
+  }
+}

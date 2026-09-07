@@ -3,6 +3,56 @@
 
 export const GIT_REPOSITORY_SCHEMA_VERSION = "1" as const;
 
+// The one git ref-name predicate in the repository. It used to live only in keiko-tools, where the
+// packages that validate a ref BEFORE it reaches git — contracts among them — could not reach it,
+// because contracts is the dependency leaf (ADR-0019). A second, weaker copy grew there and
+// accepted refs (`main/`, `main.`, `.hidden`) that git itself refuses, so a snapshot could pass
+// contract validation and then be rejected at the git boundary. Consolidated here so both sides
+// share one formula; keiko-tools imports it rather than restating it.
+//
+// Deliberately stricter than `git check-ref-format`: every ref Keiko creates is server-derived, so
+// only the deterministic shapes we emit need to be accepted, and anything that could read as an
+// option, a traversal, or a refspec/glob metacharacter is refused.
+const UNSAFE_REF_PREFIXES: readonly string[] = ["-", "/"];
+const UNSAFE_REF_SUFFIXES: readonly string[] = ["/", "."];
+const UNSAFE_REF_SUBSTRINGS: readonly string[] = ["..", "//", "@{"];
+// Rules git applies to every slash-separated component rather than to the ref as a whole: no
+// component may begin with a dot (`feature/.hidden`) or end with `.lock` (`a.lock/b`). Checking
+// `.lock` against the whole ref only accepted `a.lock/b`, `x.lock/y/z` and `refs/heads/a.lock/b`,
+// all of which `git check-ref-format --allow-onelevel` refuses. The trailing-dot rule is NOT in
+// this list on purpose: git applies it to the whole ref only (`a.` is refused, `a./b` is not).
+const UNSAFE_REF_COMPONENT_PREFIXES: readonly string[] = ["."];
+const UNSAFE_REF_COMPONENT_SUFFIXES: readonly string[] = [".lock"];
+
+function hasControlOrNul(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if ((value.codePointAt(index) ?? 0) <= 0x1f) return true;
+  }
+  return false;
+}
+
+function isUnsafeRefComponent(component: string): boolean {
+  return (
+    UNSAFE_REF_COMPONENT_PREFIXES.some((prefix) => component.startsWith(prefix)) ||
+    UNSAFE_REF_COMPONENT_SUFFIXES.some((suffix) => component.endsWith(suffix))
+  );
+}
+
+export function isSafeGitRefName(value: string): boolean {
+  if (value.length === 0 || value.length > 255 || hasControlOrNul(value)) return false;
+  if (UNSAFE_REF_PREFIXES.some((prefix) => value.startsWith(prefix))) return false;
+  if (UNSAFE_REF_SUFFIXES.some((suffix) => value.endsWith(suffix))) return false;
+  if (UNSAFE_REF_SUBSTRINGS.some((part) => value.includes(part))) return false;
+  if (!/^[A-Za-z0-9._\-/]+$/u.test(value)) return false;
+  if (value.split("/").some(isUnsafeRefComponent)) return false;
+  return !/[~^:?*[\\ ]/u.test(value);
+}
+
+/** A complete immutable Git object identity, never a ref, abbreviation or revision expression. */
+export function isGitObjectId(value: unknown): value is string {
+  return typeof value === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value);
+}
+
 export const GIT_REPOSITORY_STATES = ["available", "unavailable", "unsafe", "error"] as const;
 export type GitRepositoryState = (typeof GIT_REPOSITORY_STATES)[number];
 

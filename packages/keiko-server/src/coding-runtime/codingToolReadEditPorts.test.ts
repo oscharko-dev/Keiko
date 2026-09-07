@@ -15,8 +15,13 @@ import { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
 import type { CodingRuntimeEditorMutationLeaseRegistration } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
-import { createCodingToolReadEditPorts } from "./codingToolReadEditPorts.js";
+import {
+  createCodingToolReadEditPorts,
+  NO_ACTIVE_SESSION_MESSAGE,
+} from "./codingToolReadEditPorts.js";
+import type { SecureWorkspaceTextReadResult } from "./secureWorkspaceTextRead.js";
 
 const DIGEST = "a".repeat(64);
 const SENTINEL = "RAW_PATH_CONTENT_PATCH_CAPABILITY_SENTINEL";
@@ -87,6 +92,55 @@ function singleUseManagedAccess(root: string): () =>
     available = false;
     return { kind: "managed-task", canonicalRoot: root, fs: nodeWorkspaceFs, repositoryRoot: root };
   };
+}
+
+type WorkspaceReadFailureFixture =
+  "exception" | "oversize" | "postflight" | "preflight" | "secure-refusal";
+
+async function observedWorkspaceReadFailure(kind: WorkspaceReadFailureFixture): Promise<{
+  readonly diagnostics: readonly ServerDiagnosticRecord[];
+  readonly events: readonly ServerLogEvent[];
+  readonly result: unknown;
+}> {
+  const binding = { ...liveDiscoveryBinding(), runId: "run-read-failure" };
+  const diagnostics: ServerDiagnosticRecord[] = [];
+  const events: ServerLogEvent[] = [];
+  let contextReads = 0;
+  const readText = vi.fn((): Promise<SecureWorkspaceTextReadResult> => {
+    if (kind === "exception") return Promise.reject(new Error(SENTINEL));
+    if (kind === "secure-refusal") {
+      return Promise.resolve({ ok: false, reason: "process-failed" });
+    }
+    return Promise.resolve({
+      ok: true,
+      text: kind === "oversize" ? "x".repeat(65_537) : "safe\n",
+    });
+  });
+  const ports = createCodingToolReadEditPorts({
+    secureWorkspaceTextRead: { readText },
+    editorAgentClient: { action: vi.fn() },
+    resolveEditorActionContext: vi.fn(),
+    resolveRepositoryReadContext: () => {
+      contextReads += 1;
+      return kind === "postflight" && contextReads > 1
+        ? { ...binding, workspaceId: "other-workspace" }
+        : binding;
+    },
+    diagnostics: { record: (record): void => void diagnostics.push(record) },
+    activityLog: { write: (event): void => void events.push(event) },
+    enforceProducerBinding: true,
+  });
+  const result = await ports.repositoryRead.execute(
+    {
+      action: "read",
+      actionId: "read-failure",
+      idempotencyKey: "read-failure-key",
+      relativePath: "src/private-name.ts",
+    },
+    kind === "preflight" ? AbortSignal.abort() : undefined,
+    { check: (): true => true, binding },
+  );
+  return { diagnostics, events, result };
 }
 
 describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
@@ -353,9 +407,11 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
       Promise.resolve({ ok: true as const, text: "const value = 1;\n" }),
     );
     const editorAction = vi.fn();
+    const events: ServerLogEvent[] = [];
     const ports = createCodingToolReadEditPorts({
       secureWorkspaceTextRead: { readText },
       editorAgentClient: { action: editorAction },
+      activityLog: { write: (event): void => void events.push(event) },
       resolveEditorActionContext: () => ({
         sessionId: "session-2332",
         authorityRef: { runId: "run-2332", envelopeDigest: DIGEST },
@@ -371,6 +427,17 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
 
     expect(readText).toHaveBeenCalledWith({ relativePath: "src/a.ts", signal: undefined });
     expect(editorAction).not.toHaveBeenCalled();
+    expect(events).toEqual([
+      expect.objectContaining({
+        op: "coding-runtime.workspace-read",
+        extra: {
+          state: "completed",
+          targetPathSha256: createHash("sha256").update("src/a.ts").digest("hex"),
+          startLine: 1,
+          maxLines: 0,
+        },
+      }),
+    ]);
     expect(result).toEqual({
       status: "completed",
       read: {
@@ -465,6 +532,49 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     expect(JSON.stringify(result)).not.toContain(SENTINEL);
     expect(editorAction).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["preflight", "preflight-refused"],
+    ["secure-refusal", "process-failed"],
+    ["postflight", "postflight-refused"],
+    ["oversize", "response-too-large"],
+    ["exception", "exception"],
+  ] as const)(
+    "records a correlated body-free workspace-read failure for the %s boundary",
+    async (kind, reason) => {
+      const observed = await observedWorkspaceReadFailure(kind);
+
+      expect(observed.result).toEqual({ status: "failed" });
+      expect(observed.events).toEqual([
+        expect.objectContaining({
+          op: "coding-runtime.workspace-read",
+          correlationId: "run-read-failure",
+          level: "warn",
+          extra: expect.objectContaining({
+            state: "failed",
+            reason,
+            targetPathSha256: createHash("sha256").update("src/private-name.ts").digest("hex"),
+          }) as unknown,
+        }),
+      ]);
+      expect(JSON.stringify(observed)).not.toContain("src/private-name.ts");
+      expect(JSON.stringify(observed)).not.toContain(SENTINEL);
+      if (kind === "exception") {
+        expect(observed.events[0]?.extra?.frames).toEqual(expect.any(Array));
+        expect(observed.events[0]?.extra?.causeChain).toEqual(expect.any(Array));
+        expect(observed.diagnostics).toEqual([
+          expect.objectContaining({
+            operation: "coding-runtime.workspace-read",
+            correlationId: "run-read-failure",
+            errorClass: "Error",
+            message: "workspace-read-failed",
+          }),
+        ]);
+      } else {
+        expect(observed.diagnostics).toEqual([]);
+      }
+    },
+  );
 
   it("fails closed when a compromised read port returns more than 65,536 bytes", async () => {
     const editorAction = vi.fn();
@@ -782,7 +892,11 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
           expiresAt: liveBinding.expiresAt,
         }),
         requiresEditorReview: () => requiresReview,
-        mutationLeaseCoordinator: { register, discard: vi.fn((): boolean => true) },
+        mutationLeaseCoordinator: {
+          register,
+          discard: vi.fn((): boolean => true),
+          waitForMutation: () => Promise.resolve("succeeded"),
+        },
       });
 
       await expect(
@@ -891,9 +1005,63 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
       await expect(outcome).resolves.toEqual({
         status: "failed",
         reasonCode: "NO_ACTIVE_SESSION",
+        message: NO_ACTIVE_SESSION_MESSAGE,
       });
       expect(listSessions).toHaveBeenCalledTimes(7);
       expect(action).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Epic #3384 cascade: the model used to see the bare "NO_ACTIVE_SESSION" code with no
+  // explanation and asked the operator "how would you like to proceed?" instead of being told to
+  // reconnect the Workbench. The outcome now carries one actionable sentence — while the
+  // activity-log diagnostic (AGENTS.md §8: body-free evidence) stays reason-code-only and never
+  // carries that sentence, so it cannot leak into a log a customer might attach unredacted.
+  it("names the actual condition in the refused edit's outcome while the diagnostic stays reason-code-only", async () => {
+    vi.useFakeTimers();
+    try {
+      const records: ServerDiagnosticRecord[] = [];
+      const listSessions = vi.fn(() =>
+        Promise.resolve({ ok: true as const, value: { sessions: [] } }),
+      );
+      const ports = createCodingToolReadEditPorts({
+        secureWorkspaceTextRead: { readText: vi.fn() },
+        editorAgentClient: { action: vi.fn(), listSessions },
+        resolveEditorActionContext: () => ({
+          sessionId: "runtime-run-msg",
+          authorityRef: { runId: "run-message-1", envelopeDigest: DIGEST },
+          origin: "agent",
+          workspaceRoot: "/managed/repo",
+        }),
+        diagnostics: { record: (record): void => void records.push(record) },
+      });
+
+      const outcome = ports.editorChangeset.execute(
+        { action: "edit", actionId: "edit-1", idempotencyKey: "edit-key", changeset: changeset() },
+        undefined,
+        { check: (): true => true },
+      );
+      await vi.advanceTimersByTimeAsync(11_750);
+
+      await expect(outcome).resolves.toEqual({
+        status: "failed",
+        reasonCode: "NO_ACTIVE_SESSION",
+        message:
+          "no Coding Workbench is connected for this workspace; keep the Workbench open and retry",
+      });
+      expect(records).toEqual([
+        expect.objectContaining({
+          operation: "coding-runtime.editor-changeset",
+          source: "coding-tool-read-edit-ports.edit",
+          message: "edit-refused",
+          errorClass: "NO_ACTIVE_SESSION",
+          correlationId: "run-message-1",
+        }),
+      ]);
+      expect(records[0]).not.toHaveProperty("extra.message");
+      expect(JSON.stringify(records)).not.toContain(NO_ACTIVE_SESSION_MESSAGE);
     } finally {
       vi.useRealTimers();
     }
@@ -924,7 +1092,11 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): true => true },
       ),
-    ).resolves.toEqual({ status: "failed", reasonCode: "NO_ACTIVE_SESSION" });
+    ).resolves.toEqual({
+      status: "failed",
+      reasonCode: "NO_ACTIVE_SESSION",
+      message: NO_ACTIVE_SESSION_MESSAGE,
+    });
 
     const controller = new AbortController();
     const emptyList = vi.fn(() => Promise.resolve({ ok: true as const, value: { sessions: [] } }));
@@ -948,7 +1120,11 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     });
     controller.abort();
 
-    await expect(aborted).resolves.toEqual({ status: "failed", reasonCode: "NO_ACTIVE_SESSION" });
+    await expect(aborted).resolves.toEqual({
+      status: "failed",
+      reasonCode: "NO_ACTIVE_SESSION",
+      message: NO_ACTIVE_SESSION_MESSAGE,
+    });
     expect(failedList).toHaveBeenCalledOnce();
     expect(action).not.toHaveBeenCalled();
   });

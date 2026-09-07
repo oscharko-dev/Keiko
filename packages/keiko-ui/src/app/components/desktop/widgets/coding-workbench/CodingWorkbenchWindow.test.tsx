@@ -1,14 +1,20 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { draftDeliveryReview, draftDeliverySnapshot } from "./_draftDeliveryTestSupport";
+import { journeyFixture } from "./_journeyOutcomeTestSupport";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
+import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import type {
   AvailableCodingSafeActivityFeed,
+  CodingWorkbenchMode,
+  CodingWorkbenchRuntimePendingApprovalReview,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
   WorkspaceBinding,
   WorkspaceInstance,
+  WorkspaceTrustStatus,
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchRuntimeActions } from "@/lib/useCodingWorkbenchRuntime";
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
@@ -19,6 +25,7 @@ import {
 } from "@/lib/coding-workbench-live-state";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { CodingWorkbenchWindow, type CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import styles from "./CodingWorkbenchWindow.module.css";
 import { GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT } from "../shared/gatewaySetupBus";
 import {
@@ -37,6 +44,40 @@ const chatCatalogMock = vi.hoisted(() => ({
   activeProject: undefined as ProjectWithAvailability | undefined,
   projects: [] as ProjectWithAvailability[],
 }));
+// #3389 AC3 mark-ready wiring: the mint/execute pair the propose-ready control performs, and the
+// journey-refresh read the window uses to obtain a real, matching `JourneyOutcome`. `proposePrMarkReady`
+// is replaced with a version that calls THESE mocks directly (not the real module's own approve/execute,
+// which `importOriginal` would still close over) so a click's mint-then-execute sequence is observable
+// as two separate call counts, exactly as the mark-ready client itself performs it (api.ts).
+const journeyRefreshMock = vi.hoisted(() => vi.fn());
+const markReadyApproveMock = vi.hoisted(() => vi.fn());
+const markReadyExecuteMock = vi.hoisted(() => vi.fn());
+const mergeExecuteMock = vi.hoisted(() => vi.fn());
+const prUpdateExecuteMock = vi.hoisted(() => vi.fn());
+// #3390 wave: the header's trust affordance (`CodingWorkbenchTrustAffordance`) reads live workspace
+// trust through the SAME client the Editor uses (`useWorkspaceTrust` → workspace-trust-api). Every
+// suite in this file that binds an active workspace would otherwise reach this real fetch; the
+// `beforeEach` below resolves it "trusted" by default so the affordance stays invisible and every
+// pre-existing assertion in this file is unaffected. The dedicated suite further down overrides it.
+const trustStatusMock = vi.hoisted(() => vi.fn());
+const trustMutateMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
+  return {
+    ...actual,
+    fetchCodingWorkbenchJourneyRefresh: journeyRefreshMock,
+    fetchGitDeliveryMergeExecute: mergeExecuteMock,
+    fetchGitDeliveryPrExecute: prUpdateExecuteMock,
+    proposePrMarkReady: async (
+      input: Parameters<typeof actual.proposePrMarkReady>[0],
+    ): ReturnType<typeof actual.proposePrMarkReady> => {
+      const minted: Awaited<ReturnType<typeof actual.fetchGitDeliveryPrMarkReadyApprove>> =
+        await markReadyApproveMock(input);
+      return markReadyExecuteMock({ ...input, approval: minted.approval });
+    },
+  };
+});
 
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
@@ -60,6 +101,12 @@ vi.mock("@/lib/useCodingWorkbenchApprovalReview", () => ({
 
 vi.mock("../../hooks/useAutonomyModePolicy", () => ({
   useAutonomyModePolicy: autonomyHookMock,
+}));
+
+vi.mock("@/lib/workspace-trust-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/workspace-trust-api")>()),
+  fetchWorkspaceTrustStatus: trustStatusMock,
+  mutateWorkspaceTrust: trustMutateMock,
 }));
 
 vi.mock("@/lib/useCodingWorkbenchEditorBridge", () => ({
@@ -222,13 +269,18 @@ function renderWorkbench(
 function activeWorkspaceWithBinding(
   repositoryRoot: string,
   activeRoot: string,
-  identity: { readonly workspaceId?: string; readonly taskBranch?: string } = {},
+  identity: {
+    readonly workspaceId?: string;
+    readonly taskBranch?: string;
+    readonly repositoryId?: string;
+    readonly auditCorrelationId?: string;
+  } = {},
 ): ActiveWorkspaceApi {
   const instance: WorkspaceInstance = {
     schemaVersion: "1",
     workspaceId: identity.workspaceId ?? "workspace-1",
     taskId: "task-1",
-    repositoryId: "repository-1",
+    repositoryId: identity.repositoryId ?? "repository-1",
     repositoryRoot,
     baseBranch: "dev",
     taskBranch: identity.taskBranch ?? "task-1",
@@ -241,7 +293,7 @@ function activeWorkspaceWithBinding(
     updatedAt: AT,
     driftMarkers: [],
     recoveryHints: [],
-    auditCorrelationId: "correlation-1",
+    auditCorrelationId: identity.auditCorrelationId ?? "correlation-1",
   };
   const binding: WorkspaceBinding = {
     schemaVersion: "1",
@@ -272,6 +324,21 @@ function activeWorkspaceWithBinding(
   };
 }
 
+function trustStatus(
+  projectId: string,
+  trust: "trusted" | "restricted" = "trusted",
+): WorkspaceTrustStatus {
+  return {
+    kind: "workspace-trust-status",
+    schemaVersion: WORKSPACE_TRUST_SCHEMA_VERSION,
+    projectId,
+    trust,
+    decidedBy: "server",
+    reason: trust === "trusted" ? "human-grant" : "human-revocation",
+    revision: 1,
+  };
+}
+
 // FILE scope, not one describe's: three top-level suites in this file render
 // `CodingWorkbenchWindow`, which reads `research.grant` and `editorBridge.pendingReview` on every
 // render. While these defaults lived inside the first describe, the other two saw them only because
@@ -282,6 +349,17 @@ function activeWorkspaceWithBinding(
 beforeEach(() => {
   chatCatalogMock.activeProject = undefined;
   chatCatalogMock.projects = [];
+  // Every other suite in this file leaves the journey read unmocked-in-spirit: it never sets up an
+  // observed outcome, so it must keep resolving to a valid "nothing observed" envelope rather than
+  // silently reusing whatever a mark-ready test configured last (AGENTS.md §7: hermetic tests, no
+  // shared mutable global state between them).
+  journeyRefreshMock.mockReset().mockResolvedValue({ status: "unavailable", reason: "not-tested" });
+  markReadyApproveMock.mockReset();
+  markReadyExecuteMock.mockReset();
+  mergeExecuteMock.mockReset();
+  prUpdateExecuteMock.mockReset();
+  trustStatusMock.mockReset().mockResolvedValue(trustStatus("unused", "trusted"));
+  trustMutateMock.mockReset();
   questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
   activityHookMock.mockReturnValue(IDLE_ACTIVITY);
   approvalReviewHookMock.mockReturnValue({ status: "idle", review: null, retry: vi.fn() });
@@ -292,6 +370,7 @@ beforeEach(() => {
     approve: vi.fn(),
     deny: vi.fn(),
     retry: vi.fn(),
+    bridgeUnavailable: false,
   });
   autonomyHookMock.mockReturnValue({
     requestedMode: "supervised-coding",
@@ -304,6 +383,50 @@ beforeEach(() => {
 });
 
 describe("CodingWorkbenchWindow", () => {
+  it.each(["succeeded", "failed", "cancelled", "taken-over"] as const)(
+    "can reopen issue intake after a %s run with retained activity",
+    async (state) => {
+      const diagnostic = vi.fn();
+      setClientDiagnosticWriter(diagnostic);
+      try {
+        renderWorkbench(
+          liveState({
+            run: { status: "ready", error: null, value: snapshot({ state, runId: "run-1" }) },
+            events: [event(1)],
+          }),
+        );
+        await userEvent.setup().click(
+          screen.getByRole("button", {
+            name: "Start from a GitHub issue",
+          }),
+        );
+        expect(screen.getByRole("region", { name: "Code setup" })).toBeVisible();
+        expect(diagnostic).toHaveBeenCalledWith(
+          "[keiko] coding workbench issue intake opened",
+          undefined,
+        );
+      } finally {
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it.each(["running", "paused", "awaiting-approval", "recovery-required"] as const)(
+    "does not offer a new issue while a run is %s",
+    (state) => {
+      renderWorkbench(
+        liveState({
+          run: { status: "ready", error: null, value: snapshot({ state, runId: "run-1" }) },
+        }),
+      );
+      expect(
+        screen.queryByRole("button", {
+          name: "Start from a GitHub issue",
+        }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
   it("refreshes the model catalog when the Workbench opens", (): void => {
     const listener = vi.fn();
     window.addEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, listener);
@@ -359,7 +482,9 @@ describe("CodingWorkbenchWindow", () => {
     });
   }
 
-  function editApprovalState(): CodingWorkbenchRuntimeState {
+  function editApprovalState(
+    actionKind: "file-edit" | "git-stage" = "file-edit",
+  ): CodingWorkbenchRuntimeState {
     return liveState({
       run: {
         status: "ready",
@@ -372,7 +497,7 @@ describe("CodingWorkbenchWindow", () => {
             kind: "workspace-write",
             actionClass: "workspace-write",
             reasonCode: "approval-required",
-            actionKind: "file-edit",
+            actionKind,
             scopeLabel: "workspace-scope",
             risk: "medium",
             policyReason: "approval-required",
@@ -1142,29 +1267,12 @@ describe("CodingWorkbenchWindow", () => {
 
   it("binds one-time approval controls to live pending permission truth", async () => {
     const user = userEvent.setup();
-    const liveActions = renderWorkbench(
-      liveState({
-        run: {
-          status: "ready",
-          error: null,
-          value: snapshot({
-            state: "awaiting-approval",
-            runId: "run-1",
-            pendingPermission: {
-              requestId: "permission-1",
-              kind: "delivery-substrate",
-              actionClass: "delivery-substrate",
-              reasonCode: "approval-required",
-              actionKind: "push",
-              scopeLabel: "workspace-scope",
-              risk: "high",
-              policyReason: "approval-required",
-              expiresAt: "2026-07-13T12:05:00.000Z",
-            },
-          }),
-        },
-      }),
-    );
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: draftDeliveryReview("push"),
+      retry: vi.fn(),
+    });
+    const liveActions = renderWorkbench(deliveryApprovalState("push"));
 
     expect(screen.getByRole("heading", { name: "Review the bounded action" })).toBeInTheDocument();
     expect(screen.queryByText(/diff --git|Bearer|\/Users\//u)).not.toBeInTheDocument();
@@ -1269,6 +1377,46 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.queryByText("Research destination")).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["ci-observe", "CI status check"],
+    ["connector-read", "Connector read"],
+  ] as const)(
+    "3941816393: labels a governed %s approval and admits it without a destination review",
+    (actionKind, label) => {
+      researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null, retry: vi.fn() });
+      renderWorkbench(
+        liveState({
+          run: {
+            status: "ready",
+            error: null,
+            value: snapshot({
+              state: "awaiting-approval",
+              runId: "run-1",
+              pendingPermission: {
+                requestId: "governed-bounded-read-1",
+                kind: "command-execution",
+                actionClass: "command-execution",
+                reasonCode: "approval-required",
+                actionKind,
+                scopeLabel: "workspace-scope",
+                risk: "high",
+                policyReason: "approval-required",
+                commandLabel: actionKind,
+                expiresAt: "2026-07-13T12:05:00.000Z",
+              },
+            }),
+          },
+        }),
+      );
+
+      expect(screen.getByText(label)).toBeInTheDocument();
+      // Neither maps to "network-egress", so no destination-review coupling applies and the
+      // approve control is not blocked waiting on evidence it has no reader for (3941816393).
+      expect(screen.queryByText("Research destination")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Approve once" })).toBeEnabled();
+    },
+  );
+
   it("#2802: shows the files and magnitude of the edit the operator is approving", async () => {
     approvalReviewHookMock.mockReturnValue({
       status: "ready",
@@ -1336,6 +1484,409 @@ describe("CodingWorkbenchWindow", () => {
 
     expect(
       screen.queryByRole("button", { name: "Retry loading the changed files" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each(["loading", "unavailable"] as const)(
+    "#3386: git staging cannot be approved with %s review evidence",
+    (status) => {
+      approvalReviewHookMock.mockReturnValue({ status, review: null, retry: vi.fn() });
+      renderWorkbench(editApprovalState("git-stage"));
+      expect(approvalReviewHookMock).toHaveBeenCalledWith({
+        runId: "run-1",
+        permissionRequestId: "permission-7",
+      });
+      expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+    },
+  );
+
+  it("#3386: shows exact paths before one-use Git stage approval", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const user = userEvent.setup();
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: {
+        requestId: "permission-7",
+        paths: ["src/stage-only.ts"],
+        pathsTruncated: false,
+        fileCount: 1,
+        addedLines: 4,
+        deletedLines: 2,
+      },
+      retry: vi.fn(),
+    });
+    const actions = renderWorkbench(editApprovalState("git-stage"));
+    expect(screen.getByText("Stage changes")).toBeInTheDocument();
+    expect(screen.getByText("src/stage-only.ts")).toBeInTheDocument();
+    expect(warning).toHaveBeenCalledWith("[keiko] git stage review ready: files 1");
+    expect(JSON.stringify(warning.mock.calls)).not.toContain("src/stage-only.ts");
+    expect(
+      screen.queryByRole("region", { name: "Reviewed commit message" }),
+    ).not.toBeInTheDocument();
+    expect(actions.decideApproval).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Approve once" }));
+    expect(actions.decideApproval).toHaveBeenCalledExactlyOnceWith("approved");
+    warning.mockRestore();
+  });
+
+  function commitApprovalState(
+    mode: CodingWorkbenchMode = "governed-assist",
+  ): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "awaiting-approval",
+          runId: "run-1",
+          requestedMode: mode,
+          effectiveMode: mode,
+          pendingPermission: {
+            requestId: "proposal-3386",
+            kind: "delivery-substrate",
+            actionClass: "delivery-substrate",
+            actionKind: "commit",
+            reasonCode: "approval-required",
+            policyReason: "approval-required",
+            risk: "high",
+            expiresAt: "2026-07-13T12:05:00.000Z",
+          },
+        }),
+      },
+    });
+  }
+
+  function commitReview(): CodingWorkbenchRuntimePendingApprovalReview {
+    return {
+      requestId: "proposal-3386",
+      paths: ["src/actual.ts"],
+      pathsTruncated: false,
+      fileCount: 1,
+      addedLines: 7,
+      deletedLines: 2,
+      verifiedCommit: {
+        message: "fix: preserve exact verified commit\n\nUntrusted <script> content",
+        result: {
+          schemaVersion: "1",
+          status: "approval-required",
+          reason: "approval-required",
+          recordedAt: AT,
+          proposalId: "proposal-3386",
+          runId: "run-1",
+          envelopeDigest: "a".repeat(64),
+          runtimeAuthorityDigest: "b".repeat(64),
+          workspaceDigest: "c".repeat(64),
+          repositoryDigest: "d".repeat(64),
+          baseSha: "1".repeat(40),
+          parentSha: "2".repeat(40),
+          stagedTreeDigest: "3".repeat(64),
+          messageDigest: "4".repeat(64),
+          verificationEvidenceId: "verification-3386",
+        },
+      },
+    };
+  }
+
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "#3386: commit approval in %s requires its exact reviewed proposal",
+    async (mode) => {
+      const user = userEvent.setup();
+      approvalReviewHookMock.mockReturnValue({ status: "loading", review: null, retry: vi.fn() });
+      const liveActions = renderWorkbench(commitApprovalState(mode));
+      expect(approvalReviewHookMock).toHaveBeenCalledWith({
+        runId: "run-1",
+        permissionRequestId: "proposal-3386",
+      });
+      expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+      await user.click(screen.getByRole("button", { name: "Approve once" }));
+      expect(liveActions.decideApproval).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "#3386: displays the exact staged change and untrusted commit message before approval in %s",
+    async (mode) => {
+      const user = userEvent.setup();
+      approvalReviewHookMock.mockReturnValue({
+        status: "ready",
+        review: commitReview(),
+        retry: vi.fn(),
+      });
+      const liveActions = renderWorkbench(commitApprovalState(mode));
+      expect(liveActions.decideApproval).not.toHaveBeenCalled();
+      const message = screen.getByRole("region", { name: "Reviewed commit message" });
+      expect(message).toHaveTextContent("Untrusted <script> content");
+      expect(message.querySelector("script")).toBeNull();
+      const files = screen.getByRole("group", { name: "Staged files for this commit" });
+      expect(files).toHaveTextContent("src/actual.ts");
+      expect(files).toHaveTextContent("+7 / -2");
+      expect(screen.getByText("verification-3386")).toBeInTheDocument();
+      expect(screen.getByText("1".repeat(40))).toBeInTheDocument();
+      expect(screen.getByText("2".repeat(40))).toBeInTheDocument();
+      expect(screen.getByText("3".repeat(64))).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Approve once" }));
+      expect(liveActions.decideApproval).toHaveBeenCalledExactlyOnceWith("approved");
+      expect(await axe(document.body)).toHaveNoViolations();
+    },
+  );
+
+  it.each([
+    "missing-commit",
+    "wrong-run",
+    "wrong-proposal",
+    "invalid-message",
+    "blocked-pending",
+    "token-field",
+    "unsafe-path",
+  ])("#3386: refuses %s commit review without exposing its message", (shape) => {
+    const review = commitReview();
+    const commit = review.verifiedCommit;
+    if (commit === undefined) throw new Error("Fixture requires a commit");
+    const broken = { ...review, verifiedCommit: { ...commit, result: { ...commit.result } } };
+    if (shape === "missing-commit") Reflect.deleteProperty(broken, "verifiedCommit");
+    if (shape === "invalid-message") broken.verifiedCommit.message = "";
+    if (shape === "wrong-run") broken.verifiedCommit.result.runId = "other-run";
+    if (shape === "wrong-proposal") broken.verifiedCommit.result.proposalId = "other-proposal";
+    if (shape === "blocked-pending") Reflect.set(broken.verifiedCommit.result, "status", "blocked");
+    if (shape === "token-field")
+      Reflect.set(broken.verifiedCommit, "approvalToken", "fixture-token");
+    if (shape === "unsafe-path") broken.paths = ["../private.txt"];
+    approvalReviewHookMock.mockReturnValue({ status: "ready", review: broken, retry: vi.fn() });
+    renderWorkbench(commitApprovalState());
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    expect(screen.queryByText(/Untrusted <script>/u)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+  });
+
+  it("#3386: does not display a commit review beside a file-edit permission", () => {
+    const review = commitReview();
+    const commit = review.verifiedCommit;
+    if (commit === undefined) throw new Error("Fixture requires a commit");
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      retry: vi.fn(),
+      review: {
+        ...review,
+        requestId: "permission-7",
+        verifiedCommit: {
+          ...commit,
+          result: { ...commit.result, proposalId: "permission-7" },
+        },
+      },
+    });
+    renderWorkbench(editApprovalState());
+    expect(
+      screen.queryByRole("region", { name: "Reviewed commit message" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+  });
+
+  function deliveryApprovalState(
+    action: "push" | "pull-request",
+    mode: CodingWorkbenchMode = "governed-assist",
+  ): CodingWorkbenchRuntimeState {
+    const review = draftDeliveryReview(action);
+    return liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: {
+          ...draftDeliverySnapshot(),
+          state: "awaiting-approval",
+          requestedMode: mode,
+          effectiveMode: mode,
+          pendingPermission: {
+            requestId: review.requestId,
+            kind: "delivery-substrate",
+            actionClass: "delivery-substrate",
+            actionKind: action,
+            reasonCode: "approval-required",
+            policyReason: "approval-required",
+            risk: "high",
+            expiresAt: "2026-09-05T00:05:00.000Z",
+          },
+        },
+      },
+    });
+  }
+
+  const DELIVERY_CASES = (
+    ["governed-assist", "supervised-coding", "autonomous-delivery"] as const
+  ).flatMap((mode) => (["push", "pull-request"] as const).map((action) => ({ mode, action })));
+
+  it.each(DELIVERY_CASES)(
+    "#3387: $mode $action waits for authenticated review",
+    ({ mode, action }) => {
+      approvalReviewHookMock.mockReturnValue({ status: "loading", review: null, retry: vi.fn() });
+      renderWorkbench(deliveryApprovalState(action, mode));
+      expect(approvalReviewHookMock).toHaveBeenCalledWith({
+        runId: "run-1",
+        permissionRequestId: "delivery-1",
+      });
+      expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+    },
+  );
+
+  it.each(DELIVERY_CASES)(
+    "#3387: $mode reviews exact $action target before explicit approval",
+    async ({ mode, action }) => {
+      approvalReviewHookMock.mockReturnValue({
+        status: "ready",
+        review: draftDeliveryReview(action),
+        retry: vi.fn(),
+      });
+      const actions = renderWorkbench(deliveryApprovalState(action, mode));
+      const target = screen.getByRole("region", { name: "Reviewed delivery target" });
+      for (const value of [
+        "owner/repository",
+        "#42",
+        "feature/issue-42",
+        "main",
+        "3".repeat(40),
+        "1".repeat(40),
+      ])
+        expect(target).toHaveTextContent(value);
+      expect(screen.queryByRole("group", { name: "Changed files" })).not.toBeInTheDocument();
+      if (action === "pull-request") {
+        expect(
+          screen.getByRole("region", { name: "Reviewed pull request title" }),
+        ).toHaveTextContent("fix: exact reviewed delivery <script>");
+        const body = screen.getByRole("region", { name: "Reviewed pull request description" });
+        expect(body).toHaveTextContent("Original template <img src=x>");
+        expect(body).toHaveTextContent("Closes #42");
+        expect(body.querySelector("img")).toBeNull();
+      } else
+        expect(
+          screen.queryByRole("region", { name: "Reviewed pull request description" }),
+        ).not.toBeInTheDocument();
+      expect(actions.decideApproval).not.toHaveBeenCalled();
+      await userEvent.setup().click(screen.getByRole("button", { name: "Approve once" }));
+      expect(actions.decideApproval).toHaveBeenCalledExactlyOnceWith("approved");
+      expect(await axe(document.body)).toHaveNoViolations();
+    },
+  );
+
+  it.each([
+    "missing",
+    "wrong-run",
+    "wrong-issue",
+    "wrong-remote",
+    "wrong-number",
+    "wrong-base",
+    "wrong-request",
+    "wrong-phase",
+    "token",
+    "missing-body",
+    "mixed-commit",
+  ])("#3387: refuses %s PR review and hides its transient text", (shape) => {
+    const review = structuredClone(draftDeliveryReview("pull-request"));
+    const delivery = review.draftDelivery;
+    if (delivery === undefined) throw new Error("Fixture requires delivery");
+    if (shape === "missing") Reflect.deleteProperty(review, "draftDelivery");
+    const changedBinding: Readonly<Record<string, readonly [string, string | number]>> = {
+      "wrong-run": ["runId", "other-run"],
+      "wrong-issue": ["issueBindingDigest", "b".repeat(64)],
+      "wrong-remote": ["remoteDigest", "b".repeat(64)],
+      "wrong-number": ["issueNumber", 43],
+      "wrong-base": ["baseRef", "dev"],
+    };
+    const mutation = changedBinding[shape];
+    if (mutation !== undefined) Reflect.set(delivery.record.binding, ...mutation);
+    if (shape === "wrong-request") Reflect.set(review, "requestId", "other-request");
+    if (shape === "wrong-phase") Reflect.set(delivery.record, "phase", "push-proposed");
+    if (shape === "token") Reflect.set(delivery, "approvalToken", "fixture-secret");
+    if (shape === "missing-body") Reflect.deleteProperty(delivery, "body");
+    if (shape === "mixed-commit")
+      Reflect.set(review, "verifiedCommit", commitReview().verifiedCommit);
+    approvalReviewHookMock.mockReturnValue({ status: "ready", review, retry: vi.fn() });
+    renderWorkbench(deliveryApprovalState("pull-request"));
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    expect(screen.queryByText(/exact reviewed delivery/u)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+  });
+
+  it.each(["push", "pull-request"] as const)(
+    "#3387: refuses a valid review for the other delivery action beside %s",
+    (action) => {
+      const other = action === "push" ? "pull-request" : "push";
+      approvalReviewHookMock.mockReturnValue({
+        status: "ready",
+        review: draftDeliveryReview(other),
+        retry: vi.fn(),
+      });
+      renderWorkbench(deliveryApprovalState(action));
+      expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+      expect(
+        screen.queryByRole("region", { name: "Reviewed pull request description" }),
+      ).not.toBeInTheDocument();
+    },
+  );
+  it("#3387: records the unavailable delivery display without its rejected text", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: draftDeliveryReview("push"),
+      retry: vi.fn(),
+    });
+    renderWorkbench(deliveryApprovalState("pull-request"));
+    expect(warn).toHaveBeenCalledWith("[keiko] draft delivery review displayed: unavailable");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("Original template");
+  });
+
+  it("#3387: denies an unavailable delivery without granting and retries its existing review channel", async () => {
+    const retry = vi.fn();
+    approvalReviewHookMock.mockReturnValue({ status: "unavailable", review: null, retry });
+    const actions = renderWorkbench(deliveryApprovalState("push"));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Retry delivery review" }));
+    expect(retry).toHaveBeenCalledOnce();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Deny" }));
+    expect(actions.decideApproval).toHaveBeenCalledExactlyOnceWith("denied");
+  });
+
+  it("#3387: restores durable delivery after reload with no commit receipt or session events", () => {
+    renderWorkbench(
+      liveState({ run: { status: "ready", error: null, value: draftDeliverySnapshot() } }),
+    );
+    expect(screen.getByRole("region", { name: "Repository delivery" })).toHaveTextContent(
+      "Draft pull request created",
+    );
+    expect(screen.getByRole("link", { name: "Pull request #7" })).toHaveAttribute(
+      "href",
+      "https://github.com/owner/repository/pull/7",
+    );
+    expect(screen.queryByRole("button", { name: "Approve once" })).not.toBeInTheDocument();
+  });
+
+  it("#3386: restores the durable commit finding after reload even without session events", () => {
+    const commit = commitReview().verifiedCommit;
+    if (commit === undefined) throw new Error("Fixture requires a commit");
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            state: "succeeded",
+            runId: "run-1",
+            verifiedCommitResult: {
+              ...commit.result,
+              status: "blocked",
+              reason: "policy-block",
+              blockReason: "protected-branch",
+            },
+          }),
+        },
+      }),
+    );
+    expect(screen.getByRole("region", { name: "Commit result" })).toHaveTextContent(
+      "Target is a protected branch",
+    );
+    expect(screen.queryByRole("button", { name: "Approve once" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "Reviewed commit message" }),
     ).not.toBeInTheDocument();
   });
 
@@ -1476,6 +2027,37 @@ describe("CodingWorkbenchWindow", () => {
 
     await user.click(screen.getByRole("button", { name: "Acknowledge recovery" }));
     expect(liveActions.acknowledgeRecovery).toHaveBeenCalledOnce();
+  });
+
+  // #3390: after a server restart the operator's actual control was the composer's single "Start
+  // coding run" action, not the recovery panel's separate Retry button. Once the live-state guard
+  // reports the acknowledged predecessor as startable (`canStart: true`), that primary action must
+  // reach `actions.start` exactly like any other startable state — a hidden runState-specific
+  // guard here would leave the button visually enabled but silently inert.
+  it("lets the primary Start action fire once an acknowledged recovery-required predecessor is startable", async () => {
+    const user = userEvent.setup();
+    const liveActions = renderWorkbench(
+      liveState({
+        canStart: true,
+        canRetry: true,
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            state: "recovery-required",
+            runId: "run-1",
+            failureCode: "recovery-required",
+            recoveryAcknowledged: true,
+          }),
+        },
+      }),
+    );
+
+    const taskInput = screen.getByLabelText("Task instructions");
+    await user.type(taskInput, "Continue after the restart");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+
+    expect(liveActions.start).toHaveBeenCalledWith("Continue after the restart");
   });
 
   it("keeps terminal result evidence out of the user-facing workbench", async () => {
@@ -2007,25 +2589,163 @@ describe("Codex subscription sign-in surface", () => {
 // when Start arrived and keeps it for the run's life, so the composer chips, the session context
 // bar and the Git target must keep naming THAT workspace. Following the pointer instead labelled a
 // run in A with B's root and branch and opened B's Git — an invitation to act on the wrong tree.
-describe("CodingWorkbenchWindow run workspace attribution", () => {
-  const WORKSPACE_A = { root: "/worktrees/task-a", branch: "issue/aaa", id: "workspace-a" };
-  const WORKSPACE_B = { root: "/worktrees/task-b", branch: "issue/bbb", id: "workspace-b" };
+// #3390 wave: the header's "Allow package scripts for verification" affordance. It reads the SAME
+// server-owned trust status the Editor's own trust surface reads, keyed on the bound repository —
+// the operator no longer has to already know the Editor's own command to unblock a run refused
+// WORKSPACE_TRUST_REQUIRED (2026-09-05 real run).
+describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
+  afterEach(resetClientDiagnosticWriter);
 
-  function workspaceApi(workspace: {
-    root: string;
-    branch: string;
-    id: string;
-  }): ActiveWorkspaceApi {
-    return activeWorkspaceWithBinding("/repos/keiko", workspace.root, {
+  it("reads and grants a managed task's repository trust rather than its private worktree", async () => {
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    trustStatusMock.mockResolvedValue(trustStatus("/repos/keiko", "restricted"));
+    trustMutateMock.mockResolvedValue(trustStatus("/repos/keiko", "trusted"));
+    const user = userEvent.setup();
+    renderWorkbench(
+      liveState(),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko", "/state/.keiko/task-workspaces/task-1"),
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Allow package scripts for verification" }),
+    );
+
+    expect(trustStatusMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko");
+    expect(trustMutateMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko", "grant");
+    expect(diagnostic).toHaveBeenCalledWith("[keiko] coding workbench repository trust bound", {
+      correlationId: "correlation-1",
+      workspaceTrustBinding: {
+        repositoryId: "repository-1",
+        workspaceId: "workspace-1",
+      },
+    });
+  });
+
+  it.each<Partial<ActiveWorkspaceApi>>([
+    { loading: true },
+    { switching: true },
+    { error: "workspace unavailable" },
+    { activeInstance: null },
+    { activeBinding: null },
+  ])("withholds trust while the workspace binding is unsettled: %j", (unsettled) => {
+    renderWorkbench(liveState(), actions(), undefined, {
+      ...activeWorkspaceWithBinding("/repos/keiko", "/worktrees/task-1"),
+      ...unsettled,
+    });
+    expect(trustStatusMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("coding-workbench-trust-affordance")).not.toBeInTheDocument();
+  });
+
+  it("shows the allow action once the bound workspace resolves as restricted", async () => {
+    trustStatusMock.mockResolvedValue(trustStatus("/repos/keiko", "restricted"));
+    renderWorkbench(
+      liveState(),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko", "/repos/keiko"),
+    );
+
+    const action = await screen.findByRole("button", {
+      name: "Allow package scripts for verification",
+    });
+    expect(action).toBeEnabled();
+    expect(trustStatusMock).toHaveBeenCalledWith("/repos/keiko");
+  });
+
+  it("grants trust for the bound root through the existing grant route and hides once trusted", async () => {
+    trustStatusMock.mockResolvedValue(trustStatus("/repos/keiko", "restricted"));
+    trustMutateMock.mockResolvedValue(trustStatus("/repos/keiko", "trusted"));
+    const user = userEvent.setup();
+    renderWorkbench(
+      liveState(),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko", "/repos/keiko"),
+    );
+
+    const action = await screen.findByRole("button", {
+      name: "Allow package scripts for verification",
+    });
+    await user.click(action);
+
+    expect(trustMutateMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko", "grant");
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: /Allow package scripts/u }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("renders no affordance once the bound workspace resolves as trusted", async () => {
+    trustStatusMock.mockResolvedValue(trustStatus("/repos/keiko", "trusted"));
+    renderWorkbench(
+      liveState(),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko", "/repos/keiko"),
+    );
+
+    await waitFor(() => expect(trustStatusMock).toHaveBeenCalledWith("/repos/keiko"));
+    expect(
+      screen.queryByRole("button", { name: /Allow package scripts/u }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders no affordance while no workspace is bound", () => {
+    renderWorkbench(liveState());
+
+    expect(trustStatusMock).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: /Allow package scripts/u }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("CodingWorkbenchWindow run workspace attribution", () => {
+  afterEach(resetClientDiagnosticWriter);
+
+  const WORKSPACE_A = {
+    root: "/worktrees/task-a",
+    repositoryRoot: "/repos/a",
+    repositoryId: "repository-a",
+    branch: "issue/aaa",
+    id: "workspace-a",
+    correlationId: "correlation-workspace-a",
+  };
+  const WORKSPACE_B = {
+    root: "/worktrees/task-b",
+    repositoryRoot: "/repos/b",
+    repositoryId: "repository-b",
+    branch: "issue/bbb",
+    id: "workspace-b",
+    correlationId: "correlation-workspace-b",
+  };
+
+  interface WorkspaceFixture {
+    readonly root: string;
+    readonly repositoryRoot: string;
+    readonly repositoryId: string;
+    readonly branch: string;
+    readonly id: string;
+    readonly correlationId: string;
+  }
+
+  function workspaceApi(workspace: WorkspaceFixture): ActiveWorkspaceApi {
+    return activeWorkspaceWithBinding(workspace.repositoryRoot, workspace.root, {
       workspaceId: workspace.id,
       taskBranch: workspace.branch,
+      repositoryId: workspace.repositoryId,
+      auditCorrelationId: workspace.correlationId,
     });
   }
 
   /** The runtime state while the shell's pointer names `workspace`: the runtime's own workspace
    * projection follows that pointer, exactly as `useCodingWorkbenchWorkspaceEffect` makes it. */
   function stateIn(
-    workspace: { root: string; branch: string; id: string },
+    workspace: WorkspaceFixture,
     run: Partial<CodingWorkbenchRuntimeSnapshot> | null = null,
   ): CodingWorkbenchRuntimeState {
     return liveState({
@@ -2050,6 +2770,10 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
   async function startInAThenSwitchToB(
     liveActions: CodingWorkbenchRuntimeActions,
     onOpenGit: (target: CodingWorkbenchGitTarget) => void,
+    transitions: {
+      readonly beforeStart?: () => Promise<void>;
+      readonly onPendingSwitch?: () => Promise<void>;
+    } = {},
   ): Promise<void> {
     const user = userEvent.setup();
     runtimeHookMock.mockReturnValue({ state: stateIn(WORKSPACE_A), actions: liveActions });
@@ -2058,11 +2782,29 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
       <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>{window}</ActiveWorkspaceProvider>,
     );
     await user.type(screen.getByLabelText("Task instructions"), "Repair the failing gate");
+    await transitions.beforeStart?.();
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
 
-    // The Start response lands only now — after the operator switched the pointer to B.
+    // The operator switches the pointer while the Start response is still pending. The active
+    // workspace is now B, but neither B nor a prior hook result may become a trust target.
     runtimeHookMock.mockReturnValue({
-      state: stateIn(WORKSPACE_B, { state: "running", runId: "run-1" }),
+      state: {
+        ...stateIn(WORKSPACE_B),
+        mutation: { status: "pending", kind: "start", requestId: "req-start-a", error: null },
+      },
+      actions: liveActions,
+    });
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_B)}>{window}</ActiveWorkspaceProvider>,
+    );
+    await transitions.onPendingSwitch?.();
+
+    // The Start response lands only now, still attributed to A.
+    runtimeHookMock.mockReturnValue({
+      state: stateIn(WORKSPACE_B, {
+        state: "running",
+        runId: "run-correlation-0001",
+      }),
       actions: liveActions,
     });
     view.rerender(
@@ -2086,6 +2828,43 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     expect(onOpenGit).toHaveBeenCalledWith({
       root: WORKSPACE_A.root,
       binding: "task-workspace",
+    });
+  });
+
+  it("never redirects the run's repository trust grant after a cross-repository switch", async () => {
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    trustStatusMock.mockImplementation((repositoryRoot: string) =>
+      Promise.resolve(trustStatus(repositoryRoot, "restricted")),
+    );
+    trustMutateMock.mockImplementation((repositoryRoot: string) =>
+      Promise.resolve(trustStatus(repositoryRoot, "trusted")),
+    );
+    await startInAThenSwitchToB(actions(), vi.fn(), {
+      beforeStart: async () => {
+        await screen.findByRole("button", { name: "Allow package scripts for verification" });
+      },
+      onPendingSwitch: async () => {
+        expect(
+          screen.queryByRole("button", { name: "Allow package scripts for verification" }),
+        ).not.toBeInTheDocument();
+        expect(trustStatusMock).not.toHaveBeenCalledWith(WORKSPACE_B.repositoryRoot);
+      },
+    });
+
+    await waitFor(() => expect(trustStatusMock).toHaveBeenCalledWith(WORKSPACE_A.repositoryRoot));
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: "Allow package scripts for verification" }));
+
+    expect(trustStatusMock).not.toHaveBeenCalledWith(WORKSPACE_B.repositoryRoot);
+    expect(trustMutateMock).toHaveBeenCalledExactlyOnceWith(WORKSPACE_A.repositoryRoot, "grant");
+    expect(diagnostic).toHaveBeenLastCalledWith("[keiko] coding workbench repository trust bound", {
+      correlationId: "run-correlation-0001",
+      workspaceTrustBinding: {
+        repositoryId: WORKSPACE_A.repositoryId,
+        workspaceId: WORKSPACE_A.id,
+      },
     });
   });
 
@@ -2126,5 +2905,233 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
 
     const lastCall = editorBridgeHookMock.mock.calls.at(-1) as [{ submittedRoot: string | null }];
     expect(lastCall[0].submittedRoot).toBe(WORKSPACE_A.root);
+  });
+});
+
+// Epic #3384 cascade, end-to-end run 2026-09-05: the activity feed used to show "Reconnect
+// activity" and stay disconnected even once a different run started, until the operator clicked
+// Reconnect (or reloaded the page). `useCodingWorkbenchSafeActivity` is fully mocked in this file
+// (its own reconnect/resync behaviour is pinned at the hook level), so these tests prove the ONE
+// thing this window itself owns: calling `activity.retry()` exactly when a new run id appears.
+describe("CodingWorkbenchWindow reconnects activity on a newly observed run (#3384 cascade)", () => {
+  function runningState(runId: string): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: { status: "ready", value: snapshot({ state: "running", runId }), error: null },
+    });
+  }
+
+  it("reconnects the activity stream once a new run id appears, without a manual click", async () => {
+    const retry = vi.fn();
+    activityHookMock.mockReturnValue({
+      status: "disconnected",
+      feed: null,
+      errorCode: null,
+      retry,
+    });
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: actions() });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    expect(retry).not.toHaveBeenCalled();
+
+    runtimeHookMock.mockReturnValue({ state: runningState("run-1"), actions: actions() });
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    await waitFor(() => {
+      expect(retry).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("does not reconnect again while the same run id stays current", () => {
+    const retry = vi.fn();
+    activityHookMock.mockReturnValue({ status: "live", feed: null, errorCode: null, retry });
+    runtimeHookMock.mockReturnValue({ state: runningState("run-1"), actions: actions() });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    expect(retry).not.toHaveBeenCalled();
+
+    // An unrelated re-render (e.g. a runtime event) that keeps the SAME run id must not retry.
+    runtimeHookMock.mockReturnValue({ state: runningState("run-1"), actions: actions() });
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it("reconnects again for a second new run id after a run stops", async () => {
+    const retry = vi.fn();
+    activityHookMock.mockReturnValue({ status: "ended", feed: null, errorCode: null, retry });
+    runtimeHookMock.mockReturnValue({ state: runningState("run-1"), actions: actions() });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    runtimeHookMock.mockReturnValue({ state: runningState("run-2"), actions: actions() });
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    await waitFor(() => {
+      expect(retry).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+// Owner audit b1-14 — the journey initial-load catch reported `correlationId: runId`, discarding
+// the failed request's own `ApiError.correlationId`, so the diagnostic could not be joined to
+// server.log. `_useJourneyActions.ts`'s own failure report is the pattern to mirror: prefer
+// `correlationIdOf(error)`, falling back to `runId` only when the error carries none.
+describe("CodingWorkbenchWindow journey initial-load diagnostic correlation (b1-14)", () => {
+  afterEach(() => {
+    resetClientDiagnosticWriter();
+  });
+
+  // Failing-before: with the old unconditional `correlationId: runId`, this asserted
+  // `correlationId: "server-corr-7"` failed — the diagnostic carried `"run-1"` instead.
+  it("prefers the failed request's own correlation id over the run id", async () => {
+    const diagnostics: { message: string; correlationId?: string | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      diagnostics.push({ message, correlationId: meta?.correlationId });
+    });
+    const failure = Object.assign(new Error("journey refresh failed"), {
+      correlationId: "server-corr-7",
+    });
+    journeyRefreshMock.mockReset().mockRejectedValueOnce(failure);
+    runtimeHookMock.mockReturnValue({
+      // A journey refresh only fires when the run's snapshot carries a draftDelivery pull request
+      // (CodingWorkbenchWindow.tsx gates `useCodingWorkbenchJourney`'s runId on exactly that).
+      state: liveState({
+        run: { status: "ready", value: journeyFixture().snapshot, error: null },
+      }),
+      actions: actions(),
+    });
+    render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    await waitFor(() => {
+      expect(diagnostics).toContainEqual({
+        message: "[keiko] journey initial refresh failed",
+        correlationId: "server-corr-7",
+      });
+    });
+  });
+
+  it("falls back to the run id when the failure carries no correlation id of its own", async () => {
+    const diagnostics: { message: string; correlationId?: string | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      diagnostics.push({ message, correlationId: meta?.correlationId });
+    });
+    journeyRefreshMock.mockReset().mockRejectedValueOnce(new Error("journey refresh failed"));
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        run: { status: "ready", value: journeyFixture().snapshot, error: null },
+      }),
+      actions: actions(),
+    });
+    render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    await waitFor(() => {
+      expect(diagnostics).toContainEqual({
+        message: "[keiko] journey initial refresh failed",
+        correlationId: "run-1",
+      });
+    });
+  });
+});
+
+// Epic #3384 cascade, end-to-end run 2026-09-05: a refused edit used to leave the operator with
+// nothing but the model asking "how would you like to proceed?" while every edit kept failing
+// NO_ACTIVE_SESSION. `useCodingWorkbenchEditorBridge` is fully mocked here (its own retry behaviour
+// is pinned at the hook level); this proves the window actually surfaces `bridgeUnavailable`.
+describe("CodingWorkbenchWindow editor bridge unavailable notice (#3384 cascade)", () => {
+  it("shows the reconnecting notice while the editor bridge cannot register", () => {
+    editorBridgeHookMock.mockReturnValue({
+      pendingReview: null,
+      approve: vi.fn(),
+      deny: vi.fn(),
+      retry: vi.fn(),
+      bridgeUnavailable: true,
+    });
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          value: snapshot({ state: "running", runId: "run-1" }),
+          error: null,
+        },
+      }),
+    );
+
+    expect(
+      screen.getByText("Edits are paused: reconnecting the editor bridge."),
+    ).toBeInTheDocument();
+  });
+
+  it("stays silent while the editor bridge is registered", () => {
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          value: snapshot({ state: "running", runId: "run-1" }),
+          error: null,
+        },
+      }),
+    );
+
+    expect(screen.queryByText("Edits are paused: reconnecting the editor bridge.")).toBeNull();
+  });
+});
+
+// #3389 AC3: the Workbench window builds `onProposeReady`/`markReadyAvailable` from
+// `createPrMarkReadyProposeHandler` (CodingWorkbenchJourneyOutcome.tsx), computed from the same
+// observed `JourneyOutcome` the journey card renders — never a re-derived request shape.
+describe("CodingWorkbenchWindow #3389 mark-ready propose control", () => {
+  // The fixture's readiness/description observations carry fixed timestamps (`_ciReadinessTestSupport`,
+  // 2026-09-05T00:00:00Z + a 60s freshness window); pinning `Date.now()` inside that window is what
+  // keeps the journey card's "ready" state (not "stale") reproducible independent of wall-clock time.
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(new Date("2026-09-05T00:00:05.000Z").getTime());
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function renderWithJourney(snapshotValue: CodingWorkbenchRuntimeSnapshot): void {
+    renderWorkbench(
+      liveState({ run: { status: "ready", error: null, value: snapshotValue } }),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko-checkout", "/repos/keiko-checkout"),
+    );
+  }
+
+  it("keeps the control closed and calls no mutation endpoint while the mark-ready path is unavailable", async () => {
+    journeyRefreshMock.mockResolvedValue({ status: "unavailable", reason: "no-observation" });
+    renderWithJourney(journeyFixture().snapshot);
+
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Issue handoff" })).not.toBeInTheDocument(),
+    );
+    expect(markReadyApproveMock).not.toHaveBeenCalled();
+    expect(markReadyExecuteMock).not.toHaveBeenCalled();
+  });
+
+  it("clicking the available control mints then executes exactly once each, never a merge/close endpoint", async () => {
+    const { outcome, snapshot: snapshotValue } = journeyFixture();
+    journeyRefreshMock.mockResolvedValue({ status: "observed", outcome });
+    markReadyApproveMock.mockResolvedValueOnce({
+      schemaVersion: "1",
+      approval: { schemaVersion: "1", approvalId: "approval-1", approvalToken: "token-1" },
+      expiresAt: "2026-09-05T00:05:00.000Z",
+    });
+    markReadyExecuteMock.mockResolvedValueOnce({
+      schemaVersion: "1",
+      actionKind: "pr-mark-ready",
+      status: "succeeded",
+    });
+    renderWithJourney(snapshotValue);
+
+    const button = await screen.findByRole("button", { name: "Review ready-for-review request" });
+    expect(button).toBeEnabled();
+
+    await userEvent.setup().click(button);
+
+    await waitFor(() => expect(markReadyExecuteMock).toHaveBeenCalledTimes(1));
+    expect(markReadyApproveMock).toHaveBeenCalledTimes(1);
+    expect(markReadyExecuteMock).toHaveBeenCalledTimes(1);
+    expect(mergeExecuteMock).not.toHaveBeenCalled();
+    expect(prUpdateExecuteMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /merge|close issue/iu })).not.toBeInTheDocument();
   });
 });

@@ -30,6 +30,7 @@ import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import type { SkillCatalog } from "./skillCatalog.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import {
   createSkillInvocationPort,
   type SkillReevaluationDecision,
@@ -51,6 +52,7 @@ export interface ProductionAuxiliaryPortInput {
   readonly secureWorkspaceTextRead: SecureWorkspaceTextReadPort;
   readonly researchGrantRegistry?: ResearchGrantRegistry | undefined;
   readonly emit: (event: CodingWorkbenchRuntimeEvent) => void;
+  readonly activityLog: ServerLogSink;
 }
 
 export interface ProductionAuxiliaryPorts {
@@ -221,6 +223,7 @@ function childPort(
         },
         cancellation: { stopReason: () => stopReason(guard, signal) },
         emit: input.emit,
+        activityLog: input.activityLog,
         clock: { now: () => Date.now() },
         newEventId: (): string => {
           eventSequence += 1;

@@ -960,6 +960,42 @@ export type {
   isCodeTaskSha256Digest,
   validateCodeTaskAcceptanceContribution,
 } from "./code-task-acceptance.js";
+// #3390 qualification manifest: a versioned sibling of the #2384 acceptance contribution above,
+// reusing its closed vocabularies. See code-task-acceptance.ts's "Qualification manifest" section.
+export type {
+  CodeTaskQualificationApprovalRequestObservationV1,
+  CodeTaskQualificationApprovedProposalObservationV1,
+  CodeTaskQualificationManifestV1,
+  CodeTaskQualificationAuthorityObservationV1,
+  CodeTaskQualificationEffectToolObservationV1,
+  CodeTaskQualificationFlowArtifactV1,
+  CodeTaskQualificationFlowBindingV1,
+  CodeTaskQualificationFlowStageEvidenceV1,
+  CodeTaskQualificationFlowSpendV1,
+  CodeTaskQualificationFlowTransition,
+  CodeTaskQualificationFlowV1,
+  CodeTaskQualificationProvenance,
+  CodeTaskQualificationProposalActionKind,
+  CodeTaskQualificationRequiredChecksV1,
+  CodeTaskQualificationRubricReview,
+  CodeTaskQualificationRubricReviewV1,
+  CodeTaskQualificationStageReceiptV1,
+  CodeTaskQualificationScenarioV1,
+  CodeTaskQualificationVerdict,
+} from "./code-task-acceptance.js";
+export type {
+  CODE_TASK_QUALIFICATION_MANIFEST_KIND,
+  CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION,
+  CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND,
+  CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
+  CODE_TASK_QUALIFICATION_PROVENANCES,
+  CODE_TASK_QUALIFICATION_VERDICTS,
+  codeTaskQualificationManifestFailures,
+  codeTaskQualificationVerdictFor,
+  isCodeTaskToolName,
+  validateCodeTaskQualificationManifest,
+  validateCodeTaskQualificationFlowArtifact,
+} from "./code-task-acceptance.js";
 
 // ─── Code-task governance contracts (Issue #2386, Epic #2384) ──────────────────────
 // Grant scope, the produced GovernedActionV1 (#2387), and the consumed CodeTaskExecutionV1
@@ -1200,6 +1236,8 @@ export type {
   CodingWorkbenchRuntimeAdapterStartRequest,
   CodingWorkbenchRuntimeAuthorityEnvelope,
   CodingWorkbenchRuntimeAuthorityFacts,
+  CodingWorkbenchIssueBinding,
+  CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchRuntimeDelegationUsage,
   CodingWorkbenchRuntimeExecutionBinding,
   CodingWorkbenchRuntimeFailureCode,
@@ -1209,6 +1247,7 @@ export type {
   CodingWorkbenchRuntimeStateName,
 } from "./coding-workbench-runtime.js";
 export type {
+  CODING_WORKBENCH_ISSUE_BINDING_FAILURES,
   CODING_WORKBENCH_LIFECYCLE_COMMANDS,
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   CODING_WORKBENCH_RUNTIME_FAILURE_CODES,
@@ -1222,6 +1261,43 @@ export type {
   validateCodingWorkbenchRuntimeMintConfirmation,
   validateCodingWorkbenchRuntimeState,
 } from "./coding-workbench-runtime.js";
+// #3385: the issue preview/wire contracts beside the binding, and the ONE GitHub issue reference
+// parser (a dependency-free leaf whose runtime surface `coding-workbench-runtime.ts` re-exports).
+export type {
+  CodingWorkbenchIssueBindingProjection,
+  CodingWorkbenchIssuePreview,
+  CodingWorkbenchIssuePreviewFailureWire,
+  CodingWorkbenchIssuePreviewProvenance,
+  CodingWorkbenchIssuePreviewRequestWire,
+  CodingWorkbenchIssuePreviewResponseWire,
+  CodingWorkbenchIssueState,
+} from "./coding-workbench-runtime.js";
+export type {
+  CODING_WORKBENCH_ISSUE_PREVIEW_EXCERPT_MAX_CHARS,
+  CODING_WORKBENCH_ISSUE_PREVIEW_TITLE_MAX_CHARS,
+  CODING_WORKBENCH_ISSUE_REF_MAX_CHARS,
+  CODING_WORKBENCH_ISSUE_STATES,
+  parseCodingWorkbenchIssuePreviewRequest,
+  validateCodingWorkbenchIssuePreview,
+  validateCodingWorkbenchIssueBinding,
+} from "./coding-workbench-runtime.js";
+export type {
+  GitHubIssueReference,
+  GitHubIssueReferenceParseResult,
+  GitHubIssueReferenceRejection,
+  ParseGitHubIssueReferenceOptions,
+} from "./github-issue-reference.js";
+export type {
+  canonicalGitHubOwnerAndRepo,
+  findGitHubIssueReferences,
+  GITHUB_ISSUE_NUMBER_MAX,
+  GITHUB_ISSUE_REFERENCE_MAX_CHARS,
+  GITHUB_ISSUE_REFERENCE_REJECTIONS,
+  isGitHubOwnerAndRepo,
+  parseGitHubIssueNumber,
+  parseGitHubIssueReference,
+  sameGitHubOwnerAndRepo,
+} from "./github-issue-reference.js";
 export type {
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
@@ -1247,6 +1323,7 @@ export type {
   CodingWorkbenchRuntimeUnavailableReason,
 } from "./coding-workbench-runtime-api.js";
 export type {
+  CODING_WORKBENCH_ISSUE_NUMBER_MAX,
   CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
   CODING_WORKBENCH_RUNTIME_MODEL_ID_MAX_CHARS,
   CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS,
@@ -1436,6 +1513,69 @@ export type {
   validateGitRepositoryStatusResponse,
   validateGitRepositoryDiffResponse,
 } from "./git-repository.js";
+
+// ─── Immutable base-to-head Git change snapshot (Issue #3397, Epic #3384, ADR-0174) ───
+// The one versioned, content-free snapshot contract every pull-request journey consumes: server-
+// resolved base/head/merge-base binding, typed entries for every change kind, bounded hunk ranges
+// with digests, completeness counts and the frozen outcome vocabulary. Runtime values are consumed
+// through `@oscharko-dev/keiko-contracts/runtime/git-change-snapshot`.
+export type {
+  GitChangeSnapshot,
+  GitChangeSnapshotAddEntry,
+  GitChangeSnapshotBinaryEntry,
+  GitChangeSnapshotCompleteness,
+  GitChangeSnapshotCompletenessInput,
+  GitChangeSnapshotContentChange,
+  GitChangeSnapshotCopyEntry,
+  GitChangeSnapshotDeleteEntry,
+  GitChangeSnapshotDurableFields,
+  GitChangeSnapshotEntry,
+  GitChangeSnapshotEntryIdentity,
+  GitChangeSnapshotEntryKind,
+  GitChangeSnapshotFailed,
+  GitChangeSnapshotFailureReason,
+  GitChangeSnapshotHunk,
+  GitChangeSnapshotLimits,
+  GitChangeSnapshotLocalDivergence,
+  GitChangeSnapshotModeChangeEntry,
+  GitChangeSnapshotModifyEntry,
+  GitChangeSnapshotOmission,
+  GitChangeSnapshotOmissionReason,
+  GitChangeSnapshotOutcome,
+  GitChangeSnapshotRenameEntry,
+  GitChangeSnapshotResult,
+  GitChangeSnapshotSubmoduleEntry,
+  GitChangeSnapshotUnavailable,
+  GitChangeSnapshotUnavailableReason,
+  GitChangeSnapshotValidation,
+  GitChangeSnapshotValidationFail,
+  GitChangeSnapshotValidationOk,
+} from "./git-change-snapshot.js";
+export type {
+  GIT_CHANGE_SNAPSHOT_CONTENT_CHANGES,
+  GIT_CHANGE_SNAPSHOT_DEFAULT_LIMITS,
+  GIT_CHANGE_SNAPSHOT_DEFAULT_TTL_MS,
+  GIT_CHANGE_SNAPSHOT_ENTRY_KINDS,
+  GIT_CHANGE_SNAPSHOT_FAILURE_REASONS,
+  GIT_CHANGE_SNAPSHOT_LIMIT_CEILINGS,
+  GIT_CHANGE_SNAPSHOT_MAX_HUNK_HEADER_CHARS,
+  GIT_CHANGE_SNAPSHOT_MAX_LINE_CHARS,
+  GIT_CHANGE_SNAPSHOT_MAX_LINES_PER_HUNK,
+  GIT_CHANGE_SNAPSHOT_MAX_TTL_MS,
+  GIT_CHANGE_SNAPSHOT_OMISSION_REASONS,
+  GIT_CHANGE_SNAPSHOT_OUTCOMES,
+  GIT_CHANGE_SNAPSHOT_REPOSITORY_ID_MAX_CHARS,
+  GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION,
+  GIT_CHANGE_SNAPSHOT_UNAVAILABLE_REASONS,
+  deriveGitChangeSnapshotOutcome,
+  gitChangeSnapshotDigestFields,
+  gitChangeSnapshotEntryIdentityFields,
+  isGitChangeSnapshot,
+  isGitChangeSnapshotReference,
+  resolveGitChangeSnapshotLimits,
+  summarizeGitChangeSnapshotCompleteness,
+  validateGitChangeSnapshotResult,
+} from "./git-change-snapshot.js";
 
 // ─── Editor Git read surface (Issue #2227, Epic #2093, ADR-0127) ────────────────
 // Bounded structured staged/worktree diff and privacy-minimized blame contracts shared by the
@@ -1805,6 +1945,7 @@ export type {
   ModelReasoningEffort,
   InfillingAlignment,
   ModelCapability,
+  ModelCapabilityPricing,
   CompletionInteractionMode,
   CompletionDegradeReason,
   CompletionModelSelection,
@@ -2064,8 +2205,10 @@ export type {
 // ─── Tools ──────────────────────────────────────────────────────────────────────
 export type {
   NetworkPolicy,
+  NetworkGatewayPolicy,
   FilesystemPolicy,
   HomeIsolation,
+  OutputScrubMode,
   SandboxPolicy,
   SandboxBackend,
   SandboxAttestation,
@@ -2299,6 +2442,11 @@ export type {
 } from "./evidence.js";
 export type { EVIDENCE_SCHEMA_VERSION, DEFAULT_RETENTION } from "./evidence.js";
 export type { parseUpdateMemoryAutonomyPolicyWire } from "./bff-wire.js";
+export type {
+  GitHubIssueReaderAuthorizationWire,
+  UpdateGitHubIssueReaderAuthorizationWire,
+  parseUpdateGitHubIssueReaderAuthorizationWire,
+} from "./bff-wire.js";
 
 // ─── BFF wire types (ADR-0013; entity shapes that travel over the HTTP wire) ──────────────
 // NOTE: WorkflowStatus and ChatMessage are NOT re-exported here because those names are already
@@ -2342,6 +2490,9 @@ export type {
   BffErrorCode,
   BffError,
   GroundingLimits,
+  ChatGitChangeScope,
+  ChatGitChangeDescriptionStatus,
+  GitChangeBlockedReason,
 } from "./bff-wire.js";
 export type {
   buildGroundedAnswerContextPackSummary,
@@ -2363,6 +2514,8 @@ export type {
   normalizeAttachmentMime,
   UI_HOST,
   DEFAULT_UI_PORT,
+  CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
+  GIT_CHANGE_BLOCKED_REASONS,
 } from "./bff-wire.js";
 
 // ─── Shared text-safety primitive (Epic #177/#189 grounding hardening, GRD-001) ──
@@ -3702,6 +3855,7 @@ export type {
   GitDeliveryPushInputs,
   GitDeliveryPrCreateInputs,
   GitDeliveryPrUpdateInputs,
+  GitDeliveryPrDescriptionApplyInputs,
   GitDeliveryMergeInputs,
   GitDeliveryAbortInputs,
   GitDeliveryRecoveryInputs,
@@ -3718,6 +3872,7 @@ export type {
   GitDeliveryActionEnvelopeFor,
   GitDeliveryActionEnvelope,
   GitDeliveryParseResult,
+  GitDeliveryPrMarkReadyInputs,
 } from "./git-delivery.js";
 export type {
   GIT_DELIVERY_SCHEMA_VERSION,
@@ -4836,3 +4991,109 @@ export type {
 // it.
 export type { StoreFingerprint } from "./store-fingerprint.js";
 export type { isStoreFingerprint } from "./store-fingerprint.js";
+
+export type {
+  PR_DESCRIPTION_SCHEMA_VERSION,
+  PR_DESCRIPTION_RENDERING_VERSION,
+  PR_DESCRIPTION_LANGUAGES,
+  PrDescriptionLanguage,
+  PR_DESCRIPTION_OUTCOMES,
+  PrDescriptionOutcome,
+  PR_DESCRIPTION_SECTION_KEYS,
+  PrDescriptionSection,
+  PR_DESCRIPTION_TEXT_MAX_LENGTH,
+  PR_DESCRIPTION_SECTION_MAX_ITEMS,
+  PR_DESCRIPTION_REFERENCE_MAX_ITEMS,
+  PR_DESCRIPTION_CANDIDATE_MAX_BYTES,
+  PrDescriptionStatement,
+  PrDescriptionCandidate,
+  PrDescriptionBinding,
+  PR_DESCRIPTION_REASONS,
+  PrDescriptionReason,
+  PrDescriptionCoverage,
+  PrDescriptionArtifact,
+  PrDescriptionArtifactEvidence,
+  prDescriptionArtifactEvidence,
+  prDescriptionArtifactDigestFields,
+  freezePrDescriptionArtifact,
+  prDescriptionBinding,
+  PR_DESCRIPTION_CANDIDATE_SCHEMA,
+  PrDescriptionCandidateValidation,
+  isSafePrDescriptionText,
+  validatePrDescriptionCandidate,
+} from "./pr-description.js";
+
+export type {
+  PR_DESCRIPTION_REGION_VERSION,
+  PR_DESCRIPTION_REGION_START,
+  PR_DESCRIPTION_REGION_END,
+  PR_DESCRIPTION_ATTRIBUTION,
+  PR_DESCRIPTION_LOGO_SOURCE,
+  containsPrDescriptionMarker,
+  framePrDescriptionRegion,
+} from "./pr-description-region.js";
+
+export type {
+  VERIFIED_COMMIT_SCHEMA_VERSION,
+  VERIFIED_COMMIT_STATUSES,
+  VERIFIED_COMMIT_REASONS,
+  VerifiedCommitStatus,
+  VerifiedCommitReason,
+  VerifiedCommitBinding,
+  VerifiedCommitResult,
+  isVerifiedCommitResult,
+} from "./verified-commit.js";
+
+export type {
+  GitPreflightFindingCode,
+  GitPreflightSeverity,
+  GitPreflightRemediation,
+  GitPreflightFinding,
+  GIT_PREFLIGHT_FINDING_CODES,
+  isGitPreflightFindingCode,
+} from "./git-preflight.js";
+
+export type {
+  CodingRuntimeGitResult,
+  CodingRuntimeGitStatus,
+  CodingRuntimeGitDiff,
+  CodingRuntimeGitStage,
+} from "./coding-runtime-git.js";
+
+export type {
+  PrDescriptionApplicationStatus,
+  PrDescriptionApplicationBinding,
+  PrDescriptionApplicationReason,
+  PrDescriptionApplicationState,
+  PrDescriptionApplicationCompleteness,
+  PrDescriptionApplicationEffect,
+  PR_DESCRIPTION_APPLICATION_MAX_AGE_MS,
+  PR_DESCRIPTION_APPLICATION_REASON_STATES,
+  PR_DESCRIPTION_CONCURRENCY_LIMITATION,
+  isPrDescriptionApplicationBinding,
+  isPrDescriptionApplicationStatus,
+} from "./pr-description-application.js";
+
+export type {
+  WorkbenchDescriptionStatus,
+  WorkbenchDescriptionState,
+  WorkbenchDescriptionReason,
+  WorkbenchDescriptionDraftReview,
+  WORKBENCH_DESCRIPTION_STATUS_SCHEMA_VERSION,
+  WORKBENCH_DESCRIPTION_REASON_STATES,
+  isWorkbenchDescriptionStatus,
+} from "./workbench-description-status.js";
+
+export type {
+  GitJourneyBinding,
+  GitJourneyRemoteFacts,
+  GitJourneyReason,
+  GitJourneyState,
+  JourneyOutcome,
+  GIT_JOURNEY_REASON_STATES,
+} from "./git-journey-outcome.js";
+export type {
+  isGitJourneyBinding,
+  isGitJourneyRemoteFacts,
+  isJourneyOutcome,
+} from "./git-journey-validation.js";

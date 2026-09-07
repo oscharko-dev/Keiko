@@ -42,6 +42,7 @@ import type {
 import {
   handleApplyGatewayVerifiedCapabilities,
   handleGatewaySetup,
+  defaultGatewayEmbeddingProbe,
   MAX_DISCOVERED_MODELS,
   isExplicitlyNonChatModel,
   modelIdFromDiscoveryItem,
@@ -52,6 +53,10 @@ import {
   smokeTestCandidates,
   stripTrailingSlashes,
 } from "./gateway-setup.js";
+import {
+  QUALIFICATION_SPEND_BUDGET_USD_ENV,
+  QUALIFICATION_SPEND_LEDGER_PATH_ENV,
+} from "./gateway-spend-budget.js";
 import { selectEmbeddingModelId } from "./local-knowledge-handlers.js";
 import { runGatewayReadiness } from "./gateway-readiness.js";
 import { recommendQiModelPolicy } from "./qualityIntelligence/modelSelection.js";
@@ -9507,6 +9512,71 @@ describe("gateway setup writes the process activity log", () => {
       expect(sink.events.find((event) => event.category === "embedding")).toBeDefined();
     } finally {
       deps.store.close();
+    }
+  });
+});
+
+describe("gateway setup embedding spend ceiling", () => {
+  it("reserves every embedding retry before dispatching it", async () => {
+    const stateDir = await tempDir("keiko-gw-embedding-budget-");
+    const provider: ModelProviderConfig = {
+      modelId: "text-embedding-budgeted",
+      baseUrl: "https://llm-gateway.example.com/v1",
+      apiKey: "example-secret-token",
+      timeoutMs: 30_000,
+      maxRetries: 0,
+      retryBaseDelayMs: 0,
+    };
+    const config: GatewayConfig = {
+      providers: [provider],
+      capabilities: [
+        {
+          id: provider.modelId,
+          kind: "embedding",
+          contextWindow: 100,
+          maxOutputTokens: 0,
+          toolCalling: false,
+          structuredOutput: false,
+          streaming: false,
+          supportsImageInput: false,
+          supportsDocumentInput: false,
+          workflowEligible: false,
+          costClass: "low",
+          latencyClass: "fast",
+          throughputHint: "test embedding deployment",
+          preferredUseCases: ["Embeddings"],
+          knownLimitations: [],
+          pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+        },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    };
+    const originalFetch = globalThis.fetch;
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ error: { message: "temporarily unavailable" } }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    ) as typeof fetch;
+    globalThis.fetch = fetchImpl;
+    try {
+      const accepted = await defaultGatewayEmbeddingProbe(
+        config,
+        [provider.modelId],
+        {
+          ...MOCK_FETCH_EGRESS_ENV,
+          [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0.0001",
+          [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.json"),
+        },
+        "setup-embedding-budget-correlation",
+      );
+
+      expect(accepted).toEqual([]);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 });

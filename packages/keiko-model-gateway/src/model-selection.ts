@@ -208,8 +208,13 @@ function codingSidecarProjection(
     runMetadata: {
       maxPromptTokens: contextProfile.maxInputTokens,
       maxOutputTokens: contextProfile.reservedOutputTokens,
-      maxInputMessages: 64,
-      maxRequestBytes: 64_000,
+      // OpenCode records multiple assistant/tool messages per user turn. The raw 1 MiB body cap
+      // remains the hard memory bound, while 512 permits native compaction to run before ordinary
+      // multi-turn coding sessions hit an unrelated record-count rejection.
+      maxInputMessages: 512,
+      // The wire envelope includes JSON-escaped tool transcripts and schemas. A 64 KB cap
+      // rejected ordinary coding context long before the separate prompt-token ceiling.
+      maxRequestBytes: 1_048_576,
     },
     verification,
   };

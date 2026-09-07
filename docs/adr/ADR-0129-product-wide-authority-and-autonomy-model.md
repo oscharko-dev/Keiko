@@ -112,6 +112,14 @@ add autonomous or background auto-merge scheduling to Keiko's end-user Governed 
 That product feature remains governed by ADR-0087: merge is an explicit, approval-gated action and
 auto-merge scheduling is out of scope.
 
+For an accepted end-user Code task in Full access, the validated live Authority Envelope may also
+authorize the task's separate commit, push, and draft-pull-request execute calls without minting a
+local-operator approval for each action. The execution service passes the existing
+`{ required: false }` policy requirement to the Git kernel only while the exact capability,
+workspace binding, action classes, connector scopes, deployment ceiling, and expiry all remain
+valid. Ask for approval and Supervised workspace retain their exact, one-use operator approvals.
+This narrow Code-task path does not apply to merge.
+
 ### D5 — Vocabulary home and naming
 
 The machine vocabulary keeps its current home and module naming in

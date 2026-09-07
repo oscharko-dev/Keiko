@@ -291,7 +291,28 @@ export interface GatewayConfig {
   readonly providers: readonly ModelProviderConfig[];
   readonly circuitBreaker: CircuitBreakerConfig;
 }
+```
 
+`GatewayConfig` has grown several optional blocks since Wave 1 (`capabilities`, `grounding`,
+`reranker`, `egress`, `figma`, `branding`, …) that this historical implementation-plan snapshot was
+never kept in sync with field-by-field; `packages/keiko-model-gateway/src/types.ts` is the current,
+authoritative shape. One addition is documented here because it is otherwise undiscoverable from
+code alone: **`branding?: GatewayBrandingConfig`** (Issue #3398) lets an operator declare a public,
+immutable, content-hashed HTTPS SVG logo URL for generated PR descriptions —
+
+```typescript
+export interface GatewayBrandingConfig {
+  readonly logoUrl?: string | undefined;   // Operator-declared candidate only; never trusted as-is
+}
+```
+
+`config.ts`'s `resolvePrDescriptionBrandingFromConfig` is the sole place that turns
+`branding.logoUrl` into a `PrDescriptionBranding`, reusing `validatedPrDescriptionLogoUrl`
+(`prDescription/render.ts`) to decide whether it clears the immutable-public-HTTPS-SVG bar. An
+absent or invalid value never fails config load — it falls back to Keiko's text-only "by Keiko"
+attribution, since branding is decorative, never load-bearing.
+
+```typescript
 // ─── Request / response ───────────────────────────────────────────────────────
 
 export interface ChatMessage {

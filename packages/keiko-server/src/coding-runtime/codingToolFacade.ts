@@ -1,23 +1,37 @@
+import { isCodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
+import { isCodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
+import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
+import { isCodingRuntimeGitResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
+import { isVerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import { isCodingRepositoryResult } from "./codingRepositorySearchHandler.js";
 import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 
-import type { AuxiliaryCapabilityOutcomeV1 } from "@oscharko-dev/keiko-contracts";
+import type {
+  AuxiliaryCapabilityOutcomeV1,
+  VerificationFailureLocation,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_AGENT_CONFLICT_CODES,
   EDITOR_AGENT_FAILURE_CODES,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { validateAuxiliaryCapabilityOutcomeV1 } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
+import { isVerificationFailureLocation } from "@oscharko-dev/keiko-contracts/runtime/verification";
 
 import {
   CODING_TOOL_MAX_BODY_BYTES,
   CODING_TOOL_MAX_IN_FLIGHT,
   CODING_TOOL_MAX_READ_BYTES,
+  CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS,
+  CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS,
   isPermissionObservation,
   parseCodingToolRequest,
   type CodingToolActionRequest,
   type CodingToolEgressReadResult,
   type CodingToolReadResult,
   type CodingToolResult,
+  type CodingToolVerificationFailure,
+  type CodingToolVerificationResult,
 } from "./codingToolIpc.js";
 // KEIKO-0695: hoisted from below EDIT_FAILURE_REASON_CODES to the top-of-file import block.
 import type {
@@ -33,6 +47,8 @@ import {
 } from "../editor/verificationRunnerErrors.js";
 
 const READ_DIGEST = /^[a-f0-9]{64}$/u;
+const VERIFICATION_FAILURE_SUMMARY =
+  /^(?:test|targeted-test|typecheck|lint|build) failed; (?:0|[2-8]) structured failure locations$|^(?:test|targeted-test|typecheck|lint|build) failed; 1 structured failure location$/u;
 
 // The closed vocabulary an edit failure's `reasonCode` may carry: the two contract-owned closed
 // enums (EditorAgentConflictCode + EditorAgentFailureCode) plus this port's own transport /
@@ -55,7 +71,11 @@ const EDIT_TRANSPORT_REASON_CODES = [
 // a live editor session. Both used to reach the model as a bare "failed", so a governed run whose
 // workspace authority had been revoked looked exactly like a retryable editor conflict and the
 // agent kept re-issuing the edit (workbench end-to-end run, 2026-09-03).
-const EDIT_PORT_REFUSAL_REASON_CODES = ["EDIT_PREPARE_FAILED", "WORKSPACE_ACCESS_LOST"] as const;
+const EDIT_PORT_REFUSAL_REASON_CODES = [
+  "EDIT_PREPARE_FAILED",
+  "WORKSPACE_ACCESS_LOST",
+  "EDIT_MUTATION_FAILED",
+] as const;
 const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   ...EDITOR_AGENT_CONFLICT_CODES,
   ...EDITOR_AGENT_FAILURE_CODES,
@@ -92,6 +112,7 @@ const HTTP_ONLY_VERIFICATION_RUNNER_CODES: ReadonlySet<VerificationRunnerErrorCo
   VERIFICATION_RUNNER_ERROR_CODES.RUN_NOT_FOUND,
 ]);
 const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
+  "ci-repair-budget-blocked",
   "capability-backend-unavailable",
   "command-backend-unavailable",
   "command-authority-revoked",
@@ -99,6 +120,7 @@ const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   "git-authority-revoked",
   "delivery-authority-revoked",
   "connector-authority-revoked",
+  "search-authority-revoked",
   ...GOVERNED_VERIFICATION_REASON_CODES,
   // The verification runner's own closed codes (editor/verificationRunnerErrors.ts), sourced rather
   // than restated for the same reason the two contract enums above are. A verification the runner
@@ -112,10 +134,22 @@ import type {
   CodingToolInvocationRegistry,
   CodingToolInvocationTakeResult,
 } from "./codingToolInvocationRegistry.js";
+import type { CanonicalCatalogFacadeBridge } from "../tool-catalog/catalogToolFacadeBridge.js";
+
+// F8 (#3413): an optional, additive extension of CodingToolFacadeOptions. `codingToolFacadePorts.ts`
+// stays the single owner of the base shape; this widens only the LOCAL parameter type accepted by
+// this file's own composition function, so every existing caller that passes a plain
+// CodingToolFacadeOptions (no `catalogBridge`) keeps its exact prior behaviour unchanged.
+export interface CodingToolFacadeCreateOptions extends CodingToolFacadeOptions {
+  /** Resolves a catalog binding per covered tool call and settles it around the existing handler
+   * execution (descriptor, disposition, budget, tool-catalog.* lifecycle log lines). Actions the
+   * catalog does not cover dispatch exactly as before -- no behaviour change, no log line. */
+  readonly catalogBridge?: CanonicalCatalogFacadeBridge | undefined;
+}
 
 export function createCodingToolFacade(
   ports: CodingToolFacadePorts,
-  options: CodingToolFacadeOptions = {},
+  options: CodingToolFacadeCreateOptions = {},
 ): CodingToolFacade {
   const context: ExecutionContext = {
     ports,
@@ -123,6 +157,7 @@ export function createCodingToolFacade(
     maxInFlight: boundedOption(options.maxInFlight, CODING_TOOL_MAX_IN_FLIGHT),
     invocationRegistry: options.invocationRegistry,
     requireInvocationRegistryForEdits: options.requireInvocationRegistryForEdits === true,
+    catalogBridge: options.catalogBridge,
     inFlight: { count: 0 },
   };
   return {
@@ -136,7 +171,36 @@ interface ExecutionContext {
   readonly maxInFlight: number;
   readonly invocationRegistry: CodingToolInvocationRegistry | undefined;
   readonly requireInvocationRegistryForEdits: boolean;
+  readonly catalogBridge: CanonicalCatalogFacadeBridge | undefined;
   readonly inFlight: { count: number };
+}
+
+async function executeCatalogRequest(
+  context: ExecutionContext,
+  input: CodingToolFacadeInput,
+  request: CodingToolActionRequest,
+): Promise<CodingToolResult> {
+  const bridge = context.catalogBridge;
+  if (bridge === undefined) return empty("denied");
+  const delegateState = { threw: false };
+  try {
+    const result = await bridge.execute(request, input, async (signal, mutationGuard) => {
+      try {
+        return project(
+          request,
+          await context.ports.delegate.execute(request, signal, mutationGuard),
+        );
+      } catch (error) {
+        // The canonical settlement owner needs the original stack and cause for ADR-0173.
+        // Preserve only the old opaque failure marker here, after that owner has settled.
+        delegateState.threw = true;
+        throw error;
+      }
+    });
+    return delegateState.threw && result.status === "failed" ? projected("failed") : result;
+  } finally {
+    if (request.action === "edit" && Buffer.isBuffer(input.body)) input.body.fill(0);
+  }
 }
 
 async function execute(
@@ -151,6 +215,10 @@ async function execute(
   if (context.inFlight.count >= context.maxInFlight) return empty("busy");
   context.inFlight.count += 1;
   try {
+    if (context.catalogBridge?.covers(request) === true) {
+      return await executeCatalogRequest(context, input, request);
+    }
+    context.catalogBridge?.recordUnbound(request, input);
     return await executeAdmitted(
       context.ports,
       input,
@@ -178,11 +246,23 @@ async function executeAdmitted(
     return executeStagedEdit(ports, input, request, admission, invocationRegistry);
   }
   if (request.action === "edit" && requireInvocationRegistryForEdits) return empty("denied");
+  return executePlainAction(ports, input, request, admission);
+}
+
+// F8 (#3413): every non-edit action's delegate call, optionally resolved as a catalog binding and
+// settled by `catalogBridge` around the exact same call -- split out so `executeAdmitted` stays
+// under the file's own complexity ceiling.
+async function executePlainAction(
+  ports: CodingToolFacadePorts,
+  input: CodingToolFacadeInput,
+  request: CodingToolActionRequest,
+  admission: Extract<CodingToolAdmission, { readonly ok: true }>,
+): Promise<CodingToolResult> {
+  const runDelegate = (): Promise<unknown> =>
+    ports.delegate.execute(request, input.signal, admission.mutationGuard);
   try {
-    return project(
-      request,
-      await ports.delegate.execute(request, input.signal, admission.mutationGuard),
-    );
+    const outcome = await runDelegate();
+    return project(request, outcome);
   } catch {
     return projected("failed");
   }
@@ -221,6 +301,13 @@ async function executeStagedEdit(
   }
 }
 
+// F8 (#3413): the ONE production path a governed `edit` actually takes (a real invocation registry
+// is always supplied in production, per `createRuntimeCodingToolFacade`'s
+// `requireInvocationRegistryForEdits: true`) -- so `keiko.changeset.edit` coverage belongs here,
+// not only in the plain-action path `executeStagedEdit`'s caller never reaches for `edit`. Wraps
+// the exact same single delegate call `executePlainAction` wraps, with the same denied-fault
+// branch; the staging/claim/wipe security path above and the post-delegate cancellation recheck
+// below are both untouched.
 async function executeClaimedEdit(
   ports: CodingToolFacadePorts,
   input: CodingToolFacadeInput,
@@ -231,8 +318,10 @@ async function executeClaimedEdit(
   const signal =
     input.signal === undefined ? claimed.signal : AbortSignal.any([input.signal, claimed.signal]);
   if (isAborted(signal)) return empty("cancelled");
+  const runDelegate = (): Promise<unknown> =>
+    ports.delegate.execute(request, signal, admission.mutationGuard);
   try {
-    const result = await ports.delegate.execute(request, signal, admission.mutationGuard);
+    const result = await runDelegate();
     return isAborted(signal) ? empty("cancelled") : project(request, result);
   } catch {
     return projected("failed");
@@ -262,7 +351,9 @@ function project(request: CodingToolActionRequest, input: unknown): CodingToolRe
   if (value === undefined) return projected("failed");
   const editFailure = projectEditFailure(request, value);
   if (editFailure !== undefined) return editFailure;
-  if (value.outcome === "failed") return projectGovernedFailure(value);
+  if (value.outcome === "failed") return projectGovernedFailure(request, value);
+  const domain = projectDomainResult(request, value);
+  if (domain !== undefined) return domain;
   const auxiliary = projectAuxiliary(request, value.auxiliary);
   if (auxiliary !== undefined) {
     return {
@@ -278,11 +369,193 @@ function project(request: CodingToolActionRequest, input: unknown): CodingToolRe
     : { status: "completed", evidence: [{ kind: "governed-delegate", code: "completed" }], read };
 }
 
-function projectGovernedFailure(value: Record<string, unknown>): CodingToolResult {
-  const reasonCode = value.reasonCode;
-  return typeof reasonCode === "string" && GOVERNED_FAILURE_REASON_CODES.has(reasonCode)
-    ? projected("failed", reasonCode, true)
+function isCodingToolVerificationResult(value: unknown): value is CodingToolVerificationResult {
+  if (!isRecord(value)) return false;
+  if (value.commitProof === "recorded") return Object.keys(value).length === 1;
+  return (
+    value.commitProof === "unavailable" &&
+    ((value.reasonCode === "candidate-not-staged" && value.nextAction === "stage-then-verify") ||
+      (value.reasonCode === "candidate-drift" && value.nextAction === "verify-again")) &&
+    Object.keys(value).length === 3
+  );
+}
+
+// The three closed, already-typed domain payloads a governed delegate outcome may carry, tried in
+// a fixed order so `project()` itself stays a single flat dispatch instead of inlining every
+// action's own branching (each helper already returns `undefined` for an action it does not own).
+function projectDomainResult(
+  request: CodingToolActionRequest,
+  value: Record<string, unknown>,
+): CodingToolResult | undefined {
+  return (
+    projectRuntimeGit(request, value) ??
+    projectVerifiedCommit(request, value) ??
+    projectSearch(request, value) ??
+    projectVerification(request, value)
+  );
+}
+
+function projectVerification(
+  request: CodingToolActionRequest,
+  value: Record<string, unknown>,
+): CodingToolResult | undefined {
+  if (request.action !== "verification" || !isCodingToolVerificationResult(value.verification))
+    return undefined;
+  return {
+    status: "completed",
+    evidence: [{ kind: "governed-delegate", code: "completed" }],
+    verification: value.verification,
+  };
+}
+
+function projectRuntimeGit(
+  request: CodingToolActionRequest,
+  value: Record<string, unknown>,
+): CodingToolResult | undefined {
+  if (request.action === "git" && request.operation === "ci")
+    return isCodingRuntimeCiResult(value.ci)
+      ? {
+          status: "completed",
+          evidence: [{ kind: "governed-delegate", code: "completed" }],
+          ci: value.ci,
+        }
+      : projected("failed");
+  if (request.action === "git" && request.operation !== "read" && request.operation !== "write")
+    return isCodingRuntimeGitResult(value.git)
+      ? {
+          status: "completed",
+          evidence: [{ kind: "governed-delegate", code: "completed" }],
+          git: value.git,
+        }
+      : projected("failed");
+  return undefined;
+}
+
+// Owner audit finding b2-5: a `draftDelivery` payload shaped `{ status: "unavailable", reason }`
+// (no lease granted, or the delivery service busy — CodingRuntimeDeliveryResult, contracts) proves
+// nothing was recorded. Reporting it as a "completed" delivery tells the model its push or PR
+// succeeded when it did not. Only `status: "recorded"` rides out as completed; `"unavailable"`
+// collapses to the facade's own closed "failed" reasonCode vocabulary, the same shape
+// `projectGovernedFailure` already uses for a governed refusal.
+function projectDraftDelivery(value: Record<string, unknown>): CodingToolResult {
+  if (!isCodingRuntimeDeliveryResult(value.draftDelivery)) return projected("failed");
+  if (value.draftDelivery.status === "unavailable")
+    return projected("failed", value.draftDelivery.reason, true);
+  const disposition = approvalDisposition(value);
+  if (disposition === false) return projected("failed");
+  return {
+    status: "completed",
+    evidence: [{ kind: "governed-delegate", code: "completed" }],
+    draftDelivery: value.draftDelivery,
+    ...(disposition === undefined ? {} : { approvalDisposition: disposition }),
+  };
+}
+
+function approvalDisposition(value: Record<string, unknown>): "ready" | false | undefined {
+  if (!Object.hasOwn(value, "approvalDisposition")) return undefined;
+  return value.approvalDisposition === "ready" ? "ready" : false;
+}
+
+function projectVerifiedCommit(
+  request: CodingToolActionRequest,
+  value: Record<string, unknown>,
+): CodingToolResult | undefined {
+  if (isDraftToolRequest(request)) return projectDraftDelivery(value);
+  if (request.action === "delivery" && request.intent === "commit") {
+    const disposition = approvalDisposition(value);
+    return isVerifiedCommitResult(value.verifiedCommit) && disposition !== false
+      ? {
+          status: "completed",
+          evidence: [{ kind: "governed-delegate", code: value.verifiedCommit.status }],
+          verifiedCommit: value.verifiedCommit,
+          ...(disposition === undefined ? {} : { approvalDisposition: disposition }),
+        }
+      : projected("failed");
+  }
+  return undefined;
+}
+
+// A search's OWN outcome (`ok: false`, e.g. scope-denied/file-too-large/cancelled/timeout) is
+// content-free by construction (CodingRepositoryFailureReason) and rides out on a "completed"
+// governed-delegate outcome, exactly like a search hit — only a pre-invoke authority/backend
+// refusal (no live workspace, revoked mid-request) produces the outer "failed" status above.
+function projectSearch(
+  request: CodingToolActionRequest,
+  value: Record<string, unknown>,
+): CodingToolResult | undefined {
+  if (request.action !== "search") return undefined;
+  return isCodingRepositoryResult(value.search)
+    ? {
+        status: "completed",
+        evidence: [
+          { kind: "governed-delegate", code: value.search.ok ? "completed" : value.search.reason },
+        ],
+        search: value.search,
+      }
     : projected("failed");
+}
+
+function projectGovernedFailure(
+  request: CodingToolActionRequest,
+  value: Record<string, unknown>,
+): CodingToolResult {
+  const reasonCode = value.reasonCode;
+  if (typeof reasonCode !== "string" || !GOVERNED_FAILURE_REASON_CODES.has(reasonCode)) {
+    return projected("failed");
+  }
+  const result = projected("failed", reasonCode, true);
+  const verificationFailure =
+    request.action === "verification" && reasonCode === "VERIFICATION_FAILED"
+      ? codingToolVerificationFailure(value.verificationFailure)
+      : undefined;
+  return verificationFailure === undefined
+    ? result
+    : {
+        status: "failed",
+        reasonCode,
+        evidence: [{ kind: "governed-delegate", code: reasonCode }],
+        verificationFailure,
+      };
+}
+
+function codingToolVerificationFailure(value: unknown): CodingToolVerificationFailure | undefined {
+  if (!isRecord(value) || Object.keys(value).length !== 3) return undefined;
+  if (
+    !validVerificationFailureHeader(value) ||
+    !validVerificationFailureLocations(value.locations)
+  ) {
+    return undefined;
+  }
+  return {
+    summary: value.summary,
+    locations: value.locations,
+    truncated: value.truncated,
+  };
+}
+
+function validVerificationFailureHeader(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & { readonly summary: string; readonly truncated: boolean } {
+  if (typeof value.summary !== "string") return false;
+  return (
+    value.summary.length > 0 &&
+    value.summary.length <= CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS &&
+    VERIFICATION_FAILURE_SUMMARY.test(value.summary) &&
+    typeof value.truncated === "boolean"
+  );
+}
+
+function validVerificationFailureLocations(
+  value: unknown,
+): value is readonly VerificationFailureLocation[] {
+  if (
+    !Array.isArray(value) ||
+    value.length > CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS ||
+    Object.keys(value).length !== value.length
+  ) {
+    return false;
+  }
+  return value.every(isVerificationFailureLocation);
 }
 
 function projectEditFailure(

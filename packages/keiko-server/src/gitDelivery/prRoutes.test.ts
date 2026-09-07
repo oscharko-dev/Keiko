@@ -8,22 +8,37 @@
 //   * AC5 — PR execution cannot bypass the gateway: blocked attempts execute nothing yet still record
 //           content-free evidence (title/body never enter the ledger).
 
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
+import { DatabaseSync } from "node:sqlite";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GitDeliveryRepoPolicyPack } from "@oscharko-dev/keiko-contracts";
+import type {
+  GitDeliveryApprovalClaim,
+  GitDeliveryRepoPolicyPack,
+} from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import type { GitPullRequestCommand, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type {
   GitPrCreateExecRequest,
   GitPrExecResult,
+  GitPrMarkReadyExecRequest,
+  GitPrMarkReadyExecResult,
   GitPrUpdateExecRequest,
   GitPullRequestAdapter,
+  GitPullRequestMarkReadyAdapter,
 } from "@oscharko-dev/keiko-tools";
-import type { NodeGitPullRequestAdapterDeps } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import {
+  assessGitCiFacts,
+  type GitCiFactsResult,
+  type GitCiProviderFacts,
+  type GitCiProviderReader,
+  type NodeGitPullRequestAdapterDeps,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { UI_HOST } from "../server.js";
@@ -31,8 +46,9 @@ import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
-import type { RouteContext } from "../routes.js";
+import { matchRoute, type RouteContext } from "../routes.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 
 // Spies on the default PR-adapter factory the F1 fix threads runCommand termination-evidence
 // through (executeGovernedPullRequest's `prAdapterFor`, exercised below via direct calls to
@@ -55,14 +71,27 @@ vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal
   };
 });
 
-import { createHandlePrExecute, createHandlePrPreview } from "./prRoutes.js";
+import {
+  createGitDeliveryPrRouteGroup,
+  createHandlePrApprove,
+  createHandlePrExecute,
+  createHandlePrPreview,
+} from "./prRoutes.js";
+import {
+  createHandlePrMarkReadyApprove,
+  createHandlePrMarkReadyExecute,
+  type GitDeliveryPrMarkReadyApproveResponseBody,
+  type GitDeliveryPrMarkReadyExecuteResponseBody,
+} from "./prMarkReadyExecution.js";
 import {
   executeGovernedPullRequest,
   type GitDeliveryPrExecuteResponseBody,
   type GitDeliveryPrPreviewBody,
   type GitDeliveryPullRequestSeams,
 } from "./prExecution.js";
+import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
+import { createDraftRun } from "./ciObservationTest/_support.js";
 
 const PREVIEW = "/api/git-delivery/pr/preview";
 const EXECUTE = "/api/git-delivery/pr/execute";
@@ -209,6 +238,47 @@ function createBody(overrides: Record<string, unknown> = {}): Record<string, unk
   };
 }
 
+// #3387 (ADR-0138 D2): an accepted run's PR create/update now requires an actually consumed,
+// server-issued claim — mirrors commitRoutes.test.ts's issueCommitApproval, minting into a
+// caller-supplied store against the SAME binding handlePrExecute resolves at consume time
+// (projectId, operation "pr", the exact typed command, and the default test authority's
+// runId/envelopeDigest).
+function issuePrApproval(
+  approvalStore: ReturnType<typeof createInMemoryGitDeliveryApprovalStore>,
+  command: GitPullRequestCommand,
+  authority: { readonly runId?: string; readonly envelopeDigest?: string } = {},
+): GitDeliveryApprovalClaim {
+  return approvalStore.issue({
+    binding: {
+      projectId,
+      operation: "pr",
+      command,
+      runId: authority.runId ?? "test-run",
+      envelopeDigest: authority.envelopeDigest ?? "c".repeat(64),
+    },
+    approvedByUserId: "u-1",
+    nowMs: 1_700_000_000_000,
+    ttlMs: 60_000,
+  }).approval;
+}
+
+// Mints a real HTTP approval against the running test server's mount (the SHARED default approval
+// store the production route table falls back to, since these HTTP-level tests never inject a
+// seams.approvalStore override) and returns the request body with that claim attached — proves the
+// mint route end to end for the one HTTP-fetch-level test that needs it.
+async function approveThenBody(
+  body: Record<string, unknown>,
+  approvePath: string,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`http://${UI_HOST}:${String(port)}${approvePath}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+    body: JSON.stringify(body),
+  });
+  const approved = (await res.json()) as { approval: GitDeliveryApprovalClaim };
+  return { ...body, approval: approved.approval };
+}
+
 async function closeServer(): Promise<void> {
   await new Promise<void>((res) => {
     server.close(() => {
@@ -227,10 +297,26 @@ async function startBound(overrides: Partial<UiHandlerDeps> = {}): Promise<void>
   port = started.port;
 }
 
+// #3384 B5-8: `prepareGitDeliveryRequest` now binds every request's `ownerAndRepo` to the resolved
+// workspace's own `origin` remote before admitting it, so this fixture's project root must be a
+// real checkout whose origin resolves to the SAME "oscharko-dev/Keiko" every test body in this file
+// already names — mirrors DescriptionFixture's identical `git remote add origin` setup
+// (prDescriptionTestSupport.ts).
+function initOriginFixture(root: string): void {
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: root });
+  execFileSync("git", ["remote", "add", "origin", "https://github.com/oscharko-dev/Keiko.git"], {
+    cwd: root,
+  });
+}
+
 beforeEach(() => {
   staticRoot = mkdtempSync(join(tmpdir(), "keiko-gd-pr-static-"));
   store = createInMemoryUiStore();
-  projectId = store.createProject(mkdtempSync(join(tmpdir(), "keiko-gd-pr-proj-"))).path;
+  const projectRoot = mkdtempSync(join(tmpdir(), "keiko-gd-pr-proj-"));
+  initOriginFixture(projectRoot);
+  projectId = store.createProject(projectRoot).path;
 });
 
 afterEach(() => {
@@ -246,18 +332,33 @@ describe("pr routes — central enforcement", () => {
     await closeServer();
   });
 
-  it("does not require a deployment enable flag before checking the worktree", async () => {
+  // #3384 B5-8: `prepareGitDeliveryRequest`'s repository-binding check now runs before this route
+  // ever reaches a worktree read, for the SAME underlying cause this test originally exercised (a
+  // project workspace with no readable Git remote) — so the earliest observable gate moved from
+  // "worktree unavailable" to "repository mismatch". Still proves the same claim: no deployment
+  // enable flag is required before the check runs.
+  it("does not require a deployment enable flag before checking the repository binding", async () => {
     await closeServer();
     await startBound({ env: {} });
+    const bareProjectId = store.createProject(
+      mkdtempSync(join(tmpdir(), "keiko-gd-pr-bare-")),
+    ).path;
     for (const path of [PREVIEW, EXECUTE]) {
+      const body =
+        path === EXECUTE
+          ? await approveThenBody(
+              createBody({ projectId: bareProjectId }),
+              "/api/git-delivery/pr/approve",
+            )
+          : createBody({ projectId: bareProjectId });
       const res = await fetch(`http://${UI_HOST}:${String(port)}${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
-        body: JSON.stringify(createBody()),
+        body: JSON.stringify(body),
       });
-      expect(res.status).toBe(409);
+      expect(res.status).toBe(403);
       expect(await res.json()).toMatchObject({
-        error: { code: "GIT_DELIVERY_PR_WORKTREE_UNAVAILABLE" },
+        error: { code: "GIT_DELIVERY_PR_REPOSITORY_MISMATCH" },
       });
     }
   });
@@ -339,6 +440,21 @@ describe("pr preview — read-only metadata + readiness (AC1/AC2/AC3)", () => {
     ).toBe(400);
   });
 
+  // #3384 B5-8: a client-supplied `ownerAndRepo` naming a repository other than the resolved
+  // workspace's OWN `origin` remote (fork, upstream, or an entirely unrelated repository) is refused
+  // — the workspace's live remote is the only repository this route may ever mutate, never a
+  // client-asserted string alone. The workspace's real origin is "oscharko-dev/Keiko" (this file's
+  // shared beforeEach); "someone-else/other-repo" is format-valid but not that remote.
+  it("refuses a well-formed ownerAndRepo that does not match this project's own Git remote", async () => {
+    const handler = createHandlePrPreview({ execution: seams() });
+    const res = await handler(
+      ctxFor(PREVIEW, createBody({ ownerAndRepo: "someone-else/other-repo" })),
+      deps(),
+    );
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_PR_REPOSITORY_MISMATCH" } });
+  });
+
   // The invariant: a PR body carrying a credential is refused at the boundary. The sample is a
   // realistic token because the guard now matches a credential VALUE rather than the bare word
   // "Bearer" — the substring test rejected ordinary prose (see the accepted cases below), which made
@@ -368,14 +484,26 @@ describe("pr preview — read-only metadata + readiness (AC1/AC2/AC3)", () => {
   });
 });
 
+const DEFAULT_CREATE_COMMAND: GitPullRequestCommand = {
+  kind: "pr-create",
+  ownerAndRepo: "oscharko-dev/Keiko",
+  headBranchName: "claude/issue-477-github-pr-command-center",
+  baseBranchName: "dev",
+  title: "feat: governed pull request command center",
+  body: "Implements the #477 governed pull request command center.",
+  isDraft: false,
+};
+
 describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
   it("opens a permitted PR, returns the provider PR number, and records content-free evidence (AC5)", async () => {
     const adapter = recordingPrAdapter();
     const cap = capturingEvidenceStore();
     const activity: ServerLogEvent[] = [];
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandlePrExecute({
       execution: seams({
         prAdapterFactory: () => adapter.adapter,
+        approvalStore,
         activityLog: {
           write: (event): void => {
             activity.push(event);
@@ -384,7 +512,13 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
       }),
     });
     const res = await handler(
-      { ...ctxFor(EXECUTE, createBody()), correlationId: "request-correlation-pr-success" },
+      {
+        ...ctxFor(
+          EXECUTE,
+          createBody({ approval: issuePrApproval(approvalStore, DEFAULT_CREATE_COMMAND) }),
+        ),
+        correlationId: "request-correlation-pr-success",
+      },
       deps({ evidenceStore: cap.store }),
     );
     const body = res.body as GitDeliveryPrExecuteResponseBody;
@@ -432,9 +566,11 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
         return { ...active, runId: "replacement-run", envelopeDigest: "d".repeat(64) };
       },
     };
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandlePrExecute({
       execution: seams({
         prAdapterFactory: () => adapter.adapter,
+        approvalStore,
         activityLog: {
           write: (event): void => {
             activity.push(event);
@@ -445,7 +581,10 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
 
     const res = await handler(
       {
-        ...ctxFor(EXECUTE, createBody()),
+        ...ctxFor(
+          EXECUTE,
+          createBody({ approval: issuePrApproval(approvalStore, DEFAULT_CREATE_COMMAND) }),
+        ),
         correlationId: "request-correlation-pr-continuity",
       },
       deps({ gitDeliveryAuthority: authority, evidenceStore: cap.store }),
@@ -511,9 +650,11 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     });
     const cap = capturingEvidenceStore();
     const activity: ServerLogEvent[] = [];
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandlePrExecute({
       execution: seams({
         prAdapterFactory: () => adapter.adapter,
+        approvalStore,
         activityLog: {
           write: (event): void => {
             activity.push(event);
@@ -522,7 +663,13 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
       }),
     });
     const res = await handler(
-      { ...ctxFor(EXECUTE, createBody()), correlationId: "request-correlation-pr-rejected" },
+      {
+        ...ctxFor(
+          EXECUTE,
+          createBody({ approval: issuePrApproval(approvalStore, DEFAULT_CREATE_COMMAND) }),
+        ),
+        correlationId: "request-correlation-pr-rejected",
+      },
       deps({ evidenceStore: cap.store }),
     );
     const body = res.body as GitDeliveryPrExecuteResponseBody;
@@ -539,9 +686,14 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     expect(completed?.extra).toMatchObject({ status: "failed" });
   });
 
+  // #3387 (ADR-0138 D2): an accepted run's PR now requires an actually consumed, server-issued
+  // claim regardless of what the repo/org pack decides (mirrors commitRoutes.test.ts's equivalent
+  // pin for the commit route, #3386) — a request carrying no claim is refused before this
+  // approval-gated override pack is even consulted, so this now pins the SAME unconditional
+  // disposition the "carries no approval" case below pins, rather than the pack's own
+  // requiredApprovers evaluation.
   it("holds for approval under an approval-gated override pack, executing nothing", async () => {
     const adapter = recordingPrAdapter();
-    const activity: ServerLogEvent[] = [];
     const handler = createHandlePrExecute({
       execution: seams({
         prAdapterFactory: () => adapter.adapter,
@@ -555,11 +707,6 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
             defaultRule: { decision: "blocked" },
           },
         },
-        activityLog: {
-          write: (event): void => {
-            activity.push(event);
-          },
-        },
       }),
     });
     const res = await handler(
@@ -568,18 +715,16 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     );
     const body = res.body as GitDeliveryPrExecuteResponseBody;
     expect(body.status).toBe("approval-required");
-    expect(body.requiredApprovers).toContain("lead");
     expect(adapter.creates()).toBe(0);
-    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
-    expect(completed).toMatchObject({ correlationId: "request-correlation-pr-held" });
-    expect(completed?.extra).toMatchObject({ status: "approval-required" });
   });
 
   it("logs a snapshot precondition throw with the request correlation id", async () => {
     const activity: ServerLogEvent[] = [];
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandlePrExecute({
       execution: seams({
         snapshotReader: () => Promise.reject(new Error("host path must stay private")),
+        approvalStore,
         activityLog: {
           write: (event): void => {
             activity.push(event);
@@ -589,7 +734,13 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     });
 
     const res = await handler(
-      { ...ctxFor(EXECUTE, createBody()), correlationId: "request-correlation-pr-snapshot" },
+      {
+        ...ctxFor(
+          EXECUTE,
+          createBody({ approval: issuePrApproval(approvalStore, DEFAULT_CREATE_COMMAND) }),
+        ),
+        correlationId: "request-correlation-pr-snapshot",
+      },
       deps(),
     );
 
@@ -629,9 +780,64 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
 
   it("routes a pr-update through the update adapter method", async () => {
     const adapter = recordingPrAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandlePrExecute({
-      execution: seams({ prAdapterFactory: () => adapter.adapter }),
+      execution: seams({ prAdapterFactory: () => adapter.adapter, approvalStore }),
     });
+    const updateCommand: GitPullRequestCommand = {
+      kind: "pr-update",
+      ownerAndRepo: "oscharko-dev/Keiko",
+      prExternalId: "1499",
+      headBranchName: "claude/issue-477-github-pr-command-center",
+      baseBranchName: "dev",
+      title: "feat: updated title",
+      body: "Updated body",
+      convertToDraft: false,
+      convertFromDraft: false,
+    };
+    const res = await handler(
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        kind: "pr-update",
+        ownerAndRepo: "oscharko-dev/Keiko",
+        prExternalId: "1499",
+        headBranchName: "claude/issue-477-github-pr-command-center",
+        baseBranchName: "dev",
+        title: "feat: updated title",
+        body: "Updated body",
+        approval: issuePrApproval(approvalStore, updateCommand),
+      }),
+      deps(),
+    );
+    const body = res.body as GitDeliveryPrExecuteResponseBody;
+    expect(body.status).toBe("succeeded");
+    expect(adapter.updates()).toBe(1);
+    expect(adapter.creates()).toBe(0);
+  });
+
+  // #3389 (epic #3384 correction 1): the approval-less draft->ready transition through the generic
+  // pr-update command is closed. Before this change, this exact request (convertFromDraft: true, no
+  // pr-mark-ready claim, only the generic "pr" approval) executed and returned "succeeded" — the
+  // approval-less path AC3 requires closed. The transition is reachable ONLY through the dedicated
+  // POST /api/git-delivery/pr/mark-ready/execute route (prMarkReadyExecution.ts).
+  it("refuses convertFromDraft on the generic pr-update command even with a valid generic pr approval (#3389)", async () => {
+    const adapter = recordingPrAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const handler = createHandlePrExecute({
+      execution: seams({ prAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const updateCommand: GitPullRequestCommand = {
+      kind: "pr-update",
+      ownerAndRepo: "oscharko-dev/Keiko",
+      prExternalId: "1499",
+      headBranchName: "claude/issue-477-github-pr-command-center",
+      baseBranchName: "dev",
+      title: "feat: updated title",
+      body: "Updated body",
+      convertToDraft: false,
+      convertFromDraft: true,
+    };
     const res = await handler(
       ctxFor(EXECUTE, {
         schemaVersion: "1",
@@ -644,14 +850,192 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
         title: "feat: updated title",
         body: "Updated body",
         convertFromDraft: true,
+        // A valid, correctly-bound generic "pr" approval is minted and attached — proving the
+        // refusal is NOT merely "no approval was supplied" but that convertFromDraft is rejected
+        // at request validation, before any approval is even consulted.
+        approval: issuePrApproval(approvalStore, updateCommand),
       }),
       deps(),
     );
-    const body = res.body as GitDeliveryPrExecuteResponseBody;
-    expect(body.status).toBe("succeeded");
-    expect(adapter.updates()).toBe(1);
+    expect(res.status).toBe(400);
+    expect(adapter.updates()).toBe(0);
     expect(adapter.creates()).toBe(0);
   });
+});
+
+// #3387 — before this route existed, no HTTP path could mint a PR approval claim: the route did not
+// exist. Proves the mint route end to end: redeemable exactly once, refused for another operation or
+// run, and reachable from a running accepted run regardless of mode (ADR-0138 D2 — a delivery effect
+// is approval-required in every mode, never mode-denied merely because the mode is lower; the coarse
+// admission gate this route's own authority check runs through already resolves "approval-required"
+// rather than "mode-denied" below autonomous-delivery, per #3386).
+describe("pr approve — mints the server-issued claim execute consumes (#3387)", () => {
+  it("mints a claim that execute accepts for the exact same PR proposal, letting an approval-required PR proceed", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approveHandler = createHandlePrApprove({ execution: seams({ approvalStore }) });
+    const minted = await approveHandler(
+      ctxFor("/api/git-delivery/pr/approve", createBody()),
+      deps(),
+    );
+    expect(minted.status).toBe(200);
+    const approval = (minted.body as { approval: GitDeliveryApprovalClaim }).approval;
+
+    const adapter = recordingPrAdapter();
+    const executeHandler = createHandlePrExecute({
+      execution: seams({ prAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const res = await executeHandler(ctxFor(EXECUTE, createBody({ approval })), deps());
+    expect((res.body as GitDeliveryPrExecuteResponseBody).status).toBe("succeeded");
+    expect(adapter.creates()).toBe(1);
+  });
+
+  it("mints a claim redeemable only once", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issuePrApproval(approvalStore, DEFAULT_CREATE_COMMAND);
+    const adapter = recordingPrAdapter();
+    const executeHandler = createHandlePrExecute({
+      execution: seams({ prAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const first = await executeHandler(ctxFor(EXECUTE, createBody({ approval })), deps());
+    expect((first.body as GitDeliveryPrExecuteResponseBody).status).toBe("succeeded");
+    // The claim was consumed by the first execute: a second redemption attempt no longer matches any
+    // stored record, so resolveGitDeliveryApprovalRequirement refuses it as a malformed/unknown claim
+    // (400), never re-honouring it as a fresh "approval-required" disposition.
+    const second = await executeHandler(ctxFor(EXECUTE, createBody({ approval })), deps());
+    expect(second.status).toBe(400);
+    expect(adapter.creates()).toBe(1);
+  });
+
+  it("refuses a claim minted for a different PR command", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issuePrApproval(approvalStore, {
+      ...DEFAULT_CREATE_COMMAND,
+      title: "a different title entirely",
+    });
+    const adapter = recordingPrAdapter();
+    const handler = createHandlePrExecute({
+      execution: seams({ prAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const res = await handler(ctxFor(EXECUTE, createBody({ approval })), deps());
+    expect(res.status).toBe(400);
+    expect(adapter.creates()).toBe(0);
+  });
+
+  it("refuses a claim minted for a different run", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issuePrApproval(approvalStore, DEFAULT_CREATE_COMMAND, {
+      runId: "another-run",
+    });
+    const adapter = recordingPrAdapter();
+    const handler = createHandlePrExecute({
+      execution: seams({ prAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const res = await handler(ctxFor(EXECUTE, createBody({ approval })), deps());
+    expect(res.status).toBe(400);
+    expect(adapter.creates()).toBe(0);
+  });
+
+  it("denies the mint itself when no accepted run authority is active", async () => {
+    const handler = createHandlePrApprove({ execution: seams() });
+    const res = await handler(
+      ctxFor("/api/git-delivery/pr/approve", createBody()),
+      deps({ gitDeliveryAuthority: { current: () => undefined } }),
+    );
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+  });
+
+  it("logs a body-free line when the mint issues a claim", async () => {
+    const activity: ServerLogEvent[] = [];
+    const handler = createHandlePrApprove({
+      execution: seams({
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
+    });
+    await handler(
+      { ...ctxFor("/api/git-delivery/pr/approve", createBody()), correlationId: "corr-pr-mint-1" },
+      deps(),
+    );
+    const events = activity.filter((event) => event.op === "git.delivery.pr.approval.minted");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      correlationId: "corr-pr-mint-1",
+      extra: { runId: "test-run" },
+    });
+    expect(JSON.stringify(events[0])).not.toContain("governed pull request command center");
+  });
+
+  // Final-audit F2/#3390 (ADR-0138 D2): before this fix, the coarse admission gate hard-denied both
+  // pr/approve and pr/execute with "approval-required" below `autonomous-delivery` and no
+  // production path ever redeemed it — every test above only ever exercised the fixture default
+  // (autonomous-delivery). FAILING BEFORE THE FIX: `modeDeps()`'s approve call returned 403
+  // GIT_DELIVERY_AUTHORITY_DENIED at the `gitDeliveryAuthorityGate` call inside
+  // `createHandlePrApprove`, never reaching `store.issue()`.
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "mints and consumes a pr approval end to end at %s",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+          {
+            headRef: "claude/issue-477-github-pr-command-center",
+            baseRef: "dev",
+            allowDetachedHead: false,
+            allowedPrefixes: ["claude/"],
+          },
+        ),
+      });
+      const approvalStore = createInMemoryGitDeliveryApprovalStore();
+      const approveHandler = createHandlePrApprove({ execution: seams({ approvalStore }) });
+      const minted = await approveHandler(
+        ctxFor("/api/git-delivery/pr/approve", createBody()),
+        modeDeps,
+      );
+      expect(minted.status).toBe(200);
+      const approval = (minted.body as { approval: GitDeliveryApprovalClaim }).approval;
+
+      const adapter = recordingPrAdapter();
+      const executeHandler = createHandlePrExecute({
+        execution: seams({ prAdapterFactory: () => adapter.adapter, approvalStore }),
+      });
+      const res = await executeHandler(ctxFor(EXECUTE, createBody({ approval })), modeDeps);
+      expect((res.body as GitDeliveryPrExecuteResponseBody).status).toBe("succeeded");
+      expect(adapter.creates()).toBe(1);
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "still returns approval-required (never mode-denied) at %s when execute carries no approval",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+          {
+            headRef: "claude/issue-477-github-pr-command-center",
+            baseRef: "dev",
+            allowDetachedHead: false,
+            allowedPrefixes: ["claude/"],
+          },
+        ),
+      });
+      const adapter = recordingPrAdapter();
+      const executeHandler = createHandlePrExecute({
+        execution: seams({ prAdapterFactory: () => adapter.adapter }),
+      });
+      const res = await executeHandler(ctxFor(EXECUTE, createBody()), modeDeps);
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ status: "approval-required" });
+      expect(adapter.creates()).toBe(0);
+    },
+  );
 });
 
 // ─── F1: the default PR adapter (no prAdapterFactory seam) — audit finding: this branch
@@ -789,5 +1173,719 @@ describe("executeGovernedPullRequest — no-spawn refusal is marked, never reach
     expect(marker?.correlationId).toBe("request-correlation-pr-no-spawn");
     expect(marker?.extra?.operation).toBe("pr-create");
     expect(marker?.status).toBe(403);
+  });
+});
+
+// #3389 (epic #3384 correction 7): the pr-mark-ready mint and execute routes. Reuses the exact
+// approval-store primitives the generic PR routes above already exercise, bound to a SEPARATE
+// "pr-mark-ready" operation so a claim minted here can never redeem the generic pr-update admission
+// (and vice versa — approvalStore.test.ts pins the store-level half of this).
+describe("pr mark-ready routes (#3389)", () => {
+  const MARK_READY_APPROVE = "/api/git-delivery/pr/mark-ready/approve";
+  const MARK_READY_EXECUTE = "/api/git-delivery/pr/mark-ready/execute";
+  const HEAD_SHA = "a".repeat(40);
+  const BASE_SHA = "b".repeat(40);
+  const BASE_REF = "dev";
+
+  function page(values: readonly unknown[] = []): {
+    readonly values: readonly unknown[];
+    readonly completeness: {
+      readonly complete: true;
+      readonly pages: number;
+      readonly entries: number;
+      readonly bytes: number;
+    };
+  } {
+    return { values, completeness: { complete: true, pages: 1, entries: values.length, bytes: 0 } };
+  }
+
+  // A minimal, complete, unprotected, conflict-free live CI-facts read — head/base/draft match the
+  // approval's bound facts exactly. `requirements.digest`/`workflowDefinitions` are inert inputs to
+  // assessGitCiFacts's OWN requirementsDigest formula (not the value under test); READINESS_DIGEST
+  // below is derived by calling that real producer, never hand-rolled, so it can never drift from
+  // what the production code actually computes (AGENTS.md §7: import the producer, don't restate it).
+  function readyCiFacts(overrides: Partial<GitCiProviderFacts> = {}): GitCiProviderFacts {
+    return {
+      status: "observed",
+      identity: {
+        number: 1499,
+        externalId: "PR_kwDO123",
+        url: "https://github.com/oscharko-dev/Keiko/pull/1499",
+        repository: "oscharko-dev/Keiko",
+        headRepository: "oscharko-dev/Keiko",
+        headRef: "claude/issue-3389-x",
+        headSha: HEAD_SHA,
+        baseRef: BASE_REF,
+        baseSha: BASE_SHA,
+        state: "open",
+        isDraft: true,
+      },
+      repositoryId: 1499,
+      mergeable: true,
+      mergeState: "clean",
+      merged: false,
+      protection: { outcome: "unprotected" },
+      requirements: {
+        status: "observed",
+        requirements: [],
+        strict: false,
+        digest: "fixture-requirements-digest",
+      },
+      workflowDefinitions: { status: "observed", definitions: [] },
+      lists: {
+        "branch-rules": page(),
+        "check-runs": page(),
+        "commit-statuses": page(),
+        "workflow-runs": page(),
+        reviews: page(),
+      },
+      ...overrides,
+    };
+  }
+  const READY_CI_FACTS = readyCiFacts();
+  const requirementsDigest = assessGitCiFacts(READY_CI_FACTS).requirementsDigest;
+  if (requirementsDigest === null) throw new Error("fixture must produce a requirements digest");
+  const READINESS_DIGEST = requirementsDigest;
+
+  function ciReaderReturning(facts: GitCiFactsResult): GitCiProviderReader {
+    return { readFacts: (): Promise<GitCiFactsResult> => Promise.resolve(facts) };
+  }
+  // The default, happy-path live read every test that expects the adapter to be reached uses.
+  const cleanCiReaderFactory = (): GitCiProviderReader => ciReaderReturning(READY_CI_FACTS);
+
+  function markReadyBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      schemaVersion: "1",
+      projectId,
+      ownerAndRepo: "oscharko-dev/Keiko",
+      prExternalId: "1499",
+      headSha: HEAD_SHA,
+      baseSha: BASE_SHA,
+      baseRef: BASE_REF,
+      readinessDigest: READINESS_DIGEST,
+      ...overrides,
+    };
+  }
+
+  function recordingMarkReadyAdapter(result: GitPrMarkReadyExecResult): {
+    readonly adapter: GitPullRequestMarkReadyAdapter;
+    readonly calls: () => readonly GitPrMarkReadyExecRequest[];
+  } {
+    const calls: GitPrMarkReadyExecRequest[] = [];
+    return {
+      adapter: {
+        markPullRequestReady: (req): Promise<GitPrMarkReadyExecResult> => {
+          calls.push(req);
+          return Promise.resolve(result);
+        },
+      },
+      calls: () => calls,
+    };
+  }
+
+  async function mintMarkReadyApproval(
+    approvalStore: ReturnType<typeof createInMemoryGitDeliveryApprovalStore>,
+    overrides: Record<string, unknown> = {},
+  ): Promise<GitDeliveryApprovalClaim> {
+    const res = await createHandlePrMarkReadyApprove({
+      approvalStore,
+      now: () => 1_700_000_000_000,
+    })(ctxFor(MARK_READY_APPROVE, markReadyBody(overrides)), deps());
+    return (res.body as GitDeliveryPrMarkReadyApproveResponseBody).approval;
+  }
+
+  it("mints a claim, then executes the draft->ready transition through the adapter — no PATCH", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = await mintMarkReadyApproval(approvalStore);
+    const succeeded: GitPrMarkReadyExecResult = {
+      schemaVersion: "1",
+      outcome: "succeeded",
+      durationMs: 5,
+    };
+    const adapter = recordingMarkReadyAdapter(succeeded);
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      now: () => 1_700_000_000_001,
+      adapterFactory: () => adapter.adapter,
+      ciReaderFactory: cleanCiReaderFactory,
+    })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), deps());
+    const body = res.body as GitDeliveryPrMarkReadyExecuteResponseBody;
+    expect(body).toMatchObject({ actionKind: "pr-mark-ready", status: "succeeded" });
+    expect(adapter.calls()).toEqual([
+      {
+        ownerAndRepo: "oscharko-dev/Keiko",
+        prExternalId: "1499",
+        expectedHeadSha: HEAD_SHA,
+        expectedBaseSha: BASE_SHA,
+      },
+    ]);
+  });
+
+  it("persists a fresh ready-PR CI observation after the governed transition", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = await mintMarkReadyApproval(approvalStore);
+    const adapter = recordingMarkReadyAdapter({
+      schemaVersion: "1",
+      outcome: "succeeded",
+      durationMs: 5,
+    });
+    const db = new DatabaseSync(":memory:");
+    const activity: ServerLogEvent[] = [];
+    try {
+      const snapshots = createDraftRun(db);
+      const source = snapshots.get("run-1");
+      const ciReadiness = snapshots.ciReadiness;
+      if (source?.draftDelivery?.pullRequest === undefined || ciReadiness === undefined)
+        throw new Error("missing fixture draft or CI store");
+      const draftDelivery = {
+        ...source.draftDelivery,
+        binding: {
+          ...source.draftDelivery.binding,
+          runId: "test-run",
+          repository: "oscharko-dev/Keiko",
+          baseRef: BASE_REF,
+          baseSha: BASE_SHA,
+          headRef: "claude/issue-3389-x",
+          headSha: HEAD_SHA,
+        },
+        pullRequest: READY_CI_FACTS.identity,
+      };
+      const recordedSnapshots: ReadinessSnapshot[] = [];
+      const recordPostDeliveryObservation = vi.fn(
+        (_runId: string, readiness: ReadinessSnapshot): boolean => {
+          recordedSnapshots.push(readiness);
+          return true;
+        },
+      );
+      const runtimeStore = {
+        ...snapshots,
+        get: (runId: string): ReturnType<typeof snapshots.get> =>
+          runId === "test-run"
+            ? {
+                ...source,
+                runId,
+                state: "succeeded",
+                terminalAt: source.updatedAt,
+                draftDelivery,
+              }
+            : snapshots.get(runId),
+        ciReadiness: {
+          ...ciReadiness,
+          recordPostDeliveryObservation,
+        },
+      };
+      const observedReady = readyCiFacts({
+        identity: { ...READY_CI_FACTS.identity, isDraft: false },
+      });
+      const reads = [READY_CI_FACTS, observedReady];
+      const ciReaderFactory = (): GitCiProviderReader => ({
+        readFacts: (): Promise<GitCiFactsResult> => Promise.resolve(reads.shift() ?? observedReady),
+      });
+      const result = await createHandlePrMarkReadyExecute({
+        approvalStore,
+        now: () => 1_700_000_000_001,
+        adapterFactory: () => adapter.adapter,
+        ciReaderFactory,
+        activityLog: { write: (event): void => void activity.push(event) },
+      })(
+        {
+          ...ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })),
+          correlationId: "corr-post-ready",
+        },
+        deps({ codingRuntimeSnapshotStore: runtimeStore }),
+      );
+      expect(result.body).toMatchObject({ status: "succeeded" });
+      expect(reads).toHaveLength(0);
+      expect(recordPostDeliveryObservation).toHaveBeenCalledOnce();
+      expect(recordedSnapshots[0]).toMatchObject({
+        runId: "test-run",
+        headSha: HEAD_SHA,
+        pullRequest: { isDraft: false },
+      });
+      const refreshed = activity.find(
+        (event) => event.op === "git.delivery.pr-mark-ready.readiness-refreshed",
+      );
+      expect(refreshed).toMatchObject({
+        correlationId: "corr-post-ready",
+        extra: { recorded: true, reason: "observed" },
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("refuses execute with approval-required when no claim is attached, and never calls the adapter", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const adapter = recordingMarkReadyAdapter({
+      schemaVersion: "1",
+      outcome: "succeeded",
+      durationMs: 5,
+    });
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      adapterFactory: () => adapter.adapter,
+    })(ctxFor(MARK_READY_EXECUTE, markReadyBody()), deps());
+    const body = res.body as GitDeliveryPrMarkReadyExecuteResponseBody;
+    expect(body.status).toBe("approval-required");
+    expect(adapter.calls()).toHaveLength(0);
+  });
+
+  // #3384 B5-8: mark-ready's own client-supplied `ownerAndRepo` is refused when it does not match
+  // the resolved workspace's OWN Git remote — the mint route must never mint an approval binding
+  // (remoteDigest included) against a repository the workspace does not actually own.
+  it("refuses mark-ready mint for a well-formed ownerAndRepo that does not match this project's own Git remote", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const res = await createHandlePrMarkReadyApprove({ approvalStore })(
+      ctxFor(MARK_READY_APPROVE, markReadyBody({ ownerAndRepo: "someone-else/other-repo" })),
+      deps(),
+    );
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_PR_MARK_READY_REPOSITORY_MISMATCH" },
+    });
+  });
+
+  // #3389 (correction 1/7): the failing-before-fix case — a claim minted for the GENERIC "pr"
+  // operation (the same claim GovernedPullRequestCard's old convertFromDraft path consumed) must
+  // never redeem the dedicated pr-mark-ready execute route.
+  it("refuses execute when the approval was minted for the generic pr operation, not pr-mark-ready", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const genericPrCommand: GitPullRequestCommand = {
+      kind: "pr-update",
+      ownerAndRepo: "oscharko-dev/Keiko",
+      prExternalId: "1499",
+      headBranchName: "claude/issue-3389-x",
+      baseBranchName: "dev",
+      title: "t",
+      body: "b",
+      convertToDraft: false,
+      convertFromDraft: false,
+    };
+    const foreignApproval = issuePrApproval(approvalStore, genericPrCommand);
+    const adapter = recordingMarkReadyAdapter({
+      schemaVersion: "1",
+      outcome: "succeeded",
+      durationMs: 5,
+    });
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      adapterFactory: () => adapter.adapter,
+    })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval: foreignApproval })), deps());
+    expect(res.status).toBe(400);
+    expect(adapter.calls()).toHaveLength(0);
+  });
+
+  it("reports drift (precondition-failed) when the adapter observes the PR has moved, and revokes the claim", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = await mintMarkReadyApproval(approvalStore);
+    const drifted: GitPrMarkReadyExecResult = {
+      schemaVersion: "1",
+      outcome: "failed",
+      durationMs: 3,
+      errorCode: "precondition-failed",
+    };
+    const adapter = recordingMarkReadyAdapter(drifted);
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      now: () => 1_700_000_000_001,
+      adapterFactory: () => adapter.adapter,
+      ciReaderFactory: cleanCiReaderFactory,
+    })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), deps());
+    const body = res.body as GitDeliveryPrMarkReadyExecuteResponseBody;
+    expect(body).toMatchObject({ status: "failed", executionErrorCode: "precondition-failed" });
+    // The claim is one-use: a second execute against the identical binding no longer redeems it
+    // (the store already consumed it on the first attempt above) — a bad request, not a retry.
+    const secondRes = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      now: () => 1_700_000_000_002,
+      adapterFactory: () => adapter.adapter,
+      ciReaderFactory: cleanCiReaderFactory,
+    })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), deps());
+    expect(secondRes.status).toBe(400);
+    expect(adapter.calls()).toHaveLength(1);
+  });
+
+  // #3389 repair (review finding, correction 2): failing-before-fix — previously the execute path
+  // never re-read requirements/conflict facts at all, so ANY syntactically-valid readinessDigest
+  // (including one with no relationship to the live PR) redeemed the claim and reached the adapter,
+  // which this fixture would have reported as "succeeded". Now a live read that disagrees with the
+  // claim's bound digest revokes the claim before the adapter is ever called.
+  it("reports drift and never calls the adapter when the live requirements digest no longer matches the claim", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = await mintMarkReadyApproval(approvalStore);
+    const adapter = recordingMarkReadyAdapter({
+      schemaVersion: "1",
+      outcome: "succeeded",
+      durationMs: 5,
+    });
+    // Same head/base/draft, but the live required-checks configuration has since changed — a
+    // different requirements.digest input yields a different requirementsDigest output.
+    const driftedFacts = readyCiFacts({
+      requirements: {
+        status: "observed",
+        requirements: [],
+        strict: false,
+        digest: "a-different-requirements-configuration",
+      },
+    });
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      now: () => 1_700_000_000_001,
+      adapterFactory: () => adapter.adapter,
+      ciReaderFactory: () => ciReaderReturning(driftedFacts),
+    })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), deps());
+    const body = res.body as GitDeliveryPrMarkReadyExecuteResponseBody;
+    expect(body).toMatchObject({ status: "failed", executionErrorCode: "precondition-failed" });
+    expect(adapter.calls()).toHaveLength(0);
+  });
+
+  it("reports drift and never calls the adapter when the live PR now has a merge conflict", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = await mintMarkReadyApproval(approvalStore);
+    const adapter = recordingMarkReadyAdapter({
+      schemaVersion: "1",
+      outcome: "succeeded",
+      durationMs: 5,
+    });
+    const conflictingFacts = readyCiFacts({ mergeable: false, mergeState: "dirty" });
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      now: () => 1_700_000_000_001,
+      adapterFactory: () => adapter.adapter,
+      ciReaderFactory: () => ciReaderReturning(conflictingFacts),
+    })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), deps());
+    const body = res.body as GitDeliveryPrMarkReadyExecuteResponseBody;
+    expect(body).toMatchObject({ status: "failed", executionErrorCode: "precondition-failed" });
+    expect(adapter.calls()).toHaveLength(0);
+  });
+
+  it("reports drift and never calls the adapter when the live requirements/conflict read is unavailable or incomplete", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = await mintMarkReadyApproval(approvalStore);
+    const adapter = recordingMarkReadyAdapter({
+      schemaVersion: "1",
+      outcome: "succeeded",
+      durationMs: 5,
+    });
+    // The "unavailable" branch of GitCiFactsResult (never a synthesized green — correction 4/AC5).
+    const unavailable: GitCiFactsResult = {
+      status: "unavailable",
+      failure: { reason: "rate-limited", state: "pending" },
+    };
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      now: () => 1_700_000_000_001,
+      adapterFactory: () => adapter.adapter,
+      ciReaderFactory: () => ciReaderReturning(unavailable),
+    })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), deps());
+    const body = res.body as GitDeliveryPrMarkReadyExecuteResponseBody;
+    expect(body).toMatchObject({ status: "failed", executionErrorCode: "precondition-failed" });
+    expect(adapter.calls()).toHaveLength(0);
+  });
+
+  it("emits a correlation-keyed diagnostic when the live CI read throws", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = await mintMarkReadyApproval(approvalStore);
+    const activity: ServerLogEvent[] = [];
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const diagnosticSink: ServerDiagnosticSink = {
+      record: (record): void => void diagnostics.push(record),
+    };
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      now: () => 1_700_000_000_001,
+      activityLog: { write: (event): void => void activity.push(event) },
+      ciReaderFactory: () => ({
+        readFacts: (): Promise<GitCiFactsResult> =>
+          Promise.reject(new Error("provider response contained a secret")),
+      }),
+    })(
+      { ...ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), correlationId: "corr-ci-read" },
+      deps({ diagnostics: diagnosticSink }),
+    );
+    expect(res).toMatchObject({ status: 200, body: { status: "failed" } });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      correlationId: "corr-ci-read",
+      operation: "POST /api/git-delivery/pr/mark-ready/execute",
+      source: "pr-mark-ready-ci-read",
+      message: "The bounded status read was unavailable.",
+    });
+    expect(JSON.stringify(diagnostics[0])).not.toContain("provider response contained a secret");
+    const failure = activity.find((event) => event.op === "git.delivery.mutation.failed");
+    expect(failure).toMatchObject({
+      correlationId: "corr-ci-read",
+      level: "error",
+      errorKind: "Error",
+      extra: { actionKind: "pr-mark-ready", phaseReached: "readiness" },
+    });
+    expect(failure?.extra?.frames).toBeDefined();
+    expect(failure?.extra?.causeChain).toBeDefined();
+    expect(JSON.stringify(failure)).not.toContain("provider response contained a secret");
+  });
+
+  it("reports and logs an unexpected mark-ready adapter failure without mislabelling the worktree", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = await mintMarkReadyApproval(approvalStore);
+    const activity: ServerLogEvent[] = [];
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      now: () => 1_700_000_000_001,
+      activityLog: { write: (event): void => void activity.push(event) },
+      ciReaderFactory: cleanCiReaderFactory,
+      adapterFactory: (): GitPullRequestMarkReadyAdapter => ({
+        markPullRequestReady: (): Promise<GitPrMarkReadyExecResult> =>
+          Promise.reject(new Error("provider response contained another secret")),
+      }),
+    })(
+      {
+        ...ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })),
+        correlationId: "corr-mark-ready-failed",
+      },
+      deps({ diagnostics: { record: (record): void => void diagnostics.push(record) } }),
+    );
+
+    expect(res).toMatchObject({
+      status: 502,
+      body: { error: { code: "GIT_DELIVERY_PR_MARK_READY_EXECUTION_FAILED" } },
+    });
+    expect(activity.find((event) => event.op === "git.delivery.mutation.failed")).toMatchObject({
+      correlationId: "corr-mark-ready-failed",
+      level: "error",
+      errorKind: "Error",
+      extra: { actionKind: "pr-mark-ready", phaseReached: "dispatch" },
+    });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      correlationId: "corr-mark-ready-failed",
+      source: "pr-mark-ready-dispatch",
+    });
+    expect(JSON.stringify({ activity, diagnostics })).not.toContain(
+      "provider response contained another secret",
+    );
+  });
+
+  it.each([
+    { headSha: "not-a-sha" },
+    { baseSha: "0".repeat(39) },
+    { baseRef: "refs/heads/dev" },
+    { baseRef: "bad ref" },
+    { readinessDigest: "too-short" },
+    { prExternalId: "not-numeric" },
+    { ownerAndRepo: "not-owner-repo" },
+  ])("rejects a malformed mark-ready request %j", async (overrides) => {
+    const res = await createHandlePrMarkReadyApprove()(
+      ctxFor(MARK_READY_APPROVE, markReadyBody(overrides)),
+      deps(),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a request smuggling a merge or issue-close field", async () => {
+    const res = await createHandlePrMarkReadyApprove()(
+      ctxFor(MARK_READY_APPROVE, { ...markReadyBody(), mergeMethod: "squash", closeIssue: true }),
+      deps(),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("logs body-free git.delivery.pr-mark-ready.approval.minted and .required lines with correlation", async () => {
+    const activity: ServerLogEvent[] = [];
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const activityLog = { write: (event: ServerLogEvent): void => void activity.push(event) };
+    await createHandlePrMarkReadyApprove({ approvalStore, activityLog })(
+      { ...ctxFor(MARK_READY_APPROVE, markReadyBody()), correlationId: "corr-mark-ready-mint" },
+      deps(),
+    );
+    const minted = activity.filter(
+      (event) => event.op === "git.delivery.pr-mark-ready.approval.minted",
+    );
+    expect(minted).toHaveLength(1);
+    expect(minted[0]).toMatchObject({ correlationId: "corr-mark-ready-mint" });
+    expect(JSON.stringify(minted[0])).not.toContain("Keiko");
+
+    await createHandlePrMarkReadyExecute({ approvalStore, activityLog })(
+      { ...ctxFor(MARK_READY_EXECUTE, markReadyBody()), correlationId: "corr-mark-ready-noclaim" },
+      deps(),
+    );
+    const required = activity.filter(
+      (event) => event.op === "git.delivery.pr-mark-ready.approval.required",
+    );
+    expect(required).toHaveLength(1);
+    expect(required[0]).toMatchObject({ correlationId: "corr-mark-ready-noclaim" });
+  });
+
+  it("logs a body-free git.delivery.pr-mark-ready.executed line on success and .drift on precondition failure", async () => {
+    const activity: ServerLogEvent[] = [];
+    const activityLog = { write: (event: ServerLogEvent): void => void activity.push(event) };
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const succeeded = await mintMarkReadyApproval(approvalStore);
+    const adapter = recordingMarkReadyAdapter({
+      schemaVersion: "1",
+      outcome: "succeeded",
+      durationMs: 4,
+    });
+    await createHandlePrMarkReadyExecute({
+      approvalStore,
+      activityLog,
+      now: () => 1_700_000_000_001,
+      adapterFactory: () => adapter.adapter,
+      ciReaderFactory: cleanCiReaderFactory,
+    })(
+      {
+        ...ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval: succeeded })),
+        correlationId: "corr-mark-ready-exec",
+      },
+      deps(),
+    );
+    const executed = activity.filter((event) => event.op === "git.delivery.pr-mark-ready.executed");
+    expect(executed).toHaveLength(1);
+    expect(executed[0]).toMatchObject({
+      correlationId: "corr-mark-ready-exec",
+      extra: { outcome: "succeeded" },
+    });
+
+    const drifted = await mintMarkReadyApproval(approvalStore);
+    const driftAdapter = recordingMarkReadyAdapter({
+      schemaVersion: "1",
+      outcome: "failed",
+      durationMs: 2,
+      errorCode: "precondition-failed",
+    });
+    await createHandlePrMarkReadyExecute({
+      approvalStore,
+      activityLog,
+      now: () => 1_700_000_000_002,
+      adapterFactory: () => driftAdapter.adapter,
+      ciReaderFactory: cleanCiReaderFactory,
+    })(
+      {
+        ...ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval: drifted })),
+        correlationId: "corr-mark-ready-drift",
+      },
+      deps(),
+    );
+    const drift = activity.filter((event) => event.op === "git.delivery.pr-mark-ready.drift");
+    expect(drift).toHaveLength(1);
+    expect(drift[0]).toMatchObject({ correlationId: "corr-mark-ready-drift" });
+  });
+
+  // Final-audit F2/#3390 (ADR-0138 D2): before this fix, the coarse admission gate hard-denied both
+  // pr/mark-ready/approve and pr/mark-ready/execute with "approval-required" below
+  // `autonomous-delivery` and no production path ever redeemed it — every test above only ever
+  // exercised the fixture default (autonomous-delivery). FAILING BEFORE THE FIX: `modeDeps()`'s
+  // approve call returned 403 GIT_DELIVERY_AUTHORITY_DENIED at the `gitDeliveryAuthorityGate` call
+  // inside `createHandlePrMarkReadyApprove`, never reaching `store.issue()`.
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "mints and consumes a pr-mark-ready approval end to end at %s",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+        ),
+      });
+      const approvalStore = createInMemoryGitDeliveryApprovalStore();
+      const approveRes = await createHandlePrMarkReadyApprove({
+        approvalStore,
+        now: () => 1_700_000_000_000,
+      })(ctxFor(MARK_READY_APPROVE, markReadyBody()), modeDeps);
+      expect(approveRes.status).toBe(200);
+      const approval = (approveRes.body as GitDeliveryPrMarkReadyApproveResponseBody).approval;
+
+      const adapter = recordingMarkReadyAdapter({
+        schemaVersion: "1",
+        outcome: "succeeded",
+        durationMs: 5,
+      });
+      const executeRes = await createHandlePrMarkReadyExecute({
+        approvalStore,
+        now: () => 1_700_000_000_001,
+        adapterFactory: () => adapter.adapter,
+        ciReaderFactory: cleanCiReaderFactory,
+      })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), modeDeps);
+      const body = executeRes.body as GitDeliveryPrMarkReadyExecuteResponseBody;
+      expect(body).toMatchObject({ actionKind: "pr-mark-ready", status: "succeeded" });
+      expect(adapter.calls()).toHaveLength(1);
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "still returns approval-required (never mode-denied) at %s when execute carries no approval",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+        ),
+      });
+      const approvalStore = createInMemoryGitDeliveryApprovalStore();
+      const adapter = recordingMarkReadyAdapter({
+        schemaVersion: "1",
+        outcome: "succeeded",
+        durationMs: 5,
+      });
+      const res = await createHandlePrMarkReadyExecute({
+        approvalStore,
+        adapterFactory: () => adapter.adapter,
+      })(ctxFor(MARK_READY_EXECUTE, markReadyBody()), modeDeps);
+      const body = res.body as GitDeliveryPrMarkReadyExecuteResponseBody;
+      expect(body.status).toBe("approval-required");
+      expect(adapter.calls()).toHaveLength(0);
+    },
+  );
+
+  // AC4 (epic #3384): the coding runtime exposes neither merge nor auto-merge scheduling nor
+  // issue-close mutations. The full PR route group (create/update/preview/mark-ready) carries no
+  // such endpoint — this is a structural pin on the route table itself, independent of any single
+  // handler's behaviour.
+  it("the PR route group (including mark-ready) exposes no merge or issue-close endpoint", () => {
+    const patterns = createGitDeliveryPrRouteGroup().map((route) => route.pattern);
+    expect(patterns).toEqual(
+      expect.arrayContaining([
+        "/api/git-delivery/pr/preview",
+        "/api/git-delivery/pr/approve",
+        "/api/git-delivery/pr/execute",
+        "/api/git-delivery/pr/mark-ready/approve",
+        "/api/git-delivery/pr/mark-ready/execute",
+      ]),
+    );
+    for (const pattern of patterns) {
+      expect(pattern.toLowerCase()).not.toMatch(/merge|close/u);
+    }
+  });
+
+  // Owner audit of PR #3394, finding b2-19: every test above resolves a route group's own factory
+  // output (`createGitDeliveryPrRouteGroup()`, called fresh) rather than the real, module-level
+  // `API_ROUTES`/`matchRoute` `routes.ts` actually serves requests through. Three earlier review
+  // threads found the pr-description, journey, and mark-ready groups unmounted at intermediate
+  // checkpoints (imported into `routes.ts` but never spread into `API_ROUTES`) — a defect this
+  // group's own factory-output tests could never catch, since a group that is never wired in still
+  // returns a perfectly well-formed array from its own factory. Resolving through `matchRoute` is
+  // the only way to prove these patterns are actually reachable by an inbound request.
+  it("resolves the pr-description, journey, and mark-ready patterns through the real API_ROUTES (b2-19)", () => {
+    const postOnly = [
+      "/api/git-delivery/pr-description/preview",
+      "/api/git-delivery/pr-description/review",
+      "/api/git-delivery/pr-description/approve",
+      "/api/git-delivery/pr-description/apply",
+      "/api/git-delivery/pr-description/status",
+      "/api/git-change/review-description",
+      "/api/git-delivery/journey/refresh",
+      "/api/git-delivery/pr/mark-ready/approve",
+      "/api/git-delivery/pr/mark-ready/execute",
+    ];
+    for (const pattern of postOnly) {
+      const match = matchRoute("POST", pattern);
+      if (match === undefined || match === "method-not-allowed") {
+        throw new Error(`expected ${pattern} to resolve through the real API_ROUTES`);
+      }
+      expect(match.definition.pattern).toBe(pattern);
+      // Every one of these is a mutation/refresh surface — never reachable by GET.
+      expect(matchRoute("GET", pattern)).toBe("method-not-allowed");
+    }
   });
 });

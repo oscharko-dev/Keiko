@@ -9,6 +9,8 @@
 //   * `correlationId` is only ever trusted after `isValidCorrelationId` — the same server-side
 //     policy every other correlation id on this server goes through (`correlation.ts`) — so a
 //     browser cannot inject an arbitrary join key onto another request's timeline;
+//   * the optional Git-change response identity is a closed, body-free contract and is projected
+//     field-by-field; unknown browser fields can never enter the activity log;
 //   * the message text is written under `extra.clientNote`, NEVER `extra.message`: `"message"` is
 //     on `log-redaction.ts`'s `DENIED_FIELD_NAMES` and would collapse to `[redacted:key]` even
 //     though the value is already length-bounded by the wire guard. `clientNote` normalises to
@@ -37,7 +39,7 @@ import {
   RequestBodyTooLargeError,
   readBoundedRequestBody,
 } from "./bounded-request-body.js";
-import { isValidCorrelationId } from "./correlation.js";
+import { correlationIdOrUnknown, isValidCorrelationId } from "./correlation.js";
 import {
   createInlineCompletionRateLimiter,
   type InlineCompletionRateLimiter,
@@ -90,7 +92,7 @@ function dropNoticeThrottled(now: number): boolean {
 
 // Reports a rate-limited drop exactly once per window, carrying how many further drops that same
 // window suppressed — never the report content, which was never admitted past the limiter.
-function noticeRateLimitedDrop(now: number): void {
+function noticeRateLimitedDrop(now: number, correlationId: string | undefined): void {
   if (dropNoticeThrottled(now)) {
     dropNotice = { lastAt: dropNotice.lastAt, suppressed: dropNotice.suppressed + 1 };
     return;
@@ -100,6 +102,7 @@ function noticeRateLimitedDrop(now: number): void {
   getServerLogger().warn({
     category: "diagnostic",
     op: "client.diagnostic.rate-limited",
+    correlationId: correlationIdOrUnknown(correlationId),
     ...(suppressed > 0 ? { extra: { suppressedDrops: suppressed } } : {}),
   });
 }
@@ -107,18 +110,33 @@ function noticeRateLimitedDrop(now: number): void {
 // Projects the validated request onto the activity log. `message` is admitted only as
 // `extra.clientNote` (see module header); `readyState`/`kind` ride along as bounded, closed-shape
 // fields the value guards pass through unchanged.
-function logClientDiagnostic(request: ClientDiagnosticIngestRequest): void {
+function logClientDiagnostic(
+  request: ClientDiagnosticIngestRequest,
+  ingestCorrelationId: string | undefined,
+): void {
   const extra: Record<string, unknown> = { clientNote: request.message };
   if (request.readyState !== undefined) extra.readyState = request.readyState;
   if (request.kind !== undefined) extra.clientKind = request.kind;
+  if (request.gitChangeDescription !== undefined) {
+    extra.action = request.gitChangeDescription.action;
+    extra.disposition = request.gitChangeDescription.disposition;
+    extra.relationshipId = request.gitChangeDescription.relationshipId;
+    extra.snapshotDigest = request.gitChangeDescription.snapshotDigest;
+    extra.proposalId = request.gitChangeDescription.proposalId;
+    extra.outcome = request.gitChangeDescription.outcome;
+  }
+  if (request.workspaceTrustBinding !== undefined) {
+    extra.repositoryId = request.workspaceTrustBinding.repositoryId;
+    extra.workspaceId = request.workspaceTrustBinding.workspaceId;
+  }
   const correlationId =
     request.correlationId !== undefined && isValidCorrelationId(request.correlationId)
       ? request.correlationId
-      : undefined;
+      : correlationIdOrUnknown(ingestCorrelationId);
   getServerLogger().warn({
     category: "diagnostic",
     op: "client.diagnostic",
-    ...(correlationId === undefined ? {} : { correlationId }),
+    correlationId,
     ...(request.kind === undefined ? {} : { errorKind: request.kind }),
     extra,
   });
@@ -192,9 +210,9 @@ export async function handleClientDiagnosticIngest(ctx: RouteContext): Promise<R
   }
   const now = Date.now();
   if (!rateLimiter.tryAcquire(CLIENT_DIAGNOSTIC_RATE_LIMIT_KEY, now)) {
-    noticeRateLimitedDrop(now);
+    noticeRateLimitedDrop(now, ctx.correlationId);
     return { status: 204, body: null };
   }
-  logClientDiagnostic(parsed);
+  logClientDiagnostic(parsed, ctx.correlationId);
   return { status: 204, body: null };
 }

@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type { GatewayCallRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import {
+  CHILD_WORKSPACE_READ_ALIAS,
+  createToolInvocationNormalizer,
+} from "@oscharko-dev/keiko-tool-catalog";
 
 import {
   createProductionAuxiliaryPorts,
@@ -91,7 +95,7 @@ interface PortsOptions {
     ProductionAuxiliaryPortInput["researchGrantRegistry"] | undefined;
   readonly readText?:
     ProductionAuxiliaryPortInput["secureWorkspaceTextRead"]["readText"] | undefined;
-  readonly modelCall?: (() => Promise<NormalizedResponse>) | undefined;
+  readonly modelCall?: ((request: GatewayCallRequest) => Promise<NormalizedResponse>) | undefined;
   readonly resolveWorkspaceRootAccess?:
     ProductionAuxiliaryPortInput["resolveWorkspaceRootAccess"] | undefined;
 }
@@ -142,27 +146,45 @@ function ports(
           Promise.resolve({ ok: true as const, text: '{"scripts":{"b":"1","a":"2"}}' })),
     },
     emit: options.emit ?? ((): void => undefined),
+    activityLog: { write: (): void => undefined },
     ...(options.researchGrantRegistry === undefined
       ? {}
       : { researchGrantRegistry: options.researchGrantRegistry }),
   });
 }
 
+// Binds the call to the harness's advertised catalog exactly the way a real provider adapter now
+// must (mirrors packages/keiko-harness/src/_support.ts's scriptedModel) -- the mandatory catalog
+// dispatch path (catalog-runtime.ts) rejects a toolCall with no bound `invocation`.
 function toolThenFinish(
   name: string,
   args: Record<string, unknown>,
-): () => Promise<NormalizedResponse> {
+): (request: GatewayCallRequest) => Promise<NormalizedResponse> {
   let turn = 0;
-  return (): Promise<NormalizedResponse> => {
+  return (request): Promise<NormalizedResponse> => {
     turn += 1;
+    if (turn !== 1) return Promise.resolve(response());
+    const invocation =
+      request.toolCatalog === undefined
+        ? undefined
+        : createToolInvocationNormalizer({
+            catalog: request.toolCatalog.catalog,
+            projection: request.toolCatalog.projection,
+            offered: request.toolCatalog.offered,
+          }).bindAlias(name, args, 0);
     return Promise.resolve(
-      turn === 1
-        ? response({
-            content: "",
-            finishReason: "tool_calls",
-            toolCalls: [{ id: `call-${String(turn)}`, name, arguments: args }],
-          })
-        : response(),
+      response({
+        content: "",
+        finishReason: "tool_calls",
+        toolCalls: [
+          {
+            id: `call-${String(turn)}`,
+            name,
+            arguments: args,
+            ...(invocation === undefined ? {} : { invocation }),
+          },
+        ],
+      }),
     );
   };
 }
@@ -365,6 +387,53 @@ describe("createProductionAuxiliaryPorts", () => {
     expect(JSON.stringify(events)).not.toContain("Inspect the repository entry point");
   });
 
+  // #3407 repair: the mandatory catalog dispatch path rejects a tool call outside the child's
+  // one-tool profile before executeRead ever runs (invocation cannot bind), so
+  // productionReadOnlyChildRunner's session ends "failed" and throws "child-session-failed"
+  // instead of the pre-catalog graceful DENIED path. This throw was never routed through the
+  // orchestrator's own gate, so it never latches a governance terminal -- it hits the
+  // orchestrator's PRE-EXISTING, already-pinned "bounded runner throws" contract
+  // (readOnlyChildOrchestrator.test.ts: "fails closed to unavailable when the bounded runner
+  // throws"), which classifies ANY unhandled runner fault as `unavailable`/`child-runner-error`.
+  // This is the real, production-wired consequence one layer above productionReadOnlyChildRunner
+  // for a hostile/fabricated tool call: it is a genuine reclassification from the pre-catalog
+  // `accepted` (childResultCount 0) outcome, and it is INTENTIONAL -- an anomalous call outside
+  // the child's declared one-tool surface is a runner-contract violation, not a normal negative
+  // read result, so routing it into the orchestrator's existing runner-fault bucket is correct.
+  // This test proves and pins that end-to-end mapping through the actual production wiring
+  // (createProductionAuxiliaryPorts -> createReadOnlyChildOrchestrator +
+  // createProductionReadOnlyChildRunner), not just the runner's own unit test.
+  it("reports the child agent unavailable, not a silent zero-result accept, when the model calls a tool it was never given", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-20T00:30:00.000Z"));
+    let reads = 0;
+    const surface = ports("gpt-coding-safe", [], {
+      modelCall: toolThenFinish("write_file", { relativePath: "src/index.ts", text: "mutated" }),
+      readText: (): ReturnType<
+        ProductionAuxiliaryPortInput["secureWorkspaceTextRead"]["readText"]
+      > => {
+        reads += 1;
+        return Promise.resolve({ ok: true as const, text: "unreachable" });
+      },
+    });
+
+    try {
+      const result = await surface.childAgentAuthority?.execute(
+        childAction(),
+        undefined,
+        LIVE_GUARD,
+      );
+
+      expect(reads).toBe(0);
+      expect(result).toMatchObject({
+        status: "completed",
+        auxiliary: { status: "unavailable", reasonCode: "child-runner-error" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails a child read closed when managed workspace authority is revoked after the effect", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-07-20T00:30:00.000Z"));
@@ -383,7 +452,9 @@ describe("createProductionAuxiliaryPorts", () => {
           }
         : undefined;
     });
-    const modelCall = vi.fn(toolThenFinish("read_file", { relativePath: "src/index.ts" }));
+    const modelCall = vi.fn(
+      toolThenFinish(CHILD_WORKSPACE_READ_ALIAS, { relativePath: "src/index.ts" }),
+    );
     const surface = ports("gpt-coding-safe", [], {
       readText,
       resolveWorkspaceRootAccess,

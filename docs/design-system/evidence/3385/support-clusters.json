@@ -1,0 +1,46 @@
+[
+  {
+    "category": "security",
+    "op": "coding-workbench.issue.resolved",
+    "errorKind": null,
+    "count": 15,
+    "sampleCorrelationIds": [
+      "79513bc9-6815-4af1-84cd-a7c3d1d4f139",
+      "4ddd03d4-5ce2-4a12-b2ce-0d6a79c34e8b",
+      "57957e7a-ed6f-4e51-9098-50d57a7f5ab6",
+      "e255ecdb-d74b-4715-be09-547516daf669",
+      "357dfd7d-a2ad-4e04-95d5-22ed754cd862"
+    ]
+  },
+  {
+    "category": "http",
+    "op": "coding-workbench.issue.previewed",
+    "errorKind": null,
+    "count": 10,
+    "sampleCorrelationIds": [
+      "79513bc9-6815-4af1-84cd-a7c3d1d4f139",
+      "4ddd03d4-5ce2-4a12-b2ce-0d6a79c34e8b",
+      "57957e7a-ed6f-4e51-9098-50d57a7f5ab6",
+      "e255ecdb-d74b-4715-be09-547516daf669",
+      "357dfd7d-a2ad-4e04-95d5-22ed754cd862"
+    ]
+  },
+  {
+    "category": "process",
+    "op": "coding-runtime.run.issue-binding-refused",
+    "errorKind": null,
+    "count": 1,
+    "sampleCorrelationIds": [
+      "run-255832810961775374350937360762335812813"
+    ]
+  },
+  {
+    "category": "process",
+    "op": "coding-runtime.run.issue-context-attached",
+    "errorKind": null,
+    "count": 1,
+    "sampleCorrelationIds": [
+      "run-284427959466520679353550653011452369026"
+    ]
+  }
+]

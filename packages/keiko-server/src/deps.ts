@@ -6,9 +6,11 @@
 // pass unchanged; the handlers degrade gracefully (no config → 400 NO_MODEL on a run, null config on
 // the inspector; no store → an empty evidence list).
 
+import { configuredRuntimePromptTokenBudget } from "./coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import {
   createDefaultChatCapability,
   findConfiguredCapability,
+  hasConfiguredEnvModelProvider,
   loadConfigFromFile,
   loadEgressConfigFromFile,
   parseGatewayConfig,
@@ -20,6 +22,7 @@ import {
   resolveCostClass,
   type EnvSource,
   type GatewayRequest,
+  type GatewaySpendBudget,
   type GatewayStreamChunk,
   type GatewayConfig,
   type LiteLLMRerankRequest,
@@ -31,6 +34,7 @@ import {
   type OpenAIEmbeddingBatchRequest,
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
+  type PrDescription,
   type RealtimeNegotiationOutcome,
   type RealtimeNegotiationRequest,
   type RerankOutcome,
@@ -86,6 +90,7 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:pa
 import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
+import { gatewaySpendBudgetForEnv } from "./gateway-spend-budget.js";
 import { gatewayForConfig, gatewayForRuntimeConfig } from "./gateway-instance-cache.js";
 import {
   createConversationAttachmentStore,
@@ -292,7 +297,6 @@ import {
   createServerWorkspaceIndexProvider,
   type WorkspaceIndexProvider,
 } from "./workspace-index-provider.js";
-import type { AutonomousDeliveryConnectorExecutor } from "./coding-runtime/autonomousDeliveryPolicy.js";
 import {
   createCodingRuntimeEditorMutationLeaseBroker,
   type CodingRuntimeEditorMutationLeasePort,
@@ -301,6 +305,10 @@ import {
   createCodingRuntimeSnapshotStore,
   type CodingRuntimeSnapshotStore,
 } from "./coding-runtime/codingRuntimeSnapshotStore.js";
+import {
+  createCodingRuntimeDescriptionJobStore,
+  type CodingRuntimeDescriptionJobStore,
+} from "./coding-runtime/codingRuntimeDescriptionJobStore.js";
 import {
   createCodingRuntimeEvidenceAggregator,
   type CodingRuntimeEvidenceAggregator,
@@ -311,12 +319,44 @@ import type { CodingSafeActivityProjection } from "./coding-runtime/codingSafeAc
 import {
   createCodingRuntimeControlPlane,
   type CodingRuntimeHost,
+  type CodingRuntimeToolFacadeBridge,
 } from "./coding-runtime/codingRuntimeControlPlane.js";
+import { createProductionCodingRuntimeIssueIntake } from "./coding-context/codingRuntimeIssueIntake.js";
 import {
   createProductionCodingRuntimeHost,
   type ProductionCodingRuntimeResolver,
 } from "./coding-runtime/productionCodingRuntimeHost.js";
-import type { GitDeliveryRunAuthorityPort } from "./gitDelivery/runBoundAuthority.js";
+import {
+  createProductionWorkbenchDescriptionDispatcher,
+  type ProductionWorkbenchArtifactRetention,
+  type ProductionWorkbenchDescriptionDispatcher,
+} from "./coding-runtime/productionCodingRuntimePorts.js";
+import type {
+  GitDeliveryDescriptionAuthorityPort,
+  GitDeliveryDescriptionAuthorityMintRequest,
+  GitDeliveryDescriptionAuthorityScope,
+  GitDeliveryRunAuthorityPort,
+} from "./gitDelivery/runBoundAuthority.js";
+import {
+  createPrDescriptionReceiptStatusHooks,
+  createPrDescriptionReceiptStore,
+} from "./gitDelivery/prDescriptionReceiptStore.js";
+import type { PrDescriptionReceiptStatusHooks } from "./gitDelivery/prDescriptionReceiptTypes.js";
+import { createProductionPrDescriptionGeneration } from "./gitDelivery/prDescriptionGeneration.js";
+import type {
+  PrDescriptionApplicationService,
+  PrDescriptionContext,
+  PrDescriptionDraftPreview,
+} from "./gitDelivery/prDescriptionTypes.js";
+import { resolveProjectWorkspace } from "./gitDelivery/execution.js";
+import {
+  resolvePrDescriptionApplicationServiceForContext,
+  resolveWorkbenchDraftDescriptionService,
+  type BaseFields as PrDescriptionBaseFields,
+} from "./gitDelivery/prDescriptionRoutes.js";
+import { descriptionAuthorityEnvelopeDigest } from "./gitDelivery/runBoundAuthority.js";
+import { createProductionVerifiedCommitDependencies } from "./coding-runtime/productionVerifiedCommitDependencies.js";
+import { createProductionDraftDeliveryDependencies } from "./coding-runtime/productionDraftDeliveryDependencies.js";
 import {
   createProductionCodingRuntimeResolver,
   type ProductionCodingRuntimeResolverInput,
@@ -340,12 +380,7 @@ import { resolveProductionOpenCodeActivation } from "./coding-runtime/production
 import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
 import type { JiraCodeContextHttpPort } from "./coding-context/jiraCodeContextConnector.js";
-import { createGitHubCodeContextApiPort } from "./coding-context/githubCodeContextPort.js";
 import { createGovernedJiraCodeContextHttpPort } from "./coding-context/jiraCodeContextPort.js";
-import {
-  createAutonomousDeliveryApprovalStore,
-  type AutonomousDeliveryApprovalStore,
-} from "./coding-runtime/autonomousDeliveryApprovalStore.js";
 import type { AtlassianConnectorCredentialDeps } from "./atlassian/credentialRoutes.js";
 import { buildAtlassianConnectorCredentialDeps } from "./atlassian/wiring.js";
 // KEIKO-0565: DI-scoped Atlassian connector registries. The classes are imported (not just their
@@ -355,6 +390,10 @@ import { AtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js"
 import { AtlassianSyncJobRegistry } from "./atlassian/syncService.js";
 import { createNodeManagedLspControl } from "./editor/lsp/managedLspControlFactory.js";
 import { shutdownHostLspPool } from "./editor/lsp/hostLanguageOperation.js";
+import {
+  createGitChangeSnapshotService,
+  type GitChangeSnapshotService,
+} from "./gitChangeSnapshotService.js";
 import type { ManagedLspControlService } from "./editor/lsp/managedLspControl.js";
 import { createNodeEditorSettingsControl } from "./editor/settings/editorSettingsControlFactory.js";
 import type { EditorSettingsControlService } from "./editor/settings/editorSettingsControl.js";
@@ -404,6 +443,7 @@ export type QualityIntelligenceReviewPrincipalResolver = (
 ) => QualityIntelligenceReviewPrincipal;
 
 export interface RuntimeGatewayConfig {
+  readonly spendBudget?: GatewaySpendBudget | undefined;
   readonly storagePath: string;
   current(): GatewayConfig | undefined;
   present(): boolean;
@@ -542,10 +582,39 @@ export interface UiHandlerDeps {
         ) => unknown;
         readonly reservePromptTokens?:
           ((capability: string, promptTokens: number) => unknown) | undefined;
+        // #3384 wave-3 W3-3 "needs": reconciles a prompt-token reservation above against the
+        // provider's real reported usage once known, mirroring `reservePromptTokens`.
+        readonly settlePromptTokens?:
+          | ((
+              capability: string,
+              reservedPromptTokens: number,
+              actualPromptTokens: number,
+            ) => unknown)
+          | undefined;
       }
     | undefined;
   /** Current server-owned delivery authority; absent means Git delivery executes fail closed. */
   readonly gitDeliveryAuthority?: GitDeliveryRunAuthorityPort | undefined;
+  // #3399 (epic #3384 correction 4): the server-minted, bounded description authority that admits
+  // description generation and the "pull-request" body-only apply outside a running Code task.
+  // Absent means those two effects execute fail closed exactly like a missing `gitDeliveryAuthority`.
+  readonly gitDeliveryDescriptionAuthority?: GitDeliveryDescriptionAuthorityPort | undefined;
+  // Same minted port as `gitDeliveryDescriptionAuthority` above, exposed under the field name
+  // chat-handlers.ts's git-change turn admission (#3400) already reads via its documented
+  // "not yet wired" optional-cast seam (`GitChangeDescriptionAuthorityDeps`). One authority
+  // mechanism, two field names for its two production consumers (the PR-identity route surface
+  // and the base/head Chat scope) — see `GitDeliveryDescriptionAuthorityScope`'s union of both
+  // shapes. Absent means a Chat turn on a git-change-connected chat denies closed, same as above.
+  readonly gitChangeDescriptionAuthorityPort?: GitDeliveryDescriptionAuthorityPort | undefined;
+  // Final-audit F4 (#3400 Chat-connected git-change): the MINT half of the same authority read
+  // through the two fields above. Threaded from the SAME production chain
+  // `codingRuntimeControlPlane.mintDescriptionAuthority` already feeds
+  // `attachWorkbenchDescriptionSupport`'s automatic-description dispatcher — this is a second
+  // consumer-facing name for that one capability, never a second minting mechanism. Absent means
+  // the git-change connect route (gitChangeRoutes.ts) cannot mint a Chat-turn authority, so every
+  // subsequent turn on that connected scope denies closed exactly like a missing read port.
+  readonly mintDescriptionAuthority?:
+    ((request: GitDeliveryDescriptionAuthorityMintRequest) => void) | undefined;
   readonly openCodeGatewayReadinessRegistry?:
     | {
         readonly claim: (runId: string) => boolean;
@@ -556,6 +625,11 @@ export interface UiHandlerDeps {
         readonly clear: (runId: string, preserveVerification?: boolean) => void;
       }
     | undefined;
+  // ADR-0043 D11-D14 (#3390): the currently active run's governed tool bridge, reached by
+  // coding-sidecar-tool-facade.ts over the SAME attested loopback port as the model gateway
+  // instead of a second listener. `resolve()` is `undefined` whenever no run is active.
+  readonly toolFacadeBridge?:
+    { readonly resolve: () => CodingRuntimeToolFacadeBridge | undefined } | undefined;
   readonly codingSidecarGatewayCancellationRegistry?:
     { readonly signalFor: (runId: string) => AbortSignal | undefined } | undefined;
   readonly codingSidecarGatewayEvidenceAggregator?:
@@ -620,12 +694,6 @@ export interface UiHandlerDeps {
   // Server-owned deployment ceiling for coding-runtime authority. Undefined fails closed to
   // governed-assist; the readiness projection reports the same ceiling the mint clamp enforces.
   readonly codingRuntimeDeploymentCeiling?: CodingWorkbenchMode | undefined;
-  // Optional governed connector mutation seam for Autonomous Delivery. Production may leave this
-  // absent; the autonomous executor then fails connector writes closed instead of using provider APIs.
-  readonly autonomousDeliveryConnector?: AutonomousDeliveryConnectorExecutor | undefined;
-  // Server-owned approval proof store for Autonomous Delivery. The execute route consumes a proof
-  // minted by the confirm route instead of trusting a client-supplied digest.
-  readonly autonomousDeliveryApprovalStore?: AutonomousDeliveryApprovalStore | undefined;
   // KEIKO-0565: DI-scoped Atlassian connector approval and sync registries. Optional so
   // pre-existing fixture-heavy test wiring stays byte-for-byte compatible; production wiring in
   // buildUiHandlerDeps constructs one instance per composed deps graph so two independently-built
@@ -640,13 +708,16 @@ export interface UiHandlerDeps {
   // Server-owned deployment ceiling for Autonomous Delivery requests. Undefined fails closed to the
   // lowest authority posture instead of accepting the request-supplied ceiling.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;
-  // Optional server-owned stop-state seam. A client can still stop itself by sending
-  // operatorStopped:true, but it cannot hide a server-recorded stop for the run.
-  readonly autonomousDeliveryStopState?:
-    { readonly isStopped: (runId: string) => boolean } | undefined;
   // Optional injectable ports for the coding-context intake route (#1989 wiring). Production
   // composes real ports from env/workspace when absent; tests inject deterministic fakes.
   readonly codingContextGitHubPort?: GitHubCodeContextApiPort | undefined;
+  /**
+   * Resolves the `owner/repo` a checkout's own git remote points at (#3385). Production leaves this
+   * absent and the real reader runs; a test injects one so it can drive the repository-binding
+   * decision without a git subprocess. Same seam shape, and same reason, as the port above.
+   */
+  readonly codingContextGitHubRemoteResolver?:
+    ((repositoryRoot: string) => Promise<string | undefined>) | undefined;
   readonly codingContextJiraPort?: JiraCodeContextHttpPort | undefined;
   // Issue #2241 (Epic #2238, ADR-0128) — Atlassian connector credential custody: the write-only
   // custody surface plus the per-credential outbound HTTP port factory. The decrypted token is
@@ -733,6 +804,25 @@ export interface UiHandlerDeps {
     QualityIntelligenceReviewPrincipalResolver | undefined;
   // Issue #208 — explicit, bounded in-memory consolidation job registry for MemoriaViva polling.
   readonly consolidationJobs?: ConsolidationJobRegistry | undefined;
+  readonly gitChangeSnapshotService?: GitChangeSnapshotService | undefined;
+  // #3399: the durable recordStatus/readStatus bridge over the shared node evidence store
+  // (createPrDescriptionReceiptStatusBridge), so the PR-description application service persists
+  // status across restarts. Composed once in production; a route that receives neither this nor a
+  // test-only override cannot record or read status and treats the service as unavailable.
+  readonly prDescriptionRecordStatus?: PrDescriptionReceiptStatusHooks["recordStatus"] | undefined;
+  readonly prDescriptionReadStatus?: PrDescriptionReceiptStatusHooks["readStatus"] | undefined;
+  // #3399 mounts #3398's real production composition (createProductionPrDescriptionGeneration,
+  // reusing the process-wide Model Gateway); absent — a deployment with no configured model
+  // profile — means PR-description generation is unavailable, never a fabricated or unvalidated
+  // description.
+  readonly prDescriptionGeneration?:
+    Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot" | "revalidateAuthority"> | undefined;
+  // Final-audit F7 (#3399/#3400 production-wiring): the SAME #3399 application service composed
+  // from the description-generation/receipt-store pieces above, exposed as a typed field so
+  // chat-handlers.ts's Chat-driven description apply (#3400) can reach a real `executeApproved`
+  // instead of the previous permanently-`undefined` optional-cast seam. Absent under the exact
+  // same closed condition `prDescriptionGeneration` is absent under (no configured model profile).
+  readonly prDescriptionApplicationService?: PrDescriptionApplicationService | undefined;
   // Runtime gateway config supports first-run UI onboarding. It starts from the CLI/env/local config
   // and can be updated after a successful credential test without restarting the loopback server.
   readonly gatewayConfig?: RuntimeGatewayConfig | undefined;
@@ -904,11 +994,15 @@ export interface UiHandlerDeps {
 }
 
 export interface BuildHandlerDepsOptions {
+  /** Server-composed upstream seam shared by preview, provisioning and runtime intake. */
+  readonly codingContextGitHubPort?: GitHubCodeContextApiPort | undefined;
   // Path to a gateway config file (`keiko ui --config`); undefined → no config inspector data.
   readonly configPath: string | undefined;
   // Evidence directory (`keiko ui --evidence-dir`); resolved via the audit precedence rules.
   readonly evidenceDir: string | undefined;
   readonly env: EnvSource;
+  /** Optional local Git-mutation subprocess env; omitted by every normal product launch. */
+  readonly localGitMutationEnv?: EnvSource | undefined;
   readonly conversationAttachmentStore?: ConversationAttachmentStore | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   // Optional deployment replacement for the default memory category denylist. Production leaves
@@ -962,13 +1056,9 @@ export interface BuildHandlerDepsOptions {
   // otherwise creates an isolated default store under <evidenceDir>/coding-workbench so /api/evidence
   // stays clean while sidecar routing evidence still persists.
   readonly codingWorkbenchEvidenceStore?: EvidenceStore | undefined;
-  // Optional server-owned Autonomous Delivery approval store. Production creates one per BFF deps
-  // assembly so client-supplied Authority Envelope fields cannot mint or replay confirmations.
-  readonly autonomousDeliveryApprovalStore?: AutonomousDeliveryApprovalStore | undefined;
   // Optional server-owned Autonomous Delivery ceiling. When absent, autonomous confirmation and
   // execution fail closed to governed-assist.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;
-  readonly autonomousDeliveryStopState?: UiHandlerDeps["autonomousDeliveryStopState"] | undefined;
   // KEIKO-0565: injectable Atlassian action-approval and sync-job registries. Production wiring
   // constructs one instance per BFF process; test wiring can inject fresh instances to keep test
   // isolation clean instead of resetting a module-level singleton.
@@ -985,6 +1075,17 @@ export interface BuildHandlerDepsOptions {
   // `unqualified:undefined` for two weeks after #2835 injected a store without one). Ignored
   // when no store is injected — the UI-database path composes its own over the shared handle.
   readonly codingRuntimeSnapshotStore?: CodingRuntimeSnapshotStore | undefined;
+  // #3401: companion to an injected `store`, mirroring `codingRuntimeSnapshotStore` immediately
+  // above — a composition that injects a UiStore must inject this alongside it or the automatic
+  // description-dispatch job store (schema.ts §V29) is silently unavailable. Ignored when no store
+  // is injected — the UI-database path composes its own over the shared handle.
+  readonly codingRuntimeDescriptionJobStore?: CodingRuntimeDescriptionJobStore | undefined;
+  // #3401: full override for the composed `WorkbenchDescriptionDispatcher` (a fake gateway
+  // response in tests/e2e, or a real production one built elsewhere). When absent, production
+  // composes `createProductionWorkbenchDescriptionDispatcher` from this graph's own snapshot
+  // service, Model Gateway generation, and description-authority read port.
+  readonly codingRuntimeDescriptionDispatcher?:
+    ProductionWorkbenchDescriptionDispatcher | undefined;
   // Optional injected governed update session manager (tests); production creates the real
   // state-dir-backed updater session manager.
   readonly updateSession?: UpdateSessionManager | undefined;
@@ -1076,10 +1177,6 @@ export type ProductionCodingRuntimePorts = Pick<
   "backend" | "editorAgentClient" | "secureWorkspaceTextRead"
 >;
 
-function envModelToken(modelId: string): string {
-  return modelId.replace(/[^A-Za-z0-9]/g, "_").toUpperCase();
-}
-
 function envModelIdFromApiKeyName(name: string): string | undefined {
   const prefix = "KEIKO_MODEL_";
   const suffix = "_API_KEY";
@@ -1090,11 +1187,11 @@ function envModelIdFromApiKeyName(name: string): string | undefined {
   return token.length === 0 ? undefined : token.toLowerCase().replaceAll("_", "-");
 }
 
+// Final-audit F13/F24: delegates to keiko-model-gateway's ONE env-only provider-admission formula
+// (both `_API_KEY` and `_BASE_URL` non-empty) so this production check and the #3390 real-model
+// qualification harness's own check can never drift apart.
 function hasEnvProvider(modelId: string, env: EnvSource): boolean {
-  const token = envModelToken(modelId);
-  const baseUrl = env[`KEIKO_MODEL_${token}_BASE_URL`];
-  const apiKey = env[`KEIKO_MODEL_${token}_API_KEY`];
-  return baseUrl !== undefined && baseUrl.length > 0 && apiKey !== undefined && apiKey.length > 0;
+  return hasConfiguredEnvModelProvider(env, modelId);
 }
 
 function envModelIds(env: EnvSource): readonly string[] {
@@ -1183,6 +1280,7 @@ function createRuntimeGatewayConfig(
   initial: GatewayConfig | undefined,
   initialPresent: boolean,
   storagePath: string,
+  env: EnvSource,
 ): RuntimeGatewayConfig {
   let config = initial;
   let present = initialPresent;
@@ -1197,6 +1295,7 @@ function createRuntimeGatewayConfig(
   let generation = 0;
   return {
     storagePath,
+    spendBudget: gatewaySpendBudgetForEnv(env),
     current: (): GatewayConfig | undefined => config,
     present: (): boolean => present,
     set(next: GatewayConfig | undefined, nextPresent: boolean): void {
@@ -1239,7 +1338,9 @@ export function currentGateway(deps: UiHandlerDeps): Gateway | undefined {
   if (deps.gatewayConfig !== undefined) {
     return gatewayForRuntimeConfig(deps.gatewayConfig);
   }
-  return deps.config === undefined ? undefined : gatewayForConfig(deps.config);
+  return deps.config === undefined
+    ? undefined
+    : gatewayForConfig(deps.config, gatewaySpendBudgetForEnv(deps.env));
 }
 
 /**
@@ -1621,6 +1722,28 @@ function defaultModelPortFactory(runtimeConfig: RuntimeGatewayConfig): ModelPort
   };
 }
 
+// Child agents require a coding-safe provider, while the shared default factory also serves
+// ordinary chat and embedding callers. Revalidate that narrower eligibility on every child
+// readiness/dispatch resolution without narrowing the process-wide model-port contract.
+export function createLiveCodingChildModelPortFactory(
+  runtimeConfig: RuntimeGatewayConfig,
+  modelPortFactory: ModelPortFactory = defaultModelPortFactory(runtimeConfig),
+): ModelPortFactory {
+  return (modelId): ModelPort | undefined => {
+    const generation = runtimeConfig.generation();
+    const config = runtimeConfig.current();
+    const selected = resolveCodingSafeSidecarGatewayProfile(config, { modelId });
+    if (selected.status !== "available" || selected.modelAlias !== modelId) {
+      return undefined;
+    }
+    const model = modelPortFactory(modelId);
+    if (model === undefined || runtimeConfig.generation() !== generation) {
+      return undefined;
+    }
+    return model;
+  };
+}
+
 function buildTerminalManager(options: {
   readonly store: UiStore;
   readonly evidenceStore: EvidenceStore;
@@ -1959,6 +2082,10 @@ interface ComposedPersistence {
   // silently loses the entire coding runtime (the daily real-binary lane failed exactly this
   // way for two weeks after #2835 injected a store without one).
   readonly codingRuntimeSnapshotStore: CodingRuntimeSnapshotStore | undefined;
+  // #3401: the durable, deduplicated automatic-description job store (schema.ts §V29), composed
+  // over the SAME DatabaseSync handle. Undefined only when a UiStore is injected without also
+  // supplying one (mirrors `codingRuntimeSnapshotStore`'s own injection contract above).
+  readonly codingRuntimeDescriptionJobStore: CodingRuntimeDescriptionJobStore | undefined;
 }
 
 // A `UiStoreSchemaVersionError` or unrecoverable corruption here crashes startup — correctly: this
@@ -1987,6 +2114,7 @@ function openUiDatabaseForComposition(
 function composePersistence(
   injected: UiStore | undefined,
   injectedCodingRuntimeSnapshots: CodingRuntimeSnapshotStore | undefined,
+  injectedCodingRuntimeDescriptionJobStore: CodingRuntimeDescriptionJobStore | undefined,
   resolvedUiDbPath: string,
   redactString: (value: string) => string,
   env: EnvSource,
@@ -2000,6 +2128,7 @@ function composePersistence(
       workspaceInstanceStore: undefined,
       activeWorkspacePointerStore: undefined,
       codingRuntimeSnapshotStore: injectedCodingRuntimeSnapshots,
+      codingRuntimeDescriptionJobStore: injectedCodingRuntimeDescriptionJobStore,
     };
   }
   const db = openUiDatabaseForComposition(resolvedUiDbPath, diagnostics);
@@ -2028,6 +2157,7 @@ function composePersistence(
     workspaceInstanceStore: buildWorkspaceInstanceStoreOverDatabase(db),
     activeWorkspacePointerStore: buildActiveWorkspacePointerStoreOverDatabase(db),
     codingRuntimeSnapshotStore: createCodingRuntimeSnapshotStore(db),
+    codingRuntimeDescriptionJobStore: createCodingRuntimeDescriptionJobStore(db),
   };
 }
 
@@ -3121,6 +3251,7 @@ interface PersistenceBundle {
   readonly managedTaskWorkspaceRoot: string | undefined;
   readonly preferredProjectPath: string | undefined;
   readonly codingRuntimeSnapshotStore: CodingRuntimeSnapshotStore | undefined;
+  readonly codingRuntimeDescriptionJobStore: CodingRuntimeDescriptionJobStore | undefined;
 }
 
 // The optional correlationId is threaded by the callers that have one in scope — the verification
@@ -3316,12 +3447,13 @@ function buildPersistenceBundle(
   const persistence = composePersistence(
     options.store,
     options.codingRuntimeSnapshotStore,
+    options.codingRuntimeDescriptionJobStore,
     resolvedUiDbPath,
     redactString,
     options.env,
     options.diagnostics,
   );
-  const { store, dispose, relationship, codingRuntimeSnapshotStore } = persistence;
+  const { store, dispose, relationship } = persistence;
   try {
     const { workspaceScriptTrust, services } = composePersistenceTaskWorkspaceServices(
       options,
@@ -3340,7 +3472,8 @@ function buildPersistenceBundle(
       workspaceScriptTrust,
       dispose,
       relationship,
-      codingRuntimeSnapshotStore,
+      codingRuntimeSnapshotStore: persistence.codingRuntimeSnapshotStore,
+      codingRuntimeDescriptionJobStore: persistence.codingRuntimeDescriptionJobStore,
       ...services,
       managedTaskWorkspaceRoot,
       preferredProjectPath: seedInitialProject(store, resolvedUiDbPath, options.initialProjectPath),
@@ -3437,23 +3570,17 @@ function codingSidecarGatewayModelSourceFields(
   };
 }
 
+// #2958 (KEIKO-0115/KEIKO-0135): the browser-authored confirm/execute route group this helper used
+// to feed was deleted along with its approval store and stop-state seam. The server-owned deployment
+// ceiling survives it: it is the fail-closed clamp that the mounted coding-context, editor producer,
+// editor verification and Atlassian action surfaces all read.
 function autonomousDeliveryFields(
   options: BuildHandlerDepsOptions,
-): Pick<
-  UiHandlerDeps,
-  | "autonomousDeliveryApprovalStore"
-  | "autonomousDeliveryDeploymentCeiling"
-  | "autonomousDeliveryStopState"
-> {
+): Pick<UiHandlerDeps, "autonomousDeliveryDeploymentCeiling"> {
   return {
-    autonomousDeliveryApprovalStore:
-      options.autonomousDeliveryApprovalStore ?? createAutonomousDeliveryApprovalStore(),
     ...(options.autonomousDeliveryDeploymentCeiling === undefined
       ? {}
       : { autonomousDeliveryDeploymentCeiling: options.autonomousDeliveryDeploymentCeiling }),
-    ...(options.autonomousDeliveryStopState === undefined
-      ? {}
-      : { autonomousDeliveryStopState: options.autonomousDeliveryStopState }),
   };
 }
 
@@ -3765,6 +3892,7 @@ function activityAwareWorkspaceLifecycle(
 }
 
 interface UiHandlerRuntimeServices {
+  readonly gitChangeSnapshotService: GitChangeSnapshotService;
   readonly dapRuntime: DapRuntimeReference;
   readonly codingRuntimeEvidenceAggregator: ReturnType<
     typeof createCodingRuntimeEvidenceAggregator
@@ -3782,6 +3910,10 @@ interface UiHandlerRuntimeServices {
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const dapRuntime = createDapRuntimeReference(args.options);
   const services = assembleUiHandlerRuntimeServices(args, dapRuntime);
+  // #3399: one shared hook instance, so recordStatus/readStatus coordinate through the SAME
+  // in-process expected-version cache (createPrDescriptionReceiptStatusHooks's own contract) rather
+  // than each call building an independent, uncoordinated bridge over the same durable store.
+  const prDescriptionReceiptStatus = createPrDescriptionReceiptStatusBridge(args.evidenceStore);
   // #2906 round 2: constructed here (once per composed deps graph) rather than inline inside
   // buildIntegrationUiHandlerDeps, so createUiHandlerDispose can capture and reset the SAME
   // instances this graph's deps object exposes -- see its own comment for why disposal must reach
@@ -3791,13 +3923,26 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   // so createUiHandlerDispose can reset the SAME instance this graph's deps object exposes --
   // see denialWindows.ts for why this must not be a module singleton.
   const codingAppSessionDenialWindows = new CodingAppSessionDenialWindows();
-  return {
+  // #3399 mounts #3398's real production Model Gateway composition (epic #3384 Frozen Product
+  // Decision 8): reuses the SAME process-wide gateway config source `gatewayConfig` and
+  // `modelPortFactory` already read, never a second gateway. `undefined` here — a deployment with
+  // no configured model profile — is the ONE closed reason prDescriptionRoutes.ts's "unavailable"
+  // fallback exists for.
+  const prDescriptionGeneration = createProductionPrDescriptionGeneration(args.runtimeConfig);
+  const deps: UiHandlerDeps = {
     ...buildBaseUiHandlerDeps(args),
     ...buildRuntimeUiHandlerDeps(args, services),
     ...buildIntegrationUiHandlerDeps(args),
     ...buildOptionalUiHandlerDeps(args, services),
     ...atlassianRegistries,
     codingAppSessionDenialWindows,
+    gitChangeSnapshotService: services.gitChangeSnapshotService,
+    // #3399: the durable PR-description status bridge over the SAME node evidence store every
+    // other durable surface in this graph shares.
+    prDescriptionRecordStatus: prDescriptionReceiptStatus.recordStatus,
+    prDescriptionReadStatus: prDescriptionReceiptStatus.readStatus,
+    ...(prDescriptionGeneration === undefined ? {} : { prDescriptionGeneration }),
+    voiceRecapContentAttestations: createVoiceRecapContentAttestationStore(),
     dispose: createUiHandlerDispose(
       args,
       services,
@@ -3805,6 +3950,14 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       codingAppSessionDenialWindows,
     ),
   };
+  attachWorkbenchDescriptionSupport(
+    args,
+    services.codingRuntimeControlPlane,
+    services.gitChangeSnapshotService,
+    prDescriptionGeneration,
+    deps,
+  );
+  return deps;
 }
 
 function createDapRuntimeReference(options: BuildHandlerDepsOptions): DapRuntimeReference {
@@ -3829,6 +3982,7 @@ function assembleUiHandlerRuntimeServices(
     args,
     peripherals.commandRunner,
     peripherals.verificationRunner,
+    peripherals.editorSettingsControl,
     codingRuntimeEvidenceAggregator,
     codingRuntimeCeiling,
   );
@@ -3838,7 +3992,36 @@ function assembleUiHandlerRuntimeServices(
     codingRuntimeEvidenceAggregator,
     codingRuntimeHost,
   );
-  const codingAppSessionChannel = createCodingAppSessionChannel({
+  const gitChangeSnapshotService = createGitChangeSnapshotService({
+    logSink: processServerLogSink(),
+  });
+  const codingAppSessionChannel = buildAssemblyCodingAppSessionChannel(
+    args,
+    codingRuntimeControlPlane,
+  );
+  const workspaceLifecycle = activityAwareWorkspaceLifecycle(
+    args.bundle.workspaceLifecycle,
+    codingRuntimeControlPlane?.safeActivityProjection,
+  );
+  return {
+    dapRuntime,
+    gitChangeSnapshotService,
+    codingRuntimeEvidenceAggregator,
+    peripherals,
+    dapProduction,
+    codingRuntimeCeiling,
+    runtimeComposition,
+    codingRuntimeControlPlane,
+    codingAppSessionChannel,
+    workspaceLifecycle,
+  };
+}
+
+function buildAssemblyCodingAppSessionChannel(
+  args: UiHandlerDepsAssemblyArgs,
+  codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
+): ReturnType<typeof createCodingAppSessionChannel> {
+  return createCodingAppSessionChannel({
     registry: createSessionRegistry(),
     pairingPort:
       args.options.sessionPairingPort ?? resolveLauncherSessionPairingPort(args.options.env),
@@ -3853,21 +4036,6 @@ function assembleUiHandlerRuntimeServices(
     // failures instead of silently no-op'ing recordSseFailure().
     diagnostics: args.options.diagnostics ?? defaultServerDiagnosticSink,
   });
-  const workspaceLifecycle = activityAwareWorkspaceLifecycle(
-    args.bundle.workspaceLifecycle,
-    codingRuntimeControlPlane?.safeActivityProjection,
-  );
-  return {
-    dapRuntime,
-    codingRuntimeEvidenceAggregator,
-    peripherals,
-    dapProduction,
-    codingRuntimeCeiling,
-    runtimeComposition,
-    codingRuntimeControlPlane,
-    codingAppSessionChannel,
-    workspaceLifecycle,
-  };
 }
 
 function resolveAssemblyCodingRuntimeHost(
@@ -3889,6 +4057,13 @@ function buildUiCodingRuntimeControlPlane(
 ): ReturnType<typeof createCodingRuntimeControlPlane> | undefined {
   if (!args.bundle.codingRuntimeSnapshotStore || !args.bundle.workspaceLifecycle) return undefined;
   return createCodingRuntimeControlPlane({
+    issueIntake: createProductionCodingRuntimeIssueIntake({
+      store: args.bundle.uiStore,
+      env: args.options.env,
+      codingContextGitHubPort: args.options.codingContextGitHubPort,
+      activityLog: processServerLogSink(),
+    }),
+    deploymentCeiling: resolveCodingRuntimeDeploymentCeiling(args.options),
     snapshots: args.bundle.codingRuntimeSnapshotStore,
     evidence: codingRuntimeEvidenceAggregator,
     workspaceLifecycle: args.bundle.workspaceLifecycle,
@@ -3904,6 +4079,284 @@ function buildUiCodingRuntimeControlPlane(
     diagnostics: args.options.diagnostics ?? defaultServerDiagnosticSink,
     activityLog: processServerLogSink(),
   });
+}
+
+// #3401: attaches the automatic-description job store and dispatcher to the just-built control
+// plane's orchestrator. `createCodingRuntimeOrchestrator` is constructed inside
+// `createCodingRuntimeControlPlane` itself, before this graph's snapshot service, PR-description
+// generation, and description-authority read port exist to compose the real dispatcher with — so
+// `attachDescriptionSupport` (codingRuntimeOrchestrator.ts) is the seam that supplies them right
+// after, exactly once per composed deps graph. A missing control plane or job-store companion
+// (an injected UiStore without one, mirroring `codingRuntimeSnapshotStore`'s own contract) leaves
+// the feature unattached — the orchestrator already treats an absent `description` as "not yet
+// wired", never a crash.
+function attachWorkbenchDescriptionSupport(
+  args: UiHandlerDepsAssemblyArgs,
+  codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
+  gitChangeSnapshotService: GitChangeSnapshotService,
+  generation:
+    Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot" | "revalidateAuthority"> | undefined,
+  deps: UiHandlerDeps,
+): void {
+  const jobs = args.bundle.codingRuntimeDescriptionJobStore;
+  if (codingRuntimeControlPlane === undefined || jobs === undefined) return;
+  const dispatcher =
+    args.options.codingRuntimeDescriptionDispatcher ??
+    createProductionWorkbenchDescriptionDispatcher({
+      // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) yields no root
+      // instead of crashing dispatch -- the same guard `resolveProductionRuntimePorts`'s own
+      // `resolveWorkspaceRoot` accessor already applies to the identical `getActive()` call.
+      activeWorkspaceRoot: (): string | undefined => {
+        try {
+          return args.bundle.workspaceLifecycle?.getActive()?.binding.activeRoot;
+        } catch (error) {
+          if (isIdentityProofFailure(error)) return undefined;
+          throw error;
+        }
+      },
+      snapshots: gitChangeSnapshotService,
+      generation,
+      descriptionAuthority: codingRuntimeControlPlane.gitDeliveryDescriptionAuthority,
+      // #3401 (epic #3384 closeout, description-composition-closeout): the mint capability
+      // threaded through `productionCodingRuntimeResolver.ts` ->
+      // `productionCodingRuntimeHost.ts` -> `codingRuntimeControlPlane.ts`, the SAME chain
+      // `gitDeliveryDescriptionAuthority`'s READ port above already uses.
+      ...(codingRuntimeControlPlane.mintDescriptionAuthority === undefined
+        ? {}
+        : { mintDescriptionAuthority: codingRuntimeControlPlane.mintDescriptionAuthority }),
+      artifactRetention: createWorkbenchArtifactRetention(
+        deps,
+        codingRuntimeControlPlane,
+        (): string | undefined => {
+          try {
+            return args.bundle.workspaceLifecycle?.getActive()?.binding.activeRoot;
+          } catch (error) {
+            if (isIdentityProofFailure(error)) return undefined;
+            throw error;
+          }
+        },
+      ),
+      now: (): number => Date.now(),
+    });
+  codingRuntimeControlPlane.orchestrator.attachDescriptionSupport({ jobs, dispatcher });
+}
+
+interface WorkbenchRetentionBinding {
+  readonly request: PrDescriptionBaseFields;
+  readonly authorityScope: GitDeliveryDescriptionAuthorityScope;
+}
+
+function workbenchRetentionBinding(
+  scope: Parameters<ProductionWorkbenchArtifactRetention["hasProposal"]>[0],
+  snapshotDigest: string,
+): WorkbenchRetentionBinding | undefined {
+  const target = scope.applicationTarget;
+  if (target === undefined) return undefined;
+  return {
+    request: { ...target, snapshotDigest },
+    authorityScope: {
+      remoteDigest: scope.remoteDigest,
+      pr: { ownerAndRepo: target.ownerAndRepo, prNumber: target.prNumber },
+      snapshotDigest,
+    },
+  };
+}
+
+function workbenchDescriptionContextProvider(
+  deps: UiHandlerDeps,
+  binding: WorkbenchRetentionBinding,
+  runId: string,
+  activeWorkspaceRoot: () => string | undefined,
+): () => PrDescriptionContext | undefined {
+  const accessScope = {};
+  const current = (): boolean =>
+    activeWorkspaceRoot() === binding.request.projectId &&
+    deps.gitDeliveryDescriptionAuthority?.current(
+      binding.authorityScope,
+      new Date().toISOString(),
+    ) !== undefined;
+  return (): PrDescriptionContext | undefined => {
+    const workspace = resolveProjectWorkspace(deps, binding.request.projectId);
+    if (workspace === undefined || !current()) return undefined;
+    return {
+      workspace,
+      repository: binding.request.ownerAndRepo,
+      prNumber: binding.request.prNumber,
+      accessScope,
+      authorityDigest: descriptionAuthorityEnvelopeDigest(binding.authorityScope),
+      correlationId: runId,
+      stillAuthorized: current,
+    };
+  };
+}
+
+type WorkbenchRetentionScope = Parameters<ProductionWorkbenchArtifactRetention["hasProposal"]>[0];
+
+function resolveWorkbenchApplicationRetention(
+  deps: UiHandlerDeps,
+  activeWorkspaceRoot: () => string | undefined,
+  scope: WorkbenchRetentionScope,
+  snapshotDigest: string,
+): PrDescriptionApplicationService | undefined {
+  const binding = workbenchRetentionBinding(scope, snapshotDigest);
+  if (binding === undefined) return undefined;
+  const context = workbenchDescriptionContextProvider(
+    deps,
+    binding,
+    scope.runId,
+    activeWorkspaceRoot,
+  );
+  const resolution = resolvePrDescriptionApplicationServiceForContext(
+    deps,
+    binding.request,
+    context,
+  );
+  return resolution.ok ? resolution.service : undefined;
+}
+
+function resolveWorkbenchDraftRetention(
+  deps: UiHandlerDeps,
+  activeWorkspaceRoot: () => string | undefined,
+  scope: WorkbenchRetentionScope,
+  snapshotDigest: string,
+): PrDescriptionApplicationService | undefined {
+  const projectId = activeWorkspaceRoot();
+  if (projectId === undefined || scope.applicationTarget !== undefined) return undefined;
+  const authorityScope: GitDeliveryDescriptionAuthorityScope = {
+    remoteDigest: scope.remoteDigest,
+    pr: {
+      baseRef: scope.baseRef ?? scope.baseSha,
+      headRef: scope.headRef ?? scope.headSha,
+    },
+    snapshotDigest,
+  };
+  const resolution = resolveWorkbenchDraftDescriptionService(deps, {
+    projectId,
+    runId: scope.runId,
+    snapshotDigest,
+    authorityDigest: descriptionAuthorityEnvelopeDigest(authorityScope),
+  });
+  return resolution.ok ? resolution.service : undefined;
+}
+
+interface WorkbenchRetentionContext {
+  readonly deps: UiHandlerDeps;
+  readonly controlPlane: NonNullable<ReturnType<typeof createCodingRuntimeControlPlane>>;
+  readonly activeWorkspaceRoot: () => string | undefined;
+}
+
+async function retainWorkbenchApplicationArtifact(
+  context: WorkbenchRetentionContext,
+  scope: WorkbenchRetentionScope,
+  artifact: Parameters<ProductionWorkbenchArtifactRetention["retain"]>[1],
+  signal: AbortSignal,
+  binding: WorkbenchRetentionBinding,
+  acceptedMode: CodingWorkbenchMode,
+): Promise<string | undefined> {
+  context.controlPlane.mintDescriptionAuthority?.({
+    scope: binding.authorityScope,
+    requestedMode: acceptedMode,
+    nowIso: new Date().toISOString(),
+    correlationId: scope.runId,
+  });
+  const service = resolveWorkbenchApplicationRetention(
+    context.deps,
+    context.activeWorkspaceRoot,
+    scope,
+    artifact.binding.snapshotDigest,
+  );
+  const result = await service?.previewArtifact(artifact);
+  // The dispatcher signal governs this retain attempt, not the cached application service that
+  // the later HTTP review owns. If cancellation wins while previewing, remove the partial hold;
+  // otherwise terminal dispatcher cleanup must leave the authority-bound proposal reviewable.
+  if (signal.aborted) {
+    service?.invalidate();
+    return undefined;
+  }
+  return result?.outcome === "preview" ? result.preview.proposalId : undefined;
+}
+
+async function retainWorkbenchArtifact(
+  context: WorkbenchRetentionContext,
+  scope: WorkbenchRetentionScope,
+  artifact: Parameters<ProductionWorkbenchArtifactRetention["retain"]>[1],
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  const snapshotDigest = artifact.binding.snapshotDigest;
+  const binding = workbenchRetentionBinding(scope, snapshotDigest);
+  if (signal.aborted || scope.acceptedMode === undefined) return undefined;
+  if (binding === undefined) {
+    return resolveWorkbenchDraftRetention(
+      context.deps,
+      context.activeWorkspaceRoot,
+      scope,
+      snapshotDigest,
+    )?.holdDraftArtifact(artifact, Date.now())?.proposalId;
+  }
+  return retainWorkbenchApplicationArtifact(
+    context,
+    scope,
+    artifact,
+    signal,
+    binding,
+    scope.acceptedMode,
+  );
+}
+
+function hasWorkbenchArtifact(
+  context: WorkbenchRetentionContext,
+  scope: WorkbenchRetentionScope,
+  proposalId: string,
+  snapshotDigest: string,
+): boolean {
+  if (scope.applicationTarget === undefined) {
+    return (
+      resolveWorkbenchDraftRetention(
+        context.deps,
+        context.activeWorkspaceRoot,
+        scope,
+        snapshotDigest,
+      )?.reviewDraft(proposalId)?.artifact.binding.snapshotDigest === snapshotDigest
+    );
+  }
+  return (
+    resolveWorkbenchApplicationRetention(
+      context.deps,
+      context.activeWorkspaceRoot,
+      scope,
+      snapshotDigest,
+    )?.review(proposalId)?.status.binding.snapshotDigest === snapshotDigest
+  );
+}
+
+function reviewWorkbenchDraft(
+  context: WorkbenchRetentionContext,
+  scope: WorkbenchRetentionScope,
+  proposalId: string,
+  snapshotDigest: string,
+): PrDescriptionDraftPreview | undefined {
+  const review = resolveWorkbenchDraftRetention(
+    context.deps,
+    context.activeWorkspaceRoot,
+    scope,
+    snapshotDigest,
+  )?.reviewDraft(proposalId);
+  return review?.artifact.binding.snapshotDigest === snapshotDigest ? review : undefined;
+}
+
+function createWorkbenchArtifactRetention(
+  deps: UiHandlerDeps,
+  controlPlane: NonNullable<ReturnType<typeof createCodingRuntimeControlPlane>>,
+  activeWorkspaceRoot: () => string | undefined,
+): ProductionWorkbenchArtifactRetention {
+  const context = { deps, controlPlane, activeWorkspaceRoot };
+  return {
+    retain: (scope, artifact, signal) => retainWorkbenchArtifact(context, scope, artifact, signal),
+    hasProposal: (scope, proposalId, snapshotDigest) =>
+      hasWorkbenchArtifact(context, scope, proposalId, snapshotDigest),
+    reviewDraft: (scope, proposalId, snapshotDigest) =>
+      reviewWorkbenchDraft(context, scope, proposalId, snapshotDigest),
+  };
 }
 
 type BaseUiHandlerDeps = ReturnType<typeof gatewayConfigFields> &
@@ -4066,27 +4519,21 @@ function buildOptionalUiHandlerDeps(
 function buildCodingContextPortsDependency(
   args: UiHandlerDepsAssemblyArgs,
 ): Pick<UiHandlerDeps, "codingContextGitHubPort"> {
-  const githubPort =
-    args.options.env.GITHUB_CONNECTOR_AUTHORIZED !== "true" ||
-    args.bundle.preferredProjectPath === undefined
-      ? undefined
-      : createGitHubCodeContextApiPort({
-          workspace: {
-            root: args.bundle.preferredProjectPath,
-            selectedRoot: args.bundle.preferredProjectPath,
-            name: undefined,
-            version: undefined,
-            testFramework: "unknown",
-            sourceDirs: [],
-            testDirs: [],
-            languages: [],
-            ignoreLines: [],
-          },
-          processEnv: args.options.env,
-        });
-  return {
-    ...(githubPort === undefined ? {} : { codingContextGitHubPort: githubPort }),
-  };
+  // #3385: production composes NO port here.
+  //
+  // This used to build one from `preferredProjectPath`, the project the process happened to start
+  // in. Both consumption sites read `deps.codingContextGitHubPort ?? <port for the working root>`,
+  // so that launch-time snapshot won whenever Keiko started with a project: the grant was evaluated
+  // for the repository the caller was working in while `gh` stayed confined to the launch
+  // directory, and starting without a project left GitHub context unreachable however the grant was
+  // set. Returning nothing makes the per-request port the only one production ever uses.
+  //
+  // The field survives as an injection seam so a test can substitute a fake `gh` without spawning a
+  // process. That is also why the `??` order is correct rather than accidental: an injected port
+  // must win, and in production there is none to win.
+  return args.options.codingContextGitHubPort === undefined
+    ? {}
+    : { codingContextGitHubPort: args.options.codingContextGitHubPort };
 }
 
 function createUiHandlerDispose(
@@ -4099,6 +4546,7 @@ function createUiHandlerDispose(
     try {
       await services.codingRuntimeControlPlane?.orchestrator.shutdown();
     } finally {
+      services.gitChangeSnapshotService.close();
       services.runtimeComposition.dispose?.();
       services.codingRuntimeControlPlane?.safeActivityProjection?.purgeAll("shutdown");
       await shutdownHostLspPool();
@@ -4154,7 +4602,44 @@ interface CodingRuntimeControlPlaneDeps {
   codingSidecarGatewayCancellationRegistry?: UiHandlerDeps["codingSidecarGatewayCancellationRegistry"];
   runtimeCapabilityAuthenticator?: UiHandlerDeps["runtimeCapabilityAuthenticator"];
   gitDeliveryAuthority?: UiHandlerDeps["gitDeliveryAuthority"];
+  gitDeliveryDescriptionAuthority?: UiHandlerDeps["gitDeliveryDescriptionAuthority"];
+  gitChangeDescriptionAuthorityPort?: UiHandlerDeps["gitChangeDescriptionAuthorityPort"];
+  mintDescriptionAuthority?: UiHandlerDeps["mintDescriptionAuthority"];
   openCodeGatewayReadinessRegistry?: UiHandlerDeps["openCodeGatewayReadinessRegistry"];
+  toolFacadeBridge?: UiHandlerDeps["toolFacadeBridge"];
+}
+
+// Same-named pass-throughs from `CodingRuntimeControlPlane` onto `CodingRuntimeControlPlaneDeps`:
+// present only when the production runtime host supplied them. A per-field ternary here would
+// grow `buildCodingRuntimeControlPlaneDeps`'s cyclomatic complexity by one per capability
+// (AGENTS.md §6's complexity <=10 ceiling), so the ONE decision — "was it supplied?" — is a single
+// loop over the closed key list instead of N branches.
+const CODING_RUNTIME_CONTROL_PLANE_PASSTHROUGH_KEYS = [
+  "runtimeCapabilityAuthenticator",
+  "gitDeliveryAuthority",
+  "gitDeliveryDescriptionAuthority",
+  // Final-audit F4: passed through under its OWN name (unlike `gitChangeDescriptionAuthorityPort`
+  // below, which renames the read port) since chat-handlers.ts's git-change turn admission and
+  // gitChangeRoutes.ts's connect-flow mint both read `deps.mintDescriptionAuthority` directly.
+  "mintDescriptionAuthority",
+  "openCodeGatewayReadinessRegistry",
+  "toolFacadeBridge",
+] as const;
+
+type CodingRuntimeControlPlanePassthroughDeps = Pick<
+  CodingRuntimeControlPlaneDeps,
+  (typeof CODING_RUNTIME_CONTROL_PLANE_PASSTHROUGH_KEYS)[number]
+>;
+
+function codingRuntimeControlPlanePassthroughDeps(
+  controlPlane: ReturnType<typeof createCodingRuntimeControlPlane>,
+): CodingRuntimeControlPlanePassthroughDeps {
+  const deps: Partial<CodingRuntimeControlPlanePassthroughDeps> = {};
+  for (const key of CODING_RUNTIME_CONTROL_PLANE_PASSTHROUGH_KEYS) {
+    const value = controlPlane[key];
+    if (value !== undefined) Object.assign(deps, { [key]: value });
+  }
+  return deps;
 }
 
 function buildCodingRuntimeControlPlaneDeps(
@@ -4178,16 +4663,13 @@ function buildCodingRuntimeControlPlaneDeps(
           codingSidecarGatewayCancellationRegistry: controlPlane.cancellationRegistry,
         }
       : {}),
-    ...(controlPlane.runtimeCapabilityAuthenticator !== undefined
-      ? { runtimeCapabilityAuthenticator: controlPlane.runtimeCapabilityAuthenticator }
-      : {}),
-    ...(controlPlane.gitDeliveryAuthority !== undefined
-      ? { gitDeliveryAuthority: controlPlane.gitDeliveryAuthority }
-      : {}),
-    ...(controlPlane.openCodeGatewayReadinessRegistry !== undefined
-      ? {
-          openCodeGatewayReadinessRegistry: controlPlane.openCodeGatewayReadinessRegistry,
-        }
+    ...codingRuntimeControlPlanePassthroughDeps(controlPlane),
+    // Same value as the `gitDeliveryDescriptionAuthority` passthrough above, under the field name
+    // chat-handlers.ts's git-change turn admission reads — see the field's doc comment on
+    // `UiHandlerDeps` for why this is one authority, two consumer-facing names, not a second
+    // authority mechanism.
+    ...(controlPlane.gitDeliveryDescriptionAuthority !== undefined
+      ? { gitChangeDescriptionAuthorityPort: controlPlane.gitDeliveryDescriptionAuthority }
       : {}),
   };
 }
@@ -4263,6 +4745,12 @@ function resolveProductionRuntimePorts(
     runtimeStateDir: dirname(args.resolvedUiDbPath),
     runtimeEvidence,
     gatewayReadiness: readiness,
+    resolveGatewayRunMetadata: (modelId) => {
+      const result = resolveCodingSafeSidecarGatewayProfile(args.runtimeConfig.current(), {
+        modelId,
+      });
+      return result.status === "available" ? result.runMetadata : undefined;
+    },
     activityLog: processServerLogSink(),
     // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) yields no root: the
     // activation stays unavailable rather than crashing the resolution or trusting an unproven tree.
@@ -4321,7 +4809,12 @@ function runtimeWorkspaceAuthority(
     workspaceLifecycle,
     managedTaskWorkspaceRoot,
     deploymentCeiling,
+    promptTokenBudget: configuredRuntimePromptTokenBudget(
+      args.options.env.KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS,
+    ),
     readWorkspaceHead: readProductionWorkspaceHead,
+    verifiedCommitResult: (runId) =>
+      args.bundle.codingRuntimeSnapshotStore?.getLastSuccessfulVerifiedCommit?.(runId),
     researchEgressEnabled: args.options.codingRuntimeResearchEgressEnabled ?? true,
     resolveManagedModelProfile: (
       modelId,
@@ -4363,6 +4856,7 @@ function productionRuntimeResolver(
   args: UiHandlerDepsAssemblyArgs,
   commandRunner: PeripheralManagers["commandRunner"],
   verificationRunner: PeripheralManagers["verificationRunner"],
+  editorSettingsControl: PeripheralManagers["editorSettingsControl"],
   runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
   deploymentCeiling: CodingWorkbenchMode,
 ): ProductionRuntimeComposition {
@@ -4396,6 +4890,7 @@ function productionRuntimeResolver(
       runtimeMutationLeaseBroker,
       commandRunner,
       verificationRunner,
+      editorSettingsControl,
       workspaceLifecycle,
     }),
     readiness,
@@ -4416,6 +4911,7 @@ interface QualifiedRuntimeResolverInput {
   >;
   readonly commandRunner: PeripheralManagers["commandRunner"];
   readonly verificationRunner: PeripheralManagers["verificationRunner"];
+  readonly editorSettingsControl: PeripheralManagers["editorSettingsControl"];
   readonly workspaceLifecycle: WorkspaceLifecycleService;
 }
 
@@ -4425,6 +4921,8 @@ function qualifiedRuntimeResolver(
   const { args } = input;
   const confirmationConsumer = runtimeStartConfirmationConsumer(args, input.activated);
   const resolveWorkspaceRootAccess = createWorkspaceRootAccessResolver(args.bundle);
+  const verifiedCommit = runtimeVerifiedCommitDependencies(input);
+  const draftDelivery = runtimeDraftDeliveryDependencies(input);
   return createProductionCodingRuntimeResolver({
     workspaceAuthority: runtimeWorkspaceAuthority(
       args,
@@ -4435,11 +4933,13 @@ function qualifiedRuntimeResolver(
     ...input.ports,
     commandRunner: input.commandRunner,
     verificationRunner: input.verificationRunner,
+    ...(verifiedCommit === undefined ? {} : { verifiedCommit }),
+    ...(draftDelivery === undefined ? {} : { draftDelivery }),
     runtimeMutationLeaseBroker: input.runtimeMutationLeaseBroker,
     resolveWorkspaceRootAccess: collapsedWorkspaceRootAccessResolver(resolveWorkspaceRootAccess),
     gatewayEgress: () => args.runtimeConfig.current()?.egress ?? args.egress,
     childModelPortFactory:
-      args.options.modelPortFactory ?? defaultModelPortFactory(args.runtimeConfig),
+      args.options.modelPortFactory ?? createLiveCodingChildModelPortFactory(args.runtimeConfig),
     // #2387: a read-only child agent calls the gateway directly, so it needs the same resolved
     // coding-safe PROVIDER model id the sidecar gateway maps the runtime's "coding" alias onto.
     // Resolved per call because the gateway config can change while the server is up.
@@ -4450,6 +4950,46 @@ function qualifiedRuntimeResolver(
     diagnostics: args.options.diagnostics ?? defaultServerDiagnosticSink,
     ...(confirmationConsumer ? { confirmationConsumer } : {}),
   });
+}
+
+function runtimeVerifiedCommitDependencies(
+  input: QualifiedRuntimeResolverInput,
+): ReturnType<typeof createProductionVerifiedCommitDependencies> {
+  const { args } = input;
+  return createProductionVerifiedCommitDependencies(
+    {
+      store: args.bundle.uiStore,
+      evidenceStore: args.evidenceStore,
+      redactor: args.liveRedactor,
+      env: args.options.localGitMutationEnv ?? args.options.env,
+      activityLog: processServerLogSink(),
+      editorSettingsControl: input.editorSettingsControl,
+      managedTaskWorkspaceRoot: input.managedTaskWorkspaceRoot,
+      workspaceProvisioning: args.bundle.workspaceProvisioning,
+    },
+    args.bundle.codingRuntimeSnapshotStore,
+  );
+}
+
+function runtimeDraftDeliveryDependencies(
+  input: QualifiedRuntimeResolverInput,
+): ReturnType<typeof createProductionDraftDeliveryDependencies> {
+  const { args } = input;
+  return createProductionDraftDeliveryDependencies(
+    {
+      store: args.bundle.uiStore,
+      evidenceStore: args.evidenceStore,
+      redactor: args.liveRedactor,
+      env: args.options.env,
+      activityLog: processServerLogSink(),
+      editorSettingsControl: input.editorSettingsControl,
+      managedTaskWorkspaceRoot: input.managedTaskWorkspaceRoot,
+      workspaceProvisioning: args.bundle.workspaceProvisioning,
+      workspaceLifecycle: input.workspaceLifecycle,
+      codingContextGitHubPort: args.options.codingContextGitHubPort,
+    },
+    args.bundle.codingRuntimeSnapshotStore,
+  );
 }
 
 function qualifiedProductionRuntimeComposition(
@@ -4485,7 +5025,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     resolvedEvidenceDir,
   );
   const egress = resolveConfiguredEgress(options.configPath, options.env, runtimeConfigPath);
-  const runtimeConfig = createRuntimeGatewayConfig(config, configPresent, storagePath);
+  const runtimeConfig = createRuntimeGatewayConfig(config, configPresent, storagePath, options.env);
   const evidenceStore = createNodeEvidenceStore(resolvedEvidenceDir);
   const codingWorkbenchEvidenceStore =
     options.codingWorkbenchEvidenceStore ??
@@ -4515,8 +5055,22 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     bundle,
     contextProfileForModel,
   });
-  return {
-    ...deps,
-    voiceRecapContentAttestations: createVoiceRecapContentAttestationStore(),
-  };
+  return deps;
+}
+
+/**
+ * Composes the durable PR-description application-status bridge over the same node evidence
+ * store every other durable surface in this module shares (`createNodeEvidenceStore`), so the
+ * PR-description application service persists its status across restarts instead of the
+ * process-local field the fixture uses. Returns the plain `recordStatus`/`readStatus` hook shape
+ * `PrDescriptionServiceOptions` expects — the wiring of a live `PrDescriptionApplicationService`
+ * onto this bridge is done at the call site that owns that service's other options.
+ */
+export function createPrDescriptionReceiptStatusBridge(
+  evidenceStore: EvidenceStore,
+  log?: ServerLogSink,
+): PrDescriptionReceiptStatusHooks {
+  return createPrDescriptionReceiptStatusHooks(
+    createPrDescriptionReceiptStore({ evidenceStore, redact, ...(log !== undefined && { log }) }),
+  );
 }

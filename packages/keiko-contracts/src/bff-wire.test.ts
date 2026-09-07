@@ -8,7 +8,9 @@ import {
   assertNeverFilesTreeEntryKind,
   buildGroundedAnswerContextPackSummary,
   canonicalDesktopChatTurnReferenceSeed,
+  CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
   classifyAttachmentMime,
+  GIT_CHANGE_BLOCKED_REASONS,
   DEFAULT_GROUNDING_LIMITS,
   DESKTOP_CHAT_SEND_ABORT_CONTRACT,
   DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES,
@@ -22,12 +24,16 @@ import {
   MAX_ATTACHMENT_MIME_BYTES,
   MAX_CONNECTED_SOURCES,
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
+  MAX_GITHUB_ISSUE_READER_REPOSITORY_PATH_CHARS,
   MAX_LOCAL_KNOWLEDGE_SOURCES,
   normalizeAttachmentMime,
+  parseUpdateGitHubIssueReaderAuthorizationWire,
   parseUpdateMemoryAutonomyPolicyWire,
   resolveGroundingLimits,
   type Chat,
+  type ChatGitChangeScope,
   type ChatLocalKnowledgeScope,
+  type GitChangeBlockedReason,
   type DesktopChatSendRequestWire,
   type DesktopChatStreamTerminalEvent,
   type FilesTreeEntry,
@@ -207,6 +213,62 @@ describe("parseUpdateMemoryAutonomyPolicyWire", () => {
     { requestedMode: "governed-assist", expectedRevision: Number.MAX_SAFE_INTEGER + 1 },
   ])("rejects malformed policy update payload %#", (value) => {
     expect(parseUpdateMemoryAutonomyPolicyWire(value)).toBeUndefined();
+  });
+});
+
+describe("parseUpdateGitHubIssueReaderAuthorizationWire", () => {
+  const update = {
+    repositoryPath: "/workspace/keiko",
+    authorized: true,
+    expectedRevision: 0,
+  };
+
+  it("accepts a well-formed grant at revision zero", () => {
+    expect(parseUpdateGitHubIssueReaderAuthorizationWire(update)).toEqual(update);
+  });
+
+  it("accepts a revocation at the maximum safe revision", () => {
+    const revocation = { ...update, authorized: false, expectedRevision: Number.MAX_SAFE_INTEGER };
+    expect(parseUpdateGitHubIssueReaderAuthorizationWire(revocation)).toEqual(revocation);
+  });
+
+  it("pins both ends of the repository path bound", () => {
+    const longest = "/".padEnd(MAX_GITHUB_ISSUE_READER_REPOSITORY_PATH_CHARS, "a");
+    expect(
+      parseUpdateGitHubIssueReaderAuthorizationWire({ ...update, repositoryPath: longest }),
+    ).toEqual({ ...update, repositoryPath: longest });
+    expect(
+      parseUpdateGitHubIssueReaderAuthorizationWire({ ...update, repositoryPath: `${longest}a` }),
+    ).toBeUndefined();
+  });
+
+  it("rejects a repository path containing a NUL byte", () => {
+    expect(
+      parseUpdateGitHubIssueReaderAuthorizationWire({ ...update, repositoryPath: "/a\0/b" }),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    {},
+    undefined,
+    null,
+    [],
+    "/workspace/keiko",
+    { ...update, extra: true },
+    { authorized: true, expectedRevision: 0 },
+    { repositoryPath: "/workspace/keiko", expectedRevision: 0 },
+    { repositoryPath: "/workspace/keiko", authorized: true },
+    { ...update, repositoryPath: "" },
+    { ...update, repositoryPath: 7 },
+    { ...update, repositoryPath: null },
+    { ...update, authorized: "true" },
+    { ...update, authorized: 1 },
+    { ...update, expectedRevision: "0" },
+    { ...update, expectedRevision: -1 },
+    { ...update, expectedRevision: 0.5 },
+    { ...update, expectedRevision: Number.MAX_SAFE_INTEGER + 1 },
+  ])("rejects malformed authorization update payload %#", (value) => {
+    expect(parseUpdateGitHubIssueReaderAuthorizationWire(value)).toBeUndefined();
   });
 });
 
@@ -723,6 +785,108 @@ describe("local-knowledge multi-source contract (#189)", () => {
     expect(citation.source).toBe("Capsule A");
     expect(citation.htmlManual?.open.state).toBe("available");
     expect(hybrid.contextPack.reranker?.status).toBe("applied");
+  });
+});
+
+// Issue #3400 (epic #3384) — the THIRD, sibling Git-change Chat scope list (contract corrections
+// 2, 3 and 6). No legacy single-source field: this scope kind was never overloaded onto an
+// earlier shape, unlike connectedScope/localKnowledgeScope.
+describe("git-change Chat scope contract (#3400)", () => {
+  function gitChangeScope(patch: Partial<ChatGitChangeScope> = {}): ChatGitChangeScope {
+    return {
+      kind: "git-change",
+      relationshipId: "rel-1",
+      remoteDigest: "d".repeat(64),
+      comparisonLabel: "main...feature/x",
+      baseRef: "main",
+      headRef: "feature/x",
+      baseSha: "a".repeat(40),
+      headSha: "b".repeat(40),
+      mergeBaseSha: "c".repeat(40),
+      snapshotDigest: "e".repeat(64),
+      fileCount: 3,
+      totalFiles: 3,
+      omittedFiles: 0,
+      truncatedFiles: 0,
+      descriptionStatus: "current",
+      connectedAtMs: 10,
+      ...patch,
+    };
+  }
+
+  it("pins the frozen 6-member description-status vocabulary (contract correction 3)", () => {
+    expect([...CHAT_GIT_CHANGE_DESCRIPTION_STATUSES]).toEqual([
+      "current",
+      "stale",
+      "partial",
+      "fallback",
+      "blocked",
+      "failed",
+    ]);
+  });
+
+  it("is addressable as a third, sibling list on Chat and UpdateChatPatch", () => {
+    const base = {
+      id: "c1",
+      projectPath: "/p",
+      title: "t",
+      selectedModel: "m",
+      branchLabel: undefined,
+      status: undefined,
+      connectedScope: undefined,
+      localKnowledgeScope: undefined,
+      createdAt: 1,
+      updatedAt: 1,
+    } as const;
+    const scope = gitChangeScope();
+    const chat: Chat = { ...base, gitChangeScopes: [scope] };
+    expect(chat.gitChangeScopes).toEqual([scope]);
+    expect(chat.connectedScopes).toBeUndefined();
+    expect(chat.localKnowledgeScopes).toBeUndefined();
+
+    const patch: import("./bff-wire.js").UpdateChatPatch = { gitChangeScopes: [scope] };
+    expect(patch.gitChangeScopes).toEqual([scope]);
+    const cleared: import("./bff-wire.js").UpdateChatPatch = { gitChangeScopes: null };
+    expect(cleared.gitChangeScopes).toBeNull();
+  });
+
+  it("carries the remoteDigest identity, never repositoryId (contract correction 6)", () => {
+    const scope = gitChangeScope({ remoteDigest: "f".repeat(64) });
+    expect(scope.remoteDigest).toBe("f".repeat(64));
+    expect(Object.hasOwn(scope, "repositoryId")).toBe(false);
+  });
+
+  it("every description status is a valid ChatGitChangeDescriptionStatus", () => {
+    for (const status of CHAT_GIT_CHANGE_DESCRIPTION_STATUSES) {
+      const scope = gitChangeScope({ descriptionStatus: status });
+      expect(scope.descriptionStatus).toBe(status);
+    }
+  });
+
+  // F30 (epic #3384 final audit): the 11-member blocked-reason vocabulary is owned once here
+  // (keiko-contracts) rather than hand-restated in both the browser client and the server
+  // route; this pin is the single source both importers are checked against.
+  it("pins the 11-member GitChangeBlockedReason vocabulary (F30)", () => {
+    expect([...GIT_CHANGE_BLOCKED_REASONS]).toEqual([
+      "detached-head",
+      "unborn-head",
+      "missing-ref",
+      "no-pull-request",
+      "ambiguous-pull-request",
+      "reader-unauthorized",
+      "remote-unresolved",
+      "repository-unavailable",
+      "snapshot-unavailable",
+      "snapshot-failed",
+      "chat-project-unavailable",
+    ]);
+  });
+
+  it("every blocked reason is a valid GitChangeBlockedReason", () => {
+    for (const reason of GIT_CHANGE_BLOCKED_REASONS) {
+      const typed: GitChangeBlockedReason = reason;
+      expect(GIT_CHANGE_BLOCKED_REASONS as readonly string[]).toContain(typed);
+    }
   });
 });
 

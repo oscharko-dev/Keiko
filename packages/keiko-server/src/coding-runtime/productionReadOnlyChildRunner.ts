@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { estimateTokensForSegments } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
+  createLegacyPortCatalogFactory,
   createSession,
   type EventSink,
   type ModelPort,
@@ -9,6 +10,13 @@ import {
   type ToolCallResult,
   type ToolPort,
 } from "@oscharko-dev/keiko-harness";
+import {
+  CHILD_WORKSPACE_READ_ALIAS,
+  CHILD_WORKSPACE_READ_HANDLER_REQUIREMENT,
+  childRegistrationSet,
+  createKeikoToolCatalog,
+  gatewayToolDefinitions,
+} from "@oscharko-dev/keiko-tool-catalog";
 import type {
   GatewayRequest,
   GatewayStreamChunk,
@@ -28,16 +36,26 @@ export interface ProductionReadOnlyChildRunnerDeps {
   readonly reservePromptTokens: (promptTokens: number) => boolean;
 }
 
-const READ_FILE_TOOL: ToolDefinition = {
-  name: "read_file",
-  description: "Read one bounded repository text file through the parent authority.",
-  parameters: {
-    type: "object",
-    additionalProperties: false,
-    properties: { relativePath: { type: "string", minLength: 1, maxLength: 512 } },
-    required: ["relativePath"],
+// #3407: `keiko.child.workspace.read@1` is the reserved canonical identity (ADR-0175 D2) for the
+// one tool a read-only child is offered; the descriptor -- not a hand-typed duplicate -- is the
+// single source for both this tool's advertised ToolDefinition and its catalog binding.
+const CHILD_PROFILE = { id: "child", version: 1 } as const;
+const CHILD_CATALOG = createKeikoToolCatalog([childRegistrationSet()]);
+
+function requireChildReadTool(): ToolDefinition {
+  const [tool] = gatewayToolDefinitions(CHILD_CATALOG, CHILD_PROFILE);
+  if (tool === undefined) throw new TypeError("Missing child.workspace.read descriptor");
+  return tool;
+}
+const CHILD_READ_TOOL = requireChildReadTool();
+const CHILD_HANDLER_ATTESTATIONS = [
+  {
+    alias: CHILD_WORKSPACE_READ_ALIAS,
+    handlerId: CHILD_WORKSPACE_READ_HANDLER_REQUIREMENT.id,
+    handlerVersion: CHILD_WORKSPACE_READ_HANDLER_REQUIREMENT.contractVersion,
+    catalogAction: CHILD_WORKSPACE_READ_ALIAS,
   },
-};
+] as const;
 
 const TRANSIENT_SINK: EventSink = { emit: (): void => undefined };
 
@@ -114,14 +132,14 @@ function bindSessionCancellation(
   if (state.stoppedReason !== undefined) session.cancel(state.stoppedReason);
 }
 
-async function runChildSession(
+function buildChildSession(
   deps: ProductionReadOnlyChildRunnerDeps,
   input: ReadOnlyChildRunnerInput,
-): Promise<ReturnTypeForRunner> {
-  const model = deps.modelPortFactory(input.modelId);
-  if (model === undefined) throw new Error("child-model-unavailable");
-  const state = newChildRunState();
-  const session = createSession(
+  model: ModelPort,
+  state: ChildRunState,
+): ReturnType<typeof createSession> {
+  const tools = readOnlyTools(deps, input, state);
+  return createSession(
     {
       taskType: "editor-agent-turn",
       input: { goal: input.objective, sessionId: input.envelope.childRunId },
@@ -129,19 +147,38 @@ async function runChildSession(
     {
       model: input.modelId,
       workingDirectory: input.workspaceRoot,
-      dryRun: true,
+      dryRun: false,
       limits: childLimits(input.maxToolCalls),
     },
     {
       model: budgetedChildModel(model, deps.reservePromptTokens),
-      tools: readOnlyTools(deps, input, state),
+      tools,
+      // #3407: dispatch through the mandatory catalog path again, bound to the reserved
+      // `child` profile. Every call still runs through readOnlyTools(...).execute() below --
+      // the same parent-gate-before-read and stop-on-denial semantics, unmodified.
+      bindToolCatalog: createLegacyPortCatalogFactory(
+        CHILD_CATALOG,
+        CHILD_PROFILE,
+        tools,
+        CHILD_HANDLER_ATTESTATIONS,
+      ),
       sink: TRANSIENT_SINK,
       // KEIKO-0726 (#3323): a real, tool-using production call site — a read-only child can loop
-      // through many read_file rounds against a 128KB budget and genuinely grow past it, so this
-      // is where the gap this issue closes actually gets exercised.
+      // through many keiko_child_workspace_read rounds against a 128KB budget and genuinely grow
+      // past it, so this is where the gap this issue closes actually gets exercised.
       compactionPort: serverHarnessContextCompactor,
     },
   );
+}
+
+async function runChildSession(
+  deps: ProductionReadOnlyChildRunnerDeps,
+  input: ReadOnlyChildRunnerInput,
+): Promise<ReturnTypeForRunner> {
+  const model = deps.modelPortFactory(input.modelId);
+  if (model === undefined) throw new Error("child-model-unavailable");
+  const state = newChildRunState();
+  const session = buildChildSession(deps, input, model, state);
   bindSessionCancellation(state, session);
   const abort = (): void => {
     session.cancel("parent-stopped");
@@ -215,7 +252,8 @@ function childPromptTokenEstimate(request: GatewayRequest): number {
       toolCalls: message.toolCalls,
     }),
   );
-  const tools = request.tools === undefined ? [] : [JSON.stringify(request.tools)];
+  const tools =
+    request.toolCatalog === undefined ? [] : [JSON.stringify(request.toolCatalog.projection.tools)];
   const responseFormat =
     request.responseFormat === undefined ? [] : [JSON.stringify(request.responseFormat)];
   return Math.max(1, estimateTokensForSegments([...messages, ...tools, ...responseFormat]));
@@ -227,7 +265,7 @@ function readOnlyTools(
   state: ChildRunState,
 ): ToolPort {
   return {
-    listTools: (): readonly ToolDefinition[] => [READ_FILE_TOOL],
+    listTools: (): readonly ToolDefinition[] => [CHILD_READ_TOOL],
     execute: (request): Promise<ToolCallResult> => executeRead(deps, input, state, request),
   };
 }
@@ -243,10 +281,10 @@ const DENIED = '{"status":"denied"}';
  * would be reported while the child kept spending model calls against the same parent budget. So a
  * denial cancels the session rather than answering with a denied tool result alone.
  *
- * A tool name other than `read_file` cannot be charged against an action class, because the child is
- * offered exactly one tool and anything else is a fabricated call. That is an anomaly, not a policy
- * decision, so it terminates the session directly instead of being routed at a class it does not
- * belong to.
+ * A tool name other than `keiko_child_workspace_read` cannot be charged against an action class,
+ * because the child is offered exactly one tool and anything else is a fabricated call. That is an
+ * anomaly, not a policy decision, so it terminates the session directly instead of being routed at
+ * a class it does not belong to.
  */
 async function executeRead(
   deps: ProductionReadOnlyChildRunnerDeps,
@@ -254,7 +292,7 @@ async function executeRead(
   state: ChildRunState,
   request: ToolCallRequest,
 ): Promise<ToolCallResult> {
-  if (request.toolName !== "read_file") {
+  if (request.toolName !== CHILD_WORKSPACE_READ_ALIAS) {
     state.stop("tool-not-offered");
     return result(request.toolCallId, DENIED);
   }

@@ -25,19 +25,23 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchMode,
   EditorAgentGovernedAuthorityReference,
   EditorAgentSessionSnapshot,
   VerificationReport,
 } from "@oscharko-dev/keiko-contracts";
 import {
-  CODING_WORKBENCH_ACTION_CLASSES,
+  CODING_WORKBENCH_MODE_POLICIES,
   CODING_WORKBENCH_SCHEMA_VERSION,
   resolveEffectiveCodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
 import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { validateCodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type { GatewayCallRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import { createToolInvocationNormalizer } from "@oscharko-dev/keiko-tool-catalog";
+import { writeToolCatalogQualificationObservation } from "../../../../scripts/lib/tool-catalog-qualification-observation.mjs";
 import {
   createFetchEditorAgentHttpTransport,
   DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS,
@@ -45,7 +49,12 @@ import {
   EditorAgentToolHost,
   type EditorAgentToolOutput,
 } from "@oscharko-dev/keiko-tools";
-import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../index.js";
+import {
+  buildRedactor,
+  createInMemoryUiStore,
+  type ServerLogEvent,
+  type UiHandlerDeps,
+} from "../index.js";
 import { createRunRegistry } from "../runs.js";
 import { createUiServer, UI_HOST } from "../server.js";
 import type { VerificationRunInput, VerificationRunnerManager } from "./verificationRunner.js";
@@ -123,10 +132,14 @@ function snapshot(root: string): EditorAgentSessionSnapshot {
   };
 }
 
-function authority(root: string): EditorAgentGovernedAuthorityReference {
+function authority(
+  root: string,
+  requestedMode: CodingWorkbenchMode = CEILING,
+  runId = "run-2490",
+): EditorAgentGovernedAuthorityReference {
   const envelope: CodingWorkbenchAuthorityEnvelope = {
     schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
-    runId: "run-2489",
+    runId,
     localUser: "local-operator",
     taskRefs: ["issue-2489"],
     workspace: {
@@ -140,11 +153,11 @@ function authority(root: string): EditorAgentGovernedAuthorityReference {
       allowDetachedHead: false,
       allowedPrefixes: ["local-"],
     },
-    requestedMode: CEILING,
+    requestedMode,
     deploymentCeiling: CEILING,
-    effectiveMode: resolveEffectiveCodingWorkbenchMode(CEILING, CEILING),
+    effectiveMode: resolveEffectiveCodingWorkbenchMode(requestedMode, CEILING),
     runtimeSource: "keiko-sidecar",
-    actionClasses: CODING_WORKBENCH_ACTION_CLASSES,
+    actionClasses: CODING_WORKBENCH_MODE_POLICIES[requestedMode].allowedActionClasses,
     connectorScopes: [],
     modelProfile: {
       profileId: "profile-2489",
@@ -175,7 +188,12 @@ function authority(root: string): EditorAgentGovernedAuthorityReference {
     CEILING,
     new Date().toISOString(),
   );
-  if (!registered.ok) throw new Error("expected authority registration");
+  if (!registered.ok) {
+    const validation = validateCodingWorkbenchAuthorityEnvelope(envelope);
+    throw new Error(
+      validation.ok ? "expected authority registration" : validation.errors.join("; "),
+    );
+  }
   return registered.authorityRef;
 }
 
@@ -232,18 +250,36 @@ class FakeVerificationRunnerManager implements VerificationRunnerManager {
 }
 
 // One scripted tool_calls turn followed by a final stop turn -- exactly the two-message shape the
-// harness executor drives (model-call -> tool-call -> model-call -> reporting).
+// harness executor drives (model-call -> tool-call -> model-call -> reporting). Binds the provider
+// tool call to the harness's advertised catalog exactly the way a real provider adapter now must
+// (mirrors packages/keiko-harness/src/_support.ts's scriptedModel) -- the mandatory catalog
+// dispatch path (catalog-runtime.ts) rejects a toolCall with no bound `invocation`.
 function toolCallThenStop(toolName: string, args: Record<string, unknown>): ModelPort {
   let call = 0;
   return {
-    call: (): Promise<NormalizedResponse> => {
+    call: (request: GatewayCallRequest): Promise<NormalizedResponse> => {
       call += 1;
       if (call === 1) {
+        const invocation =
+          request.toolCatalog === undefined
+            ? undefined
+            : createToolInvocationNormalizer({
+                catalog: request.toolCatalog.catalog,
+                projection: request.toolCatalog.projection,
+                offered: request.toolCatalog.offered,
+              }).bindAlias(toolName, args, 0);
         return Promise.resolve({
           modelId: "producer-test-model",
           content: "",
           finishReason: "tool_calls",
-          toolCalls: [{ id: "call-1", name: toolName, arguments: args }],
+          toolCalls: [
+            {
+              id: "call-1",
+              name: toolName,
+              arguments: args,
+              ...(invocation === undefined ? {} : { invocation }),
+            },
+          ],
           structuredOutput: null,
           usage: {
             requestId: "r1",
@@ -279,6 +315,7 @@ interface Fixture {
   readonly authorityRef: EditorAgentGovernedAuthorityReference;
   readonly verificationRunner: FakeVerificationRunnerManager;
   readonly disconnectBridge: () => void;
+  readonly activityLogEvents: readonly ServerLogEvent[];
   setModel: (model: ModelPort) => void;
 }
 
@@ -301,11 +338,13 @@ async function createFixture(): Promise<Fixture> {
   const authorityRef = authority(root);
   const verificationRunner = new FakeVerificationRunnerManager();
   let model: ModelPort = { call: () => Promise.reject(new Error("no script configured")) };
+  const activityLogEvents: ServerLogEvent[] = [];
   const deps = {
     autonomousDeliveryDeploymentCeiling: CEILING,
     env: {},
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
+    activityLog: { write: (event: ServerLogEvent): void => void activityLogEvents.push(event) },
     store,
     modelPortFactory: (modelId: string): ModelPort | undefined =>
       modelId === "producer-test-model" ? model : undefined,
@@ -342,6 +381,7 @@ async function createFixture(): Promise<Fixture> {
     authorityRef,
     verificationRunner,
     disconnectBridge,
+    activityLogEvents,
     setModel: (next: ModelPort): void => {
       model = next;
     },
@@ -369,6 +409,16 @@ interface ProducerTurnResponse {
       readonly status?: string;
       readonly failureKind?: string;
     }[];
+    readonly catalog?: {
+      readonly catalogRevision: string;
+      readonly profile: { readonly id: string; readonly version: number };
+      readonly projectionDigest: string;
+      readonly handlerSetDigest: string;
+      readonly toolRefs: readonly {
+        readonly canonicalId: string;
+        readonly contractVersion: number;
+      }[];
+    };
     readonly error?: { readonly code: string };
   };
 }
@@ -391,6 +441,25 @@ async function postProducerTurn(
   });
   const body = (await response.json()) as ProducerTurnResponse["body"];
   return { status: response.status, body };
+}
+
+function writeEditorQualificationObservation(
+  binding: ProducerTurnResponse["body"]["catalog"],
+): void {
+  if (binding === undefined) throw new TypeError("Missing editor catalog binding");
+  writeToolCatalogQualificationObservation({
+    consumer: "editor",
+    component: "editor",
+    binding: {
+      catalogRevision: binding.catalogRevision,
+      profile: binding.profile,
+      projectionDigest: binding.projectionDigest,
+      handlerSetDigest: binding.handlerSetDigest,
+    },
+    terminalStatus: "completed",
+    settlementCount: 1,
+    proof: { kind: "single-settlement" },
+  });
 }
 
 // Asserts the producer genuinely reached a SUCCEEDED dispatch, not merely an invoked-but-conflicted
@@ -451,6 +520,61 @@ describe("editor-agent producer turn reachability (#2489 Findings 1/2)", () => {
     );
     const response = await postProducerTurn(current.port);
     expectSucceededToolOutcome(response, "editor_navigate_symbol", "succeeded");
+
+    // #3407/#3408 repair: this turn now actually dispatches through the mandatory catalog instead
+    // of failing closed on every tool call -- AGENTS.md §8 requires that new runtime behaviour ship
+    // its own body-free activity-log evidence. One line, counts/identifiers only.
+    const completed = current.activityLogEvents.find(
+      (event) => event.op === "editor.producer-turn.completed",
+    );
+    expect(completed).toMatchObject({
+      category: "process",
+      op: "editor.producer-turn.completed",
+      extra: { outcome: "completed", toolCallCount: 1, toolNames: ["editor_navigate_symbol"] },
+    });
+    expect(JSON.stringify(completed)).not.toContain("reachability probe");
+
+    expect(response.body.catalog).toMatchObject({
+      profile: { id: "editor", version: 1 },
+      toolRefs: [
+        { canonicalId: "keiko.editor.git", contractVersion: 1 },
+        { canonicalId: "keiko.editor.search", contractVersion: 1 },
+        { canonicalId: "keiko.editor.symbol", contractVersion: 1 },
+        { canonicalId: "keiko.editor.verify", contractVersion: 1 },
+      ],
+    });
+    expect(response.body.catalog?.catalogRevision).toMatch(/^[a-f0-9]{64}$/u);
+    expect(response.body.catalog?.projectionDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(response.body.catalog?.handlerSetDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(response.body.catalog?.handlerSetDigest).not.toBe(
+      response.body.catalog?.projectionDigest,
+    );
+
+    const lifecycle = current.activityLogEvents.filter((event) =>
+      event.op.startsWith("tool-catalog."),
+    );
+    expect(lifecycle.map((event) => event.op)).toEqual([
+      "tool-catalog.projection",
+      "tool-catalog.bind-ready",
+      "tool-catalog.invocation-started",
+      "tool-catalog.invocation-settled",
+    ]);
+    expect(lifecycle[0]?.extra).toMatchObject({
+      profile: { id: "editor", version: 1 },
+      resultCount: 4,
+    });
+    expect(lifecycle[2]?.extra).toMatchObject({
+      toolRef: { canonicalId: "keiko.editor.symbol", contractVersion: 1 },
+      state: "started",
+    });
+    expect(lifecycle[3]?.extra).toMatchObject({
+      toolRef: { canonicalId: "keiko.editor.symbol", contractVersion: 1 },
+      status: "completed",
+      reason: "none",
+      effectStarted: true,
+      budgetDisposition: "committed",
+    });
+    writeEditorQualificationObservation(response.body.catalog);
   });
 
   it("drives editor_search_workspace to real production dispatch", async () => {
@@ -467,6 +591,43 @@ describe("editor-agent producer turn reachability (#2489 Findings 1/2)", () => {
     );
     const response = await postProducerTurn(current.port);
     expectSucceededToolOutcome(response, "editor_search_workspace", "succeeded");
+  });
+
+  it("records a real disconnected search conflict as a failed canonical settlement", async () => {
+    const current = fixture;
+    if (current === undefined) throw new Error("fixture missing");
+    const scripted = toolCallThenStop("editor_search_workspace", {
+      sessionId: SESSION_ID,
+      idempotencyKey: "idem-search-disconnected",
+      query: "producer-reachability-needle",
+      mode: "text",
+      maxResults: 5,
+    });
+    let disconnected = false;
+    current.setModel({
+      call: (request, signal): Promise<NormalizedResponse> => {
+        if (!disconnected) {
+          disconnected = true;
+          current.disconnectBridge();
+        }
+        return scripted.call(request, signal);
+      },
+    });
+    const response = await postProducerTurn(current.port);
+    expect(response.status).toBe(200);
+    expect(response.body.toolOutcomes).toEqual([
+      { toolName: "editor_search_workspace", ok: true, status: "conflict" },
+    ]);
+    const settlements = current.activityLogEvents.filter(
+      (event) => event.op === "tool-catalog.invocation-settled",
+    );
+    expect(settlements).toHaveLength(1);
+    expect(settlements[0]?.extra).toMatchObject({
+      status: "failed",
+      reason: "handler-unavailable",
+      effectStarted: true,
+      budgetDisposition: "committed",
+    });
   });
 
   it("drives editor_git_context to real production dispatch", async () => {
@@ -572,6 +733,114 @@ describe("editor-agent producer turn error paths (#2489 coverage)", () => {
 // rejected before it ever reaches the tool host, so the mutation action never reaches
 // agentRoutes.ts (asserted via the empty audit ledger for the session).
 describe("editor-agent producer tool-scope enforcement (#2489 security hardening)", () => {
+  it.each([
+    {
+      toolName: "editor_navigate_symbol",
+      runId: "run-2486",
+      expectedStatus: "succeeded",
+      args: {
+        sessionId: SESSION_ID,
+        idempotencyKey: "idem-ask-navigate",
+        file: "src/main.ts",
+        operation: "definition",
+        position: { line: 1, character: 19 },
+        languageId: "typescript",
+        text: MAIN_TEXT,
+      },
+    },
+    {
+      toolName: "editor_search_workspace",
+      runId: "run-2485",
+      expectedStatus: "succeeded",
+      args: {
+        sessionId: SESSION_ID,
+        idempotencyKey: "idem-ask-search",
+        query: "producer-reachability-needle",
+        mode: "text",
+        maxResults: 5,
+      },
+    },
+    {
+      toolName: "editor_git_context",
+      runId: "run-2484",
+      expectedStatus: "succeeded",
+      args: {
+        sessionId: SESSION_ID,
+        idempotencyKey: "idem-ask-git",
+        path: "src/a.ts",
+        aspects: ["status", "diff"],
+      },
+    },
+  ])("executes allowed Ask-mode read $toolName", async (testCase) => {
+    const current = fixture;
+    if (current === undefined) throw new Error("fixture missing");
+    const askAuthority = authority(current.root, "governed-assist", testCase.runId);
+    current.setModel(toolCallThenStop(testCase.toolName, testCase.args));
+
+    const response = await postProducerTurn(current.port, { authorityRef: askAuthority });
+
+    expectSucceededToolOutcome(response, testCase.toolName, testCase.expectedStatus);
+  });
+
+  it("offers Ask-mode reads but withholds verification without an approval-resume channel", async () => {
+    const current = fixture;
+    if (current === undefined) throw new Error("fixture missing");
+    const askAuthority = authority(current.root, "governed-assist", "run-2488");
+    current.setModel(
+      toolCallThenStop("editor_request_verification", {
+        sessionId: SESSION_ID,
+        kind: "typecheck",
+      }),
+    );
+
+    const response = await postProducerTurn(current.port, { authorityRef: askAuthority });
+
+    expect(response.status).toBe(200);
+    expect(response.body.outcome).toBe("failed");
+    expect(response.body.catalog?.toolRefs).toEqual([
+      { canonicalId: "keiko.editor.git", contractVersion: 1 },
+      { canonicalId: "keiko.editor.search", contractVersion: 1 },
+      { canonicalId: "keiko.editor.symbol", contractVersion: 1 },
+    ]);
+    expect(response.body.toolCallCount).toBe(0);
+    expect(current.verificationRunner.calls).toBe(0);
+    const projection = current.activityLogEvents.find(
+      (event) => event.op === "tool-catalog.projection",
+    );
+    expect(projection).toMatchObject({
+      op: "tool-catalog.projection",
+      extra: {
+        profile: { id: "editor", version: 1 },
+        projectionDigest: response.body.catalog?.projectionDigest,
+        resultCount: 3,
+      },
+    });
+    expect(
+      current.activityLogEvents.some((event) => event.op === "tool-catalog.invocation-started"),
+    ).toBe(false);
+  });
+
+  it("keeps verification offerable when Supervised policy allows it without approval", async () => {
+    const current = fixture;
+    if (current === undefined) throw new Error("fixture missing");
+    const supervisedAuthority = authority(current.root, "supervised-coding", "run-2487");
+    current.setModel(
+      toolCallThenStop("editor_request_verification", {
+        sessionId: SESSION_ID,
+        kind: "typecheck",
+      }),
+    );
+
+    const response = await postProducerTurn(current.port, { authorityRef: supervisedAuthority });
+
+    expectSucceededToolOutcome(response, "editor_request_verification", "completed");
+    expect(response.body.catalog?.toolRefs).toContainEqual({
+      canonicalId: "keiko.editor.verify",
+      contractVersion: 1,
+    });
+    expect(current.verificationRunner.calls).toBe(1);
+  });
+
   it("rejects a tool call outside the advertised producer surface before it reaches the host", async () => {
     const current = fixture;
     if (current === undefined) throw new Error("fixture missing");
@@ -591,15 +860,14 @@ describe("editor-agent producer tool-scope enforcement (#2489 security hardening
     );
     const response = await postProducerTurn(current.port);
     expect(response.status).toBe(200);
-    expect(response.body.outcome).toBe("completed");
-    expect(response.body.toolCallCount).toBe(1);
-    // #2713 strengthens this pin rather than relaxing it: the rejection must still be a FAILURE, and
-    // it must now also identify itself as a PRE-DISPATCH refusal ("invalid-arguments"), never a
-    // route/transport kind — which would mean the call had actually reached a downstream route. The
-    // audit-ledger assertion below stays the decisive proof; this only narrows what may precede it.
-    expect(response.body.toolOutcomes).toEqual([
-      { toolName: "editor_propose_edit", ok: false, failureKind: "invalid-arguments" },
-    ]);
+    // #3408 strengthens the original dispatch-level allowlist pin: the active catalog no longer
+    // advertises this alias, so the mandatory catalog rejects the unbound model output before the
+    // scoped ToolPort itself runs. A failed turn with no completed calls/outcomes is therefore the
+    // earlier fail-closed result; the audit-ledger assertion remains the decisive host-boundary pin.
+    expect(response.body.outcome).toBe("failed");
+    expect(response.body.toolCallCount).toBe(0);
+    expect(response.body.toolNames).toEqual([]);
+    expect(response.body.toolOutcomes).toEqual([]);
     // The decisive proof: a real applyTextEdits dispatch would have reached agentRoutes.ts and
     // been audited (queued for browser-bridge review or denied) — zero audit entries proves the
     // request never left the producer's own scope check.

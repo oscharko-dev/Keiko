@@ -15,10 +15,29 @@ import type {
   ToolShapingDegradedReason,
 } from "@oscharko-dev/keiko-contracts";
 import { contextBytes } from "./context.js";
-import { handleToolCall } from "./executor.js";
+import { completeToolCall, selectToolMessage } from "./executor.js";
+import type { RunContext, StateStep } from "./context.js";
 import type { ToolCallRequest, ToolCallResult, ToolPort } from "./ports.js";
 import type { HarnessShaperInput, HarnessShaperPort } from "./shaper-port.js";
 import { response, toolCall, buildContext } from "./_support.js";
+
+// Retained raw-compaction pins exercise the production post-tool owner directly. They do not
+// claim that a raw 512KB payload passes the canonical tool result ceiling.
+async function handleToolCall(ctx: RunContext): Promise<StateStep> {
+  for (const call of ctx.lastResponse?.toolCalls ?? []) {
+    ctx.emitter.emit({ type: "tool:call:started", toolName: call.name, toolCallId: call.id });
+    const result = await ctx.tools.execute({
+      toolCallId: call.id,
+      toolName: call.name,
+      arguments: call.arguments,
+      signal: ctx.signal,
+    });
+    const selected = selectToolMessage(ctx, [], completeToolCall(ctx, call, result));
+    if ("to" in selected) return selected;
+    ctx.messages = [...selected.messages, ...selected.results, selected.message];
+  }
+  return { to: "model-call", reason: "tool results fed back to model" };
+}
 
 const COMMAND_SANDBOX = {
   envAllowlist: ["PATH"],

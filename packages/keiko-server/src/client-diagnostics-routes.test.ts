@@ -6,6 +6,7 @@ import {
   handleClientDiagnosticIngest,
   resetClientDiagnosticsIngestStateForTests,
 } from "./client-diagnostics-routes.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   createBufferedServerLogSink,
   createServerLogger,
@@ -111,7 +112,57 @@ describe("POST /api/diagnostics/client", () => {
     expect(line.clientNote).toBe("boundary caught TypeError");
   });
 
-  it("drops an invalid correlationId instead of rejecting the whole report", async () => {
+  it("preserves a validated git-change response identity on the originating timeline", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "git-change description response",
+      clientTs: CLIENT_TS,
+      correlationId: "original-apply-request-id",
+      gitChangeDescription: {
+        action: "apply",
+        disposition: "discarded",
+        relationshipId: "rel-1",
+        snapshotDigest: "a".repeat(64),
+        proposalId: "prop-1",
+        outcome: "observed",
+      },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticLine(sink)).toMatchObject({
+      op: "client.diagnostic",
+      correlationId: "original-apply-request-id",
+      action: "apply",
+      disposition: "discarded",
+      relationshipId: "rel-1",
+      snapshotDigest: "a".repeat(64),
+      proposalId: "prop-1",
+      outcome: "observed",
+    });
+  });
+
+  it("preserves the validated workspace trust identity on the originating timeline", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "coding workbench repository trust bound",
+      clientTs: CLIENT_TS,
+      correlationId: "originating-run-correlation",
+      workspaceTrustBinding: {
+        repositoryId: "repository-a",
+        workspaceId: "workspace-a",
+      },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticLine(sink)).toMatchObject({
+      op: "client.diagnostic",
+      correlationId: "originating-run-correlation",
+      repositoryId: "repository-a",
+      workspaceId: "workspace-a",
+    });
+  });
+
+  it("rejects an invalid correlationId and retains the validated ingest correlation", async () => {
     const sink = captureServerLog();
     // Fails `isValidCorrelationId`'s alphabet (spaces and `!` are not in [A-Za-z0-9._-]), but is a
     // conforming wire STRING, so the contract guard alone must not be trusted for this field.
@@ -124,7 +175,23 @@ describe("POST /api/diagnostics/client", () => {
     const result = await handleClientDiagnosticIngest(context(body));
 
     expect(result).toEqual({ status: 204, body: null });
-    expect(clientDiagnosticEvents(sink)[0]?.correlationId).toBeUndefined();
+    expect(clientDiagnosticEvents(sink)[0]?.correlationId).not.toBe("not valid!!");
+    expect(clientDiagnosticEvents(sink)[0]?.correlationId).toBe(CORRELATION_ID);
+  });
+
+  it.each([
+    [CORRELATION_ID, CORRELATION_ID],
+    [undefined, UNKNOWN_CORRELATION_ID],
+    ["invalid ingest!!", UNKNOWN_CORRELATION_ID],
+  ])("correlates a report without an original request using %s", async (ingestId, expected) => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({ message: "diff keyboard scroll", clientTs: CLIENT_TS });
+    const ctx = { ...context(body), correlationId: ingestId };
+
+    await handleClientDiagnosticIngest(ctx);
+
+    expect(clientDiagnosticEvents(sink)[0]?.correlationId).toBe(expected);
+    expect(clientDiagnosticLine(sink).correlationId).toBe(expected);
   });
 
   it("rejects an oversized body with 413 and never reaches the logger", async () => {
@@ -231,5 +298,8 @@ describe("POST /api/diagnostics/client", () => {
     expect(
       sink.events.filter((event) => event.op === "client.diagnostic.rate-limited"),
     ).toHaveLength(1);
+    expect(
+      sink.events.find((event) => event.op === "client.diagnostic.rate-limited")?.correlationId,
+    ).toBe(CORRELATION_ID);
   });
 });

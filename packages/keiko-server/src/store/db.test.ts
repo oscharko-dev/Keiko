@@ -1123,10 +1123,83 @@ describe("computeStoreFingerprint (Wave 4a, epic #3233 §6.2)", () => {
       expect(Object.keys(fingerprint.tableRowCounts).sort()).toEqual(
         [...UI_STORE_FINGERPRINT_TABLES].sort(),
       );
+      // The assertion above compares the constant against itself, so a migration that adds a table
+      // and forgets to fingerprint it stays invisible — which is exactly what happened when schema
+      // v21 added `github_issue_reader_authorization`. This one asks the DATABASE instead: every
+      // persistent table the migrations actually created must be fingerprinted, or a support bundle
+      // silently omits a store an operator is trying to diagnose.
+      const liveTables = db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .all()
+        .map((row) => String(row.name));
+      expect(
+        liveTables.filter((table) => !UI_STORE_FINGERPRINT_TABLES.includes(table as never)),
+      ).toEqual([]);
       expect(Object.values(fingerprint.tableRowCounts).every((count) => count === 0)).toBe(true);
       expect(fingerprint.quickCheckOk).toBe(true);
       expect(fingerprint.encryptionMode).toBe("plaintext");
       expect(fingerprint.keySource).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  // Schema v22 (#3385) widened `coding_runtime_snapshots` with the issue-binding columns and created
+  // no table. V26 separately adds cumulative CI accounting; it must not become another issue-binding
+  // store. This pins both halves: the
+  // columns landed on the already-fingerprinted table (a support bundle keeps counting issue-bound
+  // runs through the same row count), and no second, unfingerprinted store appeared for them.
+  it("keeps the v22 issue-binding columns on the fingerprinted coding_runtime_snapshots table", () => {
+    const dbPath = join(tmpDir, "fingerprint-v22.db");
+    const db = openNodeUiDatabase(dbPath);
+    try {
+      const codingRuntimeTables = UI_STORE_FINGERPRINT_TABLES.filter((table) =>
+        table.startsWith("coding_runtime"),
+      );
+      expect(codingRuntimeTables).toEqual([
+        "coding_runtime_snapshots",
+        "coding_runtime_ci_repair_budgets",
+        // V29 (#3401): the deduplicated description-job register, content-free by the same
+        // forbidden-fields pin that governs the two tables above.
+        "coding_runtime_description_jobs",
+      ]);
+      const budgetColumns = (
+        db.prepare("PRAGMA table_info(coding_runtime_ci_repair_budgets)").all() as {
+          name: string;
+        }[]
+      ).map((row) => row.name);
+      expect(budgetColumns).toEqual([
+        "task_digest",
+        "remote_digest",
+        "pr_number",
+        "revision",
+        "record_json",
+      ]);
+      const columns = (
+        db.prepare("PRAGMA table_info(coding_runtime_snapshots)").all() as { name: string }[]
+      ).map((row) => row.name);
+      for (const column of [
+        "issue_repository_id",
+        "issue_remote_digest",
+        "issue_number",
+        "issue_id_digest",
+        "issue_default_base_ref",
+        "issue_content_revision_digest",
+        "issue_binding_digest",
+      ]) {
+        expect(columns, column).toContain(column);
+      }
+      const liveTableCount = (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+          )
+          .get() as { count: number }
+      ).count;
+      expect(liveTableCount).toBe(UI_STORE_FINGERPRINT_TABLES.length);
+      expect(computeStoreFingerprint(db).tableRowCounts.coding_runtime_snapshots).toBe(0);
     } finally {
       db.close();
     }

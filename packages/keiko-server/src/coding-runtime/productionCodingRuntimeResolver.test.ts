@@ -7,7 +7,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
-import { createProductionCodingRuntimeHost } from "./productionCodingRuntimeHost.js";
+import {
+  createProductionCodingRuntimeHost,
+  type ProductionCodingRuntimeHost,
+} from "./productionCodingRuntimeHost.js";
 import { RESEARCH_GRANT_DEFAULT_MAX_TTL_MS } from "./researchGrantRegistry.js";
 import type { CodingRuntimeEditorMutationLeaseBroker } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import type {
@@ -17,9 +20,27 @@ import type {
 import {
   createProductionCodingRuntimeResolver,
   resolveProductionRuntimeStartConfirmationClaim,
+  type ProductionCodingRuntimeResolverInput,
   type ProductionRuntimeBackendInput,
   type ProductionRuntimeBackendResolver,
 } from "./productionCodingRuntimeResolver.js";
+
+const ciRepairNotifierCapture = vi.hoisted(() => ({
+  current: undefined as ((runId: string) => void) | undefined,
+}));
+
+vi.mock("./productionCiRepairRuntime.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./productionCiRepairRuntime.js")>();
+  return {
+    ...original,
+    createProductionCiRepairBudget: (
+      ...args: Parameters<typeof original.createProductionCiRepairBudget>
+    ): ReturnType<typeof original.createProductionCiRepairBudget> => {
+      ciRepairNotifierCapture.current = args[3];
+      return original.createProductionCiRepairBudget(...args);
+    },
+  };
+});
 
 const roots: string[] = [];
 
@@ -28,6 +49,38 @@ afterEach(() => {
 });
 
 describe("production coding runtime resolver", () => {
+  it("carries the admitted issue through the production context and start confirmation", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const issueBinding = {
+      schemaVersion: "1" as const,
+      repositoryId: "repository-private",
+      remoteDigest: "a".repeat(64),
+      issueNumber: 42,
+      issueIdDigest: "b".repeat(64),
+      defaultBaseRef: "dev",
+      contentRevisionDigest: "c".repeat(64),
+      bindingDigest: "d".repeat(64),
+    };
+    const request = { ...launchRequest(fixture.workspace), issueBinding };
+    const approved = resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request);
+    const generic = resolveProductionRuntimeStartConfirmationClaim(
+      fixture.authority,
+      launchRequest(fixture.workspace),
+    );
+    expect(approved.bindingDigest).not.toBe(generic.bindingDigest);
+    confirmations.issue(approved);
+    host.launchResolver.resolve(request);
+    expect(createRun.mock.calls[0]?.[0].context.issueBinding).toEqual(issueBinding);
+  });
+
   it("starts an approved research grant lifetime at operator approval time", async () => {
     const fixture = workspaceFixture();
     const confirmations = confirmationFixture();
@@ -43,8 +96,11 @@ describe("production coding runtime resolver", () => {
         }),
       },
     }));
+    let gatewayConfigured = true;
     const host = createProductionCodingRuntimeHost(
-      resolverFor(fixture, createRun, confirmations.consumer),
+      resolverFor(fixture, createRun, confirmations.consumer, undefined, {
+        gatewayEgress: () => (gatewayConfigured ? { noProxy: [] } : undefined),
+      }),
     );
     if (host === undefined) throw new Error("expected qualified host");
     const request = launchRequest(fixture.workspace);
@@ -57,6 +113,7 @@ describe("production coding runtime resolver", () => {
       workspaceRoot: fixture.workspace,
       requestedMode: request.requestedMode,
     });
+    expect(researchUnavailable(host, request.runId)).toBe(false);
     const researchRequestId = host.pendingResearchApprovals?.request({
       runId: request.runId,
       url: new URL("https://example.com/reference"),
@@ -80,6 +137,132 @@ describe("production coding runtime resolver", () => {
     expect(host.researchGrants?.activeGrants(request.runId, approvalNowMs)).toEqual([
       expect.objectContaining({ expiresAtMs: approvalNowMs + RESEARCH_GRANT_DEFAULT_MAX_TTL_MS }),
     ]);
+    // Availability is evaluated when the gateway builds each offer. A live grant never widens a
+    // missing transport binding, and restoring the binding is visible without recreating the run.
+    gatewayConfigured = false;
+    expect(researchUnavailable(host, request.runId)).toBe(true);
+    gatewayConfigured = true;
+    expect(researchUnavailable(host, request.runId)).toBe(false);
+  });
+
+  it("keeps child-agent unavailable when its per-run provider model cannot be resolved", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const childModelPortFactory = vi.fn(() => undefined);
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer, undefined, {
+        childModelId: () => "coding-safe-model",
+        childModelPortFactory,
+      }),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+    host.launchResolver.resolve(request);
+
+    expect(childUnavailable(host, request.runId)).toBe(true);
+    expect(childUnavailable(host, request.runId)).toBe(true);
+    expect(childModelPortFactory).toHaveBeenCalledOnce();
+    expect(childModelPortFactory).toHaveBeenCalledWith("coding-safe-model");
+  });
+
+  // #3399 (epic #3384 correction 4): threaded through the exact same chain
+  // `gitDeliveryAuthority` already uses. Before this change the resolver's composed runtime
+  // carried no `gitDeliveryDescriptionAuthority` field at all, so it never reached the host.
+  it("exposes a live, callable description-authority port from the real production chain", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    expect(host.gitDeliveryDescriptionAuthority).toBeDefined();
+    // Fail-closed default: nothing was minted, so a re-check for any scope finds no record.
+    expect(
+      host.gitDeliveryDescriptionAuthority?.current(
+        {
+          remoteDigest: "a".repeat(64),
+          pr: { ownerAndRepo: "owner/repo", prNumber: 1 },
+          snapshotDigest: "b".repeat(64),
+        },
+        new Date().toISOString(),
+      ),
+    ).toBeUndefined();
+  });
+
+  // #3401 (epic #3384 closeout, description-composition-closeout): the MINT capability, closing
+  // the gap the comment above's own predecessor left open. Before this change the resolver's
+  // composed runtime carried no `mintDescriptionAuthority` field at all, so
+  // `createProductionWorkbenchDescriptionDispatcher` deterministically denied every scope
+  // (`model-egress-denied`) in production regardless of what `gitDeliveryDescriptionAuthority`
+  // would have found, because nothing ever minted a record for it to find.
+  it("mints a live description authority from the accepted mode through the real production chain", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    expect(host.mintDescriptionAuthority).toBeDefined();
+    const scope = {
+      remoteDigest: "a".repeat(64),
+      pr: { ownerAndRepo: "owner/repo", prNumber: 1 },
+      snapshotDigest: "b".repeat(64),
+    };
+    const nowIso = new Date(fixture.nowMs()).toISOString();
+    host.mintDescriptionAuthority?.({
+      scope,
+      requestedMode: "governed-assist",
+      nowIso,
+      correlationId: "description-test",
+    });
+    expect(host.gitDeliveryDescriptionAuthority?.current(scope, nowIso)).toMatchObject({
+      scope,
+      // The accepted action mode reaches the owning mint and stays narrower than the fixture's
+      // supervised deployment ceiling. The ceiling is never used as a requested-mode default.
+      effectiveMode: "governed-assist",
+    });
+
+    const unknownModeScope = { ...scope, snapshotDigest: "c".repeat(64) };
+    host.mintDescriptionAuthority?.({
+      scope: unknownModeScope,
+      requestedMode: undefined,
+      nowIso,
+    } as never);
+    expect(host.gitDeliveryDescriptionAuthority?.current(unknownModeScope, nowIso)).toBeUndefined();
+  });
+
+  it("routes the resolver's CI-repair settlement callback through the latest attached notifier", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const first = vi.fn();
+    const latest = vi.fn();
+    host.attachVerifiedHeadNotifier?.(first);
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+    host.launchResolver.resolve(request);
+    host.attachVerifiedHeadNotifier?.(latest);
+
+    ciRepairNotifierCapture.current?.("run-1");
+
+    expect(first).not.toHaveBeenCalled();
+    expect(latest).toHaveBeenCalledExactlyOnceWith("run-1");
   });
 
   it("is unavailable without a trusted confirmation consumer and causes no backend side effects", () => {
@@ -306,11 +489,27 @@ describe("production coding runtime resolver", () => {
   });
 });
 
+function researchUnavailable(
+  host: ProductionCodingRuntimeHost,
+  runId: string,
+): boolean | undefined {
+  return host.runtimeCapabilityAuthenticator
+    ?.unavailableOptionalTools?.(runId)
+    ?.has("keiko_research_fetch");
+}
+
+function childUnavailable(host: ProductionCodingRuntimeHost, runId: string): boolean | undefined {
+  return host.runtimeCapabilityAuthenticator
+    ?.unavailableOptionalTools?.(runId)
+    ?.has("keiko_child_agent");
+}
+
 function resolverFor(
   fixture: ReturnType<typeof workspaceFixture>,
   createRun: ProductionRuntimeBackendResolver["createRun"],
   confirmationConsumer?: CodingRuntimeStartConfirmationConsumer,
   runtimeMutationLeaseBroker?: Pick<CodingRuntimeEditorMutationLeaseBroker, "attach">,
+  overrides: Partial<ProductionCodingRuntimeResolverInput> = {},
 ) {
   return createProductionCodingRuntimeResolver({
     workspaceAuthority: fixture.authority,
@@ -336,6 +535,7 @@ function resolverFor(
         : undefined,
     ...(confirmationConsumer ? { confirmationConsumer } : {}),
     ...(runtimeMutationLeaseBroker ? { runtimeMutationLeaseBroker } : {}),
+    ...overrides,
   });
 }
 

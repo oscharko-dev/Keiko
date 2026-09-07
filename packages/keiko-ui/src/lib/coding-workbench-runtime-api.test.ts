@@ -1,13 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
+import { genericDescriptionArtifact } from "../app/components/desktop/widgets/coding-workbench/_workbenchDescriptionStatusTestSupport";
 import {
   acknowledgeCodingWorkbenchRuntimeRecovery,
+  answerCodingWorkbenchRuntimeQuestion,
   codingWorkbenchFailureStatus,
   codingWorkbenchRuntimeActionError,
   codingWorkbenchRuntimeApiError,
   createCodingWorkbenchRuntimeEventSource,
   decideCodingWorkbenchRuntimeApproval,
   getCodingWorkbenchRuntimeReadiness,
+  getCodingWorkbenchRuntimeDescriptionDraft,
   getCodingWorkbenchRuntimeSnapshot,
   getCodingWorkbenchRuntimeStatus,
   listCodingWorkbenchRuntimeQuestions,
@@ -53,6 +56,40 @@ function snapshot(): Record<string, unknown> {
 describe("Coding Workbench runtime API", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("preserves a closed issue refusal from the mounted error envelope without retrying as generic", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          error: { code: "CODING_RUNTIME_INVALID_INTENT", message: "Issue binding refused" },
+          issueBindingFailure: "repository-mismatch",
+        },
+        409,
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    let failure: unknown;
+    try {
+      await startCodingWorkbenchRuntime({
+        requestId: "issue-start",
+        taskIntent: "implement",
+        requestedMode: "supervised-coding",
+        issueRef: "#42",
+        expectedIssueBindingDigest: "a".repeat(64),
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(codingWorkbenchRuntimeApiError(failure)).toMatchObject({
+      code: "CODING_RUNTIME_INVALID_INTENT",
+      issueBindingFailure: "repository-mismatch",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({
+      issueRef: "#42",
+      expectedIssueBindingDigest: "a".repeat(64),
+    });
   });
 
   it("reads only the server-owned readiness projection and rejects a forged effective mode", async () => {
@@ -175,10 +212,6 @@ describe("Coding Workbench runtime API error mapping", () => {
 });
 
 describe("Coding Workbench runtime API endpoints", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   function stubFetch(body: unknown): ReturnType<typeof vi.fn> {
     // A fresh Response per call: the body of a Response is single-use.
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(body)));
@@ -280,6 +313,97 @@ describe("Coding Workbench runtime API endpoints", () => {
     expect(fetchMock).toHaveBeenLastCalledWith(
       "/api/coding-workbench/runtime/runs/run-1/recovery-ack",
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("reads the exact generic description proposal from the run-scoped review route", async () => {
+    const response = {
+      outcome: "draft",
+      draft: {
+        schemaVersion: "1",
+        proposalId: "proposal-1",
+        expiresAt: "2026-09-05T18:00:00.000Z",
+        artifact: genericDescriptionArtifact(),
+      },
+    };
+    const fetchMock = stubFetch(response);
+    await expect(
+      getCodingWorkbenchRuntimeDescriptionDraft(
+        "run/1",
+        "proposal-1",
+        "b".repeat(64),
+        "c".repeat(64),
+      ),
+    ).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `/api/coding-workbench/runtime/runs/run%2F1/description-draft?proposalId=proposal-1&snapshotDigest=${"b".repeat(64)}`,
+      expect.objectContaining({ cache: "no-store" }),
+    );
+  });
+
+  it("rejects a truncated generic description artifact before displaying it", async () => {
+    stubFetch({
+      outcome: "draft",
+      draft: {
+        schemaVersion: "1",
+        proposalId: "proposal-1",
+        expiresAt: "2026-09-05T18:00:00.000Z",
+        artifact: { markdown: "## Unbound draft" },
+      },
+    });
+    await expect(
+      getCodingWorkbenchRuntimeDescriptionDraft(
+        "run-1",
+        "proposal-1",
+        "b".repeat(64),
+        "c".repeat(64),
+      ),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED", status: 502 });
+  });
+
+  it("rejects a generic draft whose artifact digest differs from the durable status", async () => {
+    stubFetch({
+      outcome: "draft",
+      draft: {
+        schemaVersion: "1",
+        proposalId: "proposal-1",
+        expiresAt: "2026-09-05T18:00:00.000Z",
+        artifact: genericDescriptionArtifact(),
+      },
+    });
+    await expect(
+      getCodingWorkbenchRuntimeDescriptionDraft(
+        "run-1",
+        "proposal-1",
+        "b".repeat(64),
+        "d".repeat(64),
+      ),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED", status: 502 });
+  });
+
+  // Epic #3384 defect A: the answer body's field is `questionId`, the single name every layer
+  // (contract, server coordinator, UI) now speaks for it -- posted verbatim, not translated from
+  // some other local field name, since answerCodingWorkbenchRuntimeQuestion's input type is
+  // imported directly from keiko-contracts rather than a second, locally-declared shape.
+  it("posts a question answer with the requestId/expectedRevision/questionId/answers contract shape", async () => {
+    const fetchMock = stubFetch(snapshot());
+    await answerCodingWorkbenchRuntimeQuestion("run-1", {
+      requestId: "req-1",
+      expectedRevision: 3,
+      questionId: "que_1",
+      answers: [["Continue"]],
+    });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/coding-workbench/runtime/runs/run-1/questions/answer",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          requestId: "req-1",
+          expectedRevision: 3,
+          questionId: "que_1",
+          answers: [["Continue"]],
+        }),
+      }),
     );
   });
 

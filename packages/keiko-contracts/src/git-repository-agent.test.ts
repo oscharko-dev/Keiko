@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { CODING_WORKBENCH_MODES, type CodingWorkbenchMode } from "./coding-workbench.js";
+import {
+  CODING_WORKBENCH_MODES,
+  codingWorkbenchPolicyEffectFor,
+  type CodingWorkbenchMode,
+} from "./coding-workbench.js";
 import {
   GIT_REPOSITORY_AGENT_OPERATION_KINDS,
   gitRepositoryAgentAuthorityClassFor,
@@ -195,14 +199,10 @@ describe("git repository agent operation contract", () => {
 // authority class without asking first, and the unconfigured case is the narrowest mode.
 describe("agent facade autonomy admission", () => {
   const READS = ["status", "diff", "branch-list"] as const;
-  const WORKSPACE_WRITES = [
-    "branch-create",
-    "branch-switch",
-    "stage",
-    "unstage",
-    "commit",
-  ] as const;
-  const DELIVERY = ["fetch", "pull", "push", "pull-request", "merge"] as const;
+  const WORKSPACE_WRITES = ["branch-create", "branch-switch", "stage", "unstage"] as const;
+  // #3386: local commit is delivery too; its verified runtime action needs a distinct human
+  // approval even in Full access. The boolean facade cannot mint or substitute that approval.
+  const DELIVERY = ["commit", "fetch", "pull", "push", "pull-request", "merge"] as const;
 
   it("classifies every operation exactly once", () => {
     for (const operation of GIT_REPOSITORY_AGENT_OPERATION_KINDS) {
@@ -302,6 +302,32 @@ describe("agent facade autonomy admission", () => {
           index >= minimumIndex,
         );
       });
+    }
+  });
+
+  // #3386 (KEIKO-0227, ADR-0138 D2): a compatibility test that DERIVES its expectation from the
+  // shared matrix producer itself, `codingWorkbenchPolicyEffectFor`, instead of restating the
+  // hardcoded booleans above — the class this repository's AGENTS.md §7 warns against, where a
+  // fixture's own copy of a formula can drift from the producer it is meant to prove agrees. "low"
+  // risk agrees with both boolean facade classes actually used at "execute" (repository-read never
+  // reaches the matrix; workspace-write's own threshold is "low" — see AUTHORITY_CLASS_POLICY);
+  // "delivery" is approval-required at every risk tier regardless, so the risk value chosen for it
+  // does not affect the outcome.
+  it("agrees with codingWorkbenchPolicyEffectFor for every operation, mode, and execute admission", () => {
+    // Derived from the exported classifier itself (`gitRepositoryAgentAuthorityClassFor`), not a
+    // restated list of operation names: a "repository-delivery" class names the "delivery" resource
+    // scope, everything else "workspace-contained" (AUTHORITY_CLASS_POLICY's own mapping). A future
+    // operation added to AUTHORITY_CLASS_BY_OPERATION is picked up here automatically instead of
+    // silently defaulting to "workspace-contained".
+    for (const operation of GIT_REPOSITORY_AGENT_OPERATION_KINDS) {
+      const scope =
+        gitRepositoryAgentAuthorityClassFor(operation) === "repository-delivery"
+          ? "delivery"
+          : "workspace-contained";
+      for (const mode of CODING_WORKBENCH_MODES) {
+        const expected = codingWorkbenchPolicyEffectFor(mode, scope, "low") === "allowed";
+        expect(gitRepositoryAgentOperationAdmitted(operation, "execute", mode)).toBe(expected);
+      }
     }
   });
 });

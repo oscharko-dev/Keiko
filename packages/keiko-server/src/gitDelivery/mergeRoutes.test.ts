@@ -10,6 +10,7 @@
 //           yet still record content-free evidence.
 //   * AC5 — a not-mergeable PR is blocked before the merge adapter is ever called.
 
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -280,10 +281,25 @@ async function startBound(overrides: Partial<UiHandlerDeps> = {}): Promise<void>
   port = started.port;
 }
 
+// #3384 B5-8: `prepareGitDeliveryRequest` now binds every request's `ownerAndRepo` to the resolved
+// workspace's own `origin` remote before admitting it, so this fixture's project root must be a
+// real checkout whose origin resolves to the SAME "oscharko-dev/Keiko" every test body in this file
+// already names — mirrors the identical fixture repair in prRoutes.test.ts.
+function initOriginFixture(root: string): void {
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: root });
+  execFileSync("git", ["remote", "add", "origin", "https://github.com/oscharko-dev/Keiko.git"], {
+    cwd: root,
+  });
+}
+
 beforeEach(() => {
   staticRoot = mkdtempSync(join(tmpdir(), "keiko-gd-merge-static-"));
   store = createInMemoryUiStore();
-  projectId = store.createProject(mkdtempSync(join(tmpdir(), "keiko-gd-merge-proj-"))).path;
+  const projectRoot = mkdtempSync(join(tmpdir(), "keiko-gd-merge-proj-"));
+  initOriginFixture(projectRoot);
+  projectId = store.createProject(projectRoot).path;
 });
 
 afterEach(() => {
@@ -848,6 +864,77 @@ describe("merge approve (mints the approval execute consumes)", () => {
     );
     expect(res.status).toBe(404);
   });
+
+  // Final-audit F2/#3390 (ADR-0138 D2): before this fix, the coarse admission gate hard-denied both
+  // merge/approve and merge/execute with "approval-required" below `autonomous-delivery` and no
+  // production path ever redeemed it — every test above only ever exercised the fixture default
+  // (autonomous-delivery). FAILING BEFORE THE FIX: `modeDeps()`'s approve call returned 403
+  // GIT_DELIVERY_AUTHORITY_DENIED at the `gitDeliveryAuthorityGate` call inside
+  // `createHandleMergeApprove`, never reaching `store.issue()`.
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "mints and consumes a merge approval end to end at %s",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+          {
+            headRef: "feat/x",
+            baseRef: "main",
+            allowDetachedHead: false,
+            allowedPrefixes: ["feat/"],
+          },
+        ),
+      });
+      const adapter = recordingMergeAdapter(READY_PROVIDER);
+      const approvalStore = createInMemoryGitDeliveryApprovalStore();
+      const approveHandler = createHandleMergeApprove({
+        execution: seams({ approvalStore, mergeAdapterFactory: () => adapter.adapter }),
+      });
+      const approveRes = await approveHandler(ctxFor(APPROVE, mergeBody()), modeDeps);
+      expect(approveRes.status).toBe(200);
+      const approveBody = approveRes.body as { approval: GitDeliveryApprovalClaim };
+
+      const executeHandler = createHandleMergeExecute({
+        execution: seams({ approvalStore, mergeAdapterFactory: () => adapter.adapter }),
+      });
+      const executeRes = await executeHandler(
+        ctxFor(EXECUTE, mergeBody({ approval: approveBody.approval })),
+        modeDeps,
+      );
+      const executeBody = executeRes.body as GitDeliveryMergeExecuteResponseBody;
+      expect(executeBody.status).toBe("succeeded");
+      expect(adapter.merges()).toBe(1);
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "still returns approval-required (never mode-denied) at %s when execute carries no approval",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+          {
+            headRef: "feat/x",
+            baseRef: "main",
+            allowDetachedHead: false,
+            allowedPrefixes: ["feat/"],
+          },
+        ),
+      });
+      const adapter = recordingMergeAdapter(READY_PROVIDER);
+      const executeHandler = createHandleMergeExecute({
+        execution: seams({ mergeAdapterFactory: () => adapter.adapter }),
+      });
+      const res = await executeHandler(ctxFor(EXECUTE, mergeBody()), modeDeps);
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ status: "approval-required" });
+      expect(adapter.merges()).toBe(0);
+    },
+  );
 });
 
 describe("merge request validation", () => {
@@ -883,6 +970,21 @@ describe("merge request validation", () => {
     const handler = createHandleMergePreview({ execution: seams() });
     const res = await handler(ctxFor(PREVIEW, mergeBody({ projectId: "/nope" })), deps());
     expect(res.status).toBe(404);
+  });
+
+  // #3384 B5-8: a client-supplied `ownerAndRepo` naming a repository other than the resolved
+  // workspace's OWN `origin` remote (fork, upstream, or an entirely unrelated repository) is refused
+  // — the workspace's live remote is the only repository this route may ever mutate. The workspace's
+  // real origin is "oscharko-dev/Keiko" (this file's shared beforeEach); "someone-else/other-repo" is
+  // format-valid but not that remote.
+  it("refuses a well-formed ownerAndRepo that does not match this project's own Git remote", async () => {
+    const handler = createHandleMergePreview({ execution: seams() });
+    const res = await handler(
+      ctxFor(PREVIEW, mergeBody({ ownerAndRepo: "someone-else/other-repo" })),
+      deps(),
+    );
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_MERGE_REPOSITORY_MISMATCH" } });
   });
 });
 
@@ -923,6 +1025,37 @@ describe("readMergeProviderReadiness — default merge-adapter termination wirin
     createNodeGitMergeAdapterCalls.length = 0;
   });
 
+  it("records unknown readiness and structured throws without provider bodies", async () => {
+    const events: ServerLogEvent[] = [];
+    const result = await readMergeProviderReadiness(
+      WIRING_COMMAND,
+      testWorkspace("/repo"),
+      {
+        activityLog: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+        mergeAdapterFactory: () => ({
+          readMergeReadiness: (): Promise<never> =>
+            Promise.reject(new Error("private provider body")),
+          mergePullRequest: (): Promise<never> => Promise.reject(new Error("must not merge")),
+        }),
+      },
+      () => 1,
+      "readiness-correlation",
+    );
+    expect(result.providerError).toBe(true);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "git.delivery.readiness.observed",
+      correlationId: "readiness-correlation",
+      errorKind: "internal",
+      extra: { state: "unknown", providerError: true },
+    });
+    expect(JSON.stringify(events)).not.toContain("private provider body");
+  });
+
   it("wires the caller's activityLog + correlationId into the default createNodeGitMergeAdapter call", async () => {
     const activity: ServerLogEvent[] = [];
     await readMergeProviderReadiness(
@@ -946,9 +1079,9 @@ describe("readMergeProviderReadiness — default merge-adapter termination wirin
       childPid: 9012,
       windowsTreeKill: "not-attempted",
     });
-    expect(activity).toHaveLength(1);
-    expect(activity[0]?.op).toBe("command.terminated");
-    expect(activity[0]?.correlationId).toBe("request-correlation-merge-wiring");
-    expect(activity[0]?.extra?.childPid).toBe(9012);
+    const terminated = activity.filter((event) => event.op === "command.terminated");
+    expect(terminated).toHaveLength(1);
+    expect(terminated[0]?.correlationId).toBe("request-correlation-merge-wiring");
+    expect(terminated[0]?.extra?.childPid).toBe(9012);
   });
 });

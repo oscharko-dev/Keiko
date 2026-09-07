@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type {
   CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchRuntimeAuthorityEnvelope,
   EditorAgentAction,
 } from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import {
   EDITOR_AGENT_AUTHORITY_MAX_RECORDS,
   EditorAgentAuthorityRegistry,
@@ -608,5 +610,129 @@ describe("EditorAgentAuthorityRegistry.reserveForConnector", () => {
     expect(
       registry.reserveForConnector(registration.authorityRef, ROOT, "governed-assist", NOW),
     ).toEqual({ ok: false, reason: "invalid" });
+  });
+});
+
+// ─── live-journey-readiness-2: prompt-token reservation reconciliation ──────────
+
+describe("EditorAgentAuthorityRegistry.settleRuntimePromptTokens", () => {
+  function runtimeEnvelope(
+    over: Partial<CodingWorkbenchAuthorityEnvelope> = {},
+  ): CodingWorkbenchRuntimeAuthorityEnvelope {
+    const authority = envelope({ taskRefs: ["task-1"], ...over });
+    return {
+      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+      authority,
+      binding: {
+        taskId: "task-1",
+        projectId: "project-1",
+        projectDigest: "a".repeat(64),
+        workspaceId: authority.workspace.workspaceId,
+        workspaceRootDigest: authority.workspace.rootDigest,
+        branchRef: authority.branch.headRef,
+        branchHeadDigest: "b".repeat(64),
+      },
+      intentDigest: "c".repeat(64),
+      nonceDigest: "d".repeat(64),
+      issuedAt: NOW,
+    };
+  }
+
+  function registeredRuntime(over: Partial<CodingWorkbenchAuthorityEnvelope> = {}): {
+    registry: EditorAgentAuthorityRegistry;
+    reference: { runId: string; envelopeDigest: string };
+  } {
+    const registry = new EditorAgentAuthorityRegistry();
+    const runtime = runtimeEnvelope(over);
+    const registration = registry.registerRuntime(runtime, "autonomous-delivery", NOW);
+    if (!registration.ok) throw new Error("runtime registration failed: " + registration.reason);
+    return { registry, reference: registration.authorityRef };
+  }
+
+  it("replaces the booked estimate with the provider's real usage instead of stacking both", () => {
+    const { registry, reference } = registeredRuntime({
+      budget: { maxRuntimeMs: 60_000, maxToolCalls: 20, maxPromptTokens: 1_000, maxPatchBytes: 1 },
+    });
+
+    // A tool-calling client resends its whole growing history: the estimate for this call is 900
+    // (close to the 1,000 ceiling), but the provider reports only 40 real prompt tokens spent.
+    expect(registry.reserveRuntimePromptTokens(reference, 900, NOW)).toEqual({ ok: true });
+    expect(registry.settleRuntimePromptTokens(reference, 900, 40, NOW)).toEqual({ ok: true });
+
+    // Reconciled to 40, so a next call's full-history estimate (well below 1,000) is admitted —
+    // proving the ledger no longer carries the discarded 900-token estimate.
+    expect(registry.reserveRuntimePromptTokens(reference, 960, NOW)).toEqual({ ok: true });
+  });
+
+  it("without settlement, the stale estimate alone exhausts the budget the real usage never would", () => {
+    const { registry, reference } = registeredRuntime({
+      budget: { maxRuntimeMs: 60_000, maxToolCalls: 20, maxPromptTokens: 1_000, maxPatchBytes: 1 },
+    });
+
+    expect(registry.reserveRuntimePromptTokens(reference, 900, NOW)).toEqual({ ok: true });
+    // No settlement call — the next call's real cumulative need (40 + 960 = 1,000) still fits the
+    // budget, but the un-reconciled 900-token estimate already consumed it.
+    expect(registry.reserveRuntimePromptTokens(reference, 960, NOW)).toEqual({
+      ok: false,
+      reason: "authority-budget-exceeded",
+    });
+  });
+
+  it("rejects an over-refund instead of erasing already-booked usage and manufacturing budget", () => {
+    const { registry, reference } = registeredRuntime({
+      budget: { maxRuntimeMs: 60_000, maxToolCalls: 20, maxPromptTokens: 100, maxPatchBytes: 1 },
+    });
+
+    expect(registry.reserveRuntimePromptTokens(reference, 10, NOW)).toEqual({ ok: true });
+    // Only 10 tokens were ever booked on this record. Claiming a 500-token refund must be
+    // rejected outright — clamping the result to zero would silently hand back budget (90
+    // tokens' worth) that was never actually reserved, letting a single bogus settlement erase
+    // real, unrelated usage on the same run.
+    expect(registry.settleRuntimePromptTokens(reference, 500, 0, NOW)).toEqual({
+      ok: false,
+      reason: "authority-resolution-failed",
+    });
+    // Proof the rejection left the ledger untouched: exactly 90 of the 100-token budget remains
+    // (10 still booked) — not the full 100 an accepted over-refund would have wrongly restored.
+    expect(registry.reserveRuntimePromptTokens(reference, 90, NOW)).toEqual({ ok: true });
+    expect(registry.reserveRuntimePromptTokens(reference, 1, NOW)).toEqual({
+      ok: false,
+      reason: "authority-budget-exceeded",
+    });
+  });
+
+  it("rejects a replayed settlement once the first application already reduced the booked total", () => {
+    const { registry, reference } = registeredRuntime({
+      budget: { maxRuntimeMs: 60_000, maxToolCalls: 20, maxPromptTokens: 1_000, maxPatchBytes: 1 },
+    });
+
+    expect(registry.reserveRuntimePromptTokens(reference, 900, NOW)).toEqual({ ok: true });
+    expect(registry.settleRuntimePromptTokens(reference, 900, 40, NOW)).toEqual({ ok: true });
+    // A second, replayed settlement of the SAME reservation must not succeed a second time: only
+    // 40 tokens remain booked, so claiming to refund the original 900-token reservation again is
+    // rejected rather than double-subtracting it from the ledger.
+    expect(registry.settleRuntimePromptTokens(reference, 900, 0, NOW)).toEqual({
+      ok: false,
+      reason: "authority-resolution-failed",
+    });
+  });
+
+  it("rejects a non-finite or negative usage count instead of silently coercing it", () => {
+    const { registry, reference } = registeredRuntime();
+    expect(registry.settleRuntimePromptTokens(reference, -1, 0, NOW)).toEqual({
+      ok: false,
+      reason: "authority-resolution-failed",
+    });
+    expect(registry.settleRuntimePromptTokens(reference, 0, Number.NaN, NOW)).toEqual({
+      ok: false,
+      reason: "authority-resolution-failed",
+    });
+  });
+
+  it("fails closed for an expired runtime authority instead of settling a dead run", () => {
+    const { registry, reference } = registeredRuntime();
+    expect(
+      registry.settleRuntimePromptTokens(reference, 10, 5, "2027-01-01T00:00:00.000Z"),
+    ).toEqual({ ok: false, reason: "authority-expired" });
   });
 });

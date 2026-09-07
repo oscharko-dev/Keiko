@@ -17,7 +17,6 @@ import {
   cloneRepository as fetchCloneRepository,
   createProject,
   fetchGitBranches,
-  fetchGitDeliverySyncExecute,
   fetchGitDeliverySyncPreview,
   fetchGitDeliveryCommitExecute,
   fetchGitDeliveryCommitPreview,
@@ -26,6 +25,11 @@ import {
   fetchGitDeliveryMergePreview,
   fetchGitDeliveryLocalBranchCreate,
   fetchGitDeliveryLocalBranchSwitch,
+  fetchGitDeliveryPrApprove,
+  fetchGitDeliveryPrDescriptionApply,
+  fetchGitDeliveryPrDescriptionApprove,
+  fetchGitDeliveryPrDescriptionPreview,
+  fetchGitDeliveryPrDescriptionStatus,
   fetchGitDeliveryPrExecute,
   fetchGitDeliveryPrPreview,
   fetchGitDeliveryPushExecute,
@@ -39,6 +43,9 @@ import {
   fetchGitSummary,
   fetchGitStatus,
   fetchProjects,
+  proposeCommit,
+  proposeGitDeliverySync,
+  proposePush,
   reconnectProject,
   type GitDeliveryCommitPreviewResponse,
   type GitDeliveryMutationResponse,
@@ -75,12 +82,31 @@ export interface GitClientSeam {
   readonly unstage: typeof fetchGitDeliveryUnstage;
   readonly commitPreview: typeof fetchGitDeliveryCommitPreview;
   readonly commitExecute: typeof fetchGitDeliveryCommitExecute;
+  // F3 (epic #3384 final audit): the standalone Git Client Window's commit/push actions must
+  // satisfy the epic's unconditional approval requirement (correction 5) themselves — unlike
+  // `prApprove`/`prExecute` and `mergeApprove`/`mergeExecute`, whose mint-then-execute pairing is
+  // composed by their own card, `commitChanges`/`runPushSync` compose nothing: they call these
+  // single mint-then-execute seam entries, which resolve to the static "approval-required"
+  // outcome when the mint itself is denied rather than dead-ending (see `proposeCommit`/
+  // `proposePush`, api.ts).
+  readonly commitPropose: typeof proposeCommit;
   readonly syncPreview: typeof fetchGitDeliverySyncPreview;
-  readonly syncExecute: typeof fetchGitDeliverySyncExecute;
+  readonly syncExecute: typeof proposeGitDeliverySync;
   readonly pushPreview: typeof fetchGitDeliveryPushPreview;
   readonly pushExecute: typeof fetchGitDeliveryPushExecute;
+  readonly pushPropose: typeof proposePush;
   readonly prPreview: typeof fetchGitDeliveryPrPreview;
+  // #3387/#3399 (epic #3384, wave8a review): required exactly like `mergeApprove` below — the
+  // generic Git window's PR pane always gets the real approval-before-execute path and the
+  // preview -> approve -> apply Description panel, never a degraded pre-#3387 unapproved execute
+  // or a hidden Description panel. DEFAULT_GIT_CLIENT wires every one of them to the real BFF
+  // clients, and every fixture building a `GitClientSeam` must do the same.
+  readonly prApprove: typeof fetchGitDeliveryPrApprove;
   readonly prExecute: typeof fetchGitDeliveryPrExecute;
+  readonly prDescriptionPreview: typeof fetchGitDeliveryPrDescriptionPreview;
+  readonly prDescriptionApprove: typeof fetchGitDeliveryPrDescriptionApprove;
+  readonly prDescriptionApply: typeof fetchGitDeliveryPrDescriptionApply;
+  readonly prDescriptionStatus: typeof fetchGitDeliveryPrDescriptionStatus;
   readonly mergePreview: typeof fetchGitDeliveryMergePreview;
   readonly mergeApprove: typeof fetchGitDeliveryMergeApprove;
   readonly mergeExecute: typeof fetchGitDeliveryMergeExecute;
@@ -104,12 +130,19 @@ export const DEFAULT_GIT_CLIENT: GitClientSeam = {
   unstage: fetchGitDeliveryUnstage,
   commitPreview: fetchGitDeliveryCommitPreview,
   commitExecute: fetchGitDeliveryCommitExecute,
+  commitPropose: proposeCommit,
   syncPreview: fetchGitDeliverySyncPreview,
-  syncExecute: fetchGitDeliverySyncExecute,
+  syncExecute: proposeGitDeliverySync,
   pushPreview: fetchGitDeliveryPushPreview,
   pushExecute: fetchGitDeliveryPushExecute,
+  pushPropose: proposePush,
   prPreview: fetchGitDeliveryPrPreview,
+  prApprove: fetchGitDeliveryPrApprove,
   prExecute: fetchGitDeliveryPrExecute,
+  prDescriptionPreview: fetchGitDeliveryPrDescriptionPreview,
+  prDescriptionApprove: fetchGitDeliveryPrDescriptionApprove,
+  prDescriptionApply: fetchGitDeliveryPrDescriptionApply,
+  prDescriptionStatus: fetchGitDeliveryPrDescriptionStatus,
   mergePreview: fetchGitDeliveryMergePreview,
   mergeApprove: fetchGitDeliveryMergeApprove,
   mergeExecute: fetchGitDeliveryMergeExecute,
@@ -164,29 +197,21 @@ export interface GitActionFlowState {
   readonly error: string | null;
 }
 
-export function useGitActions(
-  client: GitClientSeam,
-  projectId: string,
-  repositoryRoot?: string,
-): {
+interface MutationFlowController {
   readonly flow: GitActionFlowState;
-  readonly preview: GitDeliveryCommitPreviewResponse | null;
-  readonly previewDraft: string | null;
-  readonly previewError: string | null;
   readonly runMutation: (op: () => Promise<GitMutationOutcome>) => void;
-  readonly runPreview: (messageDraft: string) => void;
-  readonly reset: () => void;
-} {
+  readonly resetFlow: () => void;
+}
+
+// The mutation half of useGitActions: tracks busy/outcome/error for a single in-flight mutation
+// and guards against a late (stale) response overwriting a newer one via seqRef.
+function useMutationFlow(projectId: string, repositoryRoot?: string): MutationFlowController {
   const [flow, setFlow] = useState<GitActionFlowState>({
     busy: false,
     outcome: null,
     error: null,
   });
-  const [preview, setPreview] = useState<GitDeliveryCommitPreviewResponse | null>(null);
-  const [previewDraft, setPreviewDraft] = useState<string | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
   const seqRef = useRef(0);
-  const previewSeqRef = useRef(0);
 
   const runMutation = useCallback(
     (op: () => Promise<GitMutationOutcome>): void => {
@@ -213,6 +238,30 @@ export function useGitActions(
     [projectId, repositoryRoot],
   );
 
+  const resetFlow = useCallback((): void => {
+    seqRef.current += 1;
+    setFlow({ busy: false, outcome: null, error: null });
+  }, []);
+
+  return { flow, runMutation, resetFlow };
+}
+
+interface CommitPreviewController {
+  readonly preview: GitDeliveryCommitPreviewResponse | null;
+  readonly previewDraft: string | null;
+  readonly previewError: string | null;
+  readonly runPreview: (messageDraft: string) => void;
+  readonly resetPreview: () => void;
+}
+
+// The commit-preview half of useGitActions: tracks the last previewed draft/result and guards
+// against a late (stale) preview response overwriting a newer one via previewSeqRef.
+function useCommitPreviewFlow(client: GitClientSeam, projectId: string): CommitPreviewController {
+  const [preview, setPreview] = useState<GitDeliveryCommitPreviewResponse | null>(null);
+  const [previewDraft, setPreviewDraft] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const previewSeqRef = useRef(0);
+
   const runPreview = useCallback(
     (messageDraft: string): void => {
       const seq = previewSeqRef.current + 1;
@@ -237,17 +286,49 @@ export function useGitActions(
     [client, projectId],
   );
 
-  // Invalidates any in-flight mutation (so a late response cannot write into this flow) and clears
-  // the displayed outcome/preview. Callers reset on repository switch to prevent a stale result from
-  // one repository surfacing under another.
-  const reset = useCallback((): void => {
-    seqRef.current += 1;
+  const resetPreview = useCallback((): void => {
     previewSeqRef.current += 1;
-    setFlow({ busy: false, outcome: null, error: null });
     setPreview(null);
     setPreviewDraft(null);
     setPreviewError(null);
   }, []);
 
-  return { flow, preview, previewDraft, previewError, runMutation, runPreview, reset };
+  return { preview, previewDraft, previewError, runPreview, resetPreview };
+}
+
+export function useGitActions(
+  client: GitClientSeam,
+  projectId: string,
+  repositoryRoot?: string,
+): {
+  readonly flow: GitActionFlowState;
+  readonly preview: GitDeliveryCommitPreviewResponse | null;
+  readonly previewDraft: string | null;
+  readonly previewError: string | null;
+  readonly runMutation: (op: () => Promise<GitMutationOutcome>) => void;
+  readonly runPreview: (messageDraft: string) => void;
+  readonly reset: () => void;
+} {
+  const mutationFlow = useMutationFlow(projectId, repositoryRoot);
+  const commitPreview = useCommitPreviewFlow(client, projectId);
+  const { resetFlow } = mutationFlow;
+  const { resetPreview } = commitPreview;
+
+  // Invalidates any in-flight mutation (so a late response cannot write into this flow) and clears
+  // the displayed outcome/preview. Callers reset on repository switch to prevent a stale result from
+  // one repository surfacing under another.
+  const reset = useCallback((): void => {
+    resetFlow();
+    resetPreview();
+  }, [resetFlow, resetPreview]);
+
+  return {
+    flow: mutationFlow.flow,
+    preview: commitPreview.preview,
+    previewDraft: commitPreview.previewDraft,
+    previewError: commitPreview.previewError,
+    runMutation: mutationFlow.runMutation,
+    runPreview: commitPreview.runPreview,
+    reset,
+  };
 }

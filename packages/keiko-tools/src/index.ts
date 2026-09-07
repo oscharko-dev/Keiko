@@ -133,7 +133,7 @@ export { parseUnifiedDiff, PatchParseError, type ParsedPatch } from "./patch-par
 export { computeFileContent, type ApplyOutcome, type HunkConflict } from "./patch-content.js";
 
 // ─── Tool definitions (model-facing JSON-Schema table) ──────────────────────────────
-export { TOOL_DEFINITIONS } from "./schemas.js";
+export { TOOL_DEFINITIONS, UNAVAILABLE_TOOL_CATALOG_BINDING } from "./schemas.js";
 export { EDITOR_AGENT_TOOL_DEFINITIONS } from "./editor-agent-schemas.js";
 
 // ─── Tool host implementation ───────────────────────────────────────────────────────
@@ -289,6 +289,9 @@ export {
   buildPrConvertDraftGraphqlArgv,
   buildPrCreateArgv,
   buildPrMarkReadyGraphqlArgv,
+  buildPrReadArgv,
+  buildPrReadByHeadArgv,
+  buildPrReadBranchHeadArgv,
   buildPrUpdateArgv,
   classifyGitPullRequestRejection,
   evaluateGitPullRequestEffectivePolicy,
@@ -305,12 +308,21 @@ export {
   type GitPrUpdateCommand,
   type GitPrUpdateExecRequest,
   type GitPullRequestAdapter,
+  type GitPullRequestInspectionAdapter,
+  type GitPrInspectionResult,
+  type GitPrReadRequest,
+  type GitPrReadHeadRequest,
   type GitPullRequestCommand,
   type GitPullRequestEffectivePolicy,
   type GitPullRequestLifecycleResult,
   type GitPullRequestOrchestratorDeps,
   type GitPullRequestRejection,
   type GitPullRequestRequest,
+  // #3389: the draft->ready transition port, deliberately isolated from GitPullRequestAdapter — see
+  // git-pr-gateway.ts's GitPullRequestMarkReadyAdapter doc.
+  type GitPrMarkReadyExecRequest,
+  type GitPrMarkReadyExecResult,
+  type GitPullRequestMarkReadyAdapter,
 } from "./git-pr-gateway.js";
 
 // The SEPARATE governed merge authority (Issue #478, ADR-0087). A THIRD parallel gateway to the publish
@@ -395,3 +407,19 @@ export {
 
 // ─── Package version ────────────────────────────────────────────────────────────────
 export { KEIKO_TOOLS_VERSION } from "./version.js";
+
+// ─── Default-branch reader (#3385) ───────────────────────────────────────────────────
+// The read-only `git rev-parse` of `refs/remotes/<alias>/HEAD` the server binds an issue-bound
+// run's base ref to. Same dedicated read allowlist and remote-URL read policy as the worktree
+// snapshot reader; carries the Node spawn effect like `runCommand` above.
+export { readGitDefaultBranch } from "./git-default-branch-node.js";
+
+export {
+  type GitPullRequestBodyAdapter,
+  type GitPrBody,
+  type GitPrBodyUpdateRequest,
+  buildPrBodyReadArgv,
+  buildPrBodyUpdateArgv,
+  validGitPrBodyText,
+  GIT_PR_BODY_MAX_BYTES,
+} from "./git-pr-body.js";

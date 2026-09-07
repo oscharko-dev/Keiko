@@ -21,6 +21,7 @@
 // Lives on the `./internal/git-mutation` subpath (re-exported by git-mutation-node.ts) because it carries
 // the Node execution effect; the pure port, builders, and rules it implements are on the barrel.
 
+import { gitRemoteReadContext, gitRemoteReadWasRedacted } from "./git-remote-read-context.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type {
   GitDeliveryBranchProtection,
@@ -31,6 +32,7 @@ import type {
 import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import {
   buildBranchProtectionArgv,
+  buildBranchMetadataArgv,
   buildCheckRunsArgv,
   buildDeleteMergedBranchArgv,
   buildMergeArgv,
@@ -49,7 +51,16 @@ import {
   type GitMergeReadinessRequest,
   type RawMergeReadiness,
 } from "./git-merge-gateway.js";
-import { CommandCancelledError, CommandTimeoutError } from "./errors.js";
+import {
+  CommandCancelledError,
+  CommandDeniedError,
+  CommandTimeoutError,
+  OutputLimitError,
+} from "./errors.js";
+import { readGitCiFacts, type GitCiProviderReader } from "./git-ci-facts.js";
+import { readGitCiFailureContext } from "./git-ci-failure-context.js";
+import { readGitJourneyFacts, type GitJourneyReader } from "./git-journey-facts.js";
+import type { GitProviderReadRunner } from "./git-provider-observation.js";
 import {
   nodeSpawnFn,
   runCommand,
@@ -401,8 +412,8 @@ async function readHeadChecks(
   } catch {
     return undefined;
   }
-  const result = await runGh(ctx, argv);
-  if (result instanceof Error || result.exitCode !== 0) {
+  const result = await runGh(gitRemoteReadContext(ctx), argv);
+  if (result instanceof Error || gitRemoteReadWasRedacted(result) || result.exitCode !== 0) {
     return undefined;
   }
   const runs = parseJsonArray(result.stdout);
@@ -439,23 +450,29 @@ function approvedReviewCountFrom(reviews: readonly RawReview[]): number {
   return approved;
 }
 
-// Best-effort read of the PR's received approval count. A read failure (network, permission, or an
-// unparseable body) yields 0 — the same "no known approvals" default the hardcoded value used to
-// report unconditionally, but now only as a fallback rather than the permanent answer.
+// Reads the PR approval count. Transport, visibility, truncation or parse failures remain unknown
+// so missing review evidence cannot be mistaken for a verified zero-approval requirement.
 async function readReceivedApprovalCount(
   ctx: RunContext,
   req: GitMergeReadinessRequest,
-): Promise<number> {
+): Promise<number | undefined> {
   let argv: readonly string[];
   try {
     argv = buildPullRequestReviewsArgv(req);
   } catch {
-    return 0;
+    return undefined;
   }
-  const result = await runGh(ctx, argv);
-  if (result instanceof Error || result.exitCode !== 0) return 0;
+  const result = await runGh(gitRemoteReadContext(ctx), argv);
+  if (
+    result instanceof Error ||
+    gitRemoteReadWasRedacted(result) ||
+    result.exitCode !== 0 ||
+    result.truncated ||
+    result.timedOut
+  )
+    return undefined;
   const reviews = parseJsonArray(result.stdout);
-  return reviews === undefined ? 0 : approvedReviewCountFrom(reviews);
+  return reviews === undefined ? undefined : approvedReviewCountFrom(reviews);
 }
 
 interface BranchProtectionProjection {
@@ -527,10 +544,33 @@ function parseBranchProtection(stdout: string): BranchProtectionProjection | und
 type BranchProtectionRead =
   | { readonly outcome: "protected"; readonly projection: BranchProtectionProjection }
   | { readonly outcome: "unprotected" }
+  | { readonly outcome: "unknown" }
   | { readonly outcome: "error" };
 
 function isNotFound(result: CommandResult): boolean {
   return result.exitCode !== 0 && /\bHTTP\s+404\b/u.test(result.stderr);
+}
+
+export type BranchProtectionNotFoundConfirmation = "unprotected" | "unknown";
+
+/**
+ * Shared branch-protection-vs-404 disambiguation (#3388). A branch-protection DETAIL read that
+ * 404s is NOT authoritative for "unprotected" — GitHub also 404s that read for reasons unrelated
+ * to protection state (token scope, ruleset visibility). The only authoritative signal is the
+ * branch's OWN `protected` field, read via a second, dedicated call. Both the merge gateway
+ * (`confirmUnprotectedBranch` below) and the CI-readiness observer (git-ci-facts.ts `protection`)
+ * hit exactly this sequencing once their own not-found detection fires; each supplies its own
+ * branch fetch (own jq projection / transport) and its own "is this branch the confirmed-
+ * unprotected shape" predicate, since those differ by caller (raw `gh` exec vs. the bounded
+ * provider-read port, and a stricter shape check on the CI-readiness side).
+ */
+export async function confirmUnprotectedBranchOnNotFound<TBranch>(params: {
+  readonly fetchBranch: () => Promise<TBranch | undefined>;
+  readonly isConfirmedUnprotected: (branch: TBranch) => boolean;
+}): Promise<BranchProtectionNotFoundConfirmation> {
+  const branch = await params.fetchBranch();
+  if (branch === undefined) return "unknown";
+  return params.isConfirmedUnprotected(branch) ? "unprotected" : "unknown";
 }
 
 async function readBranchProtection(
@@ -543,17 +583,43 @@ async function readBranchProtection(
   } catch {
     return { outcome: "error" };
   }
-  const result = await runGh(ctx, argv);
+  const result = await runGh(gitRemoteReadContext(ctx), argv);
   if (result instanceof Error) return { outcome: "error" };
-  if (isNotFound(result)) return { outcome: "unprotected" };
+  if (gitRemoteReadWasRedacted(result)) return { outcome: "error" };
+  if (result.truncated || result.timedOut) return { outcome: "unknown" };
+  if (isNotFound(result)) return confirmUnprotectedBranch(ctx, req);
   if (result.exitCode !== 0) return { outcome: "error" };
   const projection = parseBranchProtection(result.stdout);
   return projection === undefined ? { outcome: "error" } : { outcome: "protected", projection };
 }
 
+async function confirmUnprotectedBranch(
+  ctx: RunContext,
+  req: GitBranchProtectionRequest,
+): Promise<BranchProtectionRead> {
+  const outcome = await confirmUnprotectedBranchOnNotFound({
+    fetchBranch: async () => {
+      const result = await runGh(gitRemoteReadContext(ctx), buildBranchMetadataArgv(req));
+      if (
+        result instanceof Error ||
+        gitRemoteReadWasRedacted(result) ||
+        result.exitCode !== 0 ||
+        result.truncated ||
+        result.timedOut
+      )
+        return undefined;
+      return parseJsonObject(result.stdout);
+    },
+    isConfirmedUnprotected: (branch) =>
+      branch.name === req.baseBranchName && branch.protected === false,
+  });
+  return { outcome };
+}
+
 export type GitBranchProtectionReadResult =
   | { readonly outcome: "protected"; readonly protection: GitDeliveryBranchProtection }
   | { readonly outcome: "unprotected" }
+  | { readonly outcome: "unknown" }
   | { readonly outcome: "unavailable" };
 
 export async function readNodeGitBranchProtection(
@@ -564,7 +630,7 @@ export async function readNodeGitBranchProtection(
   if (result.outcome === "protected") {
     return { outcome: "protected", protection: result.projection.protection };
   }
-  return result.outcome === "unprotected" ? { outcome: "unprotected" } : { outcome: "unavailable" };
+  return result.outcome === "error" ? { outcome: "unavailable" } : result;
 }
 
 // Reads the PR object (facts only, un-enriched with approval counts). Returns undefined on any
@@ -579,8 +645,9 @@ async function readPrObject(
   } catch {
     return undefined;
   }
-  const prResult = await runGh(ctx, prArgv);
-  if (prResult instanceof Error || prResult.exitCode !== 0) return undefined;
+  const prResult = await runGh(gitRemoteReadContext(ctx), prArgv);
+  if (prResult instanceof Error || gitRemoteReadWasRedacted(prResult) || prResult.exitCode !== 0)
+    return undefined;
   return parseJsonObject(prResult.stdout);
 }
 
@@ -596,8 +663,9 @@ async function readCapableStrategies(
   } catch {
     return [];
   }
-  const cfgResult = await runGh(ctx, cfgArgv);
-  if (cfgResult instanceof Error || cfgResult.exitCode !== 0) return [];
+  const cfgResult = await runGh(gitRemoteReadContext(ctx), cfgArgv);
+  if (cfgResult instanceof Error || gitRemoteReadWasRedacted(cfgResult) || cfgResult.exitCode !== 0)
+    return [];
   const cfgObj = parseJsonObject(cfgResult.stdout);
   return cfgObj !== undefined ? capableStrategiesFrom(cfgObj) : [];
 }
@@ -655,8 +723,12 @@ async function readMergeReadiness(
     readReceivedApprovalCount(ctx, req),
     readBranchProtection(ctx, req),
   ]);
-  if (branchProtection.outcome === "error") {
-    return { providerCapableStrategies, providerError: true };
+  if (
+    branchProtection.outcome === "error" ||
+    branchProtection.outcome === "unknown" ||
+    receivedApprovalCount === undefined
+  ) {
+    return unknownProviderReadiness(factsOnly, providerCapableStrategies);
   }
   const projection =
     branchProtection.outcome === "protected" ? branchProtection.projection : undefined;
@@ -668,6 +740,22 @@ async function readMergeReadiness(
     receivedApprovalCount,
     projection,
   );
+}
+
+function unknownProviderReadiness(
+  facts: RawMergeReadiness,
+  providerCapableStrategies: readonly GitDeliveryMergeStrategyHint[],
+): GitMergeProviderReadiness {
+  const pullRequest = mapRawMergeReadiness(facts);
+  return {
+    providerCapableStrategies,
+    providerError: true,
+    pullRequest: {
+      ...pullRequest,
+      mergeReadiness: { ...pullRequest.mergeReadiness, ready: false },
+    },
+    ...(facts.headSha === undefined ? {} : { headRefHash: facts.headSha }),
+  };
 }
 
 // ─── Merge execute (+ guarded, non-fatal branch deletion) ─────────────────────────────────────────────
@@ -721,5 +809,109 @@ export function createNodeGitMergeAdapter(deps: NodeGitMergeAdapterDeps): GitMer
       readMergeReadiness(ctx, req),
     mergePullRequest: (req: GitMergeExecRequest): Promise<GitMergeExecResult> =>
       mergePullRequest(ctx, req),
+  };
+}
+
+export interface NodeGitCiReaderDeps extends NodeGitMergeAdapterDeps {
+  /** Existing run/checkout admission owner, checked before every bounded provider read. */
+  readonly stillAuthorized: () => boolean;
+  readonly redactText?: (text: string) => string;
+}
+
+interface CiBudget {
+  calls: number;
+  bytes: number;
+  readonly startedAt: number;
+}
+
+function ciAdmissionFailure(
+  deps: NodeGitCiReaderDeps,
+  ctx: RunContext,
+  budget: CiBudget,
+  now: number,
+): Error | undefined {
+  if (ctx.signal.aborted) return new CommandCancelledError("CI observation cancelled");
+  if (!deps.stillAuthorized())
+    return new CommandDeniedError("CI observation authority denied", "gh");
+  if (
+    !Number.isFinite(now) ||
+    !Number.isFinite(budget.startedAt) ||
+    now < budget.startedAt ||
+    now - budget.startedAt >= 30_000
+  )
+    return new CommandTimeoutError("CI observation deadline exhausted", 30_000);
+  if (budget.calls >= 32 || budget.bytes >= 1_048_576)
+    return new OutputLimitError("CI observation budget exhausted", 1_048_576);
+  return undefined;
+}
+
+function boundedCiRunner(
+  ctx: RunContext,
+  deps: NodeGitCiReaderDeps,
+): (argv: readonly string[], typedMetadata?: boolean) => ReturnType<GitProviderReadRunner> {
+  const now = deps.now ?? Date.now;
+  const budget: CiBudget = { calls: 0, bytes: 0, startedAt: now() };
+  return async (argv, typedMetadata = true): Promise<CommandResult | Error> => {
+    const current = now();
+    const failure = ciAdmissionFailure(deps, ctx, budget, current);
+    if (failure !== undefined) return failure;
+    budget.calls += 1;
+    const timeoutMs = Math.max(
+      1,
+      Math.min(ctx.timeoutMs ?? 10_000, budget.startedAt + 30_000 - current),
+    );
+    const requestContext = { ...ctx, timeoutMs };
+    const result = await runGh(
+      typedMetadata ? gitRemoteReadContext(requestContext) : requestContext,
+      argv,
+    );
+    if (!(result instanceof Error))
+      budget.bytes +=
+        Buffer.byteLength(result.stdout, "utf8") + Buffer.byteLength(result.stderr, "utf8");
+    const after = ciAdmissionFailure(deps, ctx, { ...budget, calls: budget.calls - 1 }, now());
+    if (after !== undefined) return after;
+    return !(result instanceof Error) && typedMetadata && gitRemoteReadWasRedacted(result)
+      ? new Error("typed provider metadata was redacted")
+      : result;
+  };
+}
+
+/** Read-only port over the existing governed gh boundary; it exposes no merge or workflow effect. */
+export function createNodeGitCiReader(deps: NodeGitCiReaderDeps): GitCiProviderReader {
+  const ctx = buildRunContext(deps);
+  const captured = { ...deps };
+  const run = boundedCiRunner(ctx, captured);
+  return {
+    readFacts: (target) =>
+      readGitCiFacts({
+        target,
+        run,
+        signal: ctx.signal,
+      }),
+    readFailureContext: (facts) =>
+      readGitCiFailureContext({
+        facts,
+        // Failure detail can contain log text; retain the diagnostic scrub and the SAME budget.
+        run: (argv) => run(argv, false),
+        signal: ctx.signal,
+        stillAuthorized: captured.stillAuthorized,
+        ...(captured.redactText === undefined ? {} : { redactText: captured.redactText }),
+      }),
+  };
+}
+
+/** Read-only human review and closure facts over the same bounded governed GitHub boundary. */
+export function createNodeGitJourneyReader(deps: NodeGitCiReaderDeps): GitJourneyReader {
+  const captured = { ...deps };
+  const ctx = buildRunContext(captured);
+  const run = boundedCiRunner(ctx, captured);
+  return {
+    readJourney: (target) =>
+      readGitJourneyFacts({
+        target,
+        run,
+        signal: ctx.signal,
+        stillAuthorized: captured.stillAuthorized,
+      }),
   };
 }

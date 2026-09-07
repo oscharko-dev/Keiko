@@ -8,14 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import {
-  createServer,
-  type IncomingHttpHeaders,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
-import type { Socket } from "node:net";
+import { type IncomingHttpHeaders, type IncomingMessage } from "node:http";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -56,6 +49,7 @@ import {
   parseOpenCodeChildEndpoint,
 } from "./opencodeHttpClient.js";
 import { buildOpenCodeLaunchProfile } from "./opencodeLaunchProfile.js";
+import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
 import {
   createGeneratedOpenCodeBundle,
   createOpenCodeRuntimeAdapter,
@@ -77,6 +71,7 @@ import {
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeToolSchemas.js";
+import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
 
 const PINNED_RAW_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
 const DIGEST = /^[a-f0-9]{64}$/u;
@@ -98,6 +93,7 @@ type OpenCodeToolSettlementState = "succeeded" | "failed" | "denied" | "cancelle
 export interface OpenCodeRuntimeCompositionInput {
   readonly portable: VerifiedPortableInput;
   readonly stateBaseRoot: string;
+  readonly contextGeometry: OpenCodeContextGeometry;
   readonly capabilities: {
     readonly modelGatewayCapability: string;
     readonly toolFacadeCapability: string;
@@ -106,6 +102,14 @@ export interface OpenCodeRuntimeCompositionInput {
     readonly requestDeadlineMs: number;
     readonly maxInFlight: number;
   };
+  /**
+   * ADR-0043 D11-D14: the tool facade rides the SAME single attested loopback destination as the
+   * model gateway (`<loopback origin>/api/coding-sidecar/tool`) instead of a second ephemeral
+   * listener the Seatbelt egress profile would deny (#3390). Full URL, not a port -- the caller
+   * (productionOpenCodeActivation.ts) derives it from the one loopback origin, never a hard-coded
+   * port.
+   */
+  readonly toolFacadeOrigin: string;
   readonly toolFacade: CodingToolFacade;
   readonly codingToolApprovals?: CodingToolApprovalBridge | undefined;
   readonly governedEventSink: {
@@ -161,10 +165,25 @@ type SafeToolSettlement = NonNullable<
 
 export interface OpenCodeToolBridge {
   readonly url: string;
+  /**
+   * The SAME per-run deadline (ms) the admission gate applies to an in-flight facade call
+   * (`createToolBridgeAdmissionGate`'s `limits.requestDeadlineMs`), exposed so the BFF route can
+   * bound body-ingestion time with the identical number instead of a second, restated constant —
+   * closing the gap where a slow/partial POST could otherwise buffer for as long as Node's generic
+   * socket defaults allow before the gate's own timer ever starts (#3390 follow-up).
+   */
+  readonly requestDeadlineMs: number;
   handle(input: {
     readonly method: "POST";
     readonly headers: Headers;
     readonly body: string;
+    /**
+     * Caller-owned cancellation (e.g. the BFF route observing its client disconnect). Optional:
+     * a caller that has no disconnect signal of its own (the readiness challenge, this file's own
+     * tests) simply omits it. Merged with the admission gate's own deadline abort so both sources
+     * settle the SAME in-flight facade call through the one existing abort path.
+     */
+    readonly signal?: AbortSignal;
   }): Promise<{ readonly status: number; readonly body: string }>;
 }
 
@@ -175,7 +194,7 @@ export interface OpenCodeRuntimeComposition {
 }
 
 export interface OpenCodeRunPort {
-  readonly submitTask: (runId: string, text: string) => Promise<boolean>;
+  readonly submitTask: (runId: string, text: string, initialContext?: string) => Promise<boolean>;
   readonly abortTask: (runId: string) => Promise<boolean>;
   readonly waitForTerminal: (runId: string, signal: AbortSignal) => Promise<boolean>;
   readonly listQuestions: (runId: string) => Promise<readonly OpenCodeQuestionRequest[]>;
@@ -210,7 +229,13 @@ interface ReadyRun extends PreparedRun {
   runtimeAdapter: OpenCodeRuntimeAdapter;
   client: OpenCodeHttpClient;
   sessionId: string;
-  ready: true;
+  // Deliberately NOT narrowed to the literal `true`: `isReadyRun` below only asserts `ready`
+  // was `true` at lookup time. The same mutable object stays reachable through `runs` and can
+  // flip `ready` to `false` (dispose/monitor cleanup) while an async run port call is still
+  // in flight on this reference -- a literal-`true` type would make TS (and, on top of it,
+  // ESLint's no-unnecessary-condition) treat every later `run.ready` check as dead code and
+  // invite deleting the very guard that catches that race.
+  ready: boolean;
 }
 type ReadyRunLookup = (runId: string) => ReadyRun | undefined;
 type QuestionRunPort = Pick<OpenCodeRunPort, "listQuestions" | "answerQuestion" | "rejectQuestion">;
@@ -224,6 +249,7 @@ export function createOpenCodeRuntimeComposition(
     input.toolBridge,
     input.safeActivity?.settleTool,
     input.diagnostics,
+    input.toolFacadeOrigin,
   );
   const runs = new Map<string, PreparedRun>();
   const lifecycle = lifecycleAdapter(input, bridge, runs);
@@ -275,13 +301,13 @@ function createSubmitTask(
   readyRun: ReadyRunLookup,
   diagnostics: ServerDiagnosticSink | undefined,
 ): OpenCodeRunPort["submitTask"] {
-  return async (runId, text): Promise<boolean> => {
+  return async (runId, text, initialContext): Promise<boolean> => {
     const run = readyRun(runId);
     if (run === undefined) return false;
     if (!(await synchronizeTurnBaseline(run))) return false;
     if (!run.runtimeAdapter.armTurn()) return false;
     try {
-      await run.client.promptAsync(run.sessionId, text);
+      await run.client.promptAsync(run.sessionId, text, { initialContext });
       return run.ready;
     } catch (error) {
       recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
@@ -437,10 +463,16 @@ function createAbortTask(readyRun: ReadyRunLookup): OpenCodeRunPort["abortTask"]
         run.runtimeAdapter.cancelTurn();
         return false;
       }
-      const settled = await run.runtimeAdapter.waitForTerminal(
+      const settled = await fixedSessionIsTerminal(
+        run.client,
+        run.sessionId,
         AbortSignal.timeout(ABORT_SETTLEMENT_TIMEOUT_MS),
       );
-      if (!settled) run.runtimeAdapter.cancelTurn();
+      if (settled) {
+        await run.runtimeAdapter.waitForTerminal(AbortSignal.timeout(ABORT_SETTLEMENT_TIMEOUT_MS));
+      } else {
+        run.runtimeAdapter.cancelTurn();
+      }
       return settled && run.ready;
     } catch {
       run.runtimeAdapter.cancelTurn();
@@ -469,9 +501,12 @@ function createQuestionRunPort(readyRun: ReadyRunLookup): QuestionRunPort {
         const pending = (await run.client.listQuestions()).find(
           (request) => request.id === requestId && request.sessionID === run.sessionId,
         );
-        if (pending === undefined || !answersMatchQuestions(pending, answers)) return false;
+        if (pending === undefined || !run.ready) return false;
+        if (!answersMatchQuestions(pending, answers))
+          throw new CodingRuntimeQuestionAnswerRejectedError();
         return (await run.client.answerQuestion(requestId, answers)) && run.ready;
-      } catch {
+      } catch (error) {
+        if (error instanceof CodingRuntimeQuestionAnswerRejectedError) throw error;
         return false;
       }
     },
@@ -605,10 +640,11 @@ async function materializePrepare(
   const profile = buildOpenCodeLaunchProfile({
     executable: request.executablePath,
     stateRoot: runRoot,
+    contextGeometry: input.contextGeometry,
   });
   if (!profile.ok) throw new Error("profile-invalid");
-  const bundle = createGeneratedOpenCodeBundle();
-  const config = JSON.stringify(bundle.config);
+  const bundle = { ...createGeneratedOpenCodeBundle(), config: profile.configValue };
+  const config = profile.config;
   materialize(runRoot, config, bundle.toolSources);
   const password = profile.env.OPENCODE_SERVER_PASSWORD;
   if (password === undefined) throw new Error("password-missing");
@@ -688,6 +724,8 @@ async function handshake(
       eventIdleTimeoutMs: request.timeoutMs,
     });
     const adapter = createOpenCodeRuntimeAdapter({
+      correlationId: request.runId,
+      contextGeometry: input.contextGeometry,
       readiness: readinessPorts(input, bridge, run, client, parsed.endpoint, request),
       governedSink: input.governedEventSink,
       ...(input.safeActivity
@@ -1290,59 +1328,48 @@ interface ToolBridgeExecutionDeps {
   readonly diagnostics: ServerDiagnosticSink | undefined;
 }
 
+// #3390 (ADR-0043 D11-D14): the tool facade no longer opens its own loopback listener -- a second
+// attested destination is exactly the defect the Seatbelt egress profile exists to deny. `handle`
+// is the ONLY dispatch surface; the BFF route (coding-sidecar-tool-facade.ts) calls it directly
+// over the already-attested `/api/coding-sidecar/gateway` loopback port. `active`/`start`/`close`
+// stay so the composition's existing prepare/dispose lifecycle (which gates the readiness
+// challenge and rejects post-close calls with 503) is unchanged; only the transport underneath
+// them changes. A caller that still needs a real HTTP endpoint (the scripted functional harness's
+// fake sidecar) owns its OWN tiny listener wrapping this SAME `handle` -- never a second
+// production path (see opencodeFunctionalHarness/_support.ts).
 function createToolBridge(
   capability: string,
   facade: CodingToolFacade,
   configuredLimits: OpenCodeRuntimeCompositionInput["toolBridge"],
   settleTool: SafeToolSettlement | undefined,
   diagnostics: ServerDiagnosticSink | undefined,
+  toolFacadeOrigin: string,
 ): ToolBridgeController {
   const limits = normalizeToolBridgeLimits(configuredLimits);
-  let server: Server | undefined;
-  let url = "http://127.0.0.1:0/tool";
   let listening = false;
   const gate = createToolBridgeAdmissionGate(limits);
-  const sockets = new Set<Socket>();
   const deps: ToolBridgeExecutionDeps = { capability, facade, settleTool, diagnostics };
   const handle: OpenCodeToolBridge["handle"] = (request) =>
     handleDirectToolRequest(listening, deps, gate, request);
-  const listener = bridgeRequestListener(() => listening, deps, gate);
   const publicPort: OpenCodeToolBridge = {
     get url(): string {
-      return url;
+      return toolFacadeOrigin;
     },
+    requestDeadlineMs: limits.requestDeadlineMs,
     handle,
   };
   return {
     publicPort,
     active: () => listening,
-    start: async (): Promise<void> => {
-      if (listening) return;
-      server = configuredBridgeServer(limits, sockets, listener);
-      url = await listenBridge(server);
+    start: (): Promise<void> => {
       listening = true;
+      return Promise.resolve();
     },
-    close: async (): Promise<void> => {
+    close: (): Promise<void> => {
       listening = false;
-      const current = server;
-      server = undefined;
-      if (current === undefined) return;
       gate.abortAll();
-      for (const socket of sockets) socket.destroy();
-      await closeBridgeServer(current);
+      return Promise.resolve();
     },
-  };
-}
-
-// The listener reads `listening` through the accessor at request time, preserving the closure
-// semantics it replaces: a request that arrives after close() is rejected by the preflight.
-function bridgeRequestListener(
-  isListening: () => boolean,
-  deps: ToolBridgeExecutionDeps,
-  gate: ToolBridgeAdmissionGate,
-): (request: IncomingMessage, response: ServerResponse) => void {
-  return (request, response): void => {
-    void handleIncomingToolRequest(request, response, isListening(), deps, gate.admit);
   };
 }
 
@@ -1352,11 +1379,38 @@ function handleDirectToolRequest(
   gate: ToolBridgeAdmissionGate,
   input: Parameters<OpenCodeToolBridge["handle"]>[0],
 ): Promise<{ readonly status: number; readonly body: string }> {
-  const rejection = preflightToolRequest(active, deps.capability, input.headers, input.body);
-  if (rejection !== undefined) return Promise.resolve(rejection);
+  const preflight = preflightToolRequest(active, deps.capability, input.headers, input.body);
+  if (preflight.outcome === "rejected") {
+    return Promise.resolve({ status: preflight.status, body: preflight.body });
+  }
   const admission = gate.admit();
   if (admission === undefined) return Promise.resolve({ status: 429, body: "" });
-  return executeToolRequest(deps, input.headers, input.body, admission);
+  const detachExternalAbort = bindExternalAbort(input.signal, admission);
+  return executeToolRequest(deps, input.headers, input.body, admission).finally(
+    detachExternalAbort,
+  );
+}
+
+// The route's own disconnect signal (its client going away mid-execution) and the admission
+// gate's deadline timer settle the SAME in-flight facade call through the one existing abort
+// path (`executeToolRequest`'s `raceAbort`) -- this is the only place an external signal joins it,
+// so "abort-on-close" never grows a second cancellation mechanism.
+function bindExternalAbort(
+  signal: AbortSignal | undefined,
+  admission: AdmittedToolRequest,
+): () => void {
+  if (signal === undefined) return () => undefined;
+  if (signal.aborted) {
+    admission.controller.abort(new Error(DISCONNECT_ABORT));
+    return () => undefined;
+  }
+  const onAbort = (): void => {
+    admission.controller.abort(new Error(DISCONNECT_ABORT));
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  return (): void => {
+    signal.removeEventListener("abort", onAbort);
+  };
 }
 
 function createToolBridgeAdmissionGate(limits: ToolBridgeLimits): ToolBridgeAdmissionGate {
@@ -1390,42 +1444,6 @@ function createToolBridgeAdmissionGate(limits: ToolBridgeLimits): ToolBridgeAdmi
   };
 }
 
-function configuredBridgeServer(
-  limits: ToolBridgeLimits,
-  sockets: Set<Socket>,
-  handler: (request: IncomingMessage, response: ServerResponse) => void,
-): Server {
-  const server = createServer(handler);
-  server.headersTimeout = Math.min(limits.requestDeadlineMs, 10_000);
-  server.requestTimeout = limits.requestDeadlineMs;
-  server.keepAliveTimeout = 1_000;
-  server.timeout = limits.requestDeadlineMs;
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
-  });
-  return server;
-}
-
-async function listenBridge(server: Server): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (address === null || typeof address === "string") throw new Error("bridge-bind-failed");
-  return `http://127.0.0.1:${String(address.port)}/tool`;
-}
-
-async function closeBridgeServer(server: Server): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => {
-      if (error === undefined) resolve();
-      else reject(error);
-    });
-  });
-}
-
 function normalizeToolBridgeLimits(
   input: OpenCodeRuntimeCompositionInput["toolBridge"],
 ): ToolBridgeLimits {
@@ -1449,26 +1467,30 @@ function boundedInteger(value: number | undefined, fallback: number, maximum: nu
     : Math.min(maximum, Math.max(1, Math.trunc(value)));
 }
 
+type ToolPreflightResult =
+  | { readonly outcome: "rejected"; readonly status: number; readonly body: string }
+  | { readonly outcome: "admitted" };
+
 function preflightToolRequest(
   active: boolean,
   capability: string,
   headers: Headers,
   body?: string,
-): { readonly status: number; readonly body: string } | undefined {
-  if (!active) return { status: 503, body: "" };
-  if (headers.has("origin")) return { status: 403, body: "" };
+): ToolPreflightResult {
+  if (!active) return { outcome: "rejected", status: 503, body: "" };
+  if (headers.has("origin")) return { outcome: "rejected", status: 403, body: "" };
   const bearer = headers.get("authorization");
   if (bearer === null || !safeEqual(bearer, `Bearer ${capability}`)) {
-    return { status: 401, body: "" };
+    return { outcome: "rejected", status: 401, body: "" };
   }
   const declaredLength = declaredBodyLength(headers.get("content-length"));
   if (declaredLength === "invalid" || declaredLength > CODING_TOOL_MAX_BODY_BYTES) {
-    return { status: 413, body: "" };
+    return { outcome: "rejected", status: 413, body: "" };
   }
   if (body !== undefined && Buffer.byteLength(body, "utf8") > CODING_TOOL_MAX_BODY_BYTES) {
-    return { status: 413, body: "" };
+    return { outcome: "rejected", status: 413, body: "" };
   }
-  return undefined;
+  return { outcome: "admitted" };
 }
 
 function declaredBodyLength(value: string | null): number | "invalid" {
@@ -1652,66 +1674,17 @@ function safeEqual(left: string, right: string): boolean {
   return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
 }
 
-async function handleIncomingToolRequest(
-  request: IncomingMessage,
-  response: ServerResponse,
-  active: boolean,
-  deps: ToolBridgeExecutionDeps,
-  admit: () => AdmittedToolRequest | undefined,
-): Promise<void> {
-  if (request.method !== "POST" || request.url !== "/tool") {
-    response.writeHead(404).end();
-    return;
-  }
-  const headers = incomingHeaders(request.headers);
-  const rejection = preflightToolRequest(active, deps.capability, headers);
-  if (rejection !== undefined) {
-    response.writeHead(rejection.status).end();
-    return;
-  }
-  const admission = admit();
-  if (admission === undefined) {
-    response.writeHead(429).end();
-    return;
-  }
-  const removeDisconnectListeners = bindToolDisconnect(request, response, admission);
-  try {
-    const bytes = await readBoundedBody(request, admission.controller.signal);
-    const body = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    const result = await executeToolRequest(deps, headers, body, admission);
-    if (!response.destroyed) {
-      response.writeHead(result.status, { "Content-Type": "application/json" }).end(result.body);
-    }
-  } catch {
-    admission.release();
-    if (response.destroyed) return;
-    const status = abortReason(admission.controller.signal) === DEADLINE_ABORT ? 408 : 400;
-    response.writeHead(status).end();
-  } finally {
-    removeDisconnectListeners();
-  }
-}
+// Retired production HTTP listener for this bridge (#3390 / ADR-0043 D11-D14): NOTHING in this
+// module calls `.listen()` any more -- `handle()` above is the one dispatch surface, reached over
+// the already-attested `/api/coding-sidecar/gateway` loopback port via
+// coding-sidecar-tool-facade.ts. The two small helpers below (Node headers -> `Headers`, and a
+// byte-budget-bounded body read) are kept, exported, for the ONE caller still allowed to own a
+// real HTTP endpoint around this same `handle`: the scripted functional harness's fake sidecar
+// (opencodeFunctionalHarness/_support.ts) -- never a second production path.
 
-function bindToolDisconnect(
-  request: IncomingMessage,
-  response: ServerResponse,
-  admission: AdmittedToolRequest,
-): () => void {
-  const abortDisconnect = (): void => {
-    admission.controller.abort(new Error(DISCONNECT_ABORT));
-  };
-  const responseClosed = (): void => {
-    if (!response.writableFinished) abortDisconnect();
-  };
-  request.once("aborted", abortDisconnect);
-  response.once("close", responseClosed);
-  return (): void => {
-    request.removeListener("aborted", abortDisconnect);
-    response.removeListener("close", responseClosed);
-  };
-}
-
-function incomingHeaders(values: IncomingHttpHeaders): Headers {
+/** Node's multi-valued header shape flattened onto the Fetch `Headers` `preflightToolRequest` and
+ * the BFF route both read. */
+export function incomingHeaders(values: IncomingHttpHeaders): Headers {
   const headers = new Headers();
   for (const [name, value] of Object.entries(values)) {
     if (typeof value === "string") headers.set(name, value);
@@ -1720,7 +1693,10 @@ function incomingHeaders(values: IncomingHttpHeaders): Headers {
   return headers;
 }
 
-function readBoundedBody(request: IncomingMessage, signal: AbortSignal): Promise<Buffer> {
+/** Same byte budget (`CODING_TOOL_MAX_BODY_BYTES`) as `preflightToolRequest`'s declared-length
+ * check, enforced against the ACTUAL stream as it arrives rather than a (possibly absent or
+ * understated) `content-length` header. */
+export function readBoundedBody(request: IncomingMessage, signal: AbortSignal): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let bytes = 0;

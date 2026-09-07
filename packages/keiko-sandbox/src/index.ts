@@ -7,12 +7,13 @@
 
 export {
   buildWrappedCommand,
+  buildGatewaySeatbeltCommand,
   SEATBELT_DENY_EGRESS_PROFILE,
   DEFAULT_CONTAINER_IMAGE,
 } from "./backends.js";
 export type { WrappedCommand } from "./backends.js";
-export { selectEnforcingBackend } from "./select.js";
-export { planIsolatedRun } from "./plan.js";
+export { selectEnforcingBackend, selectGatewayBackend } from "./select.js";
+export { planIsolatedRun, GATEWAY_UNSUPPORTED_ON_HOST_REASON } from "./plan.js";
 export {
   DEBUG_CAPSULE_RUNTIME_MOUNT,
   planStrictDebugCapsule,
@@ -22,6 +23,19 @@ export {
   type DebugCapsuleImmutableMount,
 } from "./debug-capsule.js";
 export { probeBackends, currentPlatform, isExecutableOnPath } from "./probe.js";
+export {
+  attestDarwinGitExecutable,
+  resolveDarwinGitExecutable,
+  type AttestedDarwinGitExecutable,
+} from "./darwin-git.js";
+export {
+  createRuntimeGatewayConfinement,
+  copyRuntimeGatewayConfinement,
+  isRuntimeGatewayConfinement,
+  buildRuntimeGatewaySeatbeltCommand,
+  type RuntimeGatewayConfinement,
+  type RuntimeGatewayConfinementInput,
+} from "./runtime-gateway.js";
 export {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
   PRODUCTION_RUNTIME_QUALIFICATIONS,
@@ -44,7 +58,9 @@ export type {
 export type {
   BackendAvailability,
   IsolatedRunDecision,
+  IsolatedRunNetworkPolicy,
   IsolatedRunPlan,
+  NetworkGatewayPolicy,
   NetworkPolicy,
   SandboxAttestation,
   SandboxBackend,

@@ -1374,6 +1374,71 @@ export const DE_MESSAGES = {
   "scope.announcement.removed": "Verbundener Scope wurde entfernt.",
   "scope.announcement.updated.one": "Verbundener Scope aktualisiert: 1 Quelle.",
   "scope.announcement.updated.many": "Verbundener Scope aktualisiert: {count} Quellen.",
+  // Issue #3400 (epic #3384) — git-change scope pill (GitChangeScopePill.tsx).
+  "gitChangeScope.status.current": "Aktuell",
+  "gitChangeScope.status.stale": "Veraltet",
+  "gitChangeScope.status.partial": "Teilweise",
+  "gitChangeScope.status.fallback": "Ersatzweise",
+  "gitChangeScope.status.blocked": "Blockiert",
+  "gitChangeScope.status.failed": "Fehlgeschlagen",
+  "gitChangeScope.counts.file": "{count} geänderte Datei",
+  "gitChangeScope.counts.files": "{count} geänderte Dateien",
+  "gitChangeScope.counts.withOmitted": "{shown} von {total} Dateien angezeigt",
+  "gitChangeScope.pill.accessible": "Git-Änderung: {label}",
+  "gitChangeScope.refresh.aria": "{label} aktualisieren",
+  "gitChangeScope.refresh.title": "Vergleich aktualisieren",
+  "gitChangeScope.refresh.error": "Die verbundene Git-Änderung konnte nicht aktualisiert werden.",
+  "gitChangeScope.disconnect.aria": "{label} vom Chat trennen",
+  "gitChangeScope.disconnect.title": "{label} vom Chat trennen",
+  "gitChangeScope.disconnect.error": "Die verbundene Git-Änderung konnte nicht getrennt werden.",
+  "gitChangeScope.announcement.removed": "Verbundene Git-Änderung entfernt.",
+  "gitChangeScope.announcement.connected": "Git-Änderung verbunden.",
+  "gitChangeScope.announcement.stale":
+    "Die verbundene Git-Änderung ist veraltet; zum Fortfahren aktualisieren.",
+  "gitChangeScope.blocked.detachedHead":
+    "Blockiert: HEAD des Repositorys ist losgelöst (detached).",
+  "gitChangeScope.blocked.unbornHead": "Blockiert: Das Repository enthält noch keine Commits.",
+  "gitChangeScope.blocked.missingRef":
+    "Blockiert: Die ausgewählte Referenz konnte nicht aufgelöst werden.",
+  "gitChangeScope.blocked.noPullRequest":
+    "Blockiert: Für diesen Branch wurde kein offener Pull Request gefunden.",
+  "gitChangeScope.blocked.ambiguousPullRequest":
+    "Blockiert: Mehr als ein offener Pull Request passt zu diesem Branch.",
+  "gitChangeScope.blocked.readerUnauthorized":
+    "Blockiert: Der GitHub-Lesezugriff ist für dieses Repository nicht autorisiert.",
+  "gitChangeScope.blocked.remoteUnresolved":
+    "Blockiert: Das Remote des Repositorys konnte nicht aufgelöst werden.",
+  "gitChangeScope.blocked.repositoryUnavailable": "Blockiert: Das Repository ist nicht verfügbar.",
+  "gitChangeScope.blocked.snapshotUnavailable":
+    "Blockiert: Der Vergleich konnte nicht erfasst werden.",
+  "gitChangeScope.blocked.snapshotFailed":
+    "Blockiert: Das Erfassen des Vergleichs ist fehlgeschlagen.",
+  "gitChangeScope.blocked.chatProjectUnavailable":
+    "Blockiert: Das Projekt des Chats ist nicht verfügbar.",
+  "gitChangeScope.connect.title": "Git-Änderung mit Chat verbinden",
+  "gitChangeScope.connect.description":
+    "Verbinden Sie den Vergleich dieses Repositorys mit einem Chat, um dessen Pull-Request-Beschreibung zu erstellen und zu verfeinern.",
+  "gitChangeScope.connect.chatLabel": "Chat",
+  "gitChangeScope.connect.chatPlaceholder": "Chat auswählen",
+  "gitChangeScope.connect.modeLabel": "Vergleich",
+  "gitChangeScope.connect.modeComparison": "Exakter Vergleich Basis…Head",
+  "gitChangeScope.connect.modePullRequest": "Offener Pull Request für diesen Branch",
+  "gitChangeScope.connect.baseLabel": "Basis-Branch",
+  "gitChangeScope.connect.headLabel": "Head-Branch",
+  "gitChangeScope.connect.submit": "Verbinden",
+  "gitChangeScope.connect.cancel": "Abbrechen",
+  "gitChangeScope.connect.openButton": "Mit Chat verbinden",
+  "gitChangeScope.connect.noChats": "Für dieses Repository sind noch keine Chats geöffnet.",
+  "gitChangeScope.connect.chatLoadError":
+    "Die Chats für dieses Repository konnten nicht geladen werden.",
+  "gitChangeScope.connect.error": "Diese Git-Änderung konnte nicht mit dem Chat verbunden werden.",
+  "gitChangeScope.description.preview": "Vorschau",
+  "gitChangeScope.description.previewAria": "Vorschau der Beschreibung für {label}",
+  "gitChangeScope.description.approve": "Genehmigen",
+  "gitChangeScope.description.approveAria": "Beschreibung für {label} genehmigen",
+  "gitChangeScope.description.apply": "Auf PR übernehmen",
+  "gitChangeScope.description.applyAria": "Beschreibung auf {label} übernehmen",
+  "gitChangeScope.description.error": "Die Beschreibungsaktion konnte nicht abgeschlossen werden.",
   "scope.budget.pressure.low": "Niedrig",
   "scope.budget.pressure.moderate": "Mittel",
   "scope.budget.pressure.high": "Hoch",
@@ -2430,4 +2495,31 @@ export const DE_MESSAGES = {
   "manualPodRefresh.state.partial": "Handbuch mit Lücken aktualisiert; einige Seiten fehlen",
   "manualPodRefresh.state.failed":
     "Aktualisierung fehlgeschlagen; das vorherige Handbuch bleibt unverändert",
+  // GovernedPullRequestCard's Description panel (preview -> approve -> apply, epic #3384 #3399).
+  "governedPullRequestCard.description.heading": "Beschreibung",
+  "governedPullRequestCard.description.regionAria": "Pull-Request-Beschreibung",
+  "governedPullRequestCard.description.state.current": "Übernommen und bestätigt",
+  "governedPullRequestCard.description.state.stale": "Veraltet — Vorschau aktualisieren",
+  "governedPullRequestCard.description.state.partial": "Übernommen — teilweise generiert",
+  "governedPullRequestCard.description.state.fallback": "Übernommen — ohne Modell generiert",
+  "governedPullRequestCard.description.state.blocked": "Blockiert — nicht übernommen",
+  "governedPullRequestCard.description.state.failed": "Fehlgeschlagen — nicht übernommen",
+  "governedPullRequestCard.markReadyHint":
+    "Um diesen Pull Request zur Review freizugeben, verwende „Bereit vorschlagen“ im Journey-Ergebnis der Coding Workbench — es bindet die exakte Revision und verifiziert sie vor der Ausführung erneut.",
+  "governedPullRequestCard.description.previewCaption":
+    "Vorschau — Repository-Vorlage und von Menschen verfasster Text außerhalb des verwalteten Bereichs bleiben erhalten",
+  "governedPullRequestCard.description.field.repositoryAria":
+    "Beschreibung Repository (Besitzer/Repo)",
+  "governedPullRequestCard.description.field.prNumberAria": "Beschreibung Pull-Request-Nummer",
+  "governedPullRequestCard.description.field.prNumberHint":
+    "Geben Sie die numerische Pull-Request-Nummer ein, zum Beispiel 1499.",
+  "governedPullRequestCard.description.field.language": "Sprache",
+  "governedPullRequestCard.description.field.languageAria": "Beschreibung Sprache",
+  "governedPullRequestCard.description.action.preview": "Beschreibung als Vorschau anzeigen",
+  "governedPullRequestCard.description.action.approve": "Genehmigen",
+  "governedPullRequestCard.description.action.apply": "Übernehmen",
+  "governedPullRequestCard.description.refreshHint.stale":
+    "Diese Vorschau ist veraltet — der Pull Request hat sich seit der Erstellung geändert. Vorschau erneut abrufen, bevor Sie genehmigen oder übernehmen.",
+  "governedPullRequestCard.description.refreshHint.targetChanged":
+    "Das Repository oder die Pull-Request-Nummer hat sich seit der letzten Vorschau geändert. Vorschau erneut abrufen, bevor Sie genehmigen oder übernehmen.",
 } satisfies MessageCatalog;

@@ -21,12 +21,14 @@ export type {
   Clock,
   CostClass,
   FinishReason,
+  GatewayBrandingConfig,
   GatewayConfig,
   GatewayRequest,
   GatewayStreamChunk,
   InfillingAlignment,
   LatencyClass,
   ModelCapability,
+  ModelCapabilityPricing,
   CompletionInteractionMode,
   CompletionDegradeReason,
   CompletionModelSelection,
@@ -130,6 +132,7 @@ export {
   normalizeApiKeyHeaderName,
   parseGatewayConfig,
   resolveOutboundHttpEgressConfig,
+  resolvePrDescriptionBrandingFromConfig,
   toolCallingConfigurationFingerprint,
   toSafeObject,
   TOOL_CALLING_VERIFICATION_MAX_AGE_MS,
@@ -141,7 +144,18 @@ export {
   type SafeRerankerConfig,
 } from "./config.js";
 
-export { Gateway, type GatewayCallRequest, type GatewayDeps } from "./gateway.js";
+// The ONE env-only Model Gateway provider-admission formula (config.ts's own comment on it):
+// appended here rather than folded into the export block above so this file stays append-only
+// for this addition (KEIKO-final-audit F13/F24).
+export { hasConfiguredEnvModelProvider } from "./config.js";
+
+export {
+  Gateway,
+  type GatewayCallRequest,
+  type GatewayDeps,
+  type GatewaySpendBudget,
+  type GatewaySpendReservation,
+} from "./gateway.js";
 
 // The caller-supplied correlation context a `GatewayCallRequest` may carry (ADR-0173 D5). Exported
 // so a `ModelPort`/`ChatModel` caller outside this package can build one without reaching past the
@@ -224,11 +238,8 @@ export {
   isRealtimeVoice,
   requestRealtimeNegotiation,
   resolveRealtimeVoice,
-  type RealtimeFunctionTool,
   type RealtimeVoice,
   type RealtimeSessionType,
-  type RealtimeSessionTool,
-  type RealtimeSessionToolChoice,
   type RealtimeTranscriptionDelay,
   type RealtimeNegotiationErrorKind,
   type RealtimeNegotiationOutcome,
@@ -324,3 +335,7 @@ export type {
 // deterministic planner, the structured generator, the provider-neutral renderers, and the validate
 // primitives used by the workflow's optional model-assisted refinement stage.
 export * as PromptEnhancer from "./promptEnhancer/index.js";
+export * as PrDescription from "./prDescription/index.js";
+
+export { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
+export type { GatewayToolCatalogBridge } from "./toolCatalogBridge.js";

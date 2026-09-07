@@ -1,3 +1,5 @@
+import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
+import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
 import type {
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchMode,
@@ -5,8 +7,12 @@ import type {
   CodingWorkbenchRuntimeAuthorityFacts,
   CodingWorkbenchRuntimeAuthorityEnvelope,
   CodingWorkbenchRuntimeDelegationUsage,
+  GitDeliveryApprovalClaim,
 } from "@oscharko-dev/keiko-contracts";
-import { codingWorkbenchPolicyEffectFor } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  codingWorkbenchCodeTaskDeliveryEffectFor,
+  codingWorkbenchPolicyEffectFor,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 import type {
   CodingToolAuthorityPort,
@@ -19,9 +25,24 @@ import {
   createCodingToolGovernedDelegate,
   type CodingToolGovernedPorts,
 } from "./codingToolGovernedDelegate.js";
-import type { CodingToolActionRequest } from "./codingToolIpc.js";
-import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge.js";
+import { codingToolRequiredActionClasses, type CodingToolActionRequest } from "./codingToolIpc.js";
+import {
+  isApprovableToolRequest,
+  commitClaim,
+  type CodingToolApprovalProofVerifier,
+} from "./codingToolApprovalBridge.js";
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
+import {
+  createCanonicalCatalogFacadeBridge,
+  type CanonicalCatalogFacadeBridge,
+} from "../tool-catalog/catalogToolFacadeBridge.js";
+import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
+import type { CatalogToolBudgetPort } from "../tool-catalog/catalogToolPorts.js";
+import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import { defaultServerDiagnosticSink, type ServerDiagnosticSink } from "../diagnostics-log.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 
 export interface CodingToolAuthorityContext {
   readonly adapterKind: CodingWorkbenchRuntimeAdapterKind;
@@ -32,19 +53,129 @@ export interface CodingToolAuthorityContext {
   readonly runId?: string | undefined;
   readonly envelopeDigest?: string | undefined;
   readonly authorityExpiresAt?: string | undefined;
+  // F8 (#3413): threads this run's correlation id into the tool-catalog.* lifecycle log lines the
+  // catalog facade bridge emits. productionManagedWorktreeTools.ts's context provider now populates
+  // this from `input.authorityRef.runId`, so those lines join the run's own activity log.
+  // UNKNOWN_CORRELATION_ID (correlation.ts) remains the sanctioned fallback for any other/future
+  // caller that leaves this optional field unset -- never a silently missing id.
+  readonly correlationId?: string | undefined;
 }
 
 export type CodingToolAuthorityContextProvider = () => CodingToolAuthorityContext;
 
 interface CodingToolAuthorityPortOptions {
   readonly approvalProofVerifier?: CodingToolApprovalProofVerifier | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
   readonly requireProducerBinding?: boolean | undefined;
   readonly reserveEditDelegation?: boolean | undefined;
 }
 
 interface RuntimeCodingToolFacadeOptions extends CodingToolFacadeOptions {
+  readonly ciRepairBudget?: CiRepairExecutionBudget;
   readonly approvalProofVerifier?: CodingToolApprovalProofVerifier | undefined;
   readonly reserveEditDelegation?: boolean | undefined;
+  // F8 (#3413): production always wires the real catalog facade bridge; these three let a test
+  // observe its lifecycle log lines or replace its budget port without touching process-wide
+  // state. `disableCatalogBridge` exists only for a test that must isolate an unrelated concern.
+  readonly catalogActivityLog?: ServerLogSink | undefined;
+  readonly catalogDiagnostics?: ServerDiagnosticSink | undefined;
+  readonly catalogBudget?: CatalogToolBudgetPort | undefined;
+  readonly unavailableOptionalTools?: (() => ReadonlySet<OpenCodeOptionalToolName>) | undefined;
+  readonly disableCatalogBridge?: boolean | undefined;
+}
+
+export type CodingToolAuthorityAvailability =
+  { readonly ok: true } | { readonly ok: false; readonly reason: string };
+
+export type CodingToolAuthorityPreview = (
+  capability: string | undefined,
+  request: CodingToolActionRequest,
+) => CodingToolAuthorityAvailability;
+
+/** Non-consuming availability only. Actual dispatch must still call the authoritative admission. */
+export function createCodingToolAuthorityPreview(
+  authority: Pick<
+    CodingRuntimeAuthorityService,
+    "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
+  >,
+  context: CodingToolAuthorityContextProvider,
+  options: CodingToolAuthorityPortOptions = {},
+): CodingToolAuthorityPreview {
+  return (capability, request): CodingToolAuthorityAvailability => {
+    const result = admissionPreflight(
+      authority,
+      context,
+      capability,
+      request,
+      options.approvalProofVerifier,
+      options.requireProducerBinding === true,
+    );
+    return result.ok
+      ? { ok: true }
+      : {
+          ok: false,
+          reason: result.approvalRequired === true ? "approval-required" : result.reason,
+        };
+  };
+}
+
+type AdmissionPreflight =
+  | { readonly ok: false; readonly reason: string; readonly approvalRequired?: boolean }
+  | {
+      readonly ok: true;
+      readonly trusted: CodingToolAuthorityContext;
+      readonly binding: CodingToolProducerBinding | undefined;
+      readonly approvalMatched: boolean;
+    };
+
+function admissionPreflight(
+  authority: Pick<CodingRuntimeAuthorityService, "revalidateCapabilityForMutation">,
+  context: CodingToolAuthorityContextProvider,
+  capability: string | undefined,
+  request: CodingToolActionRequest,
+  verifier: CodingToolApprovalProofVerifier | undefined,
+  requireProducerBinding: boolean,
+  activityLog?: ServerLogSink,
+): AdmissionPreflight {
+  if (capability === undefined) return { ok: false, reason: "capability-missing" };
+  const trusted = context();
+  const binding = producerBinding(trusted);
+  if (requireProducerBinding && binding === undefined)
+    return { ok: false, reason: "producer-binding-missing" };
+  const preflight = authority.revalidateCapabilityForMutation({
+    capability,
+    adapterKind: trusted.adapterKind,
+    liveFacts: trusted.liveFacts,
+    workspaceRoot: trusted.workspaceRoot,
+    deploymentCeiling: trusted.deploymentCeiling,
+    nowIso: trusted.nowIso,
+  });
+  if (!preflight.ok) return { ok: false, reason: preflight.reason };
+  const approvalMatched = approved(preflight.envelope, trusted, request, verifier);
+  if (!actionAllowed(preflight.envelope, request, approvalMatched)) {
+    logAuthorityDenial(activityLog, trusted, preflight.envelope, request);
+    return {
+      ok: false,
+      reason: "action-not-authorized",
+      approvalRequired: !approvalMatched && actionAllowed(preflight.envelope, request, true),
+    };
+  }
+  return { ok: true, trusted, binding, approvalMatched };
+}
+
+function logAuthorityDenial(
+  activityLog: ServerLogSink | undefined,
+  context: CodingToolAuthorityContext,
+  envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+  request: CodingToolActionRequest,
+): void {
+  activityLog?.write({
+    level: "warn",
+    category: "security",
+    op: "coding-runtime.tool-authority.denied",
+    correlationId: context.correlationId ?? UNKNOWN_CORRELATION_ID,
+    extra: { action: request.action, effectiveMode: envelope.authority.effectiveMode },
+  });
 }
 
 export function createCodingToolAuthorityPort(
@@ -57,15 +188,7 @@ export function createCodingToolAuthorityPort(
 ): CodingToolAuthorityPort {
   return {
     admit: (capability, request): ReturnType<CodingToolAuthorityPort["admit"]> =>
-      admit(
-        authority,
-        context,
-        capability,
-        request,
-        options.approvalProofVerifier,
-        options.requireProducerBinding === true,
-        options.reserveEditDelegation === true,
-      ),
+      admit(authority, context, capability, request, options),
   };
 }
 
@@ -77,40 +200,108 @@ function admit(
   context: CodingToolAuthorityContextProvider,
   capability: string | undefined,
   request: CodingToolActionRequest,
-  approvalProofVerifier: CodingToolApprovalProofVerifier | undefined,
-  requireProducerBinding: boolean,
-  reserveEditDelegation: boolean,
+  options: CodingToolAuthorityPortOptions,
 ): ReturnType<CodingToolAuthorityPort["admit"]> {
+  const { approvalProofVerifier, requireProducerBinding, reserveEditDelegation, activityLog } =
+    options;
   if (capability === undefined) return { ok: false, reason: "capability-missing" };
-  const trusted = context();
-  const binding = producerBinding(trusted);
-  if (requireProducerBinding && binding === undefined) {
-    return { ok: false, reason: "producer-binding-missing" };
-  }
-  const preflight = authority.revalidateCapabilityForMutation({
+  const preflight = admissionPreflight(
+    authority,
+    context,
     capability,
-    adapterKind: trusted.adapterKind,
-    liveFacts: trusted.liveFacts,
-    workspaceRoot: trusted.workspaceRoot,
-    deploymentCeiling: trusted.deploymentCeiling,
-    nowIso: trusted.nowIso,
-  });
+    request,
+    approvalProofVerifier,
+    requireProducerBinding === true,
+    activityLog,
+  );
   if (!preflight.ok) return { ok: false, reason: preflight.reason };
-  const approvalMatched = approved(preflight.envelope, trusted, request, approvalProofVerifier);
-  if (!actionAllowed(preflight.envelope, request, approvalMatched)) {
-    return { ok: false, reason: "action-not-authorized" };
-  }
+  const { trusted, binding, approvalMatched } = preflight;
   if (request.action === "edit" && !reserveEditDelegation) {
     return guarded(authority, context, capability, request, binding, false);
   }
   const resolved = resolveDelegation(authority, trusted, capability, request);
   if (!resolved.ok) return { ok: false, reason: resolved.reason };
   if (!actionAllowed(resolved.envelope, request, approvalMatched)) {
+    logAuthorityDenial(activityLog, trusted, resolved.envelope, request);
     return { ok: false, reason: "action-not-authorized" };
   }
   // A one-shot proof is consumed only after the delegation budget has been reserved. Consuming it
   // during preflight or before the resolved envelope is authorized would make a transient failure
   // permanently deny a valid action.
+  return finishAdmission({
+    authority,
+    context,
+    capability,
+    request,
+    binding,
+    trusted,
+    approvalMatched,
+    approvalProofVerifier,
+  });
+}
+
+// #3384 F4: the commit-execute branch of `finishAdmission` no longer consumes the one-use commit
+// approval at admission — see the comment there. It instead threads the un-consumed claim through
+// `mutationGuard.deliveryApproval` wrapped in this shape (never `undefined` itself, so it stays
+// distinguishable from "no delivery approval applies to this request"); `claim` itself legitimately
+// stays `undefined` for a binding-matched, un-tokened redemption. productionManagedWorktreeTools.ts
+// unwraps it and passes `.claim` to `VerifiedCommitService.execute()`, which alone decides — after
+// its own preflight — whether the claim is spent.
+export interface CommitExecutionApproval {
+  readonly claim: GitDeliveryApprovalClaim | undefined;
+}
+
+interface FinishAdmissionInput {
+  readonly authority: Pick<
+    CodingRuntimeAuthorityService,
+    "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
+  >;
+  readonly context: CodingToolAuthorityContextProvider;
+  readonly capability: string;
+  readonly request: CodingToolActionRequest;
+  readonly binding: CodingToolProducerBinding | undefined;
+  readonly trusted: CodingToolAuthorityContext;
+  readonly approvalMatched: boolean;
+  readonly approvalProofVerifier: CodingToolApprovalProofVerifier | undefined;
+}
+function finishAdmission(
+  input: FinishAdmissionInput,
+): ReturnType<CodingToolAuthorityPort["admit"]> {
+  const {
+    authority,
+    context,
+    capability,
+    request,
+    binding,
+    trusted,
+    approvalMatched,
+    approvalProofVerifier,
+  } = input;
+  if (request.action === "delivery" && request.phase === "execute") {
+    if (trusted.runId === undefined) return { ok: false, reason: "action-not-authorized" };
+    // Full access reaches this branch only after both admission passes accepted the exact live
+    // delivery envelope without an approval proof. Preserve that policy authorization as an
+    // approval-free guard; the delivery service rechecks the live mode and this guard at its
+    // effect edge before it can pass `{ required: false }` to the Git kernel.
+    if (!approvalMatched) return guarded(authority, context, capability, request, binding, false);
+    if (isDraftToolRequest(request)) {
+      const lease = approvalProofVerifier?.consumeDelivery?.(trusted.runId, request);
+      if (lease === undefined) return { ok: false, reason: "action-not-authorized" };
+      return guarded(authority, context, capability, request, binding, true, lease);
+    }
+    // #3384 F4 (executeApproved consumes before preflight): the one-use commit approval must
+    // NOT be consumed here. `admissionPreflight`'s `approved()` already confirmed a matching,
+    // unconsumed approval exists (non-mutating `matchesCommit` check) moments ago, so consuming
+    // it now would burn it on every legitimate pre-commit block (staged-tree drift, unresolved
+    // conflict markers) that VerifiedCommitService.execute()'s own preflight runs strictly
+    // AFTER admission. Pass the un-consumed claim through the guard instead; execute() alone
+    // decides whether to spend it, only once that preflight has cleared (mirrors executeOne's
+    // HTTP-route parity comment in verifiedCommitService.ts).
+    const approval: CommitExecutionApproval = { claim: commitClaim(request) };
+    return guarded(authority, context, capability, request, binding, true, approval);
+  }
+  const stage = finishStageAdmission(input);
+  if (stage !== undefined) return stage;
   const approvalVerified = consumeMatchedApproval(
     approvalMatched,
     trusted,
@@ -118,6 +309,38 @@ function admit(
     approvalProofVerifier,
   );
   return guarded(authority, context, capability, request, binding, approvalVerified);
+}
+
+function finishStageAdmission(
+  input: FinishAdmissionInput,
+): ReturnType<CodingToolAuthorityPort["admit"]> | undefined {
+  const {
+    request,
+    trusted,
+    approvalProofVerifier,
+    authority,
+    context,
+    capability,
+    binding,
+    approvalMatched,
+  } = input;
+  if (
+    request.action === "git" &&
+    request.operation === "stage" &&
+    request.phase === "execute" &&
+    approvalMatched
+  ) {
+    const lease =
+      trusted.runId === undefined
+        ? undefined
+        : approvalProofVerifier?.consumeStage?.(trusted.runId, request.proposalId);
+    if (lease === undefined) return { ok: false, reason: "action-not-authorized" };
+    const admitted = guarded(authority, context, capability, request, binding, true);
+    return admitted.ok
+      ? { ...admitted, mutationGuard: { ...admitted.mutationGuard, stageApproval: lease } }
+      : admitted;
+  }
+  return undefined;
 }
 
 function resolveDelegation(
@@ -146,7 +369,7 @@ function approved(
   verifier: CodingToolApprovalProofVerifier | undefined,
 ): boolean {
   return (
-    hasClasses(envelope.authority.actionClasses, requiredClasses(request)) &&
+    actionClassesAllowed(envelope, request, true) &&
     verifyApprovalProof(envelope, context, request, verifier)
   );
 }
@@ -161,8 +384,10 @@ function guarded(
   request: CodingToolActionRequest,
   binding: CodingToolProducerBinding | undefined,
   approvalVerified: boolean,
+  deliveryApproval?: object,
 ): ReturnType<CodingToolAuthorityPort["admit"]> {
   const mutationGuard = {
+    ...(deliveryApproval === undefined ? {} : { deliveryApproval }),
     check: (): boolean => revalidate(authority, context, capability, request, approvalVerified),
     resolveParentAuthority: (): CodingWorkbenchAuthorityEnvelope | undefined =>
       revalidateEnvelope(authority, context, capability, request, approvalVerified)?.authority,
@@ -207,17 +432,92 @@ export function createRuntimeCodingToolFacade(
   governedPorts: CodingToolGovernedPorts,
   options: RuntimeCodingToolFacadeOptions = {},
 ): CodingToolFacade {
+  const activityLog = options.catalogActivityLog ?? processServerLogSink();
+  const authorityPort = createCodingToolAuthorityPort(authority, context, {
+    approvalProofVerifier: options.approvalProofVerifier,
+    activityLog,
+    requireProducerBinding: true,
+    reserveEditDelegation: options.reserveEditDelegation === true,
+  });
   return createCodingToolFacade(
     {
-      authority: createCodingToolAuthorityPort(authority, context, {
-        approvalProofVerifier: options.approvalProofVerifier,
-        requireProducerBinding: true,
-        reserveEditDelegation: options.reserveEditDelegation === true,
-      }),
-      delegate: createCodingToolGovernedDelegate(governedPorts),
+      authority: authorityPort,
+      delegate: createCodingToolGovernedDelegate(governedPorts, options.ciRepairBudget),
     },
-    { ...options, requireInvocationRegistryForEdits: true },
+    {
+      ...options,
+      requireInvocationRegistryForEdits: true,
+      catalogBridge:
+        options.disableCatalogBridge === true
+          ? undefined
+          : catalogFacadeBridgeFor(authority, authorityPort, context, options, activityLog),
+    },
   );
+}
+
+/** F8 (#3413): the production CatalogToolBinder-backed bridge for the facade's covered actions
+ * (see catalogToolFacadeBridge.ts). Built from the same real catalog used to advertise tools to
+ * the model (createOpenCodeGatewayToolCatalogAdvertisement), so there is exactly one catalog, not
+ * a second one grown for this integration. */
+function catalogFacadeBridgeFor(
+  authority: Pick<
+    CodingRuntimeAuthorityService,
+    "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
+  >,
+  authorityPort: CodingToolAuthorityPort,
+  context: CodingToolAuthorityContextProvider,
+  options: RuntimeCodingToolFacadeOptions,
+  activityLog: ServerLogSink,
+): CanonicalCatalogFacadeBridge | undefined {
+  const invocationRegistry =
+    options.invocationRegistry ??
+    createCodingToolInvocationRegistry({ now: lazyContextClock(context) });
+  return createCanonicalCatalogFacadeBridge({
+    authority: authorityPort,
+    previewAuthority: createCodingToolAuthorityPreview(authority, context, {
+      approvalProofVerifier: options.approvalProofVerifier,
+      activityLog,
+      requireProducerBinding: true,
+    }),
+    invocationRegistry,
+    approvalAvailable: options.approvalProofVerifier !== undefined,
+    ...(options.catalogBudget === undefined ? {} : { budgetPort: options.catalogBudget }),
+    logPort: {
+      primary: activityLog,
+      diagnostics: options.catalogDiagnostics ?? defaultServerDiagnosticSink,
+    },
+    context: () => {
+      const current = context();
+      return current.runId === undefined || current.authorityExpiresAt === undefined
+        ? undefined
+        : {
+            runId: current.runId,
+            correlationId: current.correlationId ?? UNKNOWN_CORRELATION_ID,
+            workspaceRoot: current.workspaceRoot,
+            workspaceIdentity: current.liveFacts.binding.workspaceId,
+            workspaceRevision: current.liveFacts.binding.branchHeadDigest,
+            authorityExpiresAt: current.authorityExpiresAt,
+            now: Date.parse(current.nowIso),
+          };
+    },
+    ...(options.unavailableOptionalTools === undefined
+      ? {}
+      : { unavailableOptionalTools: options.unavailableOptionalTools }),
+  });
+}
+
+function lazyContextClock(context: CodingToolAuthorityContextProvider): () => number {
+  let anchor: { readonly epoch: number; readonly elapsed: number } | undefined;
+  return (): number => {
+    const current =
+      anchor ??
+      ({
+        epoch: Date.parse(context().nowIso),
+        elapsed: performance.now(),
+      } as const);
+    anchor = current;
+    return current.epoch + Math.max(0, Math.floor(performance.now() - current.elapsed));
+  };
 }
 
 function revalidate(
@@ -280,38 +580,25 @@ function actionAllowed(
   approvalVerified: boolean,
 ): boolean {
   return (
-    hasClasses(envelope.authority.actionClasses, requiredClasses(request)) &&
+    actionClassesAllowed(envelope, request, approvalVerified) &&
     additionalPolicyAllowed(envelope, request, approvalVerified)
   );
 }
 
-type RuntimeActionClass =
-  CodingWorkbenchRuntimeAuthorityEnvelope["authority"]["actionClasses"][number];
-
-// Static action-class requirement per governed action. Declared as a Record over the full action
-// union minus "git", so adding an action to the union fails to compile until its required classes
-// are named here — a new action can never default to "no class required". "git" is the one action
-// whose requirement depends on the request itself and is resolved below.
-const STATIC_REQUIRED_CLASSES: Readonly<
-  Record<Exclude<CodingToolActionRequest["action"], "git">, readonly RuntimeActionClass[]>
-> = {
-  read: ["workspace-read"],
-  discover: ["workspace-read"],
-  edit: ["workspace-write"],
-  command: ["command-execution"],
-  verification: ["verification"],
-  delivery: ["delivery-substrate"],
-  connector: ["connector-access", "network-egress"],
-  egress: ["network-egress"],
-  skill: ["workspace-read"],
-  "child-agent": ["workspace-read"],
-};
-
-function requiredClasses(request: CodingToolActionRequest): readonly RuntimeActionClass[] {
-  if (request.action === "git") {
-    return [request.operation === "read" ? "workspace-read" : "workspace-write"];
+function actionClassesAllowed(
+  envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+  request: CodingToolActionRequest,
+  approved: boolean,
+): boolean {
+  if (request.action === "git" && request.operation === "stage" && approved)
+    return hasClasses(envelope.authority.actionClasses, ["workspace-read"]);
+  if (request.action === "delivery" && deliveryHasScopedApproval(request)) {
+    if (request.phase === "propose" || request.phase === "reconcile")
+      return hasClasses(envelope.authority.actionClasses, ["workspace-read"]);
+    if (approved && envelope.authority.effectiveMode !== "autonomous-delivery")
+      return hasClasses(envelope.authority.actionClasses, ["workspace-read"]);
   }
-  return STATIC_REQUIRED_CLASSES[request.action];
+  return hasClasses(envelope.authority.actionClasses, codingToolRequiredActionClasses(request));
 }
 
 // The extra policy beyond the required action class, one exhaustive case per governed action.
@@ -327,6 +614,7 @@ function additionalPolicyAllowed(
   switch (request.action) {
     case "read":
     case "discover":
+    case "search":
     case "edit":
       return true;
     case "verification":
@@ -337,17 +625,73 @@ function additionalPolicyAllowed(
         commandAllowed(envelope, request.commandId, approvalVerified)
       );
     case "git":
-      return gitPolicyAllowed(envelope, request.operation);
+      return runtimeGitPolicyAllowed(envelope, request, approvalVerified);
     case "delivery":
-      return deliveryAllowed(envelope, request.intent);
+      return request.intent === "commit" || isDraftToolRequest(request)
+        ? commitPolicyAllowed(envelope, request, approvalVerified)
+        : deliveryAllowed(envelope, request.intent);
     case "connector":
-      return connectorAllowed(envelope, request.scope);
+      return (
+        internetPolicyAllowed(envelope, approvalVerified) &&
+        connectorAllowed(envelope, request.scope)
+      );
     case "egress":
-      return networkAllowed(envelope);
+      return internetPolicyAllowed(envelope, approvalVerified) && networkAllowed(envelope);
     case "skill":
     case "child-agent":
       return true;
   }
+}
+
+function internetPolicyAllowed(
+  envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+  approvalVerified: boolean,
+): boolean {
+  return (
+    approvalVerified ||
+    codingWorkbenchPolicyEffectFor(envelope.authority.effectiveMode, "internet", "medium") ===
+      "allowed"
+  );
+}
+
+function commitPolicyAllowed(
+  envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+  request: Extract<CodingToolActionRequest, { readonly action: "delivery" }>,
+  approved: boolean,
+): boolean {
+  if (request.phase === "propose" || request.phase === "reconcile") return true;
+  if (request.phase !== "execute") return false;
+  const mode = envelope.authority.effectiveMode;
+  const effect = codingWorkbenchCodeTaskDeliveryEffectFor(mode, request.intent);
+  if (effect === "denied" || (!approved && effect !== "allowed")) return false;
+  return (
+    mode !== "autonomous-delivery" ||
+    (isDraftToolRequest(request)
+      ? deliveryAllowed(envelope, request.intent)
+      : hasScope(envelope.authority.connectorScopes, "source-control.write"))
+  );
+}
+
+/**
+ * True only when the current server-resolved envelope authorizes this exact Code-task delivery
+ * execute without a per-action approval. Proposal handlers use this to decide whether they can
+ * expose a model-only ready disposition without opening an operator approval request.
+ */
+export function codingToolFullAccessDeliveryAllowed(
+  authority: CodingWorkbenchAuthorityEnvelope,
+  request: Extract<CodingToolActionRequest, { readonly action: "delivery" }>,
+): boolean {
+  const executeRequest = { ...request, phase: "execute" } as const;
+  return (
+    codingWorkbenchCodeTaskDeliveryEffectFor(authority.effectiveMode, request.intent) ===
+      "allowed" &&
+    hasClasses(authority.actionClasses, codingToolRequiredActionClasses(executeRequest)) &&
+    hasScope(authority.connectorScopes, "source-control.write") &&
+    (request.intent === "commit" ||
+      (authority.networkPolicy.mode !== "deny-all" &&
+        hasClasses(authority.actionClasses, ["network-egress"]) &&
+        hasScope(authority.networkPolicy.connectorScopes, "source-control.write")))
+  );
 }
 
 function workspaceMediumRiskAllowed(
@@ -364,12 +708,41 @@ function workspaceMediumRiskAllowed(
   );
 }
 
+function runtimeGitPolicyAllowed(
+  envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+  request: Extract<CodingToolActionRequest, { readonly action: "git" }>,
+  approved: boolean,
+): boolean {
+  if (request.operation === "ci")
+    return (
+      internetPolicyAllowed(envelope, approved) && connectorAllowed(envelope, "source-control.read")
+    );
+  if (request.operation === "read" || request.operation === "write")
+    return gitPolicyAllowed(envelope, request.operation, approved);
+  if (request.operation === "stage" && request.phase === "execute")
+    return workspaceMediumRiskAllowed(envelope, approved);
+  return true;
+}
+
 function gitPolicyAllowed(
   envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
   operation: "read" | "write",
+  approved: boolean,
 ): boolean {
+  // A raw git "write" bypasses the propose/stage review path entirely, so it carries the same
+  // risk class as a delivery commit and is gated the same way commitPolicyAllowed gates
+  // commit-execute: an approval proof is required unconditionally, in every mode, never merely a
+  // connector scope that (per deliveryScopeGranted) is present at every mode by design.
+  if (operation === "read") return true;
+  const effect = codingWorkbenchPolicyEffectFor(
+    envelope.authority.effectiveMode,
+    "delivery",
+    "high",
+  );
   return (
-    operation === "read" || hasScope(envelope.authority.connectorScopes, "source-control.write")
+    approved &&
+    effect !== "denied" &&
+    hasScope(envelope.authority.connectorScopes, "source-control.write")
   );
 }
 
@@ -405,19 +778,45 @@ function verifyApprovalProof(
   request: CodingToolActionRequest,
   verifier: CodingToolApprovalProofVerifier | undefined,
 ): boolean {
+  if (request.action === "delivery") return matchedCommitApproval(context, request, verifier);
+  const stage = matchedStageApproval(context, request, verifier);
+  if (stage !== undefined) return stage;
   // A proof is required only when the ordinary policy denies this action without one. Keeping this
   // guard inverted prevents an unrelated proof from becoming authority for an already-allowed act.
   if (additionalPolicyAllowed(envelope, request, false)) return false;
-  if (
-    verifier === undefined ||
-    context.runId === undefined ||
-    (request.action !== "command" && request.action !== "verification") ||
-    request.approvalProof === undefined
-  ) {
+  // 3941816393 / authority-matrix-2: "git ci" and "connector" carry the same bounded-action risk
+  // as command/verification and are redeemable through the exact same per-run pendingPermission
+  // approval (see isApprovableToolRequest); a request whose action cannot carry a proof at all, or
+  // that omits one, is rejected the same way verifier.matches already rejects a missing proof.
+  if (verifier === undefined || context.runId === undefined || !isApprovableToolRequest(request)) {
     return false;
   }
   const nowMs = Date.parse(context.nowIso);
   return Number.isFinite(nowMs) && verifier.matches({ runId: context.runId, request, nowMs });
+}
+
+function matchedStageApproval(
+  context: CodingToolAuthorityContext,
+  request: CodingToolActionRequest,
+  verifier: CodingToolApprovalProofVerifier | undefined,
+): boolean | undefined {
+  if (request.action === "git" && request.operation === "stage" && request.phase === "execute")
+    return (
+      context.runId !== undefined &&
+      verifier?.matchesStage?.(context.runId, request.proposalId) === true
+    );
+  return undefined;
+}
+
+function matchedCommitApproval(
+  context: CodingToolAuthorityContext,
+  request: Extract<CodingToolActionRequest, { readonly action: "delivery" }>,
+  verifier: CodingToolApprovalProofVerifier | undefined,
+): boolean {
+  if (context.runId === undefined) return false;
+  return isDraftToolRequest(request)
+    ? verifier?.matchesDelivery?.(context.runId, request) === true
+    : verifier?.matchesCommit?.(context.runId, request) === true;
 }
 
 function consumeApprovalProof(
@@ -425,11 +824,7 @@ function consumeApprovalProof(
   request: CodingToolActionRequest,
   verifier: CodingToolApprovalProofVerifier | undefined,
 ): boolean {
-  if (
-    verifier === undefined ||
-    context.runId === undefined ||
-    (request.action !== "command" && request.action !== "verification")
-  ) {
+  if (verifier === undefined || context.runId === undefined || !isApprovableToolRequest(request)) {
     return false;
   }
   const nowMs = Date.parse(context.nowIso);
@@ -479,4 +874,10 @@ function delegationUsage(request: CodingToolActionRequest): CodingWorkbenchRunti
     patchBytes: request.action === "edit" ? Buffer.byteLength(request.changeset.patch, "utf8") : 0,
     promptTokens: 0,
   };
+}
+
+function deliveryHasScopedApproval(
+  request: Extract<CodingToolActionRequest, { readonly action: "delivery" }>,
+): boolean {
+  return request.intent === "commit" || isDraftToolRequest(request);
 }

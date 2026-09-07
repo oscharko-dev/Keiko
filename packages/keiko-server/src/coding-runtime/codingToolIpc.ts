@@ -1,11 +1,27 @@
+import { parseDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
+import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
+import type { CodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
+import { parseRuntimeGitRequest, type RuntimeGitRequest } from "./codingRuntimeGitIpc.js";
+import {
+  captureCodingRepositoryRequest,
+  type CodingRepositoryRequest,
+  type CodingRepositoryResult,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { isUtf8 } from "node:buffer";
 
 import type {
   AuxiliaryCapabilityOutcomeV1,
+  CodingWorkbenchRuntimeAuthorityEnvelope,
   EditorAgentChangeset,
+  VerificationFailureLocation,
+  VerifiedCommitResult,
+  CodingRuntimeGitResult,
 } from "@oscharko-dev/keiko-contracts";
 import { isCodeTaskSkillId } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
-import { isEditorAgentChangeset } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
+  isContainedAgentPath,
+  isEditorAgentChangeset,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 export const CODING_TOOL_MAX_BODY_BYTES = 262_144;
@@ -17,10 +33,13 @@ export const CODING_TOOL_READ_MAX_START_LINE = 1_000_000;
 export const CODING_TOOL_READ_MAX_WINDOW_LINES = 5_000;
 /** Largest model-visible repository-path discovery result. */
 export const CODING_TOOL_DISCOVER_MAX_RESULTS = 100;
+export const CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS = 8;
+export const CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS = 1_024;
 
 export type CodingToolAction =
   | "read"
   | "discover"
+  | "search"
   | "edit"
   | "command"
   | "verification"
@@ -41,6 +60,21 @@ export interface CodingToolApprovalProof {
   readonly approvalDigest: string;
 }
 
+export type CodingToolVerificationResult =
+  | { readonly commitProof: "recorded" }
+  | {
+      readonly commitProof: "unavailable";
+      readonly reasonCode: "candidate-not-staged" | "candidate-drift";
+      readonly nextAction: "stage-then-verify" | "verify-again";
+    };
+
+/** Bounded, model-only diagnostics for a verifier that executed and failed. */
+export interface CodingToolVerificationFailure {
+  readonly summary: string;
+  readonly locations: readonly VerificationFailureLocation[];
+  readonly truncated: boolean;
+}
+
 export type CodingToolActionRequest =
   | (CodingToolRequestIdentity & {
       readonly action: "read";
@@ -56,6 +90,10 @@ export type CodingToolActionRequest =
       readonly maxResults: number;
     })
   | (CodingToolRequestIdentity & {
+      readonly action: "search";
+      readonly repositoryRequest: CodingRepositoryRequest;
+    })
+  | (CodingToolRequestIdentity & {
       readonly action: "edit";
       readonly changeset: EditorAgentChangeset;
     })
@@ -67,14 +105,36 @@ export type CodingToolActionRequest =
   | (CodingToolRequestIdentity & {
       readonly action: "verification";
       readonly verifierId: string;
+      /** Required only for targeted-test; always a bounded workspace-relative path. */
+      readonly targetPath?: string | undefined;
       readonly approvalProof?: CodingToolApprovalProof | undefined;
     })
-  | (CodingToolRequestIdentity & { readonly action: "git"; readonly operation: "read" | "write" })
+  | (CodingToolRequestIdentity & { readonly action: "git"; readonly operation: "read" })
+  | (CodingToolRequestIdentity & { readonly action: "git"; readonly operation: "write" })
+  | (CodingToolRequestIdentity & {
+      readonly action: "git";
+      readonly operation: "ci";
+      /** #3388: bypasses the cached readiness snapshot for one fresh provider read. */
+      readonly forceFresh?: boolean;
+      /** 3941816393: redeems a Workbench-issued approval for a governed CI observation. */
+      readonly approvalProof?: CodingToolApprovalProof | undefined;
+    })
+  | RuntimeGitRequest
   | (CodingToolRequestIdentity & {
       readonly action: "delivery";
       readonly intent: "commit" | "push" | "pull-request" | "merge";
+      readonly phase?: "propose" | "execute" | "reconcile";
+      readonly title?: string;
+      readonly message?: string;
+      readonly proposalId?: string;
+      readonly approvalProof?: CodingToolApprovalProof | undefined;
     })
-  | (CodingToolRequestIdentity & { readonly action: "connector"; readonly scope: string })
+  | (CodingToolRequestIdentity & {
+      readonly action: "connector";
+      readonly scope: string;
+      /** 3941816393: redeems a Workbench-issued approval for a governed connector read. */
+      readonly approvalProof?: CodingToolApprovalProof | undefined;
+    })
   | (CodingToolRequestIdentity & { readonly action: "egress"; readonly target: string })
   | (CodingToolRequestIdentity & { readonly action: "skill"; readonly skillId: string })
   | (CodingToolRequestIdentity & {
@@ -83,7 +143,74 @@ export type CodingToolActionRequest =
       readonly maxToolCalls: number;
     });
 
+type RuntimeActionClass =
+  CodingWorkbenchRuntimeAuthorityEnvelope["authority"]["actionClasses"][number];
+
+const STATIC_REQUIRED_CLASSES: Readonly<
+  Record<Exclude<CodingToolActionRequest["action"], "git">, readonly RuntimeActionClass[]>
+> = {
+  read: ["workspace-read"],
+  discover: ["workspace-read"],
+  search: ["workspace-read"],
+  edit: ["workspace-write"],
+  command: ["command-execution"],
+  verification: ["verification"],
+  delivery: ["delivery-substrate"],
+  connector: ["connector-access", "network-egress"],
+  egress: ["network-egress"],
+  skill: ["workspace-read"],
+  "child-agent": ["workspace-read"],
+};
+
+/** Exact authority effects required by one parsed coding-tool action. */
+export function codingToolRequiredActionClasses(
+  request: CodingToolActionRequest,
+): readonly RuntimeActionClass[] {
+  if (request.action !== "git") return Object.freeze([...STATIC_REQUIRED_CLASSES[request.action]]);
+  if (request.operation === "ci")
+    return Object.freeze(["workspace-read", "connector-access", "network-egress"]);
+  const effect =
+    request.operation === "write" || request.operation === "stage"
+      ? "workspace-write"
+      : "workspace-read";
+  return Object.freeze([effect]);
+}
+
 export type CodingToolResult =
+  | {
+      readonly status: "completed";
+      readonly evidence: readonly CodingToolEvidence[];
+      readonly verification: CodingToolVerificationResult;
+    }
+  | {
+      readonly status: "completed";
+      readonly evidence: readonly CodingToolEvidence[];
+      readonly ci: CodingRuntimeCiResult;
+    }
+  | {
+      readonly status: "completed";
+      readonly evidence: readonly CodingToolEvidence[];
+      readonly draftDelivery: CodingRuntimeDeliveryResult;
+      /** Fresh bound approval-store disposition; the recorded delivery receipt remains immutable. */
+      readonly approvalDisposition?: "ready" | undefined;
+    }
+  | {
+      readonly status: "completed";
+      readonly evidence: readonly CodingToolEvidence[];
+      readonly git: CodingRuntimeGitResult;
+    }
+  | {
+      readonly status: "completed";
+      readonly evidence: readonly CodingToolEvidence[];
+      readonly verifiedCommit: VerifiedCommitResult;
+      /** Fresh bound approval-store disposition; the recorded commit receipt remains immutable. */
+      readonly approvalDisposition?: "ready" | undefined;
+    }
+  | {
+      readonly status: "completed";
+      readonly evidence: readonly CodingToolEvidence[];
+      readonly search: CodingRepositoryResult;
+    }
   | {
       readonly status: "completed";
       readonly evidence: readonly CodingToolEvidence[];
@@ -94,6 +221,7 @@ export type CodingToolResult =
       readonly status: "failed";
       readonly evidence: readonly CodingToolEvidence[];
       readonly reasonCode?: string | undefined;
+      readonly verificationFailure?: CodingToolVerificationFailure | undefined;
     }
   | {
       readonly status: "completed";
@@ -101,7 +229,7 @@ export type CodingToolResult =
       readonly auxiliary: AuxiliaryCapabilityOutcomeV1;
     }
   | {
-      readonly status: "denied" | "invalid" | "cancelled" | "busy" | "observed";
+      readonly status: "denied" | "invalid" | "cancelled" | "timeout" | "busy" | "observed";
       readonly evidence: readonly [];
     };
 
@@ -183,12 +311,14 @@ function requestFromRecord(value: Record<string, unknown>): CodingToolActionRequ
       return readRequest(value);
     case "discover":
       return discoverRequest(value);
+    case "search":
+      return searchRequest(value);
     case "edit":
       return editRequest(value);
     case "command":
       return approvableNamedRequest(value, "commandId", "command");
     case "verification":
-      return approvableNamedRequest(value, "verifierId", "verification");
+      return verificationRequest(value);
     case "git":
       return gitRequest(value);
     case "delivery":
@@ -219,6 +349,23 @@ function discoverRequest(value: Record<string, unknown>): CodingToolActionReques
         maxResults: value.maxResults,
       }
     : undefined;
+}
+
+// Every field-shape and numeric limit lives in the contract's own `captureCodingRepositoryRequest`
+// (packages/keiko-contracts/src/coding-repository-search.ts) and is never restated here: this
+// parser only carries the envelope identity and hands the untrusted payload straight to it.
+function searchRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
+  const identity = requestIdentity(value);
+  if (
+    identity === undefined ||
+    !hasExactKeys(value, ["action", "actionId", "idempotencyKey", "repositoryRequest"])
+  ) {
+    return undefined;
+  }
+  const repositoryRequest = captureCodingRepositoryRequest(value.repositoryRequest);
+  return repositoryRequest === undefined
+    ? undefined
+    : { ...identity, action: "search", repositoryRequest };
 }
 
 function skillRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
@@ -359,9 +506,16 @@ function approvableNamedRequest(
   const approvalProof = optionalApprovalProof(value);
   if (
     identity === undefined ||
-    !hasAllowedKeys(value, ["action", "actionId", "idempotencyKey", key, "approvalProof"]) ||
+    !hasAllowedKeys(value, [
+      "action",
+      "actionId",
+      "idempotencyKey",
+      key,
+      "approvalProof",
+      ...(action === "verification" ? ["targetPath"] : []),
+    ]) ||
     !nonEmpty(value[key]) ||
-    approvalProof === "invalid"
+    approvalProof.kind === "invalid"
   )
     return undefined;
   if (action === "command")
@@ -369,20 +523,57 @@ function approvableNamedRequest(
       ...identity,
       action,
       commandId: value[key],
-      ...(approvalProof === undefined ? {} : { approvalProof }),
+      ...(approvalProof.kind === "present" ? { approvalProof: approvalProof.proof } : {}),
     };
   return {
     ...identity,
     action,
     verifierId: value[key],
-    ...(approvalProof === undefined ? {} : { approvalProof }),
+    ...(approvalProof.kind === "present" ? { approvalProof: approvalProof.proof } : {}),
   };
 }
 
-function optionalApprovalProof(
-  value: Record<string, unknown>,
-): CodingToolApprovalProof | undefined | "invalid" {
-  if (!Object.hasOwn(value, "approvalProof")) return undefined;
+function validVerificationTarget(targeted: boolean, targetPath: unknown): boolean {
+  if (!targeted) return targetPath === undefined || targetPath === "";
+  return (
+    typeof targetPath === "string" &&
+    targetPath.length > 0 &&
+    isContainedAgentPath(targetPath) &&
+    !isDenied(targetPath)
+  );
+}
+
+function verificationRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
+  const base = approvableNamedRequest(value, "verifierId", "verification");
+  if (base?.action !== "verification") return undefined;
+  const targeted = base.verifierId === "targeted-test";
+  const targetPath = value.targetPath;
+  if (
+    !hasAllowedKeys(value, [
+      "action",
+      "actionId",
+      "idempotencyKey",
+      "verifierId",
+      "targetPath",
+      "approvalProof",
+    ]) ||
+    !validVerificationTarget(targeted, targetPath)
+  ) {
+    return undefined;
+  }
+  return targeted ? { ...base, targetPath: targetPath as string } : base;
+}
+
+/** A single explicit result shape: `optionalApprovalProof` always returns an object literal
+ * discriminated on `kind`, instead of mixing an object payload with the `"invalid"` string
+ * sentinel and a bare `undefined` "not supplied" signal. */
+type ApprovalProofOutcome =
+  | { readonly kind: "absent" }
+  | { readonly kind: "invalid" }
+  | { readonly kind: "present"; readonly proof: CodingToolApprovalProof };
+
+function optionalApprovalProof(value: Record<string, unknown>): ApprovalProofOutcome {
+  if (!Object.hasOwn(value, "approvalProof")) return { kind: "absent" };
   const proof = value.approvalProof;
   if (
     !isRecord(proof) ||
@@ -391,9 +582,12 @@ function optionalApprovalProof(
     typeof proof.approvalDigest !== "string" ||
     !/^[0-9a-f]{64}$/u.test(proof.approvalDigest)
   ) {
-    return "invalid";
+    return { kind: "invalid" };
   }
-  return { approvalId: proof.approvalId, approvalDigest: proof.approvalDigest };
+  return {
+    kind: "present",
+    proof: { approvalId: proof.approvalId, approvalDigest: proof.approvalDigest },
+  };
 }
 
 function simpleNamedRequest(
@@ -402,34 +596,137 @@ function simpleNamedRequest(
   action: "connector" | "egress",
 ): CodingToolActionRequest | undefined {
   const identity = requestIdentity(value);
+  if (identity === undefined) return undefined;
+  if (action === "egress") {
+    return hasExactKeys(value, ["action", "actionId", "idempotencyKey", key]) &&
+      nonEmpty(value[key])
+      ? { ...identity, action, target: value[key] }
+      : undefined;
+  }
+  // 3941816393: `connector`, unlike `egress`, can redeem a Workbench-issued approval proof.
+  const approvalProof = optionalApprovalProof(value);
   if (
-    identity === undefined ||
-    !hasExactKeys(value, ["action", "actionId", "idempotencyKey", key]) ||
-    !nonEmpty(value[key])
+    !hasAllowedKeys(value, ["action", "actionId", "idempotencyKey", key, "approvalProof"]) ||
+    !nonEmpty(value[key]) ||
+    approvalProof.kind === "invalid"
   ) {
     return undefined;
   }
-  return action === "connector"
-    ? { ...identity, action, scope: value[key] }
-    : { ...identity, action, target: value[key] };
+  return {
+    ...identity,
+    action,
+    scope: value[key],
+    ...(approvalProof.kind === "present" ? { approvalProof: approvalProof.proof } : {}),
+  };
 }
 
 function gitRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
   const identity = requestIdentity(value);
-  return identity !== undefined &&
-    hasExactKeys(value, ["action", "actionId", "idempotencyKey", "operation"]) &&
-    (value.operation === "read" || value.operation === "write")
-    ? { ...identity, action: "git", operation: value.operation }
+  if (identity === undefined) return undefined;
+  if (value.operation === "ci") return ciRequest(value, identity);
+  const operation = value.operation;
+  const simple = operation === "read" || operation === "write";
+  if (!simple) return parseRuntimeGitRequest(value, identity);
+  return hasExactKeys(value, ["action", "actionId", "idempotencyKey", "operation"])
+    ? { ...identity, action: "git", operation }
+    : undefined;
+}
+
+// #3388: the CI-observation tool's one optional argument. `forceFresh` stays a plain boolean
+// (never a token/identifier) so it cannot smuggle anything the model does not already own.
+function ciRequest(
+  value: Record<string, unknown>,
+  identity: CodingToolRequestIdentity,
+): CodingToolActionRequest | undefined {
+  // 3941816393: a "git ci" observation can redeem a Workbench-issued approval proof, same as
+  // command/verification (see codingToolApprovalBridge.ts's ApprovableCiObservationRequest).
+  const approvalProof = optionalApprovalProof(value);
+  if (approvalProof.kind === "invalid") return undefined;
+  const base = {
+    ...identity,
+    action: "git" as const,
+    operation: "ci" as const,
+    ...(approvalProof.kind === "present" ? { approvalProof: approvalProof.proof } : {}),
+  };
+  if (!Object.hasOwn(value, "forceFresh"))
+    return hasAllowedKeys(value, [
+      "action",
+      "actionId",
+      "idempotencyKey",
+      "operation",
+      "approvalProof",
+    ])
+      ? base
+      : undefined;
+  return hasAllowedKeys(value, [
+    "action",
+    "actionId",
+    "idempotencyKey",
+    "operation",
+    "forceFresh",
+    "approvalProof",
+  ]) && typeof value.forceFresh === "boolean"
+    ? { ...base, forceFresh: value.forceFresh }
     : undefined;
 }
 
 function deliveryRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
   const identity = requestIdentity(value);
-  return identity !== undefined &&
-    hasExactKeys(value, ["action", "actionId", "idempotencyKey", "intent"]) &&
-    deliveryIntent(value.intent)
-    ? { ...identity, action: "delivery", intent: value.intent }
-    : undefined;
+  if (identity === undefined || !deliveryIntent(value.intent)) return undefined;
+  if (value.phase === undefined)
+    return hasExactKeys(value, ["action", "actionId", "idempotencyKey", "intent"])
+      ? { ...identity, action: "delivery", intent: value.intent }
+      : undefined;
+  if (value.intent !== "commit") return parseDraftToolRequest(value, identity);
+  if (value.phase === "propose") return commitProposalRequest(value, identity);
+  return commitExecutionRequest(value, identity);
+}
+function commitExecutionRequest(
+  value: Record<string, unknown>,
+  identity: CodingToolRequestIdentity,
+): CodingToolActionRequest | undefined {
+  if (value.phase !== "execute" || !nonEmpty(value.proposalId)) return undefined;
+  const approvalProof = optionalApprovalProof(value);
+  if (
+    approvalProof.kind === "invalid" ||
+    !hasAllowedKeys(value, [
+      "action",
+      "actionId",
+      "idempotencyKey",
+      "intent",
+      "phase",
+      "proposalId",
+      "approvalProof",
+    ])
+  )
+    return undefined;
+  return {
+    ...identity,
+    action: "delivery",
+    intent: "commit",
+    phase: "execute",
+    proposalId: value.proposalId,
+    ...(approvalProof.kind === "present" ? { approvalProof: approvalProof.proof } : {}),
+  };
+}
+function commitProposalRequest(
+  value: Record<string, unknown>,
+  identity: CodingToolRequestIdentity,
+): CodingToolActionRequest | undefined {
+  if (
+    !hasExactKeys(value, ["action", "actionId", "idempotencyKey", "intent", "phase", "message"]) ||
+    !nonEmpty(value.message)
+  )
+    return undefined;
+  if (Buffer.byteLength(value.message, "utf8") > 8192 || value.message.includes("\0"))
+    return undefined;
+  return {
+    ...identity,
+    action: "delivery",
+    intent: "commit",
+    phase: "propose",
+    message: value.message,
+  };
 }
 
 function requestIdentity(value: Record<string, unknown>): CodingToolRequestIdentity | undefined {

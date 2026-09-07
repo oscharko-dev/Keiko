@@ -43,12 +43,43 @@ export interface CodingRuntimeEditorMutationLeaseRegistration {
   readonly mutationGuard: () => boolean;
 }
 
+/**
+ * The result of waiting for every mutation lease registered against one run to settle:
+ *  - "idle-succeeded": no lease is outstanding, and none of the CLAIMED mutations among them
+ *    failed. A lease that was discarded before it was ever claimed (a refusal that never reached
+ *    the commit boundary -- see `discard` below) does not count against this.
+ *  - "idle-failed": no lease is outstanding, but at least one CLAIMED mutation did not succeed --
+ *    a real, attempted change to the tree that failed.
+ *  - "not-idle": the wait was abandoned (aborted or disposed) while a lease was still
+ *    outstanding.
+ */
+export type CodingRuntimeMutationIdleOutcome = "idle-succeeded" | "idle-failed" | "not-idle";
+export type CodingRuntimeMutationOutcome = "succeeded" | "failed" | "cancelled";
+
 export interface CodingRuntimeEditorMutationLeaseCoordinator {
   readonly lease: CodingRuntimeEditorMutationLeasePort;
   readonly register: (registration: CodingRuntimeEditorMutationLeaseRegistration) => boolean;
+  /**
+   * Abandons a lease that this coordinator's OWN caller (codingToolReadEditPorts.ts) registered
+   * at prepare time but never carried to the editor route -- e.g. NO_ACTIVE_SESSION (no live
+   * Workbench bridge within the bounded wait) or WORKSPACE_ACCESS_LOST. Because the true commit
+   * boundary is `lease.claim()` (called from agentRoutes.ts's applyChangeset, immediately before
+   * the tree is touched), a lease discarded here is UNCLAIMED by construction on every production
+   * path today, so it never marks the run's mutation outcome failed: a refusal that never touched
+   * the tree must not fail an otherwise successful turn (epic #3384 cascade -- a refused edit used
+   * to fail the whole run with "pending-mutations-unsettled" even though nothing was pending or
+   * attempted). This is intentionally distinct from `lease.discard` (the general port capability
+   * every attached lease port exposes to ITS OWN caller), whose existing contract of marking the
+   * outcome failed on discard is unchanged.
+   */
   readonly discard: (request: CodingRuntimeEditorMutationLeaseRequest) => boolean;
   readonly revokeRun: (runId: string) => boolean;
-  readonly waitForIdle: (signal: AbortSignal) => Promise<boolean>;
+  readonly waitForIdle: (signal: AbortSignal) => Promise<CodingRuntimeMutationIdleOutcome>;
+  /** Capture before dispatch: only this exact lease's terminal effect can complete the tool. */
+  readonly waitForMutation: (
+    request: CodingRuntimeEditorMutationLeaseRequest,
+    signal: AbortSignal,
+  ) => Promise<CodingRuntimeMutationOutcome>;
   readonly dispose: () => void;
 }
 
@@ -86,11 +117,12 @@ export function createCodingRuntimeEditorMutationLeaseBroker(): CodingRuntimeEdi
 
 interface LeaseRecord extends CodingRuntimeEditorMutationLeaseRegistration {
   readonly key: string;
+  readonly waiters: Set<(outcome: CodingRuntimeMutationOutcome) => void>;
   claimed: boolean;
 }
 
 interface IdleWaiter {
-  readonly resolve: (idle: boolean) => void;
+  readonly resolve: (result: CodingRuntimeMutationIdleOutcome) => void;
   readonly signal: AbortSignal;
   readonly onAbort: () => void;
 }
@@ -198,15 +230,24 @@ export function createCodingRuntimeEditorMutationLeaseCoordinator(
     register: (registration): boolean =>
       registerRecord(records, revokedRuns, registration, disposed),
     discard: (request): boolean =>
-      completeRecord(records, idleWaiters, outcome, request, false, disposed),
+      discardUnclaimedLease(records, idleWaiters, outcome, request, disposed),
     revokeRun: (runId): boolean =>
       revokeRun(deps, records, revokedRuns, idleWaiters, outcome, runId, disposed),
-    waitForIdle: (signal): Promise<boolean> =>
+    waitForIdle: (signal): Promise<CodingRuntimeMutationIdleOutcome> =>
       waitForIdle(records, idleWaiters, outcome, signal, disposed),
+    waitForMutation: (request, signal): Promise<CodingRuntimeMutationOutcome> =>
+      waitForMutation(
+        records,
+        idleWaiters,
+        outcome,
+        findRecord(records, request, disposed),
+        signal,
+      ),
     dispose: (): void => {
       disposed = true;
+      for (const record of records.values()) settleMutation(record, "cancelled");
       records.clear();
-      settleIdleWaiters(idleWaiters, false);
+      settleIdleWaiters(idleWaiters, "not-idle");
     },
   };
 }
@@ -236,6 +277,7 @@ function registerRecord(
     idempotencyKey: registration.idempotencyKey,
     requiresReview: registration.requiresReview,
     mutationGuard: registration.mutationGuard,
+    waiters: new Set(),
     claimed: false,
   });
   return true;
@@ -261,6 +303,7 @@ function claimRecord(
     return true;
   }
   records.delete(record.key);
+  settleMutation(record, "failed");
   outcome.latestSucceeded = false;
   settleIfIdle(records, idleWaiters, outcome);
   return false;
@@ -277,6 +320,31 @@ function completeRecord(
   const record = findRecord(records, request, disposed);
   if (record === undefined || !records.delete(record.key)) return false;
   outcome.latestSucceeded = succeeded && record.claimed;
+  settleMutation(record, succeeded && record.claimed ? "succeeded" : "failed");
+  settleIfIdle(records, idleWaiters, outcome);
+  return true;
+}
+
+// See the `discard` doc comment on `CodingRuntimeEditorMutationLeaseCoordinator`: this is the
+// coordinator's OWN discard, reached only when codingToolReadEditPorts.ts abandons a lease it
+// registered at prepare time but never carried past the bounded editor-session wait. On every
+// production path today `record.claimed` is false here -- `claim()` only flips it true at the
+// true commit boundary in agentRoutes.ts's applyChangeset, immediately before the tree is
+// touched -- so this discard leaves `outcome.latestSucceeded` exactly as it was: a refusal that
+// never reached that boundary must not fail an otherwise successful turn. A CLAIMED record
+// reaching this path (no caller produces one today; kept for defense-in-depth) still marks the
+// outcome failed, because an abandoned CLAIMED mutation is a real, unresolved change to the tree.
+function discardUnclaimedLease(
+  records: Map<string, LeaseRecord>,
+  idleWaiters: Set<IdleWaiter>,
+  outcome: MutationOutcome,
+  request: CodingRuntimeEditorMutationLeaseRequest,
+  disposed: boolean,
+): boolean {
+  const record = findRecord(records, request, disposed);
+  if (record === undefined || !records.delete(record.key)) return false;
+  settleMutation(record, "failed");
+  if (record.claimed) outcome.latestSucceeded = false;
   settleIfIdle(records, idleWaiters, outcome);
   return true;
 }
@@ -294,12 +362,59 @@ function revokeRun(
   revokedRuns.add(runId);
   deps.invocationRegistry.revokeRun(runId);
   for (const [key, record] of records) {
-    if (record.authorityRef.runId === runId) records.delete(key);
+    if (record.authorityRef.runId === runId) {
+      records.delete(key);
+      settleMutation(record, "cancelled");
+    }
   }
   outcome.latestSucceeded = false;
   settleIfIdle(records, idleWaiters, outcome);
   deps.cancelPendingByAuthorityRun(runId);
   return true;
+}
+
+function waitForMutation(
+  records: Map<string, LeaseRecord>,
+  idleWaiters: Set<IdleWaiter>,
+  outcome: MutationOutcome,
+  record: LeaseRecord | undefined,
+  signal: AbortSignal,
+): Promise<CodingRuntimeMutationOutcome> {
+  if (record === undefined) return Promise.resolve("failed");
+  if (signal.aborted) {
+    cancelUnclaimedMutation(records, idleWaiters, outcome, record);
+    return Promise.resolve("cancelled");
+  }
+  return new Promise((resolve) => {
+    const onAbort = (): void => {
+      record.waiters.delete(onComplete);
+      cancelUnclaimedMutation(records, idleWaiters, outcome, record);
+      resolve("cancelled");
+    };
+    const onComplete = (result: CodingRuntimeMutationOutcome): void => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(signal.aborted ? "cancelled" : result);
+    };
+    record.waiters.add(onComplete);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function cancelUnclaimedMutation(
+  records: Map<string, LeaseRecord>,
+  idleWaiters: Set<IdleWaiter>,
+  outcome: MutationOutcome,
+  record: LeaseRecord,
+): void {
+  if (record.claimed || records.get(record.key) !== record) return;
+  records.delete(record.key);
+  settleMutation(record, "cancelled");
+  settleIfIdle(records, idleWaiters, outcome);
+}
+
+function settleMutation(record: LeaseRecord, outcome: CodingRuntimeMutationOutcome): void {
+  for (const waiter of record.waiters) waiter(outcome);
+  record.waiters.clear();
 }
 
 function waitForIdle(
@@ -308,15 +423,15 @@ function waitForIdle(
   outcome: MutationOutcome,
   signal: AbortSignal,
   disposed: boolean,
-): Promise<boolean> {
-  if (disposed || signal.aborted) return Promise.resolve(false);
-  if (records.size === 0) return Promise.resolve(outcome.latestSucceeded !== false);
+): Promise<CodingRuntimeMutationIdleOutcome> {
+  if (disposed || signal.aborted) return Promise.resolve("not-idle");
+  if (records.size === 0) return Promise.resolve(idleOutcome(outcome));
   return new Promise((resolve) => {
     const waiter: IdleWaiter = {
       resolve,
       signal,
       onAbort: (): void => {
-        settleIdleWaiter(waiters, waiter, false);
+        settleIdleWaiter(waiters, waiter, "not-idle");
       },
     };
     waiters.add(waiter);
@@ -324,25 +439,36 @@ function waitForIdle(
   });
 }
 
+function idleOutcome(outcome: MutationOutcome): CodingRuntimeMutationIdleOutcome {
+  return outcome.latestSucceeded === false ? "idle-failed" : "idle-succeeded";
+}
+
 function settleIfIdle(
   records: ReadonlyMap<string, LeaseRecord>,
   waiters: Set<IdleWaiter>,
   outcome: MutationOutcome,
 ): void {
-  if (records.size === 0) settleIdleWaiters(waiters, outcome.latestSucceeded !== false);
+  if (records.size === 0) settleIdleWaiters(waiters, idleOutcome(outcome));
 }
 
-function settleIdleWaiters(waiters: Set<IdleWaiter>, idle: boolean): void {
+function settleIdleWaiters(
+  waiters: Set<IdleWaiter>,
+  result: CodingRuntimeMutationIdleOutcome,
+): void {
   // Snapshot before iterating: settling a waiter may synchronously register a NEW waiter, which
   // must wait for the next settle pass instead of running inside this one.
   const snapshot = Array.from(waiters);
-  for (const waiter of snapshot) settleIdleWaiter(waiters, waiter, idle);
+  for (const waiter of snapshot) settleIdleWaiter(waiters, waiter, result);
 }
 
-function settleIdleWaiter(waiters: Set<IdleWaiter>, waiter: IdleWaiter, idle: boolean): void {
+function settleIdleWaiter(
+  waiters: Set<IdleWaiter>,
+  waiter: IdleWaiter,
+  result: CodingRuntimeMutationIdleOutcome,
+): void {
   if (!waiters.delete(waiter)) return;
   waiter.signal.removeEventListener("abort", waiter.onAbort);
-  waiter.resolve(idle);
+  waiter.resolve(result);
 }
 
 function findRecord(

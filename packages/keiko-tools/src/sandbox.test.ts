@@ -3,7 +3,9 @@ import {
   buildChildEnv,
   buildSandboxEnv,
   collectCredentialEnvValues,
+  collectCredentialLikeEnvValues,
   collectSensitiveEnvValues,
+  isCredentialEnvName,
   isCommandAllowed,
 } from "./sandbox.js";
 import {
@@ -56,6 +58,82 @@ describe("collectSensitiveEnvValues", () => {
   it("skips short values to avoid over-redaction", () => {
     const values = collectSensitiveEnvValues({ TINY: "ab" }, []);
     expect(values).not.toContain("ab");
+  });
+});
+
+// The scrub set for `outputScrub: "credentials-only"`. The default collector treats every
+// non-allowlisted value as a secret, which is right for diagnostic output and wrong for the one read
+// whose stdout IS the value the caller needs: a configured remote URL carries an owner/repository
+// name that a CI runner also exports as GITHUB_REPOSITORY, so under the default mode the URL came
+// back as `[REDACTED]` and every consumer addressed a repository that does not exist.
+describe("collectCredentialLikeEnvValues — credentials-only scrub set", () => {
+  it("scrubs governed credential names and credential-shaped names, never context names", () => {
+    const values = collectCredentialLikeEnvValues(
+      {
+        GH_TOKEN: "ghp_governed-token-value",
+        MY_DEPLOY_TOKEN: "custom-token-value",
+        AWS_SECRET_ACCESS_KEY: "aws-secret-value",
+        DB_PASSWORD: "database-password",
+        GITHUB_REPOSITORY: "alicedev-team/App",
+        GITHUB_REPOSITORY_OWNER: "alicedev-team",
+        USER: "alicedev",
+        GIT_AUTHOR_NAME: "Alice Developer",
+      },
+      [],
+    );
+
+    expect(values).toEqual(
+      expect.arrayContaining([
+        "ghp_governed-token-value",
+        "custom-token-value",
+        "aws-secret-value",
+        "database-password",
+      ]),
+    );
+    expect(values).not.toContain("alicedev-team/App");
+    expect(values).not.toContain("alicedev-team");
+    expect(values).not.toContain("alicedev");
+    expect(values).not.toContain("Alice Developer");
+  });
+
+  it("includes the policy's own credential list even under an unrelated name", () => {
+    const values = collectCredentialLikeEnvValues({ CUSTOM_CRED: "policy-listed-value" }, [
+      "CUSTOM_CRED",
+    ]);
+
+    expect(values).toEqual(["policy-listed-value"]);
+  });
+
+  it("keeps the short-value floor so a tiny token does not over-redact", () => {
+    expect(collectCredentialLikeEnvValues({ GH_TOKEN: "abc" }, [])).toEqual([]);
+  });
+
+  // `AUTH` is deliberately absent from the name pattern: GIT_AUTHOR_NAME carries a person's name,
+  // and a name is exactly the kind of value this mode exists to let through.
+  it("classifies names by credential-bearing words only", () => {
+    for (const name of [
+      "GH_TOKEN",
+      "NPM_TOKEN",
+      "X_SECRET",
+      "DB_PASSWORD",
+      "A_PASSWD",
+      "SVC_CREDENTIALS",
+      "KEIKO_API_KEY",
+      "SSH_PRIVATE_KEY",
+      "S3_ACCESS_KEY",
+    ]) {
+      expect(isCredentialEnvName(name), name).toBe(true);
+    }
+    for (const name of [
+      "GITHUB_REPOSITORY",
+      "USER",
+      "HOME",
+      "GIT_AUTHOR_NAME",
+      "SSH_AUTH_SOCK",
+      "PATH",
+    ]) {
+      expect(isCredentialEnvName(name), name).toBe(false);
+    }
   });
 });
 

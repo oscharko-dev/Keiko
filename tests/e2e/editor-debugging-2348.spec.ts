@@ -474,17 +474,24 @@ async function capturedStartedSessionCount(page: Page): Promise<number> {
   return capturedStartedSessionIds(await capturedDebugSessionEvents(page)).length;
 }
 
-async function capturedStartedSessionId(page: Page, observedStartCount: number): Promise<string> {
+async function capturedStartedSessionId(
+  page: Page,
+  observedStartCount: number,
+  expectedSessionId?: string,
+): Promise<string> {
   let sessionId: string | undefined;
-  await expect
-    .poll(async () => {
-      sessionId = capturedStartedSessionIdAfter(
-        await capturedDebugSessionEvents(page),
-        observedStartCount,
-      );
-      return sessionId;
-    })
-    .not.toBeUndefined();
+  const readCaptured = async (): Promise<string | undefined> => {
+    sessionId = capturedStartedSessionIdAfter(
+      await capturedDebugSessionEvents(page),
+      observedStartCount,
+    );
+    return sessionId;
+  };
+  if (expectedSessionId === undefined) {
+    await expect.poll(readCaptured).not.toBeUndefined();
+  } else {
+    await expect.poll(readCaptured).toBe(expectedSessionId);
+  }
   if (sessionId === undefined) throw new Error("DEBUG_SESSION_START_EVENT_NOT_OBSERVED");
   return sessionId;
 }
@@ -748,11 +755,75 @@ function editorWindow(page: Page): Locator {
   return page.locator(`[data-window-id="${EDITOR_WINDOW_ID}"]`);
 }
 
+type DebugSessionStartSettlement =
+  | { readonly kind: "response"; readonly status: number; readonly body: string }
+  | { readonly kind: "aborted"; readonly errorText: string | undefined };
+
+function isDebugSessionStartRequest(request: Request): boolean {
+  return (
+    new URL(request.url()).pathname === "/api/editor/debug/sessions" && request.method() === "POST"
+  );
+}
+
+function waitForDebugSessionStart(page: Page): Promise<DebugSessionStartSettlement> {
+  return new Promise((resolve, reject) => {
+    let startRequest: Request | undefined;
+    const cleanup = (): void => {
+      page.off("request", onRequest);
+      page.off("response", onResponse);
+      page.off("requestfailed", onRequestFailed);
+    };
+    const finish = (settlement: DebugSessionStartSettlement): void => {
+      cleanup();
+      resolve(settlement);
+    };
+    const onRequest = (request: Request): void => {
+      if (startRequest === undefined && isDebugSessionStartRequest(request)) startRequest = request;
+    };
+    const onResponse = (response: PlaywrightResponse): void => {
+      if (response.request() !== startRequest) return;
+      cleanup();
+      const status = response.status();
+      void response.text().then(
+        (body) => {
+          resolve({ kind: "response", status, body });
+        },
+        (error: unknown) => {
+          reject(error instanceof Error ? error : new Error("DEBUG_SESSION_RESPONSE_UNREADABLE"));
+        },
+      );
+    };
+    const onRequestFailed = (request: Request): void => {
+      if (request === startRequest) {
+        finish({ kind: "aborted", errorText: request.failure()?.errorText });
+      }
+    };
+    page.on("request", onRequest);
+    page.on("response", onResponse);
+    page.on("requestfailed", onRequestFailed);
+  });
+}
+
+async function startedSessionId(
+  page: Page,
+  observedStartCount: number,
+  settlement: DebugSessionStartSettlement,
+): Promise<string> {
+  if (settlement.kind === "aborted") {
+    expect(settlement.errorText).toBe("net::ERR_ABORTED");
+    return await capturedStartedSessionId(page, observedStartCount);
+  }
+  expect(settlement.status, settlement.body).toBe(201);
+  const session = debugSession(JSON.parse(settlement.body) as unknown);
+  return await capturedStartedSessionId(page, observedStartCount, session.sessionId);
+}
+
 async function startFromEditor(page: Page, pane: Locator): Promise<DebugSessionProjection> {
   const observedStartCount = await capturedStartedSessionCount(page);
+  const started = waitForDebugSessionStart(page);
   await pane.locator(EDITOR_SELECTORS.monaco).click();
   await page.keyboard.press("F5");
-  const sessionId = await capturedStartedSessionId(page, observedStartCount);
+  const sessionId = await startedSessionId(page, observedStartCount, await started);
   activeSessionId = sessionId;
   const projection = await page.request.get(
     `/api/editor/debug/sessions/${encodeURIComponent(sessionId)}`,
@@ -764,8 +835,9 @@ async function startFromEditor(page: Page, pane: Locator): Promise<DebugSessionP
 
 async function startFromDebugPanel(page: Page, panel: Locator): Promise<DebugSessionProjection> {
   const observedStartCount = await capturedStartedSessionCount(page);
+  const started = waitForDebugSessionStart(page);
   await panel.getByRole("button", { name: "Start debugging current file" }).click();
-  const sessionId = await capturedStartedSessionId(page, observedStartCount);
+  const sessionId = await startedSessionId(page, observedStartCount, await started);
   activeSessionId = sessionId;
   const projection = await page.request.get(
     `/api/editor/debug/sessions/${encodeURIComponent(sessionId)}`,
@@ -1543,6 +1615,26 @@ test("#2348 launches a governed catalog target through the real npm CLI artifact
   const session = await startCatalogDebugging(page, activation);
 
   expect(session.targetKind).toBe("catalog");
+});
+
+test("#2348 waits for a slow successful session response before matching its start event", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const { panel } = await prepareCapDebugging(page, CAP_STOPPED);
+  await page.route(
+    "**/api/editor/debug/sessions",
+    async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 20_500));
+      await route.continue();
+    },
+    { times: 1 },
+  );
+
+  const session = await startFromDebugPanel(page, panel);
+
+  expect(session.targetKind).toBe("file");
+  await stopFromDebugPanel(page, panel);
 });
 
 test("#2348 D12 composes exact stopped-projection caps through the real BFF and UI", async ({

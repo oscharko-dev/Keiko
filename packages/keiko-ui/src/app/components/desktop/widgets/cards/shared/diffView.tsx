@@ -8,6 +8,7 @@
 // Behavior is preserved verbatim from ReviewWidget's prior local definitions; only the home moved.
 
 import type { ReactNode } from "react";
+import { reportClientDiagnostic } from "../../../../../../lib/client-diagnostics";
 import type { I18nTranslate } from "../../../../../../lib/i18n";
 import type { ChangedFile } from "../../../../../../lib/types";
 import { NATIVE_BLOCK_STYLE } from "../../../native-element-styles";
@@ -59,13 +60,19 @@ interface TokensProps {
 }
 
 function TokenSpans({ tokens }: TokensProps): ReactNode {
+  const occurrences = new Map<string, number>();
   return (
     <>
-      {tokens.map((tok, idx) => (
-        <span key={idx} className={`hl-${tok[0]}`}>
-          {tok[1]}
-        </span>
-      ))}
+      {tokens.map((tok) => {
+        const baseKey = `${tok[0]}:${tok[1]}`;
+        const occurrence = occurrences.get(baseKey) ?? 0;
+        occurrences.set(baseKey, occurrence + 1);
+        return (
+          <span key={`${baseKey}:${String(occurrence)}`} className={`hl-${tok[0]}`}>
+            {tok[1]}
+          </span>
+        );
+      })}
     </>
   );
 }
@@ -73,8 +80,8 @@ function TokenSpans({ tokens }: TokensProps): ReactNode {
 interface DiffLineViewProps {
   readonly line: DiffLine;
   readonly lang: string;
-  readonly kindLabel?: string | undefined;
-  readonly labels?: DiffViewLabels | undefined;
+  readonly kindLabel: string | undefined;
+  readonly labels: DiffViewLabels | undefined;
 }
 
 function DiffLineView({ line, lang, kindLabel, labels }: DiffLineViewProps): ReactNode {
@@ -116,7 +123,7 @@ interface DiffHunkViewLabels {
 interface DiffHunkViewProps {
   readonly hunk: DiffHunk;
   readonly lang: string;
-  readonly labels?: DiffHunkViewLabels | undefined;
+  readonly labels?: DiffHunkViewLabels;
   readonly viewLabels?: DiffViewLabels | undefined;
 }
 
@@ -157,11 +164,11 @@ export function DiffHunkView({ hunk, lang, labels, viewLabels }: DiffHunkViewPro
 interface DiffFileSectionProps {
   readonly file: DiffFile;
   readonly index: number;
-  readonly changedFiles?: readonly ChangedFile[] | undefined;
+  readonly changedFiles?: readonly ChangedFile[];
   readonly sectionRef: (el: HTMLElement | null) => void;
-  readonly translate?: I18nTranslate | undefined;
-  readonly labels?: DiffViewLabels | undefined;
-  readonly idPrefix?: string | undefined;
+  readonly translate?: I18nTranslate;
+  readonly labels?: DiffViewLabels;
+  readonly idPrefix?: string;
 }
 
 function useTranslate(translate: I18nTranslate | undefined): string {
@@ -211,6 +218,10 @@ export function DiffFileSection({
       <div
         className={`rv-code mono ${selectableTextStyles["cmp-selectable-text"]}`}
         data-text-selectable="true"
+        // Horizontal code scrolling must be reachable without a pointer.
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+        tabIndex={0}
+        onFocusCapture={() => reportClientDiagnostic("[keiko] shared diff viewport focused")}
       >
         {file.binary ? (
           <p className="rv-empty-p">

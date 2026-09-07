@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,6 +29,10 @@ import {
   handleGitAgentOperationWithDelegate,
   IdempotencyCache,
 } from "./agentOperationsRoutes.js";
+import {
+  DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
+  GIT_DELIVERY_LOCAL_OPERATOR_ID,
+} from "./approvalStore.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
 let store: UiStore;
@@ -115,8 +120,26 @@ async function waitUntil(assertion: () => void): Promise<void> {
   throw lastError;
 }
 
+// #3384 B5-8 (wave-2 agent G "needs"): `prepareGitDeliveryRequest`'s repository-binding check now
+// binds every request's `ownerAndRepo` to the resolved workspace's own `origin` remote before
+// admitting it, so this fixture's project root must be a real checkout whose origin resolves to the
+// SAME "owner/repo" this file's `EXECUTE_PAYLOADS` already names for `pull-request`/`merge` —
+// mirrors `prRoutes.test.ts`/`mergeRoutes.test.ts`'s identical `initOriginFixture` repair.
+function initOriginFixture(projectRoot: string): void {
+  execFileSync("git", ["init", "-q"], { cwd: projectRoot });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: projectRoot });
+  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: projectRoot });
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "initial"], {
+    cwd: projectRoot,
+  });
+  execFileSync("git", ["remote", "add", "origin", "https://github.com/owner/repo.git"], {
+    cwd: projectRoot,
+  });
+}
+
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "keiko-agent-git-"));
+  initOriginFixture(root);
   store = createInMemoryUiStore();
   store.createProject(root, "fixture");
 });
@@ -429,6 +452,21 @@ const WRITE_OPERATIONS = Object.keys(
   EXECUTE_PAYLOADS,
 ) as readonly (keyof typeof EXECUTE_PAYLOADS)[];
 
+// The "repository-delivery" authority class (git-repository-agent.ts): commit, fetch, pull, push,
+// pull-request, merge. `commit` is excluded here since it is always denied through its own,
+// separate `verified-commit-required` special case, never through the ladder below.
+// Typed as the wider `keyof typeof EXECUTE_PAYLOADS` element type (not a literal tuple) so
+// `.includes(operation)` below type-checks against the broader `WRITE_OPERATIONS` union it is
+// filtered against — `Array<T>.includes` is invariant in `T`, and a five-member literal union
+// element type would reject any wider caller even though every value stays a valid delivery kind.
+const DELIVERY_WRITE_OPERATIONS: readonly (keyof typeof EXECUTE_PAYLOADS)[] = [
+  "fetch",
+  "pull",
+  "push",
+  "pull-request",
+  "merge",
+];
+
 function executeRequest(
   operation: keyof typeof EXECUTE_PAYLOADS,
   idempotencyKey = `${operation}-1`,
@@ -448,6 +486,34 @@ function executeRequest(
 // all. The gate resolves the SERVER-OWNED product-wide ceiling and fails closed when none is
 // configured (ADR-0129 modes, ADR-0138 monotonic semantics).
 describe("agent facade — autonomy admission (fail-closed)", () => {
+  it.each(CODING_WORKBENCH_MODES)(
+    "requires the verified runtime commit service instead of delegating to manual commit in %s",
+    async (mode) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+      const result = await handleGitAgentOperation(
+        {
+          ...ctx(executeRequest("commit", `unverified-${mode}`)),
+          correlationId: "commit-boundary",
+        },
+        deps(runner, mode),
+      );
+      expect(result.status).toBe(403);
+      expect(result.body).toMatchObject({ status: "denied", operation: "commit" });
+      expect(runner).not.toHaveBeenCalled();
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          op: "git.delivery.authority.denied",
+          correlationId: "commit-boundary",
+          extra: { operation: "commit", phase: "admission", reason: "verified-commit-required" },
+        }),
+      );
+      expect(JSON.stringify(sink.events)).not.toContain("add a thing");
+      expect(JSON.stringify(sink.events)).not.toContain(root);
+    },
+  );
+
   it.each(WRITE_OPERATIONS)(
     "denies %s execute when no deployment ceiling is configured, without delegating",
     async (operation) => {
@@ -468,10 +534,15 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
   );
 
   // The expectation is DERIVED from the production rule table: whichever operations that table puts
-  // above supervised-coding (or, since KEIKO-0227, never admit through this boolean facade at all —
-  // gitRepositoryAgentMinimumMode returns undefined for repository-delivery operations) must be
-  // denied there, and whichever it puts at or below must be admitted.
-  it.each(WRITE_OPERATIONS)("honours the ladder for %s at supervised-coding", async (operation) => {
+  // above supervised-coding must be denied there, and whichever it puts at or below must be
+  // admitted. Scoped to the non-delivery write kinds only — final-audit F2/#3390 relocates the
+  // delivery-class ladder to the two cases immediately below, since `gitRepositoryAgentMinimumMode`
+  // answers a narrower, unrelated question for them (see that fix's comment there).
+  it.each(
+    WRITE_OPERATIONS.filter(
+      (operation) => operation !== "commit" && !DELIVERY_WRITE_OPERATIONS.includes(operation),
+    ),
+  )("honours the ladder for %s at supervised-coding", async (operation) => {
     const minimum = gitRepositoryAgentMinimumMode(operation);
     const admitted =
       minimum !== undefined &&
@@ -490,6 +561,49 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
     }
   });
 
+  // Final-audit F2/#3390 (ADR-0138 D2, epic #3384 correction 5): before this fix, every
+  // "repository-delivery" write (fetch/pull/push/pull-request/merge) was permanently hard-denied by
+  // this facade's OWN coarse admission gate below `autonomous-delivery` — `gitRepositoryAgentMinimumMode`
+  // returns `undefined` for all of them because it deliberately treats "approval-required" as
+  // inadmissible for this boolean-only ladder (it has no approval channel of its own), which the old
+  // gate wrongly read as "so refuse it here too". The fix makes the gate defer that
+  // "approval-required" disposition to the delegated route's own mandatory downstream approval
+  // enforcement instead (exactly like `autonomous-delivery` already does — see "routes an accepted
+  // autonomous push..." above), so every delivery write now reaches delegation in EVERY mode; only
+  // `commit` keeps its own, unrelated, always-denied special case (verified-commit-required).
+  it.each(DELIVERY_WRITE_OPERATIONS)(
+    "always delegates %s at supervised-coding instead of hard-denying it",
+    async (operation) => {
+      const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+      const result = await handleGitAgentOperation(
+        ctx(executeRequest(operation, `${operation}-supervised-delivery`)),
+        deps(runner, "supervised-coding"),
+      );
+
+      expect(result.body).toMatchObject({ status: "delegated" });
+    },
+  );
+
+  it.each(DELIVERY_WRITE_OPERATIONS)(
+    "always delegates %s at governed-assist instead of hard-denying it",
+    async (operation) => {
+      const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+      const result = await handleGitAgentOperation(
+        ctx(executeRequest(operation, `${operation}-governed-delivery`)),
+        deps(runner, "governed-assist"),
+      );
+
+      expect(result.body).toMatchObject({ status: "delegated" });
+    },
+  );
+
+  // #3387 (ADR-0138 D2): an accepted run's push now requires an actually consumed, server-issued
+  // claim (pushRoutes.ts's runPushMutation), unconditionally, before the downstream worktree/policy
+  // gate is ever reached. This facade's own request contract (GitRepositoryAgentOperationRequest)
+  // carries no approval field and mints none, so a push delegated through it can never supply one —
+  // it now observes the SAME "approval-required" disposition every unapproved HTTP push does,
+  // relocated from the prior worktree-unavailable (409) outcome the facade saw before that
+  // unconditional check existed.
   it("routes an accepted autonomous push to its downstream policy and approval gate", async () => {
     const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
     const body = executeRequest("push", "push-autonomous");
@@ -508,13 +622,24 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
       }),
     );
 
-    expect(result.status).toBe(409);
+    expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
       status: "delegated",
       operation: "push",
+      response: { status: "approval-required" },
     });
   });
 
+  // #3384 B5-8 (wave-2 agent G "needs"): this file's shared `beforeEach` now provisions a REAL git
+  // worktree (required so the repository-binding check admits `merge`'s own `ownerAndRepo` at all).
+  // `executeGovernedMerge` reads a real worktree snapshot before it can resolve any outcome; against
+  // the non-git fixture this replaced, that read always threw, so this case only ever observed the
+  // `GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE` catch-all (409) — never the actual downstream gate its
+  // own name promises. With a real (if minimal) worktree that read now succeeds, and — with no
+  // approval token supplied, exactly like the "push" case just above — the merge resolves the
+  // GENUINE downstream disposition: 200 with `approval-required`. Renamed/updated honestly to the
+  // real gate this now reaches, not weakened: it still proves autonomous-delivery defers to the
+  // downstream approval gate rather than admitting the mutation outright.
   it("routes an accepted autonomous merge to its downstream approval gate", async () => {
     const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
     const result = await handleGitAgentOperation(
@@ -527,10 +652,12 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
       }),
     );
 
-    expect(result.status).toBe(409);
+    expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
       status: "delegated",
       operation: "merge",
+      routeStatus: 200,
+      response: { status: "approval-required" },
     });
   });
 
@@ -600,6 +727,101 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
     expect(body.message).not.toContain("add a thing");
     expect(body.message).not.toContain(root);
   });
+
+  // Final-audit F1+F2/#3390: proves the facade forwards a caller-held approval through to the
+  // delegated route (this facade never mints or consumes one itself) and that governed-assist
+  // admission no longer hard-denies the attempt (F2's fix) once that claim is presented — the
+  // delegated push route's own consumption is what actually redeems it. The claim is minted
+  // directly into the SAME shared `DEFAULT_GIT_DELIVERY_APPROVAL_STORE` this facade's own
+  // (options-free) route table falls back to.
+  it("approves then succeeds: a push delegated through the facade at governed-assist redeems a claim minted for the exact same command", async () => {
+    const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+    const command = {
+      kind: "push" as const,
+      sourceBranchName: "feat/x",
+      remoteAlias: "origin",
+      remoteBranchName: "feat/x",
+      forcePush: false,
+      setUpstreamTracking: false,
+    };
+    const issued = DEFAULT_GIT_DELIVERY_APPROVAL_STORE.issue({
+      binding: {
+        projectId: root,
+        operation: "push",
+        command,
+        runId: "test-run",
+        envelopeDigest: "c".repeat(64),
+      },
+      approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
+      nowMs: Date.now(),
+    });
+    const body = executeRequest("push", "push-agent-approved");
+    body.payload = {
+      remoteAlias: command.remoteAlias,
+      sourceBranchName: command.sourceBranchName,
+      remoteBranchName: command.remoteBranchName,
+      approval: issued.approval,
+    };
+    const result = await handleGitAgentOperation(
+      ctx(body),
+      deps(runner, "governed-assist", {
+        headRef: "feat/x",
+        baseRef: "dev",
+        allowDetachedHead: false,
+        allowedPrefixes: ["feat/"],
+      }),
+    );
+
+    expect(result.body).toMatchObject({ status: "delegated", operation: "push" });
+    expect((result.body as { response: { status?: string } }).response.status).not.toBe(
+      "approval-required",
+    );
+  });
+
+  // #3384 B5-8 (wave-2 agent G "needs"): this file's shared `beforeEach` now provisions a REAL git
+  // worktree with a matching `origin` remote (required so the repository-binding check elsewhere in
+  // this file admits requests at all). `fetch`/`pull` derive their continuity-check branch from a
+  // REAL read of the workspace (`buildSyncPreview`'s `before.branch`) rather than from the request —
+  // unlike the non-git fixture this replaced, that read now succeeds, so these two cases no longer
+  // observe the `GIT_DELIVERY_SYNC_WORKTREE_UNAVAILABLE` artifact of an invalid worktree. The minted
+  // approval is still recognized at admission (both operations reach past `admitSyncExecute`,
+  // proving the facade forwards it) — each operation reaches a DIFFERENT real, genuine gate after
+  // that: `fetch` always attempts the remote, so the workspace's real branch ("master", out of the
+  // default envelope's "feature/" prefix) is caught by the continuity guard before any network call;
+  // `pull` requires an upstream tracking ref to do anything, and this fresh worktree has none, so it
+  // resolves the informational "no-upstream" outcome locally without ever dispatching. Neither case
+  // performs real network I/O (§7 hermetic tests) — renamed/updated honestly to the new earliest
+  // gate each operation reaches, not weakened.
+  const EXPECTED_SYNC_FORWARDING = {
+    fetch: { status: 403, response: { error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } } },
+    pull: { status: 200, response: { status: "no-upstream" } },
+  } as const;
+
+  it.each(["fetch", "pull"] as const)(
+    "forwards a minted %s approval through the facade at governed-assist",
+    async (operation) => {
+      const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+      const command = { kind: operation, remote: "origin" };
+      const issued = DEFAULT_GIT_DELIVERY_APPROVAL_STORE.issue({
+        binding: { projectId: root, operation, command },
+        approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
+        nowMs: Date.now(),
+      });
+      const body = executeRequest(operation, `${operation}-agent-approved`);
+      body.payload = { remote: "origin", approval: issued.approval };
+
+      const result = await handleGitAgentOperation(ctx(body), deps(runner, "governed-assist"));
+
+      const expected = EXPECTED_SYNC_FORWARDING[operation];
+      expect(result.status).toBe(expected.status);
+      expect(result.body).toMatchObject({
+        status: "delegated",
+        operation,
+        routeStatus: expected.status,
+        response: expected.response,
+      });
+    },
+  );
 });
 
 describe("agent idempotency cache lifecycle through the handler", () => {

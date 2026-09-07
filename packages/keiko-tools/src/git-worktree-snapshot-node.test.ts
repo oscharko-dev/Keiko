@@ -5,27 +5,72 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { gitEnv } from "@oscharko-dev/keiko-git";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { recordingSpawn } from "./_support.js";
+import { nodeSpawnFn, type SpawnFn } from "./exec.js";
 import {
   GIT_WORKTREE_READ_COMMAND_RULES,
+  GitLazyFetchGuardUnsupportedError,
   GitWorktreeReadError,
+  ensureGitLazyFetchGuardSupported,
+  gitConfigIndicatesPromisorRemote,
+  readGitRemoteAliases,
   readGitRemoteUrl,
+  readGitPushRemoteUrls,
   readGitWorktreeSnapshot,
   readStagedConflictMarkerFileCount,
   readStagedPaths,
   type NodeGitWorktreeReaderDeps,
 } from "./git-worktree-snapshot-node.js";
 import { isCommandAllowed } from "./sandbox.js";
-import { DEFAULT_SANDBOX_POLICY } from "./types.js";
+import { DEFAULT_SANDBOX_POLICY, GOVERNED_GIT_REMOTE_CREDENTIAL_ENV_ALLOWLIST } from "./types.js";
 
 let root: string;
 let info: WorkspaceInfo;
+// Disposable directories a test created beside the repository (fake homes/config dirs).
+const scratchDirs: string[] = [];
 
 function git(args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd: root, encoding: "utf8" });
+}
+
+const CONFIGURED_REMOTE_URL = "https://github.com/alicedev-team/App.git";
+
+// A disposable directory carrying ONE global-scope git config whose `url.<base>.insteadOf` rule
+// rewrites every github.com URL onto an enterprise mirror — the exact shape of a corporate
+// `~/.gitconfig` (`home`) or `$XDG_CONFIG_HOME/git/config` (`xdg`).
+function makeRewritingConfigDir(scope: "home" | "xdg", mirrorBase: string): string {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), `keiko-git-${scope}-`)));
+  scratchDirs.push(dir);
+  const configPath = scope === "home" ? join(dir, ".gitconfig") : join(dir, "git", "config");
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, `[url "${mirrorBase}"]\n\tinsteadOf = https://github.com/\n`, "utf8");
+  return dir;
+}
+
+// Drives readGitRemoteUrl through the injected spawn seam and returns the env the git child
+// RECEIVED. The fake child answers with one URL line so the read completes on its normal path.
+async function captureRemoteUrlReadEnv(
+  processEnv: NodeJS.ProcessEnv,
+): Promise<Record<string, string>> {
+  const spawn = recordingSpawn();
+  const pending = readGitRemoteUrl(
+    { workspace: info, processEnv, now: () => Date.now(), spawn: spawn.fn },
+    "origin",
+  );
+  // First spawn: the lazy-fetch guard's own promisor-remote probe (reviewer 3941836280) — exit 1
+  // with no stdout means "no promisor remote configured", so the guard admits the real remote-url
+  // read that follows without a version probe of its own.
+  spawn.child.emit("close", 1, null);
+  await expect.poll(() => spawn.calls()).toHaveLength(2);
+  spawn.child.stdout.emit("data", Buffer.from(`${CONFIGURED_REMOTE_URL}\n`, "utf8"));
+  spawn.child.emit("close", 0, null);
+  await pending;
+  return spawn.calls()[1]?.options.env ?? {};
 }
 
 function workspaceInfo(rootPath: string): WorkspaceInfo {
@@ -57,6 +102,9 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
+  for (const dir of scratchDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 describe("read-only allowlist", () => {
@@ -67,6 +115,236 @@ describe("read-only allowlist", () => {
     for (const sub of ["commit", "add", "switch", "reset", "push", "fetch"]) {
       expect(isCommandAllowed(GIT_WORKTREE_READ_COMMAND_RULES, "git", [sub]).allowed).toBe(false);
     }
+  });
+});
+
+describe("read-only lane git-version compatibility", () => {
+  // Regression pin: this lane used to prepend `--no-lazy-fetch --no-replace-objects` as CLI flags
+  // to every read (git-mutation-node.ts's write lane no longer does either, for the same reason —
+  // both lanes now pin the env-var form and gate `--no-lazy-fetch`'s protection on the version
+  // check below rather than the incompatible CLI flag).
+  // `--no-lazy-fetch` is a newer global option — absent on the git 2.43 that `ubuntu-latest` ships
+  // — so on CI every read here exited 129 ("unknown option: --no-lazy-fetch") while the identical
+  // read stayed green on a workstation with a newer git (#3384 CI: git-raw-worktree-node.test.ts
+  // "never reflects the real upstream/ahead/behind state", draftDeliveryEffects.test.ts "refuses a
+  // behind-upstream push"). Git's own docs state each flag is "equivalent to setting the
+  // GIT_NO_(LAZY_FETCH|REPLACE_OBJECTS) environment variable", and `immutableReadPolicy` already
+  // pins both env vars into every read this lane performs — so the CLI flags were a redundant,
+  // version-incompatible duplicate. This pin fails if either flag reappears in the spawned argv.
+  it("never passes --no-lazy-fetch/--no-replace-objects as CLI flags, only as pinned env vars", async () => {
+    const spawn = recordingSpawn();
+    const pending = readGitRemoteAliases({
+      workspace: info,
+      spawn: spawn.fn,
+      now: () => Date.now(),
+    });
+    // First spawn: the lazy-fetch guard's own promisor-remote probe (reviewer 3941836280) — exit 1
+    // with no stdout means "no promisor remote configured", so the guard admits the real `remote`
+    // read that follows without a version probe of its own.
+    spawn.child.emit("close", 1, null);
+    await expect.poll(() => spawn.calls()).toHaveLength(2);
+    spawn.child.stdout.emit("data", Buffer.from("origin\n", "utf8"));
+    spawn.child.emit("close", 0, null);
+    await pending;
+    const call = spawn.calls()[1];
+    expect(call?.args).toEqual(["remote"]);
+    expect(call?.options.env.GIT_NO_LAZY_FETCH).toBe("1");
+    expect(call?.options.env.GIT_NO_REPLACE_OBJECTS).toBe("1");
+  });
+});
+
+// Reviewer 3941836280: Git 2.43 (`ubuntu-latest`'s pinned git) silently IGNORES GIT_NO_LAZY_FETCH —
+// its environment.c gained that check only in Git 2.45, the same release that added the CLI flag —
+// so the env var pinned above protects nothing there. That gap only matters for a PROMISOR (partial)
+// clone; these pins exercise both halves of the resulting gate directly against a scripted spawn.
+describe("lazy-fetch guard: version-gated, fail-closed for an at-risk (promisor) repository", () => {
+  function answerPromisorProbe(spawn: ReturnType<typeof recordingSpawn>, promisor: boolean): void {
+    if (promisor) {
+      spawn.child.stdout.emit("data", Buffer.from("remote.origin.promisor true\n", "utf8"));
+      spawn.child.emit("close", 0, null);
+    } else {
+      spawn.child.emit("close", 1, null);
+    }
+  }
+
+  it("refuses the read outright when the repository is a promisor clone and the installed git cannot enforce the guard", async () => {
+    const spawn = recordingSpawn();
+    const pending = readGitRemoteAliases({
+      workspace: info,
+      spawn: spawn.fn,
+      now: () => Date.now(),
+    });
+    answerPromisorProbe(spawn, true);
+    await expect.poll(() => spawn.calls()).toHaveLength(2);
+    // The version probe: git 2.43 — too old to enforce GIT_NO_LAZY_FETCH.
+    spawn.child.stdout.emit("data", Buffer.from("git version 2.43.0\n", "utf8"));
+    spawn.child.emit("close", 0, null);
+    await expect(pending).rejects.toBeInstanceOf(GitLazyFetchGuardUnsupportedError);
+    // The real `remote` read must never have been reached — refused, not read unprotected.
+    expect(spawn.calls()).toHaveLength(2);
+  });
+
+  it("admits the read once the installed git is new enough to enforce the guard", async () => {
+    const spawn = recordingSpawn();
+    const pending = readGitRemoteAliases({
+      workspace: info,
+      spawn: spawn.fn,
+      now: () => Date.now(),
+    });
+    answerPromisorProbe(spawn, true);
+    await expect.poll(() => spawn.calls()).toHaveLength(2);
+    spawn.child.stdout.emit("data", Buffer.from("git version 2.45.0\n", "utf8"));
+    spawn.child.emit("close", 0, null);
+    await expect.poll(() => spawn.calls()).toHaveLength(3);
+    spawn.child.stdout.emit("data", Buffer.from("origin\n", "utf8"));
+    spawn.child.emit("close", 0, null);
+    expect(await pending).toEqual(["origin"]);
+    expect(spawn.calls()[2]?.args).toEqual(["remote"]);
+  });
+});
+
+// Real `nodeSpawnFn` for every invocation, but each subcommand is recorded first — the definitive
+// signal for "was promisor risk (re)detected", since `probeGitVersionGuardSupport`'s `version`
+// probe is reached ONLY when `repositoryHasPromisorRemote` judged the repository at risk.
+function recordingRealSpawn(): {
+  readonly fn: SpawnFn;
+  readonly subcommands: () => readonly string[];
+} {
+  const subcommands: string[] = [];
+  const fn: SpawnFn = (command, args, options) => {
+    subcommands.push(args[0] ?? "");
+    return nodeSpawnFn(command, args, options);
+  };
+  return { fn, subcommands: () => subcommands };
+}
+
+// Real git for everything, except the FIRST `git version` invocation fails synchronously — the
+// exact shape of a workspace-local spawn failure (e.g. ENOTDIR) reviewer 3941928444 reproduced.
+// Every later call, including a later `version` probe, reaches the real binary.
+function realSpawnFailingVersionProbeOnce(): SpawnFn {
+  let versionCalls = 0;
+  return (command, args, options) => {
+    if (args[0] === "version") {
+      versionCalls += 1;
+      if (versionCalls === 1) throw new Error("ENOTDIR: not a directory");
+    }
+    return nodeSpawnFn(command, args, options);
+  };
+}
+
+describe("lazy-fetch guard: promisor detection matches git's effective configuration, and neither risk nor a failed probe goes stale", () => {
+  it("treats `partialclonefilter` alone as a promisor remote, with no `promisor` key set at all (reviewer 3941943601)", async () => {
+    git(["remote", "add", "origin", "https://example.invalid/repo.git"]);
+    git(["config", "remote.origin.partialclonefilter", "blob:none"]);
+    const rec = recordingRealSpawn();
+    await ensureGitLazyFetchGuardSupported({ ...deps(), spawn: rec.fn });
+    // A version probe runs ONLY when the repository is judged at risk — proof that
+    // `partialclonefilter` alone was enough, matching git's own promisor-remote.c.
+    expect(rec.subcommands().filter((s) => s === "version")).toHaveLength(1);
+  });
+
+  it("treats a bare `remote.<name>.promisor` key (no `=`) as true, per git's config boolean grammar (reviewer 3941943601)", async () => {
+    git(["remote", "add", "origin", "https://example.invalid/repo.git"]);
+    git(["config", "remote.origin.promisor", "true"]);
+    // Rewrite the freshly written explicit `= true` line into git's own legal bare-key shape (an
+    // implicit true with no value at all) — a real, on-disk config file, not a synthetic string
+    // handed straight to a parser under test.
+    const configPath = join(root, ".git", "config");
+    writeFileSync(
+      configPath,
+      readFileSync(configPath, "utf8").replace("promisor = true\n", "promisor\n"),
+      "utf8",
+    );
+    expect(git(["config", "--get-regexp", String.raw`^remote\..*\.promisor$`])).toBe(
+      "remote.origin.promisor\n",
+    );
+    const rec = recordingRealSpawn();
+    await ensureGitLazyFetchGuardSupported({ ...deps(), spawn: rec.fn });
+    expect(rec.subcommands().filter((s) => s === "version")).toHaveLength(1);
+  });
+
+  it("honours an `include.path` setting promisor risk, unlike the old `--local`-scoped read (reviewer 3941943601)", async () => {
+    git(["remote", "add", "origin", "https://example.invalid/repo.git"]);
+    const includeDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-include-")));
+    scratchDirs.push(includeDir);
+    const includePath = join(includeDir, "promisor.gitconfig");
+    writeFileSync(includePath, '[remote "origin"]\n\tpromisor = true\n', "utf8");
+    git(["config", "--add", "include.path", includePath]);
+    // RED proof, on this SAME repository: the guard's OLD `--local`-scoped read cannot see an
+    // `include.path` at all — it is genuinely blind here, not merely differently parsed.
+    expect(() =>
+      execFileSync(
+        "git",
+        ["config", "--local", "--get-regexp", String.raw`^remote\..*\.promisor$`],
+        {
+          cwd: root,
+          encoding: "utf8",
+        },
+      ),
+    ).toThrow();
+    const rec = recordingRealSpawn();
+    await ensureGitLazyFetchGuardSupported({ ...deps(), spawn: rec.fn });
+    expect(rec.subcommands().filter((s) => s === "version")).toHaveLength(1);
+  });
+
+  it("re-evaluates promisor risk on every call — an earlier safe verdict never authorizes a later, riskier one (reviewer 3941943603)", async () => {
+    git(["remote", "add", "origin", "https://example.invalid/repo.git"]);
+    const rec = recordingRealSpawn();
+    const readerDeps = { ...deps(), spawn: rec.fn };
+    await ensureGitLazyFetchGuardSupported(readerDeps);
+    // No promisor remote yet: admitted with only the config probe, no version check needed.
+    expect(rec.subcommands()).toEqual(["config"]);
+    git(["config", "remote.origin.promisor", "true"]);
+    await ensureGitLazyFetchGuardSupported(readerDeps);
+    // The SAME reader deps, the SAME spawn function — risk was still re-checked, not replayed
+    // from the first call's safe verdict.
+    expect(rec.subcommands().slice(1)).toEqual(["config", "version"]);
+  });
+
+  it("evicts a failed git-version probe instead of caching it forever (reviewer 3941928444)", async () => {
+    git(["remote", "add", "origin", "https://example.invalid/repo.git"]);
+    git(["config", "remote.origin.promisor", "true"]);
+    const readerDeps = { ...deps(), spawn: realSpawnFailingVersionProbeOnce() };
+    await expect(ensureGitLazyFetchGuardSupported(readerDeps)).rejects.toBeInstanceOf(
+      GitLazyFetchGuardUnsupportedError,
+    );
+    // A second, healthy call on the SAME spawn function must re-probe and succeed: the first
+    // probe's spawn failure is indeterminate, not a durable "guard unsupported" fact.
+    await expect(ensureGitLazyFetchGuardSupported(readerDeps)).resolves.toBeUndefined();
+  });
+});
+
+describe("gitConfigIndicatesPromisorRemote", () => {
+  it("matches an explicit `promisor` value and its boolean-true synonyms", () => {
+    for (const value of ["true", "yes", "on", "1", "TRUE", "On"]) {
+      expect(gitConfigIndicatesPromisorRemote(`remote.origin.promisor ${value}\n`)).toBe(true);
+    }
+  });
+
+  it("rejects an explicit false spelling, an empty value, and an unrelated remote key", () => {
+    for (const value of ["false", "no", "off", "0"]) {
+      expect(gitConfigIndicatesPromisorRemote(`remote.origin.promisor ${value}\n`)).toBe(false);
+    }
+    // git prints an explicit empty-string value as the key, ONE trailing space, then nothing —
+    // the exact shape `git config remote.origin.promisor ""` produces.
+    expect(gitConfigIndicatesPromisorRemote("remote.origin.promisor \n")).toBe(false);
+    expect(
+      gitConfigIndicatesPromisorRemote("remote.origin.url https://example.invalid/x.git\n"),
+    ).toBe(false);
+  });
+
+  it("treats a bare key with no value at all as true", () => {
+    expect(gitConfigIndicatesPromisorRemote("remote.origin.promisor\n")).toBe(true);
+  });
+
+  it("treats a configured partialclonefilter as promisor risk regardless of its own value", () => {
+    expect(gitConfigIndicatesPromisorRemote("remote.origin.partialclonefilter blob:none\n")).toBe(
+      true,
+    );
+  });
+
+  it("returns false for empty output", () => {
+    expect(gitConfigIndicatesPromisorRemote("")).toBe(false);
   });
 });
 
@@ -93,6 +371,11 @@ describe("readGitWorktreeSnapshot", () => {
     expect([...snap.existingLocalBranchNames].sort()).toEqual(["feature/x", "main"]);
     expect(snap.hasUpstream).toBe(false);
     expect(snap.remoteAliases).toEqual([]);
+    expect(snap.headSha).toBe(git(["rev-parse", "HEAD"]).trim());
+    expect(snap.stagedTreeDigest).toMatch(/^[a-f0-9]{64}$/u);
+    const stagedDigest = snap.stagedTreeDigest;
+    git(["add", "a.txt"]);
+    expect((await readGitWorktreeSnapshot(deps())).stagedTreeDigest).not.toBe(stagedDigest);
   });
 
   it("reports a detached HEAD", async () => {
@@ -149,6 +432,177 @@ describe("readGitRemoteUrl", () => {
     await expect(readGitRemoteUrl(deps(), "--upload-pack=evil")).rejects.toBeInstanceOf(
       GitWorktreeReadError,
     );
+  });
+
+  // The case above cannot see this defect: `example/repository` collides with no environment value,
+  // so it stayed green while every real owner that DID collide came back corrupted.
+  //
+  // `runCommand` scrubs the value of every env var that is not on the policy's `envAllowlist`. The
+  // account names are exactly the ones that appear in a personal GitHub owner, so under the default
+  // policy a user `alice` owning `alice-dev/App` read their own remote back as
+  // `https://github.com/[REDACTED]-dev/App` and every consumer derived a repository that does not
+  // exist. Reading this remote is a governed-identity operation, so it runs under the lane that
+  // allowlists those names; that lane still grants no credential, so a token can never survive here.
+  it("preserves an owner that collides with the account identity", async () => {
+    git(["remote", "add", "origin", "https://github.com/alicedev-team/App.git"]);
+
+    const url = await readGitRemoteUrl(
+      {
+        workspace: info,
+        // At least MIN_SCRUBBABLE_VALUE_LENGTH characters on purpose: a shorter account name is
+        // never scrubbed, so a fixture using one would pass under BOTH policies and pin nothing.
+        processEnv: { PATH: process.env.PATH ?? "", USER: "alicedev", LOGNAME: "alicedev" },
+        now: () => Date.now(),
+      },
+      "origin",
+    );
+
+    expect(url).toBe("https://github.com/alicedev-team/App.git");
+    expect(url).not.toContain("[REDACTED]");
+  });
+
+  // The identity lane widens which NAMES are allowlisted, never what a credential may do: a token
+  // value is still scrubbed out of this reader's output.
+  // The defect that turned CI red on 56ffa39c, and that the first repair only hid from the tests:
+  // a CI runner exports GITHUB_REPOSITORY=<owner/repo>, the default scrub treats that value as a
+  // secret, and the checkout's OWN remote came back as `https://github.com/[REDACTED].git`. This
+  // read's stdout IS the URL; a context value the parent happens to carry must not corrupt it.
+  it("preserves the configured remote when a context variable carries the same owner/repo", async () => {
+    git(["remote", "add", "origin", "https://github.com/alicedev-team/App.git"]);
+
+    const url = await readGitRemoteUrl(
+      {
+        workspace: info,
+        processEnv: {
+          PATH: process.env.PATH ?? "",
+          GITHUB_REPOSITORY: "alicedev-team/App",
+          GITHUB_REPOSITORY_OWNER: "alicedev-team",
+        },
+        now: () => Date.now(),
+      },
+      "origin",
+    );
+
+    expect(url).toBe("https://github.com/alicedev-team/App.git");
+  });
+
+  // Narrowing the scrub to credentials must not narrow it below "anything whose name says it is a
+  // credential": a token under a name the governed lanes never forward is still a token.
+  it("still scrubs a credential-named value the governed lanes never forward", async () => {
+    git(["remote", "add", "origin", "https://github.com/alicedev-team/deploy-tok3n-value.git"]);
+
+    const url = await readGitRemoteUrl(
+      {
+        workspace: info,
+        processEnv: { PATH: process.env.PATH ?? "", MY_DEPLOY_TOKEN: "deploy-tok3n-value" },
+        now: () => Date.now(),
+      },
+      "origin",
+    );
+
+    expect(url).not.toContain("deploy-tok3n-value");
+    expect(url).toContain("[REDACTED]");
+  });
+
+  it("still scrubs a credential value that appears in the output", async () => {
+    git(["remote", "add", "origin", "https://github.com/alicedev-team/s3cr3t-token-value.git"]);
+
+    const url = await readGitRemoteUrl(
+      {
+        workspace: info,
+        processEnv: {
+          PATH: process.env.PATH ?? "",
+          USER: "alicedev",
+          GH_TOKEN: "s3cr3t-token-value",
+        },
+        now: () => Date.now(),
+      },
+      "origin",
+    );
+
+    expect(url).not.toContain("s3cr3t-token-value");
+    expect(url).toContain("[REDACTED]");
+  });
+
+  // The consumers use this URL as an AUTHORIZATION operand — which repository a checkout may read —
+  // so it must be the remote the CHECKOUT configures, never a global rewrite of it. Under the
+  // identity lane the child inherited the user's HOME, and `git remote get-url` applies every
+  // `url.<base>.insteadOf` rule from `~/.gitconfig`: an enterprise mirror rule turned the resolved
+  // URL into a non-GitHub one (every consumer denied), and an owner-rewriting rule changed the
+  // owner the consumers authorized against.
+  it("resolves the CONFIGURED remote, not a ~/.gitconfig insteadOf rewrite of it", async () => {
+    git(["remote", "add", "origin", CONFIGURED_REMOTE_URL]);
+    const fakeHome = makeRewritingConfigDir("home", "https://ghe.corp.example/mirror/");
+
+    const url = await readGitRemoteUrl(
+      {
+        workspace: info,
+        processEnv: { PATH: process.env.PATH ?? "", HOME: fakeHome, USER: "alicedev" },
+        now: () => Date.now(),
+      },
+      "origin",
+    );
+
+    expect(url).toBe(CONFIGURED_REMOTE_URL);
+  });
+
+  // Same defect through git's OTHER global-scope location. `XDG_CONFIG_HOME` is on the identity
+  // allowlist (the identity lane needs it for signing configuration), so isolating HOME alone
+  // still let `$XDG_CONFIG_HOME/git/config` rewrite the URL; the global scope has to be switched
+  // off as a whole.
+  it("resolves the CONFIGURED remote, not an $XDG_CONFIG_HOME/git/config rewrite of it", async () => {
+    git(["remote", "add", "origin", CONFIGURED_REMOTE_URL]);
+    const fakeXdg = makeRewritingConfigDir("xdg", "https://xdg.corp.example/mirror/");
+
+    const url = await readGitRemoteUrl(
+      {
+        workspace: info,
+        processEnv: { PATH: process.env.PATH ?? "", XDG_CONFIG_HOME: fakeXdg, USER: "alicedev" },
+        now: () => Date.now(),
+      },
+      "origin",
+    );
+
+    expect(url).toBe(CONFIGURED_REMOTE_URL);
+  });
+
+  // The "still scrubs a credential value" case above proves only OUTPUT scrubbing, which holds
+  // under every lane. This pins the INPUT side: the read grants no credential, so none of the names
+  // the remote-delivery lane forwards may reach the git child — while the account identity that
+  // this read exists to keep unscrubbed still does.
+  it("forwards no credential to the git child while keeping the account identity", async () => {
+    const credentialNames = GOVERNED_GIT_REMOTE_CREDENTIAL_ENV_ALLOWLIST;
+    expect(credentialNames.length).toBeGreaterThan(0);
+    const env = await captureRemoteUrlReadEnv({
+      PATH: process.env.PATH ?? "",
+      USER: "alicedev",
+      // Scrubbable-length values on purpose: a value below the scrub floor is never forwarded by
+      // the credential lane either, so a short fixture would pass under BOTH lanes and pin nothing.
+      ...Object.fromEntries(credentialNames.map((name) => [name, `${name}-must-not-reach-git`])),
+    });
+
+    for (const name of credentialNames) {
+      expect(name in env, name).toBe(false);
+    }
+    expect(env.USER).toBe("alicedev");
+  });
+
+  // The two config scopes this read must NOT see, pinned on the child env itself: the system scope
+  // cannot be exercised hermetically (no test may own the host's system gitconfig), and the global
+  // scope must stay off even when the parent carries a real HOME.
+  it("pins the child to the checkout's own git config scopes under an isolated home", async () => {
+    const env = await captureRemoteUrlReadEnv({
+      PATH: process.env.PATH ?? "",
+      HOME: "/Users/parent",
+      XDG_CONFIG_HOME: "/Users/parent/.config",
+      USER: "alicedev",
+    });
+
+    expect(env.HOME).not.toBe("/Users/parent");
+    expect(env.GIT_CONFIG_NOSYSTEM).toBe("1");
+    // keiko-git's `gitEnv` is the product's config-isolated local-read profile; the platform null
+    // device it pins for the global scope is the one this read must pin too.
+    expect(env.GIT_CONFIG_GLOBAL).toBe(gitEnv({}).GIT_CONFIG_GLOBAL);
   });
 });
 
@@ -236,5 +690,35 @@ describe("readStagedConflictMarkerFileCount", () => {
     } finally {
       rmSync(bare, { recursive: true, force: true });
     }
+  });
+});
+
+describe("effective push destination inspection", () => {
+  it("retains every push URL so the issue-bound owner can reject multiplicity", async () => {
+    git(["remote", "add", "origin", CONFIGURED_REMOTE_URL]);
+    git(["config", "--add", "remote.origin.pushurl", "https://github.com/owner/first.git"]);
+    git(["config", "--add", "remote.origin.pushurl", "https://github.com/owner/second.git"]);
+    expect(await readGitPushRemoteUrls(deps(), "origin")).toEqual([
+      "https://github.com/owner/first.git",
+      "https://github.com/owner/second.git",
+    ]);
+  });
+  it("observes user push rewrites while the existing fetch-identity reader stays isolated", async () => {
+    git(["remote", "add", "origin", CONFIGURED_REMOTE_URL]);
+    const home = makeRewritingConfigDir("home", "https://elsewhere.example/");
+    const input = { ...deps(), processEnv: { PATH: process.env.PATH, HOME: home } };
+    expect(await readGitPushRemoteUrls(input, "origin")).toEqual([
+      "https://elsewhere.example/alicedev-team/App.git",
+    ]);
+    expect(await readGitRemoteUrl(input, "origin")).toBe(CONFIGURED_REMOTE_URL);
+  });
+  it("fails closed on truncated destination metadata", async () => {
+    git(["remote", "add", "origin", CONFIGURED_REMOTE_URL]);
+    await expect(
+      readGitPushRemoteUrls(
+        { ...deps(), policy: { ...DEFAULT_SANDBOX_POLICY, maxOutputBytes: 8 } },
+        "origin",
+      ),
+    ).rejects.toThrow("truncated");
   });
 });

@@ -29,8 +29,15 @@ import type { CodingToolActionOf, GovernedCodingToolPort } from "./codingToolGov
 import type {
   CodingRuntimeEditorMutationLeaseCoordinator,
   CodingRuntimeEditorMutationLeaseRequest,
+  CodingRuntimeMutationOutcome,
 } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
-import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
+import type { ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import type {
+  SecureWorkspaceTextReadFailure,
+  SecureWorkspaceTextReadPort,
+} from "./secureWorkspaceTextRead.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 const MAX_READ_BYTES = 65_536;
@@ -45,9 +52,28 @@ type EditorChangesetRequest = CodingToolActionOf<"edit">;
 // EditorAgentFailureCode, plus this port's own transport/no-session markers) — never raw command
 // output — so, unlike the other governed ports, it is safe for `codingToolFacade.ts` to forward
 // verbatim instead of collapsing it to the bare status.
+//
+// `message`, where present, is a fixed, content-free, actionable ONE-SENTENCE explanation of the
+// closed `reasonCode` above it — never raw command output, never anything from the changeset or
+// the workspace. It exists because a bare reason code such as NO_ACTIVE_SESSION reads to the model
+// as an opaque failure it can only ask the operator about, instead of the actionable condition it
+// names (epic #3384 cascade, end-to-end run 2026-09-05: the model asked "how would you like to
+// proceed?" instead of telling the operator to open the Workbench). The activity-log diagnostic
+// for a refusal stays reason-code-only regardless (`emitEditRefusedDiagnostic` never reads this
+// field) — `message` is carried only on the outcome returned to the caller, never logged.
 type EditOutcome =
   | { readonly status: "completed" }
-  | { readonly status: "failed"; readonly reasonCode?: string | undefined };
+  | {
+      readonly status: "failed";
+      readonly reasonCode?: string | undefined;
+      readonly message?: string | undefined;
+    };
+
+// NO_ACTIVE_SESSION means the bounded wait for a live Workbench editor bridge
+// (bindLiveEditorSession) never found one for this run's workspace — the model's edit was refused
+// before it ever reached the editor route, so nothing was attempted against the tree.
+export const NO_ACTIVE_SESSION_MESSAGE =
+  "no Coding Workbench is connected for this workspace; keep the Workbench open and retry";
 
 type EditorAgentActionClient = Pick<EditorAgentHttpClient, "action"> &
   Partial<Pick<EditorAgentHttpClient, "listSessions">>;
@@ -71,8 +97,10 @@ export interface CodingToolReadEditPortDeps {
   readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   readonly requiresEditorReview?: (() => boolean) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
   readonly mutationLeaseCoordinator?:
-    Pick<CodingRuntimeEditorMutationLeaseCoordinator, "register" | "discard"> | undefined;
+    | Pick<CodingRuntimeEditorMutationLeaseCoordinator, "register" | "discard" | "waitForMutation">
+    | undefined;
   /**
    * When true, a mutationGuard that carries no `binding` property at all fails closed at the
    * preflight boundary — read/discover/edit return failed rather than proceeding as if no
@@ -145,8 +173,9 @@ function executeDiscoverSync(
 ):
   | { readonly status: "completed"; readonly read: CodingToolReadResult }
   | { readonly status: "failed" } {
-  const binding = discoveryPreflight(deps, signal, mutationGuard);
-  if (binding === false) return { status: "failed" };
+  const preflight = discoveryPreflight(deps, signal, mutationGuard);
+  if (!preflight.ok) return { status: "failed" };
+  const binding = preflight.binding;
   try {
     const resolved = discoveryWorkspace(deps);
     if (resolved === undefined) return { status: "failed" };
@@ -263,15 +292,43 @@ async function executeRead(
   | { readonly status: "completed"; readonly read: CodingToolReadResult }
   | { readonly status: "failed" }
 > {
-  const binding = readPreflight(deps, request, signal, mutationGuard);
-  if (binding === false) return { status: "failed" };
-  const result = await deps.secureWorkspaceTextRead.readText({
-    relativePath: request.relativePath,
-    signal,
-  });
-  if (!readPostflight(deps, result, binding, signal, mutationGuard)) return { status: "failed" };
-  if (Buffer.byteLength(result.text, "utf8") > MAX_READ_BYTES) return { status: "failed" };
-  const window = readWindow(result.text, request.startLine, request.maxLines);
+  let binding = safeMutationBinding(mutationGuard);
+  try {
+    const preflight = readPreflight(deps, request, signal, mutationGuard);
+    if (!preflight.ok) return failedRead(deps, binding, request, "preflight-refused");
+    binding = preflight.binding;
+    const result = await deps.secureWorkspaceTextRead.readText({
+      relativePath: request.relativePath,
+      signal,
+    });
+    if (!result.ok) return failedRead(deps, binding, request, result.reason);
+    if (!readPostflight(deps, result, binding, signal, mutationGuard)) {
+      return failedRead(deps, binding, request, "postflight-refused");
+    }
+    if (Buffer.byteLength(result.text, "utf8") > MAX_READ_BYTES) {
+      return failedRead(deps, binding, request, "response-too-large");
+    }
+    return completedRead(deps, binding, request, result.text);
+  } catch (error) {
+    return failedRead(deps, binding, request, "exception", error);
+  }
+}
+
+type WorkspaceReadFailureReason =
+  | SecureWorkspaceTextReadFailure
+  | "exception"
+  | "postflight-refused"
+  | "preflight-refused"
+  | "response-too-large";
+
+function completedRead(
+  deps: CodingToolReadEditPortDeps,
+  binding: RuntimeProducerBinding | undefined,
+  request: RepositoryReadRequest,
+  text: string,
+): { readonly status: "completed"; readonly read: CodingToolReadResult } {
+  const window = readWindow(text, request.startLine, request.maxLines);
+  recordCompletedRead(deps, binding, request);
   return {
     status: "completed",
     read: {
@@ -279,11 +336,71 @@ async function executeRead(
       byteCount: Buffer.byteLength(window.text, "utf8"),
       // The digest always covers the WHOLE file so a later changeset's expectedContentHash stays
       // anchored to the governed read even when the model only saw a window of it.
-      digest: createHash("sha256").update(result.text, "utf8").digest("hex"),
+      digest: createHash("sha256").update(text, "utf8").digest("hex"),
       totalLines: window.totalLines,
       ...(window.nextStartLine === undefined ? {} : { nextStartLine: window.nextStartLine }),
     },
   };
+}
+
+function recordCompletedRead(
+  deps: CodingToolReadEditPortDeps,
+  binding: RuntimeProducerBinding | undefined,
+  request: RepositoryReadRequest,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    op: "coding-runtime.workspace-read",
+    correlationId: correlationIdOrUnknown(binding?.runId),
+    extra: {
+      state: "completed",
+      targetPathSha256: createHash("sha256").update(request.relativePath, "utf8").digest("hex"),
+      startLine: request.startLine ?? 1,
+      maxLines: request.maxLines ?? 0,
+    },
+  });
+}
+
+function failedRead(
+  deps: CodingToolReadEditPortDeps,
+  binding: RuntimeProducerBinding | undefined,
+  request: RepositoryReadRequest,
+  reason: WorkspaceReadFailureReason,
+  error?: unknown,
+): { readonly status: "failed" } {
+  const correlationId = correlationIdOrUnknown(binding?.runId);
+  (deps.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    op: "coding-runtime.workspace-read",
+    correlationId,
+    level: "warn",
+    ...(error === undefined ? {} : { errorKind: contentFreeErrorClass(error) }),
+    extra: {
+      state: "failed",
+      reason,
+      targetPathSha256: createHash("sha256").update(request.relativePath, "utf8").digest("hex"),
+      ...(error === undefined
+        ? {}
+        : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
+    },
+  });
+  if (error !== undefined) emitReadFailureDiagnostic(deps.diagnostics, correlationId, error);
+  return { status: "failed" };
+}
+
+function emitReadFailureDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.workspace-read",
+    source: "coding-tool-read-edit-ports.read",
+    errorClass: contentFreeErrorClass(error),
+    message: "workspace-read-failed",
+  });
 }
 
 /**
@@ -329,32 +446,41 @@ function slicedWindow(input: {
   };
 }
 
+/** A single explicit result shape for both preflight checks below: every branch returns an
+ * object literal discriminated on `ok`, instead of mixing a `RuntimeProducerBinding | undefined`
+ * payload with the bare boolean literal `false` "abort" signal. */
+type ReadEditPreflightOutcome =
+  | { readonly ok: false }
+  | { readonly ok: true; readonly binding: RuntimeProducerBinding | undefined };
+
 function readPreflight(
   deps: CodingToolReadEditPortDeps,
   request: RepositoryReadRequest,
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
-): RuntimeProducerBinding | undefined | false {
+): ReadEditPreflightOutcome {
   if (isAborted(signal) || isDenied(request.relativePath) || !hasLiveWorkspaceAccess(deps)) {
-    return false;
+    return { ok: false };
   }
   const binding = mutationBinding(mutationGuard);
-  if (binding === null) return false;
-  if (binding === undefined && deps.enforceProducerBinding === true) return false;
-  if (!readContextMatches(deps, binding) || !checkGuard(mutationGuard)) return false;
-  return isDenied(request.relativePath) ? false : binding;
+  if (binding === null) return { ok: false };
+  if (binding === undefined && deps.enforceProducerBinding === true) return { ok: false };
+  if (!readContextMatches(deps, binding) || !checkGuard(mutationGuard)) return { ok: false };
+  return isDenied(request.relativePath) ? { ok: false } : { ok: true, binding };
 }
 
 function discoveryPreflight(
   deps: CodingToolReadEditPortDeps,
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
-): RuntimeProducerBinding | undefined | false {
-  if (isAborted(signal)) return false;
+): ReadEditPreflightOutcome {
+  if (isAborted(signal)) return { ok: false };
   const binding = mutationBinding(mutationGuard);
-  if (binding === null) return false;
-  if (binding === undefined && deps.enforceProducerBinding === true) return false;
-  return readContextMatches(deps, binding) && checkGuard(mutationGuard) ? binding : false;
+  if (binding === null) return { ok: false };
+  if (binding === undefined && deps.enforceProducerBinding === true) return { ok: false };
+  return readContextMatches(deps, binding) && checkGuard(mutationGuard)
+    ? { ok: true, binding }
+    : { ok: false };
 }
 
 function discoveryPostflight(
@@ -422,15 +548,20 @@ async function executeEdit(
     );
     if (action === undefined) {
       discardMutationLease(deps, prepared.leaseRequest);
-      return editRefused(deps, correlationId, "NO_ACTIVE_SESSION");
+      return editRefused(deps, correlationId, "NO_ACTIVE_SESSION", NO_ACTIVE_SESSION_MESSAGE);
     }
     if (!hasLiveWorkspaceAccess(deps)) {
       discardMutationLease(deps, prepared.leaseRequest);
       return editRefused(deps, correlationId, "WORKSPACE_ACCESS_LOST");
     }
+    // Capture before dispatch: an automatic editor apply may settle before its HTTP response.
+    const completion =
+      prepared.leaseRequest === undefined
+        ? undefined
+        : deps.mutationLeaseCoordinator?.waitForMutation(prepared.leaseRequest, prepared.signal);
     const result = await deps.editorAgentClient.action(action, prepared.signal);
     if (result.ok && editorStatusCompleted(result.value.result.status)) {
-      return { status: "completed" };
+      return await completedEdit(deps, correlationId, completion);
     }
     discardMutationLease(deps, prepared.leaseRequest);
     return editRefused(deps, correlationId, editFailureReasonCode(result));
@@ -441,13 +572,37 @@ async function executeEdit(
   }
 }
 
+async function completedEdit(
+  deps: CodingToolReadEditPortDeps,
+  correlationId: string,
+  completion: Promise<CodingRuntimeMutationOutcome> | undefined,
+): Promise<EditOutcome> {
+  if (completion === undefined) return { status: "completed" };
+  const outcome = await completion;
+  (deps.activityLog ?? processServerLogSink()).write({
+    category: "security",
+    op: "coding-runtime.editor-mutation.settled",
+    correlationId,
+    extra: { state: outcome, actionKind: "edit" },
+  });
+  const reasonCode = outcome === "cancelled" ? "CANCELLED" : "EDIT_MUTATION_FAILED";
+  return outcome === "succeeded"
+    ? { status: "completed" }
+    : editRefused(deps, correlationId, reasonCode);
+}
+
 function editRefused(
   deps: CodingToolReadEditPortDeps,
   correlationId: string,
   reasonCode: string | undefined,
+  message?: string,
 ): EditOutcome {
+  // The diagnostic stays reason-code-only (body-free, AGENTS.md §8) — `message` never reaches the
+  // activity log, only the outcome returned to the caller.
   emitEditRefusedDiagnostic(deps.diagnostics, correlationId, reasonCode);
-  return { status: "failed", reasonCode };
+  return message === undefined
+    ? { status: "failed", reasonCode }
+    : { status: "failed", reasonCode, message };
 }
 
 // The closed vocabulary a rejected edit can name (EditorAgentConflictCode/EditorAgentFailureCode
@@ -780,6 +935,16 @@ function mutationBinding(
   const record = mutationGuard as unknown as Record<string, unknown>;
   if (!("binding" in record)) return undefined;
   return isRuntimeProducerBinding(record.binding) ? record.binding : null;
+}
+
+function safeMutationBinding(
+  mutationGuard: CodingToolMutationGuard,
+): RuntimeProducerBinding | undefined {
+  try {
+    return mutationBinding(mutationGuard) ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function isRuntimeProducerBinding(value: unknown): value is RuntimeProducerBinding {

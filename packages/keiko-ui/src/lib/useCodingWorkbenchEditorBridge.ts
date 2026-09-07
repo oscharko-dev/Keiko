@@ -15,7 +15,7 @@
 // applyTextEdits/applyPatch/setSelection/splitPane/moveTab) or already fails closed with a
 // structured "Provider unavailable" descriptor when its controller is left undefined.
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/editor-agent";
 import {
   postEditorAgentResult,
@@ -166,14 +166,14 @@ export interface UseCodingWorkbenchEditorBridgeInput {
    * Optional so existing callers with no such transitional state default to `false` — the same
    * "already resolved" assumption `root` carried before this hook started locking it to the run.
    */
-  readonly bindingPending?: boolean | undefined;
+  readonly bindingPending?: boolean;
   /**
    * The root the run was submitted against, captured by the caller when Start was issued
    * (`useCodingWorkbenchRunWorkspace`), and forwarded to the lock's own `submittedRoot`: without
    * it, a Start whose response lands after the operator moved the workspace pointer locks this
    * session onto the WRONG workspace, and the run's real root gets no session at all (#3381).
    */
-  readonly submittedRoot?: string | null | undefined;
+  readonly submittedRoot?: string | null;
 }
 
 export interface UseCodingWorkbenchEditorBridgeResult {
@@ -182,6 +182,13 @@ export interface UseCodingWorkbenchEditorBridgeResult {
   readonly deny: () => void;
   /** Repeats the last approve/deny decision after a `deliveryFailed` review. */
   readonly retry: () => void;
+  /**
+   * True while the run is active but the headless bridge session could not be registered (its
+   * last `registerSnapshot` attempt failed): every `keiko_changeset_edit` will be refused with
+   * NO_ACTIVE_SESSION until a later attempt succeeds. The caller surfaces this as one inline,
+   * body-free notice — never as a silent, indistinguishable-from-idle gap.
+   */
+  readonly bridgeUnavailable: boolean;
 }
 
 function headlessSnapshot(sessionId: string, root: string): EditorAgentSessionSnapshot {
@@ -271,7 +278,23 @@ export function useCodingWorkbenchEditorBridge(
   const [suspended, setSuspended] = useState(false);
 
   const sessionId = runId === undefined ? "" : `coding-workbench-edit-${runId}`;
-  const enabled = active && root !== null && sessionId !== "" && !suspended;
+  // Decoupled from `suspended` on purpose: `forceReconnect` below toggles `suspended` to force a
+  // full unsubscribe/resubscribe, and the reconnect-on-newly-observed-run effect must not treat
+  // that internal toggle as a fresh "run observed" transition (it would otherwise retrigger
+  // itself on every reconnect cycle it just started).
+  const shouldBeEnabled = active && root !== null && sessionId !== "";
+  const enabled = shouldBeEnabled && !suspended;
+  // True once a `registerSnapshot` call for the CURRENT session has been attempted and failed
+  // (network/BFF rejection) without a later attempt succeeding — the operator-visible signal that
+  // edits cannot land even though the run is active (epic #3384 cascade, end-to-end run
+  // 2026-09-05).
+  const [registrationFailed, setRegistrationFailed] = useState(false);
+  // Increments on EVERY failed registration attempt, including a second failure in a row where
+  // `registrationFailed` itself would otherwise stay `true` and never re-trigger the retry effect
+  // below (React skips a state update that sets a boolean to the value it already holds). The
+  // retry effect keys off this counter instead, so a persistently failing backend keeps getting
+  // retried rather than being retried exactly once.
+  const [registrationFailureEpoch, setRegistrationFailureEpoch] = useState(0);
 
   const handleApplyChangeset = useCallback((action: EditorAgentAction): void => {
     if (action.requiresReview === false) {
@@ -293,11 +316,32 @@ export function useCodingWorkbenchEditorBridge(
     [handleApplyChangeset],
   );
 
+  // A new session starts with no known registration failure — the prior session's outcome must
+  // never bleed into a run this hook has not even tried to register a bridge for yet.
+  useEffect(() => {
+    setRegistrationFailed(false);
+  }, [sessionId]);
+
   const registerSnapshot = useCallback(
-    (capability: string | undefined): Promise<EditorAgentSnapshotResponse | void> =>
-      root === null || sessionId === ""
-        ? Promise.resolve()
-        : postEditorAgentSessionSnapshot(headlessSnapshot(sessionId, root), capability),
+    async (capability: string | undefined): Promise<EditorAgentSnapshotResponse | void> => {
+      if (root === null || sessionId === "") return undefined;
+      try {
+        const response = await postEditorAgentSessionSnapshot(
+          headlessSnapshot(sessionId, root),
+          capability,
+        );
+        setRegistrationFailed(false);
+        return response;
+      } catch (error) {
+        setRegistrationFailed(true);
+        setRegistrationFailureEpoch((value) => value + 1);
+        // The underlying bridge's own registration effect (editorAgentBridge.ts) already treats a
+        // rejected `registerSnapshot` as availability-only and continues without a lease; this
+        // hook re-throws only so THAT existing handling is unchanged, after recording the
+        // operator-visible signal above.
+        throw error;
+      }
+    },
     [root, sessionId],
   );
 
@@ -315,6 +359,29 @@ export function useCodingWorkbenchEditorBridge(
     setSuspended(false);
     await wait(FORCE_RECONNECT_SETTLE_MS);
   }, []);
+
+  // Epic #3384 cascade, end-to-end run 2026-09-05: a run this window observes as active but whose
+  // headless bridge session could not be registered used to stay that way silently forever — the
+  // ordinary prop-driven (re)subscribe in `useEditorAgentBridge` only re-fires on an `enabled` or
+  // `agentSessionId` CHANGE, and neither changes merely because a registration attempt failed while
+  // the run stays active. `registerSnapshot` above bumps `registrationFailureEpoch` on every such
+  // failure; this effect is what actually DOES something about it: force one clean
+  // unsubscribe/resubscribe cycle (the same lever `decide()` below already uses after a failed
+  // decision), which schedules a fresh, debounced registration attempt. Keyed on the epoch — never
+  // on the `registrationFailed` boolean alone, which would stay `true` across a second consecutive
+  // failure and never re-trigger this effect — and guarded so `forceReconnect`'s OWN
+  // suspend/resume cycle (which also flips `enabled`) never schedules a second retry for the SAME
+  // failure. Net effect: for as long as the run stays active and registration keeps failing, the
+  // bridge keeps retrying roughly every reconnect-cycle-plus-debounce interval instead of every
+  // `keiko_changeset_edit` being refused NO_ACTIVE_SESSION until the operator reloads the page.
+  const retriedEpochRef = useRef(0);
+  useEffect(() => {
+    if (!enabled || registrationFailureEpoch === 0) return undefined;
+    if (retriedEpochRef.current === registrationFailureEpoch) return undefined;
+    retriedEpochRef.current = registrationFailureEpoch;
+    const timer = setTimeout(() => void forceReconnect(), FORCE_RECONNECT_SETTLE_MS);
+    return (): void => clearTimeout(timer);
+  }, [enabled, registrationFailureEpoch, forceReconnect]);
 
   // `lastDecisionRef` remembers which decision to retry: a failed Approve must resurface as a
   // retryable Approve, never silently as a Deny (or vice versa).
@@ -373,5 +440,6 @@ export function useCodingWorkbenchEditorBridge(
     approve,
     deny,
     retry,
+    bridgeUnavailable: enabled && registrationFailed,
   };
 }

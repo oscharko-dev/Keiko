@@ -31,7 +31,7 @@ export const WORKSPACE_LANGUAGES = Object.freeze([
 
 export type WorkspaceLanguage = (typeof WORKSPACE_LANGUAGES)[number];
 
-export type TestFramework = "vitest" | "jest" | "mocha" | "unknown";
+export type TestFramework = "vitest" | "jest" | "mocha" | "node-test" | "unknown";
 
 // A detected workspace carries TWO identities for one directory, and they are not interchangeable.
 // `root` is the realpath-admitted canonical root: every filesystem effect (discovery, reads, patch

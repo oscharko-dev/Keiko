@@ -24,14 +24,18 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { outboundTargetBlockedReason } from "./egress-policy.js";
 import { projectSafeCapabilities, type SafeModelCapability } from "./model-selection.js";
+import { validatedPrDescriptionLogoUrl } from "./prDescription/render.js";
+import type { PrDescriptionBranding } from "./prDescription/types.js";
 import type {
   CircuitBreakerConfig,
   CostClass,
   FigmaConnectorConfig,
+  GatewayBrandingConfig,
   GatewayConfig,
   InfillingAlignment,
   LatencyClass,
   ModelCapability,
+  ModelCapabilityPricing,
   ModelKind,
   ModelReasoningEffort,
   ModelProviderConfig,
@@ -107,8 +111,44 @@ const TOKEN_ACCOUNTING_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "scaleMilli",
   "offsetTokens",
 ]);
+const PRICING_KNOWN_KEYS: ReadonlySet<string> = new Set([
+  "inputUsdPerMillionTokens",
+  "outputUsdPerMillionTokens",
+]);
 
 export type EnvSource = Readonly<Record<string, string | undefined>>;
+
+const ENV_MODEL_PREFIX = "KEIKO_MODEL_";
+const ENV_MODEL_API_KEY_SUFFIX = "_API_KEY";
+
+function envModelProviderTokenQualifies(token: string, env: EnvSource): boolean {
+  const apiKey = env[`${ENV_MODEL_PREFIX}${token}${ENV_MODEL_API_KEY_SUFFIX}`];
+  const baseUrl = env[`${ENV_MODEL_PREFIX}${token}_BASE_URL`];
+  return (apiKey?.length ?? 0) > 0 && (baseUrl?.length ?? 0) > 0;
+}
+
+/**
+ * The ONE env-only Model Gateway provider-admission formula: a `KEIKO_MODEL_<TOKEN>_API_KEY` /
+ * `KEIKO_MODEL_<TOKEN>_BASE_URL` pair counts as a configured provider only when BOTH are present
+ * and non-empty — never the API key alone. Every caller that needs to know whether an env-only
+ * provider is configured (keiko-server's production Gateway composition, and the #3390 real-model
+ * qualification harness) shares this exact check, so none of them can drift into accepting a
+ * profile the others would refuse.
+ *
+ * Pass `modelId` to check one specific provider (its token is derived the same way production
+ * derives it: non-alphanumeric characters become `_`, then upper-cased); omit it to ask whether
+ * ANY env-only provider in `env` qualifies.
+ */
+export function hasConfiguredEnvModelProvider(env: EnvSource, modelId?: string): boolean {
+  if (modelId !== undefined) {
+    return envModelProviderTokenQualifies(modelId.replace(/[^A-Za-z0-9]/g, "_").toUpperCase(), env);
+  }
+  return Object.keys(env).some((key) => {
+    if (!key.startsWith(ENV_MODEL_PREFIX) || !key.endsWith(ENV_MODEL_API_KEY_SUFFIX)) return false;
+    const token = key.slice(ENV_MODEL_PREFIX.length, -ENV_MODEL_API_KEY_SUFFIX.length);
+    return token.length > 0 && envModelProviderTokenQualifies(token, env);
+  });
+}
 
 // Resolves an opaque, NON-SECRET credential reference (persisted in the config file as a provider's
 // `apiKeySecretRef`) to its plaintext secret, or undefined when the reference is unknown. The gateway
@@ -488,6 +528,49 @@ function optionalTokenAccountingField(
 ): Partial<Pick<ModelCapability, "tokenAccounting">> {
   const tokenAccounting = parseTokenAccounting(value, path);
   return tokenAccounting === undefined ? {} : { tokenAccounting };
+}
+
+function assertKnownPricingKeys(value: Record<string, unknown>, path: string): void {
+  for (const key of Object.keys(value)) {
+    if (!PRICING_KNOWN_KEYS.has(key)) {
+      throw new ConfigInvalidError(`${path}.${key} is not a recognised pricing field`);
+    }
+  }
+}
+
+function requireNonNegativeFiniteNumber(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new ConfigInvalidError(`${path} must be a non-negative finite number`);
+  }
+  return value;
+}
+
+// live-journey-readiness-1: public per-million-token USD list price, optional on every capability.
+// A model without this block carries no known dollar cost — a spend-budget check on an un-priced
+// model must fail closed, never assume free (see coding-sidecar-gateway.ts's
+// "spend-pricing-unavailable" reason).
+function parsePricing(value: unknown, path: string): ModelCapabilityPricing | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new ConfigInvalidError(`${path} must be an object`);
+  assertKnownPricingKeys(value, path);
+  return {
+    inputUsdPerMillionTokens: requireNonNegativeFiniteNumber(
+      value.inputUsdPerMillionTokens,
+      `${path}.inputUsdPerMillionTokens`,
+    ),
+    outputUsdPerMillionTokens: requireNonNegativeFiniteNumber(
+      value.outputUsdPerMillionTokens,
+      `${path}.outputUsdPerMillionTokens`,
+    ),
+  };
+}
+
+function optionalPricingField(
+  value: unknown,
+  path: string,
+): Partial<Pick<ModelCapability, "pricing">> {
+  const pricing = parsePricing(value, path);
+  return pricing === undefined ? {} : { pricing };
 }
 
 // Model id → KEIKO_MODEL_<UPPER>_ form: non-alphanumerics become "_", uppercased.
@@ -1227,6 +1310,7 @@ const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "preferredUseCases",
   "knownLimitations",
   "tokenAccounting",
+  "pricing",
 ]);
 
 function requireBoolean(value: unknown, path: string): boolean {
@@ -1458,6 +1542,7 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
     structuredOutput: requireBoolean(value.structuredOutput, `${path}.structuredOutput`),
     streaming: requireBoolean(value.streaming, `${path}.streaming`),
     ...optionalTokenAccountingField(value.tokenAccounting, `${path}.tokenAccounting`),
+    ...optionalPricingField(value.pricing, `${path}.pricing`),
     ...optionalToolCallingVerification(value, path, kind),
     supportsImageInput: requireBoolean(value.supportsImageInput, `${path}.supportsImageInput`),
     supportsDocumentInput: requireBoolean(
@@ -1738,6 +1823,39 @@ function parseFigmaConnectorConfig(raw: unknown): FigmaConnectorConfig | undefin
   return accessToken === undefined ? {} : { accessToken };
 }
 
+// Issue #3398: the operator declares a candidate logo URL only. Whether it actually renders is
+// decided once, downstream, by `resolvePrDescriptionBrandingFromConfig` reusing
+// `validatedPrDescriptionLogoUrl` — never restated here, and never rejected at load time, because
+// a bad branding value must degrade to Keiko's text-only attribution, not break config loading.
+function parseGatewayBrandingConfig(raw: unknown): GatewayBrandingConfig | undefined {
+  if (!isRecord(raw) || raw.branding === undefined) {
+    return undefined;
+  }
+  const block = raw.branding;
+  if (!isRecord(block)) {
+    throw new ConfigInvalidError("branding must be an object");
+  }
+  const logoUrl = optionalTrimmedString(block.logoUrl, "branding.logoUrl");
+  return logoUrl === undefined ? {} : { logoUrl };
+}
+
+/**
+ * Resolves the server-configured branding into the exact shape the PR-description renderer
+ * consumes. `validatedPrDescriptionLogoUrl` is the single owner of "is this a safe, immutable,
+ * publicly hosted HTTPS SVG"; an absent or invalid `branding.logoUrl` yields `{}`, which the
+ * renderer's own fallback turns into text-only "by Keiko" attribution — never a thrown error.
+ */
+export function resolvePrDescriptionBrandingFromConfig(
+  config: GatewayConfig,
+): PrDescriptionBranding {
+  const logoUrl = config.branding?.logoUrl;
+  if (logoUrl === undefined) {
+    return {};
+  }
+  const candidate: PrDescriptionBranding = { immutableLogoUrl: logoUrl, availability: "public" };
+  return validatedPrDescriptionLogoUrl(candidate) === undefined ? {} : candidate;
+}
+
 function parseCircuitBreaker(raw: unknown, path = "circuitBreaker"): CircuitBreakerConfig {
   const source = isRecord(raw) ? raw : {};
   return {
@@ -1943,6 +2061,7 @@ function buildGatewayConfig(
   const grounding = parseGroundingLimits(raw);
   const reranker = parseRerankerConfig(raw, env, egress, options);
   const figma = parseFigmaConnectorConfig(raw);
+  const branding = parseGatewayBrandingConfig(raw);
   return {
     providers,
     circuitBreaker: parseCircuitBreaker(raw.circuitBreaker),
@@ -1951,6 +2070,7 @@ function buildGatewayConfig(
     ...(reranker !== undefined ? { reranker } : {}),
     ...(egress !== undefined ? { egress } : {}),
     ...(figma !== undefined ? { figma } : {}),
+    ...(branding !== undefined ? { branding } : {}),
   };
 }
 

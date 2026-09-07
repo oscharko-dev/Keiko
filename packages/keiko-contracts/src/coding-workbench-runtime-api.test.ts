@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
 import {
+  CODING_WORKBENCH_ISSUE_NUMBER_MAX,
   CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS,
   CODING_WORKBENCH_RUNTIME_PREFERENCES,
   CODING_WORKBENCH_RUNTIME_SSE_EVENT_KINDS,
@@ -22,6 +24,30 @@ import {
 const AT = "2026-07-13T12:00:00.000Z";
 
 describe("Coding Workbench runtime API contracts", () => {
+  it("accepts only a bounded preview precondition attached to an issue intent", () => {
+    const start = {
+      requestId: "request-1",
+      taskIntent: "Fix issue",
+      requestedMode: "supervised-coding",
+    };
+    const accepted = { ...start, issueRef: "#42", expectedIssueBindingDigest: "a".repeat(64) };
+    expect(parseCodingWorkbenchRuntimeStartRequest(accepted)).toEqual({
+      ok: true,
+      value: accepted,
+    });
+    expect(
+      parseCodingWorkbenchRuntimeStartRequest({
+        ...start,
+        expectedIssueBindingDigest: accepted.expectedIssueBindingDigest,
+      }),
+    ).toMatchObject({ ok: false });
+    for (const expectedIssueBindingDigest of ["", "a".repeat(63), "A".repeat(64), {}, null]) {
+      expect(
+        parseCodingWorkbenchRuntimeStartRequest({ ...accepted, expectedIssueBindingDigest }),
+      ).toMatchObject({ ok: false });
+    }
+  });
+
   it("accepts browser start intent only and rejects forged runtime authority", () => {
     const start = {
       requestId: "request-1",
@@ -451,6 +477,160 @@ describe("Coding Workbench runtime API contracts", () => {
   });
 });
 
+describe("Coding Workbench issue binding contract (#3385)", () => {
+  const START = {
+    requestId: "request-1",
+    taskIntent: "Implement the accepted issue",
+    requestedMode: "supervised-coding",
+  };
+  const BINDING = {
+    schemaVersion: "1",
+    repositoryId: "repository-0123456789abcdef",
+    remoteDigest: "a".repeat(64),
+    issueNumber: 3385,
+    issueIdDigest: "b".repeat(64),
+    defaultBaseRef: "dev",
+    contentRevisionDigest: "c".repeat(64),
+    bindingDigest: "d".repeat(64),
+  };
+  const SNAPSHOT = {
+    schemaVersion: "1",
+    state: "running",
+    revision: 2,
+    updatedAt: AT,
+    runId: "run-1",
+    requestedMode: "supervised-coding",
+    effectiveMode: "supervised-coding",
+  };
+
+  // #3385: the start request carries the pasted reference as ONE bounded string. Its meaning —
+  // which repository, which issue, whether it exists — is resolved on the server; the contract only
+  // admits the transport shape. Whether a request carrying it may START is decided by the runtime
+  // orchestrator, which refuses the field outright while no issue resolver is composed
+  // (codingRuntimeOrchestrator.test.ts pins that fail-closed admission).
+  it("admits a bounded issue reference string on the start and retry requests", () => {
+    expect(parseCodingWorkbenchRuntimeStartRequest(START)).toMatchObject({ ok: true });
+    for (const issueRef of [
+      "https://github.com/oscharko-dev/Keiko/issues/3385",
+      "oscharko-dev/Keiko#3385",
+      "#3385",
+      "3385",
+      "a".repeat(GITHUB_ISSUE_REFERENCE_MAX_CHARS),
+    ]) {
+      const request = { ...START, issueRef };
+      expect(parseCodingWorkbenchRuntimeStartRequest(request), issueRef).toEqual({
+        ok: true,
+        value: request,
+      });
+      expect(parseCodingWorkbenchRuntimeRetryRequest(request), issueRef).toEqual({
+        ok: true,
+        value: request,
+      });
+    }
+  });
+
+  // A structured reference is still refused: the browser never authors repository identity or an
+  // issue number as separate trusted fields, only the raw text the server parses (the pre-resolver
+  // pin, kept). The remaining cases are the transport bounds every other start field already has.
+  it("refuses a structured, empty, oversized, or control-character issue reference", () => {
+    for (const issueRef of [
+      { ownerAndRepo: "oscharko-dev/Keiko", issueNumber: 3385 },
+      3385,
+      null,
+      "",
+      "   ",
+      "a".repeat(GITHUB_ISSUE_REFERENCE_MAX_CHARS + 1),
+      "#3385\u0000",
+      "#3385\n",
+      "#3385\u007f",
+    ]) {
+      expect(
+        parseCodingWorkbenchRuntimeStartRequest({ ...START, issueRef }),
+        JSON.stringify(issueRef),
+      ).toMatchObject({ ok: false });
+    }
+  });
+
+  it("projects a content-free issue binding on the snapshot", () => {
+    const snapshot = { ...SNAPSHOT, issueBinding: BINDING };
+    expect(validateCodingWorkbenchRuntimeSnapshot(snapshot)).toEqual({ ok: true, value: snapshot });
+    expect(validateCodingWorkbenchRuntimeSnapshot(SNAPSHOT)).toMatchObject({ ok: true });
+  });
+
+  // Both ends of the accepted issue-number range, so an off-by-one in either bound is caught rather
+  // than only the far-side rejection.
+  it("accepts both boundaries of the issue-number range", () => {
+    for (const issueNumber of [1, CODING_WORKBENCH_ISSUE_NUMBER_MAX]) {
+      expect(
+        validateCodingWorkbenchRuntimeSnapshot({
+          ...SNAPSHOT,
+          issueBinding: { ...BINDING, issueNumber },
+        }),
+        String(issueNumber),
+      ).toMatchObject({ ok: true });
+    }
+  });
+
+  it("refuses to carry issue content on the snapshot projection", () => {
+    for (const field of ["title", "body", "comments", "url", "remoteUrl", "issueText"]) {
+      expect(
+        validateCodingWorkbenchRuntimeSnapshot({
+          ...SNAPSHOT,
+          issueBinding: { ...BINDING, [field]: "Add a rate limiter to the ingest path" },
+        }),
+        field,
+      ).toMatchObject({ ok: false });
+    }
+  });
+
+  it("rejects a malformed issue binding field by field", () => {
+    const rejected: readonly Record<string, unknown>[] = [
+      { schemaVersion: "2" },
+      { repositoryId: "" },
+      { repositoryId: "../escape" },
+      { remoteDigest: "not-a-digest" },
+      { remoteDigest: "A".repeat(64) },
+      { issueIdDigest: "b".repeat(63) },
+      { contentRevisionDigest: 42 },
+      { bindingDigest: undefined },
+      { issueNumber: 0 },
+      { issueNumber: 2.5 },
+      // The far side of the range. Without this, deleting the upper bound from `isBoundedIssueNumber`
+      // left every case green: `0` pins the lower bound and accepting MAX pins that MAX is allowed,
+      // but neither notices that anything above it is allowed too.
+      { issueNumber: CODING_WORKBENCH_ISSUE_NUMBER_MAX + 1 },
+      { defaultBaseRef: "" },
+      { defaultBaseRef: "/dev" },
+      { defaultBaseRef: "feature//x" },
+      { defaultBaseRef: "feature/../x" },
+      { defaultBaseRef: "dev.lock" },
+      { defaultBaseRef: "dev branch" },
+      // Refs git itself refuses that a weaker second formula used to accept.
+      { defaultBaseRef: "dev/" },
+      { defaultBaseRef: "dev." },
+      { defaultBaseRef: ".hidden" },
+      { defaultBaseRef: "feature/.hidden" },
+      { defaultBaseRef: "-dev" },
+      { defaultBaseRef: "dev@{0}" },
+      { defaultBaseRef: "dev~1" },
+      { defaultBaseRef: "dev^" },
+      { defaultBaseRef: "dev:x" },
+      { defaultBaseRef: "dev?" },
+      { defaultBaseRef: "dev*" },
+      { defaultBaseRef: "a".repeat(256) },
+    ];
+    for (const override of rejected) {
+      expect(
+        validateCodingWorkbenchRuntimeSnapshot({
+          ...SNAPSHOT,
+          issueBinding: { ...BINDING, ...override },
+        }),
+        JSON.stringify(override),
+      ).toMatchObject({ ok: false });
+    }
+  });
+});
+
 describe("Coding Workbench runtime API failure branches", () => {
   const snapshot = {
     schemaVersion: "1",
@@ -687,4 +867,91 @@ describe("Coding Workbench runtime API failure branches", () => {
       parseCodingWorkbenchRuntimeResearchRevokeRequest({ requestId: "req-1", grantId: "grant-1" }),
     ).toMatchObject({ ok: false });
   });
+});
+
+describe("durable issue-bound draft delivery on the runtime snapshot", () => {
+  const issue = {
+    schemaVersion: "1",
+    repositoryId: "repository-1",
+    remoteDigest: "a".repeat(64),
+    issueIdDigest: "b".repeat(64),
+    bindingDigest: "c".repeat(64),
+    contentRevisionDigest: "d".repeat(64),
+    issueNumber: 42,
+    defaultBaseRef: "main",
+  };
+  const draft = {
+    schemaVersion: "1",
+    revision: 0,
+    phase: "push-proposed",
+    reason: "approval-required",
+    proposalId: "push-1",
+    proposalDigest: "a".repeat(64),
+    recordedAt: AT,
+    binding: {
+      runId: "run-1",
+      workspaceDigest: "e".repeat(64),
+      runtimeAuthorityDigest: "f".repeat(64),
+      envelopeDigest: "a".repeat(64),
+      remoteDigest: issue.remoteDigest,
+      issueBindingDigest: issue.bindingDigest,
+      issueIdDigest: issue.issueIdDigest,
+      issueNumber: issue.issueNumber,
+      repository: "owner/repository",
+      remoteAlias: "origin",
+      baseRef: issue.defaultBaseRef,
+      baseSha: "1".repeat(40),
+      headRef: "feature/issue-42",
+      headSha: "2".repeat(40),
+      verifiedCommitProposalId: "commit-1",
+      recoveryId: "delivery-1",
+    },
+  };
+  const snapshot = {
+    schemaVersion: "1",
+    state: "running",
+    revision: 1,
+    updatedAt: AT,
+    runId: "run-1",
+    issueBinding: issue,
+    draftDelivery: draft,
+  };
+
+  it("admits only a closed durable record with its complete frozen issue tuple", () => {
+    expect(validateCodingWorkbenchRuntimeSnapshot(snapshot)).toEqual({ ok: true, value: snapshot });
+  });
+
+  it.each([
+    { runId: undefined },
+    { runId: "run-2" },
+    { issueBinding: undefined },
+    { issueBinding: null },
+    { draftDelivery: null },
+    { draftDelivery: { ...draft, body: "private text" } },
+    { draftDelivery: { ...draft, approvalToken: "fixture" } },
+  ])("refuses missing or contaminated enclosing facts %j", (override) => {
+    expect(validateCodingWorkbenchRuntimeSnapshot({ ...snapshot, ...override }).ok).toBe(false);
+  });
+
+  it.each([
+    { bindingDigest: "e".repeat(64) },
+    { issueIdDigest: "e".repeat(64) },
+    { remoteDigest: "e".repeat(64) },
+    { issueNumber: 43 },
+    { defaultBaseRef: "dev" },
+  ])("refuses a different frozen issue component %j", (override) => {
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...snapshot,
+        issueBinding: { ...issue, ...override },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it.each(["idle", "succeeded", "recovery-required"])(
+    "preserves historical delivery facts in %s without implying a fresh grant",
+    (state) => {
+      expect(validateCodingWorkbenchRuntimeSnapshot({ ...snapshot, state }).ok).toBe(true);
+    },
+  );
 });

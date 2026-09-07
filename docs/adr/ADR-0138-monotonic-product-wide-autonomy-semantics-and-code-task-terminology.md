@@ -74,7 +74,8 @@ that data, not its home (ADR-0129 D5 unchanged). The user-facing meanings are:
   allowed; risky contained work and every external-file, internet, and delivery effect require
   approval.
 - **Full access** — non-denied task-workspace, external-file, and internet effects may run
-  unattended inside the validated Authority Envelope; delivery remains separately governed.
+  unattended inside the validated Authority Envelope; delivery remains separately governed, with
+  the narrow Code-task commit/push/draft-PR policy path specified in D3 item 5 below.
 
 ### D2 — One total, monotonic effect matrix
 
@@ -169,6 +170,88 @@ is:
    consume the matrix's approval-required cells. They remain envelope-gated, budget-charged, and
    sensitive-path-gated exactly as today. This preserves the Ask for approval meaning "reads and
    planning are allowed" without a special-case matrix row.
+
+5. **Git Delivery admission (#3386, epic #3384 correction 5 — added after initial adoption).**
+   `runBoundAuthority.authorizeGitDelivery` (`packages/keiko-server/src/gitDelivery/`) reads this
+   matrix directly: a network-reaching operation (fetch/pull/push/pull-request/merge/commit)
+   carries the `delivery` resource scope; every other Git operation
+   (status/diff/branch-list/branch-create/branch-switch/stage/unstage) carries
+   `workspace-contained`. `denied` maps to the pre-existing `mode-denied` reason (a hard denial;
+   the matrix never actually returns `denied` for either scope, so this is a closed fallback, not
+   a live path); `approval-required` maps to a dedicated `approval-required` denial reason,
+   redeemable through `GitDeliveryApprovalRedemption`; `allowed` proceeds.
+   **Redemption mechanism, corrected by the final-audit repair (#3390, closing the gap the rest of
+   this item's original text described as "redeemable" without any production caller ever
+   redeeming it):** two mechanisms, never combined for one admission attempt.
+   `deliveryApprovalDeferred` covers every `delivery`-scope operation whose OWN execute path
+   already enforces a mandatory, mode-independent consumed claim regardless of the repo/org policy
+   pack — by the time of this repair that is every Git delivery operation with a mounted
+   `/approve` route (`commit`, `push`, `pr` create/update, `merge`, `pr-mark-ready`,
+   `pr-description-apply`; see `policyPackMintability.ts`) — and simply defers the coarse layer's
+   own "approval-required" disposition to that downstream enforcement, exactly mirroring how
+   `autonomous-delivery` already bypasses the same matrix cell; it must be set at both the mint and
+   execute admission calls for such an operation (and at the continuity re-check before remote
+   dispatch), since minting produces no delivery effect of its own. A non-consuming peek
+   (`GitDeliveryApprovalStore.matches`) against the caller's already-parsed, already-bound claim
+   covers the remaining `workspace-contained` local mutations (branch-create/switch, stage/
+   unstage), which have no such operation-independent enforcement — the repo/org pack decides
+   per command whether a claim is even required, so deferring unconditionally there would let a
+   routine local edit skip human confirmation entirely in `governed-assist`. The now-superseded
+   "authority-admission" claim operation this item originally described — a coarse, run-identity-
+   bound token with no HTTP mint route anywhere — has been removed from
+   `GitDeliveryApprovalOperation`. `autonomous-delivery` is resolved outright at this layer per the
+   **capability-availability clarification** above: Full access's `delivery` cells are
+   `approval-required` in the shared matrix, but this coarse admission layer is not the execution
+   path that redeems them for an operation whose own execute path already carries mandatory,
+   mode-independent approval (`merge`, via its pre-existing approval-gated pack and
+   `/merge/approve` route; `commit`, via the unconditional consumed-claim check its execute route
+   now applies regardless of mode, added by #3386). The scope check that precedes
+   this matrix lookup (`hasRequiredScopes`) now genuinely passes for a `delivery`-scoped operation
+   in every mode: `productionRuntimeWorkspaceAuthority.ts` mints `source-control.read` /
+   `source-control.write` and `delivery-substrate` (with the paired `connector-access` action class
+   the shared contract's connector-scope invariant requires) whenever the matrix does not deny the
+   `delivery` resource scope for the effective mode — which it never does, in any of the three modes
+   (epic #3384 correction 5, item 1, closing a residual finding on this record's first landing).
+   `runBoundAuthority.ts` still carries `deliveryScopeCheckDeferredToModeDecision`, the defensive
+   fallback described in the previous revision of this paragraph, which skips the same scope check
+   for a `delivery`-scoped operation below `autonomous-delivery`; with the corrected minting it is no
+   longer load-bearing for correctness — removing it would not change any admission outcome, because
+   the scope it would otherwise gate on is already present — and it is kept only so a future, more
+   permissive edit to `hasRequiredScopes` cannot silently reopen the earlier gap. The network-policy
+   leg of the same check stays intentionally mode-gated: `runtimeNetworkPolicy` mints a
+   connector-scoped egress policy only at `autonomous-delivery`. #3387 has since landed `push`'s and
+   `pr` create/update's own mint routes and unconditional execute-path approval enforcement
+   (mirroring `commit`/`merge`), and the final-audit repair (#3390) made the coarse admission
+   layer defer to that enforcement for every one of those operations — so this network-policy leg
+   no longer determines the outcome for `push`/`pull-request`/`merge`/`commit` below
+   `autonomous-delivery` either (`deliveryScopeCheckDeferredToModeDecision` already skips it, and
+   the mode/approval matrix resolves before this leg would matter). `fetch`/`pull` have no
+   `GitDeliveryActionKind` / kernel policy pack of their own, so they cannot rely on downstream
+   kernel approval enforcement. Their guarded `/api/git-delivery/{fetch,pull}/approve` routes
+   validate the same bounded request and active run authority as execute, then mint into the shared
+   approval store. Their lower-mode `approval-required` disposition is redeemed the SAME way
+   `local-mutation` is redeemed — a non-consuming peek (`GitDeliveryApprovalStore.matches`) against
+   that claim bound to `{projectId, operation, command}` with no run identity, followed by real
+   single-use consumption immediately after admission passes. The Git Client's explicit Fetch/Pull
+   action performs this mint-then-execute sequence, so Ask and Supervised modes have a mounted,
+   user-driven redemption path rather than a test-only store call. The continuity re-check right
+   before the actual network dispatch defers
+   (`deliveryApprovalDeferred: true`) to that already-verified consumption rather than peeking the
+   now-emptied record a second time.
+
+   The end-user Code-task tool path has one narrower Full access execution rule. After a separate
+   commit, push, or draft-pull-request proposal, `codingToolAuthorityPort.ts` may admit the execute
+   without a per-action operator claim only when the freshly revalidated envelope is
+   `autonomous-delivery` and carries every action-specific class, source-control scope, network
+   policy, workspace binding, deployment ceiling, and expiry required by that exact request. The
+   owning execution service rechecks both the live Full-mode decision and the same mutation guard
+   at the effect boundary, then passes the existing `{ required: false }` policy requirement to the
+   Git kernel. It never mints `GIT_DELIVERY_LOCAL_OPERATOR_ID` or an approval token. Ask for
+   approval and Supervised workspace retain their exact, one-use operator approval path. The model
+   still makes a separate execute call after proposal, and merge remains explicitly approval-gated
+   under ADR-0087. The generic repository-agent boolean facade has neither this trusted Code-task
+   binding nor an approval channel and therefore continues to reject delivery execute in every
+   mode.
 
 Every existing policy consumer named above must be enumerated and regression-tested in the
 implementing child (#2385) before merge; no surface may keep a local copy of the old matrix or

@@ -58,6 +58,43 @@ We will introduce a dedicated remote publish gateway in keiko-tools, a Node push
 
 The local kernel (`runGitMutation`) and the local adapter are **unchanged**. The structural invariant tests proving the local allowlist excludes network verbs remain true because push never flows through the local adapter.
 
+Issue-bound Workbench delivery (#3387) adds an optional `verifiedCommitSha` operand to the same
+command, contract and adapter. It must be a complete 40- or 64-character Git object id. The
+refspec is `<verifiedCommitSha>:refs/heads/<literal feature branch>`; a moving local branch can
+never substitute another commit after approval. This path rejects upstream tracking setup,
+ref expressions, forced updates and non-branch destinations. The existing manual branch-based
+push remains supported. The run owner binds the approved repository, remote, base and head,
+checks authority before dispatch and reconciles the actual remote head afterwards; the argv
+builder alone does not grant delivery authority. A real bare-remote test advances the local
+branch after approval and proves only the approved immutable commit is published.
+
+Verified issue-bound pushes also capture an exact canonical GitHub transport URL. The workspace
+Git metadata owner creates a temporary minimal bare Git view in the existing executor-owned
+ephemeral directory facility, outside both the authorized checkout and its Git metadata. It shares
+only the authorized object store and bounded shallow identities. The dedicated push executor selects that view, suppresses
+global/system Git configuration, disables HTTP redirects and passes the approved URL literally.
+It never reopens the checkout's live remote, push-URL or URL-rewrite configuration for that effect.
+The temporary view carries no source index, branch refs, hooks or original config and is removed
+after the attempt. Pre-dispatch checks bind directory identities and the exact generated metadata
+contents. The workspace boundary denies access to that external effect directory; protection from
+an arbitrary process with the same host-user privileges is the separate runtime-containment
+qualification (#2951), not a property of a temporary pathname or an inode check.
+Existing authority, cancellation, environment redaction and the push-only
+allowlist still apply. This is transient effect metadata, not another managed workspace or clone.
+
+For that verified HTTPS path, Git uses the standard `gh auth git-credential` protocol through one
+host-scoped helper after clearing inherited helpers. The helper executable is resolved by the
+existing trusted PATH owner and its absolute path is quoted for Git's credential shell. It targets
+only `https://github.com`, pins the gh host and noninteractive behavior, and refuses account/config
+selectors resolving inside the managed workspace. Keiko does not invoke the helper separately or
+read its credential bytes; Git and gh exchange them directly. SSH keeps its existing account/agent
+lane. Hermetic tests exercise the actual Git credential protocol using synthetic values and prove
+a hostile configured helper executes without the reset and is excluded with it; they do not qualify
+live authentication or native Windows credential execution.
+
+Preparation failures use the production factory's existing activity-log and structured diagnostic
+ports with the run correlation. No remote URL, path or credential enters those events.
+
 ### D2 — The publish-rejection taxonomy is derived in the trusted layer, surfaced as typed tokens
 
 `GitPublishRejectionReason` is a closed union: `non-fast-forward | fetch-first | no-upstream | auth-failed | permission-denied | protected-ref | remote-unavailable | unknown`. The Node executor (`git-publish-node.ts`) classifies a non-zero `git push` exit by matching git's own English status phrases in the captured (secret-redacted) output via the pure `classifyGitPublishRejection` matcher, then maps the reason to:

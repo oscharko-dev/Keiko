@@ -7,8 +7,18 @@ import {
   compareCodingWorkbenchModeAuthority,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { useAutonomyModePolicy } from "../../hooks/useAutonomyModePolicy";
+import {
+  useGitHubIssueReaderAuthorization,
+  type GitHubIssueReaderAuthorization,
+} from "../../hooks/useGitHubIssueReaderAuthorization";
+import { useOptionalChatSessionProject } from "../../context/ChatSessionContext";
+import {
+  useCodingWorkbenchTranslate,
+  type CodingWorkbenchTranslate,
+} from "../coding-workbench/coding-workbench-i18n";
 import { useSettingsTranslate as useTranslate, type I18nTranslate } from "./settings-i18n";
 import styles from "./AutonomySettings.module.css";
+import intakeStyles from "../coding-workbench/CodingWorkbenchIssueIntake.module.css";
 
 const MODE_KEYS = {
   "governed-assist": {
@@ -90,6 +100,113 @@ function ModeOption({
   );
 }
 
+function GitHubIssueAccessToggle({
+  grant,
+  disabled,
+  describedBy,
+  t,
+}: {
+  readonly grant: GitHubIssueReaderAuthorization;
+  readonly disabled: boolean;
+  readonly describedBy: string;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const id = useId();
+  return (
+    <label className={styles.option} data-selected={grant.authorized} htmlFor={id}>
+      <input
+        id={id}
+        type="checkbox"
+        checked={grant.authorized}
+        disabled={disabled}
+        aria-describedby={describedBy}
+        onChange={(event) => {
+          grant.change(event.target.checked);
+        }}
+      />
+      <span className={styles.optionText}>
+        <strong>{t("codingWorkbench.githubAccess.toggle")}</strong>
+        <span>
+          {grant.authorized
+            ? t("codingWorkbench.githubAccess.enabled")
+            : t("codingWorkbench.githubAccess.disabled")}
+        </span>
+        {grant.repositoryId === null ? null : (
+          <span>
+            {t("codingWorkbench.githubAccess.repositoryId")}:{" "}
+            <code className={`mono ${intakeStyles["cmp-issue-grant-id"] ?? ""}`}>
+              {grant.repositoryId}
+            </code>
+          </span>
+        )}
+      </span>
+    </label>
+  );
+}
+
+function GitHubIssueAccessStatus({
+  grant,
+  repositoryPath,
+  t,
+}: {
+  readonly grant: GitHubIssueReaderAuthorization;
+  readonly repositoryPath: string | null;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <>
+      {/* A live region without role="status": the clamp notice above owns that role on this
+          surface, and the loading sentence must not be mistaken for it. */}
+      <p className={styles.footnote} aria-live="polite" aria-atomic="true">
+        {grant.pending ? t("codingWorkbench.githubAccess.loading") : ""}
+      </p>
+      {repositoryPath === null ? (
+        <p className={styles.notice}>{t("codingWorkbench.githubAccess.noRepository")}</p>
+      ) : null}
+      {grant.error === null ? null : (
+        <p className={styles.error} role="alert">
+          {t(`codingWorkbench.githubAccess.error.${grant.error}`)}
+        </p>
+      )}
+    </>
+  );
+}
+
+/**
+ * The per-checkout GitHub issue reader grant (#3385). Server-persisted and revisioned like the
+ * autonomy mode above it; keyed on the SELECTED project path, which the server accepts only as a
+ * registered project and resolves to a content-free repository id itself. The id is the only
+ * identity shown — never the path, never a remote.
+ *
+ * Its strings live in the Coding Workbench feature catalog because the grant is that feature's
+ * capability; the settings catalog is not this change's to extend.
+ */
+function GitHubIssueAccessSettings(): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const repositoryPath = useOptionalChatSessionProject()?.path ?? null;
+  const grant = useGitHubIssueReaderAuthorization(repositoryPath);
+  const baseId = useId();
+  const titleId = `${baseId}-github-access-title`;
+  const descriptionId = `${baseId}-github-access-description`;
+  return (
+    <fieldset className={styles.fieldset} aria-labelledby={titleId}>
+      <legend id={titleId}>{t("codingWorkbench.githubAccess.title")}</legend>
+      <p id={descriptionId} className={styles.footnote}>
+        {t("codingWorkbench.githubAccess.description")}
+      </p>
+      <div className={styles.group}>
+        <GitHubIssueAccessToggle
+          grant={grant}
+          disabled={grant.pending || repositoryPath === null}
+          describedBy={descriptionId}
+          t={t}
+        />
+      </div>
+      <GitHubIssueAccessStatus grant={grant} repositoryPath={repositoryPath} t={t} />
+    </fieldset>
+  );
+}
+
 export function AutonomySettings(): ReactNode {
   const t = useTranslate();
   const groupId = `${useId()}-product-autonomy`;
@@ -139,6 +256,7 @@ export function AutonomySettings(): ReactNode {
           {t(`settings.autonomy.error.${policy.error}`)}
         </p>
       )}
+      <GitHubIssueAccessSettings />
       <p className={styles.footnote}>{t("settings.autonomy.footnote")}</p>
     </section>
   );

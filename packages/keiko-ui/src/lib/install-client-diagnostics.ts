@@ -16,8 +16,9 @@
 // still sees every diagnostic even when the network call below is slow, throttled, or fails) and a
 // best-effort POST to `POST /api/diagnostics/client` (packages/keiko-server/src/
 // client-diagnostics-routes.ts) is added alongside it, so the same already-redacted, already-bounded
-// string also reaches the server's activity log — the machine-reconstruction surface the rest of
-// epic #3233 builds. The wire contract (`packages/keiko-contracts/src/diagnostics.ts`) treats the
+// string and its closed body-free metadata also reach the server's activity log — the
+// machine-reconstruction surface the rest of epic #3233 builds. The wire contract
+// (`packages/keiko-contracts/src/diagnostics.ts`) treats the
 // browser as untrusted input regardless of what this module sends; nothing here is a second place
 // that does redaction, it only forwards the SAME string `reportClientDiagnostic` callers already
 // bounded and redacted by convention.
@@ -105,6 +106,8 @@ function parsedSseReadyState(digit: string): ClientDiagnosticReadyState {
 function clientDiagnosticPostBody(
   message: string,
   correlationId: string | undefined,
+  gitChangeDescription: ClientDiagnosticMeta["gitChangeDescription"],
+  workspaceTrustBinding: ClientDiagnosticMeta["workspaceTrustBinding"],
 ): ClientDiagnosticIngestRequest {
   const bounded =
     message.length > CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH
@@ -113,13 +116,22 @@ function clientDiagnosticPostBody(
   const clientTs = new Date().toISOString();
   const validId = validCorrelationId(correlationId);
   const sseMatch = SSE_DIAGNOSTIC_MESSAGE_PATTERN.exec(message);
-  if (sseMatch === null) return { message: bounded, clientTs, correlationId: validId };
+  if (sseMatch === null)
+    return {
+      message: bounded,
+      clientTs,
+      correlationId: validId,
+      gitChangeDescription,
+      workspaceTrustBinding,
+    };
   const readyStateDigit = sseMatch[1];
   if (readyStateDigit === undefined) return { message: bounded, clientTs, correlationId: validId };
   return {
     message: bounded,
     clientTs,
     correlationId: validId,
+    gitChangeDescription,
+    workspaceTrustBinding,
     readyState: parsedSseReadyState(readyStateDigit),
     kind: "sse-error",
   };
@@ -188,7 +200,12 @@ function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMe
     return;
   }
   try {
-    const body = clientDiagnosticPostBody(message, meta?.correlationId);
+    const body = clientDiagnosticPostBody(
+      message,
+      meta?.correlationId,
+      meta?.gitChangeDescription,
+      meta?.workspaceTrustBinding,
+    );
     void bffFetchJson<undefined>("/api/diagnostics/client", {
       method: "POST",
       body: JSON.stringify(body),

@@ -582,3 +582,142 @@ describe("useCodingWorkbenchEditorBridge — run-bound root", () => {
     expect(latestSnapshot.workspaceRoot).toBe("/repo/other-workspace");
   });
 });
+
+// Epic #3384 cascade, end-to-end run 2026-09-05: a run this window observed as active whose
+// headless bridge session could not be registered used to stay that way forever — nothing in the
+// ordinary prop-driven (re)subscribe (keyed on `enabled`/`agentSessionId`, neither of which changes
+// merely because a registration attempt failed) ever retried it, so every `keiko_changeset_edit`
+// kept being refused NO_ACTIVE_SESSION until the operator reloaded the page. These tests hold the
+// hook to actually retrying via the existing `forceReconnect` lever for as long as the run stays
+// active and registration keeps failing — including a SECOND consecutive failure, which a naive
+// "retry once on failure" implementation would miss.
+describe("useCodingWorkbenchEditorBridge — registration retry", () => {
+  it("does not force a reconnect cycle while registration keeps succeeding", async () => {
+    renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
+    );
+    await flushMicrotasks();
+    expect(createSourceSpy).toHaveBeenCalledTimes(1);
+    // Give any (wrongly triggered) retry cycle every chance to run — it must not, since nothing
+    // ever failed.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    });
+    expect(createSourceSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries registration via a forced reconnect after a failed attempt without any external trigger", async () => {
+    postSnapshotSpy.mockRejectedValueOnce(new Error("network unreachable"));
+    postSnapshotSpy.mockResolvedValue({
+      snapshot: null,
+      bridgeDecisionCapability: "A".repeat(43),
+    });
+    const { result } = renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
+    );
+    // The first registration attempt fails and is surfaced.
+    await waitFor(
+      () => {
+        expect(result.current.bridgeUnavailable).toBe(true);
+      },
+      { timeout: 2_000 },
+    );
+    // Nothing about `root`/`runId`/`active` changed and nothing external retried it — only the
+    // hook's own forced reconnect can make a second attempt happen, and it does. Wait for the
+    // (monotonic, never-regressing) call count rather than `bridgeUnavailable` itself, which dips
+    // transiently to `false` mid-cycle (`enabled` goes false for the ~120ms the reconnect is
+    // suspended, and `bridgeUnavailable` is defined as `enabled && registrationFailed`).
+    await waitFor(
+      () => {
+        expect(postSnapshotSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+      },
+      { timeout: 2_000 },
+    );
+    const lastSnapshot = postSnapshotSpy.mock.calls.at(-1)?.[0] as { workspaceRoot: string };
+    expect(lastSnapshot.workspaceRoot).toBe("/repo/task-1");
+    await waitFor(() => {
+      expect(result.current.bridgeUnavailable).toBe(false);
+    });
+    // The now-registered session actually forms a live bridge — the shared registry never opens
+    // a stream for a session that never registered a capability.
+    await waitFor(() => {
+      expect(createSourceSpy).toHaveBeenCalled();
+    });
+
+    // Recovery holds: it does not flip back to unavailable once healthy.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    });
+    expect(result.current.bridgeUnavailable).toBe(false);
+  });
+
+  it("keeps retrying across a second consecutive failure instead of giving up after the first retry", async () => {
+    postSnapshotSpy
+      .mockRejectedValueOnce(new Error("network unreachable"))
+      .mockRejectedValueOnce(new Error("network unreachable"))
+      .mockResolvedValue({ snapshot: null, bridgeDecisionCapability: "A".repeat(43) });
+    const { result } = renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
+    );
+    // A naive "retry exactly once" implementation would get stuck after the second failure and
+    // never reach a third attempt. `bridgeUnavailable` dips transiently to `false` mid-cycle
+    // (`enabled` itself goes false for the ~120ms the reconnect is suspended), so the call count
+    // — monotonic, never regresses — is the reliable signal that a genuine THIRD attempt was made.
+    await waitFor(
+      () => {
+        expect(postSnapshotSpy.mock.calls.length).toBeGreaterThanOrEqual(3);
+      },
+      { timeout: 3_000 },
+    );
+    await waitFor(() => {
+      expect(result.current.bridgeUnavailable).toBe(false);
+    });
+  });
+});
+
+describe("useCodingWorkbenchEditorBridge — bridgeUnavailable", () => {
+  it("reports bridgeUnavailable while the run is active but registration keeps failing, and clears once it succeeds", async () => {
+    postSnapshotSpy.mockRejectedValue(new Error("network unreachable"));
+    const { result } = renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
+    );
+    expect(result.current.bridgeUnavailable).toBe(false);
+
+    await waitFor(() => {
+      expect(result.current.bridgeUnavailable).toBe(true);
+    });
+
+    postSnapshotSpy.mockResolvedValue({ snapshot: null, bridgeDecisionCapability: "A".repeat(43) });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+    await waitFor(() => {
+      expect(result.current.bridgeUnavailable).toBe(false);
+    });
+  });
+
+  it("never reports bridgeUnavailable while the run is not active", async () => {
+    postSnapshotSpy.mockRejectedValue(new Error("network unreachable"));
+    const { result } = renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: false }),
+    );
+    await flushMicrotasks();
+    expect(result.current.bridgeUnavailable).toBe(false);
+  });
+
+  it("clears a stale registration failure for a new run rather than carrying the prior session's outcome", async () => {
+    postSnapshotSpy.mockRejectedValue(new Error("network unreachable"));
+    const { result, rerender } = renderHook(
+      (props: { runId: string }) =>
+        useCodingWorkbenchEditorBridge({ root: "/repo/task-1", ...props, active: true }),
+      { initialProps: { runId: "run-1" } },
+    );
+    await waitFor(() => {
+      expect(result.current.bridgeUnavailable).toBe(true);
+    });
+
+    postSnapshotSpy.mockResolvedValue({ snapshot: null, bridgeDecisionCapability: "A".repeat(43) });
+    rerender({ runId: "run-2" });
+    expect(result.current.bridgeUnavailable).toBe(false);
+  });
+});

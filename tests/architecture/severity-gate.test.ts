@@ -32,6 +32,7 @@ const STRICT_DIRECTION_VARIANTS = [
   "1",
   "2",
   "2b",
+  "2c",
   "3a",
   "3b",
   "3c",

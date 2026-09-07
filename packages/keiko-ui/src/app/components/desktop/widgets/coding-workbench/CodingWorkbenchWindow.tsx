@@ -1,6 +1,23 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import {
+  CodingWorkbenchDeliveryReview,
+  approvalHelpKey,
+  isDeliveryPermission,
+} from "./CodingWorkbenchDeliveryReview";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
+import { fetchCodingWorkbenchJourneyRefresh } from "@/lib/api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { correlationIdOf } from "@/lib/client-error-summary";
 import type {
   CodingWorkbenchActionClass,
   CodingWorkbenchApprovalRisk,
@@ -22,6 +39,23 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { isCodingWorkbenchModel } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { useTranslate } from "@/lib/i18n";
+import { CodingWorkbenchCiReadiness } from "./CodingWorkbenchCiReadiness";
+import {
+  CodingWorkbenchDraftDelivery,
+  type WorkbenchDescriptionReviewTarget,
+} from "./CodingWorkbenchDraftDelivery";
+import {
+  CodingWorkbenchJourneyOutcome,
+  createPrMarkReadyProposeHandler,
+  type CodingWorkbenchJourneyChangedFilesSummary,
+} from "./CodingWorkbenchJourneyOutcome";
+import { CodingWorkbenchCommitResult } from "./CodingWorkbenchCommitResult";
+import {
+  CodingWorkbenchCommitReview,
+  reviewForPermission,
+  approvalReviewRequestId,
+  StageReviewDiagnostic,
+} from "./CodingWorkbenchCommitReview";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -75,13 +109,16 @@ import {
   RetryMessage,
   type RetryMessageProps,
 } from "./CodingWorkbenchChanges";
+import { useCodingWorkbenchChanges } from "@/lib/useCodingWorkbenchChanges";
 import { CodexSubscriptionAuthCard } from "./CodingWorkbenchModelCards";
 import {
   useCodingWorkbenchRunWorkspace,
+  type CodingWorkbenchRepositoryTrustBinding,
   type CodingWorkbenchRunWorkspace,
   type CodingWorkbenchRunWorkspaceBinding,
 } from "./useCodingWorkbenchRunWorkspace";
 import { ResearchGrantChip } from "./CodingWorkbenchResearchGrant";
+import { CodingWorkbenchTrustAffordance } from "./CodingWorkbenchTrustAffordance";
 import { requestGatewayModelCatalogRefresh } from "../shared/gatewaySetupBus";
 import {
   activeRunState,
@@ -93,6 +130,11 @@ import {
   visibleAlert,
 } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
+import {
+  codingWorkbenchIssueTaskId,
+  type AcceptedWorkbenchIssue,
+} from "./useCodingWorkbenchIssueIntake";
+import { CodingWorkbenchIssueChip } from "./CodingWorkbenchIssueChip";
 
 const EMPTY_WORKSPACE = {
   activeBinding: null,
@@ -165,6 +207,83 @@ function latestChangesSignal(events: readonly CodingWorkbenchRuntimeSseEvent[]):
     if (event?.kind === "status" || event?.eventKind === "diff-summarized") return event.cursor;
   }
   return null;
+}
+
+/** Joins `CodingWorkbenchChanges`' own live file list to a bounded count + truncation flag (AC2) —
+ * never a path, a diff or the underlying provider error detail. */
+function changedFilesSummary(
+  changes: ReturnType<typeof useCodingWorkbenchChanges>,
+): CodingWorkbenchJourneyChangedFilesSummary {
+  if (changes.status === "ready") {
+    return { status: "ready", fileCount: changes.files.length, truncated: changes.truncated };
+  }
+  if (changes.status === "loading") return { status: "loading", fileCount: 0, truncated: false };
+  return { status: "unavailable", fileCount: 0, truncated: false };
+}
+
+interface CodingWorkbenchJourneyState {
+  readonly outcome: JourneyOutcome | undefined;
+  readonly onRefresh: () => Promise<void>;
+}
+
+/**
+ * Read-only journey observation/reconciliation (#3389 AC1/AC5/AC6). Admitted server-side by the
+ * per-checkout GitHub-reader grant, never the run-bound mutation gate, so a manual refresh keeps
+ * working after the run has terminated. Never mints, requests or implies merge/issue-close
+ * authority — this only reads what the server already observed.
+ */
+function useCodingWorkbenchJourney(runId: string | undefined): CodingWorkbenchJourneyState {
+  const [outcome, setOutcome] = useState<JourneyOutcome | undefined>(undefined);
+  const generation = useRef(0);
+  const refresh = useCallback(async (): Promise<void> => {
+    if (runId === undefined) return;
+    const requestId = (generation.current += 1);
+    const result = await fetchCodingWorkbenchJourneyRefresh({ runId });
+    if (generation.current !== requestId) return;
+    setOutcome(result.status === "observed" ? result.outcome : undefined);
+  }, [runId]);
+  useEffect(() => {
+    setOutcome(undefined);
+    if (runId === undefined) return;
+    refresh().catch((error: unknown) => {
+      // Owner audit b1-14 — mirror _useJourneyActions.ts's own failure report: prefer the failed
+      // request's own ApiError.correlationId so this diagnostic joins server.log, falling back to
+      // runId only when the error carries none.
+      reportClientDiagnostic("[keiko] journey initial refresh failed", {
+        correlationId: correlationIdOf(error) ?? runId,
+      });
+    });
+    // The manual "Refresh observed status" control surfaces a failed retry through the card's own
+    // action feedback; this initial load only needs a body-free diagnostic, not a second UI path.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh is stable per runId already
+  }, [runId]);
+  return { outcome, onRefresh: refresh };
+}
+
+/**
+ * Builds the Coding Workbench's `onProposeReady` from the journey outcome's own exported mark-ready
+ * helper (#3389 AC3), bound to the workspace root the window already names `projectId` everywhere
+ * else in this file's family (`GovernedPullRequestCard`, `GitClientWindow`: "the active project root
+ * acts as the projectId" — AGENTS.md §5 reuse, not a second identity). Undefined whenever either the
+ * outcome or a real root is missing, so `markReadyAvailable` downstream stays exactly that same
+ * `undefined` check — the control is never offered as clickable without a handler genuinely backed
+ * by a real mint/execute request.
+ */
+function useMarkReadyPropose(
+  outcome: JourneyOutcome | undefined,
+  projectId: string | null,
+): (() => Promise<void>) | undefined {
+  return useMemo(() => {
+    if (outcome === undefined || projectId === null || projectId === "") return undefined;
+    return createPrMarkReadyProposeHandler(outcome, projectId);
+  }, [outcome, projectId]);
+}
+
+function optionalMarkReadyHandler(handler: (() => Promise<void>) | undefined): {
+  readonly onProposeReady?: () => Promise<void>;
+} {
+  if (handler === undefined) return {};
+  return { onProposeReady: handler };
 }
 
 interface ResumeModeSelection {
@@ -281,9 +400,21 @@ function selectedResumeMode(
 export interface CodingWorkbenchGitTarget {
   readonly root: string | null;
   readonly binding: "repository" | "task-workspace";
+  readonly repositoryDialog?: "clone" | "open";
+  readonly descriptionReview?: WorkbenchDescriptionReviewTarget;
 }
 
 function noopOpenGit(_target: CodingWorkbenchGitTarget): void {}
+
+function workbenchRepositoryRoot(
+  runIsActive: boolean,
+  runBoundRoot: string | null,
+  activeWorkspace: WorkbenchWorkspaceApi,
+  selectedRoot: string | undefined,
+): string | null {
+  if (!runIsActive) return activeWorkspace.activeInstance?.repositoryRoot ?? selectedRoot ?? null;
+  return runBoundRoot ?? activeWorkspace.activeBinding?.activeRoot ?? selectedRoot ?? null;
+}
 
 type WorkbenchWorkspaceApi = UseCodingWorkbenchRuntimeInput["workspace"];
 
@@ -298,6 +429,30 @@ function workspaceBindingPendingOf(workspace: WorkbenchWorkspaceApi): boolean {
   return workspace.loading || workspace.switching;
 }
 
+// Verification in a managed worktree uses its repository's package-script trust, and independently
+// rechecks that both manifests still have the same basis. A private worktree is never a trust target.
+function liveRepositoryTrustBindingOf(
+  workspace: WorkbenchWorkspaceApi,
+  projection: CodingWorkbenchWorkspaceProjection | null,
+): CodingWorkbenchRepositoryTrustBinding | null {
+  const instance = workspace.activeInstance;
+  if (
+    workspace.error !== null ||
+    workspaceBindingPendingOf(workspace) ||
+    instance === null ||
+    workspace.activeBinding?.workspaceId !== instance.workspaceId ||
+    projection?.workspaceId !== instance.workspaceId
+  ) {
+    return null;
+  }
+  return {
+    repositoryRoot: instance.repositoryRoot,
+    repositoryId: instance.repositoryId,
+    workspaceId: instance.workspaceId,
+    correlationId: instance.auditCorrelationId,
+  };
+}
+
 function liveWorkspaceIdentity(
   workspace: WorkbenchWorkspaceApi,
   state: CodingWorkbenchRuntimeState,
@@ -306,7 +461,36 @@ function liveWorkspaceIdentity(
     root: liveWorkspaceRootOf(workspace),
     taskBranch: workspace.activeInstance?.taskBranch ?? null,
     workspace: state.workspace.value,
+    trust: liveRepositoryTrustBindingOf(workspace, state.workspace.value),
   };
+}
+
+function validatedRunTrustBinding(
+  runWorkspace: CodingWorkbenchRunWorkspaceBinding,
+): CodingWorkbenchRepositoryTrustBinding | null {
+  const current = runWorkspace.bound;
+  const trust = current?.trust;
+  const workspace = current?.workspace;
+  if (trust === undefined || trust === null || workspace === undefined || workspace === null) {
+    return null;
+  }
+  return trust.workspaceId === workspace.workspaceId ? trust : null;
+}
+
+/** The trust target named by the visible run. A live shell switch cannot retarget it. */
+function sessionRepositoryTrustBinding(
+  state: CodingWorkbenchRuntimeState,
+  runWorkspace: CodingWorkbenchRunWorkspaceBinding,
+  activeWorkspace: WorkbenchWorkspaceApi,
+): CodingWorkbenchRepositoryTrustBinding | null {
+  if (state.mutation.kind === "start" && state.mutation.status === "pending") return null;
+  if (!activeRunState(state.run.value?.state)) {
+    return liveRepositoryTrustBindingOf(activeWorkspace, state.workspace.value);
+  }
+  const bound = validatedRunTrustBinding(runWorkspace);
+  if (bound === null) return null;
+  const runId = state.run.value?.runId;
+  return { ...bound, correlationId: runId ?? bound.correlationId };
 }
 
 /** The run-scoped workspace lock, wired from the live binding (#3381 review). */
@@ -478,6 +662,24 @@ function RunWorkspaceMismatchNotice({ visible }: { readonly visible: boolean }):
   );
 }
 
+/**
+ * Epic #3384 cascade: a refused edit used to leave the operator with nothing — the model just
+ * asked "how would you like to proceed?" while every `keiko_changeset_edit` kept failing
+ * NO_ACTIVE_SESSION. `useCodingWorkbenchEditorBridge` now retries the registration on its own
+ * (`bridgeUnavailable` reports whether that retry is still in flight); this is the one place the
+ * operator sees that anything is happening at all instead of a silent gap that looks identical to
+ * a healthy, idle bridge.
+ */
+function EditorBridgeUnavailableNotice({ visible }: { readonly visible: boolean }): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  if (!visible) return null;
+  return (
+    <output className={styles.alert}>
+      <span aria-hidden="true">!</span> {t("codingWorkbench.editorBridge.reconnecting")}
+    </output>
+  );
+}
+
 // The three props this level owns are named; the rest belong to `WorkbenchColumns` and pass
 // through as one rest object, so a new column prop is not restated on this hop at all.
 function WorkbenchContent({
@@ -486,7 +688,7 @@ function WorkbenchContent({
   workbenchLabel,
   ...columns
 }: WorkbenchContentProps): ReactNode {
-  const { research, runWorkspace, state } = columns;
+  const { research, runWorkspace, state, activeWorkspace } = columns;
   return (
     <section
       className={styles.shell}
@@ -495,10 +697,15 @@ function WorkbenchContent({
       data-state={state.run.value?.state ?? "idle"}
     >
       <h2 className="sr-only">{workbenchLabel}</h2>
-      <SessionContextBar
-        state={state}
-        workspace={sessionWorkspaceProjection(state, runWorkspace)}
-      />
+      <header className={styles["cmp-workbench-header"]}>
+        <SessionContextBar
+          state={state}
+          workspace={sessionWorkspaceProjection(state, runWorkspace)}
+        />
+        <CodingWorkbenchTrustAffordance
+          binding={sessionRepositoryTrustBinding(state, runWorkspace, activeWorkspace)}
+        />
+      </header>
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {lifecycleAnnouncement(state, t, research.grant)}
       </p>
@@ -508,6 +715,20 @@ function WorkbenchContent({
       </div>
     </section>
   );
+}
+
+// Epic #3384 cascade, end-to-end run 2026-09-05: after a stop, this window's activity feed showed
+// "Reconnect activity" and stayed disconnected even once a different run started — the operator
+// had to click Reconnect (or reload the page) before seeing anything for it. `retry` is a stable,
+// pure epoch-bump (`useCodingWorkbenchSafeActivity`); calling it once per newly observed run id is
+// therefore always safe, whatever the feed's current status happens to be.
+function useReconnectActivityOnNewRun(runId: string | undefined, retry: () => void): void {
+  const seenRunIdRef = useRef<string | undefined>(runId);
+  useEffect(() => {
+    if (runId === undefined || runId === seenRunIdRef.current) return;
+    seenRunIdRef.current = runId;
+    retry();
+  }, [runId, retry]);
 }
 
 function WorkbenchColumns({
@@ -526,13 +747,41 @@ function WorkbenchColumns({
   runWorkspace,
 }: Omit<WorkbenchContentProps, "alert" | "t" | "workbenchLabel">): ReactNode {
   const t = useCodingWorkbenchTranslate();
+  const [issueSetup, setIssueSetup] = useState(false);
+  const [acceptedIssue, setAcceptedIssue] = useState<AcceptedWorkbenchIssue | null>(null);
+  const activeIssueRepository = activeWorkspace.activeInstance?.repositoryId;
+  const activeIssueTask = activeWorkspace.activeBinding?.taskId;
+  const observedTerminalRunIdRef = useRef<string | undefined>(terminalRunId(state.run.value));
+  useEffect(() => {
+    const currentTerminalRunId = terminalRunId(state.run.value);
+    if (
+      currentTerminalRunId !== undefined &&
+      observedTerminalRunIdRef.current !== currentTerminalRunId
+    ) {
+      observedTerminalRunIdRef.current = currentTerminalRunId;
+      if (!runMatchesAcceptedIssue(state.run.value, acceptedIssue)) return;
+      reportClientDiagnostic(
+        "[keiko] coding workbench issue selection released after terminal run",
+      );
+      setAcceptedIssue(null);
+      return;
+    }
+    if (
+      acceptedIssue !== null &&
+      !issueSetup &&
+      activeIssueTask !== undefined &&
+      (activeIssueTask !== codingWorkbenchIssueTaskId(acceptedIssue.binding.issueNumber) ||
+        activeIssueRepository !== acceptedIssue.binding.repositoryId)
+    )
+      setAcceptedIssue(null);
+  }, [acceptedIssue, activeIssueTask, activeIssueRepository, issueSetup, state.run.value]);
   const [resumeSelection, setResumeSelection] = useState<ResumeModeSelection | null>(null);
   // The bootstrap Code setup (#2385) renders whenever no active task-workspace binding exists, so a
   // hand-bound repository can be bound → verified → started entirely from the UI (#2476). It no longer
   // hides behind runtime availability: on an unactivated install it stays reachable and honestly
   // explains why a run cannot start yet (#2476 AC4). Once a binding lands it yields to the task-start
   // flow. The honest note shows only once readiness has RESOLVED as unavailable, never during load.
-  const showSetup = bootstrapSetupVisible(state, activeWorkspace);
+  const showSetup = issueSetup || bootstrapSetupVisible(state, activeWorkspace);
   const runtimePosture = useRuntimeAssurancePosture(state);
   // Monotonic, not a count: the event buffer is capped (CODING_WORKBENCH_EVENT_RETENTION_LIMIT), so
   // its length plateaus on a long run and every change-driven resync — questions and the activity
@@ -571,6 +820,14 @@ function WorkbenchColumns({
     bindingPending: workspaceBindingPending,
     submittedRoot: runBoundRoot,
   });
+  // Epic #3384 cascade: a run this window observes as a NEW run id — a status poll or stream
+  // catching up after a stop, or a run started from another paired client — must not leave the
+  // activity feed sitting on "Reconnect activity" until the operator clicks it (or reloads the
+  // page). `activity`'s own connection effect already reacts to a `runId` change; this reconnects
+  // it EVEN WHEN the feed's projected status is currently a failure/terminal one that would
+  // otherwise wait for a manual retry (`useCodingWorkbenchSafeActivity`'s own resync only fires
+  // for an ALREADY-known run's runtime events, never for the transition onto a brand new one).
+  useReconnectActivityOnNewRun(state.run.value?.runId, activity.retry);
   // The session stream is a bounded scroll region below the header; a run's newest activity lands
   // at its end. Follow that growth while the operator is at the bottom, never yank a reader who
   // scrolled up into the history, and start following again for every new run (#3257 Wave 0).
@@ -583,6 +840,16 @@ function WorkbenchColumns({
   useEffect(() => {
     if (runId !== undefined) followNewest();
   }, [followNewest, runId]);
+  const journey = useCodingWorkbenchJourney(
+    state.run.value?.draftDelivery?.pullRequest !== undefined ? runId : undefined,
+  );
+  const journeyChanges = useCodingWorkbenchChanges({
+    root: liveWorkspaceRoot,
+    runId: state.run.value?.runId,
+    changeSignal: latestChangesSignal(state.events),
+    bindingPending: workspaceBindingPending,
+    submittedRoot: runBoundRoot,
+  });
   const pausedRun = state.run.value?.state === "paused" ? state.run.value : undefined;
   const resumeMode = selectedResumeMode(
     resumeSelection,
@@ -599,9 +866,13 @@ function WorkbenchColumns({
   // During a run those chips — and the Git target they open — name the RUN's workspace, which the
   // server still holds authority over, not the live pointer: labelling a run in A with B's root and
   // branch, and opening B's Git, invited the operator to act on the wrong tree (#3381 review).
-  const repositoryRoot = runIsActive
-    ? (runBoundRoot ?? activeWorkspace.activeBinding?.activeRoot ?? selectedRoot ?? null)
-    : (activeWorkspace.activeInstance?.repositoryRoot ?? selectedRoot ?? null);
+  const repositoryRoot = workbenchRepositoryRoot(
+    runIsActive,
+    runBoundRoot,
+    activeWorkspace,
+    selectedRoot,
+  );
+  const onProposeReady = useMarkReadyPropose(journey.outcome, repositoryRoot);
   const taskComposer = (
     <TaskStartSection
       taskIntent={taskIntent}
@@ -611,7 +882,12 @@ function WorkbenchColumns({
           // Capture the workspace identity the Start is submitted against BEFORE the request goes
           // out: the run id only arrives with the response, by which time the pointer may have moved.
           runWorkspace.captureSubmission();
-          void actions.start(taskIntent.trim());
+          if (acceptedIssue === null) void actions.start(taskIntent.trim());
+          else
+            void actions.start(taskIntent.trim(), {
+              issueRef: acceptedIssue.issueRef,
+              expectedIssueBindingDigest: acceptedIssue.binding.bindingDigest,
+            });
         },
         onPause: () => void actions.pause(),
         onResume: () => {
@@ -658,15 +934,26 @@ function WorkbenchColumns({
     return (
       <div className={styles.emptySession}>
         <CodingWorkbenchSetup
-          selectedRoot={selectedRoot}
-          refreshWorkspace={() => activeWorkspace.refresh()}
+          selectedRoot={selectedRoot ?? activeWorkspace.activeInstance?.repositoryRoot}
+          refreshWorkspace={async (): Promise<boolean> => {
+            const refreshed = await activeWorkspace.refresh();
+            if (refreshed) setIssueSetup(false);
+            return refreshed;
+          }}
           runtimePosture={runtimePosture}
+          acceptedIssue={acceptedIssue}
+          onAcceptedIssue={setAcceptedIssue}
+          onOpenGit={() =>
+            onOpenGit({ root: null, binding: "repository", repositoryDialog: "clone" })
+          }
         />
       </div>
     );
   }
   const showWelcome =
     welcomeEligibleState(state.run.value?.state) &&
+    state.run.value?.verifiedCommitResult === undefined &&
+    state.run.value?.draftDelivery === undefined &&
     state.events.length === 0 &&
     activity.feed === null &&
     questions.questions.length === 0 &&
@@ -687,6 +974,30 @@ function WorkbenchColumns({
           tabIndex={0}
         >
           <PermissionPrompt state={state} research={research} onDecision={onDecision} />
+          <CodingWorkbenchCiReadiness snapshot={state.run.value ?? undefined} />
+          <CodingWorkbenchDraftDelivery
+            snapshot={state.run.value ?? undefined}
+            onReviewDescription={(descriptionReview): void => {
+              if (repositoryRoot === null) return;
+              onOpenGit({
+                root: repositoryRoot,
+                binding: "task-workspace",
+                descriptionReview,
+              });
+            }}
+          />
+          <CodingWorkbenchJourneyOutcome
+            snapshot={state.run.value ?? undefined}
+            outcome={journey.outcome}
+            onRefresh={journey.onRefresh}
+            changedFiles={changedFilesSummary(journeyChanges)}
+            markReadyAvailable={onProposeReady !== undefined}
+            {...optionalMarkReadyHandler(onProposeReady)}
+          />
+          <CodingWorkbenchCommitResult
+            result={state.run.value?.verifiedCommitResult}
+            runId={runId}
+          />
           <ChangesetReviewPanel
             review={editorBridge.pendingReview}
             onApprove={editorBridge.approve}
@@ -718,8 +1029,29 @@ function WorkbenchColumns({
         </div>
       )}
       <div className={styles.composerDock}>
+        <div className={styles.composerContext}>
+          <CodingWorkbenchIssueChip
+            accepted={acceptedIssue}
+            snapshot={state.run.value}
+            onRemove={() => setAcceptedIssue(null)}
+          />
+          {welcomeEligibleState(state.run.value?.state) && acceptedIssue === null ? (
+            <button
+              type="button"
+              className={styles.button}
+              disabled={state.mutation.status === "pending"}
+              onClick={() => {
+                reportClientDiagnostic("[keiko] coding workbench issue intake opened");
+                setIssueSetup(true);
+              }}
+            >
+              {t("codingWorkbench.issue.title")}
+            </button>
+          ) : null}
+        </div>
         <CodexSubscriptionAuthCard state={state} actions={actions} />
         <RunWorkspaceMismatchNotice visible={runIsActive && runWorkspace.mismatched} />
+        <EditorBridgeUnavailableNotice visible={editorBridge.bridgeUnavailable} />
         <RuntimeControls
           state={state}
           actions={actions}
@@ -748,6 +1080,26 @@ function welcomeEligibleState(state: CodingWorkbenchRuntimeStateName | undefined
     state === "failed" ||
     state === "cancelled" ||
     state === "taken-over"
+  );
+}
+
+function terminalRunState(state: CodingWorkbenchRuntimeStateName): boolean {
+  return (
+    state === "succeeded" || state === "failed" || state === "cancelled" || state === "taken-over"
+  );
+}
+
+function terminalRunId(run: CodingWorkbenchRuntimeState["run"]["value"]): string | undefined {
+  return run?.runId !== undefined && terminalRunState(run.state) ? run.runId : undefined;
+}
+
+function runMatchesAcceptedIssue(
+  run: CodingWorkbenchRuntimeState["run"]["value"],
+  acceptedIssue: AcceptedWorkbenchIssue | null,
+): boolean {
+  return (
+    acceptedIssue !== null &&
+    run?.issueBinding?.bindingDigest === acceptedIssue.binding.bindingDigest
   );
 }
 
@@ -960,7 +1312,7 @@ function approvalEvidenceBound(
   approvalReview: UseCodingWorkbenchApprovalReviewResult,
   research: UseCodingWorkbenchResearchResult,
 ): boolean {
-  if (request.actionKind === "file-edit") {
+  if (approvalReviewRequestId(request) !== undefined) {
     const review = approvalReview.status === "ready" ? approvalReview.review : null;
     if (review?.requestId !== request.requestId) return false;
   }
@@ -983,12 +1335,16 @@ function PermissionPrompt({
   const t = useCodingWorkbenchTranslate();
   const request = state.run.value?.pendingPermission;
   // Called before the early return so the hook order is stable; an absent request scopes it to idle.
-  const approvalReview = useCodingWorkbenchApprovalReview({
+  const rawApprovalReview = useCodingWorkbenchApprovalReview({
     runId: state.run.value?.runId,
-    permissionRequestId: request?.actionKind === "file-edit" ? request.requestId : undefined,
+    permissionRequestId: approvalReviewRequestId(request),
   });
   if (request === undefined) return null;
-  const busy = state.mutation.status === "pending";
+  const approvalReview = reviewForPermission(
+    rawApprovalReview,
+    request,
+    state.run.value ?? undefined,
+  );
   const evidenceBound = approvalEvidenceBound(request, approvalReview, research);
   return (
     <section className={cx(styles.card, styles.permission)} aria-labelledby="permission-title">
@@ -996,16 +1352,42 @@ function PermissionPrompt({
         {t("codingWorkbench.approval.title")}
       </PanelTitle>
       <ApprovalFacts request={request} t={t} />
-      <ApprovalChangedFiles state={approvalReview} t={t} />
+      <ApprovalReviewContent kind={request.actionKind} review={approvalReview} t={t} />
       {request.kind === "network-egress" ? <ResearchDestination state={research} t={t} /> : null}
-      <p className={styles.helpText}>{t("codingWorkbench.approval.help")}</p>
+      <p className={styles.helpText}>{t(approvalHelpKey(request.actionKind))}</p>
       <ApprovalDecisionControls
-        busy={busy}
+        busy={state.mutation.status === "pending"}
         evidenceBound={evidenceBound}
         onDecision={onDecision}
         t={t}
       />
     </section>
+  );
+}
+
+function ApprovalReviewContent({
+  kind,
+  review,
+  t,
+}: {
+  readonly kind: CodingWorkbenchRuntimePendingPermission["actionKind"];
+  readonly review: UseCodingWorkbenchApprovalReviewResult;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <>
+      <StageReviewDiagnostic
+        kind={kind}
+        status={review.status}
+        fileCount={review.review?.fileCount ?? 0}
+      />
+      {isDeliveryPermission(kind) ? (
+        <CodingWorkbenchDeliveryReview state={review} t={t} />
+      ) : (
+        <ApprovalChangedFiles state={review} commit={kind === "commit"} t={t} />
+      )}
+      <CodingWorkbenchCommitReview commit={review.review?.verifiedCommit} t={t} />
+    </>
   );
 }
 
@@ -1230,19 +1612,21 @@ function ApprovalReviewBody({
  */
 function ApprovalChangedFiles({
   state,
+  commit,
   t,
 }: {
   readonly state: UseCodingWorkbenchApprovalReviewResult;
+  readonly commit: boolean;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   if (state.status === "idle") return null;
   const review = state.review;
+  const title = t(
+    commit ? "codingWorkbench.approval.commit.files" : "codingWorkbench.approval.changes.title",
+  );
   return (
-    <fieldset
-      className={styles.approvalResearch}
-      aria-label={t("codingWorkbench.approval.changes.title")}
-    >
-      <p className={styles.approvalResearchTitle}>{t("codingWorkbench.approval.changes.title")}</p>
+    <fieldset className={styles.approvalResearch} aria-label={title}>
+      <p className={styles.approvalResearchTitle}>{title}</p>
       {review === null ? (
         <RetryMessage {...detailMessageProps(state, t, APPROVAL_CHANGES_MESSAGE_KEYS)} />
       ) : (
@@ -1342,7 +1726,10 @@ const ACTION_KIND_MESSAGE_KEYS: Record<
   CodingWorkbenchMessageKey
 > = {
   "file-edit": "codingWorkbench.approval.actionKind.file-edit",
+  "git-stage": "codingWorkbench.approval.actionKind.git-stage",
   "verification-command": "codingWorkbench.approval.actionKind.verification-command",
+  "ci-observe": "codingWorkbench.approval.actionKind.ci-observe",
+  "connector-read": "codingWorkbench.approval.actionKind.connector-read",
   research: "codingWorkbench.approval.actionKind.research",
   commit: "codingWorkbench.approval.actionKind.commit",
   push: "codingWorkbench.approval.actionKind.push",

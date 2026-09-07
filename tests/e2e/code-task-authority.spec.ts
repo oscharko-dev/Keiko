@@ -25,7 +25,8 @@
 // confirmed" and disable Start.
 
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
@@ -39,6 +40,7 @@ import {
 import {
   AUTHORITY_APP_SESSION_LAUNCHER_SECRET,
   AUTHORITY_EDITED_CONTENT,
+  AUTHORITY_ORIGINAL_CONTENT,
   AUTHORITY_TARGET_RELATIVE_PATH,
   authorityManagedWorkspaceRoot,
   authorityRepositoryRoot,
@@ -248,13 +250,8 @@ async function openRealBinaryEditorBridge(page: Page): Promise<void> {
   await workspace.locator('button.tr-caret-btn[aria-label="Expand folder: src"]').click();
   await openTreeFile(workspace, AUTHORITY_TARGET_RELATIVE_PATH);
   await expect.poll(() => hasEditorSession(page, root)).toBe(true);
-  const codingWindow = page.locator('section[data-window-id="coding"]');
-  await codingWindow
-    .getByRole("group", { name: "Coding Workbench window controls" })
-    .getByRole("button", { name: "Close Coding Workbench window" })
-    .click();
-  await expect(codingWindow).toHaveCount(0);
   await assertInheritedWorkspaceTrust(page);
+  await page.locator('section[data-window-id="coding"]').focus();
 }
 
 // M11 (#2612/#2686) rebuilt workspace trust around user-facing projects: registering the folder
@@ -285,17 +282,11 @@ async function assertInheritedWorkspaceTrust(page: Page): Promise<void> {
   await expect(page.getByTestId("workspace-trust-banner-editor")).toHaveCount(0);
 }
 
-async function reopenRealBinaryCodingWorkbench(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Coding Workbench", exact: true }).click();
-  const codingWindow = page.locator('section[data-window-id="coding"]');
-  await expect(codingWindow).toHaveAttribute("data-top", "true");
-  await expect(workbench(page)).toHaveAttribute("data-state", "running");
-}
-
 async function approveRealBinaryChangeset(page: Page): Promise<void> {
   if (!realBinaryJourney) return;
-  const editorWindow = page.locator('section[data-window-id="editor"]');
-  const review = editorWindow.getByRole("group", { name: "Agent changeset review" });
+  // The run's own registered bridge owns this review. Keep it mounted and approve its exact
+  // proposed diff in the Workbench; opening an unrelated Editor session cannot transfer authority.
+  const review = workbench(page).getByRole("region", { name: "Review the proposed file change" });
   await expect
     .poll(() => latestChangesetAudit(page))
     .toMatchObject({
@@ -303,12 +294,11 @@ async function approveRealBinaryChangeset(page: Page): Promise<void> {
       outcome: "queued",
     });
   await expect(review).toBeVisible({ timeout: 30_000 });
-  await expect(editorWindow).toHaveAttribute("data-top", "true");
-  const apply = review.getByTestId("keiko-diff-apply");
+  await expect(review).toContainText(AUTHORITY_TARGET_RELATIVE_PATH);
+  const apply = review.getByRole("button", { name: "Apply change", exact: true });
   await expect(apply).toBeVisible();
   await apply.click();
   await expect(review).toBeHidden();
-  await reopenRealBinaryCodingWorkbench(page);
 }
 
 async function proveVerificationActivity(timeline: Locator): Promise<void> {
@@ -425,13 +415,18 @@ async function proveLiveActivityTimeline(
   runId: string,
 ): Promise<void> {
   await awaitRequiredQuestion(page);
+  if (realBinaryJourney) await proveRepositorySearchConsumption(timeline);
   await expect(timeline.getByRole("region", { name: "Runtime questions" })).toBeVisible();
   await expect(timeline.getByText(FUNCTIONAL_PLAN_STEP_READ, { exact: true })).toBeVisible();
-  await expect(timeline.locator('[data-tool-state="succeeded"]')).toContainText("workspace");
+  const completedRead = timeline
+    .locator('[data-tool-state="succeeded"]')
+    .filter({ hasText: "workspace" });
+  await expect(completedRead).toHaveCount(1);
+  await expect(completedRead).toContainText("workspace");
   await proveUnpairedClientReadsNoQuestionText(request, new URL(page.url()).origin, runId);
   await answerVisibleQuestion(page);
-  await openRealBinaryEditorBridge(page);
   await approveRealBinaryChangeset(page);
+  await openRealBinaryEditorBridge(page);
   await proveVerificationActivity(timeline);
   await expect(
     timeline.getByText(FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX, { exact: false }),
@@ -448,6 +443,27 @@ async function proveLiveActivityTimeline(
   expect(edited).toHaveLength(1);
   expect(readFileSync(edited[0] ?? "", "utf8")).toBe(AUTHORITY_EDITED_CONTENT);
   if (!realBinaryJourney) await proveRunChangesView(page, request, edited[0] ?? "");
+}
+
+async function proveRepositorySearchConsumption(timeline: Locator): Promise<void> {
+  const path = join(stateDir, "h1-result-consumption.json");
+  await expect.poll(() => existsSync(path)).toBe(true);
+  const proof: unknown = JSON.parse(readFileSync(path, "utf8"));
+  expect(proof).toMatchObject({
+    schemaVersion: 1,
+    toolCallId: "h1-real-binary-search",
+    hitCount: 1,
+    pathDigest: createHash("sha256").update(AUTHORITY_TARGET_RELATIVE_PATH).digest("hex"),
+    snippetDigest: createHash("sha256").update(AUTHORITY_ORIGINAL_CONTENT.trim()).digest("hex"),
+    startLine: 1,
+    endLine: 1,
+    readTargetDerivedFromResult: true,
+  });
+  for (const tool of ["keiko_repository_search", "keiko_workspace_read"]) {
+    const succeeded = timeline.locator('[data-tool-state="succeeded"]').filter({ hasText: tool });
+    await expect(succeeded).toHaveCount(1);
+    await expect(succeeded).toBeVisible();
+  }
 }
 
 async function settleRealBinaryRun(page: Page, runId: string): Promise<void> {

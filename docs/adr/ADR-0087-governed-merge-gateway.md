@@ -74,6 +74,15 @@ The local kernel, the local adapter, the publish gateway, and the PR gateway are
 
 ### D3 — Neutral merge-readiness model and blocker taxonomy in the contracts leaf
 
+The shared protection reader distinguishes `protected`, `unprotected`, `unknown` and unavailable
+transport. A protection-endpoint 404 alone is ambiguous; only a successful bounded branch metadata
+read with the exact requested name and `protected=false` establishes absence. A protected or
+unreadable branch remains unknown. A failed, truncated or timed-out review read likewise does not
+establish zero reviews. Readiness retains observed PR/protection blockers and reports provider
+uncertainty with `ready=false`; the same uncertainty prevents signing-preflight and action-sheet
+readiness from treating the target as unprotected. Ruleset union, complete check/status pagination
+and exact-head technical-readiness projection are the further #3388 work on this same owner.
+
 `packages/keiko-contracts/src/git-merge.ts` defines `GitMergeReadinessSummary` (`schemaVersion`, `mergeable: boolean`, severity-ranked `blockers: GitMergeReadinessBlocker[]`). The blocker code vocabulary **reuses** `GitDeliveryMergeBlockReason` (`checks-failing` / `approvals-missing` / `conflicts` / `branch-protection` / `merge-queue-position` / `provider-policy`) plus a `pr-not-open` / `pr-already-merged` / `draft-pr` set for lifecycle states, so the #471 seam is the canonical taxonomy. `gitMergeReadinessFor(input)` derives the summary purely from the provider-state facts (`GitDeliveryPullRequestState`, `GitDeliveryChecksState`, `GitDeliveryBranchProtection`) the server gathers and passes in — no IO, no network. Blocking blockers precede advisory blockers by construction.
 
 ### D4 — Strategy eligibility is the intersection of policy-permitted and provider-capable strategies

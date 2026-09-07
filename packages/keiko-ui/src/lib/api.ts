@@ -7,6 +7,8 @@
 import type {
   BffError,
   ChatConnectedScope,
+  ChatGitChangeDescriptionStatus,
+  ChatGitChangeScope,
   ChatLocalKnowledgeScope,
   ChatResponse,
   ChatsResponse,
@@ -104,7 +106,11 @@ import type {
   WorkflowsResponse,
 } from "./types";
 import type {
+  CodingWorkbenchIssuePreviewResponseWire,
+  CodingWorkbenchIssuePreviewRequestWire,
   CodingWorkbenchMode,
+  GitHubIssueReaderAuthorizationWire,
+  UpdateGitHubIssueReaderAuthorizationWire,
   GitCommitChangeSummary,
   GitCommitIntentAnalysis,
   GitCommitMessageValidation,
@@ -169,9 +175,24 @@ import {
   validateGitSyncExecuteResponse,
   validateGitSyncPreview,
 } from "@oscharko-dev/keiko-contracts/runtime/git-sync";
+// Only the one numeric bound below is a genuine eager dependency: `GITHUB_ISSUE_REFERENCE_MAX_CHARS`
+// is a value re-export consumed synchronously by CodingWorkbenchIssueIntake.tsx (a `maxLength` prop,
+// not behind the dynamic() boundary the rest of the Coding Workbench tree sits behind). Every other
+// binding this module used to import here — `isGitHubOwnerAndRepo`, the issue-preview title/excerpt
+// bounds, `GITHUB_ISSUE_NUMBER_MAX` — moved to `./coding-workbench-lazy-fetchers.ts` (epic #3384
+// final-audit F18), loaded only through `previewCodingWorkbenchIssue`'s `await import(...)` below.
+export { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
+import type { PrDescriptionLanguage } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
+import type {
+  PrDescriptionApplicationReason,
+  PrDescriptionApplicationStatus,
+} from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
 import {
+  CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
+  GIT_CHANGE_BLOCKED_REASONS,
   isDesktopChatStreamEvent,
   type DesktopChatSendRequestWire,
   type ConversationAttachmentUploadRequestWire,
@@ -179,6 +200,7 @@ import {
   type DesktopChatStreamDoneEvent,
   type DesktopChatStreamErrorEvent,
   type DesktopChatStreamEventType,
+  type GitChangeBlockedReason,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   DEFAULT_GROUNDING_LIMITS,
@@ -188,28 +210,20 @@ import {
   EDITOR_TEST_GENERATION_SCHEMA_VERSION,
   EDITOR_PATCH_APPLY_SCHEMA_VERSION,
 } from "./types";
+// Runtime primitives shared with `./coding-workbench-lazy-fetchers.ts`: both files import them
+// from this leaf module instead of one importing them from the other, so `api.ts`'s
+// `await import("./coding-workbench-lazy-fetchers")` below is never a load-order-sensitive cycle
+// (review finding, epic #3384 final-audit F18). `api.ts` re-exports every name here so no existing
+// caller of `./api` needs to change.
+import {
+  ApiError,
+  GITHUB_ISSUE_BINDING_ID_MAX_CHARS,
+  isBoundedText,
+  isRecordValue,
+  SHA256_HEX,
+} from "./api-shared-primitives";
 
-// ---------------------------------------------------------------------------
-// Error type
-// ---------------------------------------------------------------------------
-
-export class ApiError extends Error {
-  // RB-6 (GEN-OBS-CORRELATION-103/601): the server-issued request correlation id for this failure,
-  // when the response carried one (X-Keiko-Correlation-Id header or `error.correlationId`). Optional
-  // and set after construction so the many `new ApiError(code, message, status)` call sites are
-  // unchanged; error surfaces can show it as a copyable support id that ties the UI failure to exactly
-  // one server-side diagnostic record.
-  public correlationId?: string;
-
-  constructor(
-    public readonly code: string,
-    message: string,
-    public readonly status: number,
-  ) {
-    super(message);
-    this.name = "ApiError";
-  }
-}
+export { ApiError, GITHUB_ISSUE_BINDING_ID_MAX_CHARS, isBoundedText, isRecordValue, SHA256_HEX };
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -217,15 +231,22 @@ export class ApiError extends Error {
 
 type ResponseValidator = (value: unknown) => GitRepositoryValidation;
 
-function validateBffResponse<T>(path: string, value: unknown, validator: ResponseValidator): T {
+function validateBffResponse<T>(
+  path: string,
+  value: unknown,
+  validator: ResponseValidator,
+  correlationId: string | null = null,
+): T {
   const validation = validator(value);
   if (validation.ok) return value as T;
   const reason = validation.reasons[0] ?? "unknown validation failure";
-  throw new ApiError(
+  const error = new ApiError(
     "CONTRACT_VALIDATION_FAILED",
     `BFF response for ${path} failed contract validation: ${reason}`,
     502,
   );
+  if (correlationId !== null) error.correlationId = correlationId;
+  throw error;
 }
 
 // GEN-RES-FETCH-001 — reads against the loopback BFF must not hang the UI when the BFF
@@ -286,43 +307,70 @@ function withReadDeadline(
   return caller === undefined || caller === null ? deadline : combineAbortSignals(caller, deadline);
 }
 
+function fetchJsonHeaders(
+  init: RequestInit | undefined,
+  isStateChanging: boolean,
+  correlationId: string | undefined,
+): HeadersInit {
+  if (correlationId !== undefined) return buildBffHeaders(init, correlationId);
+  return {
+    Accept: "application/json",
+    ...(isStateChanging ? { "Content-Type": "application/json" } : {}),
+    ...(isStateChanging ? { "X-Keiko-CSRF": "1" } : {}),
+    ...init?.headers,
+  };
+}
+
 async function fetchJson<T>(
   path: string,
   init?: RequestInit,
   validator?: ResponseValidator,
+  correlationId?: string,
 ): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const isStateChanging = method !== "GET" && method !== "HEAD";
   const res = await fetch(path, {
     ...init,
     signal: withReadDeadline(init, isStateChanging),
-    headers: {
-      Accept: "application/json",
-      ...(isStateChanging ? { "Content-Type": "application/json" } : {}),
-      ...(isStateChanging ? { "X-Keiko-CSRF": "1" } : {}),
-      ...init?.headers,
-    },
+    headers: fetchJsonHeaders(init, isStateChanging, correlationId),
   });
 
-  if (!res.ok) {
-    let code = "INTERNAL";
-    let message = `HTTP ${res.status.toString()}`;
-    try {
-      const envelope = (await res.json()) as BffError;
-      code = envelope.error.code;
-      message = envelope.error.message;
-    } catch {
-      // parse failure — keep generic message, never log body
-    }
-    throw new ApiError(code, message, res.status);
-  }
+  if (!res.ok) throw await bffFailure(res);
 
   if (res.status === 204) {
     return undefined as T;
   }
 
   const value = (await res.json()) as unknown;
-  return validator === undefined ? (value as T) : validateBffResponse<T>(path, value, validator);
+  return validator === undefined
+    ? (value as T)
+    : validateBffResponse<T>(path, value, validator, res.headers.get(CORRELATION_HEADER));
+}
+
+// The `ApiError` for a non-2xx BFF response: code and message from the `{ error }` envelope when it
+// parses, the generic HTTP line otherwise (never the body). RB-6: the correlation header is the
+// transport's own record of the id; the envelope carries the same id when a route writes it into
+// the body. Either ties this failure to one redacted server diagnostic (#3385 — a refused issue
+// preview names its correlation id in the UI state).
+async function bffFailure(res: Response): Promise<ApiError> {
+  let code = "INTERNAL";
+  let message = `HTTP ${res.status.toString()}`;
+  let envelopeCorrelationId: string | undefined;
+  try {
+    const envelope = (await res.json()) as BffError & {
+      readonly error: { readonly correlationId?: unknown };
+    };
+    code = envelope.error.code;
+    message = envelope.error.message;
+    envelopeCorrelationId =
+      typeof envelope.error.correlationId === "string" ? envelope.error.correlationId : undefined;
+  } catch {
+    // parse failure — keep generic message, never log body
+  }
+  const error = new ApiError(code, message, res.status);
+  const correlationId = res.headers.get(CORRELATION_HEADER) ?? envelopeCorrelationId;
+  if (correlationId !== undefined) error.correlationId = correlationId;
+  return error;
 }
 
 async function fetchBinary(path: string, init?: RequestInit): Promise<Uint8Array> {
@@ -560,19 +608,19 @@ export interface VoiceTranscriptionRequest {
   // are stripped server-side before the allowlist check.
   readonly mimeType: string;
   // Optional declared clip length in milliseconds (positive integer within the dictation limit).
-  readonly durationMs?: number | undefined;
+  readonly durationMs?: number;
   // Optional BCP-47 language tag hint for the provider.
-  readonly language?: string | undefined;
+  readonly language?: string;
   // Optional short domain-keyword prompt (length-bounded server-side) to bias transcription toward
   // in-domain proper nouns / identifiers. Omitted lets the BFF apply its language-neutral default.
-  readonly prompt?: string | undefined;
+  readonly prompt?: string;
 }
 
 export interface VoiceTranscriptionResult {
   readonly transcript: string;
-  readonly confidence?: number | undefined;
-  readonly language?: string | undefined;
-  readonly durationMs?: number | undefined;
+  readonly confidence?: number;
+  readonly language?: string;
+  readonly durationMs?: number;
 }
 
 export async function transcribeDictation(
@@ -656,49 +704,49 @@ export interface GatewaySetupInput {
   readonly baseUrl?: string | undefined;
   readonly apiKey?: string | undefined;
   readonly apiKeyHeaderName?: string | undefined;
-  readonly timeoutMs?: number | undefined;
-  readonly deploymentNames?: readonly string[] | undefined;
-  readonly imageInputModelIds?: readonly string[] | undefined;
+  readonly timeoutMs?: number;
+  readonly deploymentNames?: readonly string[];
+  readonly imageInputModelIds?: readonly string[];
   /** Embedding-kind ids a config upload asserts so a fresh setup never chat-probes them. */
-  readonly embeddingModelIds?: readonly string[] | undefined;
-  readonly workflowEligibleModelIds?: readonly string[] | undefined;
-  readonly voiceBaseUrl?: string | undefined;
-  readonly voiceApiKey?: string | undefined;
-  readonly voiceApiKeyHeaderName?: string | undefined;
+  readonly embeddingModelIds?: readonly string[];
+  readonly workflowEligibleModelIds?: readonly string[];
+  readonly voiceBaseUrl?: string;
+  readonly voiceApiKey?: string;
+  readonly voiceApiKeyHeaderName?: string;
   /** Generic endpoint protocol, persisted verbatim on rebuilt providers (#3042). */
-  readonly endpointStyle?: string | undefined;
-  readonly apiVersion?: string | undefined;
-  readonly voiceModelId?: string | undefined;
-  readonly voiceSpeechToTextModelId?: string | undefined;
-  readonly voiceRealtimeModelId?: string | undefined;
-  readonly voiceRealtimeTranscriptionModelId?: string | undefined;
-  readonly voiceSupportsSemanticTurnDetection?: boolean | undefined;
-  readonly voiceSupportsSpeechSynthesisInstructions?: boolean | undefined;
-  readonly voiceSpeechOutputModelId?: string | undefined;
-  readonly voiceOutputVoiceId?: string | undefined;
-  readonly voiceProviderLocality?: string | undefined;
-  readonly voiceTimeoutMs?: number | undefined;
+  readonly endpointStyle?: string;
+  readonly apiVersion?: string;
+  readonly voiceModelId?: string;
+  readonly voiceSpeechToTextModelId?: string;
+  readonly voiceRealtimeModelId?: string;
+  readonly voiceRealtimeTranscriptionModelId?: string;
+  readonly voiceSupportsSemanticTurnDetection?: boolean;
+  readonly voiceSupportsSpeechSynthesisInstructions?: boolean;
+  readonly voiceSpeechOutputModelId?: string;
+  readonly voiceOutputVoiceId?: string;
+  readonly voiceProviderLocality?: string;
+  readonly voiceTimeoutMs?: number;
   /** Voice endpoint protocol imported from a config upload, persisted verbatim (#3037). */
-  readonly voiceEndpointStyle?: string | undefined;
-  readonly voiceApiVersion?: string | undefined;
-  readonly voiceRealtimeAuthMode?: string | undefined;
-  readonly figmaAccessToken?: string | undefined;
-  readonly preserveExisting?: boolean | undefined;
+  readonly voiceEndpointStyle?: string;
+  readonly voiceApiVersion?: string;
+  readonly voiceRealtimeAuthMode?: string;
+  readonly figmaAccessToken?: string;
+  readonly preserveExisting?: boolean;
 }
 
 export interface GatewaySetupResponse {
   readonly ok: true;
   readonly testedModelId: string;
   readonly testedModelIds: readonly string[];
-  readonly skippedModelIds?: readonly string[] | undefined;
+  readonly skippedModelIds?: readonly string[];
   // Models the gateway offered that setup will not use, with the reason it declared, plus embedding
   // models that failed their setup probe (kept when their role was asserted, dropped when it was
   // only inferred). Absent when there is nothing to report.
-  readonly unsupportedModels?: readonly GatewayUnsupportedDiscoveredModel[] | undefined;
-  readonly unverifiedEmbeddingModelIds?: readonly string[] | undefined;
-  readonly droppedEmbeddingModelIds?: readonly string[] | undefined;
+  readonly unsupportedModels?: readonly GatewayUnsupportedDiscoveredModel[];
+  readonly unverifiedEmbeddingModelIds?: readonly string[];
+  readonly droppedEmbeddingModelIds?: readonly string[];
   /** Chat models retained after a transient setup failure; they need a successful re-check. */
-  readonly unverifiedChatModelIds?: readonly string[] | undefined;
+  readonly unverifiedChatModelIds?: readonly string[];
   readonly providerCount: number;
   readonly models: ModelCapability[];
   readonly config: SafeGatewayConfig;
@@ -799,7 +847,7 @@ export interface StartRunInput {
     readonly source: string;
     readonly committedSegments: number;
     readonly committedText: string;
-    readonly confirmationDigest?: string | undefined;
+    readonly confirmationDigest?: string;
   };
 }
 
@@ -1103,6 +1151,8 @@ export interface UpdateChatInput {
   connectedScopes?: readonly ChatConnectedScope[] | null;
   localKnowledgeScope?: ChatLocalKnowledgeScope | null;
   localKnowledgeScopes?: readonly ChatLocalKnowledgeScope[] | null;
+  // Issue #3400 — the third, sibling Git-change scope list. No legacy single-source field.
+  gitChangeScopes?: readonly ChatGitChangeScope[] | null;
 }
 
 export async function updateChat(id: string, patch: UpdateChatInput): Promise<ChatResponse> {
@@ -1146,6 +1196,20 @@ export async function updateChatLocalKnowledgeScopes(
   return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
     method: "PATCH",
     body: JSON.stringify({ localKnowledgeScopes: scopes }),
+  });
+}
+
+// Issue #3400 — disconnects a git-change scope by removing it from the chat's list (or clearing
+// the field entirely with `null`). Every entry is server-issued (see connectGitChangeToChat /
+// refreshGitChangeScope at the end of this file); this helper never accepts browser-authored
+// scope content, only the resulting list to persist.
+export async function updateChatGitChangeScopes(
+  chatId: string,
+  scopes: readonly ChatGitChangeScope[] | null,
+): Promise<ChatResponse> {
+  return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ gitChangeScopes: scopes }),
   });
 }
 
@@ -1599,11 +1663,11 @@ export async function saveFilesContent(input: {
   readonly root: string;
   readonly path: string;
   readonly content: string;
-  readonly expectedModifiedAt?: number | undefined;
+  readonly expectedModifiedAt?: number;
   // Issue #1197: version-aware optimistic-concurrency token. Supersedes expectedModifiedAt.
   readonly baseVersion?: EditorDocumentVersion | undefined;
   /** ADR-0147 D7: restore saves checkpoint the previous on-disk state before writing. */
-  readonly historyOrigin?: "pre-restore" | undefined;
+  readonly historyOrigin?: "pre-restore";
 }): Promise<FilesContentResponse> {
   return fetchJson("/api/files/content", {
     method: "PATCH",
@@ -1724,7 +1788,7 @@ export async function renameFilesEntry(input: {
   readonly path: string;
   readonly newPath: string;
   // Issue 2.6: optional version-aware precondition; only an editor/agent holding the open buffer sets it.
-  readonly baseVersion?: EditorDocumentVersion | undefined;
+  readonly baseVersion?: EditorDocumentVersion;
 }): Promise<FilesMutationResponse> {
   return fetchJson("/api/files/rename", { method: "POST", body: JSON.stringify(input) });
 }
@@ -1732,7 +1796,7 @@ export async function renameFilesEntry(input: {
 export async function deleteFilesEntry(input: {
   readonly root: string;
   readonly path: string;
-  readonly baseVersion?: EditorDocumentVersion | undefined;
+  readonly baseVersion?: EditorDocumentVersion;
 }): Promise<FilesMutationResponse> {
   return fetchJson("/api/files/delete", { method: "POST", body: JSON.stringify(input) });
 }
@@ -1747,7 +1811,7 @@ export async function copyFilesEntry(input: {
 
 export async function fetchGitStatus(
   root: string,
-  options?: { readonly includeIgnored?: boolean | undefined },
+  options?: { readonly includeIgnored?: boolean },
 ): Promise<GitRepositoryStatusResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
@@ -1770,7 +1834,7 @@ export async function fetchGitStatus(
 export async function fetchGitStructuredDiff(
   input: {
     readonly root: string;
-    readonly path?: string | undefined;
+    readonly path?: string;
     readonly scope: GitEditorDiffScope;
   },
   signal?: AbortSignal,
@@ -1821,11 +1885,11 @@ export interface GitBranchListEntry {
 export interface GitBranchListResponse {
   readonly schemaVersion: "1";
   readonly root: string;
-  readonly repositoryRoot?: string | undefined;
+  readonly repositoryRoot?: string;
   readonly available: boolean;
   readonly state: "available" | "unavailable" | "unsafe";
-  readonly reason?: string | undefined;
-  readonly message?: string | undefined;
+  readonly reason?: string;
+  readonly message?: string;
   readonly branches: readonly GitBranchListEntry[];
   readonly truncated: boolean;
 }
@@ -1848,8 +1912,8 @@ export async function fetchGitSummary(root: string): Promise<GitRepositorySummar
 
 export async function fetchGitHistory(input: {
   readonly root: string;
-  readonly limit?: number | undefined;
-  readonly skip?: number | undefined;
+  readonly limit?: number;
+  readonly skip?: number;
 }): Promise<GitHistoryResponse> {
   const params = new URLSearchParams();
   params.set("root", input.root);
@@ -1866,8 +1930,8 @@ export async function fetchGitRemotes(root: string): Promise<GitRemotesResponse>
 
 export async function fetchGitDiff(input: {
   readonly root: string;
-  readonly path?: string | undefined;
-  readonly scope?: GitDiffScope | undefined;
+  readonly path?: string;
+  readonly scope?: GitDiffScope;
 }): Promise<GitRepositoryDiffResponse> {
   const params = new URLSearchParams();
   params.set("root", input.root);
@@ -1886,16 +1950,16 @@ export async function fetchGitDiff(input: {
 // editor cancel a superseded request.
 export interface EditorCompletionRequestInput {
   readonly root: string;
-  readonly editorSessionId?: string | undefined;
+  readonly editorSessionId?: string;
   readonly path: string;
   readonly languageId: string;
   readonly text: string;
   readonly position: { readonly line: number; readonly character: number };
   readonly triggerKind: EditorCompletionWireTriggerKind;
-  readonly triggerCharacter?: string | undefined;
+  readonly triggerCharacter?: string;
   readonly contextBudgetBytes: number;
   readonly context?: EditorCompletionContextSelectors | undefined;
-  readonly maxCostClass?: CostClass | undefined;
+  readonly maxCostClass?: CostClass;
 }
 
 export async function requestEditorCompletion(
@@ -1927,7 +1991,7 @@ export async function requestEditorCompletion(
 // never reaches a model directly. `signal` lets the editor cancel a superseded request.
 export interface EditorInlineCompletionRequestInput {
   readonly root: string;
-  readonly editorSessionId?: string | undefined;
+  readonly editorSessionId?: string;
   readonly path: string;
   readonly languageId: string;
   readonly text: string;
@@ -1935,8 +1999,8 @@ export interface EditorInlineCompletionRequestInput {
   readonly triggerKind: EditorInlineCompletionWireTriggerKind;
   readonly contextBudgetBytes: number;
   readonly context?: EditorCompletionContextSelectors | undefined;
-  readonly maxCostClass?: CostClass | undefined;
-  readonly maxOutputTokens?: number | undefined;
+  readonly maxCostClass?: CostClass;
+  readonly maxOutputTokens?: number;
 }
 
 export async function requestEditorInlineCompletion(
@@ -2005,10 +2069,10 @@ export async function reportEditorInlineCompletionTelemetry(
 // a reviewable candidate patch. The browser never reaches a model directly. `signal` cancels a run.
 export interface EditorTestGenerationRequestInput {
   readonly root: string;
-  readonly editorSessionId?: string | undefined;
+  readonly editorSessionId?: string;
   readonly target: EditorTestGenerationWireTarget;
   readonly contextBudgetBytes: number;
-  readonly context?: EditorCompletionContextSelectors | undefined;
+  readonly context?: EditorCompletionContextSelectors;
 }
 
 export async function requestEditorTestGeneration(
@@ -2040,7 +2104,7 @@ export interface EditorPatchApplyRequestInput {
   readonly patchId: string;
   readonly decision: EditorPatchApplyDecision;
   readonly diff: string;
-  readonly allowOverwrite?: boolean | undefined;
+  readonly allowOverwrite?: boolean;
 }
 
 export async function requestEditorPatchApply(
@@ -2309,7 +2373,7 @@ export async function requestEditorSymbols(
 }
 
 export async function requestEditorFormatting(
-  input: EditorLanguageRequestInput & { readonly options?: LanguageFormattingOptions | undefined },
+  input: EditorLanguageRequestInput & { readonly options?: LanguageFormattingOptions },
   signal?: AbortSignal,
 ): Promise<LanguageFormattingResult> {
   const envelope = await fetchJson<LanguageOperationEnvelope<LanguageFormattingResult>>(
@@ -2765,7 +2829,7 @@ export interface GitDeliveryLocalBranchCreateInput {
   readonly branchName: string;
   readonly baseBranchName: string;
   readonly startPointRefHash: string;
-  readonly approval?: GitDeliveryApprovalClaim | undefined;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 export async function fetchGitDeliveryLocalBranchCreate(
@@ -2789,7 +2853,7 @@ export async function fetchGitDeliveryLocalBranchCreate(
 export interface GitDeliveryLocalBranchSwitchInput {
   readonly projectId: string;
   readonly branchName: string;
-  readonly approval?: GitDeliveryApprovalClaim | undefined;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 export async function fetchGitDeliveryLocalBranchSwitch(
@@ -2812,7 +2876,7 @@ export interface GitDeliveryStageInput {
   readonly projectId: string;
   readonly pathspecs: readonly string[];
   readonly includeUntracked: boolean;
-  readonly approval?: GitDeliveryApprovalClaim | undefined;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 export async function fetchGitDeliveryStage(
@@ -2835,7 +2899,7 @@ export async function fetchGitDeliveryStage(
 export interface GitDeliveryUnstageInput {
   readonly projectId: string;
   readonly pathspecs: readonly string[];
-  readonly approval?: GitDeliveryApprovalClaim | undefined;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 export async function fetchGitDeliveryUnstage(
@@ -2867,7 +2931,7 @@ export interface GitDeliveryCommitPreviewResponse {
 }
 
 export async function fetchGitDeliveryCommitPreview(
-  input: { readonly projectId: string; readonly messageDraft?: string | undefined },
+  input: { readonly projectId: string; readonly messageDraft?: string },
   signal?: AbortSignal,
 ): Promise<GitDeliveryCommitPreviewResponse> {
   return fetchJson("/api/git-delivery/commit/preview", {
@@ -2884,8 +2948,8 @@ export async function fetchGitDeliveryCommitPreview(
 export interface GitDeliveryCommitExecuteInput {
   readonly projectId: string;
   readonly message: string;
-  readonly allowEmpty?: boolean | undefined;
-  readonly approval?: GitDeliveryApprovalClaim | undefined;
+  readonly allowEmpty?: boolean;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 export async function fetchGitDeliveryCommitExecute(
@@ -2912,9 +2976,9 @@ export interface GitDeliveryPushInput {
   readonly remoteAlias: string;
   readonly remoteBranchName: string;
   readonly sourceBranchName: string;
-  readonly forcePush?: boolean | undefined;
-  readonly setUpstreamTracking?: boolean | undefined;
-  readonly approval?: GitDeliveryApprovalClaim | undefined;
+  readonly forcePush?: boolean;
+  readonly setUpstreamTracking?: boolean;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 export interface GitDeliveryPushPreviewResponse {
@@ -2982,6 +3046,7 @@ export interface GitDeliverySyncInput {
   readonly operation: GitSyncOperation;
   readonly projectId: string;
   readonly remote?: string | undefined;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 function gitDeliverySyncBody(input: GitDeliverySyncInput): string {
@@ -2989,10 +3054,14 @@ function gitDeliverySyncBody(input: GitDeliverySyncInput): string {
     schemaVersion: "1",
     projectId: input.projectId,
     ...(input.remote === undefined ? {} : { remote: input.remote }),
+    ...(input.approval === undefined ? {} : { approval: input.approval }),
   });
 }
 
-function gitDeliverySyncPath(operation: GitSyncOperation, phase: "preview" | "execute"): string {
+function gitDeliverySyncPath(
+  operation: GitSyncOperation,
+  phase: "preview" | "approve" | "execute",
+): string {
   return `/api/git-delivery/${operation}/${phase}`;
 }
 
@@ -3026,6 +3095,35 @@ export async function fetchGitDeliverySyncExecute(
   );
 }
 
+export interface GitDeliverySyncApproveResponse {
+  readonly schemaVersion: "1";
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAt: string;
+}
+
+export async function fetchGitDeliverySyncApprove(
+  input: Omit<GitDeliverySyncInput, "approval">,
+  signal?: AbortSignal,
+): Promise<GitDeliverySyncApproveResponse> {
+  return fetchJson(gitDeliverySyncPath(input.operation, "approve"), {
+    method: "POST",
+    body: gitDeliverySyncBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+/**
+ * Treats one explicit Fetch/Pull action as the approval-mint plus one-use execute sequence. The
+ * server independently validates the same project, operation, and remote at both steps.
+ */
+export async function proposeGitDeliverySync(
+  input: Omit<GitDeliverySyncInput, "approval">,
+  signal?: AbortSignal,
+): Promise<GitSyncExecuteResponse> {
+  const minted = await fetchGitDeliverySyncApprove(input, signal);
+  return fetchGitDeliverySyncExecute({ ...input, approval: minted.approval }, signal);
+}
+
 // ─── Governed GitHub pull request command center (#477, ADR-0064) ────────────────────────────────────
 
 export type GitDeliveryPrKind = "pr-create" | "pr-update";
@@ -3040,11 +3138,11 @@ export interface GitDeliveryPrInput {
   readonly baseBranchName: string;
   readonly title: string;
   readonly body: string;
-  readonly isDraft?: boolean | undefined;
-  readonly prExternalId?: string | undefined;
-  readonly convertToDraft?: boolean | undefined;
-  readonly convertFromDraft?: boolean | undefined;
-  readonly approval?: GitDeliveryApprovalClaim | undefined;
+  readonly isDraft?: boolean;
+  readonly prExternalId?: string;
+  readonly convertToDraft?: boolean;
+  readonly convertFromDraft?: boolean;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 export interface GitDeliveryPrReadiness {
@@ -3135,8 +3233,8 @@ export interface GitDeliveryMergeInput {
   readonly headBranchName: string;
   readonly mergeStrategy: GitDeliveryMergeStrategy;
   readonly deleteBranchAfterMerge: boolean;
-  readonly expectedHeadRefHash?: string | undefined;
-  readonly approval?: GitDeliveryApprovalClaim | undefined;
+  readonly expectedHeadRefHash?: string;
+  readonly approval?: GitDeliveryApprovalClaim;
 }
 
 // A per-blocker readiness view carrying the precise code AND its recovery information (remediation class
@@ -3249,4 +3347,639 @@ export async function fetchGitDeliveryMergeExecute(
     body: gitDeliveryMergeBody(input),
     ...(signal === undefined ? {} : { signal }),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Coding Workbench journey observation (#3389) — read-only refresh/reconciliation of the accepted
+// draft delivery run's confirmed PR and bound issue. Admitted by the server's per-checkout
+// GitHub-reader grant, never the run-bound mutation gate, so it works after the run has terminated.
+//
+// The validator + fetcher live in `./coding-workbench-lazy-fetchers.ts` (epic #3384 final-audit
+// F18): `isJourneyOutcome` transitively pulls in `git-journey-validation` and its own dependency
+// graph, weight the desktop shell's first-load chunk never needs since every caller
+// (CodingWorkbenchWindow) is already behind a `next/dynamic({ ssr: false })` boundary. This function
+// keeps its name and signature so no caller needs to change.
+// ---------------------------------------------------------------------------
+
+export type CodingWorkbenchJourneyRefreshResult =
+  | { readonly status: "observed"; readonly outcome: JourneyOutcome }
+  | { readonly status: "unavailable"; readonly reason: string };
+
+/** Reads/refreshes the bounded journey observation for one accepted draft-delivery run (#3389). */
+export async function fetchCodingWorkbenchJourneyRefresh(
+  input: { readonly runId: string },
+  signal?: AbortSignal,
+): Promise<CodingWorkbenchJourneyRefreshResult> {
+  const adapter = await import("./coding-workbench-lazy-fetchers");
+  return adapter.fetchCodingWorkbenchJourneyRefresh(fetchJson, input, signal);
+}
+
+// ---------------------------------------------------------------------------
+// Coding Workbench issue intake and GitHub issue reader grant (#3385)
+// ---------------------------------------------------------------------------
+
+/**
+ * The bounded, server-resolved preview of one GitHub issue. Every string is UNTRUSTED content —
+ * issue text is authored by whoever can write on the tracker — so the renderer shows it as plain
+ * text nodes only. The bounds below are the client's own ceiling on what it will hand to that
+ * renderer; the server bounds the same values first, and a body outside them is a contract failure,
+ * never something to truncate quietly.
+ */
+export type GitHubIssuePreviewResponseWire = CodingWorkbenchIssuePreviewResponseWire;
+export type CodingWorkbenchIssuePreviewRequest = CodingWorkbenchIssuePreviewRequestWire;
+
+// Bound imported from the contract's runtime subpath, never restated: a client cap that drifts
+// from the server's own would let the client accept input the server always rejects, and vice
+// versa (same restated-formula class as #2285). The issue-preview title/excerpt bounds and the
+// owner/repo shape check live with the rest of the issue-preview validator in
+// `./coding-workbench-lazy-fetchers.ts` (epic #3384 final-audit F18) -- this is the one binding
+// from that contract module CodingWorkbenchIssueIntake.tsx still needs synchronously (a
+// `maxLength` prop outside the dynamic() boundary), so it stays an eager re-export here.
+// GITHUB_ISSUE_BINDING_ID_MAX_CHARS, SHA256_HEX, isRecordValue and isBoundedText live in
+// `./api-shared-primitives.ts` (imported and re-exported near the top of this file) so this
+// module and `./coding-workbench-lazy-fetchers.ts` both depend on that leaf instead of on each
+// other -- see the comment there for why.
+
+/**
+ * Resolve and preview a GitHub issue for the repository at `input.repositoryPath` (#3385). The
+ * validator + request live in `./coding-workbench-lazy-fetchers.ts` (epic #3384 final-audit F18):
+ * `isGitHubOwnerAndRepo` and the issue-preview bounds pull in the rest of
+ * `coding-workbench-runtime`, weight the desktop shell's first-load chunk never needs since every
+ * caller (CodingWorkbenchIssueIntake, via `useCodingWorkbenchIssueIntake`) is already behind a
+ * `next/dynamic({ ssr: false })` boundary. This function keeps its name and signature so no caller
+ * needs to change.
+ */
+export async function previewCodingWorkbenchIssue(
+  input: CodingWorkbenchIssuePreviewRequest,
+  signal?: AbortSignal,
+): Promise<GitHubIssuePreviewResponseWire> {
+  const adapter = await import("./coding-workbench-lazy-fetchers");
+  return adapter.previewCodingWorkbenchIssue(fetchJson, input, signal);
+}
+
+export function validateGitHubIssueReaderAuthorization(value: unknown): GitRepositoryValidation {
+  if (!isRecordValue(value)) return { ok: false, reasons: ["authorization must be an object"] };
+  const reasons: string[] = [];
+  if (!isBoundedText(value.repositoryId, GITHUB_ISSUE_BINDING_ID_MAX_CHARS)) {
+    reasons.push("authorization.repositoryId must be a bounded id");
+  }
+  if (typeof value.authorized !== "boolean")
+    reasons.push("authorization.authorized must be boolean");
+  if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 0) {
+    reasons.push("authorization.revision must be a non-negative integer");
+  }
+  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+}
+
+/** The per-checkout GitHub issue reader grant for a registered project path (#3385). */
+export async function fetchGitHubIssueReaderAuthorization(
+  repositoryPath: string,
+  signal?: AbortSignal,
+): Promise<GitHubIssueReaderAuthorizationWire> {
+  const params = new URLSearchParams({ repositoryPath });
+  return fetchJson(
+    `/api/coding-workbench/github-authorization?${params.toString()}`,
+    signal === undefined ? undefined : { signal },
+    validateGitHubIssueReaderAuthorization,
+  );
+}
+
+/**
+ * Grant or revoke the reader for one registered checkout. `expectedRevision` is the revision the
+ * caller last read; the server answers 409 `CONFLICT` when it moved, and the caller re-reads
+ * rather than retrying blind.
+ */
+export async function updateGitHubIssueReaderAuthorization(
+  input: UpdateGitHubIssueReaderAuthorizationWire,
+  signal?: AbortSignal,
+): Promise<GitHubIssueReaderAuthorizationWire> {
+  return fetchJson(
+    "/api/coding-workbench/github-authorization",
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        repositoryPath: input.repositoryPath,
+        authorized: input.authorized,
+        expectedRevision: input.expectedRevision,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    validateGitHubIssueReaderAuthorization,
+  );
+}
+
+// ─── Issue #3400 — Git-to-Chat connect/refresh (server-resolved comparison, never a browser root)
+
+// The 11-member closed reason set is owned once by keiko-contracts (bff-wire.ts) and imported
+// here rather than restated — the server route (gitChangeRoutes.ts) imports the same constant
+// (F30 in the epic #3384 final audit).
+const GIT_CHANGE_BLOCKED_REASON_SET: ReadonlySet<string> = new Set(GIT_CHANGE_BLOCKED_REASONS);
+
+// Owner audit b1-12 — the closed `descriptionStatus` vocabulary is owned once by keiko-contracts
+// (bff-wire.ts) and imported here rather than restated, mirroring the blocked-reason set above.
+const CHAT_GIT_CHANGE_DESCRIPTION_STATUS_SET: ReadonlySet<string> = new Set(
+  CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
+);
+
+export type { GitChangeBlockedReason };
+
+export type GitChangeConnectResponse =
+  | { readonly status: "connected"; readonly scope: ChatGitChangeScope }
+  | { readonly status: "blocked"; readonly reason: GitChangeBlockedReason };
+
+export type GitChangeRefreshResponse =
+  | { readonly status: "current"; readonly scope: ChatGitChangeScope }
+  | { readonly status: "stale"; readonly scope: ChatGitChangeScope }
+  | { readonly status: "blocked"; readonly reason: GitChangeBlockedReason };
+
+const GIT_COMMIT_SHA_HEX = /^[0-9a-f]{40}$/u;
+
+function isSha256Hex(value: unknown): value is string {
+  return typeof value === "string" && SHA256_HEX.test(value);
+}
+
+function isGitCommitShaHex(value: unknown): value is string {
+  return typeof value === "string" && GIT_COMMIT_SHA_HEX.test(value);
+}
+
+// Owner audit b1-12 — the sibling `blocked` reason is checked against the closed set below; this
+// mirrors it for `descriptionStatus` instead of accepting any bounded string, so an unrecognised
+// value is rejected here rather than reaching the pill's status-badge lookup and throwing.
+function isChatGitChangeDescriptionStatus(value: unknown): value is ChatGitChangeDescriptionStatus {
+  return typeof value === "string" && CHAT_GIT_CHANGE_DESCRIPTION_STATUS_SET.has(value);
+}
+
+function hasChatGitChangeScopeTextFields(value: Record<string, unknown>): boolean {
+  return (
+    isBoundedText(value.relationshipId, 256) &&
+    isSha256Hex(value.remoteDigest) &&
+    isBoundedText(value.comparisonLabel, 240) &&
+    isBoundedText(value.baseRef, 512) &&
+    isBoundedText(value.headRef, 512) &&
+    isGitCommitShaHex(value.baseSha) &&
+    isGitCommitShaHex(value.headSha) &&
+    isGitCommitShaHex(value.mergeBaseSha) &&
+    isSha256Hex(value.snapshotDigest) &&
+    isChatGitChangeDescriptionStatus(value.descriptionStatus)
+  );
+}
+
+function hasChatGitChangeScopeCountFields(value: Record<string, unknown>): boolean {
+  return (
+    Number.isSafeInteger(value.fileCount) &&
+    Number.isSafeInteger(value.totalFiles) &&
+    Number.isSafeInteger(value.omittedFiles) &&
+    Number.isSafeInteger(value.truncatedFiles) &&
+    Number.isSafeInteger(value.connectedAtMs)
+  );
+}
+
+function isChatGitChangeScope(value: unknown): value is ChatGitChangeScope {
+  if (!isRecordValue(value) || value.kind !== "git-change") return false;
+  return hasChatGitChangeScopeTextFields(value) && hasChatGitChangeScopeCountFields(value);
+}
+
+function validateGitChangeConnectResponse(value: unknown): GitRepositoryValidation {
+  if (!isRecordValue(value)) return { ok: false, reasons: ["response must be an object"] };
+  if (value.status === "blocked") {
+    return GIT_CHANGE_BLOCKED_REASON_SET.has(value.reason as string)
+      ? { ok: true }
+      : { ok: false, reasons: ["response.reason is not a known blocked reason"] };
+  }
+  if (value.status === "connected" && isChatGitChangeScope(value.scope)) {
+    return { ok: true };
+  }
+  return { ok: false, reasons: ["response does not match GitChangeConnectResponse"] };
+}
+
+function validateGitChangeRefreshResponse(value: unknown): GitRepositoryValidation {
+  if (!isRecordValue(value)) return { ok: false, reasons: ["response must be an object"] };
+  if (value.status === "blocked") {
+    return GIT_CHANGE_BLOCKED_REASON_SET.has(value.reason as string)
+      ? { ok: true }
+      : { ok: false, reasons: ["response.reason is not a known blocked reason"] };
+  }
+  if (
+    (value.status === "current" || value.status === "stale") &&
+    isChatGitChangeScope(value.scope)
+  ) {
+    return { ok: true };
+  }
+  return { ok: false, reasons: ["response does not match GitChangeRefreshResponse"] };
+}
+
+export interface ConnectGitChangeComparisonInput {
+  readonly chatId: string;
+  readonly mode: "comparison";
+  readonly headRef: string;
+  readonly baseRef: string;
+}
+
+export interface ConnectGitChangePullRequestInput {
+  readonly chatId: string;
+  readonly mode: "pull-request";
+  readonly headRef: string;
+}
+
+export type ConnectGitChangeInput =
+  ConnectGitChangeComparisonInput | ConnectGitChangePullRequestInput;
+
+/**
+ * Connects the Git window's selected comparison (an exact local base/head, or one open
+ * same-repository pull request) to a Chat. The browser sends only the chat id and a ref/mode
+ * selection — the server resolves the trusted repository, captures the immutable snapshot and
+ * records the relationship; the response carries only server-issued facts.
+ */
+export async function connectGitChangeToChat(
+  input: ConnectGitChangeInput,
+  signal?: AbortSignal,
+): Promise<GitChangeConnectResponse> {
+  return fetchJson(
+    "/api/git-change/connect",
+    {
+      method: "POST",
+      body: JSON.stringify({ schemaVersion: "1", ...input }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    validateGitChangeConnectResponse,
+  );
+}
+
+/**
+ * Re-checks a connected git-change scope against the live repository. `reads-context` is
+ * immutable and non-reconnectable, so a drifted comparison archives the existing relationship and
+ * creates a new one server-side; the chat's scope list is updated in the same call.
+ */
+export async function refreshGitChangeScope(
+  chatId: string,
+  relationshipId: string,
+  signal?: AbortSignal,
+): Promise<GitChangeRefreshResponse> {
+  return fetchJson(
+    "/api/git-change/refresh",
+    {
+      method: "POST",
+      body: JSON.stringify({ schemaVersion: "1", chatId, relationshipId }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    validateGitChangeRefreshResponse,
+  );
+}
+
+// ─── Governed PR mark-ready intent (#3389, epic #3384, ADR-0086) ──────────────────────────────────
+//
+// A separate, narrower client from the generic pr-create/pr-update pair above: the draft->ready
+// transition never carries title/body/base — only the exact facts the one-use approval binds
+// (owner/repo, PR number, base/head SHA, the PR's base branch NAME, a digest over the readiness
+// snapshot that justified the proposal). Consumed by the Coding Workbench journey outcome's
+// propose-ready control, never by GovernedPullRequestCard (which has neither the SHAs nor the
+// readiness digest to bind).
+//
+// `baseRef` mirrors `PrMarkReadyCommand.baseRef` (prMarkReadyExecution.ts): the server's mint route
+// requires it unconditionally (`buildMarkReadyCommand`'s `isBaseBranchName` check) so the live
+// requirements/conflict re-read can address GitHub's branch-keyed endpoints — omitting it fails the
+// mint with a clean 400 (#3389 repair).
+
+export interface GitDeliveryPrMarkReadyInput {
+  readonly projectId: string;
+  readonly ownerAndRepo: string;
+  readonly prExternalId: string;
+  readonly headSha: string;
+  readonly baseSha: string;
+  readonly baseRef: string;
+  readonly readinessDigest: string;
+  readonly approval?: GitDeliveryApprovalClaim;
+}
+
+export interface GitDeliveryPrMarkReadyApproveResponse {
+  readonly schemaVersion: "1";
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAt: string;
+}
+
+export interface GitDeliveryPrMarkReadyExecuteResponse {
+  readonly schemaVersion: "1";
+  readonly actionKind: "pr-mark-ready";
+  readonly status: "succeeded" | "failed" | "aborted" | "approval-required";
+  readonly executionErrorCode?: string;
+  readonly rejectionReason?: string;
+}
+
+function gitDeliveryPrMarkReadyBody(input: GitDeliveryPrMarkReadyInput): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    ownerAndRepo: input.ownerAndRepo,
+    prExternalId: input.prExternalId,
+    headSha: input.headSha,
+    baseSha: input.baseSha,
+    baseRef: input.baseRef,
+    readinessDigest: input.readinessDigest,
+    ...(input.approval === undefined ? {} : { approval: input.approval }),
+  });
+}
+
+export async function fetchGitDeliveryPrMarkReadyApprove(
+  input: GitDeliveryPrMarkReadyInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrMarkReadyApproveResponse> {
+  return fetchJson("/api/git-delivery/pr/mark-ready/approve", {
+    method: "POST",
+    body: gitDeliveryPrMarkReadyBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryPrMarkReadyExecute(
+  input: GitDeliveryPrMarkReadyInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrMarkReadyExecuteResponse> {
+  return fetchJson("/api/git-delivery/pr/mark-ready/execute", {
+    method: "POST",
+    body: gitDeliveryPrMarkReadyBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+/**
+ * Mints then immediately redeems the one-use pr-mark-ready approval — the mint/execute pair a
+ * single "Propose ready" click performs as one governed action. A mint failure (network, bad
+ * request, deployment-mode denial) rejects before any execute attempt is made.
+ */
+export async function proposePrMarkReady(
+  input: Omit<GitDeliveryPrMarkReadyInput, "approval">,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrMarkReadyExecuteResponse> {
+  const minted = await fetchGitDeliveryPrMarkReadyApprove(input, signal);
+  return fetchGitDeliveryPrMarkReadyExecute({ ...input, approval: minted.approval }, signal);
+}
+
+// ─── Governed commit/push/pull-request approval mint (#3386 commit, #3387 push and pull request) ──
+//
+// An accepted run's commit/push/pr-create/pr-update mutation now requires an actually consumed,
+// server-issued approval claim regardless of what the repository policy pack decides (epic #3384
+// correction 5, ADR-0138 D2/D4) — never mode-denied merely because the mode is lower. These mirror
+// fetchGitDeliveryMergeApprove exactly: the caller passes the EXACT SAME input it will subsequently
+// pass to the matching execute call (commitRoutes.ts/pushRoutes.ts/prRoutes.ts `createHandle*Approve`
+// rebuild the identical typed command from the identical request body and bind the mint to it), so a
+// claim minted for a different command, run, or operation is never redeemable by execute.
+
+export interface GitDeliveryCommitApproveResponse {
+  readonly schemaVersion: "1";
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAt: string;
+}
+
+export async function fetchGitDeliveryCommitApprove(
+  input: GitDeliveryCommitExecuteInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryCommitApproveResponse> {
+  return fetchJson("/api/git-delivery/commit/approve", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      message: input.message,
+      ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export interface GitDeliveryPushApproveResponse {
+  readonly schemaVersion: "1";
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAt: string;
+}
+
+export async function fetchGitDeliveryPushApprove(
+  input: GitDeliveryPushInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPushApproveResponse> {
+  return fetchJson("/api/git-delivery/push/approve", {
+    method: "POST",
+    body: gitDeliveryPushBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export interface GitDeliveryPrApproveResponse {
+  readonly schemaVersion: "1";
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAt: string;
+}
+
+export async function fetchGitDeliveryPrApprove(
+  input: GitDeliveryPrInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrApproveResponse> {
+  return fetchJson("/api/git-delivery/pr/approve", {
+    method: "POST",
+    body: gitDeliveryPrBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+/**
+ * Mints then immediately redeems the one-use commit approval — the mint/execute pair a single
+ * "Commit" action performs as one governed action (epic #3384 correction 5). A denied mint is a
+ * hard admission refusal (missing/stale run, workspace mismatch, or mode denial), so it propagates
+ * through the caller's ordinary error state. Only the execute route may return the explicit
+ * `approval-required` outcome after successful admission.
+ */
+export async function proposeCommit(
+  input: Omit<GitDeliveryCommitExecuteInput, "approval">,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMutationResponse> {
+  const minted = await fetchGitDeliveryCommitApprove(input, signal);
+  return fetchGitDeliveryCommitExecute({ ...input, approval: minted.approval }, signal);
+}
+
+/**
+ * Mints then immediately redeems the one-use push approval — the mint/execute pair a single
+ * "Push" action performs as one governed action (epic #3384 correction 5: an unconditional
+ * approval requirement, never mode-denied). Mirrors `proposePrMarkReady`, with the same mint-
+ * hard-denial behavior as `proposeCommit`: a refused mint propagates to the caller, while the
+ * execute route remains the sole owner of an explicit `approval-required` outcome.
+ */
+export async function proposePush(
+  input: Omit<GitDeliveryPushInput, "approval">,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPushExecuteResponse> {
+  const minted = await fetchGitDeliveryPushApprove(input, signal);
+  return fetchGitDeliveryPushExecute({ ...input, approval: minted.approval }, signal);
+}
+
+// ─── Governed PR-description application (#3399, epic #3384 correction 4, ADR-0086) ───────────────
+//
+// Reviewed Keiko-generated description text placed into the actual pull-request body while
+// preserving repository templates and human-authored content outside one versioned managed region.
+// Preview NEVER mutates the remote PR; approve mints the one-use description-apply approval bound
+// server-side to the exact proposal (repository, PR, base/head, current-body and outside-region
+// digests, draft version, final-body digest — prDescriptionRoutes.ts); apply re-reads current PR
+// base/head/body immediately before the effect and sends a body-only PATCH on an exact match. The
+// server retains the proposal between calls, so only the bounded `proposalId` — never a bearer
+// claim — travels with approve/apply. `finalBody`/`managedRegion` are rendered by trusted server
+// code (branding, template preservation) and must be shown byte-for-byte, never recomposed here.
+
+export interface GitDeliveryPrDescriptionTarget {
+  readonly projectId: string;
+  readonly ownerAndRepo: string;
+  readonly prNumber: number;
+  readonly snapshotDigest?: string;
+}
+
+export interface GitDeliveryPrDescriptionPreviewInput extends GitDeliveryPrDescriptionTarget {
+  readonly language: PrDescriptionLanguage;
+  readonly refinement?: string;
+}
+
+export interface GitDeliveryPrDescriptionProposalInput extends GitDeliveryPrDescriptionTarget {
+  readonly proposalId: string;
+}
+
+export interface PrDescriptionPreviewWire {
+  readonly proposalId: string;
+  readonly expiresAt: string;
+  readonly status: PrDescriptionApplicationStatus;
+  readonly finalBody: string;
+  readonly managedRegion: string;
+  readonly concurrencyLimitation: string;
+}
+
+export type PrDescriptionApplicationResultWire =
+  | { readonly outcome: "preview"; readonly preview: PrDescriptionPreviewWire }
+  | { readonly outcome: "observed"; readonly status: PrDescriptionApplicationStatus }
+  | { readonly outcome: "blocked"; readonly reason: PrDescriptionApplicationReason };
+
+export interface GitDeliveryPrDescriptionApproveResponse {
+  readonly schemaVersion: "1";
+  readonly proposalId: string;
+  readonly expiresAt: string;
+}
+
+export type {
+  PrDescriptionLanguage,
+  PrDescriptionApplicationStatus,
+  PrDescriptionApplicationReason,
+};
+
+// The validators + fetchers live in `./coding-workbench-lazy-fetchers.ts` (epic #3384 final-audit
+// F18): `isPrDescriptionApplicationStatus`/`PR_DESCRIPTION_APPLICATION_REASON_STATES` pull in
+// `pr-description-application`, and `PR_DESCRIPTION_LANGUAGES` pulls in `pr-description` -- weight
+// the desktop shell's first-load chunk never needs since every caller (GovernedPullRequestCard,
+// GitClientWindow) is already behind a `next/dynamic({ ssr: false })` boundary. These functions keep
+// their names and signatures so no caller needs to change.
+
+export async function fetchGitDeliveryPrDescriptionPreview(
+  input: GitDeliveryPrDescriptionPreviewInput,
+  signal?: AbortSignal,
+): Promise<PrDescriptionApplicationResultWire> {
+  const adapter = await import("./coding-workbench-lazy-fetchers");
+  return adapter.fetchGitDeliveryPrDescriptionPreview(fetchJson, input, signal);
+}
+
+export async function fetchGitDeliveryPrDescriptionReview(
+  input: GitDeliveryPrDescriptionProposalInput,
+  signal?: AbortSignal,
+): Promise<PrDescriptionApplicationResultWire> {
+  const adapter = await import("./coding-workbench-lazy-fetchers");
+  return adapter.fetchGitDeliveryPrDescriptionReview(fetchJson, input, signal);
+}
+
+export async function fetchGitDeliveryPrDescriptionApprove(
+  input: GitDeliveryPrDescriptionProposalInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrDescriptionApproveResponse> {
+  const adapter = await import("./coding-workbench-lazy-fetchers");
+  return adapter.fetchGitDeliveryPrDescriptionApprove(fetchJson, input, signal);
+}
+
+export async function fetchGitDeliveryPrDescriptionApply(
+  input: GitDeliveryPrDescriptionProposalInput,
+  signal?: AbortSignal,
+): Promise<PrDescriptionApplicationResultWire> {
+  const adapter = await import("./coding-workbench-lazy-fetchers");
+  return adapter.fetchGitDeliveryPrDescriptionApply(fetchJson, input, signal);
+}
+
+export async function fetchGitDeliveryPrDescriptionStatus(
+  input: GitDeliveryPrDescriptionTarget,
+  signal?: AbortSignal,
+): Promise<PrDescriptionApplicationResultWire> {
+  const adapter = await import("./coding-workbench-lazy-fetchers");
+  return adapter.fetchGitDeliveryPrDescriptionStatus(fetchJson, input, signal);
+}
+
+// ─── Issue #3400 final-audit F5 — Chat's apply action (body-only, shared #3399 service) ─────────
+//
+// The ONLY write action Chat's connected git-change scope exposes (Frozen Product Decision 6):
+// applies an already-approved PR-description proposal through the SAME #3399
+// `PrDescriptionApplicationService` the pr-description preview/approve/apply routes above reuse.
+// The browser sends only the chat/relationship/proposal ids -- never `ownerAndRepo` -- so the
+// server re-derives the repository identity live from the SAME trusted checkout the scope was
+// connected against (chat-handlers.ts's `createHandleGitChangeApplyDescription`), never a
+// browser-authored identity.
+
+export interface ApplyGitChangeChatDescriptionInput {
+  readonly chatId: string;
+  readonly relationshipId: string;
+  readonly proposalId: string;
+}
+
+export async function approveGitChangeChatDescription(
+  input: ApplyGitChangeChatDescriptionInput,
+  signal?: AbortSignal,
+  correlationId?: string,
+): Promise<GitDeliveryPrDescriptionApproveResponse> {
+  return fetchJson<GitDeliveryPrDescriptionApproveResponse>(
+    "/api/git-change/approve-description",
+    {
+      method: "POST",
+      body: JSON.stringify({ schemaVersion: "1", ...input }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    undefined,
+    correlationId,
+  );
+}
+
+export async function reviewGitChangeChatDescription(
+  input: ApplyGitChangeChatDescriptionInput,
+  signal?: AbortSignal,
+  correlationId?: string,
+): Promise<PrDescriptionApplicationResultWire> {
+  const adapter = await import("./coding-workbench-lazy-fetchers");
+  return fetchJson<PrDescriptionApplicationResultWire>(
+    "/api/git-change/review-description",
+    {
+      method: "POST",
+      body: JSON.stringify({ schemaVersion: "1", ...input }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    adapter.validatePrDescriptionApplicationResultWire,
+    correlationId,
+  );
+}
+
+/**
+ * Applies an already-approved description proposal for a Chat-connected git-change scope. One-use:
+ * the server consumes the approval on the first call and answers 409 on any replay.
+ */
+export async function applyGitChangeChatDescription(
+  input: ApplyGitChangeChatDescriptionInput,
+  signal?: AbortSignal,
+  correlationId?: string,
+): Promise<PrDescriptionApplicationResultWire> {
+  const adapter = await import("./coding-workbench-lazy-fetchers");
+  return fetchJson<PrDescriptionApplicationResultWire>(
+    "/api/git-change/apply-description",
+    {
+      method: "POST",
+      body: JSON.stringify({ schemaVersion: "1", ...input }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    adapter.validateGitChangeApplyDescriptionResponse,
+    correlationId,
+  );
 }

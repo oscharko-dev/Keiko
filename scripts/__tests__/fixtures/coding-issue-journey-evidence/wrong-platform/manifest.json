@@ -1,0 +1,85 @@
+{
+  "kind": "code-task-qualification-manifest",
+  "schemaVersion": 1,
+  "epicIssue": 3384,
+  "childIssue": 3390,
+  "sourceCommitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "sourceTreeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "runtimeIdentity": "opencode-1.17.17",
+  "modelIdentity": "gateway-profile:coding-issue-journey",
+  "fixtureRevision": "controlled-fixture-rev-1",
+  "rubricDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "issueReference": {
+    "outcome": "known",
+    "value": "controlled/repo#101"
+  },
+  "pullRequestReference": {
+    "outcome": "known",
+    "value": "controlled/repo#102"
+  },
+  "runReference": {
+    "outcome": "known",
+    "value": "run-20260904-01"
+  },
+  "readinessSnapshotDigest": {
+    "outcome": "known",
+    "value": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "journeyOutcomeDigest": {
+    "outcome": "known",
+    "value": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "auditReference": {
+    "outcome": "known",
+    "value": "keiko-issue-audit-20260904"
+  },
+  "auditDigest": {
+    "outcome": "known",
+    "value": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "humanMergeAttestationDigest": {
+    "outcome": "known",
+    "value": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "requiredTools": [
+    "question",
+    "keiko_repository_search",
+    "keiko_workspace_discover",
+    "keiko_workspace_read",
+    "keiko_changeset_edit",
+    "keiko_verification",
+    "keiko_git_status",
+    "keiko_git_diff",
+    "keiko_git_stage",
+    "keiko_git_commit",
+    "keiko_git_push",
+    "keiko_pull_request",
+    "keiko_ci_status",
+    "todowrite"
+  ],
+  "spendBudgetUsd": 25,
+  "observedSpendUsd": {
+    "outcome": "known",
+    "value": 4.5
+  },
+  "knownLimitations": ["packaged Windows x64 reference run is a documented external dependency"],
+  "scenarios": [
+    {
+      "scenarioId": "issue-to-pr-full-access",
+      "evidenceClass": "playwright-journey",
+      "platform": "macos-arm64",
+      "provenance": "real-model",
+      "outcome": "passed",
+      "recordedAt": "2026-09-04T12:00:00Z",
+      "blockedReason": {
+        "outcome": "absent"
+      },
+      "artifactDigests": ["0bff7151e74aa46dd91d60a64c0d00efc45f038289cca00fd827fe2b23f37172"],
+      "receiptDigest": {
+        "outcome": "known",
+        "value": "0bff7151e74aa46dd91d60a64c0d00efc45f038289cca00fd827fe2b23f37172"
+      }
+    }
+  ],
+  "flows": []
+}

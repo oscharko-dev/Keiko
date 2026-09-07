@@ -25,8 +25,9 @@ const FolderIcon = Icons.folder;
 const BranchIcon = Icons.branch;
 const CodeIcon = Icons.code;
 const FilesIcon = Icons.files;
+const ChatIcon = Icons.newChat;
 
-interface RepositoryToolbarProps {
+export interface RepositoryToolbarProps {
   readonly repositories: readonly ProjectWithAvailability[];
   readonly selectedPath: string | null;
   readonly branches: readonly GitBranchListEntry[];
@@ -43,6 +44,8 @@ interface RepositoryToolbarProps {
   readonly onRunSync: () => void;
   readonly onOpenEditor?: ((root: string) => void) | undefined;
   readonly onOpenFiles?: ((root: string) => void) | undefined;
+  /** Issue #3400 — opens the "Connect to Chat" dialog for the active repository comparison. */
+  readonly onConnectToChat?: () => void;
 }
 
 function currentBranchName(
@@ -84,13 +87,186 @@ function ToolbarCell({
   );
 }
 
-export function RepositoryToolbar({
+interface ToolbarActionsProps {
+  readonly selectedPath: string | null;
+  readonly onOpenEditor: ((root: string) => void) | undefined;
+  readonly onOpenFiles: ((root: string) => void) | undefined;
+  readonly onConnectToChat: (() => void) | undefined;
+  readonly connectToChatLabel: string;
+}
+
+// One icon-only toolbar action button. Extracted so each of the three optional actions in
+// ToolbarActions is a single call, keeping every function under the max-lines-per-function bar.
+function ToolbarIconButton({
+  label,
+  icon,
+  onClick,
+}: {
+  readonly label: string;
+  readonly icon: ReactNode;
+  readonly onClick: () => void;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      style={TOOLBAR_ICON_BTN}
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+    >
+      <span style={{ color: "var(--fg-dim)" }}>{icon}</span>
+    </button>
+  );
+}
+
+// Extracted from RepositoryToolbar so the parent stays under the complexity bar: each button is
+// an independent optional action, gated only on its own callback being supplied.
+function ToolbarActions({
+  selectedPath,
+  onOpenEditor,
+  onOpenFiles,
+  onConnectToChat,
+  connectToChatLabel,
+}: ToolbarActionsProps): ReactNode {
+  if (onOpenEditor === undefined && onOpenFiles === undefined && onConnectToChat === undefined) {
+    return null;
+  }
+  return (
+    <div style={TOOLBAR_ACTIONS_STYLE}>
+      {onConnectToChat !== undefined ? (
+        <ToolbarIconButton
+          label={connectToChatLabel}
+          icon={<ChatIcon size={15} />}
+          onClick={onConnectToChat}
+        />
+      ) : null}
+      {onOpenEditor !== undefined ? (
+        <ToolbarIconButton
+          label="Open in Editor"
+          icon={<CodeIcon size={15} />}
+          onClick={() => {
+            if (selectedPath !== null) onOpenEditor(selectedPath);
+          }}
+        />
+      ) : null}
+      {onOpenFiles !== undefined ? (
+        <ToolbarIconButton
+          label="Open Files"
+          icon={<FilesIcon size={15} />}
+          onClick={() => {
+            if (selectedPath !== null) onOpenFiles(selectedPath);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+// The muted header shown until a repository is connected (body renders the Connect panel).
+// Extracted so RepositoryToolbar itself stays under the max-lines-per-function bar.
+function EmptyRepositoryToolbar({
+  onOpenEditor,
+}: {
+  readonly onOpenEditor: ((root: string) => void) | undefined;
+}): ReactNode {
+  return (
+    <header style={TOOLBAR_EMPTY_STYLE} aria-label="Repository toolbar">
+      <span style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--fg-faint)" }}>
+        <FolderIcon size={16} />
+        <span style={{ fontSize: 14, color: "var(--fg-muted)" }}>Select a repository</span>
+      </span>
+      <span style={{ width: 1, height: 26, background: "var(--line-soft)" }} />
+      <span style={{ display: "flex", alignItems: "center", gap: 9, color: "var(--fg-faint)" }}>
+        <BranchIcon size={16} />
+        <span style={{ fontSize: 13, color: "var(--fg-faint)" }}>No branch</span>
+      </span>
+      <span style={{ flex: 1 }} />
+      {onOpenEditor !== undefined ? (
+        <button type="button" style={{ ...SECONDARY_BTN, ...disabledStyle(true) }} disabled>
+          <span style={{ color: "var(--fg-dim)" }}>
+            <CodeIcon size={15} />
+          </span>{" "}
+          Open in Editor
+        </button>
+      ) : null}
+    </header>
+  );
+}
+
+interface ConnectedToolbarCellsProps {
+  readonly repositories: readonly ProjectWithAvailability[];
+  readonly selectedPath: string | null;
+  readonly branches: readonly GitBranchListEntry[];
+  readonly branchesLoading: boolean;
+  readonly status: GitRepositoryStatusResponse | null;
+  readonly branchBusy: boolean;
+  readonly branchValue: string;
+  readonly syncView: GitSyncView;
+  readonly syncBusy: boolean;
+  readonly syncOutcome: SyncOutcomeView | null;
+  readonly syncError: string | null;
+  readonly onSelectRepository: (path: string) => void;
+  readonly onSwitchBranch: (branchName: string, trigger: HTMLButtonElement) => void;
+  readonly onCreateBranch: (trigger: HTMLButtonElement) => void;
+  readonly onRunSync: () => void;
+  readonly t: ReturnType<typeof useTranslate>;
+}
+
+// The Repository / Current branch / Sync cells of the connected toolbar. Extracted so
+// RepositoryToolbar itself stays under the max-lines-per-function bar.
+// The Repository picker cell's contents. Extracted so ConnectedToolbarCells stays under the
+// max-lines-per-function bar.
+function RepositoryCell({
+  repositories,
+  selectedPath,
+  onSelectRepository,
+}: {
+  readonly repositories: readonly ProjectWithAvailability[];
+  readonly selectedPath: string | null;
+  readonly onSelectRepository: (path: string) => void;
+}): ReactNode {
+  return (
+    <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+      <span style={{ color: "var(--fg-dim)" }}>
+        <FolderIcon size={16} />
+      </span>
+      <KeikoSelect
+        value={selectedPath ?? ""}
+        ariaLabel="Repository"
+        menuTitle="Repository"
+        placeholder="Select a repository"
+        triggerStyle={{
+          minWidth: 0,
+          border: "none",
+          background: "transparent",
+          padding: 0,
+          height: "auto",
+          font: "600 14px var(--font-ui)",
+          color: "var(--fg)",
+        }}
+        sections={[
+          {
+            options: repositories.map((repo) => ({
+              value: repo.path,
+              label: repo.name,
+              description: repo.path,
+            })),
+          },
+        ]}
+        onValueChange={onSelectRepository}
+      />
+    </span>
+  );
+}
+
+function ConnectedToolbarCells({
   repositories,
   selectedPath,
   branches,
   branchesLoading,
   status,
   branchBusy,
+  branchValue,
   syncView,
   syncBusy,
   syncOutcome,
@@ -99,72 +275,16 @@ export function RepositoryToolbar({
   onSwitchBranch,
   onCreateBranch,
   onRunSync,
-  onOpenEditor,
-  onOpenFiles,
-}: RepositoryToolbarProps): ReactNode {
-  const t = useTranslate();
-  const hasRepository = selectedPath !== null;
-  const branchValue = currentBranchName(branches, status);
-
-  // Muted toolbar — shown until a repository is connected (body renders the Connect panel).
-  if (!hasRepository) {
-    return (
-      <header style={TOOLBAR_EMPTY_STYLE} aria-label="Repository toolbar">
-        <span style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--fg-faint)" }}>
-          <FolderIcon size={16} />
-          <span style={{ fontSize: 14, color: "var(--fg-muted)" }}>Select a repository</span>
-        </span>
-        <span style={{ width: 1, height: 26, background: "var(--line-soft)" }} />
-        <span style={{ display: "flex", alignItems: "center", gap: 9, color: "var(--fg-faint)" }}>
-          <BranchIcon size={16} />
-          <span style={{ fontSize: 13, color: "var(--fg-faint)" }}>No branch</span>
-        </span>
-        <span style={{ flex: 1 }} />
-        {onOpenEditor !== undefined ? (
-          <button type="button" style={{ ...SECONDARY_BTN, ...disabledStyle(true) }} disabled>
-            <span style={{ color: "var(--fg-dim)" }}>
-              <CodeIcon size={15} />
-            </span>{" "}
-            Open in Editor
-          </button>
-        ) : null}
-      </header>
-    );
-  }
-
+  t,
+}: ConnectedToolbarCellsProps): ReactNode {
   return (
-    <header style={TOOLBAR_STYLE} aria-label="Repository toolbar">
+    <>
       <ToolbarCell label="Repository" minWidth={248}>
-        <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-          <span style={{ color: "var(--fg-dim)" }}>
-            <FolderIcon size={16} />
-          </span>
-          <KeikoSelect
-            value={selectedPath ?? ""}
-            ariaLabel="Repository"
-            menuTitle="Repository"
-            placeholder="Select a repository"
-            triggerStyle={{
-              minWidth: 0,
-              border: "none",
-              background: "transparent",
-              padding: 0,
-              height: "auto",
-              font: "600 14px var(--font-ui)",
-              color: "var(--fg)",
-            }}
-            sections={[
-              {
-                options: repositories.map((repo) => ({
-                  value: repo.path,
-                  label: repo.name,
-                  description: repo.path,
-                })),
-              },
-            ]}
-            onValueChange={onSelectRepository}
-          />
-        </span>
+        <RepositoryCell
+          repositories={repositories}
+          selectedPath={selectedPath}
+          onSelectRepository={onSelectRepository}
+        />
       </ToolbarCell>
 
       <ToolbarCell label="Current branch" minWidth={190}>
@@ -188,43 +308,65 @@ export function RepositoryToolbar({
           onRun={onRunSync}
         />
       </ToolbarCell>
+    </>
+  );
+}
+
+export function RepositoryToolbar({
+  repositories,
+  selectedPath,
+  branches,
+  branchesLoading,
+  status,
+  branchBusy,
+  syncView,
+  syncBusy,
+  syncOutcome,
+  syncError,
+  onSelectRepository,
+  onSwitchBranch,
+  onCreateBranch,
+  onRunSync,
+  onOpenEditor,
+  onOpenFiles,
+  onConnectToChat,
+}: RepositoryToolbarProps): ReactNode {
+  const t = useTranslate();
+  const hasRepository = selectedPath !== null;
+  const branchValue = currentBranchName(branches, status);
+
+  if (!hasRepository) return <EmptyRepositoryToolbar onOpenEditor={onOpenEditor} />;
+
+  return (
+    <header style={TOOLBAR_STYLE} aria-label="Repository toolbar">
+      <ConnectedToolbarCells
+        repositories={repositories}
+        selectedPath={selectedPath}
+        branches={branches}
+        branchesLoading={branchesLoading}
+        status={status}
+        branchBusy={branchBusy}
+        branchValue={branchValue}
+        syncView={syncView}
+        syncBusy={syncBusy}
+        syncOutcome={syncOutcome}
+        syncError={syncError}
+        onSelectRepository={onSelectRepository}
+        onSwitchBranch={onSwitchBranch}
+        onCreateBranch={onCreateBranch}
+        onRunSync={onRunSync}
+        t={t}
+      />
 
       <span style={{ flex: 1 }} />
 
-      {onOpenEditor !== undefined || onOpenFiles !== undefined ? (
-        <div style={TOOLBAR_ACTIONS_STYLE}>
-          {onOpenEditor !== undefined ? (
-            <button
-              type="button"
-              style={TOOLBAR_ICON_BTN}
-              aria-label="Open in Editor"
-              title="Open in Editor"
-              onClick={() => {
-                if (selectedPath !== null) onOpenEditor(selectedPath);
-              }}
-            >
-              <span style={{ color: "var(--fg-dim)" }}>
-                <CodeIcon size={15} />
-              </span>
-            </button>
-          ) : null}
-          {onOpenFiles !== undefined ? (
-            <button
-              type="button"
-              style={TOOLBAR_ICON_BTN}
-              aria-label="Open Files"
-              title="Open Files"
-              onClick={() => {
-                if (selectedPath !== null) onOpenFiles(selectedPath);
-              }}
-            >
-              <span style={{ color: "var(--fg-dim)" }}>
-                <FilesIcon size={15} />
-              </span>
-            </button>
-          ) : null}
-        </div>
-      ) : null}
+      <ToolbarActions
+        selectedPath={selectedPath}
+        onOpenEditor={onOpenEditor}
+        onOpenFiles={onOpenFiles}
+        onConnectToChat={onConnectToChat}
+        connectToChatLabel={t("gitChangeScope.connect.openButton")}
+      />
     </header>
   );
 }

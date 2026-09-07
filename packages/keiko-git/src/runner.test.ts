@@ -826,8 +826,9 @@ describe("refusal classification (AGENTS.md §8 Rule 1 evidence)", () => {
   it.skipIf(process.platform === "win32").each([
     { label: "two-token", flag: ["--config-env", "safe.key=ENVVAR"] },
     { label: "joined", flag: ["--config-env=safe.key=ENVVAR"] },
+    { label: "offline snapshot", flag: ["--no-lazy-fetch", "--no-replace-objects"] },
   ])(
-    "still neutralizes the diff family when a $label --config-env precedes the subcommand",
+    "still neutralizes the diff family when $label global flags precede the subcommand",
     async ({ flag }) => {
       // The security half of the subcommand-detection defect. `--config-env` with a key the
       // deny-list does not name is permitted (that is the point of key-level, not flag-level,
@@ -933,6 +934,11 @@ describe("gitSubcommand", () => {
   it.each([
     { label: "bare subcommand", args: ["status"], expected: "status" },
     { label: "after GIT_BASE_ARGS", args: [...GIT_BASE_ARGS, "diff"], expected: "diff" },
+    {
+      label: "after offline immutable flags",
+      args: ["--no-lazy-fetch", "--no-replace-objects", "diff"],
+      expected: "diff",
+    },
     {
       label: "after -C <path>",
       args: [...GIT_BASE_ARGS, "-C", "/tmp/x", "for-each-ref"],

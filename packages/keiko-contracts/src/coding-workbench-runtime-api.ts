@@ -29,10 +29,21 @@ import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   CODING_WORKBENCH_RUNTIME_FAILURE_CODES,
   CODING_WORKBENCH_RUNTIME_STATE_NAMES,
+  type CodingWorkbenchIssueBinding,
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimeStateName,
 } from "./coding-workbench-runtime.js";
 import { MODEL_REASONING_EFFORTS, type ModelReasoningEffort } from "./gateway.js";
+import { validateCodingWorkbenchIssueBinding } from "./coding-workbench-issue-binding.js";
+export { CODING_WORKBENCH_ISSUE_NUMBER_MAX } from "./coding-workbench-issue-binding.js";
+import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
+import { isVerifiedCommitResult, type VerifiedCommitResult } from "./verified-commit.js";
+import { isDraftDeliveryRecord, type DraftDeliveryRecord } from "./draft-delivery.js";
+import { isReadinessSnapshot, type ReadinessSnapshot } from "./git-ci-readiness.js";
+import {
+  isWorkbenchDescriptionStatus,
+  type WorkbenchDescriptionStatus,
+} from "./workbench-description-status.js";
 
 /** Browser-level preference, deliberately not an adapter, model, profile, or endpoint selector. */
 export type CodingWorkbenchRuntimePreference = "managed-gateway" | "codex-subscription";
@@ -113,6 +124,17 @@ export interface CodingWorkbenchRuntimeStartRequest {
   readonly runtimePreference?: CodingWorkbenchRuntimePreference | undefined;
   readonly modelId?: string | undefined;
   readonly reasoningEffort?: ModelReasoningEffort | undefined;
+  /**
+   * The GitHub issue the run must be bound to (#3385): the raw text the user pasted — an issue URL,
+   * `owner/repo#n` or `#n` — never a structured repository/number pair the browser could author.
+   * The server resolves it against the ACTIVE workspace's own repository into a content-free
+   * `CodingWorkbenchIssueBinding` before any run is minted; a deployment without that resolver
+   * refuses the field outright, so supplying it can never silently start a generic run. Transient
+   * intent like `taskIntent`: it is parsed, never persisted.
+   */
+  readonly issueRef?: string | undefined;
+  /** Optimistic precondition from the accepted preview; never authority. */
+  readonly expectedIssueBindingDigest?: string | undefined;
 }
 
 /** The retry route has the same fresh, transient intent shape as start. */
@@ -218,6 +240,24 @@ export interface CodingWorkbenchRuntimeSnapshot {
   readonly pendingPermission?: CodingWorkbenchRuntimePendingPermission | undefined;
   /** Terminal, body-free process outcome; never contains stdout or stderr content. */
   readonly result?: CodingWorkbenchRuntimeResult | undefined;
+  /**
+   * Present exactly when the run was started from an accepted GitHub issue (#3385). Digests, a
+   * number and a branch name only — the issue's text never crosses this boundary.
+   */
+  readonly issueBinding?: CodingWorkbenchIssueBinding | undefined;
+  /** Latest durable commit receipt; no message, paths, command or approval token. */
+  readonly verifiedCommitResult?: VerifiedCommitResult | undefined;
+  /** Durable repository delivery facts; no authored text, command, credentials or approval grant. */
+  readonly draftDelivery?: DraftDeliveryRecord | undefined;
+  /** Last bounded CI observation. Its timestamp and head binding confer no execution authority. */
+  readonly ciReadiness?: ReadinessSnapshot | undefined;
+  /**
+   * Present exactly when a stable succeeded head has an automatic description-draft attempt
+   * (#3401). No title, body, diff or model text ever crosses this boundary — see
+   * `WorkbenchDescriptionStatus`. Generation grants no remote-write authority: applying the draft
+   * still uses #3399's existing PR preview, policy and one-use approval.
+   */
+  readonly descriptionStatus?: WorkbenchDescriptionStatus | undefined;
 }
 
 export type CodingWorkbenchRuntimeStatus = CodingWorkbenchRuntimeSnapshot;
@@ -306,13 +346,37 @@ function validateReasoningEffort(value: unknown, errors: string[]): void {
   }
 }
 
+// Transport shape only: one bounded, control-character-free string, sharing the parser's own
+// length bound so a reference the contract admits is never one the parser refuses for size. What
+// the text MEANS is decided by the server-side resolver against the active repository.
+function validateIssueRef(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    value.length > GITHUB_ISSUE_REFERENCE_MAX_CHARS ||
+    containsControlCharacter(value)
+  ) {
+    errors.push("issueRef must be bounded safe text");
+  }
+}
+
 export function parseCodingWorkbenchRuntimeStartRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeStartRequest> {
   if (!isRecord(value)) return invalid("start request must be an object");
   const errors = exactKeys(
     value,
-    ["requestId", "taskIntent", "requestedMode", "runtimePreference", "modelId", "reasoningEffort"],
+    [
+      "requestId",
+      "taskIntent",
+      "requestedMode",
+      "runtimePreference",
+      "modelId",
+      "reasoningEffort",
+      "issueRef",
+      "expectedIssueBindingDigest",
+    ],
     "startRequest",
   );
   validateRequestId(value.requestId, errors);
@@ -323,6 +387,15 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   validateRuntimePreference(value.runtimePreference, errors);
   validateRuntimeModelId(value.modelId, errors);
   validateReasoningEffort(value.reasoningEffort, errors);
+  validateIssueRef(value.issueRef, errors);
+  if (
+    value.expectedIssueBindingDigest !== undefined &&
+    (value.issueRef === undefined ||
+      typeof value.expectedIssueBindingDigest !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(value.expectedIssueBindingDigest))
+  ) {
+    errors.push("expectedIssueBindingDigest requires an issue reference and sha256 digest");
+  }
   return result(value, errors);
 }
 
@@ -483,10 +556,20 @@ export function validateCodingWorkbenchRuntimeSnapshot(
       "recoveryAcknowledged",
       "pendingPermission",
       "result",
+      "issueBinding",
+      "verifiedCommitResult",
+      "draftDelivery",
+      "ciReadiness",
+      "descriptionStatus",
     ],
     "runtimeSnapshot",
   );
   validateSnapshotFields(value, errors);
+  validateIssueBinding(value.issueBinding, errors);
+  validateSnapshotVerifiedCommit(value, errors);
+  validateSnapshotDraftDelivery(value, errors);
+  validateSnapshotCiReadiness(value, errors);
+  validateSnapshotDescriptionStatus(value, errors);
   validateRuntimeResult(value.result, errors);
   if (
     value.result !== undefined &&
@@ -495,6 +578,91 @@ export function validateCodingWorkbenchRuntimeSnapshot(
     errors.push("result is permitted only on a terminal snapshot");
   }
   return result(value, errors);
+}
+
+function validateIssueBinding(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  const validated = validateCodingWorkbenchIssueBinding(value);
+  if (!validated.ok) errors.push(...validated.errors);
+}
+
+function validateSnapshotVerifiedCommit(snapshot: Record<string, unknown>, errors: string[]): void {
+  const receipt = snapshot.verifiedCommitResult;
+  if (receipt === undefined) return;
+  if (!isVerifiedCommitResult(receipt)) {
+    errors.push("verifiedCommitResult must be a closed verified commit receipt");
+    return;
+  }
+  const issue = snapshot.issueBinding;
+  const issueDigest = isRecord(issue) ? issue.bindingDigest : undefined;
+  if (receipt.runId !== snapshot.runId || receipt.issueBindingDigest !== issueDigest) {
+    errors.push("verifiedCommitResult must match the snapshot run and issue binding");
+  }
+}
+
+function validateSnapshotDraftDelivery(snapshot: Record<string, unknown>, errors: string[]): void {
+  const delivery = snapshot.draftDelivery;
+  if (delivery === undefined) return;
+  if (!isDraftDeliveryRecord(delivery)) {
+    errors.push("draftDelivery must be a closed durable delivery record");
+    return;
+  }
+  const issue = snapshot.issueBinding;
+  const target = delivery.binding;
+  if (
+    !isRecord(issue) ||
+    ![
+      target.runId === snapshot.runId,
+      target.issueBindingDigest === issue.bindingDigest,
+      target.remoteDigest === issue.remoteDigest,
+      target.issueIdDigest === issue.issueIdDigest,
+      target.issueNumber === issue.issueNumber,
+      target.baseRef === issue.defaultBaseRef,
+    ].every(Boolean)
+  ) {
+    errors.push("draftDelivery must match the snapshot run and frozen issue binding");
+  }
+}
+
+function validateSnapshotCiReadiness(snapshot: Record<string, unknown>, errors: string[]): void {
+  const readiness = snapshot.ciReadiness;
+  if (readiness === undefined) return;
+  const draft = snapshot.draftDelivery;
+  if (!isReadinessSnapshot(readiness) || !isDraftDeliveryRecord(draft)) {
+    errors.push("ciReadiness must be a closed observation of a confirmed delivery");
+    return;
+  }
+  if (
+    ![
+      readiness.runId === snapshot.runId,
+      readiness.remoteDigest === draft.binding.remoteDigest,
+      readiness.repository.toLowerCase() === draft.binding.repository.toLowerCase(),
+      readiness.prNumber === draft.pullRequest?.number,
+      readiness.headRef === draft.binding.headRef,
+      readiness.headSha === draft.binding.headSha,
+      readiness.baseRef === draft.binding.baseRef,
+    ].every(Boolean)
+  )
+    errors.push("ciReadiness must match the snapshot run and confirmed delivery target");
+}
+
+// The status can outlive the LATEST `verifiedCommitResult` shown on the snapshot (that field
+// reflects the most recent proposal attempt, which may be a later failed/blocked one, while the
+// description job binds the last SUCCESSFUL head — codingRuntimeVerifiedCommitAuthorityStore.ts /
+// epic #3384 correction 5), so only the run identity is cross-checked here.
+function validateSnapshotDescriptionStatus(
+  snapshot: Record<string, unknown>,
+  errors: string[],
+): void {
+  const status = snapshot.descriptionStatus;
+  if (status === undefined) return;
+  if (!isWorkbenchDescriptionStatus(status)) {
+    errors.push("descriptionStatus must be a closed durable description status");
+    return;
+  }
+  if (status.runId !== snapshot.runId) {
+    errors.push("descriptionStatus must match the snapshot run");
+  }
 }
 
 function validateRuntimeResult(value: unknown, errors: string[]): void {

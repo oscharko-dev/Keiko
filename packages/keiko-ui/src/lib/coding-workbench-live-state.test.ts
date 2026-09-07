@@ -409,6 +409,11 @@ describe("Coding Workbench live state", () => {
       }),
     });
     expect(acknowledged.canRetry).toBe(true);
+    // #3390: the composer's single "Start coding run" action — not only the recovery panel's
+    // separate Retry button — must become reachable once the server has recorded the
+    // acknowledgement, or an operator who used the primary control after a restart sends no
+    // request at all and has no way to launch a replacement run short of wiping local state.
+    expect(acknowledged.canStart).toBe(true);
   });
 
   it("keeps independent resource errors scoped to their own recovery lane", () => {

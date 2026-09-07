@@ -2,14 +2,19 @@ import {
   EDITOR_AGENT_CONFLICT_CODES,
   EDITOR_AGENT_FAILURE_CODES,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { VERIFICATION_RUNNER_ERROR_CODES } from "../editor/verificationRunnerErrors.js";
+import { DraftDeliveryFixture } from "../gitDelivery/draftDeliveryServiceTestSupport.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import type { CodingToolAuthorityPort, CodingToolDelegatePort } from "./codingToolFacadePorts.js";
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
 
 const capability = "capability-1-opaque-runtime-secret";
+const deliveryFixtures: DraftDeliveryFixture[] = [];
+afterEach(() => {
+  for (const fixture of deliveryFixtures.splice(0)) fixture.close();
+});
 const changeset = {
   patch: "--- a/src/file.ts\n+++ b/src/file.ts\n@@\n-old\n+new\n",
   files: [{ file: "src/file.ts", expectedContentHash: "a".repeat(64) }],
@@ -17,6 +22,12 @@ const changeset = {
 
 function requestBody(value: Readonly<Record<string, unknown>>): string {
   return JSON.stringify({ actionId: "action-1", idempotencyKey: "idempotency-1", ...value });
+}
+
+function sparseVerificationLocations(): readonly unknown[] {
+  const locations: unknown[] = [];
+  locations.length = 1;
+  return locations;
 }
 
 // The three runner codes only the HTTP verification routes can mint (a malformed body, an oversized
@@ -37,6 +48,17 @@ interface MutableFacadePorts {
   delegate: { execute: CodingToolDelegatePort["execute"] };
 }
 
+// A valid CodingRepositoryResult (#3386 H1), included on every stub outcome so the exhaustive
+// "one delegate call per action" test's blanket mock also satisfies the search action's own
+// projection without a special case; other actions ignore the unrelated field.
+const stubSearchResult = {
+  ok: true as const,
+  kind: "search" as const,
+  hits: [],
+  metrics: { candidatesDiscovered: 0, filesScanned: 0, skippedFiles: 0, durationMs: 0 },
+  truncationReasons: [],
+};
+
 function facade(admitted = true): MutableFacadePorts {
   return {
     authority: {
@@ -46,7 +68,11 @@ function facade(admitted = true): MutableFacadePorts {
           : { ok: false as const },
       ),
     },
-    delegate: { execute: vi.fn(() => Promise.resolve({ outcome: "completed", evidence: [] })) },
+    delegate: {
+      execute: vi.fn(() =>
+        Promise.resolve({ outcome: "completed", evidence: [], search: stubSearchResult }),
+      ),
+    },
   };
 }
 
@@ -267,6 +293,18 @@ describe("CodingToolFacade", () => {
     const subject = createCodingToolFacade(ports);
     const bodies = [
       { action: "edit", changeset },
+      {
+        action: "search",
+        repositoryRequest: {
+          kind: "search",
+          mode: "literal",
+          query: "safeActivity",
+          caseSensitive: false,
+          includeGlobs: [],
+          excludeGlobs: [],
+          maxResults: 20,
+        },
+      },
       { action: "command", commandId: "test" },
       { action: "verification", verifierId: "unit" },
       { action: "git", operation: "read" },
@@ -355,6 +393,75 @@ describe("CodingToolFacade", () => {
     await expect(
       subject.execute({
         body: requestBody({ action: "command", commandId: "test" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "failed" }],
+    });
+  });
+
+  // Owner audit finding b2-5: a draft-delivery attempt (push/pull-request, propose/execute/reconcile)
+  // whose delegate outcome carries `draftDelivery: { status: "unavailable", reason }` — no lease
+  // granted, or a busy delivery service — must never report "completed": nothing was recorded.
+  it("fails closed when a draft delivery attempt could not be recorded", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "completed",
+        evidence: [],
+        draftDelivery: { status: "unavailable", reason: "provider-unavailable" },
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "delivery", intent: "push", phase: "reconcile" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "provider-unavailable" }],
+      reasonCode: "provider-unavailable",
+    });
+  });
+
+  it("reports a recorded draft delivery as completed", async () => {
+    const ports = facade();
+    const fixture = new DraftDeliveryFixture();
+    deliveryFixtures.push(fixture);
+    await fixture.recordVerifiedCommit();
+    const draftDelivery = await fixture.service.proposePush();
+    expect(draftDelivery.status).toBe("recorded");
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "completed", evidence: [], draftDelivery }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "delivery", intent: "push", phase: "reconcile" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+      draftDelivery,
+    });
+  });
+
+  it("rejects a recorded delivery whose payload is not a validated delivery record", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "completed",
+        draftDelivery: { status: "recorded", record: { phase: "push-proposed", runId: "run-1" } },
+      }),
+    );
+    await expect(
+      createCodingToolFacade(ports).execute({
+        body: requestBody({ action: "delivery", intent: "push", phase: "reconcile" }),
         capability,
       }),
     ).resolves.toEqual({
@@ -640,6 +747,112 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  it("forwards only the bounded structured diagnostics of a failed verifier", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "failed",
+        reasonCode: "VERIFICATION_FAILED",
+        verificationFailure: {
+          summary: "test failed; 1 structured failure location",
+          locations: [
+            {
+              file: "ci/numerical-stability.test.js",
+              line: 19,
+              column: 5,
+              message: "expected the stable average to remain finite",
+            },
+          ],
+          truncated: false,
+        },
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "verification", verifierId: "test" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      reasonCode: "VERIFICATION_FAILED",
+      evidence: [{ kind: "governed-delegate", code: "VERIFICATION_FAILED" }],
+      verificationFailure: {
+        summary: "test failed; 1 structured failure location",
+        locations: [
+          {
+            file: "ci/numerical-stability.test.js",
+            line: 19,
+            column: 5,
+            message: "expected the stable average to remain finite",
+          },
+        ],
+        truncated: false,
+      },
+    });
+  });
+
+  it.each([
+    {
+      summary: "test failed; 1 structured failure location",
+      locations: [{ file: "/private/customer.test.js", message: "PRIVATE_FAILURE_CANARY" }],
+      truncated: false,
+    },
+    {
+      summary: "PRIVATE_FAILURE_CANARY",
+      locations: [],
+      truncated: false,
+      rawOutput: "PRIVATE_FAILURE_CANARY",
+    },
+    {
+      summary: "test failed; 1 structured failure location",
+      locations: sparseVerificationLocations(),
+      truncated: false,
+    },
+  ])("drops malformed verification diagnostics instead of exposing them", async (diagnostics) => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "failed",
+        reasonCode: "VERIFICATION_FAILED",
+        verificationFailure: diagnostics,
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({ action: "verification", verifierId: "test" }),
+      capability,
+    });
+
+    expect(result).toEqual({
+      status: "failed",
+      reasonCode: "VERIFICATION_FAILED",
+      evidence: [{ kind: "governed-delegate", code: "VERIFICATION_FAILED" }],
+    });
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_FAILURE_CANARY");
+  });
+
+  it.each([
+    { commitProof: "recorded", unexpected: true },
+    { commitProof: "unavailable", reasonCode: "candidate-not-staged", nextAction: "verify-again" },
+  ])("strips a malformed verification proof payload", async (verification) => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "completed", verification }));
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "verification", verifierId: "unit" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+    });
+  });
+
   // The other half of sourcing the runner vocabulary: the exclusion is a decision, not an accident.
   // A route-only code has no meaning for a tool call, so it collapses to the bare status instead of
   // being handed to the model as if the runner had refused.
@@ -663,6 +876,58 @@ describe("CodingToolFacade", () => {
       });
     },
   );
+
+  it("forwards a search domain outcome, including its own ok:false reason, as evidence (#3386 H1)", async () => {
+    const ports = facade();
+    const denied = { ok: false as const, reason: "scope-denied" as const };
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "completed", evidence: [], search: denied }),
+    );
+    const subject = createCodingToolFacade(ports);
+    const body = requestBody({
+      action: "search",
+      repositoryRequest: {
+        kind: "read",
+        path: ".env",
+        startLine: 1,
+        endLine: 1,
+        maxBytes: 4096,
+      },
+    });
+
+    const result = await subject.execute({ body, capability });
+
+    expect(result).toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "scope-denied" }],
+      search: denied,
+    });
+  });
+
+  it("fails closed for a malformed search delegate outcome instead of trusting an unvalidated shape", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "completed", evidence: [], search: { ok: "not-a-boolean" } }),
+    );
+    const subject = createCodingToolFacade(ports);
+    const body = requestBody({
+      action: "search",
+      repositoryRequest: {
+        kind: "search",
+        mode: "literal",
+        query: "safeActivity",
+        caseSensitive: false,
+        includeGlobs: [],
+        excludeGlobs: [],
+        maxResults: 20,
+      },
+    });
+
+    await expect(subject.execute({ body, capability })).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "failed" }],
+    });
+  });
 
   it("fails closed for blocked, denied, and malformed delegate outcomes", async () => {
     const ports = facade();

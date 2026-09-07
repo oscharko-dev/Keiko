@@ -310,10 +310,8 @@ export function buildPullRequestReviewsArgv(req: GitMergeReadinessRequest): read
 
 // `gh api /repos/{owner}/{repo}/branches/{branch}/protection --jq <projection>`. Reads the base
 // branch's required-approving-review-count so the caller can derive a REAL required-approval count
-// instead of the previously hardcoded 0. This 404s for an unprotected branch and can 403 for a caller
-// without admin on the target repository; both are read failures the caller treats as "no known
-// requirement" (0), never as a hard error — the provider's own merge-time enforcement remains the
-// ultimate authority (Force 2 / ADR-0087) regardless of what this best-effort read could see.
+// instead of the previously hardcoded 0. A 403 or opaque 404 cannot establish absence of requirements;
+// the owning reader preserves unknown visibility and never substitutes a trusted zero count.
 export function buildBranchProtectionRequiredReviewsArgv(
   req: GitBranchProtectionRequest,
 ): readonly string[] {
@@ -337,6 +335,12 @@ export function buildBranchProtectionArgv(req: GitBranchProtectionRequest): read
   const repo = assertOwnerAndRepo(req.ownerAndRepo);
   const branch = assertRef(req.baseBranchName, "baseBranchName");
   return ["api", `/repos/${repo}/branches/${branch}/protection`, "--jq", BRANCH_PROTECTION_JQ];
+}
+
+export function buildBranchMetadataArgv(req: GitBranchProtectionRequest): readonly string[] {
+  const repo = assertOwnerAndRepo(req.ownerAndRepo);
+  const branch = encodeURIComponent(assertRef(req.baseBranchName, "baseBranchName"));
+  return ["api", `/repos/${repo}/branches/${branch}`, "--jq", "{name,protected}"];
 }
 
 // `gh api --method DELETE /repos/{owner}/{repo}/git/refs/heads/{branch}`. The guarded branch deletion

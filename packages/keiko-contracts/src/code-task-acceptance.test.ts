@@ -5,14 +5,26 @@ import {
   CODE_TASK_ACCEPTANCE_SCHEMA_VERSION,
   CODE_TASK_EVIDENCE_CLASSES,
   CODE_TASK_EVIDENCE_PLATFORMS,
+  CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND,
+  CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
+  CODE_TASK_QUALIFICATION_MANIFEST_KIND,
+  CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION,
+  CODE_TASK_QUALIFICATION_REQUIRED_TOOLS,
   codeTaskAcceptanceQualificationFailures,
+  codeTaskQualificationManifestFailures,
+  codeTaskQualificationVerdictFor,
   hasInheritedEnumerableProperty,
   isCodeTaskContentFreeNote,
   isCodeTaskIsoInstant,
   isCodeTaskRepoRelativePath,
   validateCodeTaskAcceptanceContribution,
+  validateCodeTaskQualificationManifest,
+  validateCodeTaskQualificationFlowArtifact,
   type CodeTaskAcceptanceBinding,
   type CodeTaskAcceptanceContributionV1,
+  type CodeTaskIsoInstant,
+  type CodeTaskQualificationManifestV1,
+  type CodeTaskQualificationFlowArtifactV1,
 } from "./code-task-acceptance.js";
 import { withPollutedPrototype } from "./code-task-pollution-test-support.js";
 
@@ -565,5 +577,858 @@ describe("factErrors collects every violation instead of stopping at the first (
     if (result.ok) return;
     expect(result.errors.some((error) => error.includes("value is invalid"))).toBe(true);
     expect(result.errors.some((error) => error.includes("promptText"))).toBe(true);
+  });
+});
+
+// #3390 qualification manifest -- a versioned sibling of the acceptance contribution above.
+const RUBRIC_DIGEST = "e".repeat(64);
+const READINESS_DIGEST = "f".repeat(64);
+const OUTCOME_DIGEST = "1".repeat(64);
+const AUDIT_DIGEST = "2".repeat(64);
+const HUMAN_MERGE_ATTESTATION_DIGEST = "3".repeat(64);
+function codeTaskIsoInstant(value: string): CodeTaskIsoInstant {
+  if (!isCodeTaskIsoInstant(value)) {
+    throw new TypeError("qualification fixture instant must be canonical UTC ISO-8601");
+  }
+  return value;
+}
+
+const QUALIFICATION_RECORDED_AT = codeTaskIsoInstant("2026-09-04T12:00:00Z");
+
+function validQualificationFlow(
+  ordinal = 1,
+  cumulativeChargedNanoUsd = 3_240_000,
+  chargedDeltaNanoUsd = cumulativeChargedNanoUsd,
+): CodeTaskQualificationFlowArtifactV1 {
+  const pullRequestHeadSha = ordinal === 1 ? TREE_SHA : "d".repeat(40);
+  const mergeCommitSha = ordinal === 1 ? COMMIT_SHA : "e".repeat(40);
+  const mode = ordinal === 1 ? "governed-assist" : "supervised-coding";
+  const issueToPrScenario = {
+    "governed-assist": "issue-to-pr-governed-assist",
+    "supervised-coding": "issue-to-pr-supervised-coding",
+  }[mode];
+  const candidate: unknown = {
+    evidenceKind: CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND,
+    schemaVersion: 1,
+    flowId: `issue-to-pr-flow-0${String(ordinal)}`,
+    ordinal,
+    repository: "oscharko/Wegwerf-Repo",
+    issueReference: `https://github.com/oscharko/Wegwerf-Repo/issues/${String(ordinal)}`,
+    issueNumber: ordinal,
+    issueState: "closed",
+    issueClosedAt: QUALIFICATION_RECORDED_AT,
+    mode,
+    taskRunId: `run-${String(ordinal)}`,
+    pullRequestReference: `https://github.com/oscharko/Wegwerf-Repo/pull/${String(ordinal)}`,
+    pullRequestNumber: ordinal,
+    pullRequestHeadSha,
+    pullRequestState: "merged",
+    pullRequestMergedAt: QUALIFICATION_RECORDED_AT,
+    mergeCommitSha,
+    requiredChecks: {
+      observation: "observed",
+      headSha: pullRequestHeadSha,
+      requirementsVersion: "1",
+      requirementsDigest: RUBRIC_DIGEST,
+      evidenceRef: "ci-observation-1",
+      total: 1,
+      passed: 1,
+      failed: 0,
+      pending: 0,
+    },
+    authorityObservation: {
+      requestedMode: mode,
+      effectiveMode: mode,
+      approvalRequestCount: 2,
+      approvalRequests: [
+        { actionClass: "workspace-write", actionKind: "file-edit", requestCount: 1 },
+        {
+          actionClass: "delivery-substrate",
+          actionKind: "commit",
+          requestCount: 1,
+        },
+      ],
+      approvedProposalActions: [{ actionKind: "commit", approvalCount: 1 }],
+      toolInvocationCount: 4,
+      effectStartedCount: 3,
+      effectStartedTools: [
+        { canonicalId: "keiko.changeset.edit", contractVersion: 1, invocationCount: 1 },
+        { canonicalId: "keiko.verification.run", contractVersion: 1, invocationCount: 2 },
+      ],
+      completedToolCount: 3,
+      deniedToolCount: 0,
+      failedToolCount: 1,
+      otherToolCount: 0,
+    },
+    rubricReview: {
+      reviewId: `qualification-review-${String(ordinal)}`,
+      reviewDigest: DIGEST,
+      verdict: "approved",
+      flowId: `issue-to-pr-flow-0${String(ordinal)}`,
+      taskRunId: `run-${String(ordinal)}`,
+      repository: "oscharko/Wegwerf-Repo",
+      issueNumber: ordinal,
+      pullRequestNumber: ordinal,
+      pullRequestHeadSha,
+      sourceCommitSha: COMMIT_SHA,
+      rubricDigest: RUBRIC_DIGEST,
+      criteriaTotal: 5,
+      criteriaPassed: 5,
+    },
+    stageEvidence: {
+      issueToPr: {
+        scenarioId: issueToPrScenario,
+        receiptDigest: "4".repeat(64),
+      },
+      ciRepair:
+        ordinal === 1 ? { scenarioId: "ci-repair-loop", receiptDigest: "5".repeat(64) } : null,
+      description: {
+        scenarioId: "description-auto-draft-and-apply",
+        receiptDigest: "6".repeat(64),
+      },
+      markReady: { scenarioId: "mark-ready-intent", receiptDigest: "7".repeat(64) },
+      governedMerge: {
+        scenarioId: "human-merge-and-closure",
+        receiptDigest: "8".repeat(64),
+      },
+    },
+    transitions: CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
+    sourceCommitSha: COMMIT_SHA,
+    observedAt: QUALIFICATION_RECORDED_AT,
+    spend: {
+      budgetNanoUsd: 50_000_000_000,
+      chargedDeltaNanoUsd,
+      cumulativeChargedNanoUsd,
+      remainingNanoUsd: 50_000_000_000 - cumulativeChargedNanoUsd,
+    },
+  };
+  const result = validateCodeTaskQualificationFlowArtifact(candidate);
+  if (!result.ok) throw new Error(result.errors.join("; "));
+  return result.value;
+}
+
+function validQualificationManifest(): CodeTaskQualificationManifestV1 {
+  const parsed: unknown = JSON.parse(
+    JSON.stringify({
+      kind: CODE_TASK_QUALIFICATION_MANIFEST_KIND,
+      schemaVersion: CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION,
+      epicIssue: 3384,
+      childIssue: 3390,
+      sourceCommitSha: COMMIT_SHA,
+      sourceTreeSha: TREE_SHA,
+      runtimeIdentity: "opencode-1.17.17",
+      modelIdentity: "gateway-profile:coding-issue-journey",
+      fixtureRevision: "controlled-fixture-rev-1",
+      rubricDigest: RUBRIC_DIGEST,
+      issueReference: { outcome: "known", value: "controlled/repo#101" },
+      pullRequestReference: { outcome: "known", value: "controlled/repo#102" },
+      runReference: { outcome: "known", value: "run-20260904-01" },
+      readinessSnapshotDigest: { outcome: "known", value: READINESS_DIGEST },
+      journeyOutcomeDigest: { outcome: "known", value: OUTCOME_DIGEST },
+      auditReference: { outcome: "known", value: "keiko-issue-audit-20260904" },
+      auditDigest: { outcome: "known", value: AUDIT_DIGEST },
+      humanMergeAttestationDigest: { outcome: "known", value: HUMAN_MERGE_ATTESTATION_DIGEST },
+      requiredTools: CODE_TASK_QUALIFICATION_REQUIRED_TOOLS,
+      spendBudgetUsd: 25,
+      observedSpendUsd: { outcome: "known", value: 4.5 },
+      scenarios: [
+        {
+          scenarioId: "issue-to-pr-full-access",
+          evidenceClass: "playwright-journey",
+          platform: "macos-arm64",
+          provenance: "real-model",
+          outcome: "passed",
+          recordedAt: "2026-09-04T12:00:00Z",
+          blockedReason: { outcome: "absent" },
+          artifactDigests: [DIGEST],
+          receiptDigest: { outcome: "known", value: DIGEST },
+        },
+      ],
+      flows: [],
+      knownLimitations: ["packaged Windows x64 reference run is a documented external dependency"],
+    }),
+  );
+  const result = validateCodeTaskQualificationManifest(parsed);
+  if (!result.ok) throw new Error(result.errors.join("; "));
+  return result.value;
+}
+
+function mutatedManifest(patch: Record<string, unknown>): unknown {
+  return { ...validQualificationManifest(), ...patch };
+}
+
+describe("validateCodeTaskQualificationManifest", () => {
+  it("accepts a complete JSON-round-tripped manifest", () => {
+    expect(validateCodeTaskQualificationManifest(validQualificationManifest()).ok).toBe(true);
+  });
+
+  it("rejects a manifest missing provenance, runtime identity, and rubric digest", () => {
+    const base = validQualificationManifest();
+    const scenario = base.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const scenarioWithoutProvenance: Record<string, unknown> = { ...scenario };
+    delete scenarioWithoutProvenance.provenance;
+    const manifestWithoutIdentity: Record<string, unknown> = { ...base };
+    delete manifestWithoutIdentity.runtimeIdentity;
+    delete manifestWithoutIdentity.rubricDigest;
+    const result = validateCodeTaskQualificationManifest({
+      ...manifestWithoutIdentity,
+      scenarios: [scenarioWithoutProvenance],
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toContain("runtimeIdentity must be a bounded content-free reference");
+    expect(result.errors).toContain("rubricDigest is invalid");
+    expect(result.errors.some((error) => error.includes("provenance is invalid"))).toBe(true);
+  });
+
+  it("rejects a wrong kind and a non-literal schema version", () => {
+    expect(validateCodeTaskQualificationManifest(mutatedManifest({ kind: "other" })).ok).toBe(
+      false,
+    );
+    expect(validateCodeTaskQualificationManifest(mutatedManifest({ schemaVersion: 2 })).ok).toBe(
+      false,
+    );
+  });
+
+  it("requires a blocked scenario to carry a known blockedReason, and no other outcome to", () => {
+    const base = validQualificationManifest();
+    const scenario = base.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const blockedWithoutReason = validateCodeTaskQualificationManifest({
+      ...base,
+      scenarios: [{ ...scenario, outcome: "blocked", receiptDigest: { outcome: "absent" } }],
+    });
+    expect(blockedWithoutReason.ok).toBe(false);
+    const passedWithReason = validateCodeTaskQualificationManifest({
+      ...base,
+      scenarios: [{ ...scenario, blockedReason: { outcome: "known", value: "#2951" } }],
+    });
+    expect(passedWithReason.ok).toBe(false);
+    const blockedWithReason = validateCodeTaskQualificationManifest({
+      ...base,
+      scenarios: [
+        {
+          ...scenario,
+          outcome: "blocked",
+          receiptDigest: { outcome: "absent" },
+          blockedReason: { outcome: "known", value: "functional-not-platform-qualified: #2951" },
+        },
+      ],
+    });
+    expect(blockedWithReason.ok).toBe(true);
+  });
+
+  it("rejects an evidenceClass outside the shared vocabulary (functional-not-platform-qualified excluded)", () => {
+    const base = validQualificationManifest();
+    const scenario = base.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const result = validateCodeTaskQualificationManifest({
+      ...base,
+      scenarios: [{ ...scenario, evidenceClass: "functional-not-platform-qualified" }],
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((error) => error.includes("not a registered evidence class"))).toBe(
+      true,
+    );
+  });
+
+  it("rejects a manifest missing humanMergeAttestationDigest (#3390 audit F9)", () => {
+    const base: Record<string, unknown> = { ...validQualificationManifest() };
+    delete base.humanMergeAttestationDigest;
+    const result = validateCodeTaskQualificationManifest(base);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((error) => error.includes("humanMergeAttestationDigest"))).toBe(true);
+  });
+
+  it("rejects requiredTools entries that are not catalog tool names (#3390 audit F10)", () => {
+    const result = validateCodeTaskQualificationManifest(
+      mutatedManifest({ requiredTools: ["keiko_changeset_edit", "not a tool name!"] }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toContain("requiredTools must be an array of catalog tool names");
+  });
+
+  it("rejects a manifest missing requiredTools entirely", () => {
+    const base: Record<string, unknown> = { ...validQualificationManifest() };
+    delete base.requiredTools;
+    const result = validateCodeTaskQualificationManifest(base);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toContain("requiredTools must be an array of catalog tool names");
+  });
+
+  it.each([
+    ["empty", []],
+    ["partial", CODE_TASK_QUALIFICATION_REQUIRED_TOOLS.slice(0, -1)],
+    [
+      "missing delivery execution",
+      CODE_TASK_QUALIFICATION_REQUIRED_TOOLS.filter((tool: string) => tool !== "keiko_git_execute"),
+    ],
+    [
+      "duplicate",
+      [...CODE_TASK_QUALIFICATION_REQUIRED_TOOLS, CODE_TASK_QUALIFICATION_REQUIRED_TOOLS[0]],
+    ],
+  ] as const)("rejects a %s requiredTools inventory", (_description, requiredTools) => {
+    const result = validateCodeTaskQualificationManifest(mutatedManifest({ requiredTools }));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toContain(
+      "requiredTools must exactly match the controlled-journey rubric inventory",
+    );
+  });
+
+  it("rejects a non-positive or unbounded spendBudgetUsd (#3390 audit F15)", () => {
+    expect(validateCodeTaskQualificationManifest(mutatedManifest({ spendBudgetUsd: 0 })).ok).toBe(
+      false,
+    );
+    expect(validateCodeTaskQualificationManifest(mutatedManifest({ spendBudgetUsd: -5 })).ok).toBe(
+      false,
+    );
+    expect(
+      validateCodeTaskQualificationManifest(mutatedManifest({ spendBudgetUsd: 10_000_000 })).ok,
+    ).toBe(false);
+  });
+
+  it("accepts an unknown observedSpendUsd and rejects a negative one", () => {
+    expect(
+      validateCodeTaskQualificationManifest(
+        mutatedManifest({ observedSpendUsd: { outcome: "unknown" } }),
+      ).ok,
+    ).toBe(true);
+    expect(
+      validateCodeTaskQualificationManifest(
+        mutatedManifest({ observedSpendUsd: { outcome: "known", value: -1 } }),
+      ).ok,
+    ).toBe(false);
+  });
+
+  it("requires positive app-bound passing required-check evidence", () => {
+    expect(validateCodeTaskQualificationFlowArtifact(validQualificationFlow()).ok).toBe(true);
+    const base = validQualificationFlow();
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        requiredChecks: { ...base.requiredChecks, total: 0, passed: 0 },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        authorityObservation: {
+          ...base.authorityObservation,
+          approvalRequests: [
+            { actionClass: "workspace-write", actionKind: "commit", requestCount: 2 },
+          ],
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        requiredChecks: { ...base.requiredChecks, observation: "unknown" },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        requiredChecks: { ...base.requiredChecks, total: 1, pending: 1 },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        requiredChecks: { ...base.requiredChecks, requirementsDigest: "not-a-digest" },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        requiredChecks: { ...base.requiredChecks, evidenceRef: "invalid evidence ref" },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("requires observed authority without mode escalation and complete tool accounting", () => {
+    const base = validQualificationFlow();
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        authorityObservation: {
+          ...base.authorityObservation,
+          effectiveMode: "autonomous-delivery",
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        authorityObservation: { ...base.authorityObservation, toolInvocationCount: 5 },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("requires grouped action evidence and exact effectful tool references", () => {
+    const base = validQualificationFlow();
+    const duplicateRequest = base.authorityObservation.approvalRequests[0];
+    if (duplicateRequest === undefined) throw new Error("fixture approval request is unavailable");
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        authorityObservation: {
+          ...base.authorityObservation,
+          approvalRequests: [...base.authorityObservation.approvalRequests, duplicateRequest],
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        authorityObservation: {
+          ...base.authorityObservation,
+          approvedProposalActions: [{ actionKind: "commit", approvalCount: 2 }],
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        authorityObservation: {
+          ...base.authorityObservation,
+          effectStartedTools: [{ canonicalId: "keiko.changeset.edit", invocationCount: 3 }],
+        },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it.each(["approvalRequestCount", "effectStartedCount", "completedToolCount"] as const)(
+    "rejects a zero %s authority observation",
+    (field) => {
+      const base = validQualificationFlow();
+      expect(
+        validateCodeTaskQualificationFlowArtifact({
+          ...base,
+          authorityObservation: { ...base.authorityObservation, [field]: 0 },
+        }).ok,
+      ).toBe(false);
+    },
+  );
+
+  it("accepts a Full zero approval count while Ask and Supervised require one", () => {
+    const base = validQualificationFlow();
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        mode: "autonomous-delivery",
+        authorityObservation: {
+          ...base.authorityObservation,
+          requestedMode: "autonomous-delivery",
+          effectiveMode: "autonomous-delivery",
+          approvalRequestCount: 0,
+          approvalRequests: [],
+          approvedProposalActions: [],
+        },
+        stageEvidence: {
+          ...base.stageEvidence,
+          issueToPr: {
+            ...base.stageEvidence.issueToPr,
+            scenarioId: "issue-to-pr-autonomous-delivery",
+          },
+        },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        authorityObservation: { ...base.authorityObservation, approvalRequestCount: 0 },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        mode: "supervised-coding",
+        authorityObservation: {
+          ...base.authorityObservation,
+          requestedMode: "supervised-coding",
+          effectiveMode: "supervised-coding",
+          approvalRequestCount: 0,
+        },
+        stageEvidence: {
+          ...base.stageEvidence,
+          issueToPr: {
+            ...base.stageEvidence.issueToPr,
+            scenarioId: "issue-to-pr-supervised-coding",
+          },
+        },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("requires an approved independent rubric review bound to the exact flow", () => {
+    const base = validQualificationFlow();
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        rubricReview: { ...base.rubricReview, criteriaPassed: 4 },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        rubricReview: { ...base.rubricReview, pullRequestHeadSha: COMMIT_SHA },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("requires the provider and journey-observer timestamps from the completed lifecycle", () => {
+    const base = validQualificationFlow();
+    for (const field of ["issueClosedAt", "pullRequestMergedAt", "observedAt"] as const) {
+      expect(validateCodeTaskQualificationFlowArtifact({ ...base, [field]: undefined }).ok).toBe(
+        false,
+      );
+      expect(
+        validateCodeTaskQualificationFlowArtifact({ ...base, [field]: "not-an-instant" }).ok,
+      ).toBe(false);
+    }
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        pullRequestMergedAt: codeTaskIsoInstant("2026-09-04T12:00:01Z"),
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("allows nullable CI repair on any flow while validating every present receipt", () => {
+    const first = validQualificationFlow();
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...first,
+        stageEvidence: { ...first.stageEvidence, ciRepair: null },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...first,
+        stageEvidence: {
+          ...first.stageEvidence,
+          description: {
+            ...first.stageEvidence.description,
+            receiptDigest: first.stageEvidence.issueToPr.receiptDigest,
+          },
+        },
+      }).ok,
+    ).toBe(false);
+    const second = validQualificationFlow(2);
+    expect(validateCodeTaskQualificationFlowArtifact(second).ok).toBe(true);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...second,
+        stageEvidence: { ...second.stageEvidence, ciRepair: first.stageEvidence.ciRepair },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...second,
+        stageEvidence: {
+          ...second.stageEvidence,
+          ciRepair: { scenarioId: "mark-ready-intent", receiptDigest: "9".repeat(64) },
+        },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects incomplete transitions and a checks snapshot from another PR head", () => {
+    const base = validQualificationFlow();
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        transitions: base.transitions.slice(0, -1),
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskQualificationFlowArtifact({
+        ...base,
+        requiredChecks: { ...base.requiredChecks, headSha: COMMIT_SHA },
+      }).ok,
+    ).toBe(false);
+  });
+});
+
+describe("codeTaskQualificationManifestFailures and codeTaskQualificationVerdictFor", () => {
+  const binding: CodeTaskAcceptanceBinding = {
+    epicIssue: 3384,
+    childIssue: 3390,
+    sourceCommitSha: COMMIT_SHA,
+    registeredScenarioIds: ["issue-to-pr-full-access"],
+  };
+
+  it("qualifies a bound manifest whose scenarios are all passed and real-model", () => {
+    const manifest = validQualificationManifest();
+    expect(codeTaskQualificationManifestFailures(manifest, binding)).toEqual([]);
+    expect(codeTaskQualificationVerdictFor(manifest, binding)).toBe("qualified");
+  });
+
+  it("fails an empty manifest and reports blocked, never qualified", () => {
+    const empty: CodeTaskQualificationManifestV1 = {
+      ...validQualificationManifest(),
+      scenarios: [],
+    };
+    expect(codeTaskQualificationManifestFailures(empty, binding)).toContain(
+      "empty manifest: at least one scenario is required",
+    );
+    expect(codeTaskQualificationVerdictFor(empty, binding)).toBe("blocked");
+  });
+
+  it("fails foreign issue bindings and stale SHA bindings, verdict blocked", () => {
+    const manifest = validQualificationManifest();
+    expect(
+      codeTaskQualificationManifestFailures(manifest, { ...binding, epicIssue: 1982 }),
+    ).toContain("foreign epic issue binding");
+    expect(codeTaskQualificationVerdictFor(manifest, { ...binding, epicIssue: 1982 })).toBe(
+      "blocked",
+    );
+    expect(
+      codeTaskQualificationManifestFailures(manifest, { ...binding, sourceCommitSha: TREE_SHA }),
+    ).toContain("stale or foreign source SHA binding");
+  });
+
+  it("fails unregistered scenarios", () => {
+    const manifest = validQualificationManifest();
+    expect(
+      codeTaskQualificationManifestFailures(manifest, { ...binding, registeredScenarioIds: [] }),
+    ).toContain("unregistered scenario: issue-to-pr-full-access");
+  });
+
+  it("a scenario that failed outright yields verdict failed, even alongside other problems", () => {
+    const manifest = validQualificationManifest();
+    const scenario = manifest.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const failedScenario: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      scenarios: [{ ...scenario, outcome: "failed", receiptDigest: { outcome: "absent" } }],
+    };
+    expect(codeTaskQualificationVerdictFor(failedScenario, { ...binding, epicIssue: 1982 })).toBe(
+      "failed",
+    );
+  });
+
+  it("a passed scenario resting on scripted provenance cannot qualify, and names the scenario", () => {
+    const manifest = validQualificationManifest();
+    const scenario = manifest.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const scripted: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      scenarios: [{ ...scenario, provenance: "scripted" }],
+    };
+    expect(codeTaskQualificationManifestFailures(scripted, binding)).toContain(
+      "scripted-model provenance cannot establish qualification: issue-to-pr-full-access",
+    );
+    expect(codeTaskQualificationVerdictFor(scripted, binding)).toBe("blocked");
+  });
+
+  it("accepts production-functional provenance only for a trusted descriptor scenario", () => {
+    const manifest = validQualificationManifest();
+    const scenario = manifest.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const forgedModelJourney: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      scenarios: [
+        {
+          ...scenario,
+          evidenceClass: "production-functional",
+          provenance: "production-functional",
+        },
+      ],
+    };
+    expect(codeTaskQualificationManifestFailures(forgedModelJourney, binding)).toContain(
+      "production-functional provenance is not trusted for scenario: issue-to-pr-full-access",
+    );
+    expect(codeTaskQualificationVerdictFor(forgedModelJourney, binding)).toBe("blocked");
+
+    const productionFunctionalValidation = validateCodeTaskQualificationManifest({
+      ...manifest,
+      scenarios: [
+        {
+          ...scenario,
+          scenarioId: "egress-confinement-macos-arm64",
+          evidenceClass: "production-functional",
+          provenance: "production-functional",
+        },
+      ],
+    });
+    expect(productionFunctionalValidation.ok).toBe(true);
+    if (!productionFunctionalValidation.ok) return;
+    const productionFunctional = productionFunctionalValidation.value;
+    const confinementBinding: CodeTaskAcceptanceBinding = {
+      ...binding,
+      registeredScenarioIds: ["egress-confinement-macos-arm64"],
+      registeredProductionFunctionalScenarioIds: ["egress-confinement-macos-arm64"],
+    };
+    expect(codeTaskQualificationManifestFailures(productionFunctional, confinementBinding)).toEqual(
+      [],
+    );
+    expect(codeTaskQualificationVerdictFor(productionFunctional, confinementBinding)).toBe(
+      "qualified",
+    );
+
+    const falseClaim: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      scenarios: [{ ...scenario, provenance: "production-functional" }],
+    };
+    expect(codeTaskQualificationManifestFailures(falseClaim, binding)).toContain(
+      "production-functional provenance is not trusted for scenario: issue-to-pr-full-access",
+    );
+    expect(codeTaskQualificationVerdictFor(falseClaim, binding)).toBe("blocked");
+  });
+
+  it("an outstanding blocked scenario with a reason yields verdict blocked, not qualified", () => {
+    const manifest = validQualificationManifest();
+    const scenario = manifest.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const blocked: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      scenarios: [
+        {
+          ...scenario,
+          outcome: "blocked",
+          receiptDigest: { outcome: "absent" },
+          blockedReason: { outcome: "known", value: "functional-not-platform-qualified: #2951" },
+        },
+      ],
+    };
+    expect(codeTaskQualificationManifestFailures(blocked, binding)).toEqual([]);
+    expect(codeTaskQualificationVerdictFor(blocked, binding)).toBe("blocked");
+  });
+
+  it("fails a manifest that omits a scenario the binding requires, never silently qualifying (#3390 audit F3)", () => {
+    const manifest = validQualificationManifest();
+    const requiringBinding: CodeTaskAcceptanceBinding = {
+      ...binding,
+      registeredScenarioIds: ["issue-to-pr-full-access", "issue-to-pr-supervised-coding"],
+    };
+    expect(codeTaskQualificationManifestFailures(manifest, requiringBinding)).toContain(
+      "missing required scenario: issue-to-pr-supervised-coding",
+    );
+    expect(codeTaskQualificationVerdictFor(manifest, requiringBinding)).toBe("blocked");
+  });
+
+  it("requires a known human merge attestation whenever the journey outcome digest is known (#3390 audit F9)", () => {
+    const manifest = validQualificationManifest();
+    const withoutAttestation: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      humanMergeAttestationDigest: { outcome: "absent" },
+    };
+    expect(codeTaskQualificationManifestFailures(withoutAttestation, binding)).toContain(
+      "humanMergeAttestationDigest required when journeyOutcomeDigest is known",
+    );
+    expect(codeTaskQualificationVerdictFor(withoutAttestation, binding)).toBe("blocked");
+    // A manifest with no journey outcome yet does not require the attestation either.
+    const noOutcomeYet: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      journeyOutcomeDigest: { outcome: "unknown" },
+      humanMergeAttestationDigest: { outcome: "absent" },
+    };
+    expect(codeTaskQualificationManifestFailures(noOutcomeYet, binding)).toEqual([]);
+  });
+
+  it("flags an observed spend above the approved budget, never silently (#3390 audit F15)", () => {
+    const manifest = validQualificationManifest();
+    const overspent: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      spendBudgetUsd: 10,
+      observedSpendUsd: { outcome: "known", value: 10.01 },
+    };
+    expect(codeTaskQualificationManifestFailures(overspent, binding)).toContain(
+      "spend budget exceeded: observed 10.01 usd exceeds budget 10 usd",
+    );
+    expect(codeTaskQualificationVerdictFor(overspent, binding)).toBe("blocked");
+    const withinBudget: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      spendBudgetUsd: 10,
+      observedSpendUsd: { outcome: "known", value: 10 },
+    };
+    expect(codeTaskQualificationManifestFailures(withinBudget, binding)).toEqual([]);
+    const unreportedSpend: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      observedSpendUsd: { outcome: "unknown" },
+    };
+    expect(codeTaskQualificationManifestFailures(unreportedSpend, binding)).toEqual([]);
+  });
+
+  it("requires the ordered distinct flow identities and preserves failed-attempt ledger charges", () => {
+    const first = validQualificationFlow();
+    const second = validQualificationFlow(2, 8_000_000, 4_760_000);
+    const firstManifestFlow = {
+      ...first,
+      platform: "macos-arm64" as const,
+      provenance: "real-model" as const,
+      recordedAt: QUALIFICATION_RECORDED_AT,
+      artifactDigest: DIGEST as CodeTaskQualificationManifestV1["flows"][number]["artifactDigest"],
+      receiptDigest:
+        RUBRIC_DIGEST as CodeTaskQualificationManifestV1["flows"][number]["receiptDigest"],
+    };
+    const secondManifestFlow = { ...firstManifestFlow, ...second };
+    const manifest: CodeTaskQualificationManifestV1 = {
+      ...validQualificationManifest(),
+      spendBudgetUsd: 50,
+      observedSpendUsd: { outcome: "known", value: 0.008 },
+      issueReference: { outcome: "known", value: first.issueReference },
+      pullRequestReference: { outcome: "known", value: first.pullRequestReference },
+      runReference: { outcome: "known", value: first.taskRunId },
+      flows: [firstManifestFlow, secondManifestFlow],
+    };
+    const flowBinding = {
+      ...binding,
+      registeredQualificationFlows: [first, second].map((flow) => ({
+        flowId: flow.flowId,
+        ordinal: flow.ordinal,
+        repository: flow.repository,
+        issueNumber: flow.issueNumber,
+        mode: flow.mode,
+      })),
+    };
+    expect(codeTaskQualificationManifestFailures(manifest, flowBinding)).toEqual([]);
+    const foreignRubricReview: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      flows: [
+        {
+          ...firstManifestFlow,
+          rubricReview: {
+            ...firstManifestFlow.rubricReview,
+            rubricDigest: firstManifestFlow.rubricReview.reviewDigest,
+          },
+        },
+        secondManifestFlow,
+      ],
+    };
+    expect(codeTaskQualificationManifestFailures(foreignRubricReview, flowBinding)).toContain(
+      "issue-to-pr-flow-01: rubric review does not match manifest rubric digest",
+    );
+    const erasedFailedCharges: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      flows: [
+        firstManifestFlow,
+        { ...secondManifestFlow, spend: { ...second.spend, chargedDeltaNanoUsd: 1 } },
+      ],
+    };
+    expect(codeTaskQualificationManifestFailures(erasedFailedCharges, flowBinding)).toContain(
+      "issue-to-pr-flow-02: charged delta does not bridge the prior ledger cumulative",
+    );
+    expect(
+      codeTaskQualificationManifestFailures(
+        { ...manifest, flows: [firstManifestFlow, firstManifestFlow] },
+        flowBinding,
+      ),
+    ).toContain("duplicate flow taskRunId");
   });
 });

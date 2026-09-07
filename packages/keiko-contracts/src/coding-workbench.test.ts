@@ -6,9 +6,11 @@ import type {
   CodingWorkbenchEvidenceRecord,
   CodingWorkbenchPermissionRequest,
   CodingWorkbenchRuntimeEvent,
+  CodingWorkbenchSidecarGatewayUnavailable,
 } from "./index.js";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
+  CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS,
   CODING_WORKBENCH_MODEL_SOURCES,
   CODING_WORKBENCH_MODES,
   CODING_WORKBENCH_RUNTIME_EVENT_KINDS,
@@ -47,6 +49,7 @@ import {
   CODING_WORKBENCH_MODE_POLICIES,
   CODING_WORKBENCH_POLICY_EFFECTS,
   CODING_WORKBENCH_POLICY_RESOURCE_SCOPES,
+  codingWorkbenchCodeTaskDeliveryEffectFor,
   codingWorkbenchPolicyEffectFor,
   strictestCodingWorkbenchPolicyEffect,
 } from "./coding-workbench.js";
@@ -186,7 +189,10 @@ describe("coding-workbench constants", () => {
     expect(CODING_WORKBENCH_ACTION_CLASSES).toContain("delivery-substrate");
     expect(CODING_WORKBENCH_SUPERVISED_ACTION_KINDS).toEqual([
       "file-edit",
+      "git-stage",
       "verification-command",
+      "ci-observe",
+      "connector-read",
       "research",
       "commit",
       "push",
@@ -214,7 +220,7 @@ describe("coding workbench autonomy policy", () => {
     expect(CODING_WORKBENCH_MODE_POLICIES["autonomous-delivery"].display).toEqual({
       label: "Full access",
       description:
-        "File and internet operations within the validated Authority Envelope proceed without per-action approval. Delivery remains separately human-approved.",
+        "File, internet, and accepted Code-task commit, push, and draft pull request operations within the validated Authority Envelope proceed without per-action approval. Merge remains separately approval-gated.",
     });
   });
 
@@ -293,6 +299,29 @@ describe("coding workbench autonomy policy", () => {
       "denied",
     );
     expect(strictestCodingWorkbenchPolicyEffect("allowed")).toBe("allowed");
+  });
+
+  it("allows only proposal-bound Code-task delivery in Full without widening general delivery", () => {
+    for (const action of ["commit", "push", "pull-request"] as const) {
+      expect(codingWorkbenchCodeTaskDeliveryEffectFor("governed-assist", action)).toBe(
+        "approval-required",
+      );
+      expect(codingWorkbenchCodeTaskDeliveryEffectFor("supervised-coding", action)).toBe(
+        "approval-required",
+      );
+      expect(codingWorkbenchCodeTaskDeliveryEffectFor("autonomous-delivery", action)).toBe(
+        "allowed",
+      );
+    }
+    expect(codingWorkbenchPolicyEffectFor("autonomous-delivery", "delivery", "high")).toBe(
+      "approval-required",
+    );
+    expect(codingWorkbenchCodeTaskDeliveryEffectFor("autonomous-delivery", "merge")).toBe(
+      "approval-required",
+    );
+    expect(
+      codingWorkbenchCodeTaskDeliveryEffectFor("autonomous-delivery", "unknown" as never),
+    ).toBe("denied");
   });
 
   // Epic #2384: total monotonicity. Raising the mode must never make ANY (scope, risk) cell
@@ -638,6 +667,8 @@ describe("supervised coding action authority", () => {
   it("requires approval only for delivery, connector, external, and system mutations", () => {
     expect(supervisedCodingActionRequiresApproval("file-edit")).toBe(false);
     expect(supervisedCodingActionRequiresApproval("verification-command")).toBe(false);
+    expect(supervisedCodingActionRequiresApproval("ci-observe")).toBe(true);
+    expect(supervisedCodingActionRequiresApproval("connector-read")).toBe(true);
     expect(supervisedCodingActionRequiresApproval("commit")).toBe(true);
     expect(supervisedCodingActionRequiresApproval("push")).toBe(true);
     expect(supervisedCodingActionRequiresApproval("pull-request")).toBe(true);
@@ -648,15 +679,18 @@ describe("supervised coding action authority", () => {
     const autoAdmitted = CODING_WORKBENCH_SUPERVISED_ACTION_KINDS.filter(
       (kind) => !supervisedCodingActionRequiresApproval(kind),
     );
-    expect(autoAdmitted).toEqual(["file-edit", "verification-command"]);
+    expect(autoAdmitted).toEqual(["file-edit", "git-stage", "verification-command"]);
   });
 
   it("maps supervised actions to the existing permission classes", () => {
     expect(permissionKindForSupervisedCodingAction("file-edit")).toBe("workspace-write");
+    expect(permissionKindForSupervisedCodingAction("git-stage")).toBe("workspace-write");
     expect(permissionKindForSupervisedCodingAction("verification-command")).toBe(
       "command-execution",
     );
     expect(permissionKindForSupervisedCodingAction("research")).toBe("network-egress");
+    expect(permissionKindForSupervisedCodingAction("ci-observe")).toBe("command-execution");
+    expect(permissionKindForSupervisedCodingAction("connector-read")).toBe("command-execution");
     expect(permissionKindForSupervisedCodingAction("connector-write")).toBe("connector-access");
     expect(permissionKindForSupervisedCodingAction("external-write")).toBe("connector-access");
     expect(permissionKindForSupervisedCodingAction("commit")).toBe("delivery-substrate");
@@ -1148,6 +1182,32 @@ describe("validateCodingWorkbenchAuthorityEnvelope", () => {
 });
 
 describe("validateCodingWorkbenchRuntimeEvent", () => {
+  it("accepts only a body-free target digest on verification summaries", () => {
+    const event = {
+      schemaVersion: "1",
+      eventId: "evt-1",
+      runId: "run-1986",
+      occurredAt: "2026-07-07T12:00:00Z",
+      kind: "verification-summarized",
+      verificationKind: "verification-command",
+      verificationStatus: "failed",
+      passedCount: 0,
+      failedCount: 1,
+      skippedCount: 0,
+      verificationTargetDigest: "d".repeat(64),
+    } as const;
+
+    expect(validateCodingWorkbenchRuntimeEvent(event)).toEqual({ ok: true, value: event });
+    const invalid = validateCodingWorkbenchRuntimeEvent({
+      ...event,
+      verificationTargetDigest: "src/private.test.ts",
+    });
+    expect(invalid).toEqual({
+      ok: false,
+      errors: ["event.verificationTargetDigest must be a 64-character lowercase hex digest"],
+    });
+  });
+
   it("keeps runtimeSource and modelSource vocabularies separate", () => {
     expect(validateCodingWorkbenchRuntimeEvent(baseRuntimeEvent()).ok).toBe(true);
 
@@ -1898,5 +1958,24 @@ describe("redactCodingWorkbenchEvidenceText", () => {
     expect(redacted).not.toMatch(/\bsrc\b/i);
     expect(redacted).not.toMatch(/\ba\.ts\b/i);
     expect(redacted).not.toMatch(/\bb\.ts\b/i);
+  });
+});
+
+// #3390 closeout: the readiness vocabulary appended for the sidecar gateway's "otherwise available
+// but the context window cannot survive one request" state. Append-only per AGENTS.md — this test
+// exists so a future edit that narrows the union or drifts the constant fails loudly here first.
+describe("coding workbench sidecar gateway readiness — context window floor", () => {
+  it("defines the minimum coding-context prompt-token floor as a positive integer", () => {
+    expect(Number.isSafeInteger(CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS)).toBe(true);
+    expect(CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS).toBe(32_000);
+  });
+
+  it("accepts the appended reason on an unavailable sidecar gateway projection", () => {
+    const unavailable: CodingWorkbenchSidecarGatewayUnavailable = {
+      status: "unavailable",
+      reason: "model-context-window-insufficient",
+    };
+
+    expect(unavailable.reason).toBe("model-context-window-insufficient");
   });
 });

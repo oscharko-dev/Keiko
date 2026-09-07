@@ -432,13 +432,18 @@ function envelopeModeEffect(
   resourceScope: CodingWorkbenchPolicyResourceScope,
   risk: CodingWorkbenchApprovalRisk,
 ): CodingWorkbenchPolicyEffect {
-  const classEffect = decideCodingWorkbenchActionForMode(mode, actionClass).allowed
-    ? "allowed"
-    : "denied";
+  const classEffect = modeActionClassEffect(mode, actionClass);
   return strictestCodingWorkbenchPolicyEffect(
     classEffect,
     codingWorkbenchPolicyEffectFor(mode, resourceScope, risk),
   );
+}
+
+function modeActionClassEffect(
+  mode: EditorAgentAuthorityPolicy["effectiveMode"],
+  actionClass: CodingWorkbenchActionClass,
+): CodingWorkbenchPolicyEffect {
+  return decideCodingWorkbenchActionForMode(mode, actionClass).allowed ? "allowed" : "denied";
 }
 
 function workspaceTrustOperationForEffectClass(
@@ -466,6 +471,17 @@ function authorityEffect(
   const resourceScope = EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE[decision.effectClass];
   if (actionClass === null || resourceScope === null) return undefined;
   const classEffect = authority.actionClasses.includes(actionClass) ? "allowed" : "denied";
+  // ADR-0138 D4: workspace reads remain Authority Envelope-, trust-, containment-, sensitivity-,
+  // and budget-gated, but never enter the effectful workspace approval matrix. Preserve each mode's
+  // action-class ceiling so a future mode can still deny reads without a local exception.
+  if (decision.effectClass === "workspace-read") {
+    return strictestCodingWorkbenchPolicyEffect(
+      classEffect,
+      modeActionClassEffect(authority.requestedMode, actionClass),
+      modeActionClassEffect(authority.deploymentCeiling, actionClass),
+      modeActionClassEffect(authority.effectiveMode, actionClass),
+    );
+  }
   return strictestCodingWorkbenchPolicyEffect(
     classEffect,
     envelopeModeEffect(authority.requestedMode, actionClass, resourceScope, risk),

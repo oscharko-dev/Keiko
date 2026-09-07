@@ -14,11 +14,12 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   GitChangedFile,
   GitHistoryEntry,
   GitHistoryResponse,
+  GitRepositoryDiffResponse,
   GitRepositorySummary,
   GitSyncPreview,
   ProjectWithAvailability,
@@ -31,11 +32,28 @@ import type {
   GitDeliveryPushPreviewResponse,
 } from "@/lib/api";
 import type { GitRepositoryStatusResponse } from "@/lib/types";
+import type { GitEditorDiffResponse } from "@oscharko-dev/keiko-contracts";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import type { GitClientSeam } from "./git-client-seam";
 import { GitClientWindow } from "./GitClientWindow";
 import { parseUnifiedDiff } from "../shared/diffParser";
 import { notifyWorkspaceFileMutated } from "../workspace-file-events";
+
+// Issue #3400 — the "Connect to Chat" dialog calls fetchChats/connectGitChangeToChat directly
+// (it owns no GitClientSeam methods). Only these two are replaced; every other @/lib/api export
+// stays real so the rest of this file's `client` seam-only tests are unaffected.
+const gitChangeChatMocks = vi.hoisted(() => ({
+  fetchChats: vi.fn(),
+  connectGitChangeToChat: vi.fn(),
+}));
+vi.mock("@/lib/api", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+  return {
+    ...actual,
+    fetchChats: gitChangeChatMocks.fetchChats,
+    connectGitChangeToChat: gitChangeChatMocks.connectGitChangeToChat,
+  };
+});
 
 const nativeFileDialogMock = vi.hoisted(() => ({
   pickWithNativeDialog: vi.fn(),
@@ -262,11 +280,16 @@ function makeHistoryPage(
   });
 }
 
-function makeProjectResponse(repo: ProjectWithAvailability) {
+function makeProjectResponse(repo: ProjectWithAvailability): {
+  readonly project: ProjectWithAvailability;
+} {
   return { project: repo };
 }
 
-function makeDiffResponse(diff: string, overrides: { readonly truncated?: boolean } = {}) {
+function makeDiffResponse(
+  diff: string,
+  overrides: { readonly truncated?: boolean } = {},
+): GitRepositoryDiffResponse {
   return {
     schemaVersion: "1" as const,
     root: "/repos/alpha",
@@ -448,6 +471,11 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       status: "succeeded",
       actionKind: "commit",
     })),
+    commitPropose: vi.fn<GitClientSeam["commitPropose"]>(async () => ({
+      schemaVersion: "1",
+      status: "succeeded",
+      actionKind: "commit",
+    })),
     syncPreview: vi.fn<GitClientSeam["syncPreview"]>(async (input) =>
       makeSyncPreview(input.operation),
     ),
@@ -469,12 +497,39 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       status: "succeeded",
       actionKind: "push",
     })),
+    pushPropose: vi.fn<GitClientSeam["pushPropose"]>(async () => ({
+      schemaVersion: "1",
+      status: "succeeded",
+      actionKind: "push",
+    })),
     prPreview: vi.fn<GitClientSeam["prPreview"]>(async () => makePrPreview()),
+    prApprove: vi.fn<GitClientSeam["prApprove"]>(async () => ({
+      schemaVersion: "1",
+      approval: { schemaVersion: "1", approvalId: "gda_gcw_pr", approvalToken: "token-gcw-pr" },
+      expiresAt: "2026-01-01T00:00:00.000Z",
+    })),
     prExecute: vi.fn<GitClientSeam["prExecute"]>(async () => ({
       schemaVersion: "1",
       status: "succeeded",
       actionKind: "pr-create",
       createdPrExternalId: "1577",
+    })),
+    prDescriptionPreview: vi.fn<GitClientSeam["prDescriptionPreview"]>(async () => ({
+      outcome: "blocked",
+      reason: "approval-required",
+    })),
+    prDescriptionApprove: vi.fn<GitClientSeam["prDescriptionApprove"]>(async () => ({
+      schemaVersion: "1",
+      proposalId: "prop-gcw",
+      expiresAt: "2026-01-01T00:00:00.000Z",
+    })),
+    prDescriptionApply: vi.fn<GitClientSeam["prDescriptionApply"]>(async () => ({
+      outcome: "blocked",
+      reason: "approval-required",
+    })),
+    prDescriptionStatus: vi.fn<GitClientSeam["prDescriptionStatus"]>(async () => ({
+      outcome: "blocked",
+      reason: "approval-required",
     })),
     mergePreview: vi.fn<GitClientSeam["mergePreview"]>(async () => makeMergePreview()),
     mergeApprove: vi.fn<GitClientSeam["mergeApprove"]>(async () => ({
@@ -492,7 +547,10 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
   };
 }
 
-function makeStructuredDiffResponse(diff = "", scope: "staged" | "unstaged" = "unstaged") {
+function makeStructuredDiffResponse(
+  diff = "",
+  scope: "staged" | "unstaged" = "unstaged",
+): GitEditorDiffResponse {
   const parsed = parseUnifiedDiff(diff);
   return {
     schemaVersion: "1" as const,
@@ -514,6 +572,12 @@ function makeStructuredDiffResponse(diff = "", scope: "staged" | "unstaged" = "u
 afterEach(() => {
   resetClientDiagnosticWriter();
   vi.clearAllMocks();
+});
+
+// Issue #3400 — a sane default so any toolbar action that happens to mount ConnectToChatDialog
+// (even in a test that isn't exercising it) resolves instead of leaving an unhandled rejection.
+beforeEach(() => {
+  gitChangeChatMocks.fetchChats.mockResolvedValue({ chats: [] });
 });
 
 describe("GitClientWindow — repository list", () => {
@@ -881,6 +945,61 @@ describe("GitClientWindow — repository selector combobox (toolbar)", () => {
 });
 
 describe("GitClientWindow — add-repository dialog", () => {
+  it("consumes a Coding Workbench clone handoff and returns only the reconnected project", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    const updateCfg = vi.fn();
+    const connected = vi.fn();
+    render(
+      <GitClientWindow
+        client={client}
+        initialRepositoryDialog="clone"
+        onRepositoryConnected={connected}
+        updateCfg={updateCfg}
+      />,
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Add repository" });
+    expect(updateCfg).toHaveBeenCalledWith({ repositoryDialog: "" });
+    expect(connected).not.toHaveBeenCalled();
+    await user.type(
+      within(dialog).getByLabelText("Repository URL"),
+      "https://github.com/org/repo.git",
+    );
+    await user.type(within(dialog).getByLabelText("Clone to folder"), "/tmp/repo");
+    await user.click(within(dialog).getAllByRole("button", { name: "Clone repository" }).at(-1)!);
+    await waitFor(() => expect(connected).toHaveBeenCalledWith(REPO_A.path));
+    expect(client.reconnectRepository).toHaveBeenCalledWith(REPO_A.path);
+  });
+
+  // Owner audit b3-21 — this exact string must stay in sync with the
+  // `BODY_FREE_CLIENT_NOTE_PATTERNS` entry log-redaction.ts added for it, or the server collapses
+  // it to the generic shape marker (`[redacted:shape]`) and the dialog mode is lost.
+  it("reports a body-free client diagnostic naming the handed-off dialog mode", async () => {
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
+    render(<GitClientWindow client={makeClient()} initialRepositoryDialog="clone" />);
+    await screen.findByRole("dialog", { name: "Add repository" });
+    expect(diagnostics).toContain("[keiko] git repository dialog handoff: clone");
+  });
+
+  it("cancelling a handed-off clone never returns a project or calls the clone route", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    const connected = vi.fn();
+    render(
+      <GitClientWindow
+        client={client}
+        initialRepositoryDialog="clone"
+        onRepositoryConnected={connected}
+      />,
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Add repository" });
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(client.cloneRepository).not.toHaveBeenCalled();
+    expect(connected).not.toHaveBeenCalled();
+  });
+
   it("opens the dialog when the connect-repository button is clicked", async () => {
     const user = userEvent.setup();
     render(<GitClientWindow client={makeClient()} />);
@@ -1058,6 +1177,31 @@ describe("GitClientWindow — toolbar actions", () => {
     expect(screen.queryByRole("button", { name: /Open Files/ })).not.toBeInTheDocument();
   });
 
+  // Issue #3400 — the Git window's own "Connect to Chat" affordance: before RepositoryToolbar and
+  // GitClientWindow were wired to ConnectToChatDialog, no button existed anywhere in this window to
+  // start connecting a comparison to a Chat, making the entire server-side git-change feature
+  // unreachable from the product.
+  it("Connect to Chat opens the connect-to-chat dialog for the active repository", async () => {
+    const client = makeClient();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(client.listBranches).toHaveBeenCalled());
+
+    expect(screen.queryByRole("dialog", { name: /Connect Git change to chat/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Connect to Chat/i }));
+    expect(
+      await screen.findByRole("dialog", { name: /Connect Git change to chat/i }),
+    ).toBeInTheDocument();
+    // The dialog is scoped to THIS window's own facts: the active repository (for its chat
+    // picker) and the active branch (as the fixed comparison head) — never browser-authored.
+    await waitFor(() => expect(gitChangeChatMocks.fetchChats).toHaveBeenCalledWith(REPO_A.path));
+    expect(screen.getByLabelText("Head branch")).toHaveValue("main");
+  });
+
+  it("Connect to Chat is absent when no repository is selected", () => {
+    render(<GitClientWindow client={makeClient()} />);
+    expect(screen.queryByRole("button", { name: /Connect to Chat/i })).not.toBeInTheDocument();
+  });
+
   it("Sync status renders with a text label", async () => {
     const client = makeClient({
       getStatus: vi.fn(async () => makeStatus({ clean: true })),
@@ -1098,7 +1242,12 @@ describe("GitClientWindow — toolbar actions", () => {
     expect(panel).toBeInTheDocument();
     expect(within(panel).getByLabelText("Head branch")).toHaveValue("feat/issue-1577");
     expect(within(panel).getByLabelText("Base branch")).toHaveValue("main");
-    expect(within(panel).getByDisplayValue("oscharko-dev/Keiko")).toBeInTheDocument();
+    // Not getByDisplayValue: the Description panel below (#3399) now also renders once the
+    // seam is fully wired, and its own repository field independently prefills to the same
+    // inferred owner/repo — so two distinct fields legitimately share this value.
+    expect(within(panel).getByLabelText("Repository (owner/repo)")).toHaveValue(
+      "oscharko-dev/Keiko",
+    );
     expect(client.getHistory).not.toHaveBeenCalled();
 
     await user.click(within(panel).getByRole("button", { name: "Preview" }));
@@ -1114,6 +1263,58 @@ describe("GitClientWindow — toolbar actions", () => {
     );
   });
 
+  // Repair for a review residual on #3399/#3400: before git-client-seam.ts carried prApprove and
+  // the four prDescription* clients, GitClientSeam only had `mergeApprove` for the sibling merge
+  // card, so the embedded PR pane's GovernedPullRequestCard always saw those fields as `undefined`
+  // and (a) the Description panel never rendered (`requiredPrDescriptionClient` returns undefined
+  // unless all three prDescription* methods are present) and (b) `runExecute` fell back to the
+  // legacy unapproved pr-execute call, which the real BFF route rejects as approval-required
+  // forever. Failing-before: with the pre-fix seam (no prApprove/prDescription* fields at all),
+  // `screen.findByTestId("gpr-description")` never resolves and `client.prExecute` is called
+  // without an `approval` field — both assertions below fail against that code.
+  it("shows the Description panel and mints a PR approval through the seam before create (#3399/#3400)", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      getSummary: vi.fn(async () => makeSummary({ branch: "feat/issue-1577" })),
+      getRemotes: vi.fn(async () => ({
+        schemaVersion: "1" as const,
+        root: REPO_A.path,
+        state: "available" as const,
+        available: true,
+        remotes: [{ name: "origin", fetchUrl: "git@github.com:oscharko-dev/Keiko.git" }],
+        truncated: false,
+      })),
+      getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+    await waitFor(() => expect(client.getRemotes).toHaveBeenCalledWith(REPO_A.path));
+
+    await user.click(screen.getByRole("button", { name: /Create pull request/ }));
+    const panel = await screen.findByRole("region", { name: "Pull Request" });
+
+    // (a) the Description panel is now reachable through the generic Git window's own client.
+    expect(await within(panel).findByTestId("gpr-description")).toBeInTheDocument();
+
+    // (b) create still mints and attaches a server-issued approval before execute.
+    const titleInput = within(panel).getByLabelText("Pull Request title");
+    fireEvent.change(titleInput, { target: { value: "feat: seam wiring" } });
+    const submit = within(panel).getByRole("button", { name: "Create Pull Request" });
+    await waitFor(() => expect(submit).toBeEnabled());
+    await user.click(submit);
+
+    await waitFor(() => expect(client.prApprove).toHaveBeenCalledTimes(1));
+    expect(client.prExecute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approval: { schemaVersion: "1", approvalId: "gda_gcw_pr", approvalToken: "token-gcw-pr" },
+      }),
+    );
+  });
+
+  // #3389 (epic #3384 correction 1): the approval-less draft->ready transition through this generic
+  // embedded panel is closed — "Mark ready" ("to-ready") is no longer a Draft state option, so this
+  // pin is relocated to "Convert to draft" (still a plain pr-update) to keep proving the embedded
+  // panel forwards repository context and the draft-transition flag correctly.
   it("updates a Pull Request from the embedded panel with selected repository context", async () => {
     const user = userEvent.setup();
     const client = makeClient({
@@ -1141,7 +1342,7 @@ describe("GitClientWindow — toolbar actions", () => {
     await user.click(within(panel).getByLabelText("Update"));
     await user.type(within(panel).getByLabelText("Pull Request number"), "1640");
     await user.type(within(panel).getByLabelText("Pull Request title"), "fix: harden pr path");
-    await user.selectOptions(within(panel).getByLabelText("Draft state"), "to-ready");
+    await user.selectOptions(within(panel).getByLabelText("Draft state"), "to-draft");
     await user.click(within(panel).getByRole("button", { name: "Update Pull Request" }));
 
     await waitFor(() =>
@@ -1153,10 +1354,38 @@ describe("GitClientWindow — toolbar actions", () => {
           headBranchName: "feat/issue-1577",
           baseBranchName: "main",
           prExternalId: "1640",
-          convertFromDraft: true,
+          convertToDraft: true,
+          convertFromDraft: false,
         }),
       ),
     );
+  });
+
+  // #3389 (epic #3384 correction 1): failing-before-fix — before this change, selecting "to-ready"
+  // reached the generic pr-update execute call with convertFromDraft: true. The option no longer
+  // exists in the DOM at all.
+  it("does not offer Mark ready in the embedded panel's Draft state select", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      getSummary: vi.fn(async () => makeSummary({ branch: "feat/issue-1577" })),
+      getRemotes: vi.fn(async () => ({
+        schemaVersion: "1" as const,
+        root: REPO_A.path,
+        state: "available" as const,
+        available: true,
+        remotes: [{ name: "origin", fetchUrl: "git@github.com:oscharko-dev/Keiko.git" }],
+        truncated: false,
+      })),
+      getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+    await user.click(screen.getByRole("button", { name: /Create pull request/ }));
+    const panel = await screen.findByRole("region", { name: "Pull Request" });
+    await user.click(within(panel).getByLabelText("Update"));
+    const select = within(panel).getByLabelText("Draft state");
+    const optionValues = [...select.querySelectorAll("option")].map((option) => option.value);
+    expect(optionValues).toEqual(["none", "to-draft"]);
   });
 
   it("surfaces embedded Pull Request provider-auth failures without sensitive text", async () => {
@@ -1775,7 +2004,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
         setUpstreamTracking: true,
       }),
     );
-    expect(client.pushExecute).toHaveBeenCalledWith({
+    expect(client.pushPropose).toHaveBeenCalledWith({
       projectId: REPO_A.path,
       remoteAlias: "origin",
       remoteBranchName: "feature/local",
@@ -1837,7 +2066,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     const user = userEvent.setup();
     const client = makeClient({
       getSummary: vi.fn(async () => makeSummary({ ahead: 2 })),
-      pushExecute: vi.fn<GitClientSeam["pushExecute"]>(async () => ({
+      pushPropose: vi.fn<GitClientSeam["pushPropose"]>(async () => ({
         schemaVersion: "1",
         status: "failed",
         actionKind: "push",
@@ -1850,13 +2079,37 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
     await user.click(await screen.findByRole("button", { name: "Run sync: Push" }));
-    await waitFor(() => expect(client.pushExecute).toHaveBeenCalled());
+    await waitFor(() => expect(client.pushPropose).toHaveBeenCalled());
 
     const pill = await screen.findByRole("alert");
     expect(pill).toHaveTextContent(/newer commits/i);
     expect(pill).toHaveTextContent(/resolve/i);
     expect(pill).not.toHaveTextContent("non-fast-forward");
     expect(pill).not.toHaveTextContent("resolve-conflicts");
+  });
+
+  // F3 (epic #3384 final audit): before proposePush existed, runPushSync called pushExecute
+  // directly with no mint step at all — an accepted run's push could never satisfy the epic's
+  // unconditional approval requirement. When the mint itself is denied, proposePush resolves to
+  // the same static "approval-required" outcome the pack-driven approval-gated path already
+  // renders, so the existing pushOutcomePresentation catalog surfaces it without a new code path.
+  it("shows the approval-required label when the push mint is denied (F3)", async () => {
+    const client = makeClient({
+      getSummary: vi.fn(async () => makeSummary({ ahead: 2 })),
+      pushPropose: vi.fn<GitClientSeam["pushPropose"]>(async () => ({
+        schemaVersion: "1",
+        status: "approval-required",
+        actionKind: "push",
+      })),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("button", { name: "Run sync: Push" }));
+    await waitFor(() => expect(client.pushPropose).toHaveBeenCalled());
+
+    const pill = await screen.findByRole("alert");
+    expect(pill).toHaveTextContent(/approval/i);
   });
 
   it("shows diverged branches as an explicit safe fetch state with merge guidance", async () => {
@@ -2693,7 +2946,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     await user.click(button);
 
     await waitFor(() =>
-      expect(client.commitExecute).toHaveBeenCalledWith({
+      expect(client.commitPropose).toHaveBeenCalledWith({
         projectId: REPO_A.path,
         message: "feat: wire commit composer",
       }),
@@ -2883,11 +3136,78 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     await user.click(button);
 
     await waitFor(() =>
-      expect(client.commitExecute).toHaveBeenCalledWith({
+      expect(client.commitPropose).toHaveBeenCalledWith({
         projectId: REPO_A.path,
         message: "feat: subject\n\nBody line.",
       }),
     );
+  });
+
+  // F3 (epic #3384 final audit): before proposeCommit existed, commitChanges called
+  // commitExecute directly with no mint step at all — an accepted run's commit could never
+  // satisfy the epic's unconditional approval requirement and there was no code path that could
+  // ever render "Approval required" for a mint denial (it would either succeed outright with no
+  // approval, or throw a raw network error). Failing-before: this test could not even be written
+  // against the pre-fix seam, since commitExecute carries no concept of a denied mint.
+  it("shows the static Approval required label when the commit mint is denied (F3)", async () => {
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusRich()),
+      commitPropose: vi.fn<GitClientSeam["commitPropose"]>(async () => ({
+        schemaVersion: "1",
+        status: "approval-required",
+        actionKind: "commit",
+      })),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Summary"), "feat: needs approval");
+    const button = screen.getByRole("button", { name: /^Commit/ });
+    await waitFor(() => expect(button).toBeEnabled());
+    await user.click(button);
+
+    expect(await screen.findByTestId("git-commit-outcome-headline")).toHaveTextContent(
+      "commit: Approval required",
+    );
+  });
+
+  // F3: proves the existing single-flight guard (useGitActions' seqRef, via the disabled Commit
+  // button while `commit.flow.busy`) is reused as-is rather than a second lock being introduced
+  // for the mint-then-execute call — a second click while the first commitPropose call is still
+  // in flight must not mint (or execute) a second time.
+  it("does not call commitPropose a second time while the first mint/execute is in flight (F3)", async () => {
+    let resolveCommit!: (v: {
+      schemaVersion: "1";
+      status: "succeeded";
+      actionKind: string;
+    }) => void;
+    const pending = new Promise<{ schemaVersion: "1"; status: "succeeded"; actionKind: string }>(
+      (res) => {
+        resolveCommit = res;
+      },
+    );
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusRich()),
+      commitPropose: vi.fn<GitClientSeam["commitPropose"]>(() => pending),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Summary"), "feat: single flight");
+    const button = screen.getByRole("button", { name: /^Commit/ });
+    await waitFor(() => expect(button).toBeEnabled());
+    await user.click(button);
+    await waitFor(() => expect(button).toBeDisabled());
+    // The button is disabled while busy, so a second click cannot dispatch a second call.
+    fireEvent.click(button);
+    expect(client.commitPropose).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveCommit({ schemaVersion: "1", status: "succeeded", actionKind: "commit" });
+    });
+    expect(client.commitPropose).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes status and clears the composer after a successful commit", async () => {
@@ -2931,7 +3251,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
 
     expect(button).toBeDisabled();
     await user.click(button);
-    expect(client.commitExecute).not.toHaveBeenCalled();
+    expect(client.commitPropose).not.toHaveBeenCalled();
   });
 
   it("opens the new branch dialog when the commit preview blocks the protected branch", async () => {
@@ -2966,7 +3286,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     await user.click(screen.getByRole("button", { name: "Create branch first" }));
 
     expect(screen.getByRole("dialog", { name: "New branch" })).toBeInTheDocument();
-    expect(client.commitExecute).not.toHaveBeenCalled();
+    expect(client.commitPropose).not.toHaveBeenCalled();
   });
 });
 
@@ -3042,5 +3362,26 @@ describe("GitClientWindow — diff scope (Issue #1575)", () => {
         scope: "staged",
       }),
     );
+  });
+});
+
+// Issue #3400 (epic #3384) — the dialog itself is unit-tested in ConnectToChatDialog.test.tsx;
+// this pins only that the toolbar's trigger regains focus once the dialog closes (WCAG 2.4.3),
+// which needs the real GitClientWindow tree (ConnectToChatDialog.test.tsx renders the dialog
+// standalone, with no trigger to return focus to).
+describe("GitClientWindow — Connect to Chat", () => {
+  it("closes on Escape and returns focus to the toolbar trigger", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(client.listBranches).toHaveBeenCalled());
+    const trigger = screen.getByRole("button", { name: "Connect to Chat" });
+    await user.click(trigger);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 });

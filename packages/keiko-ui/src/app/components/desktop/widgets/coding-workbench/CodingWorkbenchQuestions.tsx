@@ -191,7 +191,15 @@ function questionStatusMessage(
   t: CodingWorkbenchTranslate,
 ): string {
   if (failure !== null) {
-    return actionFailureAlert(`codingWorkbench.questions.${failure.action}Failed`, failure, t);
+    const rejectedAnswer =
+      failure.action === "answer" && failure.code === "CODING_RUNTIME_QUESTION_ANSWER_REJECTED";
+    return actionFailureAlert(
+      rejectedAnswer
+        ? "codingWorkbench.questions.answerRejected"
+        : `codingWorkbench.questions.${failure.action}Failed`,
+      failure,
+      t,
+    );
   }
   return status === "ready"
     ? t("codingWorkbench.questions.ready", { count })

@@ -1,4 +1,8 @@
-import { Gateway, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import {
+  Gateway,
+  type GatewayConfig,
+  type GatewaySpendBudget,
+} from "@oscharko-dev/keiko-model-gateway";
 
 import { getServerLogger } from "./observability/index.js";
 import { processServerLogSink } from "./process-log-sink.js";
@@ -9,11 +13,12 @@ import { processServerLogSink } from "./process-log-sink.js";
 // gateway was selected while saying nothing about what it did.
 const GATEWAY_LOG_DEPS = { log: processServerLogSink() };
 
-function newGateway(config: GatewayConfig): Gateway {
-  return new Gateway(config, GATEWAY_LOG_DEPS);
+function newGateway(config: GatewayConfig, spendBudget?: GatewaySpendBudget): Gateway {
+  return new Gateway(config, { ...GATEWAY_LOG_DEPS, spendBudget });
 }
 
 export interface RuntimeGatewayConfigSource {
+  readonly spendBudget?: GatewaySpendBudget | undefined;
   current(): GatewayConfig | undefined;
   generation(): number;
 }
@@ -96,13 +101,14 @@ function logRuntimeUnavailable(
 }
 
 class GatewayInstanceCache {
+  constructor(private readonly spendBudget?: GatewaySpendBudget) {}
   private readonly byConfig = new WeakMap<GatewayConfig, Gateway>();
   private readonly byRuntimeConfig = new WeakMap<RuntimeGatewayConfigSource, RuntimeGatewayEntry>();
 
   forConfig(config: GatewayConfig): Gateway {
     const existing = this.byConfig.get(config);
     if (existing !== undefined) return existing;
-    const gateway = newGateway(config);
+    const gateway = newGateway(config, this.spendBudget);
     this.byConfig.set(config, gateway);
     return gateway;
   }
@@ -123,7 +129,7 @@ class GatewayInstanceCache {
     // reused the same parsed config object. A config change inside the SAME generation is not an
     // invalidation, so it must still converge with direct callers on the config-keyed instance.
     const gateway = LIFECYCLE_RESET_REASONS.has(reason)
-      ? newGateway(config)
+      ? newGateway(config, this.spendBudget)
       : this.forConfig(config);
     this.byRuntimeConfig.set(source, { kind: "available", config, gateway, generation });
     return gateway;
@@ -131,16 +137,28 @@ class GatewayInstanceCache {
 }
 
 let sharedGateways = new GatewayInstanceCache();
+let budgetedGateways = new WeakMap<GatewaySpendBudget, GatewayInstanceCache>();
 
-export function gatewayForConfig(config: GatewayConfig): Gateway {
-  return sharedGateways.forConfig(config);
+function cacheForBudget(budget: GatewaySpendBudget | undefined): GatewayInstanceCache {
+  if (budget === undefined) return sharedGateways;
+  let cache = budgetedGateways.get(budget);
+  if (cache === undefined) {
+    cache = new GatewayInstanceCache(budget);
+    budgetedGateways.set(budget, cache);
+  }
+  return cache;
+}
+
+export function gatewayForConfig(config: GatewayConfig, budget?: GatewaySpendBudget): Gateway {
+  return cacheForBudget(budget).forConfig(config);
 }
 
 export function gatewayForRuntimeConfig(source: RuntimeGatewayConfigSource): Gateway | undefined {
-  return sharedGateways.forRuntimeConfig(source);
+  return cacheForBudget(source.spendBudget).forRuntimeConfig(source);
 }
 
 /** Clears the process-wide cache between tests that exercise gateway instance isolation. */
 export function resetGatewayInstanceCacheForTests(): void {
   sharedGateways = new GatewayInstanceCache();
+  budgetedGateways = new WeakMap<GatewaySpendBudget, GatewayInstanceCache>();
 }

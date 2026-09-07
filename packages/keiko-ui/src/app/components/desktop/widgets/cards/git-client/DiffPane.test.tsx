@@ -81,12 +81,19 @@ function makeSeam(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
     unstage: vi.fn<GitClientSeam["unstage"]>(async () => ok),
     commitPreview: vi.fn<GitClientSeam["commitPreview"]>(),
     commitExecute: vi.fn<GitClientSeam["commitExecute"]>(async () => ok),
+    commitPropose: vi.fn<GitClientSeam["commitPropose"]>(async () => ok),
     syncPreview: vi.fn<GitClientSeam["syncPreview"]>(),
     syncExecute: vi.fn<GitClientSeam["syncExecute"]>(),
     pushPreview: vi.fn<GitClientSeam["pushPreview"]>(),
     pushExecute: vi.fn<GitClientSeam["pushExecute"]>(async () => ok),
+    pushPropose: vi.fn<GitClientSeam["pushPropose"]>(async () => ok),
     prPreview: vi.fn<GitClientSeam["prPreview"]>(),
+    prApprove: vi.fn<GitClientSeam["prApprove"]>(),
     prExecute: vi.fn<GitClientSeam["prExecute"]>(),
+    prDescriptionPreview: vi.fn<GitClientSeam["prDescriptionPreview"]>(),
+    prDescriptionApprove: vi.fn<GitClientSeam["prDescriptionApprove"]>(),
+    prDescriptionApply: vi.fn<GitClientSeam["prDescriptionApply"]>(),
+    prDescriptionStatus: vi.fn<GitClientSeam["prDescriptionStatus"]>(),
     mergePreview: vi.fn<GitClientSeam["mergePreview"]>(),
     mergeApprove: vi.fn<GitClientSeam["mergeApprove"]>(),
     mergeExecute: vi.fn<GitClientSeam["mergeExecute"]>(),
@@ -94,7 +101,10 @@ function makeSeam(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
   };
 }
 
-function renderPane(props: Partial<Parameters<typeof DiffPane>[0]> = {}) {
+function renderPane(props: Partial<Parameters<typeof DiffPane>[0]> = {}): {
+  readonly client: GitClientSeam;
+  readonly onScopeChange: ReturnType<typeof vi.fn<(scope: GitDiffScope) => void>>;
+} {
   const onScopeChange = vi.fn<(scope: GitDiffScope) => void>();
   const client = props.client ?? makeSeam();
   render(
@@ -196,6 +206,23 @@ describe("DiffPane — states", () => {
     const metaText = await screen.findByText("\\ No newline at end of file");
     expect(screen.getByText("Diff metadata")).toBeInTheDocument();
     expect(metaText.closest(".rv-line")?.querySelector(".rv-gutter")).toHaveTextContent("");
+  });
+
+  it("#3386: makes the shared diff viewport keyboard reachable without logging its content", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    renderPane({
+      client: makeSeam({
+        getStructuredDiff: vi.fn(async () => makeDiffResponse([makeDiffFile()])),
+      }),
+    });
+    const header = await screen.findByLabelText("Hunk header @@ -7,1 +7,1 @@");
+    const body = header.closest(".rv-code");
+    expect(body).toHaveAttribute("tabindex", "0");
+    if (body === null) throw new Error("Expected the diff viewport");
+    fireEvent.focus(body);
+    expect(warn).toHaveBeenCalledWith("[keiko] shared diff viewport focused");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("src/index.ts");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("const a =");
   });
 
   it("issue #2710 — makes the diff body selectable while gutters and sr-only labels opt back out", async () => {
