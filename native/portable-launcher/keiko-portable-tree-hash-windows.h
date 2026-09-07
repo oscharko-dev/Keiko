@@ -101,22 +101,26 @@ static int keiko_tree_windows_child_path(wchar_t output[KEIKO_TREE_WINDOWS_PATH_
 }
 
 static HANDLE keiko_tree_windows_open_child(HANDLE parent, const wchar_t *name, int directory) {
-  wchar_t path[KEIKO_TREE_WINDOWS_PATH_CAP];
+  wchar_t *path = (wchar_t *)malloc(KEIKO_TREE_WINDOWS_PATH_CAP * sizeof(wchar_t));
   DWORD access = directory ? FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES : GENERIC_READ;
   DWORD flags = FILE_FLAG_OPEN_REPARSE_POINT |
                 (directory ? FILE_FLAG_BACKUP_SEMANTICS : FILE_FLAG_SEQUENTIAL_SCAN);
-  HANDLE child;
+  HANDLE child = INVALID_HANDLE_VALUE;
   keiko_tree_windows_identity identity;
   /* CreateFileW has no openat-style parent argument. The parent stays open without write/delete
    * sharing while its canonical local path is resolved; OPEN_REPARSE_POINT plus post-open identity
    * checks makes the absolute child open fail closed on redirection. */
-  if (!keiko_tree_windows_child_path(path, parent, name)) return INVALID_HANDLE_VALUE;
+  if (path == NULL || !keiko_tree_windows_child_path(path, parent, name)) goto cleanup;
   child = CreateFileW(path, access, FILE_SHARE_READ, NULL, OPEN_EXISTING, flags, NULL);
+  free(path);
   if (!keiko_tree_windows_read_identity(child, directory, &identity)) {
     if (child != INVALID_HANDLE_VALUE) CloseHandle(child);
     return INVALID_HANDLE_VALUE;
   }
   return child;
+cleanup:
+  free(path);
+  return INVALID_HANDLE_VALUE;
 }
 
 static int keiko_tree_windows_component_utf8(const wchar_t *name, size_t length, char **output) {
