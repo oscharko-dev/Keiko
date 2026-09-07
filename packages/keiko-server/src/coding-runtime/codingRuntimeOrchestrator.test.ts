@@ -32,6 +32,7 @@ import {
 } from "./codingRuntimeOrchestrator.js";
 import type { CodingRuntimeDescriptionJobStore } from "./codingRuntimeDescriptionJobStore.js";
 import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import { DatabaseSync } from "node:sqlite";
 import { runMigrations } from "../store/schema.js";
 import { createCodingRuntimeDescriptionJobStore } from "./codingRuntimeDescriptionJobStore.js";
@@ -50,6 +51,10 @@ import type {
   CodingWorkbenchIssueBindingFailure,
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_ISSUE_BINDING_FAILURES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import {
+  draftDeliveryLineageRecord,
+  sameDraftRecoveryTask,
+} from "./codingRuntimeDraftDeliverySource.js";
 
 function successfulSnapshot(result: CodingRuntimeOrchestratorResult) {
   if (!result.ok) throw new Error(`expected success, received ${result.failureCode}`);
@@ -155,7 +160,12 @@ function fixture(
     },
     transition: (id, change) => {
       const current = rowFor(rows, id);
-      const next = { ...current, ...change } as CodingRuntimeSnapshot;
+      const terminalAt = new Set(["succeeded", "failed", "cancelled", "taken-over"]).has(
+        change.state,
+      )
+        ? change.updatedAt
+        : undefined;
+      const next = { ...current, ...change, terminalAt } as CodingRuntimeSnapshot;
       rows.set(id, next);
       return next;
     },
@@ -498,6 +508,107 @@ const ISSUE_ATTACHMENT = {
   byteCount: 96,
   text: `[untrusted issue context] ${ISSUE_TITLE}\n${ISSUE_BODY}`,
 };
+
+function historicalDraft(run: CodingRuntimeSnapshot): DraftDeliveryRecord {
+  return {
+    schemaVersion: "1",
+    revision: 5,
+    phase: "draft-created",
+    reason: "completed",
+    proposalId: "delivery-known-draft",
+    proposalDigest: "5".repeat(64),
+    recordedAt: run.updatedAt,
+    binding: {
+      runId: run.runId,
+      workspaceDigest: run.workspaceDigest,
+      runtimeAuthorityDigest: run.authorityDigest,
+      envelopeDigest: "6".repeat(64),
+      remoteDigest: ISSUE_BINDING.remoteDigest,
+      issueBindingDigest: ISSUE_BINDING.bindingDigest,
+      issueIdDigest: ISSUE_BINDING.issueIdDigest,
+      issueNumber: ISSUE_BINDING.issueNumber,
+      repository: "oscharko-dev/keiko",
+      remoteAlias: "origin",
+      baseRef: ISSUE_BINDING.defaultBaseRef,
+      baseSha: "1".repeat(40),
+      headRef: "keiko/task/issue-3385",
+      headSha: "2".repeat(40),
+      verifiedCommitProposalId: "commit-known-draft",
+      recoveryId: "recovery-known-draft",
+    },
+    pullRequest: {
+      repository: "oscharko-dev/Keiko",
+      headRepository: "oscharko-dev/Keiko",
+      number: 7,
+      externalId: "PR_known_draft",
+      url: "https://github.com/oscharko-dev/Keiko/pull/7",
+      state: "open",
+      isDraft: true,
+      baseRef: ISSUE_BINDING.defaultBaseRef,
+      baseSha: "1".repeat(40),
+      headRef: "keiko/task/issue-3385",
+      headSha: "2".repeat(40),
+    },
+  };
+}
+
+function historicalVerifiedCommit(run: CodingRuntimeSnapshot): VerifiedCommitResult {
+  return {
+    schemaVersion: "1",
+    status: "succeeded",
+    reason: "completed",
+    recordedAt: run.updatedAt,
+    proposalId: "commit-known-draft",
+    runId: run.runId,
+    envelopeDigest: "6".repeat(64),
+    runtimeAuthorityDigest: run.authorityDigest,
+    workspaceDigest: run.workspaceDigest,
+    repositoryDigest: ISSUE_BINDING.remoteDigest,
+    baseSha: "1".repeat(40),
+    parentSha: "1".repeat(40),
+    stagedTreeDigest: "7".repeat(64),
+    verificationEvidenceId: "verified-known-draft",
+    messageDigest: "8".repeat(64),
+    issueBindingDigest: ISSUE_BINDING.bindingDigest,
+    headSha: "2".repeat(40),
+  };
+}
+
+async function failedSuccessorWithDraftLineage(activityLog?: ServerLogSink) {
+  const verifiedCommits = new Map<string, VerifiedCommitResult>();
+  const f = fixture(
+    undefined,
+    undefined,
+    [],
+    undefined,
+    activityLog,
+    issueIntake(),
+    undefined,
+    verifiedCommits,
+  );
+  await f.orchestrator.start({ ...start, issueRef: ISSUE_REF });
+  const first = rowFor(f.rows, "run-1");
+  f.rows.set(first.runId, { ...first, draftDelivery: historicalDraft(first) });
+  verifiedCommits.set(first.runId, historicalVerifiedCommit(first));
+  await f.orchestrator.startupReconcile();
+  await f.orchestrator.acknowledgeRecovery("run-1", {
+    requestId: "run-1",
+    acknowledged: true,
+  });
+  await f.orchestrator.retry("run-1", {
+    ...start,
+    requestId: "request-2",
+    issueRef: ISSUE_REF,
+  });
+  await f.orchestrator.ingest({
+    schemaVersion: "1",
+    eventId: "run-2-terminal-failure",
+    runId: "run-2",
+    occurredAt: "2026-01-01T00:00:00.000Z",
+    kind: "runtime-stopped",
+  });
+  return f;
+}
 
 function issueIntake(
   overrides: Partial<{
@@ -1762,6 +1873,119 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(restarted).toMatchObject({ runId: "run-2", state: "running" });
     expect(f.rows.get("run-2")?.predecessorRunId).toBe("run-1");
     expect(f.rows.get("run-1")?.terminalAt).toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  it("retains a bounded draft lineage when its first linked successor fails before adoption", async () => {
+    const captured = captureActivityLog();
+    const f = await failedSuccessorWithDraftLineage(captured.activityLog);
+    expect(f.rows.get("run-1")).toMatchObject({
+      state: "recovery-required",
+      recoveryAcknowledgedAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(f.rows.get("run-2")).toMatchObject({
+      state: "failed",
+      predecessorRunId: "run-1",
+      terminalAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(
+      draftDeliveryLineageRecord(rowFor(f.rows, "run-2"), (id) => f.rows.get(id)),
+    ).toMatchObject({ snapshot: { runId: "run-1" } });
+    expect(f.orchestrator.snapshot()).toMatchObject({ runId: "run-2", state: "failed" });
+
+    await f.orchestrator.start({ ...start, requestId: "request-3", issueRef: ISSUE_REF });
+
+    expect(
+      captured.records.find(
+        (event) => event.op === "coding-runtime.run.started" && event.extra?.runId === "run-3",
+      ),
+    ).toMatchObject({
+      correlationId: UNKNOWN_CORRELATION_ID,
+      extra: {
+        hasPredecessor: true,
+        predecessorSelectionReason: "failed-successor-lineage",
+      },
+    });
+    expect(sameDraftRecoveryTask(rowFor(f.rows, "run-3"), rowFor(f.rows, "run-2"))).toBe(true);
+    expect(f.rows.get("run-3")?.predecessorRunId).toBe("run-2");
+  });
+
+  it.each([
+    ["task", (row: CodingRuntimeSnapshot) => ({ ...row, taskDigest: "5".repeat(64) })],
+    ["workspace", (row: CodingRuntimeSnapshot) => ({ ...row, workspaceDigest: "6".repeat(64) })],
+    ["issue", (row: CodingRuntimeSnapshot) => ({ ...row, issueBinding: undefined })],
+  ])("does not inherit a failed successor from a different %s", async (_name, change) => {
+    const captured = captureActivityLog();
+    const f = await failedSuccessorWithDraftLineage(captured.activityLog);
+    f.rows.set("run-2", change(rowFor(f.rows, "run-2")));
+    f.rows.set("run-1", change(rowFor(f.rows, "run-1")));
+
+    await f.orchestrator.start({ ...start, requestId: "request-3", issueRef: ISSUE_REF });
+
+    expect(f.rows.get("run-3")?.predecessorRunId).toBeUndefined();
+    expect(
+      captured.records.find(
+        (event) => event.op === "coding-runtime.run.started" && event.extra?.runId === "run-3",
+      ),
+    ).toMatchObject({
+      correlationId: UNKNOWN_CORRELATION_ID,
+      extra: { hasPredecessor: false, predecessorSelectionReason: "no-bounded-lineage" },
+    });
+  });
+
+  it("does not inherit a failed successor without a bounded durable draft", async () => {
+    const captured = captureActivityLog();
+    const f = await failedSuccessorWithDraftLineage(captured.activityLog);
+    const first = rowFor(f.rows, "run-1");
+    f.rows.set(first.runId, { ...first, draftDelivery: undefined });
+
+    await f.orchestrator.start({ ...start, requestId: "request-3", issueRef: ISSUE_REF });
+
+    expect(f.rows.get("run-3")?.predecessorRunId).toBeUndefined();
+    expect(
+      captured.records.find(
+        (event) => event.op === "coding-runtime.run.started" && event.extra?.runId === "run-3",
+      ),
+    ).toMatchObject({
+      extra: { hasPredecessor: false, predecessorSelectionReason: "no-bounded-lineage" },
+    });
+  });
+
+  it("recovers a unique local historical draft after a settled run severed its edge", async () => {
+    const prior = await failedSuccessorWithDraftLineage();
+    const second = rowFor(prior.rows, "run-2");
+    const orphan: CodingRuntimeSnapshot = {
+      ...second,
+      runId: "run-3",
+      state: "succeeded",
+      predecessorRunId: undefined,
+      updatedAt: "2026-01-01T00:00:01.000Z",
+      terminalAt: "2026-01-01T00:00:01.000Z",
+    };
+    const first = rowFor(prior.rows, "run-1");
+    const verifiedCommits = new Map([[first.runId, historicalVerifiedCommit(first)]]);
+    const captured = captureActivityLog();
+    const f = fixture(
+      undefined,
+      undefined,
+      [...prior.rows.values(), orphan],
+      undefined,
+      captured.activityLog,
+      issueIntake(),
+      undefined,
+      verifiedCommits,
+      () => "run-4",
+    );
+
+    await f.orchestrator.start({ ...start, requestId: "request-4", issueRef: ISSUE_REF });
+
+    expect(f.rows.get("run-4")?.predecessorRunId).toBe("run-1");
+    expect(
+      captured.records.find(
+        (event) => event.op === "coding-runtime.run.started" && event.extra?.runId === "run-4",
+      ),
+    ).toMatchObject({
+      extra: { hasPredecessor: true, predecessorSelectionReason: "historical-local-draft" },
+    });
   });
 
   it("still fails a plain start closed against an unacknowledged recovery-required predecessor", async () => {

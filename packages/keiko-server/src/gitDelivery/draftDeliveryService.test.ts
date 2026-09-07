@@ -177,6 +177,26 @@ describe("draft delivery runtime admission", () => {
 });
 
 describe("draft delivery hard boundaries", () => {
+  it("distinguishes unavailable provider facts from an observed base drift without publishing", async () => {
+    vi.spyOn(fixture.adapter, "readBranchHead").mockResolvedValue({
+      ok: false,
+      reason: "invalid-response",
+    });
+    expect(await fixture.service.proposePush()).toMatchObject({
+      record: { phase: "recovery-required", reason: "provider-failed" },
+    });
+    expect(fixture.pushCount).toBe(0);
+    expect(fixture.events.find((event) => event.op === "git.draft-remote.observed")).toMatchObject({
+      op: "git.draft-remote.observed",
+      correlationId: fixture.context.correlationId,
+      extra: {
+        state: "unavailable",
+        reason: "invalid-response",
+        baseMatchesExpected: false,
+      },
+    });
+  });
+
   it("refuses a concurrent operation instead of reporting the in-flight record as completed", async () => {
     const entered = deferred();
     const release = deferred();

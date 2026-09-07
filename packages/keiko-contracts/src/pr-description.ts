@@ -171,7 +171,7 @@ const STATEMENT_SCHEMA = {
   },
 };
 
-/** The same closed shape and bounds are used for provider schema and local validation. */
+/** The full closed shape and bounds used for prompting and authoritative local validation. */
 export const PR_DESCRIPTION_CANDIDATE_SCHEMA: Readonly<Record<string, unknown>> = deepFreeze({
   type: "object",
   additionalProperties: false,

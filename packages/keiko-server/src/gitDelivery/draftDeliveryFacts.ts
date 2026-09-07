@@ -12,10 +12,12 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 import { sameGitHubOwnerAndRepo } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { readGitTreeDigest } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type { GitPrInspectionResult } from "@oscharko-dev/keiko-tools";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
 import { readVerifiedCommitFacts } from "./verifiedCommitFacts.js";
 import { runtimeGitReadDeps } from "./runtimeGitRead.js";
 import { mintProposalId } from "./proposalId.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import {
   DraftDeliveryFailure,
   type DraftDeliveryDependencies,
@@ -105,6 +107,27 @@ export interface DraftRemoteState {
   readonly pullRequest: GitPullRequestIdentity | undefined;
 }
 
+function recordDraftBaseRead(
+  options: DraftDeliveryDependencies,
+  context: DraftDeliveryRunContext,
+  binding: DraftDeliveryBinding,
+  result: GitPrInspectionResult<string>,
+): void {
+  (options.execution?.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    op: "git.draft-remote.observed",
+    correlationId: context.correlationId,
+    level: result.ok ? "debug" : "warn",
+    extra: {
+      runId: context.runId,
+      phase: "base-read",
+      state: result.ok ? "observed" : "unavailable",
+      reason: result.ok ? "completed" : result.reason,
+      baseMatchesExpected: result.ok && result.value === binding.baseSha,
+    },
+  });
+}
+
 export async function readDraftRemoteState(
   options: DraftDeliveryDependencies,
   context: DraftDeliveryRunContext,
@@ -115,7 +138,9 @@ export async function readDraftRemoteState(
   if (adapter === undefined) throw new DraftDeliveryFailure("provider-failed");
   const input = { ownerAndRepo: binding.repository, headBranchName: binding.headRef };
   const base = await adapter.readBranchHead({ ...input, headBranchName: binding.baseRef });
-  if (!base.ok || base.value !== binding.baseSha) throw new DraftDeliveryFailure("remote-drift");
+  recordDraftBaseRead(options, context, binding, base);
+  if (!base.ok) throw new DraftDeliveryFailure("provider-failed");
+  if (base.value !== binding.baseSha) throw new DraftDeliveryFailure("remote-drift");
   const head = await adapter.readBranchHead(input);
   if (!head.ok && head.reason !== "not-found") throw new DraftDeliveryFailure("provider-failed");
   const list = await adapter.findPullRequestsByHead(input);

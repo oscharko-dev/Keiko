@@ -35,6 +35,12 @@ import type {
   CodingRuntimeSnapshot,
   CodingRuntimeSnapshotStore,
 } from "./codingRuntimeSnapshotStore.js";
+import {
+  DRAFT_DELIVERY_RECOVERY_MAX_PREDECESSORS,
+  draftDeliveryLineageRecord,
+  localDraftDeliverySource,
+  sameDraftRecoveryTask,
+} from "./codingRuntimeDraftDeliverySource.js";
 import { reviewableResearchAsk } from "./researchApprovalIssuance.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import { isIdentityProofFailure } from "../task-workspace/errors.js";
@@ -312,6 +318,7 @@ function recordRuntimeRunStarted(
   activityLog: ServerLogSink | undefined,
   snapshot: CodingRuntimeSnapshot,
   effectiveMode: CodingWorkbenchMode,
+  predecessorSelectionReason: PredecessorSelectionReason,
 ): void {
   activityLog?.write({
     category: "process",
@@ -326,8 +333,43 @@ function recordRuntimeRunStarted(
       runtimeSource: snapshot.runtimeSource,
       modelSource: snapshot.modelSource,
       hasPredecessor: snapshot.predecessorRunId !== undefined,
+      predecessorSelectionReason,
     },
   });
+}
+
+type PredecessorSelectionReason =
+  | "acknowledged-recovery"
+  | "failed-successor-lineage"
+  | "historical-local-draft"
+  | "no-bounded-lineage";
+
+interface PredecessorSelection {
+  readonly snapshot: CodingRuntimeSnapshot;
+  readonly reason: PredecessorSelectionReason;
+}
+
+function eligibleFailedLineageCandidate(
+  snapshot: CodingRuntimeSnapshot,
+  candidate: CodingRuntimeSnapshot | undefined,
+): candidate is CodingRuntimeSnapshot & { readonly predecessorRunId: string } {
+  if (candidate === undefined) return false;
+  return (
+    candidate.state === "failed" &&
+    candidate.terminalAt !== undefined &&
+    candidate.predecessorRunId !== undefined &&
+    sameDraftRecoveryTask(snapshot, candidate)
+  );
+}
+
+function isAcknowledgedDraftLineage(
+  lineage: ReturnType<typeof draftDeliveryLineageRecord>,
+): boolean {
+  return (
+    lineage?.snapshot.state === "recovery-required" &&
+    lineage.snapshot.terminalAt !== undefined &&
+    lineage.snapshot.recoveryAcknowledgedAt !== undefined
+  );
 }
 
 function recordRuntimeApprovalWaiting(
@@ -1388,7 +1430,7 @@ export class CodingRuntimeOrchestrator {
     );
     if (!resolved.ok) return this.fail(resolved.failureCode);
     const launch = resolved.launch;
-    const snapshot = this.buildStartSnapshot(
+    const initialSnapshot = this.buildStartSnapshot(
       parsed.value,
       active,
       principal,
@@ -1397,16 +1439,81 @@ export class CodingRuntimeOrchestrator {
       predecessorRunId,
       issue.binding,
     );
+    const selection = this.selectStartPredecessor(initialSnapshot, predecessorRunId);
+    const snapshot = selection.snapshot;
     this.deps.snapshots.create(snapshot);
     this.activeRunId = runId;
     this.settledRunId = undefined;
     this.activeEffectiveMode = launch.effectiveMode;
-    recordRuntimeRunStarted(this.deps.activityLog, snapshot, launch.effectiveMode);
+    recordRuntimeRunStarted(
+      this.deps.activityLog,
+      snapshot,
+      launch.effectiveMode,
+      selection.reason,
+    );
     if (predecessorRunId !== undefined) this.settlePredecessorRecovery(predecessorRunId);
     this.projection.publish(snapshot);
     const started = await this.startManagedRuntime(parsed.value, active, runId, launch);
     if (started !== undefined) return started;
     return this.runInitialTurn(parsed.value, runId, issue.attachment);
+  }
+
+  private selectStartPredecessor(
+    snapshot: CodingRuntimeSnapshot,
+    requested: string | undefined,
+  ): PredecessorSelection {
+    if (requested !== undefined) return { snapshot, reason: "acknowledged-recovery" };
+    const failed = this.failedSuccessorLineagePredecessor(snapshot);
+    if (failed !== undefined)
+      return {
+        snapshot: { ...snapshot, predecessorRunId: failed },
+        reason: "failed-successor-lineage",
+      };
+    const historical = this.uniqueHistoricalDraftPredecessor(snapshot);
+    return historical === undefined
+      ? { snapshot, reason: "no-bounded-lineage" }
+      : {
+          snapshot: { ...snapshot, predecessorRunId: historical },
+          reason: "historical-local-draft",
+        };
+  }
+
+  private failedSuccessorLineagePredecessor(snapshot: CodingRuntimeSnapshot): string | undefined {
+    const candidate =
+      this.settledRunId === undefined ? undefined : this.deps.snapshots.get(this.settledRunId);
+    if (!eligibleFailedLineageCandidate(snapshot, candidate)) return undefined;
+    const lineage = draftDeliveryLineageRecord(candidate, (runId) =>
+      this.deps.snapshots.get(runId),
+    );
+    if (!isAcknowledgedDraftLineage(lineage) || lineage === undefined) return undefined;
+    const source = this.deps.snapshots.getLastSuccessfulVerifiedCommit(lineage.snapshot.runId);
+    return localDraftDeliverySource(lineage.snapshot, lineage.record, source) === undefined
+      ? undefined
+      : candidate.runId;
+  }
+
+  private uniqueHistoricalDraftPredecessor(snapshot: CodingRuntimeSnapshot): string | undefined {
+    const matches = this.deps.snapshots
+      .listAll(DRAFT_DELIVERY_RECOVERY_MAX_PREDECESSORS)
+      .filter((candidate) => this.isHistoricalDraftPredecessor(snapshot, candidate));
+    return matches.length === 1 ? matches[0]?.runId : undefined;
+  }
+
+  private isHistoricalDraftPredecessor(
+    snapshot: CodingRuntimeSnapshot,
+    candidate: CodingRuntimeSnapshot,
+  ): boolean {
+    const draft = candidate.draftDelivery;
+    if (
+      draft?.pullRequest === undefined ||
+      candidate.state !== "recovery-required" ||
+      candidate.terminalAt === undefined ||
+      candidate.recoveryAcknowledgedAt === undefined ||
+      !sameDraftRecoveryTask(snapshot, candidate)
+    )
+      return false;
+    const source = this.deps.snapshots.getLastSuccessfulVerifiedCommit(candidate.runId);
+    return localDraftDeliverySource(candidate, draft, source) !== undefined;
   }
 
   private admitIssue(

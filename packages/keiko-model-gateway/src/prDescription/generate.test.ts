@@ -44,6 +44,29 @@ const REQUEST: PrDescriptionRequest = {
   authority: { authorityDigest: sha256Hex("test authority"), correlationId: "description-test" },
 };
 
+const PROVIDER_PR_DESCRIPTION_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["summary", "keyChanges", "risks", "reviewerFocus"],
+  properties: Object.fromEntries(
+    ["summary", "keyChanges", "risks", "reviewerFocus"].map((key) => [
+      key,
+      {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["text", "evidenceIds"],
+          properties: {
+            text: { type: "string" },
+            evidenceIds: { type: "array", items: { type: "string" } },
+          },
+        },
+      },
+    ]),
+  ),
+};
+
 function entry(index: number): GitChangeSnapshotEntry {
   const fields = {
     kind: "modify" as const,
@@ -250,6 +273,16 @@ describe("production Gateway PR narrative composition", () => {
       expect(payloads).toHaveLength(1);
       expect(payloads[0]).not.toHaveProperty("tools");
       expect(Object.hasOwn(payloads[0] ?? {}, "response_format")).toBe(structuredOutput);
+      if (structuredOutput) {
+        expect(payloads[0]?.response_format).toEqual({
+          type: "json_schema",
+          json_schema: {
+            name: "keiko_pr_description_v1",
+            strict: true,
+            schema: PROVIDER_PR_DESCRIPTION_SCHEMA,
+          },
+        });
+      }
     },
   );
 
@@ -265,6 +298,13 @@ describe("production Gateway PR narrative composition", () => {
     expect(setup.calls).toHaveLength(1);
     expect(setup.calls[0]?.toolCatalog).toBeUndefined();
     expect(setup.calls[0]?.responseFormat?.type === "json_schema").toBe(flags.enforced);
+    expect(
+      setup.events.find((event) => event.op === "pr-description.model.started")?.extra,
+    ).toMatchObject({
+      structuredOutput: flags.enforced,
+      responseSchemaProfile: flags.enforced ? "openai-strict-compatible-v1" : "none",
+      responseSchemaOmittedKeywordCount: flags.enforced ? 6 : 0,
+    });
     if (result.status !== "generated") throw new Error("Missing fixture artifact");
     expect(result.artifact.outcome).toBe("complete");
     expect(result.artifact.binding.snapshotDigest).toBe(setup.source.snapshot.snapshotDigest);

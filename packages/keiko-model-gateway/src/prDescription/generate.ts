@@ -29,6 +29,8 @@ import {
 import { prDescriptionChunks, validPrDescriptionSnapshot } from "./evidence.js";
 import {
   buildPrDescriptionModelRequest,
+  PR_DESCRIPTION_RESPONSE_SCHEMA_OMITTED_KEYWORD_COUNT,
+  PR_DESCRIPTION_RESPONSE_SCHEMA_PROFILE,
   prDescriptionRequestCost,
   validatePrDescriptionResponse,
 } from "./model.js";
@@ -146,6 +148,12 @@ async function executeCall(
     extra: {
       callCount: generation.calls,
       structuredOutput: call.responseFormat !== undefined,
+      responseSchemaProfile:
+        call.responseFormat === undefined ? "none" : PR_DESCRIPTION_RESPONSE_SCHEMA_PROFILE,
+      responseSchemaOmittedKeywordCount:
+        call.responseFormat === undefined
+          ? 0
+          : PR_DESCRIPTION_RESPONSE_SCHEMA_OMITTED_KEYWORD_COUNT,
       inputBytes: generation.inputBytes,
     },
   });
