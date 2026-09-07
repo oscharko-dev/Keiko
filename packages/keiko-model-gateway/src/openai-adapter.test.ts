@@ -52,6 +52,25 @@ function adapterWith(fetchImpl: typeof fetch): OpenAiAdapter {
   });
 }
 
+function responseThatAbortsAfterChunk(chunk: string, abort: () => void): Response {
+  let readCount = 0;
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      pull(controller): void {
+        if (readCount === 0) {
+          controller.enqueue(new TextEncoder().encode(chunk));
+        } else {
+          abort();
+          controller.error(new DOMException("response body aborted", "AbortError"));
+        }
+        readCount += 1;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  return new Response(stream, { status: 200 });
+}
+
 describe("OpenAiAdapter.call", () => {
   it("returns a NormalizedResponse on a 200 with correct modelId and usage", async () => {
     const adapter = adapterWith(() =>
@@ -358,6 +377,61 @@ describe("OpenAiAdapter.call", () => {
     await expect(
       adapter.call({ ...REQUEST, cancellationSignal: deadline.signal }, CONFIG),
     ).rejects.toBeInstanceOf(TimeoutError);
+  });
+
+  it("preserves the first abort cause when cancellation follows the provider deadline", async () => {
+    const cancellation = new AbortController();
+    const adapter = adapterWith((_url, init) => {
+      const signal = init?.signal;
+      if (signal === undefined || signal === null) {
+        return Promise.reject(new Error("expected a dispatch signal"));
+      }
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => {
+            cancellation.abort();
+            queueMicrotask(() => {
+              reject(new DOMException("request aborted", "AbortError"));
+            });
+          },
+          { once: true },
+        );
+      });
+    });
+
+    await expect(
+      adapter.call(
+        { ...REQUEST, cancellationSignal: cancellation.signal },
+        { ...CONFIG, timeoutMs: 1 },
+      ),
+    ).rejects.toBeInstanceOf(TimeoutError);
+  });
+
+  it.each([
+    {
+      label: "deadline",
+      reason: new DOMException("deadline exceeded", "TimeoutError"),
+      expected: TimeoutError,
+    },
+    {
+      label: "operator cancellation",
+      reason: new DOMException("operator cancelled", "AbortError"),
+      expected: CancelledError,
+    },
+  ])("classifies a $label while reading a buffered body", async ({ reason, expected }) => {
+    const cancellation = new AbortController();
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        responseThatAbortsAfterChunk("{", () => {
+          cancellation.abort(reason);
+        }),
+      ),
+    );
+
+    await expect(
+      adapter.call({ ...REQUEST, cancellationSignal: cancellation.signal }, CONFIG),
+    ).rejects.toBeInstanceOf(expected);
   });
 
   it("never includes the raw response body verbatim in a thrown error", async () => {
@@ -999,6 +1073,40 @@ describe("OpenAiAdapter.callStream", () => {
     await expect(collectStream(adapter.callStream(REQUEST, CONFIG))).rejects.toBeInstanceOf(
       TransportError,
     );
+  });
+
+  it.each([
+    {
+      label: "deadline",
+      reason: new DOMException("deadline exceeded", "TimeoutError"),
+      expected: TimeoutError,
+    },
+    {
+      label: "operator cancellation",
+      reason: new DOMException("operator cancelled", "AbortError"),
+      expected: CancelledError,
+    },
+  ])("classifies a $label after streamed usage", async ({ reason, expected }) => {
+    const cancellation = new AbortController();
+    const response = responseThatAbortsAfterChunk(usageLine(41, 7), () => {
+      cancellation.abort(reason);
+    });
+    const adapter = adapterWith(() => Promise.resolve(response));
+
+    let thrown: unknown;
+    try {
+      await collectStream(
+        adapter.callStream({ ...REQUEST, cancellationSignal: cancellation.signal }, CONFIG),
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(expected);
+    expect((thrown as GatewayError).partialUsage).toEqual({
+      promptTokens: 41,
+      completionTokens: 7,
+      streamedChars: 0,
+    });
   });
 });
 

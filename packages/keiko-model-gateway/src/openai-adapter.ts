@@ -159,6 +159,11 @@ interface ChatRequestBody {
   readonly stream_options?: { readonly include_usage: boolean };
 }
 
+interface DispatchedResponse {
+  readonly response: Response;
+  readonly signal: AbortSignal;
+}
+
 // GEN-AI-GATEWAY-002 (RB-4): honor Azure deployment routing for chat providers instead of silently
 // misrouting an Azure-configured provider to the OpenAI-compatible path. Mirrors the voice adapters'
 // joinAzureDeploymentUrl. `apiVersion` is guaranteed present for the azure style by config-time
@@ -635,16 +640,17 @@ export class OpenAiAdapter implements ProviderAdapter {
     }
     const start = this.now();
     const catalog = createGatewayToolCatalogBridge(request, this.now, this.log);
-    const response = await this.dispatch(
+    const dispatched = await this.dispatch(
       { ...request, tools: catalog.tools.length === 0 ? undefined : catalog.tools },
       config,
       secrets,
     );
+    const { response } = dispatched;
     if (!response.ok) {
-      const errorPayload = await this.readErrorBody(response);
+      const errorPayload = await this.readErrorBody(response, config, secrets, dispatched.signal);
       mapHttpError(response, config.modelId, secrets, errorPayload);
     }
-    const payload = await this.readBody(response, config, secrets);
+    const payload = await this.readBody(response, config, secrets, dispatched.signal);
     const normalized = normalizeChatResponse(
       payload,
       config.modelId,
@@ -686,14 +692,15 @@ export class OpenAiAdapter implements ProviderAdapter {
     }
     const start = this.now();
     const catalog = createGatewayToolCatalogBridge(request, this.now, this.log);
-    const response = await this.dispatch(
+    const dispatched = await this.dispatch(
       { ...request, tools: catalog.tools.length === 0 ? undefined : catalog.tools },
       config,
       secrets,
       true,
     );
+    const { response } = dispatched;
     if (!response.ok) {
-      const errorPayload = await this.readErrorBody(response);
+      const errorPayload = await this.readErrorBody(response, config, secrets, dispatched.signal);
       mapHttpError(response, config.modelId, secrets, errorPayload);
     }
     const acc: StreamAccumulator = {
@@ -704,7 +711,13 @@ export class OpenAiAdapter implements ProviderAdapter {
       usageReported: false,
       toolCalls: new Map(),
     };
-    for await (const token of this.streamDeltas(response, config, secrets, acc)) {
+    for await (const token of this.streamDeltas(
+      response,
+      config,
+      secrets,
+      acc,
+      dispatched.signal,
+    )) {
       yield { type: "delta", token };
     }
     const assembled = this.assembleResponse(config, start, acc);
@@ -724,6 +737,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     config: ModelProviderConfig,
     secrets: readonly string[],
     acc: StreamAccumulator,
+    signal: AbortSignal,
   ): AsyncGenerator<string> {
     const buffer = { pending: "" };
     const activeSecrets = configuredSecrets(secrets);
@@ -737,7 +751,7 @@ export class OpenAiAdapter implements ProviderAdapter {
       }
       yield* flushPendingBuffer(buffer, secrets);
     } catch (error) {
-      throw this.withPartialUsage(this.mapStreamError(error, config, secrets), acc);
+      throw this.withPartialUsage(this.mapStreamError(error, config, secrets, signal), acc);
     }
   }
 
@@ -788,9 +802,13 @@ export class OpenAiAdapter implements ProviderAdapter {
     error: unknown,
     config: ModelProviderConfig,
     secrets: readonly string[],
+    signal: AbortSignal,
   ): Error {
     if (error instanceof CancelledError || error instanceof TimeoutError) {
       return error;
+    }
+    if (signal.aborted) {
+      return requestAbortError(signal, config.modelId, secrets, "while reading stream");
     }
     if (error instanceof SseIdleTimeoutError) {
       return new TimeoutError(
@@ -812,7 +830,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     config: ModelProviderConfig,
     secrets: readonly string[],
     stream = false,
-  ): Promise<Response> {
+  ): Promise<DispatchedResponse> {
     const timeoutSignal = AbortSignal.timeout(config.timeoutMs);
     const cancel = request.cancellationSignal;
     const signal = cancel ? AbortSignal.any([timeoutSignal, cancel]) : timeoutSignal;
@@ -833,7 +851,7 @@ export class OpenAiAdapter implements ProviderAdapter {
       stream,
     });
     try {
-      return await gatewayFetch(url, {
+      const response = await gatewayFetch(url, {
         method: "POST",
         headers,
         body,
@@ -842,27 +860,24 @@ export class OpenAiAdapter implements ProviderAdapter {
         log: this.log,
         ...(config.egress !== undefined ? { egress: config.egress } : {}),
       });
+      return { response, signal };
     } catch (error) {
-      throw this.mapDispatchError(error, config, cancel, timeoutSignal, secrets);
+      throw this.mapDispatchError(error, config, signal, secrets);
     }
   }
 
   private mapDispatchError(
     error: unknown,
     config: ModelProviderConfig,
-    cancel: AbortSignal | undefined,
-    timeout: AbortSignal,
+    signal: AbortSignal,
     secrets: readonly string[],
   ): Error {
-    if (cancel?.aborted === true) {
-      return requestAbortError(cancel, config.modelId, secrets);
+    if (signal.aborted) {
+      return requestAbortError(signal, config.modelId, secrets);
     }
     const egressError = mapOutboundEgressError(error, secrets);
     if (egressError !== undefined) {
       return egressError;
-    }
-    if (timeout.aborted) {
-      return new TimeoutError(`request for '${config.modelId}' timed out`, secrets);
     }
     if (error instanceof DOMException && error.name === "TimeoutError") {
       return new TimeoutError(`request for '${config.modelId}' timed out`, secrets);
@@ -874,18 +889,30 @@ export class OpenAiAdapter implements ProviderAdapter {
     response: Response,
     config: ModelProviderConfig,
     secrets: readonly string[],
+    signal: AbortSignal,
   ): Promise<unknown> {
     try {
       return await readJsonCapped(response);
     } catch {
+      if (signal.aborted) {
+        throw requestAbortError(signal, config.modelId, secrets, "while reading body");
+      }
       throw new TransportError(`provider sent an unreadable body for '${config.modelId}'`, secrets);
     }
   }
 
-  private async readErrorBody(response: Response): Promise<unknown> {
+  private async readErrorBody(
+    response: Response,
+    config: ModelProviderConfig,
+    secrets: readonly string[],
+    signal: AbortSignal,
+  ): Promise<unknown> {
     try {
       return await readJsonCapped(response);
     } catch {
+      if (signal.aborted) {
+        throw requestAbortError(signal, config.modelId, secrets, "while reading error body");
+      }
       return null;
     }
   }

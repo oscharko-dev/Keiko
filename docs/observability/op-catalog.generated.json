@@ -498,7 +498,7 @@
     {
       "op": "chat.request.dispatch",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:827",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:845",
       "package": "keiko-model-gateway"
     },
     {
