@@ -100,6 +100,7 @@ const REQUIRED_CI_COMMANDS = [
   "npm run test:coverage:ui",
   // Browser release proof.
   "npm run test:e2e:smoke",
+  "npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage",
   "npm run test:e2e:editor-debugging-2348",
   // Performance e2e evidence + freshness/budget gate (Step 07, GEN-TEST-E2E-001).
   "npm run test:e2e:workspace-perf",

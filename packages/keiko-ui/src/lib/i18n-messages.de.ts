@@ -1159,6 +1159,8 @@ export const DE_MESSAGES = {
   "updates.primary.current": "Kein Update verfügbar. Du kannst jederzeit erneut prüfen.",
   "updates.primary.unavailable":
     "Update-Verfügbarkeit konnte nicht geprüft werden. Prüfe erneut, wenn die Registry erreichbar ist.",
+  "updates.primary.claimUnavailable":
+    "Prüfe das Update erneut, bevor du installierst. Keiko benötigt eine neue, serverseitig bestätigte Update-Freigabe.",
   "updates.primary.releaseUnavailable":
     "Keiko kann die Update-Download-Informationen gerade nicht prüfen. Nutze diese Version weiter und prüfe später erneut.",
   "updates.primary.portableSetupRequired":
@@ -1212,6 +1214,8 @@ export const DE_MESSAGES = {
   "updates.check.manualStillRequired":
     "Manuelle Installation steht noch aus. Folge den freigegebenen manuellen Anweisungen, starte Keiko neu und prüfe erneut.",
   "updates.check.manualInstalled": "Update installiert. Keiko läuft jetzt mit {version}.",
+  "updates.reconnecting":
+    "Verbindung zum lokalen Keiko-Backend wird wiederhergestellt. Der letzte sichere Update-Fortschritt wird weiter angezeigt.",
   "updates.action.runRemediation": "Aktion ausführen",
   "updates.action.runDeferred": "Jetzt ausführen",
   "updates.action.defer": "Aufschieben",

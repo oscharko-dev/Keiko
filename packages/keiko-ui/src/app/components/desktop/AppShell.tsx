@@ -869,7 +869,7 @@ function AppShellInner(): ReactNode {
       if (!active) return;
       cleanup = subscribeShellShortcutState(shortcutRoot, setShellShortcutState);
     });
-    return () => {
+    return (): void => {
       active = false;
       cleanup?.();
     };
@@ -900,7 +900,7 @@ function AppShellInner(): ReactNode {
   useEffect(() => {
     if (sourceConnectionNotice === null) return undefined;
     const timer = window.setTimeout(() => setSourceConnectionNotice(null), 10_000);
-    return () => window.clearTimeout(timer);
+    return (): void => window.clearTimeout(timer);
   }, [sourceConnectionNotice]);
   const rejectForLimit = useCallback(
     (connectedCount: number, cap: number): false => {
@@ -1275,7 +1275,7 @@ function AppShellInner(): ReactNode {
       setCameraSmoothness(typeof detail === "number" ? detail : 0);
     };
     window.addEventListener(WORKSPACE_CAMERA_SMOOTHNESS_EVENT, onCameraSmoothness);
-    return () => {
+    return (): void => {
       window.removeEventListener(WORKSPACE_CAMERA_SMOOTHNESS_EVENT, onCameraSmoothness);
     };
   }, []);
@@ -1608,7 +1608,7 @@ function AppShellInner(): ReactNode {
     window.addEventListener("pointerdown", setPointerModality, true);
     window.addEventListener("mousedown", setPointerModality, true);
     window.addEventListener("keydown", setKeyboardModality, true);
-    return () => {
+    return (): void => {
       window.removeEventListener("pointerdown", setPointerModality, true);
       window.removeEventListener("mousedown", setPointerModality, true);
       window.removeEventListener("keydown", setKeyboardModality, true);

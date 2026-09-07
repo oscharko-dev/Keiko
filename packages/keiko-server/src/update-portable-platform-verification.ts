@@ -8,7 +8,7 @@ import {
   resolveWindowsAuthenticodeSystem,
   type WindowsAuthenticodeSystem,
   type WindowsAuthenticodeSystemOptions,
-  windowsAuthenticodeIdentityScript,
+  windowsAuthenticodePublisherIdentityScript,
 } from "./coding-runtime/windowsPortableAuthenticode.js";
 
 const VERIFY_TIMEOUT_MS = 30_000;
@@ -115,12 +115,25 @@ function requireCurrentPath(path: string | undefined): string {
   return path;
 }
 
-function windowsSignerIdentity(output: string): string {
-  const identity = output.trim().toUpperCase();
-  if (!/^[A-F0-9]{40}$/u.test(identity)) {
+interface WindowsPublisherIdentity {
+  readonly subscriberEku: string;
+  readonly rootThumbprint: string;
+}
+
+function windowsSignerIdentity(output: string): WindowsPublisherIdentity {
+  const [subscriberEku, rootThumbprint, leafThumbprint, ...extra] = output.trim().split("|");
+  if (
+    extra.length > 0 ||
+    subscriberEku === undefined ||
+    !/^1\.3\.6\.1\.4\.1\.311\.97\.[0-9]+(?:\.[0-9]+)*$/u.test(subscriberEku) ||
+    rootThumbprint === undefined ||
+    !/^[A-F0-9]{40,128}$/u.test(rootThumbprint) ||
+    leafThumbprint === undefined ||
+    !/^[A-F0-9]{40,128}$/u.test(leafThumbprint)
+  ) {
     throw verifierUnavailable("windows portable signer identity is unavailable");
   }
-  return identity;
+  return { subscriberEku, rootThumbprint };
 }
 
 function macosTeamIdentifier(output: string): string {
@@ -138,12 +151,24 @@ function assertSameSignerIdentity(staged: string, current: string): void {
   }
 }
 
+function assertSameWindowsPublisher(
+  staged: WindowsPublisherIdentity,
+  current: WindowsPublisherIdentity,
+): void {
+  if (
+    staged.subscriberEku !== current.subscriberEku ||
+    staged.rootThumbprint !== current.rootThumbprint
+  ) {
+    throw verifierUnavailable("portable signer identity does not match the active install");
+  }
+}
+
 async function verifyWindowsPath(
   path: string,
   signal: AbortSignal | undefined,
   commandRunner: PlatformCommandRunner,
   system: WindowsAuthenticodeSystem,
-): Promise<string> {
+): Promise<WindowsPublisherIdentity> {
   const output = await commandRunner(
     system.command,
     [
@@ -151,7 +176,7 @@ async function verifyWindowsPath(
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      windowsAuthenticodeIdentityScript(),
+      windowsAuthenticodePublisherIdentityScript(),
       path,
     ],
     system.env,
@@ -166,14 +191,14 @@ async function verifyWindows(
   systemOptions: WindowsAuthenticodeSystemOptions | undefined,
 ): Promise<void> {
   const system = resolveWindowsAuthenticodeSystem(systemOptions);
-  const staged = await verifyWindowsPath(input.launcherPath, input.signal, commandRunner, system);
+  const staged = await verifyWindowsPath(input.stagedRoot, input.signal, commandRunner, system);
   const current = await verifyWindowsPath(
     requireCurrentPath(input.currentLauncherPath),
     input.signal,
     commandRunner,
     system,
   );
-  assertSameSignerIdentity(staged, current);
+  assertSameWindowsPublisher(staged, current);
 }
 
 async function verifyMacosBundle(

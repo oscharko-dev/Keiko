@@ -35,13 +35,14 @@ type CommandCallRecorder = (
   signal: AbortSignal | undefined,
 ) => Promise<string>;
 
-const WINDOWS_SIGNER = "A".repeat(40);
+const WINDOWS_ROOT = "C".repeat(40);
+const WINDOWS_PUBLISHER = `1.3.6.1.4.1.311.97.12345|${WINDOWS_ROOT}|${"A".repeat(40)}`;
 const MACOS_TEAM_OUTPUT = "TeamIdentifier=ABCDE12345\n";
 
 describe("portable platform verification", () => {
   it("runs local Authenticode verification for Windows launchers", async () => {
     const trustedRoot = String.raw`D:\Windows`;
-    const recorder = commandRecorder(() => WINDOWS_SIGNER);
+    const recorder = commandRecorder(() => WINDOWS_PUBLISHER);
     const verifier = createPortablePlatformVerifier({
       hostPlatform: "win32",
       runCommand: recorder.run,
@@ -65,7 +66,7 @@ describe("portable platform verification", () => {
       String.raw`D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
     ]);
     expect(recorder.calls[0]?.args.join(" ")).toContain("Get-AuthenticodeSignature");
-    expect(recorder.calls[0]?.args.at(-1)).toBe("C:\\Users\\keiko\\Keiko.exe");
+    expect(recorder.calls[0]?.args.at(-1)).toBe("C:\\Users\\keiko\\stage");
     expect(recorder.calls[1]?.args.at(-1)).toBe("C:\\Users\\keiko\\current\\Keiko.exe");
     expect(recorder.calls.map((call) => call.env)).toEqual([
       {
@@ -84,7 +85,7 @@ describe("portable platform verification", () => {
   });
 
   it("rejects a hostile Windows system root before invoking the command runner", async () => {
-    const recorder = commandRecorder(() => WINDOWS_SIGNER);
+    const recorder = commandRecorder(() => WINDOWS_PUBLISHER);
     const verifier = createPortablePlatformVerifier({
       hostPlatform: "win32",
       runCommand: recorder.run,
@@ -156,7 +157,9 @@ describe("portable platform verification", () => {
 
   it("fails closed when staged and active signer identities differ", async () => {
     const recorder = commandRecorder((call) =>
-      call.args.at(-1)?.includes("current") === true ? "B".repeat(40) : WINDOWS_SIGNER,
+      call.args.at(-1)?.includes("current") === true
+        ? `1.3.6.1.4.1.311.97.99999|${WINDOWS_ROOT}|${"B".repeat(40)}`
+        : WINDOWS_PUBLISHER,
     );
     const verifier = createPortablePlatformVerifier({
       hostPlatform: "win32",
@@ -171,6 +174,28 @@ describe("portable platform verification", () => {
         currentLauncherPath: "C:\\Users\\keiko\\current\\Keiko.exe",
       }),
     ).rejects.toMatchObject({ reason: "portable-verification-failed" });
+    expect(recorder.calls).toHaveLength(2);
+  });
+
+  it("accepts a rotated Azure leaf when the verified durable publisher identity is unchanged", async () => {
+    const recorder = commandRecorder((call) =>
+      call.args.at(-1)?.includes("current") === true
+        ? `1.3.6.1.4.1.311.97.12345|${WINDOWS_ROOT}|${"B".repeat(40)}`
+        : WINDOWS_PUBLISHER,
+    );
+    const verifier = createPortablePlatformVerifier({
+      hostPlatform: "win32",
+      runCommand: recorder.run,
+    });
+
+    await expect(
+      verifier({
+        target: "windows-x64",
+        stagedRoot: "C:\\Users\\keiko\\stage-with-new-leaf",
+        launcherPath: "C:\\Users\\keiko\\stage-with-new-leaf\\Keiko.exe",
+        currentLauncherPath: "C:\\Users\\keiko\\current-with-old-leaf\\Keiko.exe",
+      }),
+    ).resolves.toBeUndefined();
     expect(recorder.calls).toHaveLength(2);
   });
 

@@ -16,10 +16,11 @@ import {
   fetchUpdateRemediationStatus,
   fetchUpdateSessionStatus,
   prepareUpdateRemediationStatus,
-  retryUpdateSession,
   runUpdateRemediationAction,
   startUpdateSession,
   verifyUpdateRestart,
+  ApiError,
+  type UpdateSessionClaimRequest,
 } from "@/lib/api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type {
@@ -65,7 +66,6 @@ export interface UpdateWindowApi {
   readonly checkPreflight: () => Promise<UpdatePreflightReport>;
   readonly fetchSessionStatus: () => Promise<UpdateSessionStatus>;
   readonly startSession: typeof startUpdateSession;
-  readonly retrySession: typeof retryUpdateSession;
   readonly cancelSession: typeof cancelUpdateSession;
   readonly verifyRestart: typeof verifyUpdateRestart;
   readonly fetchRemediationStatus: () => Promise<UpdateRemediationStatusReport>;
@@ -87,8 +87,7 @@ type LoadState =
     }
   | { readonly status: "error"; readonly message: string };
 
-type BusyAction =
-  "checking" | "starting" | "retrying" | "cancelling" | "restart" | "remediation" | undefined;
+type BusyAction = "checking" | "starting" | "cancelling" | "restart" | "remediation" | undefined;
 
 type ManualInstallDisplayState = "standard" | "verified";
 type ManualCopyState = "idle" | "pressed" | "copied" | "selected" | "failed";
@@ -96,13 +95,13 @@ type ManualCopyResult = Exclude<ManualCopyState, "idle" | "pressed" | "failed">;
 
 const COPY_PRESSED_RESET_MS = 240;
 const COPY_FEEDBACK_RESET_MS = 900;
+const POLL_DELAYS_MS = [2_500, 5_000, 10_000, 20_000] as const;
 
 const DEFAULT_API: UpdateWindowApi = {
   fetchPreflight: fetchStartupUpdatePreflight,
   checkPreflight: checkUpdatePreflight,
   fetchSessionStatus: fetchUpdateSessionStatus,
   startSession: startUpdateSession,
-  retrySession: retryUpdateSession,
   cancelSession: cancelUpdateSession,
   verifyRestart: verifyUpdateRestart,
   fetchRemediationStatus: fetchUpdateRemediationStatus,
@@ -113,6 +112,29 @@ const DEFAULT_API: UpdateWindowApi = {
 function errorMessage(error: unknown, t: I18nTranslate): string {
   if (error instanceof Error && error.message.trim().length > 0) return error.message;
   return t("updates.error.load");
+}
+
+function isTransientPollFailure(error: unknown): boolean {
+  if (error instanceof ApiError) {
+    if (error.code === "STARTUP_RECOVERY_PENDING") return true;
+    return error.code === "INTERNAL" && [502, 503, 504].includes(error.status);
+  }
+  if (error instanceof TypeError) return true;
+  return (
+    typeof DOMException !== "undefined" &&
+    error instanceof DOMException &&
+    (error.name === "AbortError" || error.name === "TimeoutError")
+  );
+}
+
+function candidateRequest(report: UpdatePreflightReport): UpdateSessionClaimRequest | undefined {
+  const candidate = report.candidate;
+  if (candidate === undefined || candidate.targetVersion !== report.targetVersion) return undefined;
+  return {
+    candidateId: candidate.candidateId,
+    confirmationDigest: candidate.confirmationDigest,
+    executionToken: candidate.executionToken,
+  };
 }
 
 async function loadRemediation(
@@ -235,6 +257,58 @@ function copyFeedbackLabel(
   return buttonLabel;
 }
 
+function ManualInstructionCopyTarget({
+  command,
+  text,
+  targetRef,
+}: {
+  readonly command: boolean;
+  readonly text: string;
+  readonly targetRef: RefObject<HTMLElement | null>;
+}): ReactNode {
+  if (command) {
+    return (
+      <code ref={targetRef} className={styles.cmpCommandCopyCode}>
+        {text}
+      </code>
+    );
+  }
+  return (
+    <span ref={targetRef} className="upd-command-copy-text">
+      {text}
+    </span>
+  );
+}
+
+function ManualInstructionCopyButton({
+  copyState,
+  buttonLabel,
+  buttonFeedbackLabel,
+  onCopy,
+}: {
+  readonly copyState: ManualCopyState;
+  readonly buttonLabel: string;
+  readonly buttonFeedbackLabel: string;
+  readonly onCopy: () => void;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      className="upd-command-copy-btn"
+      data-copied={copyState === "copied" ? "true" : "false"}
+      data-pressed={copyState === "pressed" ? "true" : "false"}
+      data-selected={copyState === "selected" ? "true" : "false"}
+      data-failed={copyState === "failed" ? "true" : "false"}
+      aria-label={buttonLabel}
+      title={buttonFeedbackLabel}
+      onClick={onCopy}
+    >
+      <CopyIcon size={14} aria-hidden="true" />
+      <span className="sr-only">{buttonLabel}</span>
+    </button>
+  );
+}
+
 function ManualInstructionCopyFrame({
   text,
   command,
@@ -263,7 +337,7 @@ function ManualInstructionCopyFrame({
     if (copyState === "idle" || typeof window === "undefined") return;
     const resetMs = copyState === "pressed" ? COPY_PRESSED_RESET_MS : COPY_FEEDBACK_RESET_MS;
     const timer = window.setTimeout(() => setCopyState("idle"), resetMs);
-    return () => window.clearTimeout(timer);
+    return (): void => window.clearTimeout(timer);
   }, [copyState]);
   const handleCopy = (): void => {
     setCopyState("pressed");
@@ -275,28 +349,14 @@ function ManualInstructionCopyFrame({
   return (
     <div className="upd-command-copy" data-kind={command ? "command" : "instruction"}>
       <strong>{frameLabel}</strong>
-      <div className="upd-command-line">
-        {command ? (
-          <code ref={copyTargetRef}>{text}</code>
-        ) : (
-          <span ref={copyTargetRef} className="upd-command-copy-text">
-            {text}
-          </span>
-        )}
-        <button
-          type="button"
-          className="upd-command-copy-btn"
-          data-copied={copyState === "copied" ? "true" : "false"}
-          data-pressed={copyState === "pressed" ? "true" : "false"}
-          data-selected={copyState === "selected" ? "true" : "false"}
-          data-failed={copyState === "failed" ? "true" : "false"}
-          aria-label={buttonLabel}
-          title={buttonFeedbackLabel}
-          onClick={handleCopy}
-        >
-          <CopyIcon size={14} aria-hidden="true" />
-          <span className="sr-only">{buttonLabel}</span>
-        </button>
+      <div className={classNames("upd-command-line", styles.cmpCommandLine)}>
+        <ManualInstructionCopyTarget command={command} text={text} targetRef={copyTargetRef} />
+        <ManualInstructionCopyButton
+          copyState={copyState}
+          buttonLabel={buttonLabel}
+          buttonFeedbackLabel={buttonFeedbackLabel}
+          onCopy={handleCopy}
+        />
         <span className="sr-only" role="status" aria-live="polite">
           {copyStatusLabel}
         </span>
@@ -371,14 +431,34 @@ function primaryActionTextForSession(
   remediation: UpdateRemediationStatusReport,
   t: I18nTranslate,
 ): string | undefined {
-  if (visibleSession?.phase === "succeeded" && !remediation.updateCanComplete) {
-    return t("updates.primary.followUp");
+  if (visibleSession?.phase === "succeeded") {
+    return remediation.updateCanComplete
+      ? t("updates.primary.installed")
+      : t("updates.primary.followUp");
   }
-  if (visibleSession?.phase === "succeeded") return t("updates.primary.installed");
-  if (visibleSession?.phase === "cancelled") return t("updates.primary.cancelled");
-  if (visibleSession?.phase === "failed") return t("updates.primary.failed");
-  if (visibleSession?.phase === "restart-required") return t("updates.primary.restart");
+  const phase = visibleSession?.phase;
+  if (phase === "cancelled") return t("updates.primary.cancelled");
+  if (phase === "failed") return t("updates.primary.failed");
+  if (phase === "restart-required") return t("updates.primary.restart");
   return undefined;
+}
+
+function primaryActionTextForAvailableReport(
+  report: UpdatePreflightReport,
+  session: UpdateSessionStatus,
+  remediation: UpdateRemediationStatusReport,
+  t: I18nTranslate,
+): string {
+  if (isUpdateCheckUnavailable(report)) return t("updates.primary.unavailable");
+  if (report.updateAvailable && candidateRequest(report) === undefined) {
+    return t("updates.primary.claimUnavailable");
+  }
+  if (isManualUpdatePath(report, session)) return t("updates.primary.manual");
+  if (remediation.overallStatus === "manual-review-required") {
+    return t("updates.primary.manualReview");
+  }
+  if (isPortableManagedOneClickPath(report, session)) return t("updates.primary.portableAvailable");
+  return report.updateAvailable ? t("updates.primary.available") : t("updates.primary.current");
 }
 
 function primaryActionTextForPortable(
@@ -414,14 +494,7 @@ function primaryActionText(
   if (sessionText !== undefined) return sessionText;
   const portableText = primaryActionTextForPortable(report, session, t);
   if (portableText !== undefined) return portableText;
-  if (isUpdateCheckUnavailable(report)) return t("updates.primary.unavailable");
-  if (isManualUpdatePath(report, session)) return t("updates.primary.manual");
-  if (remediation.overallStatus === "manual-review-required") {
-    return t("updates.primary.manualReview");
-  }
-  if (isPortableManagedOneClickPath(report, session)) return t("updates.primary.portableAvailable");
-  if (report.updateAvailable) return t("updates.primary.available");
-  return t("updates.primary.current");
+  return primaryActionTextForAvailableReport(report, session, remediation, t);
 }
 
 function classNames(...values: readonly (string | false | undefined)[]): string {
@@ -494,35 +567,24 @@ function SummaryCard({
   );
 }
 
-function PrimaryActions({
-  report,
+function SessionPrimaryAction({
   session,
-  remediation,
   busy,
   onCheck,
-  onStart,
-  onRetry,
   onCancel,
   onVerifyRestart,
   canVerifyRestart,
 }: {
-  readonly report: UpdatePreflightReport;
-  readonly session: UpdateSessionStatus;
-  readonly remediation: UpdateRemediationStatusReport;
+  readonly session: NonNullable<ReturnType<typeof sessionForDisplay>>;
   readonly busy: BusyAction;
   readonly onCheck: () => void;
-  readonly onStart: () => void;
-  readonly onRetry: () => void;
   readonly onCancel: () => void;
   readonly onVerifyRestart: () => void;
   readonly canVerifyRestart: boolean;
 }): ReactNode {
   const t = useTranslate();
-  const visibleSession = sessionForDisplay(session, report);
   const disabled = busy !== undefined;
-  const manual = isManualUpdatePath(report, session);
-  const portableManaged = isPortableManagedOneClickPath(report, session);
-  if (visibleSession?.phase === "restart-required") {
+  if (session.phase === "restart-required") {
     return (
       <>
         <button
@@ -540,57 +602,87 @@ function PrimaryActions({
       </>
     );
   }
-  if (visibleSession?.phase === "failed" && visibleSession.retryable) {
-    return (
-      <button type="button" className="upd-primary-btn" disabled={disabled} onClick={onRetry}>
-        {t("updates.action.retry")}
-      </button>
-    );
+  if (session.phase === "failed" && session.retryable) {
+    return <UpdateCheckButton className="upd-primary-btn" disabled={disabled} onCheck={onCheck} label={t("updates.action.retry")} />;
   }
-  if (visibleSession?.phase === "succeeded" || visibleSession?.phase === "cancelled") {
-    return (
-      <button type="button" className="upd-secondary-btn" disabled={disabled} onClick={onCheck}>
-        {t("updates.action.check")}
-      </button>
-    );
+  if (session.phase === "succeeded" || session.phase === "cancelled") {
+    return <UpdateCheckButton className="upd-secondary-btn" disabled={disabled} onCheck={onCheck} label={t("updates.action.check")} />;
   }
-  if (visibleSession !== undefined && isSessionInProgress(visibleSession)) {
-    return visibleSession.cancelable ? (
-      <button type="button" className="upd-secondary-btn" disabled={disabled} onClick={onCancel}>
-        {t("updates.action.cancel")}
-      </button>
-    ) : null;
-  }
-  if (manual || !report.updateAvailable || blocksAutomaticInstall(remediation)) {
+  if (!isSessionInProgress(session) || !session.cancelable || session.lifecycle.cancellationCutoff !== "not-reached") return null;
+  return <UpdateCheckButton className="upd-secondary-btn" disabled={disabled} onCheck={onCancel} label={t("updates.action.cancel")} />;
+}
+
+function UpdateCheckButton({
+  className,
+  disabled,
+  onCheck,
+  label,
+}: {
+  readonly className: string;
+  readonly disabled: boolean;
+  readonly onCheck: () => void;
+  readonly label: string;
+}): ReactNode {
+  return <button type="button" className={className} disabled={disabled} onClick={onCheck}>{label}</button>;
+}
+
+function PrimaryActions({
+  report,
+  session,
+  remediation,
+  busy,
+  onCheck,
+  onStart,
+  onCancel,
+  onVerifyRestart,
+  canVerifyRestart,
+}: {
+  readonly report: UpdatePreflightReport;
+  readonly session: UpdateSessionStatus;
+  readonly remediation: UpdateRemediationStatusReport;
+  readonly busy: BusyAction;
+  readonly onCheck: () => void;
+  readonly onStart: () => void;
+  readonly onCancel: () => void;
+  readonly onVerifyRestart: () => void;
+  readonly canVerifyRestart: boolean;
+}): ReactNode {
+  const t = useTranslate();
+  const visibleSession = sessionForDisplay(session, report);
+  const disabled = busy !== undefined;
+  const manual = isManualUpdatePath(report, session);
+  const portableManaged = isPortableManagedOneClickPath(report, session);
+  if (visibleSession !== undefined) return <SessionPrimaryAction session={visibleSession} busy={busy} onCheck={onCheck} onCancel={onCancel} onVerifyRestart={onVerifyRestart} canVerifyRestart={canVerifyRestart} />;
+  if (
+    manual ||
+    !report.updateAvailable ||
+    blocksAutomaticInstall(remediation) ||
+    candidateRequest(report) === undefined
+  ) {
     if (manual) return null;
-    return (
-      <button type="button" className="upd-secondary-btn" disabled={disabled} onClick={onCheck}>
-        {t("updates.action.check")}
-      </button>
-    );
+    return <UpdateCheckButton className="upd-secondary-btn" disabled={disabled} onCheck={onCheck} label={t("updates.action.check")} />;
   }
-  return (
-    <button
-      type="button"
-      className="upd-primary-btn"
-      disabled={disabled || report.targetVersion === undefined}
-      onClick={onStart}
-    >
-      {portableManaged ? t("updates.action.updatePortable") : t("updates.action.install")}
-    </button>
-  );
+  return <UpdateCheckButton className="upd-primary-btn" disabled={disabled} onCheck={onStart} label={portableManaged ? t("updates.action.updatePortable") : t("updates.action.install")} />;
 }
 
 function ProgressPanel({ session }: { readonly session: ReturnType<typeof sessionForDisplay> }) {
   const t = useTranslate();
   if (session === undefined || !isSessionInProgress(session)) return null;
+  const { completedBytes, totalBytes } = session.lifecycle.progress;
+  const hasBoundedProgress = totalBytes !== undefined && totalBytes > 0;
   return (
     <section className="upd-panel" role="status" aria-live="polite">
       <div className="upd-panel-head">
         <strong>{sessionPhaseLabel(session, t)}</strong>
         <span>{session.message}</span>
       </div>
-      <progress className="upd-progress" aria-label={t("updates.progress.label")} />
+      <progress
+        className="upd-progress"
+        aria-label={t("updates.progress.label")}
+        {...(hasBoundedProgress
+          ? { max: totalBytes, value: Math.min(Math.max(completedBytes, 0), totalBytes) }
+          : {})}
+      />
     </section>
   );
 }
@@ -1449,6 +1541,8 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [busy, setBusy] = useState<BusyAction>();
   const [checkFeedback, setCheckFeedback] = useState<string>();
+  const [reconnecting, setReconnecting] = useState(false);
+  const [pollFailures, setPollFailures] = useState(0);
   const [releaseNotesReport, setReleaseNotesReport] = useState<UpdatePreflightReport>();
   const [manualInstructionsOpen, setManualInstructionsOpen] = useState(false);
   const [verifiedManualTargetVersion, setVerifiedManualTargetVersion] = useState<string>();
@@ -1457,7 +1551,8 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
   const readyStateRef = useRef<Extract<LoadState, { status: "ready" }> | undefined>(undefined);
 
   const refresh = useCallback(
-    async (manual: boolean): Promise<void> => {
+    async (source: "initial" | "manual" | "poll"): Promise<void> => {
+      const manual = source === "manual";
       setBusy(manual ? "checking" : undefined);
       setCheckFeedback(manual ? t("updates.check.checking") : undefined);
       try {
@@ -1479,6 +1574,8 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
         };
         readyStateRef.current = nextReadyState;
         setState(nextReadyState);
+        setReconnecting(false);
+        setPollFailures(0);
         applyReleaseNotesState(report, setReleaseNotesReport);
         if (manualInstallVerified) {
           applyVerifiedManualInstallState(
@@ -1493,6 +1590,18 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
           setCheckFeedback(checkFeedbackMessage(report, session, manualInstallState, t));
         }
       } catch (error) {
+        if (
+          source === "poll" &&
+          readyStateRef.current !== undefined &&
+          isTransientPollFailure(error)
+        ) {
+          // A BFF restart/relaunch disconnect is expected. Keep the last server-projected state
+          // visible and schedule another bounded observation attempt rather than fabricating an
+          // outcome or freezing the window on a stale error.
+          setReconnecting(true);
+          setPollFailures((failures) => failures + 1);
+          return;
+        }
         setCheckFeedback(undefined);
         setState({ status: "error", message: errorMessage(error, t) });
       } finally {
@@ -1503,7 +1612,7 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
   );
 
   useEffect(() => {
-    void refresh(false);
+    void refresh("initial");
   }, [refresh]);
 
   const visibleSession =
@@ -1513,11 +1622,12 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
   }, [state]);
   useEffect(() => {
     if (state.status !== "ready" || !isSessionInProgress(visibleSession)) return undefined;
-    const timer = window.setInterval(() => {
-      void refresh(false);
-    }, 2500);
-    return () => window.clearInterval(timer);
-  }, [refresh, state.status, visibleSession]);
+    const delay = POLL_DELAYS_MS[Math.min(pollFailures, POLL_DELAYS_MS.length - 1)];
+    const timer = window.setTimeout(() => {
+      void refresh("poll");
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [pollFailures, refresh, state.status, visibleSession]);
 
   useEffect(() => {
     if (state.status === "loading" || focusedRef.current) return;
@@ -1537,7 +1647,7 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
       setBusy(nextBusy);
       try {
         await action();
-        await refresh(false);
+        await refresh("initial");
       } catch (error) {
         setState({ status: "error", message: errorMessage(error, t) });
       } finally {
@@ -1545,6 +1655,34 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
       }
     },
     [refresh, t],
+  );
+
+  const startAndRefresh = useCallback(
+    async (claim: UpdateSessionClaimRequest): Promise<void> => {
+      setBusy("starting");
+      try {
+        const accepted = await api.startSession(claim);
+        const current = readyStateRef.current;
+        if (current === undefined) {
+          await refresh("initial");
+          return;
+        }
+        const acceptedState: Extract<LoadState, { status: "ready" }> = {
+          ...current,
+          session: { ...current.session, activeSession: accepted },
+        };
+        readyStateRef.current = acceptedState;
+        setState(acceptedState);
+        setReconnecting(false);
+        setPollFailures(0);
+        await refresh("poll");
+      } catch (error) {
+        setState({ status: "error", message: errorMessage(error, t) });
+      } finally {
+        setBusy(undefined);
+      }
+    },
+    [api, refresh, t],
   );
 
   if (state.status === "loading") {
@@ -1560,7 +1698,7 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
         <div className="upd-panel upd-error" role="alert">
           {state.message}
         </div>
-        <button type="button" className="upd-secondary-btn" onClick={() => void refresh(true)}>
+        <button type="button" className="upd-secondary-btn" onClick={() => void refresh("manual")}>
           {t("updates.action.check")}
         </button>
       </section>
@@ -1605,15 +1743,13 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
           session={session}
           remediation={remediation}
           busy={busy}
-          onCheck={() => void refresh(true)}
+          onCheck={() => void refresh("manual")}
           onStart={() => {
-            if (reportTargetVersion !== undefined) {
-              void runAndRefresh("starting", () =>
-                api.startSession({ targetVersion: reportTargetVersion }),
-              );
+            const claim = candidateRequest(report);
+            if (claim !== undefined) {
+              void startAndRefresh(claim);
             }
           }}
-          onRetry={() => void runAndRefresh("retrying", api.retrySession)}
           onCancel={() => void runAndRefresh("cancelling", api.cancelSession)}
           onVerifyRestart={() => {
             if (actionTargetVersion !== undefined) {
@@ -1631,6 +1767,11 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
           {checkFeedback}
         </div>
       ) : null}
+      {reconnecting ? (
+        <div className="upd-check-feedback" role="status" aria-live="polite">
+          {t("updates.reconnecting")}
+        </div>
+      ) : null}
       <ProgressPanel session={visibleSession} />
       <SessionOutcomePanel session={visibleSession} patchNotesReport={patchNotesReport} />
       <ManualPath
@@ -1639,7 +1780,7 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
         busy={busy}
         instructionsOpen={manualInstructionsOpen}
         onInstructionsOpenChange={setManualInstructionsOpen}
-        onCheck={() => void refresh(true)}
+        onCheck={() => void refresh("manual")}
       />
       <ImpactPanel report={report} remediation={remediation} />
       {shouldShowRemediation ? (

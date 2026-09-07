@@ -88,8 +88,9 @@ reviewed release-impact entry (explicitly, as `portableRuntimeArtifactContract.s
 lane as skipped rather than failed on such tags), the release notes state it together with the first-launch steps it
 implies (right-click → Open on macOS, the SmartScreen notice on Windows), and D7 is untouched —
 production signing credentials, their protected environments, and the signed-lane verification
-remain exactly as specified. When the signing subscriptions are in place, the production lane
-supersedes this status without a further amendment.
+remain exactly as specified. Available signing subscriptions do not retroactively qualify evaluation
+bytes. The production lane may replace evaluation delivery only after its native verification gates
+pass; evaluation-installed applications remain manual-only for the first production transition.
 
 Each asset must be accompanied by reviewed metadata that binds the artifact name, platform target,
 GitHub release id, release tag, asset id, asset name, size in bytes, Keiko version, bundled Node.js
@@ -173,9 +174,10 @@ separate credential-handling decision exists.
 Portable-managed installs use the existing governed updater authority rather than a parallel update
 system.
 
-The portable update path is explicit and user-confirmed. It stages the candidate archive, verifies
-the candidate, swaps it into the managed install, and relaunches. Update state, recovery snapshots,
-remediation status, and audit evidence remain content-free local runtime state.
+The portable update path is explicit and user-confirmed. It consumes ADR-0099's exact candidate
+claim, stages and verifies those immutable bytes, transfers ownership, swaps the managed install,
+and relaunches. Update state, recovery snapshots, remediation status, and canonical activity evidence
+remain bounded local runtime state.
 
 Portable update success means the new managed install is active, Keiko has relaunched, the running
 version matches the target stable release, and release-impact remediation is complete or explicitly
@@ -199,12 +201,50 @@ property. If the detected filesystem or layout cannot provide crash-safe promoti
 portable update is rejected as manual-only.
 
 On Windows, `MoveFileEx` fails with `EPERM`/`EBUSY` while any handle is open on a file in the
-tree (a transient antivirus scan of a just-extracted PE, the indexer, or an Explorer preview).
-POSIX `rename(2)` does not fail for an open destination. Atomic-publish swaps therefore retry
-those two codes with bounded backoff via the shared `atomicPublishRename` helper; they do not
-fall back to copy+delete. The promoting process also `chdir`s out of the managed tree before
-renaming it. `chdir` does not unmap `node.exe` loaded from that tree — the retry covers that
-residual lock.
+tree with incompatible sharing flags (for example, a transient scanner or an executable image).
+The existing atomic-publish helper may retry transient contention with bounded backoff; it must not
+fall back to copy+delete. Changing the working directory does not unmap the running `node.exe`, and
+retrying cannot settle a lock held by the process performing its own replacement. The old process
+must exit after a durable, acknowledged ownership transfer, before promotion begins.
+
+#### Native handoff and qualification requirements (#3405)
+
+The reviewed #3404 contract uses the current verified launcher and supervisor copied into a bounded,
+activation-specific handoff capsule outside the active, staged, and previous install trees. The
+capsule is private local control data: authenticated fixed paths and mechanical plan/receipt bytes
+are permitted there, but are never copied into API projections, activity logs, support evidence, or
+release artifacts. It is not a package backup or another update state store.
+
+The server persists semantic intent before spawning the coordinator. Native code accepts only the
+closed activation-id mode, validates the fixed plan and its authority, and acknowledges the exact
+plan digest over the inherited channel. A spawn event alone is not acceptance. Preparation remains
+cancelable; after the reviewed cutoff, uncertain failure requires recovery ownership rather than a
+new independent update. A missing coordinator capability must fail closed, never select the old
+in-process replacement path.
+
+The native coordinator executes finite mechanical steps and records hash-chained intent/completion
+receipts. It must prove old-process exit and port release before promotion, contain the new process
+tree using the existing platform supervisor, and never kill an unrelated PID. The server remains
+the sole semantic transition owner. Startup reconciles durable intent and receipts before normal
+routes become ready; exact process, launch identity, loopback port, target version, and verified tree
+must agree before success. A failed replacement may restore the previous verified tree only after
+proving the owned new process tree has stopped. Once N is verified, restart and cleanup must retain N.
+
+A recovery launch of N−1 is a new process instance with its own server-generated, plan-bound launch
+identity. It must attest the original tree and registration, then prove its own PID, version and
+loopback binding before readiness opens. Successful restoration settles a **failed update with
+recovery settled**, not a successful update, cancellation, or automatic retry. The server commits
+that result through revision-checked state; uncertain termination, incomplete restore evidence, or
+a persistence failure keeps recovery ownership. A crash between semantic verification and its
+native acknowledgement must never authorize restoration of an already verified N.
+
+These are implementation and acceptance requirements, not evidence that native qualification has
+completed. Each supported target needs a real same-port N−1→N run through the assembled application,
+failure/crash-boundary tests, and a second restart retaining N. Hermetic PR proof is distinct from
+the protected canary between two actual production-signed eligible releases. Until #2198's external
+signing prerequisites and that canary are satisfied, code may merge with explicit limits but no
+production one-click claim is permitted. Evaluation releases, including 0.3.17, remain manual-only;
+changing release metadata or a test verifier cannot make their installed bytes production trusted.
 
 Supported v1 behavior excludes:
 
@@ -468,6 +508,10 @@ Security review for implementation under this ADR must cover:
 
 ## Amendment history
 
+- **2026-09-05 — Issue #3405:** Clarified exact-candidate execution, acknowledged native handoff,
+  canonical evidence versus private control data, and the distinction between implementation proof
+  and production-signed qualification. Removed the claim that retries resolve the updater's own
+  loaded executable lock; evaluation-to-production continuity remains a manual transition.
 - **2026-07-10 — Issue #2199:** Added D7 and its security, alternatives, and operating-contract
   consequences to settle the production Windows and macOS signing trust boundary for Epic #2198.
 - **2026-07-11 — Issue #2308:** Added D8 to record GitHub Artifact Attestations (build provenance

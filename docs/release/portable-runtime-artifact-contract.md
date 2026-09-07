@@ -16,8 +16,9 @@ Governing decisions:
 ## Product Contract
 
 Portable v1 is an archive-backed delivery path for stable public releases with platform-specific
-promoted journeys. On Windows, ordinary users download and run the signed
-`keiko-windows-x64-setup.exe`; setup verifies its embedded canonical ZIP, completes first-run setup
+promoted journeys. On Windows, ordinary users download and run
+`keiko-windows-x64-setup.exe` (signed for production, explicitly unsigned for evaluation); setup
+verifies its embedded canonical ZIP, completes first-run setup
 into Keiko's per-user managed install location, and launches Keiko. On macOS, users download the
 target ZIP, extract `Keiko.app`, and double-click it to complete first-run setup into the managed app
 location. After setup, users launch Keiko from the same native app surface or OS search entry. The
@@ -41,8 +42,9 @@ portable assets as a release-blocking set:
 The release is not portable-complete when any target is missing, mislabeled, checksum-mismatched,
 unsigned, unnotarized where required, or not represented in reviewed release-impact metadata.
 
-Stable releases also publish `keiko-windows-x64-setup.exe` as an Authenticode-signed companion to
-the canonical Windows ZIP. The setup embeds that exact ZIP, installs it under the per-user managed
+Stable releases also publish `keiko-windows-x64-setup.exe` as a companion to the canonical Windows
+ZIP. Production releases require Authenticode signing; the reviewed evaluation program does not
+claim that production guarantee. The setup embeds that exact ZIP, installs it under the per-user managed
 install root, and verifies that the launched Keiko process remains healthy. If a managed Keiko
 installation already exists, setup validates and launches that installation without replacing it;
 governed in-app update remains the upgrade authority. The setup is a convenience install surface
@@ -91,7 +93,9 @@ both native-helper digests re-hashed from disk at discovery AND again at launch.
 booleans must be present and `false`, never absent: a manifest that omits `verificationChecks` or
 asserts any single platform check is rejected.
 
-An evaluation artifact is never publishable and never update-eligible. The `assemble` job runs only
+An evaluation dispatch artifact is not a production publication candidate and is never one-click
+update-eligible. ADR-0121 D1 separately permits explicitly reviewed public evaluation releases; their
+publication does not establish production trust. The production `assemble` job runs only
 from a stable-tag push and still requires three mutually consistent `verified-production` targets;
 `scripts/verify-portable-runtime-signing.mjs` explicitly refuses `--policy evaluation`; and the
 update preflight and staging-download predicates still demand production/verified-production. The
@@ -265,6 +269,27 @@ payloads, full archives, or customer-content backups. The exact persisted
 `updatedAt`; a managed record may additionally carry an optional `managedRootLocator`
 (`default`, `home-relative`, or `absolute-local`) plus managed-only attestation hashes; a
 `setup-failed` record carries only a bounded `failureReason` code beyond the shared fields.
+
+### Exact update input and handoff boundary
+
+The updater consumes the server-owned candidate defined by ADR-0099, not a fresh lookup of `latest`
+partway through execution. Release/asset ids, archive bytes and digest, manifest and checksum
+identities, reviewed compatibility binding, platform target, and sidecar identities must remain the
+same through preflight, download, verification, staging, and handoff. Rebound or changed evidence
+requires a fresh preflight and confirmation, not substitution inside an existing attempt.
+
+Only the attested installation is a mutation target. Before replacement, a verified copy of the
+current native launcher and supervisor may occupy the activation-specific private handoff capsule
+under the existing update state root. This bounded executable control capsule is distinct from the
+staged product archive and previous installation tree, both of which remain outside runtime state.
+Its fixed plan paths and mechanical receipts must never enter release archives, support exports,
+activity evidence, or browser projections. The capsule grants no arbitrary path or command authority.
+
+ADR-0121's acknowledged ownership transfer, same-volume promotion, process-tree containment, exact
+target startup proof, and idempotent recovery are required in addition to the artifact checks. A
+manifest that passes schema and digest validation does not prove those runtime steps. Production
+qualification additionally requires two actual production-signed eligible releases on all three
+targets. Evaluation artifacts remain manual-only, including the first transition to production.
 
 ## State And Payload Exclusions
 
@@ -863,7 +888,10 @@ Validation rules:
 - macOS targets require Developer ID signature and notarization verification. Windows requires
   Authenticode publisher-chain verification. Windows point-of-use admission additionally invokes
   the fixed system verifier with a closed environment and requires every runtime attestation carrier
-  and privileged helper to have the same verified leaf signer identity as `Keiko.exe`.
+  and privileged helper to have the same verified leaf signer identity as `Keiko.exe` within that
+  release. The updater's cross-release comparison instead binds independently verified Public Trust
+  chains and the exact reviewed subscriber identity-validation EKU, permitting legitimate Azure leaf
+  rotation without relaxing same-release consistency or timestamp verification.
 - macOS point-of-use admission derives the qualified outer app's closed Developer ID TeamIdentifier
   and requires the app seal, system-extension manager, Endpoint Security extension, and secure-read
   helper to verify under that same team identity. Raw team ids remain forbidden in persisted evidence.

@@ -11,6 +11,8 @@ import { currentGatewayEgressConfig } from "./deps.js";
 import {
   type GitHubAsset,
   type PortableRelease,
+  fetchGitHubReleaseAsset,
+  fetchWithPortableRetry,
   firstClassArchiveSetComplete,
   portableBlocker,
   requiredAssetName,
@@ -39,6 +41,7 @@ interface PortableAssetResolution {
 
 interface ValidatedPortableManifest {
   readonly archiveSha256: string;
+  readonly uncompressedSizeBytes: number;
   readonly sidecarRuntimes: readonly UpdatePortableSidecarSummary[];
 }
 
@@ -66,15 +69,22 @@ async function fetchTextAsset(
   asset: GitHubAsset,
   maxBytes: number,
 ): Promise<TextAsset | undefined> {
-  const response = await gatewayFetch(asset.downloadUrl, {
-    method: "GET",
-    headers: { Accept: "application/octet-stream", "User-Agent": "Keiko" },
-    fetchImpl: deps.gatewayReadinessFetch,
-    timeoutMs: UPDATE_PREFLIGHT_TIMEOUT_MS,
-    maxResponseBytes: maxBytes,
-    egress: currentGatewayEgressConfig(deps),
-  });
-  if (!response.ok) return undefined;
+  const response = await fetchGitHubReleaseAsset(asset.downloadUrl, (url) =>
+    fetchWithPortableRetry(() =>
+      gatewayFetch(url, {
+        method: "GET",
+        headers: { Accept: "application/octet-stream", "User-Agent": "Keiko" },
+        fetchImpl: deps.gatewayReadinessFetch,
+        timeoutMs: UPDATE_PREFLIGHT_TIMEOUT_MS,
+        maxResponseBytes: maxBytes,
+        egress: currentGatewayEgressConfig(deps),
+      }),
+    ),
+  );
+  if (!response.ok) {
+    await response.body?.cancel();
+    return undefined;
+  }
   const bytes = await readBytesCapped(response, maxBytes);
   return {
     text: new TextDecoder().decode(bytes),
@@ -185,6 +195,13 @@ function artifactSha256(manifest: Record<string, unknown>): string | undefined {
   return typeof sha256 === "string" && HEX_SHA256.test(sha256) ? sha256 : undefined;
 }
 
+function artifactUncompressedSize(manifest: Record<string, unknown>): number | undefined {
+  const value = recordAt(manifest, "artifact")?.uncompressedSizeBytes;
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 2 ** 31
+    ? value
+    : undefined;
+}
+
 function validManifestIdentity(
   manifest: Record<string, unknown>,
   release: PortableRelease,
@@ -243,13 +260,15 @@ function validateManifest(
   target: UpdatePortableTarget,
 ): ValidatedPortableManifest | undefined {
   const sha256 = artifactSha256(manifest);
-  if (sha256 === undefined) return undefined;
+  const uncompressedSizeBytes = artifactUncompressedSize(manifest);
+  if (sha256 === undefined || uncompressedSizeBytes === undefined) return undefined;
   if (!validManifestIdentity(manifest, release, archive, target)) return undefined;
   if (!validManifestBooleans(manifest)) return undefined;
   if (!securityVerified(manifest, target)) throw new PortableSigningVerificationError();
   if (!reviewedBindingValid(manifest, release, archive, target)) return undefined;
   return {
     archiveSha256: sha256,
+    uncompressedSizeBytes,
     sidecarRuntimes: verifyPortableManifestSidecars(manifest, target).summaries,
   };
 }
@@ -371,7 +390,9 @@ async function resolvePortableEvidence(
     manifestAsset,
     checksumAsset,
     manifestSha256: manifestText.sha256,
+    checksumSha256: checksum.sha256,
     archiveSha256: validated.archiveSha256,
+    uncompressedSizeBytes: validated.uncompressedSizeBytes,
     sidecarRuntimes: validated.sidecarRuntimes,
   });
 }
@@ -478,7 +499,9 @@ function eligibleResolution(input: {
   readonly manifestAsset: GitHubAsset;
   readonly checksumAsset: GitHubAsset;
   readonly manifestSha256: string;
+  readonly checksumSha256: string;
   readonly archiveSha256: string;
+  readonly uncompressedSizeBytes: number;
   readonly sidecarRuntimes: readonly UpdatePortableSidecarSummary[];
 }): PortableAssetResolution {
   return {
@@ -493,10 +516,16 @@ function eligibleResolution(input: {
         assetId: input.archive.id,
         releaseId: input.release.id,
         sizeBytes: input.archive.size,
+        uncompressedSizeBytes: input.uncompressedSizeBytes,
         sha256: input.archiveSha256,
         manifestAssetName: input.manifestAsset.name,
+        manifestAssetId: input.manifestAsset.id,
+        manifestSizeBytes: input.manifestAsset.size,
         manifestSha256: input.manifestSha256,
         checksumAssetName: input.checksumAsset.name,
+        checksumAssetId: input.checksumAsset.id,
+        checksumSizeBytes: input.checksumAsset.size,
+        checksumSha256: input.checksumSha256,
         checksumVerified: true,
         ...(input.sidecarRuntimes.length > 0 ? { sidecarRuntimes: input.sidecarRuntimes } : {}),
       },

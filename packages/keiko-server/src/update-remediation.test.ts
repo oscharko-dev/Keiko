@@ -474,8 +474,7 @@ describe("update remediation manager", () => {
     const stateDir = makeStateDir();
     const localState = createUpdateLocalStateManager({ stateDir, now: () => NOW });
     localState.writeRuntimeState({
-      schemaVersion: UPDATE_LOCAL_STATE_SCHEMA_VERSION,
-      updatedAt: "stale",
+      ...localState.readRuntimeState(),
       targetVersion: TARGET,
       remediations: [
         {
@@ -507,8 +506,7 @@ describe("update remediation manager", () => {
     chmodSync(memoryDb, 0o644);
     const localState = createUpdateLocalStateManager({ stateDir, now: () => NOW });
     localState.writeRuntimeState({
-      schemaVersion: UPDATE_LOCAL_STATE_SCHEMA_VERSION,
-      updatedAt: "stale",
+      ...localState.readRuntimeState(),
       targetVersion: TARGET,
       remediations: [
         {

@@ -78,7 +78,18 @@ export {
   type UpdateSessionManager,
   type UpdateSessionManagerOptions,
   type UpdateSessionStartOutcome,
+  type PortableHandoffShutdownRequest,
 } from "./update-session.js";
+export {
+  type UpdateStartupRecoveryCurrent,
+  type UpdateStartupRecoveryPort,
+} from "./update-portable-handoff-recovery.js";
+export {
+  importLegacyUpdateAuditSnapshot,
+  type ImportLegacyUpdateAuditSnapshotOptions,
+  type LegacyUpdateAuditImportDeferredReason,
+  type LegacyUpdateAuditImportOutcome,
+} from "./update-legacy-audit-import.js";
 export {
   createUpdateRemediationManager,
   UpdateRemediationError,

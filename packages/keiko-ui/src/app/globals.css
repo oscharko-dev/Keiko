@@ -5030,6 +5030,12 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
     grid-template-columns: 34px minmax(0, 1fr);
   }
 
+  /* The foreground updater contains the same critical context and actions. At this width, keep
+     its manual-path controls reachable instead of layering the startup notice above them. */
+  .workspace:has(.window[data-top="true"]:not([hidden]) .upd) .update-notice {
+    display: none;
+  }
+
   .update-notice-actions,
   .upd-primary,
   .upd-action {

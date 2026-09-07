@@ -129,7 +129,13 @@ export type {
   RELEASE_IMPACT_SCHEMA_VERSION,
 } from "./release-impact.js";
 
-// ─── Update availability / preflight (Issue #1692) ─────────────────────────────
+// ─── Update availability / preflight (Issues #1692, #3405) ────────────────────
+export type {
+  UpdateCandidateClaim,
+  UpdateCandidateInstallIdentity,
+  UpdateCandidatePortableIdentity,
+  UpdateCandidateSnapshot,
+} from "./update-candidate.js";
 export type {
   UpdatePreflightBlocker,
   UpdatePreflightBlockerCode,
@@ -164,11 +170,15 @@ export type {
 // ─── Governed update session runner (Issue #1693) ─────────────────────────────
 export type {
   UpdateCommandPreview,
+  UpdateCancellationCutoff,
   UpdateInstallMode,
   UpdateInstallModeKind,
   UpdateInstallModeStatus,
   UpdateInstallPackageManager,
   UpdateMutationPolicy,
+  UpdateLifecyclePhase,
+  UpdateLifecycleProgress,
+  UpdateLifecycleState,
   UpdatePortableActivationStatus,
   UpdatePortableActivationSummary,
   UpdatePortableAssetSummary,
@@ -223,6 +233,8 @@ export type {
 
 // ─── Governed update local state and recovery (Issue #1694) ─────────────────────
 export type {
+  UpdateActivationWalCheckpoint,
+  UpdateActivationWalState,
   UpdateCompatibilityScan,
   UpdateHealthState,
   UpdateRecoverySnapshot,
@@ -232,6 +244,7 @@ export type {
   UpdateRemediationStatus,
   UpdateRuntimeAuditEvent,
   UpdateRuntimeEventType,
+  UpdateRuntimeStateReadResult,
   UpdateRuntimeWarningCode,
   UpdateRuntimeState,
   UpdateStateStore,

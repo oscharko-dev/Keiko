@@ -1,0 +1,501 @@
+import { createHash } from "node:crypto";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
+import { PORTABLE_STAGE_DIR_PREFIX } from "./update-portable-staging-shared.js";
+
+const ACTIVATION_ID = /^[a-f0-9]{32}$/u;
+const HEX_SHA256 = /^[a-f0-9]{64}$/u;
+const BOUNDED_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/u;
+const MAX_PLAN_BYTES = 64 * 1024;
+const MAX_PATH_BYTES = 32 * 1024;
+const PLAN_FILE = "plan.khp";
+const PLAN_DIGEST_FILE = "plan.sha256";
+
+export const PORTABLE_HANDOFF_ACTIONS = Object.freeze([
+  "old-exit",
+  "promote",
+  "register",
+  "start",
+  "verify",
+  "cleanup",
+] as const);
+
+export interface PortableHandoffPlan {
+  readonly schemaVersion: 2;
+  readonly activationId: string;
+  readonly sessionId: string;
+  readonly stageId: string;
+  readonly target: UpdatePortableTarget;
+  readonly targetVersion: string;
+  readonly newLaunchId: string;
+  readonly restoreLaunchId: string;
+  readonly aggregateRevision: number;
+  readonly previousRegistrationState: "present" | "absent";
+  readonly oldProcess: {
+    readonly pid: number;
+    readonly launchId: string;
+    readonly host: "127.0.0.1";
+    readonly port: number;
+    readonly version: string;
+  };
+  readonly paths: {
+    readonly managedRoot: string;
+    readonly stageRoot: string;
+    readonly candidateRoot: string;
+    readonly backupRoot: string;
+    readonly candidateLauncher: string;
+    readonly candidateSupervisor: string;
+  };
+  readonly digests: {
+    readonly currentTreeSha256: string;
+    readonly candidateTreeSha256: string;
+    readonly currentLauncherSha256: string;
+    readonly currentSupervisorSha256: string;
+    readonly candidateLauncherSha256: string;
+    readonly candidateSupervisorSha256: string;
+    readonly previousRegistrationSha256: string;
+    readonly preparedRegistrationSha256: string;
+  };
+  readonly deadlines: {
+    readonly oldExitAt: number;
+    readonly startAt: number;
+    readonly verifyAt: number;
+    readonly cleanupAt: number;
+  };
+  readonly actions: typeof PORTABLE_HANDOFF_ACTIONS;
+}
+
+export type PortableHandoffPlanInput = Omit<PortableHandoffPlan, "schemaVersion" | "actions">;
+
+export class PortableHandoffPlanError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = "PortableHandoffPlanError";
+  }
+}
+
+function fail(message: string): never {
+  throw new PortableHandoffPlanError(message);
+}
+
+function assertRegularSingleLink(path: string, label: string): void {
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) fail(`${label} is unsafe`);
+}
+
+function readBoundedRegularFile(path: string, maximumBytes: number, label: string): Buffer {
+  let descriptor: number;
+  try {
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch {
+    fail(`${label} is unsafe`);
+  }
+  try {
+    const before = fstatSync(descriptor);
+    if (!before.isFile() || before.nlink !== 1 || before.size > maximumBytes) {
+      fail(`${label} is unsafe`);
+    }
+    const content = Buffer.alloc(before.size);
+    let offset = 0;
+    while (offset < content.length) {
+      const count = readSync(descriptor, content, offset, content.length - offset, null);
+      if (count === 0) fail(`${label} changed while reading`);
+      offset += count;
+    }
+    const after = fstatSync(descriptor);
+    const current = lstatSync(path);
+    if (
+      after.dev !== before.dev ||
+      after.ino !== before.ino ||
+      after.size !== before.size ||
+      after.mtimeMs !== before.mtimeMs ||
+      current.dev !== before.dev ||
+      current.ino !== before.ino ||
+      current.isSymbolicLink()
+    ) {
+      fail(`${label} changed while reading`);
+    }
+    return content;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function assertSafeHandoffTree(stateDir: string, activationId: string): string {
+  if (!existsSync(stateDir)) mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  if (lstatSync(stateDir).isSymbolicLink() || !lstatSync(stateDir).isDirectory()) {
+    fail("portable handoff path is unsafe");
+  }
+  const canonicalState = realpathSync(stateDir);
+  const segments = ["updates", "handoff", activationId];
+  let cursor = canonicalState;
+  for (const segment of segments) {
+    cursor = join(cursor, segment);
+    if (
+      existsSync(cursor) &&
+      (lstatSync(cursor).isSymbolicLink() || !lstatSync(cursor).isDirectory())
+    ) {
+      fail("portable handoff path is unsafe");
+    }
+  }
+  return join(canonicalState, ...segments);
+}
+
+function isContained(root: string, path: string): boolean {
+  const child = relative(resolve(root), resolve(path));
+  return child === "" || (child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child));
+}
+
+function assertTopology(plan: PortableHandoffPlan): void {
+  const parent = dirname(resolve(plan.paths.managedRoot));
+  const stagingBase = join(parent, PORTABLE_STAGE_DIR_PREFIX);
+  const expectedStage = join(stagingBase, plan.stageId);
+  const expectedBackup = join(parent, `.keiko-previous-${plan.activationId}`);
+  if (
+    resolve(plan.paths.stageRoot) !== resolve(expectedStage) ||
+    resolve(plan.paths.backupRoot) !== resolve(expectedBackup) ||
+    !isContained(plan.paths.stageRoot, plan.paths.candidateRoot) ||
+    !isContained(plan.paths.candidateRoot, plan.paths.candidateLauncher) ||
+    !isContained(plan.paths.candidateRoot, plan.paths.candidateSupervisor)
+  ) {
+    fail("portable handoff topology is invalid");
+  }
+}
+
+function isTarget(value: unknown): value is UpdatePortableTarget {
+  return value === "windows-x64" || value === "macos-arm64" || value === "macos-x64";
+}
+
+function assertPlanIdentity(plan: PortableHandoffPlan): void {
+  if (!ACTIVATION_ID.test(plan.activationId)) fail("portable handoff activation id is invalid");
+  if (!BOUNDED_ID.test(plan.sessionId) || !BOUNDED_ID.test(plan.stageId)) {
+    fail("portable handoff identity is invalid");
+  }
+  if (!isTarget(plan.target) || !VERSION.test(plan.targetVersion))
+    fail("portable handoff target is invalid");
+  if (
+    !BOUNDED_ID.test(plan.newLaunchId) ||
+    !BOUNDED_ID.test(plan.restoreLaunchId) ||
+    plan.restoreLaunchId === plan.newLaunchId ||
+    plan.restoreLaunchId === plan.oldProcess.launchId
+  )
+    fail("portable handoff launch identity is invalid");
+  if (!Number.isSafeInteger(plan.aggregateRevision) || plan.aggregateRevision < 1) {
+    fail("portable handoff revision is invalid");
+  }
+}
+
+function assertOldProcess(plan: PortableHandoffPlan): void {
+  const old = plan.oldProcess;
+  if (
+    !Number.isSafeInteger(old.pid) ||
+    old.pid < 1 ||
+    old.pid > 2_147_483_647 ||
+    !BOUNDED_ID.test(old.launchId) ||
+    // Parsed protocol bytes are untrusted despite the narrowed caller-facing type.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+    old.host !== "127.0.0.1" ||
+    !Number.isSafeInteger(old.port) ||
+    old.port < 1 ||
+    old.port > 65_535 ||
+    !VERSION.test(old.version)
+  )
+    fail("portable handoff old process identity is invalid");
+}
+
+function assertDigestsAndDeadlines(plan: PortableHandoffPlan): void {
+  if (plan.previousRegistrationState !== "present" && plan.previousRegistrationState !== "absent") {
+    fail("portable handoff registration state is invalid");
+  }
+  const digests = Object.values(plan.digests);
+  if (!digests.every((value) => HEX_SHA256.test(value))) fail("portable handoff digest is invalid");
+  const deadlines = Object.values(plan.deadlines);
+  if (!deadlines.every((value) => Number.isSafeInteger(value) && value > 0)) {
+    fail("portable handoff deadline is invalid");
+  }
+  if (!(
+    plan.deadlines.oldExitAt < plan.deadlines.startAt &&
+    plan.deadlines.startAt < plan.deadlines.verifyAt &&
+    plan.deadlines.verifyAt < plan.deadlines.cleanupAt
+  ))
+    fail("portable handoff deadlines are invalid");
+}
+
+function assertPathsAndActions(plan: PortableHandoffPlan): void {
+  if (plan.actions.join("|") !== PORTABLE_HANDOFF_ACTIONS.join("|")) {
+    fail("portable handoff action list is invalid");
+  }
+  Object.values(plan.paths).forEach((path) => {
+    if (
+      !isAbsolute(path) ||
+      resolve(path) !== path ||
+      path.includes("\0") ||
+      (sep === "/" && path.includes("\\")) ||
+      Buffer.byteLength(path, "utf8") > MAX_PATH_BYTES
+    )
+      fail("portable handoff path is invalid");
+  });
+  assertTopology(plan);
+}
+
+function assertPlan(plan: PortableHandoffPlan): void {
+  assertPlanIdentity(plan);
+  assertOldProcess(plan);
+  assertDigestsAndDeadlines(plan);
+  assertPathsAndActions(plan);
+}
+
+export function createPortableHandoffPlan(input: PortableHandoffPlanInput): PortableHandoffPlan {
+  const plan = { schemaVersion: 2 as const, ...input, actions: PORTABLE_HANDOFF_ACTIONS };
+  assertPlan(plan);
+  return plan;
+}
+
+function planFields(plan: PortableHandoffPlan): readonly string[] {
+  return [
+    plan.activationId,
+    plan.sessionId,
+    plan.stageId,
+    plan.target,
+    plan.targetVersion,
+    plan.newLaunchId,
+    plan.restoreLaunchId,
+    String(plan.aggregateRevision),
+    plan.previousRegistrationState,
+    String(plan.oldProcess.pid),
+    plan.oldProcess.launchId,
+    plan.oldProcess.host,
+    String(plan.oldProcess.port),
+    plan.oldProcess.version,
+    plan.paths.managedRoot,
+    plan.paths.stageRoot,
+    plan.paths.candidateRoot,
+    plan.paths.backupRoot,
+    plan.paths.candidateLauncher,
+    plan.paths.candidateSupervisor,
+    plan.digests.currentTreeSha256,
+    plan.digests.candidateTreeSha256,
+    plan.digests.currentLauncherSha256,
+    plan.digests.currentSupervisorSha256,
+    plan.digests.candidateLauncherSha256,
+    plan.digests.candidateSupervisorSha256,
+    plan.digests.previousRegistrationSha256,
+    plan.digests.preparedRegistrationSha256,
+    String(plan.deadlines.oldExitAt),
+    String(plan.deadlines.startAt),
+    String(plan.deadlines.verifyAt),
+    String(plan.deadlines.cleanupAt),
+  ];
+}
+
+function canonicalPlan(plan: PortableHandoffPlan): Buffer {
+  assertPlan(plan);
+  const fields = planFields(plan).map((field) => Buffer.from(field, "utf8"));
+  const header = Buffer.alloc(8);
+  header.write("KHP1", 0, "ascii");
+  header.writeUInt16LE(2, 4);
+  header.writeUInt16LE(fields.length, 6);
+  return Buffer.concat([
+    header,
+    ...fields.flatMap((field) => {
+      const length = Buffer.alloc(4);
+      length.writeUInt32LE(field.length);
+      return [length, field];
+    }),
+  ]);
+}
+
+export function portableHandoffPlanSha256(plan: PortableHandoffPlan): string {
+  return createHash("sha256").update(canonicalPlan(plan)).digest("hex");
+}
+
+export function portableHandoffRoot(stateDir: string, activationId: string): string {
+  if (!ACTIVATION_ID.test(activationId)) fail("portable handoff activation id is invalid");
+  return assertSafeHandoffTree(stateDir, activationId);
+}
+
+function durableWrite(path: string, content: string | Uint8Array): void {
+  const noFollow = constants.O_NOFOLLOW;
+  const descriptor = openSync(
+    path,
+    constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | noFollow,
+    0o600,
+  );
+  try {
+    writeFileSync(descriptor, content);
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function syncDirectory(path: string): void {
+  const descriptor = openSync(path, constants.O_RDONLY);
+  try {
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+export function writePortableHandoffPlan(input: {
+  readonly stateDir: string;
+  readonly plan: PortableHandoffPlan;
+}): { readonly path: string; readonly sha256: string } {
+  const root = assertSafeHandoffTree(input.stateDir, input.plan.activationId);
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  assertSafeHandoffTree(input.stateDir, input.plan.activationId);
+  const path = join(root, PLAN_FILE);
+  const digestPath = join(root, PLAN_DIGEST_FILE);
+  if (existsSync(path) || existsSync(digestPath)) fail("portable handoff plan already exists");
+  const content = canonicalPlan(input.plan);
+  if (content.byteLength > MAX_PLAN_BYTES) fail("portable handoff plan is too large");
+  const sha256 = createHash("sha256").update(content).digest("hex");
+  const temporary = join(root, `.plan-${String(process.pid)}.tmp`);
+  durableWrite(temporary, content);
+  renameSync(temporary, path);
+  durableWrite(digestPath, `${sha256}\n`);
+  syncDirectory(root);
+  assertRegularSingleLink(path, "portable handoff plan");
+  assertRegularSingleLink(digestPath, "portable handoff digest");
+  return { path, sha256 };
+}
+
+function assertPlanHeader(content: Buffer): void {
+  if (
+    content.length < 8 ||
+    content.subarray(0, 4).toString("ascii") !== "KHP1" ||
+    content.readUInt16LE(4) !== 2 ||
+    content.readUInt16LE(6) !== 32 ||
+    content.length > MAX_PLAN_BYTES
+  ) {
+    fail("portable handoff plan is malformed");
+  }
+}
+
+function readPlanFields(content: Buffer): readonly string[] {
+  assertPlanHeader(content);
+  const fields: string[] = [];
+  let offset = 8;
+  for (let index = 0; index < 32; index += 1) {
+    if (offset + 4 > content.length) fail("portable handoff plan is malformed");
+    const length = content.readUInt32LE(offset);
+    offset += 4;
+    if (length > MAX_PLAN_BYTES || offset + length > content.length) {
+      fail("portable handoff plan is malformed");
+    }
+    try {
+      fields.push(
+        new TextDecoder("utf-8", { fatal: true }).decode(content.subarray(offset, offset + length)),
+      );
+    } catch {
+      fail("portable handoff plan is malformed");
+    }
+    offset += length;
+  }
+  if (offset !== content.length) fail("portable handoff plan is malformed");
+  return fields;
+}
+
+function numericField(value: string | undefined): number {
+  if (value === undefined || !/^(?:0|[1-9][0-9]{0,15})$/u.test(value))
+    fail("portable handoff plan is malformed");
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) fail("portable handoff plan is malformed");
+  return parsed;
+}
+
+function requiredField(fields: readonly string[], index: number): string {
+  const value = fields[index];
+  if (value === undefined) fail("portable handoff plan is malformed");
+  return value;
+}
+
+function parsePlan(content: Buffer): PortableHandoffPlan {
+  const field = readPlanFields(content);
+  return createPortableHandoffPlan({
+    activationId: requiredField(field, 0),
+    sessionId: requiredField(field, 1),
+    stageId: requiredField(field, 2),
+    target: requiredField(field, 3) as UpdatePortableTarget,
+    targetVersion: requiredField(field, 4),
+    newLaunchId: requiredField(field, 5),
+    restoreLaunchId: requiredField(field, 6),
+    aggregateRevision: numericField(field[7]),
+    previousRegistrationState: requiredField(field, 8) as "present" | "absent",
+    oldProcess: {
+      pid: numericField(field[9]),
+      launchId: requiredField(field, 10),
+      host: requiredField(field, 11) as "127.0.0.1",
+      port: numericField(field[12]),
+      version: requiredField(field, 13),
+    },
+    paths: {
+      managedRoot: requiredField(field, 14),
+      stageRoot: requiredField(field, 15),
+      candidateRoot: requiredField(field, 16),
+      backupRoot: requiredField(field, 17),
+      candidateLauncher: requiredField(field, 18),
+      candidateSupervisor: requiredField(field, 19),
+    },
+    digests: {
+      currentTreeSha256: requiredField(field, 20),
+      candidateTreeSha256: requiredField(field, 21),
+      currentLauncherSha256: requiredField(field, 22),
+      currentSupervisorSha256: requiredField(field, 23),
+      candidateLauncherSha256: requiredField(field, 24),
+      candidateSupervisorSha256: requiredField(field, 25),
+      previousRegistrationSha256: requiredField(field, 26),
+      preparedRegistrationSha256: requiredField(field, 27),
+    },
+    deadlines: {
+      oldExitAt: numericField(field[28]),
+      startAt: numericField(field[29]),
+      verifyAt: numericField(field[30]),
+      cleanupAt: numericField(field[31]),
+    },
+  });
+}
+
+export function readPortableHandoffPlan(
+  stateDir: string,
+  activationId: string,
+): PortableHandoffPlan {
+  const root = assertSafeHandoffTree(stateDir, activationId);
+  const path = join(root, PLAN_FILE);
+  const digestPath = join(root, PLAN_DIGEST_FILE);
+  const content = readBoundedRegularFile(path, MAX_PLAN_BYTES, "portable handoff plan");
+  const digestContent = readBoundedRegularFile(digestPath, 65, "portable handoff digest").toString(
+    "latin1",
+  );
+  if (!/^[a-f0-9]{64}\n$/u.test(digestContent)) fail("portable handoff plan digest mismatch");
+  const expected = digestContent.slice(0, 64);
+  const actual = createHash("sha256").update(content).digest("hex");
+  if (!HEX_SHA256.test(expected) || expected !== actual)
+    fail("portable handoff plan digest mismatch");
+  const plan = parsePlan(content);
+  if (!canonicalPlan(plan).equals(content)) fail("portable handoff plan is not canonical");
+  if (plan.activationId !== activationId) fail("portable handoff activation id mismatch");
+  return plan;
+}
+
+export function discardPortableHandoffPreparation(stateDir: string, activationId: string): void {
+  const root = portableHandoffRoot(stateDir, activationId);
+  rmSync(root, { recursive: true, force: true });
+}

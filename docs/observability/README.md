@@ -85,6 +85,35 @@ Cross-process (and cross-request) causality is instead established through two i
   the customer directly triggered" to "what that triggered in turn" — `correlationId` alone names
   only the current operation, not its ancestry.
 
+Governed updates add two body-free join keys to those envelope ids: `candidateId` binds the exact
+preflight offer to its confirmation and session, while `sessionId` binds lifecycle, recovery, and
+remediation records after execution begins. `keiko support analyze --json` exposes the resulting
+`updateAttempts[]` projection. Each attempt contains its ordered lines and every explicitly linked
+request or background correlation id. The analyzer follows `parentCorrelationId` from a bound
+request to child work, but never groups by target version, wall-clock proximity, or guessed install
+facts. Candidate execution tokens, release-note prose, filesystem paths, and command output are not
+update activity fields. Current events are written solely to `logs/server.log`; existing
+`updates/update-audit.jsonl` files are retained historical data, not a second active writer or
+recovery authority. Startup attempts a bounded schema-1 snapshot import after recovery/listen and
+before `process.started`. Import uses the existing file sink, formatter, redaction and sequence;
+records are explicitly historical, retain deterministic legacy identities, and have no invented
+candidate/session/request links. A separate `update.runtime.legacy-snapshot-imported` record binds
+the source digest, imported-ID-set digest and count after same-descriptor durability checks.
+
+Import is deferred when info logging is filtered, input or destination checks fail, or durability
+cannot be established. Non-filtered deferrals emit the closed reason through
+`update.runtime.legacy-import-deferred` and a generic body-free stderr notice; startup continues.
+Intentional level filtering remains silent. A fresh logging owner inspects and durably delimits an
+unterminated current-log tail before retrying, without truncating or crediting the malformed record.
+Limits are 1 MiB / 2,048 source events / 8,192 bytes per line and a scan of at
+most 16 canonical log files / 32 MiB. The source is always retained: snapshot consistency does not
+prove that every older writer has stopped. Retirement remains an unresolved #3405 delivery item.
+Sequential retries deduplicate deterministic identities; concurrent processes may leave duplicate
+physical lines with the same identity, so this is not a cross-process exactly-once guarantee.
+Historical records do not become a complete `updateAttempts[]` timeline when their original schema
+lacks the required causal joins. The importer passed independent security review; current verification
+and remaining limits are recorded in the [repair ledger](../qa/built-in-updater-repair-3405.md).
+
 Read the log in this order for one failure:
 
 1. Find the `correlationId` of the request the customer reported (the UI shows it, or the server's

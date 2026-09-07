@@ -4,6 +4,7 @@ import {
   type UpdateReleaseImpactInput,
   type UpdateRemediationStatusReport,
   type UpdateSession,
+  type UpdateSessionStartRequest,
   type UpdateSessionStatus,
 } from "@oscharko-dev/keiko-contracts";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
@@ -207,6 +208,18 @@ function noUpdateApplyGuard(report: UpdatePreflightReport): string | undefined {
   return undefined;
 }
 
+function candidateRequestForApply(
+  report: UpdatePreflightReport,
+): UpdateSessionStartRequest | undefined {
+  const candidate = report.candidate;
+  if (candidate === undefined || candidate.targetVersion !== report.targetVersion) return undefined;
+  return {
+    candidateId: candidate.candidateId,
+    confirmationDigest: candidate.confirmationDigest,
+    executionToken: candidate.executionToken,
+  };
+}
+
 function portableApplyFallback(): string {
   return [
     "Use the Keiko update window to retry, review technical details,",
@@ -336,12 +349,6 @@ function writeApplyGuard(io: CliIo, report: UpdatePreflightReport, guard: string
   else io.out(line);
 }
 
-function targetVersionForApply(report: UpdatePreflightReport, io: CliIo): string | undefined {
-  if (report.targetVersion !== undefined) return report.targetVersion;
-  io.err("keiko update apply: No target version was available.\n");
-  return undefined;
-}
-
 async function runStatus(runtime: UpdateRuntime, io: CliIo): Promise<number> {
   const report = await runtime.preflight.getStartupReport();
   const status = runtime.session.getStatus();
@@ -382,12 +389,17 @@ async function runApply(runtime: UpdateRuntime, io: CliIo, deps: UpdateCliDeps):
     writeApplyGuard(io, report, guard);
     return applyGuardExitCode(report);
   }
-  const targetVersion = targetVersionForApply(report, io);
-  if (targetVersion === undefined) {
+  const candidate = candidateRequestForApply(report);
+  if (candidate === undefined) {
+    io.err(
+      "keiko update apply: The fresh update check did not issue a usable server-approved candidate. Run `keiko update check` and retry.\n",
+    );
     return 1;
   }
-  const started = runtime.session.start({ targetVersion });
-  io.out(`Update session: ${started.reused ? "reused" : "started"} for ${targetVersion}\n`);
+  const started = runtime.session.start(candidate);
+  io.out(
+    `Update session: ${started.reused ? "reused" : "started"} for ${report.targetVersion ?? "the approved target"}\n`,
+  );
   const terminal = await waitForTerminalSession(
     runtime.session,
     started.session.sessionId,

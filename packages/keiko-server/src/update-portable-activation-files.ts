@@ -1,11 +1,17 @@
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
+  fstatSync,
+  fsyncSync,
   linkSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -70,6 +76,14 @@ export interface PortablePromotionResult {
   readonly paths: PortableActivationPaths;
 }
 
+export interface PortableHandoffLayouts {
+  readonly paths: PortableActivationPaths;
+  readonly current: PortableActivationLayout;
+  readonly candidate: PortableActivationLayout;
+  readonly currentSupervisorPath: string;
+  readonly candidateSupervisorPath: string;
+}
+
 export interface PortableActivationRecovery {
   readonly activationId: string;
   readonly stageId: string;
@@ -79,10 +93,12 @@ export interface PortableActivationRecovery {
 }
 
 const REGISTRATION_FILE = "portable-install-state.json";
-const REGISTRATION_SNAPSHOT_SUFFIX = ".registration-backup";
-const REGISTRATION_ABSENT_SUFFIX = ".registration-absent";
 const RECOVERY_FILE = "portable-activation-recovery.json";
 const UPDATES_DIR = "updates";
+const HANDOFF_DIR = "handoff";
+const REGISTRATION_SNAPSHOT_FILE = "registration.previous";
+const REGISTRATION_ABSENT_FILE = "registration.previous.absent";
+const MAX_REGISTRATION_BYTES = 64 * 1024;
 const WINDOWS_SHORTCUT_SAFE_PATH = /^[A-Za-z0-9_@ .()/\\:-]+$/u;
 
 export class PortableUpdateActivationError extends Error {
@@ -128,6 +144,16 @@ function layoutFor(target: UpdatePortableTarget, root: string): PortableActivati
     setupManifestPath: join(resources, ".portable", "setup-manifest.json"),
     launcherPath: join(root, "Contents", "MacOS", "Keiko"),
   };
+}
+
+function supervisorFor(target: UpdatePortableTarget, layout: PortableActivationLayout): string {
+  const name =
+    target === "windows-x64" ? "keiko-runtime-supervisor.exe" : "keiko-runtime-supervisor";
+  const runtimeRoot =
+    target === "windows-x64"
+      ? layout.installRoot
+      : join(layout.installRoot, "Contents", "Resources");
+  return join(runtimeRoot, "runtime", "native", name);
 }
 
 function activationFailed(message: string): PortableUpdateActivationError {
@@ -375,6 +401,30 @@ export function promotePortableInstall(
   };
 }
 
+export function resolvePortableHandoffLayouts(input: {
+  readonly activation: PortableActivationFileInput;
+  readonly activationId: string;
+  readonly currentVersion: string;
+}): PortableHandoffLayouts {
+  const unresolved = activationPaths(input.activation, input.activationId);
+  const paths = { ...unresolved, managedRoot: realpathSync(unresolved.managedRoot) };
+  const current = validateLayout(
+    input.activation.stage.target,
+    paths.managedRoot,
+    input.currentVersion,
+  );
+  const candidate = validateLayout(
+    input.activation.stage.target,
+    paths.candidateRoot,
+    input.activation.targetVersion,
+  );
+  const currentSupervisorPath = supervisorFor(input.activation.stage.target, current);
+  const candidateSupervisorPath = supervisorFor(input.activation.stage.target, candidate);
+  requiredFile(currentSupervisorPath);
+  requiredFile(candidateSupervisorPath);
+  return { paths, current, candidate, currentSupervisorPath, candidateSupervisorPath };
+}
+
 function recoveryPath(stateDir: string): string {
   return join(stateDir, UPDATES_DIR, RECOVERY_FILE);
 }
@@ -390,36 +440,123 @@ function registrationSnapshotPaths(
   readonly content: string;
   readonly absent: string;
 } {
-  const root = join(stateDir, UPDATES_DIR);
+  if (!/^[a-f0-9]{32}$/u.test(activationId)) {
+    throw activationFailed("portable registration activation identity is invalid");
+  }
+  const root = join(stateDir, UPDATES_DIR, HANDOFF_DIR, activationId);
   return {
-    content: join(root, `${activationId}${REGISTRATION_SNAPSHOT_SUFFIX}`),
-    absent: join(root, `${activationId}${REGISTRATION_ABSENT_SUFFIX}`),
+    content: join(root, REGISTRATION_SNAPSHOT_FILE),
+    absent: join(root, REGISTRATION_ABSENT_FILE),
   };
 }
 
 function writeExclusiveFile(path: string, content: Uint8Array | string): void {
-  writeFileSync(path, content, { mode: 0o600, flag: "wx" });
+  const descriptor = openSync(
+    path,
+    constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    writeFileSync(descriptor, content);
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function readPortableRegistrationSnapshot(path: string): Buffer {
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const stat = fstatSync(descriptor);
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_REGISTRATION_BYTES) {
+      throw activationFailed("portable registration path is unsafe");
+    }
+    const content = Buffer.alloc(stat.size);
+    let offset = 0;
+    while (offset < content.length) {
+      const count = readSync(descriptor, content, offset, content.length - offset, null);
+      if (count === 0) throw activationFailed("portable registration changed during capture");
+      offset += count;
+    }
+    if (fstatSync(descriptor).size !== stat.size) {
+      throw activationFailed("portable registration changed during capture");
+    }
+    return content;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+export function attestPortableManagedRegistration(input: {
+  readonly stateDir: string;
+  readonly managedRoot: string;
+  readonly target: UpdatePortableTarget;
+  readonly version: string;
+  readonly expectedSha256: string;
+}): boolean {
+  try {
+    assertNoSymlinkAncestor(input.stateDir);
+    const registration = readPortableRegistrationSnapshot(registrationPath(input.stateDir));
+    if (createHash("sha256").update(registration).digest("hex") !== input.expectedSha256) {
+      return false;
+    }
+    const record = parseJsonRecord(registration.toString("utf8"));
+    return (
+      record?.schemaVersion === 1 &&
+      record.status === "managed" &&
+      record.updateEligible === true &&
+      record.stable === true &&
+      record.platformTarget === input.target &&
+      record.packageVersion === input.version &&
+      record.installRootIdentitySha256 === sha256Text(realpathSync(input.managedRoot))
+    );
+  } catch {
+    return false;
+  }
+}
+
+export interface PortableRegistrationSnapshot {
+  readonly state: "present" | "absent";
+  readonly sha256: string;
 }
 
 export function capturePortableRegistration(input: {
   readonly stateDir: string;
   readonly activationId: string;
-}): void {
+  readonly expectedManagedRootIdentitySha256?: string | undefined;
+  readonly expectedTarget?: UpdatePortableTarget | undefined;
+  readonly expectedVersion?: string | undefined;
+}): PortableRegistrationSnapshot {
   assertNoSymlinkAncestor(input.stateDir);
-  mkdirSync(join(input.stateDir, UPDATES_DIR), { recursive: true, mode: 0o700 });
-  const registration = registrationPath(input.stateDir);
   const snapshot = registrationSnapshotPaths(input.stateDir, input.activationId);
+  const snapshotRoot = dirname(snapshot.content);
+  assertNoSymlinkAncestor(snapshotRoot);
+  mkdirSync(snapshotRoot, { recursive: true, mode: 0o700 });
+  assertNoSymlinkAncestor(snapshotRoot);
+  const registration = registrationPath(input.stateDir);
   if (existsSync(snapshot.content) || existsSync(snapshot.absent)) {
     throw activationFailed("portable registration recovery is pending");
   }
   if (!existsSync(registration)) {
     writeExclusiveFile(snapshot.absent, "");
-    return;
+    return { state: "absent", sha256: sha256Text("") };
   }
-  if (lstatSync(registration).isSymbolicLink()) {
-    throw activationFailed("portable registration path is unsafe");
+  const content = readPortableRegistrationSnapshot(registration);
+  const record = parseJsonRecord(content.toString("utf8"));
+  if (
+    (input.expectedManagedRootIdentitySha256 !== undefined &&
+      record?.installRootIdentitySha256 !== input.expectedManagedRootIdentitySha256) ||
+    (input.expectedTarget !== undefined && record?.platformTarget !== input.expectedTarget) ||
+    (input.expectedVersion !== undefined && record?.packageVersion !== input.expectedVersion) ||
+    record?.schemaVersion !== 1 ||
+    record.status !== "managed" ||
+    record.updateEligible !== true ||
+    record.stable !== true
+  ) {
+    throw activationFailed("portable registration does not match the managed install");
   }
-  writeExclusiveFile(snapshot.content, readFileSync(registration));
+  writeExclusiveFile(snapshot.content, content);
+  return { state: "present", sha256: createHash("sha256").update(content).digest("hex") };
 }
 
 export function restorePortableRegistration(input: {
@@ -441,7 +578,7 @@ export function restorePortableRegistration(input: {
     throw activationFailed("portable registration recovery path is unsafe");
   }
   const temporary = `${registration}.${String(process.pid)}.restore`;
-  writeExclusiveFile(temporary, readFileSync(snapshot.content));
+  writeExclusiveFile(temporary, readPortableRegistrationSnapshot(snapshot.content));
   atomicPublishRename(temporary, registration, { rename: renameSync });
 }
 
@@ -606,7 +743,31 @@ export function refreshPortableRegistration(input: {
   if (existsSync(path) && lstatSync(path).isSymbolicLink()) {
     throw activationFailed("portable registration path is unsafe");
   }
+  const registration = portableRegistrationDocument(input);
+  const temporaryPath = `${path}.${String(process.pid)}.tmp`;
+  writeExclusiveFile(temporaryPath, registration);
+  atomicPublishRename(temporaryPath, path, { rename: renameSync });
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // Best-effort on non-POSIX filesystems.
+  }
+}
+
+export function portableRegistrationDocument(input: {
+  readonly layout: PortableActivationLayout;
+  readonly target: UpdatePortableTarget;
+  readonly env: EnvSource;
+  readonly home: string;
+  readonly now: number;
+  readonly launcherIdentitySha256?: string | undefined;
+}): string {
   const manifest = readJsonRecord(input.layout.setupManifestPath);
+  const launcherIdentitySha256 =
+    input.launcherIdentitySha256 ?? sha256File(input.layout.launcherPath);
+  if (!/^[a-f0-9]{64}$/u.test(launcherIdentitySha256)) {
+    throw activationFailed("portable registration launcher identity is invalid");
+  }
   const registration = {
     schemaVersion: 1,
     status: "managed",
@@ -622,17 +783,10 @@ export function refreshPortableRegistration(input: {
     ),
     setupManifestSha256: sha256File(input.layout.setupManifestPath),
     installRootIdentitySha256: sha256Text(realpathSync(input.layout.installRoot)),
-    launcherIdentitySha256: sha256File(input.layout.launcherPath),
+    launcherIdentitySha256,
     updatedAt: new Date(input.now).toISOString(),
   };
-  const temporaryPath = `${path}.${String(process.pid)}.tmp`;
-  writeExclusiveFile(temporaryPath, `${JSON.stringify(registration, null, 2)}\n`);
-  atomicPublishRename(temporaryPath, path, { rename: renameSync });
-  try {
-    chmodSync(path, 0o600);
-  } catch {
-    // Best-effort on non-POSIX filesystems.
-  }
+  return `${JSON.stringify(registration, null, 2)}\n`;
 }
 
 const SHORTCUT_FAILURE_PREFIX = "portable activation shortcut command failed";

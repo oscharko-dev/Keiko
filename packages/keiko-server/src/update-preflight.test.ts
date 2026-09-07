@@ -388,6 +388,7 @@ function portableManifest(
       assetName: archiveName,
       archiveFormat: "zip",
       sizeBytes: 99_000,
+      uncompressedSizeBytes: 240_000,
       sha256: ARCHIVE_SHA,
     },
     releaseImpact: {

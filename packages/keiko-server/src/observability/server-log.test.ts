@@ -1,5 +1,7 @@
 import {
+  appendFileSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -20,6 +22,7 @@ import {
   closeFileServerLogSinks,
   createBufferedServerLogSink,
   createFileServerLogSink,
+  appendDurableServerLogBatch,
   errorKindOf,
   formatServerLogLine,
   reportServerLogFailure,
@@ -56,6 +59,8 @@ const fsCalls = vi.hoisted(() => ({
   open: 0,
   write: 0,
   close: 0,
+  fsync: 0,
+  failFsync: false,
   // `null` passes every write through untouched. A number is a byte budget: the descriptor accepts
   // that many more bytes and then reports 0, which is what a stalled descriptor reports and the
   // only way to produce a short write on a regular file.
@@ -87,6 +92,12 @@ vi.mock("node:fs", async (importOriginal) => {
     closeSync: (...args: Parameters<typeof actual.closeSync>): void => {
       fsCalls.close += 1;
       actual.closeSync(...args);
+    },
+    fsyncSync: (...args: Parameters<typeof actual.fsyncSync>): void => {
+      fsCalls.fsync += 1;
+      if (fsCalls.failFsync)
+        throw Object.assign(new Error("forced fsync failure"), { code: "EIO" });
+      actual.fsyncSync(...args);
     },
     renameSync: (...args: Parameters<typeof actual.renameSync>): void => {
       fsCalls.rename += 1;
@@ -126,6 +137,8 @@ describe("server activity log", () => {
     fsCalls.writeBudgetBytes = null;
     fsCalls.linkErrorCode = null;
     fsCalls.rename = 0;
+    fsCalls.fsync = 0;
+    fsCalls.failFsync = false;
     // The failure notice is throttled process-wide, so a test that asserts on it must start from a
     // slate no earlier test can have used up.
     resetServerLogFailureNotices();
@@ -139,10 +152,163 @@ describe("server activity log", () => {
     fsCalls.writeBudgetBytes = null;
     fsCalls.linkErrorCode = null;
     fsCalls.rename = 0;
+    fsCalls.fsync = 0;
+    fsCalls.failFsync = false;
     rmSync(stateDir, { recursive: true, force: true });
     vi.unstubAllEnvs();
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("appends and fsyncs a durable batch through the existing active log", () => {
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "process", op: "before-batch" });
+    const openCount = fsCalls.open;
+
+    const result = appendDurableServerLogBatch(stateDir, {
+      level: "info",
+      inspect: () => ({
+        status: "append",
+        events: [
+          { category: "diagnostic", op: "batch-one" },
+          { category: "diagnostic", op: "batch-complete" },
+        ],
+      }),
+    });
+
+    expect(result).toStrictEqual({ status: "appended", appendedCount: 2 });
+    // Two additional opens pin the fixed state/log directory ancestors; one read-only descriptor
+    // validates the current tail before inspection. The existing append descriptor is still reused.
+    expect(fsCalls.open).toBe(openCount + 3);
+    expect(fsCalls.fsync).toBe(1);
+    expect(readLines(stateDir).map((line) => line.op)).toStrictEqual([
+      "before-batch",
+      "batch-one",
+      "batch-complete",
+    ]);
+  });
+
+  it("does not inspect or touch the log directory when a durable info batch is filtered", () => {
+    const inspect = vi.fn(() => ({ status: "already-complete" as const }));
+
+    expect(appendDurableServerLogBatch(stateDir, { level: "warn", inspect })).toStrictEqual({
+      status: "deferred",
+      reason: "level-filtered",
+    });
+    expect(inspect).not.toHaveBeenCalled();
+    expect(existsSync(join(stateDir, "logs"))).toBe(false);
+  });
+
+  it("defers when the current log changes during durable batch inspection", () => {
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "process", op: "before-race" });
+
+    const result = appendDurableServerLogBatch(stateDir, {
+      level: "info",
+      inspect: (directory) => {
+        appendFileSync(join(directory, "server.log"), "peer\n", "utf8");
+        return {
+          status: "append",
+          events: [{ category: "diagnostic", op: "must-not-append" }],
+        };
+      },
+    });
+
+    expect(result).toStrictEqual({ status: "deferred", reason: "destination-mutated" });
+    expect(readFileSync(join(stateDir, "logs", "server.log"), "utf8")).not.toContain(
+      "must-not-append",
+    );
+  });
+
+  it("reports uncertain durability and closes the active handle when batch fsync fails", () => {
+    fsCalls.failFsync = true;
+
+    expect(
+      appendDurableServerLogBatch(stateDir, {
+        level: "info",
+        inspect: () => ({
+          status: "append",
+          events: [{ category: "diagnostic", op: "uncertain-batch" }],
+        }),
+      }),
+    ).toStrictEqual({ status: "deferred", reason: "durability-uncertain" });
+    expect(fsCalls.close).toBeGreaterThanOrEqual(3);
+  });
+
+  it("terminates a partial record before a durable batch retry", () => {
+    fsCalls.writeBudgetBytes = 5;
+    expect(
+      appendDurableServerLogBatch(stateDir, {
+        level: "info",
+        inspect: () => ({
+          status: "append",
+          events: [{ category: "diagnostic", op: "interrupted-batch" }],
+        }),
+      }),
+    ).toStrictEqual({ status: "deferred", reason: "append-failed" });
+
+    fsCalls.writeBudgetBytes = null;
+    expect(
+      appendDurableServerLogBatch(stateDir, {
+        level: "info",
+        inspect: () => ({
+          status: "append",
+          events: [{ category: "diagnostic", op: "retry-batch" }],
+        }),
+      }),
+    ).toStrictEqual({ status: "appended", appendedCount: 1 });
+    const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+    expect(raw.endsWith("\n")).toBe(true);
+    expect(raw).toContain("retry-batch");
+  });
+
+  it("terminates and syncs a partial current-file tail before fresh-process inspection", async () => {
+    const logs = join(stateDir, "logs");
+    mkdirSync(logs);
+    writeFileSync(join(logs, "server.log"), '{"interrupted":', "utf8");
+    let inspected = false;
+    vi.resetModules();
+    const freshServerLog = await import("./server-log.js");
+
+    try {
+      const result = freshServerLog.appendDurableServerLogBatch(stateDir, {
+        level: "info",
+        inspect: (directory) => {
+          inspected = true;
+          expect(readFileSync(join(directory, "server.log"), "utf8")).toBe('{"interrupted":\n');
+          return {
+            status: "append",
+            events: [{ category: "diagnostic", op: "fresh-process-retry" }],
+          };
+        },
+      });
+
+      expect(inspected).toBe(true);
+      expect(result).toStrictEqual({ status: "appended", appendedCount: 1 });
+      expect(readRawRecords(stateDir)).toEqual([
+        null,
+        expect.objectContaining({ op: "fresh-process-retry" }),
+      ]);
+      expect(fsCalls.fsync).toBe(2);
+    } finally {
+      freshServerLog.closeFileServerLogSinks();
+    }
+  });
+
+  it("does not inspect or truncate a partial tail when delimiter durability is uncertain", () => {
+    const logs = join(stateDir, "logs");
+    mkdirSync(logs);
+    const interrupted = '{"interrupted":';
+    writeFileSync(join(logs, "server.log"), interrupted, "utf8");
+    fsCalls.failFsync = true;
+    const inspect = vi.fn(() => ({ status: "already-complete" as const }));
+
+    expect(appendDurableServerLogBatch(stateDir, { level: "info", inspect })).toStrictEqual({
+      status: "deferred",
+      reason: "destination-unsafe",
+    });
+    expect(inspect).not.toHaveBeenCalled();
+    expect(readFileSync(join(logs, "server.log"), "utf8")).toBe(`${interrupted}\n`);
   });
 
   it("writes one JSON line per event into <stateDir>/logs/server.log", () => {

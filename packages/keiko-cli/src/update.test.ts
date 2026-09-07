@@ -55,6 +55,15 @@ function baseReport(patch: Partial<UpdatePreflightReport> = {}): UpdatePreflight
     blockers: [],
     manualUpdateRequired: false,
     oneClickEligible: true,
+    candidate: {
+      schemaVersion: "1",
+      candidateId: "candidate-0.2.11",
+      targetVersion: "0.2.11",
+      confirmationDigest: "a".repeat(64),
+      executionToken: "b".repeat(64),
+      issuedAt: "2026-06-30T00:00:00.000Z",
+      expiresAt: "2026-06-30T00:10:00.000Z",
+    },
     warnings: [],
     ...patch,
   };
@@ -128,9 +137,17 @@ function updateSession(patch: Partial<UpdateSession> = {}): UpdateSession {
   return {
     schemaVersion: "1",
     sessionId: "session-1",
+    candidateId: "candidate-0.2.11",
+    candidateDigest: "c".repeat(64),
+    correlationId: "update-correlation-1",
     packageName: "@oscharko-dev/keiko",
     targetVersion: "0.2.11",
     phase: "restart-required",
+    lifecycle: {
+      phase: "verifying-relaunch",
+      progress: { completedBytes: 0 },
+      cancellationCutoff: "handoff-committed",
+    },
     failureReason: "none",
     packageManager: "npm",
     installRoot: "/Users/private/customer-bank/repo",
@@ -235,13 +252,15 @@ function fakeSessionManager(
   nonTerminalPolls = 0,
 ): {
   readonly manager: UpdateSessionManager;
-  readonly startedTargets: () => readonly string[];
+  readonly startedCandidateIds: () => readonly string[];
+  readonly startedClaims: () => readonly UpdateSessionStartRequest[];
   readonly getStatusCallCount: () => number;
 } {
   let status = initial;
   let started = false;
   let statusCalls = 0;
-  const startedTargets: string[] = [];
+  const startedCandidateIds: string[] = [];
+  const startedClaims: UpdateSessionStartRequest[] = [];
   const manager: UpdateSessionManager = {
     getStatus: (): UpdateSessionStatus => {
       if (!started) return status;
@@ -253,7 +272,8 @@ function fakeSessionManager(
       };
     },
     start: (input): UpdateSessionStartOutcome => {
-      startedTargets.push(input.targetVersion);
+      startedCandidateIds.push(input.candidateId);
+      startedClaims.push(input);
       started = true;
       const outcomeSession =
         nonTerminalPolls > 0 ? { ...terminal, phase: "running" as const } : terminal;
@@ -270,7 +290,12 @@ function fakeSessionManager(
       throw new Error("verifyRestart not used");
     },
   };
-  return { manager, startedTargets: () => startedTargets, getStatusCallCount: () => statusCalls };
+  return {
+    manager,
+    startedCandidateIds: () => startedCandidateIds,
+    startedClaims: () => startedClaims,
+    getStatusCallCount: () => statusCalls,
+  };
 }
 
 function output(captured: Captured): string {
@@ -366,7 +391,7 @@ describe("keiko update CLI", () => {
     });
 
     expect(code).toBe(1);
-    expect(session.startedTargets()).toEqual([]);
+    expect(session.startedCandidateIds()).toEqual([]);
     expect(output(c)).toContain("Policy: disabled");
     expect(output(c)).toContain("Use your package manager outside Keiko");
   });
@@ -390,7 +415,7 @@ describe("keiko update CLI", () => {
     });
 
     expect(code).toBe(1);
-    expect(session.startedTargets()).toEqual([]);
+    expect(session.startedCandidateIds()).toEqual([]);
     expect(output(c)).toContain("Portable self-update is disabled by policy.");
     expect(output(c)).toContain("download the latest Keiko release asset manually");
     expect(output(c)).not.toContain("Use your package manager outside Keiko");
@@ -418,7 +443,7 @@ describe("keiko update CLI", () => {
     });
 
     expect(code).toBe(1);
-    expect(session.startedTargets()).toEqual([]);
+    expect(session.startedCandidateIds()).toEqual([]);
     expect(output(c)).toContain("Install mode: unsupported (local-checkout)");
     expect(output(c)).toContain("Use your package manager outside Keiko");
     expect(output(c)).not.toContain("npm install");
@@ -448,7 +473,7 @@ describe("keiko update CLI", () => {
     });
 
     expect(code).toBe(1);
-    expect(session.startedTargets()).toEqual([]);
+    expect(session.startedCandidateIds()).toEqual([]);
     expect(output(c)).toContain("This portable release asset is not eligible");
     expect(output(c)).toContain("keep using the current version");
     expect(output(c)).not.toContain("Use your package manager outside Keiko");
@@ -508,7 +533,14 @@ describe("keiko update CLI", () => {
     });
 
     expect(code).toBe(0);
-    expect(session.startedTargets()).toEqual(["0.2.11"]);
+    expect(session.startedCandidateIds()).toEqual(["candidate-0.2.11"]);
+    expect(session.startedClaims()).toEqual([
+      {
+        candidateId: "candidate-0.2.11",
+        confirmationDigest: "a".repeat(64),
+        executionToken: "b".repeat(64),
+      },
+    ]);
     expect(c.out()).toContain("Update apply result: restart-required");
     expect(output(c)).not.toContain("SECRET_TOKEN");
     expect(output(c)).not.toContain("/Users/private");
@@ -528,7 +560,7 @@ describe("keiko update CLI", () => {
     });
 
     expect(code).toBe(1);
-    expect(session.startedTargets()).toEqual([]);
+    expect(session.startedCandidateIds()).toEqual([]);
     expect(output(c)).toContain(
       "Portable-managed one-click updates run through the Keiko update window.",
     );

@@ -1,12 +1,23 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { UpdateInstallMode } from "@oscharko-dev/keiko-contracts";
+import type { UpdateCandidateSnapshot, UpdateInstallMode } from "@oscharko-dev/keiko-contracts";
 import { createUpdateLocalStateManager } from "./update-local-state.js";
 import { createPortableUpdateStager } from "./update-portable-staging.js";
+import { fetchPortableAssetToFile } from "./update-portable-staging-manifest.js";
+import { verifyPortableManifestSidecars } from "./update-portable-sidecar-verification.js";
 import {
+  requiredPortableDiskBytes,
   assertPortableArchiveEntryLimits,
   type PortableArchiveLimitState,
 } from "./update-portable-staging-archive.js";
@@ -28,6 +39,12 @@ const MACOS_ARM64_ASSET_NAME = "keiko-macos-arm64.zip";
 const MACOS_X64_ASSET_NAME = "keiko-macos-x64.zip";
 const SIDECAR_ROOT = "runtime/sidecars/opencode-compatible";
 const tempRoots: string[] = [];
+
+function requestUrl(input: Parameters<typeof fetch>[0]): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.toString();
+  return input.url;
+}
 
 const CRC32_TABLE: Uint32Array = ((): Uint32Array => {
   const table = new Uint32Array(256);
@@ -297,6 +314,60 @@ function portableMode(): UpdateInstallMode {
   };
 }
 
+function candidate(
+  archiveBytes: Uint8Array,
+  sidecarRuntimes: readonly Record<string, unknown>[] = [],
+): UpdateCandidateSnapshot {
+  const manifestText = portableManifest(archiveBytes, sha256(archiveBytes), sidecarRuntimes);
+  const checksumText = `${sha256(archiveBytes)}  ${ASSET_NAME}\n`;
+  const manifest = JSON.parse(manifestText) as Record<string, unknown>;
+  const sidecars = verifyPortableManifestSidecars(manifest, TARGET).summaries;
+  return {
+    schemaVersion: "1",
+    candidateId: "candidate-portable-1",
+    currentVersion: "0.2.10",
+    targetVersion: TARGET_VERSION,
+    channel: "stable",
+    install: {
+      packageName: "@oscharko-dev/keiko",
+      installKind: "portable-managed",
+      portableTarget: TARGET,
+      installIdentitySha256: "1".repeat(64),
+    },
+    release: { source: "github-release", tag: `v${TARGET_VERSION}` },
+    releaseImpactDigest: "2".repeat(64),
+    impact: {
+      entries: [],
+      releaseNoteBullets: [],
+      stateImpact: [],
+      affectedStateStores: [],
+      userActionRequired: false,
+      remediations: [],
+    },
+    issuedAt: "2026-09-04T10:00:00.000Z",
+    expiresAt: "2026-09-04T10:10:00.000Z",
+    portable: {
+      target: TARGET,
+      releaseId: RELEASE_ID,
+      assetId: ASSET_ID,
+      assetName: ASSET_NAME,
+      sizeBytes: archiveBytes.length,
+      uncompressedSizeBytes: archiveBytes.length,
+      sha256: sha256(archiveBytes),
+      manifestAssetName: `${TARGET}-portable-manifest.json`,
+      manifestAssetId: 101,
+      manifestSizeBytes: 2048,
+      manifestSha256: sha256(ENC.encode(manifestText)),
+      checksumAssetName: `${TARGET}-SHA256SUMS.txt`,
+      checksumAssetId: 102,
+      checksumSizeBytes: 128,
+      checksumSha256: sha256(ENC.encode(checksumText)),
+      checksumVerified: true,
+      ...(sidecars.length === 0 ? {} : { sidecarRuntimes: sidecars }),
+    },
+  };
+}
+
 function assetUrl(name: string): string {
   return `https://github.com/oscharko-dev/Keiko/releases/download/v${TARGET_VERSION}/${name}`;
 }
@@ -366,6 +437,7 @@ function portableManifest(
       assetName: ASSET_NAME,
       archiveFormat: "zip",
       sizeBytes: archiveBytes.length,
+      uncompressedSizeBytes: archiveBytes.length,
       sha256: archiveSha,
     },
     runtime: {
@@ -423,7 +495,9 @@ function responseFor(
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const parsed = new URL(url);
-    if (url.endsWith("/releases/latest")) return Promise.resolve(Response.json(releaseRecord));
+    if (url.endsWith(`/releases/${String(RELEASE_ID)}`)) {
+      return Promise.resolve(Response.json(releaseRecord));
+    }
     if (parsed.hostname === "github.com") {
       const name = parsed.pathname.split("/").at(-1);
       return Promise.resolve(
@@ -503,9 +577,242 @@ describe("portable archive limit guards", () => {
       { compressedSize: 1, uncompressedSize: MAX_INFLATE_RATIO + 1 },
     );
   });
+
+  it("applies the frozen archive, inflation, current-tree, and 512 MiB disk formula", () => {
+    expect(requiredPortableDiskBytes(100, 200, 300)).toBe(200 + 300 + 512 * 1024 * 1024);
+    expect(requiredPortableDiskBytes(10_000_000_000, 200, 300)).toBe(
+      200 + 300 + Math.ceil((10_000_000_000 + 200 + 300) * 0.1),
+    );
+  });
 });
 
 describe("portable update staging", () => {
+  it("cancels a non-OK immutable release metadata body before failing", async () => {
+    const archive = portableArchive();
+    const install = makeManagedInstall();
+    const response = new Response("not found", { status: 404 });
+    const body = response.body;
+    if (body === null) throw new Error("response fixture body is missing");
+    const cancel = vi.spyOn(body, "cancel");
+    const stager = createPortableUpdateStager({
+      env: {},
+      fetchImpl: () => Promise.resolve(response),
+      platformVerifier: verifyPlatform,
+    });
+
+    await expect(
+      stager.stage({
+        candidate: candidate(archive),
+        sessionId: "session-metadata-404",
+        targetVersion: TARGET_VERSION,
+        installMode: portableMode(),
+        runtimeFacts: { packageRoot: install.packageRoot },
+      }),
+    ).rejects.toMatchObject({ reason: "portable-download-failed" });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("cancels an oversized streaming archive source exactly once", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-portable-download-"));
+    tempRoots.push(root);
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controller.enqueue(Uint8Array.of(1, 2));
+      },
+      cancel,
+    });
+    const archive = portableArchive();
+
+    await expect(
+      fetchPortableAssetToFile(
+        { env: {}, fetchImpl: () => Promise.resolve(new Response(body)) },
+        { id: ASSET_ID, name: ASSET_NAME, size: 1, downloadUrl: assetUrl(ASSET_NAME) },
+        join(root, "archive.zip"),
+        {
+          candidate: candidate(archive),
+          sessionId: "session-oversized-stream",
+          targetVersion: TARGET_VERSION,
+          installMode: portableMode(),
+        },
+      ),
+    ).rejects.toMatchObject({ reason: "portable-download-failed" });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("cancels an aborted streaming archive source exactly once", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-portable-download-"));
+    tempRoots.push(root);
+    const controller = new AbortController();
+    const cancel = vi.fn();
+    let markProgressed: (() => void) | undefined;
+    const progressed = new Promise<void>((resolveProgressed) => {
+      markProgressed = resolveProgressed;
+    });
+    const body = new ReadableStream<Uint8Array>({
+      start(stream): void {
+        stream.enqueue(new Uint8Array(1024 * 1024));
+      },
+      cancel,
+    });
+    const archive = portableArchive();
+    const download = fetchPortableAssetToFile(
+      { env: {}, fetchImpl: () => Promise.resolve(new Response(body)) },
+      { id: ASSET_ID, name: ASSET_NAME, size: 1024 * 1024 + 1, downloadUrl: assetUrl(ASSET_NAME) },
+      join(root, "archive.zip"),
+      {
+        candidate: candidate(archive),
+        sessionId: "session-aborted-stream",
+        targetVersion: TARGET_VERSION,
+        installMode: portableMode(),
+        signal: controller.signal,
+        onProgress: () => markProgressed?.(),
+      },
+    );
+
+    await progressed;
+    controller.abort();
+    await expect(download).rejects.toBeInstanceOf(Error);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("rejects rebound release metadata before downloading candidate bytes", async () => {
+    const archive = portableArchive();
+    const install = makeManagedInstall();
+    const rebound = release(archive.length);
+    const assets = rebound.assets as Record<string, unknown>[];
+    const targetAsset = assets.find((asset) => asset.name === ASSET_NAME);
+    if (targetAsset === undefined) throw new Error("target fixture missing");
+    targetAsset.id = ASSET_ID + 1;
+    const fetchImpl = responseFor(archive, portableManifest(archive), rebound);
+    const stager = createPortableUpdateStager({
+      env: {},
+      fetchImpl,
+      platformVerifier: verifyPlatform,
+    });
+
+    await expect(
+      stager.stage({
+        candidate: candidate(archive),
+        sessionId: "session-rebound-release",
+        targetVersion: TARGET_VERSION,
+        installMode: portableMode(),
+        runtimeFacts: { packageRoot: install.packageRoot },
+      }),
+    ).rejects.toMatchObject({ reason: "portable-verification-failed" });
+    const requested = vi.mocked(fetchImpl).mock.calls.map(([request]) => requestUrl(request));
+    expect(requested).toEqual([
+      `https://api.github.com/repos/oscharko-dev/keiko/releases/${String(RELEASE_ID)}`,
+    ]);
+    expect(requested).not.toContain(
+      "https://api.github.com/repos/oscharko-dev/keiko/releases/latest",
+    );
+  });
+
+  it("rejects rebound manifest and checksum metadata from the immutable release", async () => {
+    const archive = portableArchive();
+    const install = makeManagedInstall();
+    const rebound = release(archive.length);
+    const assets = rebound.assets as Record<string, unknown>[];
+    const manifest = assets.find((asset) => asset.name === `${TARGET}-portable-manifest.json`);
+    if (manifest === undefined) throw new Error("manifest fixture missing");
+    manifest.id = 999;
+    const fetchImpl = responseFor(archive, portableManifest(archive), rebound);
+    const stager = createPortableUpdateStager({
+      env: {},
+      fetchImpl,
+      platformVerifier: verifyPlatform,
+    });
+
+    await expect(
+      stager.stage({
+        candidate: candidate(archive),
+        sessionId: "session-rebound-evidence",
+        targetVersion: TARGET_VERSION,
+        installMode: portableMode(),
+        runtimeFacts: { packageRoot: install.packageRoot },
+      }),
+    ).rejects.toMatchObject({ reason: "portable-verification-failed" });
+    expect(vi.mocked(fetchImpl)).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects checksum bytes that do not match the preflight candidate digest", async () => {
+    const archive = portableArchive();
+    const install = makeManagedInstall();
+    const snapshot = candidate(archive);
+    if (snapshot.portable === undefined) throw new Error("portable candidate fixture missing");
+    const stager = createPortableUpdateStager({
+      env: {},
+      fetchImpl: responseFor(archive),
+      platformVerifier: verifyPlatform,
+    });
+
+    await expect(
+      stager.stage({
+        candidate: {
+          ...snapshot,
+          portable: { ...snapshot.portable, checksumSha256: "f".repeat(64) },
+        },
+        sessionId: "session-rebound-checksum",
+        targetVersion: TARGET_VERSION,
+        installMode: portableMode(),
+        runtimeFacts: { packageRoot: install.packageRoot },
+      }),
+    ).rejects.toMatchObject({ reason: "portable-verification-failed" });
+  });
+
+  it("fails before metadata or archive download when disk headroom is insufficient", async () => {
+    const archive = portableArchive();
+    const install = makeManagedInstall();
+    const fetchImpl = responseFor(archive);
+    const stager = createPortableUpdateStager({
+      env: {},
+      fetchImpl,
+      availableDiskBytes: () => 0,
+      platformVerifier: verifyPlatform,
+    });
+
+    await expect(
+      stager.stage({
+        candidate: candidate(archive),
+        sessionId: "session-low-disk",
+        targetVersion: TARGET_VERSION,
+        installMode: portableMode(),
+        runtimeFacts: { packageRoot: install.packageRoot },
+      }),
+    ).rejects.toMatchObject({ reason: "portable-staging-failed" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(readFileSync(join(install.root, "active.txt"), "utf8")).toBe("active");
+  });
+
+  it("cancels during extraction, removes partial staging, and preserves the active tree", async () => {
+    const archive = portableArchive();
+    const install = makeManagedInstall();
+    const controller = new AbortController();
+    const stager = createPortableUpdateStager({
+      env: {},
+      fetchImpl: responseFor(archive),
+      platformVerifier: verifyPlatform,
+    });
+
+    await expect(
+      stager.stage({
+        candidate: candidate(archive),
+        sessionId: "session-cancel-extraction",
+        targetVersion: TARGET_VERSION,
+        installMode: portableMode(),
+        runtimeFacts: { packageRoot: install.packageRoot },
+        signal: controller.signal,
+        onProgress: (progress) => {
+          if (progress.phase === "staging") controller.abort();
+        },
+      }),
+    ).rejects.toMatchObject({ reason: "cancelled" });
+    expect(readFileSync(join(install.root, "active.txt"), "utf8")).toBe("active");
+    const stageBase = join(dirname(install.root), ".keiko-portable-updates");
+    expect(readdirSync(stageBase)).toEqual([]);
+  });
+
   it("downloads, verifies, stages, and records content-free state", async () => {
     const archive = portableArchive();
     const install = makeManagedInstall();
@@ -518,6 +825,7 @@ describe("portable update staging", () => {
     });
 
     const summary = await stager.stage({
+      candidate: candidate(archive),
       sessionId: "session-1",
       targetVersion: TARGET_VERSION,
       installMode: portableMode(),
@@ -531,11 +839,6 @@ describe("portable update staging", () => {
     const persisted = JSON.stringify(localState.readRuntimeState());
     expect(persisted).not.toContain(install.root);
     expect(persisted).not.toContain("https://github.com");
-    const audit = readFileSync(join(install.stateDir, "updates", "update-audit.jsonl"), "utf8");
-    expect(audit).toContain("portable-download-result");
-    expect(audit).toContain("portable-staging-result");
-    expect(audit).not.toContain(install.root);
-    expect(audit).not.toContain("https://github.com");
   });
 
   it("fails closed when the release is missing a required first-class portable archive", async () => {
@@ -555,6 +858,7 @@ describe("portable update staging", () => {
 
     await expect(
       stager.stage({
+        candidate: candidate(archive),
         sessionId: "session-missing-non-target-archive",
         targetVersion: TARGET_VERSION,
         installMode: portableMode(),
@@ -562,13 +866,10 @@ describe("portable update staging", () => {
       }),
     ).rejects.toMatchObject({ reason: "portable-verification-failed" });
 
-    const audit = readFileSync(join(install.stateDir, "updates", "update-audit.jsonl"), "utf8");
-    expect(audit).toContain("portable-staging-result");
-    expect(audit).toContain('"status":"failed"');
-    expect(audit).not.toContain("portable-download-result");
+    expect(localState.readRuntimeState().portableStage).toBeUndefined();
   });
 
-  it("verifies bundled sidecar payloads and records content-free sidecar evidence", async () => {
+  it("verifies bundled sidecar payloads and records content-free sidecar state", async () => {
     const files = sidecarFiles();
     const sidecar = sidecarRuntime(files);
     const archive = portableArchive(sidecarArchiveEntries(files));
@@ -582,6 +883,7 @@ describe("portable update staging", () => {
     });
 
     const summary = await stager.stage({
+      candidate: candidate(archive, [sidecar]),
       sessionId: "session-sidecar",
       targetVersion: TARGET_VERSION,
       installMode: portableMode(),
@@ -598,12 +900,6 @@ describe("portable update staging", () => {
     const persisted = JSON.stringify(localState.readRuntimeState());
     expect(persisted).not.toContain(SIDECAR_ROOT);
     expect(persisted).not.toContain("opencode.cmd");
-    const audit = readFileSync(join(install.stateDir, "updates", "update-audit.jsonl"), "utf8");
-    expect(audit).toContain("portable-sidecar-verification-result");
-    expect(audit).toContain("opencode-compatible");
-    expect(audit).toContain(sidecarPayloadSha256(files));
-    expect(audit).not.toContain(SIDECAR_ROOT);
-    expect(audit).not.toContain(install.root);
   });
 
   it("fails closed when staged sidecar payload digest does not match the manifest", async () => {
@@ -621,6 +917,7 @@ describe("portable update staging", () => {
 
     await expect(
       stager.stage({
+        candidate: candidate(archive, [sidecar]),
         sessionId: "session-sidecar-fail",
         targetVersion: TARGET_VERSION,
         installMode: portableMode(),
@@ -628,10 +925,7 @@ describe("portable update staging", () => {
       }),
     ).rejects.toMatchObject({ reason: "portable-sidecar-verification-failed" });
     expect(readFileSync(join(install.root, "active.txt"), "utf8")).toBe("active");
-    const audit = readFileSync(join(install.stateDir, "updates", "update-audit.jsonl"), "utf8");
-    expect(audit).toContain("sidecar-digest-mismatch");
-    expect(audit).not.toContain(SIDECAR_ROOT);
-    expect(audit).not.toContain(install.root);
+    expect(localState.readRuntimeState().portableStage).toBeUndefined();
   });
 
   it("fails closed when the shipped executable digest is stale", async () => {
@@ -651,6 +945,7 @@ describe("portable update staging", () => {
 
     await expect(
       stager.stage({
+        candidate: candidate(archive, [sidecar]),
         sessionId: "session-sidecar-stale-executable-digest",
         targetVersion: TARGET_VERSION,
         installMode: portableMode(),
@@ -658,10 +953,7 @@ describe("portable update staging", () => {
       }),
     ).rejects.toMatchObject({ reason: "portable-sidecar-verification-failed" });
     expect(readFileSync(join(install.root, "active.txt"), "utf8")).toBe("active");
-    const audit = readFileSync(join(install.stateDir, "updates", "update-audit.jsonl"), "utf8");
-    expect(audit).toContain("sidecar-digest-mismatch");
-    expect(audit).not.toContain(SIDECAR_ROOT);
-    expect(audit).not.toContain(install.root);
+    expect(localState.readRuntimeState().portableStage).toBeUndefined();
   });
 
   it("fails closed when the archive hash no longer matches the verified manifest", async () => {
@@ -676,6 +968,7 @@ describe("portable update staging", () => {
 
     await expect(
       stager.stage({
+        candidate: candidate(archive),
         sessionId: "session-2",
         targetVersion: TARGET_VERSION,
         installMode: portableMode(),
@@ -697,6 +990,7 @@ describe("portable update staging", () => {
 
     await expect(
       stager.stage({
+        candidate: candidate(archive),
         sessionId: "session-3",
         targetVersion: TARGET_VERSION,
         installMode: portableMode(),
@@ -726,6 +1020,7 @@ describe("portable update staging", () => {
 
     await expect(
       stager.stage({
+        candidate: candidate(archive),
         sessionId: "session-platform-fail",
         targetVersion: TARGET_VERSION,
         installMode: portableMode(),

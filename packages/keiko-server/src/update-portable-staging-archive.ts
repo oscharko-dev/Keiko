@@ -1,4 +1,3 @@
-import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -12,6 +11,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statfsSync,
   statSync,
 } from "node:fs";
 import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
@@ -25,15 +25,18 @@ import {
   MAX_ARCHIVE_ENTRIES,
   MAX_ENTRY_BYTES,
   MAX_INFLATE_RATIO,
+  MIN_PORTABLE_DISK_MARGIN_BYTES,
   MAX_UNCOMPRESSED_BYTES,
   PACKAGE_NAME,
   PORTABLE_PAYLOAD_ROOT,
   PORTABLE_STAGE_DIR_PREFIX,
   fieldEquals,
+  assertAbort,
   parseJsonRecord,
   primaryLauncher,
   recordAt,
   runtimeFor,
+  reportPortableProgress,
   type PortablePlatformVerifier,
   type PortableUpdateStageInput,
   PortableUpdateStagingError,
@@ -50,6 +53,25 @@ interface ContainedEntry {
 interface ExtractedTreeFile {
   readonly relativePath: string;
   readonly sha256: string;
+}
+
+interface ExtractionProgressState {
+  completedBytes: number;
+  lastReportedBytes: number;
+  lastReportedAt: number;
+}
+
+function reportExtractionProgress(
+  session: PortableUpdateStageInput,
+  progress: ExtractionProgressState,
+): void {
+  reportPortableProgress(session, {
+    phase: "staging",
+    completedBytes: progress.completedBytes,
+    totalBytes: session.candidate.portable?.uncompressedSizeBytes,
+  });
+  progress.lastReportedBytes = progress.completedBytes;
+  progress.lastReportedAt = Date.now();
 }
 
 export function managedRootFromPackageRoot(
@@ -75,11 +97,7 @@ function assertNotSymlink(path: string): void {
   }
 }
 
-function stagingRoot(
-  input: PortableUpdateStageInput,
-  target: UpdatePortableTarget,
-  stageId: string,
-): string {
+function stagingBase(input: PortableUpdateStageInput, target: UpdatePortableTarget): string {
   const managedRoot = managedRootFromPackageRoot(target, input.runtimeFacts?.packageRoot);
   if (
     managedRoot === undefined ||
@@ -95,7 +113,22 @@ function stagingRoot(
   assertNotSymlink(base);
   mkdirSync(base, { recursive: true, mode: 0o700 });
   chmodSync(base, 0o700);
-  return join(base, stageId);
+  return base;
+}
+
+function stagingRoot(
+  input: PortableUpdateStageInput,
+  target: UpdatePortableTarget,
+  stageId: string,
+): string {
+  return join(stagingBase(input, target), stageId);
+}
+
+export function createPortableDownloadRoot(
+  input: PortableUpdateStageInput,
+  target: UpdatePortableTarget,
+): string {
+  return mkdtempSync(join(stagingBase(input, target), `${input.sessionId}.download-`));
 }
 
 function normalizedEntryName(name: string): string | undefined {
@@ -136,6 +169,88 @@ export interface PortableArchiveLimitState {
   inflated: number;
 }
 
+export function requiredPortableDiskBytes(
+  currentTreeBytes: number,
+  archiveBytes: number,
+  uncompressedBytes: number,
+): number {
+  const total = currentTreeBytes + archiveBytes + uncompressedBytes;
+  return (
+    archiveBytes +
+    uncompressedBytes +
+    Math.max(MIN_PORTABLE_DISK_MARGIN_BYTES, Math.ceil(total * 0.1))
+  );
+}
+
+function boundedCurrentTreeSize(root: string, signal: AbortSignal | undefined): number {
+  let entries = 0;
+  let bytes = 0;
+  const pending = [root];
+  while (pending.length > 0) {
+    assertAbort(signal);
+    const cursor = pending.pop();
+    if (cursor === undefined) break;
+    for (const entry of readdirSync(cursor, { withFileTypes: true })) {
+      entries += 1;
+      if (entries > MAX_ARCHIVE_ENTRIES) {
+        throw new PortableUpdateStagingError(
+          "portable-staging-failed",
+          "managed tree exceeds limits",
+        );
+      }
+      const path = join(cursor, entry.name);
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) {
+        throw new PortableUpdateStagingError("portable-staging-failed", "managed tree is unsafe");
+      }
+      if (stat.isDirectory()) pending.push(path);
+      else if (stat.isFile()) bytes += stat.size;
+      else
+        throw new PortableUpdateStagingError("portable-staging-failed", "managed tree is unsafe");
+      if (!Number.isSafeInteger(bytes)) {
+        throw new PortableUpdateStagingError(
+          "portable-staging-failed",
+          "managed tree size is invalid",
+        );
+      }
+    }
+  }
+  return bytes;
+}
+
+function availableDiskBytes(path: string): number {
+  const stats = statfsSync(path);
+  return stats.bavail * stats.bsize;
+}
+
+export function assertPortableDiskHeadroom(
+  session: PortableUpdateStageInput,
+  target: UpdatePortableTarget,
+  availableBytes?: (path: string) => number,
+): void {
+  const portable = session.candidate.portable;
+  const managedRoot = managedRootFromPackageRoot(target, session.runtimeFacts?.packageRoot);
+  if (portable === undefined || managedRoot === undefined) {
+    throw new PortableUpdateStagingError(
+      "portable-preflight-ineligible",
+      "portable disk facts are unavailable",
+    );
+  }
+  const currentBytes = boundedCurrentTreeSize(managedRoot, session.signal);
+  const available = availableBytes?.(managedRoot) ?? availableDiskBytes(managedRoot);
+  const required = requiredPortableDiskBytes(
+    currentBytes,
+    portable.sizeBytes,
+    portable.uncompressedSizeBytes,
+  );
+  if (!Number.isSafeInteger(available) || available < required) {
+    throw new PortableUpdateStagingError(
+      "portable-staging-failed",
+      "portable staging disk headroom is insufficient",
+    );
+  }
+}
+
 export function assertPortableArchiveEntryLimits(
   entry: { readonly uncompressedSize: number; readonly compressedSize: number },
   state: PortableArchiveLimitState,
@@ -165,24 +280,20 @@ export function assertPortableArchiveEntryLimits(
   }
 }
 
-function openZip(bytes: Uint8Array): Promise<yauzl.ZipFile> {
+function openZip(path: string): Promise<yauzl.ZipFile> {
   return new Promise((resolveZip, reject) => {
-    yauzl.fromBuffer(
-      Buffer.from(bytes),
-      { lazyEntries: true, decodeStrings: true },
-      (error, zip) => {
-        if (error !== null) {
-          reject(
-            new PortableUpdateStagingError(
-              "portable-staging-failed",
-              "portable archive is malformed",
-            ),
-          );
-          return;
-        }
-        resolveZip(zip);
-      },
-    );
+    yauzl.open(path, { lazyEntries: true, decodeStrings: true }, (error, zip) => {
+      if (error !== null) {
+        reject(
+          new PortableUpdateStagingError(
+            "portable-staging-failed",
+            "portable archive is malformed",
+          ),
+        );
+        return;
+      }
+      resolveZip(zip);
+    });
   });
 }
 
@@ -200,10 +311,22 @@ function openEntryStream(zip: yauzl.ZipFile, entry: yauzl.Entry): Promise<NodeJS
   });
 }
 
-function hashingTransform(hash: ReturnType<typeof createHash>): Transform {
+function hashingTransform(
+  hash: ReturnType<typeof createHash>,
+  progress: ExtractionProgressState,
+  session: PortableUpdateStageInput,
+): Transform {
   return new Transform({
     transform(chunk: Buffer, _encoding, callback): void {
       hash.update(chunk);
+      progress.completedBytes += chunk.byteLength;
+      const now = Date.now();
+      if (
+        progress.completedBytes - progress.lastReportedBytes >= 1024 * 1024 ||
+        now - progress.lastReportedAt >= 1_000
+      ) {
+        reportExtractionProgress(session, progress);
+      }
       callback(null, chunk);
     },
   });
@@ -213,14 +336,17 @@ async function writeZipEntry(
   zip: yauzl.ZipFile,
   entry: yauzl.Entry,
   destination: string,
+  session: PortableUpdateStageInput,
+  progress: ExtractionProgressState,
 ): Promise<string> {
   const mode = entryFileMode(entry);
   const hash = createHash("sha256");
   mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
   await pipeline(
     await openEntryStream(zip, entry),
-    hashingTransform(hash),
+    hashingTransform(hash, progress, session),
     createWriteStream(destination, { mode }),
+    { signal: session.signal },
   );
   chmodSync(destination, mode);
   return hash.digest("hex");
@@ -232,8 +358,19 @@ async function handleEntry(
   root: string,
   state: PortableArchiveLimitState,
   files: ExtractedTreeFile[],
+  seen: Set<string>,
+  session: PortableUpdateStageInput,
+  progress: ExtractionProgressState,
 ): Promise<void> {
+  assertAbort(session.signal);
   assertPortableArchiveEntryLimits(entry, state);
+  const declaredInflated = session.candidate.portable?.uncompressedSizeBytes;
+  if (declaredInflated === undefined || state.inflated > declaredInflated) {
+    throw new PortableUpdateStagingError(
+      "portable-staging-failed",
+      "portable archive exceeds its reviewed inflated size",
+    );
+  }
   const contained = containedEntry(root, entry.fileName);
   const type = entryType(entry);
   if (contained === undefined || type === "unsafe") {
@@ -242,14 +379,22 @@ async function handleEntry(
       "portable archive contains unsafe entries",
     );
   }
+  if (seen.has(contained.relativeName)) {
+    throw new PortableUpdateStagingError(
+      "portable-staging-failed",
+      "portable archive contains duplicate entries",
+    );
+  }
+  seen.add(contained.relativeName);
   if (type === "directory") {
     mkdirSync(contained.destination, { recursive: true, mode: 0o700 });
     return;
   }
   files.push({
     relativePath: contained.relativeName,
-    sha256: await writeZipEntry(zip, entry, contained.destination),
+    sha256: await writeZipEntry(zip, entry, contained.destination, session, progress),
   });
+  reportExtractionProgress(session, progress);
 }
 
 function hashTreeRecords(files: readonly ExtractedTreeFile[]): string {
@@ -262,24 +407,41 @@ function hashTreeRecords(files: readonly ExtractedTreeFile[]): string {
   return hash.digest("hex");
 }
 
-async function extractArchive(bytes: Uint8Array, destination: string): Promise<string> {
-  const zip = await openZip(bytes);
+async function extractArchive(
+  archivePath: string,
+  destination: string,
+  session: PortableUpdateStageInput,
+): Promise<string> {
+  assertAbort(session.signal);
+  const zip = await openZip(archivePath);
   const state = { entries: 0, inflated: 0 };
+  const progress = { completedBytes: 0, lastReportedBytes: 0, lastReportedAt: Date.now() };
   const files: ExtractedTreeFile[] = [];
+  const seen = new Set<string>();
+  let rejectAbort: (() => void) | undefined;
   try {
     await new Promise<void>((resolveDone, reject) => {
+      rejectAbort = (): void => {
+        reject(new PortableUpdateStagingError("cancelled", "cancelled"));
+      };
       zip.on("entry", (entry: yauzl.Entry) => {
-        void handleEntry(zip, entry, destination, state, files).then(() => {
-          zip.readEntry();
-        }, reject);
+        void handleEntry(zip, entry, destination, state, files, seen, session, progress).then(
+          () => {
+            zip.readEntry();
+          },
+          reject,
+        );
       });
       zip.once("end", resolveDone);
       zip.once("error", reject);
+      session.signal?.addEventListener("abort", rejectAbort, { once: true });
       zip.readEntry();
     });
   } finally {
+    if (rejectAbort !== undefined) session.signal?.removeEventListener("abort", rejectAbort);
     zip.close();
   }
+  reportExtractionProgress(session, progress);
   return hashTreeRecords(files);
 }
 
@@ -459,8 +621,8 @@ async function verifyLocalPlatform(input: {
   });
 }
 
-export async function stageArchiveBytes(input: {
-  readonly bytes: Uint8Array;
+export async function stageArchiveFile(input: {
+  readonly archivePath: string;
   readonly session: PortableUpdateStageInput;
   readonly target: UpdatePortableTarget;
   readonly targetVersion: string;
@@ -475,7 +637,8 @@ export async function stageArchiveBytes(input: {
   const finalRoot = stagingRoot(input.session, input.target, input.stageId);
   const workRoot = mkdtempSync(join(dirname(finalRoot), `${input.stageId}.tmp-`));
   try {
-    const extractedTreeSha256 = await extractArchive(input.bytes, workRoot);
+    const extractedTreeSha256 = await extractArchive(input.archivePath, workRoot, input.session);
+    assertAbort(input.session.signal);
     verifyExtractedTree(workRoot, extractedTreeSha256);
     const layout = validateStagedLayout(workRoot, input.target, input.targetVersion);
     await verifyLocalPlatform({
@@ -489,6 +652,7 @@ export async function stageArchiveBytes(input: {
       resourceRoot: stagedResourceRoot(workRoot, input.target),
       sidecars: input.sidecars,
     });
+    assertAbort(input.session.signal);
     rmSync(finalRoot, { recursive: true, force: true });
     publishStagedArchiveTree(workRoot, finalRoot, input);
   } catch (error) {

@@ -111,8 +111,10 @@ The updater targets one managed installation only. It must be able to attest all
 - the package root it is mutating, and
 - the installed version at that root.
 
-Supported v1 update execution is limited to persistent npm or Yarn installs that satisfy those
-checks. The updater must refuse to guess when the launch mode is ambiguous.
+For the package-manager path, supported v1 update execution is limited to persistent npm or Yarn
+installs that satisfy those checks. ADR-0121 extends the same authority to attested
+`portable-managed` installs; it does not add another compatibility catalog or confirmation flow.
+The updater must refuse to guess when the launch mode is ambiguous.
 
 Unsupported or ambiguous modes include:
 
@@ -139,6 +141,22 @@ mutation route. It is available only to a deliberate local shell user, so Host/O
 protections do not apply. It must still use the same managed-install attestation, policy gate,
 fixed argv allowlist, release-impact checks, state-directory session lock, timeout/abort behavior,
 and evidence semantics as the BFF authority so CLI and UI update attempts cannot overlap or drift.
+
+### Exact candidate authority (amended for #3405)
+
+Host/Origin and CSRF checks authenticate the local mutation boundary, not the candidate. Both local
+entry points must consume a fresh, single-use claim issued by the real preflight producer. The
+start contract carries `candidateId`, `confirmationDigest`, and `executionToken`, with an optional
+request correlation id; it does not accept a caller-selected version, install path, command, URL,
+or package name as execution authority.
+
+The server-held snapshot binds current and target versions, stable channel, reviewed release-impact
+digest, install identity, eligibility, expiry, and the confirmed impact. Portable candidates also
+bind the exact release, archive, manifest, checksum, and sidecar identities and digests. Revalidation
+must reject changed install facts or release evidence before execution. A rejected, expired, replayed,
+or lost claim requires a new preflight and confirmation; restart must not reconstruct a usable
+execution token from durable state. Execution stays pinned to the consumed candidate if `latest`
+changes afterward. Tokens and raw impact content never enter activity evidence.
 
 ### Compatibility and remediation policy
 
@@ -212,6 +230,21 @@ The evidence record for an update should stay content-free:
 
 If the updater cannot prove a single managed target, it must not emit a mutation attempt. It should
 emit a manual instruction path only.
+
+The reviewed #3404 repair contract requires one revision-checked durable aggregate for active/last
+session, bounded progress, confirmation binding, terminal outcome, and activation recovery ownership.
+The server lifecycle owner rejects stale, duplicate, or out-of-order transitions; CLI, UI, and native
+adapters project that decision rather than inferring success independently. Corrupt, incompatible,
+missing required, or unwritable state must produce a distinct recoverable result, not a clean default.
+After ownership transfer, persistence uncertainty retains recovery ownership and blocks another update.
+
+Canonical activity and structured diagnostics flow through the existing logging ports into
+`server.log`; a second updater audit journal is not an evidence authority. Attempt reconstruction
+uses explicit candidate/session and parent-correlation links, never nearby timestamps or matching
+versions. Mechanical native handoff receipts are bounded recovery inputs, not a second semantic
+lifecycle or a customer log. Browser reconnect retains the last safe projection and cannot declare
+success from a cached shell, a successful spawn, or a version string without the required restart
+proof. ADR-0121 defines the portable ownership-transfer and exact-target verification requirements.
 
 ### Alternatives considered
 

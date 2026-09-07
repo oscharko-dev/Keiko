@@ -1,4 +1,5 @@
 import type { ReleaseImpactRemediation, ReleaseImpactStateImpact } from "./release-impact.js";
+import type { UpdateCandidateClaim } from "./update-candidate.js";
 import type { UpdatePortableSidecarSummary, UpdatePortableTarget } from "./update-session.js";
 
 export const UPDATE_PREFLIGHT_SCHEMA_VERSION = 1 as const;
@@ -102,10 +103,16 @@ export interface UpdatePreflightPortableAssetSummary {
   readonly assetId: number;
   readonly releaseId: number;
   readonly sizeBytes: number;
+  readonly uncompressedSizeBytes: number;
   readonly sha256: string;
   readonly manifestAssetName: string;
+  readonly manifestAssetId: number;
+  readonly manifestSizeBytes: number;
   readonly manifestSha256: string;
   readonly checksumAssetName: string;
+  readonly checksumAssetId: number;
+  readonly checksumSizeBytes: number;
+  readonly checksumSha256: string;
   readonly checksumVerified: boolean;
   readonly sidecarRuntimes?: readonly UpdatePortableSidecarSummary[] | undefined;
 }
@@ -171,5 +178,6 @@ export interface UpdatePreflightReport {
   readonly patchNotes?: UpdatePreflightPatchNotes;
   readonly release?: UpdatePreflightReleaseSummary;
   readonly impact?: UpdatePreflightImpactSummary;
+  readonly candidate?: UpdateCandidateClaim;
   readonly warnings: readonly string[];
 }

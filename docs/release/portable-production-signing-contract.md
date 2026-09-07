@@ -391,6 +391,31 @@ ephemeral same-release comparison, not a committed thumbprint, public-key, or su
 preserves the approved Azure leaf-rotation contract while rejecting a valid binary from another
 publisher.
 
+### Updater continuity is a cross-release comparison
+
+The updater must not apply the same-release leaf-equality check between installed N−1 and candidate
+N. Independently verify both releases under the Public Trust/code-signing policy, bind the exact
+reviewed subscriber identity-validation EKU, and permit legitimate short-lived leaf rotation. A
+generic locally installed root, matching subject text, or account/profile alias is not that proof.
+The runtime verifier restricts its accepted Windows public roots to the native `AuthRoot` store;
+it must not turn the general local `Root` store into a publisher allowlist.
+
+Within each individual release, launcher and executable-object consistency still uses the verified
+same-release signer. Cross-release continuity does not relax SHA-256, embedded RFC 3161 validation,
+timestamp-time chain checks, code-signing/TSA EKUs, manifest/provenance binding, or archive-tree
+verification. The timestamp parser must reject noncanonical DER as well as missing, legacy,
+duplicate, or mismatched tokens. Runtime PowerShell 5.1/.NET Framework verification must be proven
+on Windows; a portable parser test on macOS is not native Authenticode qualification.
+
+Evaluation-installed applications cannot establish this production continuity. The first transition
+to a production-signed build is a deliberate manual installation under that release's reviewed
+instructions, preserving Keiko runtime state. Do not enable one-click execution by relabeling an
+evaluation artifact, accepting an injected verification Boolean, or bypassing a platform warning.
+The first repaired release is not itself proof of N−1→N production operation: release qualification
+requires two immutable production-signed eligible releases and fresh native verification on Windows
+x64 and both macOS architectures. Until those artifacts and provider prerequisites exist, record
+the external qualification gap explicitly and keep production one-click claims disabled.
+
 The protected macOS production stage binds its reviewed `APPLE_TEAM_ID` into the packaged server
 module before signing. An unbound development or dispatch package cannot qualify the native runtime.
 At startup and point of use, the outer `Keiko.app` seal, system-extension manager, Endpoint Security

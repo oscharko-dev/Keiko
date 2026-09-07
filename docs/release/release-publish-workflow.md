@@ -303,6 +303,31 @@ configuration, rerunning the stable-tag portable-assets workflow, and using the 
 id/attempt; never reuse an expired artifact, edit a candidate manifest, fabricate positive ids, or
 promote a partial target set.
 
+### Built-in updater qualification (#3403/#3405)
+
+Artifact signing, fresh archive verification, and the launch/setup smoke do not by themselves prove
+an installed application can replace itself. Before advertising production one-click updates, the
+release owner must attach native N−1→N canary evidence for Windows x64, macOS arm64, and macOS x64
+using two immutable production-signed eligible releases. Each run must exercise the assembled
+application's real BFF/CLI/native path, prove orderly same-port process transfer, exact target
+startup and durable outcome, reconstruct the canonical activity timeline, and restart again while
+retaining N. Record target, source/target versions, exact artifact digests and run identities, and
+bounded results; never include provider material, private control capsules, or raw command output.
+
+Secret-free deterministic PR qualification must separately cover the trust, resource, cancellation,
+crash/recovery, and UI outage boundaries specified by #3405. Route mocks, fake processes, injected
+version verifiers, and payload `--version` smoke are not substitutes for real native execution.
+Required-lane reachability and all three actual target results must be recorded, not inferred from
+workflow YAML or a skipped job.
+
+If #2198's provider prerequisites or two production-signed releases are unavailable, keep that
+external production-qualification limitation explicit on the issue/epic and in release guidance.
+Code review may proceed with the stated limit; a production one-click claim may not. Evaluation
+releases, including 0.3.17, remain manual-only and require a deliberate manual transition to the
+first production build. Do not retroactively change their signing scope, broaden publisher trust,
+or treat fixture evidence as a canary. No signing credentials or publish approval are granted by
+this updater repair.
+
 The publish job runs `npm run release:publish -- --tag "$NPM_DIST_TAG"` after confirming
 that the tag-push release verification already completed successfully for the same commit.
 The script:

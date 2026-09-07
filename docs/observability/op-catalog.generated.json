@@ -5,7 +5,7 @@
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-analyze.ts:517",
+      "site": "packages/keiko-cli/src/support-analyze.ts:730",
       "package": "keiko-cli"
     },
     {
@@ -41,7 +41,7 @@
     {
       "op": "process.exiting",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:686",
+      "site": "packages/keiko-cli/src/ui.ts:711",
       "package": "keiko-cli"
     },
     {
@@ -53,19 +53,19 @@
     {
       "op": "process.fatal",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:426",
+      "site": "packages/keiko-cli/src/ui.ts:451",
       "package": "keiko-cli"
     },
     {
       "op": "process.heartbeat",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:890",
+      "site": "packages/keiko-cli/src/ui.ts:943",
       "package": "keiko-cli"
     },
     {
       "op": "process.started",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:1005",
+      "site": "packages/keiko-cli/src/ui.ts:1058",
       "package": "keiko-cli"
     },
     {
@@ -114,6 +114,12 @@
       "op": "security.windows-portable-legacy-launcher.system-root-refused",
       "category": "security",
       "site": "packages/keiko-cli/src/security-log.ts:43",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "update.runtime.legacy-import-deferred",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/ui.ts:1254",
       "package": "keiko-cli"
     },
     {
@@ -869,7 +875,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:739",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1153",
       "package": "keiko-server"
     },
     {
@@ -1205,7 +1211,7 @@
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:1903",
+      "site": "packages/keiko-server/src/deps.ts:1975",
       "package": "keiko-server"
     },
     {
@@ -1271,7 +1277,7 @@
     {
       "op": "request",
       "category": "http",
-      "site": "packages/keiko-server/src/server.ts:495",
+      "site": "packages/keiko-server/src/server.ts:508",
       "package": "keiko-server"
     },
     {
@@ -1319,19 +1325,19 @@
     {
       "op": "security.fs.portable-backup-cleanup",
       "category": "security",
-      "site": "packages/keiko-server/src/update-portable-activation-files.ts:811",
+      "site": "packages/keiko-server/src/update-portable-activation-files.ts:965",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:331",
+      "site": "packages/keiko-server/src/observability/server-log.ts:336",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:357",
+      "site": "packages/keiko-server/src/observability/server-log.ts:362",
       "package": "keiko-server"
     },
     {
@@ -1362,6 +1368,54 @@
       "op": "task-workspace.lifecycle",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/task-workspace/activity-log.ts:147",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.candidate.consumed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-candidate-authority.ts:377",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.candidate.issued",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-candidate-authority.ts:308",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.candidate.rejected",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-candidate-authority.ts:340",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.candidate.rejected",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-candidate-authority.ts:353",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.runtime.event",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-legacy-audit-import.ts:718",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.runtime.event",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-local-state.ts:1447",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.runtime.legacy-snapshot-imported",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-legacy-audit-import.ts:725",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.session.lifecycle",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-session.ts:721",
       "package": "keiko-server"
     },
     {
