@@ -122,22 +122,46 @@ function assertRegularSingleLink(path: string, label: string): void {
 
 function sameOpenedFile(before: Stats, after: Stats): boolean {
   return (
+    after.isFile() &&
+    after.nlink === 1 &&
     after.dev === before.dev &&
     after.ino === before.ino &&
     after.size === before.size &&
-    after.mtimeMs === before.mtimeMs
+    after.mtimeMs === before.mtimeMs &&
+    after.ctimeMs === before.ctimeMs
   );
 }
 
 function safeOpenedFile(stat: Stats, maximumBytes: number): boolean {
-  return stat.isFile() && stat.nlink === 1 && stat.size <= maximumBytes;
+  return stat.isFile() && stat.nlink === 1 && stat.size >= 0 && stat.size <= maximumBytes;
 }
 
 function currentPathMatchesOpened(current: Stats, opened: Stats): boolean {
-  return current.dev === opened.dev && current.ino === opened.ino && !current.isSymbolicLink();
+  return (
+    current.isFile() &&
+    !current.isSymbolicLink() &&
+    current.nlink === 1 &&
+    current.dev === opened.dev &&
+    current.ino === opened.ino &&
+    current.size === opened.size &&
+    current.mtimeMs === opened.mtimeMs &&
+    current.ctimeMs === opened.ctimeMs
+  );
+}
+
+function namedFileBeforeOpen(path: string, maximumBytes: number, label: string): Stats {
+  let stat: Stats;
+  try {
+    stat = lstatSync(path);
+  } catch {
+    fail(`${label} is unsafe`);
+  }
+  if (stat.isSymbolicLink() || !safeOpenedFile(stat, maximumBytes)) fail(`${label} is unsafe`);
+  return stat;
 }
 
 function readBoundedRegularFile(path: string, maximumBytes: number, label: string): Buffer {
+  const namedBefore = namedFileBeforeOpen(path, maximumBytes, label);
   let descriptor: number;
   try {
     descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -146,7 +170,7 @@ function readBoundedRegularFile(path: string, maximumBytes: number, label: strin
   }
   try {
     const before = fstatSync(descriptor);
-    if (!safeOpenedFile(before, maximumBytes)) {
+    if (!safeOpenedFile(before, maximumBytes) || !currentPathMatchesOpened(namedBefore, before)) {
       fail(`${label} is unsafe`);
     }
     const content = Buffer.alloc(before.size);

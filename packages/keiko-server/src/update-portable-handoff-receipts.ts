@@ -11,6 +11,7 @@ import {
   openSync,
   opendirSync,
   readSync,
+  type Stats,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -79,6 +80,20 @@ function verifiedAckContent(planSha256: string): Buffer {
 }
 
 function readVerifiedAck(path: string, expectedLinks = 1): Buffer {
+  let namedBefore: Stats;
+  try {
+    namedBefore = lstatSync(path);
+  } catch {
+    fail("portable handoff verified acknowledgement is unsafe");
+  }
+  if (
+    !namedBefore.isFile() ||
+    namedBefore.isSymbolicLink() ||
+    namedBefore.nlink !== expectedLinks ||
+    namedBefore.size !== VERIFIED_ACK_BYTES
+  ) {
+    fail("portable handoff verified acknowledgement is unsafe");
+  }
   let descriptor: number;
   try {
     descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -87,7 +102,13 @@ function readVerifiedAck(path: string, expectedLinks = 1): Buffer {
   }
   try {
     const before = fstatSync(descriptor);
-    if (!before.isFile() || before.nlink !== expectedLinks || before.size !== VERIFIED_ACK_BYTES) {
+    if (
+      !before.isFile() ||
+      before.nlink !== expectedLinks ||
+      before.size !== VERIFIED_ACK_BYTES ||
+      before.dev !== namedBefore.dev ||
+      before.ino !== namedBefore.ino
+    ) {
       fail("portable handoff verified acknowledgement is unsafe");
     }
     const content = Buffer.alloc(VERIFIED_ACK_BYTES);
@@ -104,9 +125,15 @@ function readVerifiedAck(path: string, expectedLinks = 1): Buffer {
       after.ino !== before.ino ||
       after.size !== before.size ||
       after.mtimeMs !== before.mtimeMs ||
+      after.ctimeMs !== before.ctimeMs ||
+      after.nlink !== expectedLinks ||
+      !current.isFile() ||
       current.dev !== before.dev ||
       current.ino !== before.ino ||
       current.nlink !== expectedLinks ||
+      current.size !== before.size ||
+      current.mtimeMs !== before.mtimeMs ||
+      current.ctimeMs !== before.ctimeMs ||
       current.isSymbolicLink()
     )
       fail("portable handoff verified acknowledgement changed while reading");
@@ -356,6 +383,21 @@ function canonicalNumber(value: string): number {
 }
 
 function readReceipt(path: string): PortableHandoffReceipt {
+  let namedBefore: Stats;
+  try {
+    namedBefore = lstatSync(path);
+  } catch {
+    fail("portable handoff receipt is unsafe");
+  }
+  if (
+    !namedBefore.isFile() ||
+    namedBefore.isSymbolicLink() ||
+    namedBefore.nlink !== 1 ||
+    namedBefore.size < 0 ||
+    namedBefore.size > MAX_RECEIPT_BYTES
+  ) {
+    fail("portable handoff receipt is unsafe");
+  }
   let descriptor: number;
   try {
     descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -364,7 +406,13 @@ function readReceipt(path: string): PortableHandoffReceipt {
   }
   try {
     const before = fstatSync(descriptor);
-    if (!before.isFile() || before.nlink !== 1 || before.size > MAX_RECEIPT_BYTES)
+    if (
+      !before.isFile() ||
+      before.nlink !== 1 ||
+      before.size > MAX_RECEIPT_BYTES ||
+      before.dev !== namedBefore.dev ||
+      before.ino !== namedBefore.ino
+    )
       fail("portable handoff receipt is unsafe");
     const content = Buffer.alloc(before.size);
     let offset = 0;
@@ -380,8 +428,15 @@ function readReceipt(path: string): PortableHandoffReceipt {
       after.ino !== before.ino ||
       after.size !== before.size ||
       after.mtimeMs !== before.mtimeMs ||
+      after.ctimeMs !== before.ctimeMs ||
+      after.nlink !== 1 ||
+      !current.isFile() ||
       current.dev !== before.dev ||
       current.ino !== before.ino ||
+      current.nlink !== 1 ||
+      current.size !== before.size ||
+      current.mtimeMs !== before.mtimeMs ||
+      current.ctimeMs !== before.ctimeMs ||
       current.isSymbolicLink()
     )
       fail("portable handoff receipt changed while reading");
