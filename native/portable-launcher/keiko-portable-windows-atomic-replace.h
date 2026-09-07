@@ -70,7 +70,7 @@ static HANDLE keiko_windows_atomic_open_directory(
       (tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
       (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
       !keiko_windows_atomic_query_fact(handle, &fact) || fact.standard.DeletePending) {
-    if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+    if (handle != INVALID_HANDLE_VALUE && handle != NULL) CloseHandle(handle);
     return INVALID_HANDLE_VALUE;
   }
   return handle;
@@ -97,7 +97,7 @@ static HANDLE keiko_windows_atomic_open_regular(
       (tag.FileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0 ||
       !keiko_windows_atomic_query_fact(handle, &fact) || fact.standard.DeletePending ||
       fact.standard.NumberOfLinks != 1) {
-    if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+    if (handle != INVALID_HANDLE_VALUE && handle != NULL) CloseHandle(handle);
     return INVALID_HANDLE_VALUE;
   }
   return handle;
