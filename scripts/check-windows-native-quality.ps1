@@ -34,9 +34,36 @@ function Get-NativeProducerArgumentList {
   if ($argumentListStart -lt 0) {
     throw "could not locate the target compiler argument list in $ProducerPath $FunctionName()"
   }
-  $argumentListEnd = $ActiveSource.IndexOf("]", $argumentListStart)
-  if ($argumentListEnd -lt $argumentListStart) {
-    throw "could not locate the target compiler argument list in $ProducerPath $FunctionName()"
+  $argumentListEnd = -1
+  $depth = 0
+  $quote = 0
+  $escaped = $false
+  for ($index = $argumentListStart; $index -lt $ActiveSource.Length; $index += 1) {
+    $codePoint = [int]$ActiveSource[$index]
+    if ($quote -ne 0) {
+      if ($escaped) {
+        $escaped = $false
+      } elseif ($codePoint -eq 92) {
+        $escaped = $true
+      } elseif ($codePoint -eq $quote) {
+        $quote = 0
+      }
+      continue
+    }
+    if ($codePoint -eq 34 -or $codePoint -eq 39 -or $codePoint -eq 96) {
+      $quote = $codePoint
+    } elseif ($codePoint -eq 91) {
+      $depth += 1
+    } elseif ($codePoint -eq 93) {
+      $depth -= 1
+      if ($depth -eq 0) {
+        $argumentListEnd = $index
+        break
+      }
+    }
+  }
+  if ($argumentListEnd -lt $argumentListStart -or $depth -ne 0 -or $quote -ne 0) {
+    throw "could not locate the balanced target compiler argument list in $ProducerPath $FunctionName()"
   }
   return $ActiveSource.Substring($argumentListStart, $argumentListEnd - $argumentListStart + 1)
 }
@@ -211,6 +238,15 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "Windows cutover primitive probe build failed" }
   & $cutoverProbeOut
   if ($LASTEXITCODE -ne 0) { throw "Windows cutover primitive probe failed" }
+
+  $coordinatorTest = Join-Path $root "native/portable-launcher/keiko-portable-update-coordinator.windows.test.c"
+  $coordinatorTestOut = Join-Path $scratch "keiko-update-coordinator-test.exe"
+  $coordinatorTestObject = Join-Path $scratch "keiko-update-coordinator-test.obj"
+  & cl.exe @nativeFlags $windowsVersionDefine '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
+    "/Fo:$coordinatorTestObject" "/Fe:$coordinatorTestOut" $coordinatorTest
+  if ($LASTEXITCODE -ne 0) { throw "MSVC Windows update coordinator mechanics build failed" }
+  & $coordinatorTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows update coordinator mechanics verification failed" }
 
   $handoffProtocolTest = Join-Path $root "native/portable-launcher/keiko-portable-update-protocol.test.c"
   $handoffProtocolTestOut = Join-Path $scratch "keiko-handoff-protocol-test.exe"

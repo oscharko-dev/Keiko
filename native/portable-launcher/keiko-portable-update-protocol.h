@@ -7,8 +7,11 @@
 #include <string.h>
 
 enum {
-  KEIKO_KHP_VERSION = 2,
-  KEIKO_KHP_FIELD_COUNT = 32,
+  KEIKO_KHP_MAC_VERSION = 2,
+  KEIKO_KHP_MAC_FIELD_COUNT = 32,
+  KEIKO_KHP_WINDOWS_VERSION = 3,
+  KEIKO_KHP_WINDOWS_FIELD_COUNT = 37,
+  KEIKO_KHP_MAX_FIELD_COUNT = KEIKO_KHP_WINDOWS_FIELD_COUNT,
   KEIKO_KHP_MAX_BYTES = 64 * 1024,
   KEIKO_KHP_MAX_PATH_BYTES = 32 * 1024,
   KEIKO_KHP_ACTIVATION_ID = 0,
@@ -42,11 +45,26 @@ enum {
   KEIKO_KHP_OLD_EXIT_AT = 28,
   KEIKO_KHP_START_AT = 29,
   KEIKO_KHP_VERIFY_AT = 30,
-  KEIKO_KHP_CLEANUP_AT = 31
+  KEIKO_KHP_CLEANUP_AT = 31,
+  KEIKO_KHP_CUTOVER_KIND = 32,
+  KEIKO_KHP_CURRENT_GENERATION_TREE_SHA256 = 33,
+  KEIKO_KHP_CANDIDATE_GENERATION_TREE_SHA256 = 34,
+  KEIKO_KHP_CURRENT_SETUP_MANIFEST_SHA256 = 35,
+  KEIKO_KHP_CANDIDATE_SETUP_MANIFEST_SHA256 = 36
 };
 
+#if defined(_WIN32)
+#define KEIKO_KHP_VERSION KEIKO_KHP_WINDOWS_VERSION
+#define KEIKO_KHP_FIELD_COUNT KEIKO_KHP_WINDOWS_FIELD_COUNT
+#else
+#define KEIKO_KHP_VERSION KEIKO_KHP_MAC_VERSION
+#define KEIKO_KHP_FIELD_COUNT KEIKO_KHP_MAC_FIELD_COUNT
+#endif
+
 typedef struct {
-  char *field[KEIKO_KHP_FIELD_COUNT];
+  uint16_t version;
+  uint16_t field_count;
+  char *field[KEIKO_KHP_MAX_FIELD_COUNT];
 } keiko_handoff_plan;
 
 static uint16_t keiko_khp_read_u16(const unsigned char *value) {
@@ -278,13 +296,15 @@ cleanup:
 
 static void keiko_khp_clear(keiko_handoff_plan *plan) {
   size_t index;
-  for (index = 0; index < KEIKO_KHP_FIELD_COUNT; ++index) {
+  for (index = 0; index < KEIKO_KHP_MAX_FIELD_COUNT; ++index) {
     if (plan->field[index] != NULL) {
       memset(plan->field[index], 0, strlen(plan->field[index]));
       free(plan->field[index]);
       plan->field[index] = NULL;
     }
   }
+  plan->version = 0;
+  plan->field_count = 0;
 }
 
 static int keiko_khp_fields_valid(const keiko_handoff_plan *plan) {
@@ -313,6 +333,30 @@ static int keiko_khp_fields_valid(const keiko_handoff_plan *plan) {
       !keiko_khp_decimal_value(plan->field[KEIKO_KHP_OLD_PORT], 65535, &old_port) ||
       old_port < 1 || !keiko_khp_is_version(plan->field[KEIKO_KHP_OLD_VERSION]))
     return 0;
+#if defined(_WIN32)
+  if (plan->version != KEIKO_KHP_WINDOWS_VERSION ||
+      plan->field_count != KEIKO_KHP_WINDOWS_FIELD_COUNT ||
+      strcmp(plan->field[KEIKO_KHP_CUTOVER_KIND], "windows-generation-v1") != 0 ||
+      !keiko_khp_is_lower_hex(
+          plan->field[KEIKO_KHP_CURRENT_GENERATION_TREE_SHA256],
+          64
+      ) ||
+      !keiko_khp_is_lower_hex(
+          plan->field[KEIKO_KHP_CANDIDATE_GENERATION_TREE_SHA256],
+          64
+      ) ||
+      !keiko_khp_is_lower_hex(
+          plan->field[KEIKO_KHP_CURRENT_SETUP_MANIFEST_SHA256],
+          64
+      ) ||
+      !keiko_khp_is_lower_hex(
+          plan->field[KEIKO_KHP_CANDIDATE_SETUP_MANIFEST_SHA256],
+          64
+      )) return 0;
+#else
+  if (plan->version != KEIKO_KHP_MAC_VERSION ||
+      plan->field_count != KEIKO_KHP_MAC_FIELD_COUNT) return 0;
+#endif
   for (index = KEIKO_KHP_MANAGED_ROOT;
        index <= KEIKO_KHP_CANDIDATE_SUPERVISOR; ++index)
     if (!keiko_khp_is_absolute_canonical_path(plan->field[index])) return 0;
@@ -333,11 +377,20 @@ static int keiko_khp_fields_valid(const keiko_handoff_plan *plan) {
 static int keiko_khp_parse(const unsigned char *content, size_t length,
                            keiko_handoff_plan *plan) {
   size_t index, offset = 8;
+  uint16_t version;
+  uint16_t field_count;
   memset(plan, 0, sizeof(*plan));
-  if (length < 8 || length > KEIKO_KHP_MAX_BYTES || memcmp(content, "KHP1", 4) != 0 ||
-      keiko_khp_read_u16(content + 4) != KEIKO_KHP_VERSION ||
-      keiko_khp_read_u16(content + 6) != KEIKO_KHP_FIELD_COUNT) return 0;
-  for (index = 0; index < KEIKO_KHP_FIELD_COUNT; ++index) {
+  if (length < 8 || length > KEIKO_KHP_MAX_BYTES || memcmp(content, "KHP1", 4) != 0)
+    return 0;
+  version = keiko_khp_read_u16(content + 4);
+  field_count = keiko_khp_read_u16(content + 6);
+  if (!((version == KEIKO_KHP_MAC_VERSION &&
+         field_count == KEIKO_KHP_MAC_FIELD_COUNT) ||
+        (version == KEIKO_KHP_WINDOWS_VERSION &&
+         field_count == KEIKO_KHP_WINDOWS_FIELD_COUNT))) return 0;
+  plan->version = version;
+  plan->field_count = field_count;
+  for (index = 0; index < field_count; ++index) {
     uint32_t field_length;
     if (offset > length || length - offset < 4) goto invalid;
     field_length = keiko_khp_read_u32(content + offset);

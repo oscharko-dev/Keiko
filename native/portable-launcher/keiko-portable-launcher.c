@@ -47,6 +47,8 @@ static int keiko_snwprintf_s(wchar_t *out, size_t cap, size_t truncate, const wc
 #define _snwprintf_s keiko_snwprintf_s
 #endif
 
+#include "keiko-portable-update-coordinator.h"
+
 static int dirname_in_place(wchar_t *path) {
   wchar_t *last = NULL;
   for (wchar_t *cursor = path; *cursor != L'\0'; cursor++) {
@@ -313,7 +315,33 @@ static int run_launcher(keiko_launcher_buffers *buffers) {
 #endif
 }
 
-int wmain(void) {
+static int update_activation_argument(const wchar_t *value, char activation_id[33]) {
+  size_t index;
+  if (value == NULL || wcslen(value) != 32u) return 0;
+  for (index = 0; index < 32u; ++index) {
+    wchar_t byte = value[index];
+    if (!((byte >= L'0' && byte <= L'9') || (byte >= L'a' && byte <= L'f'))) return 0;
+    activation_id[index] = (char)byte;
+  }
+  activation_id[32] = '\0';
+  return 1;
+}
+
+int wmain(int argc, wchar_t **argv) {
+  if (argc == 3 && wcscmp(argv[1], L"--coordinate-update") == 0) {
+    wchar_t executable[KEIKO_PATH_CAP];
+    char activation_id[33];
+    keiko_coordinator_context coordinator;
+    DWORD length = GetModuleFileNameW(NULL, executable, KEIKO_PATH_CAP);
+    if (length == 0 || length >= KEIKO_PATH_CAP ||
+        !update_activation_argument(argv[2], activation_id) ||
+        !keiko_coordinator_prepare_windows(&coordinator, activation_id, executable)) return 74;
+    /* KHA1 remains fail-closed pending the native acceptance amendment and a
+     * real Windows executor/recovery qualification run. */
+    keiko_coordinator_clear(&coordinator);
+    return 74;
+  }
+  if (argc != 1) return 1;
   keiko_launcher_buffers *buffers = allocate_launcher_buffers();
   if (buffers == NULL) {
     return 1;

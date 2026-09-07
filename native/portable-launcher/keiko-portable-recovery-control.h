@@ -1,8 +1,6 @@
 #ifndef KEIKO_PORTABLE_RECOVERY_CONTROL_H
 #define KEIKO_PORTABLE_RECOVERY_CONTROL_H
 
-#if !defined(_WIN32)
-
 #define KEIKO_RECOVERY_CONTROL_MAX_BYTES 2048u
 #define KEIKO_RECOVERY_MAX_RECEIPTS 20u
 
@@ -16,6 +14,8 @@ typedef struct {
   char *runtime_state_sha256;
   char *lock_identity;
 } keiko_recovery_control;
+
+#if !defined(_WIN32)
 
 static int keiko_recovery_read_control(char content[KEIKO_RECOVERY_CONTROL_MAX_BYTES + 1u],
                                        uint64_t deadline_ms) {
@@ -41,6 +41,8 @@ static int keiko_recovery_read_control(char content[KEIKO_RECOVERY_CONTROL_MAX_B
   }
   return 0;
 }
+
+#endif
 
 static int keiko_recovery_parse_control(char *content, keiko_recovery_control *control) {
   char *field[9], *cursor = content;
@@ -73,6 +75,8 @@ static int keiko_recovery_parse_control(char *content, keiko_recovery_control *c
   control->lock_identity = field[8];
   return 1;
 }
+
+#if !defined(_WIN32)
 
 static int keiko_recovery_validate_runtime(const keiko_coordinator_context *context,
                                            const keiko_recovery_control *control,
@@ -243,35 +247,25 @@ static int keiko_recovery_load_receipts(keiko_coordinator_context *context,
                                         const keiko_recovery_control *control,
                                         uint64_t deadline_ms, unsigned int *forward_count,
                                         unsigned int *restore_count) {
-  static const char *const forward_kind[] = {
-      "prepared", "old-exit", "old-exit", "promote", "promote", "register", "register",
-      "start", "start", "verify", "verify", "cleanup", "cleanup", "complete"};
-  static const char *const forward_outcome[] = {
-      "completed", "intent", "completed", "intent", "completed", "intent", "completed",
-      "intent", "completed", "intent", "completed", "intent", "completed", "completed"};
-  static const char *const restore_kind[] = {
-      "restore", "restore", "restored-start", "restored-start", "restored-verify",
-      "restored-verify"};
-  static const char *const restore_outcome[] = {
-      "intent", "completed", "intent", "completed", "intent", "completed"};
   int restoring = 0;
   *forward_count = *restore_count = 0u;
   while (keiko_coordinator_next_receipt_exists(context)) {
+    const char *kind;
+    const char *outcome;
     if (context->receipt_sequence >= KEIKO_RECOVERY_MAX_RECEIPTS) return 0;
-    if (!restoring && context->receipt_sequence < 14u &&
+    if (!restoring &&
+        keiko_recovery_forward_expected(*forward_count, &kind, &outcome) &&
         keiko_coordinator_read_expected_receipt(
-            context, forward_kind[context->receipt_sequence],
-            forward_outcome[context->receipt_sequence], deadline_ms)) {
+            context, kind, outcome, deadline_ms)) {
       *forward_count += 1u;
     } else {
       if (!restoring) {
-        if (context->receipt_sequence < 3u || context->receipt_sequence > 10u) return 0;
+        if (!keiko_recovery_may_begin_restore(*forward_count)) return 0;
         restoring = 1;
       }
-      if (*restore_count >= 6u ||
+      if (!keiko_recovery_restore_expected(*restore_count, &kind, &outcome) ||
           !keiko_coordinator_read_expected_receipt(
-              context, restore_kind[*restore_count], restore_outcome[*restore_count],
-              deadline_ms))
+              context, kind, outcome, deadline_ms))
         return 0;
       *restore_count += 1u;
     }
@@ -290,38 +284,73 @@ static int keiko_recovery_remove_tree_if_present(const char *path, uint64_t dead
   return keiko_coordinator_remove_tree(path, deadline_ms);
 }
 
+static int keiko_recovery_engine_append_receipt(
+    void *opaque,
+    const char *kind,
+    const char *outcome
+) {
+  return keiko_coordinator_append_receipt(
+      (keiko_coordinator_context *)opaque,
+      kind,
+      outcome
+  );
+}
+
+static int keiko_recovery_engine_restore_platform(void *opaque, uint64_t deadline_ms) {
+  return keiko_coordinator_restore_roots(
+      (keiko_coordinator_context *)opaque,
+      deadline_ms
+  );
+}
+
+static int keiko_recovery_engine_restore_previous(void *opaque, uint64_t deadline_ms) {
+  return keiko_coordinator_restore_previous(
+      (keiko_coordinator_context *)opaque,
+      deadline_ms
+  );
+}
+
+static int keiko_recovery_engine_registration_is_prepared(
+    void *opaque,
+    uint64_t deadline_ms
+) {
+  int registration;
+  return keiko_coordinator_promoted_registration(
+             (keiko_coordinator_context *)opaque,
+             deadline_ms,
+             &registration
+         ) &&
+         registration == KEIKO_COORDINATOR_REGISTRATION_PREPARED;
+}
+
+static int keiko_recovery_engine_cleanup(void *opaque, uint64_t deadline_ms) {
+  keiko_coordinator_context *context = (keiko_coordinator_context *)opaque;
+  return keiko_recovery_remove_tree_if_present(
+             context->plan.field[KEIKO_KHP_BACKUP_ROOT],
+             deadline_ms
+         ) &&
+         keiko_recovery_remove_tree_if_present(
+             context->plan.field[KEIKO_KHP_STAGE_ROOT],
+             deadline_ms
+         );
+}
+
 static int keiko_recovery_reconcile(keiko_coordinator_context *context,
                                     unsigned int forward_count, unsigned int restore_count,
                                     uint64_t deadline_ms) {
-  int registration;
-  if (restore_count > 0u) {
-    if (!keiko_coordinator_restore_roots(context, deadline_ms)) return 0;
-    if (restore_count == 1u &&
-        !keiko_coordinator_append_receipt(context, "restore", "completed"))
-      return 0;
-    return restore_count >= 1u;
-  }
-  if (forward_count < 2u) return 0;
-  if (forward_count == 2u &&
-      !keiko_coordinator_append_receipt(context, "old-exit", "completed"))
-    return 0;
-  if (forward_count < 9u) return keiko_coordinator_restore_previous(context, deadline_ms);
-  if (!keiko_coordinator_promoted_registration(context, deadline_ms, &registration) ||
-      registration != KEIKO_COORDINATOR_REGISTRATION_PREPARED)
-    return 0;
-  if (forward_count < 11u || forward_count == 14u) return 1;
-  if (forward_count == 11u &&
-      !keiko_coordinator_append_receipt(context, "cleanup", "intent"))
-    return 0;
-  if (forward_count <= 12u) {
-    if (!keiko_recovery_remove_tree_if_present(context->plan.field[KEIKO_KHP_BACKUP_ROOT],
-                                               deadline_ms) ||
-        !keiko_recovery_remove_tree_if_present(context->plan.field[KEIKO_KHP_STAGE_ROOT],
-                                               deadline_ms) ||
-        !keiko_coordinator_append_receipt(context, "cleanup", "completed"))
-      return 0;
-  }
-  return keiko_coordinator_append_receipt(context, "complete", "completed");
+  const keiko_recovery_engine engine = {
+      context,
+      keiko_recovery_engine_append_receipt,
+      keiko_recovery_engine_restore_platform,
+      keiko_recovery_engine_restore_previous,
+      keiko_recovery_engine_registration_is_prepared,
+      keiko_recovery_engine_cleanup};
+  return keiko_recovery_reconcile_engine(
+      &engine,
+      forward_count,
+      restore_count,
+      deadline_ms
+  );
 }
 
 static int keiko_recovery_control_posix(const char *activation_id, const char *executable) {
@@ -349,6 +378,10 @@ cleanup:
   memset(&control, 0, sizeof(control));
   return result;
 }
+
+#else
+
+#include "keiko-portable-recovery-control-windows.h"
 
 #endif
 

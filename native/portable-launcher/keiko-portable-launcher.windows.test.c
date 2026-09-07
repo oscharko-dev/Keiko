@@ -244,6 +244,15 @@ static void test_generation_selection(void) {
 #endif
 
 int wmain(void) {
+  char activation_id[33];
+  assert(update_activation_argument(
+      L"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      activation_id
+  ) == 1);
+  assert(strcmp(activation_id, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") == 0);
+  assert(update_activation_argument(L"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", activation_id) == 0);
+  assert(update_activation_argument(L"short", activation_id) == 0);
+
   keiko_launcher_buffers *buffers = allocate_launcher_buffers();
   assert(buffers != NULL);
   assert(sizeof(buffers->root) / sizeof(buffers->root[0]) == (size_t)KEIKO_PATH_CAP);

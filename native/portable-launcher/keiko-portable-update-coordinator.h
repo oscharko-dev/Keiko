@@ -2,6 +2,7 @@
 #define KEIKO_PORTABLE_UPDATE_COORDINATOR_H
 
 #include "keiko-portable-tree-hash.h"
+#include "keiko-portable-update-engine.h"
 #include "keiko-portable-update-protocol.h"
 
 #if !defined(_WIN32)
@@ -1394,56 +1395,155 @@ static void keiko_coordinator_hold_runtime(keiko_coordinator_context *context) {
   }
 }
 
+static int keiko_coordinator_engine_deadline(
+    void *opaque,
+    int field,
+    uint64_t *deadline_ms
+) {
+  return keiko_coordinator_deadline(
+      (keiko_coordinator_context *)opaque,
+      field,
+      deadline_ms
+  );
+}
+
+static int keiko_coordinator_engine_emit_acceptance(void *opaque) {
+  return keiko_coordinator_emit_acceptance((keiko_coordinator_context *)opaque);
+}
+
+static int keiko_coordinator_engine_wait_old_exit(void *opaque) {
+  return keiko_coordinator_wait_old_exit((keiko_coordinator_context *)opaque);
+}
+
+static int keiko_coordinator_engine_promote(void *opaque, uint64_t deadline_ms) {
+  return keiko_coordinator_promote((keiko_coordinator_context *)opaque, deadline_ms);
+}
+
+static int keiko_coordinator_engine_publish_registration(
+    void *opaque,
+    uint64_t deadline_ms
+) {
+  return keiko_coordinator_publish_registration(
+      (keiko_coordinator_context *)opaque,
+      deadline_ms
+  );
+}
+
+static int keiko_coordinator_engine_start_runtime(
+    void *opaque,
+    uint64_t deadline_ms,
+    int restoring
+) {
+  return keiko_coordinator_start_runtime(
+      (keiko_coordinator_context *)opaque,
+      deadline_ms,
+      restoring
+  );
+}
+
+static int keiko_coordinator_engine_wait_receipt(
+    void *opaque,
+    const char *kind,
+    const char *outcome,
+    uint64_t deadline_ms
+) {
+  return keiko_coordinator_wait_expected_receipt(
+      (keiko_coordinator_context *)opaque,
+      kind,
+      outcome,
+      deadline_ms
+  );
+}
+
+static int keiko_coordinator_engine_next_receipt_exists(void *opaque) {
+  return keiko_coordinator_next_receipt_exists((keiko_coordinator_context *)opaque);
+}
+
+static int keiko_coordinator_engine_stop_runtime(void *opaque, uint64_t deadline_ms) {
+  return keiko_coordinator_stop_runtime((keiko_coordinator_context *)opaque, deadline_ms);
+}
+
+static int keiko_coordinator_engine_reconcile_stopped_runtime(
+    void *opaque,
+    uint64_t deadline_ms
+) {
+  return keiko_coordinator_reconcile_stopped_runtime(
+      (keiko_coordinator_context *)opaque,
+      deadline_ms
+  );
+}
+
+static int keiko_coordinator_engine_stop_failed_start(
+    void *opaque,
+    uint64_t deadline_ms
+) {
+  return keiko_coordinator_stop_failed_start(
+      (keiko_coordinator_context *)opaque,
+      deadline_ms
+  );
+}
+
+static int keiko_coordinator_engine_wait_verified_ack(
+    void *opaque,
+    uint64_t deadline_ms
+) {
+  return keiko_coordinator_wait_verified_ack(
+      (keiko_coordinator_context *)opaque,
+      deadline_ms
+  );
+}
+
+static int keiko_coordinator_engine_cleanup_verified(
+    void *opaque,
+    uint64_t deadline_ms
+) {
+  return keiko_coordinator_cleanup_verified(
+      (keiko_coordinator_context *)opaque,
+      deadline_ms
+  );
+}
+
+static int keiko_coordinator_engine_restore_previous(
+    void *opaque,
+    uint64_t deadline_ms
+) {
+  return keiko_coordinator_restore_previous(
+      (keiko_coordinator_context *)opaque,
+      deadline_ms
+  );
+}
+
+static void keiko_coordinator_engine_hold_runtime(void *opaque) {
+  keiko_coordinator_hold_runtime((keiko_coordinator_context *)opaque);
+}
+
 /* Compiled and analyzer-checked forward/restore transaction. The launcher does not call this
  * until crash-resume authorization is complete; therefore production KHA1 remains fail-closed. */
 static int __attribute__((unused))
 keiko_coordinator_execute_posix(keiko_coordinator_context *context) {
-  uint64_t start_deadline, verify_deadline, cleanup_deadline;
-  if (!keiko_coordinator_deadline(context, KEIKO_KHP_START_AT, &start_deadline) ||
-      !keiko_coordinator_deadline(context, KEIKO_KHP_VERIFY_AT, &verify_deadline) ||
-      !keiko_coordinator_deadline(context, KEIKO_KHP_CLEANUP_AT, &cleanup_deadline) ||
-      !keiko_coordinator_emit_acceptance(context) || !keiko_coordinator_wait_old_exit(context))
-    return 0;
-  if (!keiko_coordinator_promote(context, start_deadline) ||
-      !keiko_coordinator_publish_registration(context, start_deadline))
-    goto restore_without_runtime;
-  if (!keiko_coordinator_start_runtime(context, start_deadline, 0)) {
-    if (!keiko_coordinator_stop_failed_start(context, cleanup_deadline)) return 0;
-    goto restore_without_runtime;
-  }
-  if (!keiko_coordinator_wait_expected_receipt(context, "verify", "intent", verify_deadline)) {
-    if (keiko_coordinator_next_receipt_exists(context) ||
-        !keiko_coordinator_stop_runtime(context, cleanup_deadline)) {
-      keiko_coordinator_hold_runtime(context);
-      return 0;
-    }
-    if (!keiko_coordinator_reconcile_stopped_runtime(context, cleanup_deadline)) return 0;
-    goto restore_without_runtime;
-  }
-  if (!keiko_coordinator_wait_expected_receipt(context, "verify", "completed", verify_deadline) ||
-      !keiko_coordinator_wait_verified_ack(context, verify_deadline)) {
-    keiko_coordinator_hold_runtime(context);
-    return 0;
-  }
-  if (!keiko_coordinator_cleanup_verified(context, cleanup_deadline)) {
-    keiko_coordinator_hold_runtime(context);
-    return 0;
-  }
-  keiko_coordinator_hold_runtime(context);
-  return 1;
-
-restore_without_runtime:
-  if (!keiko_coordinator_restore_previous(context, cleanup_deadline) ||
-      !keiko_coordinator_start_runtime(context, cleanup_deadline, 1) ||
-      !keiko_coordinator_wait_expected_receipt(context, "restored-verify", "intent",
-                                               cleanup_deadline) ||
-      !keiko_coordinator_wait_expected_receipt(context, "restored-verify", "completed",
-                                               cleanup_deadline)) {
-    keiko_coordinator_hold_runtime(context);
-    return 0;
-  }
-  keiko_coordinator_hold_runtime(context);
-  return 1;
+  const keiko_coordinator_engine engine = {
+      context,
+      keiko_coordinator_engine_deadline,
+      keiko_coordinator_engine_emit_acceptance,
+      keiko_coordinator_engine_wait_old_exit,
+      keiko_coordinator_engine_promote,
+      keiko_coordinator_engine_publish_registration,
+      keiko_coordinator_engine_start_runtime,
+      keiko_coordinator_engine_wait_receipt,
+      keiko_coordinator_engine_next_receipt_exists,
+      keiko_coordinator_engine_stop_runtime,
+      keiko_coordinator_engine_reconcile_stopped_runtime,
+      keiko_coordinator_engine_stop_failed_start,
+      keiko_coordinator_engine_wait_verified_ack,
+      keiko_coordinator_engine_cleanup_verified,
+      keiko_coordinator_engine_restore_previous,
+      keiko_coordinator_engine_hold_runtime};
+  return keiko_coordinator_execute_engine(
+      &engine,
+      KEIKO_KHP_START_AT,
+      KEIKO_KHP_VERIFY_AT,
+      KEIKO_KHP_CLEANUP_AT
+  );
 }
 
 static int keiko_coordinator_hash_file(const char *path, uint64_t deadline_ms,
@@ -1779,6 +1879,10 @@ cleanup:
   if (!result) keiko_coordinator_clear(context);
   return result;
 }
+
+#else
+
+#include "keiko-portable-update-coordinator-windows.h"
 
 #endif
 
