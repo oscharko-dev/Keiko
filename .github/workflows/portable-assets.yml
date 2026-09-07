@@ -212,11 +212,9 @@ jobs:
       - name: Prepare approved sidecar payloads
         run: node scripts/prepare-approved-sidecar-payloads.mjs --target windows-x64
       - name: Stage portable runtime from approved inputs
-        run: node scripts/run-portable-assets-stage.mjs --target windows-x64
+        run: node scripts/run-portable-assets-stage.mjs --target windows-x64 --windows-generation-production
       - name: Functionally smoke the unsigned USearch addon
         run: node scripts/smoke-portable-usearch.mjs .portable-runtime/staging/windows-x64 windows-x64
-      - name: Smoke test the unsigned staged artifact
-        run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target windows-x64
       - name: Functionally smoke the unsigned secure-read helper
         run: npm run smoke:portable-secure-read -- .portable-runtime/staging/windows-x64 windows-x64 --load
       - name: Validate protected Azure configuration
@@ -368,18 +366,86 @@ jobs:
             -InventoryPath "$env:RUNNER_TEMP\windows-pe-verified.json" `
             -VerificationInput "$env:RUNNER_TEMP\windows-verification-input.json" `
             -ExpectedIdentityEku $env:EXPECTED_IDENTITY_EKU
-      - name: Remove transient signing inventory
+      - name: Remove transient core signing catalogs
         shell: pwsh
         run: |
           Remove-Item -LiteralPath .portable-runtime/staging/windows-x64/windows-signing-files.txt -Force
           Remove-Item -LiteralPath .portable-runtime/staging/windows-x64/windows-attestation-signing-file.txt -Force
-      - name: Rebuild, bind, and verify the production archive
+      - name: Close the signed generation and build its root launcher
         shell: pwsh
         run: |
-          node scripts/windows-portable-signing.mjs finalize `
+          node scripts/windows-portable-signing.mjs close-generation `
             --stage-root .portable-runtime/staging/windows-x64 `
             --expected-inventory "$env:RUNNER_TEMP\windows-pe-verified.json" `
-            --verification-input "$env:RUNNER_TEMP\windows-verification-input.json"
+            --verification-input "$env:RUNNER_TEMP\windows-verification-input.json" `
+            --launcher-catalog .portable-runtime/staging/windows-x64/windows-launcher-signing-file.txt `
+            --generation-output "$env:RUNNER_TEMP\windows-generation-id.txt"
+      - name: Re-authenticate to Azure for the generation launcher
+        uses: Azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          audience: api://AzureADTokenExchange
+      - name: Sign the exact generation launcher catalog
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files-catalog: .portable-runtime/staging/windows-x64/windows-launcher-signing-file.txt
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+          trace: false
+      - name: Clear Azure after generation launcher signing
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          az logout *> $null
+          if ($LASTEXITCODE -ne 0) { throw "windows-portable-signing: Azure session cleanup failed" }
+          az account clear *> $null
+          if ($LASTEXITCODE -ne 0) { throw "windows-portable-signing: Azure session cleanup failed" }
+      - name: Inventory and verify the complete generation plus root launcher
+        shell: pwsh
+        env:
+          EXPECTED_IDENTITY_EKU: ${{ vars.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU }}
+        run: |
+          $generation = (Get-Content -LiteralPath "$env:RUNNER_TEMP\windows-generation-id.txt" -Raw).Trim()
+          $launcherSha256 = (Get-FileHash -LiteralPath .portable-runtime/staging/windows-x64/payload/Keiko/Keiko.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          node scripts/windows-portable-signing.mjs inventory-complete `
+            --stage-root .portable-runtime/staging/windows-x64 `
+            --generation-id $generation `
+            --expected-inventory "$env:RUNNER_TEMP\windows-pe-verified.json" `
+            --launcher-sha256 $launcherSha256 `
+            --inventory "$env:RUNNER_TEMP\windows-pe-complete.json"
+          ./scripts/verify-windows-portable-signing.ps1 `
+            -StageRoot .portable-runtime/staging/windows-x64 `
+            -InventoryPath "$env:RUNNER_TEMP\windows-pe-complete.json" `
+            -VerificationInput "$env:RUNNER_TEMP\windows-complete-verification-input.json" `
+            -ExpectedIdentityEku $env:EXPECTED_IDENTITY_EKU `
+            -ResourceRootRelativePath ".portable\generations\$generation" `
+            -CompleteInventory
+      - name: Bind the outer schema and build the production archive
+        shell: pwsh
+        run: |
+          $generation = (Get-Content -LiteralPath "$env:RUNNER_TEMP\windows-generation-id.txt" -Raw).Trim()
+          node scripts/windows-portable-signing.mjs finalize `
+            --stage-root .portable-runtime/staging/windows-x64 `
+            --generation-id $generation `
+            --expected-inventory "$env:RUNNER_TEMP\windows-pe-complete.json" `
+            --verification-input "$env:RUNNER_TEMP\windows-complete-verification-input.json"
+          Remove-Item -LiteralPath .portable-runtime/staging/windows-x64/windows-launcher-signing-file.txt -Force
       - name: Build the Windows setup companion
         shell: pwsh
         run: |
@@ -438,7 +504,7 @@ jobs:
         run: |
           node scripts/windows-portable-signing.mjs verify-setup-scope `
             --stage-root .portable-runtime/staging/windows-x64 `
-            --expected-inventory "$env:RUNNER_TEMP\windows-pe-verified.json"
+            --expected-inventory "$env:RUNNER_TEMP\windows-pe-complete.json"
       - name: Remove transient setup signing inventory
         shell: pwsh
         run: |
@@ -741,7 +807,12 @@ jobs:
       - name: Functionally requalify the signed secure-read helper
         run: npm run smoke:portable-secure-read -- .qualified-windows-stage/windows-x64 windows-x64 --load
       - name: Run signed secure-read executable consistency harness
-        run: node native/secure-workspace-read/test-protocol.mjs --binary .qualified-windows-stage/windows-x64/payload/Keiko/runtime/native/keiko-secure-workspace-read.exe
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -Raw .qualified-windows-stage/windows-x64/manifest/portable-manifest.json | ConvertFrom-Json
+          $resourceRoot = Join-Path .qualified-windows-stage/windows-x64/payload/Keiko ($manifest.windowsGeneration.resourceRoot -replace '/', '\')
+          $helper = Join-Path $resourceRoot runtime/native/keiko-secure-workspace-read.exe
+          node native/secure-workspace-read/test-protocol.mjs --binary $helper
 
   qualify-macos-production:
     name: Fresh native qualification (${{ matrix.platform_target }})

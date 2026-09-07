@@ -10,6 +10,8 @@ register; the [issue](https://github.com/oscharko-dev/Keiko/issues/3405) owns ac
 The observations below were collected on the repair working tree based on
 `acc990f1f057d9445ff781903fad69a6ae58757f`, on 2026-09-05 and 2026-09-07. The core implementation is
 preserved in checkpoint `6aeac08160ae9f90f58f11c0ef8e86bbe9b77167`; subsequent changes remain in progress.
+UI behavior and loading proof are preserved in `ddd8aea06` and `9623e3402`; the legacy journal
+compatibility disposition is preserved in `a4394887c`.
 These are development observations, not SHA-bound final delivery evidence. Rerun the relevant commands after integration and bind every
 final result to the actual commit. A green #3404 documentation PR does not verify #3405 code.
 
@@ -59,6 +61,29 @@ the atomic exchange boundaries and restore shapes; local x64 execution is not an
 qualification run. Independent security review approves the final atomic prerequisite with no
 confirmed findings. Normal-startup recovery and real installed two-process proof remain outstanding.
 
+The frozen Windows generation producer passes independent security re-review with zero findings.
+The prior medium stale-inventory finding and low fresh-verification finding are closed. Production staging uses the
+schema-2 generation binding, while ordinary/evaluation output remains flat schema 1 and manual-only.
+Review fixes bind positive verification to the exact inventory bytes before producer mutation and
+independently verify extracted KHT1, root launcher digest and setup binding. The lead replay passes
+all 55 tests in the complete signing, qualification and setup suites (2.44 seconds). The owner's
+five-file review suite passes 129 tests with one intentional skip; the evaluation-package regression
+passes one selected test with 436 filtered skips (167.29 seconds), and adjacent producer smokes pass
+33 tests. The earlier review run failed one fixture missing outer schema version 2; only the corrected
+replays count as green. The earlier broad run remains 468 passing / one failed npm-pack case, with
+that selected case subsequently passing in isolation; concurrency is not a waiver for the failed run.
+Additional review attempts are not green evidence: a combined runtime/setup run was interrupted,
+and two selected runtime tests failed with `Native TypeScript package build exited with 2` while
+Mac source was still changing. That output alone establishes no root cause. The processes ended;
+final integrated package verification must settle those attempts. Reviewers subsequently restricted
+their checks to the frozen producer surface without shared builds.
+The independent reviewer's bounded signing/qualification/setup/workflow replay passes 102 tests
+with one intentional skip. The PowerShell inventory double-read was examined but not retained as
+a finding: the proposed exploit additionally required concurrent local proof replacement, and
+downstream exact-byte/live-inventory and closed-generation checks revalidate the promoted artifact.
+These results cover producer contracts and fixtures. Windows CLI/server/native generation consumer
+integration, actual signing execution and native N−1→N qualification remain outstanding.
+
 The full UI coverage run at the core checkpoint reports 7,512 passing tests, four failures, and
 one skip across 432 files. The four failures are shared stylesheet evidence hash assertions after
 the updater-specific rule changed `globals.css`. Component placement and affected updater evidence
@@ -77,34 +102,50 @@ the pinned image pull with a registry authentication error, including an isolate
 retry. No Sonar finding count or clean result is available from that attempt. Registry sign-in
 repair is requested while independent implementation and verification continue.
 
+### Native proof decision remains pending
+
+The unchanged macOS production verifier requires Developer ID continuity, strict code verification,
+stapled notarization and Gatekeeper assessment on the exact compiled bytes. Copied native artifacts
+also require the release team under Apple's certificate anchor. Ad hoc fixture signing cannot
+satisfy those checks. The current criteria simultaneously require exact current native PR artifacts
+without secrets and unchanged production boundaries; no eligible signed N−1/N inputs resolve that
+conflict today.
+
+A proposed acceptance amendment would label real-process hermetic functional evidence
+`functional-not-platform-qualified`, permit only existing test-composition provenance seams, and
+retain genuine production-signed canaries as a separate mandatory qualification. This proposal
+awaits operator approval. No criterion, production verifier, KHA1 enablement or substituted-verifier
+harness has been changed on its authority. Production qualification still requires two genuine
+eligible signed releases and all three native target journeys regardless of that decision.
+
 ## Acceptance evidence map
 
 Every row remains open until current integrated-head evidence and independent review settle its
 full scope. Existing source and focused test results locate the work; they do not imply completion.
 
-| Requirement                                                                                                                  | Current evidence surface                                                           | Remaining proof / disposition                                                                                               |
-| ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Fresh eligible candidate; reject arbitrary/stale/replayed/equal/older/future/unreviewed candidates and changed install facts | `update-candidate-authority`, production preflight, session routes and their tests | Rerun real producer-to-start integration, including all rejected classes, on final head.                                    |
-| Fixed npm/Yarn argv and immutable portable release/asset identity                                                            | CLI update, session support, preflight assets, staging manifest                    | Verify actual execution composition; prove no command/path/URL injection or mid-session retarget.                           |
-| Windows leaf rotation and hostile signer/timestamp/evidence rejection; macOS continuity                                      | `windowsPortableAuthenticode`, platform verification, native-copy verification     | Security review and target-native execution, including PowerShell 5.1, remain required.                                     |
-| Evaluation releases remain manual-only                                                                                       | Eligibility predicates and amended ADR/signing/setup guidance                      | Test real producer rejection; document genuine first production transition without relabeling 0.3.17.                       |
-| One lifecycle owner and ordered transitions                                                                                  | `update-lifecycle`, session/durable tests                                          | Production adapters must consume the same owner; remove legacy portable version-only success.                               |
-| Durable session/progress/recovery and distinct persistence failures                                                          | `update-local-state`, `update-session-durable`                                     | Revalidate migration, corruption, incompatible/missing required state, unwritable state and replacement-process projection. |
-| Idempotent startup at each crash phase; retain verified N                                                                    | Handoff plan/receipts/recovery and activation tests                                | Inject each actual native crash boundary and prove old or fully verified new tree remains runnable.                         |
-| Real same-port ownership transfer, success, cleanup and second restart                                                       | Production coordinator/recovery composition in progress                            | Native executor, assembled two-process harness and all three target results outstanding.                                    |
-| Hook/promise/child/persistence/cleanup failures settle with ownership and diagnostics                                        | Five focused lifecycle regressions replayed; startup cleanup review                | Listener cleanup on thrown recovery and complete production failure matrix still need proof.                                |
-| Finite resource limits and hostile download/egress/storage cases                                                             | Preflight/staging streaming, cancellation, retry, plan/receipt bounded-read tests  | Revalidate the full frozen cap and platform contention/quarantine matrix through production composition.                    |
-| Cancellation at every checkpoint                                                                                             | Staging tests and preparation-cancellation regression                              | Prove native cutoff, post-promotion recovery, owned-child termination and no incomplete trusted marker.                     |
-| UI/CLI agree; expected outage reconnects; no false success                                                                   | API, Update window/startup notice, CLI and session tests                           | Real BFF outage/reconnect and final version-proof projection outstanding.                                                   |
-| EN/DE, keyboard/focus/live region, contrast, motion and responsive evidence                                                  | Existing UI components and focused tests                                           | Final design-system, axe/visual evidence and suppression-register non-growth check outstanding.                             |
-| Three native assembled N−1→N gates                                                                                           | No accepted current native result                                                  | Windows x64, macOS arm64 and macOS x64 must each exercise actual product bytes and production boundaries.                   |
-| Native negative/crash qualification on every target                                                                          | Unit/fixture coverage only                                                         | Native bad-trust, download interruption, cancel, disk, crash, timeout, lock/concurrency and cleanup results outstanding.    |
-| Secret-free PR proof plus protected production canary                                                                        | Reviewed boundary separates these evidence classes                                 | Two production-signed eligible releases and #2198 provider prerequisites remain an external qualification dependency.       |
-| Required UI E2E lane with real outage                                                                                        | `update-ui-1696` suite exists                                                      | Replace insufficient mocks for the required journey and prove `check:e2e-suite-wiring` reachability.                        |
-| Canonical attempt reconstruction and redaction                                                                               | Server activity ports and CLI support analyzer tests                               | Rerun across real process lineage; verify all forbidden evidence classes are absent.                                        |
-| Catalogued operations, correlation and structured diagnostics                                                                | Generated op catalog, owning error/diagnostic paths                                | Final catalog drift/error-observability gates and failure-path review required.                                             |
-| Complete deletion/consolidation register; no unused public exports                                                           | #3404 register and current implementation diff                                     | Settle every register entry with migrated consumers or justified expiring compatibility; audit full export graph.           |
-| Runtime, ADRs, release contracts, runbooks, QA and release impact agree                                                      | Nine existing documents updated; documentation checks green                        | Reconcile completed executable behavior, final results, release-impact approval and remaining evidence gaps before handoff. |
+| Requirement                                                                                                                  | Current evidence surface                                                                         | Remaining proof / disposition                                                                                               |
+| ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| Fresh eligible candidate; reject arbitrary/stale/replayed/equal/older/future/unreviewed candidates and changed install facts | `update-candidate-authority`, production preflight, session routes and their tests               | Rerun real producer-to-start integration, including all rejected classes, on final head.                                    |
+| Fixed npm/Yarn argv and immutable portable release/asset identity                                                            | CLI update, session support, preflight assets, staging manifest                                  | Verify actual execution composition; prove no command/path/URL injection or mid-session retarget.                           |
+| Windows leaf rotation and hostile signer/timestamp/evidence rejection; macOS continuity                                      | `windowsPortableAuthenticode`, platform verification, native-copy verification                   | Security review and target-native execution, including PowerShell 5.1, remain required.                                     |
+| Evaluation releases remain manual-only                                                                                       | Eligibility predicates and amended ADR/signing/setup guidance                                    | Test real producer rejection; document genuine first production transition without relabeling 0.3.17.                       |
+| One lifecycle owner and ordered transitions                                                                                  | `update-lifecycle`, session/durable tests                                                        | Production adapters must consume the same owner; remove legacy portable version-only success.                               |
+| Durable session/progress/recovery and distinct persistence failures                                                          | `update-local-state`, `update-session-durable`                                                   | Revalidate migration, corruption, incompatible/missing required state, unwritable state and replacement-process projection. |
+| Idempotent startup at each crash phase; retain verified N                                                                    | Handoff plan/receipts/recovery and activation tests                                              | Inject each actual native crash boundary and prove old or fully verified new tree remains runnable.                         |
+| Real same-port ownership transfer, success, cleanup and second restart                                                       | Production coordinator/recovery composition in progress                                          | Native executor, assembled two-process harness and all three target results outstanding.                                    |
+| Hook/promise/child/persistence/cleanup failures settle with ownership and diagnostics                                        | Five focused lifecycle regressions replayed; startup cleanup review                              | Listener cleanup on thrown recovery and complete production failure matrix still need proof.                                |
+| Finite resource limits and hostile download/egress/storage cases                                                             | Preflight/staging streaming, cancellation, retry, plan/receipt bounded-read tests                | Revalidate the full frozen cap and platform contention/quarantine matrix through production composition.                    |
+| Cancellation at every checkpoint                                                                                             | Staging tests and preparation-cancellation regression                                            | Prove native cutoff, post-promotion recovery, owned-child termination and no incomplete trusted marker.                     |
+| UI/CLI agree; expected outage reconnects; no false success                                                                   | Eight browser tests pass, including real BFF outage/reconnect; API and session tests             | Exact native replacement/version-proof projection and final integrated-head evidence remain required.                       |
+| EN/DE, keyboard/focus/live region, contrast, motion and responsive evidence                                                  | Current visual/hash evidence, 12 zero-violation axe captures, i18n and non-growing lint registry | Rebind automated evidence to the final integrated head; carry subjective review into epic review.                           |
+| Three native assembled N−1→N gates                                                                                           | No accepted current native result                                                                | Windows x64, macOS arm64 and macOS x64 must each exercise actual product bytes and production boundaries.                   |
+| Native negative/crash qualification on every target                                                                          | Unit/fixture coverage only                                                                       | Native bad-trust, download interruption, cancel, disk, crash, timeout, lock/concurrency and cleanup results outstanding.    |
+| Secret-free PR proof plus protected production canary                                                                        | Exact trust/secret-free artifact conflict documented; proposed amendment unapproved              | Operator decision on functional evidence and genuine signed canary inputs remain outstanding.                               |
+| Required UI E2E lane with real outage                                                                                        | Eight tests pass; actual BFF outage; wiring gate reports `runs-per-pr`                           | Final required-lane execution and SHA-bound UI receipt remain required.                                                     |
+| Canonical attempt reconstruction and redaction                                                                               | Server activity ports and CLI support analyzer tests                                             | Rerun across real process lineage; verify all forbidden evidence classes are absent.                                        |
+| Catalogued operations, correlation and structured diagnostics                                                                | Generated op catalog, owning error/diagnostic paths                                              | Final catalog drift/error-observability gates and failure-path review required.                                             |
+| Complete deletion/consolidation register; no unused public exports                                                           | #3404 register and current implementation diff                                                   | Settle every register entry with migrated consumers or justified expiring compatibility; audit full export graph.           |
+| Runtime, ADRs, release contracts, runbooks, QA and release impact agree                                                      | Nine existing documents updated; documentation checks green                                      | Reconcile completed executable behavior, final results, release-impact approval and remaining evidence gaps before handoff. |
 
 ## Independently replayed development checks
 
@@ -672,8 +713,9 @@ command or substitute a unit test for the missing harness.
 
 Run the assembled package-surface aggregate after tests because it prunes the checkout's live
 dependencies. Keep the supported toolchain and environment in the result record. Current `dev`
-has advanced to `c5c03d48fa1066c985a656d29880ae1c02e68c48`; integration and revalidation of the latest
-governance/templates/toolchain remain required before final epic evidence.
+has advanced to `c5c03d48fa1066c985a656d29880ae1c02e68c48`; the clean epic branch now includes it in
+`b76198dc2614dfe28214dc2e5f4dd2cf1e680cd6`. The child still needs that integration and dependency
+refresh, and the final merged epic still requires verification of its actual current head.
 
 ## Handoff boundary
 

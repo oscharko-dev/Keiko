@@ -5,6 +5,10 @@ three portable release assets. It implements ADR-0121 D7 and is consumed by issu
 #2202. It does not replace the archive, manifest, or release-impact schema in the
 [Portable Runtime Artifact Contract](portable-runtime-artifact-contract.md).
 
+The Windows producer now has a frozen Phase A generation format for #3405/#3403. This contract
+describes its signing and verification order; it does not claim completed Windows consumer
+integration, N−1/N or cross-platform native qualification, or an approved signed release.
+
 ## Trust boundary
 
 Production signing is available only to native jobs attached to the protected GitHub environment
@@ -177,6 +181,18 @@ the ephemeral verifier input. The job then proves the verified file hashes are u
 ZIP, recalculates byte-derived archive, provenance, application-tree, sidecar-tree, reviewed-binding,
 and checksum fields, and invokes the existing production verifier. Upload occurs only after the final
 manifest is `verified-production` and the post-sign smoke test passes.
+
+The Windows generation sequence is fixed. The initial inventory is parsed and hashed against the
+exact staged bytes. The runtime attestation is added and signed before generation closure. The job
+then verifies that the qualified payload has not changed, hashes `.portable/generation-staging` with
+KHT1, renames it to `.portable/generations/<treeSha256>`, and rehashes the destination. It compiles
+the literal generation id into the root `Keiko.exe`, signs that launcher in a separate signing step,
+and verifies the complete PE inventory. Finalization rechecks the closed generation and complete
+inventory, binds the same six-field `windowsGeneration` object to the outer manifest, provenance, and
+reviewed binding, writes the root setup manifest from that binding, rechecks the closed generation,
+rebuilds the ZIP, and verifies the closed generation, root launcher, setup manifest, and final archive.
+No closed generation bytes are mutated after closure. The root launcher, setup companion, and outer
+manifest are outside the generation tree hash.
 
 RFC 3161 authority comes from the embedded Authenticode CMS, not `signtool /tw` or the presence of a
 timestamper certificate alone. Every Authenticode signer must have exactly one timestamp-token unsigned

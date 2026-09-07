@@ -618,6 +618,16 @@ describe("portable assets stage helper", () => {
     expect(evaluation.filter((arg) => arg === "--evaluation-build")).toHaveLength(1);
     // The opt-in is additive: it changes nothing else the wrapper derives.
     expect(evaluation.filter((arg) => arg !== "--evaluation-build")).toEqual(plain);
+
+    const production = stageArgumentsForTarget(
+      { ...base, windowsGenerationProduction: true },
+      approvals,
+      "a".repeat(40),
+      "0.2.14",
+      { runAttempt: 3, runId: 987654321 },
+    );
+    expect(production.filter((arg) => arg === "--windows-generation-production")).toHaveLength(1);
+    expect(plain).not.toContain("--windows-generation-production");
   });
 
   it("collects sidecar specs and derives approved stage arguments", async () => {

@@ -1,7 +1,14 @@
-import { lstatSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, posix, relative, resolve } from "node:path";
 
-import { hashDirectoryTree, portableTargetByName, sha256File } from "./portable-runtime.mjs";
+import {
+  hashDirectoryTree,
+  portableTargetByName,
+  sha256File,
+  windowsGenerationBindingValidationFailures,
+  WINDOWS_GENERATION_STAGING_RELATIVE_PATH,
+  WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION,
+} from "./portable-runtime.mjs";
 import { writeRuntimeActivationManifest } from "./runtime-activation-manifest.mjs";
 import { sha256 } from "./lib/digest.mjs";
 
@@ -15,13 +22,34 @@ function portablePath(root, path) {
   return relative(root, path).replaceAll("\\", "/");
 }
 
-export function portableResourceRoot(stageRoot, platformTarget) {
+export function portableResourceRoot(stageRoot, platformTarget, manifest) {
   const target = portableTargetByName(platformTarget);
   if (target === undefined) fail("manifest target is unsupported");
   const payloadRoot = join(stageRoot, "payload", "Keiko");
-  return target.nodePlatform === "darwin"
-    ? join(payloadRoot, "Keiko.app", "Contents", "Resources")
-    : payloadRoot;
+  if (target.nodePlatform === "darwin") {
+    return join(payloadRoot, "Keiko.app", "Contents", "Resources");
+  }
+  const generationRoot = windowsGenerationResourceRoot(payloadRoot, manifest);
+  if (generationRoot !== undefined) return generationRoot;
+  const stagingRoot = join(payloadRoot, ...WINDOWS_GENERATION_STAGING_RELATIVE_PATH.split("/"));
+  return existsSync(stagingRoot) ? stagingRoot : payloadRoot;
+}
+
+function windowsGenerationResourceRoot(payloadRoot, manifest) {
+  const generationRoot = manifest?.windowsGeneration?.resourceRoot;
+  if (typeof generationRoot === "string") {
+    if (
+      manifest.schemaVersion !== WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION ||
+      windowsGenerationBindingValidationFailures(manifest.windowsGeneration).length > 0
+    ) {
+      fail("Windows generation binding is invalid");
+    }
+    return containedResourcePath(payloadRoot, generationRoot);
+  }
+  if (manifest?.schemaVersion === WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION) {
+    fail("Windows generation binding is invalid");
+  }
+  return undefined;
 }
 
 function treeSize(root) {
@@ -210,7 +238,7 @@ function assertSidecarSbomExecutableHash(component, expectedSha256) {
 }
 
 export function rebindSignedPayload(stageRoot, manifest, platformTarget) {
-  const resourceRoot = portableResourceRoot(stageRoot, platformTarget);
+  const resourceRoot = portableResourceRoot(stageRoot, platformTarget, manifest);
   rebindSidecars(manifest, resourceRoot, true);
   rebindNativeHelpers(stageRoot, manifest, resourceRoot);
   rebindNativeAddon(stageRoot, manifest, resourceRoot);
@@ -242,6 +270,9 @@ function rebindReviewedBinding(manifest, archiveSha256) {
   if (manifest.runtimeQualification !== undefined) {
     binding.runtimeQualification = globalThis.structuredClone(manifest.runtimeQualification);
   }
+  if (manifest.windowsGeneration !== undefined) {
+    binding.windowsGeneration = globalThis.structuredClone(manifest.windowsGeneration);
+  }
 }
 
 export async function rebindExistingSignedArchive(
@@ -269,7 +300,7 @@ function rebindPayloadForArchive(stageRoot, manifest, platformTarget, options) {
     if (platformTarget === "windows-x64") {
       rebindSignedPayload(stageRoot, manifest, platformTarget);
     } else {
-      const resourceRoot = portableResourceRoot(stageRoot, platformTarget);
+      const resourceRoot = portableResourceRoot(stageRoot, platformTarget, manifest);
       rebindSidecars(manifest, resourceRoot, false);
       manifest.provenance.packagedAppTreeSha256 = hashDirectoryTree(
         containedResourcePath(resourceRoot, "app"),
@@ -302,6 +333,9 @@ function rebindProvenance(stageRoot, manifest, archiveSha256) {
       path: manifest.runtimeQualification.path,
       sha256: manifest.runtimeQualification.sha256,
     };
+  }
+  if (manifest.windowsGeneration !== undefined) {
+    provenance.windowsGeneration = globalThis.structuredClone(manifest.windowsGeneration);
   }
   const provenanceText = `${JSON.stringify(provenance)}\n`;
   writeFileSync(provenancePath, provenanceText);

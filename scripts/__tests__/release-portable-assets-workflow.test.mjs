@@ -42,6 +42,10 @@ const portableWorkflow = readFileSync(".github/workflows/portable-assets.yml", "
 const portableWorkflowDocument = parse(portableWorkflow);
 const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8");
 const windowsVerifier = readFileSync("scripts/verify-windows-portable-signing.ps1", "utf8");
+const freshWindowsVerifier = readFileSync(
+  "scripts/verify-fresh-windows-portable-artifact.ps1",
+  "utf8",
+);
 const windowsSetupVerifier = readFileSync(
   "scripts/verify-windows-portable-setup-signing.ps1",
   "utf8",
@@ -67,6 +71,18 @@ describe("portable secure-read qualification", () => {
     expect(portableWorkflow).toContain(
       ".isolated-macos-artifact/${{ matrix.platform_target }} ${{ matrix.platform_target }}",
     );
+  });
+
+  it("uses generation staging only for Windows production and keeps evaluation manually usable", () => {
+    const dispatchStage = workflowJob("  stage:", "\n  stage-windows-production:");
+    const windowsProduction = workflowJob(
+      "  stage-windows-production:",
+      "\n  stage-macos-production:",
+    );
+    expect(dispatchStage).not.toContain("--windows-generation-production");
+    expect(dispatchStage).toContain("Smoke test the staged artifact");
+    expect(dispatchStage).toContain("Build unsigned Windows setup companion");
+    expect(windowsProduction).toContain("--target windows-x64 --windows-generation-production");
   });
 
   it("qualifies the complete Windows denied-name matrix and bounded real-helper load", () => {
@@ -112,7 +128,10 @@ describe("portable secure-read qualification", () => {
       portableWorkflow.match(/Run signed secure-read executable consistency harness/gmu),
     ).toHaveLength(2);
     expect(portableWorkflow).toContain(
-      "test-protocol.mjs --binary .qualified-windows-stage/windows-x64/payload/Keiko/runtime/native/keiko-secure-workspace-read.exe",
+      "$manifest.windowsGeneration.resourceRoot -replace '/', '\\'",
+    );
+    expect(portableWorkflow).toContain(
+      "node native/secure-workspace-read/test-protocol.mjs --binary $helper",
     );
     expect(portableWorkflow).toContain(
       "test-protocol.mjs --binary .isolated-macos-artifact/${{ matrix.platform_target }}/payload/Keiko/Keiko.app/Contents/Resources/runtime/native/keiko-secure-workspace-read",
@@ -612,7 +631,12 @@ describe("Windows portable production signing workflow", () => {
     const nativeVerification = stepIndex(
       "Verify the complete Authenticode chain, identity, and RFC3161 timestamp",
     );
-    const finalization = stepIndex("Rebuild, bind, and verify the production archive");
+    const generationClose = stepIndex("Close the signed generation and build its root launcher");
+    const launcherSigning = stepIndex("Sign the exact generation launcher catalog");
+    const completeVerification = stepIndex(
+      "Inventory and verify the complete generation plus root launcher",
+    );
+    const finalization = stepIndex("Bind the outer schema and build the production archive");
     const setupBuild = stepIndex("Build the Windows setup companion");
     const setupSigning = stepIndex("Sign the Windows setup companion");
     const setupVerification = stepIndex("Verify the signed Windows setup companion");
@@ -623,6 +647,9 @@ describe("Windows portable production signing workflow", () => {
       inventory,
       signing,
       nativeVerification,
+      generationClose,
+      launcherSigning,
+      completeVerification,
       finalization,
       setupBuild,
       setupSigning,
@@ -634,7 +661,10 @@ describe("Windows portable production signing workflow", () => {
     }
     expect(inventory).toBeLessThan(signing);
     expect(signing).toBeLessThan(nativeVerification);
-    expect(nativeVerification).toBeLessThan(finalization);
+    expect(nativeVerification).toBeLessThan(generationClose);
+    expect(generationClose).toBeLessThan(launcherSigning);
+    expect(launcherSigning).toBeLessThan(completeVerification);
+    expect(completeVerification).toBeLessThan(finalization);
     expect(finalization).toBeLessThan(setupBuild);
     expect(setupBuild).toBeLessThan(setupSigning);
     expect(setupSigning).toBeLessThan(setupVerification);
@@ -643,8 +673,11 @@ describe("Windows portable production signing workflow", () => {
     const setupScopeStep = steps[setupScopeProof];
     expect(setupScopeStep.run).toContain("windows-portable-signing.mjs verify-setup-scope");
     expect(setupScopeStep.run).toContain(
-      '--expected-inventory "$env:RUNNER_TEMP\\windows-pe-verified.json"',
+      '--expected-inventory "$env:RUNNER_TEMP\\windows-pe-complete.json"',
     );
+    expect(steps[inventory].run).not.toContain("--launcher-sha256");
+    expect(steps[completeVerification].run).toContain("$launcherSha256 = (Get-FileHash");
+    expect(steps[completeVerification].run).toContain("--launcher-sha256 $launcherSha256");
     expect(setupSigningStep.with["files-catalog"]).toBe(
       ".portable-runtime/staging/windows-x64/windows-setup-signing-file.txt",
     );
@@ -729,6 +762,7 @@ describe("Windows portable production signing workflow", () => {
     expect(simulation.filter((step) => step.always).map((step) => step.name)).toEqual([
       "Clear Azure before runtime qualification",
       "Clear the Azure CLI signing session",
+      "Clear Azure after generation launcher signing",
       "Clear Azure after setup companion signing",
     ]);
     expect(
@@ -740,7 +774,10 @@ describe("Windows portable production signing workflow", () => {
     for (const name of [
       "Prove signing did not change the PE scope",
       "Verify the complete Authenticode chain, identity, and RFC3161 timestamp",
-      "Rebuild, bind, and verify the production archive",
+      "Close the signed generation and build its root launcher",
+      "Sign the exact generation launcher catalog",
+      "Inventory and verify the complete generation plus root launcher",
+      "Bind the outer schema and build the production archive",
       "Build the Windows setup companion",
       "Sign the Windows setup companion",
       "Verify the signed Windows setup companion",
@@ -928,6 +965,9 @@ describe("macOS portable production signing workflow", () => {
     expect(qualification).toContain("verify-windows-portable-setup-signing.ps1");
     expect(qualification).toContain("build-windows-portable-setup.mjs");
     expect(qualification).toContain("--verify-only");
+    expect(freshWindowsVerifier).toContain(
+      "windows-portable-signing.mjs verify-generation --stage-root $stage",
+    );
   });
 
   it("runs only static verification, cleanup, finalization, and upload in the protected job", () => {
