@@ -17,6 +17,7 @@ import type {
   UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
 import { UPDATE_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-session";
+import { assertWindowsLocalVolume } from "@oscharko-dev/keiko-security/windows-local-volume";
 import {
   generationBindingMatchesPackageLayout,
   parseWindowsGenerationBinding,
@@ -706,6 +707,19 @@ export function detectPortableUpdateInstallMode(
   const manifestSummary = bootstrapSummaryFromManifest(facts.packageRoot, fs, packageName);
   const registration = readPortableRegistration(facts.stateDir, fs);
   if (manifestSummary === undefined) return undefined;
+  if (manifestSummary.summary.target === "windows-x64") {
+    try {
+      // Keep the original install-root spelling: canonicalization can hide mapped-share and
+      // reparse boundaries which D3 explicitly denies.
+      assertWindowsLocalVolume(manifestSummary.layout.installRoot);
+    } catch {
+      return portableUnsupportedMode(
+        packageName,
+        "portable-registration-invalid",
+        manifestSummary.summary,
+      );
+    }
+  }
   if (registration.status === "invalid") {
     return portableUnsupportedMode(
       packageName,

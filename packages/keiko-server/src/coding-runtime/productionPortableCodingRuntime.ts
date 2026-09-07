@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { assertWindowsLocalVolume } from "@oscharko-dev/keiko-security/windows-local-volume";
 import {
   closeSync,
   constants,
@@ -607,6 +608,16 @@ function trustedPortableRoots(
     input.installRoot === undefined
       ? portablePackageLayout(target, productionUpdateFacts(input.env).packageRoot)
       : undefined;
+  if (target === "windows-x64") {
+    const lexicalInstallRoot = input.installRoot ?? packageLayout?.installRoot;
+    if (lexicalInstallRoot === undefined) return undefined;
+    try {
+      // This must precede realpathSync: a canonical path is evidence, not locality authority.
+      assertWindowsLocalVolume(lexicalInstallRoot);
+    } catch {
+      return undefined;
+    }
+  }
   return realPortableRoots(input.installRoot, packageLayout);
 }
 

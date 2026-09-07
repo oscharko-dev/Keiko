@@ -1069,6 +1069,23 @@ It requires a fresh independent review and genuine Windows local-volume and mapp
 Native setup/coordinator directory pinning is being implemented in parallel. Production eligibility
 and KHA1 remain disabled, and the real-artifact qualification decision remains unresolved.
 
+## Windows local-volume TypeScript repair settlement (2026-09-07)
+
+The scratch-free helper received independent security approval with **zero findings**. The prior
+High CodeDOM artifact-replacement issue is closed: fixed `kernel32.dll` P/Invoke methods are emitted
+only in an `AssemblyBuilderAccess.Run` assembly, with no compiler files or temporary-directory
+environment. The existing identity-resolved PowerShell executable, exact output protocol, bounded
+stdin/output/time, native-buffer cleanup, canonical-path check and local drive types 2/3/6 remain.
+CLI policy, install-mode detection and runtime discovery check the lexical root before realpath.
+
+Reviewed source SHA-256: `b3237c3825f091c82cbe31f4fbc4a95cdcb6a3f6fe1b452d17dbc0fa049ca955`;
+test SHA-256: `4c124d3ab2553ab088a03af54573cbe1851e9c13e95566b769ff95d7c564061a`.
+The lead rebuilt the security package with the canonical compiler, replayed five affected suites
+(**83/83 tests passed, 18.51 seconds**), and ran scoped lint and root no-emit checks successfully.
+The subsequent complete `npm run typecheck` also passed with official Node 24.18.0 and compiler
+7.0.2 (`/tmp/keiko-3405-current-canonical-typecheck.log`). Actual Windows PowerShell 5.1 and mapped
+SMB behavior remain pending in the native locality diagnostic; static approval is not that proof.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification
