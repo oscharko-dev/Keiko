@@ -605,7 +605,7 @@ describe("journey readiness renewal after the run has settled (regression, epic 
         outcome: { reason: "readiness-stale" },
       });
       const line = h.events.find((event) => event.op === "git.journey-readiness.refreshed");
-      expect(line).toMatchObject({ level: "warn", extra: { reason: "provider-unavailable" } });
+      expect(line).toMatchObject({ level: "warn", extra: { reason: "reader-unavailable" } });
     } finally {
       h.cleanup();
     }

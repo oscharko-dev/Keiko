@@ -2482,19 +2482,19 @@
     {
       "op": "git.journey-observation",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:598",
+      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:613",
       "package": "keiko-server"
     },
     {
       "op": "git.journey-outcome.recorded",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:459",
+      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:474",
       "package": "keiko-server"
     },
     {
       "op": "git.journey-outcome.recorded",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:475",
+      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:490",
       "package": "keiko-server"
     },
     {

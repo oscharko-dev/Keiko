@@ -287,7 +287,7 @@ function logJourneyReadinessFallback(
   deps: UiHandlerDeps,
   correlationId: string,
   runId: string,
-  reason: "provider-unavailable" | "read-failed",
+  reason: string,
   error?: unknown,
 ): void {
   (deps.activityLog ?? processServerLogSink()).write({
@@ -305,20 +305,30 @@ function logJourneyReadinessFallback(
   });
 }
 
+/** Why a renewal did not produce a snapshot. The provider's own failure reason is carried through
+ * verbatim: collapsing "no reader was available" and "the read reported X" into one word hides the
+ * only fact that tells an operator which of the two happened. */
+type JourneyReadinessRenewal =
+  | { readonly kind: "observed"; readonly snapshot: ReadinessSnapshot }
+  | { readonly kind: "reader-unavailable" }
+  | { readonly kind: "not-observed"; readonly reason: string };
+
 async function freshJourneyReadiness(
   deps: UiHandlerDeps,
   draft: ConfirmedDraftDeliveryRecord,
   context: JourneyObservationContext,
   resolveCiReader: (context: JourneyObservationContext) => GitCiProviderReader | undefined,
-): Promise<ReadinessSnapshot | undefined> {
+): Promise<JourneyReadinessRenewal> {
   const reader = resolveCiReader(context);
-  if (reader === undefined) return undefined;
+  if (reader === undefined) return { kind: "reader-unavailable" };
   const facts = await reader.readFacts(journeyCiTarget(draft));
-  if (facts.status !== "observed") return undefined;
+  if (facts.status !== "observed") {
+    return { kind: "not-observed", reason: facts.failure.reason };
+  }
   const { snapshot } = produceCiReadinessSnapshot(draft, facts, Date.now());
   persistJourneyReadiness(deps, draft.binding.runId, context.correlationId, snapshot);
   memoizeJourneyReadiness(deps, draft.binding.runId, snapshot);
-  return snapshot;
+  return { kind: "observed", snapshot };
 }
 
 // The durable store deliberately declines a post-delivery observation while the pull request is
@@ -393,8 +403,13 @@ async function refreshJourneyReadiness(
   const runId = draft.binding.runId;
   try {
     const fresh = await freshJourneyReadiness(deps, draft, context, resolveCiReader);
-    if (fresh !== undefined) return fresh;
-    logJourneyReadinessFallback(deps, context.correlationId, runId, "provider-unavailable");
+    if (fresh.kind === "observed") return fresh.snapshot;
+    logJourneyReadinessFallback(
+      deps,
+      context.correlationId,
+      runId,
+      fresh.kind === "reader-unavailable" ? "reader-unavailable" : `not-observed:${fresh.reason}`,
+    );
   } catch (error) {
     logJourneyReadinessFallback(deps, context.correlationId, runId, "read-failed", error);
   }
