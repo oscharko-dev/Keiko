@@ -56,6 +56,21 @@ function fixtureComponents(id, consumer) {
   });
 }
 
+function fixtureRequiredCiBinding(context) {
+  return {
+    kind: "required-ci",
+    repository: "oscharko-dev/Keiko",
+    repositoryId: 41,
+    pullRequestNumber: 3394,
+    headRepository: "oscharko-dev/Keiko",
+    headRef: "feature/epic-3384",
+    headSha: context.currentHead,
+    baseRef: "dev",
+    baseSha: "b".repeat(40),
+    requirementsDigest: sha256("effective required checks"),
+  };
+}
+
 async function fixture() {
   const producer = await generatedToolCatalogManifest();
   const binding = {
@@ -95,7 +110,8 @@ async function fixture() {
       passed: consumer ? CATALOG_CLOSEOUT_CONSUMER_PROOF_COUNTS[id] : 1,
       failed: 0,
       skipped: 0,
-      binding: consumer ? binding : null,
+      binding:
+        id === "required-ci" ? fixtureRequiredCiBinding(context) : consumer ? binding : null,
       components: fixtureComponents(id, consumer),
       packages: consumer
         ? TOOL_CATALOG_QUALIFICATION_PACKAGES[id].map((name) => ({
@@ -240,6 +256,25 @@ describe("exact-head catalog closeout artifact", () => {
       runtime: { node: "24.18.0" },
     });
     expect(manifest.platform).toBe("darwin-arm64");
+  });
+  it("preserves the exact required-CI identity in the hashed report and closeout", async () => {
+    const f = await fixture();
+    const binding = fixtureRequiredCiBinding(f.context);
+    expect(f.reports.get("required-ci").binding).toEqual(binding);
+    expect(f.manifest.checks.find((entry) => entry.id === "required-ci")).toMatchObject({ binding });
+    expect(check(f)).toEqual(f.manifest);
+  });
+  it.each([
+    { pullRequestNumber: 0 },
+    { headSha: "c".repeat(40) },
+    { baseSha: "not-a-commit" },
+    { requirementsDigest: "not-a-digest" },
+    { repository: "not a repository" },
+    { privateBody: "fixture body" },
+  ])("rejects a malformed required-CI binding %#", async (mutation) => {
+    const f = await fixture();
+    Object.assign(f.reports.get("required-ci").binding, mutation);
+    expect(() => check(f)).toThrow();
   });
   it("retains reviewed premerge H1 evidence without claiming a future dev merge", async () => {
     const f = await fixture();

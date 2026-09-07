@@ -69,7 +69,7 @@ function page(
   return { values, completeness };
 }
 
-function requiredCiFacts({ appId = 7, checkHead = HEAD, checkRuns, requirements } = {}) {
+function requiredCiFacts({ appId = 7, checkHead = HEAD, checkRuns, identity, requirements } = {}) {
   const baseSha = "b".repeat(40);
   const runs =
     checkRuns ??
@@ -101,6 +101,7 @@ function requiredCiFacts({ appId = 7, checkHead = HEAD, checkRuns, requirements 
       baseSha,
       state: "open",
       isDraft: false,
+      ...identity,
     },
     repositoryId: 41,
     mergeable: true,
@@ -285,9 +286,24 @@ describe("tool catalog closeout gate receipt producer", () => {
       platform: `${process.platform}-${process.arch}`,
       runtime: { node: process.versions.node },
       passed: 1,
+      binding: {
+        kind: "required-ci",
+        repository: "oscharko-dev/Keiko",
+        repositoryId: 41,
+        pullRequestNumber: 3394,
+        headRepository: "oscharko-dev/Keiko",
+        headRef: "feature/epic-3384",
+        headSha: HEAD,
+        baseRef: "dev",
+        baseSha: "b".repeat(40),
+        requirementsDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      },
     });
     expect(receiptFiles(receiptsDir)).toEqual(["required-ci.artifact", "required-ci.receipt.json"]);
     expect(receiptFiles(logsDir)).toEqual(["required-ci-1.log"]);
+    expect(JSON.parse(readFileSync(join(receiptsDir, "required-ci.artifact"), "utf8"))).toEqual(
+      report,
+    );
   });
 
   it.each([
@@ -298,6 +314,14 @@ describe("tool catalog closeout gate receipt producer", () => {
     {
       facts: requiredCiFacts({ checkHead: "d".repeat(40) }),
       label: "passing check from a stale head",
+    },
+    {
+      facts: requiredCiFacts({ identity: { number: 3395 } }),
+      label: "facts for a different pull request",
+    },
+    {
+      facts: requiredCiFacts({ identity: { repository: "other/Keiko" } }),
+      label: "facts for a different repository",
     },
     {
       facts: {
