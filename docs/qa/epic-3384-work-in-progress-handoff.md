@@ -1,9 +1,11 @@
-# Epic #3384: resumed work checkpoint — September 7, 2026
+# Epic #3384: prequalification checkpoint — September 7, 2026
 
 Work resumed on September 7 from the clean September 6 preservation checkpoint. This remains a
-work-in-progress record, not epic completion, merge readiness, or issue-closeout evidence. PR
-#3394 remains open and unmerged; native auto-merge is not armed. No issue or working branch is
-closed or deleted by this checkpoint, and the controlled-repository matrix remains 0/5.
+historical prequalification record, not epic completion, merge readiness, or issue-closeout
+evidence. At this checkpoint PR #3394 is open, native auto-merge is not armed, and the controlled
+repository matrix is 0/5. Later results belong to the canonical #3390 per-flow artifacts and
+manifest, exact-head PR checks and postmerge H1 provenance. This document stays frozen with the
+qualification source; its checkpoint counts are not rolling completion claims.
 
 The earlier handoff records remain available in this file's Git history. They are historical;
 especially their attempt numbers, USD 100 allowance and active-automation statements must not be
@@ -36,6 +38,15 @@ invocation registry anchors lazily, preserving construction order and authority 
 Failure, cancellation, deadline and deferred-context regressions preserve body-free lifecycle
 logging. The operation catalog is regenerated from its producer.
 
+The subsequent real attempt 33 exposed two more delivery defects. Typed GitHub metadata now uses
+the existing credential-only scrub without corrupting branch names or SHAs that also occur in
+ordinary environment values; every altered machine response is rejected before parsing. A fresh
+operator start retains a bounded proven predecessor or one unique acknowledged local draft when
+an older run lost that edge. Existing PR identity, fresh authority and durable verified source are
+required; no historical row or approval is rewritten. Provider description requests project the
+supported strict schema while preserving all full local validation. The combined source is
+`68732ec6`; its adapter, orchestrator and description targets passed 128, 129 and 112 tests.
+
 Actual results, with their source limits:
 
 | Verification                               | Result                                             | Source / limitation                                                                       |
@@ -44,6 +55,7 @@ Actual results, with their source limits:
 | Full UI coverage                           | 447 files; 8,028 tests passed; one skipped         | `44cf0537`; UI source unchanged afterward                                                 |
 | Script coverage                            | 207 files; 5,234 tests passed; 26 skipped          | `b844b272`; covered script source unchanged afterward                                     |
 | Full server suite on Node 24               | 713 files; 13,699 tests passed                     | `b844b272`; before the final clock repair                                                 |
+| Full server suite after delivery repairs   | 713 files passed; 13,712 tests passed; 16 skipped  | Product bytes at `68732ec6`; later fixture changes only correct omitted optional fields   |
 | Cold route entry imports on Node 24        | 12 passed                                          | `b844b272`                                                                                |
 | Final clock repair regression target       | 70 tests passed                                    | Both affected bridge/authority suites; ESLint, Prettier and server TypeScript also passed |
 | Browser publication                        | All 12 cases passed                                | Actual `5be376e6` producer output retained; source hashes verified                        |
@@ -57,11 +69,12 @@ semantics, staged-drift refusal and explicit denial. The tracked
 production-composed deterministic browser evidence with `modelQualification: false`; it does not
 replace a real-model flow.
 
-The #2952 native calibration/candidate pair and H1 checkpoint were regenerated at exact source
-`344e835a` after the repair. The native pair used pinned Node 24.18.0, completed two warmups and 30
+The #2952 native calibration/candidate pair was regenerated at exact source `344e835a` after the
+earlier repair. The native pair used pinned Node 24.18.0, completed two warmups and 30
 measured samples per arm, and passed its owning performance gate. The H1 verification passed three
 production-managed files / 83 tests; independent review accepted all ten criteria and bound the
-660-path owned-source closure. These are exact-source prequalification facts. H1 explicitly does
+661-path owned-source closure at the refreshed `68732ec6` source. These are exact-source
+prequalification facts. H1 explicitly does
 not establish packaged real-runtime, live-provider or final merge-head qualification, and either
 receipt must be regenerated if its owned source changes.
 
@@ -76,8 +89,12 @@ catalog check, and the local Sonar analyzer. On the September 7 resume audit, ex
 `344e835a` had no unresolved review threads but required CI was red: deterministic OpenCode startup
 timing, scripted CI-repair budget expectations and a UI debugging fixture failed. The coverage
 aggregate therefore stopped before producing the required SonarCloud context. These concrete
-failures must be repaired and the required checks rerun; the refreshed browser, H1 and native
-evidence does not override them.
+failures were repaired in `6a141383`, `14815a85` and `3a6e9b70`; current-head full checks still
+must complete. The refreshed browser, H1 and native evidence does not override required checks.
+After the `68732ec6` delivery repairs and test-fixture typing correction, full root typecheck,
+architecture and negative architecture checks, operation-catalog validation, error-observability
+validation and local Sonar passed. The full server suite also passed all 12 cold route import
+cases; no `server.js` or `routes.js` warm-up import was required.
 
 ## Real-model delivery: 0/5 completed
 
@@ -88,15 +105,19 @@ on that head. It has not been merged and the issue is open. Independent review f
 maximum-value overflow in its average implementation; that model-authored repair is still required.
 
 Attempt 32 failed before editing because recovered PR/CI binding admission was unavailable.
-That product defect was repaired in earlier commits. The next continuation remains attempt 33,
-using the preserved attempt-31 workspace and attempt-32 predecessor through normal recovery after
-the source and required prequalification inputs are frozen.
+Attempt 33 at `14815a85` ran the real model, observed failing regressions, repaired and verified
+the selected candidate, and committed `4b7a1b1a4b7f206a270c0e9af5b08d0e22c97b97` locally. It then
+failed delivery before pushing; PR7 still points to the earlier `aec3a459` head. The metadata and
+lineage defects above explain that failure. Independent review of the retained model commit found
+that `[1, 1, -1]` and `[MAX, MAX, -MAX]` incorrectly average to zero and `[MAX, -MAX/2]` overflows.
+The next continuation is attempt 34, using that exact retained worktree through normal start and
+the locally proven PR lineage after source and required prequalification inputs are frozen.
 Do not recreate the workspace, discard its Git history, manually author the fixture repair, or
 claim a completed run from the runtime's terminal status alone.
 
 ## Active sequence
 
-1. Settle the three known current-head CI regressions and rerun their exact failing lanes. Verify
+1. Complete the remaining full checks after the corrected regression targets. Verify
    local/remote PR heads, review comments and required checks before freezing; do not treat a
    missing SonarCloud context as a pass.
 2. Verify that the six-case #3386 journey receipt, all tracked visual source hashes, current H1
@@ -105,7 +126,7 @@ claim a completed run from the runtime's terminal status alone.
 3. Complete any remaining non-#3390 source/evidence corrections, then freeze one clean source F for
    all five flows. A later landing descendant may contain only the validator's allowed
    qualification artifacts; never broaden that allowlist to conceal source drift.
-4. Start the prepared real attempt 33 at F and follow the activity log first. Observe real failing
+4. Start the prepared real attempt 34 at F and follow the activity log first. Observe real failing
    regressions, model repair, passing verification, actual governed delivery and independent
    exact-head rubric review. Drive description application, ready intent, explicit governed merge
    and actual issue closure through Keiko. Then complete the other four issues from each actual
