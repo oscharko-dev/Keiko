@@ -15,7 +15,11 @@ import { URL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { createNodeEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type {
+  GitCiFactsResult,
+  GitCiProviderFacts,
+  GitCiProviderReader,
   GitJourneyFactsResult,
   GitJourneyReader,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
@@ -23,9 +27,12 @@ import type { RouteContext, RouteResult } from "../routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
-import { createCodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntimeSnapshotStore.js";
-import { createDraftRun, readySnapshot } from "./ciObservationTest/_support.js";
-import { createGitDeliveryJourneyRouteGroup } from "./journeyRoutes.js";
+import {
+  createCodingRuntimeSnapshotStore,
+  type CodingRuntimeSnapshotStore,
+} from "../coding-runtime/codingRuntimeSnapshotStore.js";
+import { AT, createDraftRun, readySnapshot } from "./ciObservationTest/_support.js";
+import { clearJourneyReadinessMemo, createGitDeliveryJourneyRouteGroup } from "./journeyRoutes.js";
 
 // Builds a fully-typed UiHandlerDeps (all 8 required fields), matching the `deps(overrides)`
 // pattern shared by the sibling gitDelivery route test files (e.g. actionSheetRoutes.test.ts),
@@ -414,6 +421,193 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(evidenceDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// Regression (defect: the persisted CI readiness snapshot is written only by the run's own in-run
+// CI tool call, expires 60s after that last observation, and nothing ever renews it once the run
+// has settled). Before this fix, `readinessFor` always resolved the FROZEN snapshot read straight
+// off the coding-runtime snapshot row, so `journey/refresh` reported `readiness-stale` on every
+// single call once the run reached `succeeded` -- forever, since nothing after that point could
+// ever write a newer one through the old, always-pass-through path. Live evidence: a real
+// qualification run reported `readiness-stale` on ~272 consecutive refreshes over ten minutes while
+// CI was in fact green.
+describe("journey readiness renewal after the run has settled (regression, epic #3384)", () => {
+  interface SettledHarness extends Harness {
+    readonly snapshots: CodingRuntimeSnapshotStore;
+    readonly draft: DraftDeliveryRecord;
+  }
+
+  // Reproduces the defect's exact shape: an expired readiness snapshot recorded while the run was
+  // still live (the only way production ever writes one), then the run settles to `succeeded` --
+  // the point at which the old code could never refresh it again.
+  function settledHarness(): SettledHarness {
+    const db = new DatabaseSync(":memory:");
+    const snapshots = createDraftRun(db);
+    const ticket = snapshots.ciReadiness?.begin("run-1");
+    if (ticket === undefined) throw new Error("missing ciReadiness store in fixture");
+    if (!snapshots.ciReadiness?.complete(ticket, readySnapshot()))
+      throw new Error("failed to seed expired readiness fixture");
+    const beforeSucceeded = snapshots.get("run-1");
+    if (beforeSucceeded === undefined) throw new Error("missing fixture snapshot");
+    snapshots.transition("run-1", {
+      state: "succeeded",
+      revision: beforeSucceeded.revision + 1,
+      updatedAt: AT,
+      terminalAt: AT,
+    });
+    const settled = snapshots.get("run-1");
+    const draft = settled?.draftDelivery;
+    if (draft === undefined) throw new Error("missing fixture draft after settling");
+    const dir = mkdtempSync(join(tmpdir(), "keiko-journey-readiness-"));
+    const events: ServerLogEvent[] = [];
+    const deps = baseDeps({
+      codingRuntimeSnapshotStore: snapshots,
+      evidenceStore: createNodeEvidenceStore(dir),
+      redactor: (value: unknown): unknown => value,
+      activityLog: {
+        write: (event: ServerLogEvent): void => {
+          events.push(event);
+        },
+      },
+    });
+    return {
+      deps,
+      events,
+      snapshots,
+      draft,
+      cleanup: (): void => {
+        // The process-local readiness memo is keyed per deps, so it cannot leak between harnesses;
+        // clearing it anyway keeps a fresh-read expectation independent of execution order.
+        clearJourneyReadinessMemo();
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      },
+    };
+  }
+
+  // Same minimal green-facts shape as ciReadinessSnapshot.test.ts's own fixture: empty/unprotected
+  // requirements so `assessGitCiFacts` resolves "required-checks-passed" / "technical-ready".
+  function greenCiFacts(draft: DraftDeliveryRecord): GitCiProviderFacts {
+    if (draft.pullRequest === undefined) throw new Error("Missing fixture pull request");
+    const page = {
+      values: [],
+      completeness: { complete: true, pages: 1, entries: 0, bytes: 2 },
+    } as const;
+    return {
+      status: "observed",
+      identity: draft.pullRequest,
+      repositoryId: 41,
+      mergeable: true,
+      mergeState: "clean",
+      merged: false,
+      protection: { outcome: "unprotected" },
+      requirements: { status: "observed", requirements: [], strict: false, digest: "c".repeat(64) },
+      workflowDefinitions: { status: "observed", definitions: [] },
+      lists: {
+        "branch-rules": page,
+        "check-runs": page,
+        "commit-statuses": page,
+        "workflow-runs": page,
+        reviews: page,
+      },
+    };
+  }
+
+  it("re-observes CI facts through a fresh, run-independent read and clears readiness-stale once the run has succeeded and the cached snapshot has expired", async () => {
+    const h = settledHarness();
+    try {
+      // Sanity: this is genuinely the frozen, expired evidence the defect leaves behind, not a
+      // fixture that happens to already look fresh.
+      expect(Date.parse(h.snapshots.get("run-1")?.ciReadiness?.expiresAt ?? "")).toBeLessThan(
+        Date.now(),
+      );
+      const group = createGitDeliveryJourneyRouteGroup({
+        reader: (): GitJourneyReader => fakeReader(OBSERVED_FACTS),
+        description: () => Promise.resolve(null),
+        // New injectable seam: a deterministic, no-network CI reader standing in for
+        // `createProductionJourneyCiReader`, proving the refresh renews readiness through a fresh
+        // read instead of ever reusing the frozen snapshot seeded above.
+        ciReader: (): GitCiProviderReader => ({
+          readFacts: (): Promise<GitCiFactsResult> => Promise.resolve(greenCiFacts(h.draft)),
+        }),
+      });
+      const result = (await group[0]?.handler(
+        ctxFor({ schemaVersion: "1", runId: "run-1" }),
+        h.deps,
+      )) as RouteResult;
+      expect(result.body).toMatchObject({
+        status: "observed",
+        outcome: {
+          // Not "readiness-stale": the freshly observed readiness is current, so the outcome
+          // advances to the next (unrelated, deliberately mocked-null) description gate instead.
+          reason: "description-unavailable",
+          readiness: { state: "technical-ready", reason: "required-checks-passed" },
+        },
+      });
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  // The renewal must not turn into a provider read per poll: the handoff card refreshes every few
+  // seconds, and a snapshot inside its own 60s TTL observed for this exact run and head is by
+  // definition still current. Expiry, a different run, or a moved head must still read afresh --
+  // that is the renewal this route owns and the defect above was the absence of it.
+  it("reuses a still-fresh snapshot for the same head instead of spending a provider read", async () => {
+    const h = settledHarness();
+    try {
+      let reads = 0;
+      const ciReader = (): GitCiProviderReader => ({
+        readFacts: (): Promise<GitCiFactsResult> => {
+          reads += 1;
+          return Promise.resolve(greenCiFacts(h.draft));
+        },
+      });
+      const group = createGitDeliveryJourneyRouteGroup({
+        reader: (): GitJourneyReader => fakeReader(OBSERVED_FACTS),
+        description: () => Promise.resolve(null),
+        ciReader,
+      });
+      const refresh = async (): Promise<RouteResult> =>
+        (await group[0]?.handler(
+          ctxFor({ schemaVersion: "1", runId: "run-1" }),
+          h.deps,
+        )) as RouteResult;
+
+      // First refresh renews the expired evidence through one real read.
+      await refresh();
+      expect(reads).toBe(1);
+      // The renewed snapshot is inside its TTL for the same head, so the next refreshes reuse it.
+      await refresh();
+      await refresh();
+      expect(reads).toBe(1);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("falls back to the existing cached snapshot -- never fabricating readiness -- when the fresh read is unavailable", async () => {
+    const h = settledHarness();
+    try {
+      const group = createGitDeliveryJourneyRouteGroup({
+        reader: (): GitJourneyReader => fakeReader(OBSERVED_FACTS),
+        description: () => Promise.resolve(null),
+        ciReader: (): GitCiProviderReader | undefined => undefined,
+      });
+      const result = (await group[0]?.handler(
+        ctxFor({ schemaVersion: "1", runId: "run-1" }),
+        h.deps,
+      )) as RouteResult;
+      expect(result.body).toMatchObject({
+        status: "observed",
+        outcome: { reason: "readiness-stale" },
+      });
+      const line = h.events.find((event) => event.op === "git.journey-readiness.refreshed");
+      expect(line).toMatchObject({ level: "warn", extra: { reason: "provider-unavailable" } });
+    } finally {
+      h.cleanup();
     }
   });
 });

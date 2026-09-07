@@ -2440,7 +2440,7 @@
     {
       "op": "git.draft-push.preparation",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:330",
+      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:365",
       "package": "keiko-server"
     },
     {
@@ -2452,7 +2452,7 @@
     {
       "op": "git.draft-target.resolved",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:440",
+      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:475",
       "package": "keiko-server"
     },
     {
@@ -2482,19 +2482,31 @@
     {
       "op": "git.journey-observation",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:384",
+      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:598",
       "package": "keiko-server"
     },
     {
       "op": "git.journey-outcome.recorded",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:252",
+      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:459",
       "package": "keiko-server"
     },
     {
       "op": "git.journey-outcome.recorded",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:268",
+      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:475",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.journey-readiness.refreshed",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:273",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.journey-readiness.refreshed",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:295",
       "package": "keiko-server"
     },
     {
@@ -3671,6 +3683,7 @@
     "git.draft-template",
     "git.journey-observation",
     "git.journey-outcome.recorded",
+    "git.journey-readiness.refreshed",
     "git.pr-description",
     "git.pr-description.receipt",
     "git.process.failed",

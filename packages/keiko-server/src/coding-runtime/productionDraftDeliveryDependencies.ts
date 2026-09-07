@@ -181,6 +181,41 @@ export function createProductionJourneyReader(
   });
 }
 
+/**
+ * Builds a read-only journey CI reader admitted by the SAME per-checkout GitHub-reader grant as
+ * `createProductionJourneyReader` above — never the run-bound mutation/CI-observation authority a
+ * terminated run no longer holds. The journey observation route's readiness resolution uses this so
+ * a refresh renews CURRENT CI facts for the confirmed PR after the originating coding run has
+ * settled to `succeeded`: the `ReadinessSnapshot` persisted on the coding-runtime snapshot row is
+ * written only by the live run's own in-run CI tool call (`DraftDeliveryFactory.ciReader` above,
+ * gated on `snapshotIsDeliverable` — `running`/`awaiting-approval`), so it necessarily expires
+ * (`observedAt + 60s`) long before a human reaches the issue-handoff stage and nothing else ever
+ * renews it. This reader closes that gap from the same read-only boundary
+ * `createProductionJourneyReader` already uses for lifecycle facts — never widening authority and
+ * never fabricating a check result.
+ */
+export function createProductionJourneyCiReader(
+  deps: JourneyReadCompositionDeps,
+  request: ProductionJourneyReadRequest,
+): ReturnType<typeof createNodeGitCiReader> | undefined {
+  const root = journeyReaderRoot(deps, request.repositoryId);
+  if (root === undefined) return undefined;
+  const stillAuthorized = (): boolean =>
+    journeyReaderRoot(deps, request.repositoryId) === root &&
+    isGitHubIssueReaderAuthorized(deps, root, { correlationId: request.correlationId });
+  if (!stillAuthorized()) return undefined;
+  return createNodeGitCiReader({
+    workspace: journeyReaderWorkspace(root),
+    processEnv: deps.env,
+    signal: request.signal,
+    onTerminated: gitDeliveryTerminationHandler(
+      { activityLog: deps.activityLog ?? processServerLogSink() },
+      request.correlationId,
+    ),
+    stillAuthorized,
+  });
+}
+
 function activeMatches(active: ActiveWorkspaceView, context: DraftDeliveryRunContext): boolean {
   const { instance, binding, pointer } = active;
   return (

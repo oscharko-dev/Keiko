@@ -3,7 +3,9 @@
 //   * POST /api/git-delivery/journey/refresh — READ-ONLY. Reconciles the observed GitHub facts for
 //       one accepted draft delivery run's confirmed pull request: canonical PR identity, merged /
 //       draft / base / head state, required approvals, unresolved review conversations and the bound
-//       issue's actual open/closed state, joined with the existing CI readiness projection and the
+//       issue's actual open/closed state, joined with a CI readiness observation this route itself
+//       renews (the persisted projection is written only while the run is live and expires 60s
+//       later, so a settled run's handoff would otherwise report `readiness-stale` forever) and the
 //       current PR-description status. Produces a JourneyOutcome or a typed unavailable reason.
 //       Never mutates, never grants merge or issue-close authority.
 //
@@ -24,11 +26,14 @@ import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/gi
 import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import type { GitCiProviderReader } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { describeError } from "../diagnostics-log.js";
 import type {
+  createProductionJourneyCiReader as ProductionJourneyCiReaderFn,
   createProductionJourneyReader as ProductionJourneyReaderFn,
   resolveJourneyCheckoutRoot as ResolveJourneyCheckoutRootFn,
 } from "../coding-runtime/productionDraftDeliveryDependencies.js";
@@ -40,6 +45,8 @@ import {
   type JourneyObservationResult,
 } from "./journeyObservationService.js";
 import type { GitJourneyOutcomeStore } from "./journeyOutcome.js";
+import { journeyEvidenceFresh } from "@oscharko-dev/keiko-contracts/runtime/git-journey-freshness";
+import { produceCiReadinessSnapshot } from "./ciReadinessSnapshot.js";
 import { createPrDescriptionReceiptStore } from "./prDescriptionReceiptStore.js";
 import type { PrDescriptionContext } from "./prDescriptionTypes.js";
 
@@ -145,6 +152,15 @@ function contentFreeReadWorkspace(root: string): WorkspaceInfo {
 export interface GitDeliveryJourneyRouteOptions {
   readonly reader?: JourneyObservationOptions["reader"];
   readonly readiness?: JourneyObservationOptions["readiness"];
+  /**
+   * Test-only override seam for the run-independent CI reader the readiness resolution uses to
+   * renew CI facts once the coding run has settled to `succeeded` (mirrors `reader` above).
+   * Production composition never sets this — it defaults to `createProductionJourneyCiReader`. A
+   * caller that wants to exercise the fresh-read-then-fallback logic under test (rather than
+   * bypassing it entirely via the `readiness` override above) supplies a deterministic
+   * `GitCiProviderReader` here, without a live network/`gh` call.
+   */
+  readonly ciReader?: (context: JourneyObservationContext) => GitCiProviderReader | undefined;
   readonly description?: JourneyObservationOptions["description"];
   /**
    * Durable CAS projection (#3389 AC6). Test-only override seam; production composition never sets
@@ -173,6 +189,7 @@ function outcomesFor(
 // settled, so it carries no such ordering risk; Node caches the module after the first call.
 interface DraftDeliveryReaderModule {
   readonly createProductionJourneyReader: typeof ProductionJourneyReaderFn;
+  readonly createProductionJourneyCiReader: typeof ProductionJourneyCiReaderFn;
   readonly resolveJourneyCheckoutRoot: typeof ResolveJourneyCheckoutRootFn;
 }
 let draftDeliveryReaderModule: Promise<DraftDeliveryReaderModule> | undefined;
@@ -198,14 +215,204 @@ function readerFor(
   );
 }
 
-function readinessFor(
+// ─── Readiness renewal (defect: the persisted CI readiness snapshot is written only by the run's
+// own in-run CI tool call and expires 60s later, so it can never be renewed once the run has
+// settled to `succeeded` and a human reaches the issue-handoff stage). Mirrors the composition
+// `prMarkReadyExecution.ts` already uses after a mark-ready transition: a run-independent CI read,
+// `produceCiReadinessSnapshot`, then a best-effort durable write through
+// `recordPostDeliveryObservation` — but the freshly observed snapshot is always the value this
+// observation uses, whether or not the durable write is admitted (e.g. the PR is still a draft; see
+// `codingRuntimeCiReadinessStore.ts`'s `postDeliverySubjectMatches`, which durably records a
+// post-delivery observation only once the PR is no longer a draft). Falls back to the existing
+// cached snapshot ONLY when the fresh read itself fails or is unavailable — never fabricating
+// readiness and never widening authority; a genuinely stale or not-ready state still blocks. ───
+
+function ciReaderFor(
+  deps: UiHandlerDeps,
   options: GitDeliveryJourneyRouteOptions,
-  readiness: ReadinessSnapshot | undefined,
-): JourneyObservationOptions["readiness"] {
+  repositoryId: string,
+  createCiReader: typeof ProductionJourneyCiReaderFn,
+): (context: JourneyObservationContext) => GitCiProviderReader | undefined {
   return (
-    options.readiness ??
-    ((): Promise<ReadinessSnapshot | null> => Promise.resolve(readiness ?? null))
+    options.ciReader ??
+    ((context): ReturnType<typeof ProductionJourneyCiReaderFn> =>
+      createCiReader(deps, {
+        repositoryId,
+        correlationId: context.correlationId,
+        ...(context.signal === undefined ? {} : { signal: context.signal }),
+      }))
   );
+}
+
+function journeyCiTarget(draft: ConfirmedDraftDeliveryRecord): {
+  readonly ownerAndRepo: string;
+  readonly prExternalId: string;
+  readonly baseBranchName: string;
+  readonly headSha: string;
+} {
+  return {
+    ownerAndRepo: draft.binding.repository,
+    prExternalId: draft.pullRequest.externalId,
+    baseBranchName: draft.binding.baseRef,
+    headSha: draft.binding.headSha,
+  };
+}
+
+/** Best-effort durable write (#3389 AC6 continuity): the returned fresh snapshot is used for THIS
+ * observation regardless of whether the write is admitted — see the module comment above. */
+function persistJourneyReadiness(
+  deps: UiHandlerDeps,
+  runId: string,
+  correlationId: string,
+  snapshot: ReadinessSnapshot,
+): void {
+  const store = deps.codingRuntimeSnapshotStore?.ciReadiness;
+  const recorded = store?.recordPostDeliveryObservation(runId, snapshot) ?? false;
+  (deps.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    op: "git.journey-readiness.refreshed",
+    correlationId,
+    level: "info",
+    extra: {
+      runId,
+      state: snapshot.state,
+      reason: snapshot.reason,
+      recorded,
+      store: store === undefined ? "unavailable" : "available",
+    },
+  });
+}
+
+function logJourneyReadinessFallback(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  runId: string,
+  reason: "provider-unavailable" | "read-failed",
+  error?: unknown,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    op: "git.journey-readiness.refreshed",
+    correlationId,
+    level: "warn",
+    ...(error === undefined ? {} : { errorKind: "internal" }),
+    extra: {
+      runId,
+      recorded: false,
+      reason,
+      ...(error === undefined ? {} : describeError(error)),
+    },
+  });
+}
+
+async function freshJourneyReadiness(
+  deps: UiHandlerDeps,
+  draft: ConfirmedDraftDeliveryRecord,
+  context: JourneyObservationContext,
+  resolveCiReader: (context: JourneyObservationContext) => GitCiProviderReader | undefined,
+): Promise<ReadinessSnapshot | undefined> {
+  const reader = resolveCiReader(context);
+  if (reader === undefined) return undefined;
+  const facts = await reader.readFacts(journeyCiTarget(draft));
+  if (facts.status !== "observed") return undefined;
+  const { snapshot } = produceCiReadinessSnapshot(draft, facts, Date.now());
+  persistJourneyReadiness(deps, draft.binding.runId, context.correlationId, snapshot);
+  memoizeJourneyReadiness(deps, draft.binding.runId, snapshot);
+  return snapshot;
+}
+
+// The durable store deliberately declines a post-delivery observation while the pull request is
+// still a draft (`codingRuntimeCiReadinessStore.ts`), which is exactly the handoff phase this route
+// serves — so without a process-local tier every poll of the handoff card would spend a fresh
+// provider read (several `gh` calls each, every few seconds) to reproduce a snapshot that is still
+// inside its own 60s TTL. Bounded and keyed per deps like `prDescriptionRoutes.ts`'s service cache,
+// so it cannot outlive the composition or grow without limit. It is a cache of an OBSERVED value,
+// never a substitute for one: nothing is served from it once the TTL has elapsed.
+const MAX_MEMOIZED_READINESS = 64;
+let readinessMemos = new WeakMap<UiHandlerDeps, Map<string, ReadinessSnapshot>>();
+
+function readinessMemoFor(deps: UiHandlerDeps): Map<string, ReadinessSnapshot> {
+  const existing = readinessMemos.get(deps);
+  if (existing !== undefined) return existing;
+  const created = new Map<string, ReadinessSnapshot>();
+  readinessMemos.set(deps, created);
+  return created;
+}
+
+function memoizeJourneyReadiness(
+  deps: UiHandlerDeps,
+  runId: string,
+  snapshot: ReadinessSnapshot,
+): void {
+  const memo = readinessMemoFor(deps);
+  memo.set(runId, snapshot);
+  while (memo.size > MAX_MEMOIZED_READINESS) {
+    const oldest = memo.keys().next().value;
+    if (oldest === undefined) break;
+    memo.delete(oldest);
+  }
+}
+
+/** Test-only: drops the process-local readiness memo so one test file's fresh snapshot can never
+ * satisfy another's expectation of a fresh provider read. */
+export function clearJourneyReadinessMemo(): void {
+  readinessMemos = new WeakMap();
+}
+
+/** A snapshot still inside its own TTL, observed for the run and head this observation is about, is
+ * the answer — re-reading the provider would spend an API call to reproduce a value that is by
+ * definition still current. Anything else — expired, or observed for a different run or head —
+ * falls through to a fresh read, so the renewal this route owns still happens the moment the
+ * evidence stops being current. */
+function reusableJourneyReadiness(
+  deps: UiHandlerDeps,
+  draft: ConfirmedDraftDeliveryRecord,
+  cached: ReadinessSnapshot | undefined,
+  now: number,
+): ReadinessSnapshot | undefined {
+  const binding = draft.binding;
+  const current = (candidate: ReadinessSnapshot | undefined): boolean =>
+    candidate !== undefined &&
+    journeyEvidenceFresh(candidate, now) &&
+    candidate.runId === binding.runId &&
+    candidate.headSha === binding.headSha;
+  const memoized = readinessMemoFor(deps).get(binding.runId);
+  if (current(memoized)) return memoized;
+  return current(cached) ? cached : undefined;
+}
+
+async function refreshJourneyReadiness(
+  deps: UiHandlerDeps,
+  draft: ConfirmedDraftDeliveryRecord,
+  cached: ReadinessSnapshot | undefined,
+  context: JourneyObservationContext,
+  resolveCiReader: (context: JourneyObservationContext) => GitCiProviderReader | undefined,
+): Promise<ReadinessSnapshot | null> {
+  const reusable = reusableJourneyReadiness(deps, draft, cached, Date.now());
+  if (reusable !== undefined) return reusable;
+  const runId = draft.binding.runId;
+  try {
+    const fresh = await freshJourneyReadiness(deps, draft, context, resolveCiReader);
+    if (fresh !== undefined) return fresh;
+    logJourneyReadinessFallback(deps, context.correlationId, runId, "provider-unavailable");
+  } catch (error) {
+    logJourneyReadinessFallback(deps, context.correlationId, runId, "read-failed", error);
+  }
+  return cached ?? null;
+}
+
+function readinessFor(
+  deps: UiHandlerDeps,
+  options: GitDeliveryJourneyRouteOptions,
+  repositoryId: string,
+  draft: ConfirmedDraftDeliveryRecord,
+  cached: ReadinessSnapshot | undefined,
+  createCiReader: typeof ProductionJourneyCiReaderFn,
+): JourneyObservationOptions["readiness"] {
+  if (options.readiness !== undefined) return options.readiness;
+  const resolveCiReader = ciReaderFor(deps, options, repositoryId, createCiReader);
+  return (context): Promise<ReadinessSnapshot | null> =>
+    refreshJourneyReadiness(deps, draft, cached, context, resolveCiReader);
 }
 
 function descriptionFor(
@@ -317,7 +524,14 @@ function buildJourneyObservationOptions(
   return {
     context: () => context,
     reader,
-    readiness: readinessFor(options, ciReadiness),
+    readiness: readinessFor(
+      deps,
+      options,
+      repositoryId,
+      draft,
+      ciReadiness,
+      draftDelivery.createProductionJourneyCiReader,
+    ),
     description: descriptionFor(
       deps,
       options,

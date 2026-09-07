@@ -26,6 +26,7 @@ import { buildWorkspaceInstanceStoreOverDatabase } from "../task-workspace/store
 import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import {
   createProductionDraftDeliveryDependencies,
+  createProductionJourneyCiReader,
   createProductionJourneyReader,
   type DraftDeliveryCompositionDeps,
 } from "./productionDraftDeliveryDependencies.js";
@@ -640,6 +641,40 @@ describe("production journey reader (#3389 AC5/AC6)", () => {
     f.store.updateGitHubIssueReaderAuthorization(repositoryId, false, 1);
     expect(
       createProductionJourneyReader(f.deps, { repositoryId, correlationId: "journey-1" }),
+    ).toBeUndefined();
+  });
+});
+
+// The journey route's readiness resolution needs a run-independent CI read the same way it already
+// needs a run-independent journey (lifecycle) read above -- so a refresh can renew CI facts after
+// the originating coding run has settled and its own in-run CI observation has necessarily expired.
+// `createProductionJourneyCiReader` mirrors `createProductionJourneyReader` exactly: same checkout
+// resolution, same per-checkout read grant, no live run or workspace required.
+describe("production journey CI reader (issue-to-PR handoff readiness renewal)", () => {
+  it("builds a read-only CI reader from the per-checkout grant alone, independent of any run", async () => {
+    const f = await fixture();
+    const repositoryId = githubIssueReaderRepositoryId(f.root);
+    if (repositoryId === undefined) throw new Error("Fixture repository required");
+    expect(
+      createProductionJourneyCiReader(f.deps, { repositoryId, correlationId: "journey-ci-1" }),
+    ).toBeDefined();
+  });
+  it("denies for an unregistered or never-granted repository id", async () => {
+    const f = await fixture();
+    expect(
+      createProductionJourneyCiReader(f.deps, {
+        repositoryId: "repo_0000000000000000",
+        correlationId: "journey-ci-1",
+      }),
+    ).toBeUndefined();
+  });
+  it("denies once the per-checkout grant is revoked, without needing a live run or workspace", async () => {
+    const f = await fixture();
+    const repositoryId = githubIssueReaderRepositoryId(f.root);
+    if (repositoryId === undefined) throw new Error("Fixture repository required");
+    f.store.updateGitHubIssueReaderAuthorization(repositoryId, false, 1);
+    expect(
+      createProductionJourneyCiReader(f.deps, { repositoryId, correlationId: "journey-ci-1" }),
     ).toBeUndefined();
   });
 });
