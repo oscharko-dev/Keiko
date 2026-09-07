@@ -201,6 +201,8 @@ interface ActiveTaskWorkspaceResponse {
       readonly taskId: string;
       readonly taskBranch: string;
     };
+    /** The run's task workspace root (`WorkspaceBinding.activeRoot`, the managed worktree). */
+    readonly binding?: { readonly activeRoot?: string };
   } | null;
 }
 
@@ -211,6 +213,18 @@ async function activeTaskWorkspace(page: Page): Promise<ActiveTaskWorkspaceRespo
     `the active-workspace read failed with HTTP ${String(response.status())}`,
   ).toBe(true);
   return ((await response.json()) as ActiveTaskWorkspaceResponse).active;
+}
+
+/** The root the server keys run-bound description proposals by (`descriptionApplicationTarget`:
+ * `workspace.binding.activeRoot`), read from the production active-workspace route -- the governed
+ * pull request card must be opened on this exact root, never on the bound repository root. */
+export async function activeTaskWorkspaceRoot(page: Page): Promise<string> {
+  const active = await activeTaskWorkspace(page);
+  const root = active?.binding?.activeRoot;
+  if (root === undefined || root.length === 0) {
+    throw new Error("the active task workspace root was unavailable for the description review");
+  }
+  return root;
 }
 
 async function controlName(locator: Locator, kind: string): Promise<string> {

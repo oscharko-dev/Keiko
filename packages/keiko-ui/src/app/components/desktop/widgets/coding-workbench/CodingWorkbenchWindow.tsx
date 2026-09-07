@@ -978,9 +978,14 @@ function WorkbenchColumns({
           <CodingWorkbenchDraftDelivery
             snapshot={state.run.value ?? undefined}
             onReviewDescription={(descriptionReview): void => {
-              if (repositoryRoot === null) return;
+              // The server retains the reviewable proposal under the run's task workspace root
+              // (`descriptionApplicationTarget`: `workspace.binding.activeRoot`), never under the
+              // repository root this settled Workbench labels; the governed pull request card must
+              // open on that exact root or its retained review resolves an empty proposal holder.
+              const root = liveWorkspaceRootOf(activeWorkspace) ?? repositoryRoot;
+              if (root === null) return;
               onOpenGit({
-                root: repositoryRoot,
+                root,
                 binding: "task-workspace",
                 descriptionReview,
               });

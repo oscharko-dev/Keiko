@@ -1,4 +1,5 @@
 import { draftDeliveryReview, draftDeliverySnapshot } from "./_draftDeliveryTestSupport";
+import { descriptionStatusSnapshot } from "./_workbenchDescriptionStatusTestSupport";
 import { journeyFixture } from "./_journeyOutcomeTestSupport";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -714,6 +715,51 @@ describe("CodingWorkbenchWindow", () => {
     expect(onOpenGit).toHaveBeenCalledWith({
       root: "/worktrees/active-task",
       binding: "task-workspace",
+    });
+  });
+
+  // Epic #3384 live-flow defect (#3401 "Review description"): after a settled run the Workbench
+  // labels the REPOSITORY root, but the server retains the reviewable description proposal under
+  // the run's task workspace root (`descriptionApplicationTarget`: `workspace.binding.activeRoot`).
+  // Opening the governed pull request card on the repository root resolved an empty proposal
+  // holder and answered 409 unknown proposal, so the retained review must open on the task
+  // workspace root the server actually keyed the proposal by.
+  it("opens the retained description review on the run's task workspace root", async (): Promise<void> => {
+    const user = userEvent.setup();
+    const onOpenGit = vi.fn();
+    chatCatalogMock.activeProject = {
+      path: "/repos/keiko",
+      name: "Keiko",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+      workspaceAvailable: false,
+    };
+    const delivered = draftDeliverySnapshot();
+    const value = {
+      ...delivered,
+      descriptionStatus: descriptionStatusSnapshot({ proposalId: "pr-description-1" })
+        .descriptionStatus,
+    };
+
+    renderWorkbench(
+      liveState({ run: { status: "ready", value, error: null } }),
+      actions(),
+      onOpenGit,
+      activeWorkspaceWithBinding("/repos/keiko", "/worktrees/active-task"),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Review exact draft" }));
+    expect(onOpenGit).toHaveBeenCalledWith({
+      root: "/worktrees/active-task",
+      binding: "task-workspace",
+      descriptionReview: {
+        ownerAndRepo: "owner/repository",
+        prNumber: 7,
+        proposalId: "pr-description-1",
+        snapshotDigest: "b".repeat(64),
+      },
     });
   });
 

@@ -56,6 +56,7 @@ import {
   runtimeSnapshot,
   waitWhileAnsweringApprovals,
 } from "./coding-issue-journey-live.js";
+import { activeTaskWorkspaceRoot } from "./coding-issue-journey-live.js";
 import { resolveLiveJourneyEnv } from "./coding-issue-journey-live-runners.js";
 import { currentPlatformKey, receiptsDir } from "./coding-issue-journey-scenarios.js";
 import {
@@ -948,7 +949,10 @@ async function applyAndRecordDescription(
   toolCallCount: number,
 ): Promise<CodeTaskQualificationFlowStageEvidenceV1["description"]> {
   const description = await waitForAutoDraftDescription(page);
-  const retained = await mountGovernedPullRequestCard(page, repositoryRoot, delivered, description);
+  // Mirrors the Workbench's own "Review description" control: the card opens on the run's task
+  // workspace root, which is where the server retained the proposal -- not on `repositoryRoot`.
+  const workspaceRoot = await activeTaskWorkspaceRoot(page);
+  const retained = await mountGovernedPullRequestCard(page, workspaceRoot, delivered, description);
   await applyAutoDraftDescriptionThroughPrCard(page, retained);
   const receiptDigest = await recordSuccessfulJourneyStage(
     page,
