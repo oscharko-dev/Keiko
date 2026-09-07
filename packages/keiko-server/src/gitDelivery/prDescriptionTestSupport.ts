@@ -59,6 +59,13 @@ export class DescriptionFixture {
     } = {},
   ) {
     const baseRef = setup.baseRef ?? "main";
+    // The fixture's head branch is fixed to "feature" (initialize()/initialRemote); a base named
+    // the same would make `git branch` fail with an opaque error instead of a meaningful one.
+    if (baseRef === "feature") {
+      throw new Error(
+        'DescriptionFixture baseRef must differ from the fixed "feature" head branch',
+      );
+    }
     this.policyPacks = setup.policyPacks;
     this.initialize();
     this.git(["remote", "add", "origin", "https://github.com/owner/repo.git"]);

@@ -117,9 +117,20 @@ describe("workspace-persistence", () => {
           descriptionSnapshotDigest: digest.toUpperCase(),
         },
       }),
+      win({
+        id: "pr-4",
+        type: "governedPullRequest",
+        cfg: {
+          projectPath: "/repo",
+          // Above the contracts-owned GITHUB_ISSUE_NUMBER_MAX ceiling and a repo with a path escape.
+          descriptionPrNumber: 1_000_000_001,
+          descriptionOwnerAndRepo: "owner/../repo",
+        },
+      }),
     ]);
     expect(hostile[0]?.cfg).toEqual({ projectPath: "/repo" });
     expect(hostile[1]?.cfg).toEqual({ projectPath: "/repo" });
+    expect(hostile[2]?.cfg).toEqual({ projectPath: "/repo" });
   });
 
   it("drops transient windows and preserves PDF preview as a safe shell only", () => {

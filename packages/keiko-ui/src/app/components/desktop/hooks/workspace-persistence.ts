@@ -1,5 +1,9 @@
 "use client";
 
+import {
+  GITHUB_ISSUE_NUMBER_MAX,
+  isGitHubOwnerAndRepo,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { sanitizeEditorRootSessionsJson } from "@/lib/editor-root-sessions";
 // KEIKO-0628: isSecretShapedString + its helpers live in a leaf module so tests/qa's cross-package
 // parity test can consume them without pulling this file's WIN_TYPES/WIN_META imports into the
@@ -129,18 +133,21 @@ function sanitizeCodingRepositoryBinding(value: unknown): AppWindow["cfg"][strin
   return value === "coding-repository" ? value : undefined;
 }
 
-const GITHUB_OWNER_AND_REPO = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/u;
 const SHA256_HEX_DIGEST = /^[a-f0-9]{64}$/u;
 
+// The owner/repo vocabulary and the issue/PR number ceiling are owned by keiko-contracts
+// (`github-issue-reference.ts`); this boundary reuses them rather than restating either rule.
 function sanitizeGitHubOwnerAndRepo(value: unknown): AppWindow["cfg"][string] {
-  if (typeof value !== "string" || !GITHUB_OWNER_AND_REPO.test(value)) return undefined;
-  return value.split("/").some((segment) => segment === "." || segment === "..")
-    ? undefined
-    : value;
+  return typeof value === "string" && isGitHubOwnerAndRepo(value) ? value : undefined;
 }
 
 function sanitizePullRequestNumber(value: unknown): AppWindow["cfg"][string] {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= GITHUB_ISSUE_NUMBER_MAX
+    ? value
+    : undefined;
 }
 
 function sanitizeOpaqueReferenceValue(value: unknown): AppWindow["cfg"][string] {

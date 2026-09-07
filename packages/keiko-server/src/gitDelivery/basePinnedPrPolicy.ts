@@ -1,5 +1,6 @@
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
+import { defaultMintableRepoPack } from "./policyPackMintability.js";
 
 // One base-pinned pull-request policy for both PR-shaped effects a governed run performs against
 // a base branch it has already resolved from the provider: the issue-bound draft creation
@@ -15,21 +16,22 @@ export function basePinnedPrPolicyPacks(
   actionKind: "pr-create" | "pr-update",
   baseRef: string,
 ): GitDeliveryTrustedPolicyPacks {
-  return {
-    repoPack: {
-      schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
-      repoId: actionKind === "pr-create" ? "issue-bound-draft" : "base-pinned-description",
-      rules: [
-        {
-          actionKind,
-          decision: "constrained",
-          constraints: [
-            { kind: "risk-class-ceiling", maxRiskClass: "protected-or-merge" },
-            { kind: "branch-pattern", patterns: [{ matchKind: "exact", value: baseRef }] },
-          ],
-        },
-      ],
-      defaultRule: { decision: "blocked" },
-    },
-  };
+  // KEIKO-0526: the same fail-loud mintability guard every sibling default-pack site runs, so a
+  // future approval-gated rule for an unmintable action kind throws here instead of failing
+  // silently at execute time.
+  return defaultMintableRepoPack({
+    schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+    repoId: actionKind === "pr-create" ? "issue-bound-draft" : "base-pinned-description",
+    rules: [
+      {
+        actionKind,
+        decision: "constrained",
+        constraints: [
+          { kind: "risk-class-ceiling", maxRiskClass: "protected-or-merge" },
+          { kind: "branch-pattern", patterns: [{ matchKind: "exact", value: baseRef }] },
+        ],
+      },
+    ],
+    defaultRule: { decision: "blocked" },
+  });
 }
