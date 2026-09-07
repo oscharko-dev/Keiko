@@ -1140,6 +1140,26 @@ Diagnostic `763a1b93d`, run `34156460872`, passed the native local-directory, re
 mapped-SMB rejection checks, then failed the shared TypeScript local positive. The PowerShell carrier
 remains under diagnosis; production eligibility and KHA1 remain disabled.
 
+### Current UI and macOS replay
+
+With official Node 24.18.0, the UI coverage run passed 432 files and 7,516 tests (one
+skipped), in 144.71 seconds. Coverage measured 89.91% statements, 82.34% branches,
+91.49% functions and 92.79% lines. The separate macOS native quality command passed
+compiler, static analyzer and boundary checks; this is host-native boundary evidence,
+not the outstanding signed N−1/N upgrade qualification.
+
+The eight update browser journeys passed in 1.3 minutes, including actual BFF outage
+and reconnection. The regenerated manifest at 2026-09-07T19:58:34.304Z matches all eight
+UI source and four harness hashes. Its thirteen fidelity captures pass, and all twelve
+axe captures have zero violations. These generated artifacts remain source-bound;
+the final merge-time UI receipt still requires the audited delivery commit.
+
+Error observability (eleven call sites), E2E wiring, changed-UI i18n, portable manifest,
+portable approvals, release impact, release alignment and zizmor anchors passed.
+Release alignment identifies existing 0.3.17 consistently; it does not publish or qualify
+this repair. Windows diagnostic `d5fb829b5` / run `34157645968` adds only closed diagnostic
+stage tokens to isolate the remaining shared locality query failure.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification
