@@ -1941,7 +1941,9 @@ describe("CodingRuntimeOrchestrator", () => {
     const captured = captureActivityLog();
     const f = await failedSuccessorWithDraftLineage(captured.activityLog);
     const first = rowFor(f.rows, "run-1");
-    f.rows.set(first.runId, { ...first, draftDelivery: undefined });
+    const withoutDraft = { ...first };
+    delete withoutDraft.draftDelivery;
+    f.rows.set(first.runId, withoutDraft);
 
     await f.orchestrator.start({ ...start, requestId: "request-3", issueRef: ISSUE_REF });
 
@@ -2016,7 +2018,6 @@ describe("CodingRuntimeOrchestrator", () => {
     const duplicate: CodingRuntimeSnapshot = {
       ...first,
       runId: "run-duplicate",
-      draftDelivery: undefined,
     };
     const orphan: CodingRuntimeSnapshot = {
       ...second,
