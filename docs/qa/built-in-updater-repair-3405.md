@@ -210,6 +210,33 @@ entry and retained-generation rejection checks. Independent re-review approves w
 findings. The lead verifies the repaired hashes and passes all 18 maintenance tests again
 (422 milliseconds). No active-WAL inspection or deletion authority is introduced by this repair.
 
+The subsequent CLI active-WAL inspection allowance and startup transport are implemented across six
+files. The allowance is validated and consumed only inside the live managed-mutation lock callback;
+its inspection capability expires when the callback returns or rejects. Exact generation/incoming
+roots are bounded, and generic removal retains selected-generation-only authority. The lead passes
+all 93 portable lifecycle tests under the default timeout (16.90 seconds) and 46 focused install/
+maintenance tests (1.27 seconds). Independent security review finds no security issues but catches
+one test-only TypeScript closure narrowing error. The owner fixes it without a cast or suppression,
+passes all 26 install tests (1.49 seconds), and independent re-review approves with zero findings.
+The lead's root no-emit replay confirms that error is gone; four server test typing errors remain
+in the pending startup/integration scope. This CLI transport does not itself produce server WAL
+allowances or authorize the unfinished native startup path.
+
+The B3a server generation consumers freeze separately across 14 source/test files. Canonical package
+layout authority feeds staging, install detection, preflight and production runtime roots. Windows
+launcher hashing streams bounded chunks, and control reads enforce finite limits and pre/post-read
+identity checks. Historical flat Windows registration remains readable and ineligible; macOS schema-1
+behavior is preserved. After a worker accidentally invokes pnpm and disrupts the npm dependency
+tree, the lead restores the committed lock with official-Node `npm ci`: 783 packages, 809 audited,
+zero vulnerabilities, 16 seconds, no tracked package/lock changes. The lead verifies all 14 frozen
+hashes and passes the final nine-suite aggregate, 170 tests (24.17 seconds). The owner reports server
+workspace typecheck and all 14 scoped lint/format checks green. Independent security review finds
+zero critical/high/medium issues and three low issues requiring repair: mapped network drives are
+not excluded by lexical root policy, production runtime discovery omits setup runtime platform/CPU
+validation, and its new root setup/launcher reads lack descriptor-bound size/deadline enforcement.
+The latter reads are distinct from the already bounded install-mode detector. B3b startup/recovery
+consumers and final root-wide verification remain outstanding.
+
 Native filesystem mechanics are snapshotted separately in diagnostic commit
 `8e1ffb09c492eed84f3879dcd957a34f395014c9`, based on reviewed child checkpoint `52ac76881`.
 The lead verified all 17 copied file hashes. Local owner evidence includes Mac focused protocol/
@@ -252,6 +279,48 @@ The owner also reports 36 wiring tests, MinGW warning-clean cross-compilation an
 passing. These checks cover source/compiler boundaries only. The full callback snapshot awaits
 the Windows plan/receipt repair before another real Windows diagnostic. The Windows coordinator
 entry remains fail-closed without production KHA1 acceptance.
+The next diagnostic, `b93a4894d` in
+[run 34145519032](https://github.com/oscharko-dev/Keiko/actions/runs/34145519032), includes the full
+native callback snapshot and the shared handoff directory-sync repair. Its Windows handoff suites
+pass 39 tests and fail two, with one explicit Mac encoder skip. Windows encoder equality and real
+plan/receipt publication now pass. The two static symlink fixtures expose reliance on ineffective
+Windows `O_NOFOLLOW`: readers reject the link only after reading through it. The repair must reject
+the named unsafe entry before opening/reading and bind the opened descriptor to that precheck;
+relaxing the expected error or skipping the cases is not an acceptable fix. Native analysis remains
+unreached, and the remaining workflow jobs are cancelled.
+
+Independent native review also identifies a medium durability gap: production file replacement
+does not perform the ADR-required post-cutover flush, although the separate probe does. That finding
+requires the productive helper and its failure-boundary tests to be repaired before acceptance.
+Its final report has one medium and two low findings: the missing post-cutover flush, an unpinned
+intermediate receipt directory permitting junction redirection, and synchronous pipe writes that
+can outlive the plan deadline when a trusted child stalls. No critical/high finding is reported.
+The native owner is repairing all three; the common Mac ordering and Windows generation-prefix
+logic otherwise survive the static review.
+
+The pre-read link repair runs in diagnostic `b22e8ed4f`,
+[run 34146159822](https://github.com/oscharko-dev/Keiko/actions/runs/34146159822). All 41 Windows
+plan/receipt tests pass with one explicit Mac encoder skip (12.08 seconds), including canonical
+Windows encoding, real persistence and unchanged symlink-rejection assertions. Native analysis is
+now reached and fails MSVC C6262: the new launcher resume function uses 197,768 bytes of stack.
+That requires bounded heap ownership, not an analysis suppression or raised stack budget. The
+native runtime stage remains unproven; other workflow jobs are cancelled after the Windows failure.
+
+Diagnostic `182a76e7c`,
+[run 34146945279](https://github.com/oscharko-dev/Keiko/actions/runs/34146945279), passes all 41 Windows
+plan/receipt tests with one explicit Mac encoder skip (13.41 seconds). Both launcher variants pass
+MSVC analysis. The real cutover probe passes success, allowing/denying handle sharing, invalid
+input, pre/post-cutover failure, contention, and flush fault boundaries (36/36 before, 40/40 after).
+The job then fails MSVC C6262 in the coordinator test fixture's 65,548-byte stack allocation. This
+is a partial mechanics result, not a green Windows job or end-to-end native qualification.
+
+The owner freezes all three native review repairs plus bounded heap fixtures in a verified 17-file
+snapshot. The productive replacement helper binds and flushes the renamed destination; capsule and
+receipt directories remain pinned; supervisor writes use nonblocking pipe mode with process and
+deadline checks. Owner macOS native quality, MinGW analysis/link checks and 95 official-Node wiring
+checks pass. Independent security re-review is pending. The snapshot is dispatched in diagnostic
+`7e99e81d6`, [run 34149173415](https://github.com/oscharko-dev/Keiko/actions/runs/34149173415), for actual
+Windows MSVC analysis and runtime execution. KHA1 remains disabled and no passing outcome is asserted.
 
 The diagnostic editor-evidence mismatch is independently traced to the local Node distribution's
 zlib. Homebrew Node 24.18.0 reports zlib 1.2.12; the checksum-verified official Node 24.18.0 binary

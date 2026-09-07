@@ -77,7 +77,12 @@ import {
   validatePortableRoot,
   withPortableManagedMutation,
 } from "./portable-install.js";
-import type { PortableManagedUpgradeFn, ValidatedPortableRoot } from "./portable-install.js";
+import type {
+  PortableManagedInspectionAllowance,
+  PortableManagedInspectionFn,
+  PortableManagedUpgradeFn,
+  ValidatedPortableRoot,
+} from "./portable-install.js";
 import { writeFailedRegistration, writeManagedRegistration } from "./portable-registration.js";
 import { hashPortableTreeKht1 } from "@oscharko-dev/keiko-security/portable-tree-attestation";
 import {
@@ -516,6 +521,150 @@ describe("portable install decisions", () => {
     expect(() => escapedUpgrade(input)).toThrow(
       "portable upgrade lock capability is no longer active",
     );
+  });
+
+  it("scopes Windows generation inspection to an active matching mutation lock", async () => {
+    const root = makePolicyAllowedRoot();
+    const managedRoot = join(root, "managed", "Keiko");
+    const stateDir = join(root, ".keiko-state");
+    const selected = await seedWindowsGenerationRoot(managedRoot);
+    const layout = validatePortableRoot("windows-x64", managedRoot).layout;
+    const candidate = "b".repeat(64);
+    const activationId = "c".repeat(32);
+    const incoming = `.portable/generations/.incoming-${activationId}`;
+    for (const resourceRoot of [`.portable/generations/${candidate}`, incoming]) {
+      const absoluteRoot = join(managedRoot, ...resourceRoot.split("/"));
+      mkdirSync(join(absoluteRoot, "app"), { recursive: true });
+      mkdirSync(join(absoluteRoot, "runtime", "native"), { recursive: true });
+      writeFileSync(
+        join(absoluteRoot, "app", "package.json"),
+        JSON.stringify({ name: PACKAGE_NAME, version: "0.3.18" }),
+      );
+      writeFileSync(
+        join(absoluteRoot, "runtime", "native", "keiko-runtime-attestation.exe"),
+        "attestation",
+      );
+    }
+    const allowance: PortableManagedInspectionAllowance = {
+      kind: "windows-generation-v1",
+      managedRoot,
+      activationId,
+      allowedResourceRoots: [
+        `.portable/generations/${selected}`,
+        `.portable/generations/${candidate}`,
+        incoming,
+      ],
+    };
+
+    await withPortableManagedMutation(
+      { target: "windows-x64", managedRoot, stateDir },
+      (_upgrade, inspect) => {
+        const scan = inspect(layout, allowance);
+        expect(scan.issues).toEqual([]);
+        expect(scan.files).toContain(
+          join(
+            managedRoot,
+            ".portable",
+            "generations",
+            candidate,
+            "runtime",
+            "native",
+            "keiko-runtime-attestation.exe",
+          ),
+        );
+        mkdirSync(join(managedRoot, ".portable", "generations", "d".repeat(64)));
+        expect(inspect(layout, allowance).issues).toContain(
+          `portable managed install contains unknown entry: .portable/generations/${"d".repeat(64)}`,
+        );
+        writeFileSync(
+          join(
+            managedRoot,
+            ".portable",
+            "generations",
+            candidate,
+            "runtime",
+            "native",
+            "unknown.exe",
+          ),
+          "unknown",
+        );
+        expect(inspect(layout, allowance).issues).toContain(
+          `portable managed install contains unknown entry: .portable/generations/${candidate}/runtime/native/unknown.exe`,
+        );
+        return Promise.resolve();
+      },
+    );
+  });
+
+  it("rejects malformed and cross-scope Windows inspection allowances", async () => {
+    const root = makePolicyAllowedRoot();
+    const managedRoot = join(root, "managed", "Keiko");
+    const stateDir = join(root, ".keiko-state");
+    const selected = await seedWindowsGenerationRoot(managedRoot);
+    const layout = validatePortableRoot("windows-x64", managedRoot).layout;
+    const activationId = "c".repeat(32);
+    const selectedRoot = `.portable/generations/${selected}`;
+    const base: PortableManagedInspectionAllowance = {
+      kind: "windows-generation-v1",
+      managedRoot,
+      activationId,
+      allowedResourceRoots: [selectedRoot],
+    };
+    const malformed = [
+      { ...base, kind: "windows-flat-v1" } as unknown as PortableManagedInspectionAllowance,
+      { ...base, managedRoot: join(root, "other", "Keiko") },
+      { ...base, activationId: "C".repeat(32) },
+      { ...base, allowedResourceRoots: [] },
+      { ...base, allowedResourceRoots: [selectedRoot, selectedRoot] },
+      { ...base, allowedResourceRoots: [selectedRoot, ".portable/generations/../outside"] },
+      {
+        ...base,
+        allowedResourceRoots: [selectedRoot, `.portable/generations/.incoming-${"d".repeat(32)}`],
+      },
+      { ...base, allowedResourceRoots: [`.portable/generations/${"e".repeat(64)}`] },
+    ] as readonly PortableManagedInspectionAllowance[];
+
+    await withPortableManagedMutation(
+      { target: "windows-x64", managedRoot, stateDir },
+      (_upgrade, inspect) => {
+        for (const allowance of malformed) expect(() => inspect(layout, allowance)).toThrow();
+        expect(() =>
+          inspect({ ...layout, installRoot: join(root, "other", "Keiko") }, base),
+        ).toThrow("portable inspection lock scope does not match the managed install");
+        return Promise.resolve();
+      },
+    );
+  });
+
+  it("revokes the inspection capability when its callback throws", async () => {
+    const root = makePolicyAllowedRoot();
+    const managedRoot = join(root, "managed", "Keiko");
+    const stateDir = join(root, ".keiko-state");
+    await seedWindowsGenerationRoot(managedRoot);
+    const layout = validatePortableRoot("windows-x64", managedRoot).layout;
+    let escaped: PortableManagedInspectionFn | undefined;
+
+    await expect(
+      withPortableManagedMutation(
+        { target: "windows-x64", managedRoot, stateDir },
+        (_upgrade, inspect) => {
+          escaped = inspect;
+          return Promise.reject(new Error("callback failed"));
+        },
+      ),
+    ).rejects.toThrow("callback failed");
+    const escapedInspection = escaped;
+    if (escapedInspection === undefined) {
+      throw new Error("inspection capability was not provided");
+    }
+    expect(() => escapedInspection(layout)).toThrow(
+      "portable inspection lock capability is no longer active",
+    );
+    await expect(
+      withPortableManagedMutation({ target: "windows-x64", managedRoot, stateDir }, () =>
+        Promise.resolve(),
+      ),
+    ).resolves.toBeUndefined();
   });
 
   it("reclaims a setup lock whose recorded owner is no longer running", async () => {

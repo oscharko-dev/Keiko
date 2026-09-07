@@ -82,7 +82,7 @@ type RegistrationArtifact =
   | WindowsShortcutRegistrationArtifact
   | DirectoryRegistrationArtifact;
 
-interface ManagedInstallScan {
+export interface ManagedInstallScan {
   readonly files: readonly string[];
   readonly directories: readonly string[];
   readonly issues: readonly string[];
@@ -130,12 +130,12 @@ const MANAGED_INSTALL_RULES: Readonly<
   },
 };
 const WINDOWS_LAUNCHER_MAX_BYTES = 64 * 1024;
-const WINDOWS_GENERATION_ROOT_FILES = [
+const WINDOWS_GENERATION_ROOT_FILES: readonly string[] = [
   "Keiko.exe",
   ".portable/setup-manifest.json",
   "support/keiko-support.cmd",
-] as const;
-const WINDOWS_GENERATION_PAYLOAD_EXACT_FILES = [
+];
+const WINDOWS_GENERATION_PAYLOAD_EXACT_FILES: readonly string[] = [
   "app/package.json",
   "app/release-impact.catalog.json",
   ".portable/runtime-activation.json",
@@ -144,13 +144,13 @@ const WINDOWS_GENERATION_PAYLOAD_EXACT_FILES = [
   "runtime/native/keiko-secure-workspace-read.exe",
   "runtime/native/usearch.node",
   "runtime/licenses/usearch/LICENSE",
-] as const;
-const WINDOWS_GENERATION_PAYLOAD_PREFIXES = [
+];
+const WINDOWS_GENERATION_PAYLOAD_PREFIXES: readonly string[] = [
   "app/dist/",
   "app/node_modules/",
   "runtime/node/",
   "runtime/sidecars/",
-] as const;
+];
 
 function appDataDir(env: EnvSource, home: string): string {
   // Absolute-only: an empty or relative APPDATA must not re-anchor registration paths at the
@@ -633,15 +633,21 @@ function pathMatchesRecursivePrefix(path: string, prefix: string): boolean {
   return path.startsWith(prefix);
 }
 
-function allowlistedDirectory(relPath: string, layout: PortableLayout): boolean {
-  const generationRoot = selectedWindowsGenerationRoot(layout);
-  if (generationRoot !== undefined) {
+function allowlistedDirectory(
+  relPath: string,
+  layout: PortableLayout,
+  windowsGenerationRoots?: readonly string[],
+): boolean {
+  if (windowsGenerationRoots !== undefined) {
     return (
       relPath === ".portable" ||
       relPath === ".portable/generations" ||
       relPath === "support" ||
-      relPath === generationRoot ||
-      selectedWindowsGenerationDirectoryAllowed(relPath, generationRoot)
+      windowsGenerationRoots.some(
+        (generationRoot) =>
+          relPath === generationRoot ||
+          selectedWindowsGenerationDirectoryAllowed(relPath, generationRoot),
+      )
     );
   }
   const rules = MANAGED_INSTALL_RULES[layout.rootKind];
@@ -654,10 +660,15 @@ function allowlistedDirectory(relPath: string, layout: PortableLayout): boolean 
   );
 }
 
-function allowlistedFile(relPath: string, layout: PortableLayout): boolean {
-  const generationRoot = selectedWindowsGenerationRoot(layout);
-  if (generationRoot !== undefined) {
-    return allowlistedSelectedWindowsGenerationFile(relPath, generationRoot);
+function allowlistedFile(
+  relPath: string,
+  layout: PortableLayout,
+  windowsGenerationRoots?: readonly string[],
+): boolean {
+  if (windowsGenerationRoots !== undefined) {
+    return windowsGenerationRoots.some((generationRoot) =>
+      allowlistedSelectedWindowsGenerationFile(relPath, generationRoot),
+    );
   }
   const rules = MANAGED_INSTALL_RULES[layout.rootKind];
   return (
@@ -670,11 +681,11 @@ function allowlistedSelectedWindowsGenerationFile(
   relPath: string,
   generationRoot: string,
 ): boolean {
-  if (WINDOWS_GENERATION_ROOT_FILES.includes(relPath as never)) return true;
+  if (WINDOWS_GENERATION_ROOT_FILES.includes(relPath)) return true;
   if (!relPath.startsWith(`${generationRoot}/`)) return false;
   const selected = relPath.slice(generationRoot.length + 1);
   return (
-    WINDOWS_GENERATION_PAYLOAD_EXACT_FILES.includes(selected as never) ||
+    WINDOWS_GENERATION_PAYLOAD_EXACT_FILES.includes(selected) ||
     WINDOWS_GENERATION_PAYLOAD_PREFIXES.some((prefix) => selected.startsWith(prefix))
   );
 }
@@ -704,6 +715,7 @@ function selectedWindowsGenerationRoot(layout: PortableLayout): string | undefin
 function scanManagedTree(
   absPath: string,
   layout: PortableLayout,
+  windowsGenerationRoots: readonly string[] | undefined,
   files: string[],
   directories: string[],
   issues: string[],
@@ -718,11 +730,11 @@ function scanManagedTree(
     }
     const relPath = normalizedRelativePath(layout.installRoot, entryPath);
     if (stat.isDirectory()) {
-      if (!allowlistedDirectory(relPath, layout)) {
+      if (!allowlistedDirectory(relPath, layout, windowsGenerationRoots)) {
         issues.push(topLevelUnknown(relPath));
         continue;
       }
-      scanManagedTree(entryPath, layout, files, directories, issues);
+      scanManagedTree(entryPath, layout, windowsGenerationRoots, files, directories, issues);
       continue;
     }
     if (!stat.isFile()) {
@@ -733,7 +745,7 @@ function scanManagedTree(
       issues.push(`portable managed install refused hardlink at ${entryPath}`);
       continue;
     }
-    if (!allowlistedFile(relPath, layout)) {
+    if (!allowlistedFile(relPath, layout, windowsGenerationRoots)) {
       issues.push(topLevelUnknown(relPath));
       continue;
     }
@@ -741,12 +753,41 @@ function scanManagedTree(
   }
 }
 
-export function inspectPortableManagedInstall(layout: PortableLayout): ManagedInstallScan {
+function inspectPortableManagedInstallWithWindowsGenerationRoots(
+  layout: PortableLayout,
+  windowsGenerationRoots: readonly string[] | undefined,
+): ManagedInstallScan {
   const files: string[] = [];
   const directories: string[] = [];
   const issues: string[] = [];
-  scanManagedTree(layout.installRoot, layout, files, directories, issues);
+  if (
+    layout.rootKind === "windows-root" &&
+    layout.resourceRoot !== layout.installRoot &&
+    selectedWindowsGenerationRoot(layout) === undefined
+  ) {
+    return {
+      files,
+      directories,
+      issues: ["portable managed install refused malformed Windows generation layout"],
+    };
+  }
+  scanManagedTree(layout.installRoot, layout, windowsGenerationRoots, files, directories, issues);
   return { files, directories, issues };
+}
+
+export function inspectPortableManagedInstallWithAllowedWindowsGenerationRoots(
+  layout: PortableLayout,
+  allowedResourceRoots: readonly string[],
+): ManagedInstallScan {
+  return inspectPortableManagedInstallWithWindowsGenerationRoots(layout, allowedResourceRoots);
+}
+
+export function inspectPortableManagedInstall(layout: PortableLayout): ManagedInstallScan {
+  const selectedGenerationRoot = selectedWindowsGenerationRoot(layout);
+  return inspectPortableManagedInstallWithWindowsGenerationRoots(
+    layout,
+    selectedGenerationRoot === undefined ? undefined : [selectedGenerationRoot],
+  );
 }
 
 export function portableManagedInstallHealth(layout: PortableLayout): {
