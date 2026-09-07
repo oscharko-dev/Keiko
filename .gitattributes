@@ -1,1 +1,2 @@
 *.ts text diff
+native/portable-launcher/fixtures/*.hex text eol=lf

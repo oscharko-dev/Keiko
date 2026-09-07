@@ -11,11 +11,15 @@ import {
   openSync,
   opendirSync,
   readSync,
+  type Stats,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { portableHandoffRoot } from "./update-portable-handoff-plan.js";
+import {
+  portableHandoffRoot,
+  syncPortableHandoffDirectory,
+} from "./update-portable-handoff-plan.js";
 
 const HEX_SHA256 = /^[a-f0-9]{64}$/u;
 const RECEIPT_NAME = /^(?<sequence>[0-9]{6})\.khr$/u;
@@ -70,74 +74,143 @@ export class PortableHandoffReceiptError extends Error {
   }
 }
 
+interface StableFileReadRules {
+  readonly changedMessage: string;
+  readonly expectedLinks: number;
+  readonly isValidDescriptorSize: (size: number) => boolean;
+  readonly isValidNamedSize: (size: number) => boolean;
+  readonly unsafeMessage: string;
+}
+
+function readNamedSafeFile(path: string, rules: StableFileReadRules): Stats {
+  let named: Stats;
+  try {
+    named = lstatSync(path);
+  } catch {
+    fail(rules.unsafeMessage);
+  }
+  if (
+    !named.isFile() ||
+    named.isSymbolicLink() ||
+    named.nlink !== rules.expectedLinks ||
+    !rules.isValidNamedSize(named.size)
+  ) {
+    fail(rules.unsafeMessage);
+  }
+  return named;
+}
+
+function openSafeReadDescriptor(path: string, rules: StableFileReadRules): number {
+  try {
+    return openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch {
+    return fail(rules.unsafeMessage);
+  }
+}
+
+function readDescriptorSnapshot(
+  descriptor: number,
+  named: Stats,
+  rules: StableFileReadRules,
+): Stats {
+  const snapshot = fstatSync(descriptor);
+  if (
+    !snapshot.isFile() ||
+    snapshot.nlink !== rules.expectedLinks ||
+    !rules.isValidDescriptorSize(snapshot.size) ||
+    snapshot.dev !== named.dev ||
+    snapshot.ino !== named.ino
+  ) {
+    fail(rules.unsafeMessage);
+  }
+  return snapshot;
+}
+
+function readDescriptorBytes(descriptor: number, size: number, changedMessage: string): Buffer {
+  const content = Buffer.alloc(size);
+  let offset = 0;
+  while (offset < content.length) {
+    const count = readSync(descriptor, content, offset, content.length - offset, null);
+    if (count === 0) fail(changedMessage);
+    offset += count;
+  }
+  return content;
+}
+
+function snapshotMatches(snapshot: Stats, before: Stats, expectedLinks: number): boolean {
+  return (
+    snapshot.dev === before.dev &&
+    snapshot.ino === before.ino &&
+    snapshot.size === before.size &&
+    snapshot.mtimeMs === before.mtimeMs &&
+    snapshot.ctimeMs === before.ctimeMs &&
+    snapshot.nlink === expectedLinks
+  );
+}
+
+function assertReadPathUnchanged(
+  path: string,
+  descriptor: number,
+  before: Stats,
+  rules: StableFileReadRules,
+): void {
+  const after = fstatSync(descriptor);
+  const current = lstatSync(path);
+  if (
+    !snapshotMatches(after, before, rules.expectedLinks) ||
+    !current.isFile() ||
+    current.isSymbolicLink() ||
+    !snapshotMatches(current, before, rules.expectedLinks)
+  ) {
+    fail(rules.changedMessage);
+  }
+}
+
 function verifiedAckContent(planSha256: string): Buffer {
   if (!HEX_SHA256.test(planSha256)) fail("portable handoff verified acknowledgement is malformed");
   return Buffer.from(`KHV1${planSha256}\n`, "ascii");
 }
 
 function readVerifiedAck(path: string, expectedLinks = 1): Buffer {
-  let descriptor: number;
+  const rules: StableFileReadRules = {
+    changedMessage: "portable handoff verified acknowledgement changed while reading",
+    expectedLinks,
+    isValidDescriptorSize: (size) => size === VERIFIED_ACK_BYTES,
+    isValidNamedSize: (size) => size === VERIFIED_ACK_BYTES,
+    unsafeMessage: "portable handoff verified acknowledgement is unsafe",
+  };
+  const named = readNamedSafeFile(path, rules);
+  const descriptor = openSafeReadDescriptor(path, rules);
   try {
-    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  } catch {
-    fail("portable handoff verified acknowledgement is unsafe");
-  }
-  try {
-    const before = fstatSync(descriptor);
-    if (!before.isFile() || before.nlink !== expectedLinks || before.size !== VERIFIED_ACK_BYTES) {
-      fail("portable handoff verified acknowledgement is unsafe");
-    }
-    const content = Buffer.alloc(VERIFIED_ACK_BYTES);
-    let offset = 0;
-    while (offset < content.length) {
-      const count = readSync(descriptor, content, offset, content.length - offset, null);
-      if (count === 0) fail("portable handoff verified acknowledgement changed while reading");
-      offset += count;
-    }
-    const after = fstatSync(descriptor);
-    const current = lstatSync(path);
-    if (
-      after.dev !== before.dev ||
-      after.ino !== before.ino ||
-      after.size !== before.size ||
-      after.mtimeMs !== before.mtimeMs ||
-      current.dev !== before.dev ||
-      current.ino !== before.ino ||
-      current.nlink !== expectedLinks ||
-      current.isSymbolicLink()
-    )
-      fail("portable handoff verified acknowledgement changed while reading");
+    const before = readDescriptorSnapshot(descriptor, named, rules);
+    const content = readDescriptorBytes(descriptor, VERIFIED_ACK_BYTES, rules.changedMessage);
+    assertReadPathUnchanged(path, descriptor, before, rules);
     return content;
   } finally {
     closeSync(descriptor);
   }
 }
 
-function fsyncDirectory(path: string): void {
-  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+function verifiedAckDestination(destination: string, expected: Buffer): Stats | undefined {
+  let stat: Stats;
   try {
-    fsyncSync(descriptor);
-  } finally {
-    closeSync(descriptor);
-  }
-}
-
-function reconcileLinkedVerifiedAck(root: string, destination: string, expected: Buffer): boolean {
-  let destinationStat: ReturnType<typeof lstatSync>;
-  try {
-    destinationStat = lstatSync(destination);
+    stat = lstatSync(destination);
   } catch {
-    return false;
+    return undefined;
   }
   if (
-    !destinationStat.isFile() ||
-    destinationStat.isSymbolicLink() ||
-    destinationStat.nlink !== 2 ||
-    destinationStat.size !== VERIFIED_ACK_BYTES ||
+    !stat.isFile() ||
+    stat.isSymbolicLink() ||
+    stat.nlink !== 2 ||
+    stat.size !== VERIFIED_ACK_BYTES ||
     !readVerifiedAck(destination, 2).equals(expected)
   ) {
-    return false;
+    return undefined;
   }
+  return stat;
+}
+
+function temporaryVerifiedAckNames(root: string): string[] {
   const directory = opendirSync(root);
   const candidates: string[] = [];
   let entries = 0;
@@ -153,24 +226,59 @@ function reconcileLinkedVerifiedAck(root: string, destination: string, expected:
   } finally {
     directory.closeSync();
   }
-  const matching = candidates.filter((name) => {
-    try {
-      const candidate = lstatSync(join(root, name));
-      return (
-        candidate.isFile() &&
-        !candidate.isSymbolicLink() &&
-        candidate.nlink === 2 &&
-        candidate.dev === destinationStat.dev &&
-        candidate.ino === destinationStat.ino
-      );
-    } catch {
-      return false;
-    }
-  });
-  if (matching.length !== 1) return false;
-  unlinkSync(join(root, matching[0]!));
-  fsyncDirectory(root);
+  return candidates;
+}
+
+function isLinkedTemporaryVerifiedAck(root: string, name: string, destination: Stats): boolean {
+  try {
+    const candidate = lstatSync(join(root, name));
+    return (
+      candidate.isFile() &&
+      !candidate.isSymbolicLink() &&
+      candidate.nlink === 2 &&
+      candidate.dev === destination.dev &&
+      candidate.ino === destination.ino
+    );
+  } catch {
+    return false;
+  }
+}
+
+function linkedTemporaryVerifiedAck(root: string, destination: Stats): string | undefined {
+  const matching = temporaryVerifiedAckNames(root).filter((name) =>
+    isLinkedTemporaryVerifiedAck(root, name, destination),
+  );
+  if (matching.length !== 1) return undefined;
+  return matching[0];
+}
+
+function reconcileLinkedVerifiedAck(root: string, destination: string, expected: Buffer): boolean {
+  const destinationStat = verifiedAckDestination(destination, expected);
+  if (destinationStat === undefined) return false;
+  const temporary = linkedTemporaryVerifiedAck(root, destinationStat);
+  if (temporary === undefined) return false;
+  unlinkSync(join(root, temporary));
+  syncPortableHandoffDirectory(root);
   return readVerifiedAck(destination).equals(expected);
+}
+
+function existingVerifiedAckMatches(root: string, destination: string, expected: Buffer): boolean {
+  try {
+    return readVerifiedAck(destination).equals(expected);
+  } catch (error) {
+    if (!(error instanceof PortableHandoffReceiptError)) throw error;
+    return reconcileLinkedVerifiedAck(root, destination, expected);
+  }
+}
+
+function removeTemporaryVerifiedAck(temporary: string, descriptor: number | undefined): void {
+  if (descriptor !== undefined) closeSync(descriptor);
+  try {
+    unlinkSync(temporary);
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    if (code !== "ENOENT") throw error;
+  }
 }
 
 export function publishPortableHandoffVerifiedAck(input: {
@@ -182,14 +290,7 @@ export function publishPortableHandoffVerifiedAck(input: {
   const destination = join(root, VERIFIED_ACK_FILE);
   const expected = verifiedAckContent(input.planSha256);
   if (existsSync(destination)) {
-    let matched = false;
-    try {
-      matched = readVerifiedAck(destination).equals(expected);
-    } catch (error) {
-      if (!(error instanceof PortableHandoffReceiptError)) throw error;
-      matched = reconcileLinkedVerifiedAck(root, destination, expected);
-    }
-    if (!matched) {
+    if (!existingVerifiedAckMatches(root, destination, expected)) {
       fail("portable handoff verified acknowledgement does not match");
     }
     return;
@@ -207,18 +308,12 @@ export function publishPortableHandoffVerifiedAck(input: {
     closeSync(descriptor);
     descriptor = undefined;
     linkSync(temporary, destination);
-    fsyncDirectory(root);
+    syncPortableHandoffDirectory(root);
   } catch (error) {
     if (existsSync(destination) && readVerifiedAck(destination).equals(expected)) return;
     throw error;
   } finally {
-    if (descriptor !== undefined) closeSync(descriptor);
-    try {
-      unlinkSync(temporary);
-    } catch (error) {
-      const code = error instanceof Error && "code" in error ? error.code : undefined;
-      if (code !== "ENOENT") throw error;
-    }
+    removeTemporaryVerifiedAck(temporary, descriptor);
   }
 }
 
@@ -362,49 +457,31 @@ function canonicalNumber(value: string): number {
 }
 
 function readReceipt(path: string): PortableHandoffReceipt {
-  let descriptor: number;
+  const rules: StableFileReadRules = {
+    changedMessage: "portable handoff receipt changed while reading",
+    expectedLinks: 1,
+    isValidDescriptorSize: (size) => size <= MAX_RECEIPT_BYTES,
+    isValidNamedSize: (size) => size >= 0 && size <= MAX_RECEIPT_BYTES,
+    unsafeMessage: "portable handoff receipt is unsafe",
+  };
+  const named = readNamedSafeFile(path, rules);
+  const descriptor = openSafeReadDescriptor(path, rules);
   try {
-    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  } catch {
-    fail("portable handoff receipt is unsafe");
-  }
-  try {
-    const before = fstatSync(descriptor);
-    if (!before.isFile() || before.nlink !== 1 || before.size > MAX_RECEIPT_BYTES)
-      fail("portable handoff receipt is unsafe");
-    const content = Buffer.alloc(before.size);
-    let offset = 0;
-    while (offset < content.length) {
-      const count = readSync(descriptor, content, offset, content.length - offset, null);
-      if (count === 0) fail("portable handoff receipt changed while reading");
-      offset += count;
-    }
-    const after = fstatSync(descriptor);
-    const current = lstatSync(path);
-    if (
-      after.dev !== before.dev ||
-      after.ino !== before.ino ||
-      after.size !== before.size ||
-      after.mtimeMs !== before.mtimeMs ||
-      current.dev !== before.dev ||
-      current.ino !== before.ino ||
-      current.isSymbolicLink()
-    )
-      fail("portable handoff receipt changed while reading");
+    const before = readDescriptorSnapshot(descriptor, named, rules);
+    const content = readDescriptorBytes(descriptor, before.size, rules.changedMessage);
+    assertReadPathUnchanged(path, descriptor, before, rules);
     return parseReceipt(content);
   } finally {
     closeSync(descriptor);
   }
 }
 
-export function readPortableHandoffReceipts(
-  stateDir: string,
-  activationId: string,
-): readonly PortableHandoffReceipt[] {
-  const root = receiptRoot(stateDir, activationId);
-  if (!existsSync(root)) return [];
+function assertReceiptRoot(root: string): void {
   if (!lstatSync(root).isDirectory() || lstatSync(root).isSymbolicLink())
     fail("portable handoff receipt path is unsafe");
+}
+
+function receiptNames(root: string): string[] {
   const directory = opendirSync(root);
   const names: string[] = [];
   try {
@@ -417,10 +494,13 @@ export function readPortableHandoffReceipts(
   } finally {
     directory.closeSync();
   }
-  names.sort();
+  return names.sort();
+}
+
+function readReceiptJournal(root: string, activationId: string): PortableHandoffReceipt[] {
   const receipts: PortableHandoffReceipt[] = [];
   let previousSha256: string | undefined;
-  for (const [index, name] of names.entries()) {
+  for (const [index, name] of receiptNames(root).entries()) {
     if (!RECEIPT_NAME.test(name)) fail("portable handoff receipt name is invalid");
     const receipt = readReceipt(join(root, name));
     if (receipt.activationId !== activationId || receipt.sequence !== index + 1)
@@ -431,6 +511,16 @@ export function readPortableHandoffReceipts(
     receipts.push(receipt);
   }
   return receipts;
+}
+
+export function readPortableHandoffReceipts(
+  stateDir: string,
+  activationId: string,
+): readonly PortableHandoffReceipt[] {
+  const root = receiptRoot(stateDir, activationId);
+  if (!existsSync(root)) return [];
+  assertReceiptRoot(root);
+  return readReceiptJournal(root, activationId);
 }
 
 const ORDERED_RECEIPTS: readonly (readonly [PortableHandoffReceiptKind, "intent" | "completed"])[] =
@@ -461,6 +551,35 @@ const RESTORE_RECEIPTS: readonly (readonly [PortableHandoffReceiptKind, "intent"
     ["restored-verify", "completed"],
   ];
 
+function startsRestoration(receipt: PortableHandoffReceipt, restoring: boolean): boolean {
+  return !restoring && receipt.kind === "restore" && receipt.outcome === "intent";
+}
+
+function assertRestorationCanStart(
+  receipts: readonly PortableHandoffReceipt[],
+  index: number,
+): void {
+  const verifiedTarget = receipts.slice(0, index).some((prior) => prior.kind === "verify");
+  if (index < 3 || verifiedTarget) fail("portable handoff receipt order is invalid");
+}
+
+function assertExpectedReceipt(
+  receipt: PortableHandoffReceipt,
+  expected: readonly [PortableHandoffReceiptKind, "intent" | "completed"] | undefined,
+  activationId: string,
+  planSha256: string,
+): void {
+  if (
+    expected === undefined ||
+    receipt.activationId !== activationId ||
+    receipt.planSha256 !== planSha256 ||
+    receipt.kind !== expected[0] ||
+    receipt.outcome !== expected[1]
+  ) {
+    fail("portable handoff receipt order is invalid");
+  }
+}
+
 export function validatePortableHandoffReceiptSequence(input: {
   readonly activationId: string;
   readonly planSha256: string;
@@ -469,23 +588,61 @@ export function validatePortableHandoffReceiptSequence(input: {
   let restoring = false;
   let restoreIndex = 0;
   for (const [index, receipt] of input.receipts.entries()) {
-    if (!restoring && receipt.kind === "restore" && receipt.outcome === "intent") {
-      const verifiedTarget = input.receipts
-        .slice(0, index)
-        .some((prior) => prior.kind === "verify");
-      if (index < 3 || verifiedTarget) fail("portable handoff receipt order is invalid");
+    if (startsRestoration(receipt, restoring)) {
+      assertRestorationCanStart(input.receipts, index);
       restoring = true;
     }
     const expected = restoring ? RESTORE_RECEIPTS[restoreIndex++] : ORDERED_RECEIPTS[index];
-    if (
-      expected === undefined ||
-      receipt.activationId !== input.activationId ||
-      receipt.planSha256 !== input.planSha256 ||
-      receipt.kind !== expected[0] ||
-      receipt.outcome !== expected[1]
-    )
-      fail("portable handoff receipt order is invalid");
+    assertExpectedReceipt(receipt, expected, input.activationId, input.planSha256);
   }
+}
+
+interface PortableHandoffReceiptAppendInput {
+  readonly activationId: string;
+  readonly at: number;
+  readonly kind: PortableHandoffReceiptKind;
+  readonly outcome: "intent" | "completed";
+  readonly planSha256: string;
+  readonly previousSha256?: string | undefined;
+  readonly stateDir: string;
+}
+
+function newReceipt(
+  input: PortableHandoffReceiptAppendInput,
+  sequence: number,
+): PortableHandoffReceipt {
+  return {
+    schemaVersion: 1,
+    activationId: input.activationId,
+    planSha256: input.planSha256,
+    sequence,
+    kind: input.kind,
+    outcome: input.outcome,
+    at: input.at,
+    ...(input.previousSha256 === undefined ? {} : { previousSha256: input.previousSha256 }),
+  };
+}
+
+function persistReceipt(
+  stateDir: string,
+  activationId: string,
+  receipt: PortableHandoffReceipt,
+): void {
+  const root = receiptRoot(stateDir, activationId);
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  const path = join(root, `${String(receipt.sequence).padStart(6, "0")}.khr`);
+  const descriptor = openSync(
+    path,
+    constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    writeFileSync(descriptor, receiptContent(receipt));
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+  syncPortableHandoffDirectory(root);
 }
 
 export function appendPortableHandoffReceipt(input: {
@@ -507,36 +664,14 @@ export function appendPortableHandoffReceipt(input: {
     previous === undefined ? undefined : portableHandoffReceiptSha256(previous);
   if (input.previousSha256 !== expectedPrevious)
     fail("portable handoff previous receipt digest is invalid");
-  const receipt: PortableHandoffReceipt = {
-    schemaVersion: 1,
-    activationId: input.activationId,
-    planSha256: input.planSha256,
-    sequence: prior.length + 1,
-    kind: input.kind,
-    outcome: input.outcome,
-    at: input.at,
-    ...(input.previousSha256 === undefined ? {} : { previousSha256: input.previousSha256 }),
-  };
+  const receipt = newReceipt(input, prior.length + 1);
   parseReceipt(receiptContent(receipt));
   validatePortableHandoffReceiptSequence({
     activationId: input.activationId,
     planSha256: input.planSha256,
     receipts: [...prior, receipt],
   });
-  const root = receiptRoot(input.stateDir, input.activationId);
-  mkdirSync(root, { recursive: true, mode: 0o700 });
-  const path = join(root, `${String(receipt.sequence).padStart(6, "0")}.khr`);
-  const descriptor = openSync(
-    path,
-    constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
-    0o600,
-  );
-  try {
-    writeFileSync(descriptor, receiptContent(receipt));
-    fsyncSync(descriptor);
-  } finally {
-    closeSync(descriptor);
-  }
+  persistReceipt(input.stateDir, input.activationId, receipt);
   return {
     receipt,
     sha256: portableHandoffReceiptSha256(receipt),

@@ -333,6 +333,39 @@ parent-pinning and nonblocking-write findings by static/API review, and requires
 rename/flush and exclusive productive digest ownership. The repair is in progress. KHA1 remains
 disabled; no green Windows job or native N−1/N result is asserted.
 
+The next native repair separates durable rename/flush from exclusive productive digest authority.
+Diagnostic `00b56e4ef`,
+[run 34150171223](https://github.com/oscharko-dev/Keiko/actions/runs/34150171223), passes all 41 Windows
+plan/receipt tests (one Mac encoder skip), the complete cutover probe (all success/handle/crash/
+contention cases, flush-before 36/36 and flush-after 40/40), and coordinator MSVC analysis. The
+coordinator executable then fails its unchanged KRP1 packet-kind assertion. The Windows encoder
+sets version 1 but omits launch-request kind 1; the existing supervisor correctly rejects zero.
+This is a production encoder defect, not a fixture expectation to relax. The remaining jobs are
+cancelled after that native failure, and the encoder repair is pending.
+
+A broader root lint replay at the B3 checkpoint reports 26 errors and no warnings, all in the
+updater repair. Fourteen belong to the handoff receipt source/tests; the remaining twelve cover
+candidate tests, activation factoring, native-verifier typings, remediation and session tests.
+The UI lint stage is not reached. Scoped owners are repairing these without suppressions; this
+failed diagnostic is not a final lint or verification receipt.
+
+The KRP1 request-kind fix changes one production byte assignment and passes independent review
+with zero findings. Diagnostic `bf2862b5b`,
+[run 34150829494](https://github.com/oscharko-dev/Keiko/actions/runs/34150829494), passes the packet,
+nonblocking-pipe, generation publication, productive cutover/flush and recovery assertions, then
+fails the final capsule-directory positive fixture's ownership/ACL check. The existing junction
+refusal succeeds. Test-only, body-free ACL classification is frozen in diagnostic `604f9738d` to
+identify the exact failed permission predicate; production ownership policy is unchanged.
+
+The handoff receipt refactor clears its 12 source and two test lint findings while preserving
+canonical bytes, pre-read link rejection, descriptor/name identity, bounded reads, hardlink ACK
+reconciliation, sequence/hash-chain authority, fsync ordering and cleanup exception precedence.
+Independent security re-review approves the exact frozen source/test with zero findings. The lead
+passes all 41 plan/receipt tests with one explicit Windows encoder host skip (21.16 seconds); the
+owner also passes 13 receipt tests, server workspace typecheck, scoped lint and formatting. The
+remaining twelve broad-lint findings have a separate narrow owner. The outstanding CLI update-test
+type import is also replayed independently: all 14 existing tests pass (1.18 seconds).
+
 The diagnostic editor-evidence mismatch is independently traced to the local Node distribution's
 zlib. Homebrew Node 24.18.0 reports zlib 1.2.12; the checksum-verified official Node 24.18.0 binary
 reports 1.3.1-e00f703. Measuring the same already-built JavaScript with the official binary produces

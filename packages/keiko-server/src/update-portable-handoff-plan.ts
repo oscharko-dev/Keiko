@@ -17,6 +17,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import { PORTABLE_STAGE_DIR_PREFIX } from "./update-portable-staging-shared.js";
 
 const ACTIVATION_ID = /^[a-f0-9]{32}$/u;
@@ -121,22 +122,46 @@ function assertRegularSingleLink(path: string, label: string): void {
 
 function sameOpenedFile(before: Stats, after: Stats): boolean {
   return (
+    after.isFile() &&
+    after.nlink === 1 &&
     after.dev === before.dev &&
     after.ino === before.ino &&
     after.size === before.size &&
-    after.mtimeMs === before.mtimeMs
+    after.mtimeMs === before.mtimeMs &&
+    after.ctimeMs === before.ctimeMs
   );
 }
 
 function safeOpenedFile(stat: Stats, maximumBytes: number): boolean {
-  return stat.isFile() && stat.nlink === 1 && stat.size <= maximumBytes;
+  return stat.isFile() && stat.nlink === 1 && stat.size >= 0 && stat.size <= maximumBytes;
 }
 
 function currentPathMatchesOpened(current: Stats, opened: Stats): boolean {
-  return current.dev === opened.dev && current.ino === opened.ino && !current.isSymbolicLink();
+  return (
+    current.isFile() &&
+    !current.isSymbolicLink() &&
+    current.nlink === 1 &&
+    current.dev === opened.dev &&
+    current.ino === opened.ino &&
+    current.size === opened.size &&
+    current.mtimeMs === opened.mtimeMs &&
+    current.ctimeMs === opened.ctimeMs
+  );
+}
+
+function namedFileBeforeOpen(path: string, maximumBytes: number, label: string): Stats {
+  let stat: Stats;
+  try {
+    stat = lstatSync(path);
+  } catch {
+    fail(`${label} is unsafe`);
+  }
+  if (stat.isSymbolicLink() || !safeOpenedFile(stat, maximumBytes)) fail(`${label} is unsafe`);
+  return stat;
 }
 
 function readBoundedRegularFile(path: string, maximumBytes: number, label: string): Buffer {
+  const namedBefore = namedFileBeforeOpen(path, maximumBytes, label);
   let descriptor: number;
   try {
     descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -145,7 +170,7 @@ function readBoundedRegularFile(path: string, maximumBytes: number, label: strin
   }
   try {
     const before = fstatSync(descriptor);
-    if (!safeOpenedFile(before, maximumBytes)) {
+    if (!safeOpenedFile(before, maximumBytes) || !currentPathMatchesOpened(namedBefore, before)) {
       fail(`${label} is unsafe`);
     }
     const content = Buffer.alloc(before.size);
@@ -411,13 +436,38 @@ function durableWrite(path: string, content: string | Uint8Array): void {
   }
 }
 
-function syncDirectory(path: string): void {
-  const descriptor = openSync(path, constants.O_RDONLY);
+export interface PortableHandoffSyncOps {
+  readonly close: (descriptor: number) => void;
+  readonly fsync: (descriptor: number) => void;
+  readonly openDirectory: (path: string) => number;
+  readonly platform: NodeJS.Platform;
+}
+
+const HANDOFF_SYNC_OPS: PortableHandoffSyncOps = {
+  close: closeSync,
+  fsync: fsyncSync,
+  openDirectory: (path) => openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW),
+  platform: process.platform,
+};
+
+export function syncPortableHandoffDirectory(
+  path: string,
+  ops: PortableHandoffSyncOps = HANDOFF_SYNC_OPS,
+): void {
+  let descriptor: number | undefined;
   try {
-    fsyncSync(descriptor);
+    descriptor = ops.openDirectory(path);
+    ops.fsync(descriptor);
+  } catch (error) {
+    if (!windowsDirectorySyncUnsupported(error, ops.platform)) throw error;
   } finally {
-    closeSync(descriptor);
+    if (descriptor !== undefined) ops.close(descriptor);
   }
+}
+
+function windowsDirectorySyncUnsupported(error: unknown, platform: NodeJS.Platform): boolean {
+  const code = error instanceof Error && "code" in error ? String(error.code) : "";
+  return platform === "win32" && ["EACCES", "EINVAL", "EISDIR", "ENOTSUP", "EPERM"].includes(code);
 }
 
 export function writePortableHandoffPlan(input: {
@@ -435,9 +485,9 @@ export function writePortableHandoffPlan(input: {
   const sha256 = createHash("sha256").update(content).digest("hex");
   const temporary = join(root, `.plan-${String(process.pid)}.tmp`);
   durableWrite(temporary, content);
-  renameSync(temporary, path);
+  atomicPublishRename(temporary, path, { rename: renameSync });
   durableWrite(digestPath, `${sha256}\n`);
-  syncDirectory(root);
+  syncPortableHandoffDirectory(root);
   assertRegularSingleLink(path, "portable handoff plan");
   assertRegularSingleLink(digestPath, "portable handoff digest");
   return { path, sha256 };
