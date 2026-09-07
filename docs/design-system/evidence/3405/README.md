@@ -1,10 +1,10 @@
 # Updater reliability evidence — #3405 / #3403
 
 The current repair evidence was regenerated on 2026-09-07. The Chromium browser suite passed
-**7/7 in 1.7 minutes** and refreshed the tracked updater artifacts. It proves the startup notice
+**8/8 in 1.2 minutes** and refreshed the tracked updater artifacts. It proves the startup notice
 yields only while a visible, foreground **ready** Update window owns the same critical context and
 actions; the notice returns when that window is backgrounded or minimized, and remains available
-when the foreground updater contains only a load error.
+while the foreground updater is loading or contains only a load error.
 
 The current suite includes the real-BFF outage journey. A preceding combined six-test run was
 interrupted after its first three tests while the fourth test had completed its browser operations

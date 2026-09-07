@@ -1447,6 +1447,51 @@ test("retains the startup notice when a foreground updater contains only a load 
   }
 });
 
+test("retains the startup notice while a foreground updater is loading", async ({ browser }) => {
+  const { page, ledger } = await openModePage(browser, MANUAL_MODE, {
+    report: manualReport(),
+    sessionStatus: manualSessionStatus(),
+    remediation: manualRemediation(),
+  });
+  let releasePreflight: () => void = () => undefined;
+  const preflightRelease = new Promise<void>((resolveRelease) => {
+    releasePreflight = resolveRelease;
+  });
+  let preflightRequests = 0;
+  await page.route("**/api/update/preflight", async (route) => {
+    preflightRequests += 1;
+    if (preflightRequests === 2) await preflightRelease;
+    await route.fallback();
+  });
+  try {
+    const settings = await openSettingsGeneral(page);
+    const notice = page.getByRole("alert", { name: "Keiko update notification" });
+    await expect(notice).toBeVisible();
+    const reviewUpdates = settings.getByRole("button", { name: "Review updates" });
+    await reviewUpdates.focus();
+    await page.keyboard.press("Enter");
+
+    const loadingUpdater = page.locator('.window[data-top="true"]', {
+      has: page.locator(".upd-loading"),
+    });
+    await expect(loadingUpdater).toBeVisible();
+    await expect(loadingUpdater.locator(".upd-loading")).toBeVisible();
+    await expect(notice).toBeVisible();
+
+    const updateWindow = page.locator(await windowSelector(loadingUpdater));
+    releasePreflight();
+    await expect(
+      updateWindow.getByRole("heading", { name: "Critical update available" }),
+    ).toBeVisible();
+    await expect(updateWindow.locator(".upd")).toHaveClass(/cmpReady/u);
+    await expect(notice).not.toBeVisible();
+    expect(ledger.preflightGets).toBe(2);
+  } finally {
+    releasePreflight();
+    await closePage(page);
+  }
+});
+
 async function recordPortableEvidence(browser: Browser, evidence: EvidenceState): Promise<void> {
   const { page, ledger } = await openModePage(browser, PORTABLE_MODE, {
     report: portableReport(),

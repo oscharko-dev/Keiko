@@ -21,8 +21,9 @@ real-process and real-artifact requirements here. Tests with filtered cases must
 
 The governed local toolchain is Node.js 24.18.0 with npm 11.16.0. The package build passes
 under that toolchain; an earlier Node.js 25 development run is not final verification evidence.
-The latest complete updater browser suite passes all seven tests (1.7 minutes), including the
-real-BFF outage/reconnect journey and the error-only foreground notice regression. Earlier
+The latest complete updater browser suite passes all eight tests (1.2 minutes), including the
+real-BFF outage/reconnect journey, deferred loading-to-ready notice assertion, and error-only
+foreground notice regression. Earlier
 interrupted multi-test and responsive captures do not count as passes. The refreshed visual
 evidence includes 12 axe captures with no violations;
 lead inspection confirms the responsive action is unobscured and all eight source plus four
