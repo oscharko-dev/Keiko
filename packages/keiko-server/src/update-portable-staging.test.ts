@@ -399,14 +399,6 @@ function candidate(
     },
     release: { source: "github-release", tag: `v${TARGET_VERSION}` },
     releaseImpactDigest: "2".repeat(64),
-    impact: {
-      entries: [],
-      releaseNoteBullets: [],
-      stateImpact: [],
-      affectedStateStores: [],
-      userActionRequired: false,
-      remediations: [],
-    },
     issuedAt: "2026-09-04T10:00:00.000Z",
     expiresAt: "2026-09-04T10:10:00.000Z",
     portable: {

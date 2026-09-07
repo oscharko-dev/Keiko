@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  generationBindingMatchesPackageLayout,
   parseWindowsGenerationBinding,
+  portablePackageLayout,
   portableManifestGenerationSchemaVerified,
   resolveWindowsGenerationLayout,
   verifiedWindowsGenerationManifestBinding,
@@ -59,6 +61,58 @@ describe("Windows generation staging authority", () => {
       portableManifestGenerationSchemaVerified(
         { ...mac, windowsGeneration: fixture().windowsGeneration },
         "macos-arm64",
+      ),
+    ).toBe(false);
+  });
+
+  it("resolves flat and generation package roots through one path authority", () => {
+    const treeSha256 = "a".repeat(64);
+    const generation = portablePackageLayout(
+      "windows-x64",
+      `C:\\Keiko\\.portable\\generations\\${treeSha256}\\app`,
+    );
+    expect(generation).toMatchObject({
+      kind: "windows-generation-v1",
+      installRoot: "C:\\Keiko",
+      resourceRoot: `C:\\Keiko\\.portable\\generations\\${treeSha256}`,
+      generationTreeSha256: treeSha256,
+    });
+    expect(generation?.rootLauncherPath).toBe("C:\\Keiko\\Keiko.exe");
+    expect(generation?.rootSetupManifestPath).toBe("C:\\Keiko\\.portable\\setup-manifest.json");
+
+    expect(portablePackageLayout("windows-x64", "C:\\Keiko\\app")).toMatchObject({
+      kind: "windows-flat-v1",
+      installRoot: "C:\\Keiko",
+      resourceRoot: "C:\\Keiko",
+    });
+    expect(
+      portablePackageLayout("macos-arm64", "/Applications/Keiko.app/Contents/Resources/app"),
+    ).toMatchObject({
+      kind: "macos-bundle-v1",
+      installRoot: "/Applications/Keiko.app",
+      resourceRoot: "/Applications/Keiko.app/Contents/Resources",
+    });
+  });
+
+  it("binds a generation package directory to the exact setup digest", () => {
+    const manifest = fixture();
+    const binding = parseWindowsGenerationBinding(manifest.windowsGeneration);
+    if (binding === undefined) throw new Error("fixture binding missing");
+    const layout = portablePackageLayout(
+      "windows-x64",
+      `/Keiko/.portable/generations/${binding.treeSha256}/app`,
+    );
+    if (layout === undefined) throw new Error("generation layout missing");
+
+    expect(generationBindingMatchesPackageLayout(binding, layout)).toBe(true);
+    expect(
+      generationBindingMatchesPackageLayout(
+        {
+          ...binding,
+          treeSha256: "c".repeat(64),
+          resourceRoot: `.portable/generations/${"c".repeat(64)}`,
+        },
+        layout,
       ),
     ).toBe(false);
   });

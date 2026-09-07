@@ -391,8 +391,12 @@ describe("portable update activation handoff", () => {
     const install = await makeInstall();
     registerCurrentInstall(install);
     const controller = new AbortController();
-    const begin = vi.fn((_input: { readonly signal?: AbortSignal }) =>
-      Promise.reject(new Error("cancelled before ACK")),
+    const begin = vi.fn(
+      (_input: {
+        readonly sessionId: string;
+        readonly activationId: string;
+        readonly signal?: AbortSignal | undefined;
+      }) => Promise.reject(new Error("cancelled before ACK")),
     );
     await expect(
       configuredActivator(install, { begin }).activate({

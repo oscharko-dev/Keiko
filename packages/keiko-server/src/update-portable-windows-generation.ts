@@ -1,7 +1,5 @@
-import { join } from "node:path";
+import { basename, dirname, join, resolve, win32 } from "node:path";
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
-import { isRecord } from "./update-preflight-registry.js";
-import { recordAt } from "./update-portable-staging-shared.js";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const BINDING_KEYS = [
@@ -32,6 +30,38 @@ export interface WindowsGenerationLayout {
   readonly rootLauncherPath: string;
   readonly rootSetupManifestPath: string;
   readonly rootSupportLauncherPath: string;
+}
+
+export interface PortablePackageLayout {
+  readonly kind: "macos-bundle-v1" | "windows-flat-v1" | "windows-generation-v1";
+  readonly installRoot: string;
+  readonly resourceRoot: string;
+  readonly appRoot: string;
+  readonly packageJsonPath: string;
+  readonly rootLauncherPath: string;
+  readonly rootSetupManifestPath: string;
+  readonly generationTreeSha256?: string | undefined;
+}
+
+type PathApi = Pick<typeof win32, "basename" | "dirname" | "join" | "resolve">;
+
+function pathApiFor(value: string): PathApi {
+  return value.includes("\\") || /^[a-z]:[\\/]/iu.test(value)
+    ? win32
+    : { basename, dirname, join, resolve };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function recordAt(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): Record<string, unknown> | undefined {
+  if (record === undefined) return undefined;
+  const value = record[key];
+  return isRecord(value) ? value : undefined;
 }
 
 function hasExactKeys(record: Record<string, unknown>): boolean {
@@ -119,16 +149,110 @@ export function resolveWindowsGenerationLayout(
   installRoot: string,
   binding: WindowsGenerationBinding,
 ): WindowsGenerationLayout {
-  const resourceRoot = join(installRoot, ...binding.resourceRoot.split("/"));
+  const pathApi = pathApiFor(installRoot);
+  const resourceRoot = pathApi.join(installRoot, ...binding.resourceRoot.split("/"));
   return {
     installRoot,
     resourceRoot,
-    appRoot: join(resourceRoot, "app"),
-    packageJsonPath: join(resourceRoot, "app", "package.json"),
-    runtimeNodePath: join(resourceRoot, "runtime", "node", "node.exe"),
-    runtimeSupervisorPath: join(resourceRoot, "runtime", "native", "keiko-runtime-supervisor.exe"),
-    rootLauncherPath: join(installRoot, binding.launcherPath),
-    rootSetupManifestPath: join(installRoot, ".portable", "setup-manifest.json"),
-    rootSupportLauncherPath: join(installRoot, "support", "keiko-support.cmd"),
+    appRoot: pathApi.join(resourceRoot, "app"),
+    packageJsonPath: pathApi.join(resourceRoot, "app", "package.json"),
+    runtimeNodePath: pathApi.join(resourceRoot, "runtime", "node", "node.exe"),
+    runtimeSupervisorPath: pathApi.join(
+      resourceRoot,
+      "runtime",
+      "native",
+      "keiko-runtime-supervisor.exe",
+    ),
+    rootLauncherPath: pathApi.join(installRoot, binding.launcherPath),
+    rootSetupManifestPath: pathApi.join(installRoot, ".portable", "setup-manifest.json"),
+    rootSupportLauncherPath: pathApi.join(installRoot, "support", "keiko-support.cmd"),
   };
+}
+
+/**
+ * Resolves the package location reported by the running server without reading mutable setup
+ * state. Policy callers must still validate the setup and registration that select a Windows
+ * generation. This function only owns the canonical path grammar.
+ */
+export function portablePackageLayout(
+  target: UpdatePortableTarget,
+  packageRoot: string | undefined,
+): PortablePackageLayout | undefined {
+  if (packageRoot === undefined) return undefined;
+  const pathApi = pathApiFor(packageRoot);
+  if (pathApi.basename(packageRoot) !== "app") return undefined;
+
+  const resourceRoot = pathApi.dirname(packageRoot);
+  if (target !== "windows-x64") {
+    return macosPackageLayout(pathApi, packageRoot, resourceRoot);
+  }
+
+  return windowsPackageLayout(pathApi, packageRoot, resourceRoot);
+}
+
+function macosPackageLayout(
+  pathApi: PathApi,
+  packageRoot: string,
+  resourceRoot: string,
+): PortablePackageLayout | undefined {
+  const contents = pathApi.dirname(resourceRoot);
+  const installRoot = pathApi.dirname(contents);
+  if (pathApi.basename(resourceRoot) !== "Resources" || pathApi.basename(contents) !== "Contents") {
+    return undefined;
+  }
+  return {
+    kind: "macos-bundle-v1",
+    installRoot,
+    resourceRoot,
+    appRoot: packageRoot,
+    packageJsonPath: pathApi.join(packageRoot, "package.json"),
+    rootLauncherPath: pathApi.join(installRoot, "Contents", "MacOS", "Keiko"),
+    rootSetupManifestPath: pathApi.join(resourceRoot, ".portable", "setup-manifest.json"),
+  };
+}
+
+function windowsPackageLayout(
+  pathApi: PathApi,
+  packageRoot: string,
+  resourceRoot: string,
+): PortablePackageLayout {
+  const generationTreeSha256 = pathApi.basename(resourceRoot);
+  const generationsRoot = pathApi.dirname(resourceRoot);
+  const portableRoot = pathApi.dirname(generationsRoot);
+  if (
+    SHA256.test(generationTreeSha256) &&
+    pathApi.basename(generationsRoot) === "generations" &&
+    pathApi.basename(portableRoot) === ".portable"
+  ) {
+    const installRoot = pathApi.dirname(portableRoot);
+    return {
+      kind: "windows-generation-v1",
+      installRoot,
+      resourceRoot,
+      appRoot: packageRoot,
+      packageJsonPath: pathApi.join(packageRoot, "package.json"),
+      rootLauncherPath: pathApi.join(installRoot, "Keiko.exe"),
+      rootSetupManifestPath: pathApi.join(installRoot, ".portable", "setup-manifest.json"),
+      generationTreeSha256,
+    };
+  }
+
+  return {
+    kind: "windows-flat-v1",
+    installRoot: resourceRoot,
+    resourceRoot,
+    appRoot: packageRoot,
+    packageJsonPath: pathApi.join(packageRoot, "package.json"),
+    rootLauncherPath: pathApi.join(resourceRoot, "Keiko.exe"),
+    rootSetupManifestPath: pathApi.join(resourceRoot, ".portable", "setup-manifest.json"),
+  };
+}
+
+export function generationBindingMatchesPackageLayout(
+  binding: WindowsGenerationBinding,
+  layout: PortablePackageLayout,
+): boolean {
+  return (
+    layout.kind === "windows-generation-v1" && layout.generationTreeSha256 === binding.treeSha256
+  );
 }

@@ -234,8 +234,13 @@ workspace typecheck and all 14 scoped lint/format checks green. Independent secu
 zero critical/high/medium issues and three low issues requiring repair: mapped network drives are
 not excluded by lexical root policy, production runtime discovery omits setup runtime platform/CPU
 validation, and its new root setup/launcher reads lack descriptor-bound size/deadline enforcement.
-The latter reads are distinct from the already bounded install-mode detector. B3b startup/recovery
-consumers and final root-wide verification remain outstanding.
+The latter reads are distinct from the already bounded install-mode detector. The runtime owner
+repairs exact platform/CPU validation and adds 64 KiB descriptor-bound setup reads plus 64 MiB
+launcher streaming under a five-second deadline. The lead passes 72 runtime tests (14.43 seconds),
+including sparse oversized files, malformed metadata, links and identity drift. Independent
+security re-review settles those two findings with zero residual issues. Network-root locality
+remains the sole open low B3a finding and has a separate native/CLI/server integration plan. B3b
+startup/recovery consumers and final root-wide verification remain outstanding.
 
 Native filesystem mechanics are snapshotted separately in diagnostic commit
 `8e1ffb09c492eed84f3879dcd957a34f395014c9`, based on reviewed child checkpoint `52ac76881`.
@@ -320,7 +325,13 @@ receipt directories remain pinned; supervisor writes use nonblocking pipe mode w
 deadline checks. Owner macOS native quality, MinGW analysis/link checks and 95 official-Node wiring
 checks pass. Independent security re-review is pending. The snapshot is dispatched in diagnostic
 `7e99e81d6`, [run 34149173415](https://github.com/oscharko-dev/Keiko/actions/runs/34149173415), for actual
-Windows MSVC analysis and runtime execution. KHA1 remains disabled and no passing outcome is asserted.
+Windows MSVC analysis and runtime execution. Its 41 plan/receipt tests pass, but the cutover probe
+fails at the post-termination scenario. The retained new-source writer conflicts with the helper's
+new post-rename reopen sharing flags; aggregate success and later contention checks consequently
+report false. Independent review confirms that medium correctness regression, closes the receipt
+parent-pinning and nonblocking-write findings by static/API review, and requires separate durable
+rename/flush and exclusive productive digest ownership. The repair is in progress. KHA1 remains
+disabled; no green Windows job or native N−1/N result is asserted.
 
 The diagnostic editor-evidence mismatch is independently traced to the local Node distribution's
 zlib. Homebrew Node 24.18.0 reports zlib 1.2.12; the checksum-verified official Node 24.18.0 binary

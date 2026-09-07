@@ -22,6 +22,7 @@ import {
   PortableSidecarVerificationError,
   verifyPortableManifestSidecars,
 } from "./update-portable-sidecar-verification.js";
+import { portableManifestGenerationSchemaVerified } from "./update-portable-windows-generation.js";
 
 const MAX_PORTABLE_MANIFEST_BYTES = 256_000;
 const MAX_CHECKSUM_BYTES = 32_000;
@@ -212,7 +213,7 @@ function validManifestIdentity(
   const artifact = recordAt(manifest, "artifact");
   const releaseRecord = recordAt(manifest, "release");
   return all([
-    manifest.schemaVersion === 1 &&
+    portableManifestGenerationSchemaVerified(manifest, target) &&
       fieldEquals(product, "packageName", "@oscharko-dev/keiko") &&
       fieldEquals(product, "packageVersion", release.targetVersion),
     fieldEquals(releaseRecord, "releaseId", release.id),

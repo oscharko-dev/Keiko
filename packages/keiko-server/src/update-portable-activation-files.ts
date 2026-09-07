@@ -19,16 +19,7 @@ import {
   type Stats,
   writeFileSync,
 } from "node:fs";
-import {
-  basename,
-  dirname,
-  isAbsolute,
-  join,
-  relative,
-  resolve,
-  sep,
-  win32 as win32Path,
-} from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep, win32 as win32Path } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   WINDOWS_SHORTCUT_MAX_BYTES,
@@ -317,7 +308,7 @@ function activationPathsFor(
   if (!isSafeStageId(stageId)) {
     throw activationFailed("portable activation stage id is invalid");
   }
-  const managedRoot = managedRootForActivation(target, runtimeFacts?.packageRoot);
+  const managedRoot = managedRootFromPackageRoot(target, runtimeFacts?.packageRoot);
   if (
     managedRoot === undefined ||
     !existsSync(managedRoot) ||
@@ -342,27 +333,6 @@ function activationPathsFor(
     candidateRoot,
     backupRoot: join(parent, `.keiko-previous-${activationId}`),
   };
-}
-
-function managedRootForActivation(
-  target: UpdatePortableTarget,
-  packageRoot: string | undefined,
-): string | undefined {
-  if (target !== "windows-x64" || packageRoot === undefined) {
-    return managedRootFromPackageRoot(target, packageRoot);
-  }
-  const generationRoot = dirname(packageRoot);
-  const generationsRoot = dirname(generationRoot);
-  const portableRoot = dirname(generationsRoot);
-  if (
-    basename(packageRoot) !== "app" ||
-    !/^[a-f0-9]{64}$/u.test(basename(generationRoot)) ||
-    basename(generationsRoot) !== "generations" ||
-    basename(portableRoot) !== ".portable"
-  ) {
-    return managedRootFromPackageRoot(target, packageRoot);
-  }
-  return dirname(portableRoot);
 }
 
 function activationPaths(

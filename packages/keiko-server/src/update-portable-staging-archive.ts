@@ -14,7 +14,7 @@ import {
   statfsSync,
   statSync,
 } from "node:fs";
-import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
+import { dirname, join, posix, relative, resolve, sep } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
@@ -45,6 +45,7 @@ import {
 import { hashPortableHandoffTree } from "./update-portable-handoff-tree.js";
 import {
   parseWindowsGenerationBinding,
+  portablePackageLayout,
   resolveWindowsGenerationLayout,
   windowsGenerationBindingsEqual,
   type WindowsGenerationBinding,
@@ -98,14 +99,7 @@ export function managedRootFromPackageRoot(
   target: UpdatePortableTarget,
   packageRoot: string | undefined,
 ): string | undefined {
-  if (packageRoot === undefined || basename(packageRoot) !== "app") return undefined;
-  if (target === "windows-x64") return dirname(packageRoot);
-  const resources = dirname(packageRoot);
-  const contents = dirname(resources);
-  const bundle = dirname(contents);
-  return basename(resources) === "Resources" && basename(contents) === "Contents"
-    ? bundle
-    : undefined;
+  return portablePackageLayout(target, packageRoot)?.installRoot;
 }
 
 function assertNotSymlink(path: string): void {
