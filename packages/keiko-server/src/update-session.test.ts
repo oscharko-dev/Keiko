@@ -761,6 +761,109 @@ describe("UpdateSessionManager", () => {
     gate.resolve();
   });
 
+  it("reuses the start-time install projection for repeated active status polls", async () => {
+    const gate = deferred();
+    const detector = vi.fn(() => supportedMode("npm"));
+    const manager = createTestUpdateSessionManager({
+      detector,
+      beforeExecute: () => gate.promise,
+      runCommandImpl: () => Promise.resolve(commandResult()),
+    });
+
+    manager.start(claim("0.2.12"));
+    expect(detector).toHaveBeenCalledOnce();
+    expect(manager.getStatus().installMode.packageManager).toBe("npm");
+    expect(manager.getStatus().installMode.packageManager).toBe("npm");
+    expect(detector).toHaveBeenCalledOnce();
+
+    gate.resolve();
+    await waitForPhase(manager, "restart-required");
+    expect(detector).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps idle detection fresh and seeds a new session from the latest mode", () => {
+    const gate = deferred();
+    let mode = supportedMode("npm");
+    const detector = vi.fn(() => mode);
+    const manager = createTestUpdateSessionManager({
+      detector,
+      beforeExecute: () => gate.promise,
+      runCommandImpl: () => Promise.resolve(commandResult()),
+    });
+
+    expect(manager.getStatus().installMode.packageManager).toBe("npm");
+    mode = supportedMode("yarn");
+    expect(manager.getStatus().installMode.packageManager).toBe("yarn");
+    manager.start(claim("0.2.12"));
+    expect(manager.getStatus().installMode.packageManager).toBe("yarn");
+    expect(detector).toHaveBeenCalledTimes(3);
+    gate.resolve();
+  });
+
+  it("lazily snapshots restored active-session status once", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "keiko-restored-status-mode-"));
+    const localState = createUpdateLocalStateManager({ stateDir });
+    const first = createTestUpdateSessionManager({
+      detector: () => portableMode(),
+      facts: () => facts({ packageRoot: "/Users/alice/Applications/Keiko/app" }),
+      idFactory: () => "restored-session",
+      processEnv: { KEIKO_UI_LAUNCH_ID: "d".repeat(32) },
+      portableStager: { stage: vi.fn().mockResolvedValue(portableStageSummary()) },
+      portableActivator: {
+        activate: vi.fn().mockResolvedValue({
+          activationId: "c".repeat(32),
+          status: "handoff-pending" as const,
+          coordinatorId: "e".repeat(64),
+          acceptedAt: "2026-09-05T00:00:00.000Z",
+        }),
+      },
+      onPortableHandoffAccepted: vi.fn().mockResolvedValue(undefined),
+      localState,
+    });
+    try {
+      first.start(claim("0.2.12"));
+      await vi.waitFor(() => {
+        expect(first.getStatus().activeSession?.lifecycle.phase).toBe("handoff-pending");
+      });
+      const detector = vi.fn(() => portableMode());
+      const restored = createTestUpdateSessionManager({ detector, localState });
+
+      expect(detector).not.toHaveBeenCalled();
+      expect(restored.getStatus().activeSession?.sessionId).toBe("restored-session");
+      expect(restored.getStatus().installMode.installKind).toBe("portable-managed");
+      expect(detector).toHaveBeenCalledOnce();
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("re-detects install drift at execution even while active status uses its snapshot", async () => {
+    const gate = deferred();
+    let mode = supportedMode("npm");
+    const detector = vi.fn(() => mode);
+    const runCommandImpl = vi.fn<NonNullable<UpdateSessionManagerOptions["runCommandImpl"]>>();
+    const manager = createTestUpdateSessionManager({
+      detector,
+      beforeExecute: () => gate.promise,
+      runCommandImpl,
+    });
+
+    manager.start(claim("0.2.12"));
+    expect(manager.getStatus().installMode.packageManager).toBe("npm");
+    expect(detector).toHaveBeenCalledOnce();
+    mode = supportedMode("yarn");
+    gate.resolve();
+    await vi.waitFor(() => {
+      expect(detector).toHaveBeenCalledTimes(2);
+    });
+
+    expect(runCommandImpl).not.toHaveBeenCalled();
+    expect(manager.getStatus().lastSession).toMatchObject({
+      phase: "failed",
+      failureReason: "unsupported-install-mode",
+    });
+  });
+
   it.each([
     ["package manager", (): UpdateInstallMode => supportedMode("yarn"), false],
     [

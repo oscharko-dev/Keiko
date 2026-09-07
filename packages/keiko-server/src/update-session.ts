@@ -232,6 +232,8 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
   private last: UpdateSession | undefined;
   private activeAbort:
     { readonly sessionId: string; readonly controller: AbortController } | undefined;
+  private statusInstallModeSnapshot:
+    { readonly sessionId: string; readonly installMode: UpdateInstallMode } | undefined;
 
   public constructor(options: UpdateSessionManagerOptions = {}) {
     this.env = options.processEnv ?? process.env;
@@ -260,14 +262,38 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     this.restoreDurableState();
   }
 
-  public readonly getStatus = (): UpdateSessionStatus => ({
-    schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
-    installMode: this.detector(),
-    policy: resolveUpdateMutationPolicy(this.env),
-    persistence: this.persistenceStatus,
-    ...(this.active === undefined ? {} : { activeSession: this.active }),
-    ...(this.last === undefined ? {} : { lastSession: this.last }),
-  });
+  public readonly getStatus = (): UpdateSessionStatus => {
+    const installMode = this.installModeForStatus();
+    return {
+      schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
+      installMode,
+      policy: resolveUpdateMutationPolicy(this.env),
+      persistence: this.persistenceStatus,
+      ...(this.active === undefined ? {} : { activeSession: this.active }),
+      ...(this.last === undefined ? {} : { lastSession: this.last }),
+    };
+  };
+
+  private installModeForStatus(): UpdateInstallMode {
+    const activeSessionId = this.active?.sessionId;
+    if (activeSessionId === undefined) {
+      this.statusInstallModeSnapshot = undefined;
+      return this.detector();
+    }
+    if (this.statusInstallModeSnapshot?.sessionId === activeSessionId) {
+      return this.statusInstallModeSnapshot.installMode;
+    }
+    const installMode = this.detector();
+    this.statusInstallModeSnapshot = { sessionId: activeSessionId, installMode };
+    return installMode;
+  }
+
+  private replaceActiveProjection(active: UpdateSession | undefined): void {
+    if (this.statusInstallModeSnapshot?.sessionId !== active?.sessionId) {
+      this.statusInstallModeSnapshot = undefined;
+    }
+    this.active = active;
+  }
 
   public readonly refreshDurableProjection = (): void => {
     if (this.localState === undefined) return;
@@ -277,7 +303,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
       return;
     }
     this.persistenceStatus = "ready";
-    this.active = inspected.state.activeSession;
+    this.replaceActiveProjection(inspected.state.activeSession);
     this.activeCandidate = inspected.state.activeCandidate;
     this.last = inspected.state.lastSession;
   };
@@ -317,12 +343,14 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     const session = this.createSession(consumed.snapshot, mode, input.requestId);
     this.acquireLock(session);
     this.active = session;
+    this.statusInstallModeSnapshot = { sessionId: session.sessionId, installMode: currentMode };
     this.activeCandidate = consumed.snapshot;
     try {
       this.persistDurableState();
     } catch {
       this.active = undefined;
       this.activeCandidate = undefined;
+      this.statusInstallModeSnapshot = undefined;
       this.lock?.release(session.sessionId);
       throw new UpdateSessionError(
         "UPDATE_STATE_UNWRITABLE",
@@ -593,10 +621,12 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     const previousActive = this.active;
     const previousCandidate = this.activeCandidate;
     const previousLast = this.last;
+    const previousStatusInstallMode = this.statusInstallModeSnapshot;
     this.last = next;
     if (this.active?.sessionId === session.sessionId && isTerminal(next.phase)) {
       this.active = undefined;
       this.activeCandidate = undefined;
+      this.statusInstallModeSnapshot = undefined;
     }
     try {
       this.persistDurableState();
@@ -604,6 +634,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
       this.active = previousActive;
       this.activeCandidate = previousCandidate;
       this.last = previousLast;
+      this.statusInstallModeSnapshot = previousStatusInstallMode;
       this.persistenceStatus = "unwritable";
       this.emitSessionEvent(this.active ?? this.last ?? session, "persistence-failed");
       throw error;
@@ -618,7 +649,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     const result = this.localState.inspectRuntimeState();
     this.persistenceStatus = result.status === "ok" ? "ready" : result.status;
     if (!("state" in result)) return;
-    this.active = result.state.activeSession;
+    this.replaceActiveProjection(result.state.activeSession);
     this.activeCandidate = result.state.activeCandidate;
     this.last = result.state.lastSession;
     if (this.settleRestoredTerminalIfNeeded()) return;
@@ -644,6 +675,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
       };
       this.active = undefined;
       this.activeCandidate = undefined;
+      this.statusInstallModeSnapshot = undefined;
     } else {
       this.active = {
         ...this.active,
@@ -674,6 +706,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     this.last = session;
     this.active = undefined;
     this.activeCandidate = undefined;
+    this.statusInstallModeSnapshot = undefined;
     try {
       this.persistDurableState();
     } catch {
@@ -767,6 +800,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     };
     this.active = undefined;
     this.activeCandidate = undefined;
+    this.statusInstallModeSnapshot = undefined;
     this.persistenceStatus = "unwritable";
     if (!persistenceFailureReported) this.emitSessionEvent(this.last, "persistence-failed");
   }
