@@ -129,8 +129,8 @@ export class DraftDeliveryController implements DraftDeliveryService {
   public reconcile(): Promise<CodingRuntimeDeliveryResult> {
     return this.run((context) => this.reconcileCurrent(context));
   }
-  public reconcileInherited(): Promise<CodingRuntimeDeliveryResult> {
-    return this.run((context) => this.reconcileInheritedCurrent(context));
+  public reconcileForObservation(): Promise<CodingRuntimeDeliveryResult> {
+    return this.run((context) => this.reconcileObservationCurrent(context));
   }
   public executeApproved(
     id: string,
@@ -410,12 +410,13 @@ export class DraftDeliveryController implements DraftDeliveryService {
     if (adopted === undefined) return unavailable("verified-commit-required");
     return this.reconcileRecord(context, adopted);
   }
-  private async reconcileInheritedCurrent(
+  private async reconcileObservationCurrent(
     context: DraftDeliveryRunContext,
   ): Promise<CodingRuntimeDeliveryResult> {
-    if (currentDraft(this.options, context) !== undefined)
+    const existing = currentDraft(this.options, context);
+    if (existing !== undefined && existing.phase !== "recovery-required")
       return unavailable("proposal-unavailable");
-    const adopted = adoptDraftPredecessor(this.options, context);
+    const adopted = existing ?? adoptDraftPredecessor(this.options, context);
     if (adopted === undefined) return unavailable("verified-commit-required");
     const stillAdopted = (): boolean =>
       sameDraftRecord(currentDraft(this.options, context), adopted);
@@ -434,8 +435,8 @@ export class DraftDeliveryController implements DraftDeliveryService {
   ): Promise<CodingRuntimeDeliveryResult> {
     if (!stillCurrent()) return unavailable("proposal-unavailable");
     let current = adopted;
-    await assertDraftLocalCandidate(this.options, context, current.binding);
-    if (!stillCurrent()) return unavailable("proposal-unavailable");
+    // Reconciliation observes an already bound remote effect. Local repairs may be ahead or
+    // uncommitted; proposal and execution paths still verify their exact local candidate.
     const remote = await readDraftRemoteState(this.options, context, current.binding);
     if (!stillCurrent()) return unavailable("proposal-unavailable");
     assertKnownDraftIdentity(current, remote);

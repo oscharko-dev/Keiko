@@ -2238,13 +2238,13 @@
     {
       "op": "git.ci-observation",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/ciObservationService.ts:230",
+      "site": "packages/keiko-server/src/gitDelivery/ciObservationService.ts:239",
       "package": "keiko-server"
     },
     {
       "op": "git.ci-observation",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/ciObservationService.ts:248",
+      "site": "packages/keiko-server/src/gitDelivery/ciObservationService.ts:257",
       "package": "keiko-server"
     },
     {
@@ -2446,7 +2446,7 @@
     {
       "op": "git.draft-remote.observed",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:118",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:119",
       "package": "keiko-server"
     },
     {

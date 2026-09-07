@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { isCodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
 import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import type {
@@ -108,7 +110,36 @@ function diagnostics(source = failedFacts()): GitCiFailureContextResult {
     },
   };
 }
+function retainLocalRepair(state: "unchanged" | "ahead" | "dirty"): void {
+  if (state === "unchanged") return;
+  writeFileSync(join(fixture.root, "code.js"), "export const value = 3;\n");
+  if (state === "ahead") {
+    fixture.git(["add", "code.js"]);
+    fixture.git(["commit", "-qm", "fix: retained local repair"]);
+  }
+}
 describe("run-bound CI observations through existing draft authority", () => {
+  it("retries an inherited remote observation after a transient provider failure", async () => {
+    const successor = fixture.successorOptions();
+    const service = new CiObservationController({
+      ...successor,
+      persistence: createCodingRuntimeCiReadinessStore(fixture.db, fixture.snapshots),
+      onChanged: vi.fn(),
+      ciReader: (): GitCiProviderReader => ({ readFacts: () => Promise.resolve(facts()) }),
+    });
+    fixture.failListAfterCreate = true;
+    expect(await service.observe()).toMatchObject({
+      status: "unavailable",
+      reason: "draft-unavailable",
+    });
+    fixture.failListAfterCreate = false;
+    expect(await service.observe(true)).toMatchObject({
+      status: "observed",
+      snapshot: { runId: "run-2", state: "technical-ready" },
+    });
+    expect(fixture.pushCount).toBe(1);
+    expect(fixture.createCount).toBe(1);
+  });
   it("preserves a repaired-head push proposal and its approval while CI is unavailable", async () => {
     fixture.git(["commit", "--allow-empty", "-qm", "fix: verified repair"]);
     await fixture.recordVerifiedCommit("commit-2");
@@ -136,94 +167,137 @@ describe("run-bound CI observations through existing draft authority", () => {
     expect(fixture.service.consumeApproval(proposal.record.proposalId)).toBeDefined();
   });
 
-  it("preserves a proposal created while inherited CI recovery is resolving authority", async () => {
-    const successor = fixture.successorOptions();
-    let releaseTarget: (() => void) | undefined;
-    let enteredTarget: (() => void) | undefined;
-    const targetEntered = new Promise<void>((resolve) => {
-      enteredTarget = resolve;
-    });
-    const targetReleased = new Promise<void>((resolve) => {
-      releaseTarget = resolve;
-    });
-    fixture.asyncBeforeTarget = async (): Promise<void> => {
-      enteredTarget?.();
-      await targetReleased;
-    };
-    const observation = new CiObservationController({
-      ...successor,
-      persistence: createCodingRuntimeCiReadinessStore(fixture.db, fixture.snapshots),
-      onChanged: vi.fn(),
-      ciReader: (): GitCiProviderReader => ({ readFacts: vi.fn(() => Promise.resolve(facts())) }),
-    });
+  it.each(["inherited", "existing-recovery"] as const)(
+    "preserves a proposal created while %s CI recovery is resolving authority",
+    async (startingState) => {
+      const successor = fixture.successorOptions();
+      const readFacts = vi.fn(() => Promise.resolve(facts()));
+      const observation = new CiObservationController({
+        ...successor,
+        persistence: createCodingRuntimeCiReadinessStore(fixture.db, fixture.snapshots),
+        onChanged: vi.fn(),
+        ciReader: (): GitCiProviderReader => ({ readFacts }),
+      });
+      if (startingState === "existing-recovery") {
+        fixture.failListAfterCreate = true;
+        expect(await observation.observe()).toMatchObject({
+          status: "unavailable",
+          reason: "draft-unavailable",
+        });
+        expect(fixture.snapshots.get("run-2")?.draftDelivery).toMatchObject({
+          phase: "recovery-required",
+          reason: "provider-failed",
+        });
+        fixture.failListAfterCreate = false;
+      }
+      let releaseTarget: (() => void) | undefined;
+      let enteredTarget: (() => void) | undefined;
+      const targetEntered = new Promise<void>((resolve) => {
+        enteredTarget = resolve;
+      });
+      const targetReleased = new Promise<void>((resolve) => {
+        releaseTarget = resolve;
+      });
+      fixture.asyncBeforeTarget = async (): Promise<void> => {
+        enteredTarget?.();
+        await targetReleased;
+      };
 
-    const pending = observation.observe();
-    await targetEntered;
-    fixture.asyncBeforeTarget = undefined;
-    const delivery = new DraftDeliveryController(successor);
-    const proposal = await delivery.proposePush();
-    if (proposal.status !== "recorded") throw new Error("Missing concurrent push proposal");
-    delivery.issueApproval(proposal.record.proposalId);
-    releaseTarget?.();
+      const pending = observation.observe(true);
+      await targetEntered;
+      fixture.asyncBeforeTarget = undefined;
+      const delivery = new DraftDeliveryController(successor);
+      const proposal = await delivery.proposePush();
+      if (proposal.status !== "recorded") throw new Error("Missing concurrent push proposal");
+      delivery.issueApproval(proposal.record.proposalId);
+      releaseTarget?.();
 
-    await expect(pending).resolves.toMatchObject({
-      status: "unavailable",
-      reason: "draft-unavailable",
-    });
-    expect(fixture.snapshots.get("run-2")?.draftDelivery).toEqual(proposal.record);
-    expect(delivery.consumeApproval(proposal.record.proposalId)).toBeDefined();
-  });
+      await expect(pending).resolves.toMatchObject({
+        status: "unavailable",
+        reason: "draft-unavailable",
+      });
+      expect(fixture.snapshots.get("run-2")?.draftDelivery).toEqual(proposal.record);
+      expect(delivery.consumeApproval(proposal.record.proposalId)).toBeDefined();
+      expect(readFacts).not.toHaveBeenCalled();
+      expect(fixture.pushCount).toBe(1);
+      expect(fixture.createCount).toBe(1);
+    },
+  );
 
-  it("adopts and reconciles the retained PR before recording successor-bound readiness", async () => {
-    const successor = fixture.successorOptions();
-    const inheritedContext = successor.context();
-    if (inheritedContext === undefined) throw new Error("Missing successor context");
-    const successorCorrelation = "successor-ci-observation";
-    const changed = vi.fn();
-    const readFacts = vi.fn(() => Promise.resolve(facts()));
-    const persistence = createCodingRuntimeCiReadinessStore(fixture.db, fixture.snapshots);
-    const service = new CiObservationController({
-      ...successor,
-      context: (): typeof inheritedContext => ({
-        ...inheritedContext,
-        correlationId: successorCorrelation,
-      }),
-      persistence,
-      onChanged: changed,
-      ciReader: (): GitCiProviderReader => ({ readFacts }),
-    });
+  it.each(["unchanged", "ahead", "dirty"] as const)(
+    "observes the retained remote PR with an %s local workspace",
+    async (localState) => {
+      const publishedHead = fixture.prs[0]?.headSha;
+      retainLocalRepair(localState);
+      const successor = fixture.successorOptions();
+      const inheritedContext = successor.context();
+      if (inheritedContext === undefined) throw new Error("Missing successor context");
+      const successorCorrelation = "successor-ci-observation";
+      const changed = vi.fn();
+      const readFacts = vi.fn(() => Promise.resolve(facts()));
+      const persistence = createCodingRuntimeCiReadinessStore(fixture.db, fixture.snapshots);
+      const service = new CiObservationController({
+        ...successor,
+        context: (): typeof inheritedContext => ({
+          ...inheritedContext,
+          correlationId: successorCorrelation,
+        }),
+        persistence,
+        onChanged: changed,
+        ciReader: (): GitCiProviderReader => ({ readFacts }),
+      });
 
-    expect(fixture.snapshots.get("run-2")?.draftDelivery).toBeUndefined();
-    expect(await service.observe()).toMatchObject({
-      status: "observed",
-      snapshot: { runId: "run-2", state: "technical-ready" },
-    });
-    expect(fixture.snapshots.get("run-2")?.draftDelivery).toMatchObject({
-      phase: "draft-created",
-      binding: { runId: "run-2", runtimeAuthorityDigest: "b".repeat(64) },
-      pullRequest: { number: 17 },
-    });
-    expect(persistence.get("run-2")).toEqual(changed.mock.calls[0]?.[0]);
-    expect(readFacts).toHaveBeenCalledOnce();
-    expect(fixture.pushCount).toBe(1);
-    expect(fixture.createCount).toBe(1);
-    const successorLines = fixture.events.filter(
-      (event) => event.correlationId === successorCorrelation,
-    );
-    expect(
-      successorLines
-        .filter((event) => event.op === "git.draft-delivery")
-        .map((event) => event.extra?.phase),
-    ).toEqual(["recovery-required", "draft-created"]);
-    expect(
-      successorLines
-        .filter((event) => event.op === "git.ci-observation")
-        .map((event) => event.extra?.phase),
-    ).toEqual(["started", "observed"]);
-    for (const line of successorLines)
-      expect(redactLogFields(line.extra ?? {})).toEqual(line.extra);
-    expect(JSON.stringify(successorLines)).not.toMatch(/owner\/repository|feat: accepted issue/u);
-  });
+      expect(fixture.snapshots.get("run-2")?.draftDelivery).toBeUndefined();
+      expect(await service.observe()).toMatchObject({
+        status: "observed",
+        snapshot: { runId: "run-2", state: "technical-ready" },
+      });
+      expect(fixture.snapshots.get("run-2")?.draftDelivery).toMatchObject({
+        phase: "draft-created",
+        binding: { runId: "run-2", runtimeAuthorityDigest: "b".repeat(64) },
+        pullRequest: { number: 17 },
+      });
+      expect(persistence.get("run-2")).toEqual(changed.mock.calls[0]?.[0]);
+      expect(readFacts).toHaveBeenCalledOnce();
+      expect(readFacts).toHaveBeenCalledWith(expect.objectContaining({ headSha: publishedHead }));
+      expect(fixture.pushCount).toBe(1);
+      expect(fixture.createCount).toBe(1);
+      const successorLines = fixture.events.filter(
+        (event) => event.correlationId === successorCorrelation,
+      );
+      expect(
+        successorLines
+          .filter((event) => event.op === "git.draft-remote.observed")
+          .map((event) => event.extra),
+      ).toContainEqual({
+        runId: "run-2",
+        phase: "head-read",
+        state: "observed",
+        reason: "completed",
+        headMatchesExpected: true,
+      });
+      expect(
+        successorLines
+          .filter((event) => event.op === "git.draft-delivery")
+          .map((event) => event.extra?.phase),
+      ).toEqual(["recovery-required", "draft-created"]);
+      expect(
+        successorLines
+          .filter((event) => event.op === "git.ci-observation")
+          .map((event) => event.extra?.phase),
+      ).toEqual(["started", "observed"]);
+      for (const line of successorLines)
+        expect(redactLogFields(line.extra ?? {})).toEqual(line.extra);
+      expect(JSON.stringify(successorLines)).not.toMatch(/owner\/repository|feat: accepted issue/u);
+      if (localState !== "unchanged") {
+        expect(await new DraftDeliveryController(successor).proposePush()).toMatchObject({
+          record: { phase: "recovery-required", reason: "remote-drift" },
+        });
+        expect(fixture.pushCount).toBe(1);
+        expect(fixture.createCount).toBe(1);
+      }
+    },
+  );
 
   it("supersedes all CI facts when the diagnostic owner observes a provider revision change", async () => {
     const test = configured(() => Promise.resolve(failedFacts()));

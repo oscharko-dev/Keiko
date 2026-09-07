@@ -107,11 +107,12 @@ export interface DraftRemoteState {
   readonly pullRequest: GitPullRequestIdentity | undefined;
 }
 
-function recordDraftBaseRead(
+function recordDraftRemoteHeadRead(
   options: DraftDeliveryDependencies,
   context: DraftDeliveryRunContext,
   binding: DraftDeliveryBinding,
   result: GitPrInspectionResult<string>,
+  phase: "base-read" | "head-read",
 ): void {
   (options.execution?.activityLog ?? processServerLogSink()).write({
     category: "process",
@@ -120,10 +121,12 @@ function recordDraftBaseRead(
     level: result.ok ? "debug" : "warn",
     extra: {
       runId: context.runId,
-      phase: "base-read",
+      phase,
       state: result.ok ? "observed" : "unavailable",
       reason: result.ok ? "completed" : result.reason,
-      baseMatchesExpected: result.ok && result.value === binding.baseSha,
+      ...(phase === "base-read"
+        ? { baseMatchesExpected: result.ok && result.value === binding.baseSha }
+        : { headMatchesExpected: result.ok && result.value === binding.headSha }),
     },
   });
 }
@@ -138,10 +141,11 @@ export async function readDraftRemoteState(
   if (adapter === undefined) throw new DraftDeliveryFailure("provider-failed");
   const input = { ownerAndRepo: binding.repository, headBranchName: binding.headRef };
   const base = await adapter.readBranchHead({ ...input, headBranchName: binding.baseRef });
-  recordDraftBaseRead(options, context, binding, base);
+  recordDraftRemoteHeadRead(options, context, binding, base, "base-read");
   if (!base.ok) throw new DraftDeliveryFailure("provider-failed");
   if (base.value !== binding.baseSha) throw new DraftDeliveryFailure("remote-drift");
   const head = await adapter.readBranchHead(input);
+  recordDraftRemoteHeadRead(options, context, binding, head, "head-read");
   if (!head.ok && head.reason !== "not-found") throw new DraftDeliveryFailure("provider-failed");
   const list = await adapter.findPullRequestsByHead(input);
   assertDraftAuthority(context);

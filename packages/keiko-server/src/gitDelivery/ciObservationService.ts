@@ -142,22 +142,31 @@ export class CiObservationController implements CiObservationService {
     });
     return this.finishRead(observation, facts, reader);
   }
+  private observationCandidate(
+    context: DraftDeliveryRunContext,
+  ): DraftDeliveryRecord | undefined {
+    const snapshot = this.options.snapshots.get(context.runId);
+    if (snapshot === undefined) return undefined;
+    const existing = snapshot.draftDelivery;
+    if (existing !== undefined)
+      return existing.phase === "draft-created" || existing.phase === "recovery-required"
+        ? existing
+        : undefined;
+    return draftDeliveryLineageRecord(snapshot, (runId) => this.options.snapshots.get(runId))
+      ?.record;
+  }
   private async observationDraft(
     context: DraftDeliveryRunContext,
   ): Promise<DraftDeliveryRecord | undefined> {
-    const snapshot = this.options.snapshots.get(context.runId);
-    if (snapshot === undefined) return undefined;
-    if (snapshot.draftDelivery !== undefined)
-      return snapshot.draftDelivery.phase === "draft-created" ? snapshot.draftDelivery : undefined;
-    const candidate = draftDeliveryLineageRecord(snapshot, (runId) =>
-      this.options.snapshots.get(runId),
-    )?.record;
+    const candidate = this.observationCandidate(context);
     if (candidate?.pullRequest === undefined) return undefined;
+    if (candidate.binding.runId === context.runId && candidate.phase === "draft-created")
+      return candidate;
     const { DraftDeliveryController } = await import("./draftDeliveryService.js");
     const result = await new DraftDeliveryController({
       ...this.options,
       onChanged: (): void => undefined,
-    }).reconcileInherited();
+    }).reconcileForObservation();
     return result.status === "recorded" && result.record.phase === "draft-created"
       ? result.record
       : undefined;

@@ -79,6 +79,17 @@ them. These qualification changes reopen the `bcbd35b1` source freeze; its compl
 remains historical, source-limited evidence. The separate catalog-closeout gate receipt producer
 is still being completed, and the actual external audit result remains unavailable.
 
+Attempt 36 at `a56e467f` successfully refreshed the provider tool-calling proof and started an
+acknowledged successor. Its fresh CI request exposed a different recovery deadlock: local commit
+`4b7a1b1a` was ahead of the retained published PR head, so read-only reconciliation incorrectly
+rejected the remote observation. The owning reconciliation now validates the exact retained remote
+independently of local repairs, while proposal and effect-time candidate checks remain intact.
+It also retries its own recovery record after a transient provider failure without overwriting a
+concurrent proposal or approval. The three observed regressions failed before repair; 55 owning
+tests pass, including unchanged/ahead/dirty worktrees and both concurrency paths. Correlated remote
+head-match evidence is emitted through the existing activity log. The attempt was interrupted
+without changing the retained model files; 0/5 complete flows remains the truthful count.
+
 Actual results, with their source limits:
 
 | Verification                               | Result                                             | Source / limitation                                                                       |

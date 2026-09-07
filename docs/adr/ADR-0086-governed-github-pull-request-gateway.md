@@ -398,6 +398,13 @@ unlinked. This creates only a new predecessor edge; it never rewrites historical
 ownership from a remote branch, restores approval, or publishes anything. The new run receives fresh
 authority and delivery still verifies the current local candidate and live remote identity.
 
+Read-only restart and CI reconciliation confirm the retained remote head, base and known PR
+identity independently of newer or uncommitted local work. They cannot publish that work or
+restore an approval. Push and PR proposals and their effect-time checks still require the exact
+verified local candidate. A transient provider failure may be retried from `recovery-required`;
+the observer must preserve any newer proposal or record that arrives during the remote reads.
+The activity log records whether each observed remote head matches its retained binding.
+
 For a pre-v25 row whose latest result is still a valid successful commit, the existing validated
 receipt can seed this retained source. If an earlier version already replaced that success with a
 failed or pending result and stored no source receipt, migration cannot reconstruct the missing
