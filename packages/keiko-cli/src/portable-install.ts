@@ -51,13 +51,13 @@ import {
   layoutFor,
   layoutForSetupManifest,
   PACKAGE_NAME,
+  parseWindowsGenerationBinding,
   primaryLauncherName,
   targetRuntime,
   type PortableLayout,
   type PortableTarget,
   type SetupManifest,
   type SetupRuntimeManifest,
-  type WindowsGenerationBinding,
   type SetupStatus,
   type SpawnFn,
 } from "./portable-shared.js";
@@ -143,15 +143,6 @@ const PORTABLE_SETUP_LOCK = "portable-setup.lock";
 const PORTABLE_OPERATION_TIMEOUT_MS = 15 * 60_000;
 const MAX_ROOT_LAUNCHER_BYTES = 64 * 1024 * 1024;
 const PORTABLE_FILE_READ_BYTES = 64 * 1024;
-const SHA256_RE = /^[a-f0-9]{64}$/u;
-const WINDOWS_GENERATION_KEYS = [
-  "schemaVersion",
-  "resourceRoot",
-  "treeHashSchema",
-  "treeSha256",
-  "launcherPath",
-  "launcherSha256",
-] as const;
 const WINDOWS_SUPPORT_LAUNCHER =
   '@echo off\r\nset "SCRIPT_DIR=%~dp0"\r\n"%SCRIPT_DIR%..\\Keiko.exe" %*\r\n';
 
@@ -170,40 +161,6 @@ function parseSetupRuntime(value: unknown): SetupRuntimeManifest {
     throw new Error("portable setup manifest runtime architecture is unsupported");
   }
   return { nodePlatform, nodeArchitecture };
-}
-
-function exactKeys(record: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(record).sort();
-  return (
-    actual.length === expected.length && [...expected].sort().every((key, i) => actual[i] === key)
-  );
-}
-
-function parseWindowsGenerationBinding(value: unknown): WindowsGenerationBinding {
-  if (!isRecord(value) || !exactKeys(value, WINDOWS_GENERATION_KEYS)) {
-    throw new Error("portable setup manifest Windows generation binding is malformed");
-  }
-  const treeSha256 = value.treeSha256;
-  const launcherSha256 = value.launcherSha256;
-  const valid = [
-    value.schemaVersion === 1,
-    value.treeHashSchema === "KHT1",
-    typeof treeSha256 === "string" && SHA256_RE.test(treeSha256),
-    value.resourceRoot === `.portable/generations/${String(treeSha256)}`,
-    value.launcherPath === "Keiko.exe",
-    typeof launcherSha256 === "string" && SHA256_RE.test(launcherSha256),
-  ].every(Boolean);
-  if (!valid || typeof treeSha256 !== "string" || typeof launcherSha256 !== "string") {
-    throw new Error("portable setup manifest Windows generation binding is malformed");
-  }
-  return {
-    schemaVersion: 1,
-    resourceRoot: `.portable/generations/${treeSha256}`,
-    treeHashSchema: "KHT1",
-    treeSha256,
-    launcherPath: "Keiko.exe",
-    launcherSha256,
-  };
 }
 
 function parseSetupManifest(path: string): SetupManifest {
@@ -1093,18 +1050,29 @@ function failedManagedAttestation(
   ) {
     return undefined;
   }
+  if (!hasRecoverableFailedWindowsGeneration(registration)) return undefined;
+  const windowsGeneration = registration.windowsGeneration;
   return {
-    schemaVersion: 1,
+    schemaVersion: windowsGeneration === undefined ? 1 : 2,
     status: "managed",
-    updateEligible: true,
+    updateEligible:
+      registration.installRootPlatformTarget !== "windows-x64" || windowsGeneration !== undefined,
     platformTarget: registration.installRootPlatformTarget,
     packageVersion: registration.packageVersion,
     stable: registration.stable,
     setupManifestSha256: registration.setupManifestSha256,
     installRootIdentitySha256: registration.installRootIdentitySha256,
     launcherIdentitySha256: registration.launcherIdentitySha256,
+    ...(windowsGeneration === undefined ? {} : { windowsGeneration }),
     updatedAt: registration.updatedAt,
   };
+}
+
+function hasRecoverableFailedWindowsGeneration(registration: FailedSetupRegistration): boolean {
+  return (
+    registration.windowsGeneration === undefined ||
+    (registration.installRootPlatformTarget === "windows-x64" && registration.stable)
+  );
 }
 
 function attestedFailedManagedInstall(

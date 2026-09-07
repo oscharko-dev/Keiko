@@ -516,7 +516,7 @@ describe("runPortableCli", () => {
     }
   });
 
-  it("promotes a Windows bootstrap payload into a managed root and records content-free state", async () => {
+  it("promotes a flat Windows bootstrap payload into a manual-only managed root and records content-free state", async () => {
     const root = tempRoot();
     const home = join(root, "home");
     const source = join(root, "bootstrap");
@@ -548,7 +548,7 @@ describe("runPortableCli", () => {
     expect(registration(stateDir)).toMatchObject({
       schemaVersion: 1,
       status: "managed",
-      updateEligible: true,
+      updateEligible: false,
       platformTarget: "windows-x64",
       packageVersion: "0.2.11",
       stable: true,
@@ -797,7 +797,7 @@ describe("runPortableCli", () => {
           {
             schemaVersion: 1,
             status: "managed",
-            updateEligible: true,
+            updateEligible: false,
             platformTarget: "windows-x64",
             packageVersion: "0.2.11",
             stable: true,
@@ -1144,7 +1144,7 @@ describe("runPortableCli", () => {
     expect(existsSync(join(env.LOCALAPPDATA, "Programs", "Keiko"))).toBe(false);
     expect(registration(stateDir)).toMatchObject({
       status: "managed",
-      updateEligible: true,
+      updateEligible: false,
       packageVersion: "0.2.13",
     });
   });
@@ -1666,7 +1666,7 @@ describe("runPortableCli", () => {
 
     expect(code).toBe(0);
     expect(c.out()).toContain("Keiko portable setup ready at managed root.");
-    expect(registration(stateDir)).toMatchObject({ status: "managed", updateEligible: true });
+    expect(registration(stateDir)).toMatchObject({ status: "managed", updateEligible: false });
   });
 
   it("never adopts an unvalidated same-path root", async () => {
@@ -2005,7 +2005,7 @@ describe("runPortableCli", () => {
       writePortableRegistration(stateDir, {
         schemaVersion: 1,
         status: "managed",
-        updateEligible: true,
+        updateEligible: false,
         platformTarget: "windows-x64",
         packageVersion: "0.2.11",
         stable: true,
@@ -2150,13 +2150,13 @@ describe("runPortableCli", () => {
     });
     expect(registration(stateDir)).toMatchObject({
       status: "managed",
-      updateEligible: true,
+      updateEligible: false,
       platformTarget: "windows-x64",
     });
     expect(readFileSync(join(stateDir, "portable-install-state.json"), "utf8")).not.toContain(root);
   });
 
-  it("launches the existing managed install when the bootstrap launcher is clicked after setup", async () => {
+  it("launches a historical schema 1 managed install as manual-only without migrating its record", async () => {
     const root = tempRoot();
     const home = join(root, "home");
     const source = join(root, "bootstrap");
@@ -2190,6 +2190,11 @@ describe("runPortableCli", () => {
         },
       },
     );
+    const historicalRegistration = registration(stateDir);
+    expect(historicalRegistration.updateEligible).toBe(false);
+    historicalRegistration.updateEligible = true;
+    writePortableRegistration(stateDir, historicalRegistration);
+    const historicalBytes = readFileSync(join(stateDir, "portable-install-state.json"), "utf8");
     const secondCapture = capture();
 
     const second = await runPortableCli(
@@ -2221,6 +2226,14 @@ describe("runPortableCli", () => {
     expect(spawns).toEqual([join(managedRoot, "Keiko.exe")]);
     expect(lifecycleStarts).toEqual([join(managedRoot, "app")]);
     expect(secondCapture.err()).not.toContain("already exists");
+    expect(readPortableInstallRegistration(stateDir)).toMatchObject({
+      schemaVersion: 1,
+      status: "managed",
+      updateEligible: false,
+    });
+    expect(readFileSync(join(stateDir, "portable-install-state.json"), "utf8")).toBe(
+      historicalBytes,
+    );
   });
 
   it("activates the macOS runtime before starting the managed application", async () => {
@@ -2882,7 +2895,7 @@ describe("runPortableCli", () => {
     expect(lifecycleStarts).toEqual([join(managedRoot, "app")]);
     expect(registration(stateDir)).toMatchObject({
       status: "managed",
-      updateEligible: true,
+      updateEligible: false,
     });
   });
 

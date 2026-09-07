@@ -192,6 +192,24 @@ Node 24.18.0 (14.28 seconds). The five Mac regression cases pass unchanged. Scop
 server workspace typecheck and B2 test typing fixes are green. This reviewed development checkpoint
 does not settle B3 consumers, root-wide test typings or native replacement qualification.
 
+The CLI registration/selected-generation maintenance slice is frozen for independent security
+review. Strict Windows schema-2 records bind setup, launcher, root and generation identities;
+historical flat schema-1 records remain readable but always project manual-only eligibility without
+rewriting stored bytes. Failed generation setup retains its attestation through real KHT1 recovery.
+The lead verifies the frozen hashes and passes all 72 registration/install/shared/maintenance/
+rename-backoff tests (1.68 seconds), then all 89 portable lifecycle tests under the default timeout
+in a quiet execution lease (17.40 seconds). Earlier shared-load runs exceeded one existing test's
+15-second timeout; the owner's 30-second override run is historical, not the final default result.
+The owner's CLI workspace typecheck and scoped lint/format pass. Active-WAL maintenance allowances
+and startup transport remain a subsequent integration tranche.
+Independent review finds one medium production-shape gap: the selected-generation allowlist omits
+`runtime/native/keiko-runtime-attestation.exe`, which the production signing pipeline stages and
+fresh qualification executes. Valid production installs would therefore fail maintenance/recovery
+inspection. The source owner adds that exact path and its fixture while retaining all unknown
+entry and retained-generation rejection checks. Independent re-review approves with zero remaining
+findings. The lead verifies the repaired hashes and passes all 18 maintenance tests again
+(422 milliseconds). No active-WAL inspection or deletion authority is introduced by this repair.
+
 Native filesystem mechanics are snapshotted separately in diagnostic commit
 `8e1ffb09c492eed84f3879dcd957a34f395014c9`, based on reviewed child checkpoint `52ac76881`.
 The lead verified all 17 copied file hashes. Local owner evidence includes Mac focused protocol/
@@ -204,12 +222,36 @@ diagnostic is dispatched in [run 34140199765](https://github.com/oscharko-dev/Ke
 the Windows job fails MSVC analysis on a nullable cleanup handle. The owner repairs that guard
 without suppressions, and a header-only diagnostic checkpoint `8e450d0de` is dispatched in
 [run 34140647807](https://github.com/oscharko-dev/Keiko/actions/runs/34140647807). It fails on three
-further cleanup guards with the same nullable-handle root cause. Both actual native failures are
-retained; the remaining workflow jobs are cancelled after the target job finishes. The owner is
-auditing all new Windows handle-cleanup paths before another run. The diagnostic also exposes stale
+further cleanup guards with the same nullable-handle root cause. After the full nullable-handle
+repair, diagnostic `73291ae3c` runs in
+[run 34141479042](https://github.com/oscharko-dev/Keiko/actions/runs/34141479042) and fails MSVC C6001
+on receipt-handle cleanup. The owner separates handle closure from the short-circuit expression
+and invalidates the consumed handle; diagnostic fix `23185ac11` uses no analysis suppression.
+All three actual native failures are retained; the remaining workflow jobs are cancelled after
+the target job finishes. The diagnostic integrates reviewed B2 checkpoint `a7eb2437f` in
+`b0ab2bc87462a366c66c082e49199b4f53f7f3a5`, including the Windows encoder-fixture CI step.
+Before another dispatch, lead review also requires temporary-file cleanup to remove only files
+created by that invocation and generation copies to enforce the KHT1 entry/path/byte budgets
+during traversal. Pre-copy retained handles and post-copy hashes do not alone bound newly added
+directory members. The copy repair is snapshotted in `a5caf6aaf`; its
+[run 34143450298](https://github.com/oscharko-dev/Keiko/actions/runs/34143450298) stops before native
+analysis at the newly integrated Windows TypeScript plan suite: 24 tests fail. The Mac golden fixture
+uses POSIX absolute paths on Windows, Git converts the hexadecimal fixture to CRLF, and real plan
+publication reaches unsupported directory `fsync` with `EPERM`. The last failure is a production
+persistence gap, not merely a fixture failure; plan and receipt publication must preserve file flush
+and atomic publication while following the existing Windows directory-refusal policy. No native
+analysis or runtime result is available from that run. The remaining jobs are cancelled. The
+diagnostic also exposes stale
 root-test typings; green workspace typechecks did not cover those tests. Windows process/supervisor
 callback integration remains in progress and
 KHA1 remains disabled. This branch is neither delivery-head CI nor native N−1/N qualification.
+
+The full native Windows callback implementation then freezes for separate independent security
+review. The lead verifies all 16 source hashes and replays macOS arm64 native quality successfully.
+The owner also reports 36 wiring tests, MinGW warning-clean cross-compilation and GCC analysis
+passing. These checks cover source/compiler boundaries only. The full callback snapshot awaits
+the Windows plan/receipt repair before another real Windows diagnostic. The Windows coordinator
+entry remains fail-closed without production KHA1 acceptance.
 
 The diagnostic editor-evidence mismatch is independently traced to the local Node distribution's
 zlib. Homebrew Node 24.18.0 reports zlib 1.2.12; the checksum-verified official Node 24.18.0 binary

@@ -72,12 +72,13 @@ import {
   portableManagedSetupLockPath,
   portableSourceCanReplaceManaged,
   portableSourceIsNewer,
+  recoverableFailedManagedRoot,
   upgradeManagedInstall,
   validatePortableRoot,
   withPortableManagedMutation,
 } from "./portable-install.js";
 import type { PortableManagedUpgradeFn, ValidatedPortableRoot } from "./portable-install.js";
-import { writeManagedRegistration } from "./portable-registration.js";
+import { writeFailedRegistration, writeManagedRegistration } from "./portable-registration.js";
 import { hashPortableTreeKht1 } from "@oscharko-dev/keiko-security/portable-tree-attestation";
 import {
   PACKAGE_NAME,
@@ -233,6 +234,32 @@ describe("portable install decisions", () => {
     expect(validated.layout.resourceRoot).toContain(generation);
     expect(validated.layout.primaryLauncherPath).toBe(join(root, "Keiko.exe"));
     expect(validated.layout.setupManifestPath).toBe(join(root, ".portable", "setup-manifest.json"));
+  });
+
+  it("recovers a failed Windows schema 2 install through its retained generation identity", async () => {
+    const root = makePolicyAllowedRoot();
+    const managedRoot = join(root, "managed", "Keiko");
+    const stateDir = join(root, "state");
+    await seedWindowsGenerationRoot(managedRoot);
+    const validated = validatePortableRoot("windows-x64", managedRoot);
+    writeManagedRegistration({
+      stateDir,
+      layout: validated.layout,
+      manifest: validated.manifest,
+      env: {},
+      home: root,
+      now: new Date("2026-09-07T12:00:00.000Z"),
+    });
+    writeFailedRegistration(
+      "windows-x64",
+      stateDir,
+      new Date("2026-09-07T12:01:00.000Z"),
+      "runtime invalid",
+    );
+
+    expect(recoverableFailedManagedRoot("windows-x64", managedRoot, stateDir)).toBe(managedRoot);
+    writeFileSync(validated.layout.primaryLauncherPath, "rebound launcher");
+    expect(recoverableFailedManagedRoot("windows-x64", managedRoot, stateDir)).toBeUndefined();
   });
 
   it("rejects post-closure non-PE mutations of a Windows generation", async () => {

@@ -4,6 +4,7 @@ import {
   defaultManagedRoot,
   layoutFor,
   layoutForSetupManifest,
+  parseWindowsGenerationBinding,
   primaryLauncherName,
   targetForHost,
   targetRuntime,
@@ -57,5 +58,30 @@ describe("portable target layout", () => {
     expect(layout.resourceRoot).toContain(digest);
     expect(layout.runtimeNodePath).toContain(digest);
     expect(layout.runtimeSupervisorPath).toContain(digest);
+  });
+
+  it("accepts only the exact Windows generation binding shape", () => {
+    const digest = "a".repeat(64);
+    expect(
+      parseWindowsGenerationBinding({
+        schemaVersion: 1,
+        resourceRoot: `.portable/generations/${digest}`,
+        treeHashSchema: "KHT1",
+        treeSha256: digest,
+        launcherPath: "Keiko.exe",
+        launcherSha256: "b".repeat(64),
+      }),
+    ).toMatchObject({ treeSha256: digest });
+    expect(() =>
+      parseWindowsGenerationBinding({
+        schemaVersion: 1,
+        resourceRoot: `.portable/generations/${digest}`,
+        treeHashSchema: "KHT1",
+        treeSha256: digest,
+        launcherPath: "Keiko.exe",
+        launcherSha256: "b".repeat(64),
+        extra: true,
+      }),
+    ).toThrow("portable setup manifest Windows generation binding is malformed");
   });
 });

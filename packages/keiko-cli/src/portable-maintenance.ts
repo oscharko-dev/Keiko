@@ -130,6 +130,27 @@ const MANAGED_INSTALL_RULES: Readonly<
   },
 };
 const WINDOWS_LAUNCHER_MAX_BYTES = 64 * 1024;
+const WINDOWS_GENERATION_ROOT_FILES = [
+  "Keiko.exe",
+  ".portable/setup-manifest.json",
+  "support/keiko-support.cmd",
+] as const;
+const WINDOWS_GENERATION_PAYLOAD_EXACT_FILES = [
+  "app/package.json",
+  "app/release-impact.catalog.json",
+  ".portable/runtime-activation.json",
+  "runtime/native/keiko-runtime-attestation.exe",
+  "runtime/native/keiko-runtime-supervisor.exe",
+  "runtime/native/keiko-secure-workspace-read.exe",
+  "runtime/native/usearch.node",
+  "runtime/licenses/usearch/LICENSE",
+] as const;
+const WINDOWS_GENERATION_PAYLOAD_PREFIXES = [
+  "app/dist/",
+  "app/node_modules/",
+  "runtime/node/",
+  "runtime/sidecars/",
+] as const;
 
 function appDataDir(env: EnvSource, home: string): string {
   // Absolute-only: an empty or relative APPDATA must not re-anchor registration paths at the
@@ -613,6 +634,16 @@ function pathMatchesRecursivePrefix(path: string, prefix: string): boolean {
 }
 
 function allowlistedDirectory(relPath: string, layout: PortableLayout): boolean {
+  const generationRoot = selectedWindowsGenerationRoot(layout);
+  if (generationRoot !== undefined) {
+    return (
+      relPath === ".portable" ||
+      relPath === ".portable/generations" ||
+      relPath === "support" ||
+      relPath === generationRoot ||
+      selectedWindowsGenerationDirectoryAllowed(relPath, generationRoot)
+    );
+  }
   const rules = MANAGED_INSTALL_RULES[layout.rootKind];
   return (
     rules.exactFiles.some((path) => path.startsWith(`${relPath}/`)) ||
@@ -624,11 +655,50 @@ function allowlistedDirectory(relPath: string, layout: PortableLayout): boolean 
 }
 
 function allowlistedFile(relPath: string, layout: PortableLayout): boolean {
+  const generationRoot = selectedWindowsGenerationRoot(layout);
+  if (generationRoot !== undefined) {
+    return allowlistedSelectedWindowsGenerationFile(relPath, generationRoot);
+  }
   const rules = MANAGED_INSTALL_RULES[layout.rootKind];
   return (
     rules.exactFiles.includes(relPath) ||
     rules.recursivePrefixes.some((prefix) => pathMatchesRecursivePrefix(relPath, prefix))
   );
+}
+
+function allowlistedSelectedWindowsGenerationFile(
+  relPath: string,
+  generationRoot: string,
+): boolean {
+  if (WINDOWS_GENERATION_ROOT_FILES.includes(relPath as never)) return true;
+  if (!relPath.startsWith(`${generationRoot}/`)) return false;
+  const selected = relPath.slice(generationRoot.length + 1);
+  return (
+    WINDOWS_GENERATION_PAYLOAD_EXACT_FILES.includes(selected as never) ||
+    WINDOWS_GENERATION_PAYLOAD_PREFIXES.some((prefix) => selected.startsWith(prefix))
+  );
+}
+
+function selectedWindowsGenerationDirectoryAllowed(
+  relPath: string,
+  generationRoot: string,
+): boolean {
+  if (!relPath.startsWith(`${generationRoot}/`)) return false;
+  const selected = relPath.slice(generationRoot.length + 1);
+  return (
+    WINDOWS_GENERATION_PAYLOAD_EXACT_FILES.some((path) => path.startsWith(`${selected}/`)) ||
+    WINDOWS_GENERATION_PAYLOAD_PREFIXES.some(
+      (prefix) => prefix.startsWith(`${selected}/`) || selected.startsWith(prefix),
+    )
+  );
+}
+
+function selectedWindowsGenerationRoot(layout: PortableLayout): string | undefined {
+  if (layout.rootKind !== "windows-root" || layout.resourceRoot === layout.installRoot) {
+    return undefined;
+  }
+  const relativeRoot = normalizedRelativePath(layout.installRoot, layout.resourceRoot);
+  return /^\.portable\/generations\/[a-f0-9]{64}$/u.test(relativeRoot) ? relativeRoot : undefined;
 }
 
 function scanManagedTree(
