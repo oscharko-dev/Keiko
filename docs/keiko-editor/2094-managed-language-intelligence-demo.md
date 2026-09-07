@@ -7,7 +7,8 @@ install a provider, toolchain, module, package, crate, or build dependency.
 
 ## Preconditions
 
-- Node.js 24.18.0 or newer in the repository-supported `>=24.18.0 <25` range is installed.
+- Node.js 24.18.0 is the exact release baseline; the repository-supported
+  `>=24.18.0 <25 || >=26.3.0 <27` range also admits the governed Node 26 compatibility line.
 - npm is used with the committed root `package-lock.json`; pnpm, Yarn, and Bun are unsupported.
 - Chromium from the repository's Playwright installation can launch on the host.
 - The candidate checkout is clean except for the exact candidate under review.

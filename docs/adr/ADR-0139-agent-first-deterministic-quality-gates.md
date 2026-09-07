@@ -176,10 +176,20 @@ warning — including any real SCM failure such as a missing revision — still 
 The same direct CLI invocation uses `--require-full-analysis`. It requires exactly zero JavaScript/
 TypeScript cache hits, one complete cache-miss receipt, a completed source set, and an explicit
 80-percent floor against the indexed-file inventory for both fresh inventories. Architecture proof
-binds the combined receipt total to SonarJasmin's plan and requires each receipt independently to be
-complete, so offsetting `51/50` and `49/50` receipts cannot pass by summing to `100/100`. The receipt
-grammar is recorded against scanner CLI `8.1.0.6389` and hosted plugin `13.8.0.44569`; future hosted
-wording or analyzer changes fail closed until the parser and fixtures are deliberately updated.
+binds the combined receipt total to SonarJasmin's plan when that plan is emitted and requires each
+receipt independently to be complete, so offsetting `51/50` and `49/50` receipts cannot pass by
+summing to `100/100`. Scanner `8.1.0.6389` PR analysis can omit the plan while still running both
+full architecture sensors. In that shape, and only when no plan or legacy UDG inventory exists, the
+gate requires a closed producer-consumer lifecycle: the separately verified full fresh JS/TS
+inventory must complete before exactly one `JsArchitectureSensor` and one `TsArchitectureSensor`
+run in order; each sensor must discover exactly one matching language-specific UDG location, read
+that producer directory, load exactly its complete positive inventory, and finish before the
+architecture upload receipt and scanner success. Additional, off-sensor, mismatched, malformed, or
+out-of-order receipts fail closed. No ratio approximates UDG breadth because Sonar does not produce
+a UDG for every analyzed source file. Generic scanner success is never architecture evidence. The
+receipt grammar is recorded against scanner CLI `8.1.0.6389` and hosted plugin `13.8.0.44569`;
+future hosted wording or analyzer changes fail closed until the parser and fixtures are
+deliberately updated.
 
 ### D9 — D12 binds dependency state per revision
 

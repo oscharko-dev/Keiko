@@ -297,7 +297,9 @@ describe("CI test/gate wiring guard", () => {
       portableAssetsWorkflow,
       mutationSecurityWorkflow,
     ].join("\n");
-    const nodeSetupCount = runtimeWorkflows.match(/node-version: "24\.18\.0"/gu)?.length ?? 0;
+    const node24SetupCount = runtimeWorkflows.match(/node-version: "24\.18\.0"/gu)?.length ?? 0;
+    const node26SetupCount = runtimeWorkflows.match(/node-version: "26\.8\.1"/gu)?.length ?? 0;
+    const nodeSetupCount = node24SetupCount + node26SetupCount;
     const verificationCount =
       runtimeWorkflows.match(/node scripts\/check-runtime-toolchain\.mjs --exact/gu)?.length ?? 0;
     // 17 -> 20 with the three coverage suite jobs Issue #2704 split out of `coverage-sonar`,
@@ -306,14 +308,17 @@ describe("CI test/gate wiring guard", () => {
     // adopted the governed runtime. The retired hosted performance policy no longer adds a lane.
     // The load-bearing assertion is the pairing below: every Node lane, old or new, verifies the
     // governed toolchain.
-    expect(nodeSetupCount).toBe(24);
+    expect(node24SetupCount).toBe(24);
+    expect(node26SetupCount).toBe(1);
+    expect(nodeSetupCount).toBe(25);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
+    expect(ci).toContain("NODE_26_COMPATIBILITY_RESULT");
   });
 
   it("executes typecheck, build, and install smokes on every desktop OS", () => {
     const start = ci.indexOf("  cross-platform-smoke:");
-    const end = ci.indexOf("\n  ui:", start);
+    const end = ci.indexOf("\n  node-26-compatibility:", start);
     const crossPlatform = ci.slice(start, end);
     expect(crossPlatform).toContain("os: [ubuntu-latest, windows-latest, macos-latest]");
     expect(crossPlatform).toContain("Typecheck the complete package graph");

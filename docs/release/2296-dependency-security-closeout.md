@@ -143,16 +143,17 @@ or peer graph).
 | `autoprefixer`                | keiko-ui              | 10.5.4  | current        | UI build baseline.                                                                     |
 | `@types/react`                | keiko-ui              | 19.2.18 | current        | Newest release; `@types/react-dom` lags it by one patch.                               |
 | `axe-core`                    | keiko-ui              | 4.12.1  | patch-deferred | 4.13.0 changes rule output; an accessibility-evidence refresh is required first.       |
-| `@noble/hashes`               | keiko-ui              | 2.3.0   | patch-deferred | 2.4.0 available; no capability requires it.                                            |
-| `@types/node`                 | root                  | 26.3.0  | patch-deferred | Declarations only; 26.4.0 available.                                                   |
-| `@types/node`                 | keiko-ui              | 26.3.0  | patch-deferred | Deduplicated with root.                                                                |
+| `@noble/hashes`               | keiko-ui              | 2.4.0   | current        | Security/correctness hardening; hash and UI quality gates remain authoritative.        |
+| `@types/node`                 | root                  | 26.3.0  | current        | Root declarations remain on the independently resolved compatible release.             |
+| `@types/node`                 | keiko-ui              | 26.4.0  | current        | Node 26 declaration refresh for the UI workspace.                                      |
 | `@types/react-dom`            | keiko-ui              | 19.2.4  | patch-deferred | Declarations only; 19.2.5 available.                                                   |
 | `@vitejs/plugin-react`        | keiko-ui              | 6.0.5   | patch-deferred | 6.1.1 available; UI build baseline is unchanged.                                       |
-| `@testing-library/react`      | keiko-ui              | 16.3.2  | patch-deferred | 16.3.3 available; no test capability requires it.                                      |
+| `@testing-library/react`      | keiko-ui              | 16.3.3  | current        | Fixes re-entrant `act()` behavior while dispatching events.                            |
 | `@testing-library/user-event` | keiko-ui              | 14.6.5  | patch-deferred | 14.6.6 available; no test capability requires it.                                      |
 | `@playwright/test`            | root                  | 1.62.1  | current        | E2E reference runner.                                                                  |
 | `prettier`                    | root                  | 3.9.6   | current        | Formatter policy is unchanged.                                                         |
-| `knip`                        | root                  | 6.32.2  | patch-deferred | 6.32.3 published 2026-08-26; backs the required `check:knip` gate.                     |
+| `knip`                        | root                  | 6.32.3  | current        | Patch refresh for the required `check:knip` gate.                                      |
+| `corepack`                    | root                  | 0.35.0  | current        | Lockfile-verified Node 26 bootstrap for the pinned offline Yarn smoke.                 |
 | `fallow`                      | root                  | 3.9.1   | patch-deferred | 3.20.0 available; backs `check:semantic-duplication`. Missed by the sweep — see below. |
 | `@napi-rs/canvas`             | keiko-local-knowledge | 1.0.8   | current        | Optional host-native backend; deduplicated to one node by a root override (see below). |
 | `postcss`                     | root                  | 8.5.26  | current        | Root override; audit reports no known vulnerability.                                   |
@@ -206,13 +207,14 @@ they executed.
 Enforced by `npm run check:runtime-toolchain` and `npm run check:typescript-toolchain`, which own
 these values; this document does not restate them as a second source.
 
-| Surface              | Governed value               | Enforcing gate               |
-| -------------------- | ---------------------------- | ---------------------------- |
-| Node.js engine       | `>=24.18.0 <25`              | `check:runtime-toolchain`    |
-| npm / packageManager | `11.16.0`                    | `check:runtime-toolchain`    |
-| TypeScript compiler  | 7.0.2 (native)               | `check:typescript-toolchain` |
-| TypeScript API       | 6.0.3                        | `check:typescript-toolchain` |
-| Internal versions    | 0.3.17 across all workspaces | `check:version-consistency`  |
+| Surface             | Governed value                    | Enforcing gate               |
+| ------------------- | --------------------------------- | ---------------------------- |
+| Node.js engine      | `>=24.18.0 <25 \|\| >=26.3.0 <27` | `check:runtime-toolchain`    |
+| npm engine          | `>=11.16.0 <12`                   | `check:runtime-toolchain`    |
+| packageManager      | `npm@11.16.0`                     | `check:runtime-toolchain`    |
+| TypeScript compiler | 7.0.2 (native)                    | `check:typescript-toolchain` |
+| TypeScript API      | 6.0.3                             | `check:typescript-toolchain` |
+| Internal versions   | 0.3.17 across all workspaces      | `check:version-consistency`  |
 
 ## Dependency graph validity (`npm ls`)
 
@@ -250,7 +252,8 @@ still describes the checkout.
 The question was measured, not estimated: across all 665 `engines` declarations in
 `package-lock.json` (1 root, 25 workspaces, 639 third-party), evaluated with the same
 `semver.satisfies(v, range, { includePrerelease: true })` predicate npm itself uses, **zero fail**
-Node 24.18.0 / npm 11.16.0 — in every class, direct, transitive, dev and optional. The optional class
+the original #2296 Node 24.18.0 / npm 11.16.0 measurement; in every class, direct, transitive,
+dev and optional. The optional class
 cannot fail at all: npm's arborist marks an optional node `inert` and explicitly ignores
 `--engine-strict` for it. Only four of the 100 distinct ranges even reject Node 25, behind three
 packages (`dependency-cruiser`, `jsdom`, `watskeburt`) that a future Node bump must move anyway.
@@ -265,9 +268,10 @@ points across eight workflows, in every case before `npm ci`. `engine-strict` wo
 version of a question that is already answered where it matters.
 
 **Its cost is a silent failure mode in exactly the machinery this closeout exists to protect.**
-`engines.node` is upper-bounded (`>=24.18.0 <25`) and `engines.npm` is an exact string. Under
-`engine-strict` both become hard install-time gates for _every_ npm process that runs in this working
-directory — including Dependabot's updater, which brings its own Node and npm and reads the project
+`engines.node` is upper-bounded (`>=24.18.0 <25 || >=26.3.0 <27`) and `engines.npm` accepts the
+governed npm 11 range (`>=11.16.0 <12`). Under `engine-strict` both become hard install-time gates
+for _every_ npm process that runs in this working directory, including Dependabot's updater, which
+brings its own Node and npm and reads the project
 `.npmrc`. If either differs, the dependency-update pull requests stop, and they stop **without
 notifying anyone**: an absence of Dependabot PRs looks identical to a quiet week. Disabling the
 mechanism that keeps dependencies current, inside the change whose subject is dependency currency,
@@ -276,17 +280,16 @@ is not a trade worth a marginal gain.
 Recorded so the measurement never has to be repeated. What would have to change first: an
 `engines` declaration that a third-party tool can satisfy — see the finding below.
 
-### A finding this raised: the published `engines.npm` constrains consumers who have no such requirement
+### Repaired finding: the published `engines.npm` constrained consumers unnecessarily
 
-`package.json` publishes `engines` as `{"node": ">=24.18.0 <25", "npm": "11.16.0"}`, and that
-manifest reaches every consumer of `@oscharko-dev/keiko`. The exact npm string is true of Keiko's
+Before this repair, `package.json` published `engines` as
+`{"node": ">=24.18.0 <25", "npm": "11.16.0"}`. That manifest reached every consumer of
+`@oscharko-dev/keiko`, although the exact npm string was true only of Keiko's
 _contributors_ — `check:runtime-toolchain` enforces it — but it is not true of anyone installing the
 package, and an organisation that sets `engine-strict` on its own side cannot install Keiko unless it
-happens to run npm 11.16.0 exactly.
+runs a supported npm 11 version.
 
-Not repaired here. Relaxing it means changing a deliberately governed pin **and** the gate that
-enforces it, which is a governance decision with its own reasoning, not a side effect of a currency
-closeout. Left as a stated finding for the release owner.
+This compatibility finding is repaired by the published Node.js 24/26 engine range and npm 11 consumer range. The exact `packageManager` pin remains the reproducible contributor, publication, portable, and measurement baseline; CI separately proves both approved Node/npm tuples.
 
 ## Follow-ups
 
@@ -358,7 +361,7 @@ platform-authoritative evidence.
 | `npm run check:knip`                                        | pass                                                     |
 | `npm run check:eslint-lane`                                 | pass — `npm ls eslint` exits 0 (#2777)                   |
 | `npm run check:perf-evidence`                               | pass — both documents within budget and internally sound |
-| `npm run check:dependency-currency`                         | pass — 37 dependency rows, 14 action rows                |
+| `npm run check:dependency-currency`                         | pass — 38 dependency rows, 14 action rows                |
 | `npm run check:secret-scanning-queue`                       | pass — 0 open alerts; both prior findings closed         |
 | `npm run check:runtime-toolchain`                           | pass — Node 24.18.0; npm 11.16.0; 25 workspaces          |
 | `npm run check:typescript-toolchain`                        | pass — compiler 7.0.2; API 6.0.3                         |
