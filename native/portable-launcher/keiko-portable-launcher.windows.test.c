@@ -18,7 +18,7 @@ static void write_fixture_file(const wchar_t *path, const char *content) {
   DWORD written = 0;
   HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_NEW,
                             FILE_ATTRIBUTE_NORMAL, NULL);
-  assert(file != INVALID_HANDLE_VALUE);
+  assert(keiko_tree_windows_handle_valid(file));
   assert(WriteFile(file, content, (DWORD)strlen(content), &written, NULL) != 0);
   assert(written == (DWORD)strlen(content));
   assert(FlushFileBuffers(file) != 0);
@@ -31,7 +31,8 @@ static void fixture_path(wchar_t *out, size_t cap, const wchar_t *root,
 }
 
 static void create_generation_fixture(const wchar_t *root) {
-  wchar_t path[KEIKO_PATH_CAP];
+  wchar_t *path = (wchar_t *)calloc(KEIKO_PATH_CAP, sizeof(wchar_t));
+  assert(path != NULL);
   fixture_path(path, KEIKO_PATH_CAP, root, L"\\.portable");
   make_directory(path);
   fixture_path(path, KEIKO_PATH_CAP, root, L"\\.portable\\generations");
@@ -75,10 +76,12 @@ static void create_generation_fixture(const wchar_t *root) {
                L"\\.portable\\generations\\" KEIKO_WIDEN(KEIKO_PORTABLE_GENERATION_ID)
                L"\\runtime\\node\\node.exe");
   write_fixture_file(path, "node\n");
+  free(path);
 }
 
 static void create_legacy_fixture(const wchar_t *root) {
-  wchar_t path[KEIKO_PATH_CAP];
+  wchar_t *path = (wchar_t *)calloc(KEIKO_PATH_CAP, sizeof(wchar_t));
+  assert(path != NULL);
   make_directory(root);
   fixture_path(path, KEIKO_PATH_CAP, root, L"\\app");
   make_directory(path);
@@ -94,10 +97,11 @@ static void create_legacy_fixture(const wchar_t *root) {
   write_fixture_file(path, "flat cli\n");
   fixture_path(path, KEIKO_PATH_CAP, root, L"\\runtime\\node\\node.exe");
   write_fixture_file(path, "flat node\n");
+  free(path);
 }
 
 static void remove_generation_fixture(const wchar_t *root) {
-  wchar_t path[KEIKO_PATH_CAP];
+  wchar_t *path = (wchar_t *)calloc(KEIKO_PATH_CAP, sizeof(wchar_t));
   static const wchar_t *files[] = {
     L"\\.portable\\generations\\" KEIKO_WIDEN(KEIKO_PORTABLE_GENERATION_ID)
       L"\\.portable\\runtime-activation.json",
@@ -131,6 +135,7 @@ static void remove_generation_fixture(const wchar_t *root) {
     L"\\app"
   };
   size_t index;
+  assert(path != NULL);
   for (index = 0; index < sizeof(files) / sizeof(files[0]); ++index) {
     fixture_path(path, KEIKO_PATH_CAP, root, files[index]);
     assert(DeleteFileW(path) != 0);
@@ -140,14 +145,22 @@ static void remove_generation_fixture(const wchar_t *root) {
     assert(RemoveDirectoryW(path) != 0);
   }
   assert(RemoveDirectoryW(root) != 0);
+  free(path);
 }
 
 static void test_generation_selection(void) {
-  wchar_t temp[KEIKO_PATH_CAP], root[KEIKO_PATH_CAP], expected[KEIKO_PATH_CAP];
-  wchar_t wrong[KEIKO_PATH_CAP], link_target[KEIKO_PATH_CAP];
-  DWORD length = GetTempPathW(KEIKO_PATH_CAP, temp);
+  wchar_t *temp = (wchar_t *)calloc(KEIKO_PATH_CAP, sizeof(wchar_t));
+  wchar_t *root = (wchar_t *)calloc(KEIKO_PATH_CAP, sizeof(wchar_t));
+  wchar_t *expected = (wchar_t *)calloc(KEIKO_PATH_CAP, sizeof(wchar_t));
+  wchar_t *wrong = (wchar_t *)calloc(KEIKO_PATH_CAP, sizeof(wchar_t));
+  wchar_t *link_target = (wchar_t *)calloc(KEIKO_PATH_CAP, sizeof(wchar_t));
+  wchar_t *source = (wchar_t *)calloc(KEIKO_PATH_CAP, sizeof(wchar_t));
+  DWORD length;
   keiko_generation_pins pins;
   keiko_launcher_buffers *buffers = allocate_launcher_buffers();
+  assert(temp != NULL && root != NULL && expected != NULL && wrong != NULL &&
+         link_target != NULL && source != NULL);
+  length = GetTempPathW(KEIKO_PATH_CAP, temp);
   assert(length > 0 && length < KEIKO_PATH_CAP);
   assert(buffers != NULL);
   assert(GetTempFileNameW(temp, L"kgl", 0, root) != 0);
@@ -212,17 +225,20 @@ static void test_generation_selection(void) {
   assert(MoveFileExW(link_target, expected, MOVEFILE_WRITE_THROUGH) != 0);
 
   fixture_path(expected, KEIKO_PATH_CAP, root, L"\\hardlink.js");
-  {
-    wchar_t source[KEIKO_PATH_CAP];
-    fixture_path(source, KEIKO_PATH_CAP, root,
-                 L"\\.portable\\generations\\" KEIKO_WIDEN(KEIKO_PORTABLE_GENERATION_ID)
-                 L"\\app\\dist\\cli\\index.js");
-    assert(CreateHardLinkW(expected, source, NULL) != 0);
-    assert(select_generation_resources(buffers, &pins) == 0);
-  }
+  fixture_path(source, KEIKO_PATH_CAP, root,
+               L"\\.portable\\generations\\" KEIKO_WIDEN(KEIKO_PORTABLE_GENERATION_ID)
+               L"\\app\\dist\\cli\\index.js");
+  assert(CreateHardLinkW(expected, source, NULL) != 0);
+  assert(select_generation_resources(buffers, &pins) == 0);
   assert(DeleteFileW(expected) != 0);
   remove_generation_fixture(root);
   free_launcher_buffers(buffers);
+  free(source);
+  free(link_target);
+  free(wrong);
+  free(expected);
+  free(root);
+  free(temp);
 }
 
 #endif
