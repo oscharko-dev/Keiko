@@ -112,13 +112,16 @@ static int parses(const char *const *fields) {
 
 static void rejects_field(size_t field, const char *value) {
   const char *fields[KEIKO_KHP_FIELD_COUNT];
-  memcpy(fields, valid_fields, sizeof(fields));
+  size_t index;
+  for (index = 0; index < KEIKO_KHP_FIELD_COUNT; ++index) {
+    fields[index] = valid_fields[index];
+  }
   fields[field] = value;
   assert(parses(fields) == 0);
 }
 
 int main(void) {
-  static const char malformed_utf8[] = {(char)0xc0, (char)0xaf, '\0'};
+  static const unsigned char malformed_utf8[] = {0xc0u, 0xafu, 0u};
   assert(parses(valid_fields) == 1);
 
   rejects_field(KEIKO_KHP_AGGREGATE_REVISION, "0");
@@ -131,7 +134,7 @@ int main(void) {
   rejects_field(KEIKO_KHP_OLD_PORT, "65536");
   rejects_field(KEIKO_KHP_CLEANUP_AT, "9999999999999999");
   rejects_field(KEIKO_KHP_START_AT, "1800000000000");
-  rejects_field(KEIKO_KHP_SESSION_ID, malformed_utf8);
+  rejects_field(KEIKO_KHP_SESSION_ID, (const char *)malformed_utf8);
   rejects_field(KEIKO_KHP_MANAGED_ROOT, INVALID_RELATIVE_PATH);
   rejects_field(KEIKO_KHP_MANAGED_ROOT, INVALID_DOT_PATH);
   rejects_field(KEIKO_KHP_CANDIDATE_ROOT, FOREIGN_CANDIDATE);
