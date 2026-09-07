@@ -6,36 +6,55 @@ import { spawnSync } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { join, win32 } from "node:path";
 
-const source = readFileSync("packages/keiko-security/src/windows-local-volume.ts", "utf8");
+const source = readFileSync(
+  "packages/keiko-security/src/windows-local-volume.ts",
+  "utf8",
+).replaceAll("\r\n", "\n");
 const match = /const QUERY = String\.raw`([\s\S]*?)`;/u.exec(source);
 if (match?.[1] === undefined) process.exit(2);
 
-let query = match[1]
-  .replace(
-    "$encoded = [Console]::In.ReadLine()",
-    "$stage = 'read'; mark $stage\n$encoded = [Console]::In.ReadLine()\n$stage = 'input'; mark $stage",
-  )
-  .replace(
-    "if ([string]::IsNullOrWhiteSpace($p) -or",
-    "$stage = 'decode'; mark $stage\nif ([string]::IsNullOrWhiteSpace($p) -or",
-  )
-  .replace(
-    "$p = [IO.Path]::GetFullPath($p)",
-    "$stage = 'path'; mark $stage\n$p = [IO.Path]::GetFullPath($p)",
-  )
-  .replace("try {\n  $assembly =", "try {\n  $stage = 'assembly'; mark $stage\n  $assembly =")
-  .replace(
-    "  $type = $module.DefineType('KeikoLocalVolumeApi', [Reflection.TypeAttributes]'Public, Abstract, Sealed')",
-    "  $type = $module.DefineType('KeikoLocalVolumeApi', [Reflection.TypeAttributes]'Public, Abstract, Sealed')\n  $stage = 'type'; mark $stage",
-  )
-  .replace(
-    "  $handle = $create.Invoke",
-    "  $stage = 'open'; mark $stage\n  $handle = $create.Invoke",
-  )
-  .replace("    $tag =", "    $stage = 'tag'; mark $stage\n    $tag =")
-  .replace("    $final =", "    $stage = 'final'; mark $stage\n    $final =")
-  .replace("    $volume =", "    $stage = 'volume'; mark $stage\n    $volume =")
-  .replace("[Console]::Out.Write('KEIKO_LOCAL_VOLUME_OK')", "mark 'success'");
+let query = match[1];
+function replaceOnce(before, after) {
+  const index = query.indexOf(before);
+  if (index < 0 || query.indexOf(before, index + before.length) >= 0) process.exit(7);
+  query = `${query.slice(0, index)}${after}${query.slice(index + before.length)}`;
+}
+replaceOnce(
+  "$encoded = [Console]::In.ReadLine()",
+  "$stage = 'read'; mark $stage\n$encoded = [Console]::In.ReadLine()\n$stage = 'input'; mark $stage",
+);
+replaceOnce(
+  "if ([string]::IsNullOrWhiteSpace($p) -or",
+  "$stage = 'decode'; mark $stage\nif ([string]::IsNullOrWhiteSpace($p) -or",
+);
+replaceOnce(
+  "$p = [IO.Path]::GetFullPath($p)",
+  "$stage = 'path'; mark $stage\n$p = [IO.Path]::GetFullPath($p)\n$stage = 'fullpath'; mark $stage\n$iterations = 0",
+);
+replaceOnce(
+  "while (-not [IO.Directory]::Exists($p)) {",
+  "$stage = 'directory'; mark $stage\nwhile (-not [IO.Directory]::Exists($p)) {\n  if ($iterations -eq 0) { $stage = 'ancestor'; mark $stage }\n  $iterations += 1\n  if ($iterations -gt 128) { mark 'ancestor-limit'; exit 1 }",
+);
+replaceOnce(
+  "try {\n  $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly",
+  "$stage = 'existing'; mark $stage\ntry {\n  $stage = 'assembly'; mark $stage\n  $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly",
+);
+replaceOnce(
+  "  $module = $assembly.DefineDynamicModule('KeikoLocalVolume')",
+  "  $stage = 'module'; mark $stage\n  $module = $assembly.DefineDynamicModule('KeikoLocalVolume')",
+);
+replaceOnce(
+  "  $type = $module.DefineType('KeikoLocalVolumeApi', [Reflection.TypeAttributes]'Public, Abstract, Sealed')",
+  "  $stage = 'type'; mark $stage\n  $type = $module.DefineType('KeikoLocalVolumeApi', [Reflection.TypeAttributes]'Public, Abstract, Sealed')",
+);
+replaceOnce(
+  "  $handle = $create.Invoke",
+  "  $stage = 'open'; mark $stage\n  $handle = $create.Invoke",
+);
+replaceOnce("    $tag =", "    $stage = 'tag'; mark $stage\n    $tag =");
+replaceOnce("    $final =", "    $stage = 'final'; mark $stage\n    $final =");
+replaceOnce("    $volume =", "    $stage = 'volume'; mark $stage\n    $volume =");
+replaceOnce("[Console]::Out.Write('KEIKO_LOCAL_VOLUME_OK')", "mark 'success'");
 query = `function mark($value) { [Console]::Out.Write('KLV_DIAG:' + $value + ';'); [Console]::Out.Flush() }\n${query}`;
 const exitStages = [
   [
@@ -76,7 +95,7 @@ const exitStages = [
     "if ($kind -ne 2 -and $kind -ne 3 -and $kind -ne 6) { mark 'drive'; exit 1 }",
   ],
 ];
-for (const [before, after] of exitStages) query = query.replace(before, after);
+for (const [before, after] of exitStages) replaceOnce(before, after);
 const catchIndex = query.lastIndexOf("} catch { exit 1 }");
 if (catchIndex < 0) process.exit(3);
 query = `${query.slice(0, catchIndex)}} catch { mark $stage; exit 1 }${query.slice(catchIndex + "} catch { exit 1 }".length)}`;
@@ -112,7 +131,7 @@ const result = spawnSync(
 const output = result.stdout ?? "";
 const stages = [
   ...output.matchAll(
-    /KLV_DIAG:(read|input|decode|path|assembly|type|open|handle|tag|final|canonical|volume|drive|success);/gu,
+    /KLV_DIAG:(read|input|decode|path|fullpath|directory|ancestor|ancestor-limit|existing|assembly|module|type|open|handle|tag|final|canonical|volume|drive|success);/gu,
   ),
 ];
 const lastStage = stages.at(-1)?.[1];
