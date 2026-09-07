@@ -175,7 +175,7 @@ static void test_generation_selection(void) {
                                SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) != 0);
   wcscpy_s(buffers->root, KEIKO_PATH_CAP, link_target);
   assert(select_generation_resources(buffers, &pins) == 0);
-  assert(DeleteFileW(link_target) != 0);
+  assert(RemoveDirectoryW(link_target) != 0);
   wcscpy_s(buffers->root, KEIKO_PATH_CAP, root);
   fixture_path(expected, KEIKO_PATH_CAP, root,
                L"\\.portable\\generations\\" KEIKO_WIDEN(KEIKO_PORTABLE_GENERATION_ID));
