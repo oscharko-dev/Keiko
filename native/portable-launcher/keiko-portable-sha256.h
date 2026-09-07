@@ -1,6 +1,7 @@
 #ifndef KEIKO_PORTABLE_SHA256_H
 #define KEIKO_PORTABLE_SHA256_H
 
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
