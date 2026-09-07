@@ -10,7 +10,6 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { UPDATE_LOCAL_STATE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-local-state";
 import type {
   UpdateRemediationAction,
   UpdateReleaseImpactInput,
@@ -481,7 +480,7 @@ describe("update remediation manager", () => {
           store: "local-knowledge",
           remediation: "local-knowledge-reindex-required",
           status: "running",
-          updatedAt: "stale",
+          updatedAt: new Date(NOW - 1).toISOString(),
         },
       ],
       warnings: [],
@@ -513,7 +512,7 @@ describe("update remediation manager", () => {
           store: "memory-vault",
           remediation: "repair-required",
           status: "running",
-          updatedAt: "stale",
+          updatedAt: new Date(NOW - 1).toISOString(),
         },
       ],
       warnings: [],

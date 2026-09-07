@@ -14,9 +14,11 @@ import {
 import { verifyPortableHandoffNativeCopy } from "./update-portable-handoff-native-verification.js";
 import {
   createUpdateStartupRecovery,
+  type UpdateStartupActiveInstallAttestationInput,
   type UpdateStartupRecoveryPort,
   type UpdateStartupRecoveryOptions,
 } from "./update-portable-handoff-recovery.js";
+import { attestWindowsGenerationInstallation } from "./update-portable-windows-inspection-allowance.js";
 import type { UpdateLocalStateManager } from "./update-local-state.js";
 import {
   releaseStateDirUpdateSessionLockForRecovery,
@@ -357,28 +359,85 @@ function settleRestoredActivation(
 function attestRecoveredTree(
   options: ProductionPortableHandoffRuntimeOptions,
 ): UpdateStartupRecoveryOptions["attestActiveTree"] {
-  return ({ activationId, expectedTreeSha256, expectedRegistrationSha256, expectedVersion }) => {
-    if (!SHA256.test(expectedTreeSha256)) return Promise.resolve(false);
-    return resolvedPromise<boolean>(() => {
-      const plan = readPortableHandoffPlan(options.stateDir, activationId);
-      if (
-        (plan.digests.candidateTreeSha256 !== expectedTreeSha256 &&
-          plan.digests.currentTreeSha256 !== expectedTreeSha256) ||
-        !attestPortableManagedRegistration({
-          stateDir: options.stateDir,
-          managedRoot: plan.paths.managedRoot,
-          target: plan.target,
-          version: expectedVersion,
-          expectedSha256: expectedRegistrationSha256,
-        })
-      ) {
-        return false;
-      }
-      return createPortableHandoffTreeAttestor({ managedRoot: plan.paths.managedRoot })(
-        expectedTreeSha256,
-      );
-    });
+  return (input) => {
+    const expectedSha256 =
+      input.kind === "windows-generation-v1"
+        ? input.expectedGenerationTreeSha256
+        : input.expectedTreeSha256;
+    if (!SHA256.test(expectedSha256)) return Promise.resolve(false);
+    return resolvedPromise<boolean>(() => attestRecoveredInstall(options, input));
   };
+}
+
+function windowsAttestationSelection(
+  plan: Extract<ReturnType<typeof readPortableHandoffPlan>, { readonly target: "windows-x64" }>,
+  input: Extract<
+    UpdateStartupActiveInstallAttestationInput,
+    { readonly kind: "windows-generation-v1" }
+  >,
+): "current" | "candidate" | undefined {
+  if (
+    plan.currentGenerationTreeSha256 === input.expectedGenerationTreeSha256 &&
+    plan.currentSetupManifestSha256 === input.expectedSetupManifestSha256 &&
+    plan.digests.previousRegistrationSha256 === input.expectedRegistrationSha256 &&
+    plan.oldProcess.version === input.expectedVersion
+  ) {
+    return "current";
+  }
+  return plan.candidateGenerationTreeSha256 === input.expectedGenerationTreeSha256 &&
+    plan.candidateSetupManifestSha256 === input.expectedSetupManifestSha256 &&
+    plan.digests.preparedRegistrationSha256 === input.expectedRegistrationSha256 &&
+    plan.targetVersion === input.expectedVersion
+    ? "candidate"
+    : undefined;
+}
+
+async function attestRecoveredWindowsInstall(
+  options: ProductionPortableHandoffRuntimeOptions,
+  plan: Extract<ReturnType<typeof readPortableHandoffPlan>, { readonly target: "windows-x64" }>,
+  input: UpdateStartupActiveInstallAttestationInput,
+): Promise<boolean> {
+  if (input.kind !== "windows-generation-v1" || !SHA256.test(input.expectedSetupManifestSha256)) {
+    return false;
+  }
+  const selection = windowsAttestationSelection(plan, input);
+  return selection === undefined
+    ? false
+    : attestWindowsGenerationInstallation({ plan, selection, stateDir: options.stateDir });
+}
+
+async function attestRecoveredMacInstall(
+  options: ProductionPortableHandoffRuntimeOptions,
+  plan: Exclude<ReturnType<typeof readPortableHandoffPlan>, { readonly target: "windows-x64" }>,
+  input: UpdateStartupActiveInstallAttestationInput,
+): Promise<boolean> {
+  if (
+    input.kind !== "whole-root-v1" ||
+    (plan.digests.candidateTreeSha256 !== input.expectedTreeSha256 &&
+      plan.digests.currentTreeSha256 !== input.expectedTreeSha256) ||
+    !attestPortableManagedRegistration({
+      stateDir: options.stateDir,
+      managedRoot: plan.paths.managedRoot,
+      target: plan.target,
+      version: input.expectedVersion,
+      expectedSha256: input.expectedRegistrationSha256,
+    })
+  ) {
+    return false;
+  }
+  return createPortableHandoffTreeAttestor({ managedRoot: plan.paths.managedRoot })(
+    input.expectedTreeSha256,
+  );
+}
+
+function attestRecoveredInstall(
+  options: ProductionPortableHandoffRuntimeOptions,
+  input: UpdateStartupActiveInstallAttestationInput,
+): Promise<boolean> {
+  const plan = readPortableHandoffPlan(options.stateDir, input.activationId);
+  return plan.target === "windows-x64"
+    ? attestRecoveredWindowsInstall(options, plan, input)
+    : attestRecoveredMacInstall(options, plan, input);
 }
 
 function createProductionRecovery(

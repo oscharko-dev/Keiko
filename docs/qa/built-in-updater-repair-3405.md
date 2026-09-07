@@ -1024,6 +1024,84 @@ metadata only and does not grant approval to this prepared repair record.
 | User action / remediation      | A one-time manual evaluation-to-production installation may be required. Keep `manual-review-required` guidance until the verified transition and production canary establish a supported path.   |
 | Approval / catalog disposition | Pending release version and release-owner evidence. Carry this prepared block into the final epic PR and the release-cut handoff; no approval or catalog insertion is claimed.                    |
 
+## Remaining lint repair checkpoint (2026-09-07)
+
+The remaining twelve lint findings were repaired in six server files. Production changes only
+factor handoff capability validation and plan preparation without changing durable operation order,
+and add an explicit native-verifier callback return type. Test changes replace unsafe assertions
+with existing guards and type the mocks. Two remediation restart fixtures now use a valid stale
+ISO timestamp instead of the invalid literal `stale`; the production state validator and restart
+assertions remain unchanged.
+
+The lead independently reviewed all six diffs and replayed candidate authority, native verification,
+remediation, session, and activation suites with official Node 24.18.0: **92/92 tests passed in
+12.97 seconds** (`/tmp/keiko-3405-six-lint-fixes-root-replay.log`). The owner's scoped lint passed
+with zero findings. This checkpoint does not replace the pending full lint, verification, or audit.
+
+## Startup and Windows boundary verification checkpoint (2026-09-07)
+
+The lead's official-Node replay of eleven startup, recovery, generation-allowance, CLI root-policy,
+security helper, install-mode, and runtime suites passed **148/148 tests in 45.98 seconds**
+(`/tmp/keiko-3405-b3b-locality-root-replay.log`). Subsequent test-only typing repairs preserve the
+lock-acquisition assertion order and the local-state writer's returned state; the owner replayed
+both affected suites with **68/68 tests passing**. Canonical package build and package-graph checks
+passed, followed by a successful root TypeScript 7.0.2 no-emit replay
+(`/tmp/keiko-3405-b3b-root-noemit-replay.log`). UI lint passed separately. Broad lint reduced the
+previous twenty-six server errors to four errors in the new locality helper and its test; those
+remain part of the helper repair. None of these results is a final SHA-bound delivery receipt.
+
+Windows diagnostic `eee979c77`, run `34153165932`, passed the complete native coordinator test,
+including the ACL owner fix, and the real cutover probe with all success/sharing/invalid/pre/post/
+contention checks and flush boundaries passing. It then failed MSVC C4996 in the protocol fixture's
+`fopen` call. The checked MSVC-specific `fopen_s` test repair is frozen and pushed as diagnostic
+`d8b199b6e`; run `34153596557`, Windows job `101840774198`, subsequently reported the entire
+**Verify productive native sources on Windows** step successful. This covers compiler/analyzer,
+cutover, coordinator, protocol and later native boundary fixtures at those exact frozen bytes.
+The fifteen changed native/script files are checkpointed from that diagnostic commit without
+including the concurrent locality work. The overall job/workflow is still pending; no full CI pass,
+new locality proof, or production-signed update qualification is inferred.
+
+Independent security review confirmed a High defect in the uncommitted local-volume helper:
+PowerShell 5.1 CodeDOM scratch storage inherits an environment-selected temporary parent's ACL,
+which permits cross-user compiler-artifact replacement when that parent is shared. The accepted
+repair removes CodeDOM and filesystem scratch entirely through transient Reflection.Emit P/Invoke.
+It requires a fresh independent review and genuine Windows local-volume and mapped-SMB evidence.
+Native setup/coordinator directory pinning is being implemented in parallel. Production eligibility
+and KHA1 remain disabled, and the real-artifact qualification decision remains unresolved.
+
+## Windows local-volume TypeScript repair settlement (2026-09-07)
+
+The scratch-free helper received independent security approval with **zero findings**. The prior
+High CodeDOM artifact-replacement issue is closed: fixed `kernel32.dll` P/Invoke methods are emitted
+only in an `AssemblyBuilderAccess.Run` assembly, with no compiler files or temporary-directory
+environment. The existing identity-resolved PowerShell executable, exact output protocol, bounded
+stdin/output/time, native-buffer cleanup, canonical-path check and local drive types 2/3/6 remain.
+CLI policy, install-mode detection and runtime discovery check the lexical root before realpath.
+
+Reviewed source SHA-256: `b3237c3825f091c82cbe31f4fbc4a95cdcb6a3f6fe1b452d17dbc0fa049ca955`;
+test SHA-256: `4c124d3ab2553ab088a03af54573cbe1851e9c13e95566b769ff95d7c564061a`.
+The lead rebuilt the security package with the canonical compiler, replayed five affected suites
+(**83/83 tests passed, 18.51 seconds**), and ran scoped lint and root no-emit checks successfully.
+The subsequent complete `npm run typecheck` also passed with official Node 24.18.0 and compiler
+7.0.2 (`/tmp/keiko-3405-current-canonical-typecheck.log`). Actual Windows PowerShell 5.1 and mapped
+SMB behavior remain pending in the native locality diagnostic; static approval is not that proof.
+
+## Windows startup recovery review settlement (2026-09-07)
+
+The twelve-file Windows generation startup/recovery slice received independent security approval
+with **zero findings**. The review traced canonical receipt validation and WAL anchoring before
+phase-specific inspection allowances, exact generation/setup/registration/launcher attestation,
+Windows `coordinator.exe` selection and unchanged KUR1 raw-state/lock binding, observed native exit
+versus ambiguous teardown, and retention of verified N. It confirmed that macOS continues using
+its whole-root attestation and that no package-root export exposes the new internal allowance.
+
+The reviewed normal-startup test hash is
+`56ceaeaba86ede05781ca397f7e773e669412f25bfec24deabd6e3e854d3361f`; the other eleven reviewed
+files match the frozen B3b slice. The lead's 148-test combined replay, the owner's final 68-test
+startup/session replay, and the now-green complete canonical typecheck support this checkpoint.
+Native process seams in these host tests are unit/integration fixtures, not real-artifact updater
+qualification. Final integrated verification, issue audit and platform evidence remain required.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification

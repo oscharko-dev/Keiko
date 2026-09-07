@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createPortableHandoffNativeCopyVerifier,
   PortableHandoffNativeVerificationError,
+  type PortableHandoffNativeCopyVerifierOptions,
 } from "./update-portable-handoff-native-verification.js";
 
 const input = {
@@ -23,16 +24,18 @@ describe("portable handoff native copy verification", () => {
   });
 
   it("revalidates both byte-identical macOS executables against the release Developer ID", async () => {
-    const run = vi.fn().mockImplementation((_command: string, args: readonly string[]) => {
-      if (args[0] === "--display") {
-        return Promise.resolve({
-          status: 0,
-          stdout: "",
-          stderr: "Authority=Developer ID Application\nTeamIdentifier=AB12CD34EF\n",
-        });
-      }
-      return Promise.resolve({ status: 0, stdout: "", stderr: "" });
-    });
+    const run = vi.fn<NonNullable<PortableHandoffNativeCopyVerifierOptions["macosRun"]>>(
+      (_command, args) => {
+        if (args[0] === "--display") {
+          return Promise.resolve({
+            status: 0,
+            stdout: "",
+            stderr: "Authority=Developer ID Application\nTeamIdentifier=AB12CD34EF\n",
+          });
+        }
+        return Promise.resolve({ status: 0, stdout: "", stderr: "" });
+      },
+    );
     const verify = createPortableHandoffNativeCopyVerifier({
       hostPlatform: "darwin",
       macosExpectedTeamIdentifier: "AB12CD34EF",

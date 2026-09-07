@@ -82,6 +82,10 @@
     "./sqlite-corruption": {
       "types": "./dist/sqlite-corruption.d.ts",
       "import": "./dist/sqlite-corruption.js"
+    },
+    "./windows-local-volume": {
+      "types": "./dist/windows-local-volume.d.ts",
+      "import": "./dist/windows-local-volume.js"
     }
   },
   "scripts": {

@@ -662,26 +662,26 @@ function activeRegistrationDigestsMatch(
   );
 }
 
-function activeWindowsInstallMatchesRegistration(
+function activeWindowsInstallBinding(
   record: Record<string, unknown>,
   input: {
     readonly managedRoot: string;
     readonly target: UpdatePortableTarget;
     readonly version: string;
   },
-): boolean {
+): WindowsGenerationBinding | undefined {
   const deadline = Date.now() + ACTIVE_ATTESTATION_TIMEOUT_MS;
   const setupManifestPath = join(input.managedRoot, ".portable", "setup-manifest.json");
   const launcherPath = join(input.managedRoot, "Keiko.exe");
   const setupBytes = readBoundedActiveFile(setupManifestPath, MAX_ACTIVE_SETUP_BYTES, deadline);
   const setup = parseJsonRecord(setupBytes.toString("utf8"));
-  if (setup === undefined) return false;
+  if (setup === undefined) return undefined;
   const expectedGeneration = parseWindowsGenerationBinding(setup.windowsGeneration);
   if (
     !activeSetupMatches(setup, input, expectedGeneration) ||
     !registrationSchemaMatches(record, input.target, expectedGeneration)
   ) {
-    return false;
+    return undefined;
   }
   const setupManifestSha256 = createHash("sha256").update(setupBytes).digest("hex");
   const launcherSha256 = digestBoundedActiveFile(launcherPath, MAX_ACTIVE_LAUNCHER_BYTES, deadline);
@@ -690,7 +690,9 @@ function activeWindowsInstallMatchesRegistration(
     setupManifestSha256,
     launcherSha256,
     expectedGeneration,
-  );
+  )
+    ? expectedGeneration
+    : undefined;
 }
 
 function activeRegistrationMetadataMatches(
@@ -711,6 +713,39 @@ function activeRegistrationMetadataMatches(
   );
 }
 
+export interface PortableManagedRegistrationAttestationFacts {
+  readonly windowsGeneration?: WindowsGenerationBinding | undefined;
+}
+
+export function attestPortableManagedRegistrationFacts(input: {
+  readonly stateDir: string;
+  readonly managedRoot: string;
+  readonly target: UpdatePortableTarget;
+  readonly version: string;
+  readonly expectedSha256: string;
+}): PortableManagedRegistrationAttestationFacts | undefined {
+  try {
+    assertNoSymlinkAncestor(input.stateDir);
+    const registration = readPortableRegistrationSnapshot(registrationPath(input.stateDir));
+    if (createHash("sha256").update(registration).digest("hex") !== input.expectedSha256) {
+      return undefined;
+    }
+    const record = parseJsonRecord(registration.toString("utf8"));
+    if (record === undefined || !registrationSchemaMatches(record, input.target)) return undefined;
+    const windowsGeneration =
+      input.target === "windows-x64" ? activeWindowsInstallBinding(record, input) : undefined;
+    if (
+      (input.target === "windows-x64" && windowsGeneration === undefined) ||
+      !activeRegistrationMetadataMatches(record, input)
+    ) {
+      return undefined;
+    }
+    return windowsGeneration === undefined ? {} : { windowsGeneration };
+  } catch {
+    return undefined;
+  }
+}
+
 export function attestPortableManagedRegistration(input: {
   readonly stateDir: string;
   readonly managedRoot: string;
@@ -718,21 +753,7 @@ export function attestPortableManagedRegistration(input: {
   readonly version: string;
   readonly expectedSha256: string;
 }): boolean {
-  try {
-    assertNoSymlinkAncestor(input.stateDir);
-    const registration = readPortableRegistrationSnapshot(registrationPath(input.stateDir));
-    if (createHash("sha256").update(registration).digest("hex") !== input.expectedSha256) {
-      return false;
-    }
-    const record = parseJsonRecord(registration.toString("utf8"));
-    if (record === undefined || !registrationSchemaMatches(record, input.target)) return false;
-    if (input.target === "windows-x64" && !activeWindowsInstallMatchesRegistration(record, input)) {
-      return false;
-    }
-    return activeRegistrationMetadataMatches(record, input);
-  } catch {
-    return false;
-  }
+  return attestPortableManagedRegistrationFacts(input) !== undefined;
 }
 
 export interface PortableRegistrationSnapshot {

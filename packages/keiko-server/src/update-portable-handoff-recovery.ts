@@ -38,6 +38,22 @@ export interface UpdateStartupRecoveryPort {
   }) => Promise<RecoveryResult>;
 }
 
+export type UpdateStartupActiveInstallAttestationInput = {
+  readonly activationId: string;
+  readonly expectedRegistrationSha256: string;
+  readonly expectedVersion: string;
+} & (
+  | {
+      readonly kind: "whole-root-v1";
+      readonly expectedTreeSha256: string;
+    }
+  | {
+      readonly kind: "windows-generation-v1";
+      readonly expectedGenerationTreeSha256: string;
+      readonly expectedSetupManifestSha256: string;
+    }
+);
+
 export interface UpdateStartupRecoveryOptions {
   readonly stateDir: string;
   readonly readActivation: () => {
@@ -53,12 +69,9 @@ export interface UpdateStartupRecoveryOptions {
     readonly sessionId: string;
     readonly activationWal: UpdateActivationWalState;
   }) => Promise<void>;
-  readonly attestActiveTree: (input: {
-    readonly activationId: string;
-    readonly expectedTreeSha256: string;
-    readonly expectedRegistrationSha256: string;
-    readonly expectedVersion: string;
-  }) => Promise<boolean>;
+  readonly attestActiveTree: (
+    input: UpdateStartupActiveInstallAttestationInput,
+  ) => Promise<boolean>;
   readonly now?: (() => number) | undefined;
 }
 
@@ -223,16 +236,33 @@ async function activeTreeMatches(
     context.effectiveWal.checkpoint === "restored-started" ||
     context.effectiveWal.checkpoint === "restored-verified";
   try {
-    return await options.attestActiveTree({
+    const common = {
       activationId: context.wal.activationId,
-      expectedTreeSha256: restored
-        ? context.plan.digests.currentTreeSha256
-        : context.plan.digests.candidateTreeSha256,
       expectedRegistrationSha256: restored
         ? context.plan.digests.previousRegistrationSha256
         : context.plan.digests.preparedRegistrationSha256,
       expectedVersion: restored ? context.plan.oldProcess.version : context.plan.targetVersion,
-    });
+    } as const;
+    return await options.attestActiveTree(
+      context.plan.target === "windows-x64"
+        ? {
+            ...common,
+            kind: "windows-generation-v1",
+            expectedGenerationTreeSha256: restored
+              ? context.plan.currentGenerationTreeSha256
+              : context.plan.candidateGenerationTreeSha256,
+            expectedSetupManifestSha256: restored
+              ? context.plan.currentSetupManifestSha256
+              : context.plan.candidateSetupManifestSha256,
+          }
+        : {
+            ...common,
+            kind: "whole-root-v1",
+            expectedTreeSha256: restored
+              ? context.plan.digests.currentTreeSha256
+              : context.plan.digests.candidateTreeSha256,
+          },
+    );
   } catch {
     return false;
   }
