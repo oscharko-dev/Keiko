@@ -80,6 +80,17 @@ function productionDeclaredGeometry() {
   }
 }
 
+function persistedReferenceGatewayConfig() {
+  const config = functionalGatewayConfig();
+  return {
+    ...config,
+    providers: config.providers.map(({ apiKey: _apiKey, ...provider }) => ({
+      ...provider,
+      apiKeySecretRef: `cred:${provider.modelId}`,
+    })),
+  };
+}
+
 function completeQualificationReport() {
   const declaredGeometry = productionDeclaredGeometry();
   return buildJourneyReport({
@@ -315,6 +326,57 @@ describe("#2483 real-binary observation helpers", () => {
       maxInputTokens: 40_960,
       maxOutputTokens: 4_096,
     });
+  });
+
+  it("derives geometry after production has migrated provider credentials to references", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-declared-reference-geometry-"));
+    const configPath = join(stateDir, "bff-state", "ui-db", "keiko.config.json");
+    try {
+      mkdirSync(dirname(configPath), { recursive: true });
+      writeFileSync(configPath, JSON.stringify(persistedReferenceGatewayConfig()));
+
+      expect(readDeclaredChildGeometry(stateDir)).toMatchObject({
+        contextWindowTokens: 45_056,
+        maxInputTokens: 40_960,
+        maxOutputTokens: 4_096,
+      });
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retains a body-free stage and error class when declared geometry cannot be read", () => {
+    const failures = [];
+    const geometry = readDeclaredChildGeometry(
+      "/private/state",
+      () => {
+        throw new TypeError("sensitive config detail");
+      },
+      () => {
+        throw new Error("unreachable");
+      },
+      () => {
+        throw new Error("unreachable");
+      },
+      (failure) => failures.push(failure),
+    );
+
+    expect(geometry).toBeUndefined();
+    expect(failures).toEqual([{ stage: "config-load", errorClass: "TypeError" }]);
+    const complete = completeQualificationReport();
+    expect(
+      missingRealBinaryEvidence({
+        ...complete,
+        limits: {
+          ...complete.limits,
+          declaredChildGeometry: undefined,
+          declaredChildGeometryFailure: failures[0],
+        },
+      }),
+    ).toEqual([
+      "no single materialized child geometry matched the admitted gateway output limit " +
+        "(stage config-load, error TypeError)",
+    ]);
   });
 
   it("requires every real-binary acceptance observation before reporting success", () => {

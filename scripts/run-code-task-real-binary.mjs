@@ -46,6 +46,7 @@ const MAX_ACTIVITY_LOG_BYTES = 32 * 1_024 * 1_024;
 const REAL_BINARY_VERSION = "1.17.17";
 const EVIDENCE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const QUALIFICATION_RECEIPTS_DIR_ENV = "KEIKO_CODE_TASK_QUALIFICATION_RECEIPTS_DIR";
+const GEOMETRY_CREDENTIAL_PLACEHOLDER = "qualification-metadata-only";
 
 // Absolute, fixed system paths — never a bare name resolved through PATH. This runner samples
 // process and socket facts on a developer or CI machine whose PATH may contain writable
@@ -250,38 +251,72 @@ export function readMaterializedLimits(stateDir) {
 
 export function readDeclaredChildGeometry(
   stateDir,
-  loadConfig = loadConfigFromFile,
+  loadConfig = loadGeometryConfig,
   resolveProfile = resolveCodingSafeSidecarGatewayProfile,
   resolveGeometry = resolveOpenCodeContextGeometry,
+  observeFailure = () => undefined,
 ) {
+  let stage = "config-load";
   try {
     const config = loadConfig(
       join(stateDir, "bff-state", "ui-db", "keiko.config.json"),
       process.env,
     );
+    stage = "profile-resolution";
     const profile = resolveProfile(config);
-    if (profile.status !== "available") return undefined;
+    if (profile.status !== "available") {
+      observeFailure({ stage, errorClass: "ProfileUnavailable" });
+      return undefined;
+    }
+    stage = "geometry-resolution";
     const geometry = resolveGeometry(profile.runMetadata);
-    return geometry === undefined
-      ? undefined
-      : {
-          ...geometry,
-          runMetadata: {
-            maxPromptTokens: profile.runMetadata.maxPromptTokens,
-            maxOutputTokens: profile.runMetadata.maxOutputTokens,
-            maxInputMessages: profile.runMetadata.maxInputMessages,
-            maxRequestBytes: profile.runMetadata.maxRequestBytes,
-          },
-        };
-  } catch {
+    if (geometry === undefined) {
+      observeFailure({ stage, errorClass: "GeometryUnavailable" });
+      return undefined;
+    }
+    return {
+      ...geometry,
+      runMetadata: {
+        maxPromptTokens: profile.runMetadata.maxPromptTokens,
+        maxOutputTokens: profile.runMetadata.maxOutputTokens,
+        maxInputMessages: profile.runMetadata.maxInputMessages,
+        maxRequestBytes: profile.runMetadata.maxRequestBytes,
+      },
+    };
+  } catch (error) {
+    observeFailure({
+      stage,
+      errorClass: error instanceof Error ? error.constructor.name : "UnknownThrownValue",
+    });
     return undefined;
   }
 }
 
+function loadGeometryConfig(path, env) {
+  // Production migrates plaintext credentials to opaque references before the journey runs. This
+  // post-run observer needs only the validated provider metadata; the successful gateway requests
+  // independently prove that the runtime resolved the real credential. A fixed non-secret value
+  // lets the shared production parser validate that persisted shape without opening the vault.
+  return loadConfigFromFile(path, env, {
+    secretResolver: () => GEOMETRY_CREDENTIAL_PLACEHOLDER,
+  });
+}
+
 function readGatewayGeometryEvidence(context) {
+  let declaredGeometryFailure;
+  const declaredGeometry = readDeclaredChildGeometry(
+    context.stateDir,
+    loadGeometryConfig,
+    resolveCodingSafeSidecarGatewayProfile,
+    resolveOpenCodeContextGeometry,
+    (failure) => {
+      declaredGeometryFailure = failure;
+    },
+  );
   return {
     gateway: readGatewayObservation(context.gatewayObservation),
-    declaredGeometry: readDeclaredChildGeometry(context.stateDir),
+    declaredGeometry,
+    declaredGeometryFailure,
   };
 }
 
@@ -403,6 +438,9 @@ export function buildJourneyReport(input) {
     },
     limits: {
       declaredChildGeometry: input.declaredGeometry,
+      ...(input.declaredGeometryFailure === undefined
+        ? {}
+        : { declaredChildGeometryFailure: input.declaredGeometryFailure }),
       materializedChildLimits: input.limits,
       gatewayRequestCount: input.gateway.requestCount,
       gatewayCatalogBindingRequestCount: input.gateway.catalogBindingRequestCount,
@@ -663,7 +701,14 @@ export function missingRealBinaryEvidence(report) {
   if (report.journey.exitCode !== 0)
     gaps.push(`journey exit code ${String(report.journey.exitCode)}`);
   if (observedChildGeometry(limits) === undefined) {
-    gaps.push("no single materialized child geometry matched the admitted gateway output limit");
+    const failure = limits.declaredChildGeometryFailure;
+    const detail =
+      failure === undefined
+        ? ""
+        : ` (stage ${String(failure.stage)}, error ${String(failure.errorClass)})`;
+    gaps.push(
+      `no single materialized child geometry matched the admitted gateway output limit${detail}`,
+    );
   }
   if (limits.gatewayRequestCount <= 0) gaps.push("no gateway request was observed");
   if (!hasStableGatewayCatalogBinding(limits)) {
@@ -821,6 +866,16 @@ function currentSourceHead() {
   }).trim();
 }
 
+function realBinaryJourneyEnvironment(context) {
+  return {
+    ...process.env,
+    KEIKO_E2E_STATE_DIR: context.stateDir,
+    KEIKO_STATE_DIR: join(context.stateDir, "activity"),
+    KEIKO_E2E_REAL_BINARY: "1",
+    KEIKO_2483_GATEWAY_OBSERVATION_PATH: context.gatewayObservation,
+  };
+}
+
 export async function runRealBinaryJourney() {
   const target = ensureMacTarget();
   const context = createJourneyContext(target);
@@ -833,19 +888,14 @@ export async function runRealBinaryJourney() {
   const limitObserver = createMaterializedLimitObserver(context.stateDir);
   const startedAt = Date.now();
   const exitCode = await runPlaywright(
-    {
-      ...process.env,
-      KEIKO_E2E_STATE_DIR: context.stateDir,
-      KEIKO_STATE_DIR: join(context.stateDir, "activity"),
-      KEIKO_E2E_REAL_BINARY: "1",
-      KEIKO_2483_GATEWAY_OBSERVATION_PATH: context.gatewayObservation,
-    },
+    realBinaryJourneyEnvironment(context),
     observer,
     limitObserver,
   );
   const missingPayload =
     exitCode === 0 ? runMissingPayloadProbe(target, context.probeState) : undefined;
-  const { gateway, declaredGeometry } = readGatewayGeometryEvidence(context);
+  const { gateway, declaredGeometry, declaredGeometryFailure } =
+    readGatewayGeometryEvidence(context);
   const h1Search = readH1SearchEvidence(context.stateDir);
   const managedCatalog = readManagedCatalogEvidence(context.stateDir, gateway, h1Search);
   const activityLog = retainJourneyActivityLog(context);
@@ -856,6 +906,7 @@ export async function runRealBinaryJourney() {
     exitCode,
     gateway,
     declaredGeometry,
+    declaredGeometryFailure,
     limits: limitObserver.report(),
     missingPayload,
     h1Search,
