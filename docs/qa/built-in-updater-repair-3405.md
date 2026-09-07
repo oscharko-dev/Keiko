@@ -550,15 +550,15 @@ a separate confirmed finding without behavioral proof.
 This is a development disposition map, not a completed deletion register. Reconcile it against the
 final integrated tree and #3404's full inventory before closing the acceptance row.
 
-| Boundary                      | Observed implementation                                                                                                     | Remaining disposition                                                                                                               |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Portable activation authority | `update-portable-activation.ts` requires the coordinator; the old in-process activation fallback is absent.                 | Prove the replacement executor and all migrated consumers, including real native failure paths.                                     |
-| Version-only portable success | Lifecycle fixtures now consume durable proof projections; native recovery owns target verification.                         | Audit every production success path and complete real-process/version/second-startup proof.                                         |
-| Runtime state                 | `update-local-state.ts` migrates schema-1 runtime facts into the schema-2 aggregate without fabricating a terminal session. | Final-head migration/corruption tests and bounded compatibility/removal disposition remain required.                                |
-| Updater JSONL sink            | `recordAuditEvent` uses the canonical activity port; the local-state regression asserts no new `update-audit.jsonl`.        | Historical journal compatibility/retirement must be explicitly settled; absence of a new file does not prove old-journal migration. |
-| Server-root handoff exports   | The three new exported types are directly consumed by `keiko-cli/src/ui.ts`.                                                | Recheck assembled boundaries after final composition changes.                                                                       |
-| Candidate runtime subpath     | `runtime/update-candidate` supplies the schema constant to the candidate authority and local-state validator.               | Retain the used runtime boundary; do not confuse it with unused type-only barrel aliases.                                           |
-| Contract-root additions       | The eight unconsumed root aliases were removed; 11 new consumed aliases remain.                                             | Recheck the final assembled package boundary and all consumers after integration.                                                   |
+| Boundary                      | Observed implementation                                                                                                     | Remaining disposition                                                                                                                             |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Portable activation authority | `update-portable-activation.ts` requires the coordinator; the old in-process activation fallback is absent.                 | Prove the replacement executor and all migrated consumers, including real native failure paths.                                                   |
+| Version-only portable success | Lifecycle fixtures now consume durable proof projections; native recovery owns target verification.                         | Audit every production success path and complete real-process/version/second-startup proof.                                                       |
+| Runtime state                 | `update-local-state.ts` migrates schema-1 runtime facts into the schema-2 aggregate without fabricating a terminal session. | Final-head migration/corruption tests and bounded compatibility/removal disposition remain required.                                              |
+| Updater JSONL sink            | Current producer retired into canonical activity; existing files are bounded, read-only historical migration input.         | Reader/source recognition expires with schema-1 runtime migration and reviewed exclusion of all legacy-producing releases; see disposition below. |
+| Server-root handoff exports   | The three new exported types are directly consumed by `keiko-cli/src/ui.ts`.                                                | Recheck assembled boundaries after final composition changes.                                                                                     |
+| Candidate runtime subpath     | `runtime/update-candidate` supplies the schema constant to the candidate authority and local-state validator.               | Retain the used runtime boundary; do not confuse it with unused type-only barrel aliases.                                                         |
+| Contract-root additions       | The eight unconsumed root aliases were removed; 11 new consumed aliases remain.                                             | Recheck the final assembled package boundary and all consumers after integration.                                                                 |
 
 The eight removed contract-root aliases are `UpdateCandidateReleaseIdentity`,
 `UPDATE_CANDIDATE_SCHEMA_VERSION`, `UPDATE_CANCELLATION_CUTOFFS`, `UPDATE_LIFECYCLE_PHASES`,
@@ -577,9 +577,8 @@ from the in-progress #3405 repair and its missing current evidence. The added up
 governance row, 11 referenced source/evidence paths, scoped formatting and diff checks passed.
 Independent review approved the four documentation changes with zero findings.
 Final proof links and executable statements still need to track the completed implementation.
-The observability guide additionally now states that historical updater journals remain retained
-data with migration/retirement outstanding; it no longer implies that an unimplemented migration
-already supplies canonical log evidence. Scoped formatting and diff checks passed.
+The observability guide distinguishes the retired current producer from retained historical
+migration input. Import results and the policy-bound retirement disposition follow below.
 Migration must not equate a normal activity-sink return with durable import proof: the existing
 file sink intentionally filters by level, reports and absorbs write failures, and its `flush()`
 does not fsync. The source journal cannot be retired on that best-effort return alone. Legacy
@@ -600,9 +599,29 @@ the lead's independent replay of 108 server tests (681 ms) and 72 CLI tests (14.
 build/lint/format checks pass. Independent security re-review is APPROVE with zero findings;
 initial green tests are not being substituted for these regression proofs.
 The canonical operation catalog is regenerated with 246 entries; all 15 drift tests pass (4.54 seconds),
-including `update.runtime.legacy-snapshot-imported` and `update.runtime.legacy-import-deferred`. This implementation
-does not settle retirement, introduce a new state lease/store, or redefine the full acceptance
-criterion as import-only. Retirement remains an explicit unresolved delivery item.
+including `update.runtime.legacy-snapshot-imported` and `update.runtime.legacy-import-deferred`.
+
+Independent architecture review settles this register item under the acceptance alternative
+“explicitly justified”: the current JSONL producer is retired and consolidated into canonical
+`logs/server.log` / `update.runtime.event`; existing files remain read-only historical migration
+input, with no current writer or recovery authority. Import does not create a second state store,
+invent causal joins, or authorize source deletion.
+
+The compatibility reader and source recognition expire together with updater runtime-state
+schema-1 migration, in a reviewed release-impact/support-baseline change that excludes every
+release capable of writing schema-1 updater state or `update-audit.jsonl`. These surfaces entered
+the shipped line together in `v0.2.12`. ADR-0099 defines `supportedFrom` as the reviewed compatibility
+authority; the [release-impact runbook](../release/release-impact-runbook.md#catalog-rules) and
+`scripts/check-release-impact.mjs` still require inclusion of the `0.2.0` baseline. No current policy
+closes that window, so this disposition invents neither a date nor a removal release. At that
+reviewed boundary, remove the importer, CLI startup seam, server exports, tests, operation-catalog
+entries and historical-input guidance together with schema-1 runtime migration.
+
+Physical unlink remains a separate data-safety action: durable import of an unchanged snapshot does
+not establish exclusion of an older direct or alternate-port writer. Deletion needs both proofs or
+an explicit reviewed support/retention decision. Until then, retaining the inert source is required.
+The release owner's future baseline decision is not represented as completed qualification, and
+this item does not settle the remaining deletion register or the epic's native proof requirements.
 
 ## Prepared release impact
 

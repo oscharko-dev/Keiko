@@ -107,7 +107,15 @@ Intentional level filtering remains silent. A fresh logging owner inspects and d
 unterminated current-log tail before retrying, without truncating or crediting the malformed record.
 Limits are 1 MiB / 2,048 source events / 8,192 bytes per line and a scan of at
 most 16 canonical log files / 32 MiB. The source is always retained: snapshot consistency does not
-prove that every older writer has stopped. Retirement remains an unresolved #3405 delivery item.
+prove that every older writer has stopped. The current producer is retired; the compatibility
+reader and source recognition expire together with updater runtime-state schema-1 migration,
+when a reviewed release-impact/support-baseline change excludes every release capable of
+writing that state or journal. The current [release-impact policy](../release/release-impact-runbook.md#catalog-rules)
+still includes the `0.2.0` baseline, so no removal date or release is asserted. Remove the importer,
+CLI startup seam, server exports, tests, operation-catalog entries and historical-input guidance
+together at that policy boundary. Physical deletion additionally requires durable import of the
+exact unchanged snapshot and exclusion of old writers, or an explicit reviewed retention decision;
+the current importer has no deletion authority.
 Sequential retries deduplicate deterministic identities; concurrent processes may leave duplicate
 physical lines with the same identity, so this is not a cross-process exactly-once guarantee.
 Historical records do not become a complete `updateAttempts[]` timeline when their original schema
