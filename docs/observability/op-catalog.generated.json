@@ -1259,7 +1259,7 @@
     {
       "op": "portable.normal-startup-recovery.required",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-portable-normal-startup.ts:179",
+      "site": "packages/keiko-server/src/update-portable-normal-startup.ts:207",
       "package": "keiko-server"
     },
     {
@@ -1331,7 +1331,7 @@
     {
       "op": "security.fs.portable-backup-cleanup",
       "category": "security",
-      "site": "packages/keiko-server/src/update-portable-activation-files.ts:965",
+      "site": "packages/keiko-server/src/update-portable-activation-files.ts:1273",
       "package": "keiko-server"
     },
     {
@@ -1421,7 +1421,7 @@
     {
       "op": "update.session.lifecycle",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-session.ts:781",
+      "site": "packages/keiko-server/src/update-session.ts:815",
       "package": "keiko-server"
     },
     {

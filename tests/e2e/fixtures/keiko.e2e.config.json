@@ -24,12 +24,8 @@
       "costClass": "low",
       "latencyClass": "fast",
       "throughputHint": "E2E fixture model used only for UI smoke validation.",
-      "preferredUseCases": [
-        "Release smoke tests"
-      ],
-      "knownLimitations": [
-        "The release smoke suite never calls this provider endpoint."
-      ]
+      "preferredUseCases": ["Release smoke tests"],
+      "knownLimitations": ["The release smoke suite never calls this provider endpoint."]
     }
   ],
   "circuitBreaker": {

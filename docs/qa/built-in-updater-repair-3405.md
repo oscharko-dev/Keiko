@@ -1102,6 +1102,44 @@ startup/session replay, and the now-green complete canonical typecheck support t
 Native process seams in these host tests are unit/integration fixtures, not real-artifact updater
 qualification. Final integrated verification, issue audit and platform evidence remain required.
 
+## Broad integration repair checkpoint (2026-09-07)
+
+The complete root test run finished with **36,085 passing, 10 failing and 27 skipped tests** across
+1,811 files in 1,455.79 seconds (`/tmp/keiko-3405-integrated-full-test.log`). This is a red run,
+not a verification receipt. The unrelated wide-root fixture failed only its 10-second cleanup hook
+under concurrent load; an isolated replay passed with unchanged timeout settings in 7.66 seconds.
+
+Three route assertions now prove that the manager receives the response's server-generated UUID
+correlation rather than a body-selected request ID. The hostile-shortcut test isolates and observes
+its local-volume prerequisite while restoring the real helper afterward. The portable launch/setup
+smoke explicitly keeps flat Windows schema-1 evaluation fixtures manual-only; both macOS expectations
+and all three targets' setup/relaunch/manual-upgrade assertions remain. The lead replayed these
+three repaired suites plus the session suite with official Node: **157/157 passed, 20.26 seconds**.
+
+Performance review traced one synchronous PowerShell launch per active status poll (2.5-second UI
+cadence). The manager now retains a private, session-ID-bound install-mode snapshot for active status
+projection. Independent security review confirmed zero findings: fresh detection still precedes
+candidate consumption and execution, and the status snapshot cannot authorize mutation. Idle status
+remains fresh; replaced, restored and terminal session states have explicit snapshot handling.
+Reviewed session source SHA-256: `2a6d8c08424674813ef1f4768645d6eca615a87bf4332ad7e2ace8fa56e4c38a`.
+The complete canonical typecheck passed again after these changes.
+
+Root/UI lint, positive and negative architecture gates, version consistency and QI supply-chain
+checks passed. Four formatting findings were repaired without behavior changes. The operation
+catalog was regenerated from source (247 entries, no naming violations) and its 15 drift tests pass.
+The native inventory repair preserves schema v1, explicitly enrolls thirteen headers under actual
+compiler/analyzer/behavior owners, and passes the lead's official-Node 25-test replay. Its declaration
+does not substitute for the pending locality runtime proof. The coverage inventory still needs fresh
+measurements for contracts (195 sources), security (28) and server (615); no floor is lowered here.
+
+Windows diagnostics established that temporary positive fixtures used aliases and that metadata-only
+opens do not participate in rename-sharing exclusion. Test-owned directories now use canonical handle
+paths; retained production pins request the least directory data right (`FILE_LIST_DIRECTORY`) plus
+attributes, with no delete sharing. Independent review approved that repair with zero findings.
+Diagnostic `763a1b93d`, run `34156460872`, passed the native local-directory, rename-exclusion and real
+mapped-SMB rejection checks, then failed the shared TypeScript local positive. The PowerShell carrier
+remains under diagnosis; production eligibility and KHA1 remain disabled.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification

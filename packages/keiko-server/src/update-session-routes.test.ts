@@ -42,6 +42,7 @@ const CLAIM = {
   confirmationDigest: "a".repeat(64),
   executionToken: "b".repeat(64),
 } as const;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 function session(
   targetVersion = "0.2.12",
@@ -231,6 +232,14 @@ function csrfHeaders(): Record<string, string> {
   return { "Content-Type": "application/json", "X-Keiko-CSRF": "1" };
 }
 
+function expectServerBoundStart(response: Response): string {
+  const correlationId = response.headers.get("X-Keiko-Correlation-Id");
+  expect(correlationId).toMatch(UUID);
+  if (correlationId === null) throw new TypeError("expected server correlation ID");
+  expect(updateSession.starts).toEqual([{ ...CLAIM, requestId: correlationId }]);
+  return correlationId;
+}
+
 beforeEach(async () => {
   staticRoot = await mkdtemp(join(tmpdir(), "keiko-update-session-routes-"));
   updateSession = new FakeUpdateSessionManager();
@@ -297,7 +306,7 @@ describe("update session routes", () => {
 
     expect(valid.status).toBe(202);
     expect(body.targetVersion).toBe("0.2.12");
-    expect(updateSession.starts[0]).toEqual({ ...CLAIM, requestId: "req-1" });
+    expect(expectServerBoundStart(valid)).not.toBe("req-1");
   });
 
   it("allows pending follow-up remediation when starting a session", async () => {
@@ -312,7 +321,7 @@ describe("update session routes", () => {
     });
 
     expect(res.status).toBe(202);
-    expect(updateSession.starts).toEqual([CLAIM]);
+    expectServerBoundStart(res);
   });
 
   it("delegates candidate-bound remediation gating to the session manager", async () => {
@@ -331,7 +340,7 @@ describe("update session routes", () => {
 
     expect(res.status).toBe(202);
     expect(body).toMatchObject({ targetVersion: "0.2.12" });
-    expect(updateSession.starts).toEqual([CLAIM]);
+    expectServerBoundStart(res);
   });
 
   it("rejects bad JSON and oversized update start bodies", async () => {

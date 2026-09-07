@@ -91,11 +91,7 @@ async function runHandler(
     if (error instanceof BodyTooLargeError) {
       return {
         status: 413,
-        body: errorBody(
-          "PAYLOAD_TOO_LARGE",
-          "Request body exceeds the size limit.",
-          correlationId,
-        ),
+        body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit.", correlationId),
       };
     }
     if (error instanceof UpdateSessionError) return toRouteResult(error, correlationId);

@@ -14,8 +14,32 @@ import { createHash } from "node:crypto";
 import { spawn, type SpawnOptions } from "node:child_process";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SecurityLogEvent, SecurityLogSink } from "@oscharko-dev/keiko-security";
+
+const windowsLocalVolumeTestControl = vi.hoisted(() => ({
+  acceptLocalFixture: false,
+  checkedPaths: [] as string[],
+}));
+
+vi.mock("@oscharko-dev/keiko-security/windows-local-volume", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@oscharko-dev/keiko-security/windows-local-volume")>();
+  return {
+    ...actual,
+    assertWindowsLocalVolume: (
+      path: string,
+      options?: Parameters<typeof actual.assertWindowsLocalVolume>[1],
+    ): void => {
+      if (windowsLocalVolumeTestControl.acceptLocalFixture) {
+        windowsLocalVolumeTestControl.checkedPaths.push(path);
+        return;
+      }
+      actual.assertWindowsLocalVolume(path, options);
+    },
+  };
+});
+
 import { runPortableCli } from "./portable.js";
 import { windowsLauncher } from "./launcher-platforms.js";
 import { portableManagedSetupLockPath, validatePortableRoot } from "./portable-install.js";
@@ -782,6 +806,8 @@ describe("runPortableCli", () => {
     };
     writeWindowsFixture(source);
     const c = capture();
+    windowsLocalVolumeTestControl.acceptLocalFixture = true;
+    windowsLocalVolumeTestControl.checkedPaths.length = 0;
 
     try {
       const code = await runPortableCli(
@@ -803,6 +829,8 @@ describe("runPortableCli", () => {
 
       expect(code).toBe(1);
       expect(existsSync(shortcut)).toBe(false);
+      expect(windowsLocalVolumeTestControl.checkedPaths.length).toBeGreaterThan(0);
+      expect(windowsLocalVolumeTestControl.checkedPaths).toContain(root);
       expect(selectedStateDirs).toEqual([stateDir]);
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
@@ -815,8 +843,11 @@ describe("runPortableCli", () => {
       expect(JSON.stringify(events)).not.toContain("attacker");
       expect(JSON.stringify(events)).not.toContain(shortcut);
     } finally {
+      windowsLocalVolumeTestControl.acceptLocalFixture = false;
+      windowsLocalVolumeTestControl.checkedPaths.length = 0;
       if (platform !== undefined) Object.defineProperty(process, "platform", platform);
     }
+    expect(windowsLocalVolumeTestControl.acceptLocalFixture).toBe(false);
   });
 
   it("promotes a flat Windows bootstrap payload into a manual-only managed root and records content-free state", async () => {
