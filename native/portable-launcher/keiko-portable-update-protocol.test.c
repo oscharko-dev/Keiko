@@ -170,14 +170,18 @@ static void fixture_path(char *output, size_t capacity) {
 static void parses_canonical_fixture(void) {
   char path[4096];
   unsigned char *decoded = (unsigned char *)malloc(KEIKO_KHP_MAX_BYTES);
-  FILE *fixture;
+  FILE *fixture = NULL;
   size_t length = 0;
   int high = -1;
   int byte;
   keiko_handoff_plan plan;
   assert(decoded != NULL);
   fixture_path(path, sizeof(path));
+#if defined(_MSC_VER)
+  assert(fopen_s(&fixture, path, "rb") == 0);
+#else
   fixture = fopen(path, "rb");
+#endif
   assert(fixture != NULL);
   while ((byte = fgetc(fixture)) != EOF) {
     int nibble;
