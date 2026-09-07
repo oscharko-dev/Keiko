@@ -213,7 +213,14 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
 /** No execution evidence exists in the diff snapshot. Never publish a model's success assurance. */
 const UNSUPPORTED_ASSURANCE =
   /\b(?:pass(?:ed|ing)?|succeeded|verified|proven|guaranteed|risk[- ]free|secure|safe|successful|bestanden|verifiziert|garantiert|sicher|erfolgreich)\b/iu;
-const ACTIVE_MARKDOWN = /[<>[\]`]|(?:https?:|javascript:|data:)\/\/|!\(|\bby\s+Keiko\b/iu;
+// Active constructs only. A bare `[` or `]` is inert in Markdown and appears in ordinary factual
+// prose about the change under review (`average([1, 2, 3])`, a bracketed aside); rejecting it made
+// every live model narrative fall back to the deterministic summary (epic #3384 qualification).
+// The link `](`, image `![` and reference-definition `]:` shapes are the ones that render as
+// active content, and they stay rejected alongside HTML angle brackets, code spans, URL schemes
+// and the trusted-renderer branding phrase.
+const ACTIVE_MARKDOWN =
+  /[<>`]|!\[|\]\s*[(:]|(?:https?:|javascript:|data:)\/\/|!\(|\bby\s+Keiko\b/iu;
 const CLOSING_DIRECTIVE =
   /\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+(?:#|[a-z0-9_.-]+\/[a-z0-9_.-]+#)/iu;
 

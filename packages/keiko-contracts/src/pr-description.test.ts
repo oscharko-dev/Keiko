@@ -119,6 +119,34 @@ describe("PR description candidate boundary", () => {
     }
   });
 
+  // Epic #3384 live qualification: `ACTIVE_MARKDOWN` matched ANY bare `[` or `]`, so a factual
+  // statement quoting the change under review -- `average([1, 2, 3])`, an empty-list case, a
+  // cited evidence id -- was rejected as unsafe model output and every live description fell back
+  // to the deterministic summary. A bare bracket is inert in Markdown; only the link, image and
+  // reference-definition shapes below are active, and those must stay rejected.
+  it.each([
+    "average([]) now returns 0 instead of NaN.",
+    "The mean of [1, 2, NaN, Infinity, 3] excludes the non-finite entries.",
+    "Selection moved to lib/finite-numbers.js [file-scoped helper].",
+    "Bounds are reported as { min, max } for the sample [-5, 3].",
+  ])("accepts factual text containing inert brackets: %s", (text) => {
+    expect(
+      validatePrDescriptionCandidate({ ...candidate, summary: [{ ...statement, text }] }, [ID]).ok,
+    ).toBe(true);
+  });
+
+  it.each([
+    "See [the report](https-free-relative-path) for details.",
+    "An inline image ![diagram](assets) was added.",
+    "[report]: a reference definition line",
+    "Rendered as <b>bold</b> markup.",
+    "A `code span` was added.",
+  ])("still rejects active markdown and markup: %s", (text) => {
+    expect(
+      validatePrDescriptionCandidate({ ...candidate, summary: [{ ...statement, text }] }, [ID]),
+    ).toEqual({ ok: false, reason: "unsafe-model-output" });
+  });
+
   it("rejects unbounded and untraceable statements", () => {
     expect(
       validatePrDescriptionCandidate(
