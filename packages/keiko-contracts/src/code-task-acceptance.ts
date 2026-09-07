@@ -2016,7 +2016,9 @@ function externalAuditScenarioFactFailures(
   scenario: CodeTaskQualificationScenarioV1 | undefined,
   factsKnown: boolean,
 ): readonly string[] {
-  if (scenario === undefined) return [];
+  if (scenario === undefined) {
+    return factsKnown ? ["external audit facts require the external audit scenario"] : [];
+  }
   if (scenario.outcome === "passed" && !factsKnown) {
     return ["passed external audit requires a known reference and digest"];
   }

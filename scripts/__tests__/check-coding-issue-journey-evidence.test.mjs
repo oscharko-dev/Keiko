@@ -360,6 +360,44 @@ function stageFiveFlowEvidence(fixtureName = "valid", repairOrdinal = 1) {
   return { manifestPath, receiptsDir, descriptor, flows };
 }
 
+function stageExternalAuditEvidence(receiptPatch = {}) {
+  const staged = stageFiveFlowEvidence();
+  const recordedAt = "2026-09-06T05:30:00Z";
+  const receiptDigest = writeQualificationEvidenceReceipt({
+    receiptsDir: staged.receiptsDir,
+    scenarioId: "keiko-issue-audit",
+    receipt: {
+      sourceCommitSha: COMMIT_SHA,
+      platformTarget: "macos-arm64",
+      result: "passed",
+    },
+    recordedAt,
+    provenance: "production-functional",
+  });
+  const receiptPath = join(staged.receiptsDir, "keiko-issue-audit.receipt.json");
+  const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+  writeFileSync(receiptPath, `${JSON.stringify({ ...receipt, ...receiptPatch }, null, 2)}\n`);
+  const manifest = JSON.parse(readFileSync(staged.manifestPath, "utf8"));
+  manifest.auditReference = { outcome: "known", value: "operator-audit-20260907" };
+  manifest.auditDigest = { outcome: "known", value: receiptDigest };
+  manifest.scenarios.push({
+    scenarioId: "keiko-issue-audit",
+    evidenceClass: "production-functional",
+    platform: "macos-arm64",
+    provenance: "production-functional",
+    outcome: "passed",
+    recordedAt,
+    blockedReason: { outcome: "absent" },
+    artifactDigests: [receiptDigest],
+    receiptDigest: { outcome: "known", value: receiptDigest },
+  });
+  writeFileSync(staged.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  staged.descriptor.blocked = [
+    { scenarioId: "keiko-issue-audit", evidenceClass: "production-functional" },
+  ];
+  return staged;
+}
+
 function rebindStageArtifact(staged, flowIndex, stageName, artifactPatch) {
   const manifest = JSON.parse(readFileSync(staged.manifestPath, "utf8"));
   const flow = manifest.flows[flowIndex];
@@ -818,6 +856,41 @@ describe("checkCodingIssueJourneyEvidence", () => {
     const { verdict, failures } = await runFixture("valid");
     expect(failures).toEqual([]);
     expect(verdict).toBe("qualified");
+  });
+
+  it("rejects orphan external audit facts when the descriptor does not register the scenario", async () => {
+    const staged = stageFiveFlowEvidence();
+    const manifest = JSON.parse(readFileSync(staged.manifestPath, "utf8"));
+    manifest.auditReference = { outcome: "known", value: "operator-audit-20260907" };
+    manifest.auditDigest = { outcome: "known", value: "c".repeat(64) };
+    writeFileSync(staged.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const { verdict, failures } = await checkCodingIssueJourneyEvidence({
+      ...staged,
+      binding: BASE_BINDING,
+      headShas: HEAD_SHAS,
+    });
+
+    expect(verdict).toBe("blocked");
+    expect(failures).toContain(
+      "manifest: external audit facts require the external audit scenario",
+    );
+  });
+
+  it.each([
+    ["an unknown field", { promptText: "must-not-pass" }, "metadata has an unknown field"],
+    ["an invalid recordedAt", { recordedAt: "not-an-instant" }, "metadata recordedAt is invalid"],
+  ])("rejects external audit receipt metadata with %s", async (_label, patch, failure) => {
+    const staged = stageExternalAuditEvidence(patch);
+
+    const result = await checkCodingIssueJourneyEvidence({
+      ...staged,
+      binding: BASE_BINDING,
+      headShas: HEAD_SHAS,
+    });
+
+    expect(result.verdict).toBe("blocked");
+    expect(result.failures).toContain(`keiko-issue-audit: ${failure}`);
   });
 
   it("cannot claim #3390 qualification without the five-flow descriptor", async () => {

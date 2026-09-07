@@ -64,6 +64,21 @@ With the additional boundary tests in `e391c61d`, the four owning suites passed 
 broader transcript/authority/managed-tool targets passed 112 tests. Full root typecheck and scoped
 lint passed. Expired authority and exhausted budgets retain their hard denials.
 
+Attempt 35 at `bcbd35b1` stopped before creating a successor run. Its actual headed-browser trace
+showed the expired tool-calling proof leaving recovery Retry disabled: the qualification harness
+refreshed model readiness only inside the normal issue-bind branch. Continuations now perform the
+existing guarded model qualification before either start path. Three regressions failed before
+the repair; both affected suites pass 54 tests, including refusal before recovery acknowledgement
+when model qualification fails. Typecheck, scoped lint, formatting and E2E wiring passed. The
+acknowledged predecessor and all model-authored files remain intact; no completed flow is claimed.
+
+The two subsequent external-audit review findings are also repaired: known audit facts require
+their matching scenario, and external audit receipt metadata must use the closed body-free schema
+with valid values. Four regressions failed before these repairs and 115 focused tests pass after
+them. These qualification changes reopen the `bcbd35b1` source freeze; its completed runtime packet
+remains historical, source-limited evidence. The separate catalog-closeout gate receipt producer
+is still being completed, and the actual external audit result remains unavailable.
+
 Actual results, with their source limits:
 
 | Verification                               | Result                                             | Source / limitation                                                                       |

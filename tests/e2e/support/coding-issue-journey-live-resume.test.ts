@@ -103,9 +103,9 @@ function client(
 ): {
   readonly subject: Parameters<typeof resumeExistingIssueWorkspace>[0];
   readonly bindIssue: ReturnType<typeof vi.fn>;
-  readonly start: ReturnType<typeof vi.fn>;
+  readonly start: ReturnType<typeof vi.fn<() => Promise<CodingWorkbenchRuntimeSnapshot>>>;
   readonly acknowledgeRecovery: ReturnType<typeof vi.fn>;
-  readonly retry: ReturnType<typeof vi.fn>;
+  readonly retry: ReturnType<typeof vi.fn<() => Promise<CodingWorkbenchRuntimeSnapshot>>>;
 } {
   const readActiveWorkspace = vi
     .fn<() => Promise<ReturnType<typeof active> | null>>()
@@ -143,6 +143,7 @@ function client(
         .fn<(runId: string) => Promise<CodingWorkbenchRuntimeSnapshot>>()
         .mockResolvedValue(valueOr(overrides.prior, snapshot(PRIOR_RUN_ID, RESUME.priorState))),
       readWorktree,
+      qualifyModel: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
       bindIssue,
       start,
       acknowledgeRecovery,
@@ -159,6 +160,49 @@ function client(
 }
 
 describe("live qualification continuation", () => {
+  it.each(["recovery-required", "succeeded"] as const)(
+    "refreshes expired model readiness before continuing a %s run",
+    async (priorState) => {
+      const fixture = client({ prior: snapshot(PRIOR_RUN_ID, priorState) });
+      let modelReady = false;
+      const qualifyModel = vi.fn((): Promise<void> => {
+        modelReady = true;
+        return Promise.resolve();
+      });
+      const run = (): Promise<CodingWorkbenchRuntimeSnapshot> =>
+        modelReady
+          ? Promise.resolve(snapshot("run-new", "running"))
+          : Promise.reject(new Error("tool-calling proof expired"));
+      fixture.retry.mockImplementation(run);
+      fixture.start.mockImplementation(run);
+      await expect(
+        resumeExistingIssueWorkspace(
+          { ...fixture.subject, qualifyModel },
+          { ...RESUME, priorState },
+          1,
+          "governed-assist",
+        ),
+      ).resolves.toMatchObject({ runId: "run-new" });
+      expect(qualifyModel).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not acknowledge or retry recovery when model qualification fails", async () => {
+    const fixture = client({ prior: snapshot(PRIOR_RUN_ID, "recovery-required") });
+    const failure = new Error("tool-calling readiness refused");
+    await expect(
+      resumeExistingIssueWorkspace(
+        { ...fixture.subject, qualifyModel: async (): Promise<void> => Promise.reject(failure) },
+        { ...RESUME, priorState: "recovery-required" },
+        1,
+        "governed-assist",
+      ),
+    ).rejects.toBe(failure);
+    expect(fixture.acknowledgeRecovery).not.toHaveBeenCalled();
+    expect(fixture.retry).not.toHaveBeenCalled();
+    expect(fixture.start).not.toHaveBeenCalled();
+  });
+
   it("publishes the default resolved state directory to the recovery worker", async () => {
     const originalStateDirectory = process.env.KEIKO_E2E_STATE_DIR;
     delete process.env.KEIKO_E2E_STATE_DIR;

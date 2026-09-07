@@ -15,6 +15,11 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  CODE_TASK_EVIDENCE_PLATFORMS,
+  isCodeTaskGitCommitSha,
+  isCodeTaskIsoInstant,
+} from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
 
 import { deriveGateVerdict, evidenceGateFailures } from "./lib/coding-issue-journey-evidence.mjs";
 import { codingIssueJourneyScenarioArtifactErrors } from "./lib/coding-issue-journey-scenario-evidence.mjs";
@@ -38,6 +43,15 @@ const FLOW_RECEIPT_KEYS = new Set([
   "recordedAt",
   "provenance",
 ]);
+const SCENARIO_RECEIPT_KEYS = new Set([
+  "scenarioId",
+  "commitSha",
+  "platform",
+  "testStatus",
+  "recordedAt",
+  "provenance",
+]);
+const SCENARIO_RECEIPT_TEST_STATUSES = new Set(["passed", "failed"]);
 
 function flowReceiptMetadataErrors(meta) {
   if (meta === null || typeof meta !== "object" || Array.isArray(meta)) {
@@ -50,6 +64,33 @@ function flowReceiptMetadataErrors(meta) {
     if (!Object.hasOwn(meta, key)) errors.push(`metadata is missing ${key}`);
   }
   return errors;
+}
+
+function externalAuditReceiptMetadataErrors(meta, receiptKey) {
+  if (receiptKey !== EXTERNAL_ISSUE_AUDIT_SCENARIO_ID) return [];
+  if (meta === null || typeof meta !== "object" || Array.isArray(meta)) {
+    return ["metadata must be an object"];
+  }
+  const errors = Object.keys(meta)
+    .filter((key) => !SCENARIO_RECEIPT_KEYS.has(key))
+    .map(() => "metadata has an unknown field");
+  for (const key of SCENARIO_RECEIPT_KEYS) {
+    if (!Object.hasOwn(meta, key)) errors.push(`metadata is missing ${key}`);
+  }
+  const checks = [
+    [meta.scenarioId === EXTERNAL_ISSUE_AUDIT_SCENARIO_ID, "metadata scenarioId is invalid"],
+    [isCodeTaskGitCommitSha(meta.commitSha), "metadata commitSha is invalid"],
+    [CODE_TASK_EVIDENCE_PLATFORMS.includes(meta.platform), "metadata platform is invalid"],
+    [SCENARIO_RECEIPT_TEST_STATUSES.has(meta.testStatus), "metadata testStatus is invalid"],
+    [isCodeTaskIsoInstant(meta.recordedAt), "metadata recordedAt is invalid"],
+    [meta.provenance === "production-functional", "metadata provenance is invalid"],
+  ];
+  errors.push(...checks.filter(([valid]) => !valid).map(([, error]) => error));
+  return errors;
+}
+
+function receiptMetadata(meta) {
+  return meta !== null && typeof meta === "object" && !Array.isArray(meta) ? meta : {};
 }
 
 function gitHeadShas(root) {
@@ -121,7 +162,8 @@ export function readReceipts(receiptsDir, { observeArtifact, contentByPath } = {
     const artifactPath = resolve(receiptsDir, `${receiptKey}.artifact`);
     const receiptPath = resolve(receiptsDir, entry);
     if (!hasEvidencePath(artifactPath, contentByPath)) continue;
-    const meta = JSON.parse(bytesForPath(receiptPath, contentByPath).toString("utf8"));
+    const rawMeta = JSON.parse(bytesForPath(receiptPath, contentByPath).toString("utf8"));
+    const meta = receiptMetadata(rawMeta);
     const scenarioId = meta.scenarioId;
     // A consumer that validates a structured artifact must inspect the same bytes whose digest
     // is retained. A separate read can race with an artifact writer and bind different content.
@@ -137,6 +179,7 @@ export function readReceipts(receiptsDir, { observeArtifact, contentByPath } = {
       testStatus: meta.testStatus,
       recordedAt: meta.recordedAt,
       provenance: meta.provenance,
+      metadataErrors: externalAuditReceiptMetadataErrors(rawMeta, receiptKey),
       digest,
       ...artifactEvidence,
     });

@@ -73,6 +73,7 @@ interface ResumeWorkspaceClient {
   readonly readActiveWorkspace: () => Promise<ActiveWorkspaceIdentity | null>;
   readonly readPriorRun: (runId: string) => Promise<CodingWorkbenchRuntimeSnapshot>;
   readonly readWorktree: (path: string) => Promise<WorktreeIdentity>;
+  readonly qualifyModel: () => Promise<void>;
   readonly bindIssue: () => Promise<void>;
   readonly start: () => Promise<CodingWorkbenchRuntimeSnapshot>;
   readonly acknowledgeRecovery: () => Promise<CodingWorkbenchRuntimeSnapshot>;
@@ -292,6 +293,7 @@ export async function resumeExistingIssueWorkspace(
   if (before.headSha !== expected.headSha || before.digest !== expected.worktreeDigest) {
     throw new Error("qualification continuation worktree changed before issue bind");
   }
+  await client.qualifyModel();
   if (expected.priorState === "recovery-required") {
     return continueRecoveryRequired(client, expected, priorIssue, mode, priorSnapshot);
   }
@@ -443,11 +445,11 @@ async function acknowledgeRecovery(
   runId: string,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
   const endpoint = `${RUN_ENDPOINT}/${encodeURIComponent(runId)}/recovery-ack`;
+  const button = page.getByRole("button", { name: "Acknowledge recovery", exact: true });
+  await expect(button).toBeEnabled({ timeout: 60_000 });
   const responsePromise = page.waitForResponse(
     (response) => response.request().method() === "POST" && response.url().endsWith(endpoint),
   );
-  const button = page.getByRole("button", { name: "Acknowledge recovery", exact: true });
-  await expect(button).toBeEnabled({ timeout: 60_000 });
   await button.click();
   const response = await responsePromise;
   expect(
@@ -466,11 +468,11 @@ async function retryRecovery(
   await selectCodingIssueMode(page, mode);
   await page.getByLabel("Task instructions").fill(continuationInstructions(correction));
   const endpoint = `${RUN_ENDPOINT}/${encodeURIComponent(runId)}/retry`;
+  const button = page.getByRole("button", { name: "Retry as a fresh run", exact: true });
+  await expect(button).toBeEnabled({ timeout: 60_000 });
   const responsePromise = page.waitForResponse(
     (response) => response.request().method() === "POST" && response.url().endsWith(endpoint),
   );
-  const button = page.getByRole("button", { name: "Retry as a fresh run", exact: true });
-  await expect(button).toBeEnabled({ timeout: 60_000 });
   await button.click();
   const response = await responsePromise;
   expect(response.ok(), `recovery retry failed with HTTP ${String(response.status())}`).toBe(true);
@@ -558,6 +560,10 @@ export async function resumeIssueToDraftPullRequest(
       readActiveWorkspace: () => readActiveWorkspace(page),
       readPriorRun: (runId) => readRun(page, runId),
       readWorktree: readQualificationWorktree,
+      qualifyModel: async (): Promise<void> => {
+        await ensureWorkflowEligibleModel(page);
+        await assertRuntimeReady(page, input.mode);
+      },
       acknowledgeRecovery: () => acknowledgeRecovery(page, input.resume.priorRunId),
       retry: () =>
         retryRecovery(
@@ -567,12 +573,7 @@ export async function resumeIssueToDraftPullRequest(
           input.resume.correctionInstructions,
         ),
       readPredecessorRunId,
-      bindIssue: async (): Promise<void> => {
-        await reacceptBoundIssue(page, input.issueRef);
-        if (await ensureWorkflowEligibleModel(page)) {
-          await reacceptBoundIssue(page, input.issueRef);
-        }
-      },
+      bindIssue: () => reacceptBoundIssue(page, input.issueRef),
       start: async (): Promise<CodingWorkbenchRuntimeSnapshot> => {
         await assertRuntimeReady(page, input.mode);
         return startContinuation(page, input.mode, input.resume.correctionInstructions);

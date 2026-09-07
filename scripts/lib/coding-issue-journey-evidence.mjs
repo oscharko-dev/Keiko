@@ -89,12 +89,16 @@ function scenarioReceiptFailures(scenario, receiptsByScenarioId, headCommitSha, 
   if (receipt === undefined) {
     return [`${scenario.scenarioId}: missing receipt`];
   }
+  const metadataFailures = (receipt.metadataErrors ?? []).map(
+    (error) => `${scenario.scenarioId}: ${error}`,
+  );
   const artifactFailures = (receipt.artifactValidationErrors ?? []).map(
     (error) => `${scenario.scenarioId}: ${error}`,
   );
   const artifactBindingFailures = scenarioArtifactBindingFailures(scenario, receipt, headCommitSha);
   artifactBindingFailures.push(...scenarioFlowBindingFailures(scenario, receipt, flows));
   return [
+    ...metadataFailures,
     ...artifactFailures,
     ...artifactBindingFailures,
     ...receiptBindingFailures(scenario, receipt, headCommitSha),

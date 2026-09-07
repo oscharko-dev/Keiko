@@ -1256,6 +1256,9 @@ describe("codeTaskQualificationManifestFailures and codeTaskQualificationVerdict
       auditReference: { outcome: "known", value: "operator-audit-20260907" },
       auditDigest: { outcome: "known", value: AUDIT_DIGEST },
     };
+    expect(codeTaskQualificationManifestFailures(factsWithoutScenario, binding)).toContain(
+      "external audit facts require the external audit scenario",
+    );
     expect(codeTaskQualificationManifestFailures(factsWithoutScenario, auditBinding)).toContain(
       "missing required scenario: keiko-issue-audit",
     );

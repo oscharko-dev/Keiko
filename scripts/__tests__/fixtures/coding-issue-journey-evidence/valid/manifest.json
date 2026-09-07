@@ -30,12 +30,10 @@
     "value": "1111111111111111111111111111111111111111111111111111111111111111"
   },
   "auditReference": {
-    "outcome": "known",
-    "value": "keiko-issue-audit-20260904"
+    "outcome": "unknown"
   },
   "auditDigest": {
-    "outcome": "known",
-    "value": "2222222222222222222222222222222222222222222222222222222222222222"
+    "outcome": "unknown"
   },
   "humanMergeAttestationDigest": {
     "outcome": "known",
