@@ -177,7 +177,7 @@ static int keiko_windows_local_volume_pin_path(
       (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) goto cleanup;
   pin->directory = CreateFileW(
       existing,
-      FILE_READ_ATTRIBUTES,
+      FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
       FILE_SHARE_READ | FILE_SHARE_WRITE,
       NULL,
       OPEN_EXISTING,
