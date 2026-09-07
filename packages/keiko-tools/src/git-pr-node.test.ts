@@ -50,11 +50,14 @@ function scriptedSpawn(steps: readonly SpawnStep[]): ScriptedSpawn {
   return { fn, calls: () => calls };
 }
 
-function makeAdapter(spawn: ScriptedSpawn): ReturnType<typeof createNodeGitPullRequestAdapter> {
+function makeAdapter(
+  spawn: ScriptedSpawn,
+  processEnv: NodeJS.ProcessEnv = { PATH: "/usr/bin" },
+): ReturnType<typeof createNodeGitPullRequestAdapter> {
   const { info } = makeWorkspace();
   return createNodeGitPullRequestAdapter({
     workspace: info,
-    processEnv: { PATH: "/usr/bin" },
+    processEnv,
     now: () => 0,
     spawn: spawn.fn,
     home: FAKE_HOME,
@@ -196,6 +199,49 @@ describe("node PR adapter — canonical reconciliation reads", () => {
     expect(spawn.calls()[0]?.args).toContain(
       "/repos/oscharko-dev/Keiko/git/ref/heads/claude%2Fissue-477-x",
     );
+  });
+
+  it("preserves typed branch facts that also occur in noncredential parent context", async () => {
+    const spawn = scriptedSpawn([
+      {
+        stdout: JSON.stringify({
+          ref: `refs/heads/${CREATE.headBranchName}`,
+          sha: PR_IDENTITY.headSha,
+          type: "commit",
+        }),
+      },
+    ]);
+    const result = await makeAdapter(spawn, {
+      PATH: "/usr/bin",
+      GITHUB_HEAD_REF: CREATE.headBranchName,
+      GITHUB_SHA: PR_IDENTITY.headSha,
+      GITHUB_REPOSITORY: CREATE.ownerAndRepo,
+    }).readBranchHead({
+      ownerAndRepo: CREATE.ownerAndRepo,
+      headBranchName: CREATE.headBranchName,
+    });
+    expect(result).toEqual({ ok: true, value: PR_IDENTITY.headSha });
+  });
+
+  it("still rejects a credential value reflected as a provider branch SHA", async () => {
+    const spawn = scriptedSpawn([
+      {
+        stdout: JSON.stringify({
+          ref: `refs/heads/${CREATE.headBranchName}`,
+          sha: PR_IDENTITY.headSha,
+          type: "commit",
+        }),
+      },
+    ]);
+    const result = await makeAdapter(spawn, {
+      PATH: "/usr/bin",
+      GH_TOKEN: PR_IDENTITY.headSha,
+    }).readBranchHead({
+      ownerAndRepo: CREATE.ownerAndRepo,
+      headBranchName: CREATE.headBranchName,
+    });
+    expect(result).toEqual({ ok: false, reason: "invalid-response" });
+    expect(JSON.stringify(result)).not.toContain(PR_IDENTITY.headSha);
   });
 
   it.each([

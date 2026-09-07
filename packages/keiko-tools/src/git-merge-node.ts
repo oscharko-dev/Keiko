@@ -21,6 +21,7 @@
 // Lives on the `./internal/git-mutation` subpath (re-exported by git-mutation-node.ts) because it carries
 // the Node execution effect; the pure port, builders, and rules it implements are on the barrel.
 
+import { gitRemoteReadContext, gitRemoteReadWasRedacted } from "./git-remote-read-context.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type {
   GitDeliveryBranchProtection,
@@ -411,8 +412,8 @@ async function readHeadChecks(
   } catch {
     return undefined;
   }
-  const result = await runGh(ctx, argv);
-  if (result instanceof Error || result.exitCode !== 0) {
+  const result = await runGh(gitRemoteReadContext(ctx), argv);
+  if (result instanceof Error || gitRemoteReadWasRedacted(result) || result.exitCode !== 0) {
     return undefined;
   }
   const runs = parseJsonArray(result.stdout);
@@ -461,8 +462,14 @@ async function readReceivedApprovalCount(
   } catch {
     return undefined;
   }
-  const result = await runGh(ctx, argv);
-  if (result instanceof Error || result.exitCode !== 0 || result.truncated || result.timedOut)
+  const result = await runGh(gitRemoteReadContext(ctx), argv);
+  if (
+    result instanceof Error ||
+    gitRemoteReadWasRedacted(result) ||
+    result.exitCode !== 0 ||
+    result.truncated ||
+    result.timedOut
+  )
     return undefined;
   const reviews = parseJsonArray(result.stdout);
   return reviews === undefined ? undefined : approvedReviewCountFrom(reviews);
@@ -576,8 +583,9 @@ async function readBranchProtection(
   } catch {
     return { outcome: "error" };
   }
-  const result = await runGh(ctx, argv);
+  const result = await runGh(gitRemoteReadContext(ctx), argv);
   if (result instanceof Error) return { outcome: "error" };
+  if (gitRemoteReadWasRedacted(result)) return { outcome: "error" };
   if (result.truncated || result.timedOut) return { outcome: "unknown" };
   if (isNotFound(result)) return confirmUnprotectedBranch(ctx, req);
   if (result.exitCode !== 0) return { outcome: "error" };
@@ -591,8 +599,14 @@ async function confirmUnprotectedBranch(
 ): Promise<BranchProtectionRead> {
   const outcome = await confirmUnprotectedBranchOnNotFound({
     fetchBranch: async () => {
-      const result = await runGh(ctx, buildBranchMetadataArgv(req));
-      if (result instanceof Error || result.exitCode !== 0 || result.truncated || result.timedOut)
+      const result = await runGh(gitRemoteReadContext(ctx), buildBranchMetadataArgv(req));
+      if (
+        result instanceof Error ||
+        gitRemoteReadWasRedacted(result) ||
+        result.exitCode !== 0 ||
+        result.truncated ||
+        result.timedOut
+      )
         return undefined;
       return parseJsonObject(result.stdout);
     },
@@ -631,8 +645,9 @@ async function readPrObject(
   } catch {
     return undefined;
   }
-  const prResult = await runGh(ctx, prArgv);
-  if (prResult instanceof Error || prResult.exitCode !== 0) return undefined;
+  const prResult = await runGh(gitRemoteReadContext(ctx), prArgv);
+  if (prResult instanceof Error || gitRemoteReadWasRedacted(prResult) || prResult.exitCode !== 0)
+    return undefined;
   return parseJsonObject(prResult.stdout);
 }
 
@@ -648,8 +663,9 @@ async function readCapableStrategies(
   } catch {
     return [];
   }
-  const cfgResult = await runGh(ctx, cfgArgv);
-  if (cfgResult instanceof Error || cfgResult.exitCode !== 0) return [];
+  const cfgResult = await runGh(gitRemoteReadContext(ctx), cfgArgv);
+  if (cfgResult instanceof Error || gitRemoteReadWasRedacted(cfgResult) || cfgResult.exitCode !== 0)
+    return [];
   const cfgObj = parseJsonObject(cfgResult.stdout);
   return cfgObj !== undefined ? capableStrategiesFrom(cfgObj) : [];
 }
@@ -829,10 +845,13 @@ function ciAdmissionFailure(
   return undefined;
 }
 
-function boundedCiRunner(ctx: RunContext, deps: NodeGitCiReaderDeps): GitProviderReadRunner {
+function boundedCiRunner(
+  ctx: RunContext,
+  deps: NodeGitCiReaderDeps,
+): (argv: readonly string[], typedMetadata?: boolean) => ReturnType<GitProviderReadRunner> {
   const now = deps.now ?? Date.now;
   const budget: CiBudget = { calls: 0, bytes: 0, startedAt: now() };
-  return async (argv): Promise<CommandResult | Error> => {
+  return async (argv, typedMetadata = true): Promise<CommandResult | Error> => {
     const current = now();
     const failure = ciAdmissionFailure(deps, ctx, budget, current);
     if (failure !== undefined) return failure;
@@ -841,12 +860,19 @@ function boundedCiRunner(ctx: RunContext, deps: NodeGitCiReaderDeps): GitProvide
       1,
       Math.min(ctx.timeoutMs ?? 10_000, budget.startedAt + 30_000 - current),
     );
-    const result = await runGh({ ...ctx, timeoutMs }, argv);
+    const requestContext = { ...ctx, timeoutMs };
+    const result = await runGh(
+      typedMetadata ? gitRemoteReadContext(requestContext) : requestContext,
+      argv,
+    );
     if (!(result instanceof Error))
       budget.bytes +=
         Buffer.byteLength(result.stdout, "utf8") + Buffer.byteLength(result.stderr, "utf8");
     const after = ciAdmissionFailure(deps, ctx, { ...budget, calls: budget.calls - 1 }, now());
-    return after ?? result;
+    if (after !== undefined) return after;
+    return !(result instanceof Error) && typedMetadata && gitRemoteReadWasRedacted(result)
+      ? new Error("typed provider metadata was redacted")
+      : result;
   };
 }
 
@@ -865,7 +891,8 @@ export function createNodeGitCiReader(deps: NodeGitCiReaderDeps): GitCiProviderR
     readFailureContext: (facts) =>
       readGitCiFailureContext({
         facts,
-        run,
+        // Failure detail can contain log text; retain the diagnostic scrub and the SAME budget.
+        run: (argv) => run(argv, false),
         signal: ctx.signal,
         stillAuthorized: captured.stillAuthorized,
         ...(captured.redactText === undefined ? {} : { redactText: captured.redactText }),

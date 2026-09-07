@@ -62,6 +62,7 @@ import {
   type GitPrBody,
 } from "./git-pr-body.js";
 import { CommandCancelledError, CommandTimeoutError } from "./errors.js";
+import { gitRemoteReadContext, gitRemoteReadWasRedacted } from "./git-remote-read-context.js";
 import {
   nodeSpawnFn,
   runCommand,
@@ -244,7 +245,7 @@ async function fetchPrNodeId(
   ownerAndRepo: string,
   prExternalId: string,
 ): Promise<NodeIdLookup> {
-  const idResult = await runGh(ctx, [
+  const idResult = await runGh(gitRemoteReadContext(ctx), [
     "api",
     `/repos/${ownerAndRepo}/pulls/${prExternalId}`,
     "--jq",
@@ -252,6 +253,12 @@ async function fetchPrNodeId(
   ]);
   if (idResult instanceof Error) {
     return { ok: false, failure: failureFromThrow(idResult, 0) };
+  }
+  if (gitRemoteReadWasRedacted(idResult)) {
+    return {
+      ok: false,
+      failure: executionResult("failed", idResult.durationMs, { errorCode: "internal-error" }),
+    };
   }
   if (idResult.exitCode !== 0) {
     return { ok: false, failure: rejectionFromExit(idResult) };
@@ -299,22 +306,12 @@ function readPrIdentity(
 ): Promise<GitPrInspectionResult<GitPullRequestIdentity>> {
   const input = { ...req };
   return inspectRemote(
-    ctx,
+    gitRemoteReadContext(ctx),
     () => buildPrReadArgv(input),
     (value) => {
       const identity = parseGitPrIdentity(value, input.ownerAndRepo);
       return String(identity?.number) === input.prExternalId ? identity : undefined;
     },
-    // #3389 repair (review finding): this exact read backs BOTH the public readPullRequest
-    // inspection AND markPullRequestReady's pre/post-mutation drift gate, matching the fail-closed
-    // treatment readPullRequestBody already gets for a comparable governed read. Defense-in-depth,
-    // not independently black-box-testable here: every GitPullRequestIdentity field is
-    // format-validated (isGitPullRequestIdentity), and the redactor's literal "[REDACTED]" marker
-    // cannot satisfy any of those formats — a redacted read on THIS endpoint already fails the
-    // existing field validation before this flag is ever consulted. It still matters as the
-    // structural invariant "a governed mutation gate never trusts an altered read" rather than
-    // relying on incidental format strictness to keep that true.
-    true,
   );
 }
 
@@ -461,7 +458,7 @@ export function createNodeGitPullRequestAdapter(
     ): Promise<GitPrInspectionResult<readonly GitPullRequestIdentity[]>> => {
       const input = { ...req };
       return inspectRemote(
-        ctx,
+        gitRemoteReadContext(ctx),
         () => buildPrReadByHeadArgv(input),
         (value) => parseGitPrIdentityList(value, input.ownerAndRepo, input.headBranchName),
       );
@@ -469,7 +466,7 @@ export function createNodeGitPullRequestAdapter(
     readBranchHead: (req): Promise<GitPrInspectionResult<string>> => {
       const input = { ...req };
       return inspectRemote(
-        ctx,
+        gitRemoteReadContext(ctx),
         () => buildPrReadBranchHeadArgv(input),
         (value) => parseGitPrBranchHead(value, input.headBranchName),
       );
@@ -481,13 +478,11 @@ async function inspectRemote<T>(
   ctx: RunContext,
   argv: () => readonly string[],
   parse: (value: unknown) => T | undefined,
-  exactOutput = false,
 ): Promise<GitPrInspectionResult<T>> {
   try {
     const result = await runGh(ctx, argv());
     if (result instanceof Error) return { ok: false, reason: "provider-unavailable" };
-    if (exactOutput && result.outputRedacted === true)
-      return { ok: false, reason: "invalid-response" };
+    if (gitRemoteReadWasRedacted(result)) return { ok: false, reason: "invalid-response" };
     if (result.timedOut || result.truncated) return { ok: false, reason: "provider-unavailable" };
     if (result.exitCode !== 0)
       return {
@@ -509,7 +504,6 @@ function bodyAdapter(ctx: RunContext): GitPullRequestBodyAdapter {
         ctx,
         () => buildPrBodyReadArgv(input),
         (value) => parseGitPrBody(value, input),
-        true,
       );
     },
     updatePullRequestBody: async (request): Promise<GitPrExecResult> => {

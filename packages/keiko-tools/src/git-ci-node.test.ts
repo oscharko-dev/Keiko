@@ -80,6 +80,21 @@ function fixture(onRespond?: () => void): Fixture {
   return { deps, calls, onTerminated };
 }
 describe("CI facts through the existing Node governed command boundary", () => {
+  it("preserves exact-head CI facts when parent context repeats repository and branch identities", async () => {
+    const test = fixture();
+    const reader = createNodeGitCiReader({
+      ...test.deps,
+      processEnv: {
+        ...test.deps.processEnv,
+        GITHUB_REPOSITORY: TARGET.ownerAndRepo,
+        GITHUB_HEAD_REF: PR.identity.headRef,
+        GITHUB_BASE_REF: PR.identity.baseRef,
+        GITHUB_SHA: TARGET.headSha,
+      },
+    });
+    expect(await reader.readFacts(TARGET)).toMatchObject({ status: "observed" });
+  });
+
   it("retains the original observation deadline when fetching failure details", async () => {
     let now = 0;
     const test = fixture();

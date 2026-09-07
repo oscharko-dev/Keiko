@@ -40,6 +40,18 @@ function fixture(afterRespond?: () => void): {
   };
 }
 describe("journey observation through the existing governed Node boundary", () => {
+  it("preserves provider identity even when the parent repeats the repository context", async () => {
+    const f = fixture();
+    const reader = createNodeGitJourneyReader({
+      ...f.deps,
+      processEnv: { ...f.deps.processEnv, GITHUB_REPOSITORY: TARGET.repository },
+    });
+    expect(await reader.readJourney(TARGET)).toMatchObject({
+      status: "observed",
+      reviewConversations: { unresolved: 1 },
+    });
+  });
+
   it("executes two fixed canonical queries and exposes no merge or issue-close action", async () => {
     const f = fixture();
     const reader = createNodeGitJourneyReader(f.deps);
