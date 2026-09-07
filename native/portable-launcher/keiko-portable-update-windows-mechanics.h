@@ -206,6 +206,8 @@ static inline int keiko_windows_update_replace_file(
     const char *expected_sha256,
     uint64_t deadline_ms
 ) {
+  HANDLE published = INVALID_HANDLE_VALUE;
+  char published_sha256[65];
   int temporary_created = 0;
   int result = 0;
   if (!keiko_windows_atomic_destination_absent(temporary_path) ||
@@ -231,15 +233,14 @@ static inline int keiko_windows_update_replace_file(
           parent_path,
           temporary_path,
           destination_path,
-          deadline_ms
-      ) ||
-      !keiko_windows_update_file_digest_matches(
-          destination_path,
-          expected_sha256,
-          deadline_ms
-      )) goto cleanup;
+          deadline_ms,
+          &published
+      ) || published == INVALID_HANDLE_VALUE || published == NULL ||
+      !keiko_windows_update_handle_hash(published, deadline_ms, published_sha256) ||
+      strcmp(published_sha256, expected_sha256) != 0) goto cleanup;
   result = 1;
 cleanup:
+  if (published != INVALID_HANDLE_VALUE && published != NULL) CloseHandle(published);
   if (!result && temporary_created) {
     DWORD attributes = GetFileAttributesW(temporary_path);
     if (attributes != INVALID_FILE_ATTRIBUTES &&

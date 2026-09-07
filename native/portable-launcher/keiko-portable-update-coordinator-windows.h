@@ -9,6 +9,7 @@
 
 #include <winsock2.h>
 #include <windows.h>
+#include <aclapi.h>
 
 #include <fcntl.h>
 #include <process.h>
@@ -22,6 +23,7 @@
 
 #if defined(_MSC_VER)
 #pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "advapi32.lib")
 #endif
 
 #ifndef KEIKO_COORDINATOR_CUTOVER_CHECKPOINT
@@ -46,6 +48,10 @@ typedef struct {
   uint64_t old_exit_deadline;
   HANDLE old_process;
   HANDLE supervisor_process;
+  HANDLE capsule_directory;
+  HANDLE receipts_directory;
+  keiko_windows_atomic_file_fact capsule_fact;
+  keiko_windows_atomic_file_fact receipts_fact;
   int supervisor_control;
   int supervisor_response;
   int start_gate;
@@ -144,8 +150,156 @@ static uint64_t keiko_coordinator_windows_wall_ms(void) {
   return (ticks.QuadPart - UINT64_C(116444736000000000)) / UINT64_C(10000);
 }
 
+static int keiko_coordinator_windows_directory_private(HANDLE directory) {
+  HANDLE token = NULL;
+  TOKEN_USER *token_user = NULL;
+  DWORD token_bytes = 0;
+  PSID owner = NULL;
+  PACL dacl = NULL;
+  PSECURITY_DESCRIPTOR descriptor = NULL;
+  BYTE system_storage[SECURITY_MAX_SID_SIZE];
+  BYTE administrators_storage[SECURITY_MAX_SID_SIZE];
+  DWORD system_size = sizeof(system_storage);
+  DWORD administrators_size = sizeof(administrators_storage);
+  DWORD status;
+  DWORD index;
+  int result = 0;
+  const DWORD write_mask = FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_WRITE_DATA |
+                           FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES |
+                           FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER |
+                           GENERIC_WRITE | GENERIC_ALL;
+  if (directory == NULL || directory == INVALID_HANDLE_VALUE ||
+      !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) goto cleanup;
+  (void)GetTokenInformation(token, TokenUser, NULL, 0, &token_bytes);
+  if (token_bytes == 0) goto cleanup;
+  token_user = (TOKEN_USER *)calloc(1u, token_bytes);
+  if (token_user == NULL ||
+      !GetTokenInformation(token, TokenUser, token_user, token_bytes, &token_bytes) ||
+      !CreateWellKnownSid(WinLocalSystemSid, NULL, system_storage, &system_size) ||
+      !CreateWellKnownSid(
+          WinBuiltinAdministratorsSid,
+          NULL,
+          administrators_storage,
+          &administrators_size
+      )) goto cleanup;
+  status = GetSecurityInfo(
+      directory,
+      SE_FILE_OBJECT,
+      OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+      &owner,
+      NULL,
+      &dacl,
+      NULL,
+      &descriptor
+  );
+  if (status != ERROR_SUCCESS || owner == NULL || dacl == NULL ||
+      !EqualSid(owner, token_user->User.Sid)) goto cleanup;
+  for (index = 0; index < dacl->AceCount; ++index) {
+    ACE_HEADER *header = NULL;
+    ACCESS_ALLOWED_ACE *allowed;
+    PSID sid;
+    if (!GetAce(dacl, index, (LPVOID *)&header) || header == NULL) goto cleanup;
+    if ((header->AceFlags & INHERIT_ONLY_ACE) != 0) continue;
+    if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) {
+      if (header->AceType == ACCESS_ALLOWED_OBJECT_ACE_TYPE ||
+          header->AceType == ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE) {
+        ACCESS_ALLOWED_OBJECT_ACE *object = (ACCESS_ALLOWED_OBJECT_ACE *)header;
+        if ((object->Mask & write_mask) != 0u) goto cleanup;
+      } else if (header->AceType == ACCESS_ALLOWED_CALLBACK_ACE_TYPE) {
+        ACCESS_ALLOWED_ACE *callback = (ACCESS_ALLOWED_ACE *)header;
+        if ((callback->Mask & write_mask) != 0u) goto cleanup;
+      }
+      continue;
+    }
+    allowed = (ACCESS_ALLOWED_ACE *)header;
+    if ((allowed->Mask & write_mask) == 0u) continue;
+    sid = (PSID)&allowed->SidStart;
+    if (!IsValidSid(sid) ||
+        (!EqualSid(sid, token_user->User.Sid) &&
+        !EqualSid(sid, system_storage) &&
+        !EqualSid(sid, administrators_storage))) goto cleanup;
+  }
+  result = 1;
+cleanup:
+  if (descriptor != NULL) LocalFree(descriptor);
+  free(token_user);
+  if (token != NULL) CloseHandle(token);
+  return result;
+}
+
+static int keiko_coordinator_windows_pin_capsule(keiko_coordinator_context *context) {
+  if (context->capsule_directory != NULL &&
+      context->capsule_directory != INVALID_HANDLE_VALUE) return 1;
+  context->capsule_directory = keiko_windows_atomic_open_directory(
+      context->capsule,
+      FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | READ_CONTROL,
+      FILE_SHARE_READ | FILE_SHARE_WRITE
+  );
+  if (context->capsule_directory == NULL ||
+      context->capsule_directory == INVALID_HANDLE_VALUE ||
+      !keiko_windows_atomic_query_fact(
+          context->capsule_directory,
+          &context->capsule_fact
+      ) ||
+      !keiko_coordinator_windows_directory_private(context->capsule_directory)) {
+    if (context->capsule_directory != NULL &&
+        context->capsule_directory != INVALID_HANDLE_VALUE)
+      CloseHandle(context->capsule_directory);
+    context->capsule_directory = INVALID_HANDLE_VALUE;
+    return 0;
+  }
+  return 1;
+}
+
+static int keiko_coordinator_windows_pin_receipts(
+    keiko_coordinator_context *context,
+    int create
+) {
+  wchar_t *receipts = NULL;
+  int result = 0;
+  if (context->receipts_directory != NULL &&
+      context->receipts_directory != INVALID_HANDLE_VALUE) return 1;
+  if (!keiko_coordinator_windows_pin_capsule(context)) return 0;
+  receipts = keiko_windows_update_path_join(context->capsule, L"\\receipts");
+  if (receipts == NULL) goto cleanup;
+  if (create && !CreateDirectoryW(receipts, NULL) &&
+      GetLastError() != ERROR_ALREADY_EXISTS) goto cleanup;
+  context->receipts_directory = keiko_windows_atomic_open_directory(
+      receipts,
+      FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | READ_CONTROL,
+      FILE_SHARE_READ | FILE_SHARE_WRITE
+  );
+  if (context->receipts_directory == NULL ||
+      context->receipts_directory == INVALID_HANDLE_VALUE ||
+      !keiko_windows_atomic_parent_matches(receipts, &context->capsule_fact) ||
+      !keiko_windows_atomic_query_fact(
+          context->receipts_directory,
+          &context->receipts_fact
+      ) ||
+      !keiko_coordinator_windows_directory_private(context->receipts_directory))
+    goto cleanup;
+  result = 1;
+cleanup:
+  if (!result && context->receipts_directory != NULL &&
+      context->receipts_directory != INVALID_HANDLE_VALUE) {
+    CloseHandle(context->receipts_directory);
+    context->receipts_directory = INVALID_HANDLE_VALUE;
+  }
+  free(receipts);
+  return result;
+}
+
 static int keiko_coordinator_windows_read_file(
     const wchar_t *path,
+    size_t maximum,
+    uint64_t deadline_ms,
+    unsigned char **output,
+    size_t *output_length
+);
+
+static int keiko_coordinator_windows_read_file_bound(
+    const wchar_t *path,
+    const keiko_windows_atomic_file_fact *parent,
     size_t maximum,
     uint64_t deadline_ms,
     unsigned char **output,
@@ -201,19 +355,42 @@ static int keiko_coordinator_windows_read_exact_fd(
 static int keiko_coordinator_windows_write_exact_fd(
     int descriptor,
     const void *content,
-    size_t length
+    size_t length,
+    uint64_t deadline_ms,
+    HANDLE observed_process
 ) {
+  HANDLE pipe = (HANDLE)_get_osfhandle(descriptor);
+  DWORD mode = PIPE_NOWAIT;
   size_t offset = 0;
+  if (pipe == NULL || pipe == INVALID_HANDLE_VALUE || content == NULL ||
+      length == 0 || length > KEIKO_COORDINATOR_KRP_MAX_BYTES) return 0;
+  if (!SetNamedPipeHandleState(pipe, &mode, NULL, NULL)) return 0;
   while (offset < length) {
-    int count;
-    if (length - offset > INT_MAX) return 0;
-    count = _write(
-        descriptor,
-        (const unsigned char *)content + offset,
-        (unsigned int)(length - offset)
-    );
-    if (count <= 0) return 0;
-    offset += (size_t)count;
+    DWORD written = 0;
+    DWORD remaining;
+    DWORD error;
+    if (GetTickCount64() > deadline_ms) return 0;
+    if (observed_process != NULL && observed_process != INVALID_HANDLE_VALUE) {
+      DWORD process_state = WaitForSingleObject(observed_process, 0);
+      if (process_state != WAIT_TIMEOUT) return 0;
+    }
+    remaining = length - offset > MAXDWORD
+                    ? MAXDWORD
+                    : (DWORD)(length - offset);
+    if (WriteFile(
+            pipe,
+            (const unsigned char *)content + offset,
+            remaining,
+            &written,
+            NULL
+        )) {
+      offset += written;
+      if (written != 0) continue;
+    } else {
+      error = GetLastError();
+      if (error != ERROR_NO_DATA && error != ERROR_PIPE_BUSY) return 0;
+    }
+    Sleep(1);
   }
   return 1;
 }
@@ -405,6 +582,60 @@ cleanup:
   return result;
 }
 
+static int keiko_coordinator_windows_read_file_bound(
+    const wchar_t *path,
+    const keiko_windows_atomic_file_fact *parent,
+    size_t maximum,
+    uint64_t deadline_ms,
+    unsigned char **output,
+    size_t *output_length
+) {
+  if (!keiko_windows_atomic_parent_matches(path, parent) ||
+      !keiko_coordinator_windows_read_file(
+          path,
+          maximum,
+          deadline_ms,
+          output,
+          output_length
+      )) return 0;
+  if (keiko_windows_atomic_parent_matches(path, parent)) return 1;
+  if (*output != NULL) {
+    SecureZeroMemory(*output, *output_length);
+    free(*output);
+    *output = NULL;
+    *output_length = 0;
+  }
+  return 0;
+}
+
+static int keiko_coordinator_windows_file_digest_bound(
+    const wchar_t *path,
+    const keiko_windows_atomic_file_fact *parent,
+    const char *expected_sha256,
+    uint64_t deadline_ms
+) {
+  HANDLE file = INVALID_HANDLE_VALUE;
+  keiko_windows_atomic_file_fact before;
+  keiko_windows_atomic_file_fact after;
+  char actual[65];
+  int result = 0;
+  if (!keiko_windows_atomic_parent_matches(path, parent)) return 0;
+  file = keiko_windows_atomic_open_regular(path, GENERIC_READ, FILE_SHARE_READ);
+  if (file == INVALID_HANDLE_VALUE || file == NULL ||
+      !keiko_windows_atomic_query_fact(file, &before) ||
+      !keiko_windows_update_handle_hash(file, deadline_ms, actual) ||
+      !keiko_windows_atomic_query_fact(file, &after) ||
+      !keiko_windows_atomic_same_file(&before, &after) ||
+      before.standard.EndOfFile.QuadPart != after.standard.EndOfFile.QuadPart ||
+      !keiko_windows_atomic_parent_matches(path, parent) ||
+      strcmp(actual, expected_sha256) != 0) goto cleanup;
+  result = 1;
+cleanup:
+  SecureZeroMemory(actual, sizeof(actual));
+  if (file != INVALID_HANDLE_VALUE && file != NULL) CloseHandle(file);
+  return result;
+}
+
 static int keiko_coordinator_windows_load_plan(
     keiko_coordinator_context *context,
     const char *activation_id,
@@ -419,15 +650,18 @@ static int keiko_coordinator_windows_load_plan(
   char actual[65];
   int result = 0;
   if (plan_path == NULL || digest_path == NULL ||
-      !keiko_coordinator_windows_read_file(
+      !keiko_coordinator_windows_pin_capsule(context) ||
+      !keiko_coordinator_windows_read_file_bound(
           plan_path,
+          &context->capsule_fact,
           KEIKO_KHP_MAX_BYTES,
           deadline_ms,
           &plan_content,
           &plan_length
       ) ||
-      !keiko_coordinator_windows_read_file(
+      !keiko_coordinator_windows_read_file_bound(
           digest_path,
+          &context->capsule_fact,
           65u,
           deadline_ms,
           &digest_content,
@@ -558,14 +792,17 @@ static int keiko_coordinator_windows_absent(const wchar_t *path) {
 }
 
 static int keiko_coordinator_windows_snapshot_matches(
-    const keiko_coordinator_context *context,
+    keiko_coordinator_context *context,
     const wchar_t *name,
     const char *digest,
     uint64_t deadline_ms
 ) {
   wchar_t *path = keiko_windows_update_path_join(context->capsule, name);
-  int result = path != NULL && keiko_windows_update_file_digest_matches(
+  int result = path != NULL &&
+               keiko_coordinator_windows_pin_capsule(context) &&
+               keiko_coordinator_windows_file_digest_bound(
       path,
+      &context->capsule_fact,
       digest,
       deadline_ms
   );
@@ -710,6 +947,14 @@ static inline void keiko_coordinator_clear(keiko_coordinator_context *context) {
   if (context->old_process != NULL && context->old_process != INVALID_HANDLE_VALUE) {
     CloseHandle(context->old_process);
   }
+  if (context->receipts_directory != NULL &&
+      context->receipts_directory != INVALID_HANDLE_VALUE) {
+    CloseHandle(context->receipts_directory);
+  }
+  if (context->capsule_directory != NULL &&
+      context->capsule_directory != INVALID_HANDLE_VALUE) {
+    CloseHandle(context->capsule_directory);
+  }
   keiko_khp_clear(&context->plan);
   free(context->state_dir_utf8);
   free(context->capsule);
@@ -821,6 +1066,9 @@ static int keiko_coordinator_windows_append_receipt(
   wchar_t *receipts = NULL;
   wchar_t *path = NULL;
   HANDLE file = INVALID_HANDLE_VALUE;
+  FILE_ATTRIBUTE_TAG_INFO file_tag;
+  keiko_windows_atomic_file_fact file_before;
+  keiko_windows_atomic_file_fact file_after;
   DWORD written = 0;
   size_t offset = 8u;
   uint64_t now = keiko_coordinator_windows_wall_ms();
@@ -854,14 +1102,14 @@ static int keiko_coordinator_windows_append_receipt(
       !keiko_coordinator_windows_append_field(content, sizeof(content), &offset, timestamp) ||
       !keiko_coordinator_windows_append_field(content, sizeof(content), &offset, previous) ||
       !keiko_coordinator_windows_hash_bytes(content, offset, digest)) goto cleanup;
+  if (!keiko_coordinator_windows_pin_receipts(context, 1)) goto cleanup;
   receipts = keiko_windows_update_path_join(context->capsule, L"\\receipts");
-  if (receipts == NULL ||
-      (!CreateDirectoryW(receipts, NULL) && GetLastError() != ERROR_ALREADY_EXISTS)) goto cleanup;
+  if (receipts == NULL) goto cleanup;
   path = keiko_windows_update_path_join(receipts, filename);
   if (path == NULL) goto cleanup;
   file = CreateFileW(
       path,
-      GENERIC_WRITE,
+      GENERIC_WRITE | FILE_READ_ATTRIBUTES,
       0,
       NULL,
       CREATE_NEW,
@@ -869,8 +1117,23 @@ static int keiko_coordinator_windows_append_receipt(
       NULL
   );
   if (file == INVALID_HANDLE_VALUE || file == NULL ||
+      !keiko_windows_atomic_parent_matches(path, &context->receipts_fact) ||
+      !GetFileInformationByHandleEx(
+          file,
+          FileAttributeTagInfo,
+          &file_tag,
+          sizeof(file_tag)
+      ) ||
+      (file_tag.FileAttributes &
+       (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0 ||
+      !keiko_windows_atomic_query_fact(file, &file_before) ||
+      file_before.standard.DeletePending || file_before.standard.NumberOfLinks != 1 ||
       !WriteFile(file, content, (DWORD)offset, &written, NULL) ||
-      written != offset || !FlushFileBuffers(file)) goto cleanup;
+      written != offset || !FlushFileBuffers(file) ||
+      !keiko_windows_atomic_query_fact(file, &file_after) ||
+      !keiko_windows_atomic_same_file(&file_before, &file_after) ||
+      file_after.standard.EndOfFile.QuadPart != (LONGLONG)offset ||
+      !keiko_windows_atomic_parent_matches(path, &context->receipts_fact)) goto cleanup;
   if (!CloseHandle(file)) {
     file = INVALID_HANDLE_VALUE;
     goto cleanup;
@@ -939,11 +1202,13 @@ static int keiko_coordinator_windows_read_expected_receipt(
           L"\\%06u.khr",
           context->receipt_sequence + 1u
       ) <= 0) goto cleanup;
+  if (!keiko_coordinator_windows_pin_receipts(context, 0)) goto cleanup;
   receipts = keiko_windows_update_path_join(context->capsule, L"\\receipts");
   if (receipts != NULL) path = keiko_windows_update_path_join(receipts, filename);
   if (path == NULL ||
-      !keiko_coordinator_windows_read_file(
+      !keiko_coordinator_windows_read_file_bound(
           path,
+          &context->receipts_fact,
           KEIKO_COORDINATOR_RECEIPT_MAX_BYTES,
           deadline_ms,
           &content,
@@ -1002,7 +1267,7 @@ cleanup:
 }
 
 static int keiko_coordinator_windows_next_receipt_exists(
-    const keiko_coordinator_context *context
+    keiko_coordinator_context *context
 ) {
   wchar_t filename[32];
   wchar_t *receipts = NULL;
@@ -1018,8 +1283,15 @@ static int keiko_coordinator_windows_next_receipt_exists(
           context->receipt_sequence + 1u
       ) <= 0) return 1;
   receipts = keiko_windows_update_path_join(context->capsule, L"\\receipts");
+  if (receipts == NULL) return 1;
+  if (!keiko_coordinator_windows_pin_receipts(context, 0)) {
+    result = !keiko_windows_atomic_destination_absent(receipts);
+    free(receipts);
+    return result;
+  }
   if (receipts != NULL) path = keiko_windows_update_path_join(receipts, filename);
-  if (path != NULL) {
+  if (path != NULL &&
+      keiko_windows_atomic_parent_matches(path, &context->receipts_fact)) {
     attributes = GetFileAttributesW(path);
     if (attributes == INVALID_FILE_ATTRIBUTES) {
       error = GetLastError();
@@ -1060,6 +1332,7 @@ static inline int keiko_coordinator_windows_wait_verified_ack(
   size_t length = 0;
   int result = 0;
   if (path == NULL) return 0;
+  if (!keiko_coordinator_windows_pin_capsule(context)) goto cleanup;
   while (GetTickCount64() <= deadline_ms) {
     DWORD attributes = GetFileAttributesW(path);
     if (attributes != INVALID_FILE_ATTRIBUTES) break;
@@ -1068,7 +1341,14 @@ static inline int keiko_coordinator_windows_wait_verified_ack(
     Sleep(10);
   }
   if (GetTickCount64() > deadline_ms ||
-      !keiko_coordinator_windows_read_file(path, 69u, deadline_ms, &content, &length) ||
+      !keiko_coordinator_windows_read_file_bound(
+          path,
+          &context->capsule_fact,
+          69u,
+          deadline_ms,
+          &content,
+          &length
+      ) ||
       length != 69u || memcmp(content, "KHV1", 4u) != 0 || content[68] != '\n' ||
       memcmp(content + 4u, context->plan_sha256, 64u) != 0) goto cleanup;
   result = 1;
@@ -1091,7 +1371,13 @@ static inline int keiko_coordinator_windows_emit_acceptance(
   memcpy(response, "KHA1", 4u);
   memcpy(response + 4u, context->plan_sha256, 64u);
   response[68] = '\n';
-  result = keiko_coordinator_windows_write_exact_fd(3, response, sizeof(response));
+  result = keiko_coordinator_windows_write_exact_fd(
+      3,
+      response,
+      sizeof(response),
+      context->old_exit_deadline,
+      context->old_process
+  );
   (void)_close(3);
   return result;
 }
@@ -1816,7 +2102,9 @@ static int keiko_coordinator_windows_spawn_supervisor(
   if (!keiko_coordinator_windows_write_exact_fd(
           context->supervisor_control,
           packet,
-          packet_length
+          packet_length,
+          deadline_ms,
+          context->supervisor_process
       ) ||
       !keiko_coordinator_windows_read_exact_fd(
           context->supervisor_response,
@@ -1862,7 +2150,9 @@ static int keiko_coordinator_windows_start_runtime(
   if (!keiko_coordinator_windows_write_exact_fd(
           context->start_gate,
           gate,
-          sizeof(gate)
+          sizeof(gate),
+          deadline_ms,
+          context->supervisor_process
       )) return 0;
   (void)_close(context->start_gate);
   context->start_gate = -1;
@@ -1881,7 +2171,9 @@ static int keiko_coordinator_windows_stop_runtime(
       !keiko_coordinator_windows_write_exact_fd(
           context->supervisor_control,
           control,
-          sizeof(control)
+          sizeof(control),
+          deadline_ms,
+          context->supervisor_process
       )) return 0;
   (void)_close(context->supervisor_control);
   context->supervisor_control = -1;

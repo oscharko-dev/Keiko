@@ -23,6 +23,20 @@
 #define KEIKO_PORTABLE_TARGET "windows-x64"
 #endif
 
+static int test_atomic_flush_allowed = 1;
+static unsigned int test_atomic_flush_calls = 0;
+
+static int test_atomic_replace_checkpoint(const char *name) {
+  if (strcmp(name, "post-rename-before-flush") == 0) {
+    test_atomic_flush_calls += 1u;
+    return test_atomic_flush_allowed;
+  }
+  return 1;
+}
+
+#define KEIKO_WINDOWS_ATOMIC_REPLACE_CHECKPOINT(name) \
+  test_atomic_replace_checkpoint(name)
+
 #include "keiko-portable-update-coordinator.h"
 #include "keiko-portable-recovery-control.h"
 
@@ -93,41 +107,105 @@ static void test_tree_hash(const wchar_t *path, char output[65]) {
   assert(CloseHandle(root));
 }
 
+static void test_file_hash(const wchar_t *path, char output[65]) {
+  HANDLE file = keiko_windows_atomic_open_regular(path, GENERIC_READ, FILE_SHARE_READ);
+  assert(file != INVALID_HANDLE_VALUE && file != NULL);
+  assert(keiko_windows_update_handle_hash(
+      file,
+      GetTickCount64() + 10000u,
+      output
+  ));
+  assert(CloseHandle(file));
+}
+
 static void test_create_root(wchar_t root[TEST_PATH_CAP]) {
-  wchar_t temporary[TEST_PATH_CAP];
+  wchar_t *temporary = (wchar_t *)calloc(TEST_PATH_CAP, sizeof(wchar_t));
+  assert(temporary != NULL);
   DWORD length = GetTempPathW(TEST_PATH_CAP, temporary);
   assert(length > 0 && length < TEST_PATH_CAP);
   assert(GetTempFileNameW(temporary, L"kwc", 0, root) != 0);
   assert(DeleteFileW(root));
   assert(CreateDirectoryW(root, NULL));
+  free(temporary);
+}
+
+static int test_create_junction(const wchar_t *link, const wchar_t *target) {
+  typedef struct {
+    wchar_t system[TEST_PATH_CAP];
+    wchar_t executable[TEST_PATH_CAP];
+    wchar_t command[TEST_PATH_CAP * 3u];
+  } command_paths;
+  command_paths *paths = (command_paths *)calloc(1u, sizeof(*paths));
+  STARTUPINFOW startup;
+  PROCESS_INFORMATION process;
+  DWORD exit_code = 1;
+  int result = 0;
+  if (paths == NULL) return 0;
+  memset(&startup, 0, sizeof(startup));
+  memset(&process, 0, sizeof(process));
+  startup.cb = sizeof(startup);
+  if (GetSystemDirectoryW(paths->system, TEST_PATH_CAP) == 0 ||
+      !test_join(paths->executable, paths->system, L"\\cmd.exe") ||
+      _snwprintf_s(
+          paths->command,
+          TEST_PATH_CAP * 3u,
+          _TRUNCATE,
+          L"\"%ls\" /d /s /c mklink /J \"%ls\" \"%ls\"",
+          paths->executable,
+          link,
+          target
+      ) <= 0 ||
+      !CreateProcessW(
+          paths->executable,
+          paths->command,
+          NULL,
+          NULL,
+          FALSE,
+          CREATE_NO_WINDOW,
+          NULL,
+          NULL,
+          &startup,
+          &process
+      )) goto cleanup;
+  if (WaitForSingleObject(process.hProcess, 10000u) == WAIT_OBJECT_0 &&
+      GetExitCodeProcess(process.hProcess, &exit_code) && exit_code == 0u) result = 1;
+cleanup:
+  if (process.hThread != NULL) CloseHandle(process.hThread);
+  if (process.hProcess != NULL) CloseHandle(process.hProcess);
+  free(paths);
+  return result;
 }
 
 static void test_copy_walk_budget_is_bounded(void) {
-  wchar_t root[TEST_PATH_CAP];
-  wchar_t source_path[TEST_PATH_CAP];
-  wchar_t destination_path[TEST_PATH_CAP];
-  wchar_t source_file_path[TEST_PATH_CAP];
-  wchar_t destination_file_path[TEST_PATH_CAP];
+  typedef struct {
+    wchar_t root[TEST_PATH_CAP];
+    wchar_t source[TEST_PATH_CAP];
+    wchar_t destination[TEST_PATH_CAP];
+    wchar_t source_file[TEST_PATH_CAP];
+    wchar_t destination_file[TEST_PATH_CAP];
+  } test_paths;
+  test_paths *paths = (test_paths *)calloc(1u, sizeof(*paths));
   HANDLE source;
   HANDLE destination;
   HANDLE source_file;
   keiko_tree_walk_budget budget;
   uint64_t total_bytes;
-  test_create_root(root);
-  assert(test_join(source_path, root, L"\\source"));
-  assert(test_join(destination_path, root, L"\\destination"));
-  assert(CreateDirectoryW(source_path, NULL));
-  assert(CreateDirectoryW(destination_path, NULL));
-  assert(test_join(source_file_path, source_path, L"\\x"));
-  assert(test_join(destination_file_path, destination_path, L"\\x"));
-  test_write(source_file_path, "x");
+  assert(paths != NULL);
+  test_create_root(paths->root);
+  assert(test_join(paths->source, paths->root, L"\\source"));
+  assert(test_join(paths->destination, paths->root, L"\\destination"));
+  assert(CreateDirectoryW(paths->source, NULL));
+  assert(CreateDirectoryW(paths->destination, NULL));
+  assert(test_join(paths->source_file, paths->source, L"\\x"));
+  assert(test_join(paths->destination_file, paths->destination, L"\\x"));
+  test_write(paths->source_file, "x");
   source = keiko_windows_atomic_open_directory(
-      source_path,
+      paths->source,
       FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
       FILE_SHARE_READ
   );
   destination = keiko_windows_atomic_open_directory(
-      destination_path,
+      paths->destination,
       FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
       FILE_SHARE_READ
   );
@@ -145,7 +223,7 @@ static void test_copy_walk_budget_is_bounded(void) {
       GetTickCount64() + 10000u,
       0u
   ));
-  assert(GetFileAttributesW(destination_file_path) == INVALID_FILE_ATTRIBUTES);
+  assert(GetFileAttributesW(paths->destination_file) == INVALID_FILE_ATTRIBUTES);
 
   budget.entries = 0u;
   budget.path_bytes = KEIKO_TREE_MAX_PATH_BYTES;
@@ -159,10 +237,10 @@ static void test_copy_walk_budget_is_bounded(void) {
       GetTickCount64() + 10000u,
       0u
   ));
-  assert(GetFileAttributesW(destination_file_path) == INVALID_FILE_ATTRIBUTES);
+  assert(GetFileAttributesW(paths->destination_file) == INVALID_FILE_ATTRIBUTES);
 
   source_file = keiko_windows_atomic_open_regular(
-      source_file_path,
+      paths->source_file,
       GENERIC_READ,
       FILE_SHARE_READ
   );
@@ -170,12 +248,12 @@ static void test_copy_walk_budget_is_bounded(void) {
   total_bytes = KEIKO_TREE_MAX_BYTES;
   assert(!keiko_windows_update_copy_handle(
       source_file,
-      destination_file_path,
+      paths->destination_file,
       KEIKO_TREE_MAX_FILE_BYTES,
       &total_bytes,
       GetTickCount64() + 10000u
   ));
-  assert(GetFileAttributesW(destination_file_path) == INVALID_FILE_ATTRIBUTES);
+  assert(GetFileAttributesW(paths->destination_file) == INVALID_FILE_ATTRIBUTES);
   assert(CloseHandle(source_file));
 
   budget.entries = KEIKO_TREE_MAX_ENTRIES - 1u;
@@ -195,46 +273,55 @@ static void test_copy_walk_budget_is_bounded(void) {
   assert(total_bytes == KEIKO_TREE_MAX_BYTES);
   assert(CloseHandle(destination));
   assert(CloseHandle(source));
-  assert(keiko_windows_update_remove_tree(root, GetTickCount64() + 10000u));
+  assert(keiko_windows_update_remove_tree(paths->root, GetTickCount64() + 10000u));
+  free(paths);
 }
 
 static void test_generation_publish_and_file_replace(void) {
-  wchar_t root[TEST_PATH_CAP];
-  wchar_t portable[TEST_PATH_CAP];
-  wchar_t generations[TEST_PATH_CAP];
-  wchar_t candidate[TEST_PATH_CAP];
-  wchar_t candidate_runtime[TEST_PATH_CAP];
-  wchar_t candidate_file[TEST_PATH_CAP];
-  wchar_t candidate_large_file[TEST_PATH_CAP];
-  wchar_t incoming[TEST_PATH_CAP];
-  wchar_t published[TEST_PATH_CAP];
-  wchar_t destination[TEST_PATH_CAP];
-  wchar_t snapshot[TEST_PATH_CAP];
-  wchar_t pending[TEST_PATH_CAP];
+  typedef struct {
+    wchar_t root[TEST_PATH_CAP];
+    wchar_t portable[TEST_PATH_CAP];
+    wchar_t generations[TEST_PATH_CAP];
+    wchar_t candidate[TEST_PATH_CAP];
+    wchar_t candidate_runtime[TEST_PATH_CAP];
+    wchar_t candidate_file[TEST_PATH_CAP];
+    wchar_t candidate_large_file[TEST_PATH_CAP];
+    wchar_t incoming[TEST_PATH_CAP];
+    wchar_t published[TEST_PATH_CAP];
+    wchar_t destination[TEST_PATH_CAP];
+    wchar_t snapshot[TEST_PATH_CAP];
+    wchar_t pending[TEST_PATH_CAP];
+  } test_paths;
+  test_paths *paths = (test_paths *)calloc(1u, sizeof(*paths));
   char tree_digest[65];
   char file_digest[65];
   char sentinel_digest[65];
   char actual_digest[65];
   HANDLE snapshot_handle;
 
-  test_create_root(root);
-  assert(test_join(portable, root, L"\\.portable"));
-  assert(CreateDirectoryW(portable, NULL));
-  assert(test_join(generations, portable, L"\\generations"));
-  assert(CreateDirectoryW(generations, NULL));
-  assert(test_join(candidate, root, L"\\candidate"));
-  assert(CreateDirectoryW(candidate, NULL));
-  assert(test_join(candidate_runtime, candidate, L"\\runtime"));
-  assert(CreateDirectoryW(candidate_runtime, NULL));
-  assert(test_join(candidate_file, candidate_runtime, L"\\node.bin"));
-  test_write(candidate_file, "candidate-generation\n");
-  assert(test_join(candidate_large_file, candidate_runtime, L"\\node-large.bin"));
+  assert(paths != NULL);
+  test_create_root(paths->root);
+  assert(test_join(paths->portable, paths->root, L"\\.portable"));
+  assert(CreateDirectoryW(paths->portable, NULL));
+  assert(test_join(paths->generations, paths->portable, L"\\generations"));
+  assert(CreateDirectoryW(paths->generations, NULL));
+  assert(test_join(paths->candidate, paths->root, L"\\candidate"));
+  assert(CreateDirectoryW(paths->candidate, NULL));
+  assert(test_join(paths->candidate_runtime, paths->candidate, L"\\runtime"));
+  assert(CreateDirectoryW(paths->candidate_runtime, NULL));
+  assert(test_join(paths->candidate_file, paths->candidate_runtime, L"\\node.bin"));
+  test_write(paths->candidate_file, "candidate-generation\n");
+  assert(test_join(
+      paths->candidate_large_file,
+      paths->candidate_runtime,
+      L"\\node-large.bin"
+  ));
   test_write_sized(
-      candidate_large_file,
+      paths->candidate_large_file,
       (uint64_t)KEIKO_WINDOWS_UPDATE_MAX_FILE_BYTES + 1u
   );
   snapshot_handle = keiko_windows_atomic_open_regular(
-      candidate_large_file,
+      paths->candidate_large_file,
       GENERIC_READ,
       FILE_SHARE_READ
   );
@@ -245,42 +332,42 @@ static void test_generation_publish_and_file_replace(void) {
       actual_digest
   ));
   assert(CloseHandle(snapshot_handle));
-  test_tree_hash(candidate, tree_digest);
+  test_tree_hash(paths->candidate, tree_digest);
 
   assert(_snwprintf_s(
-             incoming,
+             paths->incoming,
              TEST_PATH_CAP,
              _TRUNCATE,
              L"%ls\\.incoming-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-             generations
+             paths->generations
          ) > 0);
   assert(_snwprintf_s(
-             published,
+             paths->published,
              TEST_PATH_CAP,
              _TRUNCATE,
              L"%ls\\%S",
-             generations,
+             paths->generations,
              tree_digest
          ) > 0);
   assert(keiko_windows_update_copy_publish_generation(
-      candidate,
-      generations,
-      incoming,
-      published,
+      paths->candidate,
+      paths->generations,
+      paths->incoming,
+      paths->published,
       tree_digest,
       GetTickCount64() + 120000u
   ));
-  assert(GetFileAttributesW(incoming) == INVALID_FILE_ATTRIBUTES);
-  test_tree_hash(published, actual_digest);
+  assert(GetFileAttributesW(paths->incoming) == INVALID_FILE_ATTRIBUTES);
+  test_tree_hash(paths->published, actual_digest);
   assert(strcmp(actual_digest, tree_digest) == 0);
 
-  assert(test_join(destination, root, L"\\active.bin"));
-  assert(test_join(snapshot, root, L"\\snapshot.bin"));
-  assert(test_join(pending, root, L"\\.pending.bin"));
-  test_write(destination, "old\n");
-  test_write(snapshot, "new\n");
+  assert(test_join(paths->destination, paths->root, L"\\active.bin"));
+  assert(test_join(paths->snapshot, paths->root, L"\\snapshot.bin"));
+  assert(test_join(paths->pending, paths->root, L"\\.pending.bin"));
+  test_write(paths->destination, "old\n");
+  test_write(paths->snapshot, "new\n");
   snapshot_handle = keiko_windows_atomic_open_regular(
-      snapshot,
+      paths->snapshot,
       GENERIC_READ,
       FILE_SHARE_READ
   );
@@ -292,9 +379,9 @@ static void test_generation_publish_and_file_replace(void) {
   ));
   assert(CloseHandle(snapshot_handle));
 
-  test_write(pending, "sentinel\n");
+  test_write(paths->pending, "sentinel\n");
   snapshot_handle = keiko_windows_atomic_open_regular(
-      pending,
+      paths->pending,
       GENERIC_READ,
       FILE_SHARE_READ
   );
@@ -306,54 +393,229 @@ static void test_generation_publish_and_file_replace(void) {
   ));
   assert(CloseHandle(snapshot_handle));
   assert(!keiko_windows_update_replace_file(
-      snapshot,
-      root,
-      pending,
-      destination,
+      paths->snapshot,
+      paths->root,
+      paths->pending,
+      paths->destination,
       file_digest,
       GetTickCount64() + 10000u
   ));
   assert(keiko_windows_update_file_digest_matches(
-      pending,
+      paths->pending,
       sentinel_digest,
       GetTickCount64() + 10000u
   ));
-  assert(DeleteFileW(pending));
+  assert(DeleteFileW(paths->pending));
 
   snapshot_handle = keiko_windows_atomic_open_regular(
-      snapshot,
+      paths->snapshot,
       GENERIC_READ,
       FILE_SHARE_READ
   );
   assert(snapshot_handle != INVALID_HANDLE_VALUE);
   assert(!keiko_windows_update_copy_handle(
       snapshot_handle,
-      pending,
+      paths->pending,
       KEIKO_WINDOWS_UPDATE_MAX_FILE_BYTES,
       NULL,
       0
   ));
   assert(CloseHandle(snapshot_handle));
-  assert(GetFileAttributesW(pending) == INVALID_FILE_ATTRIBUTES);
+  assert(GetFileAttributesW(paths->pending) == INVALID_FILE_ATTRIBUTES);
   assert(GetLastError() == ERROR_FILE_NOT_FOUND);
 
   assert(keiko_windows_update_replace_file(
-      snapshot,
-      root,
-      pending,
-      destination,
+      paths->snapshot,
+      paths->root,
+      paths->pending,
+      paths->destination,
       file_digest,
       GetTickCount64() + 10000u
   ));
   assert(keiko_windows_update_file_digest_matches(
-      destination,
+      paths->destination,
       file_digest,
       GetTickCount64() + 10000u
   ));
 
-  assert(DeleteFileW(snapshot));
-  assert(DeleteFileW(destination));
-  assert(keiko_windows_update_remove_tree(root, GetTickCount64() + 10000u));
+  assert(DeleteFileW(paths->snapshot));
+  assert(DeleteFileW(paths->destination));
+  assert(keiko_windows_update_remove_tree(paths->root, GetTickCount64() + 10000u));
+  free(paths);
+}
+
+static void test_productive_file_cutovers_flush_and_recover(void) {
+  typedef struct {
+    wchar_t root[TEST_PATH_CAP];
+    wchar_t portable[TEST_PATH_CAP];
+    wchar_t state[TEST_PATH_CAP];
+    wchar_t destination[3][TEST_PATH_CAP];
+    wchar_t snapshot[3][TEST_PATH_CAP];
+    wchar_t temporary[3][TEST_PATH_CAP];
+    wchar_t previous[TEST_PATH_CAP];
+    wchar_t fault_snapshot[TEST_PATH_CAP];
+    wchar_t fault_temporary[TEST_PATH_CAP];
+    wchar_t restore_temporary[TEST_PATH_CAP];
+  } test_paths;
+  static const wchar_t *destination_names[3] = {
+      L"\\Keiko.exe",
+      L"\\setup-manifest.json",
+      L"\\portable-install-state.json"};
+  static const wchar_t *snapshot_names[3] = {
+      L"\\launcher.next",
+      L"\\setup-manifest.next",
+      L"\\registration.next"};
+  static const wchar_t *temporary_names[3] = {
+      L"\\.launcher-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      L"\\.setup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      L"\\.registration-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"};
+  static const char *candidate_content[3] = {
+      "launcher-candidate\n",
+      "setup-candidate\n",
+      "registration-candidate\n"};
+  test_paths *paths = (test_paths *)calloc(1u, sizeof(*paths));
+  char digest[65];
+  char previous_digest[65];
+  char fault_digest[65];
+  const wchar_t *parent[3];
+  size_t index;
+  assert(paths != NULL);
+  test_create_root(paths->root);
+  assert(test_join(paths->portable, paths->root, L"\\.portable"));
+  assert(test_join(paths->state, paths->root, L"\\state"));
+  assert(CreateDirectoryW(paths->portable, NULL));
+  assert(CreateDirectoryW(paths->state, NULL));
+  parent[0] = paths->root;
+  parent[1] = paths->portable;
+  parent[2] = paths->state;
+  test_atomic_flush_calls = 0u;
+  test_atomic_flush_allowed = 1;
+  for (index = 0; index < 3u; ++index) {
+    assert(test_join(paths->destination[index], parent[index], destination_names[index]));
+    assert(test_join(paths->snapshot[index], paths->root, snapshot_names[index]));
+    assert(test_join(paths->temporary[index], parent[index], temporary_names[index]));
+    test_write(paths->destination[index], "previous\n");
+    test_write(paths->snapshot[index], candidate_content[index]);
+    test_file_hash(paths->snapshot[index], digest);
+    assert(keiko_windows_update_replace_file(
+        paths->snapshot[index],
+        parent[index],
+        paths->temporary[index],
+        paths->destination[index],
+        digest,
+        GetTickCount64() + 10000u
+    ));
+    assert(keiko_windows_update_file_digest_matches(
+        paths->destination[index],
+        digest,
+        GetTickCount64() + 10000u
+    ));
+  }
+  assert(test_atomic_flush_calls == 3u);
+
+  assert(test_join(paths->previous, paths->root, L"\\registration.previous"));
+  assert(test_join(paths->fault_snapshot, paths->root, L"\\registration.fault.next"));
+  assert(test_join(
+      paths->fault_temporary,
+      paths->state,
+      L"\\.registration-fault-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ));
+  assert(test_join(
+      paths->restore_temporary,
+      paths->state,
+      L"\\.registration-restore-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ));
+  test_write(paths->previous, "registration-previous\n");
+  test_write(paths->fault_snapshot, "registration-fault-candidate\n");
+  test_file_hash(paths->previous, previous_digest);
+  test_file_hash(paths->fault_snapshot, fault_digest);
+  test_atomic_flush_allowed = 0;
+  assert(!keiko_windows_update_replace_file(
+      paths->fault_snapshot,
+      paths->state,
+      paths->fault_temporary,
+      paths->destination[2],
+      fault_digest,
+      GetTickCount64() + 10000u
+  ));
+  assert(keiko_windows_update_file_digest_matches(
+      paths->destination[2],
+      fault_digest,
+      GetTickCount64() + 10000u
+  ));
+  test_atomic_flush_allowed = 1;
+  assert(keiko_windows_update_replace_file(
+      paths->previous,
+      paths->state,
+      paths->restore_temporary,
+      paths->destination[2],
+      previous_digest,
+      GetTickCount64() + 10000u
+  ));
+  assert(keiko_windows_update_file_digest_matches(
+      paths->destination[2],
+      previous_digest,
+      GetTickCount64() + 10000u
+  ));
+  assert(test_atomic_flush_calls == 5u);
+  assert(keiko_windows_update_remove_tree(paths->root, GetTickCount64() + 10000u));
+  free(paths);
+}
+
+static void test_capsule_and_receipt_junctions_are_refused(void) {
+  typedef struct {
+    wchar_t root[TEST_PATH_CAP];
+    wchar_t outside_capsule[TEST_PATH_CAP];
+    wchar_t capsule_link[TEST_PATH_CAP];
+    wchar_t capsule[TEST_PATH_CAP];
+    wchar_t outside_receipts[TEST_PATH_CAP];
+    wchar_t receipts_link[TEST_PATH_CAP];
+    wchar_t escaped_receipt[TEST_PATH_CAP];
+  } test_paths;
+  test_paths *paths = (test_paths *)calloc(1u, sizeof(*paths));
+  keiko_coordinator_context context;
+  DWORD attributes;
+  assert(paths != NULL);
+  memset(&context, 0, sizeof(context));
+  test_create_root(paths->root);
+  assert(test_join(paths->outside_capsule, paths->root, L"\\outside-capsule"));
+  assert(test_join(paths->capsule_link, paths->root, L"\\capsule-link"));
+  assert(CreateDirectoryW(paths->outside_capsule, NULL));
+  assert(test_create_junction(paths->capsule_link, paths->outside_capsule));
+  context.capsule = paths->capsule_link;
+  assert(!keiko_coordinator_windows_pin_capsule(&context));
+  assert(RemoveDirectoryW(paths->capsule_link));
+
+  assert(test_join(paths->capsule, paths->root, L"\\capsule"));
+  assert(test_join(paths->outside_receipts, paths->root, L"\\outside-receipts"));
+  assert(test_join(paths->receipts_link, paths->capsule, L"\\receipts"));
+  assert(test_join(paths->escaped_receipt, paths->outside_receipts, L"\\000001.khr"));
+  assert(CreateDirectoryW(paths->capsule, NULL));
+  assert(CreateDirectoryW(paths->outside_receipts, NULL));
+  assert(test_create_junction(paths->receipts_link, paths->outside_receipts));
+  context.capsule = paths->capsule;
+  assert(keiko_coordinator_windows_pin_capsule(&context));
+  assert(!keiko_coordinator_windows_pin_receipts(&context, 0));
+  context.plan.field[KEIKO_KHP_ACTIVATION_ID] =
+      _strdup("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  assert(context.plan.field[KEIKO_KHP_ACTIVATION_ID] != NULL);
+  memset(context.plan_sha256, 'b', 64u);
+  context.plan_sha256[64] = '\0';
+  assert(!keiko_coordinator_windows_append_receipt(&context, "prepared", "completed"));
+  attributes = GetFileAttributesW(paths->escaped_receipt);
+  assert(attributes == INVALID_FILE_ATTRIBUTES);
+  assert(GetLastError() == ERROR_FILE_NOT_FOUND);
+  free(context.plan.field[KEIKO_KHP_ACTIVATION_ID]);
+  context.plan.field[KEIKO_KHP_ACTIVATION_ID] = NULL;
+  if (context.receipts_directory != NULL &&
+      context.receipts_directory != INVALID_HANDLE_VALUE)
+    assert(CloseHandle(context.receipts_directory));
+  if (context.capsule_directory != NULL &&
+      context.capsule_directory != INVALID_HANDLE_VALUE)
+    assert(CloseHandle(context.capsule_directory));
+  assert(RemoveDirectoryW(paths->receipts_link));
+  assert(keiko_windows_update_remove_tree(paths->root, GetTickCount64() + 10000u));
+  free(paths);
 }
 
 static void test_plan_paths_bind_exact_generation_names(void) {
@@ -385,10 +647,13 @@ static void test_plan_paths_bind_exact_generation_names(void) {
 }
 
 static void test_recovery_runtime_and_lock_binding(void) {
-  wchar_t root[TEST_PATH_CAP];
-  wchar_t updates[TEST_PATH_CAP];
-  wchar_t runtime_path[TEST_PATH_CAP];
-  wchar_t lock_path[TEST_PATH_CAP];
+  typedef struct {
+    wchar_t root[TEST_PATH_CAP];
+    wchar_t updates[TEST_PATH_CAP];
+    wchar_t runtime_path[TEST_PATH_CAP];
+    wchar_t lock_path[TEST_PATH_CAP];
+  } test_paths;
+  test_paths *paths = (test_paths *)calloc(1u, sizeof(*paths));
   wchar_t *child_stem;
   wchar_t *child_path;
   char identity_json[1024];
@@ -402,13 +667,18 @@ static void test_recovery_runtime_and_lock_binding(void) {
   int written;
   memset(&context, 0, sizeof(context));
   memset(&control, 0, sizeof(control));
-  test_create_root(root);
-  assert(test_join(updates, root, L"\\updates"));
-  assert(CreateDirectoryW(updates, NULL));
-  assert(test_join(runtime_path, updates, L"\\runtime-state.json"));
-  assert(test_join(lock_path, updates, L"\\update-session.lock"));
-  test_write(runtime_path, "{\"activationWal\":{}}\n");
-  file = keiko_windows_atomic_open_regular(runtime_path, GENERIC_READ, FILE_SHARE_READ);
+  assert(paths != NULL);
+  test_create_root(paths->root);
+  assert(test_join(paths->updates, paths->root, L"\\updates"));
+  assert(CreateDirectoryW(paths->updates, NULL));
+  assert(test_join(paths->runtime_path, paths->updates, L"\\runtime-state.json"));
+  assert(test_join(paths->lock_path, paths->updates, L"\\update-session.lock"));
+  test_write(paths->runtime_path, "{\"activationWal\":{}}\n");
+  file = keiko_windows_atomic_open_regular(
+      paths->runtime_path,
+      GENERIC_READ,
+      FILE_SHARE_READ
+  );
   assert(file != INVALID_HANDLE_VALUE);
   assert(keiko_windows_update_handle_hash(
       file,
@@ -431,17 +701,17 @@ static void test_recovery_runtime_and_lock_binding(void) {
       session_sha256
   ));
   assert(_snwprintf_s(
-             lock_path,
+             paths->lock_path,
              TEST_PATH_CAP,
              _TRUNCATE,
              L"%ls\\update-session.lock",
-             updates
+             paths->updates
          ) > 0);
   written = snprintf(identity_json + written, sizeof(identity_json) - (size_t)written, "\n");
   assert(written == 1);
-  test_write(lock_path, identity_json);
+  test_write(paths->lock_path, identity_json);
   child_stem = keiko_coordinator_windows_ascii_path(
-      updates,
+      paths->updates,
       L"\\update-session.lock.",
       session_sha256
   );
@@ -457,7 +727,7 @@ static void test_recovery_runtime_and_lock_binding(void) {
   );
   assert(written > 0 && (size_t)written < sizeof(child_json));
   test_write(child_path, child_json);
-  context.state_dir = root;
+  context.state_dir = paths->root;
   context.plan.field[KEIKO_KHP_SESSION_ID] = "session-1";
   context.plan.field[KEIKO_KHP_TARGET_VERSION] = "1.2.3";
   control.runtime_state_sha256 = runtime_sha256;
@@ -480,7 +750,8 @@ static void test_recovery_runtime_and_lock_binding(void) {
   ));
   free(child_path);
   free(child_stem);
-  assert(keiko_windows_update_remove_tree(root, GetTickCount64() + 10000u));
+  assert(keiko_windows_update_remove_tree(paths->root, GetTickCount64() + 10000u));
+  free(paths);
 }
 
 static void test_shared_recovery_control_parser(void) {
@@ -564,12 +835,131 @@ static void test_supervisor_packet_is_unchanged_krp1(void) {
   free(packet);
 }
 
+typedef struct {
+  HANDLE pipe;
+  unsigned char *content;
+  size_t length;
+} test_pipe_reader;
+
+static DWORD WINAPI test_read_pipe_thread(LPVOID opaque) {
+  test_pipe_reader *reader = (test_pipe_reader *)opaque;
+  size_t offset = 0;
+  while (offset < reader->length) {
+    DWORD read_bytes = 0;
+    DWORD remaining = reader->length - offset > MAXDWORD
+                          ? MAXDWORD
+                          : (DWORD)(reader->length - offset);
+    if (!ReadFile(
+            reader->pipe,
+            reader->content + offset,
+            remaining,
+            &read_bytes,
+            NULL
+        ) || read_bytes == 0) return 0;
+    offset += read_bytes;
+  }
+  return 1;
+}
+
+static void test_pipe_writes_are_deadline_bounded(void) {
+  int descriptors[2] = {-1, -1};
+  const size_t length = KEIKO_COORDINATOR_KRP_MAX_BYTES;
+  unsigned char *payload = (unsigned char *)malloc(length);
+  unsigned char *received = (unsigned char *)calloc(length, 1u);
+  test_pipe_reader reader;
+  HANDLE thread;
+  HANDLE exited;
+  DWORD thread_result = 0;
+  DWORD available = 0;
+  uint64_t started;
+  assert(payload != NULL && received != NULL);
+  memset(payload, 0x5a, length);
+  assert(_pipe(descriptors, 4096u, _O_BINARY | _O_NOINHERIT) == 0);
+  reader.pipe = (HANDLE)_get_osfhandle(descriptors[0]);
+  reader.content = received;
+  reader.length = length;
+  thread = CreateThread(NULL, 0, test_read_pipe_thread, &reader, 0, NULL);
+  assert(thread != NULL);
+  assert(keiko_coordinator_windows_write_exact_fd(
+      descriptors[1],
+      payload,
+      length,
+      GetTickCount64() + 10000u,
+      NULL
+  ));
+  assert(WaitForSingleObject(thread, 10000u) == WAIT_OBJECT_0);
+  assert(GetExitCodeThread(thread, &thread_result) && thread_result == 1u);
+  assert(memcmp(payload, received, length) == 0);
+  assert(CloseHandle(thread));
+  keiko_coordinator_windows_close_descriptors(descriptors, 2u);
+
+  assert(_pipe(descriptors, 4096u, _O_BINARY | _O_NOINHERIT) == 0);
+  started = GetTickCount64();
+  assert(!keiko_coordinator_windows_write_exact_fd(
+      descriptors[1],
+      payload,
+      length,
+      started + 100u,
+      NULL
+  ));
+  assert(GetTickCount64() - started < 3000u);
+  keiko_coordinator_windows_close_descriptors(descriptors, 2u);
+
+  assert(_pipe(descriptors, 4096u, _O_BINARY | _O_NOINHERIT) == 0);
+  exited = CreateEventW(NULL, TRUE, TRUE, NULL);
+  assert(exited != NULL);
+  assert(!keiko_coordinator_windows_write_exact_fd(
+      descriptors[1],
+      payload,
+      length,
+      GetTickCount64() + 10000u,
+      exited
+  ));
+  assert(PeekNamedPipe(
+      (HANDLE)_get_osfhandle(descriptors[0]),
+      NULL,
+      0,
+      NULL,
+      &available,
+      NULL
+  ));
+  assert(available == 0u);
+  assert(CloseHandle(exited));
+  keiko_coordinator_windows_close_descriptors(descriptors, 2u);
+
+  assert(_pipe(descriptors, 4096u, _O_BINARY | _O_NOINHERIT) == 0);
+  assert(!keiko_coordinator_windows_write_exact_fd(
+      descriptors[1],
+      payload,
+      length,
+      GetTickCount64() - 1u,
+      NULL
+  ));
+  assert(PeekNamedPipe(
+      (HANDLE)_get_osfhandle(descriptors[0]),
+      NULL,
+      0,
+      NULL,
+      &available,
+      NULL
+  ));
+  assert(available == 0u);
+  keiko_coordinator_windows_close_descriptors(descriptors, 2u);
+  SecureZeroMemory(received, length);
+  SecureZeroMemory(payload, length);
+  free(received);
+  free(payload);
+}
+
 int wmain(void) {
   test_copy_walk_budget_is_bounded();
   test_recovery_runtime_and_lock_binding();
   test_shared_recovery_control_parser();
   test_supervisor_packet_is_unchanged_krp1();
+  test_pipe_writes_are_deadline_bounded();
   test_plan_paths_bind_exact_generation_names();
   test_generation_publish_and_file_replace();
+  test_productive_file_cutovers_flush_and_recover();
+  test_capsule_and_receipt_junctions_are_refused();
   return 0;
 }

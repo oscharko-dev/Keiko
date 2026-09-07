@@ -256,12 +256,16 @@ static int reset_pair(const keiko_paths *paths, const unsigned char *active, DWO
 }
 
 static int rename_pending(const keiko_paths *paths) {
-  return keiko_windows_atomic_replace_existing(
+  HANDLE published = INVALID_HANDLE_VALUE;
+  int result = keiko_windows_atomic_replace_existing(
     paths->root,
     paths->pending,
     paths->active,
-    GetTickCount64() + KEIKO_WAIT_MS
+    GetTickCount64() + KEIKO_WAIT_MS,
+    &published
   );
+  close_if_valid(published);
+  return result;
 }
 
 static int create_paths(keiko_paths *paths) {
