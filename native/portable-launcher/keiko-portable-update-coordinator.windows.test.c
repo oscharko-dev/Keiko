@@ -143,6 +143,20 @@ static void test_create_root(wchar_t root[TEST_PATH_CAP]) {
   free(temporary);
 }
 
+static void test_canonical_local_directory(
+    const wchar_t *path,
+    wchar_t output[TEST_PATH_CAP]
+) {
+  HANDLE directory = keiko_windows_atomic_open_directory(
+      path,
+      FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE
+  );
+  assert(directory != INVALID_HANDLE_VALUE && directory != NULL);
+  assert(keiko_windows_local_volume_final_path(directory, output));
+  assert(CloseHandle(directory));
+}
+
 static void test_directory_owner_policy(void) {
   BYTE user_storage[SECURITY_MAX_SID_SIZE];
   BYTE system_storage[SECURITY_MAX_SID_SIZE];
@@ -745,6 +759,7 @@ static void test_plan_paths_bind_exact_generation_names(void) {
 
 static void test_coordinator_pins_local_managed_root(void) {
   typedef struct {
+    wchar_t original_root[TEST_PATH_CAP];
     wchar_t root[TEST_PATH_CAP];
     wchar_t managed[TEST_PATH_CAP];
     wchar_t stage[TEST_PATH_CAP];
@@ -754,7 +769,8 @@ static void test_coordinator_pins_local_managed_root(void) {
   keiko_coordinator_context context;
   assert(paths != NULL);
   memset(&context, 0, sizeof(context));
-  test_create_root(paths->root);
+  test_create_root(paths->original_root);
+  test_canonical_local_directory(paths->original_root, paths->root);
   assert(test_join(paths->managed, paths->root, L"\\managed"));
   assert(test_join(paths->stage, paths->root, L"\\stage"));
   assert(test_join(paths->renamed, paths->root, L"\\managed-renamed"));
