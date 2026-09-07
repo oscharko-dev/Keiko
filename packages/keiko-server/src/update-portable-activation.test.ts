@@ -76,10 +76,13 @@ async function makeInstall(): Promise<{
   const managedRoot = join(home, "AppData", "Local", "Programs", "Keiko");
   const packageRoot = join(managedRoot, "app");
   const candidateRoot = join(dirname(managedRoot), ".keiko-portable-updates", "stage-1", "Keiko");
+  const stateDir = join(home, ".keiko");
+  const localState = createUpdateLocalStateManager({ stateDir });
+  localState.writeRuntimeState(localState.readRuntimeState());
   writeInstall(managedRoot, OLD_VERSION);
   writeInstall(candidateRoot, TARGET_VERSION);
   writeFileSync(join(managedRoot, "active.txt"), "active");
-  return { home, stateDir: join(home, ".keiko"), managedRoot, packageRoot };
+  return { home, stateDir, managedRoot, packageRoot };
 }
 
 function registerCurrentInstall(install: Awaited<ReturnType<typeof makeInstall>>): void {
@@ -152,7 +155,7 @@ function seedCancellableSession(
 function configuredActivator(
   install: Awaited<ReturnType<typeof makeInstall>>,
   begin: Parameters<typeof createPortableUpdateActivator>[0]["handoffCoordinator"],
-) {
+): ReturnType<typeof createPortableUpdateActivator> {
   return createPortableUpdateActivator({
     env: {
       KEIKO_STATE_DIR: install.stateDir,
@@ -257,6 +260,7 @@ describe("portable update activation handoff", () => {
     const response = new PassThrough();
     const kill = vi.fn(() => true);
     const child = Object.assign(new EventEmitter(), {
+      pid: 43_210,
       stdin: control,
       stdio: [control, null, null, response],
       unref: vi.fn(),
@@ -268,6 +272,7 @@ describe("portable update activation handoff", () => {
     });
     const coordinator = createPortableHandoffCoordinator({
       stateDir: install.stateDir,
+      publishCoordinatorPid: () => true,
       persistPrepared: ({ activationWal }) => {
         const current = localState.readRuntimeState();
         localState.writeRuntimeState({
@@ -284,7 +289,9 @@ describe("portable update activation handoff", () => {
       persistAccepted: () => Promise.reject(new Error("acceptance must not persist")),
       verifyNativeCopy: () => Promise.resolve(),
       spawnFn: () => {
-        queueMicrotask(() => controller.abort());
+        queueMicrotask(() => {
+          controller.abort();
+        });
         return child;
       },
     });

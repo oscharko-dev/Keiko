@@ -18,6 +18,11 @@ import {
   type UpdateStartupRecoveryOptions,
 } from "./update-portable-handoff-recovery.js";
 import type { UpdateLocalStateManager } from "./update-local-state.js";
+import {
+  releaseStateDirUpdateSessionLockForRecovery,
+  type UpdateSessionLock,
+  type UpdateSessionRecoveryOwnership,
+} from "./update-session-lock.js";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const LAUNCH_ID = /^[a-f0-9]{32}$/u;
@@ -28,6 +33,8 @@ export interface ProductionPortableHandoffRuntimeOptions {
   readonly stateDir: string;
   readonly currentVersion: string;
   readonly localState: UpdateLocalStateManager;
+  readonly sessionLock: UpdateSessionLock;
+  readonly recoveryOwnership?: UpdateSessionRecoveryOwnership | undefined;
   readonly now?: (() => number) | undefined;
   readonly pid?: number | undefined;
   readonly verifyNativeCopy?: typeof verifyPortableHandoffNativeCopy | undefined;
@@ -222,11 +229,70 @@ function createRecoveryReadActivation(
 ): UpdateStartupRecoveryOptions["readActivation"] {
   return () => {
     const state = localState.readRuntimeState();
+    const session =
+      state.activeSession ?? (state.activationWal === undefined ? undefined : state.lastSession);
     return {
-      ...(state.activeSession === undefined ? {} : { sessionId: state.activeSession.sessionId }),
+      ...(session === undefined ? {} : { sessionId: session.sessionId }),
       ...(state.activationWal === undefined ? {} : { activationWal: state.activationWal }),
     };
   };
+}
+
+function releaseRecoveredOwnership(options: ProductionPortableHandoffRuntimeOptions): void {
+  if (options.recoveryOwnership === undefined) return;
+  if (!releaseStateDirUpdateSessionLockForRecovery(options.stateDir, options.recoveryOwnership)) {
+    fail("portable recovery ownership changed before release");
+  }
+}
+
+function persistTerminalRecovery(input: {
+  readonly options: ProductionPortableHandoffRuntimeOptions;
+  readonly now: () => number;
+  readonly current: ReturnType<UpdateLocalStateManager["readRuntimeState"]>;
+  readonly sessionId: string;
+  readonly activationWal: UpdateActivationWalState;
+  readonly phase: "pre-listen" | "post-listen";
+}): void {
+  if (
+    input.current.lastSession?.sessionId !== input.sessionId ||
+    input.activationWal.checkpoint !== "complete"
+  ) {
+    fail("portable recovery terminal session authority changed");
+  }
+  const settled = input.phase === "post-listen";
+  input.options.localState.writeRuntimeState({
+    ...input.current,
+    activationWal: settled ? undefined : input.activationWal,
+    recovery: recoveryState(input.now, input.sessionId, settled ? "settled" : "reconciling"),
+  });
+  if (settled) releaseRecoveredOwnership(input.options);
+}
+
+function persistActiveRecovery(input: {
+  readonly options: ProductionPortableHandoffRuntimeOptions;
+  readonly now: () => number;
+  readonly current: ReturnType<UpdateLocalStateManager["readRuntimeState"]>;
+  readonly active: UpdateSession;
+  readonly sessionId: string;
+  readonly activationWal: UpdateActivationWalState;
+  readonly phase: "pre-listen" | "post-listen";
+}): void {
+  const authoritative = recoveryActiveSession(input.active, input.sessionId);
+  const projection =
+    input.phase === "pre-listen"
+      ? { active: authoritative }
+      : projectRecoveredSession(authoritative, input.activationWal, input.options.canComplete);
+  const settled = input.phase === "post-listen" && input.activationWal.checkpoint === "complete";
+  input.options.localState.writeRuntimeState({
+    ...input.current,
+    ...(projection.active === undefined
+      ? { activeSession: undefined, activeCandidate: undefined }
+      : { activeSession: projection.active }),
+    ...(projection.last === undefined ? {} : { lastSession: projection.last }),
+    activationWal: settled ? undefined : input.activationWal,
+    recovery: recoveryState(input.now, input.sessionId, settled ? "settled" : "reconciling"),
+  });
+  if (settled) releaseRecoveredOwnership(input.options);
 }
 
 function persistRecoveredActivation(
@@ -236,21 +302,12 @@ function persistRecoveredActivation(
   return ({ sessionId, activationWal, phase }) =>
     resolvedPromise(() => {
       const current = options.localState.readRuntimeState();
-      const active = recoveryActiveSession(current.activeSession, sessionId);
-      const projection =
-        phase === "pre-listen"
-          ? { active }
-          : projectRecoveredSession(active, activationWal, options.canComplete);
-      const settled = phase === "post-listen" && activationWal.checkpoint === "complete";
-      options.localState.writeRuntimeState({
-        ...current,
-        ...(projection.active === undefined
-          ? { activeSession: undefined, activeCandidate: undefined }
-          : { activeSession: projection.active }),
-        ...(projection.last === undefined ? {} : { lastSession: projection.last }),
-        activationWal: settled ? undefined : activationWal,
-        recovery: recoveryState(now, sessionId, settled ? "settled" : "reconciling"),
-      });
+      const active = current.activeSession;
+      if (active === undefined) {
+        persistTerminalRecovery({ options, now, current, sessionId, activationWal, phase });
+        return;
+      }
+      persistActiveRecovery({ options, now, current, active, sessionId, activationWal, phase });
     });
 }
 
@@ -293,6 +350,7 @@ function settleRestoredActivation(
         portableActivationId: activationWal.activationId,
         status: "failed",
       });
+      releaseRecoveredOwnership(options);
     });
 }
 
@@ -360,6 +418,8 @@ export function createProductionPortableHandoffRuntime(
       persistWal({ sessionId, activationWal, prepared: true }),
     persistAccepted: ({ sessionId, activationWal }) =>
       persistWal({ sessionId, activationWal, prepared: false }),
+    publishCoordinatorPid: (sessionId, coordinatorPid) =>
+      options.sessionLock.updateChildPid(sessionId, coordinatorPid),
     verifyNativeCopy: options.verifyNativeCopy ?? verifyPortableHandoffNativeCopy,
     now,
   });

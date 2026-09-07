@@ -332,6 +332,7 @@ int wmain(void) {
 #include <unistd.h>
 
 #include "keiko-portable-update-coordinator.h"
+#include "keiko-portable-recovery-control.h"
 
 static int dirname_copy(char *out, size_t cap, const char *path) {
   if (strlen(path) >= cap) {
@@ -391,6 +392,12 @@ int main(int argc, char **argv) {
      * until the finite executor and rollback receipt state machine are complete. */
     keiko_coordinator_clear(&coordinator);
     return 74;
+  }
+  if (argc == 3 && strcmp(argv[1], "--recover-update") == 0) {
+    if (!keiko_khp_is_lower_hex(argv[2], 32u) ||
+        !keiko_recovery_control_posix(argv[2], executable))
+      return 74;
+    return 0;
   }
   if (argc == 3 && strcmp(argv[1], "--resume-update") == 0) {
     keiko_coordinator_context coordinator;

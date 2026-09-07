@@ -525,6 +525,41 @@ describe("update runtime state and audit events", () => {
     });
   });
 
+  it("binds each validated aggregate to the exact bytes read from its descriptor", () => {
+    const stateDir = makeStateDir();
+    const localState = manager(stateDir, []);
+    const first = localState.writeRuntimeState(localState.readRuntimeState());
+    const path = join(stateDir, "updates", "runtime-state.json");
+    const firstRaw = readFileSync(path, "utf8");
+    const firstInspection = localState.inspectRuntimeState();
+    expect(firstInspection).toMatchObject({ status: "ok", state: first });
+    if (firstInspection.status !== "ok") throw new TypeError("expected validated aggregate");
+    expect(firstInspection.contentSha256).toBe(
+      createHash("sha256").update(firstRaw, "utf8").digest("hex"),
+    );
+
+    const second = localState.writeRuntimeState({
+      ...first,
+      targetVersion: "0.2.12",
+      snapshotId: "récovery-snapshot",
+    });
+    const secondRaw = readFileSync(path, "utf8");
+    const secondInspection = localState.inspectRuntimeState();
+    expect(secondInspection).toMatchObject({ status: "ok", state: second });
+    if (secondInspection.status !== "ok") throw new TypeError("expected validated aggregate");
+    expect(secondInspection.contentSha256).toBe(
+      createHash("sha256").update(secondRaw, "utf8").digest("hex"),
+    );
+    expect(secondInspection.contentSha256).not.toBe(firstInspection.contentSha256);
+
+    const malformedUtf8 = Buffer.from(secondRaw, "utf8");
+    const accent = malformedUtf8.indexOf(Buffer.from("é", "utf8"));
+    expect(accent).toBeGreaterThanOrEqual(0);
+    malformedUtf8[accent + 1] = 0x28;
+    writeFileSync(path, malformedUtf8);
+    expect(localState.inspectRuntimeState()).toEqual({ status: "corrupt" });
+  });
+
   it("atomically advances the aggregate revision without retaining a temporary file", () => {
     const stateDir = makeStateDir();
     const localState = manager(stateDir, []);

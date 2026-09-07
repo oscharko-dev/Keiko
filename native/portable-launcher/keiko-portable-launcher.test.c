@@ -126,6 +126,14 @@ static void write_fixture_file(const char *path, const char *content) {
   assert(close(descriptor) == 0);
 }
 
+static void replace_fixture_file(const char *path, const char *content) {
+  int descriptor = open(path, O_TRUNC | O_WRONLY | O_CLOEXEC);
+  assert(descriptor >= 0);
+  assert(write_all(descriptor, content, strlen(content)) == 1);
+  assert(fsync(descriptor) == 0);
+  assert(close(descriptor) == 0);
+}
+
 typedef struct {
   char root[PATH_MAX];
   char managed[PATH_MAX];
@@ -217,6 +225,7 @@ static void cutover_fixture_init(cutover_fixture *fixture) {
   fixture->context.plan.field[KEIKO_KHP_ACTIVATION_ID] =
       (char *)"0123456789abcdef0123456789abcdef";
   fixture->context.plan.field[KEIKO_KHP_MANAGED_ROOT] = fixture->managed;
+  fixture->context.plan.field[KEIKO_KHP_STAGE_ROOT] = fixture->stage;
   fixture->context.plan.field[KEIKO_KHP_CANDIDATE_ROOT] = fixture->candidate;
   fixture->context.plan.field[KEIKO_KHP_BACKUP_ROOT] = fixture->backup;
   fixture->context.plan.field[KEIKO_KHP_CURRENT_TREE_SHA256] = fixture->old_digest;
@@ -394,6 +403,103 @@ static void test_restore_handles_post_exchange_shape(void) {
   cutover_fixture_clear(&fixture);
 }
 
+static void test_recovery_control_is_fixed_and_bounded(void) {
+  char valid[] =
+      "KRC1\n0123456789abcdef0123456789abcdef\n"
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+      "7\n0\n-\ncccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n"
+      "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\n";
+  char trailing[] =
+      "KRC1\n0123456789abcdef0123456789abcdef\n"
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+      "7\n0\n-\ncccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n"
+      "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\nX";
+  keiko_recovery_control control;
+  memset(&control, 0, sizeof(control));
+  assert(keiko_recovery_parse_control(valid, &control) == 1);
+  assert(control.intent_revision == 7u);
+  assert(control.receipt_sequence == 0u);
+  memset(&control, 0, sizeof(control));
+  assert(keiko_recovery_parse_control(trailing, &control) == 0);
+}
+
+static void test_recovery_runtime_requires_exact_validated_snapshot(void) {
+  static const char canonical[] =
+      "{\n  \"schemaVersion\": 2,\n  \"revision\": 7,\n"
+      "  \"activationWal\": {\"intentRevision\": 7, \"receiptSequence\": 1}\n}\n";
+  static const char *const changed[] = {
+      "{\n  \"schemaVersion\": 2,\n  \"revision\": 7,\n"
+      "  \"activationWal\": {\"intentRevision\": 7, \"receiptSequence\": 10}\n}\n",
+      "{\n  \"schemaVersion\": 2,\n  \"revision\": 7,\n"
+      "  \"other\": {\"intentRevision\": 7, \"receiptSequence\": 1}\n}\n",
+      "{\n  \"schemaVersion\": 2,\n  \"revision\": 7,\n"
+      "  \"activationWal\": {\"intentRevision\": 7, \"receiptSequence\": 1},\n"
+      "  \"duplicate\": {\"receiptSequence\": 1}\n}\n",
+      "malformed runtime state\n"};
+  cutover_fixture fixture;
+  keiko_recovery_control control;
+  char updates[PATH_MAX], runtime_state[PATH_MAX], lookalike[PATH_MAX], digest[65];
+  size_t index;
+  cutover_fixture_init(&fixture);
+  assert(join_path(updates, sizeof(updates), fixture.state, "/updates") == 1);
+  assert(mkdir(updates, 0700) == 0);
+  assert(join_path(runtime_state, sizeof(runtime_state), updates, "/runtime-state.json") == 1);
+  assert(join_path(lookalike, sizeof(lookalike), fixture.state, "/runtime-state.json") == 1);
+  write_fixture_file(lookalike, canonical);
+  write_fixture_file(runtime_state, changed[0]);
+  assert(keiko_coordinator_hash_bytes(canonical, strlen(canonical), digest) == 1);
+  memset(&control, 0, sizeof(control));
+  control.runtime_state_sha256 = digest;
+  assert(keiko_recovery_validate_runtime(&fixture.context, &control, fixture_deadline()) == 0);
+  replace_fixture_file(runtime_state, canonical);
+  assert(keiko_recovery_validate_runtime(&fixture.context, &control, fixture_deadline()) == 1);
+  replace_fixture_file(lookalike, "malformed root lookalike\n");
+  assert(keiko_recovery_validate_runtime(&fixture.context, &control, fixture_deadline()) == 1);
+  for (index = 0; index < sizeof(changed) / sizeof(changed[0]); ++index) {
+    replace_fixture_file(runtime_state, changed[index]);
+    assert(keiko_recovery_validate_runtime(&fixture.context, &control, fixture_deadline()) == 0);
+  }
+  cutover_fixture_clear(&fixture);
+}
+
+static void test_recovery_restores_before_verification_and_retains_verified(void) {
+  cutover_fixture restoring;
+  cutover_fixture retained;
+  cutover_fixture_init(&restoring);
+  assert(keiko_coordinator_promote_roots(&restoring.context, fixture_deadline()) == 1);
+  assert(keiko_coordinator_publish_registration(&restoring.context, fixture_deadline()) == 1);
+  restoring.context.receipt_sequence = 7u;
+  memset(restoring.context.receipt_sha256, 'a', 64u);
+  restoring.context.receipt_sha256[64] = '\0';
+  assert(keiko_recovery_reconcile(&restoring.context, 7u, 0u, 0u) == 0);
+  assert_tree_digest(restoring.managed, restoring.new_digest);
+  assert(keiko_recovery_reconcile(&restoring.context, 7u, 0u, fixture_deadline()) == 1);
+  assert_tree_digest(restoring.managed, restoring.old_digest);
+  assert(keiko_coordinator_file_digest_matches(restoring.registration,
+                                               restoring.previous_registration_digest,
+                                               fixture_deadline()) == 1);
+  cutover_fixture_clear(&restoring);
+
+  cutover_fixture_init(&retained);
+  assert(keiko_coordinator_promote_roots(&retained.context, fixture_deadline()) == 1);
+  assert(keiko_coordinator_publish_registration(&retained.context, fixture_deadline()) == 1);
+  retained.context.receipt_sequence = 11u;
+  memset(retained.context.receipt_sha256, 'b', 64u);
+  retained.context.receipt_sha256[64] = '\0';
+  assert_tree_digest(retained.managed, retained.new_digest);
+  assert(keiko_coordinator_file_digest_matches(retained.registration,
+                                               retained.prepared_registration_digest,
+                                               fixture_deadline()) == 1);
+  assert(keiko_recovery_reconcile(&retained.context, 11u, 0u,
+                                  keiko_tree_now_ms() + 30000u) == 1);
+  assert_tree_digest(retained.managed, retained.new_digest);
+  assert_path_absent(retained.backup);
+  assert_path_absent(retained.stage);
+  cutover_fixture_clear(&retained);
+}
+
 static void test_spawn_preserves_fixed_protocol_descriptors(const char *self) {
   char root[] = "/tmp/keiko-coordinator-spawn.XXXXXX";
   char source[PATH_MAX], supervisor[PATH_MAX], candidate[PATH_MAX], managed[PATH_MAX];
@@ -497,5 +603,8 @@ int main(int argc, char **argv) {
   test_atomic_cutover_rejects_untrusted_states();
   test_registration_and_restore_are_crash_idempotent();
   test_restore_handles_post_exchange_shape();
+  test_recovery_control_is_fixed_and_bounded();
+  test_recovery_runtime_requires_exact_validated_snapshot();
+  test_recovery_restores_before_verification_and_retains_verified();
   return 0;
 }

@@ -10,6 +10,7 @@ import {
   openSync,
   opendirSync,
   readFileSync,
+  readSync,
   renameSync,
   statSync,
   unlinkSync,
@@ -29,7 +30,6 @@ import type {
   UpdateRuntimeAuditEvent,
   UpdateRuntimeEventType,
   UpdateRuntimeState,
-  UpdateRuntimeStateReadResult,
   UpdateStateStore,
   UpdateStoreHealth,
 } from "@oscharko-dev/keiko-contracts";
@@ -136,7 +136,7 @@ export interface UpdateLocalStateManager {
   readonly validateRecoverySnapshot: (snapshotId: string) => boolean;
   readonly repairStores: (stores: readonly UpdateStateStore[]) => UpdateLocalStateRepairResult;
   readonly readRuntimeState: () => UpdateRuntimeState;
-  readonly inspectRuntimeState: () => UpdateRuntimeStateReadResult;
+  readonly inspectRuntimeState: () => UpdateRuntimeStateInspection;
   readonly writeRuntimeState: (state: UpdateRuntimeState) => UpdateRuntimeState;
   readonly acquireRemediationLease: (actionId: string) => (() => void) | undefined;
   readonly recordAuditEvent: (
@@ -145,11 +145,31 @@ export interface UpdateLocalStateManager {
   ) => AuditEventRecord;
 }
 
+export type UpdateRuntimeStateInspection =
+  | {
+      readonly status: "ok";
+      readonly state: UpdateRuntimeState;
+      readonly contentSha256: string;
+    }
+  | { readonly status: "migrated" | "missing"; readonly state: UpdateRuntimeState }
+  | { readonly status: "corrupt" | "incompatible" | "unwritable" };
+
 export class UpdateRuntimeStateError extends Error {
   public constructor(public readonly kind: "corrupt" | "incompatible" | "unwritable") {
     super(`Update runtime state is ${kind}.`);
     this.name = "UpdateRuntimeStateError";
   }
+}
+
+function readBoundedRuntimeState(descriptor: number, expectedSize: number): Buffer | undefined {
+  const content = Buffer.allocUnsafe(expectedSize + 1);
+  let offset = 0;
+  while (offset < content.length) {
+    const count = readSync(descriptor, content, offset, content.length - offset, null);
+    if (count === 0) break;
+    offset += count;
+  }
+  return offset === expectedSize ? content.subarray(0, offset) : undefined;
 }
 
 export interface UpdateLocalStateManagerOptions {
@@ -1410,10 +1430,37 @@ function validRuntimeState(value: Record<string, unknown>): boolean {
   );
 }
 
+function parseInspectedRuntimeState(
+  context: ManagerContext,
+  raw: string,
+  rawBytes: Buffer,
+): UpdateRuntimeStateInspection {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { status: "corrupt" };
+  }
+  if (!isRecord(parsed)) return { status: "corrupt" };
+  if (parsed.schemaVersion === 1) {
+    const migrated = migratedRuntimeState(context, parsed);
+    return migrated === undefined ? { status: "corrupt" } : { status: "migrated", state: migrated };
+  }
+  if (parsed.schemaVersion !== UPDATE_LOCAL_STATE_SCHEMA_VERSION) return { status: "incompatible" };
+  return validRuntimeState(parsed)
+    ? {
+        status: "ok",
+        state: parsed as unknown as UpdateRuntimeState,
+        contentSha256: createHash("sha256").update(rawBytes).digest("hex"),
+      }
+    : { status: "corrupt" };
+}
+
 // eslint-disable-next-line complexity
-function inspectRuntimeState(context: ManagerContext): UpdateRuntimeStateReadResult {
+function inspectRuntimeState(context: ManagerContext): UpdateRuntimeStateInspection {
   const path = runtimeStatePath(context.stateDir);
   let raw: string;
+  let rawBytes: Buffer;
   let descriptor: number | undefined;
   try {
     const supplied = lstatSync(path);
@@ -1427,7 +1474,11 @@ function inspectRuntimeState(context: ManagerContext): UpdateRuntimeStateReadRes
         ? { status: "corrupt" }
         : { status: "unwritable" };
     }
-    raw = readFileSync(descriptor, "utf8");
+    const bounded = readBoundedRuntimeState(descriptor, opened.size);
+    if (bounded === undefined) return { status: "corrupt" };
+    rawBytes = bounded;
+    raw = rawBytes.toString("utf8");
+    if (!Buffer.from(raw, "utf8").equals(rawBytes)) return { status: "corrupt" };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
@@ -1439,23 +1490,7 @@ function inspectRuntimeState(context: ManagerContext): UpdateRuntimeStateReadRes
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { status: "corrupt" };
-  }
-  if (!isRecord(parsed)) return { status: "corrupt" };
-  if (parsed.schemaVersion === 1) {
-    const migrated = migratedRuntimeState(context, parsed);
-    return migrated === undefined ? { status: "corrupt" } : { status: "migrated", state: migrated };
-  }
-  if (parsed.schemaVersion !== UPDATE_LOCAL_STATE_SCHEMA_VERSION) {
-    return { status: "incompatible" };
-  }
-  return validRuntimeState(parsed)
-    ? { status: "ok", state: parsed as unknown as UpdateRuntimeState }
-    : { status: "corrupt" };
+  return parseInspectedRuntimeState(context, raw, rawBytes);
 }
 
 function readRuntimeState(context: ManagerContext): UpdateRuntimeState {
@@ -1607,7 +1642,7 @@ export function createUpdateLocalStateManager(
       validateSnapshot(context.stateDir, snapshotId),
     repairStores: (stores): UpdateLocalStateRepairResult => repairStores(context, stores),
     readRuntimeState: (): UpdateRuntimeState => readRuntimeState(context),
-    inspectRuntimeState: (): UpdateRuntimeStateReadResult => inspectRuntimeState(context),
+    inspectRuntimeState: (): UpdateRuntimeStateInspection => inspectRuntimeState(context),
     writeRuntimeState: (state): UpdateRuntimeState => writeRuntimeState(context, state),
     acquireRemediationLease: (actionId): (() => void) | undefined =>
       acquireRemediationLease(context, actionId),

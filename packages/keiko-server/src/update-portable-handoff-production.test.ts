@@ -2,29 +2,127 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { UpdateActivationWalState, UpdateSession } from "@oscharko-dev/keiko-contracts";
+import type {
+  UpdateActivationWalCheckpoint,
+  UpdateRuntimeState,
+  UpdateSession,
+} from "@oscharko-dev/keiko-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import { digestUpdateCandidate } from "./update-candidate-authority.js";
-import { createUpdateLocalStateManager } from "./update-local-state.js";
+import {
+  createUpdateLocalStateManager,
+  type UpdateLocalStateManager,
+} from "./update-local-state.js";
 import { hashPortableHandoffTree } from "./update-portable-handoff-builder.js";
 import {
   createPortableHandoffPlan,
   writePortableHandoffPlan,
+  type PortableHandoffPlan,
 } from "./update-portable-handoff-plan.js";
 import { createProductionPortableHandoffRuntime } from "./update-portable-handoff-production.js";
 import {
   appendPortableHandoffReceipt,
   type PortableHandoffReceiptKind,
 } from "./update-portable-handoff-receipts.js";
+import type { UpdateSessionLock } from "./update-session-lock.js";
 
 const roots: string[] = [];
 const NOW = Date.parse("2026-09-05T00:00:00.000Z");
+const sessionLock: UpdateSessionLock = {
+  isLocked: (): boolean => true,
+  acquire: (): boolean => false,
+  updateChildPid: (): boolean => true,
+  release: (): void => undefined,
+};
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-async function productionFixture(outcome: "restored" | "complete" = "restored") {
+interface ProductionFixture {
+  readonly activationId: string;
+  readonly localState: UpdateLocalStateManager;
+  readonly plan: PortableHandoffPlan;
+  readonly sessionId: string;
+  readonly stateDir: string;
+}
+
+type FixtureOutcome = "restored" | "complete";
+
+function fixtureDigests(
+  outcome: FixtureOutcome,
+  tree: string,
+  registration: string,
+): PortableHandoffPlan["digests"] {
+  const registrationSha256 = createHash("sha256").update(registration).digest("hex");
+  return {
+    currentTreeSha256: outcome === "restored" ? tree : "c".repeat(64),
+    candidateTreeSha256: outcome === "complete" ? tree : "d".repeat(64),
+    currentLauncherSha256: "3".repeat(64),
+    currentSupervisorSha256: "4".repeat(64),
+    candidateLauncherSha256: "e".repeat(64),
+    candidateSupervisorSha256: "f".repeat(64),
+    previousRegistrationSha256: outcome === "restored" ? registrationSha256 : "0".repeat(64),
+    preparedRegistrationSha256: outcome === "complete" ? registrationSha256 : "1".repeat(64),
+  };
+}
+
+function fixtureReceipts(
+  outcome: FixtureOutcome,
+): readonly (readonly [PortableHandoffReceiptKind, "intent" | "completed"])[] {
+  const forward = [
+    ["prepared", "completed"],
+    ["old-exit", "intent"],
+    ["old-exit", "completed"],
+    ["promote", "intent"],
+    ["promote", "completed"],
+    ["register", "intent"],
+    ["register", "completed"],
+    ["start", "intent"],
+    ["start", "completed"],
+  ] as const;
+  return outcome === "restored"
+    ? [
+        ...forward,
+        ["restore", "intent"],
+        ["restore", "completed"],
+        ["restored-start", "intent"],
+        ["restored-start", "completed"],
+      ]
+    : [
+        ...forward,
+        ["verify", "intent"],
+        ["verify", "completed"],
+        ["cleanup", "intent"],
+        ["cleanup", "completed"],
+        ["complete", "completed"],
+      ];
+}
+
+function fixtureCheckpoints(
+  outcome: FixtureOutcome,
+): readonly (readonly [UpdateActivationWalCheckpoint, number])[] {
+  return outcome === "restored"
+    ? ([
+        ["old-exited", 3],
+        ["promoted", 5],
+        ["registered", 7],
+        ["new-started", 9],
+        ["restoring", 10],
+        ["restored-started", 13],
+      ] as const)
+    : ([
+        ["old-exited", 3],
+        ["promoted", 5],
+        ["registered", 7],
+        ["new-started", 9],
+        ["verified", 11],
+        ["cleanup-pending", 12],
+        ["complete", 14],
+      ] as const);
+}
+
+async function productionFixture(outcome: FixtureOutcome = "restored"): Promise<ProductionFixture> {
   const root = mkdtempSync(join(tmpdir(), "keiko-handoff-production-"));
   roots.push(root);
   const stateDir = join(root, "state");
@@ -94,22 +192,7 @@ async function productionFixture(outcome: "restored" | "complete" = "restored") 
         "keiko-runtime-supervisor",
       ),
     },
-    digests: {
-      currentTreeSha256: outcome === "restored" ? currentTreeSha256 : "c".repeat(64),
-      candidateTreeSha256: outcome === "complete" ? currentTreeSha256 : "d".repeat(64),
-      currentLauncherSha256: "3".repeat(64),
-      currentSupervisorSha256: "4".repeat(64),
-      candidateLauncherSha256: "e".repeat(64),
-      candidateSupervisorSha256: "f".repeat(64),
-      previousRegistrationSha256:
-        outcome === "restored"
-          ? createHash("sha256").update(registration).digest("hex")
-          : "0".repeat(64),
-      preparedRegistrationSha256:
-        outcome === "complete"
-          ? createHash("sha256").update(registration).digest("hex")
-          : "1".repeat(64),
-    },
+    digests: fixtureDigests(outcome, currentTreeSha256, registration),
     deadlines: {
       oldExitAt: NOW + 30_000,
       startAt: NOW + 60_000,
@@ -118,34 +201,7 @@ async function productionFixture(outcome: "restored" | "complete" = "restored") 
     },
   });
   const { sha256: planSha256 } = writePortableHandoffPlan({ stateDir, plan });
-  const forwardReceipts = [
-    ["prepared", "completed"],
-    ["old-exit", "intent"],
-    ["old-exit", "completed"],
-    ["promote", "intent"],
-    ["promote", "completed"],
-    ["register", "intent"],
-    ["register", "completed"],
-    ["start", "intent"],
-    ["start", "completed"],
-  ] as const;
-  const receipts: readonly (readonly [PortableHandoffReceiptKind, "intent" | "completed"])[] =
-    outcome === "restored"
-      ? [
-          ...forwardReceipts,
-          ["restore", "intent"],
-          ["restore", "completed"],
-          ["restored-start", "intent"],
-          ["restored-start", "completed"],
-        ]
-      : [
-          ...forwardReceipts,
-          ["verify", "intent"],
-          ["verify", "completed"],
-          ["cleanup", "intent"],
-          ["cleanup", "completed"],
-          ["complete", "completed"],
-        ];
+  const receipts = fixtureReceipts(outcome);
   const receiptDigests: string[] = [];
   let previousSha256: string | undefined;
   for (const [kind, outcome] of receipts) {
@@ -214,30 +270,14 @@ async function productionFixture(outcome: "restored" | "complete" = "restored") 
       receiptSequence: 0,
     },
   });
-  const checkpoints =
-    outcome === "restored"
-      ? ([
-          ["old-exited", 3],
-          ["promoted", 5],
-          ["registered", 7],
-          ["new-started", 9],
-          ["restoring", 10],
-          ["restored-started", 13],
-        ] as const)
-      : ([
-          ["old-exited", 3],
-          ["promoted", 5],
-          ["registered", 7],
-          ["new-started", 9],
-          ["verified", 11],
-          ["cleanup-pending", 12],
-          ["complete", 14],
-        ] as const);
+  const checkpoints = fixtureCheckpoints(outcome);
   for (const [checkpoint, sequence] of checkpoints) {
+    const activationWal = state.activationWal;
+    if (activationWal === undefined) throw new TypeError("expected activation WAL");
     state = localState.writeRuntimeState({
       ...state,
       activationWal: {
-        ...state.activationWal!,
+        ...activationWal,
         checkpoint,
         receiptSequence: sequence,
         receiptSha256: receiptDigests[sequence - 1],
@@ -254,7 +294,9 @@ describe("production portable handoff recovery", () => {
     let rejectSettlement = true;
     const guardedLocalState = {
       ...fixture.localState,
-      writeRuntimeState: (state: Parameters<typeof fixture.localState.writeRuntimeState>[0]) => {
+      writeRuntimeState: (
+        state: Parameters<typeof fixture.localState.writeRuntimeState>[0],
+      ): UpdateRuntimeState => {
         if (rejectSettlement && state.activationWal === undefined) {
           throw new Error("injected settlement persistence failure");
         }
@@ -269,6 +311,7 @@ describe("production portable handoff recovery", () => {
       version: fixture.plan.oldProcess.version,
     };
     const firstRuntime = createProductionPortableHandoffRuntime({
+      sessionLock,
       env: {},
       stateDir: fixture.stateDir,
       currentVersion: fixture.plan.oldProcess.version,
@@ -288,6 +331,7 @@ describe("production portable handoff recovery", () => {
 
     rejectSettlement = false;
     const restartedRuntime = createProductionPortableHandoffRuntime({
+      sessionLock,
       env: {},
       stateDir: fixture.stateDir,
       currentVersion: fixture.plan.oldProcess.version,
@@ -313,6 +357,7 @@ describe("production portable handoff recovery", () => {
     });
 
     const secondRestart = createProductionPortableHandoffRuntime({
+      sessionLock,
       env: {},
       stateDir: fixture.stateDir,
       currentVersion: fixture.plan.oldProcess.version,
@@ -328,6 +373,7 @@ describe("production portable handoff recovery", () => {
     const fixture = await productionFixture("complete");
     const candidate = fixture.localState.readRuntimeState().activeCandidate;
     const runtime = createProductionPortableHandoffRuntime({
+      sessionLock,
       env: {},
       stateDir: fixture.stateDir,
       currentVersion: fixture.plan.targetVersion,
@@ -362,6 +408,7 @@ describe("production portable handoff recovery", () => {
   it("atomically settles a complete activation as succeeded and remains ready", async () => {
     const fixture = await productionFixture("complete");
     const runtime = createProductionPortableHandoffRuntime({
+      sessionLock,
       env: {},
       stateDir: fixture.stateDir,
       currentVersion: fixture.plan.targetVersion,
@@ -392,6 +439,7 @@ describe("production portable handoff recovery", () => {
     });
 
     const restarted = createProductionPortableHandoffRuntime({
+      sessionLock,
       env: {},
       stateDir: fixture.stateDir,
       currentVersion: fixture.plan.targetVersion,

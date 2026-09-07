@@ -13,7 +13,10 @@ import {
   readPortableHandoffReceipts,
   type PortableHandoffReceiptKind,
 } from "./update-portable-handoff-receipts.js";
-import { createUpdateStartupRecovery } from "./update-portable-handoff-recovery.js";
+import {
+  createUpdateStartupRecovery,
+  type UpdateStartupRecoveryOptions,
+} from "./update-portable-handoff-recovery.js";
 
 const roots: string[] = [];
 
@@ -189,7 +192,13 @@ describe("portable handoff startup recovery", () => {
       receiptSha256: completed.sha256,
       coordinatorId: "9".repeat(64),
     };
-    const persist = vi.fn(() => Promise.resolve());
+    const persistedPhases: string[] = [];
+    const persist = vi.fn(
+      (entry: Parameters<UpdateStartupRecoveryOptions["persistActivation"]>[0]): Promise<void> => {
+        persistedPhases.push(entry.phase);
+        return Promise.resolve();
+      },
+    );
     const recovery = createUpdateStartupRecovery({
       stateDir: fixture.stateDir,
       readActivation: () => ({ sessionId: fixture.sessionId, activationWal: wal }),
@@ -213,7 +222,7 @@ describe("portable handoff startup recovery", () => {
     });
     expect(readPortableHandoffReceipts(fixture.stateDir, fixture.activationId)).toHaveLength(11);
     expect(persist).toHaveBeenCalledTimes(2);
-    expect(persist.mock.calls.map(([entry]) => entry.phase)).toEqual(["pre-listen", "post-listen"]);
+    expect(persistedPhases).toEqual(["pre-listen", "post-listen"]);
   });
 
   it("completes an existing target verification intent after a crash without duplicating it", async () => {
@@ -428,5 +437,51 @@ describe("portable handoff startup recovery", () => {
     expect(settleRestored).toHaveBeenCalledOnce();
     expect(wal.checkpoint).toBe("restored-verified");
     expect(readPortableHandoffReceipts(fixture.stateDir, fixture.activationId)).toHaveLength(15);
+  });
+
+  it("completes the restored-start receipt for the exact recovered process before listen", async () => {
+    const fixture = prepare();
+    let previousSha256 = appendThroughStart(fixture);
+    for (const [kind, outcome] of [
+      ["restore", "intent"],
+      ["restore", "completed"],
+    ] as const) {
+      previousSha256 = appendPortableHandoffReceipt({
+        ...fixture,
+        kind,
+        outcome,
+        at: 3,
+        previousSha256,
+      }).sha256;
+    }
+    let wal = initialWal(fixture);
+    const recovery = createUpdateStartupRecovery({
+      stateDir: fixture.stateDir,
+      readActivation: () => ({ sessionId: fixture.sessionId, activationWal: wal }),
+      persistActivation: ({ activationWal }) => {
+        wal = activationWal;
+        return Promise.resolve();
+      },
+      settleRestored: () => Promise.resolve(),
+      attestActiveTree: () => Promise.resolve(true),
+    });
+    await expect(
+      recovery.reconcile({
+        phase: "pre-listen",
+        current: {
+          pid: process.pid,
+          launchId: "3".repeat(32),
+          host: "127.0.0.1",
+          port: 1983,
+          version: "1.2.2",
+        },
+      }),
+    ).resolves.toMatchObject({ status: "ready" });
+    expect(wal.checkpoint).toBe("restored-started");
+    expect(
+      readPortableHandoffReceipts(fixture.stateDir, fixture.activationId)
+        .slice(-2)
+        .map(({ kind, outcome }) => `${kind}:${outcome}`),
+    ).toEqual(["restored-start:intent", "restored-start:completed"]);
   });
 });

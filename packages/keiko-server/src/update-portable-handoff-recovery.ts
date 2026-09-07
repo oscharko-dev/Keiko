@@ -241,8 +241,10 @@ async function activeTreeMatches(
 async function reconcilePreListen(
   options: UpdateStartupRecoveryOptions,
   context: RecoveryContext,
+  current: UpdateStartupRecoveryCurrent,
 ): Promise<RecoveryResult> {
   const checkpoint = context.effectiveWal.checkpoint;
+  if (checkpoint === "restoring") return reconcileRestoringPreListen(options, context, current);
   const mayStart =
     checkpoint === "new-started" ||
     checkpoint === "restored-started" ||
@@ -257,6 +259,66 @@ async function reconcilePreListen(
   return (
     (await persistIfAdvanced(options, context, "pre-listen")) ?? result("ready", context.sessionId)
   );
+}
+
+async function reconcileRestoringPreListen(
+  options: UpdateStartupRecoveryOptions,
+  context: RecoveryContext,
+  current: UpdateStartupRecoveryCurrent,
+): Promise<RecoveryResult> {
+  if (!restoredIdentityMatches(context, current)) {
+    return result("recovery-required", context.sessionId, "interrupted");
+  }
+  if (!(await activeTreeMatches(options, context))) {
+    return result("recovery-required", context.sessionId, "interrupted");
+  }
+  try {
+    const nextWal = effectiveWal(context.wal, appendRestoredStart(options, context));
+    await options.persistActivation({
+      sessionId: context.sessionId,
+      activationWal: nextWal,
+      phase: "pre-listen",
+    });
+    return result("ready", context.sessionId);
+  } catch {
+    return result("recovery-required", context.sessionId, "persistence-failed");
+  }
+}
+
+function appendRestoredStart(
+  options: UpdateStartupRecoveryOptions,
+  context: RecoveryContext,
+): readonly PortableHandoffReceipt[] {
+  const common = {
+    stateDir: options.stateDir,
+    activationId: context.wal.activationId,
+    planSha256: context.wal.planSha256,
+    at: options.now?.() ?? Date.now(),
+  };
+  const pending = context.receipts.at(-1);
+  if (pending?.kind === "restored-start" && pending.outcome === "intent") {
+    const completed = appendPortableHandoffReceipt({
+      ...common,
+      kind: "restored-start",
+      outcome: "completed",
+      previousSha256: portableHandoffReceiptSha256(pending),
+    });
+    return [...context.receipts, completed.receipt];
+  }
+  const previous = receiptDigest(context.receipts);
+  const intent = appendPortableHandoffReceipt({
+    ...common,
+    kind: "restored-start",
+    outcome: "intent",
+    ...(previous === undefined ? {} : { previousSha256: previous }),
+  });
+  const completed = appendPortableHandoffReceipt({
+    ...common,
+    kind: "restored-start",
+    outcome: "completed",
+    previousSha256: intent.sha256,
+  });
+  return [...context.receipts, intent.receipt, completed.receipt];
 }
 
 function restoredIdentityMatches(
@@ -464,7 +526,7 @@ async function reconcile(
   const loaded = loadRecoveryContext(options);
   if (isRecoveryResult(loaded)) return loaded;
   return input.phase === "pre-listen"
-    ? reconcilePreListen(options, loaded)
+    ? reconcilePreListen(options, loaded, input.current)
     : reconcilePostListen(options, loaded, input.current);
 }
 

@@ -61,6 +61,29 @@ the atomic exchange boundaries and restore shapes; local x64 execution is not an
 qualification run. Independent security review approves the final atomic prerequisite with no
 confirmed findings. Normal-startup recovery and real installed two-process proof remain outstanding.
 
+The Mac normal-startup slice is now source-frozen for independent security review. Its early CLI
+gate holds the existing managed mutation lock, binds the plan to that locked root, and rejects live
+owners or published children before claim or mutation. Session-lock transfer and child publication
+are durable and identity-bound. Restored-start completion runs before BFF listen; terminal-last
+state with a complete WAL is handled explicitly. Native recovery derives its action from receipts
+and retains verified N.
+
+The recovery control binds the exact aggregate bytes validated by the existing runtime-state reader.
+That reader hashes one bounded raw buffer and rejects malformed UTF-8 and size races. Native reload
+uses no-follow `updates/runtime-state.json`; it rejects a root-level lookalike and changed bytes,
+including misleading numeric-prefix or object fragments. Earlier substring checks, independent
+before/after digest reads, and the native fixture's incorrect root-level path were identified and
+replaced before freeze. No positive native process replacement is inferred from these loader fixtures.
+
+Owner replays pass seven server files / 68 tests, the local-state/normal-startup pair / 39 tests,
+and two CLI files / 142 tests sequentially. Owned source and test ESLint, server/CLI noEmit, arm64
+native quality, and ASan/UBSan pass. The earlier parallel CLI timeout remains a failed attempt;
+its sequential replay is the passing result. Apple's ASan rejected an initial leak-detection option;
+the supported sanitizer invocation passes with leak detection disabled, without claiming leak proof.
+The lead regenerated the canonical operation catalog to 247 entries and independently passed all
+15 drift tests (4.49 seconds). Package rebuild, independent review and final integrated-head proof
+remain required; production KHA1 is still disabled.
+
 The frozen Windows generation producer passes independent security re-review with zero findings.
 The prior medium stale-inventory finding and low fresh-verification finding are closed. Production staging uses the
 schema-2 generation binding, while ordinary/evaluation output remains flat schema 1 and manual-only.

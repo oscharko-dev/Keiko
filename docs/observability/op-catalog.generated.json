@@ -1211,7 +1211,7 @@
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:1975",
+      "site": "packages/keiko-server/src/deps.ts:1982",
       "package": "keiko-server"
     },
     {
@@ -1254,6 +1254,12 @@
       "op": "native-file-dialog.selection.projected",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/native-file-dialog/route.ts:172",
+      "package": "keiko-server"
+    },
+    {
+      "op": "portable.normal-startup-recovery.required",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-portable-normal-startup.ts:179",
       "package": "keiko-server"
     },
     {
@@ -1403,7 +1409,7 @@
     {
       "op": "update.runtime.event",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-local-state.ts:1447",
+      "site": "packages/keiko-server/src/update-local-state.ts:1586",
       "package": "keiko-server"
     },
     {
@@ -1415,7 +1421,7 @@
     {
       "op": "update.session.lifecycle",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-session.ts:721",
+      "site": "packages/keiko-server/src/update-session.ts:781",
       "package": "keiko-server"
     },
     {

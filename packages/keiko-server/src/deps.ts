@@ -154,7 +154,16 @@ import {
 } from "./update-candidate-authority.js";
 import { createUpdatePreflightService } from "./update-preflight-routes.js";
 import { detectUpdateInstallMode, type UpdateRuntimeFacts } from "./update-install-mode.js";
-import { createStateDirUpdateSessionLock } from "./update-session-lock.js";
+import {
+  adoptStateDirUpdateSessionLockForRecovery,
+  createStateDirUpdateSessionLock,
+  type UpdateSessionLock,
+  type UpdateSessionRecoveryOwnership,
+} from "./update-session-lock.js";
+import {
+  PORTABLE_RECOVERED_LAUNCH_ENV,
+  readPortableRecoveredLaunchDescriptor,
+} from "./update-portable-normal-startup.js";
 import {
   createUpdateLocalStateManager,
   type UpdateLocalStateManager,
@@ -1784,6 +1793,7 @@ function buildUpdateSession(options: {
   readonly portableHandoffShutdown?:
     ((request: PortableHandoffShutdownRequest) => Promise<void>) | undefined;
   readonly portableHandoffRuntime: ProductionPortableHandoffRuntime;
+  readonly updateSessionLock: UpdateSessionLock;
   readonly runtimeFacts?: (() => UpdateRuntimeFacts) | undefined;
   readonly runCommandImpl?: UpdateSessionManagerOptions["runCommandImpl"] | undefined;
 }): UpdateSessionManager {
@@ -1797,10 +1807,7 @@ function buildUpdateSession(options: {
     activityLog: processServerLogSink(),
     diagnostics: options.diagnostics,
     candidateGate: updateCandidateGate(options.updateRemediation),
-    lock: createStateDirUpdateSessionLock(resolveUpdateStateDir(options.env), {
-      diagnostics: options.diagnostics,
-      securityLogSink: processServerLogSink(),
-    }),
+    lock: options.updateSessionLock,
     portableStager: createPortableUpdateStager({
       env: options.env,
       localState: options.updateLocalState,
@@ -3005,6 +3012,61 @@ function resolveTrustAndManagedLspControl(args: BuildPeripheralsArgs): {
   return { workspaceScriptTrust, managedLspControl, disposeTrustLspBridge };
 }
 
+function adoptPortableRecoveryOwnership(
+  args: BuildPeripheralsArgs,
+): UpdateSessionRecoveryOwnership | undefined {
+  const encoded = args.options.env[PORTABLE_RECOVERED_LAUNCH_ENV];
+  const recovered = readPortableRecoveredLaunchDescriptor(encoded);
+  if (encoded !== undefined && recovered === undefined) {
+    throw new TypeError("portable recovered launch descriptor is invalid");
+  }
+  if (
+    recovered?.expectedVersion !== undefined &&
+    recovered.expectedVersion !== KEIKO_PRODUCT_VERSION
+  ) {
+    throw new TypeError("portable recovered launch version does not match this runtime");
+  }
+  const ownership =
+    recovered === undefined
+      ? undefined
+      : adoptStateDirUpdateSessionLockForRecovery(args.runtimeStateDir, recovered);
+  if (recovered !== undefined && ownership === undefined) {
+    throw new TypeError("portable recovered launch ownership could not be adopted");
+  }
+  return ownership;
+}
+
+function resolvedUpdateStartupRecovery(
+  args: BuildPeripheralsArgs,
+  localState: UpdateLocalStateManager,
+  portableRuntime: ProductionPortableHandoffRuntime,
+): UpdateStartupRecoveryPort | undefined {
+  if (args.options.updateStartupRecovery !== undefined) return args.options.updateStartupRecovery;
+  return localState.readRuntimeState().activationWal === undefined
+    ? undefined
+    : portableRuntime.recovery;
+}
+
+function resolvedUpdatePreflight(
+  args: BuildPeripheralsArgs,
+  candidateAuthority: UpdateCandidateAuthority,
+): UiHandlerDeps["updatePreflight"] {
+  if (args.options.updatePreflight !== undefined) return args.options.updatePreflight;
+  const runtimeFacts = args.options.updateRuntimeFacts;
+  return createUpdatePreflightService({
+    candidateAuthority,
+    ...(runtimeFacts === undefined
+      ? {}
+      : {
+          installMode: (): ReturnType<typeof detectUpdateInstallMode> =>
+            detectUpdateInstallMode(runtimeFacts(), { ...args.options.env }),
+        }),
+    ...(args.options.updatePreflightCatalog === undefined
+      ? {}
+      : { bundledCatalog: args.options.updatePreflightCatalog }),
+  });
+}
+
 // eslint-disable-next-line max-lines-per-function -- central runtime wiring stays together so dependency authority is visible.
 function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
   const updateCandidateAuthority = createUpdateCandidateAuthority({
@@ -3032,11 +3094,18 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
   const { workspaceScriptTrust, managedLspControl, disposeTrustLspBridge } =
     resolveTrustAndManagedLspControl(args);
   const debugActivationControl = buildDebugActivationControl(args);
+  const updateSessionLock = createStateDirUpdateSessionLock(args.runtimeStateDir, {
+    diagnostics: args.options.diagnostics,
+    securityLogSink: processServerLogSink(),
+  });
+  const recoveryOwnership = adoptPortableRecoveryOwnership(args);
   const portableHandoffRuntime = createProductionPortableHandoffRuntime({
     env: args.options.env,
     stateDir: args.runtimeStateDir,
     currentVersion: KEIKO_PRODUCT_VERSION,
     localState: updateLocalState,
+    sessionLock: updateSessionLock,
+    ...(recoveryOwnership === undefined ? {} : { recoveryOwnership }),
     canComplete: portableCompletionGate(updateRemediation),
   });
   return {
@@ -3078,30 +3147,16 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       candidateAuthority: updateCandidateAuthority,
       portableHandoffShutdown: args.options.portableHandoffShutdown,
       portableHandoffRuntime,
+      updateSessionLock,
       runtimeFacts: args.options.updateRuntimeFacts,
       runCommandImpl: args.options.updateRunCommandImpl,
     }),
-    updateStartupRecovery:
-      args.options.updateStartupRecovery ??
-      (updateLocalState.readRuntimeState().activationWal === undefined
-        ? undefined
-        : portableHandoffRuntime.recovery),
-    updatePreflight:
-      args.options.updatePreflight ??
-      createUpdatePreflightService({
-        candidateAuthority: updateCandidateAuthority,
-        ...(args.options.updateRuntimeFacts === undefined
-          ? {}
-          : {
-              installMode: (): ReturnType<typeof detectUpdateInstallMode> =>
-                detectUpdateInstallMode(args.options.updateRuntimeFacts?.() ?? {}, {
-                  ...args.options.env,
-                }),
-            }),
-        ...(args.options.updatePreflightCatalog === undefined
-          ? {}
-          : { bundledCatalog: args.options.updatePreflightCatalog }),
-      }),
+    updateStartupRecovery: resolvedUpdateStartupRecovery(
+      args,
+      updateLocalState,
+      portableHandoffRuntime,
+    ),
+    updatePreflight: resolvedUpdatePreflight(args, updateCandidateAuthority),
     updateLocalState,
     updateRemediation,
     containerRunner: buildContainerRunner({

@@ -309,6 +309,42 @@ const INVALID_SETUP_MANIFEST_CASES: readonly InvalidSetupManifestCase[] = [
 ];
 
 describe("runPortableCli", () => {
+  it("runs Mac recovery before validating a stale clicked package root", async () => {
+    const home = tempRoot();
+    const c = capture();
+    let recoveryCalls = 0;
+    const code = await runPortableCli(
+      [
+        "launch",
+        "--target",
+        "macos-arm64",
+        "--portable-root",
+        join(home, "missing-clicked-package"),
+        "--managed-root",
+        join(home, "Applications", "Keiko.app"),
+        "--state-dir",
+        join(home, ".keiko"),
+      ],
+      c.io,
+      {},
+      {
+        cwd: home,
+        homedir: () => home,
+        platform: () => "darwin",
+        arch: () => "arm64",
+        recoverNormalStartupFn: (input) => {
+          recoveryCalls += 1;
+          expect(input.expectedManagedRoot).toBe(join(home, "Applications", "Keiko.app"));
+          return Promise.resolve({ status: "recovery-required" });
+        },
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(recoveryCalls).toBe(1);
+    expect(c.err()).toContain("portable update recovery is required before launch");
+    expect(c.err()).not.toContain("portable root");
+  });
   it("uses the canonical macOS Applications location as the managed default", () => {
     expect(defaultManagedRoot("macos-arm64", {}, "/Users/alice")).toBe("/Applications/Keiko.app");
     expect(defaultManagedRoot("macos-x64", {}, "/Users/alice")).toBe("/Applications/Keiko.app");

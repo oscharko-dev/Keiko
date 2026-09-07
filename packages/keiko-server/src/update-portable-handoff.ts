@@ -56,6 +56,7 @@ export interface PortableHandoffCoordinatorOptions {
     readonly currentPath: string;
     readonly copiedPath: string;
   }) => Promise<void>;
+  readonly publishCoordinatorPid: (sessionId: string, coordinatorPid: number) => boolean;
   readonly spawnFn?: SpawnFn | undefined;
   readonly now?: (() => number) | undefined;
   readonly acceptanceTimeoutMs?: number | undefined;
@@ -254,16 +255,27 @@ function awaitCoordinatorAcceptance(
         ),
       );
     };
-    child.once("error", rejectClosed);
-    child.once("exit", rejectClosed);
-    signal?.addEventListener("abort", rejectClosed, { once: true });
-    if (signal?.aborted === true) {
-      rejectClosed();
-      return;
-    }
-    response.on("data", onData);
-    response.once("end", onEnd);
+    bindAcceptanceListeners(child, response, signal, rejectClosed, onData, onEnd);
   });
+}
+
+function bindAcceptanceListeners(
+  child: ChildProcess,
+  response: Readable,
+  signal: AbortSignal | undefined,
+  rejectClosed: () => void,
+  onData: (chunk: Buffer) => void,
+  onEnd: () => void,
+): void {
+  child.once("error", rejectClosed);
+  child.once("exit", rejectClosed);
+  signal?.addEventListener("abort", rejectClosed, { once: true });
+  if (signal?.aborted === true) {
+    rejectClosed();
+    return;
+  }
+  response.on("data", onData);
+  response.once("end", onEnd);
 }
 
 async function cleanupFailedCoordinator(child: ChildProcess, timeoutMs: number): Promise<void> {
@@ -329,28 +341,14 @@ async function prepareCoordinator(
   const extension = process.platform === "win32" ? ".exe" : "";
   const coordinator = join(root, `coordinator${extension}`);
   const supervisor = join(root, `runtime-supervisor${extension}`);
-  const current = currentNativeArtifacts(plan);
   try {
-    const coordinatorSha256 = copyVerifiedNative(current.coordinator, coordinator);
-    const supervisorSha256 = copyVerifiedNative(current.supervisor, supervisor);
-    if (
-      coordinatorSha256 !== plan.digests.currentLauncherSha256 ||
-      supervisorSha256 !== plan.digests.currentSupervisorSha256
-    ) {
-      fail("portable handoff current native identity changed");
-    }
-    await options.verifyNativeCopy({
-      kind: "coordinator",
-      currentPath: current.coordinator,
-      copiedPath: coordinator,
+    const coordinatorSha256 = await copyAndVerifyNativeArtifacts({
+      options,
+      plan,
+      coordinator,
+      supervisor,
+      signal,
     });
-    assertNotAborted(signal);
-    await options.verifyNativeCopy({
-      kind: "runtime-supervisor",
-      currentPath: current.supervisor,
-      copiedPath: supervisor,
-    });
-    assertNotAborted(signal);
     const planSha256 = await persistPreparedCoordinator(
       options,
       plan,
@@ -368,6 +366,37 @@ async function prepareCoordinator(
     rmSync(supervisor, { force: true });
     throw error;
   }
+}
+
+async function copyAndVerifyNativeArtifacts(input: {
+  readonly options: PortableHandoffCoordinatorOptions;
+  readonly plan: PortableHandoffPlan;
+  readonly coordinator: string;
+  readonly supervisor: string;
+  readonly signal: AbortSignal | undefined;
+}): Promise<string> {
+  const current = currentNativeArtifacts(input.plan);
+  const coordinatorSha256 = copyVerifiedNative(current.coordinator, input.coordinator);
+  const supervisorSha256 = copyVerifiedNative(current.supervisor, input.supervisor);
+  if (
+    coordinatorSha256 !== input.plan.digests.currentLauncherSha256 ||
+    supervisorSha256 !== input.plan.digests.currentSupervisorSha256
+  ) {
+    fail("portable handoff current native identity changed");
+  }
+  await input.options.verifyNativeCopy({
+    kind: "coordinator",
+    currentPath: current.coordinator,
+    copiedPath: input.coordinator,
+  });
+  assertNotAborted(input.signal);
+  await input.options.verifyNativeCopy({
+    kind: "runtime-supervisor",
+    currentPath: current.supervisor,
+    copiedPath: input.supervisor,
+  });
+  assertNotAborted(input.signal);
+  return coordinatorSha256;
 }
 
 async function persistPreparedCoordinator(
@@ -414,63 +443,80 @@ function currentNativeArtifacts(plan: PortableHandoffPlan): {
   };
 }
 
+async function beginPortableHandoff(
+  options: PortableHandoffCoordinatorOptions,
+  input: Parameters<PortableHandoffCoordinatorPort["begin"]>[0],
+): ReturnType<PortableHandoffCoordinatorPort["begin"]> {
+  const { sessionId, activationId, signal } = input;
+  const prepared = await prepareCoordinator(options, sessionId, activationId, signal);
+  const child = spawnPreparedCoordinator(options, prepared.coordinator, activationId);
+  try {
+    await acceptPreparedCoordinator(options, prepared, child, input);
+  } catch (error) {
+    await cleanupFailedCoordinator(
+      child,
+      options.teardownTimeoutMs ?? COORDINATOR_TEARDOWN_TIMEOUT_MS,
+    );
+    throw error;
+  }
+  (child.stdin as NodeJS.WritableStream & { unref?: () => void }).unref?.();
+  child.unref();
+  return {
+    coordinatorId: prepared.coordinatorSha256,
+    acceptedAt: new Date(options.now?.() ?? Date.now()).toISOString(),
+  };
+}
+
+function spawnPreparedCoordinator(
+  options: PortableHandoffCoordinatorOptions,
+  coordinator: string,
+  activationId: string,
+): ChildProcess {
+  return (options.spawnFn ?? spawn)(coordinator, ["--coordinate-update", activationId], {
+    detached: true,
+    env: { KEIKO_STATE_DIR: options.stateDir },
+    stdio: ["pipe", "ignore", "ignore", "pipe"],
+    windowsHide: true,
+  });
+}
+
+async function acceptPreparedCoordinator(
+  options: PortableHandoffCoordinatorOptions,
+  prepared: Awaited<ReturnType<typeof prepareCoordinator>>,
+  child: ChildProcess,
+  input: Parameters<PortableHandoffCoordinatorPort["begin"]>[0],
+): Promise<void> {
+  if (child.pid === undefined || !options.publishCoordinatorPid(input.sessionId, child.pid)) {
+    fail("portable handoff coordinator ownership could not be published");
+  }
+  await Promise.all([
+    writeCoordinatorControl(child, prepared.planSha256),
+    awaitCoordinatorAcceptance(
+      child,
+      prepared.planSha256,
+      options.acceptanceTimeoutMs ?? ACCEPT_TIMEOUT_MS,
+      input.signal,
+    ),
+  ]);
+  assertNotAborted(input.signal);
+  await options.persistAccepted({
+    sessionId: input.sessionId,
+    activationWal: {
+      activationId: input.activationId,
+      planSha256: prepared.planSha256,
+      coordinatorSha256: prepared.coordinatorSha256,
+      intentRevision: prepared.intentRevision,
+      checkpoint: "prepared",
+      receiptSequence: 0,
+      coordinatorId: prepared.coordinatorSha256,
+    },
+  });
+}
+
 export function createPortableHandoffCoordinator(
   options: PortableHandoffCoordinatorOptions,
 ): PortableHandoffCoordinatorPort {
-  return {
-    async begin({ sessionId, activationId, signal }): Promise<{
-      readonly coordinatorId: string;
-      readonly acceptedAt: string;
-    }> {
-      const prepared = await prepareCoordinator(options, sessionId, activationId, signal);
-      const child = (options.spawnFn ?? spawn)(
-        prepared.coordinator,
-        ["--coordinate-update", activationId],
-        {
-          detached: true,
-          env: { KEIKO_STATE_DIR: options.stateDir },
-          stdio: ["pipe", "ignore", "ignore", "pipe"],
-          windowsHide: true,
-        },
-      );
-      try {
-        await Promise.all([
-          writeCoordinatorControl(child, prepared.planSha256),
-          awaitCoordinatorAcceptance(
-            child,
-            prepared.planSha256,
-            options.acceptanceTimeoutMs ?? ACCEPT_TIMEOUT_MS,
-            signal,
-          ),
-        ]);
-        assertNotAborted(signal);
-        await options.persistAccepted({
-          sessionId,
-          activationWal: {
-            activationId,
-            planSha256: prepared.planSha256,
-            coordinatorSha256: prepared.coordinatorSha256,
-            intentRevision: prepared.intentRevision,
-            checkpoint: "prepared",
-            receiptSequence: 0,
-            coordinatorId: prepared.coordinatorSha256,
-          },
-        });
-      } catch (error) {
-        await cleanupFailedCoordinator(
-          child,
-          options.teardownTimeoutMs ?? COORDINATOR_TEARDOWN_TIMEOUT_MS,
-        );
-        throw error;
-      }
-      (child.stdin as NodeJS.WritableStream & { unref?: () => void }).unref?.();
-      child.unref();
-      return {
-        coordinatorId: prepared.coordinatorSha256,
-        acceptedAt: new Date(options.now?.() ?? Date.now()).toISOString(),
-      };
-    },
-  };
+  return { begin: (input) => beginPortableHandoff(options, input) };
 }
 
 export function portableCoordinatorArtifactNames(): readonly string[] {

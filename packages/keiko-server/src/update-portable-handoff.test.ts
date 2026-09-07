@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createPortableHandoffCoordinator,
   PortableHandoffCoordinatorError,
+  type PortableHandoffAcceptedIntent,
   type PortableHandoffPreparedIntent,
 } from "./update-portable-handoff.js";
 import {
@@ -120,6 +121,7 @@ describe("portable handoff coordinator", () => {
       controlText += chunk.toString("utf8");
     });
     const child = Object.assign(new EventEmitter(), {
+      pid: 43_210,
       stdin: control,
       stdio: [control, null, null, response],
       unref: vi.fn(),
@@ -137,6 +139,11 @@ describe("portable handoff coordinator", () => {
     });
     const coordinator = createPortableHandoffCoordinator({
       stateDir: fixture.stateDir,
+      publishCoordinatorPid: (_sessionId, pid) => {
+        expect(pid).toBe(43_210);
+        order.push("publish");
+        return true;
+      },
       persistPrepared: vi.fn(({ activationWal }: PortableHandoffPreparedIntent) => {
         order.push("persist");
         expect(activationWal.checkpoint).toBe("prepared");
@@ -144,7 +151,7 @@ describe("portable handoff coordinator", () => {
         expectedPlanSha256 = activationWal.planSha256;
         return Promise.resolve();
       }),
-      persistAccepted: vi.fn(({ activationWal }) => {
+      persistAccepted: vi.fn(({ activationWal }: PortableHandoffAcceptedIntent) => {
         order.push("accept");
         expect(activationWal.coordinatorId).toBe(activationWal.coordinatorSha256);
         return Promise.resolve();
@@ -157,7 +164,7 @@ describe("portable handoff coordinator", () => {
     await expect(
       coordinator.begin({ sessionId: "session-1", activationId: fixture.plan.activationId }),
     ).resolves.toMatchObject({ acceptedAt: "2023-11-14T22:13:20.000Z" });
-    expect(order).toStrictEqual(["persist", "spawn", "accept"]);
+    expect(order).toStrictEqual(["persist", "spawn", "publish", "accept"]);
     expect(controlText).toMatch(/^[a-f0-9]{64}\n$/u);
     expect(control.writableEnded).toBe(false);
   });
@@ -169,6 +176,7 @@ describe("portable handoff coordinator", () => {
     const spawnFn = vi.fn();
     const coordinator = createPortableHandoffCoordinator({
       stateDir: fixture.stateDir,
+      publishCoordinatorPid: () => true,
       persistPrepared: () => Promise.reject(new Error("stale revision")),
       persistAccepted: () => Promise.resolve(),
       verifyNativeCopy: () => Promise.resolve(),
@@ -196,6 +204,7 @@ describe("portable handoff coordinator", () => {
     });
     const kill = vi.fn(() => true);
     const child = Object.assign(new EventEmitter(), {
+      pid: 43_210,
       stdin: control,
       stdio: [control, null, null, response],
       unref: vi.fn(),
@@ -207,6 +216,7 @@ describe("portable handoff coordinator", () => {
     });
     const coordinator = createPortableHandoffCoordinator({
       stateDir: fixture.stateDir,
+      publishCoordinatorPid: () => true,
       persistPrepared: () => Promise.resolve(),
       persistAccepted: () => Promise.resolve(),
       verifyNativeCopy: () => Promise.resolve(),
@@ -221,6 +231,41 @@ describe("portable handoff coordinator", () => {
     expect(control.destroy).toHaveBeenCalled();
   });
 
+  it("sends no mutation control when coordinator ownership publication fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-handoff-"));
+    roots.push(root);
+    const fixture = prepare(root);
+    const response = new PassThrough();
+    const control = new PassThrough();
+    const write = vi.spyOn(control, "write");
+    const childEmitter = new EventEmitter();
+    const kill = vi.fn(() => {
+      queueMicrotask(() => childEmitter.emit("exit", null, "SIGKILL"));
+      return true;
+    });
+    const child = Object.assign(childEmitter, {
+      pid: 43_210,
+      stdin: control,
+      stdio: [control, null, null, response],
+      unref: vi.fn(),
+      kill,
+    }) as unknown as ChildProcess;
+    const coordinator = createPortableHandoffCoordinator({
+      stateDir: fixture.stateDir,
+      publishCoordinatorPid: () => false,
+      persistPrepared: () => Promise.resolve(),
+      persistAccepted: () => Promise.resolve(),
+      verifyNativeCopy: () => Promise.resolve(),
+      spawnFn: () => child,
+    });
+
+    await expect(
+      coordinator.begin({ sessionId: "session-1", activationId: fixture.plan.activationId }),
+    ).rejects.toThrow(/ownership could not be published/u);
+    expect(write.mock.calls).toHaveLength(0);
+    expect(kill).toHaveBeenCalledOnce();
+  });
+
   it("stops the accepted coordinator when the accepted checkpoint CAS fails", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-handoff-"));
     roots.push(root);
@@ -229,6 +274,7 @@ describe("portable handoff coordinator", () => {
     const response = new PassThrough();
     const kill = vi.fn(() => true);
     const child = Object.assign(new EventEmitter(), {
+      pid: 43_210,
       stdin: control,
       stdio: [control, null, null, response],
       unref: vi.fn(),
@@ -241,6 +287,7 @@ describe("portable handoff coordinator", () => {
     let planSha256 = "";
     const coordinator = createPortableHandoffCoordinator({
       stateDir: fixture.stateDir,
+      publishCoordinatorPid: () => true,
       persistPrepared: ({ activationWal }) => {
         planSha256 = activationWal.planSha256;
         return Promise.resolve();
@@ -267,6 +314,7 @@ describe("portable handoff coordinator", () => {
     const response = new PassThrough();
     const kill = vi.fn(() => true);
     const child = Object.assign(new EventEmitter(), {
+      pid: 43_210,
       stdin: control,
       stdio: [control, null, null, response],
       unref: vi.fn(),
@@ -279,6 +327,7 @@ describe("portable handoff coordinator", () => {
     let planSha256 = "";
     const coordinator = createPortableHandoffCoordinator({
       stateDir: fixture.stateDir,
+      publishCoordinatorPid: () => true,
       persistPrepared: ({ activationWal }) => {
         planSha256 = activationWal.planSha256;
         return Promise.resolve();
@@ -309,6 +358,7 @@ describe("portable handoff coordinator", () => {
     const response = new PassThrough();
     const kill = vi.fn(() => true);
     const child = Object.assign(new EventEmitter(), {
+      pid: 43_210,
       stdin: control,
       stdio: [control, null, null, response],
       unref: vi.fn(),
@@ -322,11 +372,14 @@ describe("portable handoff coordinator", () => {
     const controller = new AbortController();
     const coordinator = createPortableHandoffCoordinator({
       stateDir: fixture.stateDir,
+      publishCoordinatorPid: () => true,
       persistPrepared: () => Promise.resolve(),
       persistAccepted: accepted,
       verifyNativeCopy: () => Promise.resolve(),
       spawnFn: () => {
-        queueMicrotask(() => controller.abort());
+        queueMicrotask(() => {
+          controller.abort();
+        });
         return child;
       },
     });
@@ -347,6 +400,7 @@ describe("portable handoff coordinator", () => {
     const control = new PassThrough();
     const response = new PassThrough();
     const child = Object.assign(new EventEmitter(), {
+      pid: 43_210,
       stdin: control,
       stdio: [control, null, null, response],
       exitCode: null,
@@ -355,6 +409,7 @@ describe("portable handoff coordinator", () => {
     }) as unknown as ChildProcess;
     const coordinator = createPortableHandoffCoordinator({
       stateDir: fixture.stateDir,
+      publishCoordinatorPid: () => true,
       persistPrepared: () => Promise.resolve(),
       persistAccepted: () => Promise.resolve(),
       verifyNativeCopy: () => Promise.resolve(),
