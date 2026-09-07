@@ -43,12 +43,18 @@ import {
   PortableUpdateStagingError,
   reportPortableProgress,
 } from "./update-portable-staging-shared.js";
+import {
+  portableManifestGenerationSchemaVerified,
+  verifiedWindowsGenerationManifestBinding,
+  type WindowsGenerationBinding,
+} from "./update-portable-windows-generation.js";
 
 export interface PortableStageAssets {
   readonly release: PortableRelease;
   readonly archive: GitHubAsset;
   readonly manifest: TextAsset;
   readonly sidecars: readonly PortableSidecarRuntimeVerification[];
+  readonly windowsGeneration?: WindowsGenerationBinding | undefined;
 }
 
 function safePositiveInteger(value: unknown): number | undefined {
@@ -528,7 +534,7 @@ function manifestVerified(
   const releaseRecord = recordAt(manifest, "release");
   const artifact = recordAt(manifest, "artifact");
   return [
-    manifest.schemaVersion === 1,
+    portableManifestGenerationSchemaVerified(manifest, target),
     fieldEquals(product, "packageName", PACKAGE_NAME),
     fieldEquals(product, "packageVersion", release.targetVersion),
     releaseManifestVerified(releaseRecord, release),
@@ -671,10 +677,19 @@ export async function resolvePortableStageAssets(
   });
   const evidence = await fetchCandidateTextEvidence(options, input, release, target);
   const sidecars = verifiedCandidateSidecars(input, release, archive, evidence, target);
+  const manifestRecord = parseJsonRecord(evidence.manifest.text);
+  if (manifestRecord === undefined) {
+    throw new PortableUpdateStagingError(
+      "portable-verification-failed",
+      "portable manifest is not verified",
+    );
+  }
+  const windowsGeneration = verifiedWindowsGenerationManifestBinding(manifestRecord, target);
   return {
     release,
     archive,
     manifest: evidence.manifest,
     sidecars,
+    ...(windowsGeneration === undefined ? {} : { windowsGeneration }),
   };
 }

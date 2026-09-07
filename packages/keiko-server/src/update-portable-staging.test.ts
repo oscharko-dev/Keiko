@@ -16,6 +16,8 @@ import { createUpdateLocalStateManager } from "./update-local-state.js";
 import { createPortableUpdateStager } from "./update-portable-staging.js";
 import { fetchPortableAssetToFile } from "./update-portable-staging-manifest.js";
 import { verifyPortableManifestSidecars } from "./update-portable-sidecar-verification.js";
+import { hashPortableHandoffTree } from "./update-portable-handoff-tree.js";
+import type { WindowsGenerationBinding } from "./update-portable-windows-generation.js";
 import {
   requiredPortableDiskBytes,
   assertPortableArchiveEntryLimits,
@@ -39,6 +41,9 @@ const MACOS_ARM64_ASSET_NAME = "keiko-macos-arm64.zip";
 const MACOS_X64_ASSET_NAME = "keiko-macos-x64.zip";
 const SIDECAR_ROOT = "runtime/sidecars/opencode-compatible";
 const tempRoots: string[] = [];
+const WINDOWS_SUPPORT_LAUNCHER =
+  '@echo off\r\nset "SCRIPT_DIR=%~dp0"\r\n"%SCRIPT_DIR%..\\Keiko.exe" %*\r\n';
+const windowsGenerationByArchive = new WeakMap<Uint8Array, WindowsGenerationBinding>();
 
 function requestUrl(input: Parameters<typeof fetch>[0]): string {
   if (typeof input === "string") return input;
@@ -269,9 +274,9 @@ function sidecarRuntime(
   };
 }
 
-function setupManifest(): string {
+function setupManifest(windowsGeneration: WindowsGenerationBinding): string {
   return JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     platformTarget: TARGET,
     packageName: "@oscharko-dev/keiko",
     packageVersion: TARGET_VERSION,
@@ -279,22 +284,80 @@ function setupManifest(): string {
     primaryLauncher: "Keiko.exe",
     bootstrapUpdateEligible: false,
     runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+    windowsGeneration,
   });
 }
 
-function portableArchive(
+async function portableArchive(
   extraEntries: readonly { readonly name: string; readonly bytes: Uint8Array }[] = [],
-): Uint8Array {
-  return zipEntries([
-    { name: "Keiko/Keiko.exe", bytes: ENC.encode("launcher") },
-    { name: "Keiko/.portable/setup-manifest.json", bytes: ENC.encode(setupManifest()) },
+  fault?: "generation-mutation" | "launcher-replacement" | "setup-rebind" | "support-replacement",
+): Promise<Uint8Array> {
+  const launcher = ENC.encode("launcher");
+  const generationEntries = [
     {
-      name: "Keiko/app/package.json",
+      name: "app/package.json",
       bytes: ENC.encode(JSON.stringify({ name: "@oscharko-dev/keiko", version: TARGET_VERSION })),
     },
-    { name: "Keiko/runtime/node/node.exe", bytes: ENC.encode("node") },
-    ...extraEntries,
+    { name: "runtime/node/node.exe", bytes: ENC.encode("node") },
+    { name: "runtime/native/keiko-runtime-supervisor.exe", bytes: ENC.encode("supervisor") },
+    { name: "runtime/evidence.txt", bytes: ENC.encode("non-PE generation evidence") },
+    ...extraEntries
+      .filter(
+        (entry) => entry.name.startsWith("Keiko/runtime/") || entry.name.startsWith("Keiko/app/"),
+      )
+      .map((entry) => ({ ...entry, name: entry.name.slice("Keiko/".length) })),
+  ];
+  const generationFixtureRoot = mkdtempSync(join(tmpdir(), "keiko-generation-fixture-"));
+  tempRoots.push(generationFixtureRoot);
+  for (const entry of generationEntries) {
+    const path = join(generationFixtureRoot, ...entry.name.split("/"));
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, entry.bytes);
+  }
+  const treeSha256 = await hashPortableHandoffTree(generationFixtureRoot, {
+    deadline: Date.now() + 60_000,
+  });
+  const windowsGeneration: WindowsGenerationBinding = {
+    schemaVersion: 1,
+    resourceRoot: `.portable/generations/${treeSha256}`,
+    treeHashSchema: "KHT1",
+    treeSha256,
+    launcherPath: "Keiko.exe",
+    launcherSha256: sha256(launcher),
+  };
+  const setupGeneration =
+    fault === "setup-rebind"
+      ? { ...windowsGeneration, launcherSha256: "f".repeat(64) }
+      : windowsGeneration;
+  const archive = zipEntries([
+    {
+      name: "Keiko/Keiko.exe",
+      bytes: fault === "launcher-replacement" ? ENC.encode("replacement launcher") : launcher,
+    },
+    {
+      name: "Keiko/.portable/setup-manifest.json",
+      bytes: ENC.encode(setupManifest(setupGeneration)),
+    },
+    {
+      name: "Keiko/support/keiko-support.cmd",
+      bytes: ENC.encode(
+        fault === "support-replacement" ? "@echo off\r\n" : WINDOWS_SUPPORT_LAUNCHER,
+      ),
+    },
+    ...generationEntries.map((entry) => ({
+      ...entry,
+      name: `Keiko/.portable/generations/${treeSha256}/${entry.name}`,
+      bytes:
+        fault === "generation-mutation" && entry.name === "runtime/evidence.txt"
+          ? ENC.encode("mutated after generation closure")
+          : entry.bytes,
+    })),
+    ...extraEntries.filter(
+      (entry) => !entry.name.startsWith("Keiko/runtime/") && !entry.name.startsWith("Keiko/app/"),
+    ),
   ]);
+  windowsGenerationByArchive.set(archive, windowsGeneration);
+  return archive;
 }
 
 function portableMode(): UpdateInstallMode {
@@ -422,8 +485,11 @@ function portableManifest(
   archiveSha = sha256(archiveBytes),
   sidecarRuntimes: readonly Record<string, unknown>[] = [],
 ): string {
+  const windowsGeneration = windowsGenerationByArchive.get(archiveBytes);
+  if (windowsGeneration === undefined) throw new Error("Windows generation fixture is unavailable");
   return JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
+    windowsGeneration,
     product: { name: "Keiko", packageName: "@oscharko-dev/keiko", packageVersion: TARGET_VERSION },
     release: {
       releaseId: RELEASE_ID,
@@ -447,6 +513,7 @@ function portableManifest(
       nodeDistribution: "official-nodejs-dist",
       nodeArchiveSha256: "d".repeat(64),
     },
+    provenance: { windowsGeneration },
     security: {
       verificationPolicy: "production",
       verificationStatus: "verified-production",
@@ -469,6 +536,7 @@ function portableManifest(
         packageVersion: TARGET_VERSION,
         archiveSha256: archiveSha,
         platformSignatureLocallyVerified: true,
+        windowsGeneration,
         ...(sidecarRuntimes.length > 0 ? { sidecarRuntimes } : {}),
       },
     },
@@ -588,7 +656,7 @@ describe("portable archive limit guards", () => {
 
 describe("portable update staging", () => {
   it("cancels a non-OK immutable release metadata body before failing", async () => {
-    const archive = portableArchive();
+    const archive = await portableArchive();
     const install = makeManagedInstall();
     const response = new Response("not found", { status: 404 });
     const body = response.body;
@@ -622,7 +690,7 @@ describe("portable update staging", () => {
       },
       cancel,
     });
-    const archive = portableArchive();
+    const archive = await portableArchive();
 
     await expect(
       fetchPortableAssetToFile(
@@ -655,7 +723,7 @@ describe("portable update staging", () => {
       },
       cancel,
     });
-    const archive = portableArchive();
+    const archive = await portableArchive();
     const download = fetchPortableAssetToFile(
       { env: {}, fetchImpl: () => Promise.resolve(new Response(body)) },
       { id: ASSET_ID, name: ASSET_NAME, size: 1024 * 1024 + 1, downloadUrl: assetUrl(ASSET_NAME) },
@@ -677,7 +745,7 @@ describe("portable update staging", () => {
   });
 
   it("rejects rebound release metadata before downloading candidate bytes", async () => {
-    const archive = portableArchive();
+    const archive = await portableArchive();
     const install = makeManagedInstall();
     const rebound = release(archive.length);
     const assets = rebound.assets as Record<string, unknown>[];
@@ -710,7 +778,7 @@ describe("portable update staging", () => {
   });
 
   it("rejects rebound manifest and checksum metadata from the immutable release", async () => {
-    const archive = portableArchive();
+    const archive = await portableArchive();
     const install = makeManagedInstall();
     const rebound = release(archive.length);
     const assets = rebound.assets as Record<string, unknown>[];
@@ -737,7 +805,7 @@ describe("portable update staging", () => {
   });
 
   it("rejects checksum bytes that do not match the preflight candidate digest", async () => {
-    const archive = portableArchive();
+    const archive = await portableArchive();
     const install = makeManagedInstall();
     const snapshot = candidate(archive);
     if (snapshot.portable === undefined) throw new Error("portable candidate fixture missing");
@@ -762,7 +830,7 @@ describe("portable update staging", () => {
   });
 
   it("fails before metadata or archive download when disk headroom is insufficient", async () => {
-    const archive = portableArchive();
+    const archive = await portableArchive();
     const install = makeManagedInstall();
     const fetchImpl = responseFor(archive);
     const stager = createPortableUpdateStager({
@@ -786,7 +854,7 @@ describe("portable update staging", () => {
   });
 
   it("cancels during extraction, removes partial staging, and preserves the active tree", async () => {
-    const archive = portableArchive();
+    const archive = await portableArchive();
     const install = makeManagedInstall();
     const controller = new AbortController();
     const stager = createPortableUpdateStager({
@@ -814,7 +882,7 @@ describe("portable update staging", () => {
   });
 
   it("downloads, verifies, stages, and records content-free state", async () => {
-    const archive = portableArchive();
+    const archive = await portableArchive();
     const install = makeManagedInstall();
     const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
     const stager = createPortableUpdateStager({
@@ -834,15 +902,49 @@ describe("portable update staging", () => {
 
     const stageRoot = join(dirname(install.root), ".keiko-portable-updates", summary.stageId);
     expect(existsSync(join(stageRoot, "Keiko", "Keiko.exe"))).toBe(true);
-    expect(existsSync(join(stageRoot, "Keiko", "runtime", "node", "node.exe"))).toBe(true);
+    const binding = windowsGenerationByArchive.get(archive);
+    if (binding === undefined) throw new Error("Windows generation fixture missing");
+    expect(
+      existsSync(
+        join(stageRoot, "Keiko", ...binding.resourceRoot.split("/"), "runtime", "node", "node.exe"),
+      ),
+    ).toBe(true);
     expect(localState.readRuntimeState().portableStage).toEqual(summary);
     const persisted = JSON.stringify(localState.readRuntimeState());
     expect(persisted).not.toContain(install.root);
     expect(persisted).not.toContain("https://github.com");
   });
 
+  it.each([
+    ["generation-mutation", "staged Windows generation digest mismatch"],
+    ["launcher-replacement", "staged Windows root launcher digest mismatch"],
+    [
+      "setup-rebind",
+      "setup manifest Windows generation binding does not match the reviewed manifest",
+    ],
+    ["support-replacement", "staged Windows support launcher is not canonical"],
+  ] as const)("rejects a Windows %s after reviewed binding", async (fault, message) => {
+    const archive = await portableArchive([], fault);
+    const install = makeManagedInstall();
+    const stager = createPortableUpdateStager({
+      env: {},
+      fetchImpl: responseFor(archive),
+      platformVerifier: verifyPlatform,
+    });
+
+    await expect(
+      stager.stage({
+        candidate: candidate(archive),
+        sessionId: `session-${fault}`,
+        targetVersion: TARGET_VERSION,
+        installMode: portableMode(),
+        runtimeFacts: { packageRoot: install.packageRoot },
+      }),
+    ).rejects.toThrow(message);
+  });
+
   it("fails closed when the release is missing a required first-class portable archive", async () => {
-    const archive = portableArchive();
+    const archive = await portableArchive();
     const install = makeManagedInstall();
     const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
     const stager = createPortableUpdateStager({
@@ -872,7 +974,7 @@ describe("portable update staging", () => {
   it("verifies bundled sidecar payloads and records content-free sidecar state", async () => {
     const files = sidecarFiles();
     const sidecar = sidecarRuntime(files);
-    const archive = portableArchive(sidecarArchiveEntries(files));
+    const archive = await portableArchive(sidecarArchiveEntries(files));
     const install = makeManagedInstall();
     const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
     const stager = createPortableUpdateStager({
@@ -905,7 +1007,7 @@ describe("portable update staging", () => {
   it("fails closed when staged sidecar payload digest does not match the manifest", async () => {
     const files = sidecarFiles();
     const sidecar = sidecarRuntime(files, "9".repeat(64));
-    const archive = portableArchive(sidecarArchiveEntries(files));
+    const archive = await portableArchive(sidecarArchiveEntries(files));
     const install = makeManagedInstall();
     const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
     const stager = createPortableUpdateStager({
@@ -933,7 +1035,7 @@ describe("portable update staging", () => {
     const sidecar = sidecarRuntime(files);
     const signing = sidecar.signing as Record<string, unknown>;
     signing.shippedExecutableSha256 = "9".repeat(64);
-    const archive = portableArchive(sidecarArchiveEntries(files));
+    const archive = await portableArchive(sidecarArchiveEntries(files));
     const install = makeManagedInstall();
     const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
     const stager = createPortableUpdateStager({
@@ -957,7 +1059,7 @@ describe("portable update staging", () => {
   });
 
   it("fails closed when the archive hash no longer matches the verified manifest", async () => {
-    const archive = portableArchive();
+    const archive = await portableArchive();
     const install = makeManagedInstall();
     const stager = createPortableUpdateStager({
       env: {},
@@ -979,7 +1081,7 @@ describe("portable update staging", () => {
   });
 
   it("rejects traversal entries without mutating the active install", async () => {
-    const archive = portableArchive([{ name: "../evil.txt", bytes: ENC.encode("escape") }]);
+    const archive = await portableArchive([{ name: "../evil.txt", bytes: ENC.encode("escape") }]);
     const install = makeManagedInstall();
     const stager = createPortableUpdateStager({
       env: {},
@@ -1002,7 +1104,7 @@ describe("portable update staging", () => {
   });
 
   it("fails closed when local platform verification rejects the staged payload", async () => {
-    const archive = portableArchive();
+    const archive = await portableArchive();
     const install = makeManagedInstall();
     const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
     const stager = createPortableUpdateStager({

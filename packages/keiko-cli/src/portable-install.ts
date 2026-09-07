@@ -1,10 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  closeSync,
+  constants,
   copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   opendirSync,
   readdirSync,
   readFileSync,
@@ -12,8 +15,9 @@ import {
   renameSync,
   rmdirSync,
   rmSync,
-  statSync,
+  fstatSync,
   writeFileSync,
+  type Stats,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import {
@@ -44,6 +48,7 @@ import {
   defaultManagedRoot,
   isPortableTarget,
   layoutFor,
+  layoutForSetupManifest,
   PACKAGE_NAME,
   primaryLauncherName,
   targetRuntime,
@@ -51,6 +56,7 @@ import {
   type PortableTarget,
   type SetupManifest,
   type SetupRuntimeManifest,
+  type WindowsGenerationBinding,
   type SetupStatus,
   type SpawnFn,
 } from "./portable-shared.js";
@@ -131,10 +137,17 @@ class PortableManagedRegistrationRepairError extends Error {
 const STABLE_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const PORTABLE_TARGETS = ["windows-x64", "macos-arm64", "macos-x64"] as const;
 const PORTABLE_SETUP_LOCK = "portable-setup.lock";
-
-function readJson(path: string): unknown {
-  return JSON.parse(readFileSync(path, "utf8")) as unknown;
-}
+const SHA256_RE = /^[a-f0-9]{64}$/u;
+const WINDOWS_GENERATION_KEYS = [
+  "schemaVersion",
+  "resourceRoot",
+  "treeHashSchema",
+  "treeSha256",
+  "launcherPath",
+  "launcherSha256",
+] as const;
+const WINDOWS_SUPPORT_LAUNCHER =
+  '@echo off\r\nset "SCRIPT_DIR=%~dp0"\r\n"%SCRIPT_DIR%..\\Keiko.exe" %*\r\n';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -153,9 +166,48 @@ function parseSetupRuntime(value: unknown): SetupRuntimeManifest {
   return { nodePlatform, nodeArchitecture };
 }
 
+function exactKeys(record: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(record).sort();
+  return (
+    actual.length === expected.length && [...expected].sort().every((key, i) => actual[i] === key)
+  );
+}
+
+function parseWindowsGenerationBinding(value: unknown): WindowsGenerationBinding {
+  if (!isRecord(value) || !exactKeys(value, WINDOWS_GENERATION_KEYS)) {
+    throw new Error("portable setup manifest Windows generation binding is malformed");
+  }
+  const treeSha256 = value.treeSha256;
+  const launcherSha256 = value.launcherSha256;
+  const valid = [
+    value.schemaVersion === 1,
+    value.treeHashSchema === "KHT1",
+    typeof treeSha256 === "string" && SHA256_RE.test(treeSha256),
+    value.resourceRoot === `.portable/generations/${String(treeSha256)}`,
+    value.launcherPath === "Keiko.exe",
+    typeof launcherSha256 === "string" && SHA256_RE.test(launcherSha256),
+  ].every(Boolean);
+  if (!valid || typeof treeSha256 !== "string" || typeof launcherSha256 !== "string") {
+    throw new Error("portable setup manifest Windows generation binding is malformed");
+  }
+  return {
+    schemaVersion: 1,
+    resourceRoot: `.portable/generations/${treeSha256}`,
+    treeHashSchema: "KHT1",
+    treeSha256,
+    launcherPath: "Keiko.exe",
+    launcherSha256,
+  };
+}
+
 function parseSetupManifest(path: string): SetupManifest {
-  const raw = readJson(path);
-  if (!isRecord(raw) || raw.schemaVersion !== 1) {
+  const raw = JSON.parse(
+    readPortableFile(path, "portable setup manifest is unsafe").toString("utf8"),
+  ) as unknown;
+  if (!isRecord(raw) || (raw.schemaVersion !== 1 && raw.schemaVersion !== 2)) {
+    throw new Error("portable setup manifest is malformed");
+  }
+  if (raw.schemaVersion === 2 && raw.windowsGeneration === undefined) {
     throw new Error("portable setup manifest is malformed");
   }
   const targetName = typeof raw.platformTarget === "string" ? raw.platformTarget : undefined;
@@ -183,8 +235,7 @@ function parseSetupManifestRecord(
   if (typeof primaryLauncher !== "string") {
     throw new TypeError("portable setup manifest launcher field is malformed");
   }
-  return {
-    schemaVersion: 1,
+  const fields = {
     platformTarget: targetName,
     packageName,
     packageVersion,
@@ -192,6 +243,17 @@ function parseSetupManifestRecord(
     primaryLauncher,
     bootstrapUpdateEligible,
     runtime: parseSetupRuntime(raw.runtime),
+  };
+  if (raw.schemaVersion === 1) return { schemaVersion: 1, ...fields };
+  if (targetName !== "windows-x64" || primaryLauncher !== "Keiko.exe") {
+    throw new Error("portable setup manifest schema is unsupported for target");
+  }
+  return {
+    schemaVersion: 2,
+    ...fields,
+    platformTarget: "windows-x64",
+    primaryLauncher: "Keiko.exe",
+    windowsGeneration: parseWindowsGenerationBinding(raw.windowsGeneration),
   };
 }
 
@@ -221,15 +283,122 @@ function validateLayout(layout: PortableLayout, manifest: SetupManifest): void {
     { label: "primary launcher", path: layout.primaryLauncherPath },
   ] as const;
   for (const file of requiredFiles) {
-    if (!existsSync(file.path) || !statSync(file.path).isFile()) {
-      throw new Error(`missing portable ${file.label}`);
-    }
+    readPortableFile(file.path, `missing portable ${file.label}`);
   }
+  if (manifest.schemaVersion === 2) validateWindowsGenerationLayout(layout, manifest);
   validateAppPackage(layout.packageJsonPath, manifest.packageVersion);
 }
 
+function readPortableFile(path: string, message: string): Buffer {
+  let descriptor: number;
+  try {
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch {
+    throw new Error(message);
+  }
+  try {
+    const before = lstatSync(path);
+    const opened = fstatSync(descriptor);
+    assertPortableFileOpened(before, opened, message);
+    const bytes = readFileSync(descriptor);
+    const after = fstatSync(descriptor);
+    const current = lstatSync(path);
+    assertPortableFileStable(bytes, opened, after, current, message);
+    return bytes;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function assertPortableFileOpened(before: Stats, opened: Stats, message: string): void {
+  const valid = [
+    before.isFile(),
+    !before.isSymbolicLink(),
+    before.nlink === 1,
+    opened.isFile(),
+    opened.nlink === 1,
+    before.dev === opened.dev,
+    before.ino === opened.ino,
+    before.size === opened.size,
+  ].every(Boolean);
+  if (!valid) throw new Error(message);
+}
+
+function assertPortableFileStable(
+  bytes: Buffer,
+  opened: Stats,
+  after: Stats,
+  current: Stats,
+  message: string,
+): void {
+  const stable = [
+    bytes.byteLength === opened.size,
+    after.dev === opened.dev,
+    after.ino === opened.ino,
+    after.size === opened.size,
+    after.mtimeMs === opened.mtimeMs,
+    current.dev === opened.dev,
+    current.ino === opened.ino,
+  ].every(Boolean);
+  if (!stable) throw new Error(message);
+}
+
+function sha256PortableFile(path: string, message: string): string {
+  return createHash("sha256").update(readPortableFile(path, message)).digest("hex");
+}
+
+function requireWindowsGenerationDirectories(layout: PortableLayout): void {
+  const paths = [
+    join(layout.installRoot, ".portable"),
+    join(layout.installRoot, ".portable", "generations"),
+    layout.resourceRoot,
+    layout.appRoot,
+    join(layout.resourceRoot, "runtime"),
+    join(layout.resourceRoot, "runtime", "node"),
+    join(layout.resourceRoot, "runtime", "native"),
+  ];
+  for (const path of paths) {
+    if (!existsSync(path)) throw new Error("portable Windows generation path is unavailable");
+    const entry = lstatSync(path);
+    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+      throw new Error("portable Windows generation path is unsafe");
+    }
+  }
+}
+
+function validateWindowsGenerationLayout(
+  layout: PortableLayout,
+  manifest: Extract<SetupManifest, { readonly schemaVersion: 2 }>,
+): void {
+  requireWindowsGenerationDirectories(layout);
+  readPortableFile(layout.runtimeSupervisorPath, "missing portable runtime supervisor");
+  if (
+    sha256PortableFile(layout.primaryLauncherPath, "portable root launcher is unsafe") !==
+    manifest.windowsGeneration.launcherSha256
+  ) {
+    throw new Error("portable root launcher digest mismatch");
+  }
+  const supportLauncher = join(layout.installRoot, "support", "keiko-support.cmd");
+  if (
+    readPortableFile(
+      supportLauncher,
+      "portable Windows support launcher is not canonical",
+    ).toString("utf8") !== WINDOWS_SUPPORT_LAUNCHER
+  ) {
+    throw new Error("portable Windows support launcher is not canonical");
+  }
+  if (
+    existsSync(join(layout.installRoot, "app")) ||
+    existsSync(join(layout.installRoot, "runtime"))
+  ) {
+    throw new Error("portable Windows generation layout contains legacy payload copies");
+  }
+}
+
 function validateAppPackage(path: string, expectedVersion: string): void {
-  const appPackage = readJson(path);
+  const appPackage = JSON.parse(
+    readPortableFile(path, "portable app package metadata is unsafe").toString("utf8"),
+  ) as unknown;
   if (!isRecord(appPackage) || appPackage.name !== PACKAGE_NAME) {
     throw new Error("portable app package name mismatch");
   }
@@ -434,18 +603,19 @@ function promoteToManaged(
   try {
     copyTreeSafe(source.installRoot, stagedTarget);
     atomicPublishTreeSwap(stagedTarget, managedRoot, { rename: renameSync });
-    return layoutFor(target, managedRoot);
+    return validatePortableRoot(target, managedRoot).layout;
   } finally {
     rmSync(stagingRoot, { recursive: true, force: true });
   }
 }
 
 export function validatePortableRoot(target: PortableTarget, root: string): ValidatedPortableRoot {
-  const layout = layoutFor(target, root);
-  if (!existsSync(layout.setupManifestPath))
+  const rootLayout = layoutFor(target, root);
+  if (!existsSync(rootLayout.setupManifestPath))
     throw new Error("portable setup manifest is unavailable");
-  const manifest = parseSetupManifest(layout.setupManifestPath);
+  const manifest = parseSetupManifest(rootLayout.setupManifestPath);
   validateSetupManifest(manifest, target);
+  const layout = layoutForSetupManifest(target, root, manifest);
   validateLayout(layout, manifest);
   return { layout, manifest };
 }
@@ -530,7 +700,7 @@ function swapStagedUpgrade(
       ...(input.securityLogSink !== undefined ? { securityLogSink: input.securityLogSink } : {}),
     });
     promoted = true;
-    const layout = layoutFor(input.target, paths.managedRoot);
+    const layout = validatePortableRoot(input.target, paths.managedRoot).layout;
     finalizeManagedSetup(
       {
         target: input.target,

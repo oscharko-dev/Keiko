@@ -29,6 +29,7 @@ import {
   MAX_UNCOMPRESSED_BYTES,
   PACKAGE_NAME,
   PORTABLE_PAYLOAD_ROOT,
+  PORTABLE_OPERATION_TIMEOUT_MS,
   PORTABLE_STAGE_DIR_PREFIX,
   fieldEquals,
   assertAbort,
@@ -41,6 +42,13 @@ import {
   type PortableUpdateStageInput,
   PortableUpdateStagingError,
 } from "./update-portable-staging-shared.js";
+import { hashPortableHandoffTree } from "./update-portable-handoff-tree.js";
+import {
+  parseWindowsGenerationBinding,
+  resolveWindowsGenerationLayout,
+  windowsGenerationBindingsEqual,
+  type WindowsGenerationBinding,
+} from "./update-portable-windows-generation.js";
 import { type PortableSidecarRuntimeVerification } from "./update-portable-sidecar-verification.js";
 import { verifyStagedSidecarPayloads } from "./update-portable-sidecar-staging-verification.js";
 import { verifyPortablePlatformSignature } from "./update-portable-platform-verification.js";
@@ -60,6 +68,18 @@ interface ExtractionProgressState {
   lastReportedBytes: number;
   lastReportedAt: number;
 }
+
+interface StagedLayout {
+  readonly resourceRoot: string;
+  readonly appRoot: string;
+  readonly runtimeNode: string;
+  readonly runtimeSupervisor?: string | undefined;
+  readonly launcher: string;
+  readonly appBundlePath?: string | undefined;
+}
+
+const WINDOWS_SUPPORT_LAUNCHER =
+  '@echo off\r\nset "SCRIPT_DIR=%~dp0"\r\n"%SCRIPT_DIR%..\\Keiko.exe" %*\r\n';
 
 function reportExtractionProgress(
   session: PortableUpdateStageInput,
@@ -499,7 +519,11 @@ function setupManifestPath(root: string, target: UpdatePortableTarget): string {
 }
 
 function requiredStagedFile(path: string): void {
-  if (!existsSync(path) || !statSync(path).isFile()) {
+  if (!existsSync(path)) {
+    throw new PortableUpdateStagingError("portable-staging-failed", "staged layout is incomplete");
+  }
+  const entry = lstatSync(path);
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
     throw new PortableUpdateStagingError("portable-staging-failed", "staged layout is incomplete");
   }
 }
@@ -508,23 +532,50 @@ function validateSetupManifest(
   record: Record<string, unknown>,
   target: UpdatePortableTarget,
   targetVersion: string,
+  windowsGeneration: WindowsGenerationBinding | undefined,
 ): void {
   const runtime = recordAt(record, "runtime");
   const expected = runtimeFor(target);
-  if (
-    record.schemaVersion !== 1 ||
-    record.platformTarget !== target ||
-    record.packageName !== PACKAGE_NAME ||
-    record.packageVersion !== targetVersion ||
-    record.stable !== true ||
-    record.bootstrapUpdateEligible !== false ||
-    record.primaryLauncher !== primaryLauncher(target) ||
-    !fieldEquals(runtime, "nodePlatform", expected.platform) ||
-    !fieldEquals(runtime, "nodeArchitecture", expected.arch)
-  ) {
+  const eligible = [
+    record.schemaVersion === (target === "windows-x64" ? 2 : 1),
+    record.platformTarget === target,
+    record.packageName === PACKAGE_NAME,
+    record.packageVersion === targetVersion,
+    record.stable === true,
+    record.bootstrapUpdateEligible === false,
+    record.primaryLauncher === primaryLauncher(target),
+    fieldEquals(runtime, "nodePlatform", expected.platform),
+    fieldEquals(runtime, "nodeArchitecture", expected.arch),
+  ].every(Boolean);
+  if (!eligible) {
     throw new PortableUpdateStagingError(
       "portable-staging-failed",
       "setup manifest is not eligible",
+    );
+  }
+  if (target === "windows-x64") {
+    validateWindowsSetupBinding(record, windowsGeneration);
+  } else if (record.windowsGeneration !== undefined) {
+    throw new PortableUpdateStagingError(
+      "portable-staging-failed",
+      "setup manifest Windows generation binding is unsupported for target",
+    );
+  }
+}
+
+function validateWindowsSetupBinding(
+  record: Record<string, unknown>,
+  expected: WindowsGenerationBinding | undefined,
+): void {
+  const setupGeneration = parseWindowsGenerationBinding(record.windowsGeneration);
+  if (
+    expected === undefined ||
+    setupGeneration === undefined ||
+    !windowsGenerationBindingsEqual(setupGeneration, expected)
+  ) {
+    throw new PortableUpdateStagingError(
+      "portable-staging-failed",
+      "setup manifest Windows generation binding does not match the reviewed manifest",
     );
   }
 }
@@ -542,22 +593,28 @@ function validatePackageJson(path: string, targetVersion: string): void {
 function stagedLayout(
   root: string,
   target: UpdatePortableTarget,
-): {
-  readonly appRoot: string;
-  readonly runtimeNode: string;
-  readonly launcher: string;
-  readonly appBundlePath?: string | undefined;
-} {
+  windowsGeneration: WindowsGenerationBinding | undefined,
+): StagedLayout {
   const payload = join(root, PORTABLE_PAYLOAD_ROOT);
   if (target === "windows-x64") {
+    if (windowsGeneration === undefined) {
+      throw new PortableUpdateStagingError(
+        "portable-staging-failed",
+        "reviewed Windows generation binding is unavailable",
+      );
+    }
+    const generation = resolveWindowsGenerationLayout(payload, windowsGeneration);
     return {
-      appRoot: join(payload, "app"),
-      runtimeNode: join(payload, "runtime", "node", "node.exe"),
-      launcher: join(payload, "Keiko.exe"),
+      resourceRoot: generation.resourceRoot,
+      appRoot: generation.appRoot,
+      runtimeNode: generation.runtimeNodePath,
+      runtimeSupervisor: generation.runtimeSupervisorPath,
+      launcher: generation.rootLauncherPath,
     };
   }
   const bundle = join(payload, "Keiko.app");
   return {
+    resourceRoot: join(bundle, "Contents", "Resources"),
     appBundlePath: bundle,
     appRoot: join(bundle, "Contents", "Resources", "app"),
     runtimeNode: join(bundle, "Contents", "Resources", "runtime", "node", "bin", "node"),
@@ -565,24 +622,105 @@ function stagedLayout(
   };
 }
 
-function stagedResourceRoot(root: string, target: UpdatePortableTarget): string {
-  const payload = join(root, PORTABLE_PAYLOAD_ROOT);
-  if (target === "windows-x64") return payload;
-  return join(payload, "Keiko.app", "Contents", "Resources");
-}
-
-function validateStagedLayout(
+async function validateStagedLayout(
   root: string,
   target: UpdatePortableTarget,
   targetVersion: string,
-): ReturnType<typeof stagedLayout> {
-  const layout = stagedLayout(root, target);
+  windowsGeneration: WindowsGenerationBinding | undefined,
+  signal: AbortSignal | undefined,
+): Promise<StagedLayout> {
+  const layout = stagedLayout(root, target, windowsGeneration);
   requiredStagedFile(layout.runtimeNode);
   requiredStagedFile(layout.launcher);
   requiredStagedFile(join(layout.appRoot, "package.json"));
-  validateSetupManifest(readJsonRecord(setupManifestPath(root, target)), target, targetVersion);
+  const setupPath = setupManifestPath(root, target);
+  requiredStagedFile(setupPath);
+  validateSetupManifest(readJsonRecord(setupPath), target, targetVersion, windowsGeneration);
   validatePackageJson(join(layout.appRoot, "package.json"), targetVersion);
+  if (target === "windows-x64" && windowsGeneration !== undefined) {
+    await validateWindowsGenerationArchive(root, layout, windowsGeneration, signal);
+  }
   return layout;
+}
+
+async function validateWindowsGenerationArchive(
+  root: string,
+  layout: StagedLayout,
+  binding: WindowsGenerationBinding,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const payload = join(root, PORTABLE_PAYLOAD_ROOT);
+  const generationsRoot = join(payload, ".portable", "generations");
+  requiredStagedFile(layout.runtimeSupervisor ?? "");
+  validateWindowsGenerationDirectories(payload, generationsRoot, binding);
+  validateWindowsRootFiles(payload, layout.launcher, binding);
+  const treeSha256 = await stagedWindowsGenerationDigest(layout.resourceRoot, signal);
+  if (treeSha256 !== binding.treeSha256) {
+    throw new PortableUpdateStagingError(
+      "portable-staging-failed",
+      "staged Windows generation digest mismatch",
+    );
+  }
+}
+
+function validateWindowsGenerationDirectories(
+  payload: string,
+  generationsRoot: string,
+  binding: WindowsGenerationBinding,
+): void {
+  const valid = [
+    !existsSync(join(payload, "app")),
+    !existsSync(join(payload, "runtime")),
+    existsSync(generationsRoot),
+    existsSync(generationsRoot) && lstatSync(generationsRoot).isDirectory(),
+    existsSync(generationsRoot) && readdirSync(generationsRoot).join("\0") === binding.treeSha256,
+  ].every(Boolean);
+  if (!valid) {
+    throw new PortableUpdateStagingError(
+      "portable-staging-failed",
+      "staged Windows generation layout is invalid",
+    );
+  }
+}
+
+function validateWindowsRootFiles(
+  payload: string,
+  launcher: string,
+  binding: WindowsGenerationBinding,
+): void {
+  const supportLauncher = join(payload, "support", "keiko-support.cmd");
+  requiredStagedFile(supportLauncher);
+  if (readFileSync(supportLauncher, "utf8") !== WINDOWS_SUPPORT_LAUNCHER) {
+    throw new PortableUpdateStagingError(
+      "portable-staging-failed",
+      "staged Windows support launcher is not canonical",
+    );
+  }
+  if (
+    createHash("sha256").update(readFileSync(launcher)).digest("hex") !== binding.launcherSha256
+  ) {
+    throw new PortableUpdateStagingError(
+      "portable-staging-failed",
+      "staged Windows root launcher digest mismatch",
+    );
+  }
+}
+
+async function stagedWindowsGenerationDigest(
+  resourceRoot: string,
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  try {
+    return await hashPortableHandoffTree(resourceRoot, {
+      signal,
+      deadline: Date.now() + PORTABLE_OPERATION_TIMEOUT_MS,
+    });
+  } catch {
+    throw new PortableUpdateStagingError(
+      "portable-staging-failed",
+      "staged Windows generation could not be attested",
+    );
+  }
 }
 
 function currentTrustAnchorLayout(
@@ -628,6 +766,7 @@ export async function stageArchiveFile(input: {
   readonly targetVersion: string;
   readonly stageId: string;
   readonly sidecars: readonly PortableSidecarRuntimeVerification[];
+  readonly windowsGeneration?: WindowsGenerationBinding | undefined;
   readonly platformVerifier?: PortablePlatformVerifier | undefined;
   readonly securityLogSink?: SecurityLogSink | undefined;
   readonly rename?: typeof renameSync | undefined;
@@ -640,7 +779,13 @@ export async function stageArchiveFile(input: {
     const extractedTreeSha256 = await extractArchive(input.archivePath, workRoot, input.session);
     assertAbort(input.session.signal);
     verifyExtractedTree(workRoot, extractedTreeSha256);
-    const layout = validateStagedLayout(workRoot, input.target, input.targetVersion);
+    const layout = await validateStagedLayout(
+      workRoot,
+      input.target,
+      input.targetVersion,
+      input.windowsGeneration,
+      input.session.signal,
+    );
     await verifyLocalPlatform({
       root: workRoot,
       target: input.target,
@@ -649,7 +794,7 @@ export async function stageArchiveFile(input: {
       verifier: input.platformVerifier,
     });
     verifyStagedSidecarPayloads({
-      resourceRoot: stagedResourceRoot(workRoot, input.target),
+      resourceRoot: layout.resourceRoot,
       sidecars: input.sidecars,
     });
     assertAbort(input.session.signal);

@@ -16,8 +16,7 @@ export interface SetupRuntimeManifest {
   readonly nodeArchitecture: "x64" | "arm64";
 }
 
-export interface SetupManifest {
-  readonly schemaVersion: 1;
+interface SetupManifestFields {
   readonly platformTarget: PortableTarget;
   readonly packageName: string;
   readonly packageVersion: string;
@@ -27,6 +26,28 @@ export interface SetupManifest {
   readonly runtime: SetupRuntimeManifest;
 }
 
+export interface WindowsGenerationBinding {
+  readonly schemaVersion: 1;
+  readonly resourceRoot: string;
+  readonly treeHashSchema: "KHT1";
+  readonly treeSha256: string;
+  readonly launcherPath: "Keiko.exe";
+  readonly launcherSha256: string;
+}
+
+export interface LegacySetupManifest extends SetupManifestFields {
+  readonly schemaVersion: 1;
+}
+
+export interface WindowsGenerationSetupManifest extends SetupManifestFields {
+  readonly schemaVersion: 2;
+  readonly platformTarget: "windows-x64";
+  readonly primaryLauncher: "Keiko.exe";
+  readonly windowsGeneration: WindowsGenerationBinding;
+}
+
+export type SetupManifest = LegacySetupManifest | WindowsGenerationSetupManifest;
+
 export interface PortableLayout {
   readonly rootKind: "windows-root" | "macos-app";
   readonly installRoot: string;
@@ -34,6 +55,7 @@ export interface PortableLayout {
   readonly appRoot: string;
   readonly packageJsonPath: string;
   readonly runtimeNodePath: string;
+  readonly runtimeSupervisorPath: string;
   readonly primaryLauncherPath: string;
   readonly setupManifestPath: string;
 }
@@ -95,6 +117,7 @@ export function layoutFor(target: PortableTarget, root: string): PortableLayout 
       appRoot: join(root, "app"),
       packageJsonPath: join(root, "app", "package.json"),
       runtimeNodePath: join(root, "runtime", "node", "node.exe"),
+      runtimeSupervisorPath: join(root, "runtime", "native", "keiko-runtime-supervisor.exe"),
       primaryLauncherPath: join(root, "Keiko.exe"),
       setupManifestPath: join(root, ".portable", SETUP_MANIFEST),
     };
@@ -108,7 +131,29 @@ export function layoutFor(target: PortableTarget, root: string): PortableLayout 
     appRoot: join(resources, "app"),
     packageJsonPath: join(resources, "app", "package.json"),
     runtimeNodePath: join(resources, "runtime", "node", "bin", "node"),
+    runtimeSupervisorPath: join(resources, "runtime", "native", "keiko-runtime-supervisor"),
     primaryLauncherPath: join(appBundle, "Contents", "MacOS", "Keiko"),
     setupManifestPath: join(resources, ".portable", SETUP_MANIFEST),
+  };
+}
+
+export function layoutForSetupManifest(
+  target: PortableTarget,
+  root: string,
+  manifest: SetupManifest,
+): PortableLayout {
+  const layout = layoutFor(target, root);
+  if (target !== "windows-x64" || manifest.schemaVersion !== 2) return layout;
+  const resourceRoot = join(
+    layout.installRoot,
+    ...manifest.windowsGeneration.resourceRoot.split("/"),
+  );
+  return {
+    ...layout,
+    resourceRoot,
+    appRoot: join(resourceRoot, "app"),
+    packageJsonPath: join(resourceRoot, "app", "package.json"),
+    runtimeNodePath: join(resourceRoot, "runtime", "node", "node.exe"),
+    runtimeSupervisorPath: join(resourceRoot, "runtime", "native", "keiko-runtime-supervisor.exe"),
   };
 }

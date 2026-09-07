@@ -157,6 +157,20 @@ downstream exact-byte/live-inventory and closed-generation checks revalidate the
 These results cover producer contracts and fixtures. Windows CLI/server/native generation consumer
 integration, actual signing execution and native N−1→N qualification remain outstanding.
 
+The first Windows consumer slice is frozen as a development checkpoint in ten CLI/staging/parser
+files. It binds strict outer/provenance/reviewed schema-2 generation copies to extracted setup,
+selects the generation resource paths, verifies root launcher/support and closed-generation KHT1,
+and rejects unsafe links, rebound authority and extra generation content. CLI schema 1 remains
+launch/manual compatible. Owner verification passes 190 tests in 12 affected files, CLI and server
+workspace typechecks, scoped lint, format and diff checks. Earlier attempts remain red evidence:
+one mutation fixture failed at JSON parsing before the intended KHT1 check (moved to a non-PE file),
+one broad test exposed a changed malformed-schema diagnostic (restored), and CLI typecheck exposed
+type-narrowing/fs-overload errors (repaired before the green serial replay).
+This slice is not accepted as complete: direct CLI KHT1 attestation awaits the shared-security
+extraction/hookup and independent review; registration v2, maintenance, handoff and native cutover
+remain subsequent integration work. Native implementation has a separate file owner after the Mac
+reviewed checkpoint; its KHP3 parser must consume the TypeScript owner's frozen byte fixtures.
+
 The full UI coverage run at the core checkpoint reports 7,512 passing tests, four failures, and
 one skip across 432 files. The four failures are shared stylesheet evidence hash assertions after
 the updater-specific rule changed `globals.css`. Component placement and affected updater evidence

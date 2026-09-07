@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   defaultManagedRoot,
   layoutFor,
+  layoutForSetupManifest,
   primaryLauncherName,
   targetForHost,
   targetRuntime,
@@ -27,5 +28,34 @@ describe("portable target layout", () => {
       rootKind: "macos-app",
       installRoot: "/Applications/Keiko.app",
     });
+  });
+
+  it("resolves Windows schema 2 runtime resources inside the bound generation", () => {
+    const digest = "a".repeat(64);
+    const layout = layoutForSetupManifest("windows-x64", "C:\\Keiko", {
+      schemaVersion: 2,
+      platformTarget: "windows-x64",
+      packageName: "@oscharko-dev/keiko",
+      packageVersion: "0.3.17",
+      stable: true,
+      primaryLauncher: "Keiko.exe",
+      bootstrapUpdateEligible: false,
+      runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+      windowsGeneration: {
+        schemaVersion: 1,
+        resourceRoot: `.portable/generations/${digest}`,
+        treeHashSchema: "KHT1",
+        treeSha256: digest,
+        launcherPath: "Keiko.exe",
+        launcherSha256: "b".repeat(64),
+      },
+    });
+
+    expect(layout.installRoot).toBe("C:\\Keiko");
+    expect(layout.primaryLauncherPath).toContain("Keiko.exe");
+    expect(layout.setupManifestPath).toContain("setup-manifest.json");
+    expect(layout.resourceRoot).toContain(digest);
+    expect(layout.runtimeNodePath).toContain(digest);
+    expect(layout.runtimeSupervisorPath).toContain(digest);
   });
 });

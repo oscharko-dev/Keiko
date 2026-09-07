@@ -233,7 +233,7 @@ async function stageCandidateArchive(
   target: UpdatePortableTarget,
   stageAssets: PortableStageAssets,
 ): Promise<{ readonly stageId: string; readonly sha256: string }> {
-  const { release, archive, manifest, sidecars } = stageAssets;
+  const { release, archive, manifest, sidecars, windowsGeneration } = stageAssets;
   archiveSizeLimit(archive);
   const downloadRoot = createPortableDownloadRoot(input, target);
   const archivePath = join(downloadRoot, "archive.zip");
@@ -257,6 +257,7 @@ async function stageCandidateArchive(
       targetVersion: release.targetVersion,
       stageId,
       sidecars,
+      ...(windowsGeneration === undefined ? {} : { windowsGeneration }),
       ...(options.platformVerifier === undefined
         ? {}
         : { platformVerifier: options.platformVerifier }),
