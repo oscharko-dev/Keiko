@@ -133,10 +133,11 @@ artifact. The root launcher, setup companion, and outer
 manifest are outside the generation tree hash; the generation tree itself remains closed.
 
 The explicit `--windows-generation-production` staging flag is production-only and cannot be used by
-evaluation output. Windows generation discovery and N−1/N consumer support remain next work. Current
-cross-platform consumer and recovery integration remains in progress, including macOS recovery; KHA1
-is disabled, and native platform qualification remains unfinished. These are release gates, not
-evidence supplied by this document.
+evaluation output. Windows generation-v1 discovery, consumers, startup attestation and recovery
+integration are implemented. Native execution verification and the three-target production-signed
+N−1→N canaries remain incomplete; KHA1 coordinator acceptance stays disabled. Implementation and
+host-side tests do not establish platform qualification. These are release gates, not evidence
+supplied by this document.
 
 ## Archive And Evidence Layout
 

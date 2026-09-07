@@ -1160,6 +1160,29 @@ Release alignment identifies existing 0.3.17 consistently; it does not publish o
 this repair. Windows diagnostic `d5fb829b5` / run `34157645968` adds only closed diagnostic
 stage tokens to isolate the remaining shared locality query failure.
 
+### Packaging and documentation follow-up
+
+`portable:manual-review` prepared the disposable 0.3.17 fixture inventory; this command
+prepares scenarios and is not a real packaged upgrade run. `smoke:portable-launch-setup`
+passed all three target formats. Invoking `smoke:portable-secure-read` without its required
+stage-root and platform arguments exited 2; no staged bundle was available from that
+preparation, so this standalone artifact smoke remains unverified. The macOS native gate
+separately passed its actual secure-read protocol/load checks.
+
+Editor release evidence passed B1 (zero first-load editor markers across nineteen scripts),
+B2 (1,002.6 KiB / 2,560 KiB) and B3 (110.1 KiB / 750 KiB). Dependency currency passed
+thirty-eight governed dependency and fourteen action rows. Independent documentation review
+found and settled two stale descriptions: Windows generation consumers are implemented,
+and automatic replacement remains a qualified future contract while coordinator acceptance
+is disabled. No production eligibility or acceptance criterion was changed by these edits.
+
+Diagnostic `d5fb829b5` failed after the local TypeScript query and diagnostic each consumed
+approximately ten seconds; the closed diagnostic result was `spawn-error`. This suggests
+but does not yet establish a timeout. Native local/rename/mapped-SMB checks passed again.
+The diagnostic-only Knip failure names the temporary probe file, which must be removed
+before final delivery gates. The full package coverage run remains in progress against
+frozen product sources; its known baseline source-count assertion is still red.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification

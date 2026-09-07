@@ -92,6 +92,11 @@ boundary instead of relocating the app to a writable parent.
 
 ## Update Journey
 
+Current evaluation releases require reviewed manual installation. The repaired native coordinator
+still refuses update acceptance while its qualification gates are incomplete. The automatic
+replacement and relaunch behavior below describes the qualified release contract; it is not a claim
+that current releases can execute a one-click update or automatic re-download fallback.
+
 The portable-managed update path uses the existing in-app notice and Update window. One-click
 execution is offered only for a fresh eligible candidate on an attested managed installation and
 requires explicit confirmation. Download, verification, staging, ownership transfer, activation,
