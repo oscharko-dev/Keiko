@@ -3,6 +3,7 @@
 
 #if defined(_WIN32)
 
+#include <stdlib.h>
 #include <windows.h>
 
 static wchar_t mutation_path[32768];
@@ -80,26 +81,38 @@ static void test_allowed_deep_tree(const wchar_t *temp) {
   free(root);
 }
 
+typedef struct {
+  wchar_t temp[32768];
+  wchar_t root[32768];
+  wchar_t nested[32768];
+  wchar_t file[32768];
+  wchar_t hardlink[32768];
+} keiko_tree_windows_fixture_paths;
+
 int main(void) {
   static const char expected[] =
     "4d120aeb0383a39dfd0d1782e7cb3e4d0ed6b0e86658842e1b8db2c1efdafca4";
-  wchar_t temp[32768], root[32768], nested[32768], file[32768], hardlink[32768];
+  keiko_tree_windows_fixture_paths *paths =
+    (keiko_tree_windows_fixture_paths *)calloc(1u, sizeof(*paths));
   char digest[65];
-  DWORD temp_length = GetTempPathW(32768, temp);
+  DWORD temp_length;
   HANDLE root_handle;
   keiko_tree_windows_pins pins = {0};
+  assert(paths != NULL);
+  if (paths == NULL) return 1;
+  temp_length = GetTempPathW(32768, paths->temp);
   assert(temp_length > 0 && temp_length < 32768);
-  assert(GetTempFileNameW(temp, L"kht", 0, root) != 0);
-  assert(DeleteFileW(root) != 0);
-  assert(CreateDirectoryW(root, NULL) != 0);
-  append_fixture_path(mutation_path, 32768, root, L"\\B.txt");
+  assert(GetTempFileNameW(paths->temp, L"kht", 0, paths->root) != 0);
+  assert(DeleteFileW(paths->root) != 0);
+  assert(CreateDirectoryW(paths->root, NULL) != 0);
+  append_fixture_path(mutation_path, 32768, paths->root, L"\\B.txt");
   write_fixture(mutation_path, "upper");
-  append_fixture_path(nested, 32768, root, L"\\z");
-  assert(CreateDirectoryW(nested, NULL) != 0);
-  append_fixture_path(file, 32768, nested, L"\\a.txt");
-  write_fixture(file, "nested");
+  append_fixture_path(paths->nested, 32768, paths->root, L"\\z");
+  assert(CreateDirectoryW(paths->nested, NULL) != 0);
+  append_fixture_path(paths->file, 32768, paths->nested, L"\\a.txt");
+  write_fixture(paths->file, "nested");
 
-  root_handle = CreateFileW(root, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+  root_handle = CreateFileW(paths->root, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
                             FILE_SHARE_READ, NULL, OPEN_EXISTING,
                             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
   assert(root_handle != INVALID_HANDLE_VALUE);
@@ -111,21 +124,22 @@ int main(void) {
   assert(CloseHandle(root_handle) != 0);
   keiko_tree_windows_pins_clear(&pins);
   write_fixture(mutation_path, "tampered");
-  assert(keiko_tree_hash_windows(root, keiko_tree_now_ms() + 5000u, digest));
+  assert(keiko_tree_hash_windows(paths->root, keiko_tree_now_ms() + 5000u, digest));
   assert(strcmp(digest, expected) != 0);
   write_fixture(mutation_path, "upper");
 
-  append_fixture_path(hardlink, 32768, root, L"\\hardlink.txt");
-  assert(CreateHardLinkW(hardlink, file, NULL) != 0);
-  assert(!keiko_tree_hash_windows(root, keiko_tree_now_ms() + 5000u, digest));
-  assert(DeleteFileW(hardlink) != 0);
-  assert(!keiko_tree_hash_windows(root, keiko_tree_now_ms() - 1u, digest));
+  append_fixture_path(paths->hardlink, 32768, paths->root, L"\\hardlink.txt");
+  assert(CreateHardLinkW(paths->hardlink, paths->file, NULL) != 0);
+  assert(!keiko_tree_hash_windows(paths->root, keiko_tree_now_ms() + 5000u, digest));
+  assert(DeleteFileW(paths->hardlink) != 0);
+  assert(!keiko_tree_hash_windows(paths->root, keiko_tree_now_ms() - 1u, digest));
 
-  assert(DeleteFileW(file) != 0);
-  assert(RemoveDirectoryW(nested) != 0);
+  assert(DeleteFileW(paths->file) != 0);
+  assert(RemoveDirectoryW(paths->nested) != 0);
   assert(DeleteFileW(mutation_path) != 0);
-  assert(RemoveDirectoryW(root) != 0);
-  test_allowed_deep_tree(temp);
+  assert(RemoveDirectoryW(paths->root) != 0);
+  test_allowed_deep_tree(paths->temp);
+  free(paths);
   return 0;
 }
 
