@@ -442,14 +442,14 @@ describe("app-session pairing readiness (release-audit F-08/RG-12)", () => {
     });
   }
 
-  it("keeps Start blocked only while pairing is unresolved", () => {
+  it("admits Start only for a confirmed paired browser session", () => {
     expect(startable(null).canStart).toBe(false);
     expect(startable("unknown").canStart).toBe(false);
-    expect(startable("unpaired").canStart).toBe(true);
+    expect(startable("unpaired").canStart).toBe(false);
     expect(startable("paired").canStart).toBe(true);
   });
 
-  it("keeps recovery Retry blocked only while pairing is unresolved", () => {
+  it("admits recovery Retry only for a confirmed paired browser session", () => {
     const recovery = (pairing: CodingWorkbenchPairingState): CodingWorkbenchRuntimeState =>
       codingWorkbenchRuntimeReducer(readyState(false, pairing), {
         kind: "run-set",
@@ -462,7 +462,7 @@ describe("app-session pairing readiness (release-audit F-08/RG-12)", () => {
         }),
       });
     expect(recovery("unknown").canRetry).toBe(false);
-    expect(recovery("unpaired").canRetry).toBe(true);
+    expect(recovery("unpaired").canRetry).toBe(false);
     expect(recovery("paired").canRetry).toBe(true);
   });
 

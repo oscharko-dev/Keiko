@@ -1407,17 +1407,37 @@ describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
 
   it("answers an unpaired run start with the honest authority-resolution failure, never a silent success", async () => {
     const { channel } = pairedAppSession();
-    const spy = spyingRuntime(channel);
+    const records: unknown[] = [];
+    const deps = runtime({
+      codingAppSessionChannel: channel,
+      activityLog: { write: (event: unknown) => void records.push(event) },
+    });
     const denied = await handleCreateCodingRuntimeRun(
-      context('{"requestId":"r","taskIntent":"secret","requestedMode":"governed-assist"}'),
-      spy.deps,
+      context(
+        '{"requestId":"r","taskIntent":"secret","requestedMode":"governed-assist"}',
+        {},
+        "/api/coding-workbench/runtime/runs",
+        undefined,
+        "unpaired-start-correlation",
+      ),
+      deps,
     );
     expect(denied).toMatchObject({
       status: 403,
       body: { error: { code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED" } },
     });
-    expect(spy.invoked).toEqual([]);
+    expect((deps as unknown as { __calls: unknown[] }).__calls).toEqual([]);
     expect(JSON.stringify(denied.body)).not.toContain("secret");
+    expect(records).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        category: "process",
+        op: "coding-runtime.operation.refused",
+        correlationId: "unpaired-start-correlation",
+        extra: { operation: "start", reason: "authority-resolution-failed" },
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain("secret");
   });
 
   // The recorded attack, end to end: the unauthenticated status route publishes the pending

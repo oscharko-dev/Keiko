@@ -211,8 +211,8 @@ async function withBody(
  *     the response an unknown `runId` yields, so the denial is not a run-existence oracle
  *     (ADR-0141 D6, the same posture the question mutations already take);
  *   - the run-creating `POST /runs` names no run and conceals no existence, so it answers with the
- *     honest `authority-resolution-failed` the Workbench already renders as an actionable start
- *     failure — never a dead button, and never a silent success.
+ *     honest `authority-resolution-failed` response for a stale or hostile caller, never a
+ *     silent success.
  */
 function requireMutationAuthority(
   ctx: RouteContext,
@@ -237,7 +237,18 @@ async function mutation(
   ) => ReturnType<CodingRuntimeOrchestrator["start"]>,
 ): Promise<RouteResult> {
   const denied = requireMutationAuthority(ctx, deps, runId);
-  if (denied !== undefined) return denied;
+  if (denied !== undefined) {
+    // The request is refused before a per-run identifier can be resolved. Keep the evidence
+    // content-free by logging only the closed operation and reason, never the caller-supplied id.
+    logRuntimeOperationRefusal(
+      deps,
+      ctx.correlationId,
+      operationName,
+      undefined,
+      "authority-resolution-failed",
+    );
+    return denied;
+  }
   const required = requireRuntime(deps, ctx.correlationId);
   if (isRouteResult(required)) return required;
   if (runId !== undefined && !required.orchestrator.getSnapshot(runId))

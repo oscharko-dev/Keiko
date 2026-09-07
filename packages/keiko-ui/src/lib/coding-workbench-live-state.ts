@@ -26,9 +26,8 @@ export type CodingWorkbenchResourceStatus =
 /**
  * Release-audit F-08/RG-12: whether this browser window holds a launcher-paired app session, as
  * reported by the honest workspaces read (`session: "paired" | "unpaired"`). Never guessed
- * client-side. Runtime start may proceed once the workspace is resolved, but content-bearing
- * channels still use this dimension; `unknown` (boot, or the read failed) blocks start fail-closed
- * without claiming the window is unpaired.
+ * client-side. Every runtime mutation needs this session authority, so both `unknown` (boot, or
+ * the read failed) and `unpaired` block start fail-closed.
  */
 export type CodingWorkbenchPairingState = "unknown" | "paired" | "unpaired";
 
@@ -326,11 +325,10 @@ function projectReadiness(state: CodingWorkbenchRuntimeState): CodingWorkbenchRu
     runState !== undefined &&
     (STARTABLE_RUN_STATES.has(runState) || isAcknowledgedRecoveryRequired(state));
   const mutationIdle = state.mutation.status !== "pending";
-  // Pairing is a channel diagnostic, not a local-composer kill switch. `unknown` still blocks while
-  // the boot read is unresolved, but a confirmed unpaired browser must be allowed to send the start
-  // request so the server can either bind the registered workspace or return the authoritative
-  // failure. Blocking it here left a filled composer with a dead send button.
-  const pairingReady = state.pairing !== "unknown";
+  // A confirmed unpaired browser cannot mutate the runtime: the server correctly refuses every
+  // such request. Keep the draft editable, but do not present a Start or Retry action that is
+  // guaranteed to fail authority resolution.
+  const pairingReady = state.pairing === "paired";
   return {
     ...state,
     canStart:

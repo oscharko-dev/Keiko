@@ -500,7 +500,7 @@ describe("useCodingWorkbenchRuntime", () => {
     view.unmount();
   });
 
-  it("arms Start when a registered workspace is ready and the browser is confirmed unpaired", async () => {
+  it("keeps Start blocked when a registered workspace is ready but the browser is unpaired", async () => {
     manifestAccessMock.mockResolvedValue({ session: "unpaired", manifests: [] });
     installBootstrap(snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }));
     const activeWorkspace = workspace();
@@ -513,7 +513,7 @@ describe("useCodingWorkbenchRuntime", () => {
 
     await waitFor(() => expect(view.result.current.state.pairing).toBe("unpaired"));
     await waitFor(() => expect(view.result.current.state.run.status).toBe("ready"));
-    expect(view.result.current.state.canStart).toBe(true);
+    expect(view.result.current.state.canStart).toBe(false);
 
     view.unmount();
   });
