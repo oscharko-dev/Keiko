@@ -59,8 +59,12 @@ This section is an immutable prequalification checkpoint. Attempt 33 at `14815a8
 created the real verified local model commit `4b7a1b1a4b7f206a270c0e9af5b08d0e22c97b97` but did not
 finish PR delivery. The combined `68732ec6` repairs typed GitHub metadata redaction, bounded local
 draft-lineage recovery and provider-compatible description schemas. The adapter, orchestrator and
-description regression targets passed 128, 129 and 112 tests; the refreshed H1 proof passed its
-83-test producer and binds 661 owned source paths. None of these results is a completed live flow.
+description regression targets passed 128, 129 and 112 tests. Follow-up review exposed the real
+SQLite predecessor admission gap: `7ae8282b` repairs it and records the actual predecessor id in
+the start activity event. The failing real-store reproduction now passes; the orchestrator and
+store targets passed 130 and 40 tests, including unacknowledged terminal-row rejection. The
+refreshed H1 proof at `7ae8282b` passed its 83-test producer and binds 661 owned source paths.
+None of these results is a completed live flow.
 The prepared attempt 34 preserves the actual model workspace and PR7, and must first repair the
 remaining independently observed average arithmetic defects. Later qualification results are
 owned by the canonical per-flow artifacts and manifest, not by changing this frozen source map.

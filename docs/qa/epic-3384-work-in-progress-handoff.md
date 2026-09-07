@@ -47,6 +47,14 @@ required; no historical row or approval is rewritten. Provider description reque
 supported strict schema while preserving all full local validation. The combined source is
 `68732ec6`; its adapter, orchestrator and description targets passed 128, 129 and 112 tests.
 
+Review then found that the real SQLite store rejected the acknowledged terminal recovery row
+selected by that lineage repair. `7ae8282b` admits only that narrowly proven predecessor state and
+adds the actual predecessor id to the existing body-free start event. The failing real-store
+reproduction now passes through restart, selection and draft adoption. The orchestrator and store
+targets passed 130 and 40 tests, including rejection of terminal rows without acknowledgement;
+full typecheck and scoped lint passed. The two review threads carry fix and test references and
+are resolved. This is regression evidence, not a successful production continuation.
+
 Actual results, with their source limits:
 
 | Verification                               | Result                                             | Source / limitation                                                                       |
@@ -69,11 +77,11 @@ semantics, staged-drift refusal and explicit denial. The tracked
 production-composed deterministic browser evidence with `modelQualification: false`; it does not
 replace a real-model flow.
 
-The #2952 native calibration/candidate pair was regenerated at exact source `344e835a` after the
-earlier repair. The native pair used pinned Node 24.18.0, completed two warmups and 30
+The #2952 native calibration/candidate pair was regenerated at exact source `7ae8282b` after the
+SQLite repair. The native pair used pinned Node 24.18.0, completed two warmups and 30
 measured samples per arm, and passed its owning performance gate. The H1 verification passed three
 production-managed files / 83 tests; independent review accepted all ten criteria and bound the
-661-path owned-source closure at the refreshed `68732ec6` source. These are exact-source
+661-path owned-source closure at the refreshed `7ae8282b` source. These are exact-source
 prequalification facts. H1 explicitly does
 not establish packaged real-runtime, live-provider or final merge-head qualification, and either
 receipt must be regenerated if its owned source changes.
@@ -142,8 +150,8 @@ claim a completed run from the runtime's terminal status alone.
    and review settlement. Only then integrate through the protected path, verify actual `dev`,
    record genuine H1 postmerge provenance, close fulfilled issues and delete the merged branch.
 
-All 322 historical review conversations were resolved at the pre-pause observation, and the
-September 7 audit found zero unresolved review threads. New comments and checks after that audit
+All 324 review conversations were resolved at the September 7 `7ae8282b` observation, including
+the two SQLite/lineage logging findings. New comments and checks after that audit
 require another read. Only CodeRabbit's oversized-PR coverage failure is excluded; concrete
 findings and other reviewers remain in scope.
 
