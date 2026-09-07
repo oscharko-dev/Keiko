@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createPortableHandoffPlan,
+  encodePortableHandoffPlan,
   portableHandoffPlanSha256,
   readPortableHandoffPlan,
   writePortableHandoffPlan,
@@ -81,6 +82,133 @@ function planInput(root: string): PortableHandoffPlanInput {
   };
 }
 
+function windowsPlanInput(root: string): PortableHandoffPlanInput {
+  const parent = join(root, "install-parent");
+  const managedRoot = join(parent, "Keiko");
+  const stageRoot = join(parent, ".keiko-portable-updates", "stage-1");
+  const generation = "7".repeat(64);
+  return {
+    ...planInput(root),
+    target: "windows-x64",
+    paths: {
+      managedRoot,
+      stageRoot,
+      candidateRoot: join(stageRoot, "Keiko"),
+      backupRoot: join(parent, `.keiko-previous-${"a".repeat(32)}`),
+      candidateLauncher: join(stageRoot, "Keiko", "Keiko.exe"),
+      candidateSupervisor: join(
+        stageRoot,
+        "Keiko",
+        ".portable",
+        "generations",
+        generation,
+        "runtime",
+        "native",
+        "keiko-runtime-supervisor.exe",
+      ),
+    },
+    cutoverKind: "windows-generation-v1",
+    currentGenerationTreeSha256: "6".repeat(64),
+    candidateGenerationTreeSha256: generation,
+    currentSetupManifestSha256: "8".repeat(64),
+    candidateSetupManifestSha256: "9".repeat(64),
+  };
+}
+
+function fixtureBytes(name: string): Buffer {
+  const text = readFileSync(
+    join(process.cwd(), "native", "portable-launcher", "fixtures", name),
+    "ascii",
+  );
+  expect(text).toMatch(/^(?:[a-f0-9]{2})+\n$/u);
+  return Buffer.from(text.trim(), "hex");
+}
+
+function goldenMacInput(): PortableHandoffPlanInput {
+  const input = planInput("/fixture");
+  return {
+    ...input,
+    restoreLaunchId: "5".repeat(32),
+    paths: {
+      managedRoot: "/Applications/Keiko.app",
+      stageRoot: "/Applications/.keiko-portable-updates/stage-1",
+      candidateRoot: "/Applications/.keiko-portable-updates/stage-1/Keiko/Keiko.app",
+      backupRoot: `/Applications/.keiko-previous-${"a".repeat(32)}`,
+      candidateLauncher:
+        "/Applications/.keiko-portable-updates/stage-1/Keiko/Keiko.app/Contents/MacOS/Keiko",
+      candidateSupervisor:
+        "/Applications/.keiko-portable-updates/stage-1/Keiko/Keiko.app/Contents/Resources/runtime/native/keiko-runtime-supervisor",
+    },
+  };
+}
+
+function goldenWindowsInput(): PortableHandoffPlanInput {
+  return {
+    ...goldenMacInput(),
+    target: "windows-x64",
+    paths: {
+      managedRoot: "C:\\Keiko",
+      stageRoot: "C:\\.keiko-portable-updates\\stage-1",
+      candidateRoot: "C:\\.keiko-portable-updates\\stage-1\\Keiko",
+      backupRoot: `C:\\.keiko-previous-${"a".repeat(32)}`,
+      candidateLauncher: "C:\\.keiko-portable-updates\\stage-1\\Keiko\\Keiko.exe",
+      candidateSupervisor: `C:\\.keiko-portable-updates\\stage-1\\Keiko\\.portable\\generations\\${"7".repeat(64)}\\runtime\\native\\keiko-runtime-supervisor.exe`,
+    },
+    cutoverKind: "windows-generation-v1",
+    currentGenerationTreeSha256: "6".repeat(64),
+    candidateGenerationTreeSha256: "7".repeat(64),
+    currentSetupManifestSha256: "8".repeat(64),
+    candidateSetupManifestSha256: "9".repeat(64),
+  };
+}
+
+function encodeLegacyMacPlan(plan: ReturnType<typeof createPortableHandoffPlan>): Buffer {
+  if (plan.target === "windows-x64") throw new Error("legacy encoder accepts only Mac plans");
+  const fields = [
+    plan.activationId,
+    plan.sessionId,
+    plan.stageId,
+    plan.target,
+    plan.targetVersion,
+    plan.newLaunchId,
+    plan.restoreLaunchId,
+    String(plan.aggregateRevision),
+    plan.previousRegistrationState,
+    String(plan.oldProcess.pid),
+    plan.oldProcess.launchId,
+    plan.oldProcess.host,
+    String(plan.oldProcess.port),
+    plan.oldProcess.version,
+    plan.paths.managedRoot,
+    plan.paths.stageRoot,
+    plan.paths.candidateRoot,
+    plan.paths.backupRoot,
+    plan.paths.candidateLauncher,
+    plan.paths.candidateSupervisor,
+    plan.digests.currentTreeSha256,
+    plan.digests.candidateTreeSha256,
+    plan.digests.currentLauncherSha256,
+    plan.digests.currentSupervisorSha256,
+    plan.digests.candidateLauncherSha256,
+    plan.digests.candidateSupervisorSha256,
+    plan.digests.previousRegistrationSha256,
+    plan.digests.preparedRegistrationSha256,
+    String(plan.deadlines.oldExitAt),
+    String(plan.deadlines.startAt),
+    String(plan.deadlines.verifyAt),
+    String(plan.deadlines.cleanupAt),
+  ].map((field) => Buffer.from(field, "utf8"));
+  const header = Buffer.from("4b48503102002000", "hex");
+  return Buffer.concat([
+    header,
+    ...fields.flatMap((field) => {
+      const length = Buffer.alloc(4);
+      length.writeUInt32LE(field.length);
+      return [length, field];
+    }),
+  ]);
+}
+
 function replaceKhpField(content: Buffer, fieldIndex: number, replacement: Buffer): Buffer {
   const fields: Buffer[] = [];
   let offset = 8;
@@ -110,7 +238,48 @@ function rewritePublishedPlan(path: string, fieldIndex: number, replacement: Buf
   );
 }
 
+function rewritePublishedBytes(path: string, content: Buffer): void {
+  writeFileSync(path, content);
+  writeFileSync(
+    join(path, "..", "plan.sha256"),
+    `${createHash("sha256").update(content).digest("hex")}\n`,
+  );
+}
+
 describe("portable handoff plan", () => {
+  it("keeps canonical Mac KHP version 2 at 32 fields and byte-identical to the fixture", () => {
+    const plan = createPortableHandoffPlan(goldenMacInput());
+    const encoded = encodePortableHandoffPlan(plan);
+    expect(encoded.readUInt16LE(4)).toBe(2);
+    expect(encoded.readUInt16LE(6)).toBe(32);
+    expect(encoded).toEqual(encodeLegacyMacPlan(plan));
+    expect(encoded).toEqual(fixtureBytes("khp-v2-macos.hex"));
+  });
+
+  it("appends only the five frozen Windows KHP version 3 fields", () => {
+    const root = fixtureRoot();
+    const plan = createPortableHandoffPlan(windowsPlanInput(root));
+    const encoded = encodePortableHandoffPlan(plan);
+    expect(encoded.readUInt16LE(4)).toBe(3);
+    expect(encoded.readUInt16LE(6)).toBe(37);
+    const fields = readKhpFields(encoded);
+    expect(fields.slice(32)).toEqual([
+      "windows-generation-v1",
+      "6".repeat(64),
+      "7".repeat(64),
+      "8".repeat(64),
+      "9".repeat(64),
+    ]);
+  });
+
+  it.skipIf(process.platform !== "win32")(
+    "matches the canonical Windows fixture on Windows hosts",
+    () => {
+      const plan = createPortableHandoffPlan(goldenWindowsInput());
+      expect(encodePortableHandoffPlan(plan)).toEqual(fixtureBytes("khp-v3-windows.hex"));
+    },
+  );
+
   it("writes and reopens one canonical KHP1 plan with a stable digest", () => {
     const root = fixtureRoot();
     const stateDir = join(root, "state");
@@ -122,6 +291,45 @@ describe("portable handoff plan", () => {
     expect(readPortableHandoffPlan(stateDir, plan.activationId)).toStrictEqual(plan);
     expect(readFileSync(published.path).subarray(0, 4).toString("ascii")).toBe("KHP1");
     expect(() => writePortableHandoffPlan({ stateDir, plan })).toThrow(/already exists/u);
+  });
+
+  it.each([
+    [3, 32],
+    [2, 37],
+  ])("rejects a cross-version field-count header (%i/%i)", (version, count) => {
+    const root = fixtureRoot();
+    const stateDir = join(root, "state");
+    const plan = createPortableHandoffPlan(planInput(root));
+    const published = writePortableHandoffPlan({ stateDir, plan });
+    const content = readFileSync(published.path);
+    content.writeUInt16LE(version, 4);
+    content.writeUInt16LE(count, 6);
+    rewritePublishedBytes(published.path, content);
+
+    expect(() => readPortableHandoffPlan(stateDir, plan.activationId)).toThrow(/malformed/u);
+  });
+
+  it("rejects a KHP version 3 plan carrying a Mac target", () => {
+    const root = fixtureRoot();
+    const stateDir = join(root, "state");
+    const plan = createPortableHandoffPlan(windowsPlanInput(root));
+    const published = writePortableHandoffPlan({ stateDir, plan });
+    rewritePublishedPlan(published.path, 3, Buffer.from("macos-arm64", "ascii"));
+
+    expect(() => readPortableHandoffPlan(stateDir, plan.activationId)).toThrow(/malformed/u);
+  });
+
+  it("rejects unknown fields and trailing bytes", () => {
+    const root = fixtureRoot();
+    const stateDir = join(root, "state");
+    const plan = createPortableHandoffPlan(planInput(root));
+    const published = writePortableHandoffPlan({ stateDir, plan });
+    rewritePublishedBytes(
+      published.path,
+      Buffer.concat([readFileSync(published.path), Buffer.from([0])]),
+    );
+
+    expect(() => readPortableHandoffPlan(stateDir, plan.activationId)).toThrow(/malformed/u);
   });
 
   it("rejects a plan whose candidate escapes the fixed sibling staging topology", () => {
@@ -264,3 +472,16 @@ describe("portable handoff plan", () => {
     );
   });
 });
+
+function readKhpFields(content: Buffer): readonly string[] {
+  const fields: string[] = [];
+  let offset = 8;
+  for (let index = 0; index < content.readUInt16LE(6); index += 1) {
+    const length = content.readUInt32LE(offset);
+    offset += 4;
+    fields.push(content.subarray(offset, offset + length).toString("utf8"));
+    offset += length;
+  }
+  expect(offset).toBe(content.length);
+  return fields;
+}

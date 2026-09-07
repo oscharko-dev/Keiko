@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { linkSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -109,7 +109,231 @@ function prepare(root: string): HandoffFixture {
   return { coordinator, plan, stateDir, supervisor };
 }
 
+function prepareWindows(root: string): HandoffFixture {
+  const stateDir = join(root, "state");
+  const parent = join(root, "install-parent");
+  const managedRoot = join(parent, "Keiko");
+  const stageRoot = join(parent, ".keiko-portable-updates", "stage-1");
+  const candidateRoot = join(stageRoot, "Keiko");
+  const activationId = "a".repeat(32);
+  const currentGenerationTreeSha256 = "6".repeat(64);
+  const candidateGenerationTreeSha256 = "7".repeat(64);
+  const coordinator = join(managedRoot, "Keiko.exe");
+  const supervisor = join(
+    managedRoot,
+    ".portable",
+    "generations",
+    currentGenerationTreeSha256,
+    "runtime",
+    "native",
+    "keiko-runtime-supervisor.exe",
+  );
+  const candidateLauncher = join(candidateRoot, "Keiko.exe");
+  const candidateSupervisor = join(
+    candidateRoot,
+    ".portable",
+    "generations",
+    candidateGenerationTreeSha256,
+    "runtime",
+    "native",
+    "keiko-runtime-supervisor.exe",
+  );
+  const currentSetup = join(managedRoot, ".portable", "setup-manifest.json");
+  const candidateSetup = join(candidateRoot, ".portable", "setup-manifest.json");
+  for (const path of [coordinator, supervisor, candidateLauncher, candidateSupervisor]) {
+    mkdirSync(join(path, ".."), { recursive: true });
+  }
+  writeFileSync(coordinator, "coordinator");
+  writeFileSync(supervisor, "supervisor");
+  writeFileSync(candidateLauncher, "candidate-launcher");
+  writeFileSync(candidateSupervisor, "candidate-supervisor");
+  writeFileSync(currentSetup, "current-setup");
+  writeFileSync(candidateSetup, "candidate-setup");
+  const registrationPrevious = "registration-previous";
+  const registrationNext = "registration-next";
+  const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
+  const plan = createPortableHandoffPlan({
+    activationId,
+    sessionId: "session-1",
+    stageId: "stage-1",
+    target: "windows-x64",
+    targetVersion: "1.2.3",
+    newLaunchId: "2".repeat(32),
+    restoreLaunchId: "3".repeat(32),
+    aggregateRevision: 7,
+    previousRegistrationState: "present",
+    oldProcess: {
+      pid: 123,
+      launchId: "b".repeat(32),
+      host: "127.0.0.1",
+      port: 1983,
+      version: "1.2.2",
+    },
+    paths: {
+      managedRoot,
+      stageRoot,
+      candidateRoot,
+      backupRoot: join(parent, `.keiko-previous-${activationId}`),
+      candidateLauncher,
+      candidateSupervisor,
+    },
+    digests: {
+      currentTreeSha256: "c".repeat(64),
+      candidateTreeSha256: "d".repeat(64),
+      currentLauncherSha256: digest("coordinator"),
+      currentSupervisorSha256: digest("supervisor"),
+      candidateLauncherSha256: digest("candidate-launcher"),
+      candidateSupervisorSha256: digest("candidate-supervisor"),
+      previousRegistrationSha256: digest(registrationPrevious),
+      preparedRegistrationSha256: digest(registrationNext),
+    },
+    deadlines: {
+      oldExitAt: 1_800_000_000_000,
+      startAt: 1_800_000_030_000,
+      verifyAt: 1_800_000_060_000,
+      cleanupAt: 1_800_000_090_000,
+    },
+    cutoverKind: "windows-generation-v1",
+    currentGenerationTreeSha256,
+    candidateGenerationTreeSha256,
+    currentSetupManifestSha256: digest("current-setup"),
+    candidateSetupManifestSha256: digest("candidate-setup"),
+  });
+  writePortableHandoffPlan({ stateDir, plan });
+  const capsule = join(stateDir, "updates", "handoff", activationId);
+  writeFileSync(join(capsule, "registration.previous"), registrationPrevious);
+  writeFileSync(join(capsule, "registration.next"), registrationNext);
+  return { coordinator, plan, stateDir, supervisor };
+}
+
 describe("portable handoff coordinator", () => {
+  it("durably validates every Windows capsule prerequisite before prepared intent", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-handoff-windows-"));
+    roots.push(root);
+    const fixture = prepareWindows(root);
+    const control = new PassThrough();
+    const response = new PassThrough();
+    const child = Object.assign(new EventEmitter(), {
+      pid: 43_210,
+      stdin: control,
+      stdio: [control, null, null, response],
+      unref: vi.fn(),
+      kill: vi.fn(() => true),
+    }) as unknown as ChildProcess;
+    let planSha256 = "";
+    const persistPrepared = vi.fn(({ activationWal }: PortableHandoffPreparedIntent) => {
+      planSha256 = activationWal.planSha256;
+      const capsule = join(fixture.stateDir, "updates", "handoff", fixture.plan.activationId);
+      expect(readFileSync(join(capsule, "coordinator.exe"), "utf8")).toBe("coordinator");
+      expect(readFileSync(join(capsule, "runtime-supervisor.exe"), "utf8")).toBe("supervisor");
+      expect(readFileSync(join(capsule, "launcher.next"), "utf8")).toBe("candidate-launcher");
+      expect(readFileSync(join(capsule, "setup-manifest.previous"), "utf8")).toBe("current-setup");
+      expect(readFileSync(join(capsule, "setup-manifest.next"), "utf8")).toBe("candidate-setup");
+      expect(readFileSync(join(capsule, "registration.previous"), "utf8")).toBe(
+        "registration-previous",
+      );
+      expect(readFileSync(join(capsule, "registration.next"), "utf8")).toBe("registration-next");
+      return Promise.resolve();
+    });
+    const spawnFn = vi.fn((_command: string, _args: readonly string[], _options: SpawnOptions) => {
+      queueMicrotask(() => response.end(`KHA1${planSha256}\n`));
+      return child;
+    });
+    const coordinator = createPortableHandoffCoordinator({
+      stateDir: fixture.stateDir,
+      persistPrepared,
+      persistAccepted: () => Promise.resolve(),
+      verifyNativeCopy: () => Promise.resolve(),
+      publishCoordinatorPid: () => true,
+      spawnFn,
+    });
+
+    await expect(
+      coordinator.begin({ sessionId: "session-1", activationId: fixture.plan.activationId }),
+    ).resolves.toBeDefined();
+    expect(persistPrepared).toHaveBeenCalledOnce();
+    expect(spawnFn).toHaveBeenCalledOnce();
+    expect(spawnFn.mock.calls[0]?.[0]).toMatch(/coordinator\.exe$/u);
+  });
+
+  it("rejects a stale Windows registration capsule before prepared intent", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-handoff-windows-stale-"));
+    roots.push(root);
+    const fixture = prepareWindows(root);
+    writeFileSync(
+      join(fixture.stateDir, "updates", "handoff", fixture.plan.activationId, "registration.next"),
+      "replaced-registration",
+    );
+    const persistPrepared = vi.fn(() => Promise.resolve());
+    const spawnFn = vi.fn();
+    const coordinator = createPortableHandoffCoordinator({
+      stateDir: fixture.stateDir,
+      persistPrepared,
+      persistAccepted: () => Promise.resolve(),
+      verifyNativeCopy: () => Promise.resolve(),
+      publishCoordinatorPid: () => true,
+      spawnFn,
+    });
+
+    await expect(
+      coordinator.begin({ sessionId: "session-1", activationId: fixture.plan.activationId }),
+    ).rejects.toThrow(/registration snapshot changed/u);
+    expect(persistPrepared).not.toHaveBeenCalled();
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  it("rejects stale Windows setup bytes before prepared intent", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-handoff-windows-stale-setup-"));
+    roots.push(root);
+    const fixture = prepareWindows(root);
+    writeFileSync(
+      join(fixture.plan.paths.candidateRoot, ".portable", "setup-manifest.json"),
+      "replaced-setup",
+    );
+    const persistPrepared = vi.fn(() => Promise.resolve());
+    const spawnFn = vi.fn();
+    const coordinator = createPortableHandoffCoordinator({
+      stateDir: fixture.stateDir,
+      persistPrepared,
+      persistAccepted: () => Promise.resolve(),
+      verifyNativeCopy: () => Promise.resolve(),
+      publishCoordinatorPid: () => true,
+      spawnFn,
+    });
+
+    await expect(
+      coordinator.begin({ sessionId: "session-1", activationId: fixture.plan.activationId }),
+    ).rejects.toThrow(/capsule identity changed/u);
+    expect(persistPrepared).not.toHaveBeenCalled();
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  it("rejects a hard-linked Windows capsule source before prepared intent", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-handoff-windows-hardlink-"));
+    roots.push(root);
+    const fixture = prepareWindows(root);
+    const source = join(root, "linked-launcher.exe");
+    writeFileSync(source, "candidate-launcher");
+    rmSync(fixture.plan.paths.candidateLauncher);
+    linkSync(source, fixture.plan.paths.candidateLauncher);
+    const persistPrepared = vi.fn(() => Promise.resolve());
+    const spawnFn = vi.fn();
+    const coordinator = createPortableHandoffCoordinator({
+      stateDir: fixture.stateDir,
+      persistPrepared,
+      persistAccepted: () => Promise.resolve(),
+      verifyNativeCopy: () => Promise.resolve(),
+      publishCoordinatorPid: () => true,
+      spawnFn,
+    });
+
+    await expect(
+      coordinator.begin({ sessionId: "session-1", activationId: fixture.plan.activationId }),
+    ).rejects.toThrow(/source is unsafe/u);
+    expect(persistPrepared).not.toHaveBeenCalled();
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
   it("persists prepared intent before a fixed-argv spawn and keeps the parent pipe open", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-handoff-"));
     roots.push(root);

@@ -1,4 +1,17 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  appendFileSync,
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -12,21 +25,27 @@ import { digestUpdateCandidate } from "./update-candidate-authority.js";
 import { createPortableUpdateActivator } from "./update-portable-activation.js";
 import {
   activationIdFor,
+  attestPortableManagedRegistration,
   refreshPortableRegistration,
+  type PortableActivationLayout,
 } from "./update-portable-activation-files.js";
 import {
   createPortableHandoffCoordinator,
   PortableHandoffCoordinatorError,
 } from "./update-portable-handoff.js";
+import { hashPortableHandoffTree } from "./update-portable-handoff-tree.js";
 
 const TARGET_VERSION = "0.2.12";
 const OLD_VERSION = "0.2.11";
 const TARGET = "windows-x64" as const;
 const tempRoots: string[] = [];
 
-function setupManifest(version: string): string {
+function setupManifest(
+  version: string,
+  windowsGeneration: NonNullable<PortableActivationLayout["windowsGeneration"]>,
+): string {
   return JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     platformTarget: TARGET,
     packageName: "@oscharko-dev/keiko",
     packageVersion: version,
@@ -34,20 +53,58 @@ function setupManifest(version: string): string {
     primaryLauncher: "Keiko.exe",
     bootstrapUpdateEligible: false,
     runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+    windowsGeneration,
   });
 }
 
-function writeInstall(root: string, version: string): void {
-  mkdirSync(join(root, "app"), { recursive: true });
+async function writeInstall(root: string, version: string): Promise<PortableActivationLayout> {
+  const pendingGeneration = join(root, ".portable", "generation-fixture");
+  mkdirSync(join(pendingGeneration, "app"), { recursive: true });
   mkdirSync(join(root, ".portable"), { recursive: true });
-  mkdirSync(join(root, "runtime", "native"), { recursive: true });
-  copyFileSync(process.execPath, join(root, "Keiko.exe"));
-  writeFileSync(join(root, "runtime", "native", "keiko-runtime-supervisor.exe"), "supervisor");
+  mkdirSync(join(pendingGeneration, "runtime", "native"), { recursive: true });
+  writeFileSync(join(root, "Keiko.exe"), `fixture-launcher-${version}`, { mode: 0o700 });
   writeFileSync(
-    join(root, "app", "package.json"),
+    join(pendingGeneration, "runtime", "native", "keiko-runtime-supervisor.exe"),
+    "supervisor",
+  );
+  writeFileSync(
+    join(pendingGeneration, "app", "package.json"),
     JSON.stringify({ name: "@oscharko-dev/keiko", version }),
   );
-  writeFileSync(join(root, ".portable", "setup-manifest.json"), setupManifest(version));
+  const treeSha256 = await hashPortableHandoffTree(pendingGeneration, {
+    deadline: Date.now() + 10_000,
+  });
+  const resourceRoot = `.portable/generations/${treeSha256}`;
+  const generationRoot = join(root, ...resourceRoot.split("/"));
+  mkdirSync(dirname(generationRoot), { recursive: true });
+  renameSync(pendingGeneration, generationRoot);
+  const windowsGeneration = {
+    schemaVersion: 1,
+    resourceRoot,
+    treeHashSchema: "KHT1",
+    treeSha256,
+    launcherPath: "Keiko.exe",
+    launcherSha256: createHash("sha256")
+      .update(readFileSync(join(root, "Keiko.exe")))
+      .digest("hex"),
+  } as const;
+  const setupManifestPath = join(root, ".portable", "setup-manifest.json");
+  writeFileSync(setupManifestPath, setupManifest(version, windowsGeneration));
+  return {
+    installRoot: root,
+    resourceRoot: generationRoot,
+    appRoot: join(generationRoot, "app"),
+    packageJsonPath: join(generationRoot, "app", "package.json"),
+    setupManifestPath,
+    launcherPath: join(root, "Keiko.exe"),
+    runtimeSupervisorPath: join(
+      generationRoot,
+      "runtime",
+      "native",
+      "keiko-runtime-supervisor.exe",
+    ),
+    windowsGeneration,
+  };
 }
 
 function stageSummary(): UpdatePortableStagingSummary {
@@ -70,36 +127,47 @@ async function makeInstall(): Promise<{
   readonly stateDir: string;
   readonly managedRoot: string;
   readonly packageRoot: string;
+  readonly currentLayout: PortableActivationLayout;
 }> {
   const home = await mkdtemp(join(tmpdir(), "keiko-portable-activation-"));
   tempRoots.push(home);
   const managedRoot = join(home, "AppData", "Local", "Programs", "Keiko");
-  const packageRoot = join(managedRoot, "app");
   const candidateRoot = join(dirname(managedRoot), ".keiko-portable-updates", "stage-1", "Keiko");
   const stateDir = join(home, ".keiko");
   const localState = createUpdateLocalStateManager({ stateDir });
   localState.writeRuntimeState(localState.readRuntimeState());
-  writeInstall(managedRoot, OLD_VERSION);
-  writeInstall(candidateRoot, TARGET_VERSION);
+  const currentLayout = await writeInstall(managedRoot, OLD_VERSION);
+  await writeInstall(candidateRoot, TARGET_VERSION);
   writeFileSync(join(managedRoot, "active.txt"), "active");
-  return { home, stateDir, managedRoot, packageRoot };
+  return { home, stateDir, managedRoot, packageRoot: currentLayout.appRoot, currentLayout };
 }
 
 function registerCurrentInstall(install: Awaited<ReturnType<typeof makeInstall>>): void {
   refreshPortableRegistration({
     stateDir: install.stateDir,
-    layout: {
-      installRoot: install.managedRoot,
-      appRoot: install.packageRoot,
-      packageJsonPath: join(install.packageRoot, "package.json"),
-      setupManifestPath: join(install.managedRoot, ".portable", "setup-manifest.json"),
-      launcherPath: join(install.managedRoot, "Keiko.exe"),
-    },
+    layout: install.currentLayout,
     target: TARGET,
     env: { LOCALAPPDATA: join(install.home, "AppData", "Local") },
     home: install.home,
     now: 1_699_999_000_000,
   });
+}
+
+function attestCurrentRegistration(install: Awaited<ReturnType<typeof makeInstall>>): boolean {
+  const registration = readFileSync(join(install.stateDir, "portable-install-state.json"));
+  return attestPortableManagedRegistration({
+    stateDir: install.stateDir,
+    managedRoot: install.managedRoot,
+    target: TARGET,
+    version: OLD_VERSION,
+    expectedSha256: createHash("sha256").update(registration).digest("hex"),
+  });
+}
+
+function makeLauncherWritable(install: Awaited<ReturnType<typeof makeInstall>>): string {
+  const launcher = join(install.managedRoot, "Keiko.exe");
+  chmodSync(launcher, 0o700);
+  return launcher;
 }
 
 function seedCancellableSession(
@@ -182,6 +250,92 @@ afterEach(async () => {
 });
 
 describe("portable update activation handoff", () => {
+  it("attests schema 2 registration against the active root setup generation binding", async () => {
+    const install = await makeInstall();
+    registerCurrentInstall(install);
+    const registrationPath = join(install.stateDir, "portable-install-state.json");
+    const registration = readFileSync(registrationPath);
+    expect(
+      attestPortableManagedRegistration({
+        stateDir: install.stateDir,
+        managedRoot: install.managedRoot,
+        target: TARGET,
+        version: OLD_VERSION,
+        expectedSha256: createHash("sha256").update(registration).digest("hex"),
+      }),
+    ).toBe(true);
+    const replaced = JSON.parse(registration.toString("utf8")) as Record<string, unknown>;
+    const windowsGeneration = replaced.windowsGeneration;
+    if (
+      typeof windowsGeneration !== "object" ||
+      windowsGeneration === null ||
+      Array.isArray(windowsGeneration)
+    ) {
+      throw new Error("Windows generation fixture is missing");
+    }
+    const differentTree = "f".repeat(64);
+    replaced.windowsGeneration = {
+      ...windowsGeneration,
+      resourceRoot: `.portable/generations/${differentTree}`,
+      treeSha256: differentTree,
+    };
+    const replacedBytes = Buffer.from(`${JSON.stringify(replaced, null, 2)}\n`, "utf8");
+    writeFileSync(registrationPath, replacedBytes);
+
+    expect(
+      attestPortableManagedRegistration({
+        stateDir: install.stateDir,
+        managedRoot: install.managedRoot,
+        target: TARGET,
+        version: OLD_VERSION,
+        expectedSha256: createHash("sha256").update(replacedBytes).digest("hex"),
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["setup manifest", ".portable/setup-manifest.json", 64 * 1024 + 1],
+    ["root launcher", "Keiko.exe", 64 * 1024 * 1024 + 1],
+  ])("rejects a genuinely sparse oversized Windows %s", async (_name, relativePath, size) => {
+    const install = await makeInstall();
+    registerCurrentInstall(install);
+    if (relativePath === "Keiko.exe") makeLauncherWritable(install);
+    truncateSync(join(install.managedRoot, ...relativePath.split("/")), size);
+
+    expect(attestCurrentRegistration(install)).toBe(false);
+  });
+
+  it("rejects a hard-linked Windows root launcher", async () => {
+    const install = await makeInstall();
+    registerCurrentInstall(install);
+    const launcher = join(install.managedRoot, "Keiko.exe");
+    const linkedSource = join(install.managedRoot, "linked-launcher.exe");
+    copyFileSync(launcher, linkedSource);
+    rmSync(launcher);
+    linkSync(linkedSource, launcher);
+
+    expect(attestCurrentRegistration(install)).toBe(false);
+  });
+
+  it("rejects Windows root launcher growth after registration", async () => {
+    const install = await makeInstall();
+    registerCurrentInstall(install);
+    appendFileSync(makeLauncherWritable(install), "growth");
+
+    expect(attestCurrentRegistration(install)).toBe(false);
+  });
+
+  it("rejects same-size Windows root launcher mutation after registration", async () => {
+    const install = await makeInstall();
+    registerCurrentInstall(install);
+    const launcher = makeLauncherWritable(install);
+    const bytes = readFileSync(launcher);
+    bytes[0] = (bytes[0] ?? 0) ^ 0xff;
+    writeFileSync(launcher, bytes);
+
+    expect(attestCurrentRegistration(install)).toBe(false);
+  });
+
   it("hands an immutable plan to the coordinator without promoting or reporting success", async () => {
     const install = await makeInstall();
     registerCurrentInstall(install);
@@ -237,7 +391,9 @@ describe("portable update activation handoff", () => {
     const install = await makeInstall();
     registerCurrentInstall(install);
     const controller = new AbortController();
-    const begin = vi.fn(() => Promise.reject(new Error("cancelled before ACK")));
+    const begin = vi.fn((_input: { readonly signal?: AbortSignal }) =>
+      Promise.reject(new Error("cancelled before ACK")),
+    );
     await expect(
       configuredActivator(install, { begin }).activate({
         sessionId: "handoff-cancelled",

@@ -12,7 +12,7 @@ import {
   rmSync,
   writeSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
 import type { UpdateActivationWalState } from "@oscharko-dev/keiko-contracts";
 import {
@@ -23,6 +23,7 @@ import {
 } from "./update-portable-handoff-plan.js";
 
 const MAX_NATIVE_BYTES = 64 * 1024 * 1024;
+const MAX_CONTROL_BYTES = 64 * 1024;
 const COPY_BUFFER_BYTES = 64 * 1024;
 const ACCEPT_TIMEOUT_MS = 15 * 60 * 1_000;
 const COORDINATOR_TEARDOWN_TIMEOUT_MS = 5_000;
@@ -88,7 +89,7 @@ interface NativeIdentity {
   readonly mtimeMs: number;
 }
 
-function assertSourceIdentity(path: string, descriptor: number): NativeIdentity {
+function assertSourceIdentity(path: string, descriptor: number, maxBytes: number): NativeIdentity {
   const before = lstatSync(path);
   const opened = fstatSync(descriptor);
   if (
@@ -100,7 +101,7 @@ function assertSourceIdentity(path: string, descriptor: number): NativeIdentity 
     before.dev !== opened.dev ||
     before.ino !== opened.ino ||
     opened.size < 1 ||
-    opened.size > MAX_NATIVE_BYTES
+    opened.size > maxBytes
   )
     fail("portable handoff native source is unsafe");
   return { dev: opened.dev, ino: opened.ino, size: opened.size, mtimeMs: opened.mtimeMs };
@@ -117,9 +118,32 @@ function assertUnchangedIdentity(before: NativeIdentity, after: NativeIdentity):
   }
 }
 
+function assertNoLinkPath(root: string, path: string): void {
+  const canonicalRoot = resolve(root);
+  const canonicalPath = resolve(path);
+  const child = relative(canonicalRoot, canonicalPath);
+  if (child.length === 0 || child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child)) {
+    fail("portable handoff source escaped its verified root");
+  }
+  const rootStat = lstatSync(canonicalRoot);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    fail("portable handoff source path is unsafe");
+  }
+  let cursor = canonicalRoot;
+  const segments = child.split(sep);
+  for (const segment of segments.slice(0, -1)) {
+    cursor = join(cursor, segment);
+    const stat = lstatSync(cursor);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      fail("portable handoff source path is unsafe");
+    }
+  }
+}
+
 function copyBytes(
   sourceFd: number,
   destinationFd: number,
+  maxBytes: number,
 ): { readonly sha256: string; readonly size: number } {
   const hash = createHash("sha256");
   const buffer = Buffer.allocUnsafe(COPY_BUFFER_BYTES);
@@ -128,7 +152,7 @@ function copyBytes(
     const count = readSync(sourceFd, buffer, 0, buffer.length, null);
     if (count === 0) break;
     copied += count;
-    if (copied > MAX_NATIVE_BYTES) fail("portable handoff native source is too large");
+    if (copied > maxBytes) fail("portable handoff source is too large");
     hash.update(buffer.subarray(0, count));
     let offset = 0;
     while (offset < count) offset += writeSync(destinationFd, buffer, offset, count - offset);
@@ -136,50 +160,72 @@ function copyBytes(
   return { sha256: hash.digest("hex"), size: copied };
 }
 
-function digestCopiedNative(destination: string, expectedSize: number): string {
+function digestOpenedFile(descriptor: number, expectedSize: number, maxBytes: number): string {
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(COPY_BUFFER_BYTES);
+  let readBytes = 0;
+  for (;;) {
+    const count = readSync(descriptor, buffer, 0, buffer.length, null);
+    if (count === 0) break;
+    readBytes += count;
+    if (readBytes > expectedSize || readBytes > maxBytes) {
+      fail("portable handoff copy changed during verification");
+    }
+    hash.update(buffer.subarray(0, count));
+  }
+  if (readBytes !== expectedSize) fail("portable handoff copy changed during verification");
+  return hash.digest("hex");
+}
+
+function digestCopiedFile(destination: string, expectedSize: number, maxBytes: number): string {
   const copiedFd = openSync(destination, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const copiedStat = fstatSync(copiedFd);
     if (!copiedStat.isFile() || copiedStat.nlink !== 1 || copiedStat.size !== expectedSize) {
-      fail("portable handoff native copy is unsafe");
+      fail("portable handoff copy is unsafe");
     }
-    const hash = createHash("sha256");
-    const buffer = Buffer.allocUnsafe(COPY_BUFFER_BYTES);
-    let readBytes = 0;
-    for (;;) {
-      const count = readSync(copiedFd, buffer, 0, buffer.length, null);
-      if (count === 0) break;
-      readBytes += count;
-      if (readBytes > expectedSize || readBytes > MAX_NATIVE_BYTES) {
-        fail("portable handoff native copy changed during verification");
-      }
-      hash.update(buffer.subarray(0, count));
-    }
-    if (readBytes !== expectedSize)
-      fail("portable handoff native copy changed during verification");
-    return hash.digest("hex");
+    return digestOpenedFile(copiedFd, expectedSize, maxBytes);
   } finally {
     closeSync(copiedFd);
   }
 }
 
-function copyVerifiedNative(source: string, destination: string): string {
+function digestExistingFile(path: string, maxBytes: number): string {
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const before = assertSourceIdentity(path, descriptor, maxBytes);
+    const digest = digestOpenedFile(descriptor, before.size, maxBytes);
+    assertUnchangedIdentity(before, assertSourceIdentity(path, descriptor, maxBytes));
+    return digest;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function copyVerifiedFile(
+  source: string,
+  destination: string,
+  sourceRoot: string,
+  maxBytes: number,
+  mode: number,
+): string {
+  assertNoLinkPath(sourceRoot, source);
   const noFollow = constants.O_NOFOLLOW;
   const sourceFd = openSync(source, constants.O_RDONLY | noFollow);
   const temporary = `${destination}.${String(process.pid)}.tmp`;
   let destinationFd: number | undefined;
   try {
-    const sourceIdentity = assertSourceIdentity(source, sourceFd);
+    const sourceIdentity = assertSourceIdentity(source, sourceFd, maxBytes);
     destinationFd = openSync(
       temporary,
       constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | noFollow,
-      0o700,
+      mode,
     );
-    const copied = copyBytes(sourceFd, destinationFd);
+    const copied = copyBytes(sourceFd, destinationFd, maxBytes);
     fsyncSync(destinationFd);
     closeSync(destinationFd);
     destinationFd = undefined;
-    assertUnchangedIdentity(sourceIdentity, assertSourceIdentity(source, sourceFd));
+    assertUnchangedIdentity(sourceIdentity, assertSourceIdentity(source, sourceFd, maxBytes));
     renameSync(temporary, destination);
     if (process.platform !== "win32") {
       const parentFd = openSync(dirname(destination), constants.O_RDONLY);
@@ -189,14 +235,19 @@ function copyVerifiedNative(source: string, destination: string): string {
         closeSync(parentFd);
       }
     }
-    const actual = digestCopiedNative(destination, copied.size);
-    if (actual !== copied.sha256) fail("portable handoff native copy digest mismatch");
+    const actual = digestCopiedFile(destination, copied.size, maxBytes);
+    if (actual !== copied.sha256) fail("portable handoff copy digest mismatch");
+    assertNoLinkPath(sourceRoot, source);
     return actual;
   } finally {
     if (destinationFd !== undefined) closeSync(destinationFd);
     closeSync(sourceFd);
     rmSync(temporary, { force: true });
   }
+}
+
+function copyVerifiedNative(source: string, destination: string, sourceRoot: string): string {
+  return copyVerifiedFile(source, destination, sourceRoot, MAX_NATIVE_BYTES, 0o700);
 }
 
 function coordinatorResponse(child: ChildProcess): Readable {
@@ -338,7 +389,7 @@ async function prepareCoordinator(
   assertNotAborted(signal);
   if (plan.sessionId !== sessionId) fail("portable handoff session identity does not match");
   const root = portableHandoffRoot(options.stateDir, activationId);
-  const extension = process.platform === "win32" ? ".exe" : "";
+  const extension = plan.target === "windows-x64" ? ".exe" : "";
   const coordinator = join(root, `coordinator${extension}`);
   const supervisor = join(root, `runtime-supervisor${extension}`);
   try {
@@ -349,6 +400,7 @@ async function prepareCoordinator(
       supervisor,
       signal,
     });
+    snapshotWindowsCapsule(plan, root);
     const planSha256 = await persistPreparedCoordinator(
       options,
       plan,
@@ -364,7 +416,80 @@ async function prepareCoordinator(
   } catch (error) {
     rmSync(coordinator, { force: true });
     rmSync(supervisor, { force: true });
+    if (plan.target === "windows-x64") {
+      for (const name of ["launcher.next", "setup-manifest.previous", "setup-manifest.next"]) {
+        rmSync(join(root, name), { force: true });
+      }
+    }
     throw error;
+  }
+}
+
+interface WindowsSnapshotArtifact {
+  readonly source: string;
+  readonly destination: string;
+  readonly sourceRoot: string;
+  readonly expectedSha256: string;
+  readonly maxBytes: number;
+  readonly mode: number;
+}
+
+function windowsSnapshotArtifacts(
+  plan: Extract<PortableHandoffPlan, { readonly target: "windows-x64" }>,
+  root: string,
+): readonly WindowsSnapshotArtifact[] {
+  return [
+    {
+      source: plan.paths.candidateLauncher,
+      destination: join(root, "launcher.next"),
+      sourceRoot: plan.paths.candidateRoot,
+      expectedSha256: plan.digests.candidateLauncherSha256,
+      maxBytes: MAX_NATIVE_BYTES,
+      mode: 0o700,
+    },
+    {
+      source: join(plan.paths.managedRoot, ".portable", "setup-manifest.json"),
+      destination: join(root, "setup-manifest.previous"),
+      sourceRoot: plan.paths.managedRoot,
+      expectedSha256: plan.currentSetupManifestSha256,
+      maxBytes: MAX_CONTROL_BYTES,
+      mode: 0o600,
+    },
+    {
+      source: join(plan.paths.candidateRoot, ".portable", "setup-manifest.json"),
+      destination: join(root, "setup-manifest.next"),
+      sourceRoot: plan.paths.candidateRoot,
+      expectedSha256: plan.candidateSetupManifestSha256,
+      maxBytes: MAX_CONTROL_BYTES,
+      mode: 0o600,
+    },
+  ] as const;
+}
+
+function snapshotWindowsCapsule(plan: PortableHandoffPlan, root: string): void {
+  if (plan.target !== "windows-x64") return;
+  for (const artifact of windowsSnapshotArtifacts(plan, root)) {
+    if (
+      copyVerifiedFile(
+        artifact.source,
+        artifact.destination,
+        artifact.sourceRoot,
+        artifact.maxBytes,
+        artifact.mode,
+      ) !== artifact.expectedSha256
+    ) {
+      fail("portable handoff Windows capsule identity changed");
+    }
+  }
+  assertNoLinkPath(root, join(root, "registration.previous"));
+  assertNoLinkPath(root, join(root, "registration.next"));
+  if (
+    digestExistingFile(join(root, "registration.previous"), MAX_CONTROL_BYTES) !==
+      plan.digests.previousRegistrationSha256 ||
+    digestExistingFile(join(root, "registration.next"), MAX_CONTROL_BYTES) !==
+      plan.digests.preparedRegistrationSha256
+  ) {
+    fail("portable handoff Windows registration snapshot changed");
   }
 }
 
@@ -376,8 +501,16 @@ async function copyAndVerifyNativeArtifacts(input: {
   readonly signal: AbortSignal | undefined;
 }): Promise<string> {
   const current = currentNativeArtifacts(input.plan);
-  const coordinatorSha256 = copyVerifiedNative(current.coordinator, input.coordinator);
-  const supervisorSha256 = copyVerifiedNative(current.supervisor, input.supervisor);
+  const coordinatorSha256 = copyVerifiedNative(
+    current.coordinator,
+    input.coordinator,
+    input.plan.paths.managedRoot,
+  );
+  const supervisorSha256 = copyVerifiedNative(
+    current.supervisor,
+    input.supervisor,
+    input.plan.paths.managedRoot,
+  );
   if (
     coordinatorSha256 !== input.plan.digests.currentLauncherSha256 ||
     supervisorSha256 !== input.plan.digests.currentSupervisorSha256
@@ -425,9 +558,15 @@ function currentNativeArtifacts(plan: PortableHandoffPlan): {
   readonly supervisor: string;
 } {
   if (plan.target === "windows-x64") {
+    const generation = join(
+      plan.paths.managedRoot,
+      ".portable",
+      "generations",
+      plan.currentGenerationTreeSha256,
+    );
     return {
       coordinator: join(plan.paths.managedRoot, "Keiko.exe"),
-      supervisor: join(plan.paths.managedRoot, "runtime", "native", "keiko-runtime-supervisor.exe"),
+      supervisor: join(generation, "runtime", "native", "keiko-runtime-supervisor.exe"),
     };
   }
   return {

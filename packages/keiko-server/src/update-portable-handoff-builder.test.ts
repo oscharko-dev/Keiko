@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,8 +11,12 @@ import {
   PortableHandoffBuilderError,
   preparePortableHandoffPlan,
 } from "./update-portable-handoff-builder.js";
-import { refreshPortableRegistration } from "./update-portable-activation-files.js";
+import {
+  refreshPortableRegistration,
+  type PortableActivationLayout,
+} from "./update-portable-activation-files.js";
 import { readPortableHandoffPlan } from "./update-portable-handoff-plan.js";
+import type { WindowsGenerationBinding } from "./update-portable-windows-generation.js";
 
 const roots: string[] = [];
 const OLD_VERSION = "1.2.2";
@@ -23,23 +27,43 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
 });
 
-function writeInstall(root: string, version: string): void {
-  mkdirSync(join(root, "app"), { recursive: true });
+type WindowsActivationLayout = PortableActivationLayout & {
+  readonly windowsGeneration: WindowsGenerationBinding;
+};
+
+async function writeInstall(root: string, version: string): Promise<WindowsActivationLayout> {
+  const pendingGeneration = join(root, ".portable", "generation-fixture");
+  mkdirSync(join(pendingGeneration, "app"), { recursive: true });
   mkdirSync(join(root, ".portable"), { recursive: true });
-  mkdirSync(join(root, "runtime", "native"), { recursive: true });
+  mkdirSync(join(pendingGeneration, "runtime", "native"), { recursive: true });
   writeFileSync(join(root, "Keiko.exe"), `launcher-${version}`);
   writeFileSync(
-    join(root, "runtime", "native", "keiko-runtime-supervisor.exe"),
+    join(pendingGeneration, "runtime", "native", "keiko-runtime-supervisor.exe"),
     `supervisor-${version}`,
   );
   writeFileSync(
-    join(root, "app", "package.json"),
+    join(pendingGeneration, "app", "package.json"),
     JSON.stringify({ name: "@oscharko-dev/keiko", version }),
   );
+  const treeSha256 = await hashPortableHandoffTree(pendingGeneration, {
+    deadline: Date.now() + 5_000,
+  });
+  const resourceRoot = `.portable/generations/${treeSha256}`;
+  const generationRoot = join(root, ...resourceRoot.split("/"));
+  mkdirSync(dirname(generationRoot), { recursive: true });
+  renameSync(pendingGeneration, generationRoot);
+  const windowsGeneration = {
+    schemaVersion: 1,
+    resourceRoot,
+    treeHashSchema: "KHT1",
+    treeSha256,
+    launcherPath: "Keiko.exe",
+    launcherSha256: createHash("sha256").update(`launcher-${version}`).digest("hex"),
+  } as const;
   writeFileSync(
     join(root, ".portable", "setup-manifest.json"),
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       platformTarget: "windows-x64",
       packageName: "@oscharko-dev/keiko",
       packageVersion: version,
@@ -47,8 +71,24 @@ function writeInstall(root: string, version: string): void {
       bootstrapUpdateEligible: false,
       primaryLauncher: "Keiko.exe",
       runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+      windowsGeneration,
     }),
   );
+  return {
+    installRoot: root,
+    resourceRoot: generationRoot,
+    appRoot: join(generationRoot, "app"),
+    packageJsonPath: join(generationRoot, "app", "package.json"),
+    setupManifestPath: join(root, ".portable", "setup-manifest.json"),
+    launcherPath: join(root, "Keiko.exe"),
+    runtimeSupervisorPath: join(
+      generationRoot,
+      "runtime",
+      "native",
+      "keiko-runtime-supervisor.exe",
+    ),
+    windowsGeneration,
+  };
 }
 
 function stage(): UpdatePortableStagingSummary {
@@ -73,17 +113,11 @@ describe("portable handoff production plan builder", () => {
     const managedRoot = join(root, "Programs", "Keiko");
     const candidateRoot = join(dirname(managedRoot), ".keiko-portable-updates", "stage-1", "Keiko");
     const stateDir = join(root, "state");
-    writeInstall(managedRoot, OLD_VERSION);
-    writeInstall(candidateRoot, NEW_VERSION);
+    const currentLayout = await writeInstall(managedRoot, OLD_VERSION);
+    const candidateLayout = await writeInstall(candidateRoot, NEW_VERSION);
     refreshPortableRegistration({
       stateDir,
-      layout: {
-        installRoot: managedRoot,
-        appRoot: join(managedRoot, "app"),
-        packageJsonPath: join(managedRoot, "app", "package.json"),
-        setupManifestPath: join(managedRoot, ".portable", "setup-manifest.json"),
-        launcherPath: join(managedRoot, "Keiko.exe"),
-      },
+      layout: currentLayout,
       target: "windows-x64",
       env: { LOCALAPPDATA: root },
       home: root,
@@ -110,7 +144,7 @@ describe("portable handoff production plan builder", () => {
         sessionId: "session-1",
         targetVersion: NEW_VERSION,
         stage: stage(),
-        runtimeFacts: { packageRoot: join(managedRoot, "app"), portableStateDir: stateDir },
+        runtimeFacts: { packageRoot: currentLayout.appRoot, portableStateDir: stateDir },
       },
       7,
     );
@@ -122,17 +156,136 @@ describe("portable handoff production plan builder", () => {
     );
     expect(prepared.plan.digests.preparedRegistrationSha256).toMatch(/^[a-f0-9]{64}$/u);
     expect(prepared.plan.previousRegistrationState).toBe("present");
+    expect(prepared.plan.schemaVersion).toBe(3);
+    if (prepared.plan.target !== "windows-x64") throw new Error("Windows plan expected");
+    expect(prepared.plan.cutoverKind).toBe("windows-generation-v1");
+    expect(prepared.plan.currentGenerationTreeSha256).toBe(
+      currentLayout.windowsGeneration.treeSha256,
+    );
+    expect(prepared.plan.candidateGenerationTreeSha256).toBe(
+      candidateLayout.windowsGeneration.treeSha256,
+    );
+    expect(prepared.plan.currentSetupManifestSha256).toBe(
+      createHash("sha256").update(readFileSync(currentLayout.setupManifestPath)).digest("hex"),
+    );
+    expect(prepared.plan.candidateSetupManifestSha256).toBe(
+      createHash("sha256").update(readFileSync(candidateLayout.setupManifestPath)).digest("hex"),
+    );
     expect(prepared.plan.digests.previousRegistrationSha256).toMatch(/^[a-f0-9]{64}$/u);
-    expect(
+    const nextRegistration = JSON.parse(
       readFileSync(
         join(stateDir, "updates", "handoff", prepared.activationId, "registration.next"),
         "utf8",
       ),
-    ).toContain(NEW_VERSION);
+    ) as Record<string, unknown>;
+    expect(nextRegistration).toMatchObject({
+      schemaVersion: 2,
+      packageVersion: NEW_VERSION,
+      windowsGeneration: candidateLayout.windowsGeneration,
+    });
     const attest = createPortableHandoffTreeAttestor({ managedRoot });
     await expect(attest(prepared.plan.digests.currentTreeSha256)).resolves.toBe(true);
-    writeFileSync(join(managedRoot, "app", "package.json"), "changed");
+    writeFileSync(currentLayout.packageJsonPath, "changed");
     await expect(attest(prepared.plan.digests.currentTreeSha256)).resolves.toBe(false);
+  });
+
+  it("rejects a generation changed after its setup binding was published", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-handoff-builder-stale-generation-"));
+    roots.push(root);
+    const managedRoot = join(root, "Programs", "Keiko");
+    const candidateRoot = join(dirname(managedRoot), ".keiko-portable-updates", "stage-1", "Keiko");
+    const stateDir = join(root, "state");
+    const currentLayout = await writeInstall(managedRoot, OLD_VERSION);
+    const candidateLayout = await writeInstall(candidateRoot, NEW_VERSION);
+    refreshPortableRegistration({
+      stateDir,
+      layout: currentLayout,
+      target: "windows-x64",
+      env: { LOCALAPPDATA: root },
+      home: root,
+      now: 1_699_999_000_000,
+    });
+    writeFileSync(join(candidateLayout.resourceRoot, "changed-after-binding.txt"), "changed");
+
+    await expect(
+      preparePortableHandoffPlan(
+        {
+          env: { LOCALAPPDATA: root },
+          stateDir,
+          currentVersion: OLD_VERSION,
+          currentProcess: () => ({
+            pid: 42,
+            launchId: "1".repeat(32),
+            host: "127.0.0.1",
+            port: 1983,
+            version: OLD_VERSION,
+          }),
+          newLaunchId: () => "2".repeat(32),
+          restoreLaunchId: () => "3".repeat(32),
+          home: () => root,
+        },
+        {
+          sessionId: "session-1",
+          targetVersion: NEW_VERSION,
+          stage: stage(),
+          runtimeFacts: { packageRoot: currentLayout.appRoot, portableStateDir: stateDir },
+        },
+        7,
+      ),
+    ).rejects.toThrow(/generation digest mismatch/u);
+  });
+
+  it("rejects an occupied candidate generation destination before capsule mutation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-handoff-builder-occupied-generation-"));
+    roots.push(root);
+    const managedRoot = join(root, "Programs", "Keiko");
+    const candidateRoot = join(dirname(managedRoot), ".keiko-portable-updates", "stage-1", "Keiko");
+    const stateDir = join(root, "state");
+    const currentLayout = await writeInstall(managedRoot, OLD_VERSION);
+    const candidateLayout = await writeInstall(candidateRoot, NEW_VERSION);
+    refreshPortableRegistration({
+      stateDir,
+      layout: currentLayout,
+      target: "windows-x64",
+      env: { LOCALAPPDATA: root },
+      home: root,
+      now: 1_699_999_000_000,
+    });
+    mkdirSync(
+      join(managedRoot, ".portable", "generations", candidateLayout.windowsGeneration.treeSha256),
+      { recursive: true },
+    );
+
+    const input = {
+      sessionId: "session-1",
+      targetVersion: NEW_VERSION,
+      stage: stage(),
+      runtimeFacts: { packageRoot: currentLayout.appRoot, portableStateDir: stateDir },
+    };
+    await expect(
+      preparePortableHandoffPlan(
+        {
+          env: { LOCALAPPDATA: root },
+          stateDir,
+          currentVersion: OLD_VERSION,
+          currentProcess: () => ({
+            pid: 42,
+            launchId: "1".repeat(32),
+            host: "127.0.0.1",
+            port: 1983,
+            version: OLD_VERSION,
+          }),
+          newLaunchId: () => "2".repeat(32),
+          restoreLaunchId: () => "3".repeat(32),
+          home: () => root,
+        },
+        input,
+        7,
+      ),
+    ).rejects.toThrow(/destination is occupied/u);
+    expect(readFileSync(join(stateDir, "portable-install-state.json"), "utf8")).toContain(
+      OLD_VERSION,
+    );
   });
 
   it("uses the exact KHT1 byte grammar with ordinal UTF-8 paths and forward separators", async () => {

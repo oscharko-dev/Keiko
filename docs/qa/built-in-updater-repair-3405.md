@@ -164,6 +164,62 @@ the Windows equality must run in its genuine host lane. A formerly silent early 
 to an explicit skip, and a required Windows CI step is being added. Native code consumes the
 TypeScript-owned fixtures read-only; local fixture proof is not native replacement qualification.
 
+The B2 plan/capsule slice is frozen for independent static security review. Owner checks pass
+112 core/wiring tests with one explicit Windows-host skip, 26 adjacent handoff tests, scoped
+lint/format and the final server typecheck. Earlier attempts failed on a stale flat fixture path,
+15 lint findings, a `lstatSync` return type, and an unresolved shared-security subpath before its
+approved build; those attempts are not green evidence. The lead independently passes the initial
+111-test core/wiring batch with one skip (16.17 seconds), the final seven-test active-binding suite
+(13.41 seconds), and all 27 Windows parser/staging/rename tests (14.05 seconds).
+The broader Mac recovery replay then fails five tests with 23 passing (15.26 seconds): two
+normal-startup and three production-handoff fixtures now return recovery-required after the new
+active setup/launcher checks also apply to Mac. The checkpoint is held for contract-preserving
+repair and independent re-review; the narrower green runs do not settle this regression.
+Static review confirms that Mac behavior regression and a second medium availability finding:
+the new Windows active-registration check reads setup/launcher bytes without bounds before its
+caller reaches bounded KHT1 attestation. The owner repairs both findings: Mac keeps its reviewed
+schema-1 authority, while Windows setup reads are capped at 64 KiB and launcher hashing streams
+64 KiB chunks with a 64 MiB ceiling under one 15-second deadline. No-follow/single-link reads and
+identity, size, mtime and ctime checks reject oversized, changed and rebound files. Independent
+security re-review approves the production repair with zero findings. Initial adversarial tests
+fail three cases because their copied fixture is read-only; only temporary fixture permissions
+are corrected. A later official-Node replay passes 38 tests and fails two because copying that
+120,965,360-byte executable exceeds the deliberate native ceiling. The unit fixture now uses
+deterministic bounded launcher bytes; its existing mocked process/verifier boundaries and real
+capsule operations are unchanged. The lead verifies final source/test hashes and independently
+passes all 40 activation, normal-startup, production-handoff and recovery tests with official
+Node 24.18.0 (14.28 seconds). The five Mac regression cases pass unchanged. Scoped lint/format,
+server workspace typecheck and B2 test typing fixes are green. This reviewed development checkpoint
+does not settle B3 consumers, root-wide test typings or native replacement qualification.
+
+Native filesystem mechanics are snapshotted separately in diagnostic commit
+`8e1ffb09c492eed84f3879dcd957a34f395014c9`, based on reviewed child checkpoint `52ac76881`.
+The lead verified all 17 copied file hashes. Local owner evidence includes Mac focused protocol/
+recovery tests, production launcher compilation and MinGW syntax/link checks for Windows sources;
+none establishes Windows runtime behavior. Initial native wiring verification failed one of 35
+tests because its compiler-argument extractor stopped at a nested array. The hardening flags were
+present in production. The repaired extractor balances arrays and quoted brackets, retains the
+adversarial flag checks, and passes all 36 tests in the lead replay (4.94 seconds). A genuine Windows
+diagnostic is dispatched in [run 34140199765](https://github.com/oscharko-dev/Keiko/actions/runs/34140199765);
+the Windows job fails MSVC analysis on a nullable cleanup handle. The owner repairs that guard
+without suppressions, and a header-only diagnostic checkpoint `8e450d0de` is dispatched in
+[run 34140647807](https://github.com/oscharko-dev/Keiko/actions/runs/34140647807). It fails on three
+further cleanup guards with the same nullable-handle root cause. Both actual native failures are
+retained; the remaining workflow jobs are cancelled after the target job finishes. The owner is
+auditing all new Windows handle-cleanup paths before another run. The diagnostic also exposes stale
+root-test typings; green workspace typechecks did not cover those tests. Windows process/supervisor
+callback integration remains in progress and
+KHA1 remains disabled. This branch is neither delivery-head CI nor native N−1/N qualification.
+
+The diagnostic editor-evidence mismatch is independently traced to the local Node distribution's
+zlib. Homebrew Node 24.18.0 reports zlib 1.2.12; the checksum-verified official Node 24.18.0 binary
+reports 1.3.1-e00f703. Measuring the same already-built JavaScript with the official binary produces
+CI's exact fingerprint `63a3cb02c83e260cdf38599c08596ed1ff6b603fb09ed15dc5e953d9b572103d`.
+The committed evidence is regenerated with that runtime and its check passes: zero first-load
+Monaco markers, 1002.6 KiB shipped lazy runtime against 2560 KiB, and 110.1 KiB largest worker
+against 750 KiB. No UI bytes or budget guard are changed. Subsequent final evidence commands use
+the official Node distribution; earlier Homebrew-derived measurement results remain historical.
+
 The frozen Windows generation producer passes independent security re-review with zero findings.
 The prior medium stale-inventory finding and low fresh-verification finding are closed. Production staging uses the
 schema-2 generation binding, while ordinary/evaluation output remains flat schema 1 and manual-only.

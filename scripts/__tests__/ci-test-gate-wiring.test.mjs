@@ -161,6 +161,25 @@ const HTML_MANUAL_FIXTURE_IDS = [
 ];
 
 describe("CI test/gate wiring guard", () => {
+  it("runs the portable handoff protocol fixture suite on a genuine Windows host", () => {
+    const buildStep = ci.indexOf("      - name: Build packages for the Windows smokes");
+    const fixtureStep = ci.indexOf(
+      "      - name: Verify the Windows portable handoff protocol fixture",
+    );
+    const nextStep = ci.indexOf(
+      "      - name: Verify Git executable Windows reparse containment",
+      fixtureStep,
+    );
+    expect(buildStep).toBeGreaterThan(-1);
+    expect(fixtureStep).toBeGreaterThan(buildStep);
+    expect(nextStep).toBeGreaterThan(fixtureStep);
+    const fixtureGate = ci.slice(fixtureStep, nextStep);
+    expect(fixtureGate).toContain("if: runner.os == 'Windows'");
+    expect(fixtureGate).toContain(
+      "npx vitest run packages/keiko-server/src/update-portable-handoff-plan.test.ts",
+    );
+  });
+
   it("refreshes workspace evidence without replacing the immutable D12 comparison", () => {
     const performanceStep = ci.slice(
       ci.indexOf("      - name: Refresh workspace performance evidence"),
