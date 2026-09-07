@@ -93,13 +93,13 @@ describe("portable handoff receipts", () => {
       join(stateDir, "updates", "handoff", activationId, "verified.ack"),
       `KHV1${"c".repeat(64)}\n`,
     );
-    expect(() =>
+    expect(() => {
       publishPortableHandoffVerifiedAck({
         stateDir,
         activationId,
         planSha256: "b".repeat(64),
-      }),
-    ).toThrow(/does not match/u);
+      });
+    }).toThrow(/does not match/u);
   });
 
   it("reconciles an exact two-link acknowledgement left by a publication crash", () => {
@@ -150,9 +150,9 @@ describe("portable handoff receipts", () => {
     writeFileSync(temporary, `KHV1${digestByte.repeat(64)}\n`);
     linkSync(temporary, destination);
 
-    expect(() => publishPortableHandoffVerifiedAck({ stateDir, activationId, planSha256 })).toThrow(
-      /does not match/u,
-    );
+    expect(() => {
+      publishPortableHandoffVerifiedAck({ stateDir, activationId, planSha256 });
+    }).toThrow(/does not match/u);
     expect(existsSync(temporary)).toBe(true);
     expect(lstatSync(destination).nlink).toBe(2);
   });

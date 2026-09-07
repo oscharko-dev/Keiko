@@ -25,11 +25,14 @@ import { layoutFor } from "./portable-shared.js";
 import { createCliSecurityLogSink } from "./security-log.js";
 import {
   installNativeRegistration,
+  inspectPortableManagedInstall,
+  inspectPortableManagedInstallWithAllowedWindowsGenerationRoots,
   nativeRegistrationKinds,
   parseWindowsStartMenuRegistration,
   portableManagedRootMode,
   portableRegistrationHealth,
   removePortableRegistrationArtifacts,
+  removePortableManagedInstall,
   repairUserLocalRegistration,
   windowsLegacyStartMenuRegistrationPath,
   windowsStartMenuRegistrationPath,
@@ -67,6 +70,159 @@ function recordingCliSink(stateDir: string): {
 }
 
 describe("portable native registration policy", () => {
+  it("scans only the selected Windows generation and refuses retained generations", () => {
+    const root = mkdtempSync(join(homedir(), ".keiko-generation-maintenance-"));
+    try {
+      const selected = "a".repeat(64);
+      const retained = "b".repeat(64);
+      const layout = {
+        ...layoutFor("windows-x64", root),
+        resourceRoot: join(root, ".portable", "generations", selected),
+      };
+      const runtimeAttestation = join(
+        layout.resourceRoot,
+        "runtime",
+        "native",
+        "keiko-runtime-attestation.exe",
+      );
+      const paths = [
+        join(root, "Keiko.exe"),
+        join(root, ".portable", "setup-manifest.json"),
+        join(root, "support", "keiko-support.cmd"),
+        join(layout.resourceRoot, "app", "package.json"),
+        join(layout.resourceRoot, ".portable", "runtime-activation.json"),
+        join(layout.resourceRoot, "runtime", "node", "node.exe"),
+        runtimeAttestation,
+        join(layout.resourceRoot, "runtime", "native", "keiko-runtime-supervisor.exe"),
+        join(layout.resourceRoot, "runtime", "native", "keiko-secure-workspace-read.exe"),
+        join(layout.resourceRoot, "runtime", "native", "usearch.node"),
+        join(layout.resourceRoot, "runtime", "licenses", "usearch", "LICENSE"),
+        join(layout.resourceRoot, "runtime", "sidecars", "approved", "sidecar.bin"),
+      ];
+      for (const path of paths) {
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, "fixture");
+      }
+      const productionScan = inspectPortableManagedInstall(layout);
+      expect(productionScan.issues).toEqual([]);
+      expect(productionScan.files).toContain(runtimeAttestation);
+      writeFileSync(join(layout.resourceRoot, "runtime", "native", "unknown.exe"), "unknown");
+      expect(inspectPortableManagedInstall(layout).issues).toContain(
+        `portable managed install contains unknown entry: .portable/generations/${selected}/runtime/native/unknown.exe`,
+      );
+      rmSync(join(layout.resourceRoot, "runtime", "native", "unknown.exe"));
+      mkdirSync(join(layout.resourceRoot, "runtime", "native", "empty-unknown"));
+      expect(inspectPortableManagedInstall(layout).issues).toContain(
+        `portable managed install contains unknown entry: .portable/generations/${selected}/runtime/native/empty-unknown`,
+      );
+      rmSync(join(layout.resourceRoot, "runtime", "native", "empty-unknown"), { recursive: true });
+      mkdirSync(join(root, ".portable", "generations", retained));
+      const scan = inspectPortableManagedInstall(layout);
+      expect(scan.issues).toContain(
+        `portable managed install contains unknown entry: .portable/generations/${retained}`,
+      );
+      expect(() => {
+        removePortableManagedInstall(layout, { out: () => undefined, err: () => undefined }, false);
+      }).toThrow(`.portable/generations/${retained}`);
+      expect(existsSync(join(root, ".portable", "generations", retained))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("applies production payload rules under each explicitly allowed Windows generation root", () => {
+    const root = mkdtempSync(join(homedir(), ".keiko-generation-allowance-"));
+    try {
+      const selected = "a".repeat(64);
+      const candidate = "b".repeat(64);
+      const activationId = "c".repeat(32);
+      const incoming = `.portable/generations/.incoming-${activationId}`;
+      const allowedRoots = [
+        `.portable/generations/${selected}`,
+        `.portable/generations/${candidate}`,
+        incoming,
+      ];
+      const layout = {
+        ...layoutFor("windows-x64", root),
+        resourceRoot: join(root, ".portable", "generations", selected),
+      };
+      for (const resourceRoot of allowedRoots) {
+        const absoluteRoot = join(root, ...resourceRoot.split("/"));
+        const files = [
+          join(absoluteRoot, "app", "package.json"),
+          join(absoluteRoot, ".portable", "runtime-activation.json"),
+          join(absoluteRoot, "runtime", "node", "node.exe"),
+          join(absoluteRoot, "runtime", "native", "keiko-runtime-attestation.exe"),
+          join(absoluteRoot, "runtime", "native", "keiko-runtime-supervisor.exe"),
+        ];
+        for (const path of files) {
+          mkdirSync(dirname(path), { recursive: true });
+          writeFileSync(path, "fixture");
+        }
+      }
+      for (const path of [
+        join(root, "Keiko.exe"),
+        join(root, ".portable", "setup-manifest.json"),
+        join(root, "support", "keiko-support.cmd"),
+      ]) {
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, "fixture");
+      }
+
+      const scan = inspectPortableManagedInstallWithAllowedWindowsGenerationRoots(
+        layout,
+        allowedRoots,
+      );
+      expect(scan.issues).toEqual([]);
+      expect(scan.files).toContain(
+        join(
+          root,
+          ".portable",
+          "generations",
+          candidate,
+          "runtime",
+          "native",
+          "keiko-runtime-attestation.exe",
+        ),
+      );
+
+      writeFileSync(
+        join(root, ".portable", "generations", candidate, "runtime", "native", "unknown.exe"),
+        "unknown",
+      );
+      expect(
+        inspectPortableManagedInstallWithAllowedWindowsGenerationRoots(layout, allowedRoots).issues,
+      ).toContain(
+        `portable managed install contains unknown entry: .portable/generations/${candidate}/runtime/native/unknown.exe`,
+      );
+      mkdirSync(join(root, ".portable", "generations", "d".repeat(64)));
+      expect(
+        inspectPortableManagedInstallWithAllowedWindowsGenerationRoots(layout, allowedRoots).issues,
+      ).toContain(
+        `portable managed install contains unknown entry: .portable/generations/${"d".repeat(64)}`,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses malformed non-flat Windows layouts instead of applying flat-root rules", () => {
+    const root = mkdtempSync(join(homedir(), ".keiko-generation-malformed-"));
+    try {
+      const layout = {
+        ...layoutFor("windows-x64", root),
+        resourceRoot: join(root, ".portable", "generations", "selected"),
+      };
+      mkdirSync(join(root, "app"), { recursive: true });
+      writeFileSync(join(root, "app", "package.json"), "fixture");
+
+      expect(inspectPortableManagedInstall(layout).issues).toEqual([
+        "portable managed install refused malformed Windows generation layout",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   it("registers only canonical platform-managed roots", () => {
     expect(
       nativeRegistrationKinds(

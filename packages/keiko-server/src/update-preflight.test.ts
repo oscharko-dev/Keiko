@@ -370,8 +370,20 @@ function portableManifest(
   sidecarRuntimes: readonly Record<string, unknown>[] = [],
 ): Record<string, unknown> {
   const archiveName = UPDATE_PORTABLE_TARGET_ASSET_NAMES[target];
+  const windowsGeneration =
+    target === "windows-x64"
+      ? {
+          schemaVersion: 1,
+          resourceRoot: `.portable/generations/${"a".repeat(64)}`,
+          treeHashSchema: "KHT1",
+          treeSha256: "a".repeat(64),
+          launcherPath: "Keiko.exe",
+          launcherSha256: "b".repeat(64),
+        }
+      : undefined;
   return {
-    schemaVersion: 1,
+    schemaVersion: windowsGeneration === undefined ? 1 : 2,
+    ...(windowsGeneration === undefined ? {} : { windowsGeneration }),
     product: {
       packageName: "@oscharko-dev/keiko",
       packageVersion: "0.2.11",
@@ -404,9 +416,11 @@ function portableManifest(
         packageVersion: "0.2.11",
         archiveSha256: ARCHIVE_SHA,
         platformSignatureLocallyVerified: true,
+        ...(windowsGeneration === undefined ? {} : { windowsGeneration }),
         ...(sidecarRuntimes.length > 0 ? { sidecarRuntimes } : {}),
       },
     },
+    provenance: windowsGeneration === undefined ? {} : { windowsGeneration },
     security: signingEvidence(target),
     ...(sidecarRuntimes.length > 0 ? { sidecarRuntimes } : {}),
     updateEligibility: {
@@ -983,6 +997,44 @@ describe("update preflight service", () => {
     expect(report.blockers).toContainEqual(
       expect.objectContaining({ code: "portable-manifest-malformed" }),
     );
+    deps.store.close();
+  });
+
+  it("rejects a Windows manifest whose provenance generation is rebound", async () => {
+    const target: UpdatePortableTarget = "windows-x64";
+    const manifest = portableManifest(target);
+    const provenance = manifest.provenance as Record<string, unknown>;
+    const generation = provenance.windowsGeneration as Record<string, unknown>;
+    provenance.windowsGeneration = { ...generation, launcherSha256: "c".repeat(64) };
+    const fetchImpl = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/releases/latest")) {
+        return Promise.resolve(jsonResponse(portableRelease(target)));
+      }
+      if (url.endsWith(`${target}-portable-manifest.json`)) {
+        return Promise.resolve(textResponse(JSON.stringify(manifest)));
+      }
+      if (url.endsWith(`${target}-SHA256SUMS.txt`)) {
+        return Promise.resolve(
+          textResponse(`${ARCHIVE_SHA}  ${UPDATE_PORTABLE_TARGET_ASSET_NAMES[target]}\n`),
+        );
+      }
+      return Promise.resolve(new Response("not found", { status: 404 }));
+    });
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: baseCatalog(),
+      installMode: () => portableMode(target),
+    });
+
+    expect(report.portableAsset).toMatchObject({ target, status: "malformed" });
+    expect(report.oneClickEligible).toBe(false);
+    expect(report.blockers).toContainEqual(
+      expect.objectContaining({ code: "portable-manifest-malformed" }),
+    );
+    expect(fetchImpl).toHaveBeenCalled();
     deps.store.close();
   });
 

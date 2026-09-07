@@ -3,6 +3,7 @@ import type {
   UpdatePreflightReport,
   UpdateRemediationStatusReport,
   UpdateSession,
+  UpdateSessionStartRequest,
   UpdateSessionStatus,
 } from "@oscharko-dev/keiko-contracts";
 import { UPDATE_SESSION_PHASES } from "@oscharko-dev/keiko-contracts/runtime/update-session";

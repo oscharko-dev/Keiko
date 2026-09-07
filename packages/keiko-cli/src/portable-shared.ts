@@ -35,6 +35,54 @@ export interface WindowsGenerationBinding {
   readonly launcherSha256: string;
 }
 
+const WINDOWS_GENERATION_KEYS = [
+  "schemaVersion",
+  "resourceRoot",
+  "treeHashSchema",
+  "treeSha256",
+  "launcherPath",
+  "launcherSha256",
+] as const;
+const SHA256_RE = /^[a-f0-9]{64}$/u;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function parseWindowsGenerationBinding(value: unknown): WindowsGenerationBinding {
+  if (!isRecord(value) || !hasExactKeys(value, WINDOWS_GENERATION_KEYS)) {
+    throw new Error("portable setup manifest Windows generation binding is malformed");
+  }
+  const treeSha256 = value.treeSha256;
+  const launcherSha256 = value.launcherSha256;
+  const valid = [
+    value.schemaVersion === 1,
+    value.treeHashSchema === "KHT1",
+    typeof treeSha256 === "string" && SHA256_RE.test(treeSha256),
+    value.resourceRoot === `.portable/generations/${String(treeSha256)}`,
+    value.launcherPath === "Keiko.exe",
+    typeof launcherSha256 === "string" && SHA256_RE.test(launcherSha256),
+  ].every(Boolean);
+  if (!valid || typeof treeSha256 !== "string" || typeof launcherSha256 !== "string") {
+    throw new Error("portable setup manifest Windows generation binding is malformed");
+  }
+  return {
+    schemaVersion: 1,
+    resourceRoot: `.portable/generations/${treeSha256}`,
+    treeHashSchema: "KHT1",
+    treeSha256,
+    launcherPath: "Keiko.exe",
+    launcherSha256,
+  };
+}
+
+function hasExactKeys(record: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(record).sort();
+  return (
+    actual.length === expected.length && [...expected].sort().every((key, i) => actual[i] === key)
+  );
+}
+
 export interface LegacySetupManifest extends SetupManifestFields {
   readonly schemaVersion: 1;
 }

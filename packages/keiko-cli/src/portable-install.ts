@@ -20,7 +20,7 @@ import {
   writeFileSync,
   type Stats,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import {
   type FailedSetupRegistration,
   type ManagedRootLocator,
@@ -36,10 +36,12 @@ import {
 } from "./portable-registration.js";
 import {
   inspectPortableManagedInstall,
+  inspectPortableManagedInstallWithAllowedWindowsGenerationRoots,
   installNativeRegistration,
   parseWindowsStartMenuRegistration,
   removePortableManagedInstall,
   type PortableRegistrationOptions,
+  type ManagedInstallScan,
   windowsLegacyStartMenuRegistrationPath,
   windowsStartMenuRegistrationPath,
 } from "./portable-maintenance.js";
@@ -51,13 +53,13 @@ import {
   layoutFor,
   layoutForSetupManifest,
   PACKAGE_NAME,
+  parseWindowsGenerationBinding,
   primaryLauncherName,
   targetRuntime,
   type PortableLayout,
   type PortableTarget,
   type SetupManifest,
   type SetupRuntimeManifest,
-  type WindowsGenerationBinding,
   type SetupStatus,
   type SpawnFn,
 } from "./portable-shared.js";
@@ -143,15 +145,6 @@ const PORTABLE_SETUP_LOCK = "portable-setup.lock";
 const PORTABLE_OPERATION_TIMEOUT_MS = 15 * 60_000;
 const MAX_ROOT_LAUNCHER_BYTES = 64 * 1024 * 1024;
 const PORTABLE_FILE_READ_BYTES = 64 * 1024;
-const SHA256_RE = /^[a-f0-9]{64}$/u;
-const WINDOWS_GENERATION_KEYS = [
-  "schemaVersion",
-  "resourceRoot",
-  "treeHashSchema",
-  "treeSha256",
-  "launcherPath",
-  "launcherSha256",
-] as const;
 const WINDOWS_SUPPORT_LAUNCHER =
   '@echo off\r\nset "SCRIPT_DIR=%~dp0"\r\n"%SCRIPT_DIR%..\\Keiko.exe" %*\r\n';
 
@@ -170,40 +163,6 @@ function parseSetupRuntime(value: unknown): SetupRuntimeManifest {
     throw new Error("portable setup manifest runtime architecture is unsupported");
   }
   return { nodePlatform, nodeArchitecture };
-}
-
-function exactKeys(record: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(record).sort();
-  return (
-    actual.length === expected.length && [...expected].sort().every((key, i) => actual[i] === key)
-  );
-}
-
-function parseWindowsGenerationBinding(value: unknown): WindowsGenerationBinding {
-  if (!isRecord(value) || !exactKeys(value, WINDOWS_GENERATION_KEYS)) {
-    throw new Error("portable setup manifest Windows generation binding is malformed");
-  }
-  const treeSha256 = value.treeSha256;
-  const launcherSha256 = value.launcherSha256;
-  const valid = [
-    value.schemaVersion === 1,
-    value.treeHashSchema === "KHT1",
-    typeof treeSha256 === "string" && SHA256_RE.test(treeSha256),
-    value.resourceRoot === `.portable/generations/${String(treeSha256)}`,
-    value.launcherPath === "Keiko.exe",
-    typeof launcherSha256 === "string" && SHA256_RE.test(launcherSha256),
-  ].every(Boolean);
-  if (!valid || typeof treeSha256 !== "string" || typeof launcherSha256 !== "string") {
-    throw new Error("portable setup manifest Windows generation binding is malformed");
-  }
-  return {
-    schemaVersion: 1,
-    resourceRoot: `.portable/generations/${treeSha256}`,
-    treeHashSchema: "KHT1",
-    treeSha256,
-    launcherPath: "Keiko.exe",
-    launcherSha256,
-  };
 }
 
 function parseSetupManifest(path: string): SetupManifest {
@@ -1093,18 +1052,29 @@ function failedManagedAttestation(
   ) {
     return undefined;
   }
+  if (!hasRecoverableFailedWindowsGeneration(registration)) return undefined;
+  const windowsGeneration = registration.windowsGeneration;
   return {
-    schemaVersion: 1,
+    schemaVersion: windowsGeneration === undefined ? 1 : 2,
     status: "managed",
-    updateEligible: true,
+    updateEligible:
+      registration.installRootPlatformTarget !== "windows-x64" || windowsGeneration !== undefined,
     platformTarget: registration.installRootPlatformTarget,
     packageVersion: registration.packageVersion,
     stable: registration.stable,
     setupManifestSha256: registration.setupManifestSha256,
     installRootIdentitySha256: registration.installRootIdentitySha256,
     launcherIdentitySha256: registration.launcherIdentitySha256,
+    ...(windowsGeneration === undefined ? {} : { windowsGeneration }),
     updatedAt: registration.updatedAt,
   };
+}
+
+function hasRecoverableFailedWindowsGeneration(registration: FailedSetupRegistration): boolean {
+  return (
+    registration.windowsGeneration === undefined ||
+    (registration.installRootPlatformTarget === "windows-x64" && registration.stable)
+  );
 }
 
 function attestedFailedManagedInstall(
@@ -1375,9 +1345,131 @@ function withPortableStateSetupLock<T>(stateDir: string, operation: () => T): T 
 
 export type PortableManagedUpgradeFn = (input: PortableManagedUpgradeInput) => PortableLayout;
 
+export interface PortableManagedInspectionAllowance {
+  readonly kind: "windows-generation-v1";
+  readonly managedRoot: string;
+  readonly activationId: string;
+  readonly allowedResourceRoots: readonly string[];
+}
+
+export type PortableManagedInspectionFn = (
+  layout: PortableLayout,
+  allowance?: PortableManagedInspectionAllowance,
+) => ManagedInstallScan;
+
+const WINDOWS_GENERATION_RESOURCE_ROOT = /^\.portable\/generations\/[a-f0-9]{64}$/u;
+
+function samePortableSetupLockScope(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((path, index) => path === right[index]);
+}
+
+function portableInspectionAllowanceRecord(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("portable inspection allowance is malformed");
+  }
+  return value as Record<string, unknown>;
+}
+
+function portableInspectionResourceRoots(
+  record: Record<string, unknown>,
+  activationId: string,
+): readonly string[] {
+  const value = record.allowedResourceRoots;
+  if (!Array.isArray(value) || value.length === 0 || value.length > 3) {
+    throw new Error("portable inspection allowance resource roots are invalid");
+  }
+  const resourceRoots = (value as readonly unknown[]).map((resourceRoot) => {
+    if (typeof resourceRoot !== "string") {
+      throw new Error("portable inspection allowance resource roots are invalid");
+    }
+    return resourceRoot;
+  });
+  const incomingRoot = `.portable/generations/.incoming-${activationId}`;
+  if (
+    new Set(resourceRoots).size !== resourceRoots.length ||
+    resourceRoots.some(
+      (resourceRoot) =>
+        !WINDOWS_GENERATION_RESOURCE_ROOT.test(resourceRoot) && resourceRoot !== incomingRoot,
+    )
+  ) {
+    throw new Error("portable inspection allowance resource roots are invalid");
+  }
+  return resourceRoots;
+}
+
+function assertPortableInspectionLockScope(
+  options: PortableMutationLockOptions,
+  expectedLocks: readonly string[],
+  layout: PortableLayout,
+  managedRootValue: unknown,
+): void {
+  if (options.target !== "windows-x64" || layout.rootKind !== "windows-root") {
+    throw new Error("portable inspection allowance requires a Windows managed install");
+  }
+  if (typeof managedRootValue !== "string") {
+    throw new Error("portable inspection allowance managed root is invalid");
+  }
+  const managedRoot = resolve(options.managedRoot);
+  const allowanceLocks = portableSetupLockPaths({
+    target: options.target,
+    managedRoot: managedRootValue,
+    stateDir: options.stateDir,
+  });
+  if (
+    resolve(managedRootValue) !== managedRoot ||
+    resolve(layout.installRoot) !== managedRoot ||
+    !samePortableSetupLockScope(allowanceLocks, expectedLocks)
+  ) {
+    throw new Error("portable inspection allowance does not match the managed lock scope");
+  }
+}
+
+function portableInspectionActivationId(value: unknown): string {
+  if (typeof value !== "string" || !/^[a-f0-9]{32}$/u.test(value)) {
+    throw new Error("portable inspection allowance activation is invalid");
+  }
+  return value;
+}
+
+function assertSelectedWindowsGenerationAllowed(
+  layout: PortableLayout,
+  resourceRoots: readonly string[],
+): void {
+  const selectedResourceRoot = relative(layout.installRoot, layout.resourceRoot).replaceAll(
+    "\\",
+    "/",
+  );
+  if (
+    !WINDOWS_GENERATION_RESOURCE_ROOT.test(selectedResourceRoot) ||
+    !resourceRoots.includes(selectedResourceRoot)
+  ) {
+    throw new Error("portable inspection allowance does not include the selected generation");
+  }
+}
+
+function validatePortableInspectionAllowance(
+  options: PortableMutationLockOptions,
+  expectedLocks: readonly string[],
+  layout: PortableLayout,
+  allowance: PortableManagedInspectionAllowance,
+): readonly string[] {
+  const record = portableInspectionAllowanceRecord(allowance);
+  if (record.kind !== "windows-generation-v1") {
+    throw new Error("portable inspection allowance kind is invalid");
+  }
+  assertPortableInspectionLockScope(options, expectedLocks, layout, record.managedRoot);
+  const activationId = portableInspectionActivationId(record.activationId);
+  const resourceRoots = portableInspectionResourceRoots(record, activationId);
+  assertSelectedWindowsGenerationAllowed(layout, resourceRoots);
+  return resourceRoots;
+}
+
 export async function withPortableManagedMutation<T>(
   options: PortableMutationLockOptions,
-  operation: (upgrade: PortableManagedUpgradeFn) => Promise<T>,
+  operation: (
+    upgrade: PortableManagedUpgradeFn,
+    inspect: PortableManagedInspectionFn,
+  ) => Promise<T>,
 ): Promise<T> {
   const acquired = acquirePortableSetupLocks(options);
   const expectedLocks = portableSetupLockPaths(options);
@@ -1385,16 +1477,27 @@ export async function withPortableManagedMutation<T>(
   const upgrade: PortableManagedUpgradeFn = (input) => {
     if (!active) throw new Error("portable upgrade lock capability is no longer active");
     const inputLocks = portableSetupLockPaths(input);
-    if (
-      inputLocks.length !== expectedLocks.length ||
-      inputLocks.some((path, index) => path !== expectedLocks[index])
-    ) {
+    if (!samePortableSetupLockScope(inputLocks, expectedLocks)) {
       throw new Error("portable upgrade lock scope does not match the managed install");
     }
     return upgradeLockedManagedInstall(input);
   };
+  const inspect: PortableManagedInspectionFn = (layout, allowance) => {
+    if (!active) throw new Error("portable inspection lock capability is no longer active");
+    if (resolve(layout.installRoot) !== resolve(options.managedRoot)) {
+      throw new Error("portable inspection lock scope does not match the managed install");
+    }
+    if (allowance === undefined) return inspectPortableManagedInstall(layout);
+    const resourceRoots = validatePortableInspectionAllowance(
+      options,
+      expectedLocks,
+      layout,
+      allowance,
+    );
+    return inspectPortableManagedInstallWithAllowedWindowsGenerationRoots(layout, resourceRoots);
+  };
   try {
-    return await operation(upgrade);
+    return await operation(upgrade, inspect);
   } finally {
     active = false;
     releasePortableSetupLocks(acquired);

@@ -27,6 +27,8 @@ import {
   statusPortable,
   validatePortableRoot,
   withPortableManagedMutation,
+  type PortableManagedInspectionAllowance,
+  type PortableManagedInspectionFn,
   type PortableManagedUpgradeFn,
   type ValidatedPortableRoot,
 } from "./portable-install.js";
@@ -74,9 +76,13 @@ interface PortableRecoveredLaunchDescriptor {
 }
 
 type PortableNormalStartupRecoveryResult =
-  | { readonly status: "normal" }
+  | { readonly status: "normal"; readonly inspectionAllowance?: PortableManagedInspectionAllowance }
   | { readonly status: "recovery-required" }
-  | { readonly status: "recovered"; readonly descriptor: PortableRecoveredLaunchDescriptor };
+  | {
+      readonly status: "recovered";
+      readonly descriptor: PortableRecoveredLaunchDescriptor;
+      readonly inspectionAllowance?: PortableManagedInspectionAllowance;
+    };
 
 interface PortableCliOptions {
   readonly command: PortableCommand;
@@ -464,10 +470,8 @@ async function launchPortable(
   >,
 ): Promise<number> {
   try {
-    if (options.target !== "windows-x64") {
-      const recovered = await recoverBeforePortableLaunch(options, io, env, deps);
-      if (recovered !== undefined) return recovered;
-    }
+    const recovered = await recoverBeforePortableLaunch(options, io, env, deps);
+    if (recovered !== undefined) return recovered;
     const source = validatePortableRoot(options.target, options.portableRoot);
     if (sameRealPath(source.layout.installRoot, options.managedRoot)) {
       return await setupAndLaunchManaged(options, io, env, deps);
@@ -505,23 +509,31 @@ async function recoverBeforePortableLaunch(
     "activateMacosRuntimeFn" | "lifecycleFn" | "recoverNormalStartupFn" | "encodeRecoveredLaunchFn"
   >,
 ): Promise<number | undefined> {
-  const recovery = await withPortableManagedMutation(options, () =>
-    deps.recoverNormalStartupFn({
-      stateDir: options.stateDir,
-      target: options.target,
-      expectedManagedRoot: options.managedRoot,
-      securityLogSink: options.securityLogSink,
-    }),
+  const attestedRecovery = await withPortableManagedMutation(options, (_upgrade, inspect) =>
+    inspectNormalStartupRecovery(options, env, deps.recoverNormalStartupFn, inspect),
   );
+  const { recovery } = attestedRecovery;
   if (recovery.status === "recovery-required") {
     throw new Error("portable update recovery is required before launch");
   }
-  if (recovery.status === "normal") return undefined;
-  const managed = attestedKnownManagedInstall(options, env);
-  if (managed === undefined) throw new Error("recovered portable install could not be attested");
+  if (recovery.status === "normal") {
+    if (attestedRecovery.managed === undefined) return undefined;
+    return launchManaged(
+      options.target,
+      attestedRecovery.managed.layout,
+      io,
+      env,
+      options.stateDir,
+      deps,
+      options.securityLogSink,
+    );
+  }
+  if (attestedRecovery.managed === undefined) {
+    throw new Error("recovered portable install could not be attested");
+  }
   return launchManaged(
     options.target,
-    managed.layout,
+    attestedRecovery.managed.layout,
     io,
     env,
     options.stateDir,
@@ -532,6 +544,38 @@ async function recoverBeforePortableLaunch(
       encoded: deps.encodeRecoveredLaunchFn(recovery.descriptor),
     },
   );
+}
+
+interface AttestedNormalStartupRecovery {
+  readonly recovery: PortableNormalStartupRecoveryResult;
+  readonly managed?: ValidatedPortableRoot | undefined;
+}
+
+async function inspectNormalStartupRecovery(
+  options: PortableCliOptions,
+  env: EnvSource,
+  recover: PortableNormalStartupRecoveryFn,
+  inspect: PortableManagedInspectionFn,
+): Promise<AttestedNormalStartupRecovery> {
+  const recovery = await recover({
+    stateDir: options.stateDir,
+    target: options.target,
+    expectedManagedRoot: options.managedRoot,
+    securityLogSink: options.securityLogSink,
+  });
+  if (recovery.status === "recovery-required") {
+    if (Object.hasOwn(recovery, "inspectionAllowance")) {
+      throw new Error("portable recovery-required result must not carry an inspection allowance");
+    }
+    return { recovery };
+  }
+  const allowance = recovery.inspectionAllowance;
+  if (recovery.status === "normal" && allowance === undefined) return { recovery };
+  const managed = attestedKnownManagedInstall(options, env);
+  if (managed === undefined) throw new Error("recovered portable install could not be attested");
+  const scan = inspect(managed.layout, allowance);
+  if (scan.issues.length > 0) throw new Error(scan.issues[0]);
+  return { recovery, managed };
 }
 
 async function defaultPortableRecovery(

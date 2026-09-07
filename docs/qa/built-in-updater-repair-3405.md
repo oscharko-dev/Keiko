@@ -192,6 +192,56 @@ Node 24.18.0 (14.28 seconds). The five Mac regression cases pass unchanged. Scop
 server workspace typecheck and B2 test typing fixes are green. This reviewed development checkpoint
 does not settle B3 consumers, root-wide test typings or native replacement qualification.
 
+The CLI registration/selected-generation maintenance slice is frozen for independent security
+review. Strict Windows schema-2 records bind setup, launcher, root and generation identities;
+historical flat schema-1 records remain readable but always project manual-only eligibility without
+rewriting stored bytes. Failed generation setup retains its attestation through real KHT1 recovery.
+The lead verifies the frozen hashes and passes all 72 registration/install/shared/maintenance/
+rename-backoff tests (1.68 seconds), then all 89 portable lifecycle tests under the default timeout
+in a quiet execution lease (17.40 seconds). Earlier shared-load runs exceeded one existing test's
+15-second timeout; the owner's 30-second override run is historical, not the final default result.
+The owner's CLI workspace typecheck and scoped lint/format pass. Active-WAL maintenance allowances
+and startup transport remain a subsequent integration tranche.
+Independent review finds one medium production-shape gap: the selected-generation allowlist omits
+`runtime/native/keiko-runtime-attestation.exe`, which the production signing pipeline stages and
+fresh qualification executes. Valid production installs would therefore fail maintenance/recovery
+inspection. The source owner adds that exact path and its fixture while retaining all unknown
+entry and retained-generation rejection checks. Independent re-review approves with zero remaining
+findings. The lead verifies the repaired hashes and passes all 18 maintenance tests again
+(422 milliseconds). No active-WAL inspection or deletion authority is introduced by this repair.
+
+The subsequent CLI active-WAL inspection allowance and startup transport are implemented across six
+files. The allowance is validated and consumed only inside the live managed-mutation lock callback;
+its inspection capability expires when the callback returns or rejects. Exact generation/incoming
+roots are bounded, and generic removal retains selected-generation-only authority. The lead passes
+all 93 portable lifecycle tests under the default timeout (16.90 seconds) and 46 focused install/
+maintenance tests (1.27 seconds). Independent security review finds no security issues but catches
+one test-only TypeScript closure narrowing error. The owner fixes it without a cast or suppression,
+passes all 26 install tests (1.49 seconds), and independent re-review approves with zero findings.
+The lead's root no-emit replay confirms that error is gone; four server test typing errors remain
+in the pending startup/integration scope. This CLI transport does not itself produce server WAL
+allowances or authorize the unfinished native startup path.
+
+The B3a server generation consumers freeze separately across 14 source/test files. Canonical package
+layout authority feeds staging, install detection, preflight and production runtime roots. Windows
+launcher hashing streams bounded chunks, and control reads enforce finite limits and pre/post-read
+identity checks. Historical flat Windows registration remains readable and ineligible; macOS schema-1
+behavior is preserved. After a worker accidentally invokes pnpm and disrupts the npm dependency
+tree, the lead restores the committed lock with official-Node `npm ci`: 783 packages, 809 audited,
+zero vulnerabilities, 16 seconds, no tracked package/lock changes. The lead verifies all 14 frozen
+hashes and passes the final nine-suite aggregate, 170 tests (24.17 seconds). The owner reports server
+workspace typecheck and all 14 scoped lint/format checks green. Independent security review finds
+zero critical/high/medium issues and three low issues requiring repair: mapped network drives are
+not excluded by lexical root policy, production runtime discovery omits setup runtime platform/CPU
+validation, and its new root setup/launcher reads lack descriptor-bound size/deadline enforcement.
+The latter reads are distinct from the already bounded install-mode detector. The runtime owner
+repairs exact platform/CPU validation and adds 64 KiB descriptor-bound setup reads plus 64 MiB
+launcher streaming under a five-second deadline. The lead passes 72 runtime tests (14.43 seconds),
+including sparse oversized files, malformed metadata, links and identity drift. Independent
+security re-review settles those two findings with zero residual issues. Network-root locality
+remains the sole open low B3a finding and has a separate native/CLI/server integration plan. B3b
+startup/recovery consumers and final root-wide verification remain outstanding.
+
 Native filesystem mechanics are snapshotted separately in diagnostic commit
 `8e1ffb09c492eed84f3879dcd957a34f395014c9`, based on reviewed child checkpoint `52ac76881`.
 The lead verified all 17 copied file hashes. Local owner evidence includes Mac focused protocol/
@@ -204,12 +254,117 @@ diagnostic is dispatched in [run 34140199765](https://github.com/oscharko-dev/Ke
 the Windows job fails MSVC analysis on a nullable cleanup handle. The owner repairs that guard
 without suppressions, and a header-only diagnostic checkpoint `8e450d0de` is dispatched in
 [run 34140647807](https://github.com/oscharko-dev/Keiko/actions/runs/34140647807). It fails on three
-further cleanup guards with the same nullable-handle root cause. Both actual native failures are
-retained; the remaining workflow jobs are cancelled after the target job finishes. The owner is
-auditing all new Windows handle-cleanup paths before another run. The diagnostic also exposes stale
+further cleanup guards with the same nullable-handle root cause. After the full nullable-handle
+repair, diagnostic `73291ae3c` runs in
+[run 34141479042](https://github.com/oscharko-dev/Keiko/actions/runs/34141479042) and fails MSVC C6001
+on receipt-handle cleanup. The owner separates handle closure from the short-circuit expression
+and invalidates the consumed handle; diagnostic fix `23185ac11` uses no analysis suppression.
+All three actual native failures are retained; the remaining workflow jobs are cancelled after
+the target job finishes. The diagnostic integrates reviewed B2 checkpoint `a7eb2437f` in
+`b0ab2bc87462a366c66c082e49199b4f53f7f3a5`, including the Windows encoder-fixture CI step.
+Before another dispatch, lead review also requires temporary-file cleanup to remove only files
+created by that invocation and generation copies to enforce the KHT1 entry/path/byte budgets
+during traversal. Pre-copy retained handles and post-copy hashes do not alone bound newly added
+directory members. The copy repair is snapshotted in `a5caf6aaf`; its
+[run 34143450298](https://github.com/oscharko-dev/Keiko/actions/runs/34143450298) stops before native
+analysis at the newly integrated Windows TypeScript plan suite: 24 tests fail. The Mac golden fixture
+uses POSIX absolute paths on Windows, Git converts the hexadecimal fixture to CRLF, and real plan
+publication reaches unsupported directory `fsync` with `EPERM`. The last failure is a production
+persistence gap, not merely a fixture failure; plan and receipt publication must preserve file flush
+and atomic publication while following the existing Windows directory-refusal policy. No native
+analysis or runtime result is available from that run. The remaining jobs are cancelled. The
+diagnostic also exposes stale
 root-test typings; green workspace typechecks did not cover those tests. Windows process/supervisor
 callback integration remains in progress and
 KHA1 remains disabled. This branch is neither delivery-head CI nor native N−1/N qualification.
+
+The full native Windows callback implementation then freezes for separate independent security
+review. The lead verifies all 16 source hashes and replays macOS arm64 native quality successfully.
+The owner also reports 36 wiring tests, MinGW warning-clean cross-compilation and GCC analysis
+passing. These checks cover source/compiler boundaries only. The full callback snapshot awaits
+the Windows plan/receipt repair before another real Windows diagnostic. The Windows coordinator
+entry remains fail-closed without production KHA1 acceptance.
+The next diagnostic, `b93a4894d` in
+[run 34145519032](https://github.com/oscharko-dev/Keiko/actions/runs/34145519032), includes the full
+native callback snapshot and the shared handoff directory-sync repair. Its Windows handoff suites
+pass 39 tests and fail two, with one explicit Mac encoder skip. Windows encoder equality and real
+plan/receipt publication now pass. The two static symlink fixtures expose reliance on ineffective
+Windows `O_NOFOLLOW`: readers reject the link only after reading through it. The repair must reject
+the named unsafe entry before opening/reading and bind the opened descriptor to that precheck;
+relaxing the expected error or skipping the cases is not an acceptable fix. Native analysis remains
+unreached, and the remaining workflow jobs are cancelled.
+
+Independent native review also identifies a medium durability gap: production file replacement
+does not perform the ADR-required post-cutover flush, although the separate probe does. That finding
+requires the productive helper and its failure-boundary tests to be repaired before acceptance.
+Its final report has one medium and two low findings: the missing post-cutover flush, an unpinned
+intermediate receipt directory permitting junction redirection, and synchronous pipe writes that
+can outlive the plan deadline when a trusted child stalls. No critical/high finding is reported.
+The native owner is repairing all three; the common Mac ordering and Windows generation-prefix
+logic otherwise survive the static review.
+
+The pre-read link repair runs in diagnostic `b22e8ed4f`,
+[run 34146159822](https://github.com/oscharko-dev/Keiko/actions/runs/34146159822). All 41 Windows
+plan/receipt tests pass with one explicit Mac encoder skip (12.08 seconds), including canonical
+Windows encoding, real persistence and unchanged symlink-rejection assertions. Native analysis is
+now reached and fails MSVC C6262: the new launcher resume function uses 197,768 bytes of stack.
+That requires bounded heap ownership, not an analysis suppression or raised stack budget. The
+native runtime stage remains unproven; other workflow jobs are cancelled after the Windows failure.
+
+Diagnostic `182a76e7c`,
+[run 34146945279](https://github.com/oscharko-dev/Keiko/actions/runs/34146945279), passes all 41 Windows
+plan/receipt tests with one explicit Mac encoder skip (13.41 seconds). Both launcher variants pass
+MSVC analysis. The real cutover probe passes success, allowing/denying handle sharing, invalid
+input, pre/post-cutover failure, contention, and flush fault boundaries (36/36 before, 40/40 after).
+The job then fails MSVC C6262 in the coordinator test fixture's 65,548-byte stack allocation. This
+is a partial mechanics result, not a green Windows job or end-to-end native qualification.
+
+The owner freezes all three native review repairs plus bounded heap fixtures in a verified 17-file
+snapshot. The productive replacement helper binds and flushes the renamed destination; capsule and
+receipt directories remain pinned; supervisor writes use nonblocking pipe mode with process and
+deadline checks. Owner macOS native quality, MinGW analysis/link checks and 95 official-Node wiring
+checks pass. Independent security re-review is pending. The snapshot is dispatched in diagnostic
+`7e99e81d6`, [run 34149173415](https://github.com/oscharko-dev/Keiko/actions/runs/34149173415), for actual
+Windows MSVC analysis and runtime execution. Its 41 plan/receipt tests pass, but the cutover probe
+fails at the post-termination scenario. The retained new-source writer conflicts with the helper's
+new post-rename reopen sharing flags; aggregate success and later contention checks consequently
+report false. Independent review confirms that medium correctness regression, closes the receipt
+parent-pinning and nonblocking-write findings by static/API review, and requires separate durable
+rename/flush and exclusive productive digest ownership. The repair is in progress. KHA1 remains
+disabled; no green Windows job or native N−1/N result is asserted.
+
+The next native repair separates durable rename/flush from exclusive productive digest authority.
+Diagnostic `00b56e4ef`,
+[run 34150171223](https://github.com/oscharko-dev/Keiko/actions/runs/34150171223), passes all 41 Windows
+plan/receipt tests (one Mac encoder skip), the complete cutover probe (all success/handle/crash/
+contention cases, flush-before 36/36 and flush-after 40/40), and coordinator MSVC analysis. The
+coordinator executable then fails its unchanged KRP1 packet-kind assertion. The Windows encoder
+sets version 1 but omits launch-request kind 1; the existing supervisor correctly rejects zero.
+This is a production encoder defect, not a fixture expectation to relax. The remaining jobs are
+cancelled after that native failure, and the encoder repair is pending.
+
+A broader root lint replay at the B3 checkpoint reports 26 errors and no warnings, all in the
+updater repair. Fourteen belong to the handoff receipt source/tests; the remaining twelve cover
+candidate tests, activation factoring, native-verifier typings, remediation and session tests.
+The UI lint stage is not reached. Scoped owners are repairing these without suppressions; this
+failed diagnostic is not a final lint or verification receipt.
+
+The KRP1 request-kind fix changes one production byte assignment and passes independent review
+with zero findings. Diagnostic `bf2862b5b`,
+[run 34150829494](https://github.com/oscharko-dev/Keiko/actions/runs/34150829494), passes the packet,
+nonblocking-pipe, generation publication, productive cutover/flush and recovery assertions, then
+fails the final capsule-directory positive fixture's ownership/ACL check. The existing junction
+refusal succeeds. Test-only, body-free ACL classification is frozen in diagnostic `604f9738d` to
+identify the exact failed permission predicate; production ownership policy is unchanged.
+
+The handoff receipt refactor clears its 12 source and two test lint findings while preserving
+canonical bytes, pre-read link rejection, descriptor/name identity, bounded reads, hardlink ACK
+reconciliation, sequence/hash-chain authority, fsync ordering and cleanup exception precedence.
+Independent security re-review approves the exact frozen source/test with zero findings. The lead
+passes all 41 plan/receipt tests with one explicit Windows encoder host skip (21.16 seconds); the
+owner also passes 13 receipt tests, server workspace typecheck, scoped lint and formatting. The
+remaining twelve broad-lint findings have a separate narrow owner. The outstanding CLI update-test
+type import is also replayed independently: all 14 existing tests pass (1.18 seconds).
 
 The diagnostic editor-evidence mismatch is independently traced to the local Node distribution's
 zlib. Homebrew Node 24.18.0 reports zlib 1.2.12; the checksum-verified official Node 24.18.0 binary
