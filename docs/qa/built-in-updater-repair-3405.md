@@ -1183,6 +1183,33 @@ The diagnostic-only Knip failure names the temporary probe file, which must be r
 before final delivery gates. The full package coverage run remains in progress against
 frozen product sources; its known baseline source-count assertion is still red.
 
+### Measured coverage and governed baseline refresh
+
+The official-Node package coverage run completed in 1,455.82 seconds: 1,802 files passed,
+two failed and seven skipped; 36,098 tests passed, two failed and twenty-seven skipped.
+It remains a red test run. Aggregate coverage measured 90.83% statements, 84.53% branches,
+95.59% functions and 93.02% lines. Before any refresh, all twenty-five package metric
+floors, two release targets and sixty-nine governed file floors passed.
+
+The documented writer generated a candidate baseline from these fresh measurements.
+Review verified that every effective package floor (`min(85, recorded percentage)`) held
+or rose, all absolute file floors were unchanged, and existing file ratchets held or rose
+with unchanged tolerance. An independent static review confirmed zero weakening. The
+accepted artifact updates contracts/security/server inventories to 195/28/615 and adds
+two mechanically selected file floors. All sixty-six baseline tests now pass; the refreshed
+quality gate passes all twenty-five packages and seventy-one governed file floors.
+
+The other coverage failure was a 100 ms startup-challenge fixture returning `start-timeout`.
+That exact case passed in isolation under coverage with unchanged limits. A full-file replay
+then passed that case but timed out in the separate first lifecycle test at its existing
+fifteen-second bound. This file remains under focused diagnosis; no limit has been raised
+and no complete current-head root test pass is claimed.
+
+Windows diagnostic `dde12fba4` / run `34159212513` reliably classified `timeout-assembly`.
+The preceding `timeout-path` classification was ambiguous because Windows CRLF could skip
+one instrumentation replacement. Diagnostic-only normalization and exact-match assertions
+now guard every substitution. No production path, timeout or trust authority was changed.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification
