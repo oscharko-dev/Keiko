@@ -3,13 +3,13 @@
   "epic": 3403,
   "verdict": "PASS",
   "tool": "axe-core 4.12.1",
-  "cssSha256": "0bfc18ed50e366df06f231eba1e45ecd7c770663a9dd8148234a9f081d52724d",
+  "cssSha256": "a1866c44bf9be1a967cbf43e40be3c410668322157acdc0d4e2bc7db2645e7df",
   "sourceSha256": {
     "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx": "3a9c9a489d7f87e2afc920fa1fa4dd412af7bbecd44900b52a8b2f4acb5acdc8",
-    "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx": "aa06d46341a2fc4921f7cb7b3735e655a5d291a532bb1d400f28e391b63210b6",
-    "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css": "0f5c4f949c9bb9bcb284bbdfaea7ae66ad0d361e7fd018ffb44230722b4fe1cd",
+    "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx": "57b0c8ba40ab785918ebeea42f9f0007a9b6c3c4b61c94f067c67a1d5431d198",
+    "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css": "9ae951f2aa6c98beaa04b587364291776998ba000d0e33064bffc09962d51998",
     "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts": "5e34eb591f63aca2ce64fd43daba10de0e172d12014f055092b4a1a00830c2da",
-    "packages/keiko-ui/src/app/globals.css": "0bfc18ed50e366df06f231eba1e45ecd7c770663a9dd8148234a9f081d52724d",
+    "packages/keiko-ui/src/app/globals.css": "a1866c44bf9be1a967cbf43e40be3c410668322157acdc0d4e2bc7db2645e7df",
     "packages/keiko-ui/src/lib/api.ts": "74e2599cdb0159f82c80eb33e93aacde4991cf2538051c930b76228712b36d39",
     "packages/keiko-ui/src/lib/i18n-messages.de.ts": "0d2f01ec43ee5fc932d2467edfaa55aaf25dcd15ad73025c89e0ae7d2d7a852d",
     "packages/keiko-ui/src/lib/i18n-messages.en.ts": "fb3bca5f0d2e02fcd2f1cf3727b90730cff5463c821b30e4201a8a2a82e6ae69"

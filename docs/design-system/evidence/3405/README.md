@@ -1,13 +1,14 @@
 # Updater reliability evidence — #3405 / #3403
 
-The current 320px repair evidence was regenerated on 2026-09-07. The Chromium visual-evidence
-test passed **1/1** and refreshed all tracked artifacts. It proves the startup notice yields only
-while a visible, foreground Update window owns the same critical context and actions; the notice
-returns when that window is backgrounded or minimized.
+The current repair evidence was regenerated on 2026-09-07. The Chromium browser suite passed
+**7/7 in 1.7 minutes** and refreshed the tracked updater artifacts. It proves the startup notice
+yields only while a visible, foreground **ready** Update window owns the same critical context and
+actions; the notice returns when that window is backgrounded or minimized, and remains available
+when the foreground updater contains only a load error.
 
-The separately replayed real-BFF outage test passed **1/1 in 59.8 seconds**. A preceding combined
-six-test run was interrupted after its first three tests while the fourth test had completed its
-browser operations but did not tear down; it is not represented as a complete suite result.
+The current suite includes the real-BFF outage journey. A preceding combined six-test run was
+interrupted after its first three tests while the fourth test had completed its browser operations
+but did not tear down; it remains excluded as a complete-suite result.
 
 ## Reproduce
 
@@ -31,6 +32,10 @@ npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage
   progress, critical notice, portable eligibility, reconnect and remediation captures.
 - [Accessibility proof](a11y-proof.json): axe-core 4.12.1 reported no violations in its 12 recorded
   captures; the suite also asserts English/German control, focus and polite-live-region parity.
+- The ready-marker selector lives in `UpdateWindow.module.css` because it bridges the existing
+  desktop-window and startup-notice contracts in compact viewports (≤720px), with 320px browser
+  proof. Its scoped `:global()` references are registered in the Design System exception inventory;
+  no shared stylesheet rule was added.
 - `13-reconnecting-state-mocked.png` deliberately uses a deterministic transport-failure fixture.
   All screenshots use mocked update API responses and prove rendered UI behavior only.
 - The separate real-BFF test passed actual HTTP start acceptance, process stop/restart, retained

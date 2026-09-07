@@ -21,9 +21,10 @@ real-process and real-artifact requirements here. Tests with filtered cases must
 
 The governed local toolchain is Node.js 24.18.0 with npm 11.16.0. The package build passes
 under that toolchain; an earlier Node.js 25 development run is not final verification evidence.
-The isolated real-BFF outage/reconnect browser journey passes (one test, 59.8 seconds).
-An interrupted multi-test capture and an interrupted responsive capture do not count as passes.
-The subsequent coherent visual capture passes (one test), with 12 axe captures and no violations;
+The latest complete updater browser suite passes all seven tests (1.7 minutes), including the
+real-BFF outage/reconnect journey and the error-only foreground notice regression. Earlier
+interrupted multi-test and responsive captures do not count as passes. The refreshed visual
+evidence includes 12 axe captures with no violations;
 lead inspection confirms the responsive action is unobscured and all eight source plus four
 harness hashes match. The wiring gate identifies the updater suite as
 `runs-per-pr`, and the explicit changed-file i18n guard passes.
@@ -41,10 +42,12 @@ The bounded review confirmed no additional authority-binding regression from the
 
 Successive Windows diagnostics repaired directory-symlink cleanup, oversized fixture/protocol
 stack allocations, strict byte/qualifier diagnostics, and a missing standalone SHA header include.
-The latest diagnostic at `37f16d070db94b84f1eff603703ab23ed4ad012a` passes the Windows native
-quality and setup-bootstrap steps; the full job is still running in
+The latest diagnostic at `37f16d070db94b84f1eff603703ab23ed4ad012a` passes the complete Windows
+job: native compiler/analyzer/fixtures, setup bootstrap, package typecheck/build, and both
+installable-package smokes (optional dependencies omitted and included). Evidence:
 [Windows job 101721128128](https://github.com/oscharko-dev/Keiko/actions/runs/34115445910/job/101721128128).
-Earlier failed diagnostics are not delivery CI evidence.
+The terminal Windows log was captured before cancelling the remaining diagnostic jobs.
+Earlier failed diagnostics and cancelled jobs are not delivery CI evidence.
 The diagnostic branch's protected-branch rejection is expected and is never treated as a green
 workflow. Production KHA1 remains disabled pending startup recovery and actual native update proof.
 
@@ -58,7 +61,15 @@ confirmed findings. Normal-startup recovery and real installed two-process proof
 The full UI coverage run at the core checkpoint reports 7,512 passing tests, four failures, and
 one skip across 432 files. The four failures are shared stylesheet evidence hash assertions after
 the updater-specific rule changed `globals.css`. Component placement and affected updater evidence
-are being repaired; this run is not a passing UI gate. Normal UI lint and changed-file i18n pass.
+are now repaired: updater-specific behavior lives in the existing component stylesheet, and the
+shared stylesheet matches its evidence baseline. All 337 focused UI/style tests pass, with eight
+source and four harness hashes independently matched and the compact action screenshot inspected.
+Independent full coverage replay now passes all 432 files: 7,516 tests pass and one is skipped
+(167.01 seconds). Coverage is 89.92% statements, 82.35% branches, 91.49% functions and 92.79% lines.
+Normal UI lint, workspace typecheck, changed-file i18n and formatting pass without increasing lint
+suppressions. The generated editor bundle evidence is refreshed from the actual production build;
+freshness and all three existing budgets pass. These development results still require final
+integrated-head verification and do not qualify native replacement.
 
 The required local `npm run gates:sonar` attempt stops before analysis because Docker rejects
 the pinned image pull with a registry authentication error, including an isolated anonymous

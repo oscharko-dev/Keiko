@@ -128,6 +128,7 @@ interface RouteFixtures {
   readonly sessionStatus?: JsonObject;
   readonly remediation?: JsonObject;
   readonly transientSessionReadFailuresAfterStart?: number;
+  readonly preflightFailureAtGet?: number;
 }
 
 interface UpdateRouteState {
@@ -259,12 +260,7 @@ async function provePortReusable(port: number): Promise<void> {
 }
 
 async function cleanupOutageHarness(harness: OutageHarness): Promise<void> {
-  try {
-    runOutageLifecycle(harness, "stop");
-  } catch (error) {
-    // Keep the private state root: it contains the exact process identity needed for recovery.
-    throw error;
-  }
+  runOutageLifecycle(harness, "stop");
   await provePortReusable(harness.port);
   rmSync(harness.root, { recursive: true, force: true });
 }
@@ -657,16 +653,24 @@ function updateRouteState(fixtures: RouteFixtures): UpdateRouteState {
 
 async function installPreflightRoutes(
   page: Page,
-  report: JsonObject,
+  fixtures: RouteFixtures,
   ledger: UpdateRouteLedger,
 ): Promise<void> {
   await page.route("**/api/update/preflight/check", async (route) => {
     ledger.preflightChecks += 1;
-    await fulfillJson(route, report);
+    await fulfillJson(route, fixtures.report);
   });
   await page.route("**/api/update/preflight", async (route) => {
     ledger.preflightGets += 1;
-    await fulfillJson(route, report);
+    if (ledger.preflightGets === fixtures.preflightFailureAtGet) {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "INTERNAL", message: "Update service unavailable" }),
+      });
+      return;
+    }
+    await fulfillJson(route, fixtures.report);
   });
 }
 
@@ -770,7 +774,7 @@ async function installUpdateRoutes(
 ): Promise<UpdateRouteLedger> {
   const ledger = updateRouteLedger();
   const state = updateRouteState(fixtures);
-  await installPreflightRoutes(page, fixtures.report, ledger);
+  await installPreflightRoutes(page, fixtures, ledger);
   await installSessionRoutes(page, ledger, state);
   await installRemediationRoutes(page, ledger, state);
   return ledger;
@@ -938,7 +942,6 @@ async function assertManualCheckActionIsUnobscuredAt320CssPixels(
   await updateWindow.focus();
   await expect(updateWindow).toHaveAttribute("data-top", "true");
   await expect(notice).not.toBeVisible();
-
 }
 
 async function assertStartupNoticeReturnsWhenUpdaterMinimized(
@@ -948,6 +951,18 @@ async function assertStartupNoticeReturnsWhenUpdaterMinimized(
   const notice = page.getByRole("alert", { name: "Keiko update notification" });
   await updateWindow.locator(".win-traffic-minimize").click();
   await expect(updateWindow).toBeHidden();
+  await expect(notice).toBeVisible();
+}
+
+async function assertStartupNoticeRemainsWhenUpdaterOnlyHasAnError(
+  page: Page,
+  settings: Locator,
+): Promise<void> {
+  const notice = page.getByRole("alert", { name: "Keiko update notification" });
+  await expect(notice).toBeVisible();
+  const updateWindow = await openUpdateFromSettings(page, settings, /Update status unavailable/u);
+  await expect(updateWindow.getByRole("alert")).toContainText("HTTP 503");
+  await expect(updateWindow.locator(".upd")).not.toHaveClass(/cmpReady/u);
   await expect(notice).toBeVisible();
 }
 
@@ -1188,7 +1203,7 @@ async function closePage(page: Page): Promise<void> {
   }
 }
 
-const MODE_CAPTURES: readonly ModeCaptureCase[] = [
+const MODE_CAPTURES: readonly [ModeCaptureCase, ...ModeCaptureCase[]] = [
   {
     file: "01-update-window-dark.png",
     mode: "dark",
@@ -1414,6 +1429,23 @@ async function recordManualEvidence(browser: Browser, evidence: EvidenceState): 
     await closePage(page);
   }
 }
+
+test("retains the startup notice when a foreground updater contains only a load error", async ({
+  browser,
+}) => {
+  const { page } = await openModePage(browser, MANUAL_MODE, {
+    report: manualReport(),
+    sessionStatus: manualSessionStatus(),
+    remediation: manualRemediation(),
+    preflightFailureAtGet: 2,
+  });
+  try {
+    const settings = await openSettingsGeneral(page);
+    await assertStartupNoticeRemainsWhenUpdaterOnlyHasAnError(page, settings);
+  } finally {
+    await closePage(page);
+  }
+});
 
 async function recordPortableEvidence(browser: Browser, evidence: EvidenceState): Promise<void> {
   const { page, ledger } = await openModePage(browser, PORTABLE_MODE, {

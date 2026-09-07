@@ -567,6 +567,49 @@ function SummaryCard({
   );
 }
 
+interface SessionPrimaryActionProps {
+  readonly session: NonNullable<ReturnType<typeof sessionForDisplay>>;
+  readonly busy: BusyAction;
+  readonly onCheck: () => void;
+  readonly onCancel: () => void;
+  readonly onVerifyRestart: () => void;
+  readonly canVerifyRestart: boolean;
+}
+
+function RestartVerificationAction({
+  disabled,
+  canVerifyRestart,
+  onVerifyRestart,
+}: Pick<SessionPrimaryActionProps, "canVerifyRestart" | "onVerifyRestart"> & {
+  readonly disabled: boolean;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <>
+      <button
+        type="button"
+        className="upd-primary-btn"
+        aria-describedby="updates-restart-verification-help"
+        disabled={disabled || !canVerifyRestart}
+        onClick={onVerifyRestart}
+      >
+        {t("updates.action.verifyRestart")}
+      </button>
+      <span id="updates-restart-verification-help" className="sr-only">
+        {t("updates.restart.verifyHelp")}
+      </span>
+    </>
+  );
+}
+
+function canCancelSession(session: SessionPrimaryActionProps["session"]): boolean {
+  return (
+    isSessionInProgress(session) &&
+    session.cancelable &&
+    session.lifecycle.cancellationCutoff === "not-reached"
+  );
+}
+
 function SessionPrimaryAction({
   session,
   busy,
@@ -574,42 +617,47 @@ function SessionPrimaryAction({
   onCancel,
   onVerifyRestart,
   canVerifyRestart,
-}: {
-  readonly session: NonNullable<ReturnType<typeof sessionForDisplay>>;
-  readonly busy: BusyAction;
-  readonly onCheck: () => void;
-  readonly onCancel: () => void;
-  readonly onVerifyRestart: () => void;
-  readonly canVerifyRestart: boolean;
-}): ReactNode {
+}: SessionPrimaryActionProps): ReactNode {
   const t = useTranslate();
   const disabled = busy !== undefined;
   if (session.phase === "restart-required") {
     return (
-      <>
-        <button
-          type="button"
-          className="upd-primary-btn"
-          aria-describedby="updates-restart-verification-help"
-          disabled={disabled || !canVerifyRestart}
-          onClick={onVerifyRestart}
-        >
-          {t("updates.action.verifyRestart")}
-        </button>
-        <span id="updates-restart-verification-help" className="sr-only">
-          {t("updates.restart.verifyHelp")}
-        </span>
-      </>
+      <RestartVerificationAction
+        disabled={disabled}
+        canVerifyRestart={canVerifyRestart}
+        onVerifyRestart={onVerifyRestart}
+      />
     );
   }
   if (session.phase === "failed" && session.retryable) {
-    return <UpdateCheckButton className="upd-primary-btn" disabled={disabled} onCheck={onCheck} label={t("updates.action.retry")} />;
+    return (
+      <UpdateCheckButton
+        className="upd-primary-btn"
+        disabled={disabled}
+        onCheck={onCheck}
+        label={t("updates.action.retry")}
+      />
+    );
   }
   if (session.phase === "succeeded" || session.phase === "cancelled") {
-    return <UpdateCheckButton className="upd-secondary-btn" disabled={disabled} onCheck={onCheck} label={t("updates.action.check")} />;
+    return (
+      <UpdateCheckButton
+        className="upd-secondary-btn"
+        disabled={disabled}
+        onCheck={onCheck}
+        label={t("updates.action.check")}
+      />
+    );
   }
-  if (!isSessionInProgress(session) || !session.cancelable || session.lifecycle.cancellationCutoff !== "not-reached") return null;
-  return <UpdateCheckButton className="upd-secondary-btn" disabled={disabled} onCheck={onCancel} label={t("updates.action.cancel")} />;
+  if (!canCancelSession(session)) return null;
+  return (
+    <UpdateCheckButton
+      className="upd-secondary-btn"
+      disabled={disabled}
+      onCheck={onCancel}
+      label={t("updates.action.cancel")}
+    />
+  );
 }
 
 function UpdateCheckButton({
@@ -623,7 +671,35 @@ function UpdateCheckButton({
   readonly onCheck: () => void;
   readonly label: string;
 }): ReactNode {
-  return <button type="button" className={className} disabled={disabled} onClick={onCheck}>{label}</button>;
+  return (
+    <button type="button" className={className} disabled={disabled} onClick={onCheck}>
+      {label}
+    </button>
+  );
+}
+
+interface PrimaryActionsProps {
+  readonly report: UpdatePreflightReport;
+  readonly session: UpdateSessionStatus;
+  readonly remediation: UpdateRemediationStatusReport;
+  readonly busy: BusyAction;
+  readonly onCheck: () => void;
+  readonly onStart: () => void;
+  readonly onCancel: () => void;
+  readonly onVerifyRestart: () => void;
+  readonly canVerifyRestart: boolean;
+}
+
+function shouldShowCheckAction(
+  report: UpdatePreflightReport,
+  session: UpdateSessionStatus,
+  remediation: UpdateRemediationStatusReport,
+): boolean {
+  return (
+    !report.updateAvailable ||
+    blocksAutomaticInstall(remediation) ||
+    candidateRequest(report) === undefined
+  );
 }
 
 function PrimaryActions({
@@ -636,33 +712,42 @@ function PrimaryActions({
   onCancel,
   onVerifyRestart,
   canVerifyRestart,
-}: {
-  readonly report: UpdatePreflightReport;
-  readonly session: UpdateSessionStatus;
-  readonly remediation: UpdateRemediationStatusReport;
-  readonly busy: BusyAction;
-  readonly onCheck: () => void;
-  readonly onStart: () => void;
-  readonly onCancel: () => void;
-  readonly onVerifyRestart: () => void;
-  readonly canVerifyRestart: boolean;
-}): ReactNode {
+}: PrimaryActionsProps): ReactNode {
   const t = useTranslate();
   const visibleSession = sessionForDisplay(session, report);
   const disabled = busy !== undefined;
   const manual = isManualUpdatePath(report, session);
   const portableManaged = isPortableManagedOneClickPath(report, session);
-  if (visibleSession !== undefined) return <SessionPrimaryAction session={visibleSession} busy={busy} onCheck={onCheck} onCancel={onCancel} onVerifyRestart={onVerifyRestart} canVerifyRestart={canVerifyRestart} />;
-  if (
-    manual ||
-    !report.updateAvailable ||
-    blocksAutomaticInstall(remediation) ||
-    candidateRequest(report) === undefined
-  ) {
+  if (visibleSession !== undefined)
+    return (
+      <SessionPrimaryAction
+        session={visibleSession}
+        busy={busy}
+        onCheck={onCheck}
+        onCancel={onCancel}
+        onVerifyRestart={onVerifyRestart}
+        canVerifyRestart={canVerifyRestart}
+      />
+    );
+  if (manual || shouldShowCheckAction(report, session, remediation)) {
     if (manual) return null;
-    return <UpdateCheckButton className="upd-secondary-btn" disabled={disabled} onCheck={onCheck} label={t("updates.action.check")} />;
+    return (
+      <UpdateCheckButton
+        className="upd-secondary-btn"
+        disabled={disabled}
+        onCheck={onCheck}
+        label={t("updates.action.check")}
+      />
+    );
   }
-  return <UpdateCheckButton className="upd-primary-btn" disabled={disabled} onCheck={onStart} label={portableManaged ? t("updates.action.updatePortable") : t("updates.action.install")} />;
+  return (
+    <UpdateCheckButton
+      className="upd-primary-btn"
+      disabled={disabled}
+      onCheck={onStart}
+      label={portableManaged ? t("updates.action.updatePortable") : t("updates.action.install")}
+    />
+  );
 }
 
 function ProgressPanel({ session }: { readonly session: ReturnType<typeof sessionForDisplay> }) {
@@ -1725,7 +1810,7 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
     canShowManualReview ||
     (canRunRemediation && remediation.overallStatus !== "manual-review-required");
   return (
-    <section className="upd" aria-labelledby="updates-window-title">
+    <section className={classNames("upd", styles.cmpReady)} aria-labelledby="updates-window-title">
       <SummaryCard
         report={report}
         session={session}
