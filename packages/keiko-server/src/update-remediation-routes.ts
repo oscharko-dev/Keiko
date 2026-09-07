@@ -132,10 +132,7 @@ export async function handleRunUpdateRemediationAction(
     // remediation falls back to its own request correlation.
     return {
       status: 200,
-      body: await guard.runAction(
-        parsed.value,
-        updateAttempt?.correlationId ?? ctx.correlationId,
-      ),
+      body: await guard.runAction(parsed.value, updateAttempt?.correlationId ?? ctx.correlationId),
     };
   });
 }
