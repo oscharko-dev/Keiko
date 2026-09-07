@@ -37,6 +37,40 @@ export function workbenchSurface(page: Page): Locator {
   return page.locator(SURFACE);
 }
 
+// #3394 — the always-mounted left rail (`LeftRail.tsx`, `aria-label={t("rail.primaryNavigation")}`
+// = "Primary workspace navigation"). Scoping every rail lookup through this locator, rather than an
+// unscoped `getByRole("button", { name: … })`, keeps "Editor" and "Settings" unambiguous once the
+// Settings window is open: `settings.tabs.editor` renders its OWN "Editor" tab button inside the
+// Settings region, and an unscoped query would match either one depending on DOM order.
+function primaryRail(page: Page): Locator {
+  return page.getByRole("navigation", { name: "Primary workspace navigation" });
+}
+
+// Every rail tool button reports its own open/closed state via `aria-pressed` (LeftRail.tsx), and
+// `AppShell.tsx`'s `onTool` toggles that state on every click: clicking an already-open tool's rail
+// button CLOSES it. Reading `aria-pressed` first makes opening a tool idempotent -- required here
+// because "Editor" and "Settings" are opened from more than one call site in this module and a
+// second blind click would toggle the window shut instead of reusing it.
+async function ensureRailToolOpen(page: Page, label: string): Promise<void> {
+  const button = primaryRail(page).getByRole("button", { name: label, exact: true });
+  if ((await button.getAttribute("aria-pressed")) !== "true") {
+    await button.click();
+  }
+  await expect(button).toHaveAttribute("aria-pressed", "true");
+}
+
+// Opens (or reuses) the Settings tool window and switches it to the named tab
+// (`settingsTabLabel` in SettingsPanel.tsx: "Models" / "Security" / …), mirroring the exact
+// sequence `coding-issue-intake.spec.ts`'s `enableFullAccess` already drives against the real UI
+// (rail "Settings" -> region named "Settings…" -> tab button).
+async function openSettingsTab(page: Page, tabName: string): Promise<Locator> {
+  await ensureRailToolOpen(page, "Settings");
+  const settings = page.getByRole("region", { name: /^Settings/u });
+  await expect(settings).toBeVisible();
+  await settings.getByRole("button", { name: tabName, exact: true }).click();
+  return settings;
+}
+
 // Live-run blocker (A), generalized from the original single test: the real production
 // composition starts every browser session unpaired, so the first authority-gated call 403s
 // ("Workbench is not paired") until a launcher pairing attestation is minted against the SAME
@@ -125,11 +159,29 @@ function qualificationChatModel(models: readonly ModelCapability[]): ModelCapabi
   return candidate;
 }
 
+// Real affordance: SettingsPanel.tsx's Models tab, `ModelCapabilityRow`'s "Run readiness check"
+// button (`t("settings.models.runReadiness")`) -- it POSTs GATEWAY_READINESS_ENDPOINT with no
+// `probes` filter, so the server runs its whole `DEFAULT_PROBES` set (chat, streaming, tool_calling,
+// json_schema, embedding -- gateway-readiness.ts), not only `tool_calling` as the removed direct
+// call requested. There is no narrower control a real user can reach: this is the finest-grained
+// readiness action the product exposes, and `tool_calling` is always included in that default set,
+// so the proof this function exists to capture is still produced.
 async function refreshToolCallingProof(page: Page, modelId: string): Promise<void> {
-  const response = await page.request.post(GATEWAY_READINESS_ENDPOINT, {
-    headers: CSRF,
-    data: { modelId, options: { probes: ["tool_calling"] } },
+  const settings = await openSettingsTab(page, "Models");
+  const modelRow = settings
+    .locator(".ml-row")
+    .filter({ has: page.getByText(modelId, { exact: true }) });
+  const readinessButton = modelRow.getByRole("button", {
+    name: "Run readiness check",
+    exact: true,
   });
+  await expect(readinessButton).toBeEnabled({ timeout: 60_000 });
+  const readiness = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" && response.url().endsWith(GATEWAY_READINESS_ENDPOINT),
+  );
+  await readinessButton.click();
+  const response = await readiness;
   expect(
     response.ok(),
     `the guarded readiness call failed with HTTP ${String(response.status())}`,
@@ -294,21 +346,43 @@ async function waitForLiveWorkbenchIdentity(
 // an expired proof must go through the production readiness route, which is protected by the same
 // durable qualification-spend admission as every subsequent provider request. Filtering the stale
 // model out before that call made a valid configured profile impossible to qualify.
+// Real affordance: SettingsPanel.tsx's Models tab "Update credentials" button
+// (`t("settings.models.updateCredentials")`, shown once a gateway is already configured) opens
+// GatewaySetupDialog.tsx with `preserveExisting={gatewayConfigured}` (SettingsPanel.tsx's
+// `ModelsTabContent`). That prop is exactly the removed direct call's `preserveExisting: true`:
+// every OTHER field left blank is resolved server-side from the stored config
+// (`submittedOrInheritedString` / the `deploymentNames` empty-list fallback in
+// packages/keiko-server/src/gateway-setup.ts), so filling in only the "Coding-safe workflow models"
+// field (`t("gatewaySetup.workflowEligibleModels")`) and submitting cannot clobber the live
+// provider credentials this journey depends on. `workflowEligibleModelIdsConfigured` flips true on
+// the field's own onChange, which alone satisfies `computeCanSubmit` when `preserveExisting` is
+// true, so no other field needs to be touched for "Test & save" to become enabled.
+async function enableCodingWorkflowEligibility(page: Page, modelId: string): Promise<void> {
+  const settings = await openSettingsTab(page, "Models");
+  await settings.getByRole("button", { name: "Update credentials", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Update Keiko credentials" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel("Coding-safe workflow models").fill(modelId);
+  const setup = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" && response.url().endsWith(GATEWAY_SETUP_ENDPOINT),
+  );
+  const submit = dialog.getByRole("button", { name: "Test & save", exact: true });
+  await expect(submit).toBeEnabled({ timeout: 10_000 });
+  await submit.click();
+  const setupResponse = await setup;
+  expect(
+    setupResponse.ok(),
+    `the gateway setup call failed with HTTP ${String(setupResponse.status())}`,
+  ).toBe(true);
+}
+
 export async function ensureWorkflowEligibleModel(page: Page): Promise<boolean> {
   const workspaceIdentity = await currentLiveWorkbenchIdentity(page);
   const changed = await qualifyLiveModel({
     loadModels: () => liveModels(page),
     refreshToolCalling: (modelId) => refreshToolCallingProof(page, modelId),
-    enableWorkflow: async (modelId): Promise<void> => {
-      const setupResponse = await page.request.post(GATEWAY_SETUP_ENDPOINT, {
-        headers: CSRF,
-        data: { preserveExisting: true, workflowEligibleModelIds: [modelId] },
-      });
-      expect(
-        setupResponse.ok(),
-        `the gateway setup call failed with HTTP ${String(setupResponse.status())}`,
-      ).toBe(true);
-    },
+    enableWorkflow: (modelId) => enableCodingWorkflowEligibility(page, modelId),
   });
   await reconcileLiveWorkbenchAfterModelChange(changed, workspaceIdentity, {
     reload: () => page.reload().then(() => undefined),
@@ -318,6 +392,56 @@ export async function ensureWorkflowEligibleModel(page: Page): Promise<boolean> 
   return changed;
 }
 
+// #3394 PRODUCT GAP -- left as a direct API call, unconverted. The scoping bug this comment
+// originally cited is now fixed: `GitHubIssueAccessSettings` (AutonomySettings.tsx) receives the
+// settings panel's own bound `root`, threaded from `AutonomySettings` exactly like every sibling
+// tab (`<EditorSettingsPanel root={root} />`, `<ManagedLanguageSettings root={root} />`,
+// `<DebuggingSettings root={root} />`, `<AutonomySettings root={root} />` -- SettingsPanel.tsx),
+// falling back to `useOptionalChatSessionProject()` only when no root is bound. That fix alone
+// does not unblock this conversion: two further, independent preconditions still do.
+//
+// 1) Sequencing. `SettingsPanelSessionHost` resolves the bound root as
+//    `ctx.activeRoot ?? ctx.linkedRoot ?? activeProject?.path ?? undefined`
+//    (packages/keiko-ui/src/app/components/desktop/widgets/index.tsx:397). `ctx.activeRoot` is
+//    the ACTIVE TASK WORKSPACE root (ADR-0090, useActiveWorkspaceState.ts) and stays null until
+//    one is bound -- which happens only once Bind succeeds, i.e. after issue preview. But issue
+//    preview itself requires THIS SAME grant to already exist
+//    (packages/keiko-server/src/coding-context/githubIssueResolution.ts's `resolveReader` ->
+//    `isGitHubIssueReaderAuthorized`, gating `issuePreviewRoutes.ts`), so `ctx.activeRoot` can
+//    never hold the target repository at the moment the grant must be created. `ctx.linkedRoot`
+//    is structurally unavailable to a Settings window regardless of timing -- the "settings"
+//    window type is absent from `FILES_CONTEXT_TYPES` (windows/connectionUtils.ts), so
+//    `receivesFilesContext("settings")` is always false. That leaves `activeProject?.path`, which
+//    can only be set through `RepositoryFolderSwitcher.tsx`'s `chatActions.addProject` -- and its
+//    manual-path fallback is UNREACHABLE whenever the host reports native file-dialog support
+//    (`nativeFileDialogSupported` returns true for darwin/win32,
+//    packages/keiko-server/src/native-file-dialog/adapter.ts), exactly the platform this journey
+//    runs on (`runs-on: macos-14`, .github/workflows/code-task-real-binary.yml).
+//
+//    A register-then-reload sequence would resolve this FOR THIS JOURNEY: `registerProject` (now
+//    sequenced before `grantGithub`, see `prepareTrustedIssueWorkspace` above) registers
+//    `repositoryRoot` server-side, and a `page.reload()` afterward would re-run AppShell's
+//    `useChatSession({ autoCreate: false })` bootstrap (useChatSession.ts's `bootstrapSession`),
+//    which re-fetches the project list and auto-selects the first available registered project as
+//    `activeProject` -- the same reload-to-resync technique `reconcileLiveWorkbenchAfterModelChange`
+//    above already uses for a stale-client-state problem of the same shape. That is not sufficient
+//    on its own, though: see (2).
+//
+// 2) This function is shared with a caller this fix cannot safely reach. `grantGithubAccess` is
+//    also called directly by `coding-issue-journey-live-git-chat.ts`'s
+//    `connectControlledPullRequestToChat`, BEFORE that function's own `page.goto("/")` and
+//    `seedWorkspace` -- i.e. before any workbench window, or possibly any navigation at all in a
+//    fresh browser context, is guaranteed to exist. (That caller registers its own repository
+//    directly via `POST /api/projects` inside `createChatForFixture`, independent of
+//    `prepareTrustedIssueWorkspace`, so it does not share this file's ordering fix.) A
+//    reload-and-drive-the-checkbox body here would carry assumptions -- a bound "coding" window, a
+//    "Repository path" field holding this exact value -- that do not hold for that caller, which
+//    is outside this file's ownership. Splitting the function into two near-duplicates rather than
+//    reusing one would trade this gap for the exact problem AGENTS.md SS5 warns against.
+//
+// Until issue preview stops gating on this grant, or the shared caller above no longer needs
+// `grantGithubAccess` to work before any navigation, there is no single real, browser-driven
+// action that safely replaces this call for every caller of this shared function.
 export async function grantGithubAccess(page: Page, repositoryRoot: string): Promise<void> {
   const observed = await page.request.get(
     `${AUTH_ENDPOINT}?${new URLSearchParams({ repositoryPath: repositoryRoot }).toString()}`,
@@ -357,28 +481,67 @@ export async function registerTrustedRepositoryProject(
 
 export interface LiveIssueWorkspacePreparation {
   readonly open: () => Promise<void>;
-  readonly grantGithub: () => Promise<void>;
   readonly registerProject: () => Promise<void>;
+  readonly grantGithub: () => Promise<void>;
   readonly bindIssue: () => Promise<void>;
 }
 
+// #3394 -- registerProject now precedes grantGithub (it used to follow it). The server accepts a
+// GitHub access grant only for an already-registered repository
+// (packages/keiko-server/src/coding-context/githubAuthorizationRoutes.ts's
+// `registeredRepositoryRoot`, which checks `deps.store.listProjects()`), and nothing before this
+// point registers `repositoryRoot` -- `coding-issue-journey-server.mts` starts with an empty
+// project store, and `openLiveWorkbench` only seeds the window layout, never `/api/projects`. The
+// previous order (grantGithub before registerProject) asked the server to authorize a repository
+// it had never heard of. registerProject already had to precede bindIssue for its own, separate
+// reason (trust must be derived before the provisioner runs, see the comment at the call site
+// below); this keeps both orderings in one sequence.
 export async function prepareTrustedIssueWorkspace(
   steps: LiveIssueWorkspacePreparation,
 ): Promise<void> {
   await steps.open();
-  await steps.grantGithub();
   await steps.registerProject();
+  await steps.grantGithub();
   await steps.bindIssue();
+}
+
+// Real affordance: the project/repository open flow. EditorEmptyState.tsx ("Shown when the editor
+// window is open without a bound project root (e.g. toggled from the left rail)") is the one
+// `createProject` call site that renders its manual-path fallback UNCONDITIONALLY, alongside the
+// native picker, rather than instead of it (compare RepositoryFolderSwitcher.tsx's `FolderPanel`,
+// which renders the manual form ONLY when native dialogs are unsupported -- unusable here since
+// `nativeFileDialogSupported` reports true on darwin/win32 regardless of automation). Toggling the
+// left rail's "Editor" tool with no root bound (a fresh coding-only workspace has no "editor" window
+// yet) mounts EditorEmptyState directly, with no dialog to drive first.
+async function openEmptyEditorWindow(page: Page): Promise<Locator> {
+  await ensureRailToolOpen(page, "Editor");
+  const empty = page.getByTestId("editor-empty-state");
+  await expect(empty).toBeVisible();
+  return empty;
+}
+
+// The scratch Editor window served only to reach EditorEmptyState's real "open a project" control;
+// closing it again keeps the workspace layout the rest of the journey expects (a single "coding"
+// window) rather than leaving an unrelated bound Editor window mounted for the remaining steps.
+// Safe to call right after `openEmptyEditorWindow`: the rail button's `aria-pressed` is still
+// "true" (open), so this click toggles it closed rather than reopening it.
+async function closeEditorWindow(page: Page): Promise<void> {
+  await primaryRail(page).getByRole("button", { name: "Editor", exact: true }).click();
 }
 
 async function registerLiveRepositoryProject(page: Page, repositoryRoot: string): Promise<void> {
   await registerTrustedRepositoryProject(
     {
       register: async (path): Promise<RepositoryProjectRegistration> => {
-        const response = await page.request.post(PROJECTS_ENDPOINT, {
-          headers: CSRF,
-          data: { path, name: "Issue Journey Controlled Repository" },
-        });
+        const empty = await openEmptyEditorWindow(page);
+        await empty.getByLabel("Project folder path").fill(path);
+        const created = page.waitForResponse(
+          (response) =>
+            response.request().method() === "POST" && response.url().endsWith(PROJECTS_ENDPOINT),
+        );
+        await empty.getByRole("button", { name: "Open", exact: true }).click();
+        const response = await created;
+        await closeEditorWindow(page);
         if (response.status() !== 201) return { status: response.status() };
         const body = (await response.json()) as { readonly warning?: unknown };
         return { status: response.status(), warning: body.warning };
@@ -621,10 +784,12 @@ export async function driveIssueToDraftPullRequest(
 ): Promise<DeliveredPullRequest> {
   await prepareTrustedIssueWorkspace({
     open: () => openLiveWorkbench(page, input.repositoryRoot),
-    grantGithub: () => grantGithubAccess(page, input.repositoryRoot),
     // Project registration is the folder picker's explicit trust act. It must precede Bind so
-    // the production provisioner derives that trust onto the managed worktree.
+    // the production provisioner derives that trust onto the managed worktree, and (#3394) it
+    // must precede the GitHub access grant too -- the server accepts a grant only for an
+    // already-registered repository.
     registerProject: () => registerLiveRepositoryProject(page, input.repositoryRoot),
+    grantGithub: () => grantGithubAccess(page, input.repositoryRoot),
     bindIssue: () =>
       prepareBoundIssueForRun({
         previewAndBind: () => previewAndBindIssue(page, input.issueRef),

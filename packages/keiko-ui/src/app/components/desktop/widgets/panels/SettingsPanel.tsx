@@ -1924,7 +1924,7 @@ export function SettingsPanel({
         {tab === "debugging" && <DebuggingSettings root={root} />}
         {tab === "security" && (
           <div className="set-list">
-            <AutonomySettings />
+            <AutonomySettings root={root} />
             <div className="set-sec-h">
               <div>
                 <div className="set-sec-t">{workspaceT("workspaceTrust.title")}</div>

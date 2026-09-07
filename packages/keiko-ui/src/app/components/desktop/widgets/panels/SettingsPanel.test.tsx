@@ -7,7 +7,7 @@
 //     literal (the no-leak invariant).
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/lib/i18n";
 import type { GatewayReadinessReport, ModelCapability, SafeGatewayConfig } from "@/lib/types";
 import { SettingsPanel, formatGatewayReadinessReport } from "./SettingsPanel";
@@ -36,6 +36,22 @@ vi.mock("@/lib/api", () => ({
     fetchManagedLspSettingsMock(...args),
   mutateManagedLspSettings: (...args: readonly unknown[]): Promise<unknown> =>
     mutateManagedLspSettingsMock(...args),
+}));
+
+// #3394 — pins that the Security tab forwards SettingsPanel's own bound `root` to AutonomySettings
+// exactly like every sibling tab (EditorSettingsPanel, ManagedLanguageSettings, DebuggingSettings
+// above). Mocked at the hook boundary, same as AutonomySettings.test.tsx, so this stays a wiring
+// pin on SettingsPanel.tsx itself rather than re-covering AutonomySettings's own behaviour.
+const githubGrantMock = vi.fn();
+const autonomyPolicyMock = vi.fn();
+
+vi.mock("../../hooks/useGitHubIssueReaderAuthorization", () => ({
+  useGitHubIssueReaderAuthorization: (...args: readonly unknown[]): unknown =>
+    githubGrantMock(...args),
+}));
+
+vi.mock("../../hooks/useAutonomyModePolicy", () => ({
+  useAutonomyModePolicy: (): unknown => autonomyPolicyMock(),
 }));
 
 // Issue #144: synthetic capability fixtures. Generic ids only — no customer
@@ -369,6 +385,54 @@ describe("SettingsPanel managed language composition", () => {
       "/workspace/settings",
       expect.any(AbortSignal),
     );
+  });
+});
+
+// #3394 — the Security tab used to mount `<AutonomySettings />` with no props at all, so its
+// GitHub issue reader grant (nested inside AutonomySettings) keyed itself on the top-level chat
+// session's active project instead of this panel's own bound root — the one every sibling tab
+// above (editor, languages, debugging) already receives as `root={root}`. These pin the actual
+// SettingsPanel.tsx call site: AutonomySettings.test.tsx separately pins that AutonomySettings
+// honours a bound `root` once given one.
+describe("SettingsPanel Security tab composition (#3394)", () => {
+  beforeEach(() => {
+    autonomyPolicyMock.mockReturnValue({
+      requestedMode: "supervised-coding",
+      effectiveMode: "supervised-coding",
+      deploymentCeiling: null,
+      pending: false,
+      error: null,
+      change: vi.fn(),
+    });
+    githubGrantMock.mockReturnValue({
+      repositoryId: null,
+      authorized: false,
+      revision: 0,
+      pending: false,
+      error: null,
+      change: vi.fn(),
+      reload: vi.fn(),
+    });
+  });
+
+  it("forwards the panel's bound root to the GitHub issue access grant, like every sibling tab", async () => {
+    primeFetches([]);
+    render(<SettingsPanel root="/workspace/settings" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Security" }));
+
+    expect(await screen.findByRole("group", { name: "GitHub issue access" })).toBeInTheDocument();
+    expect(githubGrantMock).toHaveBeenCalledWith("/workspace/settings");
+  });
+
+  it("passes no repository through when the panel itself has no bound root", async () => {
+    primeFetches([]);
+    render(<SettingsPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Security" }));
+
+    expect(await screen.findByRole("group", { name: "GitHub issue access" })).toBeInTheDocument();
+    expect(githubGrantMock).toHaveBeenCalledWith(null);
   });
 });
 

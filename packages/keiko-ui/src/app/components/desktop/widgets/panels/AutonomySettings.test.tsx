@@ -347,6 +347,38 @@ describe("AutonomySettings", () => {
       ).toBeChecked();
     });
 
+    // #3394 — GitHubIssueAccessSettings used to key the grant on the top-level chat session's
+    // active project only, while every sibling settings tab (EditorSettingsPanel, DebuggingSettings,
+    // ManagedLanguageSettings) receives the settings panel's own bound `root` as a prop. A user who
+    // bound repository X in the Coding Workbench but had a different (or no) chat-session project
+    // active would have the grant silently target the wrong repository, or refuse to target any.
+    describe("grant scoping to the settings panel's bound root (#3394)", () => {
+      it("keys the grant on the bound root, not the chat session's active project", () => {
+        projectMock.path = "/repos/other-project";
+        render(<AutonomySettings root="/repos/bound-root" />);
+
+        expect(githubGrantMock).toHaveBeenCalledWith("/repos/bound-root");
+        expect(githubGrantMock).not.toHaveBeenCalledWith("/repos/other-project");
+      });
+
+      it("falls back to the chat session's active project when no root is bound", () => {
+        projectMock.path = "/repos/keiko";
+        render(<AutonomySettings />);
+
+        expect(githubGrantMock).toHaveBeenCalledWith("/repos/keiko");
+      });
+
+      it("falls back to no repository, disabling the toggle, when neither a bound root nor a chat-session project resolves one", () => {
+        projectMock.path = null;
+        render(<AutonomySettings />);
+
+        expect(githubGrantMock).toHaveBeenCalledWith(null);
+        expect(
+          screen.getByRole("checkbox", { name: /Allow reading GitHub issues/u }),
+        ).toBeDisabled();
+      });
+    });
+
     it("has no serious or critical axe violations in the granted, pending, and failed states", async () => {
       for (const view of [
         grantView({ authorized: true }),

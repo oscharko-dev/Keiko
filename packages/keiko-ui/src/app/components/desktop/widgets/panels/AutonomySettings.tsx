@@ -178,12 +178,20 @@ function GitHubIssueAccessStatus({
  * registered project and resolves to a content-free repository id itself. The id is the only
  * identity shown — never the path, never a remote.
  *
+ * The selected project is the settings panel's own BOUND root (#3394) — the same one every sibling
+ * tab receives as a prop (`EditorSettingsPanel root`, `ManagedLanguageSettings root`,
+ * `DebuggingSettings root`) — not the top-level chat session's active project, which can name a
+ * different repository or none at all while a root is bound here. When no root is bound, this
+ * falls back to the chat-session project so the control still resolves a repository outside the
+ * settings panel's own root-bound surfaces rather than going dead.
+ *
  * Its strings live in the Coding Workbench feature catalog because the grant is that feature's
  * capability; the settings catalog is not this change's to extend.
  */
-function GitHubIssueAccessSettings(): ReactNode {
+function GitHubIssueAccessSettings({ root }: { readonly root?: string | undefined }): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const repositoryPath = useOptionalChatSessionProject()?.path ?? null;
+  const chatSessionProjectPath = useOptionalChatSessionProject()?.path ?? null;
+  const repositoryPath = root ?? chatSessionProjectPath;
   const grant = useGitHubIssueReaderAuthorization(repositoryPath);
   const baseId = useId();
   const titleId = `${baseId}-github-access-title`;
@@ -207,7 +215,7 @@ function GitHubIssueAccessSettings(): ReactNode {
   );
 }
 
-export function AutonomySettings(): ReactNode {
+export function AutonomySettings({ root }: { readonly root?: string | undefined }): ReactNode {
   const t = useTranslate();
   const groupId = `${useId()}-product-autonomy`;
   const policy = useAutonomyModePolicy();
@@ -256,7 +264,7 @@ export function AutonomySettings(): ReactNode {
           {t(`settings.autonomy.error.${policy.error}`)}
         </p>
       )}
-      <GitHubIssueAccessSettings />
+      <GitHubIssueAccessSettings root={root} />
       <p className={styles.footnote}>{t("settings.autonomy.footnote")}</p>
     </section>
   );

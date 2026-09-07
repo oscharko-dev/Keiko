@@ -366,7 +366,14 @@ describe("live journey model-change reload", () => {
 });
 
 describe("live journey repository trust", () => {
-  it("registers trust before the issue provisions its managed worktree", async () => {
+  // #3394 -- registerProject now precedes grantGithub (previously the reverse). The invariant this
+  // test pins -- registration before the issue provisions its managed worktree -- is unchanged;
+  // what moved is registerProject ALSO preceding grantGithub, because the server accepts a GitHub
+  // access grant only for an already-registered repository
+  // (githubAuthorizationRoutes.ts's `registeredRepositoryRoot`, which checks
+  // `deps.store.listProjects()`), and nothing before this point registers one. The previous order
+  // asked the server to authorize a repository it had never heard of.
+  it("registers trust before granting GitHub access or provisioning the managed worktree", async () => {
     const order: string[] = [];
 
     await prepareTrustedIssueWorkspace({
@@ -374,12 +381,12 @@ describe("live journey repository trust", () => {
         order.push("opened");
         return Promise.resolve();
       },
-      grantGithub: (): Promise<void> => {
-        order.push("github-authorized");
-        return Promise.resolve();
-      },
       registerProject: (): Promise<void> => {
         order.push("project-registered");
+        return Promise.resolve();
+      },
+      grantGithub: (): Promise<void> => {
+        order.push("github-authorized");
         return Promise.resolve();
       },
       bindIssue: (): Promise<void> => {
@@ -388,7 +395,7 @@ describe("live journey repository trust", () => {
       },
     });
 
-    expect(order).toEqual(["opened", "github-authorized", "project-registered", "issue-bound"]);
+    expect(order).toEqual(["opened", "project-registered", "github-authorized", "issue-bound"]);
   });
 
   it("registers the accepted repository as a trusted project before provisioning", async () => {
