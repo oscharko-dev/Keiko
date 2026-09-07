@@ -5,6 +5,7 @@
 #include <windows.h>
 
 #define KEIKO_TREE_WINDOWS_PATH_CAP 32768u
+#define KEIKO_TREE_WINDOWS_READ_BUFFER_BYTES (64u * 1024u)
 
 #ifndef KEIKO_TREE_WINDOWS_AFTER_FILE_PIN
 #define KEIKO_TREE_WINDOWS_AFTER_FILE_PIN(name) ((void)(name))
@@ -313,16 +314,18 @@ static int keiko_tree_windows_digest_file(HANDLE root, const char *name, keiko_s
   HANDLE file = keiko_tree_windows_open_relative_file(root, name), current = INVALID_HANDLE_VALUE;
   keiko_tree_windows_identity before, after, current_identity;
   keiko_sha256 hash;
-  unsigned char digest[32], buffer[64u * 1024u];
+  unsigned char digest[32];
+  unsigned char *buffer = (unsigned char *)malloc(KEIKO_TREE_WINDOWS_READ_BUFFER_BYTES);
   uint64_t bytes = 0;
   int result = 0;
-  if (!keiko_tree_windows_read_identity(file, 0, &before) ||
+  if (buffer == NULL || !keiko_tree_windows_read_identity(file, 0, &before) ||
       (uint64_t)before.standard.EndOfFile.QuadPart > KEIKO_TREE_MAX_FILE_BYTES ||
       !keiko_sha256_init(&hash)) goto cleanup;
   for (;;) {
     DWORD read_bytes = 0;
     if (!keiko_tree_before_deadline(deadline_ms) ||
-        !ReadFile(file, buffer, sizeof(buffer), &read_bytes, NULL)) goto hash_cleanup;
+        !ReadFile(file, buffer, KEIKO_TREE_WINDOWS_READ_BUFFER_BYTES, &read_bytes, NULL))
+      goto hash_cleanup;
     if (read_bytes == 0) break;
     bytes += read_bytes;
     if (bytes > (uint64_t)before.standard.EndOfFile.QuadPart ||
@@ -348,6 +351,10 @@ static int keiko_tree_windows_digest_file(HANDLE root, const char *name, keiko_s
 hash_cleanup:
   keiko_sha256_clear(&hash);
 cleanup:
+  if (buffer != NULL) {
+    SecureZeroMemory(buffer, KEIKO_TREE_WINDOWS_READ_BUFFER_BYTES);
+    free(buffer);
+  }
   if (keiko_tree_windows_handle_valid(current)) CloseHandle(current);
   if (keiko_tree_windows_handle_valid(file)) CloseHandle(file);
   return result;
