@@ -280,6 +280,39 @@ describe("CI repair accounting around admitted model work", () => {
     expect(test.controller.admitTool(verify("verify-1"))).toBeUndefined();
     expect(test.store.read(test.context).record).toBeUndefined();
   });
+  describe("ciObservationRequired", () => {
+    it("distinguishes absent and expired observations from fresh terminal observations", () => {
+      const test = fixture();
+      expect(test.controller.ciObservationRequired()).toBe(false);
+
+      expect(test.readiness.complete(test.readiness.begin("run-1"), readySnapshot())).toBe(true);
+      expect(test.controller.ciObservationRequired()).toBe(false);
+
+      test.clock.now += 60_000;
+      expect(test.controller.ciObservationRequired()).toBe(true);
+      expect(test.readiness.invalidate("run-1")).toBe(true);
+      expect(test.controller.ciObservationRequired()).toBe(true);
+    });
+
+    it("does not request an observation when authority is revoked or repair work is active", () => {
+      const test = fixture();
+      expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
+      expect(test.controller.ciObservationRequired()).toBe(false);
+
+      test.clock.live = false;
+      expect(test.controller.ciObservationRequired()).toBe(false);
+    });
+
+    it("does not mask an exhausted ledger as a recoverable observation requirement", () => {
+      const test = fixture({ maxToolCalls: 1 });
+      expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
+      expect(test.store.read(test.context)).toMatchObject({
+        status: "blocked",
+        reason: "tool-budget-exhausted",
+      });
+      expect(test.controller.ciObservationRequired()).toBe(false);
+    });
+  });
   it("also counts child reads and gateway reservations through the existing parent owners", () => {
     const test = fixture({ maxToolCalls: 2, maxPromptTokens: 10 });
     expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
