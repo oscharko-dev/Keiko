@@ -4,8 +4,8 @@
   "reviewKind": "independent-source-and-evidence-audit",
   "integrationPr": 3394,
   "ownerIssue": 3386,
-  "sourceHead": "7ae8282b5047becff5ecb915e0e6172459c84b03",
-  "ownedSourceDigest": "781d043078f2d74c88b9c45ba8ac7d546e38b979e16f699d17c0728f6072879d",
+  "sourceHead": "503b5abe3dd7fa92b72a0a6723fced2f3349ee51",
+  "ownedSourceDigest": "97c576a31af4586a41ea048314e9c996b3f8371921e624dac9099aabda5c3060",
   "producerIdentity": {
     "profile": {
       "id": "opencode",

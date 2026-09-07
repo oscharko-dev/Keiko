@@ -86,11 +86,11 @@ semantics, staged-drift refusal and explicit denial. The tracked
 production-composed deterministic browser evidence with `modelQualification: false`; it does not
 replace a real-model flow.
 
-The #2952 native calibration/candidate pair was regenerated at exact source `7ae8282b` after the
-SQLite repair. The native pair used pinned Node 24.18.0, completed two warmups and 30
+The #2952 native calibration/candidate pair was regenerated at exact source `503b5abe` after the
+CI-observation and qualification repairs. The native pair used pinned Node 24.18.0, completed two warmups and 30
 measured samples per arm, and passed its owning performance gate. The H1 verification passed three
 production-managed files / 83 tests; independent review accepted all ten criteria and bound the
-661-path owned-source closure at the refreshed `7ae8282b` source. These are exact-source
+661-path owned-source closure at the refreshed `503b5abe` source. These are exact-source
 prequalification facts. H1 explicitly does
 not establish packaged real-runtime, live-provider or final merge-head qualification, and either
 receipt must be regenerated if its owned source changes.
@@ -123,6 +123,12 @@ on that head. The full coverage run exposed a stale generated source inventory f
 test failed. Fresh UI coverage and the existing coverage-quality evaluation passed. `4c8fed68`
 adds an inventory-only mode to the existing generator and produces exactly the 70-to-71 correction;
 all coverage metrics and file floors remain unchanged. Its 68 owning tests, lint and format passed.
+
+The combined `503b5abe` source also passed full root typecheck, full root/UI lint, format, local
+Sonar, architecture and negative architecture, operation-catalog, error-observability,
+context-quality and E2E-wiring checks. Its external audit binding passed 152 targeted tests,
+including exact opaque artifact/receipt identity and rejection of unrelated post-freeze files.
+The actual external audit and completed live-flow evidence remain separate prerequisites.
 
 ## Real-model delivery: 0/5 completed
 
