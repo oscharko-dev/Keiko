@@ -12,6 +12,9 @@ The observations below were collected on the repair working tree based on
 preserved in checkpoint `6aeac08160ae9f90f58f11c0ef8e86bbe9b77167`; subsequent changes remain in progress.
 UI behavior and loading proof are preserved in `ddd8aea06` and `9623e3402`; the legacy journal
 compatibility disposition is preserved in `a4394887c`.
+The reviewed Windows producer is preserved in `50160cd10`, and the Mac normal-startup recovery
+development checkpoint in `a4c2dbd9f`. Integration commit
+`78f52c774a1e49b32df80db0c4b3c5ecd2c592a0` includes current reviewed dev through the epic branch.
 These are development observations, not SHA-bound final delivery evidence. Rerun the relevant commands after integration and bind every
 final result to the actual commit. A green #3404 documentation PR does not verify #3405 code.
 
@@ -84,6 +87,30 @@ The lead regenerated the canonical operation catalog to 247 entries and independ
 15 drift tests (4.49 seconds). Package rebuild, independent review and final integrated-head proof
 remain required; production KHA1 is still disabled.
 
+On integrated commit `78f52c774`, clean `npm ci` completes with zero reported vulnerabilities and
+`npm run build:packages` passes using Node 24.18.0/npm 11.16.0. Independent replay passes all
+68 tests in the seven complete local-state, normal-startup, handoff, production-handoff,
+handoff-recovery, session-lock-recovery and activation suites (18.19 seconds). The sequential CLI
+lifecycle/portable replay passes all 142 tests (34.47 seconds); macOS arm64 native quality also
+passes its compiler, analyzer and boundary checks.
+The completed independent review identifies two medium recovery gaps despite that green
+replay: a lone durable prepared receipt before native acceptance cannot settle on retry, and
+timeout teardown can replace the child PID before confirmed native exit. These require scoped
+repairs and additional crash/teardown regressions before the Mac slice is accepted. A dedicated
+owner is repairing those gaps and distinguishing the unreleased KUR1 recovery control from the
+unchanged binary supervisor KRC1 protocol. The review reports no critical, high or low findings.
+
+The independent Windows architecture review freezes the remaining consumer/cutover contract in
+[ADR-0121](../adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md#windows-generation-consumer-and-cutover-contract-3405).
+Mac keeps KHP2/32; Windows uses KHP3/37 with exact appended generation/setup identities and shared
+cross-language byte fixtures. A single native lifecycle owns both platform adapters. TypeScript
+and native implementation have disjoint file scopes and start after Mac review settlement, with
+the native parser depending on the TypeScript fixture checkpoint. This is a design contract, not
+Windows consumer execution evidence or approval of the pending native-proof amendment.
+The architect approves the final recorded contract after clarifying the exact incoming path and
+the common KUR1 raw-snapshot validation. Parsers remain within existing package boundaries, without
+new public exports.
+
 The frozen Windows generation producer passes independent security re-review with zero findings.
 The prior medium stale-inventory finding and low fresh-verification finding are closed. Production staging uses the
 schema-2 generation binding, while ordinary/evaluation output remains flat schema 1 and manual-only.
@@ -119,6 +146,10 @@ Normal UI lint, workspace typecheck, changed-file i18n and formatting pass witho
 suppressions. The generated editor bundle evidence is refreshed from the actual production build;
 freshness and all three existing budgets pass. These development results still require final
 integrated-head verification and do not qualify native replacement.
+After the integrated dependency refresh, full UI coverage independently passes again: all 432
+files, 7,516 passing tests and one skip (156.75 seconds). Coverage is 89.91% statements, 82.35%
+branches, 91.49% functions and 92.79% lines. The production UI rebuild is running to refresh its
+bundle evidence against the updated dependency tree.
 
 The required local `npm run gates:sonar` attempt stops before analysis because Docker rejects
 the pinned image pull with a registry authentication error, including an isolated anonymous
@@ -737,8 +768,9 @@ command or substitute a unit test for the missing harness.
 Run the assembled package-surface aggregate after tests because it prunes the checkout's live
 dependencies. Keep the supported toolchain and environment in the result record. Current `dev`
 has advanced to `c5c03d48fa1066c985a656d29880ae1c02e68c48`; the clean epic branch now includes it in
-`b76198dc2614dfe28214dc2e5f4dd2cf1e680cd6`. The child still needs that integration and dependency
-refresh, and the final merged epic still requires verification of its actual current head.
+`b76198dc2614dfe28214dc2e5f4dd2cf1e680cd6`. The child includes that integration in `78f52c774`,
+with clean dependency refresh and package build passing. Final child and merged-epic verification
+must still cover their actual delivery heads after the remaining implementation and review fixes.
 
 ## Handoff boundary
 

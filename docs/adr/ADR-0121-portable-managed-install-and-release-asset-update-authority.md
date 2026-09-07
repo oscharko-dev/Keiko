@@ -246,6 +246,86 @@ signing prerequisites and that canary are satisfied, code may merge with explici
 production one-click claim is permitted. Evaluation releases, including 0.3.17, remain manual-only;
 changing release metadata or a test verifier cannot make their installed bytes production trusted.
 
+#### Windows generation consumer and cutover contract (#3405)
+
+This contract freezes the remaining consumer implementation against the production generation
+producer in `50160cd10`. It does not enable native acceptance or settle platform qualification.
+Mac retains KHP version 2 with 32 fields. Windows requires KHP version 3 with 37 fields; both use
+the existing `KHP1` magic, little-endian version/count header and length-prefixed UTF-8 fields.
+Fields 0–31 retain their byte order and meaning. Windows appends exactly:
+
+| Index | Field | Required value |
+| --- | --- | --- |
+| 32 | `cutoverKind` | `windows-generation-v1` |
+| 33 | `currentGenerationTreeSha256` | 64 lowercase hexadecimal characters |
+| 34 | `candidateGenerationTreeSha256` | 64 lowercase hexadecimal characters |
+| 35 | `currentSetupManifestSha256` | 64 lowercase hexadecimal characters |
+| 36 | `candidateSetupManifestSha256` | 64 lowercase hexadecimal characters |
+
+Reject cross-target version/count combinations, unknown fields and trailing bytes. Use a
+discriminated plan union. The TypeScript encoder and native parser consume the same checked-in
+Mac and Windows hexadecimal fixtures; the Mac fixture remains byte-identical. Fields 20/21 remain
+whole-root KHT1 input evidence, never terminal Windows root hashes. Field 17 remains a reserved
+sibling backup path, required absent at acceptance.
+
+Consumers distinguish install root, selected resource root, application/package paths, runtime
+Node, root launcher/setup and generation supervisor. Windows setup/registration schema 2 uses
+only the strict six-field `windowsGeneration` binding from the artifact contract. The setup bytes,
+launcher digest, package version, target, stable managed eligibility, root identity and registration
+must agree with disk. Flat Windows schema 1 stays readable for launch/manual setup and cannot
+become one-click eligible through automatic migration. Mac schema 1 is unchanged.
+Keep the server parser/resolver internal and CLI authority parsing within its existing boundary;
+introduce no new public package export. Shared frozen fixtures prevent boundary-local parser drift.
+
+Before prepared WAL or native acceptance, the capsule durably snapshots and revalidates the
+current launcher as `coordinator.exe`, current supervisor, `launcher.next`, previous/next setup
+manifests and previous/next registrations. Copies use no-follow reads, flush and digest rechecks.
+Restoration copies coordinator bytes into a root-local temporary file before atomic replacement;
+it never renames an executing coordinator. Candidate generation and plan-owned incoming paths
+must be absent at acceptance.
+
+After proven old-process exit and port release, the single coordinator performs this order:
+
+1. Flush promote intent; copy the candidate into `.portable/generations/.incoming-<activationId>`,
+   flush and verify KHT1,
+   then atomically publish `.portable/generations/<candidateHash>` and rehash.
+2. Atomically replace and flush root launcher, then root setup; verify their plan-bound bytes and
+   setup binding before recording promote completion.
+3. Record register intent, atomically publish and attest next registration, then register completion.
+4. Start N through the copied qualified supervisor; complete existing process/tree verification and
+   semantic runtime-state acknowledgment.
+5. Record cleanup intent; remove only the exact previous generation and plan-owned staging/incoming
+   paths, then record cleanup and complete receipts.
+
+Recovery recognizes only monotonic forward prefixes: old authorities; candidate generation added;
+candidate launcher selected; candidate setup selected; candidate registration selected. Before
+start completion, restore previous registration, setup and launcher in reverse order, attest N−1,
+then remove N. After start completion, retain N only when its owned process and all selected
+authorities attest; otherwise stop only the proven owned process tree before restoration. After
+semantic verification, never restore N−1: finish cleanup idempotently. Non-prefix mixtures require
+recovery without speculative repair. Direct active attestation covers generation KHT1, launcher,
+setup, registration, selected package/helper identities and existing process/launch/port/version
+proof; it introduces no synthetic whole-root projection.
+
+Normal-startup recovery holds the existing mutation lock before ordinary setup/registration
+validation. Without a valid nonterminal WAL, maintenance admits exactly the selected generation.
+With a validated Windows plan and receipt chain, it admits only the exact current/candidate and
+plan-owned incoming paths permitted by the phase; after cleanup completion, only candidate remains.
+Third generations, unrelated incoming paths and unbound content remain issues. Generic maintenance
+does not delete retained generations; the common recovery owner alone has plan-scoped deletion
+authority. The generation-independent support shim retains canonical producer bytes in both inputs;
+a future shim change needs a subsequent contract revision.
+
+One coordinator owns receipt policy, phase classification, deadlines, forward/restore/cleanup and
+semantic acknowledgment. Compile-selected platform adapters supply secure filesystem operations,
+KHT1 walking, process/port checks and existing supervisor transport. Windows reuses the existing
+runtime supervisor and its KRP1/KRC1/KRS1 protocol. The unreleased newline-framed update-recovery
+control uses `KUR1` to distinguish it from that unchanged binary supervisor control protocol.
+Its `runtimeStateSha256` binds the single bounded raw-byte read of canonical
+`<stateDir>/updates/runtime-state.json`. Native validation hashes those exact bytes without JSON
+reserialization. Windows reuses the same KUR1 parser and validation contract, with no platform
+variant.
+
 Supported v1 behavior excludes:
 
 - rollback,
