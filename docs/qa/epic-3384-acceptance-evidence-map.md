@@ -65,8 +65,13 @@ the start activity event. The failing real-store reproduction now passes; the or
 store targets passed 130 and 40 tests, including unacknowledged terminal-row rejection. The
 refreshed H1 proof at `7ae8282b` passed its 83-test producer and binds 661 owned source paths.
 None of these results is a completed live flow.
-The prepared attempt 34 preserves the actual model workspace and PR7, and must first repair the
-remaining independently observed average arithmetic defects. Later qualification results are
+Attempt 34 at `fe441237` recovered that lineage and made real model calls, but stale inherited
+CI blocked edits with an opaque failure. No file changed before the owning test process was
+interrupted. `e01e4b8d` exposes the required CI refresh and logs the admission reason; `e391c61d`
+adds the fresh/stale/active/exhausted/revoked boundary pins. The four owning suites passed 128
+tests and the broader affected targets passed 112. The prepared attempt 35 preserves the actual
+model workspace and PR7, refreshes CI, and must repair the remaining arithmetic defects.
+Later qualification results are
 owned by the canonical per-flow artifacts and manifest, not by changing this frozen source map.
 
 The historical handoff remains useful as an immutable failure record, but its attempt-12b status is

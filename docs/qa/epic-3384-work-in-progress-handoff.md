@@ -55,6 +55,15 @@ targets passed 130 and 40 tests, including rejection of terminal rows without ac
 full typecheck and scoped lint passed. The two review threads carry fix and test references and
 are resolved. This is regression evidence, not a successful production continuation.
 
+Attempt 34 then exposed a stale inherited CI observation. Post-PR edit and verification admission
+correctly failed closed, but the tool projection hid the supported next step behind a generic
+failure. `e01e4b8d` exposes `ci-observation-required` and records that admission reason on the
+existing activity log. The real SQLite regression preserves the initial denial, refreshes current
+readiness through its owning store, then admits the same edit without creating a repair ledger.
+With the additional boundary tests in `e391c61d`, the four owning suites passed 128 tests; the
+broader transcript/authority/managed-tool targets passed 112 tests. Full root typecheck and scoped
+lint passed. Expired authority and exhausted budgets retain their hard denials.
+
 Actual results, with their source limits:
 
 | Verification                               | Result                                             | Source / limitation                                                                       |
@@ -104,6 +113,15 @@ architecture and negative architecture checks, operation-catalog validation, err
 validation and local Sonar passed. The full server suite also passed all 12 cold route import
 cases; no `server.js` or `routes.js` warm-up import was required.
 
+At `fe441237`, the isolated pinned-runtime qualification passed two real-binary browser tests,
+41 same-run macOS confinement checks, all five consumers against a freshly staged Node 24 npm
+artifact, and three actual native compaction/lifecycle cases. The compactable case observed native
+compaction and retry after a 513-message overflow; the irreducible case failed closed. These are
+source-specific scripted-gateway proofs, not paid-model flow completion. Local Sonar also passed
+on that head. The full coverage run exposed a stale generated source inventory for `keiko-tools`
+(70 recorded, 71 actual after the typed-metadata helper); its producer must refresh that evidence
+from actual measured coverage without weakening the inventory pin or lowering coverage floors.
+
 ## Real-model delivery: 0/5 completed
 
 [Wegwerf-Repo PR #7](https://github.com/oscharko/Wegwerf-Repo/pull/7) is an actual draft for
@@ -118,8 +136,11 @@ the selected candidate, and committed `4b7a1b1a4b7f206a270c0e9af5b08d0e22c97b97`
 failed delivery before pushing; PR7 still points to the earlier `aec3a459` head. The metadata and
 lineage defects above explain that failure. Independent review of the retained model commit found
 that `[1, 1, -1]` and `[MAX, MAX, -MAX]` incorrectly average to zero and `[MAX, -MAX/2]` overflows.
-The next continuation is attempt 34, using that exact retained worktree through normal start and
-the locally proven PR lineage after source and required prequalification inputs are frozen.
+Attempt 34 at `fe441237` recovered the proven PR lineage and made real model calls, then repeated
+the stale-CI admission failure above without editing any file. The owning test process was
+interrupted and its failure trace and support-analysis timeline retained privately. Attempt 35
+will recover that exact retained worktree through normal startup/recovery and refresh CI before
+editing, after source and required prequalification inputs are frozen.
 Do not recreate the workspace, discard its Git history, manually author the fixture repair, or
 claim a completed run from the runtime's terminal status alone.
 
@@ -134,7 +155,7 @@ claim a completed run from the runtime's terminal status alone.
 3. Complete any remaining non-#3390 source/evidence corrections, then freeze one clean source F for
    all five flows. A later landing descendant may contain only the validator's allowed
    qualification artifacts; never broaden that allowlist to conceal source drift.
-4. Start the prepared real attempt 34 at F and follow the activity log first. Observe real failing
+4. Start the prepared real attempt 35 at F and follow the activity log first. Observe real failing
    regressions, model repair, passing verification, actual governed delivery and independent
    exact-head rubric review. Drive description application, ready intent, explicit governed merge
    and actual issue closure through Keiko. Then complete the other four issues from each actual
@@ -149,6 +170,12 @@ claim a completed run from the runtime's terminal status alone.
 7. Complete the final source-bound acceptance audit, full applicable gates, required GitHub checks
    and review settlement. Only then integrate through the protected path, verify actual `dev`,
    record genuine H1 postmerge provenance, close fulfilled issues and delete the merged branch.
+
+The separately required `keiko-issue-audit` is an operator-run external process, as fixed by
+issue #3390 comment 5545472383. Its tool/instructions or completed exact-source output have been
+requested from the operator and are not available at this checkpoint. The in-repository validator
+may bind an opaque external result; it must not execute, reproduce, substitute for, or invent that
+audit. The remaining independent implementation and live-flow work can proceed meanwhile.
 
 All 324 review conversations were resolved at the September 7 `7ae8282b` observation, including
 the two SQLite/lineage logging findings. New comments and checks after that audit
