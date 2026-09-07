@@ -137,7 +137,9 @@ describe("UpdateCandidateAuthority", () => {
       ),
     ).toEqual({ ok: false, reason: "unknown" });
     expect(authority.issue({ ...reviewed, oneClickEligible: false }, mode())).toBeUndefined();
-    expect(authority.consume(request(claims[0]!), "0.3.17", mode(), reviewed)).toMatchObject({
+    expect(
+      authority.consume(request(requiredClaim(claims[0])), "0.3.17", mode(), reviewed),
+    ).toMatchObject({
       ok: true,
     });
   });
@@ -148,12 +150,14 @@ describe("UpdateCandidateAuthority", () => {
     const issued = Array.from({ length: 33 }, () =>
       requiredClaim(issuedAuthority.issue(reviewed, mode())),
     );
-    expect(issuedAuthority.consume(request(issued[0]!), "0.3.17", mode(), reviewed)).toEqual({
+    expect(
+      issuedAuthority.consume(request(requiredClaim(issued[0])), "0.3.17", mode(), reviewed),
+    ).toEqual({
       ok: false,
       reason: "unknown",
     });
     expect(
-      issuedAuthority.consume(request(issued.at(-1)!), "0.3.17", mode(), reviewed),
+      issuedAuthority.consume(request(requiredClaim(issued.at(-1))), "0.3.17", mode(), reviewed),
     ).toMatchObject({ ok: true });
 
     const consumedAuthority = createUpdateCandidateAuthority({ now: () => NOW, capacity: 32 });
@@ -164,12 +168,19 @@ describe("UpdateCandidateAuthority", () => {
       });
       return claim;
     });
-    expect(consumedAuthority.consume(request(consumed[0]!), "0.3.17", mode(), reviewed)).toEqual({
+    expect(
+      consumedAuthority.consume(request(requiredClaim(consumed[0])), "0.3.17", mode(), reviewed),
+    ).toEqual({
       ok: false,
       reason: "unknown",
     });
     expect(
-      consumedAuthority.consume(request(consumed.at(-1)!), "0.3.17", mode(), reviewed),
+      consumedAuthority.consume(
+        request(requiredClaim(consumed.at(-1))),
+        "0.3.17",
+        mode(),
+        reviewed,
+      ),
     ).toEqual({ ok: false, reason: "replayed" });
   });
 

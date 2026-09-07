@@ -118,7 +118,7 @@ export function createPortableHandoffNativeCopyVerifier(
     if (hostPlatform === "win32") {
       const matches =
         options.windowsIdentityMatches ??
-        ((currentPath: string, copiedPath: string) =>
+        ((currentPath: string, copiedPath: string): Promise<boolean> =>
           windowsPublisherIdentityMatchesAsync(currentPath, copiedPath));
       if (!(await matches(input.currentPath, input.copiedPath))) {
         fail("portable handoff native Authenticode identity changed");

@@ -56,6 +56,13 @@ export { PortableUpdateActivationError } from "./update-portable-activation-file
 
 const activePortableStateDirs = new Set<string>();
 
+interface PortableHandoffDependencies {
+  readonly coordinator: PortableHandoffCoordinatorPort;
+  readonly currentProcess: () => PortableHandoffProcessIdentity;
+  readonly currentVersion: string;
+  readonly localState: UpdateLocalStateManager;
+}
+
 function assertAbort(signal: AbortSignal | undefined): void {
   if (signal?.aborted === true) {
     throw new PortableUpdateActivationError("cancelled", "portable activation was cancelled");
@@ -95,14 +102,10 @@ function discardUncommittedHandoff(
   discardPortableHandoffPreparation(stateDir, activationId);
 }
 
-async function beginPortableHandoff(
+function portableHandoffDependencies(
   options: PortableUpdateActivatorOptions,
-  input: PortableUpdateActivateInput,
-): Promise<PortableUpdateHandoffAcceptance> {
-  const coordinator = options.handoffCoordinator;
-  const currentVersion = options.currentVersion;
-  const currentProcess = options.currentProcess;
-  const localState = options.localState;
+): PortableHandoffDependencies {
+  const { handoffCoordinator: coordinator, currentVersion, currentProcess, localState } = options;
   if (
     coordinator === undefined ||
     currentVersion === undefined ||
@@ -114,28 +117,45 @@ async function beginPortableHandoff(
       "portable handoff capability is unavailable",
     );
   }
+  return { coordinator, currentVersion, currentProcess, localState };
+}
+
+function prepareHandoffPlan(
+  options: PortableUpdateActivatorOptions,
+  input: PortableUpdateActivateInput,
+  stateDir: string,
+  dependencies: PortableHandoffDependencies,
+): Promise<unknown> {
+  return preparePortableHandoffPlan(
+    {
+      env: options.env,
+      stateDir,
+      currentVersion: dependencies.currentVersion,
+      currentProcess: dependencies.currentProcess,
+      signal: input.signal,
+      ...(options.now === undefined ? {} : { now: options.now }),
+      ...(options.newLaunchId === undefined ? {} : { newLaunchId: options.newLaunchId }),
+      ...(options.restoreLaunchId === undefined
+        ? {}
+        : { restoreLaunchId: options.restoreLaunchId }),
+      ...(options.homedir === undefined ? {} : { home: options.homedir }),
+    },
+    input,
+    dependencies.localState.readRuntimeState().revision + 1,
+  );
+}
+
+async function beginPortableHandoff(
+  options: PortableUpdateActivatorOptions,
+  input: PortableUpdateActivateInput,
+): Promise<PortableUpdateHandoffAcceptance> {
+  const dependencies = portableHandoffDependencies(options);
   assertAbort(input.signal);
   const stateDir = portableStateDir(options, input);
   const activationId = activationIdFor(input);
   try {
-    await preparePortableHandoffPlan(
-      {
-        env: options.env,
-        stateDir,
-        currentVersion,
-        currentProcess,
-        signal: input.signal,
-        ...(options.now === undefined ? {} : { now: options.now }),
-        ...(options.newLaunchId === undefined ? {} : { newLaunchId: options.newLaunchId }),
-        ...(options.restoreLaunchId === undefined
-          ? {}
-          : { restoreLaunchId: options.restoreLaunchId }),
-        ...(options.homedir === undefined ? {} : { home: options.homedir }),
-      },
-      input,
-      localState.readRuntimeState().revision + 1,
-    );
-    const accepted = await coordinator.begin({
+    await prepareHandoffPlan(options, input, stateDir, dependencies);
+    const accepted = await dependencies.coordinator.begin({
       sessionId: input.sessionId,
       activationId,
       ...(input.signal === undefined ? {} : { signal: input.signal }),

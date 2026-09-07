@@ -1024,6 +1024,20 @@ metadata only and does not grant approval to this prepared repair record.
 | User action / remediation      | A one-time manual evaluation-to-production installation may be required. Keep `manual-review-required` guidance until the verified transition and production canary establish a supported path.   |
 | Approval / catalog disposition | Pending release version and release-owner evidence. Carry this prepared block into the final epic PR and the release-cut handoff; no approval or catalog insertion is claimed.                    |
 
+## Remaining lint repair checkpoint (2026-09-07)
+
+The remaining twelve lint findings were repaired in six server files. Production changes only
+factor handoff capability validation and plan preparation without changing durable operation order,
+and add an explicit native-verifier callback return type. Test changes replace unsafe assertions
+with existing guards and type the mocks. Two remediation restart fixtures now use a valid stale
+ISO timestamp instead of the invalid literal `stale`; the production state validator and restart
+assertions remain unchanged.
+
+The lead independently reviewed all six diffs and replayed candidate authority, native verification,
+remediation, session, and activation suites with official Node 24.18.0: **92/92 tests passed in
+12.97 seconds** (`/tmp/keiko-3405-six-lint-fixes-root-replay.log`). The owner's scoped lint passed
+with zero findings. This checkpoint does not replace the pending full lint, verification, or audit.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification

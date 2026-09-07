@@ -478,13 +478,14 @@ describe("UpdateSessionManager", () => {
       return new Promise<never>((_resolve, reject) => {
         input.signal?.addEventListener(
           "abort",
-          () =>
+          () => {
             reject(
               new PortableUpdateActivationError(
                 "cancelled",
                 "portable handoff preparation was cancelled",
               ),
-            ),
+            );
+          },
           { once: true },
         );
       });
@@ -588,7 +589,7 @@ describe("UpdateSessionManager", () => {
     const lock = new MemoryUpdateSessionLock();
     const localState = {
       ...delegate,
-      writeRuntimeState: (state: Parameters<typeof delegate.writeRuntimeState>[0]) => {
+      writeRuntimeState: (state: Parameters<typeof delegate.writeRuntimeState>[0]): void => {
         if (failWrites) throw new Error("runtime state unavailable");
         return delegate.writeRuntimeState(state);
       },
