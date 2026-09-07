@@ -71,6 +71,10 @@
       "types": "./dist/fs-atomic-rename.d.ts",
       "import": "./dist/fs-atomic-rename.js"
     },
+    "./portable-tree-attestation": {
+      "types": "./dist/portable-tree-attestation.d.ts",
+      "import": "./dist/portable-tree-attestation.js"
+    },
     "./macos-keychain": {
       "types": "./dist/macos-keychain.d.ts",
       "import": "./dist/macos-keychain.js"

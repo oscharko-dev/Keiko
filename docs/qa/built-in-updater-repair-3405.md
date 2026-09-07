@@ -62,9 +62,10 @@ The macOS atomic promotion/restoration prerequisite independently passes both
 command on the local Apple silicon host. These compiler/analyzer/filesystem fixtures exercise
 the atomic exchange boundaries and restore shapes; local x64 execution is not an Intel release
 qualification run. Independent security review approves the final atomic prerequisite with no
-confirmed findings. Normal-startup recovery and real installed two-process proof remain outstanding.
+confirmed findings. That prerequisite did not settle normal-startup recovery or real installed
+two-process proof; the subsequent recovery review and repairs are recorded below.
 
-The Mac normal-startup slice is now source-frozen for independent security review. Its early CLI
+The Mac normal-startup slice was frozen in `a4c2dbd9f` for independent security review. Its early CLI
 gate holds the existing managed mutation lock, binds the plan to that locked root, and rejects live
 owners or published children before claim or mutation. Session-lock transfer and child publication
 are durable and identity-bound. Restored-start completion runs before BFF listen; terminal-last
@@ -84,8 +85,8 @@ native quality, and ASan/UBSan pass. The earlier parallel CLI timeout remains a 
 its sequential replay is the passing result. Apple's ASan rejected an initial leak-detection option;
 the supported sanitizer invocation passes with leak detection disabled, without claiming leak proof.
 The lead regenerated the canonical operation catalog to 247 entries and independently passed all
-15 drift tests (4.49 seconds). Package rebuild, independent review and final integrated-head proof
-remain required; production KHA1 is still disabled.
+15 drift tests (4.49 seconds). Those owner results required the package rebuild and independent
+review recorded next; final integrated-head proof remains required and KHA1 is still disabled.
 
 On integrated commit `78f52c774`, clean `npm ci` completes with zero reported vulnerabilities and
 `npm run build:packages` passes using Node 24.18.0/npm 11.16.0. Independent replay passes all
@@ -93,13 +94,12 @@ On integrated commit `78f52c774`, clean `npm ci` completes with zero reported vu
 handoff-recovery, session-lock-recovery and activation suites (18.19 seconds). The sequential CLI
 lifecycle/portable replay passes all 142 tests (34.47 seconds); macOS arm64 native quality also
 passes its compiler, analyzer and boundary checks.
-The completed independent review identifies two medium recovery gaps despite that green
+The first independent review identified two medium recovery gaps despite that green
 replay: a lone durable prepared receipt before native acceptance cannot settle on retry, and
-timeout teardown can replace the child PID before confirmed native exit. These require scoped
-repairs and additional crash/teardown regressions before the Mac slice is accepted. A dedicated
-owner is repairing those gaps and distinguishing the unreleased KUR1 recovery control from the
-unchanged binary supervisor KRC1 protocol. The review reports no critical, high or low findings.
-The resulting four-file repair is frozen for independent re-review. It attests the old tree and
+timeout teardown can replace the child PID before confirmed native exit. A dedicated owner repaired
+those gaps with additional crash/teardown regressions and distinguished the unreleased KUR1 recovery
+control from the unchanged binary supervisor KRC1 protocol. That review reported no critical, high
+or low findings. The resulting four-file repair was frozen for independent re-review. It attests the old tree and
 registration before settling the prepared-only prefix, waits up to five seconds for observed native
 exit after teardown, retains published child ownership on failure, and handles asynchronous control
 pipe errors. Owner verification passes all 17 focused tests, scoped lint/format and arm64 native
@@ -111,7 +111,8 @@ gap: prepared-only recovery must reject an absent child record. The final narrow
 absent child only with zero receipts, preserving the prepared-only/dead-published-child positive
 case. Independent security re-review now approves all four files with zero findings. Owner and lead
 both pass all 18 focused startup tests; the lead replay takes 12.70 seconds and confirms the frozen
-hashes. The independent arm64 native replay also passes. Later integrated delivery verification and
+hashes. The independent arm64 native replay also passes. The reviewed repairs are preserved in
+`8dacddb02`; later integrated delivery verification and
 native N−1/N proof remain required.
 
 The independent Windows architecture review freezes the remaining consumer/cutover contract in
@@ -133,6 +134,26 @@ security-package subpath, synchronous/asynchronous drivers over one bounded stat
 the existing server module retained as a compatibility facade. Parsers stay at existing boundaries;
 no product-facing or package-root API, duplicate hasher or trust switch is introduced. A separate
 owner implements this extraction before B1's final CLI attestation hookup and independent review.
+
+The shared KHT1 extraction is now frozen and independently security-approved with zero findings.
+One IO-request state machine preserves grammar, budgets, identity/link/mutation checks and cleanup;
+the server driver retains asynchronous filesystem operations. Security typecheck, scoped lint/format
+and built subpath import pass. Owner and lead each pass all nine shared tests; the lead additionally
+passes five selected existing server tree regressions with one explicitly filtered plan-builder
+case (12.04 seconds). Full server typecheck remains pending the concurrent B2 plan/builder fields;
+its observed failure is not counted as green. A separate CLI owner now connects the synchronous
+attestor and removes the B1 regression that read the entire Node executable for presence/type-only
+checks. No CLI attestation completion is claimed yet.
+
+The shared KHP fixtures are frozen under `native/portable-launcher/fixtures/`. Independent decoding
+confirms Mac KHP2/32 (1,282 bytes; SHA-256
+`40623f9023666e9101b7fbedd0038da372cd6dd8eb5ee224c4f3671413cd1e3f`) and Windows KHP3/37
+(1,540 bytes; SHA-256 `957ad255b762f2f6d4aaaffad29b64838b9005883228d97da13ebaf9e309fdd7`).
+The lead plan-suite replay passes 22 tests with one explicit Windows-host encoder-equality skip
+(13.30 seconds). Mac prior/new encoder equality and Windows field-order assertions run locally;
+the Windows equality must run in its genuine host lane. A formerly silent early return was changed
+to an explicit skip, and a required Windows CI step is being added. Native code consumes the
+TypeScript-owned fixtures read-only; local fixture proof is not native replacement qualification.
 
 The frozen Windows generation producer passes independent security re-review with zero findings.
 The prior medium stale-inventory finding and low fresh-verification finding are closed. Production staging uses the

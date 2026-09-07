@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import { constants, type BigIntStats, type Dirent, type Stats } from "node:fs";
-import { lstat, open, opendir, type FileHandle } from "node:fs/promises";
-import { join } from "node:path";
+import { constants, type Stats } from "node:fs";
+import { lstat, open, type FileHandle } from "node:fs/promises";
+import {
+  hashPortableTreeKht1,
+  PortableTreeAttestationError,
+} from "@oscharko-dev/keiko-security/portable-tree-attestation";
 
-const MAX_TREE_ENTRIES = 60_000;
-const MAX_TREE_BYTES = 2 * 1024 * 1024 * 1024;
-const MAX_TREE_PATH_BYTES = 16 * 1024 * 1024;
 const MAX_FILE_BYTES = 256 * 1024 * 1024;
 const BUFFER_BYTES = 64 * 1024;
 
@@ -133,153 +133,15 @@ export async function digestPortableHandoffFile(
   }
 }
 
-interface TreeBudget {
-  entries: number;
-  pathBytes: number;
-}
-
-interface TreeEntrySnapshot {
-  readonly name: string;
-  readonly stat: BigIntStats;
-}
-
-interface TreeSnapshot {
-  readonly directories: readonly TreeEntrySnapshot[];
-  readonly files: readonly TreeEntrySnapshot[];
-}
-
-function recordTreeEntry(budget: TreeBudget, name: string): void {
-  budget.entries += 1;
-  budget.pathBytes += Buffer.byteLength(name, "utf8");
-  if (budget.entries > MAX_TREE_ENTRIES) fail("portable handoff tree has too many entries");
-  if (budget.pathBytes > MAX_TREE_PATH_BYTES) fail("portable handoff tree paths are too large");
-}
-
-function treeEntryKind(entry: Dirent, stat: BigIntStats): "directory" | "file" {
-  if (entry.isDirectory() && stat.isDirectory() && !stat.isSymbolicLink()) return "directory";
-  if (entry.isFile() && stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1n) return "file";
-  fail("portable handoff tree contains an unsupported entry");
-}
-
-async function snapshotTree(
-  root: string,
-  operation: PortableHandoffOperation,
-): Promise<TreeSnapshot> {
-  assertPortableHandoffOperation(operation);
-  const rootStat = await lstat(root, { bigint: true });
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
-    fail("portable handoff tree root is unsafe");
-  }
-  const files: TreeEntrySnapshot[] = [];
-  const directorySnapshots: TreeEntrySnapshot[] = [{ name: "", stat: rootStat }];
-  const directories = [""];
-  const budget: TreeBudget = { entries: 0, pathBytes: 0 };
-  while (directories.length > 0) {
-    assertPortableHandoffOperation(operation);
-    const relativeDirectory = directories.pop();
-    if (relativeDirectory === undefined) break;
-    const directory = await opendir(
-      relativeDirectory === "" ? root : join(root, ...relativeDirectory.split("/")),
-    );
-    for await (const entry of directory) {
-      assertPortableHandoffOperation(operation);
-      const name = relativeDirectory === "" ? entry.name : `${relativeDirectory}/${entry.name}`;
-      recordTreeEntry(budget, name);
-      const path = join(root, ...name.split("/"));
-      const stat = await lstat(path, { bigint: true });
-      if (treeEntryKind(entry, stat) === "directory") {
-        directories.push(name);
-        directorySnapshots.push({ name, stat });
-      } else {
-        files.push({ name, stat });
-      }
-      if (budget.entries % 256 === 0) await operation.yieldControl();
-    }
-  }
-  return { directories: directorySnapshots, files };
-}
-
-function comparePortablePaths(left: string, right: string): number {
-  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
-}
-
-function sortTreeEntries(entries: readonly TreeEntrySnapshot[]): readonly TreeEntrySnapshot[] {
-  return [...entries].sort((left, right) => comparePortablePaths(left.name, right.name));
-}
-
-async function portableTreeSnapshot(
-  root: string,
-  operation: PortableHandoffOperation,
-): Promise<TreeSnapshot> {
-  const snapshot = await snapshotTree(root, operation);
-  return {
-    directories: sortTreeEntries(snapshot.directories),
-    files: sortTreeEntries(snapshot.files),
-  };
-}
-
-function sameTreeEntry(left: TreeEntrySnapshot, right: TreeEntrySnapshot): boolean {
-  return (
-    left.name === right.name &&
-    left.stat.dev === right.stat.dev &&
-    left.stat.ino === right.stat.ino &&
-    left.stat.mode === right.stat.mode &&
-    left.stat.nlink === right.stat.nlink &&
-    left.stat.size === right.stat.size &&
-    left.stat.mtimeNs === right.stat.mtimeNs &&
-    left.stat.ctimeNs === right.stat.ctimeNs &&
-    left.stat.birthtimeNs === right.stat.birthtimeNs
-  );
-}
-
-function sameTreeEntries(
-  left: readonly TreeEntrySnapshot[],
-  right: readonly TreeEntrySnapshot[],
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every((entry, index) => {
-      const current = right[index];
-      return current !== undefined && sameTreeEntry(entry, current);
-    })
-  );
-}
-
-function assertSameTreeSnapshot(before: TreeSnapshot, after: TreeSnapshot): void {
-  if (
-    !sameTreeEntries(before.directories, after.directories) ||
-    !sameTreeEntries(before.files, after.files)
-  ) {
-    fail("portable handoff tree changed during attestation");
-  }
-}
-
-function uint32(value: number): Buffer {
-  const bytes = Buffer.allocUnsafe(4);
-  bytes.writeUInt32LE(value);
-  return bytes;
-}
-
 export async function hashPortableHandoffTree(
   root: string,
   options: PortableHandoffOperationOptions,
 ): Promise<string> {
   const operation = portableHandoffOperationFrom(options);
-  const snapshot = await portableTreeSnapshot(root, operation);
-  const hash = createHash("sha256");
-  hash.update(PORTABLE_HANDOFF_TREE_HASH_SCHEMA, "ascii");
-  hash.update(uint32(snapshot.files.length));
-  let totalBytes = 0n;
-  for (const file of snapshot.files) {
-    assertPortableHandoffOperation(operation);
-    const path = join(root, ...file.name.split("/"));
-    totalBytes += (await lstat(path, { bigint: true })).size;
-    if (totalBytes > BigInt(MAX_TREE_BYTES)) fail("portable handoff tree is too large");
-    const nameBytes = Buffer.from(file.name, "utf8");
-    hash.update(uint32(nameBytes.byteLength));
-    hash.update(nameBytes);
-    hash.update(await digestPortableHandoffFile(path, operation));
+  try {
+    return await hashPortableTreeKht1(root, operation);
+  } catch (error) {
+    if (error instanceof PortableTreeAttestationError) fail(error.message);
+    throw error;
   }
-  assertSameTreeSnapshot(snapshot, await portableTreeSnapshot(root, operation));
-  return hash.digest("hex");
 }
