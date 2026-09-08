@@ -1360,18 +1360,19 @@ describe("private OpenCode run control", () => {
       });
       const event = runtimeEvents.find((candidate) => candidate.kind === "permission-requested");
       const permission = event?.permissionRequest;
-      if (typeof permission !== "object" || permission === null || Array.isArray(permission)) {
+      if (permission === undefined || Array.isArray(permission)) {
         throw new Error("expected public permission request");
       }
+      expect(permission).toMatchObject({
+        requestId: expect.stringMatching(/^permission-[0-9]+$/u),
+        scopeLabel: "workspace-scope",
+      });
       const { requestId } = permission;
-      expect(requestId).toMatch(/^permission-[0-9]+$/u);
       expect(requestId).not.toBe(upstreamPermission.id);
-      expect(permission).toMatchObject({ scopeLabel: "workspace-scope" });
       await expect(
         fixture.runtime.runPort.replyPermission(FIXTURE_RUN_ID, upstreamPermission.id, "reject"),
       ).resolves.toBe(false);
       expect(permissionRequests).toEqual([]);
-      if (typeof requestId !== "string") throw new Error("expected permission alias");
       await expect(
         fixture.runtime.runPort.replyPermission(FIXTURE_RUN_ID, requestId, "reject"),
       ).resolves.toBe(true);

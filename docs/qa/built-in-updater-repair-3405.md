@@ -1354,10 +1354,31 @@ part of final package/architecture verification.
 
 Independent security review confirmed one Windows availability defect: production PowerShell 5.1
 runtime C# compilation lacks a standard-user writable compiler temporary directory after environment
-restriction. A contract-preserving repair is being selected; ambient temporary authority must not
-be restored. The independent accessibility/design-system audit found zero findings and verified
+restriction. The selected repair precompiles the unchanged verifier into a private, deterministic .NET
+Framework assembly and loads validated bytes in memory; ambient temporary authority must not be
+restored. Generator/toolchain pinning and real restricted-token PowerShell 5.1 proof remain pending. The independent accessibility/design-system audit found zero findings and verified
 that all eight UI and four harness hashes still match the existing browser/axe/fidelity evidence.
 That source-bound review does not replace the final HEAD execution receipt.
+
+### Remaining performance and diagnostic findings
+
+The final performance audit found that each successful active Update window poll (every 2.5 seconds)
+also prepares remediation, which reaches a synchronous recursive state scan without entry, depth,
+or time bounds. This is a confirmed execution-path finding, not a measured latency claim. The repair
+must avoid repeating unchanged remediation preparation and preserve safe handling of incomplete
+scans for compatibility, snapshots, and repair. Existing UI evidence will need refreshing if its
+covered source changes.
+
+Diagnostic run `34201205684` at `e4660b5d9a0de7cda92ef7202d3a8a959b168be9` reports successful
+Windows cross-platform job `101980236635` and Node 26 job `101980236677`. The completed Node 26 job log records
+1804 passing files, seven skipped files, 36110 passing tests and 24 skipped tests in 1020.54 seconds.
+All 20 Windows Authenticode fixture tests passed on Linux, including the repaired source-parity case. Core quality failed on one redundant typed null
+condition in the runtime-composition test. The test-only repair retains the undefined/array boundary
+and asserts the generated alias and scope together as an object before use. Scoped ESLint passed
+with zero warnings and Prettier reported no changes; its focused runtime replay is pending. Frozen
+test SHA-256: `e5fae99c156385332fbb8b3b92892d551932282849fed5fa421c51c67d8214fa`. The diagnostic
+branch's protected-branch rejection is expected and is not a target-branch CI receipt. Coverage and
+Sonar from this manual run still select `dev`, as documented above.
 
 ## Final verification checklist
 
