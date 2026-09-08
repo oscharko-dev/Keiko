@@ -47,6 +47,53 @@ describe("portable handoff native copy verification", () => {
     expect(run.mock.calls.filter((call) => call[1][0] === "--verify")).toHaveLength(2);
   });
 
+  it.each([
+    [
+      "codesign cannot identify the current executable",
+      [{ status: 1, stderr: "codesign failed", stdout: "" }],
+      "portable handoff native Developer ID identity is unavailable",
+      1,
+    ],
+    [
+      "codesign returns no TeamIdentifier for the current executable",
+      [{ status: 0, stderr: "Authority=Developer ID Application", stdout: "" }],
+      "portable handoff native Developer ID identity is unavailable",
+      1,
+    ],
+    [
+      "the copied executable has a different team",
+      [
+        { status: 0, stderr: "TeamIdentifier=AB12CD34EF", stdout: "" },
+        { status: 0, stderr: "TeamIdentifier=ZX98CV76BN", stdout: "" },
+      ],
+      "portable handoff native Developer ID identity changed",
+      2,
+    ],
+    [
+      "codesign rejects the current executable during strict verification",
+      [
+        { status: 0, stderr: "TeamIdentifier=AB12CD34EF", stdout: "" },
+        { status: 0, stderr: "TeamIdentifier=AB12CD34EF", stdout: "" },
+        { status: 1, stderr: "verification failed", stdout: "" },
+      ],
+      "portable handoff native Developer ID verification failed",
+      3,
+    ],
+  ])("fails closed when %s", async (_label, results, message, calls) => {
+    let index = 0;
+    const run = vi.fn<NonNullable<PortableHandoffNativeCopyVerifierOptions["macosRun"]>>(() =>
+      Promise.resolve(results[index++] ?? { status: 1, stderr: "unexpected command", stdout: "" }),
+    );
+    const verify = createPortableHandoffNativeCopyVerifier({
+      hostPlatform: "darwin",
+      macosExpectedTeamIdentifier: "AB12CD34EF",
+      macosRun: run,
+    });
+
+    await expect(verify(input)).rejects.toThrow(message);
+    expect(run).toHaveBeenCalledTimes(calls);
+  });
+
   it("fails closed on a copied signer mismatch or unsupported host", async () => {
     const windows = createPortableHandoffNativeCopyVerifier({
       hostPlatform: "win32",

@@ -107,6 +107,54 @@ function cancellablePreparedState(
   });
 }
 
+function seedTerminalCompletedState(
+  stateDir: string,
+  localState: UpdateLocalStateManager,
+): ReturnType<UpdateLocalStateManager["readRuntimeState"]> {
+  const prepared = cancellablePreparedState(localState);
+  const activeSession = prepared.activeSession;
+  const activationWal = prepared.activationWal;
+  if (activeSession === undefined || activationWal === undefined) {
+    throw new TypeError("expected prepared handoff state");
+  }
+  const terminalSession = {
+    ...activeSession,
+    phase: "succeeded" as const,
+    lifecycle: {
+      ...activeSession.lifecycle,
+      phase: "succeeded" as const,
+      cancellationCutoff: "handoff-committed" as const,
+    },
+    cancelable: false,
+    retryable: false,
+    restartRequired: false,
+  };
+  const complete = {
+    ...prepared,
+    activeSession: undefined,
+    activeCandidate: undefined,
+    lastSession: terminalSession,
+    activationWal: {
+      ...activationWal,
+      checkpoint: "complete" as const,
+      receiptSequence: 14,
+      receiptSha256: "4".repeat(64),
+      coordinatorId: activationWal.coordinatorSha256,
+    },
+    recovery: {
+      status: "reconciling" as const,
+      sessionId: terminalSession.sessionId,
+      updatedAt: "2026-06-30T12:00:00.000Z",
+    },
+  };
+  writeFileSync(
+    join(stateDir, "updates", "runtime-state.json"),
+    `${JSON.stringify(complete, null, 2)}\n`,
+    "utf8",
+  );
+  return localState.readRuntimeState();
+}
+
 function seedSensitiveState(stateDir: string): void {
   touch(join(stateDir, "keiko.config.json"), '{"path":"/Users/alice/private-bank-repo"}');
   touch(join(stateDir, "credentials", "provider-credentials.vault"), "sk-secret-from-vault");
@@ -820,6 +868,74 @@ describe("update runtime state and audit events", () => {
       UpdateRuntimeStateError,
     );
   });
+
+  it("clears a receipt-bound complete WAL for an unchanged terminal session", () => {
+    const stateDir = makeStateDir();
+    const localState = manager(stateDir, []);
+    const complete = seedTerminalCompletedState(stateDir, localState);
+
+    const settled = localState.writeRuntimeState({
+      ...complete,
+      activationWal: undefined,
+      recovery: {
+        status: "settled",
+        sessionId: complete.lastSession?.sessionId,
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+    });
+
+    expect(settled.activationWal).toBeUndefined();
+    expect(settled.activeSession).toBeUndefined();
+    expect(settled.activeCandidate).toBeUndefined();
+    expect(settled.lastSession).toEqual(complete.lastSession);
+    expect(settled.recovery).toEqual({
+      status: "settled",
+      sessionId: complete.lastSession?.sessionId,
+      updatedAt: "2026-06-30T12:00:00.000Z",
+    });
+  });
+
+  it.each(["cleanup-pending", "missing-receipt", "stale-recovery", "altered-last"] as const)(
+    "refuses terminal handoff settlement with %s authority",
+    (mismatch) => {
+      const stateDir = makeStateDir();
+      const localState = manager(stateDir, []);
+      let complete = seedTerminalCompletedState(stateDir, localState);
+      if (mismatch === "cleanup-pending" || mismatch === "missing-receipt") {
+        const activationWal = complete.activationWal;
+        if (activationWal === undefined) throw new TypeError("expected complete activation WAL");
+        complete = {
+          ...complete,
+          activationWal:
+            mismatch === "cleanup-pending"
+              ? { ...activationWal, checkpoint: "cleanup-pending" }
+              : { ...activationWal, receiptSequence: 0, receiptSha256: undefined },
+        };
+        writeFileSync(
+          join(stateDir, "updates", "runtime-state.json"),
+          `${JSON.stringify(complete, null, 2)}\n`,
+          "utf8",
+        );
+        complete = localState.readRuntimeState();
+      }
+      const lastSession = complete.lastSession;
+      if (lastSession === undefined) throw new TypeError("expected terminal session");
+      const next = {
+        ...complete,
+        activationWal: undefined,
+        recovery: {
+          status: "settled" as const,
+          sessionId: mismatch === "stale-recovery" ? "other-session" : lastSession.sessionId,
+          updatedAt: "2026-06-30T12:00:00.000Z",
+        },
+        ...(mismatch === "altered-last"
+          ? { lastSession: { ...lastSession, message: "altered terminal session" } }
+          : {}),
+      };
+
+      expect(() => localState.writeRuntimeState(next)).toThrow(UpdateRuntimeStateError);
+    },
+  );
 
   it.each(["dropped", "swapped", "modified"] as const)(
     "refuses remediation settlement with a %s accepted candidate",

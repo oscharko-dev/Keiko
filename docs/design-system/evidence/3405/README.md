@@ -1,14 +1,14 @@
 # Updater reliability evidence — #3405 / #3403
 
-The current repair evidence was regenerated on 2026-09-07. The Chromium browser suite passed
-**8/8 in 1.2 minutes** and refreshed the tracked updater artifacts. It proves the startup notice
+The current repair evidence was regenerated on 2026-09-08. The Chromium browser suite passed
+**8/8 in 58.6 seconds** and refreshed the tracked updater artifacts. It proves the startup notice
 yields only while a visible, foreground **ready** Update window owns the same critical context and
 actions; the notice returns when that window is backgrounded or minimized, and remains available
 while the foreground updater is loading or contains only a load error.
 
-The current suite includes the real-BFF outage journey. A preceding combined six-test run was
-interrupted after its first three tests while the fourth test had completed its browser operations
-but did not tear down; it remains excluded as a complete-suite result.
+The current suite includes the real-BFF outage journey. Both the main server and the outage
+harness use isolated copies of the fake-key gateway fixture, preserving the tracked source
+through normal CLI credential migration and subsequent restarts.
 
 ## Reproduce
 
@@ -27,7 +27,8 @@ npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage
 
 ## Evidence and limits
 
-- [Manifest](manifest.json): 14 screenshots, the proof documents, and eight current UI source hashes.
+- [Manifest](manifest.json): 14 screenshots, the proof documents, eight current UI source hashes,
+  and four harness provenance hashes.
 - [Fidelity proof](update-experience-fidelity-proof.json): seven canonical modes, responsive/manual,
   progress, critical notice, portable eligibility, reconnect and remediation captures.
 - [Accessibility proof](a11y-proof.json): axe-core 4.12.1 reported no violations in its 12 recorded

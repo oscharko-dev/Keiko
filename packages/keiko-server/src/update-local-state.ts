@@ -30,6 +30,7 @@ import type {
   UpdateRuntimeAuditEvent,
   UpdateRuntimeEventType,
   UpdateRuntimeState,
+  UpdateSession,
   UpdateStateStore,
   UpdateStoreHealth,
 } from "@oscharko-dev/keiko-contracts";
@@ -1188,6 +1189,55 @@ function validCompletedHandoffSettlement(
   );
 }
 
+function completedTerminalSession(currentState: UpdateRuntimeState): UpdateSession | undefined {
+  const terminal = currentState.lastSession;
+  if (
+    currentState.activeSession !== undefined ||
+    currentState.activeCandidate !== undefined ||
+    terminal?.phase !== "succeeded" ||
+    terminal.lifecycle.phase !== "succeeded" ||
+    terminal.cancelable ||
+    terminal.retryable ||
+    terminal.restartRequired
+  ) {
+    return undefined;
+  }
+  return terminal;
+}
+
+function exactTerminalCompletedProjection(
+  currentState: UpdateRuntimeState,
+  nextState: UpdateRuntimeState,
+  terminal: UpdateSession,
+): boolean {
+  return (
+    currentState.recovery.status === "reconciling" &&
+    currentState.recovery.sessionId === terminal.sessionId &&
+    nextState.activeSession === undefined &&
+    nextState.activeCandidate === undefined &&
+    isDeepStrictEqual(nextState.lastSession, terminal) &&
+    nextState.recovery.status === "settled" &&
+    nextState.recovery.sessionId === terminal.sessionId &&
+    isDeepStrictEqual(nextState, {
+      ...currentState,
+      activationWal: undefined,
+      recovery: nextState.recovery,
+    })
+  );
+}
+
+function validTerminalCompletedHandoffSettlement(
+  currentState: UpdateRuntimeState,
+  nextState: UpdateRuntimeState,
+): boolean {
+  const wal = currentState.activationWal;
+  if (wal?.checkpoint !== "complete" || !validCompletedHandoffWal(wal)) return false;
+  const terminal = completedTerminalSession(currentState);
+  return (
+    terminal !== undefined && exactTerminalCompletedProjection(currentState, nextState, terminal)
+  );
+}
+
 function completedHandoffSucceeded(
   currentState: UpdateRuntimeState,
   nextState: UpdateRuntimeState,
@@ -1269,7 +1319,8 @@ function validActivationWalAdvance(
     return (
       validPreparedAbortSettlement(currentState, nextState) ||
       validRestoredHandoffSettlement(currentState, nextState) ||
-      validCompletedHandoffSettlement(currentState, nextState)
+      validCompletedHandoffSettlement(currentState, nextState) ||
+      validTerminalCompletedHandoffSettlement(currentState, nextState)
     );
   }
   if (next.activationId !== current.activationId) {

@@ -5,6 +5,38 @@ production one-click claim. Parent epic: [#3403](https://github.com/oscharko-dev
 The [reviewed baseline audit](built-in-updater-audit-3404.md) defines the repair contract and deletion
 register; the [issue](https://github.com/oscharko-dev/Keiko/issues/3405) owns acceptance criteria.
 
+## Current checkpoint (2026-09-08)
+
+Later dated entries supersede historical failures below. The repaired restricted-token
+Windows helper now passes the actual four-probe loader job and the C# analyzer job
+in run [34216315755](https://github.com/oscharko-dev/Keiko/actions/runs/34216315755)
+on `4028c1f83`. The full Windows native gate also passed on that exact head. The fix changes the
+helper's derived-token default object DACL to the current user plus SYSTEM; it does
+not change production trust or environment. Independent static review found no issues.
+
+The canonical scripts run passed 4,438 tests (two skips). The refreshed UI coverage
+run passed 7,519 tests (one skip). Package coverage passed 36,137 tests with one stale
+generated-catalog failure; regeneration and all 15 catalog tests then passed. The
+fresh reports meet every existing package, release, and per-file coverage floor.
+The complete working-tree new-code measurement was 83.363%, below the unchanged
+85% bar. The focused failure/recovery tests described below address that gap before
+the final canonical rerun. They exposed a terminal-session recovery write rejection.
+The narrow completed-WAL settlement repair now passes 84 focused tests and independent
+static review with zero findings. A broader current-source run passes 561 updater tests
+(two platform skips) across 38 suites. Its provisional coverage union measures 84.869%;
+the final generator-input tests then bring the provisional union to 85.387%, above
+the unchanged 85% threshold. Fresh canonical coverage still must confirm it. The full
+Update window suite now passes all 55 tests.
+
+The isolated updater browser suite passed 8/8 in 58.6 seconds with all 12
+source/harness hashes verified; accessibility/design-system review found no issues.
+The permission timing/matcher regression is fixed. Full repository/UI lint, the root
+TypeScript no-emit check, and full formatting now pass. Complete final verify,
+canonical coverage, and required CI remain outstanding. The unapproved functional-native-proof
+proposal and unavailable local Sonar image access remain explicit prerequisites;
+genuine production-signed canaries remain external. No final audit receipt, ready
+status, or merge is claimed.
+
 ## Evidence boundary
 
 The observations below were collected on the repair working tree based on
@@ -1561,3 +1593,219 @@ against the current files before copying the **17** real-run artifacts into
 `2026-09-08T09:17:58.786Z`. This refresh covers the final remediation-polling UI
 projection and isolated outage harness. It remains distinct from the final
 commit-bound UI receipt and native production qualification.
+
+### Runtime-target analyzer settlement and current verification (2026-09-08)
+
+The extracted Windows verifier now has a dedicated C# 5/.NET Framework 4.8.1
+analyzer project with latest-all analysis, warnings as errors, four explicit
+reviewed reference assemblies, no implicit framework references or reference-package
+download, and an empty locked dependency graph. The existing .NET 8 producer
+project retains its original scope and gates. Target-applicable source changes
+are limited to read-only collection interfaces, empty-array reuse, and an explicit
+`DecodeOid` null check. Static security review confirmed that the CMS, timestamp,
+imprint, chain, EKU, publisher and native-read policy remained unchanged.
+
+The dedicated Windows analyzer passed at `ff2306f503e2ea5187d08d9d8d64e65b380c7880`
+in job `102008733798`. [Bootstrap run 34210083070](https://github.com/oscharko-dev/Keiko/actions/runs/34210083070)
+produced two byte-identical assemblies. Root independently verified the canonical
+source, canonical Base64, PE signature, byte length, assembly hash, and unchanged
+compiler/distribution pins before copying the generated asset:
+
+- Canonical C#: `4bf862e48434c6b955e30493bee0f58d40ffba5dcb4b41e61aa1ef94dc46c859`.
+- Generated TypeScript: `3d082c81667b2fe35eec7c59a70354e233d6831fdf067fe8fabe60d1bef66bf2`.
+- DLL: **12,800 bytes**, `ac4c55d5381903579b1277aae5e08a4e4e07587b533c5568b4c383c6f81ead43`.
+
+These close deterministic generation and analyzer findings. They do not close
+restricted-token execution: the current fast Windows probe fails before loading
+with an out-of-range child exit mapped to helper failure 113. The next diagnostic
+retains that failure and exposes only the numeric child status through a bounded,
+closed grammar. Neither this work nor a green analyzer enables KHA1 or qualifies
+production-signed updating.
+
+Current independent root checks under official Node 24.18.0:
+
+- Root typecheck passed: `/tmp/keiko-3405-regenerated-verifier-final-typecheck.log`.
+- Seven regenerated-verifier/permission/tooling suites passed **125 tests**, with
+  one platform skip, in **23.46 seconds**; loader-probe tests passed a further
+  **7/7** in **442 ms**. Logs are
+  `/tmp/keiko-3405-regenerated-verifier-permission-tests.log` and
+  `/tmp/keiko-3405-closed-loader-probe-tests.log`.
+- Canonical UI coverage passed **432 files / 7,518 tests**, with one skip, in
+  **147.20 seconds**: 89.92% statements, 82.35% branches, 91.51% functions,
+  92.80% lines. The canonical report remains at
+  `packages/keiko-ui/coverage/lcov.info`; log
+  `/tmp/keiko-3405-final-ui-canonical-coverage.log`.
+- Fresh accessibility/design-system review passed with **zero findings**, including
+  all 14 visual captures, all 12 axe captures, and all 12 source/harness hash bindings.
+- Full lint identified an unsafe test matcher plus an archived staging copy inside
+  the source tree. Direct typed assertions replace that matcher without weakening
+  the permission check. The previously verified 562 MiB staging artifact was moved
+  intact to `/tmp/keiko-3405-verified-staging-90bbe`; it is not production source.
+  A complete lint rerun remains required.
+
+### Canonical package coverage and catalog replay (2026-09-08)
+
+The official Node.js 24.18.0 canonical package coverage run completed in 1,622.87 seconds
+with 1,807 passing files, one failing file, seven skipped files; 36,137 passing tests,
+one failing test, and 27 skipped tests. The sole failure was checked-in operation-catalog
+drift at three source references: `windowsPortableAuthenticode.ts` lines 63/71 moved to
+76/84, and `update-local-state.ts` line 1586 moved to 1605. No operation definition changed.
+`npm run generate:op-catalog` regenerated 247 entries (nine dynamic, zero naming
+violations), and `npm run check:op-catalog` passed all 15 tests. A complete direct replay
+of the same catalog suite also passed all 15 tests in 4.53 seconds. The original full
+run remains recorded as red; the replay settles its single observed failure.
+
+Canonical package coverage measured 90.84% statements, 84.55% branches, 95.60% functions,
+and 93.03% lines. `npm run check:coverage:quality` subsequently passed all four metrics
+for all 25 packages, both strict release targets, and all 71 held per-file floors
+with zero violations. Log: `/tmp/keiko-3405-fresh-package-ui-coverage-quality.log`. These fresh reports replace the earlier partial package measurements.
+Logs: `/tmp/keiko-3405-final-packages-canonical-coverage.log` and
+`/tmp/keiko-3405-final-op-catalog-replay.log`. The canonical scripts coverage run is
+separate and still running; no merged new-code verdict is claimed yet.
+
+Windows diagnostic run [34213453952](https://github.com/oscharko-dev/Keiko/actions/runs/34213453952)
+on `2b474353af182044b52de3fcdb9c43df89d2c229` showed the original-token child exiting
+zero under the same closed environment and private desktop. The restricted child still
+exited with `C0000142` after explicit user/SYSTEM process/thread DACLs, despite successful
+restricted query/synchronize access to both objects. This eliminates that minimal
+child-object ACL adjustment as a demonstrated fix. Run
+[34214763762](https://github.com/oscharko-dev/Keiko/actions/runs/34214763762) on
+`00db0d66b2ec329fbd334ef278cfc6f4c368c82f` adds isolated group-only and privilege-only
+controls and bounded token-shape classifications. Its required combined-token probe
+remains unchanged; diagnostic controls do not grant a pass.
+
+The isolated-token run completed with analyzer success and loader failure. Original-token
+and privilege-only controls exited zero; group-only and combined controls failed with
+`C0000142`. All classified normal user groups remained enabled; integrity remained high.
+Removing Administrators changed the token owner from Administrators to the user, while
+the token default DACL retained its original trustee classes (no explicit current-user
+allow entry). This is a diagnostic hypothesis, not a proven cause. The next control
+changes only the derived token's default DACL to current user plus SYSTEM and compares
+it with the unchanged required probe. Log:
+`/tmp/keiko-3405-authenticode-token-controls-00db.log`.
+
+Windows diagnostic [34215483696](https://github.com/oscharko-dev/Keiko/actions/runs/34215483696)
+on `d919b21af` isolated the token default-DACL cause: the derived token changed from
+trustee class 14 to class 3 (explicit current user plus SYSTEM), retained high integrity
+and all normal enabled user groups, and started the PowerShell child successfully
+(exit zero). The unchanged required combined token still failed with `C0000142`.
+The analyzer job passed; the workflow remains red because the unchanged required
+loader probe intentionally remained the pass condition. The repair is confined to
+test-helper token construction; it does not change production environment or trust.
+The full four-probe loader and complete native gate must pass after simplification.
+Log: `/tmp/keiko-3405-authenticode-default-dacl-d919.log`.
+
+### Completed scripts coverage and remaining new-code gap (2026-09-08)
+
+The canonical `npm run test:coverage:scripts` run passed all 188 files: 4,438 passing
+tests, two skipped, in 805.78 seconds. Fresh coverage measured 78.30% statements,
+73.91% branches, 83.82% functions, and 79.74% lines.
+Log: `/tmp/keiko-3405-final-scripts-canonical-coverage.log`.
+
+A diagnostic application of the repository's coverage parser to the complete working
+tree (including new untracked source) and all three fresh canonical LCOV reports
+measured 83.363% of 9,431 new lines/conditions. This is below the unchanged 85% bar
+and is not a final committed-head gate. It supersedes earlier partial estimates.
+Meaningful verifier, handoff, and recovery regression cases are being added through
+existing test seams; no thresholds, exclusions, or production trust are changed.
+Diagnostic data: `/tmp/keiko-3405-full-working-tree-new-coverage.json`.
+
+The new recovery-pending UI test uses HTTP 409 so it exercises the specific
+`STARTUP_RECOVERY_PENDING` branch independently of generic transient server errors.
+The complete Update window suite passed all 55 tests in 3.85 seconds.
+Log: `/tmp/keiko-3405-recovery-pending-ui-gap-tests.log`.
+
+### Final precompiled Windows verifier execution (2026-09-08)
+
+All three jobs passed in [run 34216315755](https://github.com/oscharko-dev/Keiko/actions/runs/34216315755)
+on diagnostic commit `4028c1f83`: analyzer `102028783977`, required loader
+`102028784133`, and complete Windows native quality `102029284977`. The required
+loader proves stdin transport and real `Assembly.Load` under the non-administrator
+combined token with only the fixed four-variable environment, plus truncated and
+corrupt-input rejection. The full `npm run check:native:windows` path also passed.
+The independent static review of final helper SHA-256
+`42540e1f32fae7304af5d2975cbe4dcd16d25b09d1ccc6121c63eff39c24c9b7`
+reported zero findings. All diagnostic branches were removed before this run.
+
+The causal repair sets only the derived test token's default object DACL to current
+user plus SYSTEM. Administrators remains disabled and the enabled-privilege cap is
+unchanged; the original token and shared desktop/object permissions are unchanged.
+This repairs the test helper's token construction, not production trust. The compiled
+verifier source, deterministic asset, runtime loader, and analyzer inputs retain the
+reviewed hashes recorded above. This is verifier execution evidence, not an eligible
+production-signed N−1-to-N canary or an epic completion receipt.
+
+Logs: `/tmp/keiko-3405-authenticode-required-loader-4028.log` and
+`/tmp/keiko-3405-authenticode-full-native-4028.log`.
+
+### Terminal-session complete-WAL regression found (2026-09-08)
+
+The new production-composition test starts from a succeeded terminal `lastSession`,
+no active session/candidate, and the surviving `complete` WAL and real handoff receipt
+fixture. Pre-listen recovery succeeds and persists reconciling state. Post-listen
+recovery incorrectly returns `persistence-failed` and retains the WAL. The rejection
+occurs at the local-state write before verified-ACK publication: the completed-WAL
+settlement validator requires a current active session, while the existing
+`persistTerminalRecovery` path necessarily operates on the terminal last session.
+
+The repair is scoped to `update-local-state.ts` and its tests. It adds a distinct
+terminal-complete case with an unchanged succeeded last session, no active
+session/candidate, complete receipt-bound WAL, matching recovery identity, and an
+otherwise exact state projection. Existing active, remediation, and restored cases
+remain. The original failing production regression is retained. All 84 tests in the
+three owning suites passed, including a second restart preserving the succeeded last
+session. The server production typecheck, scoped lint, and formatting passed; those
+outputs are retained in the worker task transcript, not standalone filesystem logs.
+Independent static review of the four-file freeze reported zero findings. This
+supersedes any claim that all implementation gaps were already settled by the earlier
+static acceptance map.
+
+The lead then ran all 38 server updater suites against the current source: 561 passing
+tests and two platform skips in 40.23 seconds, exit zero. The persisted log is
+`/tmp/keiko-3405-terminal-state-broad-coverage.log`; fresh local-state coverage is under
+`/tmp/keiko-3405-terminal-state-broad-coverage/`. The diagnostic full union replaces
+the old local-state report entirely with this source-matching report, avoiding stale
+line/branch indices, and measures 84.869% of 9,464 new lines/conditions. It remains
+provisional and below the unchanged 85% requirement.
+
+Reviewed product SHA-256: `d9b6ac004c3b88199f6a17dd207581cf2f448622ee67e5f67d5e4bd9524dfa95`.
+Freeze manifest: `/tmp/keiko-3405-terminal-wal-and-recovery-tests-freeze/manifest.json`
+(SHA-256 `bf3967c356c146e5a6d8d515643ba6c02d11ebac4630ad5660e2193cc0bb1092`).
+
+### Generator input boundary and coverage freeze (2026-09-08)
+
+The final generator test slice exercises the real CLI inspection path without
+compilation and rejects missing references, unknown options, malformed reference pins,
+malformed compiler-distribution JSON, and compilation without reviewed pins. All 19
+generator tests and all 62 legacy-import tests passed; scoped ESLint, Prettier and
+diff whitespace checks passed. No product source, coverage exclusion or floor changed.
+
+Generator coverage increased from 96/131 to 122/131 lines and 43/79 to 66/79 conditions.
+The provisional full union now covers 8,081 of 9,464 new lines/conditions (85.387%),
+with the changed local-state source represented only by its fresh broader updater
+report. Canonical coverage must still confirm the result; this is not a gate receipt.
+
+Logs: `/tmp/keiko-3405-final-generator-import-gap-tests.log` and
+`/tmp/keiko-3405-final-legacy-import-gap-tests.log`. Diagnostic union:
+`/tmp/keiko-3405-provisional-covered-gap-union.json`.
+
+The full root compiler subsequently caught an optional fixture spread in the new
+negative state test. An explicit last-session guard corrected the test type without
+a cast or assertion weakening; product source is unchanged. The local-state suite
+passed 41/41, the root native TypeScript no-emit check passed, and scoped lint and
+formatting passed. Final test SHA-256:
+`c0ba33026643d3ffac30a67a2a84814fed433f7ceb704fa30a4b8b27a4b7dfc3`.
+Logs: `/tmp/keiko-3405-terminal-test-narrowing-vitest.log`,
+`/tmp/keiko-3405-terminal-test-narrowing-typecheck.log`,
+`/tmp/keiko-3405-terminal-test-narrowing-eslint.log`, and
+`/tmp/keiko-3405-terminal-test-narrowing-format.log`.
+
+The source catalog was regenerated after the recovery fix and now points to
+`update-local-state.ts:1656`. The full repository formatting check passed.
+Independent review of all added test deltas found no weakened checks or artificial
+coverage; that review was static and does not replace canonical execution.
+
+Full root and UI `npm run lint` completed successfully, exit zero:
+`/tmp/keiko-3405-frozen-root-lint.log`. Full `npm run format:check` passed:
+`/tmp/keiko-3405-frozen-format-check.log`; this final ledger update was formatted
+again afterward.

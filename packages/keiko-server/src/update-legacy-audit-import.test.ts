@@ -177,6 +177,19 @@ describe("legacy update audit import", () => {
     expect(existsSync(join(stateDir, "logs"))).toBe(false);
   });
 
+  it("defers an empty regular snapshot before creating canonical log output", () => {
+    const stateDir = fixture();
+    const updates = join(stateDir, "updates");
+    mkdirSync(updates);
+    writeFileSync(join(updates, "update-audit.jsonl"), "");
+
+    expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toStrictEqual({
+      status: "deferred",
+      reason: "source-invalid",
+    });
+    expect(existsSync(join(stateDir, "logs"))).toBe(false);
+  });
+
   it("defers before touching source or destination when info records are filtered", () => {
     const stateDir = fixture();
     const source = writeLegacy(stateDir, [JSON.stringify(legacyEvent())]);
@@ -534,6 +547,22 @@ describe("legacy update audit import", () => {
     });
   });
 
+  it("does not credit a tampered historical event as represented migration evidence", () => {
+    const stateDir = fixture();
+    writeLegacy(stateDir, [JSON.stringify(legacyEvent())]);
+    expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" }).status).toBe("imported");
+    closeFileServerLogSinks();
+    const imported = canonicalLines(stateDir).find((line) => line.op === "update.runtime.event");
+    if (imported === undefined) throw new Error("expected historical event");
+    const tampered = { ...imported, status: "failed" };
+    writeFileSync(join(stateDir, "logs", "server.log"), `${JSON.stringify(tampered)}\n`);
+
+    expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toStrictEqual({
+      status: "deferred",
+      reason: "destination-invalid",
+    });
+  });
+
   it("bounds allowed canonical log files", () => {
     const stateDir = fixture();
     writeLegacy(stateDir, [JSON.stringify(legacyEvent())]);
@@ -562,6 +591,24 @@ describe("legacy update audit import", () => {
       status: "deferred",
       reason: "destination-too-large",
     });
+  });
+
+  it("bounds repeated historical migration evidence before appending", () => {
+    const stateDir = fixture();
+    writeLegacy(stateDir, [JSON.stringify(legacyEvent())]);
+    expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" }).status).toBe("imported");
+    closeFileServerLogSinks();
+    const imported = canonicalLines(stateDir).find((line) => line.op === "update.runtime.event");
+    if (imported === undefined) throw new Error("expected historical event");
+    const crowdedLog = `${Array.from({ length: 2_050 }, () => JSON.stringify(imported)).join("\n")}\n`;
+    const logPath = join(stateDir, "logs", "server.log");
+    writeFileSync(logPath, crowdedLog);
+
+    expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toStrictEqual({
+      status: "deferred",
+      reason: "destination-invalid",
+    });
+    expect(readFileSync(logPath, "utf8")).toBe(crowdedLog);
   });
 
   it.each(["symlink", "hardlink"])("rejects a %s canonical current file", (kind) => {

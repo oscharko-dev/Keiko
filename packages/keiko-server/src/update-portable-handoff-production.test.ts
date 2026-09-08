@@ -9,6 +9,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import { digestUpdateCandidate } from "./update-candidate-authority.js";
+import { transitionUpdateSession } from "./update-lifecycle.js";
 import {
   createUpdateLocalStateManager,
   type UpdateLocalStateManager,
@@ -19,7 +20,11 @@ import {
   writePortableHandoffPlan,
   type PortableHandoffPlan,
 } from "./update-portable-handoff-plan.js";
-import { createProductionPortableHandoffRuntime } from "./update-portable-handoff-production.js";
+import {
+  createPortableHandoffCurrentProcessResolver,
+  createProductionPortableHandoffRuntime,
+  ProductionPortableHandoffError,
+} from "./update-portable-handoff-production.js";
 import {
   appendPortableHandoffReceipt,
   type PortableHandoffReceiptKind,
@@ -288,6 +293,59 @@ async function productionFixture(outcome: FixtureOutcome = "restored"): Promise<
   return { activationId, localState, plan, sessionId, stateDir };
 }
 
+describe("production portable handoff process identity", () => {
+  const validEnv = {
+    KEIKO_UI_HOST: "127.0.0.1",
+    KEIKO_UI_LAUNCH_ID: "a".repeat(32),
+    KEIKO_UI_PORT: "1983",
+  };
+
+  it("resolves an exact loopback launch identity", () => {
+    const resolveCurrent = createPortableHandoffCurrentProcessResolver({
+      env: validEnv,
+      currentVersion: "1.2.3",
+      pid: 42,
+    });
+
+    expect(resolveCurrent()).toEqual({
+      pid: 42,
+      launchId: "a".repeat(32),
+      host: "127.0.0.1",
+      port: 1983,
+      version: "1.2.3",
+    });
+    expect(
+      createPortableHandoffCurrentProcessResolver({
+        env: validEnv,
+        currentVersion: "1.2.3",
+      })().pid,
+    ).toBe(process.pid);
+  });
+
+  it("rejects spoofable or out-of-range launch identities", () => {
+    const invalid = [
+      { env: { ...validEnv, KEIKO_UI_HOST: "0.0.0.0" }, currentVersion: "1.2.3", pid: 42 },
+      {
+        env: { ...validEnv, KEIKO_UI_LAUNCH_ID: "not-a-launch" },
+        currentVersion: "1.2.3",
+        pid: 42,
+      },
+      { env: { ...validEnv, KEIKO_UI_PORT: "01983" }, currentVersion: "1.2.3", pid: 42 },
+      { env: { ...validEnv, KEIKO_UI_PORT: "65536" }, currentVersion: "1.2.3", pid: 42 },
+      { env: validEnv, currentVersion: "invalid version", pid: 42 },
+      { env: validEnv, currentVersion: "1.2.3", pid: 0 },
+      { env: validEnv, currentVersion: "1.2.3", pid: 2_147_483_648 },
+      { env: {}, currentVersion: "1.2.3", pid: 42 },
+    ];
+
+    for (const options of invalid) {
+      expect(() => createPortableHandoffCurrentProcessResolver(options)()).toThrow(
+        ProductionPortableHandoffError,
+      );
+    }
+  });
+});
+
 describe("production portable handoff recovery", () => {
   it("persists restored proof before atomic failure settlement and stays settled on restart", async () => {
     const fixture = await productionFixture();
@@ -449,5 +507,74 @@ describe("production portable handoff recovery", () => {
     await expect(
       restarted.recovery.reconcile({ phase: "pre-listen", current }),
     ).resolves.toMatchObject({ status: "ready" });
+  });
+
+  it("settles a terminal session whose completed WAL survived the prior process", async () => {
+    const fixture = await productionFixture("complete");
+    const interrupted = fixture.localState.readRuntimeState();
+    const activeSession = interrupted.activeSession;
+    if (activeSession === undefined) throw new TypeError("expected active session fixture");
+    const verifyingSession = {
+      ...activeSession,
+      ...transitionUpdateSession(activeSession, { phase: "verifying-relaunch" }),
+    };
+    const terminalSession = {
+      ...verifyingSession,
+      ...transitionUpdateSession(verifyingSession, { phase: "succeeded" }),
+    };
+    fixture.localState.writeRuntimeState({
+      ...interrupted,
+      activeSession: undefined,
+      activeCandidate: undefined,
+      lastSession: terminalSession,
+    });
+    const runtime = createProductionPortableHandoffRuntime({
+      sessionLock,
+      env: {},
+      stateDir: fixture.stateDir,
+      currentVersion: fixture.plan.targetVersion,
+      localState: fixture.localState,
+      now: () => NOW,
+    });
+    const current = {
+      pid: process.pid,
+      launchId: fixture.plan.newLaunchId,
+      host: "127.0.0.1" as const,
+      port: fixture.plan.oldProcess.port,
+      version: fixture.plan.targetVersion,
+    };
+
+    await expect(
+      runtime.recovery.reconcile({ phase: "pre-listen", current }),
+    ).resolves.toMatchObject({ status: "ready" });
+    expect(fixture.localState.readRuntimeState()).toMatchObject({
+      activationWal: { checkpoint: "complete" },
+      lastSession: { sessionId: fixture.sessionId },
+      recovery: { status: "reconciling", sessionId: fixture.sessionId },
+    });
+
+    await expect(runtime.recovery.reconcile({ phase: "post-listen", current })).resolves.toEqual({
+      status: "ready",
+      sessionId: fixture.sessionId,
+    });
+    const settled = fixture.localState.readRuntimeState();
+    expect(settled.activationWal).toBeUndefined();
+    expect(settled).toMatchObject({
+      lastSession: { sessionId: fixture.sessionId },
+      recovery: { status: "settled", sessionId: fixture.sessionId },
+    });
+
+    const restarted = createProductionPortableHandoffRuntime({
+      sessionLock,
+      env: {},
+      stateDir: fixture.stateDir,
+      currentVersion: fixture.plan.targetVersion,
+      localState: fixture.localState,
+      now: () => NOW,
+    });
+    await expect(restarted.recovery.reconcile({ phase: "pre-listen", current })).resolves.toEqual({
+      status: "ready",
+    });
+    expect(fixture.localState.readRuntimeState().lastSession).toEqual(settled.lastSession);
   });
 });

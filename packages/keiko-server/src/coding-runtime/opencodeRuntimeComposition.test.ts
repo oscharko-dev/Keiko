@@ -1363,10 +1363,8 @@ describe("private OpenCode run control", () => {
       if (permission === undefined || Array.isArray(permission)) {
         throw new Error("expected public permission request");
       }
-      expect(permission).toMatchObject({
-        requestId: expect.stringMatching(/^permission-[0-9]+$/u),
-        scopeLabel: "workspace-scope",
-      });
+      expect(permission.requestId).toMatch(/^permission-[0-9]+$/u);
+      expect(permission.scopeLabel).toBe("workspace-scope");
       const { requestId } = permission;
       expect(requestId).not.toBe(upstreamPermission.id);
       await expect(

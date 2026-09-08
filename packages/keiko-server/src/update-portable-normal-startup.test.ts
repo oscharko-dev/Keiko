@@ -30,6 +30,8 @@ import {
   type PortableHandoffReceiptKind,
 } from "./update-portable-handoff-receipts.js";
 import {
+  encodePortableRecoveredLaunchDescriptor,
+  readPortableRecoveredLaunchDescriptor,
   reconcilePortableNormalStartup,
   runPortableNativeRecoveryProcess,
   type PortableNativeRecoveryInput,
@@ -132,6 +134,68 @@ function nativeInput(
     onSpawn,
   };
 }
+
+describe("portable recovered launch descriptor", () => {
+  const descriptor = {
+    sessionId: "session-recovered",
+    targetVersion: "1.2.3",
+    lockIdentity: "1".repeat(64),
+    activationId: "2".repeat(32),
+    planSha256: "3".repeat(64),
+    launchId: "4".repeat(32),
+    host: "127.0.0.1" as const,
+    port: 1983,
+    expectedVersion: "1.2.3",
+  };
+
+  it("round-trips the exact recovery authority passed to the relaunched process", () => {
+    const encoded = encodePortableRecoveredLaunchDescriptor(descriptor);
+
+    expect(readPortableRecoveredLaunchDescriptor(encoded)).toEqual(descriptor);
+  });
+
+  it("rejects malformed or non-canonical descriptor envelopes", () => {
+    expect(readPortableRecoveredLaunchDescriptor(undefined)).toBeUndefined();
+    expect(readPortableRecoveredLaunchDescriptor("=")).toBeUndefined();
+    expect(readPortableRecoveredLaunchDescriptor("a".repeat(4097))).toBeUndefined();
+    expect(
+      readPortableRecoveredLaunchDescriptor(Buffer.from("{", "utf8").toString("base64url")),
+    ).toBeUndefined();
+    expect(
+      readPortableRecoveredLaunchDescriptor(Buffer.from("[]", "utf8").toString("base64url")),
+    ).toBeUndefined();
+    expect(
+      readPortableRecoveredLaunchDescriptor(
+        `${Buffer.from(JSON.stringify(descriptor), "utf8").toString("base64url")}=`,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("rejects descriptors that could escape the recovered process authority", () => {
+    const invalid = [
+      { ...descriptor, sessionId: "" },
+      { ...descriptor, sessionId: "s".repeat(257) },
+      { ...descriptor, targetVersion: "invalid version" },
+      { ...descriptor, lockIdentity: "not-a-digest" },
+      { ...descriptor, activationId: "not-an-activation" },
+      { ...descriptor, planSha256: "not-a-digest" },
+      { ...descriptor, launchId: "not-a-launch" },
+      { ...descriptor, expectedVersion: "invalid version" },
+      { ...descriptor, host: "0.0.0.0" },
+      { ...descriptor, port: 0 },
+      { ...descriptor, port: 65_536 },
+      { ...descriptor, port: 1983.5 },
+    ];
+
+    for (const value of invalid) {
+      const encoded = Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+      expect(readPortableRecoveredLaunchDescriptor(encoded)).toBeUndefined();
+    }
+    expect(() => encodePortableRecoveredLaunchDescriptor({ ...descriptor, port: 0 })).toThrow(
+      TypeError,
+    );
+  });
+});
 
 async function prepare(terminal = false): Promise<NormalStartupFixture> {
   const root = mkdtempSync(join(tmpdir(), "keiko-normal-startup-recovery-"));
@@ -1218,6 +1282,31 @@ describe("portable normal startup recovery", () => {
     expect(fixture.localState.readRuntimeState()).toEqual(beforeState);
   });
 
+  it("refuses a changed recovery coordinator before publishing a native PID", async () => {
+    const fixture = await prepare();
+    prepareAcceptedRecovery(fixture);
+    writeFileSync(
+      join(portableHandoffRoot(fixture.stateDir, fixture.activationId), "coordinator"),
+      "changed recovery coordinator",
+    );
+    const runNative = vi.fn(() => Promise.resolve({ status: "succeeded" as const }));
+
+    await expect(
+      reconcilePortableNormalStartup({
+        stateDir: fixture.stateDir,
+        target: "macos-arm64",
+        expectedManagedRoot: fixture.managedRoot,
+        currentPid: 303,
+        processIdentity: "recovery-cli",
+        pidAlive: () => false,
+        runNative,
+      }),
+    ).resolves.toEqual({ status: "recovery-required" });
+
+    expect(runNative).not.toHaveBeenCalled();
+    expect(inspectStateDirUpdateSessionLockForRecovery(fixture.stateDir)?.childPid).toBe(202);
+  });
+
   it("does not settle an unaccepted handoff while its published coordinator is live", async () => {
     const fixture = await prepare();
     expect(fixture.lock.updateChildPid(fixture.session.sessionId, 202)).toBe(true);
@@ -1326,6 +1415,60 @@ describe("portable normal startup recovery", () => {
     expect(fixture.endControl).not.toHaveBeenCalled();
   });
 
+  it("treats a synchronous native spawn failure as confirmed dead", async () => {
+    await expect(
+      runPortableNativeRecoveryProcess(nativeInput(), () => {
+        throw new Error("native spawn failed");
+      }),
+    ).resolves.toEqual({ status: "failed", process: "confirmed-dead" });
+  });
+
+  it("accepts only a clean native exit after publishing the PID and control packet", async () => {
+    const onSpawn = vi.fn(() => true);
+    const fixture = fakeNativeProcess();
+    const result = runPortableNativeRecoveryProcess(nativeInput(onSpawn), () => fixture.child);
+
+    expect(onSpawn).toHaveBeenCalledWith(404);
+    expect(fixture.endControl).toHaveBeenCalledWith(Buffer.from("KUR1\n", "ascii"));
+    fixture.emitExit(0, null);
+
+    await expect(result).resolves.toEqual({ status: "succeeded" });
+    expect(fixture.destroyControl).not.toHaveBeenCalled();
+    expect(fixture.terminate).not.toHaveBeenCalled();
+  });
+
+  it("tears down a published child after an asynchronous spawn error", async () => {
+    const fixture = fakeNativeProcess();
+    const result = runPortableNativeRecoveryProcess(nativeInput(), () => fixture.child);
+
+    fixture.emitError();
+    expect(fixture.destroyControl).toHaveBeenCalledOnce();
+    expect(fixture.terminate).toHaveBeenCalledWith("SIGKILL");
+    fixture.emitExit(null, "SIGKILL");
+
+    await expect(result).resolves.toEqual({ status: "failed", process: "confirmed-dead" });
+  });
+
+  it("uses process exit as authority when control and termination teardown both throw", async () => {
+    const fixture = fakeNativeProcess();
+    fixture.endControl.mockImplementation(() => {
+      throw new Error("control write failed");
+    });
+    fixture.destroyControl.mockImplementation(() => {
+      throw new Error("control close failed");
+    });
+    fixture.terminate.mockImplementation(() => {
+      throw new Error("termination failed");
+    });
+    const result = runPortableNativeRecoveryProcess(nativeInput(), () => fixture.child);
+
+    fixture.emitExit(null, "SIGKILL");
+
+    await expect(result).resolves.toEqual({ status: "failed", process: "confirmed-dead" });
+    expect(fixture.destroyControl).toHaveBeenCalledOnce();
+    expect(fixture.terminate).toHaveBeenCalledWith("SIGKILL");
+  });
+
   it("does not reclaim while an ambiguously live native recovery PID remains published", async () => {
     const fixture = await prepare();
     prepareAcceptedRecovery(fixture);
@@ -1360,6 +1503,30 @@ describe("portable normal startup recovery", () => {
     ).resolves.toEqual({ status: "recovery-required" });
     expect(runNative).toHaveBeenCalledOnce();
     expect(retryNative).not.toHaveBeenCalled();
+  });
+
+  it("retains a native PID when recovery throws after durable publication", async () => {
+    const fixture = await prepare();
+    prepareAcceptedRecovery(fixture);
+    const runNative = vi.fn((input: PortableNativeRecoveryInput) => {
+      expect(input.onSpawn(404)).toBe(true);
+      throw new Error("native recovery failed after publication");
+    });
+
+    await expect(
+      reconcilePortableNormalStartup({
+        stateDir: fixture.stateDir,
+        target: "macos-arm64",
+        expectedManagedRoot: fixture.managedRoot,
+        currentPid: 303,
+        processIdentity: "recovery-cli",
+        pidAlive: () => false,
+        runNative,
+      }),
+    ).resolves.toEqual({ status: "recovery-required" });
+
+    expect(runNative).toHaveBeenCalledOnce();
+    expect(inspectStateDirUpdateSessionLockForRecovery(fixture.stateDir)?.childPid).toBe(404);
   });
 
   it("retains a confirmed-dead native PID instead of replacing its durable sidecar", async () => {

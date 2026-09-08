@@ -480,6 +480,11 @@ describe("Windows portable PE signing inventory", () => {
       `.portable/generations/${generationId}/runtime/node/node.exe`,
       "Keiko.exe",
     ]);
+    write(join(stage, "payload", "Keiko", "support", "keiko-support.cmd"), portableExecutable(8));
+    expect(() => inventoryWindowsPortableCompletePeFiles(stage, generationId)).toThrow(
+      /escapes the generation and root launcher/u,
+    );
+    rmSync(join(stage, "payload", "Keiko", "support"), { recursive: true });
     const tampered = structuredClone(complete);
     tampered.files[0].sha256 = "b".repeat(64);
     expect(
@@ -578,6 +583,47 @@ describe("Windows portable PE signing inventory", () => {
         ),
       ).toBe('{"name":"fixture"}\n');
     }
+  });
+
+  it("preserves staging for an invalid generation ID and detects post-relocation mutation", async () => {
+    const invalidStage = root();
+    const invalidStaging = join(
+      invalidStage,
+      "payload",
+      "Keiko",
+      ".portable",
+      "generation-staging",
+    );
+    write(join(invalidStaging, "app", "package.json"), '{"name":"fixture"}\n');
+    const invalidHashTree = vi.fn(async () => "not-a-generation-id");
+
+    await expect(
+      closeWindowsGenerationDirectory(invalidStage, { hashTree: invalidHashTree }),
+    ).rejects.toThrow(/Windows generation ID is invalid/u);
+    expect(existsSync(invalidStaging)).toBe(true);
+    expect(invalidHashTree).toHaveBeenCalledOnce();
+
+    const changedStage = root();
+    const changedStaging = join(
+      changedStage,
+      "payload",
+      "Keiko",
+      ".portable",
+      "generation-staging",
+    );
+    write(join(changedStaging, "app", "package.json"), '{"name":"fixture"}\n');
+    const generationId = "a".repeat(64);
+    const changedHashTree = vi.fn(async () =>
+      changedHashTree.mock.calls.length === 1 ? generationId : "b".repeat(64),
+    );
+
+    await expect(
+      closeWindowsGenerationDirectory(changedStage, { hashTree: changedHashTree }),
+    ).rejects.toThrow(/generation changed after relocation/u);
+    expect(existsSync(changedStaging)).toBe(false);
+    expect(
+      existsSync(join(changedStage, "payload", "Keiko", ".portable", "generations", generationId)),
+    ).toBe(true);
   });
 
   it("fails closed when a required launcher is absent or an exe/dll is not PE", () => {
@@ -682,6 +728,33 @@ describe("Windows portable PE signing inventory", () => {
         attestedInventoryPath,
       ]),
     ).resolves.toBeUndefined();
+  });
+
+  it("rejects a manifest sidecar that is absent from the signed PE inventory", async () => {
+    const { stage } = validStage();
+    const manifestPath = join(stage, "manifest", "portable-manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.sidecarRuntimes.push({
+      name: "missing-sidecar",
+      executablePath: "runtime/sidecars/missing/sidecar.exe",
+    });
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    const inventoryPath = join(stage, "inventory.json");
+    const catalogPath = join(stage, "catalog.txt");
+
+    await expect(
+      main([
+        "inventory",
+        "--stage-root",
+        stage,
+        "--inventory",
+        inventoryPath,
+        "--catalog",
+        catalogPath,
+      ]),
+    ).rejects.toThrow(/manifest sidecar executable is missing from the Windows PE inventory/u);
+    expect(existsSync(inventoryPath)).toBe(false);
+    expect(existsSync(catalogPath)).toBe(false);
   });
 
   it("promotes a complete signed Windows payload and binds its activation manifest", async () => {

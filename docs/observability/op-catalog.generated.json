@@ -1409,7 +1409,7 @@
     {
       "op": "update.runtime.event",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-local-state.ts:1605",
+      "site": "packages/keiko-server/src/update-local-state.ts:1656",
       "package": "keiko-server"
     },
     {

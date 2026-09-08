@@ -2285,6 +2285,48 @@ describe("UpdateWindow", () => {
     }
   });
 
+  it("retries a startup-recovery-pending poll without replacing server-projected progress", async () => {
+    vi.useFakeTimers();
+    const running = sessionStatus({
+      activeSession: session({ phase: "running", message: "Installing update.", cancelable: true }),
+    });
+    const recovered = sessionStatus({
+      lastSession: session({
+        phase: "succeeded",
+        message: "Startup recovery verified the update.",
+        cancelable: false,
+      }),
+    });
+    const api = apiFor({ status: running });
+    vi.mocked(api.fetchSessionStatus)
+      .mockResolvedValueOnce(running)
+      .mockRejectedValueOnce(
+        new ApiError("STARTUP_RECOVERY_PENDING", "startup recovery is in progress", 409),
+      )
+      .mockResolvedValueOnce(recovered);
+
+    try {
+      render(<UpdateWindow api={api} />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_500);
+      });
+      expect(screen.getByText(/Reconnecting to the local Keiko backend/i)).toBeInTheDocument();
+      expect(screen.getByRole("progressbar", { name: "Update progress" })).toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(screen.getByText("Startup recovery verified the update.")).toBeInTheDocument();
+      expect(screen.queryByText(/Reconnecting to the local Keiko backend/i)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reuses remediation across progress polls and refreshes it on lifecycle transitions", async () => {
     vi.useFakeTimers();
     const impactReport = preflight({
