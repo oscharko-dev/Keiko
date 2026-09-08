@@ -59,6 +59,16 @@ export function journeyReadinessCurrent(
     facts.mergedAt === null
   );
 }
+/**
+ * The states in which a Keiko description counts as APPLIED to the pull request: the exact model
+ * text, a partially admitted one, or the deterministic fallback the renderer substitutes when the
+ * model's text asserts what the snapshot cannot back (#3390). All three are complete applications
+ * -- the fallback is correct behaviour, not a degraded one -- and every consumer that asks "is the
+ * description applied" reads this set rather than restating it.
+ */
+export const APPLIED_PR_DESCRIPTION_STATES: ReadonlySet<PrDescriptionApplicationStatus["state"]> =
+  new Set<PrDescriptionApplicationStatus["state"]>(["current", "partial", "fallback"]);
+
 export function journeyDescriptionApplied(
   binding: GitJourneyBinding,
   facts: GitJourneyRemoteFacts,
@@ -72,7 +82,7 @@ export function journeyDescriptionApplied(
   )
     return false;
   return (
-    new Set(["current", "partial", "fallback"]).has(value.state) &&
+    APPLIED_PR_DESCRIPTION_STATES.has(value.state) &&
     (value.effect === "confirmed" || value.effect === "reconciled") &&
     descriptionIdentity(binding, value.binding) &&
     descriptionRevision(binding, facts, value.binding)

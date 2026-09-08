@@ -18,6 +18,7 @@
 // render), instead of filling the create/update form and clicking the manual preview button.
 
 import { expect, type Locator, type Page, type Response } from "@playwright/test";
+import { APPLIED_PR_DESCRIPTION_STATES } from "@oscharko-dev/keiko-contracts/runtime/git-journey-freshness";
 import { waitWhileAnsweringApprovals, raiseWindow } from "./coding-issue-journey-live.js";
 import type { DeliveredPullRequest } from "./coding-issue-journey-live.js";
 import {
@@ -86,6 +87,11 @@ interface PrDescriptionStatusWireBody {
     readonly binding: PrDescriptionStatusBinding;
   };
 }
+
+const APPLIED_DESCRIPTION_STATE = new RegExp(
+  `^(${[...APPLIED_PR_DESCRIPTION_STATES].join("|")})$`,
+  "u",
+);
 
 function readyDescriptionBindingMatches(
   binding: PrDescriptionStatusBinding | undefined,
@@ -283,9 +289,15 @@ export async function applyAutoDraftDescriptionThroughPrCard(
   if (body.outcome !== "observed" || body.status?.binding.draftDigest !== retained.draftDigest) {
     throw new Error("applied description artifact did not match the retained automatic draft");
   }
-  await expect(card.getByTestId("gpr-description-state")).toHaveAttribute("data-state", "current", {
-    timeout: 60_000,
-  });
+  // Applied is any of the product's own applied states -- the exact model text, a partial one, or
+  // the deterministic fallback the renderer substitutes when the model's text asserts what the
+  // snapshot cannot back. The fallback is correct behaviour (rehearsal run-10 applied one), so the
+  // accepted set is the contract's, never a restated "current".
+  await expect(card.getByTestId("gpr-description-state")).toHaveAttribute(
+    "data-state",
+    APPLIED_DESCRIPTION_STATE,
+    { timeout: 60_000 },
+  );
 }
 
 /** Reconciles the already-applied description after the governed draft-to-ready transition. The
@@ -330,7 +342,13 @@ export async function reconcileAppliedDescriptionAfterMarkReady(
   if (!descriptionReconciledToReadyPullRequest(body, pullRequest)) {
     throw new Error("description was not reconciled to the exact ready pull request identity");
   }
-  await expect(card.getByTestId("gpr-description-state")).toHaveAttribute("data-state", "current", {
-    timeout: 60_000,
-  });
+  // Applied is any of the product's own applied states -- the exact model text, a partial one, or
+  // the deterministic fallback the renderer substitutes when the model's text asserts what the
+  // snapshot cannot back. The fallback is correct behaviour (rehearsal run-10 applied one), so the
+  // accepted set is the contract's, never a restated "current".
+  await expect(card.getByTestId("gpr-description-state")).toHaveAttribute(
+    "data-state",
+    APPLIED_DESCRIPTION_STATE,
+    { timeout: 60_000 },
+  );
 }
