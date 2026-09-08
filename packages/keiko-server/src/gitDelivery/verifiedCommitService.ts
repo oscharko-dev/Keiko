@@ -287,8 +287,14 @@ class VerifiedCommitController implements VerifiedCommitService {
     const facts = await this.facts(context);
     const binding = this.binding(context, facts, message);
     const verification = this.proof;
-    if (verification?.passed !== true)
+    // Two different facts, two words (#3390): no verification of this workspace at all, or a
+    // latest verification that did not pass (it failed, or executed nothing). Rehearsal run-16's
+    // model read "verification-missing" after a verification it had just watched succeed and gave
+    // the delivery up; the proof it lacked was a PASSING latest verification.
+    if (verification === undefined)
       return this.record(context, binding, "verification-failed", "verification-missing");
+    if (!verification.passed)
+      return this.record(context, binding, "verification-failed", "verification-failed");
     if (
       !contextMatches(context, verification.context) ||
       !sameVerifiedCommitFacts(verification.facts, facts) ||

@@ -131,6 +131,28 @@ describe("runVerification — outcomes", () => {
     expect(report.results[0]?.status).toBe("skipped");
     expect(report.results[0]?.detail).toContain("no lint script");
     expect(rec.calls()).toHaveLength(0);
+    // #3390 (KEIKO-0848 class): a plan whose only step was skipped executed nothing, so it is
+    // "skipped", never "passed" -- the verified-commit proof requires an executed, passing step,
+    // and the model must read the same verdict the proof applies.
+    expect(report.overallStatus).toBe("skipped");
+  });
+
+  it("a skipped step beside a passed step still reports passed", async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { stdout: "ok\n", exitCode: 0 });
+    const skip = step({
+      kind: "lint",
+      scriptName: undefined,
+      command: "npm",
+      args: ["run", "lint"],
+      skipReason: "no lint script",
+    });
+    const report = await runVerification(
+      planOf([skip, step({ kind: "test" })], ws.info.root),
+      depsWith(ws, rec.fn),
+    );
+    expect(report.results.map((result) => result.status)).toEqual(["skipped", "passed"]);
     expect(report.overallStatus).toBe("passed");
   });
 

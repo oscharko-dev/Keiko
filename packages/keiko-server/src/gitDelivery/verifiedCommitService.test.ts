@@ -314,7 +314,13 @@ describe("verified Code-task commit service", () => {
         results: passed.results.map((result) => ({ ...result, status })),
       };
       expect(await service.completeVerification(ticket, contradictory)).toBe(false);
-      expect((await service.propose("feat: rejected report"))?.status).toBe("verification-failed");
+      // #3390: a verification that ran and did not pass is named as such -- "verification-missing"
+      // is reserved for a workspace that was never verified at all (rehearsal run-16's model read
+      // "missing" right after watching a verification and abandoned the delivery).
+      expect(await service.propose("feat: rejected report")).toMatchObject({
+        status: "verification-failed",
+        reason: "verification-failed",
+      });
       expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("0");
     },
   );
@@ -387,7 +393,10 @@ describe("verified Code-task commit service", () => {
   });
   it("requires verification and refuses forged or cross-proposal approvals without a Git effect", async () => {
     const before = git(["rev-parse", "HEAD"]);
-    expect((await service.propose("feat: no verification"))?.status).toBe("verification-failed");
+    expect(await service.propose("feat: no verification")).toMatchObject({
+      status: "verification-failed",
+      reason: "verification-missing",
+    });
     const id = await verifiedProposal();
     const approval = await claim(id);
     expect((await service.execute(id, { ...approval, approvalToken: "invalid" }))?.reason).toBe(

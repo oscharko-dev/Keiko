@@ -495,7 +495,13 @@ function overallStatus(
     return "failed";
   }
   const allOk = results.every((r) => r.status === "passed" || r.status === "skipped");
-  return allOk ? "passed" : "failed";
+  if (!allOk) return "failed";
+  // The same KEIKO-0848 class one step further (#3390): a report whose EVERY step was skipped
+  // executed nothing either. Reporting it as "passed" told the coding model its verification had
+  // succeeded, while the verified-commit proof -- which requires at least one executed, passing
+  // step -- refused that very report; the model then abandoned the delivery (rehearsal run-16).
+  // "skipped" is the honest word: nothing failed, and nothing was proven.
+  return results.some((r) => r.status === "passed") ? "passed" : "skipped";
 }
 
 function countByStatus(results: readonly VerificationResult[]): Record<VerificationStatus, number> {
