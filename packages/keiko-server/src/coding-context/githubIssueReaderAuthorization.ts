@@ -59,18 +59,52 @@ export function githubIssueReaderRepositoryId(repositoryRoot: string): string | 
   return deriveRepositoryId(canonical);
 }
 
+/**
+ * #3390: the root whose grant governs `root`. A managed task worktree is the same checkout as the
+ * repository it was provisioned from -- the same remote, the same operator decision -- so it
+ * inherits that repository's grant instead of carrying a separate identity nobody ever granted.
+ * Without this, every read a surface makes FROM the task worktree (the description status refresh
+ * opens off it by design) was refused with `no-grant` while the run's own reads, made against the
+ * repository root, were authorized. Any root that is not a known managed worktree governs itself.
+ */
+export function githubIssueReaderGrantRoot(
+  deps: Pick<UiHandlerDeps, "workspaceLifecycle">,
+  root: string,
+): { readonly root: string; readonly inherited: boolean } {
+  const lifecycle = deps.workspaceLifecycle;
+  if (lifecycle === undefined) return { root, inherited: false };
+  let canonical: string;
+  try {
+    canonical = realpathSync(root);
+  } catch {
+    return { root, inherited: false };
+  }
+  for (const instance of lifecycle.listAll()) {
+    try {
+      if (realpathSync(instance.managedWorktreePath) === canonical) {
+        return { root: instance.repositoryRoot, inherited: true };
+      }
+    } catch {
+      // A worktree that no longer exists on disk cannot be the one being asked about.
+    }
+  }
+  return { root, inherited: false };
+}
+
 function decide(
-  deps: Pick<UiHandlerDeps, "store">,
+  deps: Pick<UiHandlerDeps, "store" | "workspaceLifecycle">,
   repositoryRoot: string | undefined,
 ): {
   readonly decision: GitHubIssueReaderAuthorizationDecision;
   readonly repositoryId?: string;
   readonly revision?: number;
+  readonly inherited?: boolean;
 } {
   if (repositoryRoot === undefined || repositoryRoot === "") {
     return { decision: "repository-unresolved" };
   }
-  const repositoryId = githubIssueReaderRepositoryId(repositoryRoot);
+  const grant = githubIssueReaderGrantRoot(deps, repositoryRoot);
+  const repositoryId = githubIssueReaderRepositoryId(grant.root);
   if (repositoryId === undefined) return { decision: "repository-unresolved" };
   // A deps graph composed without persistence must DENY, not throw. `store` is typed as required,
   // but a partially-composed graph can still reach here, and an exception on the authorization path
@@ -86,11 +120,13 @@ function decide(
     ?.readGitHubIssueReaderAuthorization;
   if (typeof read !== "function") return { decision: "store-unavailable", repositoryId };
   const record = read(repositoryId);
-  if (record === undefined) return { decision: "no-grant", repositoryId };
+  if (record === undefined)
+    return { decision: "no-grant", repositoryId, inherited: grant.inherited };
   return {
     decision: record.authorized ? "authorized" : "revoked",
     repositoryId,
     revision: record.revision,
+    inherited: grant.inherited,
   };
 }
 
@@ -125,11 +161,11 @@ function decide(
  * decision and the grant's revision — never a path, a remote, or issue text.
  */
 export function isGitHubIssueReaderAuthorized(
-  deps: Pick<UiHandlerDeps, "store">,
+  deps: Pick<UiHandlerDeps, "store" | "workspaceLifecycle">,
   repositoryRoot: string | undefined,
   observation: GitHubIssueReaderAuthorizationObservation = {},
 ): boolean {
-  const { decision, repositoryId, revision } = decide(deps, repositoryRoot);
+  const { decision, repositoryId, revision, inherited } = decide(deps, repositoryRoot);
   const authorized = decision === "authorized";
   const sink = observation.activityLog ?? processServerLogSink();
   sink.write({
@@ -144,6 +180,9 @@ export function isGitHubIssueReaderAuthorized(
       // Which stored grant was evaluated, so a timeline can tell one revision from the next. Absent
       // exactly when no row was read, which the decision already says.
       ...(revision === undefined ? {} : { revision }),
+      // True when the asked-about root is a managed task worktree and the grant evaluated is the
+      // one of the repository it was provisioned from (#3390).
+      ...(inherited === true ? { inheritedFromRepository: true } : {}),
     },
   });
   return authorized;

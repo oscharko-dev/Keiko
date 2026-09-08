@@ -81,6 +81,36 @@ describe("isGitHubIssueReaderAuthorized (#3385)", () => {
     });
   });
 
+  // #3390: a managed task worktree is the same checkout as the repository it was provisioned from,
+  // so it inherits that repository's grant. Without this, every read a surface made FROM the
+  // worktree -- the description status refresh opens off it by design -- was refused with
+  // `no-grant` while the run's own reads against the repository root were authorized.
+  it("lets a managed task worktree inherit the grant of the repository it was provisioned from", () => {
+    const worktree = mkdtempSync(join(tmpdir(), "keiko-managed-worktree-"));
+    const { sink, events } = capturingLog();
+    const withLifecycle = {
+      ...granted,
+      workspaceLifecycle: {
+        listAll: () => [{ managedWorktreePath: worktree, repositoryRoot: ROOT }],
+      },
+    } as unknown as Pick<UiHandlerDeps, "store" | "workspaceLifecycle">;
+    try {
+      expect(githubIssueReaderRepositoryId(worktree)).not.toBe(ROOT_ID);
+      expect(isGitHubIssueReaderAuthorized(withLifecycle, worktree, { activityLog: sink })).toBe(
+        true,
+      );
+      expect(events[0]?.extra).toMatchObject({
+        decision: "authorized",
+        repositoryId: ROOT_ID,
+        inheritedFromRepository: true,
+      });
+      // A worktree the lifecycle does not know governs itself, and it carries no grant of its own.
+      expect(isGitHubIssueReaderAuthorized(granted, worktree)).toBe(false);
+    } finally {
+      rmSync(worktree, { recursive: true, force: true });
+    }
+  });
+
   it("authorizes only the repository that carries an explicit grant", () => {
     expect(isGitHubIssueReaderAuthorized(granted, ROOT)).toBe(true);
     expect(isGitHubIssueReaderAuthorized(granted, "/workspace/other-project")).toBe(false);
