@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
@@ -7,6 +8,7 @@ import {
   lstatSync,
   mkdirSync,
   realpathSync,
+  renameSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -37,18 +39,27 @@ function requiredExecutable(path: string): string {
   return resolved;
 }
 
-function copyExecutable(source: string, target: string): string {
+/**
+ * Copies `source` to `target` by landing it under a private name and renaming it into place. The
+ * lane's per-run state dir is shared by every test, so the previous test's sandboxed session may
+ * still be executing the file at `target`; opening that file for writing fails with ETXTBSY on
+ * Linux, while a rename gives the running process its old inode and the next launch the new one.
+ */
+function replaceFile(source: string, target: string, mode?: number): string {
   mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-  copyFileSync(source, target);
-  chmodSync(target, 0o755);
+  const staging = `${target}.${String(process.pid)}.${randomUUID()}`;
+  copyFileSync(source, staging);
+  if (mode !== undefined) chmodSync(staging, mode);
+  renameSync(staging, target);
   return target;
 }
 
+function copyExecutable(source: string, target: string): string {
+  return replaceFile(source, target, 0o755);
+}
+
 function copyEmpty(target: string): string {
-  mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-  copyFileSync("/dev/null", target);
-  chmodSync(target, 0o600);
-  return target;
+  return replaceFile("/dev/null", target, 0o600);
 }
 
 function artifact(
@@ -75,8 +86,7 @@ function nodeRuntimeClosure(node: string, closureRoot: string): readonly Record<
   const artifacts: Record<string, string>[] = [];
   for (const [index, library] of values.entries()) {
     const target = join(closureRoot, `runtime-library-${String(index)}`);
-    mkdirSync(closureRoot, { recursive: true, mode: 0o700 });
-    copyFileSync(library.source, target);
+    replaceFile(library.source, target);
     artifacts.push(artifact(target, closureRoot, library.capsulePath));
   }
   if (artifacts.length === 0) {

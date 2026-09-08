@@ -757,6 +757,9 @@ function editorWindow(page: Page): Locator {
 
 type DebugSessionStartSettlement =
   | { readonly kind: "response"; readonly status: number; readonly body: string }
+  // The response arrived but the browser had already discarded its body (CDP
+  // `Network.getResponseBody`: "No data found for resource"); the status is still authoritative.
+  | { readonly kind: "unreadable"; readonly status: number }
   | { readonly kind: "aborted"; readonly errorText: string | undefined };
 
 function isDebugSessionStartRequest(request: Request): boolean {
@@ -766,7 +769,7 @@ function isDebugSessionStartRequest(request: Request): boolean {
 }
 
 function waitForDebugSessionStart(page: Page): Promise<DebugSessionStartSettlement> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     let startRequest: Request | undefined;
     const cleanup = (): void => {
       page.off("request", onRequest);
@@ -788,8 +791,8 @@ function waitForDebugSessionStart(page: Page): Promise<DebugSessionStartSettleme
         (body) => {
           resolve({ kind: "response", status, body });
         },
-        (error: unknown) => {
-          reject(error instanceof Error ? error : new Error("DEBUG_SESSION_RESPONSE_UNREADABLE"));
+        () => {
+          resolve({ kind: "unreadable", status });
         },
       );
     };
@@ -811,6 +814,12 @@ async function startedSessionId(
 ): Promise<string> {
   if (settlement.kind === "aborted") {
     expect(settlement.errorText).toBe("net::ERR_ABORTED");
+    return await capturedStartedSessionId(page, observedStartCount);
+  }
+  if (settlement.kind === "unreadable") {
+    // Same recovery as the aborted path: the product's own captured session events name the session
+    // the 201 created, so the test never depends on a body buffer the browser does not guarantee.
+    expect(settlement.status).toBe(201);
     return await capturedStartedSessionId(page, observedStartCount);
   }
   expect(settlement.status, settlement.body).toBe(201);
