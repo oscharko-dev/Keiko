@@ -348,7 +348,14 @@ export function gitDeliveryAuthorityGate(
 export function gitDeliveryAuthorityContinuityGuard(
   input: GitDeliveryAuthorityContinuityInput,
 ): () => boolean {
+  // #3390: the guard runs before EVERY remote dispatch of one operation -- for a mark-ready or a
+  // merge that is every CI-reader poll, fifty-odd times per operation -- and each admitted re-check
+  // wrote its own identical `git.delivery.authority.admitted` line. One operation now writes one
+  // continuity admission line: repeats are suppressed after the first, a denial always logs, and
+  // the re-check itself still runs in full every time.
+  let admittedLogged = false;
   return (): boolean => {
+    const baseSink = input.audit?.logSink ?? processServerLogSink();
     const latest = gitDeliveryAuthorityGate(
       input.ctx,
       input.deps,
@@ -358,10 +365,12 @@ export function gitDeliveryAuthorityContinuityGuard(
       input.target,
       {
         ...input.audit,
+        logSink: admittedLogged ? withoutRepeatedAdmission(baseSink) : baseSink,
         expectedAuthority: input.admitted,
         phase: "continuity",
       },
     );
+    if (latest.allowed) admittedLogged = true;
     if (!latest.allowed) {
       if (input.denialCapture !== undefined) {
         input.denialCapture.result = latest.result;
@@ -371,6 +380,16 @@ export function gitDeliveryAuthorityContinuityGuard(
       return false;
     }
     return input.next?.() ?? true;
+  };
+}
+
+/** The sink a repeated, already-logged continuity admission writes through: everything but the
+ * identical admission line still reaches the activity log. */
+function withoutRepeatedAdmission(sink: ServerLogSink): ServerLogSink {
+  return {
+    write: (event): void => {
+      if (event.op !== "git.delivery.authority.admitted") sink.write(event);
+    },
   };
 }
 

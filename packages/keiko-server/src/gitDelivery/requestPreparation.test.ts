@@ -22,11 +22,15 @@ import {
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import type { RouteContext } from "../routes.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
 import {
+  gitDeliveryAuthorityContinuityGuard,
+  gitDeliveryAuthorityGate,
   gitDeliveryRepositoryBindingMismatch,
   prepareGitDeliveryRequest,
   type GitDeliveryRepositoryReadFailure,
 } from "./requestPreparation.js";
+import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
 function workspaceAt(root: string): WorkspaceInfo {
   return {
@@ -181,5 +185,60 @@ describe("prepareGitDeliveryRequest — repository-mismatch activity log line", 
       { readonly frames?: readonly string[]; readonly causeChain?: readonly string[] } | undefined;
     expect(Array.isArray(extra?.frames)).toBe(true);
     expect(Array.isArray(extra?.causeChain)).toBe(true);
+  });
+});
+
+// #3390: the continuity guard re-checks authority before EVERY remote dispatch of one operation --
+// for a mark-ready or a merge that is every CI-reader poll (rehearsal run-12: 52 identical
+// `admitted` lines for one mark-ready). One operation, one continuity admission line; the re-check
+// still runs every time, and a denial is never suppressed.
+describe("gitDeliveryAuthorityContinuityGuard — one admission line per operation", () => {
+  const PROJECT_ID = "project-continuity";
+  const ROOT = "/workspace/continuity";
+  const NOW = "2026-09-08T09:00:00.000Z";
+  const target = { headBranchName: "feature/test", remoteBranchName: "feature/test" };
+
+  it("logs the first admitted re-check, suppresses identical repeats, and always logs a denial", () => {
+    const events: ServerLogEvent[] = [];
+    const logSink = { write: (event: ServerLogEvent): void => void events.push(event) };
+    const workspace = { root: ROOT } as WorkspaceInfo;
+    const authority = permittedGitDeliveryAuthority(
+      () => PROJECT_ID,
+      () => ROOT,
+    );
+    let revoked = false;
+    const deps = {
+      get gitDeliveryAuthority(): typeof authority | undefined {
+        return revoked ? undefined : authority;
+      },
+    };
+    const ctx = { correlationId: "correlation-continuity" } as never;
+    const admission = gitDeliveryAuthorityGate(ctx, deps, PROJECT_ID, workspace, "push", target, {
+      nowIso: NOW,
+      logSink,
+    });
+    if (!admission.allowed) throw new Error("fixture admission must be allowed");
+    const guard = gitDeliveryAuthorityContinuityGuard({
+      ctx,
+      deps,
+      projectId: PROJECT_ID,
+      workspace,
+      operation: "push",
+      target,
+      admitted: { runId: admission.runId, envelopeDigest: admission.envelopeDigest },
+      audit: { nowIso: NOW, logSink },
+    });
+
+    expect([guard(), guard(), guard()]).toEqual([true, true, true]);
+    const admitted = events.filter((event) => event.op === "git.delivery.authority.admitted");
+    expect(admitted.map((event) => event.extra?.phase)).toEqual(["admission", "continuity"]);
+
+    revoked = true;
+    expect(guard()).toBe(false);
+    expect(events.filter((event) => event.op === "git.delivery.authority.denied")).toEqual([
+      expect.objectContaining({
+        extra: { operation: "push", phase: "continuity", reason: "accepted-run-unavailable" },
+      }),
+    ]);
   });
 });
