@@ -263,7 +263,11 @@ settled, which is precisely when an operator reconciles the description against 
 request. The Issue handoff's journey refresh re-observes an applied description whose last
 observation has aged out through that same reader grant and the same service instance, instead of
 reporting `description-stale` for a body nothing has changed; without the grant it reports the aged
-status as it is (#3390).
+status as it is (#3390). Once the delivered head has merged, the journey no longer asks the remote
+whether the description is still applied -- a merged pull request cannot be re-read as open, and a
+fresh observation answers `stale-pr` -- it holds the application to be the durable fact it is:
+applied when it was recorded on exactly the head that merged, however long ago it was last observed
+(rehearsal run-24; `journeyDescriptionApplied`).
 
 ### D11 — A dedicated `pr-mark-ready` action kind and approval operation close the approval-less draft->ready transition; no title/body/base PATCH is bundled with the mutation (#3389, epic #3384 corrections 1/2/7)
 

@@ -167,12 +167,13 @@ function descriptionState(
 ): "unavailable" | NonNullable<JourneyOutcome["description"]>["state"] {
   const description = outcome.description;
   if (description === null) return "unavailable";
+  // Whether the application still holds is the shared contract rule's verdict: while the pull
+  // request is open it needs the live revision and a read within the observation window; once the
+  // delivered head has merged it rests on the receipt for that head, however old the last read
+  // (#3390, rehearsal run-24). A merged journey's applied description is therefore not "stale".
+  if (journeyDescriptionCurrent(outcome, now)) return description.state;
   if (!journeyEvidenceFresh(description, now)) return "stale";
-  if (
-    new Set(["current", "partial", "fallback"]).has(description.state) &&
-    !journeyDescriptionCurrent(outcome, now)
-  )
-    return "stale";
+  if (new Set(["current", "partial", "fallback"]).has(description.state)) return "stale";
   return description.state;
 }
 function JourneyDescription({

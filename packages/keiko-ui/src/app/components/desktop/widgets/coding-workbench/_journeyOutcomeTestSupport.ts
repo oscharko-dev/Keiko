@@ -91,7 +91,9 @@ export function completedJourneyFixture(closed: boolean): ReturnType<typeof jour
       ...fixture.outcome,
       state: closed ? "completed" : "merged-awaiting-issue-closure",
       reason: closed ? "merge-and-closure-observed" : "issue-closure-pending",
-      keikoDescriptionApplied: false,
+      // The description was applied on the head that merged: the durable fact survives the merge
+      // (journeyDescriptionApplied's merged-head rule), so the producer and validator agree on true.
+      keikoDescriptionApplied: true,
       remote: {
         ...remote,
         identity: { ...remote.identity, state: "closed", isDraft: false },

@@ -89,6 +89,35 @@ describe("observed exact-revision issue-to-PR handoff", () => {
       });
     },
   );
+  it("keeps the governed description applied once the delivered head has merged (#3390, run-24)", () => {
+    // The receipt is older than the observation window and the pull request is closed: a fresh
+    // read would answer stale-pr. The application still happened on exactly the head that merged.
+    const f = journeyFixture(false);
+    if (f.description === null) throw new TypeError("Description missing");
+    const facts = {
+      ...f.facts,
+      identity: { ...f.facts.identity, state: "closed" as const },
+      mergedAt: "2026-09-05T00:00:00Z",
+      mergeCommitSha: "f".repeat(40),
+      issue: { ...f.facts.issue, state: "closed" as const, closedAt: "2026-09-05T00:00:00Z" },
+    };
+    const aged = {
+      ...f.description,
+      observedAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2026-01-01T00:01:00.000Z",
+    };
+    expect(
+      produceJourneyOutcome({ ...f, facts, readiness: null, description: aged }),
+    ).toMatchObject({
+      state: "completed",
+      reason: "merge-and-closure-observed",
+      keikoDescriptionApplied: true,
+    });
+    const otherHead = { ...aged, binding: { ...aged.binding, headSha: "e".repeat(40) } };
+    expect(
+      produceJourneyOutcome({ ...f, facts, readiness: null, description: otherHead }),
+    ).toMatchObject({ state: "completed", keikoDescriptionApplied: false });
+  });
   it.each(["open", "closed"] as const)(
     "does not attribute manually closed issue to an unmerged %s PR",
     (state) => {

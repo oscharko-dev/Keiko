@@ -170,7 +170,10 @@ describe("observed issue journey handoff", () => {
         screen.getByText(closed ? "Issue journey completed" : "Merged; issue closure pending"),
       ).toBeInTheDocument();
       expect(screen.getByText(closed ? "Issue closed" : "Issue open")).toBeInTheDocument();
-      expect(screen.getByText("Description confirmation is stale")).toBeInTheDocument();
+      // The delivered head merged with the description applied on it; that fact does not age out
+      // with the last body read, so the card reports it as current, not stale (#3390, run-24).
+      expect(screen.getByText("Description is current")).toBeInTheDocument();
+      expect(screen.getByText("Description applied to the observed PR")).toBeInTheDocument();
       expect(screen.queryByRole("button")).not.toBeInTheDocument();
     },
   );
