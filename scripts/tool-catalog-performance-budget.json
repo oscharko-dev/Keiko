@@ -2,15 +2,15 @@
   "schemaVersion": 1,
   "target": "tool-catalog",
   "policy": "observed-maximum-plus-full-range-v1",
-  "calibrationSha256": "bf4846b084a19beba8bb83c6043b5b0f9cefd5159888cf101e7357f029bd76b3",
+  "calibrationSha256": "f8b58c92873f95caf2c874cdb61e7d7c261819db33883f5ec436b4d3eab0c985",
   "maximumP95Ms": {
     "legacy-native-6-tool": {
-      "coldCompileMs": 7.004750000000286,
-      "lookupBatchMs": 4.3470409999998765
+      "coldCompileMs": 10.649667000000136,
+      "lookupBatchMs": 2.2667509999998856
     },
     "synthetic-300-tool": {
-      "coldCompileMs": 157.33137400000078,
-      "lookupBatchMs": 120.80341800000133
+      "coldCompileMs": 168.58329199999935,
+      "lookupBatchMs": 107.89704099999835
     }
   }
 }
