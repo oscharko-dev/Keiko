@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
@@ -7,8 +6,9 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readFileSync,
   realpathSync,
-  renameSync,
+  statSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -40,26 +40,36 @@ function requiredExecutable(path: string): string {
 }
 
 /**
- * Copies `source` to `target` by landing it under a private name and renaming it into place. The
- * lane's per-run state dir is shared by every test, so the previous test's sandboxed session may
- * still be executing the file at `target`; opening that file for writing fails with ETXTBSY on
- * Linux, while a rename gives the running process its old inode and the next launch the new one.
+ * Provisions `target` from `source` once per state dir. Playwright evaluates this config in the
+ * runner and again in every worker, after the BFF has already pinned each operator artifact by
+ * dev/ino/size/mode/uid and content (`createOperatorProvisioningQualification`, keiko-server
+ * deps.ts) and while an earlier test's sandboxed session may still be executing it. A rewrite must
+ * therefore keep the same inode -- a replacement file reads as NOT_PROVISIONED -- and must not open
+ * a running executable for writing (ETXTBSY). An identical artifact is left untouched; only a
+ * missing or different one is written, in place.
  */
-function replaceFile(source: string, target: string, mode?: number): string {
+function provisionFile(source: string, target: string, mode?: number): string {
   mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-  const staging = `${target}.${String(process.pid)}.${randomUUID()}`;
-  copyFileSync(source, staging);
-  if (mode !== undefined) chmodSync(staging, mode);
-  renameSync(staging, target);
+  if (!sameContent(source, target)) {
+    copyFileSync(source, target);
+    if (mode !== undefined) chmodSync(target, mode);
+  } else if (mode !== undefined && (statSync(target).mode & 0o777) !== mode) {
+    chmodSync(target, mode);
+  }
   return target;
 }
 
+function sameContent(source: string, target: string): boolean {
+  if (!existsSync(target) || !statSync(target).isFile()) return false;
+  return readFileSync(source).equals(readFileSync(target));
+}
+
 function copyExecutable(source: string, target: string): string {
-  return replaceFile(source, target, 0o755);
+  return provisionFile(source, target, 0o755);
 }
 
 function copyEmpty(target: string): string {
-  return replaceFile("/dev/null", target, 0o600);
+  return provisionFile("/dev/null", target, 0o600);
 }
 
 function artifact(
@@ -86,7 +96,7 @@ function nodeRuntimeClosure(node: string, closureRoot: string): readonly Record<
   const artifacts: Record<string, string>[] = [];
   for (const [index, library] of values.entries()) {
     const target = join(closureRoot, `runtime-library-${String(index)}`);
-    replaceFile(library.source, target);
+    provisionFile(library.source, target);
     artifacts.push(artifact(target, closureRoot, library.capsulePath));
   }
   if (artifacts.length === 0) {
