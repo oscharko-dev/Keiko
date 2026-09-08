@@ -105,6 +105,13 @@ export async function openLiveWorkbench(page: Page, repositoryRoot: string): Pro
   await page.addInitScript(
     ({ root }) => {
       localStorage.setItem("keiko.theme", "dark");
+      // #3390: pin the interface language. Every control this lane clicks and every sentence it
+      // reads is named in English, while the product resolves its locale from `navigator.language`
+      // when nothing is stored -- so on a runner whose browser reports any other language the whole
+      // lane would fail on its first control lookup, for a reason that has nothing to do with the
+      // product. `keiko.locale` is the product's own preference key, set exactly as the operator's
+      // own language choice sets it.
+      localStorage.setItem("keiko.locale", "en");
       if (localStorage.getItem("keiko.workspace.v4") === null) {
         localStorage.setItem(
           "keiko.workspace.v4",

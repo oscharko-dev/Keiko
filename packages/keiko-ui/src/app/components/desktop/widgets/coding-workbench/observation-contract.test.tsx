@@ -60,6 +60,29 @@ describe("Code task observation contract (#3390)", () => {
     vi.restoreAllMocks();
   });
 
+  // The lane reads each card in ONE round trip so every value comes from the same paint, and that
+  // atomic read finds the card's status with a bare `[data-state]` query inside the card. A second
+  // `data-state` anywhere in the same card would make it read the wrong element.
+  it.each([
+    [
+      "cwb-draft-delivery-state",
+      (): void => void render(<CodingWorkbenchDraftDelivery snapshot={draftDeliverySnapshot()} />),
+    ],
+    [
+      "cwb-description-status",
+      (): void =>
+        void render(<CodingWorkbenchDraftDelivery snapshot={descriptionStatusSnapshot()} />),
+    ],
+    [
+      "cwb-commit-result",
+      (): void =>
+        void render(<CodingWorkbenchCommitResult result={commitReceipt()} runId="run-1" />),
+    ],
+  ] as const)("carries exactly one data-state element inside the %s card", (testId, mount) => {
+    mount();
+    expect(card(testId).querySelectorAll("[data-state]")).toHaveLength(1);
+  });
+
   it("resolves every delivery fact from the delivery card's own scope", () => {
     render(<CodingWorkbenchDraftDelivery snapshot={draftDeliverySnapshot()} />);
     const state = screen.getByTestId("cwb-draft-delivery-state");

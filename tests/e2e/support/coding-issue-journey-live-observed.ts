@@ -48,22 +48,78 @@ async function textOf(locator: Locator): Promise<string> {
   return ((await locator.first().textContent()) ?? "").trim();
 }
 
-/** A displayed fact, by its stable id. Readable while its `<details>` is still collapsed: the row
- * is in the DOM either way, and this never asserts visibility. */
-async function fact(card: Locator, id: string): Promise<string> {
-  const row = card.locator(`[data-fact="${id}"] dd`);
-  if (!(await present(row))) {
+/** One card, as it stood in a single paint. */
+interface CardReading {
+  readonly state: string | null;
+  readonly reason: string | null;
+  readonly facts: Readonly<Record<string, string>>;
+  readonly checks: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  readonly href: string | null;
+  readonly testIds: readonly string[];
+}
+
+/**
+ * Reads a whole card in ONE round trip, so every value comes from the same paint.
+ *
+ * Reading attribute by attribute over separate round trips is a torn read: the Code task is driven
+ * by a live event stream, so an update landing between two of them yields a reading that never
+ * existed — a delivery phase from before it beside a head SHA from after. The route this replaced
+ * returned one JSON document and was atomic by construction; this restores that property against
+ * the DOM. Facts inside a collapsed `<details>` are included: the rows are in the DOM either way,
+ * and nothing here asserts visibility.
+ */
+async function readCard(card: Locator): Promise<CardReading | undefined> {
+  if (!(await present(card))) return undefined;
+  return card.evaluate((root: Element): CardReading => {
+    const text = (node: Element | null | undefined): string => (node?.textContent ?? "").trim();
+    const collect = <T>(
+      selector: string,
+      key: string,
+      value: (element: Element) => T,
+    ): Record<string, T> => {
+      const entries: Record<string, T> = {};
+      for (const element of root.querySelectorAll(selector)) {
+        const id = element.getAttribute(key);
+        if (id !== null && id.length > 0) entries[id] = value(element);
+      }
+      return entries;
+    };
+    const status = root.querySelector("[data-state]");
+    return {
+      state: status?.getAttribute("data-state") ?? null,
+      reason: status?.getAttribute("data-reason") ?? null,
+      facts: collect("[data-fact]", "data-fact", (row) => text(row.querySelector("dd"))),
+      checks: collect("[data-checks]", "data-checks", (group) => {
+        const counts: Record<string, string> = {};
+        for (const cell of group.querySelectorAll("[data-count]")) {
+          const name = cell.getAttribute("data-count");
+          if (name !== null) counts[name] = text(cell.querySelector("dd"));
+        }
+        return counts;
+      }),
+      href: root.querySelector("a")?.getAttribute("href") ?? null,
+      testIds: Object.keys(collect("[data-testid]", "data-testid", () => true)),
+    };
+  });
+}
+
+function fact(reading: CardReading, id: string): string {
+  const value = reading.facts[id];
+  if (value === undefined || value.length === 0) {
     throw new Error(`the Code task did not display the "${id}" fact`);
   }
-  return textOf(row);
+  return value;
+}
+
+function displayed(value: string | null, what: string): string {
+  if (value === null || value.length === 0) {
+    throw new Error(`the Code task did not display a "${what}" value`);
+  }
+  return value;
 }
 
 async function attribute(locator: Locator, name: string): Promise<string> {
-  const value = await locator.first().getAttribute(name);
-  if (value === null || value.length === 0) {
-    throw new Error(`the Code task did not display a "${name}" value`);
-  }
-  return value;
+  return displayed(await locator.first().getAttribute(name), name);
 }
 
 /** The run lifecycle state the window is showing. `idle` also stands for "no run", which is why no
@@ -94,10 +150,9 @@ export interface ObservedDelivery {
 
 /** The observed pull request is read from the card's own link HREF, not from its label: the number
  * in `.../pull/<n>` is the provider's, while the label is a translated sentence. */
-async function observedPullRequest(card: Locator): Promise<ObservedPullRequest | undefined> {
-  const link = card.getByRole("link");
-  if (!(await present(link))) return undefined;
-  const url = await attribute(link, "href");
+function observedPullRequest(reading: CardReading): ObservedPullRequest | undefined {
+  const url = reading.href;
+  if (url === null) return undefined;
   const number = /\/pull\/(\d+)(?:[/?#]|$)/u.exec(url)?.[1];
   if (number === undefined) {
     throw new Error("the Code task displayed a pull request link without a pull request number");
@@ -105,28 +160,26 @@ async function observedPullRequest(card: Locator): Promise<ObservedPullRequest |
   return {
     number: Number(number),
     url,
-    headSha: await fact(card, "remoteHead"),
-    baseSha: await fact(card, "remoteBase"),
+    headSha: fact(reading, "remoteHead"),
+    baseSha: fact(reading, "remoteBase"),
   };
 }
 
 /** The Repository delivery card, or `undefined` while the run has recorded no delivery yet. */
 export async function observedDelivery(page: Page): Promise<ObservedDelivery | undefined> {
-  const card = cardWith(page, "cwb-draft-delivery-state");
-  if (!(await present(card))) return undefined;
-  const state = card.getByTestId("cwb-draft-delivery-state");
-  const issueNumber = (await fact(card, "issueNumber")).replace(/^#/u, "");
+  const reading = await readCard(cardWith(page, "cwb-draft-delivery-state"));
+  if (reading === undefined) return undefined;
   return {
-    phase: await attribute(state, "data-state"),
-    reason: await attribute(state, "data-reason"),
-    repository: await fact(card, "repository"),
-    issueNumber: Number(issueNumber),
-    headRef: await fact(card, "headRef"),
-    headSha: await fact(card, "headSha"),
-    baseRef: await fact(card, "baseRef"),
-    baseSha: await fact(card, "baseSha"),
-    proposalId: await fact(card, "proposalId"),
-    pullRequest: await observedPullRequest(card),
+    phase: displayed(reading.state, "delivery phase"),
+    reason: displayed(reading.reason, "delivery reason"),
+    repository: fact(reading, "repository"),
+    issueNumber: Number(fact(reading, "issueNumber").replace(/^#/u, "")),
+    headRef: fact(reading, "headRef"),
+    headSha: fact(reading, "headSha"),
+    baseRef: fact(reading, "baseRef"),
+    baseSha: fact(reading, "baseSha"),
+    proposalId: fact(reading, "proposalId"),
+    pullRequest: observedPullRequest(reading),
   };
 }
 
@@ -146,15 +199,14 @@ export interface ObservedDescriptionStatus {
 export async function observedDescriptionStatus(
   page: Page,
 ): Promise<ObservedDescriptionStatus | undefined> {
-  const card = cardWith(page, "cwb-description-status");
-  if (!(await present(card))) return undefined;
-  const state = card.getByTestId("cwb-description-status");
+  const reading = await readCard(cardWith(page, "cwb-description-status"));
+  if (reading === undefined) return undefined;
   return {
-    state: await attribute(state, "data-state"),
-    reason: await attribute(state, "data-reason"),
-    headSha: await fact(card, "headSha"),
-    generationVersion: Number(await fact(card, "generationVersion")),
-    reviewable: await present(card.getByTestId("cwb-description-review")),
+    state: displayed(reading.state, "description state"),
+    reason: displayed(reading.reason, "description reason"),
+    headSha: fact(reading, "headSha"),
+    generationVersion: Number(fact(reading, "generationVersion")),
+    reviewable: reading.testIds.includes("cwb-description-review"),
   };
 }
 
@@ -169,31 +221,32 @@ export interface ObservedCiReadiness {
   readonly advisoryChecks: GitCiCheckCounts;
 }
 
-async function checkCounts(
-  card: Locator,
-  kind: "required" | "advisory",
-): Promise<GitCiCheckCounts> {
-  const group = card.locator(`[data-checks="${kind}"]`);
-  const counts = await Promise.all(
-    CHECK_COUNTS.map(
-      async (name) =>
-        [name, Number(await textOf(group.locator(`[data-count="${name}"] dd`)))] as const,
-    ),
-  );
+function checkCounts(reading: CardReading, kind: "required" | "advisory"): GitCiCheckCounts {
+  const group = reading.checks[kind];
+  if (group === undefined) {
+    throw new Error(`the Code task did not display the ${kind} CI check counts`);
+  }
+  const counts = CHECK_COUNTS.map((name) => {
+    const value = Number(group[name]);
+    if (!Number.isInteger(value) || value < 0) {
+      throw new Error(`the Code task displayed no ${kind} "${name}" CI check count`);
+    }
+    return [name, value] as const;
+  });
   return Object.fromEntries(counts) as unknown as GitCiCheckCounts;
 }
 
 /** The CI readiness card, or `undefined` before a pull request exists to observe checks for. */
 export async function observedCiReadiness(page: Page): Promise<ObservedCiReadiness | undefined> {
-  const card = cardWith(page, "cwb-ci-state");
-  if (!(await present(card))) return undefined;
-  const state = await attribute(card.getByTestId("cwb-ci-state"), "data-state");
+  const reading = await readCard(cardWith(page, "cwb-ci-state"));
+  if (reading === undefined) return undefined;
+  const state = displayed(reading.state, "CI readiness state");
   if (state === "unobserved") return undefined;
   return {
     state,
-    headSha: await fact(card, "headSha"),
-    requiredChecks: await checkCounts(card, "required"),
-    advisoryChecks: await checkCounts(card, "advisory"),
+    headSha: fact(reading, "headSha"),
+    requiredChecks: checkCounts(reading, "required"),
+    advisoryChecks: checkCounts(reading, "advisory"),
   };
 }
 
@@ -227,15 +280,14 @@ export interface ObservedCommitReceipt {
 export async function observedCommitReceipt(
   page: Page,
 ): Promise<ObservedCommitReceipt | undefined> {
-  const card = cardWith(page, "cwb-commit-result");
-  if (!(await present(card))) return undefined;
-  const state = card.getByTestId("cwb-commit-result");
+  const reading = await readCard(cardWith(page, "cwb-commit-result"));
+  if (reading === undefined) return undefined;
   return {
-    status: await attribute(state, "data-state"),
-    reason: await attribute(state, "data-reason"),
-    headSha: await fact(card, "headSha"),
-    verificationEvidenceId: await fact(card, "verificationEvidenceId"),
-    proposalId: await fact(card, "proposalId"),
+    status: displayed(reading.state, "commit receipt status"),
+    reason: displayed(reading.reason, "commit receipt reason"),
+    headSha: fact(reading, "headSha"),
+    verificationEvidenceId: fact(reading, "verificationEvidenceId"),
+    proposalId: fact(reading, "proposalId"),
   };
 }
 
