@@ -116,6 +116,10 @@ install remains on the previous version or Keiko reopens the previous version.
 
 **Root Cause**
 
+Current evaluation releases require reviewed manual installation, and the repaired native coordinator
+still refuses update acceptance pending qualification. The automatic fallback described below is the
+qualified release contract, not evidence that a current release can replace an installation this way.
+
 The manual re-download fallback only replaces an already-attested managed install when the clicked
 package is valid, stable, newer than the managed install, and the current local Keiko server can be
 stopped before the file swap. It refuses older, equal, beta, malformed, wrong-platform, or

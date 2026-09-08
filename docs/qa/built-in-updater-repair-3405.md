@@ -1140,6 +1140,76 @@ Diagnostic `763a1b93d`, run `34156460872`, passed the native local-directory, re
 mapped-SMB rejection checks, then failed the shared TypeScript local positive. The PowerShell carrier
 remains under diagnosis; production eligibility and KHA1 remain disabled.
 
+### Current UI and macOS replay
+
+With official Node 24.18.0, the UI coverage run passed 432 files and 7,516 tests (one
+skipped), in 144.71 seconds. Coverage measured 89.91% statements, 82.34% branches,
+91.49% functions and 92.79% lines. The separate macOS native quality command passed
+compiler, static analyzer and boundary checks; this is host-native boundary evidence,
+not the outstanding signed N−1/N upgrade qualification.
+
+The eight update browser journeys passed in 1.3 minutes, including actual BFF outage
+and reconnection. The regenerated manifest at 2026-09-07T19:58:34.304Z matches all eight
+UI source and four harness hashes. Its thirteen fidelity captures pass, and all twelve
+axe captures have zero violations. These generated artifacts remain source-bound;
+the final merge-time UI receipt still requires the audited delivery commit.
+
+Error observability (eleven call sites), E2E wiring, changed-UI i18n, portable manifest,
+portable approvals, release impact, release alignment and zizmor anchors passed.
+Release alignment identifies existing 0.3.17 consistently; it does not publish or qualify
+this repair. Windows diagnostic `d5fb829b5` / run `34157645968` adds only closed diagnostic
+stage tokens to isolate the remaining shared locality query failure.
+
+### Packaging and documentation follow-up
+
+`portable:manual-review` prepared the disposable 0.3.17 fixture inventory; this command
+prepares scenarios and is not a real packaged upgrade run. `smoke:portable-launch-setup`
+passed all three target formats. Invoking `smoke:portable-secure-read` without its required
+stage-root and platform arguments exited 2; no staged bundle was available from that
+preparation, so this standalone artifact smoke remains unverified. The macOS native gate
+separately passed its actual secure-read protocol/load checks.
+
+Editor release evidence passed B1 (zero first-load editor markers across nineteen scripts),
+B2 (1,002.6 KiB / 2,560 KiB) and B3 (110.1 KiB / 750 KiB). Dependency currency passed
+thirty-eight governed dependency and fourteen action rows. Independent documentation review
+found and settled two stale descriptions: Windows generation consumers are implemented,
+and automatic replacement remains a qualified future contract while coordinator acceptance
+is disabled. No production eligibility or acceptance criterion was changed by these edits.
+
+Diagnostic `d5fb829b5` failed after the local TypeScript query and diagnostic each consumed
+approximately ten seconds; the closed diagnostic result was `spawn-error`. This suggests
+but does not yet establish a timeout. Native local/rename/mapped-SMB checks passed again.
+The diagnostic-only Knip failure names the temporary probe file, which must be removed
+before final delivery gates. The full package coverage run remains in progress against
+frozen product sources; its known baseline source-count assertion is still red.
+
+### Measured coverage and governed baseline refresh
+
+The official-Node package coverage run completed in 1,455.82 seconds: 1,802 files passed,
+two failed and seven skipped; 36,098 tests passed, two failed and twenty-seven skipped.
+It remains a red test run. Aggregate coverage measured 90.83% statements, 84.53% branches,
+95.59% functions and 93.02% lines. Before any refresh, all twenty-five package metric
+floors, two release targets and sixty-nine governed file floors passed.
+
+The documented writer generated a candidate baseline from these fresh measurements.
+Review verified that every effective package floor (`min(85, recorded percentage)`) held
+or rose, all absolute file floors were unchanged, and existing file ratchets held or rose
+with unchanged tolerance. An independent static review confirmed zero weakening. The
+accepted artifact updates contracts/security/server inventories to 195/28/615 and adds
+two mechanically selected file floors. All sixty-six baseline tests now pass; the refreshed
+quality gate passes all twenty-five packages and seventy-one governed file floors.
+
+The other coverage failure was a 100 ms startup-challenge fixture returning `start-timeout`.
+That exact case passed in isolation under coverage with unchanged limits. A full-file replay
+then passed that case but timed out in the separate first lifecycle test at its existing
+fifteen-second bound. This file remains under focused diagnosis; no limit has been raised
+and no complete current-head root test pass is claimed.
+
+Windows diagnostic `dde12fba4` / run `34159212513` reliably classified `timeout-assembly`.
+The preceding `timeout-path` classification was ambiguous because Windows CRLF could skip
+one instrumentation replacement. Diagnostic-only normalization and exact-match assertions
+now guard every substitution. No production path, timeout or trust authority was changed.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification
