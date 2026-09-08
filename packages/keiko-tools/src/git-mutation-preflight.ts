@@ -246,10 +246,12 @@ function preflightPush(
   // is the checked-out branch's head, so a push naming any other branch (or issued from a detached
   // head, where `currentBranchName` is absent) is refused outright rather than judged by a head the
   // snapshot never read for it.
+  // One root cause, one finding: once the named branch is not the checkout, the drift comparison
+  // has no valid signal (it would compare against another branch's head) and its "retry" hint would
+  // contradict the "re-target" hint of the finding that actually explains the refusal.
   if (snapshot.currentBranchName !== inputs.sourceBranchName) {
     findings.push(blocking("source-branch-not-checked-out"));
-  }
-  if (inputs.verifiedCommitSha !== snapshot.headSha) {
+  } else if (inputs.verifiedCommitSha !== snapshot.headSha) {
     findings.push(blocking("verified-commit-drifted"));
   }
   if (snapshot.remoteReachable === false) {

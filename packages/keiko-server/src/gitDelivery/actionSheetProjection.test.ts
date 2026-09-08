@@ -201,6 +201,11 @@ describe("buildActionSheetFromFacts", () => {
     const hints = sheet.recovery.map((hint) => hint.actionHint);
     expect(hints).toContain("recover-via-strategy");
     expect(hints).not.toContain("configure-upstream");
+    // The hint carries the concrete governed strategy (contract: present iff recover-via-strategy).
+    // CLEAN_SNAPSHOT stages three files, so the worktree counts as dirty and the strategy that
+    // preserves those changes while re-attaching the head is stash-and-reset.
+    const strategyHint = sheet.recovery.find((hint) => hint.actionHint === "recover-via-strategy");
+    expect(strategyHint?.suggestedRecoveryStrategy).toBe("stash-and-reset");
   });
 
   it("emits a recover-via-strategy hint with a concrete strategy for a dirty recovery", () => {

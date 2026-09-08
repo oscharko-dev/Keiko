@@ -237,6 +237,27 @@ describe("preflight — push (upstream readiness and remote reachability)", () =
     expect(codes(push, snapshot())).not.toContain("source-branch-not-checked-out");
   });
 
+  // Keiko for Quality on #3394: a wrong-branch push whose pinned commit also differs from the
+  // checked-out head is ONE root cause. The drift comparison has no valid signal against another
+  // branch's head, and its "retry" hint would contradict the "re-target" hint that explains the
+  // refusal -- so it is reported alone, and the drift finding is reserved for the checked-out branch.
+  it("reports a wrong-branch push once, without the meaningless drift finding for another branch's head", () => {
+    const report = evaluateGitPreflight(
+      { ...push, sourceBranchName: "feature/other", verifiedCommitSha: "b".repeat(40) },
+      snapshot({ headSha: "a".repeat(40) }),
+    );
+    expect(report.ok).toBe(false);
+    expect(report.blocking.map((f) => f.code)).toEqual(["source-branch-not-checked-out"]);
+  });
+
+  it("still reports drift for the checked-out branch when the pinned commit moved", () => {
+    const report = evaluateGitPreflight(
+      { ...push, verifiedCommitSha: "b".repeat(40) },
+      snapshot({ headSha: "a".repeat(40) }),
+    );
+    expect(report.blocking.map((f) => f.code)).toEqual(["verified-commit-drifted"]);
+  });
+
   it("permits setting an upstream on first push", () => {
     expect(
       evaluateGitPreflight({ ...push, setUpstreamTracking: true }, snapshot({ hasUpstream: false }))

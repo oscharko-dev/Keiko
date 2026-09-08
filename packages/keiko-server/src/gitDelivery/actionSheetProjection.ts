@@ -205,7 +205,11 @@ function collectExpectedBlockers(
 // (GIT_PREFLIGHT_RECOVERY_ACTION_HINT); the "recover-via-strategy" hints below are produced separately
 // so they can carry a suggestedRecoveryStrategy.
 
+// Every code the shared table maps to "recover-via-strategy" belongs here, so that hint always
+// carries the concrete strategy the kernel would execute (the contract: present iff the hint is
+// recover-via-strategy). A detached head is re-attached by a governed recovery onto its target.
 const STRATEGY_RECOVERY_CODES: ReadonlySet<GitPreflightFindingCode> = new Set([
+  "detached-head",
   "dirty-worktree-impacts-recovery",
   "recovery-target-unset",
 ]);
