@@ -655,6 +655,7 @@ registerWindowRender("governedGit", (cfg, ctx) => {
         <GitClientWindow
           key={projectId ?? ""}
           projectId={projectId}
+          lockedToActiveRoot={!honorConfiguredRoot && ctx.activeBinding !== null}
           initialPath={initialPath}
           initialCommit={initialCommit}
           initialRepositoryDialog={initialRepositoryDialog}

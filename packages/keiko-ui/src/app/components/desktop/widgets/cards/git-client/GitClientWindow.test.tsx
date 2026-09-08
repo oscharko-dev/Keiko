@@ -3385,3 +3385,42 @@ describe("GitClientWindow — Connect to Chat", () => {
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 });
+
+describe("desktop-locked active root (#3390, rehearsal run-21)", () => {
+  // The Coding Workbench's task worktree: registered server-side, deliberately absent from the
+  // user-facing repository list, and the root the desktop locks Git to while that workspace is
+  // active. Judging it against the list stranded the operator on "unavailable" instead of the
+  // merge pane.
+  const MANAGED_ROOT = "/state/task-workspaces/repo_alpha/ws_1";
+
+  it("binds a root the desktop locked to the active task workspace although the list omits it", async () => {
+    const updateCfg = vi.fn();
+    const client = makeClient();
+    render(
+      <GitClientWindow
+        client={client}
+        updateCfg={updateCfg}
+        projectId={MANAGED_ROOT}
+        lockedToActiveRoot
+      />,
+    );
+    await waitFor(() => {
+      expect(client.getStatus).toHaveBeenCalledWith(MANAGED_ROOT);
+    });
+    expect(
+      screen.queryByText("This local repository is unavailable. Choose another repository."),
+    ).toBeNull();
+    expect(updateCfg).not.toHaveBeenCalledWith({ projectPath: "" });
+  });
+
+  it("still treats an unlisted configured root as unavailable when the desktop did not lock it", async () => {
+    const updateCfg = vi.fn();
+    const client = makeClient();
+    render(<GitClientWindow client={client} updateCfg={updateCfg} projectId={MANAGED_ROOT} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This local repository is unavailable. Choose another repository.",
+    );
+    expect(updateCfg).toHaveBeenCalledWith({ projectPath: "" });
+    expect(client.getStatus).not.toHaveBeenCalled();
+  });
+});

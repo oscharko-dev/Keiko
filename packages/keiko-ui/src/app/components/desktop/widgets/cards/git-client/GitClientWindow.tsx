@@ -151,6 +151,10 @@ function useRepositoryCommitDraft(repositoryPath: string | null): RepositoryComm
 export interface GitClientWindowProps {
   /** Repository path to preselect when opened from Files, Editor, or Runtime (resolveBoundRoot). */
   readonly projectId?: string | undefined;
+  /** The desktop locked this window to the active task workspace: `projectId` is that managed
+   * worktree, registered server-side and deliberately absent from the user-facing repository list,
+   * so it is bound as-is instead of being judged against that list (#3390). */
+  readonly lockedToActiveRoot?: boolean | undefined;
   readonly initialPath?: string | undefined;
   readonly initialCommit?: string | undefined;
   readonly initialRepositoryDialog?: "clone" | "open" | undefined;
@@ -774,6 +778,7 @@ function repositoryRootForMutation(
 
 export function GitClientWindow({
   projectId,
+  lockedToActiveRoot = false,
   initialPath,
   initialCommit,
   initialRepositoryDialog,
@@ -1266,6 +1271,14 @@ export function GitClientWindow({
     const configuredPath = projectId !== undefined && projectId !== "" ? projectId : null;
     const requestedPath = selectedPath ?? configuredPath;
     if (requestedPath === null) return;
+    // A root the desktop locked to the active task workspace is a managed worktree: the server
+    // registers it for trust, manifests and verification and keeps it out of the user-facing
+    // repository list on purpose, so the recents-membership check below could only ever declare it
+    // unavailable and strand the operator (#3390, rehearsal run-21). It is bound as-is.
+    if (lockedToActiveRoot && requestedPath === configuredPath) {
+      if (selectedPath !== requestedPath) setSelectedPath(requestedPath);
+      return;
+    }
     const selected = repositories.find((repository) => repository.path === requestedPath);
     if (selected?.available === true && selected.workspaceAvailable === true) {
       if (selectedPath !== requestedPath) setSelectedPath(requestedPath);
@@ -1280,7 +1293,16 @@ export function GitClientWindow({
           : "gitClientWindow.repository.workspaceUnavailable",
       ),
     );
-  }, [optionalT, projectId, repositories, reposError, reposLoading, selectedPath, updateCfg]);
+  }, [
+    lockedToActiveRoot,
+    optionalT,
+    projectId,
+    repositories,
+    reposError,
+    reposLoading,
+    selectedPath,
+    updateCfg,
+  ]);
 
   const active = activeGitClientState({
     selectedPath,
