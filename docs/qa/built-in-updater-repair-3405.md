@@ -1409,6 +1409,39 @@ test SHA-256: `e5fae99c156385332fbb8b3b92892d551932282849fed5fa421c51c67d8214fa`
 branch's protected-branch rejection is expected and is not a target-branch CI receipt. Coverage and
 Sonar from this manual run still select `dev`, as documented above.
 
+### Remediation performance repair re-review
+
+The Update window now reuses only the server-returned remediation projection during unchanged
+progress polls. Its key includes target, reviewed impact, session identity/location, persistence,
+and lifecycle state; ordinary progress/messages/timestamps do not invalidate it. Manual checks,
+actions, meaningful transitions and reconnect recovery refresh the projection. Unconditional
+initial/manual/action refreshes retain concurrent session/remediation loading.
+
+The private state scanner iterates directories incrementally and bounds entries (50000), depth (64),
+relative-path UTF-8 bytes (4096), and monotonic elapsed time (250 ms). Time checks occur before each
+further directory open and entry stat. This is a best-effort traversal budget between filesystem
+calls, not a hard deadline on an individual synchronous call. An incomplete traversal has an explicit
+private result: affected compatibility becomes manual review, snapshots fail before publication or
+pruning, and repairs stop before permission mutation. Public contracts remain unchanged.
+
+The owner passed **67 server tests and 54 UI tests**, with scoped ESLint/Prettier green. The new
+regressions verify unchanged-poll call counts with advancing progress, transition/reconnect/action
+refresh, concurrent initial requests, all four limits, no post-expiry entry syscall, no partial
+snapshot, and zero partial permission repair. Independent performance re-review found **zero
+findings** and verified the frozen source/test hashes. Earlier owner coverage used a text-only
+reporter and produced no persistent LCOV; those temporary paths are not union evidence. The lead's
+independent canonical-config replay now passed **67/67 server tests in 2.19 seconds** and
+**54/54 UI tests in 4.58 seconds**, with persistent isolated LCOV under
+`/tmp/keiko-3405-remediation-final-root-server-coverage` and
+`/tmp/keiko-3405-remediation-final-root-ui-coverage`. The focused server modules measured 84.88%
+statements, 74.29% branches, 90.9% functions and 87.83% lines; UpdateWindow measured
+95.57/90.98/96.58/97.58 respectively. This is isolated coverage, not the full 85% new-code gate.
+Final updater browser evidence remains pending.
+
+Frozen Update window/source-scanner SHA-256:
+`cc1e70deab4b55500fc3e219d7eba128e1ef0915c9a29dfd3fa475f995fa0199` /
+`d3663ca6d9d481267d32b1606c2015fc1284a560f37742b410a08bd6b357d9fa`.
+
 ### E2E gateway prerequisite and Windows verifier generation
 
 Both completed diagnostic Chromium smoke jobs (`34198289921` and `34201205684`) reported 60

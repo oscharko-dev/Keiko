@@ -232,6 +232,38 @@ function restoreClipboard(descriptor: PropertyDescriptor | undefined): void {
 }
 
 describe("UpdateWindow", () => {
+  it("starts initial remediation preparation before session status resolves", async () => {
+    let resolveSession!: (status: UpdateSessionStatus) => void;
+    const impactReport = preflight({
+      impact: {
+        entries: [],
+        releaseNoteBullets: ["Memory state requires repair."],
+        affectedStateStores: ["memory-vault"],
+        stateImpact: [],
+        userActionRequired: true,
+        remediations: ["repair-required"],
+      },
+    });
+    const status = sessionStatus();
+    const api = apiFor({ report: impactReport, status });
+    vi.mocked(api.fetchSessionStatus).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSession = resolve;
+        }),
+    );
+
+    render(<UpdateWindow api={api} />);
+
+    await waitFor(() => {
+      expect(api.prepareRemediationStatus).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByRole("heading", { name: "Update available" })).toBeNull();
+
+    resolveSession(status);
+    expect(await screen.findByRole("heading", { name: "Update available" })).toBeInTheDocument();
+  });
+
   it("renders a normal available update with collapsed patch notes and details", async () => {
     const api = apiFor();
     const { container } = render(<UpdateWindow api={api} />);
@@ -1492,6 +1524,9 @@ describe("UpdateWindow", () => {
         }),
       );
     });
+    await waitFor(() => {
+      expect(api.fetchRemediationStatus).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("uses the completed session target in the summary before a fresh update check", async () => {
@@ -2244,6 +2279,105 @@ describe("UpdateWindow", () => {
       });
       expect(screen.getByText("Update verified by the local Keiko backend.")).toBeInTheDocument();
       expect(screen.queryByText(/Reconnecting to the local Keiko backend/i)).toBeNull();
+      expect(api.fetchRemediationStatus).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reuses remediation across progress polls and refreshes it on lifecycle transitions", async () => {
+    vi.useFakeTimers();
+    const impactReport = preflight({
+      impact: {
+        entries: [],
+        releaseNoteBullets: ["Memory state requires repair."],
+        affectedStateStores: ["memory-vault"],
+        stateImpact: [
+          {
+            store: "memory-vault",
+            description: "Memory state requires repair.",
+            remediation: "repair-required",
+            userActionRequired: true,
+          },
+        ],
+        userActionRequired: true,
+        remediations: ["repair-required"],
+      },
+    });
+    const downloading = sessionStatus({
+      activeSession: session({
+        lifecycle: {
+          phase: "downloading",
+          progress: { completedBytes: 1, totalBytes: 100 },
+          cancellationCutoff: "not-reached",
+        },
+      }),
+    });
+    const progressed = sessionStatus({
+      activeSession: session({
+        updatedAt: "2026-06-30T12:00:02.000Z",
+        message: "Downloaded more bytes.",
+        lifecycle: {
+          phase: "downloading",
+          progress: { completedBytes: 50, totalBytes: 100 },
+          cancellationCutoff: "not-reached",
+        },
+      }),
+    });
+    const verifying = sessionStatus({
+      activeSession: session({
+        lifecycle: {
+          phase: "verifying",
+          progress: { completedBytes: 100, totalBytes: 100 },
+          cancellationCutoff: "mutation-started",
+        },
+      }),
+    });
+    const completed = sessionStatus({
+      lastSession: session({
+        phase: "succeeded",
+        lifecycle: {
+          phase: "succeeded",
+          progress: { completedBytes: 100, totalBytes: 100 },
+          cancellationCutoff: "handoff-committed",
+        },
+        cancelable: false,
+        restartRequired: false,
+      }),
+    });
+    const api = apiFor({ report: impactReport, status: downloading });
+    vi.mocked(api.fetchSessionStatus)
+      .mockResolvedValueOnce(downloading)
+      .mockResolvedValueOnce(progressed)
+      .mockResolvedValueOnce(verifying)
+      .mockResolvedValueOnce(completed);
+
+    try {
+      render(<UpdateWindow api={api} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(api.prepareRemediationStatus).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_500);
+      });
+      expect(api.prepareRemediationStatus).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("progressbar", { name: "Update progress" })).toHaveAttribute(
+        "value",
+        "50",
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_500);
+      });
+      expect(api.prepareRemediationStatus).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_500);
+      });
+      expect(api.prepareRemediationStatus).toHaveBeenCalledTimes(3);
+      expect(api.fetchSessionStatus).toHaveBeenCalledTimes(4);
     } finally {
       vi.useRealTimers();
     }

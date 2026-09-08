@@ -1,5 +1,6 @@
-import { lstatSync, readdirSync } from "node:fs";
+import { lstatSync, opendirSync, type Dir } from "node:fs";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import type { UpdateCompatibilityScan, UpdateStateStore } from "@oscharko-dev/keiko-contracts";
 import { UPDATE_STATE_STORES } from "@oscharko-dev/keiko-contracts/runtime/update-local-state";
 
@@ -27,20 +28,65 @@ export interface RetainedNode {
   readonly category?: ArtifactCategory | undefined;
 }
 
-export interface StateScan {
+interface StateScanResult {
   readonly status: UpdateCompatibilityScan["stateDirStatus"];
   readonly files: readonly ArtifactNode[];
   readonly directories: readonly ArtifactNode[];
   readonly retained: readonly RetainedNode[];
 }
 
+export type StateScanLimit = "entry-count" | "depth" | "relative-path-bytes" | "elapsed-time";
+
+export type StateScan = StateScanResult &
+  (
+    | { readonly completion: "complete" }
+    | { readonly completion: "incomplete"; readonly limit: StateScanLimit }
+  );
+
+interface StateScanOptions {
+  readonly maxEntries?: number | undefined;
+  readonly maxDepth?: number | undefined;
+  readonly maxRelativePathBytes?: number | undefined;
+  readonly maxDurationMs?: number | undefined;
+  readonly now?: (() => number) | undefined;
+}
+
+interface ScanLimits {
+  readonly maxEntries: number;
+  readonly maxDepth: number;
+  readonly maxRelativePathBytes: number;
+  readonly maxDurationMs: number;
+}
+
 interface WalkAcc {
   files: ArtifactNode[];
   directories: ArtifactNode[];
   retained: RetainedNode[];
+  limit?: StateScanLimit | undefined;
+  entries: number;
+}
+
+interface WalkContext {
+  readonly limits: ScanLimits;
+  readonly startedAt: number;
+  readonly now: () => number;
 }
 
 export const UPDATE_DIR = "updates";
+
+const DEFAULT_SCAN_LIMITS: ScanLimits = {
+  maxEntries: 50_000,
+  maxDepth: 64,
+  maxRelativePathBytes: 4_096,
+  maxDurationMs: 250,
+};
+
+const SCAN_LIMIT_LABELS: Readonly<Record<StateScanLimit, string>> = {
+  "entry-count": "entry-count",
+  depth: "depth",
+  "relative-path-bytes": "relative-path-size",
+  "elapsed-time": "elapsed-time",
+};
 
 export const CATEGORY_STORE: Readonly<Record<ArtifactCategory, UpdateStateStore>> = {
   lifecycle: "server-runtime",
@@ -127,13 +173,9 @@ function retainUnreadable(
   acc.retained.push(retainedNode(relPath.length === 0 ? "." : relPath, category));
 }
 
-function directoryNames(
-  absDir: string,
-  relDir: string,
-  acc: WalkAcc,
-): readonly string[] | undefined {
+function openDirectory(absDir: string, relDir: string, acc: WalkAcc): Dir | undefined {
   try {
-    return readdirSync(absDir);
+    return opendirSync(absDir);
   } catch (error) {
     if (!isInspectableFsError(error)) throw error;
     retainUnreadable(relDir, topCategory(relDir), acc);
@@ -141,12 +183,33 @@ function directoryNames(
   }
 }
 
+function scanLimits(options: StateScanOptions): ScanLimits {
+  return {
+    maxEntries: options.maxEntries ?? DEFAULT_SCAN_LIMITS.maxEntries,
+    maxDepth: options.maxDepth ?? DEFAULT_SCAN_LIMITS.maxDepth,
+    maxRelativePathBytes: options.maxRelativePathBytes ?? DEFAULT_SCAN_LIMITS.maxRelativePathBytes,
+    maxDurationMs: options.maxDurationMs ?? DEFAULT_SCAN_LIMITS.maxDurationMs,
+  };
+}
+
+function stopScan(acc: WalkAcc, limit: StateScanLimit): void {
+  acc.limit ??= limit;
+}
+
+function durationExhausted(acc: WalkAcc, context: WalkContext): boolean {
+  if (context.now() - context.startedAt < context.limits.maxDurationMs) return false;
+  stopScan(acc, "elapsed-time");
+  return true;
+}
+
 function inspectedStat(
   absPath: string,
   relPath: string,
   category: ArtifactCategory | undefined,
   acc: WalkAcc,
+  context: WalkContext,
 ): ReturnType<typeof lstatSync> | undefined {
+  if (durationExhausted(acc, context)) return undefined;
   try {
     return lstatSync(absPath);
   } catch (error) {
@@ -156,9 +219,15 @@ function inspectedStat(
   }
 }
 
-function visitStateNode(absPath: string, relPath: string, acc: WalkAcc): void {
+function visitStateNode(
+  absPath: string,
+  relPath: string,
+  depth: number,
+  acc: WalkAcc,
+  context: WalkContext,
+): void {
   const category = topCategory(relPath);
-  const stat = inspectedStat(absPath, relPath, category, acc);
+  const stat = inspectedStat(absPath, relPath, category, acc, context);
   if (stat === undefined) return;
   if (stat.isSymbolicLink()) {
     acc.retained.push(retainedNode(relPath, category));
@@ -170,7 +239,11 @@ function visitStateNode(absPath: string, relPath: string, acc: WalkAcc): void {
       return;
     }
     acc.directories.push({ relPath, absPath, category });
-    walkState(absPath, relPath, acc);
+    if (depth >= context.limits.maxDepth) {
+      stopScan(acc, "depth");
+      return;
+    }
+    walkState(absPath, relPath, depth + 1, acc, context);
     return;
   }
   if (stat.isFile() && category !== undefined && stat.nlink <= 1) {
@@ -180,34 +253,86 @@ function visitStateNode(absPath: string, relPath: string, acc: WalkAcc): void {
   acc.retained.push(retainedNode(relPath, category));
 }
 
-function walkState(absDir: string, relDir: string, acc: WalkAcc): void {
-  const names = directoryNames(absDir, relDir, acc);
-  if (names === undefined) return;
-  for (const name of names) {
-    const absPath = join(absDir, name);
-    const relPath = childPath(relDir, name);
-    visitStateNode(absPath, relPath, acc);
+function readDirectoryEntry(directory: Dir, relDir: string, acc: WalkAcc): string | undefined {
+  try {
+    return directory.readSync()?.name;
+  } catch (error) {
+    if (!isInspectableFsError(error)) throw error;
+    retainUnreadable(relDir, topCategory(relDir), acc);
+    return undefined;
   }
 }
 
-export function scanStateDir(stateDir: string): StateScan {
+function walkState(
+  absDir: string,
+  relDir: string,
+  depth: number,
+  acc: WalkAcc,
+  context: WalkContext,
+): void {
+  if (durationExhausted(acc, context)) return;
+  const directory = openDirectory(absDir, relDir, acc);
+  if (directory === undefined) return;
+  try {
+    while (acc.limit === undefined && !durationExhausted(acc, context)) {
+      const name = readDirectoryEntry(directory, relDir, acc);
+      if (name === undefined) return;
+      if (acc.entries >= context.limits.maxEntries) {
+        stopScan(acc, "entry-count");
+        return;
+      }
+      acc.entries += 1;
+      const relPath = childPath(relDir, name);
+      if (Buffer.byteLength(relPath, "utf8") > context.limits.maxRelativePathBytes) {
+        stopScan(acc, "relative-path-bytes");
+        return;
+      }
+      visitStateNode(join(absDir, name), relPath, depth, acc, context);
+    }
+  } finally {
+    directory.closeSync();
+  }
+}
+
+function resultFromAcc(status: StateScan["status"], acc: WalkAcc): StateScan {
+  const result = {
+    status,
+    files: acc.files,
+    directories: acc.directories,
+    retained: acc.retained,
+  };
+  return acc.limit === undefined
+    ? { ...result, completion: "complete" }
+    : { ...result, completion: "incomplete", limit: acc.limit };
+}
+
+function emptyScan(status: StateScan["status"]): StateScan {
+  return { status, completion: "complete", files: [], directories: [], retained: [] };
+}
+
+export function incompleteScanWarning(scan: StateScan): string | undefined {
+  if (scan.completion === "complete") return undefined;
+  return `Runtime state scan stopped after reaching the ${SCAN_LIMIT_LABELS[scan.limit]} safety limit; partial traversal requires manual review.`;
+}
+
+export function scanStateDir(stateDir: string, options: StateScanOptions = {}): StateScan {
   try {
     const root = lstatSync(stateDir);
-    if (root.isSymbolicLink())
-      return { status: "symlink", files: [], directories: [], retained: [] };
-    if (!root.isDirectory()) {
-      return { status: "not-directory", files: [], directories: [], retained: [] };
-    }
+    if (root.isSymbolicLink()) return emptyScan("symlink");
+    if (!root.isDirectory()) return emptyScan("not-directory");
     const acc = {
       files: [] as ArtifactNode[],
       directories: [] as ArtifactNode[],
       retained: [] as RetainedNode[],
+      entries: 0,
     };
-    walkState(stateDir, "", acc);
-    return { status: "directory", ...acc };
+    const now = options.now ?? performance.now.bind(performance);
+    const context = { limits: scanLimits(options), startedAt: now(), now };
+    walkState(stateDir, "", 0, acc, context);
+    return resultFromAcc("directory", acc);
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
-      return { status: "absent", files: [], directories: [], retained: [] };
+      return emptyScan("absent");
     }
     throw error;
   }
