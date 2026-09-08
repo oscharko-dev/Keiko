@@ -1269,6 +1269,18 @@ validation. All-report preliminary new-code coverage is 83.8% against 85%; meani
 Windows recovery and generation-signing/staging cases are under test. No coverage or source
 mapping gate is claimed green until the complete reports are refreshed.
 
+### Additional Windows recovery authority regressions
+
+Four test-only scenarios now cover legitimate pre-acceptance settlement, current-generation
+drift before that settlement, a native launch exception before child PID publication, and
+candidate-generation drift after native recovery. The fixture constructs pre-acceptance state
+before any accepted receipt exists; it does not regress the persisted WAL. Drift retains the
+WAL, and the launch-failure retry proves that the live recovery owner prevents a second launch.
+The complete normal-startup file passed all 28 tests with isolated coverage in 17.78 seconds;
+scoped formatting/lint and lead diff review passed. Frozen test SHA-256:
+`c7237e3426de96ea0519b56f5fec799419cd06b18c27c65cf7267996c694fbcc`.
+The isolated report remains separate from the full-suite coverage reports.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification

@@ -321,6 +321,36 @@ function windowsGenerationBinding(
 }
 
 type WindowsActiveSelection = "candidate" | "current" | "third";
+type WindowsRecoveryHistory = "accepted" | "unaccepted";
+
+interface WindowsRecoverySessionFacts {
+  readonly cancelable: boolean;
+  readonly cancellationCutoff: "handoff-committed" | "not-reached";
+  readonly lifecyclePhase: "handoff-pending" | "staging";
+  readonly message: string;
+  readonly phase: "restart-required" | "running";
+  readonly restartRequired: boolean;
+}
+
+function windowsRecoverySessionFacts(history: WindowsRecoveryHistory): WindowsRecoverySessionFacts {
+  return history === "unaccepted"
+    ? {
+        cancelable: true,
+        lifecyclePhase: "staging" as const,
+        cancellationCutoff: "not-reached" as const,
+        message: "Preparing handoff.",
+        phase: "running" as const,
+        restartRequired: false,
+      }
+    : {
+        cancelable: false,
+        lifecyclePhase: "handoff-pending" as const,
+        cancellationCutoff: "handoff-committed" as const,
+        message: "Native handoff pending.",
+        phase: "restart-required" as const,
+        restartRequired: true,
+      };
+}
 
 interface GeneratedWindowsGeneration {
   readonly file: string;
@@ -493,6 +523,7 @@ function appendReceiptSequence(
 
 async function prepareWindows(
   active: WindowsActiveSelection = "candidate",
+  history: WindowsRecoveryHistory = "accepted",
 ): Promise<WindowsNormalStartupFixture> {
   const root = mkdtempSync(join(tmpdir(), "keiko-windows-normal-startup-"));
   roots.push(root);
@@ -533,6 +564,7 @@ async function prepareWindows(
   writeFileSync(join(stateDir, "portable-install-state.json"), registration);
   const activationId = "a".repeat(32);
   const sessionId = "session-windows-normal-startup";
+  const sessionFacts = windowsRecoverySessionFacts(history);
   const stageRoot = join(root, "install", ".keiko-portable-updates", "stage-1");
   const candidateRoot = join(stageRoot, "Keiko");
   const currentSetup = windowsSetup("1.2.2", currentBinding);
@@ -616,20 +648,20 @@ async function prepareWindows(
     correlationId: "corr-windows-normal-startup",
     packageName: "@oscharko-dev/keiko",
     targetVersion: "1.2.3",
-    phase: "restart-required",
+    phase: sessionFacts.phase,
     lifecycle: {
-      phase: "handoff-pending",
+      phase: sessionFacts.lifecyclePhase,
       progress: { completedBytes: 1, totalBytes: 1 },
-      cancellationCutoff: "handoff-committed",
+      cancellationCutoff: sessionFacts.cancellationCutoff,
     },
     failureReason: "none",
     packageManager: "npm",
     startedAt: "2026-09-07T09:00:00.000Z",
     updatedAt: "2026-09-07T09:00:00.000Z",
-    cancelable: false,
+    cancelable: sessionFacts.cancelable,
     retryable: false,
-    restartRequired: true,
-    message: "Native handoff pending.",
+    restartRequired: sessionFacts.restartRequired,
+    message: sessionFacts.message,
   };
   const state = localState.writeRuntimeState({
     ...initial,
@@ -639,7 +671,7 @@ async function prepareWindows(
       activationId,
       planSha256,
       coordinatorSha256,
-      coordinatorId: coordinatorSha256,
+      ...(history === "accepted" ? { coordinatorId: coordinatorSha256 } : {}),
       intentRevision: plan.aggregateRevision,
       checkpoint: "prepared",
       receiptSequence: 0,
@@ -663,6 +695,10 @@ async function prepareWindows(
     state,
     stateDir,
   } satisfies WindowsNormalStartupFixture;
+  expect(
+    lock.acquire({ sessionId, targetVersion: "1.2.3", startedAt: session.startedAt, pid: 101 }),
+  ).toBe(true);
+  if (history === "unaccepted") return { ...fixture, lock, state };
   const entries = receiptEntriesFor(active);
   const receiptSha256s = appendReceiptSequence(fixture, entries);
   let terminalState = state;
@@ -679,9 +715,6 @@ async function prepareWindows(
       },
     });
   }
-  expect(
-    lock.acquire({ sessionId, targetVersion: "1.2.3", startedAt: session.startedAt, pid: 101 }),
-  ).toBe(true);
   expect(lock.updateChildPid(sessionId, 202)).toBe(true);
   return { ...fixture, lock, state: terminalState };
 }
@@ -734,6 +767,53 @@ describe("portable normal startup recovery", () => {
     expect(runNative).not.toHaveBeenCalled();
   });
 
+  it("settles a verified unaccepted Windows handoff before native recovery", async () => {
+    const fixture = await prepareWindows("current", "unaccepted");
+    const runNative = vi.fn(() => Promise.resolve({ status: "succeeded" as const }));
+
+    await expect(
+      reconcilePortableNormalStartup({
+        stateDir: fixture.stateDir,
+        target: "windows-x64",
+        expectedManagedRoot: fixture.managedRoot,
+        currentPid: 303,
+        processIdentity: "windows-preacceptance-cli",
+        pidAlive: () => false,
+        runNative,
+      }),
+    ).resolves.toEqual({ status: "normal" });
+
+    expect(fixture.localState.readRuntimeState()).toMatchObject({
+      activeSession: { sessionId: fixture.session.sessionId },
+      recovery: { status: "settled", sessionId: fixture.session.sessionId },
+    });
+    expect(fixture.localState.readRuntimeState().activationWal).toBeUndefined();
+    expect(runNative).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unaccepted Windows handoff when the N-1 generation no longer attests", async () => {
+    const fixture = await prepareWindows("current", "unaccepted");
+    writeFileSync(fixture.activeGenerationFile, "drifted N-1 generation bytes");
+    const beforeState = fixture.localState.readRuntimeState();
+    const runNative = vi.fn(() => Promise.resolve({ status: "succeeded" as const }));
+
+    await expect(
+      reconcilePortableNormalStartup({
+        stateDir: fixture.stateDir,
+        target: "windows-x64",
+        expectedManagedRoot: fixture.managedRoot,
+        currentPid: 303,
+        processIdentity: "windows-preacceptance-cli",
+        pidAlive: () => false,
+        runNative,
+      }),
+    ).resolves.toEqual({ status: "recovery-required" });
+
+    expect(inspectStateDirUpdateSessionLockForRecovery(fixture.stateDir)?.ownerPid).toBe(303);
+    expect(fixture.localState.readRuntimeState()).toEqual(beforeState);
+    expect(runNative).not.toHaveBeenCalled();
+  });
+
   it("recovers the verified Windows candidate through coordinator.exe and grants only N", async () => {
     const fixture = await prepareWindows("candidate");
     const runNative = vi.fn((input: PortableNativeRecoveryInput) => {
@@ -769,6 +849,43 @@ describe("portable normal startup recovery", () => {
       },
     });
     expect(runNative).toHaveBeenCalledOnce();
+  });
+
+  it("anchors failed Windows native launch ownership before any child PID is published", async () => {
+    const fixture = await prepareWindows("candidate");
+    const runNative = vi.fn((input: PortableNativeRecoveryInput) => {
+      expect(input.coordinator).toBe(
+        join(portableHandoffRoot(fixture.stateDir, fixture.activationId), "coordinator.exe"),
+      );
+      throw new Error("native launch failed before child publication");
+    });
+
+    await expect(
+      reconcilePortableNormalStartup({
+        stateDir: fixture.stateDir,
+        target: "windows-x64",
+        expectedManagedRoot: fixture.managedRoot,
+        currentPid: 303,
+        processIdentity: "windows-recovery-cli",
+        pidAlive: () => false,
+        runNative,
+      }),
+    ).resolves.toEqual({ status: "recovery-required" });
+
+    expect(inspectStateDirUpdateSessionLockForRecovery(fixture.stateDir)?.childPid).toBe(303);
+    const retryNative = vi.fn(() => Promise.resolve({ status: "succeeded" as const }));
+    await expect(
+      reconcilePortableNormalStartup({
+        stateDir: fixture.stateDir,
+        target: "windows-x64",
+        expectedManagedRoot: fixture.managedRoot,
+        currentPid: 505,
+        processIdentity: "windows-retry-cli",
+        pidAlive: (pid) => pid === 303,
+        runNative: retryNative,
+      }),
+    ).resolves.toEqual({ status: "recovery-required" });
+    expect(retryNative).not.toHaveBeenCalled();
   });
 
   it("recovers a restored Windows N-1 without granting candidate rollback access", async () => {
@@ -847,6 +964,28 @@ describe("portable normal startup recovery", () => {
       expect(runNative).toHaveBeenCalledOnce();
     },
   );
+
+  it("withholds Windows recovery after native completion changes the candidate generation", async () => {
+    const fixture = await prepareWindows("candidate");
+    const runNative = vi.fn((input: PortableNativeRecoveryInput) => {
+      expect(input.onSpawn(404)).toBe(true);
+      writeFileSync(fixture.activeGenerationFile, "changed during native recovery");
+      return Promise.resolve({ status: "succeeded" as const });
+    });
+
+    await expect(
+      reconcilePortableNormalStartup({
+        stateDir: fixture.stateDir,
+        target: "windows-x64",
+        expectedManagedRoot: fixture.managedRoot,
+        currentPid: 303,
+        processIdentity: "windows-post-native-attestation-cli",
+        pidAlive: () => false,
+        runNative,
+      }),
+    ).resolves.toEqual({ status: "recovery-required" });
+    expect(runNative).toHaveBeenCalledOnce();
+  });
 
   it("treats an installation with no aggregate or interrupted anchors as fresh", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-normal-startup-fresh-"));
