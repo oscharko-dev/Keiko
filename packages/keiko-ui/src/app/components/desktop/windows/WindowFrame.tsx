@@ -864,7 +864,24 @@ function WindowFrameImpl({
     [api, win.id],
   );
   const openWindow = useCallback(
-    (type: WindowType, cfg?: AppWindow["cfg"]): string | null => api.add(type, cfg),
+    (type: WindowType, cfg?: AppWindow["cfg"]): string | null => {
+      const id = api.add(type, cfg);
+      // #3390: a window opened from inside another window receives focus, as on any desktop. The
+      // opener's own deferred raise (see `focusWindowForTarget`) yields to wherever focus has
+      // moved, so the new window also stays on top instead of landing behind its opener. Deferred
+      // one frame: the element exists only after React has committed the added window.
+      if (id !== null) {
+        requestAnimationFrame(() => {
+          const opened = document.querySelector<HTMLElement>(
+            `.window[data-window-id="${CSS.escape(id)}"]`,
+          );
+          if (opened !== null && !opened.contains(document.activeElement)) {
+            opened.focus({ preventScroll: true });
+          }
+        });
+      }
+      return id;
+    },
     [api],
   );
   const openEditorFile = useCallback<WorkspaceApi["openEditorFile"]>(
@@ -1008,7 +1025,13 @@ function WindowFrameImpl({
         return;
       }
       if (isInteractiveControlTarget(target)) {
-        window.setTimeout(() => api.focus(win.id), 0);
+        window.setTimeout(() => {
+          // #3390: a control inside this window may itself have opened ANOTHER window, which
+          // took focus and the top of the stack in the meantime. Raising this window regardless
+          // put the Coding Workbench back over the Pull Request window its own "Review exact
+          // draft" had just opened, every time -- the same guard the text-entry branch applies.
+          if (delayedFocusStillTargetsWindow(target)) api.focus(win.id);
+        }, 0);
         return;
       }
       api.focus(win.id);
