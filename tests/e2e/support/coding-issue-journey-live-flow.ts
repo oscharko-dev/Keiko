@@ -557,58 +557,30 @@ async function bindGitWindowToControlledRepository(
   }
 }
 
-async function waitForSyncExecute(page: Page, operation: "fetch" | "pull"): Promise<void> {
-  const response = await page.waitForResponse(
-    (candidate) =>
-      candidate.request().method() === "POST" &&
-      candidate.url().endsWith(`/api/git-delivery/${operation}/execute`),
-    // A real network git operation, not the 30s action-timeout default.
-    { timeout: 5 * 60_000 },
-  );
-  expect(response.ok(), `governed ${operation} failed with HTTP ${String(response.status())}`).toBe(
-    true,
-  );
-}
-
-async function updateControlledBaseThroughGovernedGit(
+/**
+ * Verifies, through the product's own reading, that the controlled base is current before any
+ * model spend. The governed fetch and pull are admitted under an accepted run's authority only
+ * (syncRoutes.ts: the approve route mints its one-use claim from the active run), so a fresh flow
+ * cannot bring the base current through the Git window -- real run-29's Fetch was refused
+ * `accepted-run-unavailable` -- and does not try to: the operator's fixture reset fetches and
+ * hard-resets the clone to `origin/master` before every flow. What the lane owes is the proof that
+ * this held: the rail-opened Git window binds the checkout and its sync control states
+ * "Up to date with <upstream>"; a base that is behind, ahead of or diverged from its upstream fails
+ * the flow closed before the model is paid.
+ */
+async function assertControlledBaseCurrentThroughGit(
   page: Page,
-  flow: QualificationFlowBinding,
   repositoryRoot: string,
 ): Promise<void> {
-  // Every flow, flow 1 included: bringing the controlled base up to date is what an operator does
-  // before accepting work, a fetch on an already current base is a no-op, and the step then proves
-  // the rail-opened Git window binds the checkout before any model spend rather than surfacing for
-  // the first time in flow 2 (real run-27).
   await openLiveWorkbench(page, repositoryRoot);
   const gitWindow = await openGovernedGitWindow(page, repositoryRoot, "rail");
-  await fetchThenPullControlledBase(page, gitWindow);
-}
-
-// `SyncControl` renders ONE button whose accessible name carries the state it currently offers:
-// "Run sync: Fetch" when up to date, "Run sync: Pull" only while the branch is behind, and
-// "Run sync: syncing" while busy. The lane used to click Fetch, then require a Pull to appear and
-// require Fetch to come back afterwards -- three assumptions that hold only when the controlled
-// base actually moved since the last flow, which is not the normal case. Nothing to pull is a
-// legitimate outcome of bringing the base up to date, so it is treated as one.
-async function fetchThenPullControlledBase(page: Page, gitWindow: Locator): Promise<void> {
   const sync = gitWindow.locator('button[aria-label^="Run sync: "]');
-  const fetched = waitForSyncExecute(page, "fetch");
-  await expect(sync).toHaveAttribute("aria-label", "Run sync: Fetch", { timeout: 60_000 });
-  await sync.click();
-  await fetched;
-  await expect(sync).not.toHaveAttribute("aria-label", "Run sync: syncing", { timeout: 60_000 });
-  if (!(await controlledBaseIsBehind(page, sync))) return;
-  const pulled = waitForSyncExecute(page, "pull");
-  await sync.click();
-  // `WorktreeMutationConfirmDialog` is an alertdialog, not a dialog: Playwright's role engine
-  // compares the computed role exactly, with no superclass fallback, so the previous
-  // `getByRole("dialog", …)` could never match and every flow after the first hung here.
-  await page
-    .getByRole("alertdialog", { name: "Confirm pull" })
-    .getByRole("button", { name: "Pull changes" })
-    .click();
-  await pulled;
-  await expect(sync).toHaveAttribute("aria-label", "Run sync: Fetch", { timeout: 60_000 });
+  await expect(sync).toBeVisible({ timeout: 60_000 });
+  if (await controlledBaseIsBehind(page, sync)) {
+    throw new Error(
+      "the controlled base is behind its upstream before the flow; the fixture reset must bring it to origin/master first",
+    );
+  }
 }
 
 /**
@@ -1585,7 +1557,7 @@ export async function runSelectedQualificationFlow(
   if (before.charged < previousCumulativeChargedNanoUsd) {
     throw new Error("durable spend ledger predates the prior completed qualification flow");
   }
-  await updateControlledBaseThroughGovernedGit(page, flow, env.repositoryRoot);
+  await assertControlledBaseCurrentThroughGit(page, env.repositoryRoot);
   const completed = await driveFlowToCompletedOutcome(
     page,
     flow,
