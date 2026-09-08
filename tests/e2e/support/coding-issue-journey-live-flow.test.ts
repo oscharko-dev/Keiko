@@ -219,6 +219,34 @@ describe("completed live qualification flow evidence", () => {
     );
   });
 
+  // #3390: a dress rehearsal against a private copy of the fixture must never be able to record
+  // counting evidence for the authorized host -- the override binds to redirected receipts.
+  it("rebinds the selected flow to a rehearsal copy only while receipts are redirected", () => {
+    expect(
+      selectedQualificationFlow({
+        KEIKO_QUALIFICATION_FLOW_ORDINAL: "1",
+        KEIKO_QUALIFICATION_REHEARSAL_REPOSITORY: "oscharko/Wegwerf-Repo-Probe",
+        KEIKO_QUALIFICATION_RECEIPTS_DIR: "/somewhere/else/receipts-rehearsal",
+      }),
+    ).toMatchObject({ ordinal: 1, repository: "oscharko/Wegwerf-Repo-Probe", issueNumber: 1 });
+    expect(() =>
+      selectedQualificationFlow({
+        KEIKO_QUALIFICATION_FLOW_ORDINAL: "1",
+        KEIKO_QUALIFICATION_REHEARSAL_REPOSITORY: "oscharko/Wegwerf-Repo-Probe",
+      }),
+    ).toThrow("requires KEIKO_QUALIFICATION_RECEIPTS_DIR");
+    expect(() =>
+      selectedQualificationFlow({
+        KEIKO_QUALIFICATION_FLOW_ORDINAL: "1",
+        KEIKO_QUALIFICATION_REHEARSAL_REPOSITORY: "not a slug",
+        KEIKO_QUALIFICATION_RECEIPTS_DIR: "/somewhere/else",
+      }),
+    ).toThrow("owner/repo slug");
+    expect(selectedQualificationFlow({ KEIKO_QUALIFICATION_FLOW_ORDINAL: "1" })).toMatchObject({
+      repository: "oscharko/Wegwerf-Repo",
+    });
+  });
+
   it("binds the exact completed outcome and bridges all durable spend since the prior flow", () => {
     const artifact = buildQualificationFlowArtifact({
       flow: FLOW,

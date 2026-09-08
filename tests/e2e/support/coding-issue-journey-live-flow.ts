@@ -346,7 +346,30 @@ export function selectedQualificationFlow(
       !Array.isArray(candidate) &&
       (candidate as Readonly<Record<string, unknown>>).ordinal === ordinal,
   );
-  return descriptorFlow(entry, ordinal);
+  return withRehearsalRepository(descriptorFlow(entry, ordinal), env);
+}
+
+/** A dress rehearsal may drive the selected flow against a private copy of the controlled fixture
+ * (#3390): the copy's slug replaces the descriptor's authorized host ONLY while the receipts are
+ * already redirected away from the tracked evidence directory, so a rehearsal can never record
+ * counting evidence for another repository -- and the rehearsal artifact carries the copy's slug,
+ * never the authorized host's. */
+function withRehearsalRepository(
+  flow: QualificationFlowBinding,
+  env: Readonly<Record<string, string | undefined>>,
+): QualificationFlowBinding {
+  const rehearsal = env.KEIKO_QUALIFICATION_REHEARSAL_REPOSITORY?.trim();
+  if (rehearsal === undefined || rehearsal.length === 0) return flow;
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(rehearsal)) {
+    throw new Error("KEIKO_QUALIFICATION_REHEARSAL_REPOSITORY must be an owner/repo slug");
+  }
+  const receipts = env.KEIKO_QUALIFICATION_RECEIPTS_DIR?.trim();
+  if (receipts === undefined || receipts.length === 0) {
+    throw new Error(
+      "KEIKO_QUALIFICATION_REHEARSAL_REPOSITORY requires KEIKO_QUALIFICATION_RECEIPTS_DIR to point away from the tracked evidence directory",
+    );
+  }
+  return { ...flow, repository: rehearsal };
 }
 
 function spendSnapshot(path: string): SpendSnapshot {
