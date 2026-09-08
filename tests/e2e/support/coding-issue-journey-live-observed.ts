@@ -36,9 +36,12 @@ const CHECK_COUNTS = ["total", "passed", "failed", "pending", "blocked", "unknow
  * card's own test id rather than by its translated `aria-label` keeps every reader below
  * independent of the operator's locale; taking the nearest ancestor rather than a `section:has(…)`
  * match keeps it off the workbench shell, which is itself a section and encloses every card. */
-function cardWith(page: Page, testId: string): Locator {
-  return page.getByTestId(testId).locator("xpath=ancestor::section[1]");
-}
+const CARD_TEST_IDS = [
+  "cwb-draft-delivery-state",
+  "cwb-description-status",
+  "cwb-ci-state",
+  "cwb-commit-result",
+] as const;
 
 async function present(locator: Locator): Promise<boolean> {
   return (await locator.count()) > 0;
@@ -58,49 +61,73 @@ interface CardReading {
   readonly testIds: readonly string[];
 }
 
+/** Every status card the Code task is showing, plus the run state, as they stood in ONE paint. */
+interface WorkbenchReading {
+  readonly state: string | null;
+  readonly cards: Readonly<Record<string, CardReading>>;
+}
+
 /**
- * Reads a whole card in ONE round trip, so every value comes from the same paint.
+ * Reads the WHOLE Code task in one round trip, so every value -- across cards, not just within one
+ * -- comes from the same paint.
  *
- * Reading attribute by attribute over separate round trips is a torn read: the Code task is driven
- * by a live event stream, so an update landing between two of them yields a reading that never
- * existed — a delivery phase from before it beside a head SHA from after. The route this replaced
- * returned one JSON document and was atomic by construction; this restores that property against
- * the DOM. Facts inside a collapsed `<details>` are included: the rows are in the DOM either way,
- * and nothing here asserts visibility.
+ * Reading attribute by attribute, or card by card, over separate round trips is a torn read: the
+ * Code task is driven by a live event stream, so an update landing between two of them yields a
+ * reading that never existed -- a delivery phase from before it beside a head SHA from after, or a
+ * run state from before beside a commit receipt from after, which is exactly what a predicate like
+ * `state === "succeeded" && commitReceipt?.status === "succeeded"` compares. The route this
+ * replaced returned one JSON document and was atomic by construction; this restores that property
+ * against the DOM.
+ *
+ * Each card is scoped to the NEAREST enclosing section of its own status element -- never an outer
+ * one, since the workbench shell is itself a section and encloses every card -- and located by test
+ * id rather than by a translated `aria-label`, so nothing here depends on the operator's language.
+ * Facts inside a collapsed `<details>` are included: the rows are in the DOM either way, and
+ * nothing here asserts visibility.
  */
-async function readCard(card: Locator): Promise<CardReading | undefined> {
-  if (!(await present(card))) return undefined;
-  return card.evaluate((root: Element): CardReading => {
+async function readWorkbench(page: Page): Promise<WorkbenchReading> {
+  const shell = page.locator(WORKBENCH);
+  if (!(await present(shell))) throw new Error("the Code task window was not displayed");
+  return shell.first().evaluate((root: Element, testIds: readonly string[]): WorkbenchReading => {
     const text = (node: Element | null | undefined): string => (node?.textContent ?? "").trim();
-    const collect = <T>(
+    const collect = (
+      scope: Element,
       selector: string,
       key: string,
-      value: (element: Element) => T,
-    ): Record<string, T> => {
-      const entries: Record<string, T> = {};
-      for (const element of root.querySelectorAll(selector)) {
+      value: (element: Element) => string,
+    ): Record<string, string> => {
+      const entries: Record<string, string> = {};
+      for (const element of scope.querySelectorAll(selector)) {
         const id = element.getAttribute(key);
         if (id !== null && id.length > 0) entries[id] = value(element);
       }
       return entries;
     };
-    const status = root.querySelector("[data-state]");
-    return {
-      state: status?.getAttribute("data-state") ?? null,
-      reason: status?.getAttribute("data-reason") ?? null,
-      facts: collect("[data-fact]", "data-fact", (row) => text(row.querySelector("dd"))),
-      checks: collect("[data-checks]", "data-checks", (group) => {
-        const counts: Record<string, string> = {};
-        for (const cell of group.querySelectorAll("[data-count]")) {
-          const name = cell.getAttribute("data-count");
-          if (name !== null) counts[name] = text(cell.querySelector("dd"));
+    const cards: Record<string, CardReading> = {};
+    for (const testId of testIds) {
+      const status = root.querySelector(`[data-testid="${testId}"]`);
+      const card = status === null ? null : status.closest("section");
+      if (status === null || card === null) continue;
+      const checks: Record<string, Record<string, string>> = {};
+      for (const group of card.querySelectorAll("[data-checks]")) {
+        const kind = group.getAttribute("data-checks");
+        if (kind !== null) {
+          checks[kind] = collect(group, "[data-count]", "data-count", (cell) =>
+            text(cell.querySelector("dd")),
+          );
         }
-        return counts;
-      }),
-      href: root.querySelector("a")?.getAttribute("href") ?? null,
-      testIds: Object.keys(collect("[data-testid]", "data-testid", () => true)),
-    };
-  });
+      }
+      cards[testId] = {
+        state: status.getAttribute("data-state"),
+        reason: status.getAttribute("data-reason"),
+        facts: collect(card, "[data-fact]", "data-fact", (row) => text(row.querySelector("dd"))),
+        checks,
+        href: card.querySelector("a")?.getAttribute("href") ?? null,
+        testIds: Object.keys(collect(card, "[data-testid]", "data-testid", () => "")),
+      };
+    }
+    return { state: root.getAttribute("data-state"), cards };
+  }, CARD_TEST_IDS);
 }
 
 function fact(reading: CardReading, id: string): string {
@@ -131,6 +158,11 @@ export async function observedRunState(page: Page): Promise<string> {
 export interface ObservedPullRequest {
   readonly number: number;
   readonly url: string;
+  /** `owner/repo`, taken from the link's own HREF -- the provider's spelling of the repository the
+   * pull request actually lives in. The delivery BINDING also names a repository, but the contract
+   * only requires the two to match case-insensitively (`sameGitHubOwnerAndRepo`,
+   * draft-delivery.ts), so the binding's spelling is not a safe stand-in for the provider's. */
+  readonly repository: string;
   readonly headSha: string;
   readonly baseSha: string;
 }
@@ -153,13 +185,18 @@ export interface ObservedDelivery {
 function observedPullRequest(reading: CardReading): ObservedPullRequest | undefined {
   const url = reading.href;
   if (url === null) return undefined;
-  const number = /\/pull\/(\d+)(?:[/?#]|$)/u.exec(url)?.[1];
-  if (number === undefined) {
-    throw new Error("the Code task displayed a pull request link without a pull request number");
+  const matched = /\/([^/]+\/[^/]+)\/pull\/(\d+)(?:[/?#]|$)/u.exec(url);
+  const repository = matched?.[1];
+  const number = matched?.[2];
+  if (repository === undefined || number === undefined) {
+    throw new Error(
+      `the Code task displayed a pull request link naming no repository and number: ${url}`,
+    );
   }
   return {
     number: Number(number),
     url,
+    repository,
     headSha: fact(reading, "remoteHead"),
     baseSha: fact(reading, "remoteBase"),
   };
@@ -167,7 +204,11 @@ function observedPullRequest(reading: CardReading): ObservedPullRequest | undefi
 
 /** The Repository delivery card, or `undefined` while the run has recorded no delivery yet. */
 export async function observedDelivery(page: Page): Promise<ObservedDelivery | undefined> {
-  const reading = await readCard(cardWith(page, "cwb-draft-delivery-state"));
+  return deliveryOf(await readWorkbench(page));
+}
+
+function deliveryOf(workbench: WorkbenchReading): ObservedDelivery | undefined {
+  const reading = workbench.cards["cwb-draft-delivery-state"];
   if (reading === undefined) return undefined;
   return {
     phase: displayed(reading.state, "delivery phase"),
@@ -188,10 +229,18 @@ export interface ObservedDescriptionStatus {
   readonly reason: string;
   readonly headSha: string;
   readonly generationVersion: number;
-  /** The "Review exact draft" control is on screen — the interface's own proof that a retained
-   * proposal exists AND that the operator can act on it. The proposal id and its digests are never
-   * rendered, and this lane never needs them: what was applied is checked against what was
-   * reviewed, from the two responses the card's own clicks produce. */
+  /** The "Review exact draft" control is on screen AND it is the one that opens the governed pull
+   * request window. The proposal id and its digests are never rendered, and this lane never needs
+   * them: what was applied is checked against what was reviewed, from the two responses the card's
+   * own clicks produce.
+   *
+   * The qualification: `WorkbenchDescriptionReview` renders that same test id and label on TWO
+   * paths -- the application path, which opens the window, and a draft-only fallback that merely
+   * inlines a read-only textarea and reviews nothing. They are told apart by the delivery card
+   * showing a pull request, which is the condition the application path itself is gated on
+   * (`descriptionReviewTarget` requires an open pull request). Sampling the window while that card
+   * is momentarily absent would otherwise report the wrong control as reviewable, and the click
+   * would then wait for a window that never opens. */
   readonly reviewable: boolean;
 }
 
@@ -199,14 +248,19 @@ export interface ObservedDescriptionStatus {
 export async function observedDescriptionStatus(
   page: Page,
 ): Promise<ObservedDescriptionStatus | undefined> {
-  const reading = await readCard(cardWith(page, "cwb-description-status"));
+  return descriptionStatusOf(await readWorkbench(page));
+}
+
+function descriptionStatusOf(workbench: WorkbenchReading): ObservedDescriptionStatus | undefined {
+  const reading = workbench.cards["cwb-description-status"];
   if (reading === undefined) return undefined;
+  const deliveredPullRequest = workbench.cards["cwb-draft-delivery-state"]?.href ?? null;
   return {
     state: displayed(reading.state, "description state"),
     reason: displayed(reading.reason, "description reason"),
     headSha: fact(reading, "headSha"),
     generationVersion: Number(fact(reading, "generationVersion")),
-    reviewable: reading.testIds.includes("cwb-description-review"),
+    reviewable: deliveredPullRequest !== null && reading.testIds.includes("cwb-description-review"),
   };
 }
 
@@ -238,7 +292,11 @@ function checkCounts(reading: CardReading, kind: "required" | "advisory"): GitCi
 
 /** The CI readiness card, or `undefined` before a pull request exists to observe checks for. */
 export async function observedCiReadiness(page: Page): Promise<ObservedCiReadiness | undefined> {
-  const reading = await readCard(cardWith(page, "cwb-ci-state"));
+  return ciReadinessOf(await readWorkbench(page));
+}
+
+function ciReadinessOf(workbench: WorkbenchReading): ObservedCiReadiness | undefined {
+  const reading = workbench.cards["cwb-ci-state"];
   if (reading === undefined) return undefined;
   const state = displayed(reading.state, "CI readiness state");
   if (state === "unobserved") return undefined;
@@ -280,7 +338,11 @@ export interface ObservedCommitReceipt {
 export async function observedCommitReceipt(
   page: Page,
 ): Promise<ObservedCommitReceipt | undefined> {
-  const reading = await readCard(cardWith(page, "cwb-commit-result"));
+  return commitReceiptOf(await readWorkbench(page));
+}
+
+function commitReceiptOf(workbench: WorkbenchReading): ObservedCommitReceipt | undefined {
+  const reading = workbench.cards["cwb-commit-result"];
   if (reading === undefined) return undefined;
   return {
     status: displayed(reading.state, "commit receipt status"),
@@ -299,14 +361,16 @@ export interface ObservedRun {
   readonly commitReceipt: ObservedCommitReceipt | undefined;
 }
 
-/** One reading of everything the Code task is currently showing about its run. */
+/** One reading of everything the Code task is currently showing about its run -- from ONE paint,
+ * so a caller comparing the run state against the commit receipt compares the same moment. */
 export async function observedRun(page: Page): Promise<ObservedRun> {
+  const workbench = await readWorkbench(page);
   return {
-    state: await observedRunState(page),
-    delivery: await observedDelivery(page),
-    description: await observedDescriptionStatus(page),
-    ciReadiness: await observedCiReadiness(page),
-    commitReceipt: await observedCommitReceipt(page),
+    state: displayed(workbench.state, "run state"),
+    delivery: deliveryOf(workbench),
+    description: descriptionStatusOf(workbench),
+    ciReadiness: ciReadinessOf(workbench),
+    commitReceipt: commitReceiptOf(workbench),
   };
 }
 

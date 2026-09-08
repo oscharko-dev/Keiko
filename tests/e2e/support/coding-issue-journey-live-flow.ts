@@ -52,6 +52,7 @@ import { proposeJourneyReady } from "./coding-issue-journey-live-mark-ready.js";
 import {
   type DeliveredPullRequest,
   openLiveWorkbench,
+  raiseWorkbench,
   readObservedRunWhileAwaitingSuccess,
   waitWhileAnsweringApprovals,
 } from "./coding-issue-journey-live.js";
@@ -306,6 +307,16 @@ function descriptorFlow(value: unknown, ordinal: number): QualificationFlowBindi
   };
 }
 
+/** The five counting flows are bound to one authorized host. Asserted at second zero AND at the
+ * receipt, so neither a late discovery nor a drifting call site can record evidence for another. */
+function assertAuthorizedQualificationHost(): "macos-arm64" {
+  const platform = currentPlatformKey();
+  if (platform !== "macos-arm64") {
+    throw new Error("real five-flow qualification is bound to the authorized macos-arm64 host");
+  }
+  return platform;
+}
+
 export function selectedQualificationFlow(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): QualificationFlowBinding | undefined {
@@ -435,7 +446,10 @@ async function openGovernedGitWindow(page: Page, repositoryRoot: string): Promis
     `Manage repository ${repositoryButtonLabel(repositoryRoot)}`,
   );
   await manageRepository.click();
-  const gitWindow = page.getByRole("region", { name: "Git", exact: true });
+  // A WINDOW, matched by prefix. `accessibleWindowLabel` appends " — selected" to the label of the
+  // selected window, so an exact name match broke the moment the operator's own click selected it;
+  // and only real windows carry `data-window-id`, which keeps this off the panes inside them.
+  const gitWindow = page.locator('section[data-window-id][aria-label^="Git"]');
   await expect(gitWindow).toBeVisible({ timeout: 60_000 });
   return gitWindow;
 }
@@ -459,21 +473,67 @@ async function updateControlledBaseThroughGovernedGit(
   if (flow.ordinal === 1) return;
   await openLiveWorkbench(page, repositoryRoot);
   const gitWindow = await openGovernedGitWindow(page, repositoryRoot);
+  await fetchThenPullControlledBase(page, gitWindow);
+}
+
+// `SyncControl` renders ONE button whose accessible name carries the state it currently offers:
+// "Run sync: Fetch" when up to date, "Run sync: Pull" only while the branch is behind, and
+// "Run sync: syncing" while busy. The lane used to click Fetch, then require a Pull to appear and
+// require Fetch to come back afterwards -- three assumptions that hold only when the controlled
+// base actually moved since the last flow, which is not the normal case. Nothing to pull is a
+// legitimate outcome of bringing the base up to date, so it is treated as one.
+async function fetchThenPullControlledBase(page: Page, gitWindow: Locator): Promise<void> {
+  const sync = gitWindow.locator('button[aria-label^="Run sync: "]');
   const fetched = waitForSyncExecute(page, "fetch");
-  await gitWindow.getByRole("button", { name: "Run sync: Fetch" }).click();
+  await expect(sync).toHaveAttribute("aria-label", "Run sync: Fetch", { timeout: 60_000 });
+  await sync.click();
   await fetched;
-  const pull = gitWindow.getByRole("button", { name: "Run sync: Pull" });
-  await expect(pull).toBeVisible({ timeout: 60_000 });
+  await expect(sync).not.toHaveAttribute("aria-label", "Run sync: syncing", { timeout: 60_000 });
+  if ((await sync.getAttribute("aria-label")) !== "Run sync: Pull") return;
   const pulled = waitForSyncExecute(page, "pull");
-  await pull.click();
+  await sync.click();
+  // `WorktreeMutationConfirmDialog` is an alertdialog, not a dialog: Playwright's role engine
+  // compares the computed role exactly, with no superclass fallback, so the previous
+  // `getByRole("dialog", …)` could never match and every flow after the first hung here.
   await page
-    .getByRole("dialog", { name: "Confirm pull" })
+    .getByRole("alertdialog", { name: "Confirm pull" })
     .getByRole("button", { name: "Pull changes" })
     .click();
   await pulled;
-  await expect(gitWindow.getByRole("button", { name: "Run sync: Fetch" })).toBeVisible({
-    timeout: 60_000,
-  });
+  await expect(sync).toHaveAttribute("aria-label", "Run sync: Fetch", { timeout: 60_000 });
+}
+
+/**
+ * Previews until the provider has actually decided mergeability.
+ *
+ * GitHub computes it ASYNCHRONOUSLY and answers `null` until it has -- routinely so right after the
+ * base moved, which is exactly what this lane does for every flow after the first. The card renders
+ * that undecided answer as "Mergeable: no" (`preview.readiness.mergeable ? "yes" : "no"`), so a
+ * single preview followed by a text assertion read a verdict the provider had not given yet, and
+ * failed 30 seconds later against a DOM nothing was refreshing -- after the human rubric review had
+ * already been paid for. Re-previewing is what an operator does, and what makes the answer real.
+ */
+async function previewUntilMergeable(page: Page, card: Locator): Promise<void> {
+  const readiness = card.getByTestId("gm-readiness");
+  const deadline = Date.now() + 10 * 60_000;
+  for (;;) {
+    const previewed = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith("/api/git-delivery/merge/preview"),
+      { timeout: 120_000 },
+    );
+    await card.getByRole("button", { name: "Preview", exact: true }).click();
+    const response = await previewed;
+    expect(response.ok(), `merge preview failed with HTTP ${String(response.status())}`).toBe(true);
+    if (((await readiness.textContent()) ?? "").includes("Mergeable: yes")) return;
+    if (Date.now() > deadline) {
+      throw new Error(
+        `the governed merge card never reported the pull request mergeable: ${(await readiness.textContent()) ?? ""}`,
+      );
+    }
+    await page.waitForTimeout(15_000);
+  }
 }
 
 // Real production affordance for the governed merge action. The SAME singleton "Git" window
@@ -495,30 +555,34 @@ async function executeGovernedMerge(
 ): Promise<void> {
   const gitWindow = await openGovernedGitWindow(page, repositoryRoot);
   await gitWindow.getByRole("tab", { name: "Changes" }).click();
-  await gitWindow.getByRole("button", { name: /Merge/u }).click();
+  // Anchored, not a loose /Merge/: once the merge pane is open the card's own submit
+  // ("Merge Pull Request") matches that pattern too, so any retry of this step inside one page
+  // session became a strict-mode violation rather than a second attempt.
+  await gitWindow.getByRole("button", { name: "Merge…", exact: true }).click();
   const card = gitWindow.getByRole("region", { name: "Merge", exact: true });
   await card.getByLabel("Repository (owner/repo)").fill(delivered.repository);
   await card.getByLabel("Pull Request number").fill(String(delivered.number));
   await card.getByLabel("Base branch").fill(delivered.baseRef);
-  const previewed = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" &&
-      response.url().endsWith("/api/git-delivery/merge/preview"),
-  );
-  await card.getByRole("button", { name: "Preview", exact: true }).click();
-  const previewResponse = await previewed;
-  expect(
-    previewResponse.ok(),
-    `merge preview failed with HTTP ${String(previewResponse.status())}`,
-  ).toBe(true);
-  await expect(card.getByTestId("gm-readiness")).toContainText("Mergeable: yes");
+  await previewUntilMergeable(page, card);
   // The controlled base requires linear history, so a merge-commit-shaped strategy is not offered
   // (deriveEligibleMergeStrategies). Name squash explicitly, as an operator merging into such a
   // branch does, instead of leaving the provider to choose the method.
   await card.getByTestId("gm-strategy").selectOption("squash");
+  // The high-risk confirmation is rendered from the same preview response as the strategy control,
+  // so a one-shot `count()` here could miss a checkbox that paints a tick later -- after which
+  // `gm-submit` never enables and the failure reads as a bare timeout instead of naming the
+  // unchecked confirmation. Settle on the submit control first, then require the checkbox whenever
+  // the submit is still blocked.
+  const submit = card.getByTestId("gm-submit");
   const confirmation = card.getByLabel("I confirm this high-risk merge");
-  if ((await confirmation.count()) > 0) await confirmation.check();
-  await expect(card.getByTestId("gm-submit")).toBeEnabled();
+  if (!(await submit.isEnabled())) {
+    await expect(
+      confirmation,
+      "the governed merge is blocked and offers no high-risk confirmation to give",
+    ).toBeVisible({ timeout: 60_000 });
+    await confirmation.check();
+  }
+  await expect(submit).toBeEnabled({ timeout: 60_000 });
   const executed = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
@@ -577,16 +641,22 @@ function resolveObservedJourneyOutcome(
 }
 
 async function readJourneyOutcome(page: Page, runId: string): Promise<JourneyOutcome | undefined> {
+  // The Git window this flow opened for the merge sits over the workbench; raise it back before
+  // reaching for a control inside it, or the click below waits on a covered target.
+  await raiseWorkbench(page);
   const journey = page.getByRole("region", { name: JOURNEY_REGION_NAME, exact: true });
   // CodingWorkbenchJourneyOutcome renders nothing (returns null) until its OWN mount-time refresh
-  // has already produced a valid outcome, so "not visible yet" is the real-UI equivalent of the
+  // has already produced a valid outcome, so an absent card is the real-UI equivalent of the
   // server's "unavailable" status -- the caller's own polling loop
   // (`waitWhileAnsweringApprovals`) keeps retrying every 2s until the card appears on its own.
-  if (!(await journey.isVisible())) return undefined;
+  // `count()`, not `isVisible()`: a card that IS mounted but momentarily covered must be driven,
+  // not silently reported as unavailable.
+  if ((await journey.count()) === 0) return undefined;
   const refreshed = page.waitForResponse(
     (candidate) =>
       candidate.request().method() === "POST" &&
       candidate.url().endsWith("/api/git-delivery/journey/refresh"),
+    { timeout: 120_000 },
   );
   await journey.getByRole("button", { name: JOURNEY_REFRESH_BUTTON_NAME }).click();
   const response = await refreshed;
@@ -662,6 +732,37 @@ function sameStablePullRequest(
   );
 }
 
+/** Retried, not sampled once. A delivery card caught mid-render either throws a missing-fact error
+ * or yields fields that trip `resolveFinalDeliveredPullRequest` into "not bound to the exact
+ * CI-ready pull request head" -- a message that blames the product for a paint race, at the end of
+ * a paid run. */
+async function settledDeliverySnapshot(page: Page): Promise<FinalDeliverySnapshot> {
+  const delivery = await waitWhileAnsweringApprovals(
+    page,
+    () => observedDelivery(page),
+    (value) => value?.pullRequest !== undefined,
+    {
+      timeoutMs: 2 * 60_000,
+      message: "expected the Code task to keep showing its delivered pull request",
+    },
+  );
+  return {
+    phase: delivery?.phase,
+    reason: delivery?.reason,
+    bindingHeadSha: delivery?.headSha,
+    pullRequest:
+      delivery?.pullRequest === undefined
+        ? undefined
+        : {
+            repository: delivery.pullRequest.repository,
+            number: delivery.pullRequest.number,
+            baseRef: delivery.baseRef,
+            headRef: delivery.headRef,
+            headSha: delivery.pullRequest.headSha,
+          },
+  };
+}
+
 export function resolveFinalDeliveredPullRequest(
   initial: DeliveredPullRequest,
   snapshot: FinalDeliverySnapshot,
@@ -728,16 +829,47 @@ export function activityEventTree(
   );
 }
 
+function readActivityEvents(path: string): readonly Readonly<Record<string, unknown>>[] {
+  return readFileSync(path, "utf8")
+    .split("\n")
+    .map(parseActivityLine)
+    .filter((event): event is Readonly<Record<string, unknown>> => event !== undefined);
+}
+
+/**
+ * Reads the run's activity events from the LIVE server log, twice, and only accepts a reading the
+ * second pass reproduces.
+ *
+ * The log is being appended to while this reads it, and `parseActivityLine` silently drops an
+ * unparseable line -- which a half-written trailing line always is. The strictest assertions in the
+ * lane run on this: every started tool invocation must have a settlement, every invocation id must
+ * be unique, and there must be exactly one run start and one run settlement. A single truncated
+ * line therefore failed the whole qualification with "unmatched tool invocations" AFTER the merge
+ * had landed and the issue was closed -- full spend, no artifact, and the product blamed for a
+ * partial write. Requiring two identical passes admits only a settled file.
+ */
 export function activityEventsForRun(runId: string): readonly Readonly<Record<string, unknown>>[] {
   const path = process.env.KEIKO_QUALIFICATION_ACTIVITY_LOG_PATH;
   if (path === undefined || path.length === 0) {
     throw new Error("qualification activity log path is unavailable");
   }
-  const events = readFileSync(path, "utf8")
-    .split("\n")
-    .map(parseActivityLine)
-    .filter((event): event is Readonly<Record<string, unknown>> => event !== undefined);
-  return activityEventTree(events, runId);
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    const first = readActivityEvents(path);
+    const second = readActivityEvents(path);
+    if (first.length === second.length) return activityEventTree(second, runId);
+    if (Date.now() > deadline) {
+      throw new Error("the qualification activity log never settled long enough to be read");
+    }
+    sleepSync(500);
+  }
+}
+
+/** Deliberately synchronous: `activityEventsForRun` is a synchronous reader used from synchronous
+ * assertion helpers, and turning the whole chain async to wait half a second would spread through
+ * every caller for no gain. `Atomics.wait` parks the thread rather than spinning it. */
+function sleepSync(milliseconds: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
 export function isUsefulRepositorySearchEvent(event: Readonly<Record<string, unknown>>): boolean {
@@ -920,7 +1052,11 @@ function stageFlowBinding(
   delivered: DeliveredPullRequest,
 ): NonNullable<Parameters<typeof recordSuccessfulJourneyStage>[4]> {
   if (delivered.repository !== flow.repository) {
-    throw new Error("qualification stage repository does not match the selected flow");
+    // Naming both sides matters: this fired once with a bare message and cost a full rehearsal to
+    // locate, because nothing said WHICH repository the delivered pull request claimed.
+    throw new Error(
+      `qualification stage repository ${delivered.repository} does not match the selected flow ${flow.repository}`,
+    );
   }
   return {
     flowId: flow.flowId,
@@ -1059,24 +1195,9 @@ async function resolveExactHeadDelivery(
   if (ci.finalState !== "technical-ready") {
     throw new Error("qualification flow did not reach exact-head technical readiness");
   }
-  const delivery = await observedDelivery(page);
   const exactHead = resolveFinalDeliveredPullRequest(
     delivered,
-    {
-      phase: delivery?.phase,
-      reason: delivery?.reason,
-      bindingHeadSha: delivery?.headSha,
-      pullRequest:
-        delivery?.pullRequest === undefined
-          ? undefined
-          : {
-              repository: delivery.repository,
-              number: delivery.pullRequest.number,
-              baseRef: delivery.baseRef,
-              headRef: delivery.headRef,
-              headSha: delivery.pullRequest.headSha,
-            },
-    },
+    await settledDeliverySnapshot(page),
     ci.finalHeadSha,
   );
   await assertVerifiedModelChange(page, exactHead);
@@ -1231,14 +1352,10 @@ function recordFlowArtifact(
   });
   const dir = receiptsDir();
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const platform = currentPlatformKey();
-  if (platform !== "macos-arm64") {
-    throw new Error("real five-flow qualification is bound to the authorized macos-arm64 host");
-  }
   writeCodingIssueJourneyFlowEvidenceReceipt({
     receiptsDir: dir,
     artifact,
-    platform,
+    platform: assertAuthorizedQualificationHost(),
     recordedAt: new Date().toISOString(),
   });
   return artifact;
@@ -1248,7 +1365,18 @@ export async function runSelectedQualificationFlow(
   page: Page,
   flow: QualificationFlowBinding,
 ): Promise<CodeTaskQualificationFlowArtifactV1> {
+  // The stages below are SEQUENTIAL, not alternative: drive-to-draft (25 min) then CI repair
+  // (20 min) then terminal success (25 min) then the auto-draft description (20 min) then
+  // mark-ready (10 min) then pre-merge readiness. Each is bounded on its own; their sum is not, and
+  // the config's 30-minute test clock is smaller than it. A genuinely slow real run therefore died
+  // at minute 30 with a bare "Test timeout exceeded" that named nothing and wrote no receipt --
+  // after the model had already been paid for. The stage budgets are the real bound; the outer
+  // clock is released here, before the first of them, rather than in `reviewExactHead` after all
+  // of them.
+  test.setTimeout(0);
   const startedAt = Date.now();
+  // Knowable at second zero. Checking it after a completed merge threw away the whole paid flow.
+  assertAuthorizedQualificationHost();
   const qualifiedSourceCommitSha = sourceCommitSha();
   const env = resolveLiveJourneyEnv();
   assertConfiguredIssue(flow, env.issueRef);

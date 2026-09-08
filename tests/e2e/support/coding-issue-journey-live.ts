@@ -23,6 +23,7 @@ import {
   LIFECYCLE_STATUS,
   observedDiagnosis,
   observedRun,
+  observedRunState,
   type ObservedRun,
 } from "./coding-issue-journey-live-observed.js";
 
@@ -34,6 +35,25 @@ const CSRF = { "X-Keiko-CSRF": "1" };
 
 export function workbenchSurface(page: Page): Locator {
   return page.locator(SURFACE);
+}
+
+/**
+ * Brings the Coding Workbench window back to the front by clicking its own title bar, exactly as an
+ * operator raises a window another one has covered.
+ *
+ * The desktop places each newly opened window slightly offset from the last with a higher z, so the
+ * Git, Settings, Editor and governed Pull Request windows this lane opens all land ON TOP of the
+ * workbench seeded at (40, 48) and stay there -- the layout, z included, even survives the reload
+ * inside `pairLiveSession`. Playwright never clicks through an overlay: it retries the pointer hit
+ * test until the action timeout and then fails, naming the target rather than the window covering
+ * it. Every workbench interaction that can follow one of those windows raises it first.
+ */
+export async function raiseWorkbench(page: Page): Promise<void> {
+  const header = workbenchSurface(page)
+    .locator("xpath=ancestor::section[1]")
+    .locator("header.win-head");
+  if ((await header.count()) === 0) return;
+  await header.first().click();
 }
 
 // #3394 — the always-mounted left rail (`LeftRail.tsx`, `aria-label={t("rail.primaryNavigation")}`
@@ -68,6 +88,24 @@ async function openSettingsTab(page: Page, tabName: string): Promise<Locator> {
   await expect(settings).toBeVisible();
   await settings.getByRole("button", { name: tabName, exact: true }).click();
   return settings;
+}
+
+/**
+ * Closes the Settings window through its own control.
+ *
+ * Leaving it open is not cosmetic: `selectCodingIssueMode` opens Settings with an UNCONDITIONAL
+ * rail click (coding-issue-browser.ts), which on an already-open window toggles it CLOSED -- after
+ * which its Security tab has nothing to click and the mode selection times out. That is the exact
+ * toggling hazard `ensureRailToolOpen` exists to defend against, reached from the other side, and
+ * it fires precisely on the model-qualification path that opens Settings in the first place.
+ */
+async function closeSettingsWindow(page: Page): Promise<void> {
+  const close = page.getByRole("button", { name: "Close Settings window", exact: true });
+  if ((await close.count()) === 0) return;
+  await close.first().click();
+  await expect(page.getByRole("region", { name: /^Settings/u })).toHaveCount(0, {
+    timeout: 30_000,
+  });
 }
 
 // Live-run blocker (A), generalized from the original single test: the real production
@@ -147,6 +185,7 @@ async function displayedChatModelIds(page: Page): Promise<readonly string[]> {
   const settings = await openSettingsTab(page, "Models");
   const rows = settings.locator(".ml-row").filter({ has: page.getByTestId("conv-elig-ok") });
   const names = await rows.locator(".ml-name").allTextContents();
+  await closeSettingsWindow(page);
   return names.map((name) => name.trim()).filter((name) => name.length > 0);
 }
 
@@ -164,7 +203,9 @@ async function displayedChatModelIds(page: Page): Promise<readonly string[]> {
  * fixes), so a remedy applied in Settings reaches this without a reload -- but not instantly, hence
  * the bounded wait.
  */
-async function usableModelSource(page: Page, timeoutMs = 30_000): Promise<boolean> {
+// Generous on purpose: a false negative here does not cost time, it costs MONEY -- the whole
+// readiness probe set and a gateway save against an environment that was already fine.
+async function usableModelSource(page: Page, timeoutMs = 120_000): Promise<boolean> {
   const status = workbenchSurface(page).locator(LIFECYCLE_STATUS);
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -191,9 +232,14 @@ async function refreshToolCallingProof(page: Page, modelId: string): Promise<voi
     exact: true,
   });
   await expect(readinessButton).toBeEnabled({ timeout: 60_000 });
+  // The default response wait is the 30s `actionTimeout`. This one fronts the gateway's WHOLE
+  // default probe set -- chat, streaming, tool calling, json schema, embedding -- each a real
+  // provider round trip with its own timeout, so 30s regularly expires AFTER the paid probe has
+  // already run and before its answer arrives.
   const readiness = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" && response.url().endsWith(GATEWAY_READINESS_ENDPOINT),
+    { timeout: 10 * 60_000 },
   );
   await readinessButton.click();
   const response = await readiness;
@@ -205,6 +251,7 @@ async function refreshToolCallingProof(page: Page, modelId: string): Promise<voi
   const proof = report.probes.find((probe) => probe.name === "tool_calling");
   expect(proof?.status, "the guarded readiness call must verify tool calling").toBe("passed");
   expect(report.verifiedCapabilities.toolCalling).toBe(true);
+  await closeSettingsWindow(page);
 }
 
 export interface LiveModelQualificationClient {
@@ -311,7 +358,13 @@ async function waitForWorkbenchResources(page: Page): Promise<void> {
     .getByRole("status")
     .filter({ hasText: "Model source ready." });
   await expect(status).toContainText("Workspace ready.", { timeout: 60_000 });
-  await expect(status).toContainText("Runtime available", { timeout: 60_000 });
+  // "Runtime available" appears in ONE string: the unsigned evaluation-runtime sentence. A
+  // platform-qualified runtime announces "Runtime ready." instead, so requiring the former made a
+  // correctly signed runtime fail this wait -- while `assertObservedRuntimeReady` already accepted
+  // both. Same alternation, one meaning.
+  await expect(status).toContainText(/Runtime ready\.|unverified evaluation runtime/u, {
+    timeout: 60_000,
+  });
 }
 
 async function waitForWorkbenchWorkspace(page: Page): Promise<void> {
@@ -375,9 +428,11 @@ async function enableCodingWorkflowEligibility(page: Page, modelId: string): Pro
   const dialog = page.getByRole("dialog", { name: "Update Keiko credentials" });
   await expect(dialog).toBeVisible();
   await dialog.getByLabel("Coding-safe workflow models").fill(modelId);
+  // "Test & save" verifies the profile against the real provider before it saves.
   const setup = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" && response.url().endsWith(GATEWAY_SETUP_ENDPOINT),
+    { timeout: 10 * 60_000 },
   );
   const submit = dialog.getByRole("button", { name: "Test & save", exact: true });
   await expect(submit).toBeEnabled({ timeout: 10_000 });
@@ -387,6 +442,7 @@ async function enableCodingWorkflowEligibility(page: Page, modelId: string): Pro
     setupResponse.ok(),
     `the gateway setup call failed with HTTP ${String(setupResponse.status())}`,
   ).toBe(true);
+  await closeSettingsWindow(page);
 }
 
 export async function ensureWorkflowEligibleModel(page: Page): Promise<boolean> {
@@ -542,10 +598,17 @@ export async function assertRuntimeReady(page: Page, mode: CodingWorkbenchMode):
 }
 
 async function previewAndAcceptIssue(page: Page, issueRef: string): Promise<void> {
+  await raiseWorkbench(page);
   const issueField = page.getByLabel("Issue URL or #number");
-  if (!(await issueField.isVisible())) {
-    await page.getByRole("button", { name: "Start from a GitHub issue", exact: true }).click();
-  }
+  const startFromIssue = page.getByRole("button", {
+    name: "Start from a GitHub issue",
+    exact: true,
+  });
+  // Settle first, then branch. `isVisible()` answers false for a field that has simply not painted
+  // yet, which sent the lane down the disclosure branch and then waited for a control that was
+  // never going to appear.
+  await expect(issueField.or(startFromIssue).first()).toBeVisible({ timeout: 60_000 });
+  if (!(await issueField.isVisible())) await startFromIssue.click();
   await expect(issueField).toBeVisible();
   await issueField.fill(issueRef);
   await previewIssueGrantingAccessIfRefused(page);
@@ -585,7 +648,10 @@ async function previewIssueGrantingAccessIfRefused(page: Page): Promise<void> {
 export async function previewAndBindIssue(page: Page, issueRef: string): Promise<void> {
   await previewAndAcceptIssue(page, issueRef);
   await page.getByRole("button", { name: "Bind workspace", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Code setup", exact: true })).toHaveCount(0);
+  // Real worktree provisioning, trust derivation and activation -- minutes, not the 30s default.
+  await expect(page.getByRole("region", { name: "Code setup", exact: true })).toHaveCount(0, {
+    timeout: 10 * 60_000,
+  });
 }
 
 export async function reacceptBoundIssue(page: Page, issueRef: string): Promise<void> {
@@ -652,6 +718,8 @@ export async function startCodingRun(
   issueRef: string,
 ): Promise<string> {
   await selectCodingIssueMode(page, mode);
+  // The mode selection opens and closes the Settings window over the workbench.
+  await raiseWorkbench(page);
   await page.getByLabel("Task instructions").fill(issueResolutionTaskInstructions());
   const startButton = page.getByRole("button", { name: "Start coding run", exact: true });
   await expect(startButton).toBeEnabled({ timeout: 60_000 });
@@ -678,18 +746,41 @@ export async function startCodingRun(
   return runId;
 }
 
-async function clickIfVisible(control: Locator): Promise<void> {
-  if (await control.isVisible()) await control.click();
+/** Clicks only a control that is visible AND actionable, and never lets one unsuccessful attempt
+ * end the poll it runs inside. `ApprovalDecisionControls` renders the prompt DISABLED until its own
+ * review fetch has bound the evidence, so a visible prompt is regularly not yet answerable; and a
+ * window raised over the Coding Workbench makes an otherwise ready control unclickable. Both are
+ * states the next tick resolves -- neither is a reason to abandon a paid run. */
+export async function clickWhenActionable(control: Locator): Promise<void> {
+  if (!(await control.isVisible())) return;
+  if (!(await control.isEnabled())) return;
+  try {
+    await control.click({ timeout: 5_000 });
+  } catch {
+    // Occluded, detached, or still settling. The caller polls again in two seconds.
+    return;
+  }
 }
 
 async function answerVisibleApproval(page: Page): Promise<void> {
-  await clickIfVisible(page.getByRole("button", { name: "Approve once", exact: true }));
+  await clickWhenActionable(page.getByRole("button", { name: "Approve once", exact: true }));
   const changeReview = page.getByRole("region", {
     name: "Review the proposed file change",
     exact: true,
   });
-  await clickIfVisible(changeReview.getByRole("button", { name: "Apply change", exact: true }));
+  await clickWhenActionable(
+    changeReview.getByRole("button", { name: "Apply change", exact: true }),
+  );
 }
+
+/**
+ * A condition this lane must stop on immediately, however much wall clock a wait still has: the run
+ * reached a terminal state, or the window stopped showing the pull request this flow delivered.
+ * Everything else a reader can throw -- an empty fact cell, a card caught mid-remount -- is a bad
+ * paint the next tick resolves, and swallowing THOSE is what keeps a 25-minute wait alive; treating
+ * a terminal run the same way would waste every remaining minute of it instead of failing at once.
+ */
+export class QualificationRunStopped extends Error {}
 
 /**
  * Polls `read()` until `isDone` accepts the value, clicking "Approve once" whenever it is visible
@@ -706,10 +797,23 @@ export async function waitWhileAnsweringApprovals<T>(
   options: { readonly timeoutMs: number; readonly message: string },
 ): Promise<T> {
   const deadline = Date.now() + options.timeoutMs;
+  let pending: Error | undefined;
   for (;;) {
-    const value = await read();
-    if (isDone(value)) return value;
-    if (Date.now() > deadline) throw new Error(options.message);
+    try {
+      const value = await read();
+      pending = undefined;
+      if (isDone(value)) return value;
+    } catch (error) {
+      if (error instanceof QualificationRunStopped) throw error;
+      pending = error instanceof Error ? error : new Error(String(error));
+    }
+    if (Date.now() > deadline) {
+      // A read that was still failing when the clock ran out is the most useful thing to report:
+      // a bare "expected X" would hide that the lane never got a clean reading at all.
+      throw pending === undefined
+        ? new Error(options.message)
+        : new Error(`${options.message}: ${pending.message}`, { cause: pending });
+    }
     await answerVisibleApproval(page);
     await page.waitForTimeout(2_000);
   }
@@ -760,7 +864,7 @@ export async function readObservedRunWhileAwaitingDraft(
   ) {
     return observed;
   }
-  throw new Error(
+  throw new QualificationRunStopped(
     `the coding run reached ${observed.state} before creating a draft pull request -- ${await diagnose()}`,
   );
 }
@@ -776,12 +880,16 @@ export async function readObservedRunWhileAwaitingSuccess(
 ): Promise<ObservedRun> {
   const observed = await read();
   if (observed.delivery?.pullRequest?.number !== expectedPullRequestNumber) {
+    // Not fatal on its own: the delivery card can be absent for a frame while it re-renders. The
+    // poll retries, and only a persistent disappearance reaches the deadline.
     throw new Error(
       `the Code task stopped showing pull request #${String(expectedPullRequestNumber)} while awaiting terminal success`,
     );
   }
   if (!UNSUCCESSFUL_TERMINAL_STATES.has(observed.state)) return observed;
-  throw new Error(`the coding run reached ${observed.state} -- ${await diagnose()}`);
+  throw new QualificationRunStopped(
+    `the coding run reached ${observed.state} -- ${await diagnose()}`,
+  );
 }
 
 /**
@@ -810,9 +918,12 @@ export async function driveIssueToDraftPullRequest(
   });
   await assertRuntimeReady(page, input.mode);
   const runId = await startCodingRun(page, input.mode, input.issueRef);
-  await expect(workbenchSurface(page)).toHaveAttribute("data-state", "running", {
-    timeout: 60_000,
-  });
+  // Not "running" exactly. The lifecycle can pass through `starting` straight into
+  // `awaiting-approval` -- in `governed-assist` a first tool call needing approval does precisely
+  // that -- and nothing answers approvals until the wait below begins, so requiring `running` here
+  // parked the lane for a minute and then failed moments after the model had been paid for. What
+  // must be true is that a run started at all.
+  await expect.poll(() => observedRunState(page), { timeout: 60_000 }).not.toBe("idle");
   const observed = await waitWhileAnsweringApprovals(
     page,
     () =>
@@ -831,11 +942,14 @@ export async function driveIssueToDraftPullRequest(
   if (delivery === undefined || pullRequest === undefined) {
     throw new Error("the Code task did not display a delivered pull request after the live drive");
   }
-  // The delivery card names the repository and both refs of the target it delivered against; the
-  // pull request link and the observed-remote facts name the created pull request itself.
+  // The repository and number come from the pull request LINK -- the provider's own spelling of
+  // where the pull request lives. The delivery binding names a repository too, but the contract
+  // only requires the two to agree case-insensitively, so taking it from there would compare the
+  // operator's spelling against the descriptor's. Both refs are the delivery target's, which is
+  // what the binding is for.
   return {
     runId,
-    repository: delivery.repository,
+    repository: pullRequest.repository,
     number: pullRequest.number,
     baseRef: delivery.baseRef,
     headRef: delivery.headRef,

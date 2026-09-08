@@ -39,7 +39,8 @@ function deliveredDraft(phase = "draft-created", number = 1): ObservedRun["deliv
     proposalId: "pull-request-1",
     pullRequest: {
       number,
-      url: `https://example.test/pull/${String(number)}`,
+      url: `https://example.test/owner/repository/pull/${String(number)}`,
+      repository: "owner/repository",
       headSha: "4".repeat(40),
       baseSha: "3".repeat(40),
     },

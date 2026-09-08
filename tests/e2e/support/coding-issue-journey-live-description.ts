@@ -141,7 +141,12 @@ export async function waitForAutoDraftDescription(page: Page): Promise<ObservedD
 // the Coding Workbench itself is a WindowsRegistry singleton, so this accessible region name
 // (`window.type.governedPullRequest.title`) is unambiguous for the lifetime of one flow.
 function governedPullRequestWindow(page: Page): Locator {
-  return page.getByRole("region", { name: "Pull Request", exact: true });
+  // A WINDOW, matched by prefix. The Git window renders its own pane named exactly "Pull Request"
+  // (`gitClientWindow.panel.pullRequest`), and that window is open from the base update onward for
+  // every flow after the first -- so an unscoped region name could match two elements and fail
+  // strict mode. Only real windows carry `data-window-id`. The prefix also survives the
+  // " — selected" suffix `accessibleWindowLabel` appends to the selected window's label.
+  return page.locator('section[data-window-id][aria-label^="Pull Request"]');
 }
 
 /** The independent cross-check that the reviewed proposal IS the draft the card is displaying:
