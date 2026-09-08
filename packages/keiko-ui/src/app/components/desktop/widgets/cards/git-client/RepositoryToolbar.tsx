@@ -55,8 +55,9 @@ export interface RepositoryToolbarProps {
 }
 
 /** The value of the Repository menu's one action entry. Every repository option's value is an
- * absolute path, so this sentinel can never collide with one. */
-export const ADD_REPOSITORY_OPTION = "__add-repository__";
+ * absolute path, so this sentinel can never collide with one. Module-private: the menu and its
+ * handler are the only two readers. */
+const ADD_REPOSITORY_OPTION = "__add-repository__";
 
 type RepositorySection = KeikoSelectProps["sections"][number];
 
