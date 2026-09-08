@@ -2,6 +2,7 @@ import { expect, test, type Browser, type Locator, type Page, type Route } from 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -181,7 +182,10 @@ async function createOutageHarness(): Promise<OutageHarness> {
   const root = mkdtempSync(join(realpathSync(homedir()), ".keiko-e2e-update-outage-"));
   const launcherCwd = join(root, "launcher");
   const stateDir = join(root, "state");
+  const configPath = join(stateDir, "keiko.e2e.config.json");
   mkdirSync(launcherCwd, { recursive: true, mode: 0o700 });
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  copyFileSync(resolve(REPO_ROOT, "tests/e2e/fixtures/keiko.e2e.config.json"), configPath);
   writeFileSync(join(launcherCwd, "package.json"), '{"name":"keiko-e2e-outage-launcher"}\n', {
     encoding: "utf8",
     mode: 0o600,
@@ -197,7 +201,7 @@ async function createOutageHarness(): Promise<OutageHarness> {
       ...process.env,
       KEIKO_CLI_BIN_PATH: OUTAGE_WRAPPER,
       KEIKO_UI_STATIC_ROOT: PACKAGED_STATIC_ROOT,
-      KEIKO_CONFIG_FILE: resolve(REPO_ROOT, "tests/e2e/fixtures/keiko.e2e.config.json"),
+      KEIKO_CONFIG_FILE: configPath,
       KEIKO_E2E_UPDATE_OUTAGE: "1",
     },
   };

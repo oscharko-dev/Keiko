@@ -1516,3 +1516,48 @@ No child/epic completion is asserted by this ledger. Child integration requires 
 and exact-head CI. The final epic PR targets `dev` for human review; the agent does not merge it.
 Production-signed qualification remains explicitly external if the prerequisites are unavailable,
 and the issue/epic must not be closed as production-qualified on that basis.
+
+### Verifier and browser follow-up (2026-09-08, pending final freeze)
+
+- Official Node 24.18.0 root typecheck and the native UI typecheck passed after the
+  precompiled-verifier integration. The seven focused verifier/tooling suites passed
+  **97 tests, with one platform skip**, in 17.52 seconds. Persistent LCOV and JSON
+  reports are under `/tmp/keiko-3405-precompiled-verifier-final-root-coverage`;
+  the corresponding `.log` records the actual exit. These are focused reports,
+  not the final canonical coverage or new-code verdict.
+- The static security audit of the 19-file verifier repair found **zero actionable
+  findings**. Its PASS remains conditional on real restricted-token execution and
+  the native analyzer gate. Deterministic regeneration passed on Windows at
+  `69d4115b42b8d2851644c6af8b16881db470fc81` in
+  [run 34208078111](https://github.com/oscharko-dev/Keiko/actions/runs/34208078111).
+- [Runtime proof 34208078216](https://github.com/oscharko-dev/Keiko/actions/runs/34208078216)
+  passed the existing native C tests, secure-read protocol/load checks, and the
+  deterministic verifier check, then failed in the new test helper with exit 115
+  before loading the assembly. The helper incorrectly treated `IsTokenRestricted`
+  as proof of disabled administrator membership; that API specifically tests a
+  restricting-SID list. This is a failed qualification run, not loader success.
+  The bounded helper repair and a fresh actual Windows run remain required.
+- The updater browser command passed **8/8 journeys in 1.3 minutes**, including the
+  real BFF outage/reconnect path, with log
+  `/tmp/keiko-3405-final-remediation-updater-browser.log`. The run revealed migration
+  of the tracked fake-key fixture to a vault reference; regenerated evidence was
+  therefore retained under the default untracked output directory pending harness
+  isolation and a clean rerun. It is not a final SHA-bound UI receipt.
+
+### Isolated outage harness and refreshed UI evidence (2026-09-08)
+
+The outage harness, separately from Playwright's main server, passed the tracked
+fixture directly to the real CLI. Credential migration therefore rewrote that
+fixture. `createOutageHarness()` now copies the fixture into its private state
+directory and uses the copy for every CLI start/restart. The fixture remains the
+exact committed fake-key fixture after execution.
+
+Root reran `npm run test:e2e:update-ui-1696` under official Node 24.18.0:
+**8/8 passed in 58.6 seconds**, actual exit zero, including the real BFF outage.
+The log is `/tmp/keiko-3405-isolated-outage-final-updater-browser.log`.
+All **12** recorded product/harness SHA-256 values were independently checked
+against the current files before copying the **17** real-run artifacts into
+`docs/design-system/evidence/3405/`. The manifest generation time is
+`2026-09-08T09:17:58.786Z`. This refresh covers the final remediation-polling UI
+projection and isolated outage harness. It remains distinct from the final
+commit-bound UI receipt and native production qualification.
