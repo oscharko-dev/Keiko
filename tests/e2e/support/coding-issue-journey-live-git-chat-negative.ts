@@ -10,17 +10,22 @@
 // hermetic git fixture and Chat-connect flow the `git-change-chat-3400.spec.ts` sibling already
 // builds (`buildGitChangeChatFixture`) rather than a second one.
 
-import { expect, type APIRequestContext, type Page, type Request } from "@playwright/test";
 import {
-  buildGitChangeChatFixture,
-  createChatForFixture,
-  removeGitChangeChatFixture,
-  seedWorkspace,
-} from "./git-change-chat-3400.js";
+  expect,
+  type APIRequestContext,
+  type Locator,
+  type Page,
+  type Request,
+} from "@playwright/test";
+import { buildGitChangeChatFixture, removeGitChangeChatFixture } from "./git-change-chat-3400.js";
 import { activityEventsForRun, activityEventTree } from "./coding-issue-journey-live-flow.js";
+import { openGovernedGitWindow } from "./coding-issue-journey-live.js";
+import {
+  CHAT_WINDOW,
+  createChatThroughRail,
+  prepareGitConnectedDesktop,
+} from "./coding-issue-journey-live-git-chat.js";
 
-const GIT_WINDOW_ID = "issue-3400-git-window";
-const CHAT_WINDOW_ID = "issue-3400-chat-window";
 const FORBIDDEN_KEYWORDS = [
   "branch",
   "fetch",
@@ -300,8 +305,12 @@ export async function observeBoundGitChatSessionActivity<T>(
   }
 }
 
-async function connectFixtureToChat(page: Page, baseRef: string, chatTitle: string): Promise<void> {
-  const gitWindow = page.locator(`[data-window-id="${GIT_WINDOW_ID}"]`);
+async function connectFixtureToChat(
+  page: Page,
+  gitWindow: Locator,
+  baseRef: string,
+  chatTitle: string,
+): Promise<void> {
   await gitWindow.getByRole("button", { name: "Connect to Chat" }).click();
   const dialog = page.getByRole("dialog", { name: "Connect Git change to chat" });
   await expect(dialog).toBeVisible();
@@ -314,7 +323,7 @@ async function connectFixtureToChat(page: Page, baseRef: string, chatTitle: stri
 }
 
 async function assertNoMutatingChatControls(page: Page): Promise<string> {
-  const chatWindow = page.locator(`[data-window-id="${CHAT_WINDOW_ID}"]`);
+  const chatWindow = page.locator(CHAT_WINDOW);
   const buttons = await chatWindow.getByRole("button").allTextContents();
   const offending = buttons.filter((label) =>
     FORBIDDEN_KEYWORDS.some((keyword) => label.toLowerCase().includes(keyword)),
@@ -338,11 +347,13 @@ export async function assertGitChangeChatExposesNoMutatingAffordance(
   const fixture = buildGitChangeChatFixture();
   try {
     const uiFinding = await observeNoForbiddenSessionRequests(page, async () => {
-      const chat = await createChatForFixture(request, fixture.root);
-      await seedWorkspace(page, fixture.root, chat);
-      await page.goto("/");
-      await expect(page.locator(`[data-window-id="${GIT_WINDOW_ID}"]`)).toBeVisible();
-      await connectFixtureToChat(page, fixture.baseRef, chat.title);
+      // #3390: the same real operator path as the model-backed journey -- Git window from the rail
+      // (the fixture checkout added through the window's own dialog), the Chat from the rail's
+      // "New chat" -- never a seeded window layout or a chat created over the API.
+      await prepareGitConnectedDesktop(page, fixture.root);
+      const chat = await createChatThroughRail(page, request, fixture.root);
+      const gitWindow = await openGovernedGitWindow(page, fixture.root, "rail");
+      await connectFixtureToChat(page, gitWindow, fixture.baseRef, chat.title);
       return assertNoMutatingChatControls(page);
     });
     return [routeFinding, uiFinding];

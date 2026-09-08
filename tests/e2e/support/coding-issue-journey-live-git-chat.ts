@@ -25,7 +25,7 @@ import { fetchGitChangeScopes } from "./git-change-chat-3400.js";
 // (`openGovernedGitWindow`, coding-issue-journey-live.ts). The Chat window this scenario creates
 // through the rail is the only one on the page for its lifetime, so the same aria-label-prefix
 // pattern -- rather than a fixed `data-window-id` a seed would have hardcoded -- finds it too.
-const CHAT_WINDOW = 'section[data-window-id][aria-label^="Chat"]';
+export const CHAT_WINDOW = 'section[data-window-id][aria-label^="Chat"]';
 
 function git(root: string, args: readonly string[]): string {
   return execFileSync("git", args, { cwd: root, encoding: "utf8", timeout: 30_000 }).trim();
@@ -171,7 +171,7 @@ async function reconnectAsActiveProject(page: Page, repositoryRoot: string): Pro
   await openGovernedGitWindow(page, repositoryRoot, "rail");
 }
 
-interface ConnectedRailChat {
+export interface ConnectedRailChat {
   readonly id: string;
   readonly title: string;
 }
@@ -201,7 +201,7 @@ async function readChatsForProject(
  * shows is identified by comparing the read-only chat list before and after the click: a newly
  * listed chat is the created one; otherwise the project's sole chat is the one that was opened.
  */
-async function createChatThroughRail(
+export async function createChatThroughRail(
   page: Page,
   request: APIRequestContext,
   repositoryRoot: string,
@@ -271,19 +271,33 @@ async function chatWindowDiagnosis(page: Page): Promise<string> {
  * binds the disposable checkout, creates the Chat and grants GitHub issue-reader access entirely
  * through the real UI (#3390): no seeded `keiko.workspace.v4` window and no direct
  * `/api/projects` / `/api/chats` / github-authorization mutation. */
+/**
+ * The operator's real path to a Git window bound to `repositoryRoot` on a desktop whose chat session
+ * treats it as the active project: the paired desktop, the Git window opened from the rail (adding
+ * the checkout through the window's own dialog when the desktop has never seen it), then the reload
+ * that lets the chat session resolve the freshest project. Shared by both git-to-chat scenarios.
+ *
+ * The paired desktop only -- no Coding Workbench window. Neither journey uses it, and its
+ * gateway-profile read (`/api/coding-sidecar/gateway/profile`) is one of the effect boundaries
+ * `observeNoForbiddenSessionRequests` forbids for a Git-connected Chat: the probe rehearsal of
+ * 2026-09-08 completed connect, two refinement turns and the description apply, then failed on
+ * exactly that read.
+ */
+export async function prepareGitConnectedDesktop(
+  page: Page,
+  repositoryRoot: string,
+): Promise<void> {
+  await openLiveDesktop(page);
+  await openGovernedGitWindow(page, repositoryRoot, "rail");
+  await reconnectAsActiveProject(page, repositoryRoot);
+}
+
 export async function connectControlledPullRequestToChat(
   page: Page,
   request: APIRequestContext,
   repositoryRoot: string,
 ): Promise<ConnectedGitChatSession> {
-  // The paired desktop only -- no Coding Workbench window. This journey never uses it, and its
-  // gateway-profile read (`/api/coding-sidecar/gateway/profile`) is one of the effect boundaries
-  // `observeNoForbiddenSessionRequests` forbids for a Git-connected Chat: the probe rehearsal of
-  // 2026-09-08 completed connect, two refinement turns and the description apply, then failed on
-  // exactly that read.
-  await openLiveDesktop(page);
-  await openGovernedGitWindow(page, repositoryRoot, "rail");
-  await reconnectAsActiveProject(page, repositoryRoot);
+  await prepareGitConnectedDesktop(page, repositoryRoot);
   await grantGithubIssueReaderAccessThroughSettings(page);
   const chat = await createChatThroughRail(page, request, repositoryRoot);
   const gitWindow = await openGovernedGitWindow(page, repositoryRoot, "rail");
