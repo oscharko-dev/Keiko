@@ -451,6 +451,17 @@ static const size_t KEIKO_RUNTIME_ATTESTATION_LENGTH = 20u;
     "-p:RestoreLockedMode=true"
   if ($LASTEXITCODE -ne 0) { throw ".NET analyzer quality build failed" }
 
+  $runtimeVerifierProject = Join-Path $PSScriptRoot `
+    "native-quality/windows-authenticode-verifier-quality.csproj"
+  $runtimeVerifierIntermediate = Join-Path $scratch "authenticode-verifier-obj/"
+  $runtimeVerifierOutput = Join-Path $scratch "authenticode-verifier-bin/"
+  dotnet build $runtimeVerifierProject --configuration Release --nologo `
+    "-p:BaseIntermediateOutputPath=$runtimeVerifierIntermediate" `
+    "-p:OutputPath=$runtimeVerifierOutput" `
+    "-p:KeikoFrameworkReferencePath=$frameworkReferences" `
+    "-p:RestoreLockedMode=true"
+  if ($LASTEXITCODE -ne 0) { throw ".NET runtime Authenticode analyzer quality build failed" }
+
   & pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot "__tests__/windows-rfc3161-fixtures.ps1")
   if ($LASTEXITCODE -ne 0) { throw "RFC3161 fixture verification failed" }
 } finally {

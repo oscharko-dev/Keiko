@@ -15,6 +15,8 @@ on:
       - scripts/check-windows-portable-authenticode-verifier.mjs
       - scripts/generate-windows-portable-authenticode-verifier.mjs
       - scripts/windows-portable-authenticode-standard-token-loader.test.cs
+      - scripts/native-quality/windows-authenticode-verifier-quality.csproj
+      - scripts/native-quality/windows-authenticode-verifier.packages.lock.json
 
 permissions:
   contents: read
@@ -40,6 +42,13 @@ jobs:
             "-p:BaseIntermediateOutputPath=$intermediate" "-p:OutputPath=$output" `
             "-p:RestoreLockedMode=true"
           if ($LASTEXITCODE -ne 0) { throw ".NET Authenticode analyzer proof failed" }
+          $references = Join-Path ${env:ProgramFiles(x86)} "Reference Assemblies/Microsoft/Framework/.NETFramework/v4.8.1"
+          $runtimeIntermediate = Join-Path $env:RUNNER_TEMP "runtime-authenticode-analyzer-obj/"
+          $runtimeOutput = Join-Path $env:RUNNER_TEMP "runtime-authenticode-analyzer-bin/"
+          dotnet build scripts/native-quality/windows-authenticode-verifier-quality.csproj --configuration Release --nologo `
+            "-p:BaseIntermediateOutputPath=$runtimeIntermediate" "-p:OutputPath=$runtimeOutput" `
+            "-p:KeikoFrameworkReferencePath=$references" "-p:RestoreLockedMode=true"
+          if ($LASTEXITCODE -ne 0) { throw ".NET runtime Authenticode analyzer proof failed" }
 
   runtime-proof:
     runs-on: windows-latest

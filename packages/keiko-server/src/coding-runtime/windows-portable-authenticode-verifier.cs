@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -11,11 +12,11 @@ using System.Text.RegularExpressions;
 namespace Keiko.Portable.Runtime {
 public sealed class TimestampResult {
   public bool Valid { get; set; }
-  public X509Certificate2[] Certificates { get; set; }
-  public DateTimeOffset[] GenerationTimes { get; set; }
+  public IReadOnlyList<X509Certificate2> Certificates { get; set; }
+  public IReadOnlyList<DateTimeOffset> GenerationTimes { get; set; }
   public TimestampResult() {
-    Certificates = new X509Certificate2[0];
-    GenerationTimes = new DateTimeOffset[0];
+    Certificates = Array.Empty<X509Certificate2>();
+    GenerationTimes = Array.Empty<DateTimeOffset>();
   }
 }
 
@@ -42,6 +43,7 @@ public static class Rfc3161 {
   }
 
   public static string DecodeOid(byte[] encoded) {
+    if (encoded == null) throw new ArgumentNullException("encoded");
     var reader = new DerReader(encoded);
     string value = reader.ReadOid();
     if (reader.HasData) throw new CryptographicException();
