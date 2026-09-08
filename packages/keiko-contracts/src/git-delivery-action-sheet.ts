@@ -184,6 +184,9 @@ export const GIT_PREFLIGHT_RECOVERY_ACTION_HINT: Readonly<
   "dirty-worktree-impacts-recovery": "recover-via-strategy",
   // The branch moved since the caller previewed/approved it: re-preview and re-approve -- a retry.
   "verified-commit-drifted": "retry",
+  // The caller named a source branch that is not the one checked out: re-target the push (or check
+  // the named branch out) and preview again.
+  "source-branch-not-checked-out": "adjust-policy-target",
 };
 
 export interface GitDeliveryRecoveryHint {

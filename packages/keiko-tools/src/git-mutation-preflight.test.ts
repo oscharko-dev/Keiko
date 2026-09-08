@@ -214,6 +214,29 @@ describe("preflight — push (upstream readiness and remote reachability)", () =
     expect(codes(push, current)).not.toContain("verified-commit-drifted");
   });
 
+  // #3394 review, follow-up on the drift check: `snapshot.headSha` is the head of the CHECKED-OUT
+  // branch, so the pinned-commit comparison only speaks for `sourceBranchName` when that branch is
+  // the checkout. The reviewer's case -- pinned commit equal to the checked-out head, but a different
+  // branch named as the source -- used to pass preflight; it must be refused outright.
+  it("blocks when the named source branch is not the checked-out branch (source-branch-not-checked-out)", () => {
+    const report = evaluateGitPreflight(
+      { ...push, sourceBranchName: "feature/other" },
+      snapshot({ headSha: "a".repeat(40) }),
+    );
+    expect(report.ok).toBe(false);
+    expect(report.blocking.map((f) => f.code)).toContain("source-branch-not-checked-out");
+  });
+
+  it("blocks a push from a detached head, where no checked-out branch vouches for the named source", () => {
+    expect(codes(push, snapshot({ headDetached: true, currentBranchName: undefined }))).toContain(
+      "source-branch-not-checked-out",
+    );
+  });
+
+  it("does not block when the named source branch is the checked-out branch", () => {
+    expect(codes(push, snapshot())).not.toContain("source-branch-not-checked-out");
+  });
+
   it("permits setting an upstream on first push", () => {
     expect(
       evaluateGitPreflight({ ...push, setUpstreamTracking: true }, snapshot({ hasUpstream: false }))

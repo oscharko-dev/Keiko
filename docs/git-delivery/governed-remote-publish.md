@@ -19,7 +19,7 @@ evidence schema.
 | contracts    | `git-delivery*.ts`          | push input shape (mandatory `verifiedCommitSha`, ADR-0085 D6), execution error codes, recovery vocabulary                                                            |
 | tools (pure) | `git-publish-gateway.ts`    | `GitPushCommand`, narrow `GitRemotePublishAdapter` port, dedicated push allowlist, `buildPushArgv` (force refused), rejection taxonomy, `runGitPublish` orchestrator |
 | tools (Node) | `git-publish-node.ts`       | `createNodeGitPublishAdapter` — runs `git push` through the no-shell spawn boundary with the dedicated allowlist; classifies rejections from git output              |
-| tools (pure) | `git-mutation-preflight.ts` | adds the `non-fast-forward` and `verified-commit-drifted` findings to the push preflight                                                                             |
+| tools (pure) | `git-mutation-preflight.ts` | adds the `non-fast-forward`, `verified-commit-drifted` and `source-branch-not-checked-out` findings to the push preflight                                            |
 | server       | `pushExecution.ts`          | `executeGovernedPublish`, the default-safe publish policy pack, preview/response projections                                                                         |
 | server       | `pushRoutes.ts`             | `POST /api/git-delivery/push/preview` (read-only) and `POST /api/git-delivery/push/execute` (governed)                                                               |
 | ui           | `GovernedGitFlowCard.tsx`   | a Publish section: remote/branch inputs, preview, and governed push                                                                                                  |
@@ -29,8 +29,8 @@ evidence schema.
 ### `POST /api/git-delivery/push/preview` (read-only)
 
 Builds the pre-publish risk context from a live worktree snapshot: the remote target, the risk class,
-`wouldCreateRemoteBranch` / `forceBlocked` flags, the preflight findings (including `non-fast-forward`
-and `verified-commit-drifted`), and the **effective** policy outcome for that specific target. The
+`wouldCreateRemoteBranch` / `forceBlocked` flags, the preflight findings (including `non-fast-forward`,
+`verified-commit-drifted` and `source-branch-not-checked-out`), and the **effective** policy outcome for that specific target. The
 response also carries `headCommitSha` (the live snapshot's own head) for the UI to capture and
 resubmit as the mandatory `verifiedCommitSha` on approve/execute — see ADR-0085 D6. Never mutates,
 never records evidence.
@@ -111,8 +111,8 @@ evidence capture.
   hermetic bare + working repos: a real push reaches the remote; a real non-fast-forward is classified
   at execution time; a force push is blocked and the remote is untouched; evidence is recorded for
   allowed and blocked attempts; push stays out of the local mutation allowlist.
-- `packages/keiko-tools/src/git-mutation-preflight.test.ts` — the `non-fast-forward` and
-  `verified-commit-drifted` preflight findings.
+- `packages/keiko-tools/src/git-mutation-preflight.test.ts` — the `non-fast-forward`,
+  `verified-commit-drifted` and `source-branch-not-checked-out` preflight findings.
 - `packages/keiko-server/src/gitDelivery/pushRoutes.test.ts` — the BFF seam: CSRF and request guards,
   preview risk context, the default pack's protected-target block, force block, non-fast-forward
   preflight block, rejection surfacing, and evidence recording.

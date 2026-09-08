@@ -185,6 +185,15 @@ machinery, not a call-site check.
   (AGENTS.md §7: delete the dead code rather than leave an always-false guard in place). Losing that
   check does not reduce coverage — an actually-unconfigured upstream on a pinned push still fails,
   just later and more informatively, when git itself rejects the pinned refspec.
+- **The branch-identity finding (review of the drift check).** `snapshot.headSha` is the head of
+  the branch that is *checked out*, so `verified-commit-drifted` only speaks for `sourceBranchName`
+  when that branch is the checkout. `preflightPush` therefore also emits
+  `"source-branch-not-checked-out"` (blocking, user-actionable) when `snapshot.currentBranchName`
+  is not `inputs.sourceBranchName` — including a detached head, where no branch is checked out at
+  all. A caller naming a branch the snapshot never read is refused outright instead of being judged
+  (and possibly passed) by another branch's head; the pinned refspec then publishes exactly the
+  commit the checked-out branch was at when it was reviewed. Recovery hint: `adjust-policy-target`
+  (re-target the push, or check the named branch out, and preview again).
 - **Why this does not defeat D1's own guarantee for the issue-bound path.** D1's canonical-URL path
   intentionally publishes the exact approved commit even when the local branch has since moved
   further — that is the whole point of pinning. A blanket "input must equal live local head" check

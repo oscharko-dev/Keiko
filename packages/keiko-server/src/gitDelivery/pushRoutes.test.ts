@@ -617,8 +617,19 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
   it("executes a push to an ordinary user branch that follows no Keiko naming convention", async () => {
     const adapter = recordingPublishAdapter();
     const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    // The user has `my-work` checked out: a push names the checkout, or preflight refuses it with
+    // `source-branch-not-checked-out` (#3394 review) before the adapter is reached.
     const handler = createHandlePushExecute({
-      execution: seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
+      execution: seams({
+        publishAdapterFactory: () => adapter.adapter,
+        approvalStore,
+        snapshotReader: () =>
+          Promise.resolve({
+            ...SNAPSHOT,
+            currentBranchName: "my-work",
+            existingLocalBranchNames: ["my-work", "dev"],
+          }),
+      }),
     });
     const command: GitPushCommand = {
       kind: "push",

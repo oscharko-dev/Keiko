@@ -702,6 +702,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Workspace changes prevent safe recovery",
   "codingWorkbench.commitResult.preflight.verified-commit-drifted":
     "The reviewed commit no longer matches the branch's current head",
+  "codingWorkbench.commitResult.preflight.source-branch-not-checked-out":
+    "The branch named for this push is not the checked-out branch",
   "codingWorkbench.commitResult.messageViolation.empty-subject": "The commit subject is empty",
   "codingWorkbench.commitResult.messageViolation.missing-conventional-prefix":
     'The subject is missing a conventional-commit prefix (for example "feat: ")',

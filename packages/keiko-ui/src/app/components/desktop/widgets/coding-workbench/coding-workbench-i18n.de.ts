@@ -729,6 +729,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Workspace-Änderungen verhindern eine sichere Wiederherstellung",
   "codingWorkbench.commitResult.preflight.verified-commit-drifted":
     "Der überprüfte Commit stimmt nicht mehr mit dem aktuellen Stand des Branches überein",
+  "codingWorkbench.commitResult.preflight.source-branch-not-checked-out":
+    "Der für diesen Push angegebene Branch ist nicht der ausgecheckte Branch",
   "codingWorkbench.commitResult.messageViolation.empty-subject": "Die Commit-Betreffzeile ist leer",
   "codingWorkbench.commitResult.messageViolation.missing-conventional-prefix":
     'Der Betreffzeile fehlt ein Conventional-Commit-Präfix (zum Beispiel "feat: ")',

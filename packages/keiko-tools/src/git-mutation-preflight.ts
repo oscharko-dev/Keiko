@@ -89,6 +89,8 @@ const FINDING_REMEDIATION: Readonly<Record<GitPreflightFindingCode, GitPreflight
   "dirty-worktree-impacts-recovery": "user-actionable",
   // The user just needs to re-preview/re-approve against the branch's current head.
   "verified-commit-drifted": "user-actionable",
+  // The user re-targets the push to the checked-out branch (or checks the named branch out).
+  "source-branch-not-checked-out": "user-actionable",
 } as const;
 
 export function gitPreflightRemediationFor(code: GitPreflightFindingCode): GitPreflightRemediation {
@@ -240,6 +242,13 @@ function preflightPush(
   // This is the actual anti-drift gate the finding is about: it runs on the FRESHLY re-read snapshot
   // (never the one a stale preview cached), so it catches "the branch moved since I approved this"
   // before any adapter call happens at all.
+  // ...and it only speaks for `sourceBranchName` when that branch IS the checkout: `snapshot.headSha`
+  // is the checked-out branch's head, so a push naming any other branch (or issued from a detached
+  // head, where `currentBranchName` is absent) is refused outright rather than judged by a head the
+  // snapshot never read for it.
+  if (snapshot.currentBranchName !== inputs.sourceBranchName) {
+    findings.push(blocking("source-branch-not-checked-out"));
+  }
   if (inputs.verifiedCommitSha !== snapshot.headSha) {
     findings.push(blocking("verified-commit-drifted"));
   }

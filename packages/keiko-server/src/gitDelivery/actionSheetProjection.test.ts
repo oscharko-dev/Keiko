@@ -278,10 +278,12 @@ describe("buildActionSheetFromFacts", () => {
 // the opposite of what will happen. The packs below are the PRODUCTION packs imported from the
 // executing routes — not copies — so this test moves with them.
 
+// The push names CLEAN_SNAPSHOT's checked-out branch: `source-branch-not-checked-out` (#3394 review)
+// refuses a push whose named source is not the checkout, before policy is even consulted.
 const PUSH_TO_DEV: GitDeliveryResolvedInputs = {
   kind: "push",
   verifiedCommitSha: "a".repeat(40),
-  sourceBranchName: "feat/x",
+  sourceBranchName: "feature/x",
   remoteAlias: "origin",
   remoteBranchName: "dev",
   forcePush: false,

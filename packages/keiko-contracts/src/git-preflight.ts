@@ -20,7 +20,12 @@ export type GitPreflightFindingCode =
   // #3394 review, finding 1: the caller-supplied `verifiedCommitSha` no longer equals the freshly
   // re-read local worktree head — the branch moved between preview/approval and execute. Blocking so
   // a drifted push is refused instead of silently publishing a different commit than was reviewed.
-  | "verified-commit-drifted";
+  | "verified-commit-drifted"
+  // #3394 review, follow-up on the drift check: `snapshot.headSha` is the head of the CHECKED-OUT
+  // branch, so the pinned-commit comparison only speaks for `sourceBranchName` when that branch is
+  // the one checked out. A push naming any other branch (or issued from a detached head) is refused
+  // outright instead of being judged -- and possibly passed -- by another branch's head.
+  | "source-branch-not-checked-out";
 
 export const GIT_PREFLIGHT_FINDING_CODES: readonly GitPreflightFindingCode[] = [
   "detached-head",
@@ -41,6 +46,7 @@ export const GIT_PREFLIGHT_FINDING_CODES: readonly GitPreflightFindingCode[] = [
   "recovery-target-unset",
   "dirty-worktree-impacts-recovery",
   "verified-commit-drifted",
+  "source-branch-not-checked-out",
 ] as const;
 
 // A blocking finding halts the lifecycle before execution; an advisory finding is surfaced for the
