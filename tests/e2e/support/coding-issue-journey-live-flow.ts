@@ -56,6 +56,7 @@ import {
   raiseWorkbench,
   readObservedRunWhileAwaitingSuccess,
   waitWhileAnsweringApprovals,
+  raiseWindow,
 } from "./coding-issue-journey-live.js";
 import {
   observedDelivery,
@@ -460,6 +461,9 @@ async function openGovernedGitWindow(page: Page, repositoryRoot: string): Promis
   // and only real windows carry `data-window-id`, which keeps this off the panes inside them.
   const gitWindow = page.locator('section[data-window-id][aria-label^="Git"]');
   await expect(gitWindow).toBeVisible({ timeout: 60_000 });
+  // Visible is not usable: another window may cover it. Bring it forward before anything inside it
+  // is clicked, the way an operator does.
+  await raiseWindow(page, gitWindow, "Git");
   return gitWindow;
 }
 
