@@ -800,6 +800,32 @@ export async function clickWhenActionable(control: Locator): Promise<void> {
   }
 }
 
+/**
+ * Re-observes the Issue handoff at an operator's cadence.
+ *
+ * "Refresh observed status" re-reads the real GitHub facts through the journey refresh route, so it
+ * is rate-limited by construction: at most one click per `everyMs`, and only while the control is
+ * present and actionable. Every step that waits on a post-run observation -- CI readiness after the
+ * run has settled, the ready-for-review offer -- shares this one cadence rather than carrying its
+ * own; a second copy is how the lane once fired hundreds of refreshes inside ten minutes.
+ */
+export function journeyRefresher(
+  page: Page,
+  everyMs = 15_000,
+): { readonly tick: () => Promise<void> } {
+  const refresh = page
+    .getByRole("region", { name: "Issue handoff", exact: true })
+    .getByRole("button", { name: "Refresh observed status" });
+  let last = 0;
+  return {
+    async tick(): Promise<void> {
+      if (Date.now() - last < everyMs) return;
+      last = Date.now();
+      await clickWhenActionable(refresh);
+    },
+  };
+}
+
 async function answerVisibleApproval(page: Page): Promise<void> {
   await clickWhenActionable(page.getByRole("button", { name: "Approve once", exact: true }));
   const changeReview = page.getByRole("region", {

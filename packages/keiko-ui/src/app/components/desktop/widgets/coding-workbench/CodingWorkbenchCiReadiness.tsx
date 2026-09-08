@@ -142,7 +142,10 @@ function ObservationDetails({
   );
 }
 
-function CheckCounts({
+// Exported so the Issue handoff card's CI group renders the SAME machine-readable count contract
+// (`data-checks` / `data-count` / `dd`) once the run has settled and this card reports its own
+// observations as historical (#3390): one producer of that shape, not a second copy per card.
+export function CheckCounts({
   kind,
   counts,
   t,
@@ -214,7 +217,7 @@ function ReviewContext({
 }
 // #3390: `id` is the fact's stable, locale-independent identity; `label` is what the operator
 // reads. Mirrors `DeliveryFacts` on the sibling delivery card.
-function Fact({
+export function Fact({
   id,
   label,
   value,

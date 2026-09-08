@@ -6,6 +6,7 @@ import type {
 import { journeyEvidenceFresh } from "@oscharko-dev/keiko-contracts/runtime/git-journey-freshness";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import { journeyCiCurrent, journeyDescriptionCurrent } from "./_journeyPresentation";
+import { CheckCounts, Fact } from "./CodingWorkbenchCiReadiness";
 import common from "./CodingWorkbenchWindow.module.css";
 import styles from "./CodingWorkbenchJourneyOutcome.module.css";
 
@@ -92,10 +93,18 @@ function JourneyCi({
   let state: "unobserved" | "stale" | NonNullable<JourneyOutcome["readiness"]>["state"] =
     "unobserved";
   if (ci !== null) state = journeyCiCurrent(outcome, now) ? ci.state : "stale";
+  // #3390: once the run has settled, this group is the operator's only CURRENT reading of CI
+  // readiness -- the CI readiness card reports a settled run's own observations as historical by
+  // design -- so it carries the same machine-readable contract that card does: the displayed state
+  // and reason on one element, the check counts and the observed head as data. A reader that
+  // resolved the verdict from translated text would break on the first wording change, and one
+  // that could not resolve it at all waited twenty minutes for a card that had already answered.
   return (
     <section className={styles["cmp-journey-group"]} aria-label={t("codingWorkbench.journey.ci")}>
       <h4>{t("codingWorkbench.journey.ci")}</h4>
-      <p>{t(`codingWorkbench.ci.state.${state}`)}</p>
+      <output data-testid="cwb-journey-ci" data-state={state} data-reason={ci?.reason}>
+        {t(`codingWorkbench.ci.state.${state}`)}
+      </output>
       {ci !== null && (
         <>
           <p>
@@ -105,7 +114,15 @@ function JourneyCi({
               failed: ci.advisoryChecks.failed,
             })}
           </p>
-          <p>{t(`codingWorkbench.ci.reason.${ci.reason}`)}</p>
+          <CheckCounts kind="required" counts={ci.requiredChecks} t={t} />
+          <CheckCounts kind="advisory" counts={ci.advisoryChecks} t={t} />
+          <dl className={common.approvalFacts}>
+            <Fact
+              id="headSha"
+              label={t("codingWorkbench.ci.head")}
+              value={<code>{ci.headSha}</code>}
+            />
+          </dl>
           <JourneyReviewCounts outcome={outcome} />
         </>
       )}

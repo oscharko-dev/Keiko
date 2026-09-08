@@ -9,7 +9,11 @@
 // #3390 AC5) -- this module never calls a merge or issue-close route.
 
 import { expect, type Locator, type Page } from "@playwright/test";
-import { clickWhenActionable, raiseWorkbench } from "./coding-issue-journey-live.js";
+import {
+  clickWhenActionable,
+  journeyRefresher,
+  raiseWorkbench,
+} from "./coding-issue-journey-live.js";
 
 const JOURNEY_REGION_NAME = "Issue handoff";
 const REFRESH_BUTTON_NAME = "Refresh observed status";
@@ -21,7 +25,7 @@ export async function proposeJourneyReady(page: Page): Promise<void> {
   await expect(journey).toBeVisible({ timeout: 60_000 });
   const refresh = journey.getByRole("button", { name: REFRESH_BUTTON_NAME });
   const propose = journey.getByRole("button", { name: PROPOSE_BUTTON_NAME });
-  await waitForProposeReadyOffer(page, refresh, propose);
+  await waitForProposeReadyOffer(page, propose);
   await propose.click();
   await clickWhenActionable(refresh);
   // A successfully redeemed proposal converts the observed PR from draft to ready, so the control
@@ -38,24 +42,22 @@ export async function proposeJourneyReady(page: Page): Promise<void> {
  * disabled or momentarily detached refresh click ended the flow outright -- and the button IS
  * disabled while a refresh is in flight. And with the default poll intervals it fired hundreds of
  * real `journey/refresh` calls against GitHub inside ten minutes, which is secondary-rate-limit
- * territory. The click now lives outside the matcher, is only attempted when actionable, and runs
- * at a fixed fifteen-second cadence.
+ * territory. The click lives outside the matcher, is only attempted when actionable, and runs at
+ * the shared fifteen-second cadence (`journeyRefresher`); the offer itself is re-checked every two
+ * seconds so it is seen as soon as it appears rather than up to fifteen seconds later.
  *
  * `isEnabled()` is no longer wrapped in a catch: swallowing a strict-mode or detachment error into
  * "not ready yet" reported a structural break ten minutes later as a plain availability timeout.
  */
-async function waitForProposeReadyOffer(
-  page: Page,
-  refresh: Locator,
-  propose: Locator,
-): Promise<void> {
+async function waitForProposeReadyOffer(page: Page, propose: Locator): Promise<void> {
+  const refresher = journeyRefresher(page);
   const deadline = Date.now() + 10 * 60_000;
   for (;;) {
     if ((await propose.count()) > 0 && (await propose.isEnabled())) return;
     if (Date.now() > deadline) {
       throw new Error("expected the ready-for-review control to become available");
     }
-    await clickWhenActionable(refresh);
-    await page.waitForTimeout(15_000);
+    await refresher.tick();
+    await page.waitForTimeout(2_000);
   }
 }

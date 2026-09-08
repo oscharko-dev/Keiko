@@ -17,6 +17,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodingWorkbenchDraftDelivery } from "./CodingWorkbenchDraftDelivery";
 import { CodingWorkbenchCiReadiness } from "./CodingWorkbenchCiReadiness";
 import { CodingWorkbenchCommitResult } from "./CodingWorkbenchCommitResult";
+import { CodingWorkbenchJourneyOutcome } from "./CodingWorkbenchJourneyOutcome";
+import { journeyFixture } from "./_journeyOutcomeTestSupport";
 import { draftDeliverySnapshot } from "./_draftDeliveryTestSupport";
 import { descriptionStatusSnapshot } from "./_workbenchDescriptionStatusTestSupport";
 import { ciReadinessSnapshot } from "./_ciReadinessTestSupport";
@@ -131,6 +133,30 @@ describe("Code task observation contract (#3390)", () => {
         expect(group?.querySelector(`[data-count="${count}"] dd`)?.textContent).toMatch(/^\d+$/u);
       }
     }
+  });
+
+  // After the run has settled, the Issue handoff card's CI group is the operator's only current CI
+  // reading, and the lane reads it through the same mapper as the CI card (`observedCiPicture`).
+  // Its scope is the group's OWN section, nested inside the handoff card: the handoff's state and
+  // the CI group's state are two different facts and must never resolve to each other.
+  it("resolves the handoff's CI group from its own nested scope, apart from the handoff state", () => {
+    vi.spyOn(Date, "now").mockReturnValue(new Date("2026-09-05T00:00:05.000Z").getTime());
+    render(<CodingWorkbenchJourneyOutcome {...journeyFixture()} />);
+    const journey = card("cwb-journey-state");
+    const ci = card("cwb-journey-ci");
+    expect(ci).not.toBe(journey);
+    expect(journey.contains(ci)).toBe(true);
+    expect(screen.getByTestId("cwb-journey-ci")).toHaveAttribute("data-state", "technical-ready");
+    expect(fact("cwb-journey-ci", "headSha")).toBe("3".repeat(40));
+    for (const kind of ["required", "advisory"] as const) {
+      const group = ci.querySelector(`[data-checks="${kind}"]`);
+      expect(group, `${kind} check counts must be addressable`).not.toBeNull();
+      for (const count of ["total", "passed", "failed", "pending", "blocked", "unknown"]) {
+        expect(group?.querySelector(`[data-count="${count}"] dd`)?.textContent).toMatch(/^\d+$/u);
+      }
+    }
+    // The CI group's state is the only data-state inside its own scope.
+    expect(ci.querySelectorAll("[data-state]")).toHaveLength(1);
   });
 
   it("resolves the commit receipt's facts from the receipt card's own scope", () => {

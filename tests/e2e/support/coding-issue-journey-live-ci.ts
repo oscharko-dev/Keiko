@@ -10,9 +10,10 @@ import {
   GIT_CI_READINESS_REASON_STATES,
   type ReadinessSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
-import { waitWhileAnsweringApprovals } from "./coding-issue-journey-live.js";
+import { journeyRefresher, waitWhileAnsweringApprovals } from "./coding-issue-journey-live.js";
 import {
-  observedCiReadiness,
+  observedCiPicture,
+  type ObservedCiPicture,
   type ObservedCiReadiness,
 } from "./coding-issue-journey-live-observed.js";
 
@@ -38,6 +39,21 @@ export interface CiRepairOutcome {
 // readiness state then narrows here automatically instead of failing as an "unknown" one.
 const READINESS_STATES = new Set<string>(Object.values(GIT_CI_READINESS_REASON_STATES));
 
+/**
+ * The CI reading an operator would act on, chosen from one paint.
+ *
+ * While the run is live the CI readiness card shows the model's own observations and is the
+ * current reading. Once the run has settled that card reports those observations as stale by design
+ * -- the model that made them is gone -- and the Issue handoff card's CI group, fed by "Refresh
+ * observed status", becomes the only current one. Reading the CI card alone therefore waited the
+ * full twenty minutes on every settled run: its stale reading is never terminal, and nothing on that
+ * card can refresh it (#3390). Pure, so the choice is pinned without a browser.
+ */
+export function currentCiReading(picture: ObservedCiPicture): ObservedCiReadiness | undefined {
+  if (picture.runCard !== undefined && picture.runCard.state !== "stale") return picture.runCard;
+  return picture.journey ?? picture.runCard;
+}
+
 function terminalReadinessState(state: string): ReadinessSnapshot["state"] {
   if (!READINESS_STATES.has(state)) {
     throw new TypeError(`the CI readiness card displayed an unknown state "${state}"`);
@@ -49,15 +65,22 @@ function terminalReadinessState(state: string): ReadinessSnapshot["state"] {
 export async function waitForCiRepairOutcome(page: Page): Promise<CiRepairOutcome> {
   let observedFailure = false;
   let failureHeadSha: string | undefined;
+  const refresher = journeyRefresher(page);
   const readiness = await waitWhileAnsweringApprovals(
     page,
     async (): Promise<ObservedCiReadiness | undefined> => {
-      const value = await observedCiReadiness(page);
-      if (value?.state === "failed") {
+      const picture = await observedCiPicture(page);
+      // A repair is something only the running model can do, so an observed failure counts from
+      // the run's own card alone; the handoff's post-run reading never shows one being repaired.
+      if (picture.runCard?.state === "failed") {
         observedFailure = true;
-        failureHeadSha ??= value.headSha;
+        failureHeadSha ??= picture.runCard.headSha;
       }
-      return value;
+      const current = currentCiReading(picture);
+      // What an operator does when the reading in front of them is dated or missing: refresh the
+      // handoff. Rate-limited by the shared cadence, so a long wait stays inside GitHub's limits.
+      if (current === undefined || current.state === "stale") await refresher.tick();
+      return current;
     },
     (value) => value !== undefined && TERMINAL_CI_STATES.has(value.state),
     {

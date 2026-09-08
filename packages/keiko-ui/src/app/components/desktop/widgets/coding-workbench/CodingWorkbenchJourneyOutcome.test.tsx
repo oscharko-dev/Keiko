@@ -46,12 +46,42 @@ describe("observed issue journey handoff", () => {
       "href",
       "https://github.com/owner/repository/pull/7",
     );
-    expect(screen.getByText("3333333333333333333333333333333333333333")).toBeInTheDocument();
+    // The exact head is shown twice on purpose: once as the accepted delivery's bound head in the
+    // identity block, once as the head the CI observation was made on inside the CI group (#3390).
+    // A current observation binds the same head; a dated one may not, and then both must be seen.
+    expect(screen.getAllByText("3333333333333333333333333333333333333333")).toHaveLength(2);
     expect(screen.getByText("Description applied to the observed PR")).toBeInTheDocument();
     expect(screen.getByText("Technical checks ready")).toBeInTheDocument();
     expect(screen.getByText("Human review required")).toBeInTheDocument();
     expect(screen.queryByText("Issue journey completed")).not.toBeInTheDocument();
   });
+  // #3390: once the run has settled, this group is the operator's only CURRENT reading of CI
+  // readiness (the CI readiness card reports a settled run's own observations as stale by design),
+  // so it must expose the same machine-readable contract that card does -- the qualification lane
+  // and any observation reader resolve the verdict, the counts and the head from data, never from
+  // translated text. Reading the CI card alone waited twenty minutes on every settled run.
+  it("exposes the CI group machine-readably: state, reason, check counts and observed head", () => {
+    const fixture = journeyFixture();
+    const readiness = fixture.outcome.readiness;
+    if (readiness === null) throw new Error("journey fixture must carry a readiness snapshot");
+    render(<CodingWorkbenchJourneyOutcome {...fixture} />);
+
+    const state = screen.getByTestId("cwb-journey-ci");
+    expect(state).toHaveAttribute("data-state", "technical-ready");
+    expect(state).toHaveAttribute("data-reason", readiness.reason);
+    const group = state.closest("section");
+    expect(group).not.toBeNull();
+    expect(group?.getAttribute("aria-label")).toBe("Technical checks");
+    for (const kind of ["required", "advisory"] as const) {
+      const counts = group?.querySelector(`[data-checks="${kind}"]`);
+      expect(counts, `${kind} check counts must be addressable`).not.toBeNull();
+      expect(counts?.querySelector('[data-count="passed"] dd')?.textContent).toBe(
+        String(readiness[`${kind}Checks`].passed),
+      );
+    }
+    expect(group?.querySelector('[data-fact="headSha"] dd')?.textContent).toBe(readiness.headSha);
+  });
+
   it("renders ready-for-review as a closed, non-clickable approval-path-pending control by default (#3389 AC3)", async () => {
     const onProposeReady = vi.fn();
     render(<CodingWorkbenchJourneyOutcome {...journeyFixture()} onProposeReady={onProposeReady} />);

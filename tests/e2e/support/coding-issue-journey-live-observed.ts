@@ -41,7 +41,10 @@ const CARD_TEST_IDS = [
   "cwb-description-status",
   "cwb-ci-state",
   "cwb-commit-result",
+  "cwb-journey-state",
+  "cwb-journey-ci",
 ] as const;
+type CardTestId = (typeof CARD_TEST_IDS)[number];
 
 async function present(locator: Locator): Promise<boolean> {
   return (await locator.count()) > 0;
@@ -292,11 +295,44 @@ function checkCounts(reading: CardReading, kind: "required" | "advisory"): GitCi
 
 /** The CI readiness card, or `undefined` before a pull request exists to observe checks for. */
 export async function observedCiReadiness(page: Page): Promise<ObservedCiReadiness | undefined> {
-  return ciReadinessOf(await readWorkbench(page));
+  return ciReadinessOf(await readWorkbench(page), "cwb-ci-state");
 }
 
-function ciReadinessOf(workbench: WorkbenchReading): ObservedCiReadiness | undefined {
-  const reading = workbench.cards["cwb-ci-state"];
+/**
+ * Everything the lane needs to decide WHICH CI reading is the operator's current one, from ONE
+ * paint (#3390).
+ *
+ * The CI readiness card shows the run's own observations and deliberately reports them as stale
+ * once the run has settled -- they were the model's readings, and the model is gone. From then on
+ * the Issue handoff card is the operator's surface: its "Refresh observed status" re-observes the
+ * provider and its CI group shows the result. Reading the two from separate paints would let a run
+ * settle between them and pair a live-phase verdict with a post-run head.
+ */
+export interface ObservedCiPicture {
+  readonly runState: string;
+  /** The CI readiness card's own reading, or `undefined` while nothing is observed. */
+  readonly runCard: ObservedCiReadiness | undefined;
+  /** The Issue handoff card's CI group, or `undefined` before a journey outcome is shown. */
+  readonly journey: ObservedCiReadiness | undefined;
+}
+
+export async function observedCiPicture(page: Page): Promise<ObservedCiPicture> {
+  const workbench = await readWorkbench(page);
+  return {
+    runState: displayed(workbench.state, "run state"),
+    runCard: ciReadinessOf(workbench, "cwb-ci-state"),
+    journey: ciReadinessOf(workbench, "cwb-journey-ci"),
+  };
+}
+
+// One mapper for both cards: the Issue handoff card's CI group renders the CI card's own
+// machine-readable contract (`CheckCounts` / `Fact`, CodingWorkbenchCiReadiness.tsx), so a reader
+// scoped to either card resolves the same shape from the same attributes.
+function ciReadinessOf(
+  workbench: WorkbenchReading,
+  cardId: Extract<CardTestId, "cwb-ci-state" | "cwb-journey-ci">,
+): ObservedCiReadiness | undefined {
+  const reading = workbench.cards[cardId];
   if (reading === undefined) return undefined;
   const state = displayed(reading.state, "CI readiness state");
   if (state === "unobserved") return undefined;
@@ -306,6 +342,18 @@ function ciReadinessOf(workbench: WorkbenchReading): ObservedCiReadiness | undef
     requiredChecks: checkCounts(reading, "required"),
     advisoryChecks: checkCounts(reading, "advisory"),
   };
+}
+
+export interface ObservedJourney {
+  readonly state: string;
+  readonly reason: string | null;
+}
+
+/** The Issue handoff card's displayed journey state -- `stale` included, exactly as shown. */
+export async function observedJourney(page: Page): Promise<ObservedJourney | undefined> {
+  const reading = (await readWorkbench(page)).cards["cwb-journey-state"];
+  if (reading === undefined) return undefined;
+  return { state: displayed(reading.state, "journey state"), reason: reading.reason };
 }
 
 /**
@@ -369,7 +417,7 @@ export async function observedRun(page: Page): Promise<ObservedRun> {
     state: displayed(workbench.state, "run state"),
     delivery: deliveryOf(workbench),
     description: descriptionStatusOf(workbench),
-    ciReadiness: ciReadinessOf(workbench),
+    ciReadiness: ciReadinessOf(workbench, "cwb-ci-state"),
     commitReceipt: commitReceiptOf(workbench),
   };
 }

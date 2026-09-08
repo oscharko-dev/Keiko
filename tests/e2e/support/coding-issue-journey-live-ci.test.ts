@@ -8,9 +8,11 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  currentCiReading,
   evaluateCiRepairLoopOutcome,
   type CiRepairOutcome,
 } from "./coding-issue-journey-live-ci.js";
+import type { ObservedCiReadiness } from "./coding-issue-journey-live-observed.js";
 
 const REQUIRED_CHECKS = { total: 3, passed: 3, failed: 0, pending: 0, blocked: 0, unknown: 0 };
 
@@ -52,5 +54,42 @@ describe("evaluateCiRepairLoopOutcome", () => {
       result: "passed",
       reason: "observed-failure-repaired-fresh-head-ready",
     });
+  });
+});
+
+// #3390: the CI readiness card reports a settled run's own observations as stale by design, and
+// nothing on that card can refresh them; from then on the Issue handoff card's CI group is the
+// operator's only current reading. Choosing the wrong source is not a wrong answer but NO answer:
+// the lane waited its full twenty minutes on every settled run before this choice existed.
+describe("currentCiReading", () => {
+  const reading = (state: string, head = "a".repeat(40)): ObservedCiReadiness => ({
+    state,
+    headSha: head,
+    requiredChecks: REQUIRED_CHECKS,
+    advisoryChecks: REQUIRED_CHECKS,
+  });
+
+  it("acts on the run's own card while its reading is current", () => {
+    const runCard = reading("failed");
+    expect(
+      currentCiReading({ runState: "running", runCard, journey: reading("technical-ready") }),
+    ).toBe(runCard);
+  });
+
+  it("switches to the handoff's group once the run's card reports its observations as stale", () => {
+    const journey = reading("technical-ready", "b".repeat(40));
+    expect(currentCiReading({ runState: "succeeded", runCard: reading("stale"), journey })).toBe(
+      journey,
+    );
+  });
+
+  it("reads the handoff's group when the run's card shows nothing at all", () => {
+    const journey = reading("blocked");
+    expect(currentCiReading({ runState: "succeeded", runCard: undefined, journey })).toBe(journey);
+  });
+
+  it("returns the stale run card, never undefined, when the handoff is not shown yet", () => {
+    const runCard = reading("stale");
+    expect(currentCiReading({ runState: "succeeded", runCard, journey: undefined })).toBe(runCard);
   });
 });
