@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
@@ -7,11 +8,11 @@ import { KeikoDesktop } from "./KeikoDesktop";
 const replace = vi.fn();
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ replace }),
+  useRouter: (): { replace: typeof replace } => ({ replace }),
 }));
 
 vi.mock("./AppShell", () => ({
-  AppShell: () => <section aria-label="Mock app shell" />,
+  AppShell: (): ReactNode => <section aria-label="Mock app shell" />,
 }));
 
 vi.mock("@/lib/coding-app-session-client", () => ({
