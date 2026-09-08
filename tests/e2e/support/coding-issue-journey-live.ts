@@ -821,6 +821,10 @@ export function journeyRefresher(
     async tick(): Promise<void> {
       if (Date.now() - last < everyMs) return;
       last = Date.now();
+      // Another window (the Editor used for the trust decision, the Git window used for the base
+      // update or the merge) may sit over the workbench; a covered control is not actionable and
+      // `clickWhenActionable` would skip it silently, tick after tick.
+      await raiseWorkbench(page);
       await clickWhenActionable(refresh);
     },
   };

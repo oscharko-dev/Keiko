@@ -28,6 +28,7 @@ import {
   type GitDeliveryApprovalRedemption,
   type GitDeliveryAuthorityDenial,
   type GitDeliveryDescriptionAuthorityAdmission,
+  type GitDeliveryDeliveredPullRequestAdmission,
 } from "./runBoundAuthority.js";
 import {
   DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
@@ -65,6 +66,7 @@ export interface GitDeliveryAuthorityTarget {
   readonly baseBranchName?: string | undefined;
   readonly remoteBranchName?: string | undefined;
   readonly descriptionApply?: boolean | undefined;
+  readonly handoff?: "pr-mark-ready" | undefined;
 }
 
 // The exact per-operation approval binding this admission attempt corresponds to — the SAME
@@ -116,6 +118,11 @@ export interface GitDeliveryAuthorityAuditSeams {
   // a running Code task, over the server-minted description authority, when no run is active. Has
   // no effect on any other operation — `authorizeGitDelivery` only consults it for "pull-request".
   readonly descriptionAuthority?: GitDeliveryDescriptionAuthorityAdmission | undefined;
+  // #3390: admits the two handoff operations on a pull request a SETTLED run delivered --
+  // ready-for-review and merge -- over that run's durable delivery record, when no run is active.
+  // Consulted only for "merge" and the `handoff: "pr-mark-ready"`-tagged "pull-request" request;
+  // a plain create/update keeps requiring a running accepted run.
+  readonly deliveredPullRequest?: GitDeliveryDeliveredPullRequestAdmission | undefined;
 }
 
 export type GitDeliveryAuthorityPhase = "admission" | "continuity";
@@ -146,6 +153,7 @@ interface GitDeliveryAuthorityContinuityInput {
     | Pick<
         GitDeliveryAuthorityAuditSeams,
         | "nowIso"
+        | "deliveredPullRequest"
         | "logSink"
         | "deliveryApprovalDeferred"
         | "approval"
@@ -326,6 +334,7 @@ export function gitDeliveryAuthorityGate(
     audit.nowIso ?? new Date().toISOString(),
     gitDeliveryApprovalRedemption(projectId, audit),
     audit.descriptionAuthority,
+    audit.deliveredPullRequest,
   );
   const logSink = audit.logSink ?? processServerLogSink();
   const phase = authorityPhaseFor(audit);

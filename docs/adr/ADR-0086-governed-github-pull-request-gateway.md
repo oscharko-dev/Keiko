@@ -242,6 +242,21 @@ window is derived from it (ADR-0174 D4), so a proposal can never outlive the aut
 admit its application, and a retained proposal that lapses while its scope is unchanged is reported
 as `expired` rather than as a moved snapshot.
 
+The two handoff operations that follow the description -- `pr-mark-ready` (D11, #3389) and the
+governed merge (ADR-0087) -- are admitted outside a running run by a different bound, because both
+are the human's work AFTER the run and the merge follows a review that may take days (#3390). When
+no run is active, `authorizeGitDelivery` consults the settled run's **durable delivery record**
+(`coding_runtime_snapshots.draft_delivery_record`, written by the run that pushed the head under the
+accepted Authority Envelope) for exactly the repository and pull request the request names -- and,
+where the request names a head, exactly that head -- and admits with that run's `runId` and
+`envelopeDigest`, so the mandatory one-use approval each route mints and redeems is bound to the
+delivering run's envelope precisely as it would have been while the run was alive. Only a run that
+settled `succeeded` with its draft pull request in place answers; a pull request no settled run
+delivered, a moved head, or a plain create/update finds nothing and fails closed with the same
+`accepted-run-unavailable` a missing run produces. The run-bound gate had made both operations
+unreachable in the one state they are needed in, since the run settles the moment its draft pull
+request exists.
+
 ### D11 — A dedicated `pr-mark-ready` action kind and approval operation close the approval-less draft->ready transition; no title/body/base PATCH is bundled with the mutation (#3389, epic #3384 corrections 1/2/7)
 
 The generic `pr-update` command's `convertFromDraft` flag reached the draft->ready GraphQL

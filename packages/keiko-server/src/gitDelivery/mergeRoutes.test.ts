@@ -59,6 +59,8 @@ vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal
   };
 });
 
+import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
+import type { CodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntimeSnapshotStore.js";
 import {
   createHandleMergeApprove,
   createHandleMergeExecute,
@@ -798,6 +800,55 @@ describe("merge approve (mints the approval execute consumes)", () => {
     expect(executeBody.status).toBe("succeeded");
     expect(executeBody.merged).toBe(true);
     expect(adapter.merges()).toBe(1);
+  });
+
+  // #3390: the merge follows a human review that may take days, long after the delivering Code task
+  // run has settled and its run-bound authority has ended. The route then admits over the settled
+  // run's durable delivery record for exactly this pull request -- and binds the one-use approval to
+  // THAT run's identity, so mint and execute agree without any run alive.
+  it("admits the merge after the delivering run has settled, over its durable delivery record", async () => {
+    const adapter = recordingMergeAdapter(READY_PROVIDER);
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const current = vi.fn(() => ({
+      runId: "run-settled",
+      envelopeDigest: "e".repeat(64),
+      headSha: "1".repeat(40),
+    }));
+    const settled = deps({
+      gitDeliveryAuthority: undefined,
+      codingRuntimeSnapshotStore: {
+        deliveredPullRequests: { current },
+      } as unknown as CodingRuntimeSnapshotStore,
+    });
+    const approveRes = await createHandleMergeApprove({
+      execution: seams({ approvalStore, mergeAdapterFactory: () => adapter.adapter }),
+    })(ctxFor(APPROVE, mergeBody()), settled);
+    expect(approveRes.status).toBe(200);
+    expect(current).toHaveBeenCalledWith({
+      remoteDigest: codingWorkbenchRemoteDigest("oscharko-dev/Keiko"),
+      prNumber: 42,
+    });
+    const approval = (approveRes.body as { approval: GitDeliveryApprovalClaim }).approval;
+
+    const executeRes = await createHandleMergeExecute({
+      execution: seams({ approvalStore, mergeAdapterFactory: () => adapter.adapter }),
+    })(ctxFor(EXECUTE, mergeBody({ approval })), settled);
+    expect((executeRes.body as GitDeliveryMergeExecuteResponseBody).status).toBe("succeeded");
+    expect(adapter.merges()).toBe(1);
+  });
+
+  it("still refuses the merge with no run alive when no settled run delivered the pull request", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const res = await createHandleMergeApprove({ execution: seams({ approvalStore }) })(
+      ctxFor(APPROVE, mergeBody()),
+      deps({
+        gitDeliveryAuthority: undefined,
+        codingRuntimeSnapshotStore: {
+          deliveredPullRequests: { current: () => undefined },
+        } as unknown as CodingRuntimeSnapshotStore,
+      }),
+    );
+    expect(res.status).toBe(403);
   });
 
   it("mints a claim redeemable only for the exact merge target it was issued against", async () => {

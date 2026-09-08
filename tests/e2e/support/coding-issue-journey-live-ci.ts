@@ -77,9 +77,12 @@ export async function waitForCiRepairOutcome(page: Page): Promise<CiRepairOutcom
         failureHeadSha ??= picture.runCard.headSha;
       }
       const current = currentCiReading(picture);
-      // What an operator does when the reading in front of them is dated or missing: refresh the
-      // handoff. Rate-limited by the shared cadence, so a long wait stays inside GitHub's limits.
-      if (current === undefined || current.state === "stale") await refresher.tick();
+      // What an operator does while the reading in front of them is not yet a verdict -- dated,
+      // missing, or simply "pending": refresh the handoff. Refreshing only on a stale reading left
+      // a current "required checks pending" sitting unrefreshed until it expired (rehearsal run-02
+      // stood still for minutes on exactly that), so the tick runs on every poll and the shared
+      // cadence, not this condition, keeps a long wait inside GitHub's limits.
+      await refresher.tick();
       return current;
     },
     (value) => value !== undefined && TERMINAL_CI_STATES.has(value.state),

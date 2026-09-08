@@ -41,6 +41,8 @@ import {
 } from "./codingRuntimeDraftDeliveryStore.js";
 
 import { draftDeliverySourceFromRow } from "./codingRuntimeDraftDeliverySource.js";
+import { createCodingRuntimeDeliveredPullRequestStore } from "./codingRuntimeDeliveredPullRequestStore.js";
+import type { GitDeliveryDeliveredPullRequestPort } from "../gitDelivery/runBoundAuthority.js";
 import {
   assertVerifiedCommitRuntimeBinding,
   readLastSuccessfulVerifiedCommit,
@@ -140,6 +142,12 @@ export interface CodingRuntimeSnapshotStore {
    * or a process restart. Optional only for explicitly injected legacy/test stores.
    */
   readonly journeyOutcomes?: GitJourneyOutcomeStore;
+  /**
+   * #3390: which settled run delivered a given pull request, at which head, under which envelope
+   * -- the durable binding the post-delivery handoff admission (ready-for-review, merge) rests on
+   * once the run-bound authority has ended with the run. Optional only for injected test stores.
+   */
+  readonly deliveredPullRequests?: GitDeliveryDeliveredPullRequestPort;
   readonly adoptDraftDeliveryFromPredecessor: (
     record: DraftDeliveryRecord,
     recordedAt?: string,
@@ -268,6 +276,7 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
       activityLog: processServerLogSink(),
     }),
     journeyOutcomes: createGitJourneyOutcomeStore(db),
+    deliveredPullRequests: createCodingRuntimeDeliveredPullRequestStore(db),
     adoptDraftDeliveryFromPredecessor: (record, recordedAt): CodingRuntimeSnapshot =>
       adoptDraftDeliveryFromPredecessor(db, one, record, recordedAt),
     recordDraftDelivery: (record, expectedRevision, recordedAt): CodingRuntimeSnapshot =>

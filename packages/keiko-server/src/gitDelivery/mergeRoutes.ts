@@ -32,6 +32,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { isGitDeliveryMergeStrategyHint } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitMergeCommand } from "@oscharko-dev/keiko-tools";
+import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -69,6 +70,7 @@ import {
   type GitDeliveryAuthorityIdentity,
   type GitDeliveryRequestErrors,
 } from "./requestPreparation.js";
+import type { GitDeliveryDeliveredPullRequestAdmission } from "./runBoundAuthority.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
 
@@ -258,6 +260,28 @@ export interface GitDeliveryMergeApproveResponseBody {
   readonly expiresAt: string;
 }
 
+// #3390: after the delivering run has settled, admission rests on that run's durable delivery
+// record for exactly this pull request (runBoundAuthority.ts, `GitDeliveryDeliveredPullRequestAdmission`).
+// The merge follows a human review that may take days, so no short-lived grant could carry it;
+// the record can. The exact head is bound when the request names one (`expectedHeadRefHash`);
+// the readiness preview immediately before dispatch re-checks the live head regardless. Absent
+// store: nothing is admitted post-run, exactly like a missing `gitDeliveryAuthority`.
+function deliveredPullRequestAdmission(
+  deps: Pick<UiHandlerDeps, "codingRuntimeSnapshotStore">,
+  command: GitMergeCommand,
+): GitDeliveryDeliveredPullRequestAdmission | undefined {
+  const port = deps.codingRuntimeSnapshotStore?.deliveredPullRequests;
+  if (port === undefined) return undefined;
+  return {
+    port,
+    scope: {
+      remoteDigest: codingWorkbenchRemoteDigest(command.ownerAndRepo),
+      prNumber: Number(command.prExternalId),
+    },
+    headSha: command.expectedHeadRefHash,
+  };
+}
+
 export const createHandleMergeApprove = (
   options: GitDeliveryMergeRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
@@ -286,6 +310,7 @@ export const createHandleMergeApprove = (
         // mandatory, mode-independent consumed approval below, so this coarse admission layer
         // defers to it instead of demanding a second claim.
         deliveryApprovalDeferred: true,
+        deliveredPullRequest: deliveredPullRequestAdmission(deps, command),
       },
     );
     if (!authority.allowed) return authority.result;
@@ -362,7 +387,11 @@ async function dispatchGovernedMerge(input: GovernedMergeDispatch): Promise<Rout
     admitted: authority,
     next: seams.beforeRemoteDispatch,
     denialCapture,
-    audit: { logSink: seams.activityLog, deliveryApprovalDeferred: true },
+    audit: {
+      logSink: seams.activityLog,
+      deliveryApprovalDeferred: true,
+      deliveredPullRequest: deliveredPullRequestAdmission(deps, command),
+    },
   });
   try {
     const result = await executeGovernedMerge(
@@ -397,6 +426,7 @@ async function handleMergeExecute(
   const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "merge", target, {
     logSink: seams.activityLog,
     deliveryApprovalDeferred: true,
+    deliveredPullRequest: deliveredPullRequestAdmission(deps, command),
   });
   if (!authority.allowed) return authority.result;
   const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {

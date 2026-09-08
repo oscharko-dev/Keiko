@@ -9,10 +9,14 @@ import type {
 } from "./runBoundAuthority.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { ServerLogEvent } from "../observability/index.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CORRELATION_RESPONSE_HEADER, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { gitDeliveryAuthorityDenial, gitDeliveryAuthorityGate } from "./requestPreparation.js";
-import { authorizeGitDelivery, authorizeGitDeliveryModelEgress } from "./runBoundAuthority.js";
+import {
+  authorizeGitDelivery,
+  authorizeGitDeliveryModelEgress,
+  type GitDeliveryDeliveredPullRequestAdmission,
+} from "./runBoundAuthority.js";
 import {
   permittedGitDeliveryAuthority,
   productionScopedGitDeliveryAuthority,
@@ -840,5 +844,97 @@ describe("authorizeGitDeliveryModelEgress (#3399)", () => {
       allowed: false,
       reason: "authority-expired",
     });
+  });
+});
+
+// #3390: the two handoff operations after the run -- ready-for-review and merge -- are admitted
+// over the settled run's durable delivery record when no run is active. These pins hold the shape
+// of that admission: which operations it may carry, that it binds the delivering run's identity,
+// that a moved head or an undelivered pull request finds nothing, and that it never introduces a
+// new denial reason.
+describe("post-delivery handoff admission (#3390)", () => {
+  const SCOPE = { remoteDigest: "f".repeat(64), prNumber: 21 };
+  const DELIVERED = {
+    runId: "run-settled",
+    envelopeDigest: "a".repeat(64),
+    headSha: "1".repeat(40),
+  };
+  function admission(
+    delivered: typeof DELIVERED | undefined,
+    headSha?: string,
+  ): GitDeliveryDeliveredPullRequestAdmission {
+    return { port: { current: () => delivered }, scope: SCOPE, headSha };
+  }
+  const decide = (
+    request: Partial<Parameters<typeof authorizeGitDelivery>[1]>,
+    delivered: GitDeliveryDeliveredPullRequestAdmission | undefined,
+  ): ReturnType<typeof authorizeGitDelivery> =>
+    authorizeGitDelivery(
+      undefined,
+      { ...REQUEST, ...request },
+      NOW,
+      undefined,
+      undefined,
+      delivered,
+    );
+
+  it("admits ready-for-review over the delivered pull request, as the delivering run", () => {
+    const decision = decide(
+      { operation: "pull-request", handoff: "pr-mark-ready" },
+      admission(DELIVERED, DELIVERED.headSha),
+    );
+    expect(decision).toEqual({
+      allowed: true,
+      runId: "run-settled",
+      envelopeDigest: "a".repeat(64),
+    });
+  });
+
+  it("admits the governed merge over the delivered pull request", () => {
+    expect(decide({ operation: "merge" }, admission(DELIVERED))).toEqual({
+      allowed: true,
+      runId: "run-settled",
+      envelopeDigest: "a".repeat(64),
+    });
+  });
+
+  it("never admits a plain pull-request create/update through the delivery record", () => {
+    expect(decide({ operation: "pull-request" }, admission(DELIVERED))).toEqual({
+      allowed: false,
+      reason: "accepted-run-unavailable",
+    });
+  });
+
+  it("refuses a head the run did not deliver", () => {
+    expect(
+      decide(
+        { operation: "pull-request", handoff: "pr-mark-ready" },
+        admission(DELIVERED, "2".repeat(40)),
+      ),
+    ).toEqual({ allowed: false, reason: "accepted-run-unavailable" });
+  });
+
+  it("falls back to accepted-run-unavailable when no settled run delivered the pull request", () => {
+    expect(decide({ operation: "merge" }, admission(undefined))).toEqual({
+      allowed: false,
+      reason: "accepted-run-unavailable",
+    });
+  });
+
+  it("leaves a running accepted run as the sole authority; the record is never consulted", () => {
+    const port = { current: vi.fn(() => DELIVERED) };
+    const active = permittedGitDeliveryAuthority(
+      () => REQUEST.projectId,
+      () => REQUEST.workspaceRoot,
+    );
+    const request = { ...REQUEST, operation: "merge" as const };
+    const withRecord = authorizeGitDelivery(active, request, NOW, undefined, undefined, {
+      port,
+      scope: SCOPE,
+    });
+    // Whatever the running run decides -- allowed or denied -- is the decision; the record neither
+    // widens nor narrows it, and is not even read.
+    expect(withRecord).toEqual(authorizeGitDelivery(active, request, NOW));
+    expect(port.current).not.toHaveBeenCalled();
   });
 });

@@ -10,6 +10,13 @@ import { isJourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-jour
 import { validateCodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 const ACTIVE = new Set(["ready", "running", "awaiting-approval"]);
+// #3390: ready-for-review is human work AFTER the run. The run settles the moment its draft pull
+// request exists, so `succeeded` is the one state this control is normally offered in; the server
+// admits it over the settled run's durable delivery record for exactly this pull request and the
+// mandatory one-use approval the operator gives here. Every other terminal state still offers
+// nothing -- a failed, cancelled, taken-over or recovery-required run delivered nothing a human
+// should hand off without looking first.
+const HANDOFF_ELIGIBLE = new Set([...ACTIVE, "succeeded"]);
 export function matchesJourneySnapshot(
   outcome: unknown,
   snapshot: CodingWorkbenchRuntimeSnapshot | undefined,
@@ -61,7 +68,7 @@ export function canProposeJourneyReady(
 ): boolean {
   return (
     runtimeState !== undefined &&
-    ACTIVE.has(runtimeState) &&
+    HANDOFF_ELIGIBLE.has(runtimeState) &&
     outcome.state === "awaiting-ready-approval" &&
     journeyEvidenceFresh(outcome, now) &&
     outcome.remote?.identity.isDraft === true &&

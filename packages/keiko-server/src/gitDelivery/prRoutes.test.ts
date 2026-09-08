@@ -44,6 +44,8 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { UI_HOST } from "../server.js";
 import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
+import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
+import type { CodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntimeSnapshotStore.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import { matchRoute, type RouteContext } from "../routes.js";
@@ -1293,6 +1295,72 @@ describe("pr mark-ready routes (#3389)", () => {
     })(ctxFor(MARK_READY_APPROVE, markReadyBody(overrides)), deps());
     return (res.body as GitDeliveryPrMarkReadyApproveResponseBody).approval;
   }
+
+  // #3390: ready-for-review is the human's work AFTER the run, and the run settles the moment its
+  // draft pull request exists -- so the run-bound authority is already gone when this is needed.
+  // The route then admits over the settled run's durable delivery record for exactly this pull
+  // request at exactly this head, and binds the one-use approval to THAT run's identity, so mint
+  // and execute agree without any run alive.
+  it("admits ready-for-review after the run has settled, over the pull request that run delivered", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const current = vi.fn(() => ({
+      runId: "run-settled",
+      envelopeDigest: "e".repeat(64),
+      headSha: HEAD_SHA,
+    }));
+    const settled = deps({
+      gitDeliveryAuthority: undefined,
+      codingRuntimeSnapshotStore: {
+        deliveredPullRequests: { current },
+      } as unknown as CodingRuntimeSnapshotStore,
+    });
+    const approveRes = await createHandlePrMarkReadyApprove({
+      approvalStore,
+      now: () => 1_700_000_000_000,
+    })(ctxFor(MARK_READY_APPROVE, markReadyBody()), settled);
+    expect(approveRes.status).toBe(200);
+    expect(current).toHaveBeenCalledWith({
+      remoteDigest: codingWorkbenchRemoteDigest("oscharko-dev/Keiko"),
+      prNumber: 1499,
+    });
+    const approval = (approveRes.body as GitDeliveryPrMarkReadyApproveResponseBody).approval;
+
+    const adapter = recordingMarkReadyAdapter({
+      schemaVersion: "1",
+      outcome: "succeeded",
+      durationMs: 5,
+    });
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      now: () => 1_700_000_000_001,
+      adapterFactory: () => adapter.adapter,
+      ciReaderFactory: cleanCiReaderFactory,
+    })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), settled);
+    expect(res.body).toMatchObject({ actionKind: "pr-mark-ready", status: "succeeded" });
+    expect(adapter.calls()).toHaveLength(1);
+  });
+
+  it("refuses ready-for-review with no run alive when the delivered head is not the requested one", async () => {
+    const res = await createHandlePrMarkReadyApprove({
+      approvalStore: createInMemoryGitDeliveryApprovalStore(),
+      now: () => 1_700_000_000_000,
+    })(
+      ctxFor(MARK_READY_APPROVE, markReadyBody()),
+      deps({
+        gitDeliveryAuthority: undefined,
+        codingRuntimeSnapshotStore: {
+          deliveredPullRequests: {
+            current: () => ({
+              runId: "run-settled",
+              envelopeDigest: "e".repeat(64),
+              headSha: "f".repeat(40),
+            }),
+          },
+        } as unknown as CodingRuntimeSnapshotStore,
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
 
   it("mints a claim, then executes the draft->ready transition through the adapter — no PATCH", async () => {
     const approvalStore = createInMemoryGitDeliveryApprovalStore();

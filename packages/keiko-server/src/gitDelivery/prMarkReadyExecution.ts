@@ -85,6 +85,8 @@ import {
   type GitDeliveryAuthorityIdentity,
   type GitDeliveryRequestErrors,
 } from "./requestPreparation.js";
+import type { GitDeliveryDeliveredPullRequestAdmission } from "./runBoundAuthority.js";
+import type { GitDeliveryAuthorityAuditSeams } from "./requestPreparation.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
 
@@ -245,6 +247,43 @@ function validate(parsed: unknown): Validation {
 }
 
 // ─── Approval binding ───────────────────────────────────────────────────────────────────────────
+
+// #3390: after the delivering run has settled, admission rests on that run's durable delivery
+// record for exactly this pull request at exactly this head (runBoundAuthority.ts,
+// `GitDeliveryDeliveredPullRequestAdmission`). Absent store: nothing is admitted post-run, exactly
+// like a missing `gitDeliveryAuthority`.
+function deliveredPullRequestAdmission(
+  deps: Pick<UiHandlerDeps, "codingRuntimeSnapshotStore">,
+  command: PrMarkReadyCommand,
+): GitDeliveryDeliveredPullRequestAdmission | undefined {
+  const port = deps.codingRuntimeSnapshotStore?.deliveredPullRequests;
+  if (port === undefined) return undefined;
+  return {
+    port,
+    scope: { remoteDigest: command.remoteDigest, prNumber: Number(command.prExternalId) },
+    headSha: command.headSha,
+  };
+}
+
+// The identical audit seams for admission, continuity and execute: the handoff admission MUST be
+// re-derived at every gate the same way, or a claim minted post-run would fail its own continuity.
+function handoffAudit(
+  logSink: ServerLogSink | undefined,
+  deps: Pick<UiHandlerDeps, "codingRuntimeSnapshotStore">,
+  command: PrMarkReadyCommand,
+): Pick<
+  GitDeliveryAuthorityAuditSeams,
+  "logSink" | "deliveryApprovalDeferred" | "deliveredPullRequest"
+> {
+  return {
+    logSink,
+    // Final-audit F2/#3390 (ADR-0138 D2, #3389): pr-mark-ready's own execute path already
+    // enforces a mandatory, mode-independent consumed approval, so the coarse admission layer
+    // defers to it instead of demanding a second claim.
+    deliveryApprovalDeferred: true,
+    deliveredPullRequest: deliveredPullRequestAdmission(deps, command),
+  };
+}
 
 function markReadyApprovalBinding(
   projectId: string,
@@ -503,14 +542,8 @@ export const createHandlePrMarkReadyApprove = (
       projectId,
       workspace,
       "pull-request",
-      {},
-      {
-        logSink: options.activityLog,
-        // Final-audit F2/#3390 (ADR-0138 D2, #3389): pr-mark-ready's own execute path already
-        // enforces a mandatory, mode-independent consumed approval below, so this coarse admission
-        // layer defers to it instead of demanding a second claim.
-        deliveryApprovalDeferred: true,
-      },
+      { handoff: "pr-mark-ready" },
+      handoffAudit(options.activityLog, deps, command),
     );
     if (!authority.allowed) return authority.result;
     const store = options.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;
@@ -688,10 +721,11 @@ async function dispatchOrBlock(
     projectId,
     workspace,
     operation: "pull-request",
+    target: { handoff: "pr-mark-ready" },
     admitted: authority,
     next: options.beforeRemoteDispatch,
     denialCapture,
-    audit: { logSink: options.activityLog, deliveryApprovalDeferred: true },
+    audit: handoffAudit(options.activityLog, deps, command),
   });
   try {
     const result = await dispatchGovernedMarkReady({
@@ -741,11 +775,8 @@ async function handleMarkReadyExecute(
     projectId,
     workspace,
     "pull-request",
-    {},
-    {
-      logSink: options.activityLog,
-      deliveryApprovalDeferred: true,
-    },
+    { handoff: "pr-mark-ready" },
+    handoffAudit(options.activityLog, deps, command),
   );
   if (!authority.allowed) return authority.result;
   const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {

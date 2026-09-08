@@ -125,6 +125,12 @@ export interface GitDeliveryAuthorityRequest {
   readonly remoteBranchName?: string | undefined;
   /** True only for the body-only PR-description apply route. */
   readonly descriptionApply?: boolean | undefined;
+  /**
+   * Set only by the ready-for-review route (#3390). The generic "pull-request" operation also
+   * covers create and update, which must keep requiring a running accepted run; the tag is what
+   * lets the post-delivery admission below recognise the one handoff intent it may admit.
+   */
+  readonly handoff?: "pr-mark-ready" | undefined;
 }
 
 // Invoked only when the matrix resolves "approval-required" for a lower mode. Returns true when the
@@ -295,6 +301,83 @@ export function descriptionAuthorityEnvelopeDigest(
   return sha256Hex(canonicalise(scope));
 }
 
+/** The pull request a handoff operation names, in the same canonical repository identity the
+ * delivery record carries. */
+export interface GitDeliveryDeliveredPullRequestScope {
+  readonly remoteDigest: string;
+  readonly prNumber: number;
+}
+
+/** What the durable delivery record proves about a pull request a settled run delivered. */
+export interface GitDeliveryDeliveredPullRequest {
+  readonly runId: string;
+  readonly envelopeDigest: string;
+  readonly headSha: string;
+}
+
+export interface GitDeliveryDeliveredPullRequestPort {
+  current(scope: GitDeliveryDeliveredPullRequestScope): GitDeliveryDeliveredPullRequest | undefined;
+}
+
+/**
+ * #3390: the caller-supplied admission for the two HANDOFF operations on a pull request that a
+ * settled Code task run delivered -- ready-for-review and merge -- consulted exclusively when no
+ * running accepted run exists.
+ *
+ * Both operations belong to the human work AFTER the run: the run settles when its draft pull
+ * request exists, the description authority (#3399) covers the body-only apply for ten minutes,
+ * and the merge follows a human review that may take days. Neither can rest on the run-bound
+ * authority, which ends with the run, nor on a short-lived grant. What binds them instead is the
+ * run's own durable delivery record: server-owned, written by the run that pushed the head, naming
+ * the repository, the pull request, the head and the accepted Authority Envelope. Admission
+ * returns THAT run's identity, so the mandatory one-use human approval each route mints and
+ * redeems is bound to the delivering run's envelope exactly as it would have been while the run
+ * was alive. A pull request no settled run delivered, a moved head, or a plain create/update
+ * simply finds nothing here and falls through to the same `accepted-run-unavailable` closed reason
+ * a missing run produces -- this admission source never introduces a new "reason" either.
+ */
+export interface GitDeliveryDeliveredPullRequestAdmission {
+  readonly port: GitDeliveryDeliveredPullRequestPort;
+  readonly scope: GitDeliveryDeliveredPullRequestScope;
+  /** The exact head the request names; when given, it must be the head the run delivered. */
+  readonly headSha?: string | undefined;
+}
+
+function isHandoffOperation(request: GitDeliveryAuthorityRequest): boolean {
+  return (
+    request.operation === "merge" ||
+    (request.operation === "pull-request" && request.handoff === "pr-mark-ready")
+  );
+}
+
+// The two bounded admission sources that exist outside a running run, in precedence order; a
+// request neither recognises fails closed with the same reason a missing run produces.
+function admitWithoutRun(
+  request: GitDeliveryAuthorityRequest,
+  nowIso: string,
+  descriptionAuthority: GitDeliveryDescriptionAuthorityAdmission | undefined,
+  deliveredPullRequest: GitDeliveryDeliveredPullRequestAdmission | undefined,
+): GitDeliveryAuthorityDecision {
+  return (
+    admitByDescriptionAuthority(request, descriptionAuthority, nowIso) ??
+    admitByDeliveredPullRequest(request, deliveredPullRequest) ?? {
+      allowed: false,
+      reason: "accepted-run-unavailable",
+    }
+  );
+}
+
+function admitByDeliveredPullRequest(
+  request: GitDeliveryAuthorityRequest,
+  admission: GitDeliveryDeliveredPullRequestAdmission | undefined,
+): GitDeliveryAuthorityDecision | undefined {
+  if (admission === undefined || !isHandoffOperation(request)) return undefined;
+  const delivered = admission.port.current(admission.scope);
+  if (delivered === undefined) return undefined;
+  if (admission.headSha !== undefined && admission.headSha !== delivered.headSha) return undefined;
+  return { allowed: true, runId: delivered.runId, envelopeDigest: delivered.envelopeDigest };
+}
+
 function admitByDescriptionAuthority(
   request: GitDeliveryAuthorityRequest,
   admission: GitDeliveryDescriptionAuthorityAdmission | undefined,
@@ -335,15 +418,11 @@ export function authorizeGitDelivery(
   nowIso: string,
   redeemApproval?: GitDeliveryApprovalRedemption,
   descriptionAuthority?: GitDeliveryDescriptionAuthorityAdmission,
+  deliveredPullRequest?: GitDeliveryDeliveredPullRequestAdmission,
 ): GitDeliveryAuthorityDecision {
   const active = authorityPort?.current(nowIso);
   if (active === undefined) {
-    return (
-      admitByDescriptionAuthority(request, descriptionAuthority, nowIso) ?? {
-        allowed: false,
-        reason: "accepted-run-unavailable",
-      }
-    );
+    return admitWithoutRun(request, nowIso, descriptionAuthority, deliveredPullRequest);
   }
   if (expired(nowIso, active.authority.expiresAt))
     return { allowed: false, reason: "authority-expired" };

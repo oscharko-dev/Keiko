@@ -189,28 +189,42 @@ describe("observed issue journey handoff", () => {
       expect(screen.getByRole("button", { name: "Review ready-for-review request" })).toBeEnabled();
     },
   );
-  it.each([
-    "succeeded",
-    "cancelled",
-    "failed",
-    "recovery-required",
-    "taken-over",
-    "stopping",
-  ] as const)("does not restore mutation authority from %s runtime", (state) => {
+  // #3390: `succeeded` used to be in this list. That made the control unreachable in the one state
+  // it is needed in -- the run settles the moment its draft pull request exists, and ready-for-review
+  // is the human's work after that. The invariant this pin protects is unchanged: a terminal runtime
+  // restores no RUN authority. The server admits the settled run's handoff over its durable delivery
+  // record plus the one-use approval given here, not over any revived run authority.
+  it("offers ready-for-review after the run has settled, over a fresh handoff observation", () => {
     const fixture = journeyFixture();
     render(
       <CodingWorkbenchJourneyOutcome
         {...fixture}
-        snapshot={{ ...fixture.snapshot, state }}
+        snapshot={{ ...fixture.snapshot, state: "succeeded" }}
         onProposeReady={vi.fn()}
         onRefresh={vi.fn()}
+        markReadyAvailable
       />,
     );
-    expect(
-      screen.queryByRole("button", { name: "Review ready-for-review request" }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Refresh observed status" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Review ready-for-review request" })).toBeEnabled();
   });
+  it.each(["cancelled", "failed", "recovery-required", "taken-over", "stopping"] as const)(
+    "does not restore mutation authority from %s runtime",
+    (state) => {
+      const fixture = journeyFixture();
+      render(
+        <CodingWorkbenchJourneyOutcome
+          {...fixture}
+          snapshot={{ ...fixture.snapshot, state }}
+          onProposeReady={vi.fn()}
+          onRefresh={vi.fn()}
+        />,
+      );
+      expect(
+        screen.queryByRole("button", { name: "Review ready-for-review request" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Refresh observed status" })).toBeEnabled();
+    },
+  );
   it("serializes double clicks and disables both actions until the request settles", async () => {
     let settle: (() => void) | undefined;
     const promise = new Promise<void>((resolve) => {

@@ -1225,21 +1225,21 @@
     {
       "op": "POST /api/git-delivery/pr/mark-ready/execute",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:457",
+      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:496",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/git-delivery/pr/mark-ready/execute",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:588",
+      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:621",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/git-delivery/pr/mark-ready/execute",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:717",
+      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:751",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2314,13 +2314,13 @@
     {
       "op": "git.delivery.authority.admitted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:251",
+      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:259",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.authority.denied",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:225",
+      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:233",
       "package": "keiko-server"
     },
     {
@@ -2362,13 +2362,13 @@
     {
       "op": "git.delivery.mutation.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:438",
+      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:477",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.pr-mark-ready.readiness-refreshed",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:362",
+      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:401",
       "package": "keiko-server"
     },
     {
@@ -2404,7 +2404,7 @@
     {
       "op": "git.delivery.repository.mismatch",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:430",
+      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:439",
       "package": "keiko-server"
     },
     {
@@ -2620,7 +2620,7 @@
     {
       "op": "git.verified-commit.authority",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeSnapshotStore.ts:536",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeSnapshotStore.ts:545",
       "package": "keiko-server"
     },
     {
