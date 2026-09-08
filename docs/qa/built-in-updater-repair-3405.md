@@ -1327,6 +1327,38 @@ A preliminary union of the complete local reports with isolated new regression c
 84.5% against the unchanged 85% new-code floor. This diagnostic calculation leaves the canonical
 reports untouched and is not a final gate receipt. The integrated report refresh remains pending.
 
+### Real staged macOS secure-read smoke
+
+The approved USearch input verified locally; approved sidecar preparation completed, and the
+repository's normal staging command produced a real macOS arm64 bundle from package 0.3.17.
+`npm run smoke:portable-secure-read -- .portable-runtime/staging/macos-arm64 macos-arm64 --load`
+passed against its actual manifest-declared helper. Manifest SHA-256:
+`5406ca8dc4bdd3115d56d93c6682a465e47d2d041e7d01893c069b576249644a`; helper shipped SHA-256:
+`06e574a1fadf7239530f607e9a2bb03f2809918e4db06b31c5297286be092bac` (34504 bytes). The artifact records source commit
+`90bbe2fd99c602e84547860d1c66197c1b3a5038` and explicitly remains `unverified-staging`.
+This closes the earlier missing-staging-input smoke prerequisite, not signed upgrade eligibility.
+
+Staging prunes package artifacts and workspace/native dependencies. The lead subsequently restored
+the committed dependency graph with official Node 24.18.0 `npm ci --ignore-scripts` (783 packages,
+zero reported vulnerabilities). Future package/test verification must rebuild after ongoing fixes.
+
+### Final audit findings under repair
+
+Independent PR review confirmed two default CLI composition defects: preflight/session did not
+share candidate authority or pass the fresh report, and CLI sessions/local state lacked durable
+state/canonical activity wiring. The CLI owner is repairing these together and adding default
+composition regressions. The necessary existing authority factory will be consumed through the
+private, non-independently-published server package's existing internal barrel; no new HTTP endpoint
+or externally published package API is introduced. The export's actual CLI consumer must remain
+part of final package/architecture verification.
+
+Independent security review confirmed one Windows availability defect: production PowerShell 5.1
+runtime C# compilation lacks a standard-user writable compiler temporary directory after environment
+restriction. A contract-preserving repair is being selected; ambient temporary authority must not
+be restored. The independent accessibility/design-system audit found zero findings and verified
+that all eight UI and four harness hashes still match the existing browser/axe/fidelity evidence.
+That source-bound review does not replace the final HEAD execution receipt.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification
