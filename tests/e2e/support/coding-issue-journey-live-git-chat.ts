@@ -14,7 +14,7 @@ import { expect, type APIRequestContext, type Locator, type Page } from "@playwr
 import {
   closeSettingsWindow,
   openGovernedGitWindow,
-  openLiveWorkbench,
+  openLiveDesktop,
   openSettingsTab,
   raiseWindow,
 } from "./coding-issue-journey-live.js";
@@ -276,7 +276,12 @@ export async function connectControlledPullRequestToChat(
   request: APIRequestContext,
   repositoryRoot: string,
 ): Promise<ConnectedGitChatSession> {
-  await openLiveWorkbench(page, repositoryRoot);
+  // The paired desktop only -- no Coding Workbench window. This journey never uses it, and its
+  // gateway-profile read (`/api/coding-sidecar/gateway/profile`) is one of the effect boundaries
+  // `observeNoForbiddenSessionRequests` forbids for a Git-connected Chat: the probe rehearsal of
+  // 2026-09-08 completed connect, two refinement turns and the description apply, then failed on
+  // exactly that read.
+  await openLiveDesktop(page);
   await openGovernedGitWindow(page, repositoryRoot, "rail");
   await reconnectAsActiveProject(page, repositoryRoot);
   await grantGithubIssueReaderAccessThroughSettings(page);

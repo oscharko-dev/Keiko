@@ -338,7 +338,11 @@ export async function pairLiveSession(page: Page): Promise<void> {
 // pre-binds a repository path through browser storage. The init script keeps only the non-action
 // preferences (an English UI every control lookup below depends on, and a dark theme) and drops the
 // per-connector cache so a stale `keiko.conns.v1` from an earlier context never leaks in.
-export async function openLiveWorkbench(page: Page, repositoryRoot: string): Promise<void> {
+/** The bare, paired desktop every live journey starts from: preferences, then the launcher pairing.
+ * No window is opened here -- a scenario that never needs the Coding Workbench (the git-to-chat
+ * pair) must not open it, since its gateway-profile read is one of the effect boundaries the
+ * connected-chat observer forbids. */
+export async function openLiveDesktop(page: Page): Promise<void> {
   await page.addInitScript(() => {
     localStorage.setItem("keiko.theme", "dark");
     // #3390: pin the interface language. Every control this lane clicks and every sentence it
@@ -351,6 +355,10 @@ export async function openLiveWorkbench(page: Page, repositoryRoot: string): Pro
     localStorage.removeItem("keiko.conns.v1");
   });
   await pairLiveSession(page);
+}
+
+export async function openLiveWorkbench(page: Page, repositoryRoot: string): Promise<void> {
+  await openLiveDesktop(page);
   await ensureRailToolOpen(page, "Coding Workbench");
   await expect(workbenchSurface(page)).toBeVisible();
   await raiseWorkbench(page);
