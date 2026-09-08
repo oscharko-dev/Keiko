@@ -81,6 +81,7 @@ interface PrDescriptionStatusBinding {
 
 interface PrDescriptionStatusWireBody {
   readonly outcome: string;
+  readonly reason?: string;
   readonly status?: {
     readonly state: string;
     readonly effect: string;
@@ -95,6 +96,20 @@ const APPLIED_DESCRIPTION_STATE = new RegExp(
   `^(${[...APPLIED_PR_DESCRIPTION_STATES].join("|")})$`,
   "u",
 );
+
+/** Body-free summary of a status response for a failure message: outcome, closed reason/state
+ * words and the binding identity facts -- never the description text. Rehearsal run-12 failed here
+ * with only the assertion's name to go on; the response had said `blocked`/`authority-denied`. */
+function describeDescriptionStatus(body: PrDescriptionStatusWireBody): string {
+  const status = body.status;
+  if (status === undefined) return `outcome=${body.outcome} reason=${body.reason ?? "none"}`;
+  const binding = status.binding;
+  return (
+    `outcome=${body.outcome} state=${status.state} effect=${status.effect} ` +
+    `pr=#${String(binding.prNumber)} head=${binding.headSha.slice(0, 12)} ` +
+    `draft=${String(binding.isDraft)}`
+  );
+}
 
 function readyDescriptionBindingMatches(
   binding: PrDescriptionStatusBinding | undefined,
@@ -344,7 +359,10 @@ export async function reconcileAppliedDescriptionAfterMarkReady(
   assertDescriptionScopeUnchanged(response, retained, "refresh");
   const body = (await response.json()) as PrDescriptionStatusWireBody;
   if (!descriptionReconciledToReadyPullRequest(body, pullRequest)) {
-    throw new Error("description was not reconciled to the exact ready pull request identity");
+    throw new Error(
+      "description was not reconciled to the exact ready pull request identity: " +
+        describeDescriptionStatus(body),
+    );
   }
   // Applied is any of the product's own applied states -- the exact model text, a partial one, or
   // the deterministic fallback the renderer substitutes when the model's text asserts what the

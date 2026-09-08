@@ -1,8 +1,9 @@
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { GitDeliveryApprovalRequirement } from "@oscharko-dev/keiko-contracts";
-import type {
-  PrDescriptionApplicationBinding,
-  PrDescriptionApplicationStatus,
+import {
+  isObservedReadyRebinding,
+  type PrDescriptionApplicationBinding,
+  type PrDescriptionApplicationStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import type { GitPrBody, GitPrExecResult, GitPullRequestAdapter } from "@oscharko-dev/keiko-tools";
 import { basePinnedPrPolicyPacks } from "./basePinnedPrPolicy.js";
@@ -51,7 +52,10 @@ function reconciledBinding(
 ): PrDescriptionApplicationBinding | undefined {
   if (matchesDescriptionIdentity(binding, remote)) return binding;
   if (!matchesObservedReadyTransition(binding, remote)) return undefined;
-  return { ...binding, isDraft: false, providerUpdatedAt: remote.updatedAt };
+  const ready = { ...binding, isDraft: false, providerUpdatedAt: remote.updatedAt };
+  // Derived through the SAME contract predicate the durable receipt admits it by (#3390), so this
+  // producer can never emit a rebinding the receipt then refuses as a foreign binding.
+  return isObservedReadyRebinding(binding, ready) ? ready : undefined;
 }
 export async function assertDescriptionUnchanged(
   options: PrDescriptionServiceOptions,
@@ -197,8 +201,15 @@ function bodyEffectAdapter(
         "uncertain",
         now(),
       );
-      if (!check() || !options.recordStatus(proposal.context, journal))
-        throw new PrDescriptionFailure("authority-denied");
+      if (!check()) throw new PrDescriptionFailure("authority-denied");
+      // A refused durable journal is not an authority loss (#3390): the operator stays admitted
+      // and the provider is reachable; the receipt store's own log line names the cause. Recorded
+      // as the refusal, like the recheck above, so the lifecycle's swallowed adapter error does not
+      // resurface as the generic not-dispatched `authority-denied`.
+      if (!options.recordStatus(proposal.context, journal)) {
+        progress.refusal = new PrDescriptionFailure("receipt-refused");
+        throw progress.refusal;
+      }
       progress.dispatched = true;
       return remote.updatePullRequestBody({
         ownerAndRepo: expected.ownerAndRepo,

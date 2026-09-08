@@ -8,6 +8,7 @@ import {
 import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { DescriptionFixture } from "./prDescriptionTestSupport.js";
 import { applicationStatus } from "./prDescriptionProjection.js";
+import { createPrDescriptionApplicationService } from "./prDescriptionService.js";
 import {
   createPrDescriptionReceiptStatusHooks,
   createPrDescriptionReceiptStore,
@@ -102,6 +103,58 @@ describe.each(["memory", "file"] as const)(
         reason: "receipt-conflict",
       });
       expect(store.readStatus(fixture.context)).toEqual(success);
+    });
+    // #3390: marking the pull request ready changes its identity (`isDraft`) without moving the
+    // change. The effect layer re-binds the confirmed content to the ready identity through the
+    // contract's `isObservedReadyRebinding`; this store must admit exactly that rebinding of a
+    // confirmed receipt -- and still refuse every other binding change on it.
+    it("admits the observed draft-to-ready rebinding of a confirmed receipt and nothing else", () => {
+      const first = store.recordStatus(fixture.context, journal, null);
+      const applied = applicationStatus(
+        journal.binding,
+        "complete",
+        "applied",
+        "confirmed",
+        fixture.now,
+      );
+      const confirmed = store.recordStatus(fixture.context, applied, version(first));
+      expect(confirmed.ok).toBe(true);
+      const ready = {
+        ...journal.binding,
+        isDraft: false,
+        providerUpdatedAt: new Date(fixture.now).toISOString(),
+      };
+      const reconciled = applicationStatus(
+        ready,
+        "complete",
+        "reconciled",
+        "reconciled",
+        fixture.now,
+      );
+      const observed = store.recordStatus(fixture.context, reconciled, version(confirmed));
+      expect(observed).toMatchObject({
+        ok: true,
+        status: { state: "current", effect: "reconciled", binding: { isDraft: false } },
+      });
+      for (const foreign of [
+        { ...ready, headSha: "c".repeat(40) },
+        { ...ready, baseRef: "release" },
+        { ...ready, finalBodyDigest: "0".repeat(64) },
+        { ...journal.binding },
+      ]) {
+        const moved = applicationStatus(
+          foreign,
+          "complete",
+          "reconciled",
+          "reconciled",
+          fixture.now,
+        );
+        expect(store.recordStatus(fixture.context, moved, version(observed))).toEqual({
+          ok: false,
+          reason: "receipt-conflict",
+        });
+      }
+      expect(store.readStatus(fixture.context)).toEqual(observed);
     });
     it("rejects revoked context, foreign source and hostile nested fields without changing prior bytes", () => {
       const first = store.recordStatus(fixture.context, journal, null);
@@ -283,5 +336,45 @@ describe("description receipt status hooks (service option bridge)", () => {
       fixture.now,
     );
     expect(hooks.recordStatus(fixture.context, reconciled)).toBe(true);
+  });
+  // Rehearsal run-12 (#3390): the service applied the description to the draft pull request, the
+  // operator marked it ready, and the status refresh then failed as `authority-denied` -- the
+  // receipt refused the ready rebinding the effect layer had produced. The service suite alone
+  // could not see it: its fixture persists everything. This is the two real layers together.
+  it("reconciles an applied description to the ready pull request through the durable receipt", async () => {
+    const hooks = hooksOver();
+    const service = createPrDescriptionApplicationService({
+      ...fixture.options,
+      recordStatus: hooks.recordStatus,
+      readStatus: hooks.readStatus,
+    });
+    const preview = await service.preview({ language: "en" });
+    if (preview.outcome !== "preview") throw new TypeError("Missing actual preview");
+    service.issueApproval(preview.preview.proposalId);
+    const lease = service.consumeApproval(preview.preview.proposalId);
+    if (lease === undefined) throw new TypeError("Missing approval lease");
+    expect(await service.executeApproved(preview.preview.proposalId, lease)).toMatchObject({
+      outcome: "observed",
+      status: { state: "current", effect: "confirmed", binding: { isDraft: true } },
+    });
+    fixture.now += 5_000;
+    fixture.remote = {
+      ...fixture.remote,
+      identity: { ...fixture.remote.identity, isDraft: false },
+      updatedAt: new Date(fixture.now).toISOString(),
+    };
+    expect(await service.reconcile()).toMatchObject({
+      outcome: "observed",
+      status: {
+        state: "current",
+        reason: "reconciled",
+        effect: "reconciled",
+        binding: { isDraft: false, headSha: fixture.remote.identity.headSha },
+      },
+    });
+    expect(hooks.readStatus(fixture.context)).toMatchObject({
+      effect: "reconciled",
+      binding: { isDraft: false },
+    });
   });
 });

@@ -121,6 +121,18 @@ retention length changes what remains reviewable, never what may be applied. A p
 holder has lapsed is reported as `expired` — the artifact is gone, the change has not moved — and
 the surface that offered it must still lead the operator to the pull request it belonged to.
 
+An applied status is bound to the pull request identity it was written against, draft flag
+included. Marking the pull request ready changes that identity without moving the change, so the
+status owner re-reads the remote body and re-binds the same confirmed content to the ready
+identity — the *observed ready rebinding*, defined once in the contract
+(`isObservedReadyRebinding`): every identity and content field equal, `isDraft` turned false, the
+provider's own timestamp not moved backwards. The durable receipt admits exactly this transition on
+a confirmed receipt without passing through `uncertain` and refuses every other binding change; the
+effect layer derives the rebinding through the same predicate, so the producer cannot emit a status
+the receipt rejects (#3390). A refused durable record is reported as `receipt-refused`, never as an
+authority denial — the operator was admitted and the provider answered — and the receipt's own log
+line names the precise cause.
+
 ### D5 — Reconstruction and verification
 
 Snapshot capture/read/recheck/expiry/invalidation and narrative generation use existing activity

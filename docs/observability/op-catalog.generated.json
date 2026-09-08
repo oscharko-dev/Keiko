@@ -1377,13 +1377,13 @@
     {
       "op": "coding-context.github-authorization.evaluated",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:138",
+      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:174",
       "package": "keiko-server"
     },
     {
       "op": "coding-context.github-remote.evaluated",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:224",
+      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:263",
       "package": "keiko-server"
     },
     {
@@ -2524,13 +2524,13 @@
     {
       "op": "git.pr-description.receipt",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/prDescriptionReceiptStore.ts:184",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionReceiptStore.ts:194",
       "package": "keiko-server"
     },
     {
       "op": "git.pr-description.receipt",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/prDescriptionReceiptStore.ts:240",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionReceiptStore.ts:250",
       "package": "keiko-server"
     },
     {
@@ -2932,25 +2932,25 @@
     {
       "op": "pr-description.apply.blocked",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:740",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:831",
       "package": "keiko-server"
     },
     {
       "op": "pr-description.apply.failed",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:748",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:839",
       "package": "keiko-server"
     },
     {
       "op": "pr-description.apply.started",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:724",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:815",
       "package": "keiko-server"
     },
     {
       "op": "pr-description.apply.succeeded",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:732",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:823",
       "package": "keiko-server"
     },
     {
@@ -2968,13 +2968,13 @@
     {
       "op": "pr-description.model-egress.denied",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:765",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:856",
       "package": "keiko-server"
     },
     {
       "op": "pr-description.repository.mismatch",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:780",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:871",
       "package": "keiko-server"
     },
     {

@@ -31,6 +31,10 @@ export const PR_DESCRIPTION_APPLICATION_REASON_STATES = Object.freeze({
   "approval-required": "blocked",
   "approval-invalid": "blocked",
   "authority-denied": "blocked",
+  // #3390: the durable receipt refused to record an observation the service had already made.
+  // Reported as its own word because it is not an authority denial -- the operator was admitted
+  // and the provider answered -- and the receipt's own log line names the precise cause.
+  "receipt-refused": "blocked",
   "policy-blocked": "blocked",
   "invalid-request": "blocked",
   "malformed-region": "blocked",
@@ -90,7 +94,7 @@ export const PR_DESCRIPTION_CONCURRENCY_LIMITATION =
 
 const DIGEST = /^[a-f0-9]{64}$/u;
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
-const BINDING_KEYS = [
+const BINDING_KEYS: readonly (keyof PrDescriptionApplicationBinding)[] = [
   "repositoryId",
   "remoteDigest",
   "repository",
@@ -195,6 +199,30 @@ export function isPrDescriptionApplicationBinding(
       "finalBodyDigest",
     ].every((key) => pattern(value[key], DIGEST))
   );
+}
+/** The two binding fields the observed draft-to-ready transition moves; every other field is identity. */
+const READY_REBINDING_KEYS: ReadonlySet<keyof PrDescriptionApplicationBinding> = new Set([
+  "isDraft",
+  "providerUpdatedAt",
+]);
+/**
+ * The ONE binding change an applied description undergoes without its provenance becoming
+ * uncertain: the pull request its body was written to was observed leaving draft state (#3390).
+ * Every identity and content field stays equal; only `isDraft` turns false and the provider's own
+ * `updatedAt` moves forward -- never back, a backwards read is a stale observation, not a
+ * transition. The effect layer produces exactly this rebinding when it re-reads the remote body
+ * after mark-ready (ADR-0174 D4), and the durable receipt admits exactly this transition and no
+ * other: one definition, so the producer and the store can never disagree again.
+ */
+export function isObservedReadyRebinding(
+  previous: PrDescriptionApplicationBinding,
+  next: PrDescriptionApplicationBinding,
+): boolean {
+  if (!previous.isDraft || next.isDraft) return false;
+  const before = Date.parse(previous.providerUpdatedAt);
+  const after = Date.parse(next.providerUpdatedAt);
+  if (!Number.isFinite(before) || !Number.isFinite(after) || after < before) return false;
+  return BINDING_KEYS.every((key) => READY_REBINDING_KEYS.has(key) || previous[key] === next[key]);
 }
 function validState(value: Record<string, unknown>): boolean {
   if (

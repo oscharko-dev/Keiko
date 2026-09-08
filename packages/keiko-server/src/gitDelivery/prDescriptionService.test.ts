@@ -194,13 +194,27 @@ describe("body-only description application", () => {
       expect(fixture.writes).toHaveLength(0);
     },
   );
-  it("fails closed when durable intent cannot be recorded", async () => {
+  it("fails closed when durable intent cannot be recorded, naming the refused record", async () => {
     const { review, lease } = await approved();
     fixture.persistence = false;
-    expect(await fixture.service.executeApproved(review.proposalId, lease)).toMatchObject({
+    // #3390: a refused durable record is reported as its own reason, never as an authority denial
+    // -- the operator was admitted and the provider answered; only the receipt refused.
+    expect(await fixture.service.executeApproved(review.proposalId, lease)).toEqual({
       outcome: "blocked",
+      reason: "receipt-refused",
     });
     expect(fixture.writes).toHaveLength(0);
+  });
+  it("reports a refused durable record of a reconciliation as receipt-refused", async () => {
+    const { review, lease } = await approved();
+    expect(await fixture.service.executeApproved(review.proposalId, lease)).toMatchObject({
+      outcome: "observed",
+    });
+    fixture.persistence = false;
+    expect(await fixture.service.reconcile()).toEqual({
+      outcome: "blocked",
+      reason: "receipt-refused",
+    });
   });
   // #3390: a generated proposal must stay reviewable long enough for an operator to reach it.
   // It used to be discarded after one OBSERVATION window -- sixty seconds -- which is a different

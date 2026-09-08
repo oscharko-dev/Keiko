@@ -317,8 +317,10 @@ class DescriptionService implements PrDescriptionApplicationService {
     const now = this.time();
     if (!check() || now - started >= 60_000) throw new PrDescriptionFailure("authority-denied");
     const status = reconciledDescriptionStatus(previous, remote, confirmed, now);
+    // The observation succeeded; only its durable record was refused. That is not an authority
+    // denial (#3390) -- the receipt store logs the exact cause under `git.pr-description.receipt`.
     if (!this.options.recordStatus(context, status))
-      throw new PrDescriptionFailure("authority-denied");
+      throw new PrDescriptionFailure("receipt-refused");
     logDescription(this.options, context, phase, status.reason, status);
     return { outcome: "observed", status };
   }

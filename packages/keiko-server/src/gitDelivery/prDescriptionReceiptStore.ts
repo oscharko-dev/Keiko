@@ -2,6 +2,7 @@ import { realpathSync } from "node:fs";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { canonicalise, redact, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
+  isObservedReadyRebinding,
   isPrDescriptionApplicationStatus,
   type PrDescriptionApplicationStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
@@ -131,7 +132,16 @@ function validateTransition(
   )
     throw new ReceiptFailure("receipt-conflict");
   const same = canonicalise(next.binding) === canonicalise(previous.status.binding);
-  if ((previous.status.effect === "uncertain" || next.effect !== "uncertain") && !same)
+  // #3390: the observed draft-to-ready rebinding is identity-preserving by the contract's own
+  // definition -- the one binding change a confirmed receipt admits without passing through
+  // `uncertain`. Refusing it here failed every status refresh after mark-ready while the effect
+  // layer had produced exactly that rebinding from the remote it re-read.
+  const readyRebinding = isObservedReadyRebinding(previous.status.binding, next.binding);
+  if (
+    (previous.status.effect === "uncertain" || next.effect !== "uncertain") &&
+    !same &&
+    !readyRebinding
+  )
     throw new ReceiptFailure("receipt-conflict");
 }
 function checkedStatus(

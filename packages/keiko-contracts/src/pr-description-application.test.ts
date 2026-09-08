@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isPrDescriptionApplicationStatus } from "./pr-description-application.js";
+import {
+  isObservedReadyRebinding,
+  isPrDescriptionApplicationStatus,
+} from "./pr-description-application.js";
 
 export const APPLICATION_STATUS = {
   schemaVersion: "1",
@@ -76,4 +79,46 @@ it.each([
   { reason: "reconciled", effect: "confirmed" },
 ])("rejects contradictory successful effect provenance %j", (patch) => {
   expect(isPrDescriptionApplicationStatus({ ...APPLICATION_STATUS, ...patch })).toBe(false);
+});
+
+// #3390: the one identity-preserving binding change. Producer (effect layer) and consumer (durable
+// receipt) both call this predicate, so the transition has exactly one definition.
+describe("observed ready rebinding", () => {
+  const draft = APPLICATION_STATUS.binding;
+  const ready = { ...draft, isDraft: false, providerUpdatedAt: "2026-09-05T00:00:30.000Z" };
+  it("admits the draft-to-ready transition that keeps every identity and content field", () => {
+    expect(isObservedReadyRebinding(draft, ready)).toBe(true);
+    expect(
+      isObservedReadyRebinding(draft, { ...ready, providerUpdatedAt: draft.providerUpdatedAt }),
+    ).toBe(true);
+  });
+  it.each([
+    { name: "a draft that stays draft", previous: draft, next: { ...ready, isDraft: true } },
+    { name: "a ready reversal", previous: ready, next: draft },
+    {
+      name: "a provider timestamp moving backwards",
+      previous: draft,
+      next: { ...ready, providerUpdatedAt: "2026-09-04T00:00:00.000Z" },
+    },
+    {
+      name: "an unparseable provider timestamp",
+      previous: draft,
+      next: { ...ready, providerUpdatedAt: "later" },
+    },
+    { name: "a moved head", previous: draft, next: { ...ready, headSha: "c".repeat(40) } },
+    { name: "a moved base", previous: draft, next: { ...ready, baseRef: "release" } },
+    {
+      name: "a different body",
+      previous: draft,
+      next: { ...ready, finalBodyDigest: "0".repeat(64) },
+    },
+    { name: "a different pull request", previous: draft, next: { ...ready, prNumber: 124 } },
+    {
+      name: "a different repository checkout",
+      previous: draft,
+      next: { ...ready, repositoryId: "repo-other" },
+    },
+  ])("rejects $name", ({ previous, next }) => {
+    expect(isObservedReadyRebinding(previous, next)).toBe(false);
+  });
 });
