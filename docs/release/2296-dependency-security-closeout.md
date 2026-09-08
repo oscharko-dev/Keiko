@@ -118,46 +118,46 @@ release exists and is intentionally not taken), `major-deferred` (a newer major 
 separately governed migration), `unsupported` (the newer release cannot be adopted on this runtime
 or peer graph).
 
-| Package                       | Scope                 | Version | Disposition    | Rationale                                                                              |
-| ----------------------------- | --------------------- | ------- | -------------- | -------------------------------------------------------------------------------------- |
-| `typescript`                  | root                  | 6.0.3   | major-deferred | Programmatic API lane. TypeScript 7's stable API entry gate is #2269/#2270.            |
-| `typescript`                  | keiko-server          | 6.0.3   | major-deferred | Same API lane as root; the language-service consumers bind to it.                      |
-| `typescript`                  | keiko-workspace       | 6.0.3   | major-deferred | Same API lane as root.                                                                 |
-| `typescript`                  | keiko-ui              | 5.7.3   | major-deferred | The Next.js-supported UI compiler; UI source is proven separately against native TS 7. |
-| `@typescript/native`          | root                  | 7.0.2   | current        | The native TypeScript 7 compiler, aliased as `npm:typescript@~7.0.2`.                  |
-| `eslint`                      | root                  | 10.9.1  | current        | ESLint 10 lane; the `eslint-config-next` peer cap was cleared by #2777.                |
-| `eslint`                      | keiko-ui              | 10.9.1  | current        | Deduplicated onto the root node by #2777; the workspace no longer pins its own copy.   |
-| `@eslint/js`                  | root                  | 10.0.1  | current        | Realigned with the `eslint` 10 lane by #2777; one family, one major again.             |
-| `typescript-eslint`           | root                  | 8.68.0  | patch-deferred | 8.69.0 published 2026-08-31; held by the reviewed seven-day update cooldown.           |
-| `next`                        | keiko-ui              | 16.3.1  | patch-deferred | 16.3.3 available; deferred to a reviewed batch with `eslint-config-next`.              |
-| `eslint-config-next`          | keiko-ui              | 16.3.1  | patch-deferred | Kept exactly aligned with `next`; the two move together or not at all.                 |
-| `react`                       | keiko-ui              | 19.2.8  | current        | React 19 runtime delivered by #2295.                                                   |
-| `react-dom`                   | keiko-ui              | 19.2.8  | current        | Matches `react`.                                                                       |
-| `monaco-editor`               | root                  | 0.56.0  | current        | The reviewed editor pin; ADR-0042 was amended to 0.56.0 on 2026-08-16 and agrees.      |
-| `monaco-editor`               | keiko-ui              | 0.56.0  | current        | Deduplicated with root.                                                                |
-| `monaco-editor`               | keiko-editor          | 0.56.0  | current        | Deduplicated with root.                                                                |
-| `vite`                        | keiko-ui              | 8.1.4   | patch-deferred | 8.2.2 available; the Rolldown/native binding delta is not required by any capability.  |
-| `vitest`                      | root                  | 4.1.11  | current        | Realigned here; the keiko-ui nested copy is gone and both resolve to this node.        |
-| `vitest`                      | keiko-ui              | 4.1.11  | current        | Resolves to the root node; the workspace no longer carries its own copy.               |
-| `@vitest/coverage-v8`         | root                  | 4.1.11  | current        | Exact peer match for Vitest 4.1.11; a mismatch here made `npm ls` invalid.             |
-| `autoprefixer`                | keiko-ui              | 10.5.4  | current        | UI build baseline.                                                                     |
-| `@types/react`                | keiko-ui              | 19.2.18 | current        | Newest release; `@types/react-dom` lags it by one patch.                               |
-| `axe-core`                    | keiko-ui              | 4.12.1  | patch-deferred | 4.13.0 changes rule output; an accessibility-evidence refresh is required first.       |
-| `@noble/hashes`               | keiko-ui              | 2.4.0   | current        | Security/correctness hardening; hash and UI quality gates remain authoritative.        |
-| `@types/node`                 | root                  | 26.3.0  | current        | Root declarations remain on the independently resolved compatible release.             |
-| `@types/node`                 | keiko-ui              | 26.4.0  | current        | Node 26 declaration refresh for the UI workspace.                                      |
-| `@types/react-dom`            | keiko-ui              | 19.2.4  | patch-deferred | Declarations only; 19.2.5 available.                                                   |
-| `@vitejs/plugin-react`        | keiko-ui              | 6.0.5   | patch-deferred | 6.1.1 available; UI build baseline is unchanged.                                       |
-| `@testing-library/react`      | keiko-ui              | 16.3.3  | current        | Fixes re-entrant `act()` behavior while dispatching events.                            |
-| `@testing-library/user-event` | keiko-ui              | 14.6.5  | patch-deferred | 14.6.6 available; no test capability requires it.                                      |
-| `@playwright/test`            | root                  | 1.62.1  | current        | E2E reference runner.                                                                  |
-| `prettier`                    | root                  | 3.9.6   | current        | Formatter policy is unchanged.                                                         |
-| `knip`                        | root                  | 6.32.3  | current        | Patch refresh for the required `check:knip` gate.                                      |
-| `corepack`                    | root                  | 0.35.0  | current        | Lockfile-verified Node 26 bootstrap for the pinned offline Yarn smoke.                 |
-| `fallow`                      | root                  | 3.9.1   | patch-deferred | 3.20.0 available; backs `check:semantic-duplication`. Missed by the sweep — see below. |
-| `@napi-rs/canvas`             | keiko-local-knowledge | 1.0.8   | current        | Optional host-native backend; deduplicated to one node by a root override (see below). |
-| `postcss`                     | root                  | 8.5.26  | current        | Root override; audit reports no known vulnerability.                                   |
-| `ws`                          | root                  | 8.21.3  | current        | WebSocket runtime.                                                                     |
+| Package                       | Scope                 | Version | Disposition    | Rationale                                                                                                               |
+| ----------------------------- | --------------------- | ------- | -------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `typescript`                  | root                  | 6.0.3   | major-deferred | Programmatic API lane. TypeScript 7's stable API entry gate is #2269/#2270.                                             |
+| `typescript`                  | keiko-server          | 6.0.3   | major-deferred | Same API lane as root; the language-service consumers bind to it.                                                       |
+| `typescript`                  | keiko-workspace       | 6.0.3   | major-deferred | Same API lane as root.                                                                                                  |
+| `typescript`                  | keiko-ui              | 5.7.3   | major-deferred | The Next.js-supported UI compiler; UI source is proven separately against native TS 7.                                  |
+| `@typescript/native`          | root                  | 7.0.2   | current        | The native TypeScript 7 compiler, aliased as `npm:typescript@~7.0.2`.                                                   |
+| `eslint`                      | root                  | 10.9.1  | current        | ESLint 10 lane; the `eslint-config-next` peer cap was cleared by #2777.                                                 |
+| `eslint`                      | keiko-ui              | 10.9.1  | current        | Deduplicated onto the root node by #2777; the workspace no longer pins its own copy.                                    |
+| `@eslint/js`                  | root                  | 10.0.1  | current        | Realigned with the `eslint` 10 lane by #2777; one family, one major again.                                              |
+| `typescript-eslint`           | root                  | 8.68.0  | patch-deferred | 8.69.0 published 2026-08-31; held by the reviewed seven-day update cooldown.                                            |
+| `next`                        | keiko-ui              | 16.3.3  | current        | Taken 2026-09-08 for GHSA-p293-qw3h-jr36 (CVSS 9.0, RCE on Windows-hosted servers), together with `eslint-config-next`. |
+| `eslint-config-next`          | keiko-ui              | 16.3.3  | current        | Kept exactly aligned with `next`; the two move together or not at all.                                                  |
+| `react`                       | keiko-ui              | 19.2.8  | current        | React 19 runtime delivered by #2295.                                                                                    |
+| `react-dom`                   | keiko-ui              | 19.2.8  | current        | Matches `react`.                                                                                                        |
+| `monaco-editor`               | root                  | 0.56.0  | current        | The reviewed editor pin; ADR-0042 was amended to 0.56.0 on 2026-08-16 and agrees.                                       |
+| `monaco-editor`               | keiko-ui              | 0.56.0  | current        | Deduplicated with root.                                                                                                 |
+| `monaco-editor`               | keiko-editor          | 0.56.0  | current        | Deduplicated with root.                                                                                                 |
+| `vite`                        | keiko-ui              | 8.1.4   | patch-deferred | 8.2.2 available; the Rolldown/native binding delta is not required by any capability.                                   |
+| `vitest`                      | root                  | 4.1.11  | current        | Realigned here; the keiko-ui nested copy is gone and both resolve to this node.                                         |
+| `vitest`                      | keiko-ui              | 4.1.11  | current        | Resolves to the root node; the workspace no longer carries its own copy.                                                |
+| `@vitest/coverage-v8`         | root                  | 4.1.11  | current        | Exact peer match for Vitest 4.1.11; a mismatch here made `npm ls` invalid.                                              |
+| `autoprefixer`                | keiko-ui              | 10.5.4  | current        | UI build baseline.                                                                                                      |
+| `@types/react`                | keiko-ui              | 19.2.18 | current        | Newest release; `@types/react-dom` lags it by one patch.                                                                |
+| `axe-core`                    | keiko-ui              | 4.12.1  | patch-deferred | 4.13.0 changes rule output; an accessibility-evidence refresh is required first.                                        |
+| `@noble/hashes`               | keiko-ui              | 2.4.0   | current        | Security/correctness hardening; hash and UI quality gates remain authoritative.                                         |
+| `@types/node`                 | root                  | 26.3.0  | current        | Root declarations remain on the independently resolved compatible release.                                              |
+| `@types/node`                 | keiko-ui              | 26.4.0  | current        | Node 26 declaration refresh for the UI workspace.                                                                       |
+| `@types/react-dom`            | keiko-ui              | 19.2.4  | patch-deferred | Declarations only; 19.2.5 available.                                                                                    |
+| `@vitejs/plugin-react`        | keiko-ui              | 6.0.5   | patch-deferred | 6.1.1 available; UI build baseline is unchanged.                                                                        |
+| `@testing-library/react`      | keiko-ui              | 16.3.3  | current        | Fixes re-entrant `act()` behavior while dispatching events.                                                             |
+| `@testing-library/user-event` | keiko-ui              | 14.6.5  | patch-deferred | 14.6.6 available; no test capability requires it.                                                                       |
+| `@playwright/test`            | root                  | 1.62.1  | current        | E2E reference runner.                                                                                                   |
+| `prettier`                    | root                  | 3.9.6   | current        | Formatter policy is unchanged.                                                                                          |
+| `knip`                        | root                  | 6.32.3  | current        | Patch refresh for the required `check:knip` gate.                                                                       |
+| `corepack`                    | root                  | 0.35.0  | current        | Lockfile-verified Node 26 bootstrap for the pinned offline Yarn smoke.                                                  |
+| `fallow`                      | root                  | 3.9.1   | patch-deferred | 3.20.0 available; backs `check:semantic-duplication`. Missed by the sweep — see below.                                  |
+| `@napi-rs/canvas`             | keiko-local-knowledge | 1.0.8   | current        | Optional host-native backend; deduplicated to one node by a root override (see below).                                  |
+| `postcss`                     | root                  | 8.5.26  | current        | Root override; audit reports no known vulnerability.                                                                    |
+| `ws`                          | root                  | 8.21.3  | current        | WebSocket runtime.                                                                                                      |
 
 The live inventory command is `npm outdated --workspaces --include-workspace-root --json`; it
 reported 18 non-current direct entries, every one of which is dispositioned above.
