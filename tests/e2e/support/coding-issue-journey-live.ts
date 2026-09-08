@@ -117,7 +117,7 @@ function primaryRail(page: Page): Locator {
 // button CLOSES it. Reading `aria-pressed` first makes opening a tool idempotent -- required here
 // because "Editor" and "Settings" are opened from more than one call site in this module and a
 // second blind click would toggle the window shut instead of reusing it.
-async function ensureRailToolOpen(page: Page, label: string): Promise<void> {
+export async function ensureRailToolOpen(page: Page, label: string): Promise<void> {
   const button = primaryRail(page).getByRole("button", { name: label, exact: true });
   if ((await button.getAttribute("aria-pressed")) !== "true") {
     await button.click();

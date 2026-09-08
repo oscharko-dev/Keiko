@@ -53,6 +53,7 @@ import { observeQualificationFlowAuthority } from "./coding-issue-journey-live-a
 import { proposeJourneyReady } from "./coding-issue-journey-live-mark-ready.js";
 import {
   type DeliveredPullRequest,
+  ensureRailToolOpen,
   openLiveWorkbench,
   raiseWorkbench,
   readObservedRunWhileAwaitingSuccess,
@@ -486,13 +487,26 @@ function repositoryButtonLabel(repositoryRoot: string): string {
 // duplicates. The desktop assigns its id, so the window is located by its accessible region name
 // ("Git", `window.type.governedGit.title`, no sub-text for this window type) rather than a fixed
 // `data-window-id`.
-async function openGovernedGitWindow(page: Page, repositoryRoot: string): Promise<Locator> {
-  const manageRepository = page.locator('button[aria-label^="Manage repository "]');
-  await expect(manageRepository).toBeVisible({ timeout: 60_000 });
-  await expect(manageRepository).toHaveAccessibleName(
-    `Manage repository ${repositoryButtonLabel(repositoryRoot)}`,
-  );
-  await manageRepository.click();
+/** How the Git window is reached. The Coding Workbench's repository chip exists only once the
+ * workbench has bound a repository through an accepted task; before that -- the base sync that
+ * precedes flows 2 to 5 -- an operator opens Git from the left rail and picks the checkout there. */
+type GitWindowEntry = "workbench" | "rail";
+
+async function openGovernedGitWindow(
+  page: Page,
+  repositoryRoot: string,
+  entry: GitWindowEntry = "workbench",
+): Promise<Locator> {
+  if (entry === "workbench") {
+    const manageRepository = page.locator('button[aria-label^="Manage repository "]');
+    await expect(manageRepository).toBeVisible({ timeout: 60_000 });
+    await expect(manageRepository).toHaveAccessibleName(
+      `Manage repository ${repositoryButtonLabel(repositoryRoot)}`,
+    );
+    await manageRepository.click();
+  } else {
+    await ensureRailToolOpen(page, "Git");
+  }
   // A WINDOW, matched by prefix. `accessibleWindowLabel` appends " — selected" to the label of the
   // selected window, so an exact name match broke the moment the operator's own click selected it;
   // and only real windows carry `data-window-id`, which keeps this off the panes inside them.
@@ -501,7 +515,46 @@ async function openGovernedGitWindow(page: Page, repositoryRoot: string): Promis
   // Visible is not usable: another window may cover it. Bring it forward before anything inside it
   // is clicked, the way an operator does.
   await raiseWindow(page, gitWindow, "Git");
+  if (entry === "rail") await bindGitWindowToControlledRepository(gitWindow, repositoryRoot);
   return gitWindow;
+}
+
+/**
+ * Opened from the rail before any task workspace exists, the Git window comes up on whichever root
+ * the desktop resolves -- often its connect panel, where the controlled checkout is one of the
+ * recent repositories (its project is registered at server start). Choosing it there is exactly
+ * what an operator does; the repository toolbar naming the checkout is the proof the binding took.
+ * Real flow 2 (run-27) failed closed here before this existed: the workbench chip the merge step
+ * uses is not rendered until a task has bound the repository.
+ */
+async function bindGitWindowToControlledRepository(
+  gitWindow: Locator,
+  repositoryRoot: string,
+): Promise<void> {
+  const label = repositoryButtonLabel(repositoryRoot);
+  // The connected toolbar names the bound checkout on its repository selector (RepositoryToolbar's
+  // `RepositoryCell`, aria-label "Repository", text = the project's name); the connect panel lists
+  // it as a recent repository whose button reads the same name.
+  const repository = gitWindow.getByLabel("Repository toolbar").getByLabel("Repository", {
+    exact: true,
+  });
+  const recent = gitWindow.getByRole("button", { name: label, exact: true });
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    if ((await repository.count()) > 0) {
+      const bound = ((await repository.first().textContent()) ?? "").trim();
+      if (bound === label) return;
+    }
+    if ((await recent.count()) > 0 && (await recent.first().isVisible())) {
+      await recent.first().click();
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `the Git window did not bind the controlled repository "${label}" within a minute`,
+      );
+    }
+    await gitWindow.page().waitForTimeout(1_000);
+  }
 }
 
 async function waitForSyncExecute(page: Page, operation: "fetch" | "pull"): Promise<void> {
@@ -522,9 +575,12 @@ async function updateControlledBaseThroughGovernedGit(
   flow: QualificationFlowBinding,
   repositoryRoot: string,
 ): Promise<void> {
-  if (flow.ordinal === 1) return;
+  // Every flow, flow 1 included: bringing the controlled base up to date is what an operator does
+  // before accepting work, a fetch on an already current base is a no-op, and the step then proves
+  // the rail-opened Git window binds the checkout before any model spend rather than surfacing for
+  // the first time in flow 2 (real run-27).
   await openLiveWorkbench(page, repositoryRoot);
-  const gitWindow = await openGovernedGitWindow(page, repositoryRoot);
+  const gitWindow = await openGovernedGitWindow(page, repositoryRoot, "rail");
   await fetchThenPullControlledBase(page, gitWindow);
 }
 
