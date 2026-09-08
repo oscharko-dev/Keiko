@@ -28,10 +28,8 @@ import {
 } from "./coding-issue-journey-live-observed.js";
 
 const SURFACE = 'section[aria-label="Coding Workbench"][data-state]';
-const AUTH_ENDPOINT = "/api/coding-workbench/github-authorization";
 const GATEWAY_READINESS_ENDPOINT = "/api/gateway/readiness";
 const GATEWAY_SETUP_ENDPOINT = "/api/gateway/setup";
-const CSRF = { "X-Keiko-CSRF": "1" };
 
 export function workbenchSurface(page: Page): Locator {
   return page.locator(SURFACE);
@@ -129,7 +127,7 @@ export async function ensureRailToolOpen(page: Page, label: string): Promise<voi
 // (`settingsTabLabel` in SettingsPanel.tsx: "Models" / "Security" / …), mirroring the exact
 // sequence `coding-issue-intake.spec.ts`'s `enableFullAccess` already drives against the real UI
 // (rail "Settings" -> region named "Settings…" -> tab button).
-async function openSettingsTab(page: Page, tabName: string): Promise<Locator> {
+export async function openSettingsTab(page: Page, tabName: string): Promise<Locator> {
   await ensureRailToolOpen(page, "Settings");
   const settings = page.getByRole("region", { name: /^Settings/u });
   await expect(settings).toBeVisible();
@@ -146,13 +144,141 @@ async function openSettingsTab(page: Page, tabName: string): Promise<Locator> {
  * toggling hazard `ensureRailToolOpen` exists to defend against, reached from the other side, and
  * it fires precisely on the model-qualification path that opens Settings in the first place.
  */
-async function closeSettingsWindow(page: Page): Promise<void> {
+export async function closeSettingsWindow(page: Page): Promise<void> {
   const close = page.getByRole("button", { name: "Close Settings window", exact: true });
   if ((await close.count()) === 0) return;
   await close.first().click();
   await expect(page.getByRole("region", { name: /^Settings/u })).toHaveCount(0, {
     timeout: 30_000,
   });
+}
+
+// The last non-empty "/"-or-"\"-separated segment of a repository path -- mirrors
+// `repositoryLabel()` in CodingWorkbenchWindow.tsx (~line 1111), which derives the composer's
+// "Manage repository {repository}" accessible name (i18n
+// "codingWorkbench.composer.repository.open") from the SAME algorithm.
+function repositoryButtonLabel(repositoryRoot: string): string {
+  const parts = repositoryRoot.split(/[\\/]/u);
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index];
+    if (part !== undefined && part.length > 0) return part;
+  }
+  return repositoryRoot;
+}
+
+// Real production affordance for opening the governed Git window (binding rule: every user action
+// goes through the browser exactly as a normal user would -- never a seeded `keiko.workspace.v4`
+// window). The Coding Workbench composer's own repository chip
+// (CodingWorkbenchSections.tsx ~193-204, aria-label "Manage repository {repository}") calls
+// `onOpenGit({ root: repositoryRoot, binding: "repository" })` (CodingWorkbenchWindow.tsx ~909,
+// proven by CodingWorkbenchWindow.test.tsx's "opens Git on the active task worktree" case), which
+// widgets/index.tsx's "coding" registerWindowRender (~602-620) turns into
+// `ctx.openWindow("governedGit", { projectPath: root, ... })`. The prefix selector below is
+// the SAME one `currentLiveWorkbenchIdentity` (below) already uses
+// (`button[aria-label^="Manage repository "]`) to identify this exact control.
+//
+// `governedGit` is a SINGLETON window type (WindowsRegistry.ts `governedGit: { singleton: true }`),
+// so repeated calls across one flow raise/refresh the ONE real Git window instead of stacking
+// duplicates. The desktop assigns its id, so the window is located by its accessible region name
+// ("Git", `window.type.governedGit.title`, no sub-text for this window type) rather than a fixed
+// `data-window-id`.
+/** How the Git window is reached. The Coding Workbench's repository chip exists only once the
+ * workbench has bound a repository through an accepted task; before that -- the base sync that
+ * precedes flows 2 to 5, and the git-to-chat scenario's own disposable checkout -- an operator
+ * opens Git from the left rail and picks (or adds) the checkout there. */
+export type GitWindowEntry = "workbench" | "rail";
+
+export async function openGovernedGitWindow(
+  page: Page,
+  repositoryRoot: string,
+  entry: GitWindowEntry = "workbench",
+): Promise<Locator> {
+  if (entry === "workbench") {
+    const manageRepository = page.locator('button[aria-label^="Manage repository "]');
+    await expect(manageRepository).toBeVisible({ timeout: 60_000 });
+    await expect(manageRepository).toHaveAccessibleName(
+      `Manage repository ${repositoryButtonLabel(repositoryRoot)}`,
+    );
+    await manageRepository.click();
+  } else {
+    await ensureRailToolOpen(page, "Git");
+  }
+  // A WINDOW, matched by prefix. `accessibleWindowLabel` appends " — selected" to the label of the
+  // selected window, so an exact name match broke the moment the operator's own click selected it;
+  // and only real windows carry `data-window-id`, which keeps this off the panes inside them.
+  const gitWindow = page.locator('section[data-window-id][aria-label^="Git"]');
+  await expect(gitWindow).toBeVisible({ timeout: 60_000 });
+  // Visible is not usable: another window may cover it. Bring it forward before anything inside it
+  // is clicked, the way an operator does.
+  await raiseWindow(page, gitWindow, "Git");
+  if (entry === "rail") await bindGitWindowToControlledRepository(gitWindow, repositoryRoot);
+  return gitWindow;
+}
+
+/**
+ * Opened from the rail before any task workspace exists, the Git window comes up on whichever root
+ * the desktop resolves -- often its connect panel, where the controlled checkout is one of the
+ * recent repositories (its project is registered at server start). Choosing it there is exactly
+ * what an operator does; the repository toolbar naming the checkout is the proof the binding took.
+ * Real flow 2 (run-27) failed closed here before this existed: the workbench chip the merge step
+ * uses is not rendered until a task has bound the repository.
+ *
+ * A checkout the desktop has never seen before -- no recent entry, e.g. the git-to-chat scenario's
+ * disposable worktree (#3390) -- has no "recent" button to click either; the loop then reaches for
+ * the connect panel's own "Connect repository" control and adds it through the SAME
+ * `AddRepositoryDialog` an operator uses, rather than a direct `/api/projects` POST. This never
+ * fires for the four flows above: their controlled checkout is always already a recent entry, so
+ * the first branch below returns before the "Connect repository" button is ever looked for.
+ */
+async function bindGitWindowToControlledRepository(
+  gitWindow: Locator,
+  repositoryRoot: string,
+): Promise<void> {
+  const label = repositoryButtonLabel(repositoryRoot);
+  // The connected toolbar names the bound checkout on its repository selector (RepositoryToolbar's
+  // `RepositoryCell`, a combobox labelled "Repository" whose trigger renders the project's name and
+  // its path as two separate nodes -- so the name is matched as its own exact text node, never as
+  // the trigger's concatenated text, which real run-28 showed reads "Wegwerf-Repo/Users/..."). The
+  // connect panel lists the checkout as a recent repository whose button reads the same name.
+  const repository = gitWindow.getByLabel("Repository toolbar").getByRole("combobox", {
+    name: "Repository",
+    exact: true,
+  });
+  const recent = gitWindow.getByRole("button", { name: label, exact: true });
+  const connect = gitWindow.getByRole("button", { name: "Connect repository", exact: true });
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    if ((await repository.getByText(label, { exact: true }).count()) > 0) return;
+    if ((await recent.count()) > 0 && (await recent.first().isVisible())) {
+      await recent.first().click();
+    } else if ((await connect.count()) > 0 && (await connect.first().isVisible())) {
+      await registerLocalRepositoryThroughGitWindow(gitWindow, repositoryRoot);
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `the Git window did not bind the controlled repository "${label}" within a minute`,
+      );
+    }
+    await gitWindow.page().waitForTimeout(1_000);
+  }
+}
+
+/**
+ * Adds a local checkout the desktop has never registered as a project, through the Git window's own
+ * "Connect repository" -> "Open local repository" flow (`AddRepositoryDialog.tsx`), exactly as an
+ * operator adds an existing folder. `onAdded` (GitClientWindow.tsx) reconnects to it immediately, so
+ * the caller's next poll finds it already selected.
+ */
+async function registerLocalRepositoryThroughGitWindow(
+  gitWindow: Locator,
+  repositoryRoot: string,
+): Promise<void> {
+  await gitWindow.getByRole("button", { name: "Connect repository", exact: true }).click();
+  const dialog = gitWindow.page().getByRole("dialog", { name: "Add repository" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel("Local repository path").fill(repositoryRoot);
+  await dialog.getByRole("button", { name: "Open repository", exact: true }).click();
+  await expect(dialog).toBeHidden({ timeout: 30_000 });
 }
 
 // Live-run blocker (A), generalized from the original single test: the real production
@@ -178,50 +304,52 @@ export async function pairLiveSession(page: Page): Promise<void> {
   await expect.poll(() => page.url()).not.toContain("keiko-app-session");
 }
 
-// Review 3941762920: this init script re-runs on EVERY navigation Playwright performs on this
-// page, including a later `page.reload()` a scenario issues after appending its own window (e.g.
-// `mountGovernedPullRequestCard`). Seeding `keiko.workspace.v4` unconditionally clobbered that
-// appended window back to the single "coding" layout on every such reload. Guarding the seed
-// behind "not already present" makes it one-shot per browser context: the first navigation of a
-// fresh context (empty storage) still seeds the initial layout, but a later reload of the SAME
-// context sees the already-populated key and leaves whatever the scenario has since appended.
+// #3390: no `keiko.workspace.v4` seed here any more -- a real operator neither places a window nor
+// pre-binds a repository path through browser storage. The init script keeps only the non-action
+// preferences (an English UI every control lookup below depends on, and a dark theme) and drops the
+// per-connector cache so a stale `keiko.conns.v1` from an earlier context never leaks in.
 export async function openLiveWorkbench(page: Page, repositoryRoot: string): Promise<void> {
-  await page.addInitScript(
-    ({ root }) => {
-      localStorage.setItem("keiko.theme", "dark");
-      // #3390: pin the interface language. Every control this lane clicks and every sentence it
-      // reads is named in English, while the product resolves its locale from `navigator.language`
-      // when nothing is stored -- so on a runner whose browser reports any other language the whole
-      // lane would fail on its first control lookup, for a reason that has nothing to do with the
-      // product. `keiko.locale` is the product's own preference key, set exactly as the operator's
-      // own language choice sets it.
-      localStorage.setItem("keiko.locale", "en");
-      if (localStorage.getItem("keiko.workspace.v4") === null) {
-        localStorage.setItem(
-          "keiko.workspace.v4",
-          JSON.stringify([
-            {
-              id: "coding-issue-journey-live",
-              type: "coding",
-              x: 40,
-              y: 48,
-              w: 1120,
-              h: 1400,
-              z: 10,
-              zoom: 1,
-              cfg: { repositoryPath: root },
-              max: false,
-            },
-          ]),
-        );
-      }
-      localStorage.removeItem("keiko.conns.v1");
-    },
-    { root: repositoryRoot },
-  );
+  await page.addInitScript(() => {
+    localStorage.setItem("keiko.theme", "dark");
+    // #3390: pin the interface language. Every control this lane clicks and every sentence it
+    // reads is named in English, while the product resolves its locale from `navigator.language`
+    // when nothing is stored -- so on a runner whose browser reports any other language the whole
+    // lane would fail on its first control lookup, for a reason that has nothing to do with the
+    // product. `keiko.locale` is the product's own preference key, set exactly as the operator's
+    // own language choice sets it.
+    localStorage.setItem("keiko.locale", "en");
+    localStorage.removeItem("keiko.conns.v1");
+  });
   await pairLiveSession(page);
+  await ensureRailToolOpen(page, "Coding Workbench");
   await expect(workbenchSurface(page)).toBeVisible();
-  await expect(page.getByLabel("Repository path")).toHaveValue(repositoryRoot);
+  await raiseWorkbench(page);
+  await settleWorkbenchRepositoryPath(page, repositoryRoot);
+}
+
+/**
+ * Types the repository root into the workbench setup's own "Repository path" input
+ * (`CodingWorkbenchSetup.tsx`'s `RepositoryPathField`) exactly as an operator would, and commits it
+ * the same way the component does: `onChange` updates the value as it is typed, and leaving the
+ * field (`onBlur` -> `onSettled`) fires the base-branch lookup for that path -- a real Tab press,
+ * not a synthetic blur call.
+ *
+ * Idempotent on purpose. `openLiveWorkbench` runs more than once per flow on the SAME page --
+ * the base sync check, the workspace preparation, a resumed run's re-attach, and a cached scenario
+ * reuse all call it -- and since #3390's pairing fix redeems a repeat `pairLiveSession` fragment
+ * without a page load, a later call finds the SAME document still showing whatever this function
+ * left in the field. Retyping an already-correct value would needlessly refire the branch lookup
+ * (and, worse, could clobber a path the operator/scenario has since moved on from), so a call that
+ * finds the field already holding `repositoryRoot` does nothing further.
+ */
+async function settleWorkbenchRepositoryPath(page: Page, repositoryRoot: string): Promise<void> {
+  const pathInput = page.getByLabel("Repository path");
+  await expect(pathInput).toBeVisible();
+  if ((await pathInput.inputValue()) !== repositoryRoot) {
+    await pathInput.fill(repositoryRoot);
+    await pathInput.press("Tab");
+  }
+  await expect(pathInput).toHaveValue(repositoryRoot);
 }
 
 /** The chat models the gateway is configured with, read from the Settings Models tab the operator
@@ -506,33 +634,6 @@ export async function ensureWorkflowEligibleModel(page: Page): Promise<boolean> 
     waitForWorkspaceIdentity: (identity) => waitForLiveWorkbenchIdentity(page, identity),
   });
   return changed;
-}
-
-// The GitHub issue-reader grant, over the authorization route.
-//
-// #3390: the five qualification flows no longer use this. They grant through the Workbench's own
-// control on the issue-access refusal (`previewIssueGrantingAccessIfRefused` above ->
-// CodingWorkbenchIssueIntake.tsx's `GitHubIssueAccessGrant`), which is the real user journey and
-// the reason that control now exists: the only affordance used to live in Settings, whose bound
-// root at grant time is not the repository the operator just named in the Workbench.
-//
-// What remains here serves ONE caller: `coding-issue-journey-live-git-chat.ts`'s
-// `connectControlledPullRequestToChat`, a scenario that never previews an issue and therefore never
-// reaches that control. There the grant is a FIXTURE PRECONDITION, not a user step under
-// qualification -- it exists so that scenario does not silently depend on an issue-to-PR flow
-// having run first in the same process (review 3941793542). It is deliberately not a step of the
-// five flows, and nothing in those flows calls it.
-export async function grantGithubAccess(page: Page, repositoryRoot: string): Promise<void> {
-  const observed = await page.request.get(
-    `${AUTH_ENDPOINT}?${new URLSearchParams({ repositoryPath: repositoryRoot }).toString()}`,
-  );
-  expect(observed.ok()).toBe(true);
-  const { revision } = (await observed.json()) as { readonly revision: number };
-  const updated = await page.request.put(AUTH_ENDPOINT, {
-    headers: CSRF,
-    data: { repositoryPath: repositoryRoot, authorized: true, expectedRevision: revision },
-  });
-  expect(updated.ok()).toBe(true);
 }
 
 export interface LiveIssueWorkspacePreparation {

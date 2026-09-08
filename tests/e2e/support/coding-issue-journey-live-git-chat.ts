@@ -10,20 +10,21 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, type APIRequestContext, type Page } from "@playwright/test";
-import { grantGithubAccess } from "./coding-issue-journey-live.js";
+import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import {
-  createChatForFixture,
-  fetchGitChangeScopes,
-  seedWorkspace,
-} from "./git-change-chat-3400.js";
+  closeSettingsWindow,
+  openGovernedGitWindow,
+  openLiveWorkbench,
+  openSettingsTab,
+} from "./coding-issue-journey-live.js";
+import { fetchGitChangeScopes } from "./git-change-chat-3400.js";
 
-// Matches `seedWorkspace`'s own hardcoded window ids (support/git-change-chat-3400.ts) -- these
-// are arbitrary DOM window identifiers this test author chose, not scripted-server fixture data,
-// so reusing the literal values here is not the "bound to a fixture id" case AGENTS.md §5 asks to
-// generalize before reuse.
-const GIT_WINDOW_ID = "issue-3400-git-window";
-const CHAT_WINDOW_ID = "issue-3400-chat-window";
+// The Git window is a real production singleton (WindowsRegistry.ts `governedGit: {singleton:
+// true}`), matched by its accessible region name like every other real-UI lookup in this lane
+// (`openGovernedGitWindow`, coding-issue-journey-live.ts). The Chat window this scenario creates
+// through the rail is the only one on the page for its lifetime, so the same aria-label-prefix
+// pattern -- rather than a fixed `data-window-id` a seed would have hardcoded -- finds it too.
+const CHAT_WINDOW = 'section[data-window-id][aria-label^="Chat"]';
 
 function git(root: string, args: readonly string[]): string {
   return execFileSync("git", args, { cwd: root, encoding: "utf8", timeout: 30_000 }).trim();
@@ -112,23 +113,123 @@ async function readExactConnectedRelationship(
   return scopes[0].relationshipId;
 }
 
+/**
+ * Grants the per-checkout GitHub issue-reader access through the real product control for a
+ * repository with no bound issue: the Settings "Security" tab's `GitHubIssueAccessSettings`
+ * (AutonomySettings.tsx ~line 195) -- as opposed to `CodingWorkbenchIssueIntake.tsx`'s own grant,
+ * which only renders once an issue preview has actually been refused, never reached here. That
+ * panel resolves its own repository as `ctx.activeRoot ?? ctx.linkedRoot ?? activeProject?.path`
+ * (`SettingsPanelSessionHost`, widgets/index.tsx); with no task workspace bound and nothing else
+ * naming a root, it falls through to the chat session's own active project -- which
+ * `reconnectAsActiveProject` below has already made `repositoryRoot`.
+ */
+async function grantGithubIssueReaderAccessThroughSettings(page: Page): Promise<void> {
+  const settings = await openSettingsTab(page, "Security");
+  const toggle = settings.getByRole("checkbox", {
+    name: /Allow reading GitHub issues for this repository/u,
+  });
+  if (!(await toggle.isChecked())) {
+    const granted = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PUT" &&
+        response.url().endsWith("/api/coding-workbench/github-authorization"),
+      { timeout: 30_000 },
+    );
+    await toggle.check();
+    const response = await granted;
+    expect(
+      response.ok(),
+      `the GitHub access grant failed with HTTP ${String(response.status())}`,
+    ).toBe(true);
+  }
+  await closeSettingsWindow(page);
+}
+
+/**
+ * The chat session resolves its ONE active project at boot, from whichever registered project was
+ * most recently opened (`bootstrapSession`/`sortProjects`, useChatSession.ts / sidebar-sort.ts:
+ * favorites first, then the freshest `lastOpenedAt`). A bare rail "New chat" click has no per-click
+ * project picker -- `prepareNewWindowCfg` always falls back to that one session-wide active project
+ * -- so `repositoryRoot` must be the freshest registered project before "New chat" is ever clicked.
+ *
+ * Connecting the Git window to `repositoryRoot` already bumped its `lastOpenedAt` server-side past
+ * whatever the CLI registered at boot (`registerRepository`/`reconnectRepository` both upsert
+ * `last_opened_at = now`, projects.ts). Reloading -- an entirely ordinary real action, and the same
+ * one `reconcileLiveWorkbenchAfterModelChange` already performs elsewhere in this lane -- simply
+ * re-runs that boot-time resolution, which now lands on `repositoryRoot` instead.
+ */
+async function reconnectAsActiveProject(page: Page, repositoryRoot: string): Promise<void> {
+  await page.reload();
+  await openGovernedGitWindow(page, repositoryRoot, "rail");
+}
+
+interface ConnectedRailChat {
+  readonly id: string;
+  readonly title: string;
+}
+
+async function readSoleChatForProject(
+  request: APIRequestContext,
+  projectPath: string,
+): Promise<ConnectedRailChat> {
+  const response = await request.get(`/api/chats?projectPath=${encodeURIComponent(projectPath)}`);
+  if (!response.ok()) {
+    throw new Error(`Chat list failed (${String(response.status())}): ${await response.text()}`);
+  }
+  const body = (await response.json()) as { readonly chats: readonly ConnectedRailChat[] };
+  if (body.chats.length !== 1 || body.chats[0] === undefined) {
+    throw new Error(
+      `expected exactly one chat under the newly connected repository, found ${String(body.chats.length)}`,
+    );
+  }
+  return body.chats[0];
+}
+
+/**
+ * Creates a Chat through the left rail's own "New chat" control (`LeftRail.tsx`, i18n
+ * "rail.newChat") -- the same one-shot action button every operator uses, never a seeded
+ * `chat`-type window. The dialog's "title" field is left at its localized default so the server
+ * keeps its canonical untitled default (`NewWindowDialog.tsx`'s `withChatUntitledMarker`); this
+ * reads the created chat's actual id/title back from the read-only chats list rather than assuming
+ * either.
+ */
+async function createChatThroughRail(
+  page: Page,
+  request: APIRequestContext,
+  repositoryRoot: string,
+): Promise<ConnectedRailChat> {
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "New Chat window" });
+  await expect(dialog).toBeVisible();
+  const created = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().endsWith("/api/chats"),
+    { timeout: 30_000 },
+  );
+  await dialog.getByRole("button", { name: "Open Chat", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  const response = await created;
+  expect(response.ok(), `chat creation failed with HTTP ${String(response.status())}`).toBe(true);
+  await expect(page.locator(CHAT_WINDOW)).toBeVisible();
+  return readSoleChatForProject(request, repositoryRoot);
+}
+
 /** Connects the checked-out branch's real open pull request to a real Chat -- the exact real
  * routes the scripted sibling's "Open pull request for this branch" case drives, here reached
- * against the real controlled repository instead of an intercepted fixture response. Establishes
- * the repository-reader grant itself (review 3941793542) through the same authorized route
- * `driveIssueToDraftPullRequest` uses, so this scenario does not silently depend on an earlier
- * issue-to-PR scenario having run first in the same process to create that grant. */
+ * against the real controlled repository instead of an intercepted fixture response. Registers and
+ * binds the disposable checkout, creates the Chat and grants GitHub issue-reader access entirely
+ * through the real UI (#3390): no seeded `keiko.workspace.v4` window and no direct
+ * `/api/projects` / `/api/chats` / github-authorization mutation. */
 export async function connectControlledPullRequestToChat(
   page: Page,
   request: APIRequestContext,
   repositoryRoot: string,
 ): Promise<ConnectedGitChatSession> {
-  const chat = await createChatForFixture(request, repositoryRoot);
-  await grantGithubAccess(page, repositoryRoot);
-  await seedWorkspace(page, repositoryRoot, chat);
-  await page.goto("/");
-  const gitWindow = page.locator(`[data-window-id="${GIT_WINDOW_ID}"]`);
-  await expect(gitWindow).toBeVisible();
+  await openLiveWorkbench(page, repositoryRoot);
+  await openGovernedGitWindow(page, repositoryRoot, "rail");
+  await reconnectAsActiveProject(page, repositoryRoot);
+  await grantGithubIssueReaderAccessThroughSettings(page);
+  const chat = await createChatThroughRail(page, request, repositoryRoot);
+  const gitWindow = await openGovernedGitWindow(page, repositoryRoot, "rail");
   await gitWindow.getByRole("button", { name: "Connect to Chat" }).click();
   const dialog = page.getByRole("dialog", { name: "Connect Git change to chat" });
   await expect(dialog).toBeVisible();
@@ -137,7 +238,7 @@ export async function connectControlledPullRequestToChat(
   await page.getByRole("option", { name: chat.title }).click();
   await dialog.getByRole("button", { name: "Connect" }).click();
   await expect(dialog).toBeHidden();
-  await expect(page.locator(`[data-window-id="${CHAT_WINDOW_ID}"]`)).toBeVisible();
+  await expect(page.locator(CHAT_WINDOW)).toBeVisible();
   const relationshipId = await readExactConnectedRelationship(request, repositoryRoot, chat.id);
   return { chatId: chat.id, relationshipId };
 }
@@ -150,8 +251,8 @@ const IN_FLIGHT_SEND_STATUSES = new Set(["queued", "contacting", "streaming"]);
  * it to reach a terminal value again -- proving THIS click's turn is what settled, not a stale
  * "completed" left over from the previous turn (`sendStatus` never auto-resets to "idle" between
  * turns). Throws on a turn error so a failed/cancelled turn never reads as a silent success. */
-async function waitForOwnTerminalSendStatus(page: Page, chatWindowId: string): Promise<void> {
-  const sendStatus = page.locator(`[data-window-id="${chatWindowId}"] [data-send-status]`);
+async function waitForOwnTerminalSendStatus(chatWindow: Locator): Promise<void> {
+  const sendStatus = chatWindow.locator("[data-send-status]");
   await expect
     .poll(
       async () =>
@@ -182,7 +283,7 @@ export async function refineDescriptionOverChat(
   page: Page,
   turns: readonly string[],
 ): Promise<void> {
-  const chatWindow = page.locator(`[data-window-id="${CHAT_WINDOW_ID}"]`);
+  const chatWindow = page.locator(CHAT_WINDOW);
   for (const message of turns) {
     const composer = chatWindow.getByRole("textbox", { name: "Chat message" });
     await composer.click();
@@ -191,7 +292,7 @@ export async function refineDescriptionOverChat(
     await expect(send).toBeEnabled();
     await send.click();
     await expect(chatWindow.getByText(message)).toBeVisible();
-    await waitForOwnTerminalSendStatus(page, CHAT_WINDOW_ID);
+    await waitForOwnTerminalSendStatus(chatWindow);
   }
 }
 
@@ -199,7 +300,7 @@ export async function refineDescriptionOverChat(
  * the real `/api/git-change/review-description|approve-description|apply-description` routes,
  * ending in a real GitHub PATCH of the pull request body. */
 export async function reviewApproveApplyGitChangeDescription(page: Page): Promise<void> {
-  const chatWindow = page.locator(`[data-window-id="${CHAT_WINDOW_ID}"]`);
+  const chatWindow = page.locator(CHAT_WINDOW);
   await chatWindow.getByTestId("git-change-description-preview").click();
   await expect(chatWindow.getByTestId("git-change-description-preview-body")).toBeVisible({
     timeout: 120_000,

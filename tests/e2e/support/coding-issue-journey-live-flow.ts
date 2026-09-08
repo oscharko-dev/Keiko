@@ -53,12 +53,11 @@ import { observeQualificationFlowAuthority } from "./coding-issue-journey-live-a
 import { proposeJourneyReady } from "./coding-issue-journey-live-mark-ready.js";
 import {
   type DeliveredPullRequest,
-  ensureRailToolOpen,
+  openGovernedGitWindow,
   openLiveWorkbench,
   raiseWorkbench,
   readObservedRunWhileAwaitingSuccess,
   waitWhileAnsweringApprovals,
-  raiseWindow,
 } from "./coding-issue-journey-live.js";
 import {
   observedDelivery,
@@ -456,105 +455,6 @@ function previousFlowCumulative(flow: QualificationFlowBinding): number {
     throw new Error("prior completed qualification flow evidence is unavailable");
   }
   return validated.value.spend.cumulativeChargedNanoUsd;
-}
-
-// The last non-empty "/"-or-"\"-separated segment of a repository path -- mirrors
-// `repositoryLabel()` in CodingWorkbenchWindow.tsx (~line 1111), which derives the composer's
-// "Manage repository {repository}" accessible name (i18n
-// "codingWorkbench.composer.repository.open") from the SAME algorithm.
-function repositoryButtonLabel(repositoryRoot: string): string {
-  const parts = repositoryRoot.split(/[\\/]/u);
-  for (let index = parts.length - 1; index >= 0; index -= 1) {
-    const part = parts[index];
-    if (part !== undefined && part.length > 0) return part;
-  }
-  return repositoryRoot;
-}
-
-// Real production affordance for opening the governed Git window (binding rule: every user action
-// goes through the browser exactly as a normal user would -- never a seeded `keiko.workspace.v4`
-// window). The Coding Workbench composer's own repository chip
-// (CodingWorkbenchSections.tsx ~193-204, aria-label "Manage repository {repository}") calls
-// `onOpenGit({ root: repositoryRoot, binding: "repository" })` (CodingWorkbenchWindow.tsx ~909,
-// proven by CodingWorkbenchWindow.test.tsx's "opens Git on the active task worktree" case), which
-// widgets/index.tsx's "coding" registerWindowRender (~602-620) turns into
-// `ctx.openWindow("governedGit", { projectPath: root, ... })`. The prefix selector below is
-// the SAME one `coding-issue-journey-live.ts`'s `currentLiveWorkbenchIdentity` already uses
-// (`button[aria-label^="Manage repository "]`) to identify this exact control.
-//
-// `governedGit` is a SINGLETON window type (WindowsRegistry.ts `governedGit: { singleton: true }`),
-// so repeated calls across one flow raise/refresh the ONE real Git window instead of stacking
-// duplicates. The desktop assigns its id, so the window is located by its accessible region name
-// ("Git", `window.type.governedGit.title`, no sub-text for this window type) rather than a fixed
-// `data-window-id`.
-/** How the Git window is reached. The Coding Workbench's repository chip exists only once the
- * workbench has bound a repository through an accepted task; before that -- the base sync that
- * precedes flows 2 to 5 -- an operator opens Git from the left rail and picks the checkout there. */
-type GitWindowEntry = "workbench" | "rail";
-
-async function openGovernedGitWindow(
-  page: Page,
-  repositoryRoot: string,
-  entry: GitWindowEntry = "workbench",
-): Promise<Locator> {
-  if (entry === "workbench") {
-    const manageRepository = page.locator('button[aria-label^="Manage repository "]');
-    await expect(manageRepository).toBeVisible({ timeout: 60_000 });
-    await expect(manageRepository).toHaveAccessibleName(
-      `Manage repository ${repositoryButtonLabel(repositoryRoot)}`,
-    );
-    await manageRepository.click();
-  } else {
-    await ensureRailToolOpen(page, "Git");
-  }
-  // A WINDOW, matched by prefix. `accessibleWindowLabel` appends " — selected" to the label of the
-  // selected window, so an exact name match broke the moment the operator's own click selected it;
-  // and only real windows carry `data-window-id`, which keeps this off the panes inside them.
-  const gitWindow = page.locator('section[data-window-id][aria-label^="Git"]');
-  await expect(gitWindow).toBeVisible({ timeout: 60_000 });
-  // Visible is not usable: another window may cover it. Bring it forward before anything inside it
-  // is clicked, the way an operator does.
-  await raiseWindow(page, gitWindow, "Git");
-  if (entry === "rail") await bindGitWindowToControlledRepository(gitWindow, repositoryRoot);
-  return gitWindow;
-}
-
-/**
- * Opened from the rail before any task workspace exists, the Git window comes up on whichever root
- * the desktop resolves -- often its connect panel, where the controlled checkout is one of the
- * recent repositories (its project is registered at server start). Choosing it there is exactly
- * what an operator does; the repository toolbar naming the checkout is the proof the binding took.
- * Real flow 2 (run-27) failed closed here before this existed: the workbench chip the merge step
- * uses is not rendered until a task has bound the repository.
- */
-async function bindGitWindowToControlledRepository(
-  gitWindow: Locator,
-  repositoryRoot: string,
-): Promise<void> {
-  const label = repositoryButtonLabel(repositoryRoot);
-  // The connected toolbar names the bound checkout on its repository selector (RepositoryToolbar's
-  // `RepositoryCell`, a combobox labelled "Repository" whose trigger renders the project's name and
-  // its path as two separate nodes -- so the name is matched as its own exact text node, never as
-  // the trigger's concatenated text, which real run-28 showed reads "Wegwerf-Repo/Users/..."). The
-  // connect panel lists the checkout as a recent repository whose button reads the same name.
-  const repository = gitWindow.getByLabel("Repository toolbar").getByRole("combobox", {
-    name: "Repository",
-    exact: true,
-  });
-  const recent = gitWindow.getByRole("button", { name: label, exact: true });
-  const deadline = Date.now() + 60_000;
-  for (;;) {
-    if ((await repository.getByText(label, { exact: true }).count()) > 0) return;
-    if ((await recent.count()) > 0 && (await recent.first().isVisible())) {
-      await recent.first().click();
-    }
-    if (Date.now() > deadline) {
-      throw new Error(
-        `the Git window did not bind the controlled repository "${label}" within a minute`,
-      );
-    }
-    await gitWindow.page().waitForTimeout(1_000);
-  }
 }
 
 /**
