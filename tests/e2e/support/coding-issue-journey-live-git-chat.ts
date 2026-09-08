@@ -212,15 +212,56 @@ async function createChatThroughRail(
   await dialog.getByRole("button", { name: "Open Chat", exact: true }).click();
   await expect(dialog).toBeHidden();
   await expect(page.locator(CHAT_WINDOW)).toBeVisible();
+  // The window creates its chat asynchronously once the session is ready; the composer is the
+  // proof that it exists. Its absence is the failure to explain, not a list to re-read.
+  await expect(page.locator(CHAT_WINDOW).getByRole("textbox", { name: "Chat message" }))
+    .toBeVisible({ timeout: 60_000 })
+    .catch(async (error: unknown) => {
+      throw new Error(`the Chat window never became ready -- ${await chatWindowDiagnosis(page)}`, {
+        cause: error,
+      });
+    });
   const after = await readChatsForProject(request, repositoryRoot);
   const created = after.filter((chat) => !before.has(chat.id));
   const opened = created.length === 1 ? created[0] : after.length === 1 ? after[0] : undefined;
   if (opened === undefined) {
     throw new Error(
-      `could not tell which chat the rail opened: ${String(created.length)} new, ${String(after.length)} listed under the connected repository`,
+      `could not tell which chat the rail opened: ${String(created.length)} new, ${String(after.length)} listed under the connected repository -- ${await chatWindowDiagnosis(page)}`,
     );
   }
   return opened;
+}
+
+/** What the operator's screen shows when the Chat window does not come up: the window's own text,
+ * every visible alert, and the desktop's persisted layout entry for the window (its bound project
+ * and creation request), read from the same browser storage the desktop reads. Body-free by
+ * construction: window chrome text, notice text and configuration keys, never a message body. */
+async function chatWindowDiagnosis(page: Page): Promise<string> {
+  const windowText = (
+    await page
+      .locator(CHAT_WINDOW)
+      .innerText()
+      .catch(() => "")
+  ).replace(/\s+/gu, " ");
+  const alerts = await page
+    .getByRole("alert")
+    .allInnerTexts()
+    .then((texts) => texts.map((text) => text.trim()).filter((text) => text.length > 0))
+    .catch(() => [] as string[]);
+  const layout = await page
+    .evaluate(() => {
+      const raw = localStorage.getItem("keiko.workspace.v4");
+      if (raw === null) return "no layout";
+      const windows = JSON.parse(raw) as readonly {
+        type?: string;
+        cfg?: Record<string, unknown>;
+      }[];
+      return JSON.stringify(
+        windows.filter((entry) => entry.type === "chat").map((entry) => entry.cfg ?? {}),
+      );
+    })
+    .catch(() => "layout unreadable");
+  return `window: "${windowText.slice(0, 300)}"; alerts: ${JSON.stringify(alerts)}; chat window cfg: ${layout}`;
 }
 
 /** Connects the checked-out branch's real open pull request to a real Chat -- the exact real
