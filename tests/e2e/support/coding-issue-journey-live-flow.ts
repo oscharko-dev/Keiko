@@ -459,6 +459,8 @@ async function waitForSyncExecute(page: Page, operation: "fetch" | "pull"): Prom
     (candidate) =>
       candidate.request().method() === "POST" &&
       candidate.url().endsWith(`/api/git-delivery/${operation}/execute`),
+    // A real network git operation, not the 30s action-timeout default.
+    { timeout: 5 * 60_000 },
   );
   expect(response.ok(), `governed ${operation} failed with HTTP ${String(response.status())}`).toBe(
     true,
@@ -587,6 +589,8 @@ async function executeGovernedMerge(
     (response) =>
       response.request().method() === "POST" &&
       response.url().endsWith("/api/git-delivery/merge/execute"),
+    // A real merge against the provider.
+    { timeout: 5 * 60_000 },
   );
   await card.getByTestId("gm-submit").click();
   const executeResponse = await executed;

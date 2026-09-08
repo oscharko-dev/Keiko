@@ -727,6 +727,8 @@ export async function startCodingRun(
     (response) =>
       response.request().method() === "POST" &&
       response.url().endsWith("/api/coding-workbench/runtime/runs"),
+    // Starting a run provisions the sidecar runtime; not the 30s action-timeout default.
+    { timeout: 5 * 60_000 },
   );
   await startButton.click();
   const response = await started;

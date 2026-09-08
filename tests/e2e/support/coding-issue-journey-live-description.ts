@@ -236,9 +236,11 @@ export async function mountGovernedPullRequestCard(
   pullRequest: DeliveredPullRequest,
   displayed: ObservedDescriptionStatus,
 ): Promise<RetainedDescriptionBinding> {
+  // Each of these fronts a real GitHub read or write; none may inherit the 30s action timeout.
   const reviewed = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" && response.url().endsWith(REVIEW_ENDPOINT),
+    { timeout: 5 * 60_000 },
   );
   await page.getByRole("button", { name: "Review exact draft", exact: true }).click();
   await expect(governedPullRequestWindow(page)).toBeVisible({ timeout: 60_000 });
@@ -268,6 +270,7 @@ export async function applyAutoDraftDescriptionThroughPrCard(
   await expect(card.getByTestId("gpr-description-apply-button")).toBeEnabled();
   const applied = page.waitForResponse(
     (response) => response.request().method() === "POST" && response.url().endsWith(APPLY_ENDPOINT),
+    { timeout: 5 * 60_000 },
   );
   await card.getByTestId("gpr-description-apply-button").click();
   const response = await applied;
@@ -310,6 +313,7 @@ export async function reconcileAppliedDescriptionAfterMarkReady(
   const reconciled = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" && response.url().endsWith(STATUS_ENDPOINT),
+    { timeout: 5 * 60_000 },
   );
   await refresh.click();
   const response = await reconciled;
