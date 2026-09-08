@@ -59,6 +59,15 @@ though Apple/Windows signing (#2198) and the Atlassian half of #2952 are exclude
    `auditReference`/`auditDigest` binding for it; the validator checks that binding and reports its
    absence as `blocked`, and never executes, reproduces, or substitutes for the audit itself.
 
+6. **The CI-repair row is blocked by a green-first delivery, not by a defect.** The rubric lets only
+   the seeded first flow establish `ci-repair-loop`, and only after an actual failed head is followed
+   by a different technically-ready head. On the frozen source the configured model delivered the
+   issue #1 repair green on its first pushed head (real flow 1, 2026-09-08): the required `ci` check
+   never failed, so the repair transition could not be observed and no `ci-repair-loop` receipt
+   exists. The descriptor therefore carries the row as `blocked` with that reason instead of a
+   fabricated receipt; the product's CI-repair loop itself keeps its deterministic fixture coverage
+   (`tests/e2e/coding-issue-ci.spec.ts`), which is not release-qualification evidence.
+
 ## Deterministic evidence that does exist
 
 - **The qualification-manifest schema.** `CodeTaskQualificationManifestV1` and

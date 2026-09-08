@@ -55,11 +55,6 @@
       "platform": "macos-arm64"
     },
     {
-      "scenarioId": "ci-repair-loop",
-      "evidenceClass": "playwright-journey",
-      "platform": "macos-arm64"
-    },
-    {
       "scenarioId": "description-auto-draft-and-apply",
       "evidenceClass": "playwright-journey",
       "platform": "macos-arm64"
@@ -101,6 +96,12 @@
     }
   ],
   "blocked": [
+    {
+      "scenarioId": "ci-repair-loop",
+      "evidenceClass": "playwright-journey",
+      "platform": "macos-arm64",
+      "blockedReason": "#3390 rubric: the seeded first flow delivered a green first head, so no required-check failure was observed and the CI-repair transition could not be recorded"
+    },
     {
       "scenarioId": "packaged-macos-arm64-reference",
       "evidenceClass": "packaged-computer-use",
