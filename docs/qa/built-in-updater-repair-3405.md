@@ -1296,9 +1296,10 @@ Scoped formatting, lint and lead diff review passed. The report is retained sepa
 ### Authenticode producer-parity compilation fixture repair
 
 Diagnostic run `34198289921` completed the full Windows packaging job successfully, including
-native optional dependencies. Core quality, all coverage suites, package coverage aggregation,
-Linux/macOS package smokes and the SonarCloud scanner's quality gate also passed for that
-diagnostic branch. Its Node 26 compatibility suite had one failure among 36,103 executed tests:
+native optional dependencies. Core quality and Linux/macOS package smokes also passed for that diagnostic branch. The manual
+workflow deliberately checks out `dev` for every coverage producer and the Sonar aggregate:
+those passing jobs verify `c5c03d48fa1066c985a656d29880ae1c02e68c48`, not the diagnostic or
+repair head. Its Node 26 compatibility suite had one failure among 36,103 executed tests:
 the producer-parity fixture concatenated two C# compilation units, placing productive source
 `using` directives after runtime namespace declarations (CS1529). The fixture now sends the exact
 source units as a JSON array and compiles each independently in the same PowerShell process.
@@ -1311,7 +1312,20 @@ the runtime DER probe did execute with PowerShell present. Linux/Windows parity 
 head remains required. Frozen test SHA-256:
 `20298e0266b91e2955c608a7a04bb11aa259568204a11f84d5c19bf84e8d15e8`.
 No final child-head CI or complete epic-baseline new-code coverage result is inferred from the
-passing diagnostic Sonar gate.
+passing manual Sonar gate on `dev`.
+
+### Manual CI evidence binding correction
+
+The workflow-dispatch coverage producers and Sonar aggregate explicitly select `dev`
+(`.github/workflows/ci.yml:457`, `:561`, `:629`, `:730`). The scanner log for run `34198289921`
+records `SONAR_HEAD_SHA` and SCM revision `c5c03d48fa1066c985a656d29880ae1c02e68c48` and a
+passing main-branch gate. Those results establish the current `dev` baseline only. They do not
+close this child's package/script/UI coverage or Sonar/new-code requirements. The diagnostic
+Windows native/setup/type/build/full package evidence remains bound to its selected head.
+
+A preliminary union of the complete local reports with isolated new regression coverage measures
+84.5% against the unchanged 85% new-code floor. This diagnostic calculation leaves the canonical
+reports untouched and is not a final gate receipt. The integrated report refresh remains pending.
 
 ## Final verification checklist
 
