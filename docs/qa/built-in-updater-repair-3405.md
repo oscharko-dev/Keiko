@@ -1246,6 +1246,29 @@ cases passed with coverage in 18.67 seconds. Canonical Node 24.18.0 package/root
 also passed. The final diff restores the original permission guard after those executions;
 the complete final-head suite is still required. No production lifecycle behavior changed.
 
+### Windows setup smoke verified after canonical fixture preparation
+
+Diagnostic `e2c17c77b`, run `34198289921`, Windows job `101971015297`, passed both the
+complete productive native quality step and the following setup-bootstrap smoke. It also
+passed Windows package-graph typechecking and package build. The smoke fixture now resolves
+its newly created temporary root with `realpathSync.native` before deriving Unicode/custom
+installation paths. The primary smoke file is byte-identical to the runner input, SHA-256
+`d87826e9ba3e53931884733a25255dbd0d880bb54792ad1c9db2e0b9a7185bac`.
+No production canonical-path check was relaxed. The overall run remains incomplete; its
+protected-branch gate rejects the temporary diagnostic branch by design, and this diagnostic
+run is not final child-head CI or signed release qualification.
+
+Scripts coverage completed with 183 passing files, 4,283 passing tests, 51 failing tests and
+85 skipped tests in 908.79 seconds. The two failing files were environmental: the scripted
+release test could not resolve a trusted `gh`, and route wiring rejected source timestamps
+newer than the pre-run build. After freezing source, rebuilding and supplying a protected
+copy of the exact installed gh 2.92.0 binary through PATH, both complete files passed in the
+four-file replay. That replay also passed runtime composition; its two failures were new
+Windows preacceptance fixture construction, currently being corrected without weakening WAL
+validation. All-report preliminary new-code coverage is 83.8% against 85%; meaningful missing
+Windows recovery and generation-signing/staging cases are under test. No coverage or source
+mapping gate is claimed green until the complete reports are refreshed.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification
