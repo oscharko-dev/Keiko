@@ -347,7 +347,9 @@ export async function refineDescriptionOverChat(
     const send = chatWindow.getByRole("button", { name: "Send message" });
     await expect(send).toBeEnabled();
     await send.click();
-    await expect(chatWindow.getByText(message)).toBeVisible();
+    // The sent turn is rendered twice once the chat has more than one question: as the message
+    // itself and, truncated, as the question map's jump card. The message body is the exact text.
+    await expect(chatWindow.getByText(message, { exact: true }).first()).toBeVisible();
     await waitForOwnTerminalSendStatus(chatWindow);
   }
 }
