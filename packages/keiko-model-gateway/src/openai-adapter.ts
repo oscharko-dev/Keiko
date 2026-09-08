@@ -10,6 +10,7 @@ import {
   ERROR_CODES,
   GatewayEgressError,
   GatewayError,
+  MalformedToolCallError,
   ModelRefusalError,
   ProviderError,
   RateLimitError,
@@ -392,16 +393,47 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function redactUnknown(value: unknown, secrets: readonly string[]): unknown {
+// Locally defined (not in @oscharko-dev/keiko-security's gateway error taxonomy) for the same
+// reason GatewayToolCatalogError lives in toolCatalogBridge.ts rather than there: it is
+// gateway-internal, thrown and caught entirely within this package. Never the provider's fault —
+// the gateway's OWN redaction pass refused to keep walking a pathologically deep response body —
+// so recordProviderFailure (gateway.ts) excludes it from circuit breaker accounting the same way
+// it already excludes CancelledError/ConfigInvalidError (review findings on PR #3394 against
+// gateway.ts:161 and openai-adapter.ts:444: an untyped RangeError from this recursion used to slip
+// through both). Extends MalformedToolCallError so it carries a real, already-catalogued
+// GATEWAY_MALFORMED_TOOL_CALL code and is redacted/retryable=false like every sibling GatewayError,
+// without minting a new ERROR_CODES entry for one call site. Deterministic on the payload shape, so
+// retrying the identical response can never succeed.
+export class ResponseRedactionError extends MalformedToolCallError {}
+
+// KEIKO-0778 sibling (see qualityIntelligence/redaction.ts and promptEnhancement/redaction.ts,
+// which already fix the identical defect for their own deepRedact): without a ceiling, a
+// pathologically deep tool-call-arguments or JSON-mode structured-output payload drives this
+// recursion into an uncaught, untyped RangeError instead of the typed GatewayError every other
+// gateway failure surfaces. No cycle guard is needed here: this value always originates from
+// JSON.parse (normalize.ts), whose output is a tree, never a graph. 32 mirrors the sibling ceiling
+// exactly — it comfortably covers any real tool schema or structured-output shape while
+// empirically staying well clear of the engine's own stack limit (this repeatedly overflowed at
+// ~3,000 levels of nesting in this runtime; a well-formed production payload is nowhere near even
+// this constant, let alone that limit).
+const MAX_REDACT_DEPTH = 32;
+
+function redactUnknown(value: unknown, secrets: readonly string[], depth = 0): unknown {
+  if (depth >= MAX_REDACT_DEPTH) {
+    throw new ResponseRedactionError(
+      "gateway response payload exceeds the maximum redaction depth",
+      secrets,
+    );
+  }
   if (typeof value === "string") {
     return redact(value, secrets);
   }
   if (Array.isArray(value)) {
-    return value.map((item) => redactUnknown(item, secrets));
+    return value.map((item) => redactUnknown(item, secrets, depth + 1));
   }
   if (isRecord(value)) {
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, redactUnknown(item, secrets)]),
+      Object.entries(value).map(([key, item]) => [key, redactUnknown(item, secrets, depth + 1)]),
     );
   }
   return value;

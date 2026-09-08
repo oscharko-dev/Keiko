@@ -24,7 +24,7 @@ import {
   type ModelGatewayLogLevel,
   type ModelGatewayLogSink,
 } from "./observability.js";
-import { OpenAiAdapter } from "./openai-adapter.js";
+import { OpenAiAdapter, ResponseRedactionError } from "./openai-adapter.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import { CircuitBreaker, executeWithRetry, systemClock } from "./resilience.js";
@@ -153,12 +153,24 @@ function attachGatewayRequestId(error: unknown, requestId: string): void {
   }
 }
 
+// Faults that never indicate the PROVIDER is unhealthy: a client-initiated cancel, our own invalid
+// configuration, or the gateway's own redaction pass refusing to walk a pathologically deep
+// response body (review finding on PR #3394 — an untyped RangeError from that last case used to
+// slip past this list and trip the breaker for an otherwise healthy model; ResponseRedactionError
+// is now thrown instead, see openai-adapter.ts's redactUnknown). A named, extensible list rather
+// than a growing chain of `&&` conditions, so the next non-provider fault is one array entry away.
+const NON_PROVIDER_FAULTS = [CancelledError, ConfigInvalidError, ResponseRedactionError] as const;
+
+function isNonProviderFault(error: unknown): boolean {
+  return NON_PROVIDER_FAULTS.some((errorClass) => error instanceof errorClass);
+}
+
 function recordProviderFailure(
   breaker: CircuitBreaker,
   error: unknown,
   correlationId: string,
 ): void {
-  if (!(error instanceof CancelledError) && !(error instanceof ConfigInvalidError)) {
+  if (!isNonProviderFault(error)) {
     breaker.recordFailure(correlationId);
   }
 }

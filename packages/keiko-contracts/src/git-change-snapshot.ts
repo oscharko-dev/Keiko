@@ -467,11 +467,12 @@ function omissionRollUp(
     // `additions`/`omittedHunks`/etc., which validateEntryIdentity already forces to be OWN
     // properties before an entry is accepted here) -- so a plain `entry.omission` read would
     // still resolve a hostile inherited value on an entry that legitimately carries no own
-    // `omission` property. Read it the same own-property-only way the validator does (`field()`
-    // itself takes `Record<string, unknown>`, not the closed entry union, so the ownership check
-    // is inlined here rather than widening that signature for one call site).
+    // `omission` property. Reuse the file's one ownership-guard primitive (`ownField`, the same
+    // fix `field()` itself delegates to) instead of a second inlined `Object.hasOwn` check --
+    // `ownField()`'s signature takes `Record<string, unknown>`, not the closed entry union, so the
+    // cast is narrowed at this one call site rather than widening that signature everywhere.
     const affected = entries.filter(
-      (entry) => Object.hasOwn(entry, "omission") && entry.omission === reason,
+      (entry) => ownField(entry as unknown as Record<string, unknown>, "omission") === reason,
     );
     if (affected.length === 0) continue;
     const hunks = affected.reduce((sum, entry) => sum + entry.omittedHunks, 0);

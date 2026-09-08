@@ -498,7 +498,7 @@
     {
       "op": "chat.request.dispatch",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:845",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:877",
       "package": "keiko-model-gateway"
     },
     {
@@ -630,19 +630,19 @@
     {
       "op": "gateway.chat.completed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:652",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:664",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.chat.failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:549",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:561",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.chat.started",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:529",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:541",
       "package": "keiko-model-gateway"
     },
     {
@@ -672,7 +672,7 @@
     {
       "op": "gateway.config.resolved",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:294",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:306",
       "package": "keiko-model-gateway"
     },
     {
@@ -702,37 +702,37 @@
     {
       "op": "gateway.route.rejected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:776",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:788",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.abandoned",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:597",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:609",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.buffered-fallback",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:685",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:697",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.completed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:569",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:581",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:622",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:634",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.started",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:529",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:541",
       "package": "keiko-model-gateway"
     },
     {
@@ -750,7 +750,7 @@
     {
       "op": "gateway.tool-catalog.projected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:339",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:349",
       "package": "keiko-model-gateway"
     },
     {
@@ -762,7 +762,7 @@
     {
       "op": "gateway.tool-catalog.repair",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:426",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:438",
       "package": "keiko-model-gateway"
     },
     {
@@ -1377,13 +1377,13 @@
     {
       "op": "coding-context.github-authorization.evaluated",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:174",
+      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:175",
       "package": "keiko-server"
     },
     {
       "op": "coding-context.github-remote.evaluated",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:263",
+      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:264",
       "package": "keiko-server"
     },
     {
@@ -2161,25 +2161,25 @@
     {
       "op": "gateway.spend.ceiling",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-spend-budget.ts:217",
+      "site": "packages/keiko-server/src/gateway-spend-budget.ts:237",
       "package": "keiko-server"
     },
     {
       "op": "gateway.spend.rejected",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-spend-budget.ts:116",
+      "site": "packages/keiko-server/src/gateway-spend-budget.ts:132",
       "package": "keiko-server"
     },
     {
       "op": "gateway.spend.reserved",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-spend-budget.ts:246",
+      "site": "packages/keiko-server/src/gateway-spend-budget.ts:266",
       "package": "keiko-server"
     },
     {
       "op": "gateway.spend.settled",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-spend-budget.ts:150",
+      "site": "packages/keiko-server/src/gateway-spend-budget.ts:167",
       "package": "keiko-server"
     },
     {
@@ -2357,13 +2357,13 @@
     {
       "op": "git.delivery.mutation.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:835",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:842",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:867",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:874",
       "package": "keiko-server"
     },
     {
@@ -2381,25 +2381,25 @@
     {
       "op": "git.delivery.pr.approval.minted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/prRoutes.ts:521",
+      "site": "packages/keiko-server/src/gitDelivery/prRoutes.ts:552",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.pr.approval.required",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/prRoutes.ts:383",
+      "site": "packages/keiko-server/src/gitDelivery/prRoutes.ts:412",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.push.approval.minted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/pushRoutes.ts:403",
+      "site": "packages/keiko-server/src/gitDelivery/pushRoutes.ts:433",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.push.approval.required",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/pushRoutes.ts:290",
+      "site": "packages/keiko-server/src/gitDelivery/pushRoutes.ts:318",
       "package": "keiko-server"
     },
     {

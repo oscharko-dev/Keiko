@@ -808,4 +808,23 @@ describe("provider invocation batch bounds", () => {
       expect.objectContaining({ reason: "invalid-arguments" }),
     );
   });
+
+  // #3394 review: a hole ALONE already trips the own-keys-count check above (it changes
+  // `Reflect.ownKeys(calls).length` relative to `calls.length + 1`). Pairing the hole with one
+  // smuggled extra own key restores that coincidental match, so only a per-index denseness walk
+  // -- not `Array.prototype.every`, which skips holes instead of visiting them -- still catches
+  // it. Unpatched, this array sailed through unbound with a hole at index 1: `bindCalls` returned
+  // a frozen 2-length array containing only one real bound call, silently, with no thrown error.
+  it("rejects a sparse calls array whose hole is masked by a matching smuggled own key", () => {
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
+      (): number => NOW,
+    );
+    const calls = [{ id: "call-0", name: "todowrite", arguments: { todos: [] } }];
+    calls.length = 2; // a hole at index 1
+    (calls as unknown as Record<string, unknown>).extra = "x"; // keeps ownKeys.length === length+1
+    expect(() => bridge.bindCalls(calls)).toThrow(
+      expect.objectContaining({ reason: "invalid-arguments" }),
+    );
+  });
 });

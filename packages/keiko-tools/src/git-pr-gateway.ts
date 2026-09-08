@@ -82,6 +82,14 @@ export interface GitPrCreateCommand {
   readonly isDraft: boolean;
   /** Issue-bound delivery pins the provider host and retains complete reconciliation facts. */
   readonly canonicalGitHubIdentity?: true;
+  /**
+   * The head commit a caller previewed/approved (PR analogue of the #3394 review finding against
+   * `GitPushCommand.verifiedCommitSha`). Optional; when present it becomes part of prRoutes.ts's
+   * approval-binding hash (the binding hashes the whole command), so an approval minted for one
+   * commit no longer matches an execute request naming a different one, however far
+   * `headBranchName` has since moved between mint and execute.
+   */
+  readonly verifiedCommitSha?: string;
 }
 
 export interface GitPrUpdateCommand {
@@ -94,6 +102,8 @@ export interface GitPrUpdateCommand {
   readonly body: string;
   readonly convertToDraft: boolean;
   readonly convertFromDraft: boolean;
+  /** Same content-pinning purpose as GitPrCreateCommand.verifiedCommitSha above. */
+  readonly verifiedCommitSha?: string;
 }
 
 export type GitPullRequestCommand = GitPrCreateCommand | GitPrUpdateCommand;

@@ -23,7 +23,11 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import type { GitPushCommand, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
-import type { GitPublishExecResult, GitRemotePublishAdapter } from "@oscharko-dev/keiko-tools";
+import type {
+  GitPublishExecRequest,
+  GitPublishExecResult,
+  GitRemotePublishAdapter,
+} from "@oscharko-dev/keiko-tools";
 import type { NodeGitPublishAdapterDeps } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -811,6 +815,73 @@ describe("push approve — mints the server-issued claim execute consumes (#3387
     expect(adapter.calls()).toBe(0);
   });
 
+  // #3394 review: `pushApprovalBinding` used to hash only branch names/flags, never a commit, so an
+  // approval minted here stayed valid for whatever `sourceBranchName` pointed to at execute time --
+  // not what a human reviewed at preview/approval time. `verifiedCommitSha` pins the binding (and,
+  // downstream, the actual dispatch) to the exact commit that was approved.
+  const COMMIT_A = "a".repeat(40);
+  const COMMIT_B = "b".repeat(40);
+
+  it("mints a claim bound to a verified commit and lets execute proceed against that same commit (#3394 review)", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approveHandler = createHandlePushApprove({ execution: seams({ approvalStore }) });
+    const minted = await approveHandler(
+      ctxFor("/api/git-delivery/push/approve", pushBody({ verifiedCommitSha: COMMIT_A })),
+      deps(),
+    );
+    expect(minted.status).toBe(200);
+    const approval = (minted.body as { approval: GitDeliveryApprovalClaim }).approval;
+
+    const adapter = recordingPublishAdapter();
+    const executeHandler = createHandlePushExecute({
+      execution: seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const res = await executeHandler(
+      ctxFor(EXECUTE, pushBody({ approval, verifiedCommitSha: COMMIT_A })),
+      deps(),
+    );
+    expect((res.body as GitDeliveryPushExecuteResponseBody).status).toBe("succeeded");
+    expect(adapter.calls()).toBe(1);
+  });
+
+  it("refuses to execute against a different commit than the one the approval was minted for, even with identical branch names/flags (#3394 review)", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issuePushApproval(approvalStore, { ...COMMAND, verifiedCommitSha: COMMIT_A });
+    const adapter = recordingPublishAdapter();
+    const handler = createHandlePushExecute({
+      execution: seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    // Same remote/source/target/flags as approved -- only the reviewed commit has since moved
+    // (e.g. a concurrent process advanced the branch between approval and this execute).
+    const res = await handler(
+      ctxFor(EXECUTE, pushBody({ approval, verifiedCommitSha: COMMIT_B })),
+      deps(),
+    );
+    expect(res.status).toBe(400);
+    expect(adapter.calls()).toBe(0);
+  });
+
+  it("dispatches the approved commit itself to the remote adapter, not a plain branch-name push (#3394 review)", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issuePushApproval(approvalStore, { ...COMMAND, verifiedCommitSha: COMMIT_A });
+    let received: GitPublishExecRequest | undefined;
+    const adapter: GitRemotePublishAdapter = {
+      publish: (request): Promise<GitPublishExecResult> => {
+        received = request;
+        return Promise.resolve({ schemaVersion: "1", outcome: "succeeded", durationMs: 1 });
+      },
+    };
+    const handler = createHandlePushExecute({
+      execution: seams({ publishAdapterFactory: () => adapter, approvalStore }),
+    });
+    const res = await handler(
+      ctxFor(EXECUTE, pushBody({ approval, verifiedCommitSha: COMMIT_A })),
+      deps(),
+    );
+    expect((res.body as GitDeliveryPushExecuteResponseBody).status).toBe("succeeded");
+    expect(received?.verifiedCommitSha).toBe(COMMIT_A);
+  });
+
   it("refuses a claim minted for a different run", async () => {
     const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const approval = issuePushApproval(approvalStore, COMMAND, { runId: "another-run" });
@@ -916,9 +987,35 @@ describe("push approve — mints the server-issued claim execute consumes (#3387
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       correlationId: "corr-push-mint-1",
-      extra: { runId: "test-run" },
+      extra: { runId: "test-run", commitPinned: false },
     });
     expect(JSON.stringify(events[0])).not.toContain("feat/x");
+  });
+
+  // #3394 review: `commitPinned` is body-free evidence (a boolean, never the SHA itself) that lets
+  // `keiko support analyze` distinguish a content-pinned mint from a branch-name-only one directly
+  // from the activity log, without re-deriving it from the (redacted) command shape.
+  it("marks the mint log line commitPinned when the request names a verified commit (#3394 review)", async () => {
+    const activity = captureActivityLog();
+    const handler = createHandlePushApprove({
+      execution: seams({ activityLog: activity.sink }),
+    });
+    await handler(
+      {
+        ...ctxFor("/api/git-delivery/push/approve", pushBody({ verifiedCommitSha: COMMIT_A })),
+        correlationId: "corr-push-mint-2",
+      },
+      deps(),
+    );
+    const events = activity.events.filter(
+      (event) => event.op === "git.delivery.push.approval.minted",
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      correlationId: "corr-push-mint-2",
+      extra: { runId: "test-run", commitPinned: true },
+    });
+    expect(JSON.stringify(events[0])).not.toContain(COMMIT_A);
   });
 });
 

@@ -24,6 +24,7 @@
 // diff content, secrets, or credentials. CSRF + JSON content type are enforced centrally by server.ts.
 
 import type { GitDeliveryApprovalClaim } from "@oscharko-dev/keiko-contracts";
+import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import type { GitPushCommand } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
@@ -114,6 +115,7 @@ const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   "sourceBranchName",
   "forcePush",
   "setUpstreamTracking",
+  "verifiedCommitSha",
   "approval",
 ]);
 
@@ -144,6 +146,20 @@ function scanError(parsed: Record<string, unknown>): RouteResult | undefined {
   return undefined;
 }
 
+// #3394 review: `pushApprovalBinding` (below) hashes the WHOLE typed command, so a client that
+// states which commit it previewed/approved binds the approval to that content, not merely to
+// branch names + flags -- an approval minted for one `verifiedCommitSha` no longer matches a
+// request that later names a different one, however the local branch has moved in between.
+// Optional (like `mergeRoutes.ts`'s `expectedHeadRefHash`): a caller that omits it keeps today's
+// branch-name push; one that supplies it gets both the tighter binding AND the existing SHA-pinned
+// dispatch path (`git-publish-gateway.ts`'s `verifiedPushArgv`), which publishes exactly that
+// commit regardless of what the branch currently points to -- the same mechanism
+// `draftDeliveryService.ts` already trusts for the autonomous delivery path.
+function parseVerifiedCommitSha(value: unknown): { ok: true; value?: string } | { ok: false } {
+  if (value === undefined) return { ok: true };
+  return isGitObjectId(value) ? { ok: true, value } : { ok: false };
+}
+
 // Builds the typed push command from validated ref + boolean operands, or undefined when any operand is
 // malformed.
 function buildPushCommand(parsed: Record<string, unknown>): GitPushCommand | undefined {
@@ -156,7 +172,10 @@ function buildPushCommand(parsed: Record<string, unknown>): GitPushCommand | und
   }
   const forcePush = optionalBool(parsed.forcePush);
   const setUpstreamTracking = optionalBool(parsed.setUpstreamTracking);
-  if (forcePush === undefined || setUpstreamTracking === undefined) return undefined;
+  const verifiedCommitSha = parseVerifiedCommitSha(parsed.verifiedCommitSha);
+  if (forcePush === undefined || setUpstreamTracking === undefined || !verifiedCommitSha.ok) {
+    return undefined;
+  }
   return {
     kind: "push",
     sourceBranchName: parsed.sourceBranchName,
@@ -164,6 +183,9 @@ function buildPushCommand(parsed: Record<string, unknown>): GitPushCommand | und
     remoteBranchName: parsed.remoteBranchName,
     forcePush,
     setUpstreamTracking,
+    ...(verifiedCommitSha.value === undefined
+      ? {}
+      : { verifiedCommitSha: verifiedCommitSha.value }),
   };
 }
 
@@ -235,6 +257,11 @@ export const createHandlePushPreview = (
 
 // ─── Execute handler (governed) ───────────────────────────────────────────────────────────────
 
+// #3394 review: `command` is embedded and hashed WHOLE (gitDeliveryApprovalBindingHash ->
+// canonicalise), so once `buildPushCommand` carries a caller-supplied `verifiedCommitSha`, this
+// binding is automatically content-sensitive to it -- an approval minted for one commit no longer
+// `matches()`/`consume()`s against an execute request naming a different one, closing the gap where
+// a binding built only from branch names/flags stayed valid however far the branch had since moved.
 function pushApprovalBinding(
   projectId: string,
   command: GitPushCommand,
@@ -284,13 +311,14 @@ function logPushApprovalRequired(
   activityLog: ServerLogSink,
   correlationId: string,
   runId: string,
+  commitPinned: boolean,
 ): void {
   activityLog.write({
     category: "security",
     op: "git.delivery.push.approval.required",
     correlationId,
     status: 200,
-    extra: { operation: "push", runId },
+    extra: { operation: "push", runId, commitPinned },
   });
 }
 
@@ -310,6 +338,7 @@ async function runPushMutation(input: PushMutationInput): Promise<RouteResult> {
       seams.activityLog ?? processServerLogSink(),
       input.correlationId,
       authority.runId,
+      command.verifiedCommitSha !== undefined,
     );
     return pushApprovalRequiredBlock(deps);
   }
@@ -397,13 +426,14 @@ function logPushApprovalMinted(
   activityLog: ServerLogSink,
   correlationId: string,
   runId: string,
+  commitPinned: boolean,
 ): void {
   activityLog.write({
     category: "security",
     op: "git.delivery.push.approval.minted",
     correlationId,
     status: 200,
-    extra: { operation: "push", runId },
+    extra: { operation: "push", runId, commitPinned },
   });
 }
 
@@ -442,6 +472,7 @@ export const createHandlePushApprove = (
       seams.activityLog ?? processServerLogSink(),
       correlationId,
       authority.runId,
+      command.verifiedCommitSha !== undefined,
     );
     const body: GitDeliveryPushApproveResponseBody = {
       schemaVersion: "1",

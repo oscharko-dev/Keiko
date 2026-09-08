@@ -1,6 +1,6 @@
 import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OpenAiAdapter, STREAM_IDLE_TIMEOUT_MS } from "./openai-adapter.js";
+import { OpenAiAdapter, ResponseRedactionError, STREAM_IDLE_TIMEOUT_MS } from "./openai-adapter.js";
 import {
   AuthenticationError,
   CancelledError,
@@ -37,6 +37,17 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
     headers: { "content-type": "application/json" },
     ...init,
   });
+}
+
+// 4,000 levels of {"a": ...} nesting: comfortably past the ~3,000-level point this repeatedly
+// overflowed the stack at in this runtime (empirically confirmed while building the redaction
+// depth guard), yet a tiny (~24KB) payload well under the adapter's response-size cap.
+function deeplyNestedJson(depth: number): string {
+  let value: unknown = "leaf";
+  for (let i = 0; i < depth; i += 1) {
+    value = { a: value };
+  }
+  return JSON.stringify(value);
 }
 
 function adapterWith(fetchImpl: typeof fetch): OpenAiAdapter {
@@ -513,6 +524,41 @@ describe("OpenAiAdapter.call", () => {
     const serialized = JSON.stringify(result);
     expect(result.structuredOutput).toEqual({ token: "[REDACTED]" });
     expect(serialized).not.toContain(customSecret);
+  });
+
+  it("rejects a pathologically deep tool-call-arguments payload with a typed ResponseRedactionError, not a raw RangeError (review finding, PR #3394)", async () => {
+    // RED reasoning: before the depth guard, redactUnknown recursed once per level of JSON
+    // nesting with no ceiling, so this call rejected with a raw, untyped `RangeError: Maximum
+    // call stack size exceeded` — not a GatewayError at all — and lost structured errorKind
+    // classification (openai-adapter.ts:444, bindCatalogResponse's catch only re-throws).
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "",
+                tool_calls: [
+                  {
+                    id: "call_1",
+                    function: { name: "read_file", arguments: deeplyNestedJson(4000) },
+                  },
+                ],
+              },
+              finish_reason: "tool_calls",
+            },
+          ],
+        }),
+      ),
+    );
+    const rejection = adapter.call(
+      { ...REQUEST, toolCatalog: gatewayCatalogAdvertisement(0, ["read_file"]) },
+      CONFIG,
+    );
+    await expect(rejection).rejects.toBeInstanceOf(GatewayError);
+    await expect(rejection).rejects.toBeInstanceOf(ResponseRedactionError);
+    await expect(rejection).rejects.toMatchObject({ code: ERROR_CODES.MALFORMED_TOOL_CALL });
   });
 
   it("throws TimeoutError when fetch aborts with a TimeoutError DOMException", async () => {

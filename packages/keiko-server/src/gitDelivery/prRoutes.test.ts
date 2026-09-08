@@ -976,6 +976,99 @@ describe("pr approve — mints the server-issued claim execute consumes (#3387)"
     expect(adapter.creates()).toBe(0);
   });
 
+  // PR analogue of the #3394 review finding against pushRoutes.ts's `pushApprovalBinding`:
+  // `prApprovalBinding` used to hash only ownerAndRepo/branch names/title/body, never a commit, so
+  // an approval minted here stayed valid for whatever `headBranchName` pointed to at execute time --
+  // not what a human reviewed at preview/approval time. `verifiedCommitSha` pins the binding to the
+  // exact commit that was approved, mirroring pushRoutes.test.ts's identical proof for push.
+  const COMMIT_A = "a".repeat(40);
+  const COMMIT_B = "b".repeat(40);
+
+  it("mints a claim bound to a verified commit and lets execute proceed against that same commit (#3394-class review, PR analogue)", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approveHandler = createHandlePrApprove({ execution: seams({ approvalStore }) });
+    const minted = await approveHandler(
+      ctxFor("/api/git-delivery/pr/approve", createBody({ verifiedCommitSha: COMMIT_A })),
+      deps(),
+    );
+    expect(minted.status).toBe(200);
+    const approval = (minted.body as { approval: GitDeliveryApprovalClaim }).approval;
+
+    const adapter = recordingPrAdapter();
+    const executeHandler = createHandlePrExecute({
+      execution: seams({ prAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const res = await executeHandler(
+      ctxFor(EXECUTE, createBody({ approval, verifiedCommitSha: COMMIT_A })),
+      deps(),
+    );
+    expect((res.body as GitDeliveryPrExecuteResponseBody).status).toBe("succeeded");
+    expect(adapter.creates()).toBe(1);
+  });
+
+  it("refuses to execute against a different commit than the one the approval was minted for, even with an identical create command otherwise (#3394-class review, PR analogue)", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issuePrApproval(approvalStore, {
+      ...DEFAULT_CREATE_COMMAND,
+      verifiedCommitSha: COMMIT_A,
+    });
+    const adapter = recordingPrAdapter();
+    const handler = createHandlePrExecute({
+      execution: seams({ prAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    // Same owner/repo/head/base/title/body/isDraft as approved -- only the reviewed head commit has
+    // since moved (e.g. a concurrent push advanced the branch between approval and this execute).
+    const res = await handler(
+      ctxFor(EXECUTE, createBody({ approval, verifiedCommitSha: COMMIT_B })),
+      deps(),
+    );
+    expect(res.status).toBe(400);
+    expect(adapter.creates()).toBe(0);
+  });
+
+  // The task names both `pr-create` and `pr-update` explicitly: `buildUpdateCommand` threads
+  // `verifiedCommitSha` the same way `buildCreateCommand` does, so this proves the pr-update wire
+  // path also produces a command whose binding hash covers the reviewed commit, not just pr-create.
+  it("threads verifiedCommitSha through a pr-update request the same way, routing through the update adapter method (#3394-class review, PR analogue)", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const updateCommand: GitPullRequestCommand = {
+      kind: "pr-update",
+      ownerAndRepo: "oscharko-dev/Keiko",
+      prExternalId: "1499",
+      headBranchName: "claude/issue-477-github-pr-command-center",
+      baseBranchName: "dev",
+      title: "feat: updated title",
+      body: "Updated body",
+      convertToDraft: false,
+      convertFromDraft: false,
+      verifiedCommitSha: COMMIT_A,
+    };
+    const adapter = recordingPrAdapter();
+    const handler = createHandlePrExecute({
+      execution: seams({ prAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const res = await handler(
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        kind: "pr-update",
+        ownerAndRepo: "oscharko-dev/Keiko",
+        prExternalId: "1499",
+        headBranchName: "claude/issue-477-github-pr-command-center",
+        baseBranchName: "dev",
+        title: "feat: updated title",
+        body: "Updated body",
+        verifiedCommitSha: COMMIT_A,
+        approval: issuePrApproval(approvalStore, updateCommand),
+      }),
+      deps(),
+    );
+    const body = res.body as GitDeliveryPrExecuteResponseBody;
+    expect(body.status).toBe("succeeded");
+    expect(adapter.updates()).toBe(1);
+    expect(adapter.creates()).toBe(0);
+  });
+
   it("refuses a claim minted for a different run", async () => {
     const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const approval = issuePrApproval(approvalStore, DEFAULT_CREATE_COMMAND, {
@@ -1022,6 +1115,37 @@ describe("pr approve — mints the server-issued claim execute consumes (#3387)"
       extra: { runId: "test-run" },
     });
     expect(JSON.stringify(events[0])).not.toContain("governed pull request command center");
+  });
+
+  // #3394-class review (PR analogue): `commitPinned` is body-free evidence (a boolean, never the
+  // SHA itself) that lets `keiko support analyze` distinguish a content-pinned PR mint from a
+  // branch-name-only one directly from the activity log, without re-deriving it from the (redacted)
+  // command shape. Mirrors pushRoutes.test.ts's identical pin for the push route.
+  it("marks the mint log line commitPinned when the request names a verified commit (#3394-class review, PR analogue)", async () => {
+    const activity: ServerLogEvent[] = [];
+    const handler = createHandlePrApprove({
+      execution: seams({
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
+    });
+    await handler(
+      {
+        ...ctxFor("/api/git-delivery/pr/approve", createBody({ verifiedCommitSha: COMMIT_A })),
+        correlationId: "corr-pr-mint-2",
+      },
+      deps(),
+    );
+    const events = activity.filter((event) => event.op === "git.delivery.pr.approval.minted");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      correlationId: "corr-pr-mint-2",
+      extra: { runId: "test-run", commitPinned: true },
+    });
+    expect(JSON.stringify(events[0])).not.toContain(COMMIT_A);
   });
 
   // Final-audit F2/#3390 (ADR-0138 D2): before this fix, the coarse admission gate hard-denied both

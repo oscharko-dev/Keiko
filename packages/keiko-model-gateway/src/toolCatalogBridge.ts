@@ -263,26 +263,36 @@ function bindCall(
 }
 // `captureCatalogJson`'s budget is a single accumulator shared across everything it copies --
 // right-sized for one call's arguments, wrong for a batch: `TOOL_CATALOG_LIMITS.maxResultBytes`
-// caps any single invocation at exactly `maxArgumentBytes`, so a shared budget across the whole
-// array would reject up to `maxArrayItems` legitimate calls (e.g. 50 parallel tool calls) the
-// moment their COMBINED size passes one call's ceiling, even though every one of them is
-// individually well under it. The array only needs to be proven genuine and bounded in length
-// here -- mirrors copyArray's own shape checks (dense, correctly-prototyped, no smuggled own
-// keys, no sparse holes or accessor-backed indices) without sharing a byte budget across
-// siblings; `captureCall` below still re-validates (and re-bounds) every entry individually.
+// equals `maxArgumentBytes`, so passing the whole array through it with that budget would reject
+// up to `maxArrayItems` legitimate calls (e.g. 50 parallel tool calls) the moment their COMBINED
+// size passes one call's ceiling, even though every one of them is individually well under it --
+// reusing that helper here would resurrect the exact shared-budget bug the batch bounds test below
+// ("binds a batch whose combined size exceeds one call's byte budget...") pins as fixed. The array
+// only needs to be proven genuine and bounded in length here -- mirrors `copyArray`'s own shape
+// checks (dense, correctly-prototyped, no smuggled own keys, no sparse holes or accessor-backed
+// indices) without sharing a byte budget across siblings; `captureCall` below still re-validates
+// (and re-bounds) every entry individually.
+//
+// The denseness check MUST be an explicit index loop, not `Array.prototype.every`/`map`: both
+// SKIP an index that doesn't exist as an own property (a hole) instead of visiting and rejecting
+// it. A hole paired with one smuggled extra own key (e.g. `calls.length = 2; calls.extra = "x"`)
+// keeps `Reflect.ownKeys(calls).length === calls.length + 1` true by coincidence, so only this
+// per-index walk still catches it.
 function requireGenuineCallArray(calls: readonly NormalizedToolCall[]): void {
-  const genuineIndex = (index: number): boolean => {
-    const descriptor = Object.getOwnPropertyDescriptor(calls, String(index));
-    return descriptor !== undefined && "value" in descriptor && descriptor.enumerable === true;
-  };
   requireBridge(
     Array.isArray(calls) &&
       Object.getPrototypeOf(calls) === Array.prototype &&
       Reflect.ownKeys(calls).length === calls.length + 1 &&
-      calls.length <= TOOL_CATALOG_LIMITS.maxArrayItems &&
-      calls.every((_call, index) => genuineIndex(index)),
+      calls.length <= TOOL_CATALOG_LIMITS.maxArrayItems,
     "invalid-arguments",
   );
+  for (let index = 0; index < calls.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(calls, String(index));
+    requireBridge(
+      descriptor !== undefined && "value" in descriptor && descriptor.enumerable === true,
+      "invalid-arguments",
+    );
+  }
 }
 function bindCalls(
   normalizer: ToolInvocationNormalizer | undefined,

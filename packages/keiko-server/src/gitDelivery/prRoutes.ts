@@ -29,6 +29,7 @@ import type {
   GitDeliveryApprovalClaim,
   GitDeliveryApprovalRequirement,
 } from "@oscharko-dev/keiko-contracts";
+import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import type { GitPullRequestCommand } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
@@ -143,6 +144,7 @@ const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   "prExternalId",
   "convertToDraft",
   "convertFromDraft",
+  "verifiedCommitSha",
   "approval",
 ]);
 
@@ -176,6 +178,18 @@ function scanError(parsed: Record<string, unknown>): RouteResult | undefined {
   return undefined;
 }
 
+// PR analogue of the #3394 review finding against pushRoutes.ts's `pushApprovalBinding`:
+// `prApprovalBinding` (below) hashes the WHOLE typed command, so a client that states which head
+// commit it previewed/approved binds the approval to that content, not merely to branch names/
+// title/body -- an approval minted for one `verifiedCommitSha` no longer matches a request that
+// later names a different one, however far `headBranchName` has since moved in between. Optional
+// (mirrors pushRoutes.ts's identical field exactly): a caller that omits it keeps today's
+// branch-name pr-create/pr-update behavior.
+function parseVerifiedCommitSha(value: unknown): { ok: true; value?: string } | { ok: false } {
+  if (value === undefined) return { ok: true };
+  return isGitObjectId(value) ? { ok: true, value } : { ok: false };
+}
+
 function buildCreateCommand(parsed: Record<string, unknown>): GitPullRequestCommand | undefined {
   if (
     !isOwnerAndRepo(parsed.ownerAndRepo) ||
@@ -187,7 +201,8 @@ function buildCreateCommand(parsed: Record<string, unknown>): GitPullRequestComm
     return undefined;
   }
   const isDraft = optionalBool(parsed.isDraft);
-  if (isDraft === undefined) return undefined;
+  const verifiedCommitSha = parseVerifiedCommitSha(parsed.verifiedCommitSha);
+  if (isDraft === undefined || !verifiedCommitSha.ok) return undefined;
   return {
     kind: "pr-create",
     ownerAndRepo: parsed.ownerAndRepo,
@@ -196,6 +211,9 @@ function buildCreateCommand(parsed: Record<string, unknown>): GitPullRequestComm
     title: parsed.title,
     body: parsed.body,
     isDraft,
+    ...(verifiedCommitSha.value === undefined
+      ? {}
+      : { verifiedCommitSha: verifiedCommitSha.value }),
   };
 }
 
@@ -244,7 +262,8 @@ function parseConvertFlags(
 function buildUpdateCommand(parsed: Record<string, unknown>): GitPullRequestCommand | undefined {
   if (!hasValidUpdateFields(parsed)) return undefined;
   const converts = parseConvertFlags(parsed);
-  if (converts === undefined) return undefined;
+  const verifiedCommitSha = parseVerifiedCommitSha(parsed.verifiedCommitSha);
+  if (converts === undefined || !verifiedCommitSha.ok) return undefined;
   return {
     kind: "pr-update",
     ownerAndRepo: parsed.ownerAndRepo,
@@ -255,6 +274,9 @@ function buildUpdateCommand(parsed: Record<string, unknown>): GitPullRequestComm
     body: parsed.body,
     convertToDraft: converts.convertToDraft,
     convertFromDraft: converts.convertFromDraft,
+    ...(verifiedCommitSha.value === undefined
+      ? {}
+      : { verifiedCommitSha: verifiedCommitSha.value }),
   };
 }
 
@@ -317,6 +339,12 @@ function prAuthorityTarget(command: GitPullRequestCommand): {
   return { headBranchName: command.headBranchName, baseBranchName: command.baseBranchName };
 }
 
+// #3394-class review (PR analogue): `command` is embedded and hashed WHOLE
+// (gitDeliveryApprovalBindingHash -> canonicalise), so once `buildCreateCommand`/`buildUpdateCommand`
+// carry a caller-supplied `verifiedCommitSha`, this binding is automatically content-sensitive to it
+// -- an approval minted for one commit no longer `matches()`/`consume()`s against an execute request
+// naming a different one, closing the gap where a binding built only from branch names/title/body
+// stayed valid however far the head branch had since moved.
 function prApprovalBinding(
   projectId: string,
   command: GitPullRequestCommand,
@@ -377,13 +405,14 @@ function logPrApprovalRequired(
   activityLog: ServerLogSink,
   correlationId: string,
   runId: string,
+  commitPinned: boolean,
 ): void {
   activityLog.write({
     category: "security",
     op: "git.delivery.pr.approval.required",
     correlationId,
     status: 200,
-    extra: { operation: "pr", runId },
+    extra: { operation: "pr", runId, commitPinned },
   });
 }
 
@@ -479,6 +508,7 @@ async function handlePrExecute(
       seams.activityLog ?? processServerLogSink(),
       correlationId,
       authority.runId,
+      command.verifiedCommitSha !== undefined,
     );
     return prApprovalRequiredBlock(deps, command);
   }
@@ -515,13 +545,14 @@ function logPrApprovalMinted(
   activityLog: ServerLogSink,
   correlationId: string,
   runId: string,
+  commitPinned: boolean,
 ): void {
   activityLog.write({
     category: "security",
     op: "git.delivery.pr.approval.minted",
     correlationId,
     status: 200,
-    extra: { operation: "pr", runId },
+    extra: { operation: "pr", runId, commitPinned },
   });
 }
 
@@ -558,6 +589,7 @@ export const createHandlePrApprove = (
       seams.activityLog ?? processServerLogSink(),
       correlationId,
       authority.runId,
+      command.verifiedCommitSha !== undefined,
     );
     const body: GitDeliveryPrApproveResponseBody = {
       schemaVersion: "1",
