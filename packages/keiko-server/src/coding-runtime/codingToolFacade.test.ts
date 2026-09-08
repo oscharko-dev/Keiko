@@ -614,6 +614,73 @@ describe("CodingToolFacade", () => {
     expect(result).toEqual({
       status: "failed",
       evidence: [{ kind: "governed-delegate", code: "CONTENT_HASH_MISMATCH" }],
+      guidance: expect.stringContaining("Re-read the file with keiko_workspace_read") as unknown,
+    });
+  });
+
+  // #3390: a structural refusal carries the route's sentence and a fixed recovery instruction, so
+  // the model repairs the patch instead of resending it. The sentence is admitted only as one
+  // bounded printable-ASCII line, and only for the structural codes.
+  it("tells the model why a structural edit refusal happened and how to recover", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "failed",
+        reasonCode: "INVALID_EDITS",
+        message: "context mismatch at original line 12",
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({ body: requestBody({ action: "edit", changeset }), capability }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "INVALID_EDITS" }],
+      detail: "context mismatch at original line 12",
+      guidance: expect.stringContaining(
+        "does not apply to the file as it is now",
+      ) as unknown as string,
+    });
+  });
+
+  it.each([
+    ["a multi-line message", "line one\nline two"],
+    ["a non-ASCII message", "kontext stimmt nicht überein"],
+    ["an over-long message", "x".repeat(241)],
+    ["a non-string message", 12],
+  ])("drops %s from an edit refusal's detail", async (_label, message) => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "INVALID_EDITS", message }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({ action: "edit", changeset }),
+      capability,
+    });
+
+    expect(result).not.toHaveProperty("detail");
+    expect(result).toHaveProperty("guidance");
+  });
+
+  it("keeps a transport refusal to its code: no detail, no guidance", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "failed",
+        reasonCode: "EDIT_TRANSPORT_ERROR",
+        message: "socket hang up at 10.0.0.7",
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({ body: requestBody({ action: "edit", changeset }), capability }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "EDIT_TRANSPORT_ERROR" }],
     });
   });
 
@@ -660,6 +727,12 @@ describe("CodingToolFacade", () => {
   // port's own transport markers. Iterating the exported enums proves that a future addition to
   // either canonical list reaches this facade without a coordinated edit — the previous
   // hand-restated 21-entry Set silently drifted on every new contract code.
+  const EDIT_FAILURE_GUIDANCE_CODES: ReadonlySet<string> = new Set([
+    "CONTENT_HASH_MISMATCH",
+    "INVALID_EDITS",
+    "PRECONDITION_REQUIRED",
+    "OUT_OF_SCOPE",
+  ]);
   it("forwards every canonical contract EditorAgent conflict and failure code", async () => {
     const canonical = [...EDITOR_AGENT_CONFLICT_CODES, ...EDITOR_AGENT_FAILURE_CODES];
     expect(canonical.length).toBeGreaterThanOrEqual(11 + 6);
@@ -676,10 +749,14 @@ describe("CodingToolFacade", () => {
         capability,
       });
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         status: "failed",
         evidence: [{ kind: "governed-delegate", code }],
       });
+      // #3390: only the four structural refusals carry a recovery instruction; a route sentence
+      // was not supplied here, so no code carries a detail.
+      expect("guidance" in result).toBe(EDIT_FAILURE_GUIDANCE_CODES.has(code));
+      expect(result).not.toHaveProperty("detail");
     }
   });
 

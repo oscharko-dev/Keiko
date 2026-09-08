@@ -349,6 +349,33 @@ describe("CodingToolGovernedDelegate", () => {
     ).resolves.toEqual({ outcome: "failed", reasonCode: "CONTENT_HASH_MISMATCH" });
   });
 
+  // #3390: the editor route's sentence for a refused edit reaches the facade; a non-edit failure
+  // never carries one, whatever its port returned.
+  it("forwards a refused edit's route message and drops it for every other action", async () => {
+    const refusal = {
+      status: "failed" as const,
+      reasonCode: "INVALID_EDITS",
+      message: "context mismatch at original line 12",
+    };
+    const ports: CodingToolGovernedPorts = {
+      ...governedPorts(),
+      editorChangeset: { execute: vi.fn(() => Promise.resolve(refusal)) },
+      commandRunner: { execute: vi.fn(() => Promise.resolve(refusal)) },
+    };
+    const delegate = createCodingToolGovernedDelegate(ports);
+
+    await expect(
+      delegate.execute({ ...identity, action: "edit", changeset }, undefined, liveGuard),
+    ).resolves.toEqual({
+      outcome: "failed",
+      reasonCode: "INVALID_EDITS",
+      message: "context mismatch at original line 12",
+    });
+    await expect(
+      delegate.execute({ ...identity, action: "command", commandId: "test" }, undefined, liveGuard),
+    ).resolves.toEqual({ outcome: "failed", reasonCode: "INVALID_EDITS" });
+  });
+
   it("omits reasonCode for a failure that did not carry one", async () => {
     const ports: CodingToolGovernedPorts = {
       ...governedPorts(),

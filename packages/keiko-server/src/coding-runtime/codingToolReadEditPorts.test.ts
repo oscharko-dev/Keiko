@@ -757,7 +757,13 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): true => true },
       ),
-    ).resolves.toEqual({ status: "failed", reasonCode: "OUT_OF_SCOPE" });
+    ).resolves.toEqual({
+      status: "failed",
+      reasonCode: "OUT_OF_SCOPE",
+      // #3390: the route's own sentence rides to the caller so the model can repair the patch; it
+      // still never reaches the activity log (asserted below).
+      message: "The target escapes the root.",
+    });
     expect(records).toEqual([
       expect.objectContaining({
         operation: "coding-runtime.editor-changeset",

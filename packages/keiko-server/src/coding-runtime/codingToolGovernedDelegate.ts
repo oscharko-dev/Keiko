@@ -52,10 +52,13 @@ export type GovernedCodingToolResult =
       readonly approvalDisposition?: "ready" | undefined;
     }
   // `reasonCode` is a closed-vocabulary marker. The facade forwards only its own allowlisted,
-  // body-free codes and collapses every unrecognized value to a bare failed outcome.
+  // body-free codes and collapses every unrecognized value to a bare failed outcome. `message` is
+  // the editor route's own sentence for a refused edit; only an edit carries it, and the facade
+  // decides whether the model sees it.
   | {
       readonly status: "failed";
       readonly reasonCode?: string | undefined;
+      readonly message?: string | undefined;
       readonly verificationFailure?: CodingToolVerificationFailure | undefined;
     };
 
@@ -182,12 +185,15 @@ function governedFailureOutcome(
   result: Extract<GovernedCodingToolResult, { readonly status: "failed" }>,
 ): unknown {
   if (result.reasonCode === undefined) return { outcome: "failed" };
-  return action === "verification" && result.verificationFailure !== undefined
-    ? {
-        outcome: "failed",
-        reasonCode: result.reasonCode,
-        verificationFailure: result.verificationFailure,
-      }
+  if (action === "verification" && result.verificationFailure !== undefined) {
+    return {
+      outcome: "failed",
+      reasonCode: result.reasonCode,
+      verificationFailure: result.verificationFailure,
+    };
+  }
+  return action === "edit" && result.message !== undefined
+    ? { outcome: "failed", reasonCode: result.reasonCode, message: result.message }
     : { outcome: "failed", reasonCode: result.reasonCode };
 }
 

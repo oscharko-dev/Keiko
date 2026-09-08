@@ -564,7 +564,12 @@ async function executeEdit(
       return await completedEdit(deps, correlationId, completion);
     }
     discardMutationLease(deps, prepared.leaseRequest);
-    return editRefused(deps, correlationId, editFailureReasonCode(result));
+    return editRefused(
+      deps,
+      correlationId,
+      editFailureReasonCode(result),
+      editFailureMessage(result),
+    );
   } catch (error) {
     discardMutationLease(deps, prepared.leaseRequest);
     emitEditFailureDiagnostic(deps.diagnostics, correlationId, error);
@@ -615,6 +620,20 @@ function editFailureReasonCode(
   if (!result.ok) return result.error.code;
   const outcome = result.value.result;
   return outcome.conflict?.code ?? outcome.failure?.code;
+}
+
+// The editor route's own sentence for a conflict or failure -- "context mismatch at original line
+// 12", "A declared file is missing from the patch." -- is product-authored text over paths and line
+// numbers, never file content or command output. It rides to the caller (the facade decides what the
+// model sees) and, like `message` above, never into the activity log. Without it the model saw the
+// bare code and retried the same patch blind: the probe rehearsal of 2026-09-08 sent six
+// INVALID_EDITS patches in a row and then gave up without delivering (#3390).
+function editFailureMessage(
+  result: Awaited<ReturnType<EditorAgentActionClient["action"]>>,
+): string | undefined {
+  if (!result.ok) return undefined;
+  const outcome = result.value.result;
+  return outcome.conflict?.message ?? outcome.failure?.message;
 }
 
 // The run id is the timeline an edit failure belongs to; the tool action id carries the sidecar's

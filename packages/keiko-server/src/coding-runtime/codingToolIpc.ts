@@ -221,6 +221,11 @@ export type CodingToolResult =
       readonly status: "failed";
       readonly evidence: readonly CodingToolEvidence[];
       readonly reasonCode?: string | undefined;
+      /** A refused edit's structural reason from the editor route (paths and line numbers, never
+       * content), so the model can repair the patch instead of resending it. */
+      readonly detail?: string | undefined;
+      /** The fixed recovery instruction for a refused edit's reason code. */
+      readonly guidance?: string | undefined;
       readonly verificationFailure?: CodingToolVerificationFailure | undefined;
     }
   | {

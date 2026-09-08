@@ -560,6 +560,31 @@ function validVerificationFailureLocations(
   return value.every(isVerificationFailureLocation);
 }
 
+// What the model is told to do next for the refusals it can act on. Fixed sentences keyed by the
+// closed reason code -- never derived from content. Before this the model received the bare code
+// and, in the probe rehearsal of 2026-09-08, resent the same rejected patch six times and then
+// ended its run without delivering (#3390).
+const EDIT_FAILURE_GUIDANCE: Readonly<Record<string, string>> = {
+  CONTENT_HASH_MISMATCH:
+    "The file changed after the read that produced expectedContentHash; an earlier successful edit of yours changes it too. Re-read the file with keiko_workspace_read and rebuild the patch against its current content and digest. Do not resend the same patch.",
+  INVALID_EDITS:
+    "The unified diff does not apply to the file as it is now: a hunk's context or line numbers no longer match, the header is malformed, or a listed file is missing from the patch. Re-read the file, copy its exact current lines as context, and submit one fresh patch that declares every file it touches.",
+  PRECONDITION_REQUIRED:
+    "Read the file with keiko_workspace_read first and bind the edit to the digest that read returns.",
+  OUT_OF_SCOPE:
+    "The path is outside the workspace or protected by policy. This is a decision, not a transient error; do not retry it.",
+};
+// The refusals whose route sentence is structural (paths, hunk indexes, line numbers) and therefore
+// safe to show; every other code keeps the code alone.
+const EDIT_FAILURE_DETAIL_REASON_CODES: ReadonlySet<string> = new Set([
+  "CONTENT_HASH_MISMATCH",
+  "INVALID_EDITS",
+  "PRECONDITION_REQUIRED",
+  "OUT_OF_SCOPE",
+]);
+// One printable ASCII line, bounded: anything else is not a route sentence and is dropped.
+const EDIT_FAILURE_DETAIL = /^[\x20-\x7e]{1,240}$/u;
+
 function projectEditFailure(
   request: CodingToolActionRequest,
   value: Record<string, unknown>,
@@ -570,7 +595,27 @@ function projectEditFailure(
     typeof reasonCode === "string" && EDIT_FAILURE_REASON_CODES.has(reasonCode)
       ? reasonCode
       : undefined;
-  return projected("failed", safeReasonCode, safeReasonCode === "ci-observation-required");
+  const base = projected("failed", safeReasonCode, safeReasonCode === "ci-observation-required");
+  return safeReasonCode === undefined
+    ? base
+    : { ...base, ...editFailureCoaching(safeReasonCode, value.message) };
+}
+
+function editFailureCoaching(
+  reasonCode: string,
+  message: unknown,
+): { readonly detail?: string; readonly guidance?: string } {
+  const guidance = EDIT_FAILURE_GUIDANCE[reasonCode];
+  const detail =
+    EDIT_FAILURE_DETAIL_REASON_CODES.has(reasonCode) &&
+    typeof message === "string" &&
+    EDIT_FAILURE_DETAIL.test(message)
+      ? message
+      : undefined;
+  return {
+    ...(detail === undefined ? {} : { detail }),
+    ...(guidance === undefined ? {} : { guidance }),
+  };
 }
 
 function projectAuxiliary(
