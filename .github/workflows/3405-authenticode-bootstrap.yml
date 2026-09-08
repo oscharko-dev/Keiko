@@ -1,0 +1,64 @@
+name: 3405 Authenticode verifier bootstrap
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/3405-windows-native-mechanics-proof
+    paths:
+      - .github/workflows/3405-authenticode-bootstrap.yml
+      - scripts/generate-windows-portable-authenticode-verifier.mjs
+      - packages/keiko-server/src/coding-runtime/windows-portable-authenticode-verifier.cs
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-toolchain:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Inspect the finite Roslyn and .NET Framework reference inputs
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
+          if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+            throw "Visual Studio locator was not found"
+          }
+          $installations = @(
+            & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+          )
+          if ($LASTEXITCODE -ne 0 -or $installations.Count -ne 1) {
+            throw "Exactly one latest Visual Studio MSBuild installation is required"
+          }
+          $compiler = Join-Path $installations[0] "MSBuild/Current/Bin/Roslyn/csc.exe"
+          $references = Join-Path ${env:ProgramFiles(x86)} "Reference Assemblies/Microsoft/Framework/.NETFramework/v4.8.1"
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
+            throw "The Visual Studio Roslyn compiler was not found"
+          }
+          if (-not (Test-Path -LiteralPath $references -PathType Container)) {
+            throw "The .NET Framework 4.8.1 reference directory was not found"
+          }
+          $receipt = & node scripts/generate-windows-portable-authenticode-verifier.mjs `
+            --inspect --compiler $compiler --references $references
+          if ($LASTEXITCODE -ne 0) {
+            throw "Authenticode verifier toolchain inspection failed"
+          }
+          $receiptPath = Join-Path $env:RUNNER_TEMP "authenticode-verifier-toolchain.json"
+          $receipt | Set-Content -LiteralPath $receiptPath -Encoding utf8NoBOM
+      - name: Upload the toolchain receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: authenticode-verifier-toolchain
+          path: ${{ runner.temp }}/authenticode-verifier-toolchain.json
+          if-no-files-found: error
+          retention-days: 1
