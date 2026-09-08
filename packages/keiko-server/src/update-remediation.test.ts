@@ -300,6 +300,31 @@ describe("update remediation manager", () => {
     ).rejects.toBeInstanceOf(UpdateRemediationError);
   });
 
+  it("does not offer runnable repair when compatibility inspection is incomplete", () => {
+    const stateDir = makeStateDir();
+    let nested = join(stateDir, "memory");
+    for (let depth = 0; depth <= 64; depth += 1) {
+      nested = join(nested, "d");
+      mkdirSync(nested, { recursive: true });
+    }
+
+    const status = manager(stateDir).getStatus({
+      targetVersion: TARGET,
+      impact: {
+        affectedStateStores: ["memory-vault"],
+        remediation: "repair-required",
+        userActionRequired: true,
+      },
+    });
+
+    expect(status.actions[0]).toMatchObject({
+      actionId: "manual-review:memory-vault",
+      kind: "manual-review",
+      canRun: false,
+      status: "manual-review-required",
+    });
+  });
+
   it("allows Local Knowledge reindex to be safely deferred while marking the feature degraded", async () => {
     const subject = manager(makeStateDir(), fakeLocalKnowledge());
 

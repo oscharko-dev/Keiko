@@ -93,6 +93,11 @@ type ManualInstallDisplayState = "standard" | "verified";
 type ManualCopyState = "idle" | "pressed" | "copied" | "selected" | "failed";
 type ManualCopyResult = Exclude<ManualCopyState, "idle" | "pressed" | "failed">;
 
+interface RemediationProjection {
+  readonly key: string;
+  readonly report: UpdateRemediationStatusReport;
+}
+
 const COPY_PRESSED_RESET_MS = 240;
 const COPY_FEEDBACK_RESET_MS = 900;
 const POLL_DELAYS_MS = [2_500, 5_000, 10_000, 20_000] as const;
@@ -150,6 +155,37 @@ async function loadRemediation(
     });
   }
   return api.fetchRemediationStatus();
+}
+
+function remediationProjectionKey(
+  report: UpdatePreflightReport,
+  status: UpdateSessionStatus,
+): string {
+  const selected = sessionForDisplay(status, report);
+  return JSON.stringify({
+    targetVersion: report.targetVersion,
+    impact: impactInput(report),
+    persistence: status.persistence,
+    sessionLocation:
+      status.activeSession !== undefined
+        ? "active"
+        : status.lastSession === undefined
+          ? "none"
+          : "last",
+    session:
+      selected === undefined
+        ? undefined
+        : {
+            sessionId: selected.sessionId,
+            candidateId: selected.candidateId,
+            targetVersion: selected.targetVersion,
+            phase: selected.phase,
+            lifecyclePhase: selected.lifecycle.phase,
+            cancellationCutoff: selected.lifecycle.cancellationCutoff,
+            failureReason: selected.failureReason,
+            restartRequired: selected.restartRequired,
+          },
+  });
 }
 
 function selectCopyTarget(target: HTMLElement | null): boolean {
@@ -1634,6 +1670,8 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
   const titleRef = useRef<HTMLHeadingElement>(null);
   const focusedRef = useRef(false);
   const readyStateRef = useRef<Extract<LoadState, { status: "ready" }> | undefined>(undefined);
+  const remediationProjectionRef = useRef<RemediationProjection | undefined>(undefined);
+  const remediationRefreshRequiredRef = useRef(true);
 
   const refresh = useCallback(
     async (source: "initial" | "manual" | "poll"): Promise<void> => {
@@ -1643,10 +1681,25 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
       try {
         const previousManualTarget = computePreviousManualTarget(manual, readyStateRef.current);
         const report = manual ? await api.checkPreflight() : await api.fetchPreflight();
-        const [session, remediation] = await Promise.all([
-          api.fetchSessionStatus(),
-          loadRemediation(api, report),
-        ]);
+        let session: UpdateSessionStatus;
+        let remediation: UpdateRemediationStatusReport;
+        if (source === "poll") {
+          session = await api.fetchSessionStatus();
+          const cachedRemediation = remediationProjectionRef.current;
+          const pollKey = remediationProjectionKey(report, session);
+          remediation =
+            !remediationRefreshRequiredRef.current && cachedRemediation?.key === pollKey
+              ? cachedRemediation.report
+              : await loadRemediation(api, report);
+        } else {
+          [session, remediation] = await Promise.all([
+            api.fetchSessionStatus(),
+            loadRemediation(api, report),
+          ]);
+        }
+        const remediationKey = remediationProjectionKey(report, session);
+        remediationProjectionRef.current = { key: remediationKey, report: remediation };
+        remediationRefreshRequiredRef.current = false;
         const manualInstallVerified = computeManualInstallVerified(previousManualTarget, report);
         const manualInstallState: ManualInstallDisplayState = manualInstallVerified
           ? "verified"
@@ -1683,6 +1736,7 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
           // A BFF restart/relaunch disconnect is expected. Keep the last server-projected state
           // visible and schedule another bounded observation attempt rather than fabricating an
           // outcome or freezing the window on a stale error.
+          remediationRefreshRequiredRef.current = true;
           setReconnecting(true);
           setPollFailures((failures) => failures + 1);
           return;

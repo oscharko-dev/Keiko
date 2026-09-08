@@ -12,7 +12,7 @@ import {
   UPDATE_LOCAL_STATE_SCHEMA_VERSION,
   UPDATE_STATE_STORES,
 } from "@oscharko-dev/keiko-contracts/runtime/update-local-state";
-import { UPDATE_DIR, type StateScan } from "./update-local-state-scan.js";
+import { UPDATE_DIR, incompleteScanWarning, type StateScan } from "./update-local-state-scan.js";
 
 const SNAPSHOT_DIR = "snapshots";
 const MANIFEST_FILE = "manifest.json";
@@ -147,6 +147,7 @@ export function failedSnapshot(input: {
   readonly scan: StateScan;
   readonly health: UpdateHealthState;
 }): UpdateRecoverySnapshot {
+  const warning = incompleteScanWarning(input.scan) ?? "Runtime state root is unsafe to snapshot.";
   return {
     schemaVersion: UPDATE_LOCAL_STATE_SCHEMA_VERSION,
     snapshotId: input.snapshotId,
@@ -157,7 +158,7 @@ export function failedSnapshot(input: {
     stateDirStatus: input.scan.status,
     overallHealth: input.health,
     entries: [],
-    warnings: ["Runtime state root is unsafe to snapshot."],
+    warnings: [warning],
   };
 }
 

@@ -62,6 +62,7 @@ import {
   CATEGORY_STORE,
   UPDATE_DIR,
   canonicalStore,
+  incompleteScanWarning,
   scanStateDir,
   type StateScan,
 } from "./update-local-state-scan.js";
@@ -292,6 +293,7 @@ function actionRequiredForStore(
 function decideStoreHealth(input: {
   readonly affected: boolean;
   readonly scanStatus: StateScan["status"];
+  readonly scanComplete: boolean;
   readonly retainedCount: number;
   readonly userActionRequired: boolean;
 }): StoreHealthDecision {
@@ -302,6 +304,12 @@ function decideStoreHealth(input: {
     return {
       health: "manual-review-required",
       message: "Runtime state root is unavailable or unsafe to inspect.",
+    };
+  }
+  if (!input.scanComplete) {
+    return {
+      health: "manual-review-required",
+      message: "Runtime state inspection stopped at a safety limit and requires manual review.",
     };
   }
   if (input.retainedCount > 0) {
@@ -328,11 +336,16 @@ function storeHealth(
   const files = scan.files.filter((node) => CATEGORY_STORE[node.category] === store);
   const storeRetained = retainedForStore(scan, store);
   const snapshotEligible = affected || files.length > 0 || storeRetained.length > 0;
-  const remediation = remediationFor(store, impact);
-  const userActionRequired = actionRequiredForStore(store, impact, affected);
+  const inspectionIncomplete = scan.completion === "incomplete" && affected;
+  const remediation = inspectionIncomplete
+    ? "manual-review-required"
+    : remediationFor(store, impact);
+  const userActionRequired =
+    inspectionIncomplete || actionRequiredForStore(store, impact, affected);
   const decision = decideStoreHealth({
     affected,
     scanStatus: scan.status,
+    scanComplete: scan.completion === "complete",
     retainedCount: storeRetained.length,
     userActionRequired,
   });
@@ -622,14 +635,16 @@ function scanCompatibility(
 ): UpdateCompatibilityScan {
   const scan = scanStateDir(context.stateDir);
   const stores = UPDATE_STATE_STORES.map((store) => storeHealth(store, scan, impact));
-  const warning = retainedWarning(scan);
+  const warnings = [retainedWarning(scan), incompleteScanWarning(scan)].filter(
+    (warning): warning is string => warning !== undefined,
+  );
   return {
     schemaVersion: UPDATE_LOCAL_STATE_SCHEMA_VERSION,
     scannedAt: nowIso(context.now),
     stateDirStatus: scan.status,
     stores,
     overallHealth: overallHealth(stores),
-    warnings: warning === undefined ? [] : [warning],
+    warnings,
   };
 }
 
@@ -642,7 +657,11 @@ function createRecoverySnapshot(
   const createdAt = nowIso(context.now);
   const stores = UPDATE_STATE_STORES.map((store) => storeHealth(store, scan, input.impact));
   const health = overallHealth(stores);
-  if (scan.status === "symlink" || scan.status === "not-directory") {
+  if (
+    scan.completion === "incomplete" ||
+    scan.status === "symlink" ||
+    scan.status === "not-directory"
+  ) {
     return failedSnapshot({ request: input, snapshotId, createdAt, scan, health });
   }
   mkdirPrivate(snapshotDir(context.stateDir, snapshotId));

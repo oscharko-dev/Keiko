@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -184,6 +185,29 @@ describe("update local state compatibility scan", () => {
       chmodSync(memoryDir, 0o700);
     }
   });
+
+  it("fails affected compatibility closed when the bounded scan cannot finish", () => {
+    const stateDir = makeStateDir();
+    let nested = join(stateDir, "memory");
+    for (let depth = 0; depth <= 64; depth += 1) {
+      nested = join(nested, "d");
+      mkdirSync(nested, { recursive: true });
+    }
+
+    const scan = manager(stateDir, ["scan-id"]).scanCompatibility({
+      affectedStateStores: ["memory-vault"],
+      remediation: "repair-required",
+      userActionRequired: true,
+    });
+
+    expect(scan.stores.find((store) => store.store === "memory-vault")?.health).toBe(
+      "manual-review-required",
+    );
+    expect(scan.warnings).toEqual([
+      expect.stringMatching(/scan stopped after reaching the depth safety limit/i),
+    ]);
+    expect(scan.warnings.join(" ")).not.toMatch(/corrupt/i);
+  });
 });
 
 describe("update recovery snapshots", () => {
@@ -260,6 +284,61 @@ describe("update recovery snapshots", () => {
     expect(snapshot.stateDirStatus).toBe("symlink");
     expect(snapshot.entries).toHaveLength(0);
     expect(localState.validateRecoverySnapshot("snap-symlink")).toBe(false);
+  });
+
+  it("does not publish or prune snapshots from an incomplete scan", () => {
+    const stateDir = makeStateDir();
+    const localState = manager(stateDir, ["snap-valid", "snap-incomplete"]);
+    const valid = localState.createRecoverySnapshot({
+      fromVersion: "0.2.10",
+      toVersion: "0.2.11",
+    });
+    let nested = join(stateDir, "memory");
+    for (let depth = 0; depth <= 64; depth += 1) {
+      nested = join(nested, "d");
+      mkdirSync(nested, { recursive: true });
+    }
+
+    const incomplete = localState.createRecoverySnapshot({
+      fromVersion: "0.2.11",
+      toVersion: "0.2.12",
+      impact: { affectedStateStores: ["memory-vault"] },
+    });
+
+    expect(valid.status).toBe("created");
+    expect(incomplete).toMatchObject({ status: "failed", entries: [] });
+    expect(incomplete.warnings).toEqual([
+      expect.stringMatching(/scan stopped after reaching the depth safety limit/i),
+    ]);
+    expect(localState.validateRecoverySnapshot("snap-valid")).toBe(true);
+    expect(localState.validateRecoverySnapshot("snap-incomplete")).toBe(false);
+  });
+});
+
+describe("update local-state repair", () => {
+  it("performs no partial permission repair when the scan is incomplete", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const stateDir = makeStateDir();
+    const memoryDir = join(stateDir, "memory");
+    mkdirSync(memoryDir, { recursive: true });
+    chmodSync(memoryDir, 0o755);
+    let nested = memoryDir;
+    for (let depth = 0; depth <= 64; depth += 1) {
+      nested = join(nested, "d");
+      mkdirSync(nested, { recursive: true });
+    }
+
+    const repair = manager(stateDir, ["unused"]).repairStores(["memory-vault"]);
+
+    expect(repair).toMatchObject({
+      status: "manual-review-required",
+      repairedArtifactCount: 0,
+      retainedEntryCount: 0,
+    });
+    expect(repair.warnings).toEqual([
+      expect.stringMatching(/scan stopped after reaching the depth safety limit/i),
+    ]);
+    expect(statSync(memoryDir).mode & 0o777).toBe(0o755);
   });
 });
 
