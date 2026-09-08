@@ -2436,6 +2436,7 @@ export const EN_MESSAGES = {
     "Enter the numeric Pull Request number, for example 1499.",
   "governedPullRequestCard.description.field.language": "Language",
   "governedPullRequestCard.description.field.languageAria": "Description language",
+  "governedPullRequestCard.description.action.status": "Refresh status",
   "governedPullRequestCard.description.action.preview": "Preview description",
   "governedPullRequestCard.description.action.approve": "Approve",
   "governedPullRequestCard.description.action.apply": "Apply",

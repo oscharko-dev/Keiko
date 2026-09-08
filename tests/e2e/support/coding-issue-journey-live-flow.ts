@@ -4,7 +4,7 @@
 // closure on the exact run/head. Failed attempts remain represented by the durable spend delta of
 // the next completed flow.
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import type {
   CodeTaskGitCommitSha,
   CodeTaskQualificationAuthorityObservationV1,
@@ -70,11 +70,10 @@ import {
 import { recordSuccessfulJourneyStage } from "./coding-issue-journey-stage-receipts.js";
 
 const DESCRIPTOR_PATH = join("docs", "acceptance", "coding-issue-journey-3390.json");
-const GIT_WINDOW_ID = "coding-issue-journey-governed-git";
-const MERGE_WINDOW_ID = "coding-issue-journey-governed-merge";
-const CSRF = { "X-Keiko-CSRF": "1" };
 const MAX_AUTHORIZED_BUDGET_NANO_USD = 50_000_000_000;
 const NANO_USD = 1_000_000_000;
+const JOURNEY_REGION_NAME = "Issue handoff";
+const JOURNEY_REFRESH_BUTTON_NAME = "Refresh observed status";
 
 export interface QualificationFlowBinding {
   readonly flowId: CodeTaskScenarioId;
@@ -392,30 +391,45 @@ function previousFlowCumulative(flow: QualificationFlowBinding): number {
   return validated.value.spend.cumulativeChargedNanoUsd;
 }
 
-async function pushGovernedGitWindow(page: Page, repositoryRoot: string): Promise<void> {
-  await page.evaluate(
-    ({ windowId, projectPath }) => {
-      const raw = window.localStorage.getItem("keiko.workspace.v4");
-      const windows: unknown[] = raw === null ? [] : (JSON.parse(raw) as unknown[]);
-      windows.push({
-        id: windowId,
-        type: "governedGit",
-        x: 70,
-        y: 70,
-        w: 1120,
-        h: 900,
-        z: 35,
-        cfg: { projectPath },
-        max: false,
-      });
-      window.localStorage.setItem("keiko.workspace.v4", JSON.stringify(windows));
-    },
-    { windowId: GIT_WINDOW_ID, projectPath: repositoryRoot },
+// The last non-empty "/"-or-"\"-separated segment of a repository path -- mirrors
+// `repositoryLabel()` in CodingWorkbenchWindow.tsx (~line 1111), which derives the composer's
+// "Manage repository {repository}" accessible name (i18n
+// "codingWorkbench.composer.repository.open") from the SAME algorithm.
+function repositoryButtonLabel(repositoryRoot: string): string {
+  const parts = repositoryRoot.split(/[\\/]/u);
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index];
+    if (part !== undefined && part.length > 0) return part;
+  }
+  return repositoryRoot;
+}
+
+// Real production affordance for opening the governed Git window (binding rule: every user action
+// goes through the browser exactly as a normal user would -- never a seeded `keiko.workspace.v4`
+// window). The Coding Workbench composer's own repository chip
+// (CodingWorkbenchSections.tsx ~193-204, aria-label "Manage repository {repository}") calls
+// `onOpenGit({ root: repositoryRoot, binding: "repository" })` (CodingWorkbenchWindow.tsx ~909,
+// proven by CodingWorkbenchWindow.test.tsx's "opens Git on the active task worktree" case), which
+// widgets/index.tsx's "coding" registerWindowRender (~602-620) turns into
+// `ctx.openWindow("governedGit", { projectPath: root, ... })`. The prefix selector below is
+// the SAME one `coding-issue-journey-live.ts`'s `currentLiveWorkbenchIdentity` already uses
+// (`button[aria-label^="Manage repository "]`) to identify this exact control.
+//
+// `governedGit` is a SINGLETON window type (WindowsRegistry.ts `governedGit: { singleton: true }`),
+// so repeated calls across one flow raise/refresh the ONE real Git window instead of stacking
+// duplicates. The desktop assigns its id, so the window is located by its accessible region name
+// ("Git", `window.type.governedGit.title`, no sub-text for this window type) rather than a fixed
+// `data-window-id`.
+async function openGovernedGitWindow(page: Page, repositoryRoot: string): Promise<Locator> {
+  const manageRepository = page.locator('button[aria-label^="Manage repository "]');
+  await expect(manageRepository).toBeVisible({ timeout: 60_000 });
+  await expect(manageRepository).toHaveAccessibleName(
+    `Manage repository ${repositoryButtonLabel(repositoryRoot)}`,
   );
-  await page.reload();
-  await expect(page.locator(`[data-window-id="${GIT_WINDOW_ID}"]`)).toBeVisible({
-    timeout: 60_000,
-  });
+  await manageRepository.click();
+  const gitWindow = page.getByRole("region", { name: "Git", exact: true });
+  await expect(gitWindow).toBeVisible({ timeout: 60_000 });
+  return gitWindow;
 }
 
 async function waitForSyncExecute(page: Page, operation: "fetch" | "pull"): Promise<void> {
@@ -436,8 +450,7 @@ async function updateControlledBaseThroughGovernedGit(
 ): Promise<void> {
   if (flow.ordinal === 1) return;
   await openLiveWorkbench(page, repositoryRoot);
-  await pushGovernedGitWindow(page, repositoryRoot);
-  const gitWindow = page.locator(`[data-window-id="${GIT_WINDOW_ID}"]`);
+  const gitWindow = await openGovernedGitWindow(page, repositoryRoot);
   const fetched = waitForSyncExecute(page, "fetch");
   await gitWindow.getByRole("button", { name: "Run sync: Fetch" }).click();
   await fetched;
@@ -455,43 +468,27 @@ async function updateControlledBaseThroughGovernedGit(
   });
 }
 
-async function pushGovernedMergeWindow(
-  page: Page,
-  repositoryRoot: string,
-  delivered: DeliveredPullRequest,
-): Promise<void> {
-  await page.evaluate(
-    ({ windowId, projectPath, headBranchName }) => {
-      const raw = window.localStorage.getItem("keiko.workspace.v4");
-      const windows: unknown[] = raw === null ? [] : (JSON.parse(raw) as unknown[]);
-      windows.push({
-        id: windowId,
-        type: "governedMerge",
-        x: 80,
-        y: 80,
-        w: 760,
-        h: 900,
-        z: 40,
-        cfg: { projectPath, headBranchName },
-        max: false,
-      });
-      window.localStorage.setItem("keiko.workspace.v4", JSON.stringify(windows));
-    },
-    { windowId: MERGE_WINDOW_ID, projectPath: repositoryRoot, headBranchName: delivered.headRef },
-  );
-  await page.reload();
-  await expect(page.locator(`[data-window-id="${MERGE_WINDOW_ID}"]`)).toBeVisible({
-    timeout: 60_000,
-  });
-}
-
+// Real production affordance for the governed merge action. The SAME singleton "Git" window
+// `openGovernedGitWindow` opens embeds the merge command center as its own right-pane panel:
+// `GitClientWindow.tsx`'s `CommitComposer` renders a "Merge" button
+// (`onMerge={() => openRightPane("merge")}`, ~line 1596) that switches the window's right pane to
+// `mergePane` (a `GovernedMergeCard`, ~line 1739-1747), a region named "Merge"
+// (`gitClientWindow.panel.merge`, i18n). This exact selector pair -- `getByRole("tab", {name:
+// "Changes"})` -> `getByRole("button", {name: /Merge/u})` -> `getByRole("region", {name: "Merge",
+// exact: true})` -- is already proven against the real production window by
+// `tests/e2e/git-pr-merge-1577.spec.ts` (~line 371-403) and
+// `tests/e2e/git-client-closeout-1578.spec.ts`'s `verifyPrAndMerge` (~line 771-798). "changes" is
+// the panel's own default tab (GitClientWindow.tsx's `useState<ChangesTab>("changes")`), so the
+// explicit click only mirrors those proven specs' defensive habit, never a required precondition.
 async function executeGovernedMerge(
   page: Page,
   repositoryRoot: string,
   delivered: DeliveredPullRequest,
 ): Promise<void> {
-  await pushGovernedMergeWindow(page, repositoryRoot, delivered);
-  const card = page.locator(`[data-window-id="${MERGE_WINDOW_ID}"]`);
+  const gitWindow = await openGovernedGitWindow(page, repositoryRoot);
+  await gitWindow.getByRole("tab", { name: "Changes" }).click();
+  await gitWindow.getByRole("button", { name: /Merge/u }).click();
+  const card = gitWindow.getByRole("region", { name: "Merge", exact: true });
   await card.getByLabel("Repository (owner/repo)").fill(delivered.repository);
   await card.getByLabel("Pull Request number").fill(String(delivered.number));
   await card.getByLabel("Base branch").fill(delivered.baseRef);
@@ -529,20 +526,37 @@ async function executeGovernedMerge(
   await expect(card.getByTestId("gm-outcome")).toContainText("merged: yes");
 }
 
-async function readJourneyOutcome(page: Page, runId: string): Promise<JourneyOutcome | undefined> {
-  const response = await page.request.post("/api/git-delivery/journey/refresh", {
-    headers: CSRF,
-    data: { runId },
-  });
-  expect(response.ok(), `journey refresh failed with HTTP ${String(response.status())}`).toBe(true);
-  const body: unknown = await response.json();
+// Real production affordance for observing the journey outcome. The Coding Workbench's own "Issue
+// handoff" card (CodingWorkbenchJourneyOutcome.tsx, region name from i18n
+// "codingWorkbench.journey.title") carries the "Refresh observed status" button (i18n
+// "codingWorkbench.journey.refresh") that invokes the SAME production hook
+// (`useCodingWorkbenchJourney`'s `refresh`, CodingWorkbenchWindow.tsx ~235-260), which POSTs this
+// exact route (`fetchCodingWorkbenchJourneyRefresh`, coding-workbench-lazy-fetchers.ts:273). The
+// route is server-documented as read-only (journeyRoutes.ts: "Never mutates, never grants merge or
+// issue-close authority") yet load-bearing for progress: its own comment states the persisted
+// CI-readiness projection "is written only while the run is live and expires 60s later, so a
+// settled run's handoff would otherwise report readiness-stale forever" -- so this cannot be
+// dropped as a pure assertion-only read, it must actually be triggered through the real control.
+// The identical region/button names are already proven driving this SAME card in
+// `coding-issue-journey-live-mark-ready.ts`'s `proposeJourneyReady`.
+function parseJourneyRefreshBody(body: unknown): Readonly<Record<string, unknown>> {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     throw new TypeError("journey refresh response must be an object");
   }
-  const record = body as Readonly<Record<string, unknown>>;
+  return body as Readonly<Record<string, unknown>>;
+}
+
+// Split out of `readJourneyOutcome` to keep both functions under the complexity bar (AGENTS.md §6).
+function resolveObservedJourneyOutcome(
+  record: Readonly<Record<string, unknown>>,
+  runId: string,
+): JourneyOutcome | undefined {
   if (record.status === "unavailable") return undefined;
   if (record.status !== "observed" || !isJourneyOutcome(record.outcome)) {
     throw new Error("journey refresh did not return a valid observed outcome");
+  }
+  if (record.outcome.binding.runId !== runId) {
+    throw new Error("journey refresh observed a different run than the one being awaited");
   }
   if (
     record.outcome.state === "blocked" ||
@@ -552,6 +566,25 @@ async function readJourneyOutcome(page: Page, runId: string): Promise<JourneyOut
     throw new Error(`journey completion failed closed in state ${record.outcome.state}`);
   }
   return record.outcome;
+}
+
+async function readJourneyOutcome(page: Page, runId: string): Promise<JourneyOutcome | undefined> {
+  const journey = page.getByRole("region", { name: JOURNEY_REGION_NAME, exact: true });
+  // CodingWorkbenchJourneyOutcome renders nothing (returns null) until its OWN mount-time refresh
+  // has already produced a valid outcome, so "not visible yet" is the real-UI equivalent of the
+  // server's "unavailable" status -- the caller's own polling loop
+  // (`waitWhileAnsweringApprovals`) keeps retrying every 2s until the card appears on its own.
+  if (!(await journey.isVisible())) return undefined;
+  const refreshed = page.waitForResponse(
+    (candidate) =>
+      candidate.request().method() === "POST" &&
+      candidate.url().endsWith("/api/git-delivery/journey/refresh"),
+  );
+  await journey.getByRole("button", { name: JOURNEY_REFRESH_BUTTON_NAME }).click();
+  const response = await refreshed;
+  expect(response.ok(), `journey refresh failed with HTTP ${String(response.status())}`).toBe(true);
+  const record = parseJourneyRefreshBody(await response.json());
+  return resolveObservedJourneyOutcome(record, runId);
 }
 
 async function waitForCompletedJourney(page: Page, runId: string): Promise<JourneyOutcome> {
@@ -946,15 +979,19 @@ async function recordDeliveryAndCiStages(
 
 async function applyAndRecordDescription(
   page: Page,
-  repositoryRoot: string,
   delivered: DeliveredPullRequest,
   flow: QualificationFlowBinding,
   startedAt: number,
   toolCallCount: number,
-): Promise<CodeTaskQualificationFlowStageEvidenceV1["description"]> {
+): Promise<{
+  readonly stage: CodeTaskQualificationFlowStageEvidenceV1["description"];
+  readonly workspaceRoot: string;
+}> {
   const description = await waitForAutoDraftDescription(page);
   // Mirrors the Workbench's own "Review description" control: the card opens on the run's task
-  // workspace root, which is where the server retained the proposal -- not on `repositoryRoot`.
+  // workspace root, which is where the server retained the proposal -- not on the repository root.
+  // The post-mark-ready status refresh reads that same retained scope, so the root is returned
+  // rather than re-derived from a run that is terminal by then.
   const workspaceRoot = await activeTaskWorkspaceRoot(page);
   const retained = await mountGovernedPullRequestCard(page, workspaceRoot, delivered, description);
   await applyAutoDraftDescriptionThroughPrCard(page, retained);
@@ -966,7 +1003,10 @@ async function applyAndRecordDescription(
     stageFlowBinding(flow, delivered),
     toolCallCount,
   );
-  return stageReceiptIdentity("description-auto-draft-and-apply", receiptDigest);
+  return {
+    stage: stageReceiptIdentity("description-auto-draft-and-apply", receiptDigest),
+    workspaceRoot,
+  };
 }
 
 async function driveSelectedDraftPullRequest(
@@ -1027,7 +1067,6 @@ async function resolveExactHeadDelivery(
 async function recordPreMergeStages(
   page: Page,
   flow: QualificationFlowBinding,
-  repositoryRoot: string,
   startedAt: number,
   exactHead: Awaited<ReturnType<typeof resolveExactHeadDelivery>>,
 ): Promise<{
@@ -1046,14 +1085,13 @@ async function recordPreMergeStages(
   );
   const description = await applyAndRecordDescription(
     page,
-    repositoryRoot,
     delivered,
     flow,
     startedAt,
     toolCallCount,
   );
   await proposeJourneyReady(page);
-  await reconcileAppliedDescriptionAfterMarkReady(page, repositoryRoot, delivered);
+  await reconcileAppliedDescriptionAfterMarkReady(page, description.workspaceRoot, delivered);
   const flowBinding = stageFlowBinding(flow, delivered);
   const markReadyDigest = await recordSuccessfulJourneyStage(
     page,
@@ -1068,7 +1106,7 @@ async function recordPreMergeStages(
     flowBinding,
     stages: {
       ...delivery,
-      description,
+      description: description.stage,
       markReady: stageReceiptIdentity("mark-ready-intent", markReadyDigest),
     },
   };
@@ -1111,7 +1149,7 @@ async function driveFlowToCompletedOutcome(
   readonly stageEvidence: CodeTaskQualificationFlowStageEvidenceV1;
 }> {
   const exactHead = await resolveExactHeadDelivery(page, flow, repositoryRoot);
-  const preMerge = await recordPreMergeStages(page, flow, repositoryRoot, startedAt, exactHead);
+  const preMerge = await recordPreMergeStages(page, flow, startedAt, exactHead);
   const finalDelivered = exactHead.delivered;
   const rubricReview = await reviewExactHead(flow, finalDelivered, qualifiedSourceCommitSha);
   await executeGovernedMerge(page, repositoryRoot, finalDelivered);

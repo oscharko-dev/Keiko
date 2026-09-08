@@ -1,4 +1,5 @@
 import { act, render } from "@testing-library/react";
+import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import type {
   AvailableCodingSafeActivityFeed,
@@ -193,5 +194,55 @@ describe("CodingWorkbenchTimeline", () => {
     const planRow = container.querySelector('[data-timeline-kind="plan"]');
     expect(planRow).not.toBeNull();
     expect(planRow?.querySelectorAll("[data-plan-state]")).toHaveLength(64);
+  });
+
+  // The tool-call card (`.toolCard`) and plan card rows are otherwise exercised only indirectly
+  // through CodingWorkbenchWindow.test.tsx's full-window axe pass; this pins the Timeline's own
+  // rendering of both directly, matching the per-component axe suites of its siblings.
+  it("has no serious or critical axe violations with a tool card and a plan card rendered", async () => {
+    const events = [event(1)];
+    const feed: AvailableCodingSafeActivityFeed = {
+      schemaVersion: "1",
+      availability: "available",
+      runId: "run-1",
+      updatedAt: AT,
+      turns: [
+        {
+          turnId: "turn-1",
+          messages: [
+            {
+              messageId: "message-1",
+              role: "assistant",
+              occurredAt: AT,
+              segments: [{ kind: "text", text: "Kicking off the run", truncated: false }],
+              truncated: false,
+            },
+          ],
+          tools: [{ callId: "call-1", tool: "run_tests", state: "succeeded", occurredAt: AT }],
+          truncated: false,
+        },
+      ],
+      plan: {
+        revision: 1,
+        anchorMessageId: "message-1",
+        updatedAt: AT,
+        steps: [{ text: "Step 1", state: "pending", truncated: false }],
+        truncated: false,
+      },
+      truncated: false,
+      droppedEventCount: 0,
+    };
+    const { container } = render(
+      <Timeline events={events} activity={activityLike(feed)} questions={IDLE_QUESTIONS} />,
+    );
+    expect(container.querySelector('[data-timeline-kind="tool"]')).not.toBeNull();
+    expect(container.querySelector('[data-timeline-kind="plan"]')).not.toBeNull();
+
+    const report = await axe(container);
+    expect(
+      report.violations.filter((violation) =>
+        ["serious", "critical"].includes(violation.impact ?? ""),
+      ),
+    ).toEqual([]);
   });
 });

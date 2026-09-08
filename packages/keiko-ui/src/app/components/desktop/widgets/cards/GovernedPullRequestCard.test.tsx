@@ -688,6 +688,88 @@ describe("GovernedPullRequestCard — PR description application (#3399)", () =>
     expect(screen.getByTestId("gpr-description-approve-button")).not.toBeDisabled();
     expect(screen.queryByTestId("gpr-description-refresh-hint")).not.toBeInTheDocument();
   });
+
+  // #3390 (five-flow qualification, epic #3384): the governed draft-to-ready transition changes the
+  // pull request's own `isDraft` identity, so an already-applied description's confirmed status is
+  // bound to an identity that no longer exists. Before this control the panel could CHANGE the
+  // description but never OBSERVE it: the only path to a fresh status was "Preview description",
+  // which regenerates the artifact through the Model Gateway -- a paid model call to answer a
+  // read-only question -- so the qualification flow had to reach past the UI and POST
+  // `/api/git-delivery/pr-description/status` itself. `prDescriptionStatus` was already declared on
+  // the git-client seam (git-client-seam.ts) for exactly this and left wired to no control; this
+  // completes that seam rather than introducing a second status concept (AGENTS.md §5).
+  it("refreshes the applied description status against the current pull-request identity", async () => {
+    const prDescriptionStatus = vi.fn(async () =>
+      descriptionObservedResult({ effect: "reconciled" }),
+    );
+    const client = makeDescriptionClient({ prDescriptionStatus });
+    render(<GovernedPullRequestCard projectId={PROJECT} client={client} />);
+    fillDescriptionForm();
+
+    fireEvent.click(screen.getByTestId("gpr-description-status-button"));
+    await waitFor(() => expect(prDescriptionStatus).toHaveBeenCalledTimes(1));
+    expect(prDescriptionStatus).toHaveBeenCalledWith({
+      projectId: PROJECT,
+      ownerAndRepo: "oscharko-dev/Keiko",
+      prNumber: 1499,
+    });
+    expect(await screen.findByTestId("gpr-description-state")).toHaveAttribute(
+      "data-state",
+      "current",
+    );
+    // Observing is not generating: a status read never reaches the Model Gateway and never applies.
+    expect(client.prDescriptionPreview).not.toHaveBeenCalled();
+    expect(client.prDescriptionApply).not.toHaveBeenCalled();
+  });
+
+  it("never discards a pending proposal: the status control is unavailable while one is live", async () => {
+    const prDescriptionStatus = vi.fn(async () => descriptionObservedResult());
+    const client = makeDescriptionClient({ prDescriptionStatus });
+    render(<GovernedPullRequestCard projectId={PROJECT} client={client} />);
+    fillDescriptionForm();
+    expect(screen.getByTestId("gpr-description-status-button")).not.toBeDisabled();
+
+    fireEvent.click(screen.getByTestId("gpr-description-preview-button"));
+    await screen.findByTestId("gpr-description-preview");
+    expect(screen.getByTestId("gpr-description-status-button")).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId("gpr-description-approve-button"));
+    await waitFor(() =>
+      expect(screen.getByTestId("gpr-description-apply-button")).not.toBeDisabled(),
+    );
+    expect(screen.getByTestId("gpr-description-status-button")).toBeDisabled();
+
+    // Apply spends the one-use proposal, so observing the result becomes available again.
+    fireEvent.click(screen.getByTestId("gpr-description-apply-button"));
+    await screen.findByTestId("gpr-description-state");
+    await waitFor(() =>
+      expect(screen.getByTestId("gpr-description-status-button")).not.toBeDisabled(),
+    );
+    expect(prDescriptionStatus).not.toHaveBeenCalled();
+  });
+
+  it("renders no status control when the injected client omits the status reader", () => {
+    render(<GovernedPullRequestCard projectId={PROJECT} client={makeDescriptionClient()} />);
+    expect(screen.getByTestId("gpr-description")).toBeInTheDocument();
+    expect(screen.queryByTestId("gpr-description-status-button")).not.toBeInTheDocument();
+  });
+
+  it("surfaces a readable API error from the status read without touching apply", async () => {
+    const client = makeDescriptionClient({
+      prDescriptionStatus: vi.fn(() =>
+        Promise.reject(new ApiError("GIT_DELIVERY_PR_DESCRIPTION_UNAVAILABLE", "unavailable", 503)),
+      ),
+    });
+    render(<GovernedPullRequestCard projectId={PROJECT} client={client} />);
+    fillDescriptionForm();
+    fireEvent.click(screen.getByTestId("gpr-description-status-button"));
+    await waitFor(() =>
+      expect(
+        screen.getByText("unavailable (GIT_DELIVERY_PR_DESCRIPTION_UNAVAILABLE)"),
+      ).toBeInTheDocument(),
+    );
+    expect(client.prDescriptionApply).not.toHaveBeenCalled();
+  });
 });
 
 // Locale review residual: the Description panel was 100% hardcoded English (no i18n hook at all)
@@ -714,13 +796,18 @@ describe("GovernedPullRequestCard — Description panel localization (DE)", () =
 
   it("renders the action buttons in German", async () => {
     await loadLocaleMessages("de");
-    renderDescriptionPanelInGerman(makeDescriptionClient());
+    renderDescriptionPanelInGerman(
+      makeDescriptionClient({
+        prDescriptionStatus: vi.fn(async () => descriptionObservedResult()),
+      }),
+    );
 
     expect(
       await screen.findByRole("button", { name: "Beschreibung als Vorschau anzeigen" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Genehmigen" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Übernehmen" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Status aktualisieren" })).toBeInTheDocument();
     // The EN wording must not leak through once German is selected.
     expect(screen.queryByRole("button", { name: "Preview description" })).not.toBeInTheDocument();
   });

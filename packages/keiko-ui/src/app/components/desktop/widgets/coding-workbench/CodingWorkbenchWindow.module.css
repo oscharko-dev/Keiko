@@ -223,15 +223,18 @@
 
 .permission,
 .recovery {
-  border: 1px solid var(--feedback-warning);
   border-radius: var(--radius-surface);
   padding: var(--space-5);
-  background: var(--feedback-warning-surface);
+}
+
+.permission {
+  border: 1px solid var(--ai-permission-border);
+  background: var(--ai-permission-surface);
 }
 
 .recovery {
-  border-color: var(--feedback-danger);
-  background: var(--feedback-danger-surface);
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 45%, transparent);
+  background: color-mix(in oklch, var(--feedback-danger) 7%, var(--surface-primary));
 }
 
 .eyebrow,
@@ -508,8 +511,13 @@
 }
 
 .buttonDanger {
-  border-color: color-mix(in oklch, var(--feedback-danger) 52%, var(--border-default));
+  border-color: color-mix(in oklch, var(--feedback-danger) 42%, transparent);
   color: var(--feedback-danger);
+  background: transparent;
+}
+
+.buttonDanger:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--feedback-danger) 12%, transparent);
 }
 
 .fieldLabel {
@@ -835,10 +843,10 @@
   flex-wrap: wrap;
   gap: var(--space-2) var(--space-3);
   align-items: center;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--ai-tool-border);
   border-radius: var(--radius-control);
   padding: var(--space-3) var(--space-4);
-  background: var(--surface-inset);
+  background: var(--ai-tool-surface);
 }
 
 .toolCard[data-tool-state="succeeded"] {

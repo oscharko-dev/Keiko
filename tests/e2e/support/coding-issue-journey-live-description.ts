@@ -17,16 +17,14 @@
 // `descriptionProposalId`/`descriptionSnapshotDigest`, `widgets/index.tsx`'s `governedPullRequest`
 // render), instead of filling the create/update form and clicking the manual preview button.
 
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page, type Response } from "@playwright/test";
 import type { WorkbenchDescriptionStatus } from "@oscharko-dev/keiko-contracts";
 import { runtimeSnapshot, waitWhileAnsweringApprovals } from "./coding-issue-journey-live.js";
 import type { DeliveredPullRequest } from "./coding-issue-journey-live.js";
 
-const GOVERNED_PR_WINDOW_ID = "coding-issue-journey-governed-pr";
 const REVIEW_ENDPOINT = "/api/git-delivery/pr-description/review";
 const APPLY_ENDPOINT = "/api/git-delivery/pr-description/apply";
 const STATUS_ENDPOINT = "/api/git-delivery/pr-description/status";
-const CSRF = { "X-Keiko-CSRF": "1" };
 
 /** The exact retained artifact identity #3401 already generated -- captured once from the
  * automatic status and carried through review/approve/apply so every step can be checked against
@@ -44,6 +42,16 @@ interface PrDescriptionReviewWireBody {
       readonly binding: { readonly snapshotDigest: string; readonly draftDigest: string };
     };
   };
+}
+
+/** The target fields every description request carries (`GitDeliveryPrDescriptionTarget`, api.ts)
+ * -- read back from the network request (never constructed by this test) to confirm production
+ * resolved the click to the run's task workspace root and the delivered pull request, not merely to
+ * a proposal whose digests happen to match. */
+interface PrDescriptionRequestBody {
+  readonly projectId: string;
+  readonly ownerAndRepo: string;
+  readonly prNumber: number;
 }
 
 interface PrDescriptionApplyWireBody {
@@ -130,61 +138,12 @@ function retainedBindingOf(status: WorkbenchDescriptionStatus): RetainedDescript
   };
 }
 
-interface GovernedPullRequestWindowInput {
-  readonly repositoryRoot: string;
-  readonly pullRequest: DeliveredPullRequest;
-  readonly retained: RetainedDescriptionBinding;
-}
-
-/** The window-seeding half of `mountGovernedPullRequestCard`, extracted only to keep that
- * function under the function-size bar (AGENTS.md §6) -- pushes the SAME cfg shape
- * `CodingWorkbenchWindow`'s "Review description" control produces. */
-async function pushGovernedPullRequestWindow(
-  page: Page,
-  input: GovernedPullRequestWindowInput,
-): Promise<void> {
-  await page.evaluate(
-    ({
-      windowId,
-      projectPath,
-      headBranchName,
-      ownerAndRepo,
-      prNumber,
-      proposalId,
-      snapshotDigest,
-    }) => {
-      const raw = window.localStorage.getItem("keiko.workspace.v4");
-      const windows: unknown[] = raw === null ? [] : (JSON.parse(raw) as unknown[]);
-      windows.push({
-        id: windowId,
-        type: "governedPullRequest",
-        x: 60,
-        y: 60,
-        w: 760,
-        h: 900,
-        z: 30,
-        cfg: {
-          projectPath,
-          headBranchName,
-          descriptionOwnerAndRepo: ownerAndRepo,
-          descriptionPrNumber: prNumber,
-          descriptionProposalId: proposalId,
-          descriptionSnapshotDigest: snapshotDigest,
-        },
-        max: false,
-      });
-      window.localStorage.setItem("keiko.workspace.v4", JSON.stringify(windows));
-    },
-    {
-      windowId: GOVERNED_PR_WINDOW_ID,
-      projectPath: input.repositoryRoot,
-      headBranchName: input.pullRequest.headRef,
-      ownerAndRepo: input.pullRequest.repository,
-      prNumber: input.pullRequest.number,
-      proposalId: input.retained.proposalId,
-      snapshotDigest: input.retained.snapshotDigest,
-    },
-  );
+// The desktop assigns the opened window's id, and `governedPullRequest` is not a singleton window
+// type -- but exactly one instance is ever opened per flow (from `applyAndRecordDescription`), and
+// the Coding Workbench itself is a WindowsRegistry singleton, so this accessible region name
+// (`window.type.governedPullRequest.title`) is unambiguous for the lifetime of one flow.
+function governedPullRequestWindow(page: Page): Locator {
+  return page.getByRole("region", { name: "Pull Request", exact: true });
 }
 
 function assertReviewMatchesRetained(
@@ -200,13 +159,46 @@ function assertReviewMatchesRetained(
   }
 }
 
-/** Adds a real `governedPullRequest` window to the live desktop session bound to the delivered
- * PR's exact retained proposal, mirroring `CodingWorkbenchWindow`'s own "Review description"
- * control (`onOpenGit({ ..., descriptionReview })` -> `widgets/index.tsx`'s `governedPullRequest`
- * cfg) so the card's `useRetainedDescriptionProposal` effect calls the retained-review route
+/** Confirms the REAL click resolved `root`/PR the same way `descriptionReviewTarget`
+ * (CodingWorkbenchDraftDelivery.tsx) and `onReviewDescription` (CodingWorkbenchWindow.tsx) compute
+ * it in production -- read from the request the card actually issued, never constructed by this
+ * test. This is the #3401 regression this scenario exists to pin: opening the card on the
+ * repository root instead of the run's task workspace root resolved an empty proposal holder and
+ * answered 409 unknown proposal with the SAME digests otherwise matching. The status refresh below
+ * is held to the identical binding, because it reads the status the SAME retained scope owns. */
+function assertDescriptionRequestTargetedTaskWorkspace(
+  response: Response,
+  expectedRoot: string,
+  pullRequest: DeliveredPullRequest,
+  action: string,
+): void {
+  const raw = response.request().postData();
+  const body: Partial<PrDescriptionRequestBody> =
+    raw === null ? {} : (JSON.parse(raw) as Partial<PrDescriptionRequestBody>);
+  if (
+    body.projectId !== expectedRoot ||
+    body.ownerAndRepo !== pullRequest.repository ||
+    body.prNumber !== pullRequest.number
+  ) {
+    throw new Error(
+      `retained description ${action} did not resolve to the run's task workspace root and delivered pull request`,
+    );
+  }
+}
+
+/** Opens the real `governedPullRequest` window bound to the delivered PR's exact retained
+ * proposal by clicking the SAME "Review exact draft" control production users click
+ * (`CodingWorkbenchDraftDelivery.tsx`'s `DescriptionReviewButton`, i18n
+ * "codingWorkbench.descriptionStatus.review") -- which calls `onReviewDescription` ->
+ * `onOpenGit({ root, binding: "task-workspace", descriptionReview })` (`CodingWorkbenchWindow.tsx`,
+ * resolving `root` from the run's OWN task workspace, never the repository root) ->
+ * `widgets/index.tsx`'s "coding" registerWindowRender opening `governedPullRequest` with that
+ * exact cfg, so the card's `useRetainedDescriptionProposal` effect calls the retained-review route
  * itself -- this never fills the create/update form or clicks the manual preview button. Returns
- * the retained binding once the automatic `prDescriptionReview` response has confirmed it reviewed
- * that EXACT draft (not one it generated fresh). */
+ * the retained binding once the automatic `prDescriptionReview` request has confirmed it targeted
+ * the expected task workspace root and delivered pull request, and reviewed that EXACT draft (not
+ * one it generated fresh). A unit test in CodingWorkbenchWindow.test.tsx ("opens the retained
+ * description review on the run's task workspace root") pins the exact payload this mirrors. */
 export async function mountGovernedPullRequestCard(
   page: Page,
   repositoryRoot: string,
@@ -218,10 +210,10 @@ export async function mountGovernedPullRequestCard(
     (response) =>
       response.request().method() === "POST" && response.url().endsWith(REVIEW_ENDPOINT),
   );
-  await pushGovernedPullRequestWindow(page, { repositoryRoot, pullRequest, retained });
-  await page.reload();
-  await expect(page.locator(`[data-window-id="${GOVERNED_PR_WINDOW_ID}"]`)).toBeVisible();
+  await page.getByRole("button", { name: "Review exact draft", exact: true }).click();
+  await expect(governedPullRequestWindow(page)).toBeVisible({ timeout: 60_000 });
   const response = await reviewed;
+  assertDescriptionRequestTargetedTaskWorkspace(response, repositoryRoot, pullRequest, "review");
   assertReviewMatchesRetained((await response.json()) as PrDescriptionReviewWireBody, retained);
   return retained;
 }
@@ -234,9 +226,7 @@ export async function applyAutoDraftDescriptionThroughPrCard(
   page: Page,
   retained: RetainedDescriptionBinding,
 ): Promise<void> {
-  const card = page
-    .locator(`[data-window-id="${GOVERNED_PR_WINDOW_ID}"]`)
-    .getByTestId("gpr-description");
+  const card = governedPullRequestWindow(page).getByTestId("gpr-description");
   await expect(card.getByTestId("gpr-description-preview")).toBeVisible({ timeout: 60_000 });
   await card.getByTestId("gpr-description-approve-button").click();
   await expect(card.getByTestId("gpr-description-apply-button")).toBeEnabled();
@@ -256,28 +246,46 @@ export async function applyAutoDraftDescriptionThroughPrCard(
 
 /** Reconciles the already-applied description after the governed draft-to-ready transition. The
  * transition changes the provider's `isDraft` identity, so the pre-transition applied status is
- * deliberately stale until this production status owner re-reads the remote body and persists the
- * same confirmed content against the ready PR identity. */
+ * deliberately stale until the status owner re-reads the remote body and persists the same
+ * confirmed content against the ready PR identity.
+ *
+ * Driven through the REAL control a user clicks -- the governed PR card's Description panel
+ * "Refresh status" button (`gpr-description-status-button`, i18n
+ * "governedPullRequestCard.description.action.status"), on the card this flow already opened in
+ * `mountGovernedPullRequestCard`. Until that control existed the panel could CHANGE a description
+ * but never OBSERVE one: the only path to a fresh status was "Preview description", which
+ * regenerates the artifact through the Model Gateway -- a paid model call to answer a read-only
+ * question -- so this step reached past the UI and posted the status route itself. The window is
+ * raised by its own title bar first, exactly as a user raises a window the Coding Workbench has
+ * since covered. The request is read back from the network to confirm production resolved the click
+ * to the run's task workspace root, which is the scope holding the retained status -- the previous
+ * direct call targeted the repository root instead. */
 export async function reconcileAppliedDescriptionAfterMarkReady(
   page: Page,
-  repositoryRoot: string,
+  workspaceRoot: string,
   pullRequest: DeliveredPullRequest,
 ): Promise<void> {
-  const response = await page.request.post(STATUS_ENDPOINT, {
-    headers: CSRF,
-    data: {
-      schemaVersion: "1",
-      projectId: repositoryRoot,
-      ownerAndRepo: pullRequest.repository,
-      prNumber: pullRequest.number,
-    },
-  });
+  const prWindow = governedPullRequestWindow(page);
+  await prWindow.locator("header.win-head").click();
+  const card = prWindow.getByTestId("gpr-description");
+  const refresh = card.getByTestId("gpr-description-status-button");
+  await expect(refresh).toBeEnabled({ timeout: 60_000 });
+  const reconciled = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" && response.url().endsWith(STATUS_ENDPOINT),
+  );
+  await refresh.click();
+  const response = await reconciled;
   expect(
     response.ok(),
     `description reconciliation failed with HTTP ${String(response.status())}`,
   ).toBe(true);
+  assertDescriptionRequestTargetedTaskWorkspace(response, workspaceRoot, pullRequest, "refresh");
   const body = (await response.json()) as PrDescriptionStatusWireBody;
   if (!descriptionReconciledToReadyPullRequest(body, pullRequest)) {
     throw new Error("description was not reconciled to the exact ready pull request identity");
   }
+  await expect(card.getByTestId("gpr-description-state")).toHaveAttribute("data-state", "current", {
+    timeout: 60_000,
+  });
 }

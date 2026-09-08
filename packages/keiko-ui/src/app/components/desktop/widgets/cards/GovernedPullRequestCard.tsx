@@ -23,6 +23,7 @@ import {
   fetchGitDeliveryPrDescriptionApprove,
   fetchGitDeliveryPrDescriptionPreview,
   fetchGitDeliveryPrDescriptionReview,
+  fetchGitDeliveryPrDescriptionStatus,
   type GitDeliveryPrDescriptionProposalInput,
   type GitDeliveryPrDescriptionPreviewInput,
   type GitDeliveryPrDescriptionTarget,
@@ -66,6 +67,10 @@ export interface GovernedPullRequestClient {
   readonly prDescriptionReview?: typeof fetchGitDeliveryPrDescriptionReview;
   readonly prDescriptionApprove?: typeof fetchGitDeliveryPrDescriptionApprove;
   readonly prDescriptionApply?: typeof fetchGitDeliveryPrDescriptionApply;
+  // #3390: the read-only status observation. Optional like `prDescriptionReview` — the panel simply
+  // renders no status control for a client that omits it, and the preview -> approve -> apply
+  // lifecycle above is unaffected either way.
+  readonly prDescriptionStatus?: typeof fetchGitDeliveryPrDescriptionStatus;
 }
 
 const DEFAULT_CLIENT: GovernedPullRequestClient = {
@@ -76,6 +81,7 @@ const DEFAULT_CLIENT: GovernedPullRequestClient = {
   prDescriptionReview: fetchGitDeliveryPrDescriptionReview,
   prDescriptionApprove: fetchGitDeliveryPrDescriptionApprove,
   prDescriptionApply: fetchGitDeliveryPrDescriptionApply,
+  prDescriptionStatus: fetchGitDeliveryPrDescriptionStatus,
 };
 
 function formatError(err: unknown): string {
@@ -705,6 +711,7 @@ interface DescriptionAsync extends DescriptionAsyncState {
   readonly runReview: (input: GitDeliveryPrDescriptionProposalInput) => void;
   readonly runApprove: () => void;
   readonly runApply: () => void;
+  readonly runStatus: (target: GitDeliveryPrDescriptionTarget) => void;
 }
 
 // The three description methods, narrowed to non-optional: `PrDescriptionPanel` builds this only
@@ -715,6 +722,7 @@ interface RequiredPrDescriptionClient {
   readonly prDescriptionApprove: typeof fetchGitDeliveryPrDescriptionApprove;
   readonly prDescriptionApply: typeof fetchGitDeliveryPrDescriptionApply;
   readonly prDescriptionReview?: typeof fetchGitDeliveryPrDescriptionReview;
+  readonly prDescriptionStatus?: typeof fetchGitDeliveryPrDescriptionStatus;
 }
 
 // Shared sequencing for the three description actions below: increments the guard token, marks
@@ -805,6 +813,29 @@ function descriptionReviewAction(
   );
 }
 
+// #3390: observe the applied description's CURRENT status for a PR identity, without generating
+// anything. The governed draft-to-ready transition changes the PR's own `isDraft` identity, which
+// leaves a previously confirmed status bound to an identity that no longer exists; this is the read
+// that reconciles it. It mints no proposal and consumes no approval, so the pending lifecycle is
+// reset to "nothing in flight" rather than carried forward against a status the user never
+// previewed — and `canRefresh` keeps the control disabled while a proposal IS in flight, so this
+// reset can never discard one.
+function descriptionStatusAction(
+  read: typeof fetchGitDeliveryPrDescriptionStatus,
+  seq: { current: number },
+  setState: (updater: (s: DescriptionAsyncState) => DescriptionAsyncState) => void,
+  handleError: (err: unknown, token: number) => void,
+  target: GitDeliveryPrDescriptionTarget,
+): void {
+  dispatchDescriptionAction(
+    seq,
+    setState,
+    handleError,
+    () => read(target),
+    (result) => ({ result, target, proposalId: null, approved: false }),
+  );
+}
+
 function descriptionApplyAction(
   client: RequiredPrDescriptionClient,
   seq: { current: number },
@@ -872,7 +903,13 @@ function useGovernedPrDescriptionActions(
     descriptionApplyAction(client, seq, setState, handleError, state.target, state.proposalId);
   };
 
-  return { ...state, runPreview, runReview, runApprove, runApply };
+  const runStatus = (target: GitDeliveryPrDescriptionTarget): void => {
+    const read = client?.prDescriptionStatus;
+    if (read === undefined) return;
+    descriptionStatusAction(read, seq, setState, handleError, target);
+  };
+
+  return { ...state, runPreview, runReview, runApprove, runApply, runStatus };
 }
 
 function descriptionStateOf(
@@ -1054,20 +1091,54 @@ function PrDescriptionFields(props: DescriptionFieldsProps): ReactNode {
 
 interface DescriptionButtonsProps {
   readonly busy: boolean;
+  readonly canRefresh: boolean;
   readonly canPreview: boolean;
   readonly canApprove: boolean;
   readonly canApply: boolean;
+  // `undefined` when the injected client carries no status reader — the control is then absent
+  // rather than present-and-permanently-disabled, matching how the whole panel disappears for a
+  // client without the preview/approve/apply trio.
+  readonly onRefresh: (() => void) | undefined;
   readonly onPreview: () => void;
   readonly onApprove: () => void;
   readonly onApply: () => void;
   readonly t: I18nTranslate;
 }
 
+function DescriptionActionButton({
+  testId,
+  label,
+  primary = false,
+  disabled,
+  onClick,
+}: {
+  readonly testId: string;
+  readonly label: string;
+  readonly primary?: boolean;
+  readonly disabled: boolean;
+  readonly onClick: () => void;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      style={primary ? PRIMARY_BTN : GHOST_BTN}
+      disabled={disabled}
+      onClick={onClick}
+      data-testid={testId}
+    >
+      {label}
+    </button>
+  );
+}
+
+// Reading first, then the generate -> approve -> apply lifecycle, with the one primary action last.
 function PrDescriptionButtons({
   busy,
+  canRefresh,
   canPreview,
   canApprove,
   canApply,
+  onRefresh,
   onPreview,
   onApprove,
   onApply,
@@ -1075,33 +1146,33 @@ function PrDescriptionButtons({
 }: DescriptionButtonsProps): ReactNode {
   return (
     <div style={ROW_STYLE}>
-      <button
-        type="button"
-        style={GHOST_BTN}
+      {onRefresh === undefined ? null : (
+        <DescriptionActionButton
+          testId="gpr-description-status-button"
+          label={t("governedPullRequestCard.description.action.status")}
+          disabled={busy || !canRefresh}
+          onClick={onRefresh}
+        />
+      )}
+      <DescriptionActionButton
+        testId="gpr-description-preview-button"
+        label={t("governedPullRequestCard.description.action.preview")}
         disabled={busy || !canPreview}
         onClick={onPreview}
-        data-testid="gpr-description-preview-button"
-      >
-        {t("governedPullRequestCard.description.action.preview")}
-      </button>
-      <button
-        type="button"
-        style={GHOST_BTN}
+      />
+      <DescriptionActionButton
+        testId="gpr-description-approve-button"
+        label={t("governedPullRequestCard.description.action.approve")}
         disabled={busy || !canApprove}
         onClick={onApprove}
-        data-testid="gpr-description-approve-button"
-      >
-        {t("governedPullRequestCard.description.action.approve")}
-      </button>
-      <button
-        type="button"
-        style={PRIMARY_BTN}
+      />
+      <DescriptionActionButton
+        testId="gpr-description-apply-button"
+        label={t("governedPullRequestCard.description.action.apply")}
+        primary
         disabled={busy || !canApply}
         onClick={onApply}
-        data-testid="gpr-description-apply-button"
-      >
-        {t("governedPullRequestCard.description.action.apply")}
-      </button>
+      />
     </div>
   );
 }
@@ -1147,6 +1218,9 @@ function requiredPrDescriptionClient(
     ...(client.prDescriptionReview === undefined
       ? {}
       : { prDescriptionReview: client.prDescriptionReview }),
+    ...(client.prDescriptionStatus === undefined
+      ? {}
+      : { prDescriptionStatus: client.prDescriptionStatus }),
   };
 }
 
@@ -1156,6 +1230,7 @@ interface DescriptionPanelFlags {
   readonly visibleResult: PrDescriptionApplicationResultWire | null;
   readonly state: PrDescriptionApplicationStatus["state"] | undefined;
   readonly canPreview: boolean;
+  readonly canRefresh: boolean;
   readonly canApprove: boolean;
   readonly canApply: boolean;
 }
@@ -1196,6 +1271,12 @@ function derivePrDescriptionPanelFlags(
   return {
     ...visibility,
     canPreview: form.ownerAndRepo !== "" && isValidDescriptionPrNumber(form.prNumber),
+    // Observing needs only a named PR — and stays unavailable while a proposal is pending so the
+    // status result can never replace a preview the user is still approving or applying.
+    canRefresh:
+      form.ownerAndRepo !== "" &&
+      isValidDescriptionPrNumber(form.prNumber) &&
+      async.proposalId === null,
     canApprove: stillValid && async.proposalId !== null && !async.approved && state !== "stale",
     canApply: stillValid && async.proposalId !== null && async.approved && state !== "stale",
   };
@@ -1239,6 +1320,22 @@ function usePrDescriptionPreviewHandler(
       language: form.language,
     });
   }, [async, flags.canPreview, form.language, form.ownerAndRepo, form.prNumber, projectId]);
+}
+
+function usePrDescriptionStatusHandler(
+  form: DescriptionForm,
+  flags: DescriptionPanelFlags,
+  async: DescriptionAsync,
+  projectId: string,
+): () => void {
+  return useCallback((): void => {
+    if (!flags.canRefresh) return;
+    async.runStatus({
+      projectId,
+      ownerAndRepo: form.ownerAndRepo,
+      prNumber: Number(form.prNumber),
+    });
+  }, [async, flags.canRefresh, form.ownerAndRepo, form.prNumber, projectId]);
 }
 
 function useRetainedDescriptionProposal(
@@ -1293,6 +1390,7 @@ function PrDescriptionPanel({
   useRetainedDescriptionProposal(async, projectId, retainedProposal);
   const flags = derivePrDescriptionPanelFlags(form, async);
   const onPreview = usePrDescriptionPreviewHandler(form, flags, async, projectId);
+  const onRefresh = usePrDescriptionStatusHandler(form, flags, async, projectId);
 
   if (descriptionClient === undefined) return null;
 
@@ -1308,9 +1406,11 @@ function PrDescriptionPanel({
       <PrDescriptionFields form={form} busy={async.busy} onChange={onChange} t={t} />
       <PrDescriptionButtons
         busy={async.busy}
+        canRefresh={flags.canRefresh}
         canPreview={flags.canPreview}
         canApprove={flags.canApprove}
         canApply={flags.canApply}
+        onRefresh={descriptionClient.prDescriptionStatus === undefined ? undefined : onRefresh}
         onPreview={onPreview}
         onApprove={async.runApprove}
         onApply={async.runApply}
