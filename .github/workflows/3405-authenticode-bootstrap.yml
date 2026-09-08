@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 jobs:
-  inspect-toolchain:
+  generate-verifier:
     runs-on: windows-latest
     timeout-minutes: 5
     steps:
@@ -26,7 +26,7 @@ jobs:
         with:
           node-version: "24.18.0"
           package-manager-cache: false
-      - name: Inspect the finite Roslyn and .NET Framework reference inputs
+      - name: Generate twice from the reviewed finite toolchain inputs
         shell: pwsh
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
@@ -48,17 +48,58 @@ jobs:
           if (-not (Test-Path -LiteralPath $references -PathType Container)) {
             throw "The .NET Framework 4.8.1 reference directory was not found"
           }
-          $receipt = & node scripts/generate-windows-portable-authenticode-verifier.mjs `
-            --inspect --compiler $compiler --references $references
-          if ($LASTEXITCODE -ne 0) {
-            throw "Authenticode verifier toolchain inspection failed"
+          $assetOne = Join-Path $env:RUNNER_TEMP "authenticode-verifier-one.generated.ts"
+          $assetTwo = Join-Path $env:RUNNER_TEMP "authenticode-verifier-two.generated.ts"
+          $compilerDistribution = '{"fileCount":111,"sha256":"ba14f4ef19598f640ba103fe352e0bdca7a9bb9421b8dd1629df725431bcb8c3","totalBytes":35634755}'
+          $pins = @(
+            "--compiler", $compiler,
+            "--references", $references,
+            "--expected-compiler-sha256", "3aafb7b9c54fa31a7092af35148971ee616965e7f9a0b80fb7fdc4bdd1d1a555",
+            "--expected-compiler-distribution", $compilerDistribution,
+            "--expected-reference-sha256", "mscorlib.dll=1eb7ab99447ceed5ec717c97b94c4aec5da1edeef9fe4989c287355e03a8f58f",
+            "--expected-reference-sha256", "System.dll=3fba2c9ab7f1538d09d3a025730da545f3dc24af0b6b74ea5f92cc7768edd5d5",
+            "--expected-reference-sha256", "System.Core.dll=0c5a6f6527a4ebda1d105809c48c0577b316d75d5fd04177a5a0e54f1e4cff59",
+            "--expected-reference-sha256", "System.Security.dll=fbd98d2027a174137b3dc8c7ba4fda4606c7c8506e35781ede74703676321844"
+          )
+          & node scripts/generate-windows-portable-authenticode-verifier.mjs @pins --output $assetOne
+          if ($LASTEXITCODE -ne 0) { throw "First Authenticode verifier generation failed" }
+          & node scripts/generate-windows-portable-authenticode-verifier.mjs @pins --output $assetTwo
+          if ($LASTEXITCODE -ne 0) { throw "Second Authenticode verifier generation failed" }
+          $firstBytes = [IO.File]::ReadAllBytes($assetOne)
+          $secondBytes = [IO.File]::ReadAllBytes($assetTwo)
+          $sameBytes = $firstBytes.Length -eq $secondBytes.Length
+          for ($index = 0; $sameBytes -and $index -lt $firstBytes.Length; $index += 1) {
+            $sameBytes = $firstBytes[$index] -eq $secondBytes[$index]
+          }
+          if (-not $sameBytes) {
+            throw "Authenticode verifier generation was not byte-deterministic"
+          }
+          $generatedAsset = Join-Path $env:RUNNER_TEMP "windowsPortableAuthenticodeVerifier.generated.ts"
+          Copy-Item -LiteralPath $assetOne -Destination $generatedAsset
+          $powershell51 = Join-Path $env:WINDIR "System32/WindowsPowerShell/v1.0/powershell.exe"
+          $runtimeVersion = & $powershell51 -NoLogo -NoProfile -NonInteractive -Command `
+            "[Console]::Out.Write([Environment]::Version.ToString())"
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($runtimeVersion)) {
+            throw "The .NET Framework runtime version could not be recorded"
           }
           $receiptPath = Join-Path $env:RUNNER_TEMP "authenticode-verifier-toolchain.json"
-          $receipt | Set-Content -LiteralPath $receiptPath -Encoding utf8NoBOM
-      - name: Upload the toolchain receipt
+          [ordered]@{
+            compilerRuntimeVersion = $runtimeVersion
+            compilerDistribution = $compilerDistribution | ConvertFrom-Json
+            compilerSha256 = "3aafb7b9c54fa31a7092af35148971ee616965e7f9a0b80fb7fdc4bdd1d1a555"
+            referenceSha256 = [ordered]@{
+              "mscorlib.dll" = "1eb7ab99447ceed5ec717c97b94c4aec5da1edeef9fe4989c287355e03a8f58f"
+              "System.dll" = "3fba2c9ab7f1538d09d3a025730da545f3dc24af0b6b74ea5f92cc7768edd5d5"
+              "System.Core.dll" = "0c5a6f6527a4ebda1d105809c48c0577b316d75d5fd04177a5a0e54f1e4cff59"
+              "System.Security.dll" = "fbd98d2027a174137b3dc8c7ba4fda4606c7c8506e35781ede74703676321844"
+            }
+          } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $receiptPath -Encoding utf8NoBOM
+      - name: Upload the generated verifier and toolchain receipt
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: authenticode-verifier-toolchain
-          path: ${{ runner.temp }}/authenticode-verifier-toolchain.json
+          name: authenticode-verifier-bootstrap
+          path: |
+            ${{ runner.temp }}/windowsPortableAuthenticodeVerifier.generated.ts
+            ${{ runner.temp }}/authenticode-verifier-toolchain.json
           if-no-files-found: error
           retention-days: 1
