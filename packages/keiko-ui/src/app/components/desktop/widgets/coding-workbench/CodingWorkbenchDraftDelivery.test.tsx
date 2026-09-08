@@ -18,6 +18,44 @@ function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value
 }
 
 describe("durable repository delivery in the Code task", () => {
+  // #3390: the Code task's four status cards render one state each. Two of them (CI readiness,
+  // journey outcome) already carry that state as a `data-state` attribute alongside the translated
+  // sentence; these two carried the sentence alone, so the state was readable only by translating
+  // the prose back. That is not a test hook: a status a machine cannot read is one that support
+  // tooling, the qualification lane, and any future automation must guess at, in whichever locale
+  // the operator happens to be running. This brings the two stragglers onto the sibling pattern,
+  // and adds the reason code the sentence is derived from.
+  it("exposes the delivery phase and reason as machine-readable state", () => {
+    render(<CodingWorkbenchDraftDelivery snapshot={draftDeliverySnapshot()} />);
+    const state = screen.getByTestId("cwb-draft-delivery-state");
+    expect(state).toHaveAttribute("data-state", "draft-created");
+    expect(state).toHaveAttribute("data-reason", "completed");
+    expect(state).toHaveTextContent("Draft pull request created");
+  });
+
+  // Same reason as the two states above: every delivery fact was addressable only through its
+  // TRANSLATED label, so nothing could read "the head SHA" without first knowing the operator's
+  // locale. Each fact now carries its own stable id.
+  it("identifies every delivery fact by a stable key, not by its translated label", () => {
+    render(<CodingWorkbenchDraftDelivery snapshot={draftDeliverySnapshot()} />);
+    const delivery = screen.getByRole("region", { name: "Repository delivery" });
+    const factValue = (id: string): string =>
+      delivery.querySelector(`[data-fact="${id}"] dd`)?.textContent ?? "";
+    expect(factValue("remoteState")).toBe("Open · Draft");
+    expect(factValue("remoteHead")).toBe("3".repeat(40));
+    expect(factValue("repository")).toBe("owner/repository");
+    expect(factValue("headRef")).toBe("feature/issue-42");
+    expect(factValue("headSha")).toBe("3".repeat(40));
+    expect(factValue("baseRef")).toBe("main");
+  });
+
+  it("exposes the description state and reason as machine-readable state", () => {
+    render(<CodingWorkbenchDraftDelivery snapshot={descriptionStatusSnapshot()} />);
+    const state = screen.getByTestId("cwb-description-status");
+    expect(state).toHaveAttribute("data-state", "current");
+    expect(state).toHaveAttribute("data-reason", "generated");
+  });
+
   beforeEach(() => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
   });

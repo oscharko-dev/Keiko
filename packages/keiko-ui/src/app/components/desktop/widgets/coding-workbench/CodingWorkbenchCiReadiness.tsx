@@ -49,7 +49,7 @@ function CiReadinessCard({
   return (
     <section className={common.card} aria-label={t("codingWorkbench.ci.title")}>
       <h3 className={common.approvalResearchTitle}>{t("codingWorkbench.ci.title")}</h3>
-      <output className={styles["cmp-ci-state"]} data-state={state}>
+      <output className={styles["cmp-ci-state"]} data-testid="cwb-ci-state" data-state={state}>
         {t(`codingWorkbench.ci.state.${state}`)}
       </output>
       <p className={common.helpText}>{t(`codingWorkbench.ci.${stale ? "staleHelp" : "help"}`)}</p>

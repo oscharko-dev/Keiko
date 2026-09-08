@@ -98,7 +98,13 @@ function DraftDeliveryCard({
   return (
     <section className={styles.card} aria-label={t("codingWorkbench.draftDelivery.title")}>
       <h3 className={styles.approvalResearchTitle}>{t("codingWorkbench.draftDelivery.title")}</h3>
-      <output>{t(`codingWorkbench.draftDelivery.phase.${delivery.phase}`)}</output>
+      <output
+        data-testid="cwb-draft-delivery-state"
+        data-state={delivery.phase}
+        data-reason={delivery.reason}
+      >
+        {t(`codingWorkbench.draftDelivery.phase.${delivery.phase}`)}
+      </output>
       <p className={styles.helpText}>
         {t(`codingWorkbench.draftDelivery.reason.${delivery.reason}`)}
       </p>
@@ -217,6 +223,20 @@ function descriptionDraftTarget(
   };
 }
 
+function descriptionFacts(
+  status: WorkbenchDescriptionStatus,
+  t: CodingWorkbenchTranslate,
+): readonly DeliveryFact[] {
+  return [
+    { id: "headSha", label: t("codingWorkbench.descriptionStatus.head"), value: status.headSha },
+    {
+      id: "generationVersion",
+      label: t("codingWorkbench.descriptionStatus.generation"),
+      value: String(status.generationVersion),
+    },
+  ];
+}
+
 // #3401: content-free status for the automatically generated description draft. Reviewing opens
 // #3399's existing exact-proposal surface; approval and apply remain exclusively in that surface.
 function WorkbenchDescriptionCard({
@@ -241,22 +261,17 @@ function WorkbenchDescriptionCard({
       <h3 className={styles.approvalResearchTitle}>
         {t("codingWorkbench.descriptionStatus.title")}
       </h3>
-      <output>{t(`codingWorkbench.descriptionStatus.state.${status.state}`)}</output>
+      <output
+        data-testid="cwb-description-status"
+        data-state={status.state}
+        data-reason={status.reason}
+      >
+        {t(`codingWorkbench.descriptionStatus.state.${status.state}`)}
+      </output>
       <p className={styles.helpText}>
         {t(`codingWorkbench.descriptionStatus.reason.${status.reason}`)}
       </p>
-      <DeliveryFacts
-        facts={[
-          {
-            label: t("codingWorkbench.descriptionStatus.head"),
-            value: status.headSha,
-          },
-          {
-            label: t("codingWorkbench.descriptionStatus.generation"),
-            value: String(status.generationVersion),
-          },
-        ]}
-      />
+      <DeliveryFacts facts={descriptionFacts(status, t)} />
       <WorkbenchDescriptionReview
         applicationTarget={reviewTarget}
         draftTarget={draftTarget}
@@ -394,11 +409,20 @@ function ObservedPullRequest({
       <DeliveryFacts
         facts={[
           {
+            id: "remoteState",
             label: t("codingWorkbench.draftDelivery.remoteState"),
             value: `${observedState} · ${observedDraft}`,
           },
-          { label: t("codingWorkbench.draftDelivery.remoteHead"), value: pr.headSha },
-          { label: t("codingWorkbench.draftDelivery.remoteBase"), value: pr.baseSha },
+          {
+            id: "remoteHead",
+            label: t("codingWorkbench.draftDelivery.remoteHead"),
+            value: pr.headSha,
+          },
+          {
+            id: "remoteBase",
+            label: t("codingWorkbench.draftDelivery.remoteBase"),
+            value: pr.baseSha,
+          },
         ]}
       />
     </div>
@@ -433,31 +457,50 @@ export function DeliveryBindingFacts({
   return (
     <DeliveryFacts
       facts={[
-        { label: t("codingWorkbench.draftDelivery.repository"), value: target.repository },
         {
+          id: "repository",
+          label: t("codingWorkbench.draftDelivery.repository"),
+          value: target.repository,
+        },
+        {
+          id: "issueNumber",
           label: t("codingWorkbench.draftDelivery.issue"),
           value: `#${String(target.issueNumber)}`,
         },
-        { label: t("codingWorkbench.draftDelivery.headRef"), value: target.headRef },
-        { label: t("codingWorkbench.draftDelivery.headSha"), value: target.headSha },
-        { label: t("codingWorkbench.draftDelivery.baseRef"), value: target.baseRef },
-        { label: t("codingWorkbench.draftDelivery.baseSha"), value: target.baseSha },
-        { label: t("codingWorkbench.draftDelivery.proposal"), value: delivery.proposalId },
-        { label: t("codingWorkbench.draftDelivery.recordedAt"), value: delivery.recordedAt },
+        { id: "headRef", label: t("codingWorkbench.draftDelivery.headRef"), value: target.headRef },
+        { id: "headSha", label: t("codingWorkbench.draftDelivery.headSha"), value: target.headSha },
+        { id: "baseRef", label: t("codingWorkbench.draftDelivery.baseRef"), value: target.baseRef },
+        { id: "baseSha", label: t("codingWorkbench.draftDelivery.baseSha"), value: target.baseSha },
+        {
+          id: "proposalId",
+          label: t("codingWorkbench.draftDelivery.proposal"),
+          value: delivery.proposalId,
+        },
+        {
+          id: "recordedAt",
+          label: t("codingWorkbench.draftDelivery.recordedAt"),
+          value: delivery.recordedAt,
+        },
       ]}
     />
   );
 }
 
-function DeliveryFacts({
-  facts,
-}: {
-  readonly facts: readonly { readonly label: string; readonly value: string }[];
-}): ReactNode {
+// #3390: `id` is the fact's stable, locale-independent identity; `label` is what the operator
+// reads. Keying the row (and React's list) on the label meant a fact could only be located by
+// knowing the current translation, and two facts whose labels collide in some locale would have
+// collided as React keys too.
+interface DeliveryFact {
+  readonly id: string;
+  readonly label: string;
+  readonly value: string;
+}
+
+function DeliveryFacts({ facts }: { readonly facts: readonly DeliveryFact[] }): ReactNode {
   return (
     <dl className={styles.approvalFacts}>
-      {facts.map(({ label, value }) => (
-        <div className={styles.approvalFact} key={label}>
+      {facts.map(({ id, label, value }) => (
+        <div className={styles.approvalFact} data-fact={id} key={id}>
           <dt>{label}</dt>
           <dd>{value}</dd>
         </div>

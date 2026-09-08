@@ -143,7 +143,12 @@ function JourneyCard(
   return (
     <section className={common.card} aria-label={t("codingWorkbench.journey.title")}>
       <h3 className={common.approvalResearchTitle}>{t("codingWorkbench.journey.title")}</h3>
-      <output className={styles["cmp-journey-state"]} data-state={state}>
+      <output
+        className={styles["cmp-journey-state"]}
+        data-testid="cwb-journey-state"
+        data-state={state}
+        data-reason={outcome.reason}
+      >
         {t(`codingWorkbench.journey.state.${state}`)}
       </output>
       <p className={common.helpText}>{t(`codingWorkbench.journey.reason.${outcome.reason}`)}</p>
