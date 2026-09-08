@@ -9,7 +9,7 @@ import {
   reconcileLiveWorkbenchAfterModelChange,
   trustRepositoryWorkspace,
 } from "./coding-issue-journey-live.js";
-import type { ObservedRun } from "./coding-issue-journey-live-observed.js";
+import { sameRepositorySlug, type ObservedRun } from "./coding-issue-journey-live-observed.js";
 
 const DIAGNOSIS = "Running. Revision 1.";
 const diagnose = (): Promise<string> => Promise.resolve(DIAGNOSIS);
@@ -375,5 +375,17 @@ describe("live journey repository trust", () => {
     await expect(trustRepositoryWorkspace({ trust })).rejects.toThrow(
       "must not stay in restricted mode before worktree provisioning",
     );
+  });
+});
+
+// Rehearsal run-13 (#3390): the journey binding and its readiness carry the lowercased slug, the
+// delivery card the provider's casing -- a strict equality polled pre-merge readiness for two
+// minutes against a match that could never hold.
+describe("repository slug comparison", () => {
+  it("treats GitHub slugs as case-insensitive and everything else as a different repository", () => {
+    expect(sameRepositorySlug("oscharko/Wegwerf-Repo", "oscharko/wegwerf-repo")).toBe(true);
+    expect(sameRepositorySlug("oscharko/Wegwerf-Repo", "oscharko/Wegwerf-Repo")).toBe(true);
+    expect(sameRepositorySlug("oscharko/Wegwerf-Repo", "oscharko/Wegwerf-Repo2")).toBe(false);
+    expect(sameRepositorySlug("other/Wegwerf-Repo", "oscharko/Wegwerf-Repo")).toBe(false);
   });
 });

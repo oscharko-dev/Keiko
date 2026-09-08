@@ -635,276 +635,341 @@ describe("journey readiness renewal after the run has settled (regression, epic 
 // wrote -- keyed to the worktree -- could never be found: every refresh reported
 // `description-unavailable` forever, even though the receipt existed and was perfectly readable
 // under the identity it was actually written with.
-describe("journey description read finds the run's own workspace receipt (regression, epic #3384)", () => {
-  const COUNTS = { total: 0, passed: 0, failed: 0, pending: 0, blocked: 0, unknown: 0 };
+const COUNTS = { total: 0, passed: 0, failed: 0, pending: 0, blocked: 0, unknown: 0 };
 
-  it("reads the receipt the real apply path wrote even though it lives under a different local checkout than the issue-bound repository", async () => {
-    const description = new DescriptionFixture();
-    const receiptDir = mkdtempSync(join(tmpdir(), "keiko-journey-receipt-"));
-    const parentDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-journey-parent-")));
-    const db = new DatabaseSync(":memory:");
-    const events: ServerLogEvent[] = [];
-    try {
-      // WRITE side: the REAL receipt store, exactly as the apply in `prDescriptionEffects.ts` /
-      // `prDescriptionService.ts` writes through it -- keyed to `description.root`, the coding
-      // run's OWN workspace (standing in for its managed worktree). Two CAS'd writes, exactly
-      // `bodyEffectAdapter`'s own sequence in `prDescriptionEffects.ts`: a pre-mutation
-      // "recovery-required"/"uncertain" journal (so a crash mid-PATCH is never read back as
-      // confirmed), then the post-mutation "applied"/"confirmed" status
-      // (`applicationStatus(..., "applied", "confirmed", ...)`, the exact call made after a
-      // confirmed apply) CAS'd against the first write's version. The binding comes from a real
-      // preview so every digest is genuine, not hand-typed.
-      const evidenceStore = createNodeEvidenceStore(receiptDir);
-      const preview = await description.service.preview({ language: "en" });
-      if (preview.outcome !== "preview") throw new Error("Fixture preview failed");
-      const now = Date.now();
-      const descriptionBinding = preview.preview.status.binding;
-      const writeStore = createPrDescriptionReceiptStore({
-        evidenceStore,
-        redact: (value: string): string => value,
-      });
-      const uncertain = applicationStatus(
-        descriptionBinding,
-        "complete",
-        "recovery-required",
-        "uncertain",
-        now,
-      );
-      const started = writeStore.recordStatus(description.context, uncertain, null);
-      expect(started.ok).toBe(true);
-      const applied = applicationStatus(
-        descriptionBinding,
-        "complete",
-        "applied",
-        "confirmed",
-        now,
-      );
-      const written = writeStore.recordStatus(
-        description.context,
-        applied,
-        started.ok ? started.version : null,
-      );
-      expect(written.ok).toBe(true);
+interface SeededJourney {
+  readonly description: DescriptionFixture;
+  readonly deps: UiHandlerDeps;
+  readonly facts: GitJourneyFactsResult;
+  readonly readiness: ReadinessSnapshot;
+  readonly events: ServerLogEvent[];
+  /** Grants the per-checkout GitHub-reader authorization on the run's OWN workspace root. */
+  readonly grantReader: () => void;
+  readonly close: () => void;
+}
 
-      // READ side: `parentDir` stands in for the ORIGINAL repository the issue was accepted
-      // against -- the checkout `issueBinding.repositoryId` is keyed to -- and is registered as a
-      // project so `journeyReaderRoot` can resolve it. `description.root` (the run's own worktree)
-      // is ALSO registered so the real, unmocked `resolveProjectWorkspace` admits it once
-      // `workspaceLifecycle.list` names it as a candidate; this proves the fix's own composition
-      // (`resolveJourneyDescriptionCheckoutRoots`) without re-proving the separately-tested managed
-      // worktree strong-prover. `journeyReaderRoot` still cannot find `description.root` through
-      // `repositoryId` matching alone -- its own content-free id is necessarily different from
-      // `parentDir`'s -- reproducing the exact defect precondition.
-      const store = createInMemoryUiStore();
-      store.createProject(parentDir, "parent");
-      store.createProject(description.root, "worktree");
-      const repositoryId = githubIssueReaderRepositoryId(parentDir);
-      if (repositoryId === undefined) throw new Error("Fixture parent repository required");
-      expect(repositoryId).not.toBe(githubIssueReaderRepositoryId(description.root));
+/**
+ * Seeds one confirmed draft delivery whose description receipt was written -- through the REAL
+ * receipt store, exactly as `prDescriptionEffects.ts` / `prDescriptionService.ts` write it -- under
+ * the coding run's OWN workspace root (`description.root`, standing in for its managed worktree),
+ * a different local checkout than the issue-bound repository (`parentDir`). Two CAS'd writes,
+ * exactly `bodyEffectAdapter`'s own sequence: a pre-mutation "recovery-required"/"uncertain"
+ * journal, then the post-mutation "applied"/"confirmed" status CAS'd against the first write's
+ * version. The binding comes from a real preview so every digest is genuine, not hand-typed.
+ *
+ * `receiptObservedAtMs` back-dates the recorded observation (the receipt store's clock moves with
+ * it, so the write itself stays admissible); `applyThroughService` additionally performs the apply
+ * through the fixture's own service, so that same service can later re-observe the description.
+ */
+/** Approves and applies the held proposal through the fixture's own service, as an operator does. */
+async function applyThroughFixtureService(
+  description: DescriptionFixture,
+  proposalId: string,
+): Promise<void> {
+  description.service.issueApproval(proposalId);
+  const lease = description.service.consumeApproval(proposalId);
+  if (lease === undefined) throw new Error("Fixture approval lease missing");
+  const applied = await description.service.executeApproved(proposalId, lease);
+  if (applied.outcome !== "observed") throw new Error("Fixture apply failed");
+}
 
-      const remoteDigest = codingWorkbenchRemoteDigest("owner/repo");
-      const identity = description.remote.identity;
-      const nowIso = new Date(now).toISOString();
-      const DIGEST = "b".repeat(64);
+async function seedJourneyWithAppliedReceipt(input: {
+  readonly receiptObservedAtMs?: number;
+  readonly applyThroughService?: boolean;
+}): Promise<SeededJourney> {
+  const description = new DescriptionFixture();
+  description.now = Date.now();
+  const receiptDir = mkdtempSync(join(tmpdir(), "keiko-journey-receipt-"));
+  const parentDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-journey-parent-")));
+  const db = new DatabaseSync(":memory:");
+  const events: ServerLogEvent[] = [];
+  const close = (): void => {
+    description.close();
+    db.close();
+    rmSync(receiptDir, { recursive: true, force: true });
+    rmSync(parentDir, { recursive: true, force: true });
+  };
+  try {
+    const evidenceStore = createNodeEvidenceStore(receiptDir);
+    const preview = await description.service.preview({ language: "en" });
+    if (preview.outcome !== "preview") throw new Error("Fixture preview failed");
+    if (input.applyThroughService === true) {
+      await applyThroughFixtureService(description, preview.preview.proposalId);
+    }
+    const now = Date.now();
+    const receiptNow = input.receiptObservedAtMs ?? now;
+    const descriptionBinding = preview.preview.status.binding;
+    const writeStore = createPrDescriptionReceiptStore({
+      evidenceStore,
+      redact: (value: string): string => value,
+      now: () => receiptNow,
+    });
+    const uncertain = applicationStatus(
+      descriptionBinding,
+      "complete",
+      "recovery-required",
+      "uncertain",
+      receiptNow,
+    );
+    const started = writeStore.recordStatus(description.context, uncertain, null);
+    expect(started.ok).toBe(true);
+    const applied = applicationStatus(
+      descriptionBinding,
+      "complete",
+      "applied",
+      "confirmed",
+      receiptNow,
+    );
+    const written = writeStore.recordStatus(
+      description.context,
+      applied,
+      started.ok ? started.version : null,
+    );
+    expect(written.ok).toBe(true);
 
-      runMigrations(db);
-      const snapshots = createCodingRuntimeSnapshotStore(db);
-      const binding = {
-        runId: "run-1",
-        workspaceDigest: DIGEST,
-        runtimeAuthorityDigest: DIGEST,
-        envelopeDigest: DIGEST,
+    // READ side: `parentDir` stands in for the ORIGINAL repository the issue was accepted
+    // against -- the checkout `issueBinding.repositoryId` is keyed to -- and is registered as a
+    // project so `journeyReaderRoot` can resolve it. `description.root` (the run's own worktree)
+    // is ALSO registered so the real, unmocked `resolveProjectWorkspace` admits it once
+    // `workspaceLifecycle.list` names it as a candidate; this proves the fix's own composition
+    // (`resolveJourneyDescriptionCheckoutRoots`) without re-proving the separately-tested managed
+    // worktree strong-prover. `journeyReaderRoot` still cannot find `description.root` through
+    // `repositoryId` matching alone -- its own content-free id is necessarily different from
+    // `parentDir`'s -- reproducing the exact defect precondition.
+    const store = createInMemoryUiStore();
+    store.createProject(parentDir, "parent");
+    store.createProject(description.root, "worktree");
+    const repositoryId = githubIssueReaderRepositoryId(parentDir);
+    if (repositoryId === undefined) throw new Error("Fixture parent repository required");
+    expect(repositoryId).not.toBe(githubIssueReaderRepositoryId(description.root));
+
+    const remoteDigest = codingWorkbenchRemoteDigest("owner/repo");
+    const identity = description.remote.identity;
+    const nowIso = new Date(now).toISOString();
+    const DIGEST = "b".repeat(64);
+
+    runMigrations(db);
+    const snapshots = createCodingRuntimeSnapshotStore(db);
+    const binding = {
+      runId: "run-1",
+      workspaceDigest: DIGEST,
+      runtimeAuthorityDigest: DIGEST,
+      envelopeDigest: DIGEST,
+      remoteDigest,
+      issueBindingDigest: DIGEST,
+      issueIdDigest: DIGEST,
+      issueNumber: 1,
+      repository: "owner/repo",
+      remoteAlias: "origin" as const,
+      baseRef: identity.baseRef,
+      baseSha: identity.baseSha,
+      headRef: identity.headRef,
+      headSha: identity.headSha,
+      verifiedCommitProposalId: "commit-1",
+      recoveryId: "delivery-1",
+    };
+    snapshots.create({
+      schemaVersion: "1",
+      runId: "run-1",
+      state: "running",
+      revision: 0,
+      requestedMode: "autonomous-delivery",
+      runtimeSource: "keiko-sidecar",
+      modelSource: "keiko-model-gateway",
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      taskDigest: DIGEST,
+      workspaceDigest: DIGEST,
+      operatorDigest: DIGEST,
+      authorityDigest: DIGEST,
+      bindingDigest: DIGEST,
+      provenanceDigest: DIGEST,
+      toolCallCount: 0,
+      patchByteCount: 0,
+      modelRequestCount: 0,
+      issueBinding: {
+        schemaVersion: "1",
+        repositoryId,
         remoteDigest,
-        issueBindingDigest: DIGEST,
-        issueIdDigest: DIGEST,
         issueNumber: 1,
-        repository: "owner/repo",
-        remoteAlias: "origin" as const,
-        baseRef: identity.baseRef,
-        baseSha: identity.baseSha,
-        headRef: identity.headRef,
-        headSha: identity.headSha,
-        verifiedCommitProposalId: "commit-1",
-        recoveryId: "delivery-1",
-      };
-      snapshots.create({
-        schemaVersion: "1",
-        runId: "run-1",
-        state: "running",
-        revision: 0,
-        requestedMode: "autonomous-delivery",
-        runtimeSource: "keiko-sidecar",
-        modelSource: "keiko-model-gateway",
-        createdAt: nowIso,
-        updatedAt: nowIso,
-        taskDigest: DIGEST,
-        workspaceDigest: DIGEST,
-        operatorDigest: DIGEST,
-        authorityDigest: DIGEST,
+        issueIdDigest: DIGEST,
+        defaultBaseRef: identity.baseRef,
+        contentRevisionDigest: DIGEST,
         bindingDigest: DIGEST,
-        provenanceDigest: DIGEST,
-        toolCallCount: 0,
-        patchByteCount: 0,
-        modelRequestCount: 0,
-        issueBinding: {
-          schemaVersion: "1",
-          repositoryId,
-          remoteDigest,
-          issueNumber: 1,
-          issueIdDigest: DIGEST,
-          defaultBaseRef: identity.baseRef,
-          contentRevisionDigest: DIGEST,
-          bindingDigest: DIGEST,
+      },
+    });
+    snapshots.recordVerifiedCommit({
+      schemaVersion: "1",
+      runId: "run-1",
+      proposalId: "commit-1",
+      envelopeDigest: DIGEST,
+      runtimeAuthorityDigest: DIGEST,
+      workspaceDigest: DIGEST,
+      // Must equal the draft binding's `remoteDigest`, not a generic placeholder:
+      // `matchesVerifiedCommit` (codingRuntimeDraftDeliverySource.ts) checks
+      // `commit.repositoryDigest === target.remoteDigest`.
+      repositoryDigest: remoteDigest,
+      baseSha: identity.baseSha,
+      parentSha: "2".repeat(40),
+      stagedTreeDigest: DIGEST,
+      verificationEvidenceId: "verification-1",
+      messageDigest: DIGEST,
+      issueBindingDigest: DIGEST,
+      status: "succeeded",
+      reason: "completed",
+      headSha: identity.headSha,
+      committedTreeDigest: DIGEST,
+      recordedAt: nowIso,
+    });
+    const initial: DraftDeliveryRecord = {
+      schemaVersion: "1",
+      revision: 0,
+      phase: "push-proposed",
+      reason: "approval-required",
+      proposalId: "push-1",
+      proposalDigest: DIGEST,
+      recordedAt: nowIso,
+      binding,
+    };
+    snapshots.recordDraftDelivery(initial, null);
+    const steps: readonly Pick<DraftDeliveryRecord, "phase" | "reason">[] = [
+      { phase: "pushing", reason: "in-flight" },
+      { phase: "pushed", reason: "completed" },
+      { phase: "pr-proposed", reason: "approval-required" },
+      { phase: "creating-pr", reason: "in-flight" },
+      { phase: "draft-created", reason: "completed" },
+    ];
+    for (const [index, step] of steps.entries())
+      snapshots.recordDraftDelivery(
+        {
+          ...initial,
+          ...step,
+          revision: index + 1,
+          ...(step.phase === "draft-created"
+            ? {
+                pullRequest: {
+                  number: 123,
+                  externalId: identity.externalId,
+                  url: identity.url,
+                  repository: "owner/repo",
+                  headRepository: "owner/repo",
+                  headRef: identity.headRef,
+                  headSha: identity.headSha,
+                  baseRef: identity.baseRef,
+                  baseSha: identity.baseSha,
+                  state: "open",
+                  isDraft: true,
+                } as const,
+              }
+            : {}),
         },
-      });
-      snapshots.recordVerifiedCommit({
-        schemaVersion: "1",
-        runId: "run-1",
-        proposalId: "commit-1",
-        envelopeDigest: DIGEST,
-        runtimeAuthorityDigest: DIGEST,
-        workspaceDigest: DIGEST,
-        // Must equal the draft binding's `remoteDigest`, not a generic placeholder:
-        // `matchesVerifiedCommit` (codingRuntimeDraftDeliverySource.ts) checks
-        // `commit.repositoryDigest === target.remoteDigest`.
-        repositoryDigest: remoteDigest,
-        baseSha: identity.baseSha,
-        parentSha: "2".repeat(40),
-        stagedTreeDigest: DIGEST,
-        verificationEvidenceId: "verification-1",
-        messageDigest: DIGEST,
-        issueBindingDigest: DIGEST,
-        status: "succeeded",
-        reason: "completed",
-        headSha: identity.headSha,
-        committedTreeDigest: DIGEST,
-        recordedAt: nowIso,
-      });
-      const initial: DraftDeliveryRecord = {
-        schemaVersion: "1",
-        revision: 0,
-        phase: "push-proposed",
-        reason: "approval-required",
-        proposalId: "push-1",
-        proposalDigest: DIGEST,
-        recordedAt: nowIso,
-        binding,
-      };
-      snapshots.recordDraftDelivery(initial, null);
-      const steps: readonly Pick<DraftDeliveryRecord, "phase" | "reason">[] = [
-        { phase: "pushing", reason: "in-flight" },
-        { phase: "pushed", reason: "completed" },
-        { phase: "pr-proposed", reason: "approval-required" },
-        { phase: "creating-pr", reason: "in-flight" },
-        { phase: "draft-created", reason: "completed" },
-      ];
-      for (const [index, step] of steps.entries())
-        snapshots.recordDraftDelivery(
-          {
-            ...initial,
-            ...step,
-            revision: index + 1,
-            ...(step.phase === "draft-created"
-              ? {
-                  pullRequest: {
-                    number: 123,
-                    externalId: identity.externalId,
-                    url: identity.url,
-                    repository: "owner/repo",
-                    headRepository: "owner/repo",
-                    headRef: identity.headRef,
-                    headSha: identity.headSha,
-                    baseRef: identity.baseRef,
-                    baseSha: identity.baseSha,
-                    state: "open",
-                    isDraft: true,
-                  } as const,
-                }
-              : {}),
-          },
-          index,
-        );
+        index,
+      );
 
-      const deps = baseDeps({
-        store,
-        codingRuntimeSnapshotStore: snapshots,
-        evidenceStore,
-        redactor: (value: unknown): unknown => value,
-        workspaceLifecycle: {
-          list: (root: string): readonly unknown[] =>
-            root === parentDir ? [{ managedWorktreePath: description.root }] : [],
-        } as never,
-        activityLog: {
-          write: (event: ServerLogEvent): void => {
-            events.push(event);
-          },
+    const deps = baseDeps({
+      store,
+      codingRuntimeSnapshotStore: snapshots,
+      evidenceStore,
+      redactor: (value: unknown): unknown => value,
+      workspaceLifecycle: {
+        list: (root: string): readonly unknown[] =>
+          root === parentDir ? [{ managedWorktreePath: description.root }] : [],
+        listAll: (): readonly unknown[] => [],
+      } as never,
+      activityLog: {
+        write: (event: ServerLogEvent): void => {
+          events.push(event);
         },
-      });
+      },
+    });
 
-      const facts: GitJourneyFactsResult = {
-        status: "observed",
-        identity: {
-          number: 123,
-          externalId: identity.externalId,
-          url: identity.url,
-          repository: "owner/repo",
-          headRepository: "owner/repo",
-          headRef: identity.headRef,
-          headSha: identity.headSha,
-          baseRef: identity.baseRef,
-          baseSha: identity.baseSha,
-          state: "open",
-          isDraft: true,
-        },
-        repositoryId: 41,
-        defaultBranchRef: identity.baseRef,
-        mergedAt: null,
-        mergeCommitSha: null,
-        reviewDecision: "unknown",
-        issue: { number: 1, state: "open", closedAt: null },
-        reviewConversations: { total: 0, unresolved: 0, resolved: 0 },
-        factsDigest: "a".repeat(64),
-      };
-      const readiness: ReadinessSnapshot = {
-        schemaVersion: "1",
-        runId: "run-1",
-        remoteDigest,
+    const facts: GitJourneyFactsResult = {
+      status: "observed",
+      identity: {
+        number: 123,
+        externalId: identity.externalId,
+        url: identity.url,
         repository: "owner/repo",
-        prNumber: 123,
-        baseRef: identity.baseRef,
-        baseSha: identity.baseSha,
+        headRepository: "owner/repo",
         headRef: identity.headRef,
         headSha: identity.headSha,
-        requirementsVersion: "1",
-        requirementsDigest: DIGEST,
-        strictBaseRequired: false,
-        observedAt: nowIso,
-        expiresAt: new Date(now + 60_000).toISOString(),
-        evidenceRef: "ci-observation-1",
-        complete: true,
-        state: "technical-ready",
-        reason: "required-checks-passed",
-        requiredChecks: COUNTS,
-        advisoryChecks: COUNTS,
-        pullRequest: { status: "open", isDraft: true, conflict: "clear", baseCurrency: "current" },
-        humanReview: {
-          visibility: "complete",
-          requiredCount: 0,
-          approvedCount: 0,
-          changesRequestedCount: 0,
-        },
-      };
+        baseRef: identity.baseRef,
+        baseSha: identity.baseSha,
+        state: "open",
+        isDraft: true,
+      },
+      repositoryId: 41,
+      defaultBranchRef: identity.baseRef,
+      mergedAt: null,
+      mergeCommitSha: null,
+      reviewDecision: "unknown",
+      issue: { number: 1, state: "open", closedAt: null },
+      reviewConversations: { total: 0, unresolved: 0, resolved: 0 },
+      factsDigest: "a".repeat(64),
+    };
+    const readiness: ReadinessSnapshot = {
+      schemaVersion: "1",
+      runId: "run-1",
+      remoteDigest,
+      repository: "owner/repo",
+      prNumber: 123,
+      baseRef: identity.baseRef,
+      baseSha: identity.baseSha,
+      headRef: identity.headRef,
+      headSha: identity.headSha,
+      requirementsVersion: "1",
+      requirementsDigest: DIGEST,
+      strictBaseRequired: false,
+      observedAt: nowIso,
+      expiresAt: new Date(now + 60_000).toISOString(),
+      evidenceRef: "ci-observation-1",
+      complete: true,
+      state: "technical-ready",
+      reason: "required-checks-passed",
+      requiredChecks: COUNTS,
+      advisoryChecks: COUNTS,
+      pullRequest: { status: "open", isDraft: true, conflict: "clear", baseCurrency: "current" },
+      humanReview: {
+        visibility: "complete",
+        requiredCount: 0,
+        approvedCount: 0,
+        changesRequestedCount: 0,
+      },
+    };
+    const grantReader = (): void => {
+      const workspaceRepositoryId = githubIssueReaderRepositoryId(description.root);
+      if (workspaceRepositoryId === undefined) throw new Error("Fixture workspace id required");
+      store.updateGitHubIssueReaderAuthorization(workspaceRepositoryId, true, 0);
+    };
+    return { description, deps, facts, readiness, events, grantReader, close };
+  } catch (error) {
+    close();
+    throw error;
+  }
+}
 
-      const group = createGitDeliveryJourneyRouteGroup({
-        reader: (): GitJourneyReader => fakeReader(facts),
-        readiness: () => Promise.resolve(readiness),
+async function refreshJourney(
+  seeded: SeededJourney,
+  options: Parameters<typeof createGitDeliveryJourneyRouteGroup>[0],
+): Promise<RouteResult> {
+  const group = createGitDeliveryJourneyRouteGroup(options);
+  return (await group[0]?.handler(
+    ctxFor({ schemaVersion: "1", runId: "run-1" }),
+    seeded.deps,
+  )) as RouteResult;
+}
+
+describe("journey description read finds the run's own workspace receipt (regression, epic #3384)", () => {
+  it("reads the receipt the real apply path wrote even though it lives under a different local checkout than the issue-bound repository", async () => {
+    clearJourneyReadinessMemo();
+    const seeded = await seedJourneyWithAppliedReceipt({});
+    try {
+      const result = await refreshJourney(seeded, {
+        reader: (): GitJourneyReader => fakeReader(seeded.facts),
+        readiness: () => Promise.resolve(seeded.readiness),
         // No `description` override: exercises the REAL descriptionFor/readDescriptionStatus path
         // this regression is about.
       });
-      const result = (await group[0]?.handler(
-        ctxFor({ schemaVersion: "1", runId: "run-1" }),
-        deps,
-      )) as RouteResult;
 
       // Before the fix: `resolveJourneyCheckoutRoot` only ever resolves `parentDir`, so the receipt
       // written under `description.root` is never found -- `outcome.description` stays null and
@@ -922,15 +987,56 @@ describe("journey description read finds the run's own workspace receipt (regres
       // The miss on `parentDir` (the first, ordinary candidate) is a clean "not found", never a
       // logged failure -- trying further candidates must stay silent on an expected miss so a
       // routine poll for a not-yet-applied description does not spam the activity log.
-      const readFailures = events.filter(
+      const readFailures = seeded.events.filter(
         (event) => event.op === "git.pr-description.receipt" && event.extra?.phase === "read",
       );
       expect(readFailures).toHaveLength(0);
     } finally {
-      description.close();
-      db.close();
-      rmSync(receiptDir, { recursive: true, force: true });
-      rmSync(parentDir, { recursive: true, force: true });
+      seeded.close();
+    }
+  });
+
+  // Rehearsal run-13 (#3390): the description was applied and reconciled to the ready pull
+  // request, then every journey refresh more than sixty seconds later reported `blocked` /
+  // `description-stale` -- the refresh renewed its readiness facts but only ever READ the
+  // description receipt, so an applied description became "stale" by the passage of time alone,
+  // with the pull request body unchanged. The refresh must re-observe an aged applied status
+  // through the same reader grant it runs under, and must keep reporting the aged status as it is
+  // when that grant is absent.
+  it("re-observes an applied description whose observation window has lapsed instead of reporting it stale", async () => {
+    clearJourneyReadinessMemo();
+    const seeded = await seedJourneyWithAppliedReceipt({
+      receiptObservedAtMs: Date.now() - 5 * 60_000,
+      applyThroughService: true,
+    });
+    try {
+      const options: Parameters<typeof createGitDeliveryJourneyRouteGroup>[0] = {
+        reader: (): GitJourneyReader => fakeReader(seeded.facts),
+        readiness: () => Promise.resolve(seeded.readiness),
+        prDescription: { serviceFactory: () => seeded.description.service },
+      };
+      const refused = await refreshJourney(seeded, options);
+      expect(refused.body).toMatchObject({
+        status: "observed",
+        outcome: {
+          state: "blocked",
+          reason: "description-stale",
+          keikoDescriptionApplied: false,
+        },
+      });
+
+      seeded.grantReader();
+      const reobserved = await refreshJourney(seeded, options);
+      expect(reobserved.body).toMatchObject({
+        status: "observed",
+        outcome: {
+          reason: "ready-approval-required",
+          keikoDescriptionApplied: true,
+          description: { reason: "reconciled", effect: "reconciled" },
+        },
+      });
+    } finally {
+      seeded.close();
     }
   });
 });

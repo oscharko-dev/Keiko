@@ -32,6 +32,7 @@
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { PrDescription } from "@oscharko-dev/keiko-model-gateway";
 import { PR_DESCRIPTION_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
+import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { GITHUB_ISSUE_NUMBER_MAX } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { isGitHubIssueReaderAuthorized } from "../coding-context/githubIssueReaderAuthorization.js";
@@ -744,6 +745,41 @@ export function resolvePrDescriptionApplicationServiceForRequest(
   return service === undefined
     ? { ok: false, result: unavailableService() }
     : { ok: true, service };
+}
+
+/**
+ * #3390: the Issue handoff's journey refresh re-observes an APPLIED description whose last
+ * observation has aged out, through the SAME reader admission and the SAME cached service instance
+ * the governed PR card's "Refresh status" control uses -- one reconciliation path, never a second
+ * reader. Returns the freshly observed status, or `null` when the reader grant is absent, no
+ * service can be composed, or the reconciliation was refused; the caller keeps the persisted
+ * status it already holds and reports it as it is.
+ */
+export async function reconcileDescriptionStatusAsReader(
+  deps: UiHandlerDeps,
+  workspace: WorkspaceInfo,
+  target: Pick<BaseFields, "ownerAndRepo" | "prNumber">,
+  correlationId: string,
+  options: PrDescriptionRouteOptions = {},
+): Promise<PrDescriptionApplicationStatus | null> {
+  const seams = options.execution ?? {};
+  const logSink = seams.activityLog ?? processServerLogSink();
+  const request: BaseFields = { projectId: workspace.root, ...target };
+  const admitted = admitDescriptionReader(deps, workspace, correlationId, logSink);
+  if (!admitted.allowed) return null;
+  const key = cacheKey(request, `reader:${admitted.scope.authorityDigest}`);
+  const contextProvider = readerContextProvider({
+    deps,
+    request,
+    workspace,
+    correlationId,
+    logSink,
+    key,
+  });
+  const service = serviceFor(options, deps, seams, workspace, key, contextProvider);
+  if (service === undefined) return null;
+  const result = await service.reconcile();
+  return result.outcome === "observed" ? result.status : null;
 }
 
 /**

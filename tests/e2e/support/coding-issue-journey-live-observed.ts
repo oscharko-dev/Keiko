@@ -154,6 +154,16 @@ async function attribute(locator: Locator, name: string): Promise<string> {
 
 /** The run lifecycle state the window is showing. `idle` also stands for "no run", which is why no
  * caller may treat it as a terminal outcome. */
+/** GitHub repository slugs are case-insensitive, and the product canonicalises them differently
+ * per surface: the journey binding and its readiness snapshot carry the lowercased slug, the
+ * delivery card and the description binding the provider's own casing. Rehearsal run-13 polled
+ * pre-merge readiness for two minutes against an equality that could never hold
+ * (`oscharko/wegwerf-repo` vs `oscharko/Wegwerf-Repo`). Every slug comparison in this lane goes
+ * through here. */
+export function sameRepositorySlug(left: string, right: string): boolean {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
 export async function observedRunState(page: Page): Promise<string> {
   return attribute(page.locator(WORKBENCH), "data-state");
 }

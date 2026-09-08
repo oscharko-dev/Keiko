@@ -52,9 +52,11 @@ import {
   createHandlePrDescriptionPreview,
   createHandlePrDescriptionReview,
   createHandlePrDescriptionStatus,
+  reconcileDescriptionStatusAsReader,
   resolvePrDescriptionApplicationServiceForRequest,
   type PrDescriptionRouteOptions,
 } from "./prDescriptionRoutes.js";
+import { resolveProjectWorkspace } from "./execution.js";
 import { DescriptionFixture } from "./prDescriptionTestSupport.js";
 import type { PrDescriptionApplicationService } from "./prDescriptionTypes.js";
 
@@ -923,5 +925,73 @@ describe("pr-description routes — source file stays text, never binary (#3394 
     const here = dirname(fileURLToPath(import.meta.url));
     const source = readFileSync(join(here, "prDescriptionRoutes.ts"));
     expect(source.includes(0)).toBe(false);
+  });
+});
+
+// #3390: the Issue handoff's journey refresh re-observes an aged applied description through this
+// helper -- the SAME reader admission and cached service the status route uses, never a second
+// reader path. Proven at the helper because the journey route's own regression
+// (journeyRoutes.test.ts) exercises it end to end over a seeded delivery.
+describe("pr-description reader reconciliation for the journey refresh (#3390)", () => {
+  async function appliedThroughFixture(): Promise<void> {
+    const preview = await fixture.service.preview({ language: "en" });
+    if (preview.outcome !== "preview") throw new Error("fixture preview failed");
+    fixture.service.issueApproval(preview.preview.proposalId);
+    const lease = fixture.service.consumeApproval(preview.preview.proposalId);
+    if (lease === undefined) throw new Error("fixture approval lease missing");
+    const applied = await fixture.service.executeApproved(preview.preview.proposalId, lease);
+    if (applied.outcome !== "observed") throw new Error("fixture apply failed");
+  }
+  function workspace(): NonNullable<ReturnType<typeof resolveProjectWorkspace>> {
+    const resolved = resolveProjectWorkspace(deps(), projectId);
+    if (resolved === undefined) throw new Error("fixture project must resolve");
+    return resolved;
+  }
+  function grantReader(): void {
+    const repositoryId = githubIssueReaderRepositoryId(projectId);
+    if (repositoryId === undefined) throw new Error("fixture project must resolve a repository id");
+    store.updateGitHubIssueReaderAuthorization(repositoryId, true, 0);
+  }
+  const target = { ownerAndRepo: "owner/repo", prNumber: 123 };
+
+  it("re-observes the applied description under the reader grant, with no run and no authority", async () => {
+    await appliedThroughFixture();
+    grantReader();
+    const status = await reconcileDescriptionStatusAsReader(
+      deps({ gitDeliveryAuthority: undefined }),
+      workspace(),
+      target,
+      "corr-journey-1",
+      optionsWithFixtureService(),
+    );
+    expect(status).toMatchObject({ state: "current", reason: "reconciled", effect: "reconciled" });
+  });
+
+  it("returns nothing without the reader grant, whatever authority is active", async () => {
+    await appliedThroughFixture();
+    expect(
+      await reconcileDescriptionStatusAsReader(
+        deps(),
+        workspace(),
+        target,
+        "corr-journey-2",
+        optionsWithFixtureService(),
+      ),
+    ).toBeNull();
+  });
+
+  it("returns nothing when the reconciliation itself is refused, never a fabricated status", async () => {
+    await appliedThroughFixture();
+    grantReader();
+    fixture.persistence = false;
+    expect(
+      await reconcileDescriptionStatusAsReader(
+        deps({ gitDeliveryAuthority: undefined }),
+        workspace(),
+        target,
+        "corr-journey-3",
+        optionsWithFixtureService(),
+      ),
+    ).toBeNull();
   });
 });

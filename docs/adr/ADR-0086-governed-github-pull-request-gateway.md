@@ -260,7 +260,10 @@ read -- it re-observes the remote body and persists the observation -- and is th
 the per-checkout GitHub-reader grant alone, exactly like the Issue handoff's refresh, never by the
 delivery authority; routing it through the mutation gate had refused every refresh once the run had
 settled, which is precisely when an operator reconciles the description against the now-ready pull
-request.
+request. The Issue handoff's journey refresh re-observes an applied description whose last
+observation has aged out through that same reader grant and the same service instance, instead of
+reporting `description-stale` for a body nothing has changed; without the grant it reports the aged
+status as it is (#3390).
 
 ### D11 — A dedicated `pr-mark-ready` action kind and approval operation close the approval-less draft->ready transition; no title/body/base PATCH is bundled with the mutation (#3389, epic #3384 corrections 1/2/7)
 

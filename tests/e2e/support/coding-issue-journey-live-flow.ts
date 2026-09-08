@@ -62,6 +62,7 @@ import {
   observedDelivery,
   observedDiagnosis,
   observedRun,
+  sameRepositorySlug,
 } from "./coding-issue-journey-live-observed.js";
 import type { RetainedDescriptionBinding } from "./coding-issue-journey-live-description.js";
 import { resolveLiveJourneyEnv } from "./coding-issue-journey-live-runners.js";
@@ -156,7 +157,7 @@ function hasCompletedRemote(outcome: JourneyOutcome): outcome is CompletedRemote
 
 function outcomeMatchesFlow(outcome: JourneyOutcome, flow: QualificationFlowBinding): boolean {
   return (
-    outcome.binding.repository === flow.repository &&
+    sameRepositorySlug(outcome.binding.repository, flow.repository) &&
     outcome.binding.issueNumber === flow.issueNumber &&
     outcome.remote?.issue.number === flow.issueNumber
   );
@@ -745,7 +746,7 @@ async function waitForPreMergeReadiness(
     (outcome) =>
       outcome?.readiness?.state === "technical-ready" &&
       outcome.readiness.complete &&
-      outcome.readiness.repository === delivered.repository &&
+      sameRepositorySlug(outcome.readiness.repository, delivered.repository) &&
       outcome.readiness.prNumber === delivered.number &&
       outcome.readiness.baseRef === delivered.baseRef &&
       outcome.readiness.headRef === delivered.headRef &&
@@ -779,7 +780,7 @@ function sameStablePullRequest(
   current: NonNullable<FinalDeliverySnapshot["pullRequest"]>,
 ): boolean {
   return (
-    current.repository === initial.repository &&
+    sameRepositorySlug(current.repository, initial.repository) &&
     current.number === initial.number &&
     current.baseRef === initial.baseRef &&
     current.headRef === initial.headRef
@@ -1105,7 +1106,7 @@ function stageFlowBinding(
   flow: QualificationFlowBinding,
   delivered: DeliveredPullRequest,
 ): NonNullable<Parameters<typeof recordSuccessfulJourneyStage>[4]> {
-  if (delivered.repository !== flow.repository) {
+  if (!sameRepositorySlug(delivered.repository, flow.repository)) {
     // Naming both sides matters: this fired once with a bare message and cost a full rehearsal to
     // locate, because nothing said WHICH repository the delivered pull request claimed.
     throw new Error(

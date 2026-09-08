@@ -24,6 +24,7 @@ import type { DeliveredPullRequest } from "./coding-issue-journey-live.js";
 import {
   observedDescriptionStatus,
   type ObservedDescriptionStatus,
+  sameRepositorySlug,
 } from "./coding-issue-journey-live-observed.js";
 
 const REVIEW_ENDPOINT = "/api/git-delivery/pr-description/review";
@@ -116,7 +117,8 @@ function readyDescriptionBindingMatches(
   pullRequest: DeliveredPullRequest,
 ): boolean {
   return (
-    binding?.repository === pullRequest.repository &&
+    binding !== undefined &&
+    sameRepositorySlug(binding.repository, pullRequest.repository) &&
     binding.prNumber === pullRequest.number &&
     binding.headRef === pullRequest.headRef &&
     binding.headSha === pullRequest.headSha &&

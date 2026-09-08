@@ -45,7 +45,14 @@ import {
   type JourneyObservationResult,
 } from "./journeyObservationService.js";
 import type { GitJourneyOutcomeStore } from "./journeyOutcome.js";
-import { journeyEvidenceFresh } from "@oscharko-dev/keiko-contracts/runtime/git-journey-freshness";
+import {
+  APPLIED_PR_DESCRIPTION_STATES,
+  journeyEvidenceFresh,
+} from "@oscharko-dev/keiko-contracts/runtime/git-journey-freshness";
+import {
+  reconcileDescriptionStatusAsReader,
+  type PrDescriptionRouteOptions,
+} from "./prDescriptionRoutes.js";
 import { produceCiReadinessSnapshot } from "./ciReadinessSnapshot.js";
 import { createPrDescriptionReceiptStore } from "./prDescriptionReceiptStore.js";
 import type { PrDescriptionContext } from "./prDescriptionTypes.js";
@@ -162,6 +169,11 @@ export interface GitDeliveryJourneyRouteOptions {
    */
   readonly ciReader?: (context: JourneyObservationContext) => GitCiProviderReader | undefined;
   readonly description?: JourneyObservationOptions["description"];
+  /**
+   * Test-only seam for the description service the aged-status re-observation below resolves
+   * (mirrors `PrDescriptionRouteOptions.serviceFactory`). Production composition never sets this.
+   */
+  readonly prDescription?: PrDescriptionRouteOptions;
   /**
    * Durable CAS projection (#3389 AC6). Test-only override seam; production composition never sets
    * this — it defaults to `deps.codingRuntimeSnapshotStore.journeyOutcomes`, the SQLite-backed
@@ -444,7 +456,7 @@ function descriptionFor(
   resolveCheckoutRoots: typeof ResolveJourneyDescriptionCheckoutRootsFn,
 ): JourneyObservationOptions["description"] {
   if (options.description !== undefined) return options.description;
-  return (context): Promise<PrDescriptionApplicationStatus | null> => {
+  return async (context): Promise<PrDescriptionApplicationStatus | null> => {
     // Tries every local checkout that could hold this repository's receipt (#3389 AC9 correction,
     // epic #3384 issue-to-PR), not only the durable, run-independent registered project: a
     // worktree-isolated run's description apply is scoped to its OWN managed worktree, a different
@@ -452,18 +464,40 @@ function descriptionFor(
     // Read-only and safe to try in order — a wrong candidate can only ever come back "not found",
     // never a fabricated or foreign status (see `resolveJourneyDescriptionCheckoutRoots`).
     for (const root of resolveCheckoutRoots(deps, repositoryId)) {
+      const workspace = contentFreeReadWorkspace(root);
       const status = readDescriptionStatus(
         deps,
-        contentFreeReadWorkspace(root),
+        workspace,
         repository,
         prNumber,
         context.correlationId,
         context.stillAuthorized,
       );
-      if (status !== null) return Promise.resolve(status);
+      if (status === null) continue;
+      if (!agedAppliedDescription(status, Date.now())) return status;
+      // #3390: an APPLIED status whose observation window has lapsed is re-observed, exactly as
+      // the readiness above renews its own facts -- never reported as `description-stale` merely
+      // because a minute has passed. The observation window bounds how long a READ of the remote
+      // body may be trusted (ADR-0174 D4); it says nothing about whether the description is still
+      // applied, which only a fresh read can answer. Rehearsal run-13 blocked here 60 s after the
+      // post-ready reconcile with the body unchanged. Admission is the same per-checkout reader
+      // grant this refresh itself runs under; a refused re-observation keeps the aged status.
+      const reobserved = await reconcileDescriptionStatusAsReader(
+        deps,
+        workspace,
+        { ownerAndRepo: repository, prNumber },
+        context.correlationId,
+        options.prDescription ?? {},
+      );
+      return reobserved ?? status;
     }
-    return Promise.resolve(null);
+    return null;
   };
+}
+
+/** An applied description whose last observation is older than the contract's trust window. */
+function agedAppliedDescription(status: PrDescriptionApplicationStatus, now: number): boolean {
+  return APPLIED_PR_DESCRIPTION_STATES.has(status.state) && !journeyEvidenceFresh(status, now);
 }
 
 /**
