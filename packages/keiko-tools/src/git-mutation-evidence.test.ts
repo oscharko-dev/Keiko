@@ -174,6 +174,28 @@ const SCENARIOS: readonly Scenario[] = [
     actionHint: "stage-changes",
   },
   {
+    // #3394 review: the hint is the ONE contracts table shared with the server's action sheet.
+    name: "blocked-preflight-detached-head",
+    result: lifecycle(
+      {
+        status: "blocked",
+        category: "preflight-block",
+        findings: [
+          {
+            code: "detached-head",
+            severity: "blocking",
+            remediation: "user-actionable",
+            phase: "preflight",
+          },
+        ],
+      },
+      "preflight",
+    ),
+    outcomeClass: "blocked",
+    disposition: "user-fixable",
+    actionHint: "recover-via-strategy",
+  },
+  {
     name: "failed-execution",
     result: lifecycle(
       {

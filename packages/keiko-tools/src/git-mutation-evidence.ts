@@ -35,6 +35,7 @@ import type {
   GitDeliveryRecoveryMetadata,
   GitDeliveryResolvedInputs,
 } from "@oscharko-dev/keiko-contracts";
+import { GIT_PREFLIGHT_RECOVERY_ACTION_HINT } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-action-sheet";
 import {
   GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION,
   gitDeliveryRecoveryDispositionForBlockReason,
@@ -51,7 +52,7 @@ import type {
   GitMutationOutcome,
 } from "./git-mutation-orchestrator.js";
 import type { GitMutationLifecyclePhase } from "./git-mutation-taxonomy.js";
-import type { GitPreflightFinding, GitPreflightFindingCode } from "./git-mutation-preflight.js";
+import type { GitPreflightFinding } from "./git-mutation-preflight.js";
 
 // ─── Build input + dependencies ─────────────────────────────────────────────────────────────
 
@@ -160,31 +161,6 @@ const ACTION_HINT_BY_EXECUTION_ERROR: Readonly<
   "internal-error": "retry",
 } as const;
 
-const ACTION_HINT_BY_PREFLIGHT_FINDING: Readonly<
-  Record<GitPreflightFindingCode, GitDeliveryRecoveryActionHint>
-> = {
-  "detached-head": "recover-via-strategy",
-  "branch-already-exists": "retry",
-  "base-branch-missing": "retry",
-  "switch-target-missing": "retry",
-  "no-changes-to-stage": "stage-changes",
-  "nothing-staged-to-unstage": "stage-changes",
-  "nothing-staged-to-commit": "stage-changes",
-  "untracked-files-impacted": "stage-changes",
-  "no-upstream-configured": "configure-upstream",
-  "nothing-to-push": "retry",
-  "non-fast-forward": "resolve-conflicts",
-  "remote-alias-missing": "configure-upstream",
-  "remote-unreachable": "wait-for-provider",
-  "operation-in-progress": "abort-in-progress-operation",
-  "no-operation-to-abort": "retry",
-  "recovery-target-unset": "recover-via-strategy",
-  "dirty-worktree-impacts-recovery": "recover-via-strategy",
-  // #3394 review: the branch moved since the caller previewed/approved it — re-previewing captures a
-  // fresh reference commit and re-approving redeems against that, so this is a plain retry.
-  "verified-commit-drifted": "retry",
-} as const;
-
 function recoveryForBlockReason(reason: GitDeliveryBlockReason): GitDeliveryRecoveryMetadata {
   return {
     disposition: gitDeliveryRecoveryDispositionForBlockReason(reason),
@@ -201,7 +177,7 @@ function recoveryForPreflight(
   const code = findings[0]?.code;
   return {
     disposition: "user-fixable",
-    ...(code !== undefined ? { actionHint: ACTION_HINT_BY_PREFLIGHT_FINDING[code] } : {}),
+    ...(code !== undefined ? { actionHint: GIT_PREFLIGHT_RECOVERY_ACTION_HINT[code] } : {}),
   };
 }
 

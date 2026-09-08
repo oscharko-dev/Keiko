@@ -34,6 +34,7 @@ import type {
 import {
   buildGitDeliveryActionSheet,
   gitDeliverySuggestedRecoveryStrategy,
+  GIT_PREFLIGHT_RECOVERY_ACTION_HINT,
 } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-action-sheet";
 import {
   evaluateGitDeliveryEffectivePolicy,
@@ -200,38 +201,14 @@ function collectExpectedBlockers(
 }
 
 // ─── Recovery-hint mapping (AC4 — common failure classes, same surface) ─────────────
-// A deterministic, exhaustive table from each preflight finding code to a recovery action hint. The
-// "recover-via-strategy" hints are produced separately so they can carry a suggestedRecoveryStrategy.
+// The recovery hint per preflight finding code is the ONE shared table in keiko-contracts
+// (GIT_PREFLIGHT_RECOVERY_ACTION_HINT); the "recover-via-strategy" hints below are produced separately
+// so they can carry a suggestedRecoveryStrategy.
 
 const STRATEGY_RECOVERY_CODES: ReadonlySet<GitPreflightFindingCode> = new Set([
   "dirty-worktree-impacts-recovery",
   "recovery-target-unset",
 ]);
-
-const FINDING_RECOVERY_HINT: Readonly<
-  Record<GitPreflightFindingCode, GitDeliveryRecoveryActionHint>
-> = {
-  "detached-head": "configure-upstream",
-  "branch-already-exists": "adjust-policy-target",
-  "base-branch-missing": "adjust-policy-target",
-  "switch-target-missing": "adjust-policy-target",
-  "no-changes-to-stage": "stage-changes",
-  "nothing-staged-to-unstage": "stage-changes",
-  "nothing-staged-to-commit": "stage-changes",
-  "untracked-files-impacted": "stage-changes",
-  "no-upstream-configured": "configure-upstream",
-  "nothing-to-push": "retry",
-  "non-fast-forward": "resolve-conflicts",
-  "remote-alias-missing": "configure-upstream",
-  "remote-unreachable": "retry",
-  "operation-in-progress": "abort-in-progress-operation",
-  "no-operation-to-abort": "retry",
-  "recovery-target-unset": "recover-via-strategy",
-  "dirty-worktree-impacts-recovery": "recover-via-strategy",
-  // #3394 review: the branch moved since the caller previewed/approved it — re-previewing captures a
-  // fresh reference commit and re-approving redeems against that, so this is a plain retry.
-  "verified-commit-drifted": "retry",
-};
 
 function worktreeIsDirty(snapshot: GitWorktreeSnapshot): boolean {
   return (
@@ -256,7 +233,10 @@ function recoveryHintForFinding(
       ),
     };
   }
-  return { actionHint: FINDING_RECOVERY_HINT[finding.code], remediation: finding.remediation };
+  return {
+    actionHint: GIT_PREFLIGHT_RECOVERY_ACTION_HINT[finding.code],
+    remediation: finding.remediation,
+  };
 }
 
 function policyRecoveryHint(

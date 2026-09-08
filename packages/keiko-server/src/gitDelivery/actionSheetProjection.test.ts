@@ -184,6 +184,25 @@ describe("buildActionSheetFromFacts", () => {
     expect(sheet.recovery.some((hint) => hint.actionHint === "wait-for-provider")).toBe(true);
   });
 
+  it("mirrors a detached-head preflight block into the shared recover-via-strategy hint (#3394)", () => {
+    // The hint comes from the ONE contracts table both projections read; the retired server-local
+    // table said "configure-upstream" here, which the evidence projection never did.
+    const sheet = buildActionSheetFromFacts(
+      facts({ worktreeSnapshot: { ...CLEAN_SNAPSHOT, headDetached: true } }),
+    );
+    expect(sheet.state).toBe("blocked");
+    expect(sheet.blocked?.cause).toBe("preflight");
+    expect(sheet.blocked?.expectedBlockers).toContainEqual({
+      source: "preflight",
+      severity: "blocking",
+      remediation: "user-actionable",
+      reasonCode: "detached-head",
+    });
+    const hints = sheet.recovery.map((hint) => hint.actionHint);
+    expect(hints).toContain("recover-via-strategy");
+    expect(hints).not.toContain("configure-upstream");
+  });
+
   it("emits a recover-via-strategy hint with a concrete strategy for a dirty recovery", () => {
     const recoveryInputs: GitDeliveryResolvedInputs = {
       kind: "recovery",

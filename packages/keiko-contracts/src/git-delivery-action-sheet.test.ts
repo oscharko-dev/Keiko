@@ -18,6 +18,7 @@ import {
   GIT_DELIVERY_APPROVAL_NECESSITIES,
   GIT_DELIVERY_BLOCKED_CAUSES,
   GIT_DELIVERY_RECOVERY_ACTION_HINTS,
+  GIT_PREFLIGHT_RECOVERY_ACTION_HINT,
   gitDeliveryActionSheetStateFor,
   gitDeliveryApprovalNecessityForDecision,
   gitDeliveryBlockedCauseFor,
@@ -33,6 +34,7 @@ import {
   isGitDeliveryRecoveryHint,
   parseGitDeliveryActionSheet,
 } from "./git-delivery-action-sheet.js";
+import { GIT_PREFLIGHT_FINDING_CODES } from "./git-preflight.js";
 
 const TOKEN_HASH = "a".repeat(64);
 
@@ -472,5 +474,28 @@ describe("buildGitDeliveryActionSheet", () => {
       policyExplanation: { ...sheet.policyExplanation, decision: "totally-made-up" },
     };
     expect(isGitDeliveryActionSheet(corrupted)).toBe(false);
+  });
+});
+
+describe("GIT_PREFLIGHT_RECOVERY_ACTION_HINT (#3394 review: one table for both projections)", () => {
+  it("maps every preflight finding code to exactly one known recovery action hint", () => {
+    for (const code of GIT_PREFLIGHT_FINDING_CODES) {
+      expect(isGitDeliveryRecoveryActionHint(GIT_PREFLIGHT_RECOVERY_ACTION_HINT[code])).toBe(true);
+    }
+    expect([...Object.keys(GIT_PREFLIGHT_RECOVERY_ACTION_HINT)].sort()).toEqual(
+      [...GIT_PREFLIGHT_FINDING_CODES].sort(),
+    );
+  });
+
+  it("pins the reconciled hints the two retired per-package tables disagreed on", () => {
+    expect(GIT_PREFLIGHT_RECOVERY_ACTION_HINT["detached-head"]).toBe("recover-via-strategy");
+    expect(GIT_PREFLIGHT_RECOVERY_ACTION_HINT["branch-already-exists"]).toBe(
+      "adjust-policy-target",
+    );
+    expect(GIT_PREFLIGHT_RECOVERY_ACTION_HINT["base-branch-missing"]).toBe("adjust-policy-target");
+    expect(GIT_PREFLIGHT_RECOVERY_ACTION_HINT["switch-target-missing"]).toBe(
+      "adjust-policy-target",
+    );
+    expect(GIT_PREFLIGHT_RECOVERY_ACTION_HINT["remote-unreachable"]).toBe("wait-for-provider");
   });
 });
