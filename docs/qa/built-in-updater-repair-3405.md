@@ -1281,6 +1281,18 @@ scoped formatting/lint and lead diff review passed. Frozen test SHA-256:
 `c7237e3426de96ea0519b56f5fec799419cd06b18c27c65cf7267996c694fbcc`.
 The isolated report remains separate from the full-suite coverage reports.
 
+### Windows generation staging and signing command regressions
+
+Three existing script suites now exercise production-generation lane rejection, exact generation
+binding passed to the launcher compiler, malformed binding/missing fixed output, and the real
+signing command dispatchers for inventory closure and generation verification. A changed launcher
+digest is rejected against the closed generation. These are scoped deterministic command/fixture
+checks; they do not claim a native compiler run or production signature qualification.
+
+The isolated scripts-coverage replay passed all 64 tests across the three files in 3.70 seconds.
+Scoped formatting, lint and lead diff review passed. The report is retained separately at
+`/tmp/keiko-3405-windows-generation.LGM7nP/coverage` pending a complete coverage refresh.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification

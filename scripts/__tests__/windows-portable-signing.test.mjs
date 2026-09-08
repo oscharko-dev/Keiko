@@ -436,7 +436,7 @@ describe("Windows portable PE signing inventory", () => {
     );
   });
 
-  it("separates the signed generation inventory from the final root launcher", () => {
+  it("separates the signed generation inventory from the final root launcher", async () => {
     const stage = root();
     const generationId = "a".repeat(64);
     const generationRoot = join(
@@ -498,6 +498,46 @@ describe("Windows portable PE signing inventory", () => {
         "c".repeat(64),
       ),
     ).toBe(false);
+    const expectedInventoryPath = join(stage, "generation-inventory.json");
+    const completeInventoryPath = join(stage, "complete-inventory.json");
+    writeFileSync(expectedInventoryPath, JSON.stringify(generationInventory));
+    write(
+      join(stage, "manifest", "portable-manifest.json"),
+      Buffer.from(JSON.stringify({ windowsGeneration: { launcherSha256 } })),
+    );
+    await expect(
+      main([
+        "inventory-complete",
+        "--stage-root",
+        stage,
+        "--generation-id",
+        generationId,
+        "--expected-inventory",
+        expectedInventoryPath,
+        "--inventory",
+        completeInventoryPath,
+      ]),
+    ).resolves.toBeUndefined();
+    expect(JSON.parse(readFileSync(completeInventoryPath, "utf8"))).toEqual(complete);
+    write(
+      join(stage, "manifest", "portable-manifest.json"),
+      Buffer.from(JSON.stringify({ windowsGeneration: { launcherSha256: "b".repeat(64) } })),
+    );
+    await expect(
+      main([
+        "inventory-complete",
+        "--stage-root",
+        stage,
+        "--generation-id",
+        generationId,
+        "--expected-inventory",
+        expectedInventoryPath,
+        "--inventory",
+        completeInventoryPath,
+        "--launcher-sha256",
+        launcherSha256,
+      ]),
+    ).rejects.toThrow(/does not match the closed generation/u);
     write(join(stage, "payload", "Keiko", "app", "flat-copy.txt"), "forbidden");
     expect(() => inventoryWindowsPortableCompletePeFiles(stage, generationId)).toThrow(
       /unexpected flat-layout entry/u,
@@ -728,8 +768,10 @@ describe("Windows portable PE signing inventory", () => {
       windowsGeneration,
     };
     stageWindowsPortableRootFiles(join(stage, "payload", "Keiko"), windowsGeneration);
+    write(join(stage, "manifest", "portable-manifest.json"), Buffer.from(JSON.stringify(manifest)));
 
     await expect(verifyClosedWindowsGeneration(stage, manifest)).resolves.toBeUndefined();
+    await expect(main(["verify-generation", "--stage-root", stage])).resolves.toBeUndefined();
 
     write(
       join(
