@@ -1041,9 +1041,12 @@ export async function waitWhileAnsweringApprovals<T>(
         ? new Error(options.message)
         : new Error(`${options.message}: ${pending.message}`, { cause: pending });
     }
-    await answerVisibleApproval(page);
-    // Guarded like `clickWhenActionable`: a question the window is still binding, or an option that
-    // cannot be checked yet, defers to the next tick instead of ending the poll -- and the run.
+    // Guarded like `clickWhenActionable`: an approval or a question the window is still binding,
+    // or an option that cannot be checked yet, defers to the next tick instead of ending the poll
+    // -- and the run.
+    await answerVisibleApproval(page).catch((error: unknown) => {
+      process.stderr.write(`[lane] approval answer deferred: ${firstErrorLine(error)}\n`);
+    });
     await answerVisibleQuestion(page).catch((error: unknown) => {
       process.stderr.write(`[lane] question answer deferred: ${firstErrorLine(error)}\n`);
     });

@@ -163,6 +163,13 @@ const POSITIONAL_OP_HELPERS = [
     category: "gateway",
     file: "packages/keiko-model-gateway/src/openai-adapter.ts",
   },
+  // logGitDeliveryApprovalEvent(activityLog, op, operation, correlationId, runId, commitPinned) —
+  // category hardcoded "security" in the function body
+  // (packages/keiko-server/src/gitDelivery/approvalEvents.ts, #3394 review: pushRoutes.ts's
+  // logPushApprovalRequired/logPushApprovalMinted and prRoutes.ts's
+  // logPrApprovalRequired/logPrApprovalMinted were four structurally identical functions,
+  // consolidated into this one shared writer parameterized by `op` and `operation`).
+  { name: "logGitDeliveryApprovalEvent", argIndex: 1, category: "security" },
 ];
 
 // Exact diagnostic API shapes. Arbitrary `operation` payload fields are not instrumentation.

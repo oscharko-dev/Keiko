@@ -24,13 +24,11 @@
 // diff content, secrets, or credentials. CSRF + JSON content type are enforced centrally by server.ts.
 
 import type { GitDeliveryApprovalClaim } from "@oscharko-dev/keiko-contracts";
-import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import type { GitPushCommand } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import type { ServerLogSink } from "../observability/server-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
   DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
@@ -40,6 +38,7 @@ import {
   type GitDeliveryApprovalBinding,
   type ParsedGitDeliveryApprovalRequest,
 } from "./approvalStore.js";
+import { logGitDeliveryApprovalEvent, parseVerifiedCommitSha } from "./approvalEvents.js";
 import { gitDeliveryTerminationHandler, readWorktreeSnapshotFor } from "./execution.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import {
@@ -154,11 +153,9 @@ function scanError(parsed: Record<string, unknown>): RouteResult | undefined {
 // branch-name push; one that supplies it gets both the tighter binding AND the existing SHA-pinned
 // dispatch path (`git-publish-gateway.ts`'s `verifiedPushArgv`), which publishes exactly that
 // commit regardless of what the branch currently points to -- the same mechanism
-// `draftDeliveryService.ts` already trusts for the autonomous delivery path.
-function parseVerifiedCommitSha(value: unknown): { ok: true; value?: string } | { ok: false } {
-  if (value === undefined) return { ok: true };
-  return isGitObjectId(value) ? { ok: true, value } : { ok: false };
-}
+// `draftDeliveryService.ts` already trusts for the autonomous delivery path. Parsing itself is
+// shared with `prRoutes.ts` via `approvalEvents.ts`'s `parseVerifiedCommitSha` (#3394 review: was
+// duplicated byte-for-byte between the two routes).
 
 // Builds the typed push command from validated ref + boolean operands, or undefined when any operand is
 // malformed.
@@ -307,21 +304,6 @@ function pushApprovalRequiredBlock(deps: Pick<UiHandlerDeps, "redactor">): Route
   };
 }
 
-function logPushApprovalRequired(
-  activityLog: ServerLogSink,
-  correlationId: string,
-  runId: string,
-  commitPinned: boolean,
-): void {
-  activityLog.write({
-    category: "security",
-    op: "git.delivery.push.approval.required",
-    correlationId,
-    status: 200,
-    extra: { operation: "push", runId, commitPinned },
-  });
-}
-
 // Resolves the approval requirement, arms the continuity guard, drives the publish gateway, and
 // projects the content-free response. Extracted from createHandlePushExecute's returned handler
 // purely to stay under the function-length budget (AGENTS.md §6) — no behavioral seam of its own.
@@ -334,8 +316,10 @@ async function runPushMutation(input: PushMutationInput): Promise<RouteResult> {
   });
   if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_PUSH_BAD_REQUEST");
   if (!verifiedApproval.required) {
-    logPushApprovalRequired(
+    logGitDeliveryApprovalEvent(
       seams.activityLog ?? processServerLogSink(),
+      "git.delivery.push.approval.required",
+      "push",
       input.correlationId,
       authority.runId,
       command.verifiedCommitSha !== undefined,
@@ -422,21 +406,6 @@ export interface GitDeliveryPushApproveResponseBody {
   readonly expiresAt: string;
 }
 
-function logPushApprovalMinted(
-  activityLog: ServerLogSink,
-  correlationId: string,
-  runId: string,
-  commitPinned: boolean,
-): void {
-  activityLog.write({
-    category: "security",
-    op: "git.delivery.push.approval.minted",
-    correlationId,
-    status: 200,
-    extra: { operation: "push", runId, commitPinned },
-  });
-}
-
 export const createHandlePushApprove = (
   options: GitDeliveryPushRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
@@ -468,8 +437,10 @@ export const createHandlePushApprove = (
       approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
       nowMs: (seams.now ?? Date.now)(),
     });
-    logPushApprovalMinted(
+    logGitDeliveryApprovalEvent(
       seams.activityLog ?? processServerLogSink(),
+      "git.delivery.push.approval.minted",
+      "push",
       correlationId,
       authority.runId,
       command.verifiedCommitSha !== undefined,

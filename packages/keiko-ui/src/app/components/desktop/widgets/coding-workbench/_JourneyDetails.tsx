@@ -3,7 +3,10 @@ import type {
   JourneyOutcome,
   GitJourneyRemoteFacts,
 } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
-import { journeyEvidenceFresh } from "@oscharko-dev/keiko-contracts/runtime/git-journey-freshness";
+import {
+  APPLIED_PR_DESCRIPTION_STATES,
+  journeyEvidenceFresh,
+} from "@oscharko-dev/keiko-contracts/runtime/git-journey-freshness";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import { journeyCiCurrent, journeyDescriptionCurrent } from "./_journeyPresentation";
 import { CheckCounts, Fact } from "./CodingWorkbenchCiReadiness";
@@ -173,7 +176,7 @@ function descriptionState(
   // (#3390, rehearsal run-24). A merged journey's applied description is therefore not "stale".
   if (journeyDescriptionCurrent(outcome, now)) return description.state;
   if (!journeyEvidenceFresh(description, now)) return "stale";
-  if (new Set(["current", "partial", "fallback"]).has(description.state)) return "stale";
+  if (APPLIED_PR_DESCRIPTION_STATES.has(description.state)) return "stale";
   return description.state;
 }
 function JourneyDescription({

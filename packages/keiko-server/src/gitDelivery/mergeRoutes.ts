@@ -58,6 +58,7 @@ import {
   isNonEmptyString,
   isOwnerAndRepo,
   isPlainObject,
+  isPrNumberString,
   isSafeGitRef,
   scanForbiddenStrings,
   scanUnsafeFormatChars,
@@ -119,12 +120,7 @@ export interface GitDeliveryMergeRouteOptions {
   readonly execution?: GitDeliveryMergeSeams;
 }
 
-const PR_NUMBER_RE = /^[1-9]\d{0,9}$/;
 const SHA_RE = /^[0-9a-fA-F]{7,64}$/;
-
-function isPrNumberString(value: unknown): value is string {
-  return typeof value === "string" && PR_NUMBER_RE.test(value);
-}
 
 const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   "schemaVersion",

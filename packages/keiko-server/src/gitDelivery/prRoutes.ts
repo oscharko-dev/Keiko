@@ -29,7 +29,6 @@ import type {
   GitDeliveryApprovalClaim,
   GitDeliveryApprovalRequirement,
 } from "@oscharko-dev/keiko-contracts";
-import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import type { GitPullRequestCommand } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
@@ -45,6 +44,7 @@ import {
   type GitDeliveryApprovalBinding,
   type ParsedGitDeliveryApprovalRequest,
 } from "./approvalStore.js";
+import { logGitDeliveryApprovalEvent, parseVerifiedCommitSha } from "./approvalEvents.js";
 import { readWorktreeSnapshotFor } from "./execution.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import {
@@ -184,11 +184,9 @@ function scanError(parsed: Record<string, unknown>): RouteResult | undefined {
 // title/body -- an approval minted for one `verifiedCommitSha` no longer matches a request that
 // later names a different one, however far `headBranchName` has since moved in between. Optional
 // (mirrors pushRoutes.ts's identical field exactly): a caller that omits it keeps today's
-// branch-name pr-create/pr-update behavior.
-function parseVerifiedCommitSha(value: unknown): { ok: true; value?: string } | { ok: false } {
-  if (value === undefined) return { ok: true };
-  return isGitObjectId(value) ? { ok: true, value } : { ok: false };
-}
+// branch-name pr-create/pr-update behavior. Parsing itself is shared with pushRoutes.ts via
+// `approvalEvents.ts`'s `parseVerifiedCommitSha` (#3394 review: was duplicated byte-for-byte
+// between the two routes).
 
 function buildCreateCommand(parsed: Record<string, unknown>): GitPullRequestCommand | undefined {
   if (
@@ -401,21 +399,6 @@ function prApprovalRequiredBlock(
   };
 }
 
-function logPrApprovalRequired(
-  activityLog: ServerLogSink,
-  correlationId: string,
-  runId: string,
-  commitPinned: boolean,
-): void {
-  activityLog.write({
-    category: "security",
-    op: "git.delivery.pr.approval.required",
-    correlationId,
-    status: 200,
-    extra: { operation: "pr", runId, commitPinned },
-  });
-}
-
 interface GovernedPrDispatch {
   readonly ctx: RouteContext;
   readonly deps: UiHandlerDeps;
@@ -504,8 +487,10 @@ async function handlePrExecute(
   });
   if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_PR_BAD_REQUEST");
   if (!verifiedApproval.required) {
-    logPrApprovalRequired(
+    logGitDeliveryApprovalEvent(
       seams.activityLog ?? processServerLogSink(),
+      "git.delivery.pr.approval.required",
+      "pr",
       correlationId,
       authority.runId,
       command.verifiedCommitSha !== undefined,
@@ -541,21 +526,6 @@ export interface GitDeliveryPrApproveResponseBody {
   readonly expiresAt: string;
 }
 
-function logPrApprovalMinted(
-  activityLog: ServerLogSink,
-  correlationId: string,
-  runId: string,
-  commitPinned: boolean,
-): void {
-  activityLog.write({
-    category: "security",
-    op: "git.delivery.pr.approval.minted",
-    correlationId,
-    status: 200,
-    extra: { operation: "pr", runId, commitPinned },
-  });
-}
-
 export const createHandlePrApprove = (
   options: GitDeliveryPrRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
@@ -585,8 +555,10 @@ export const createHandlePrApprove = (
       approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
       nowMs: (seams.now ?? Date.now)(),
     });
-    logPrApprovalMinted(
+    logGitDeliveryApprovalEvent(
       seams.activityLog ?? processServerLogSink(),
+      "git.delivery.pr.approval.minted",
+      "pr",
       correlationId,
       authority.runId,
       command.verifiedCommitSha !== undefined,
