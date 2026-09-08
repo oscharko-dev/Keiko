@@ -15,6 +15,7 @@ internal static class StandardTokenLoader {
   private const uint TokenAssignPrimary = 0x1;
   private const uint TokenDuplicate = 0x2;
   private const uint TokenQuery = 0x8;
+  private const uint TokenAdjustDefault = 0x80;
   private const uint SePrivilegeEnabled = 0x2;
   private const uint CreateNoWindow = 0x08000000;
   private const uint CreateUnicodeEnvironment = 0x00000400;
@@ -54,7 +55,8 @@ internal static class StandardTokenLoader {
       mode != "--original-token-control" &&
       mode != "--explicit-child-dacl-control" &&
       mode != "--group-only-control" &&
-      mode != "--privilege-only-control") return Fail(100, "invalid-arguments");
+      mode != "--privilege-only-control" &&
+      mode != "--token-default-dacl-control") return Fail(100, "invalid-arguments");
     string input = ReadBoundedInput();
     if (input == null) return Fail(101, "input-too-large");
     IntPtr processToken = IntPtr.Zero;
@@ -66,7 +68,7 @@ internal static class StandardTokenLoader {
     try {
       if (!OpenProcessToken(
         GetCurrentProcess(),
-        TokenAssignPrimary | TokenDuplicate | TokenQuery,
+        TokenAssignPrimary | TokenDuplicate | TokenQuery | TokenAdjustDefault,
         out processToken)) return Win32Failure(102, "open-token");
       if (!CreateWellKnownSid(
         WinBuiltinAdministratorsSid,
@@ -125,6 +127,22 @@ internal static class StandardTokenLoader {
             "standard-token-loader:prepare-control-security:Exception:hresult-" +
             unchecked((uint)error.HResult).ToString("X8"));
           return 122;
+        }
+        if (mode == "--token-default-dacl-control") {
+          int defaultDaclError;
+          bool defaultDaclErrorIsHResult;
+          if (!TrySetPrivateTokenDefaultDacl(
+            restrictedToken,
+            user,
+            out defaultDaclError,
+            out defaultDaclErrorIsHResult)) {
+            string classification = defaultDaclErrorIsHResult
+              ? "Exception:hresult-" + unchecked((uint)defaultDaclError).ToString("X8")
+              : "win32-" + defaultDaclError;
+            Console.Error.WriteLine(
+              "standard-token-loader:set-control-default-dacl:" + classification);
+            return 123;
+          }
         }
         int originalDacl = ClassifyTokenDefaultDacl(
           processToken,
@@ -185,6 +203,61 @@ internal static class StandardTokenLoader {
       SecurityIdentifier user = identity.User;
       if (user == null) throw new InvalidOperationException();
       return user;
+    }
+  }
+
+  private static bool TrySetPrivateTokenDefaultDacl(
+    IntPtr token,
+    SecurityIdentifier user,
+    out int failureCode,
+    out bool failureIsHResult) {
+    failureCode = 0;
+    failureIsHResult = false;
+    IntPtr descriptor = IntPtr.Zero;
+    IntPtr information = IntPtr.Zero;
+    try {
+      uint descriptorBytes;
+      string descriptorText = "D:P(A;;GA;;;SY)(A;;GA;;;" + user.Value + ")";
+      if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        descriptorText,
+        1,
+        out descriptor,
+        out descriptorBytes)) {
+        failureCode = Marshal.GetLastWin32Error();
+        return false;
+      }
+      bool daclPresent;
+      bool daclDefaulted;
+      IntPtr dacl;
+      if (!GetSecurityDescriptorDacl(
+        descriptor,
+        out daclPresent,
+        out dacl,
+        out daclDefaulted)) {
+        failureCode = Marshal.GetLastWin32Error();
+        return false;
+      }
+      if (!daclPresent || dacl == IntPtr.Zero) return false;
+      information = Marshal.AllocHGlobal(IntPtr.Size);
+      Marshal.WriteIntPtr(information, dacl);
+      if (!SetTokenInformation(
+        token,
+        TokenDefaultDacl,
+        information,
+        unchecked((uint)IntPtr.Size))) {
+        failureCode = Marshal.GetLastWin32Error();
+        return false;
+      }
+      return true;
+    }
+    catch (Exception error) {
+      failureCode = error.HResult;
+      failureIsHResult = true;
+      return false;
+    }
+    finally {
+      if (information != IntPtr.Zero) Marshal.FreeHGlobal(information);
+      if (descriptor != IntPtr.Zero) LocalFree(descriptor);
     }
   }
 
@@ -1038,6 +1111,20 @@ internal static class StandardTokenLoader {
     IntPtr information,
     uint informationLength,
     out uint returnLength);
+
+  [DllImport("advapi32.dll", SetLastError = true)]
+  private static extern bool SetTokenInformation(
+    IntPtr token,
+    int informationClass,
+    IntPtr information,
+    uint informationLength);
+
+  [DllImport("advapi32.dll", SetLastError = true)]
+  private static extern bool GetSecurityDescriptorDacl(
+    IntPtr securityDescriptor,
+    [MarshalAs(UnmanagedType.Bool)] out bool daclPresent,
+    out IntPtr dacl,
+    [MarshalAs(UnmanagedType.Bool)] out bool daclDefaulted);
 
   [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   private static extern bool LookupPrivilegeValueW(

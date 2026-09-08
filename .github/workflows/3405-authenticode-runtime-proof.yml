@@ -95,10 +95,7 @@ jobs:
           $controlCommand = [Convert]::ToBase64String(
             [Text.Encoding]::Unicode.GetBytes("exit 0"))
           foreach ($control in @(
-            @{ Name = "original-token"; Mode = "--original-token-control" },
-            @{ Name = "explicit-child-dacl"; Mode = "--explicit-child-dacl-control" },
-            @{ Name = "group-only"; Mode = "--group-only-control" },
-            @{ Name = "privilege-only"; Mode = "--privilege-only-control" }
+            @{ Name = "token-default-dacl"; Mode = "--token-default-dacl-control" }
           )) {
             $controlStatus = 255
             try {
