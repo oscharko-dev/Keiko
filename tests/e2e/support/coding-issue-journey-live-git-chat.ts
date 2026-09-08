@@ -175,49 +175,52 @@ interface ConnectedRailChat {
   readonly title: string;
 }
 
-async function readSoleChatForProject(
+/** The project's chats, read-only, as the desktop lists them. */
+async function readChatsForProject(
   request: APIRequestContext,
   projectPath: string,
-): Promise<ConnectedRailChat> {
+): Promise<readonly ConnectedRailChat[]> {
   const response = await request.get(`/api/chats?projectPath=${encodeURIComponent(projectPath)}`);
   if (!response.ok()) {
     throw new Error(`Chat list failed (${String(response.status())}): ${await response.text()}`);
   }
   const body = (await response.json()) as { readonly chats: readonly ConnectedRailChat[] };
-  if (body.chats.length !== 1 || body.chats[0] === undefined) {
-    throw new Error(
-      `expected exactly one chat under the newly connected repository, found ${String(body.chats.length)}`,
-    );
-  }
-  return body.chats[0];
+  return body.chats;
 }
 
 /**
- * Creates a Chat through the left rail's own "New chat" control (`LeftRail.tsx`, i18n
+ * Opens a Chat through the left rail's own "New chat" control (`LeftRail.tsx`, i18n
  * "rail.newChat") -- the same one-shot action button every operator uses, never a seeded
  * `chat`-type window. The dialog's "title" field is left at its localized default so the server
- * keeps its canonical untitled default (`NewWindowDialog.tsx`'s `withChatUntitledMarker`); this
- * reads the created chat's actual id/title back from the read-only chats list rather than assuming
- * either.
+ * keeps its canonical untitled default (`NewWindowDialog.tsx`'s `withChatUntitledMarker`).
+ *
+ * "Open Chat" does not always create: the desktop opens the project's existing untitled chat when
+ * one is there instead of posting a second one (the probe rehearsal of 2026-09-08 waited 30 s for a
+ * `POST /api/chats` that never came while the Chat window was already open). So the chat the window
+ * shows is identified by comparing the read-only chat list before and after the click: a newly
+ * listed chat is the created one; otherwise the project's sole chat is the one that was opened.
  */
 async function createChatThroughRail(
   page: Page,
   request: APIRequestContext,
   repositoryRoot: string,
 ): Promise<ConnectedRailChat> {
+  const before = new Set((await readChatsForProject(request, repositoryRoot)).map((c) => c.id));
   await page.getByRole("button", { name: "New chat", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "New Chat window" });
   await expect(dialog).toBeVisible();
-  const created = page.waitForResponse(
-    (response) => response.request().method() === "POST" && response.url().endsWith("/api/chats"),
-    { timeout: 30_000 },
-  );
   await dialog.getByRole("button", { name: "Open Chat", exact: true }).click();
   await expect(dialog).toBeHidden();
-  const response = await created;
-  expect(response.ok(), `chat creation failed with HTTP ${String(response.status())}`).toBe(true);
   await expect(page.locator(CHAT_WINDOW)).toBeVisible();
-  return readSoleChatForProject(request, repositoryRoot);
+  const after = await readChatsForProject(request, repositoryRoot);
+  const created = after.filter((chat) => !before.has(chat.id));
+  const opened = created.length === 1 ? created[0] : after.length === 1 ? after[0] : undefined;
+  if (opened === undefined) {
+    throw new Error(
+      `could not tell which chat the rail opened: ${String(created.length)} new, ${String(after.length)} listed under the connected repository`,
+    );
+  }
+  return opened;
 }
 
 /** Connects the checked-out branch's real open pull request to a real Chat -- the exact real
