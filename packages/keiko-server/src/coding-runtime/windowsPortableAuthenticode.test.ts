@@ -59,11 +59,11 @@ interface RuntimeDerEvidence {
   readonly trailingZero: boolean;
 }
 
-function powershellJsonProbe(source: string, script: string, timeout: number): unknown {
+function powershellJsonProbe(sources: readonly string[], script: string, timeout: number): unknown {
   const result = spawnSync(
     "pwsh",
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
-    { encoding: "utf8", input: source, timeout },
+    { encoding: "utf8", input: JSON.stringify(sources), timeout },
   );
   if (result.status !== 0) throw new Error(result.stderr || "RFC3161 DER probe failed");
   return JSON.parse(result.stdout) as unknown;
@@ -72,31 +72,38 @@ function powershellJsonProbe(source: string, script: string, timeout: number): u
 function runtimeDerEvidence(): RuntimeDerEvidence {
   const script = [
     "$ErrorActionPreference='Stop'",
-    "$source=[Console]::In.ReadToEnd()",
+    "$sources=@([Console]::In.ReadToEnd()|ConvertFrom-Json)",
     "$refs=[string][AppContext]::GetData('TRUSTED_PLATFORM_ASSEMBLIES') -split [IO.Path]::PathSeparator",
-    "Add-Type -TypeDefinition $source -ReferencedAssemblies $refs",
+    "$sources|ForEach-Object{Add-Type -TypeDefinition $_ -ReferencedAssemblies $refs}",
     `function Test-RuntimeTst([string]$hex){[Keiko.Portable.Runtime.Rfc3161]::VerifyTstInfo([Convert]::FromHexString($hex),[Convert]::FromHexString('${SIGNATURE_HEX}'))}`,
     "$oidBytes=[Convert]::FromHexString('0603883703')",
     `$result=[ordered]@{canonical=(Test-RuntimeTst '${CANONICAL_TST_INFO}');fractional=(Test-RuntimeTst '${FRACTIONAL_TST_INFO}');noncanonicalOid=(Test-RuntimeTst '${NONCANONICAL_OID_TST_INFO}');trailingZero=(Test-RuntimeTst '${TRAILING_ZERO_TST_INFO}');oid=[Keiko.Portable.Runtime.Rfc3161]::DecodeOid($oidBytes)}`,
     "$result|ConvertTo-Json -Compress",
   ].join(";");
-  return powershellJsonProbe(WINDOWS_RFC3161_VERIFIER_SOURCE, script, 30_000) as RuntimeDerEvidence;
+  return powershellJsonProbe(
+    [WINDOWS_RFC3161_VERIFIER_SOURCE],
+    script,
+    30_000,
+  ) as RuntimeDerEvidence;
 }
 
 function rfc3161ParityEvidence(): Rfc3161ParityEvidence {
-  const source = `${WINDOWS_RFC3161_VERIFIER_SOURCE}\n${PRODUCER_RFC3161_SOURCE}`;
   const script = [
     "$ErrorActionPreference='Stop'",
-    "$source=[Console]::In.ReadToEnd()",
+    "$sources=@([Console]::In.ReadToEnd()|ConvertFrom-Json)",
     "$refs=[string][AppContext]::GetData('TRUSTED_PLATFORM_ASSEMBLIES') -split [IO.Path]::PathSeparator",
-    "Add-Type -TypeDefinition $source -ReferencedAssemblies $refs",
+    "$sources|ForEach-Object{Add-Type -TypeDefinition $_ -ReferencedAssemblies $refs}",
     `function Test-ProducerParity([string]$hex){$bytes=[Convert]::FromHexString($hex);$signature=[Convert]::FromHexString('${SIGNATURE_HEX}');$runtime=[Keiko.Portable.Runtime.Rfc3161]::VerifyTstInfo($bytes,$signature);$method=[Keiko.Portable.WindowsPortableRfc3161].GetMethod('TryReadTstInfo',[Reflection.BindingFlags]'NonPublic,Static');$invokeArgs=[object[]]@($bytes,$signature,[DateTimeOffset]::MinValue);try{$producer=[bool]$method.Invoke($null,$invokeArgs)}catch{$producer=$false};return @($runtime,$producer)}`,
     `$oidBytes=[Convert]::FromHexString('0603883703')`,
     "$oidReader=[System.Formats.Asn1.AsnReader]::new($oidBytes,[System.Formats.Asn1.AsnEncodingRules]::DER)",
     `$result=[ordered]@{canonical=(Test-ProducerParity '${CANONICAL_TST_INFO}');fractional=(Test-ProducerParity '${FRACTIONAL_TST_INFO}');noncanonicalOid=(Test-ProducerParity '${NONCANONICAL_OID_TST_INFO}');trailingZero=(Test-ProducerParity '${TRAILING_ZERO_TST_INFO}');oid=[Keiko.Portable.Runtime.Rfc3161]::DecodeOid($oidBytes);producerOid=$oidReader.ReadObjectIdentifier()}`,
     "$result|ConvertTo-Json -Compress",
   ].join(";");
-  return powershellJsonProbe(source, script, 60_000) as Rfc3161ParityEvidence;
+  return powershellJsonProbe(
+    [WINDOWS_RFC3161_VERIFIER_SOURCE, PRODUCER_RFC3161_SOURCE],
+    script,
+    60_000,
+  ) as Rfc3161ParityEvidence;
 }
 
 function signerRunner(...identities: readonly string[]): {

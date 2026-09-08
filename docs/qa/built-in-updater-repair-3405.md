@@ -1293,6 +1293,26 @@ The isolated scripts-coverage replay passed all 64 tests across the three files 
 Scoped formatting, lint and lead diff review passed. The report is retained separately at
 `/tmp/keiko-3405-windows-generation.LGM7nP/coverage` pending a complete coverage refresh.
 
+### Authenticode producer-parity compilation fixture repair
+
+Diagnostic run `34198289921` completed the full Windows packaging job successfully, including
+native optional dependencies. Core quality, all coverage suites, package coverage aggregation,
+Linux/macOS package smokes and the SonarCloud scanner's quality gate also passed for that
+diagnostic branch. Its Node 26 compatibility suite had one failure among 36,103 executed tests:
+the producer-parity fixture concatenated two C# compilation units, placing productive source
+`using` directives after runtime namespace declarations (CS1529). The fixture now sends the exact
+source units as a JSON array and compiles each independently in the same PowerShell process.
+Product C# and all canonical/adversarial parity assertions are unchanged.
+
+At the repaired fixture, the lead's canonical full typecheck passed and the normal-startup plus
+Authenticode replay passed 47 tests in 22.15 seconds. One producer-parity test retains its existing
+macOS platform skip because producer SignedCms loading can block in Apple's Security framework;
+the runtime DER probe did execute with PowerShell present. Linux/Windows parity at the repaired
+head remains required. Frozen test SHA-256:
+`20298e0266b91e2955c608a7a04bb11aa259568204a11f84d5c19bf84e8d15e8`.
+No final child-head CI or complete epic-baseline new-code coverage result is inferred from the
+passing diagnostic Sonar gate.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification
