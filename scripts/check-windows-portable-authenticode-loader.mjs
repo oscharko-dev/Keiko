@@ -28,6 +28,45 @@ function runRestricted(run, helper, powershell, systemRoot, script, input) {
   });
 }
 
+function assertProbeSucceeded(result, label) {
+  if (result.error === undefined && result.status === 0 && result.stdout === "") return;
+  throw new Error(
+    `${label} failed (${result.status ?? "spawn"};${closedHelperDiagnostic(result.stderr)})`,
+  );
+}
+
+function transportProbe(sentinel) {
+  return (
+    "$ErrorActionPreference='Stop';$s=[Console]::In.ReadToEnd();" +
+    `if($s -cne '${sentinel}'){exit 23};` +
+    "if($null -ne $env:TMP -or $null -ne $env:TEMP -or $null -ne $env:USERPROFILE){exit 20};" +
+    "$i=[Security.Principal.WindowsIdentity]::GetCurrent();" +
+    "$p=[Security.Principal.WindowsPrincipal]::new($i);" +
+    "if($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){exit 22};exit 0"
+  );
+}
+
+function verifierProbe(loader) {
+  return (
+    loader +
+    "if($null -ne $env:TMP -or $null -ne $env:TEMP -or $null -ne $env:USERPROFILE){exit 20};" +
+    "$i=[Security.Principal.WindowsIdentity]::GetCurrent();" +
+    "$p=[Security.Principal.WindowsPrincipal]::new($i);" +
+    "if($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){exit 22};" +
+    "$v=[Keiko.Portable.Runtime.Rfc3161]::DecodeOid([byte[]](6,2,42,3));" +
+    "if($v -cne '1.2.3'){exit 21};exit 0"
+  );
+}
+
+function assertCorruptInputsDenied({ helperPath, input, powershellPath, probe, run, systemRoot }) {
+  for (const invalid of [input.slice(0, -4), `A${input.slice(1)}`]) {
+    const denied = runRestricted(run, helperPath, powershellPath, systemRoot, probe, invalid);
+    if (denied.error !== undefined || denied.status !== 1) {
+      throw new Error("restricted verifier loader accepted corrupt assembly input");
+    }
+  }
+}
+
 export async function checkWindowsPortableAuthenticodeLoader({
   helperPath,
   powershellPath,
@@ -38,47 +77,20 @@ export async function checkWindowsPortableAuthenticodeLoader({
   const runtime = await import(pathToFileURL(resolve(serverRuntimePath)).href);
   const loader = runtime.windowsAuthenticodeVerifierLoaderScript();
   const input = runtime.windowsAuthenticodeVerifierAssemblyInput();
-  const transportSentinel = "keiko-authenticode-stdin-v1";
-  const transportProbe =
-    "$ErrorActionPreference='Stop';$s=[Console]::In.ReadToEnd();" +
-    `if($s -cne '${transportSentinel}'){exit 23};` +
-    "if($null -ne $env:TMP -or $null -ne $env:TEMP -or $null -ne $env:USERPROFILE){exit 20};" +
-    "$i=[Security.Principal.WindowsIdentity]::GetCurrent();" +
-    "$p=[Security.Principal.WindowsPrincipal]::new($i);" +
-    "if($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){exit 22};exit 0";
+  const sentinel = "keiko-authenticode-stdin-v1";
   const transport = runRestricted(
     run,
     helperPath,
     powershellPath,
     systemRoot,
-    transportProbe,
-    transportSentinel,
+    transportProbe(sentinel),
+    sentinel,
   );
-  if (transport.error !== undefined || transport.status !== 0 || transport.stdout !== "") {
-    throw new Error(
-      `restricted stdin probe failed (${transport.status ?? "spawn"};${closedHelperDiagnostic(transport.stderr)})`,
-    );
-  }
-  const probe =
-    loader +
-    "if($null -ne $env:TMP -or $null -ne $env:TEMP -or $null -ne $env:USERPROFILE){exit 20};" +
-    "$i=[Security.Principal.WindowsIdentity]::GetCurrent();" +
-    "$p=[Security.Principal.WindowsPrincipal]::new($i);" +
-    "if($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){exit 22};" +
-    "$v=[Keiko.Portable.Runtime.Rfc3161]::DecodeOid([byte[]](6,2,42,3));" +
-    "if($v -cne '1.2.3'){exit 21};exit 0";
+  assertProbeSucceeded(transport, "restricted stdin probe");
+  const probe = verifierProbe(loader);
   const valid = runRestricted(run, helperPath, powershellPath, systemRoot, probe, input);
-  if (valid.error !== undefined || valid.status !== 0 || valid.stdout !== "") {
-    throw new Error(
-      `restricted verifier loader failed (${valid.status ?? "spawn"};${closedHelperDiagnostic(valid.stderr)})`,
-    );
-  }
-  for (const invalid of [input.slice(0, -4), `A${input.slice(1)}`]) {
-    const denied = runRestricted(run, helperPath, powershellPath, systemRoot, probe, invalid);
-    if (denied.error !== undefined || denied.status !== 1) {
-      throw new Error("restricted verifier loader accepted corrupt assembly input");
-    }
-  }
+  assertProbeSucceeded(valid, "restricted verifier loader");
+  assertCorruptInputsDenied({ helperPath, input, powershellPath, probe, run, systemRoot });
 }
 
 function parseArguments(argv) {

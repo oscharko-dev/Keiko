@@ -99,6 +99,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Restricted-token loader proof failed" }
 
   runtime-proof:
+    needs: [analyzer-proof, loader-proof]
     runs-on: windows-latest
     timeout-minutes: 30
     steps:

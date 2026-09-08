@@ -28,6 +28,9 @@ internal static class StandardTokenLoader {
   private const int TeardownTimeoutMs = 5000;
   private const int WinBuiltinAdministratorsSid = 26;
   private const int SecurityImpersonation = 2;
+  private const uint GenericAll = 0x10000000;
+  private const uint CreateWindowStationOnly = 0x00000001;
+  private const int UserObjectName = 2;
 
   public static int Main(string[] args) {
     if (args.Length != 3) return Fail(100, "invalid-arguments");
@@ -127,12 +130,176 @@ internal static class StandardTokenLoader {
     return new string(buffer, 0, offset);
   }
 
+  private sealed class DesktopAuthority : IDisposable {
+    private IntPtr station;
+    private IntPtr desktop;
+    public string Name { get; private set; }
+
+    private DesktopAuthority(IntPtr stationHandle, IntPtr desktopHandle, string name) {
+      station = stationHandle;
+      desktop = desktopHandle;
+      Name = name;
+    }
+
+    public static bool TryCreate(
+      out DesktopAuthority authority,
+      out string failureStage,
+      out int failureCode,
+      out bool failureIsHResult) {
+      authority = null;
+      failureStage = "prepare-security";
+      failureCode = 0;
+      failureIsHResult = false;
+      IntPtr securityDescriptor = IntPtr.Zero;
+      IntPtr originalStation = IntPtr.Zero;
+      IntPtr privateStation = IntPtr.Zero;
+      IntPtr privateDesktop = IntPtr.Zero;
+      bool restoreRequired = false;
+      try {
+        SecurityIdentifier user;
+        using (WindowsIdentity identity = WindowsIdentity.GetCurrent()) {
+          user = identity.User;
+        }
+        if (user == null) return false;
+        string descriptor = "D:P(A;;GA;;;SY)(A;;GA;;;" + user.Value + ")";
+        uint descriptorBytes;
+        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+          descriptor,
+          1,
+          out securityDescriptor,
+          out descriptorBytes)) {
+          failureStage = "create-security-descriptor";
+          failureCode = Marshal.GetLastWin32Error();
+          return false;
+        }
+        var attributes = new SecurityAttributes {
+          Length = Marshal.SizeOf(typeof(SecurityAttributes)),
+          SecurityDescriptor = securityDescriptor,
+          InheritHandle = false,
+        };
+        originalStation = GetProcessWindowStation();
+        if (originalStation == IntPtr.Zero) {
+          failureStage = "get-parent-station";
+          failureCode = Marshal.GetLastWin32Error();
+          return false;
+        }
+        string requestedStationName = "keiko-authenticode-" + Guid.NewGuid().ToString("N");
+        privateStation = CreateWindowStationW(
+          requestedStationName,
+          CreateWindowStationOnly,
+          GenericAll,
+          ref attributes);
+        if (privateStation == IntPtr.Zero) {
+          failureStage = "create-private-station";
+          failureCode = Marshal.GetLastWin32Error();
+          return false;
+        }
+        restoreRequired = true;
+        if (!SetProcessWindowStation(privateStation)) {
+          failureStage = "select-private-station";
+          failureCode = Marshal.GetLastWin32Error();
+          return false;
+        }
+        const string desktopName = "keiko-authenticode";
+        privateDesktop = CreateDesktopW(
+          desktopName,
+          null,
+          IntPtr.Zero,
+          0,
+          GenericAll,
+          ref attributes);
+        if (privateDesktop == IntPtr.Zero) {
+          failureStage = "create-private-desktop";
+          failureCode = Marshal.GetLastWin32Error();
+          return false;
+        }
+        var stationName = new StringBuilder(512);
+        int requiredNameBytes;
+        if (!GetUserObjectInformationW(
+          privateStation,
+          UserObjectName,
+          stationName,
+          stationName.Capacity * 2,
+          out requiredNameBytes) ||
+          requiredNameBytes <= 2 ||
+          requiredNameBytes > stationName.Capacity * 2) {
+          failureStage = "read-private-station-name";
+          failureCode = Marshal.GetLastWin32Error();
+          return false;
+        }
+        string actualStationName = stationName.ToString();
+        if (!String.Equals(
+          actualStationName,
+          requestedStationName,
+          StringComparison.OrdinalIgnoreCase)) {
+          failureStage = "verify-private-station-name";
+          return false;
+        }
+        if (!SetProcessWindowStation(originalStation)) {
+          failureStage = "restore-parent-station";
+          failureCode = Marshal.GetLastWin32Error();
+          return false;
+        }
+        restoreRequired = false;
+        authority = new DesktopAuthority(
+          privateStation,
+          privateDesktop,
+          actualStationName + "\\" + desktopName);
+        privateStation = IntPtr.Zero;
+        privateDesktop = IntPtr.Zero;
+        return true;
+      }
+      catch (Exception error) {
+        failureStage = "prepare-security";
+        failureCode = error.HResult;
+        failureIsHResult = true;
+        return false;
+      }
+      finally {
+        if (restoreRequired && originalStation != IntPtr.Zero) {
+          SetProcessWindowStation(originalStation);
+        }
+        if (privateDesktop != IntPtr.Zero) CloseDesktop(privateDesktop);
+        if (privateStation != IntPtr.Zero) CloseWindowStation(privateStation);
+        if (securityDescriptor != IntPtr.Zero) LocalFree(securityDescriptor);
+      }
+    }
+
+    public void Dispose() {
+      if (desktop != IntPtr.Zero) {
+        CloseDesktop(desktop);
+        desktop = IntPtr.Zero;
+      }
+      if (station != IntPtr.Zero) {
+        CloseWindowStation(station);
+        station = IntPtr.Zero;
+      }
+    }
+  }
+
   private static int RunChild(
     IntPtr token,
     string powershell,
     string systemRoot,
     string encodedCommand,
     string input) {
+    DesktopAuthority authority;
+    string authorityStage;
+    int authorityCode;
+    bool authorityCodeIsHResult;
+    if (!DesktopAuthority.TryCreate(
+      out authority,
+      out authorityStage,
+      out authorityCode,
+      out authorityCodeIsHResult)) {
+      string classification = authorityCodeIsHResult
+        ? "Exception:hresult-" + unchecked((uint)authorityCode).ToString("X8")
+        : "win32-" + authorityCode;
+      Console.Error.WriteLine(
+        "standard-token-loader:" + authorityStage + ":" + classification);
+      return 119;
+    }
+    using (authority)
     using (var pipe = new AnonymousPipeServerStream(
       PipeDirection.Out,
       HandleInheritability.Inheritable)) {
@@ -161,6 +328,7 @@ internal static class StandardTokenLoader {
         environment = Marshal.StringToHGlobalUni(environmentText);
         var startup = new StartupInfo {
           Size = Marshal.SizeOf(typeof(StartupInfo)),
+          Desktop = authority.Name,
           Flags = StartfUseStdHandles,
           StandardInput = pipe.ClientSafePipeHandle.DangerousGetHandle(),
           StandardOutput = output,
@@ -361,6 +529,13 @@ internal static class StandardTokenLoader {
     ref uint sidSize);
 
   [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(
+    string stringSecurityDescriptor,
+    uint stringSdRevision,
+    out IntPtr securityDescriptor,
+    out uint securityDescriptorSize);
+
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   private static extern bool CreateProcessAsUserW(
     IntPtr token,
     string applicationName,
@@ -395,4 +570,43 @@ internal static class StandardTokenLoader {
 
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern bool CloseHandle(IntPtr handle);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern IntPtr LocalFree(IntPtr memory);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  private static extern IntPtr GetProcessWindowStation();
+
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern IntPtr CreateWindowStationW(
+    string windowStation,
+    uint flags,
+    uint desiredAccess,
+    ref SecurityAttributes securityAttributes);
+
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern IntPtr CreateDesktopW(
+    string desktop,
+    string device,
+    IntPtr deviceMode,
+    uint flags,
+    uint desiredAccess,
+    ref SecurityAttributes securityAttributes);
+
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern bool GetUserObjectInformationW(
+    IntPtr userObject,
+    int index,
+    StringBuilder information,
+    int informationLength,
+    out int requiredLength);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  private static extern bool SetProcessWindowStation(IntPtr windowStation);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  private static extern bool CloseDesktop(IntPtr desktop);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  private static extern bool CloseWindowStation(IntPtr windowStation);
 }
