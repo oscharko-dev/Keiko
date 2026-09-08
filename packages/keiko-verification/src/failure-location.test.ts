@@ -443,3 +443,73 @@ describe("extractFailureLocations — regex safety (S8786 regression guards)", (
     }
   });
 });
+
+// #3390: `runCommand` scrubs every non-allowlisted environment value from captured output, and a
+// user name or a state directory is routinely a prefix of the workspace path. Rehearsal runs 12-18
+// never produced a single failure location for the coding model because every frame carried the
+// placeholder and was dropped as "outside the workspace". Restoration is proof-based: the text
+// after the placeholder must resume a non-empty, directory-aligned suffix of the root.
+describe("extractFailureLocations — scrubbed host paths (#3390)", () => {
+  const frame = (path: string): string =>
+    [
+      "✖ keeps the online mean stable (0.5ms)",
+      "✖ failing tests:",
+      "✖ keeps the online mean stable (0.5ms)",
+      "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:",
+      "",
+      "  Infinity !== 0",
+      "",
+      `      at TestContext.<anonymous> (${path}:12:10)`,
+    ].join("\n");
+
+  it("restores a user name scrubbed inside the workspace path", () => {
+    expect(
+      extract(
+        "targeted-test",
+        cmd(frame("/Users/[REDACTED]/repo/test/a.test.js")),
+        "/Users/me/repo",
+      ),
+    ).toEqual([
+      {
+        file: "test/a.test.js",
+        line: 12,
+        column: 10,
+        message:
+          "keeps the online mean stable: Expected values to be strictly equal: Infinity !== 0",
+        ruleId: "ERR_ASSERTION",
+      },
+    ]);
+  });
+
+  it("restores leading segments scrubbed as one placeholder", () => {
+    expect(
+      extract(
+        "test",
+        cmd(frame("[REDACTED]/task-workspaces/ws_1/test/a.test.js")),
+        "/Users/me/state/task-workspaces/ws_1",
+      )[0]?.file,
+    ).toBe("test/a.test.js");
+  });
+
+  it("restores a scrubbed vitest frame the same way", () => {
+    const out = extract(
+      "test",
+      cmd(
+        ["FAIL src/a.test.ts > case", "  at /Users/[REDACTED]/repo/src/a.test.ts:3:4"].join("\n"),
+      ),
+      "/Users/me/repo",
+    );
+    expect(out[0]).toMatchObject({ file: "src/a.test.ts", line: 3, column: 4 });
+  });
+
+  it("never attributes a scrubbed path that does not resume the workspace root", () => {
+    for (const path of [
+      "[REDACTED]/other/test/a.test.js",
+      "/Users/[REDACTED]/elsewhere/test/a.test.js",
+      "[REDACTED]/test/a.test.js",
+      "[REDACTED]/repo/[REDACTED]/a.test.js",
+    ]) {
+      expect(extract("test", cmd(frame(path)), "/Users/me/repo")).toEqual([]);
+    }
+  });
+});

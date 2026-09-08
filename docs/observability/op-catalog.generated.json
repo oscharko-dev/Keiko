@@ -738,25 +738,25 @@
     {
       "op": "gateway.tool-catalog.call-bound",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:243",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:246",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.native-passthrough",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:231",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:234",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.projected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:314",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:339",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.rejected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:182",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:185",
       "package": "keiko-model-gateway"
     },
     {

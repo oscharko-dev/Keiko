@@ -19,7 +19,7 @@ import {
   VERIFICATION_MAX_FAILURE_LOCATIONS,
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import type { CommandResult } from "@oscharko-dev/keiko-tools";
-import { redact } from "@oscharko-dev/keiko-security";
+import { REDACTION_PLACEHOLDER, redact } from "@oscharko-dev/keiko-security";
 import { posix as posixPath, win32 as win32Path } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
@@ -211,7 +211,12 @@ function nodeStackLocation(line: string): Omit<VerificationFailureLocation, "mes
   const lineSeparator = location.lastIndexOf(":", columnSeparator - 1);
   if (lineSeparator <= 0 || columnSeparator <= lineSeparator) return undefined;
   const file = location.slice(0, lineSeparator);
-  if (!file.startsWith("file:") && !posixPath.isAbsolute(file) && !win32Path.isAbsolute(file)) {
+  if (
+    !file.startsWith("file:") &&
+    !file.startsWith(REDACTION_PLACEHOLDER) &&
+    !posixPath.isAbsolute(file) &&
+    !win32Path.isAbsolute(file)
+  ) {
     return undefined;
   }
   return {
@@ -335,8 +340,42 @@ function validFailurePath(
   );
 }
 
+/**
+ * Restores a host path the command runner scrubbed on its way out (#3390). `runCommand` replaces
+ * every non-allowlisted environment value in captured output with the redaction placeholder --
+ * fail-closed by design, and it hits `USER`, a state directory or any other value that happens
+ * to be a prefix of the workspace: `/Users/[REDACTED]/repo/test/a.test.js` or
+ * `[REDACTED]/task-workspaces/ws/test/a.test.js`. Before this, every such frame was dropped as
+ * "outside the workspace" and a coding run never saw a single failure location.
+ *
+ * The placeholder may stand for any run of characters, so the path is restored only when the
+ * text after the placeholder resumes a NON-EMPTY, directory-aligned suffix of the workspace root
+ * followed by a relative path -- which proves the original path was inside the root. A value
+ * that masked the whole root cannot be told apart from a sibling directory and stays dropped.
+ */
+function restoreScrubbedHostPath(file: string, workspaceRoot: string): string | undefined {
+  const at = file.indexOf(REDACTION_PLACEHOLDER);
+  if (at < 0) return file;
+  const prefix = file.slice(0, at);
+  const rest = file.slice(at + REDACTION_PLACEHOLDER.length);
+  if (!workspaceRoot.startsWith(prefix) || rest.includes(REDACTION_PLACEHOLDER)) return undefined;
+  for (let resume = prefix.length; resume < workspaceRoot.length; resume += 1) {
+    const tail = workspaceRoot.slice(resume);
+    if (!isSeparator(tail[0]) || !rest.startsWith(tail)) continue;
+    const remainder = rest.slice(tail.length);
+    if (isSeparator(remainder[0])) return `${workspaceRoot}${remainder}`;
+  }
+  return undefined;
+}
+
+function isSeparator(character: string | undefined): boolean {
+  return character === "/" || character === "\\";
+}
+
 function normalizeFailurePath(file: string, workspaceRoot: string): string | undefined {
-  const candidate = decodeFailurePath(file, workspaceRoot);
+  const decoded = decodeFailurePath(file, workspaceRoot);
+  const candidate =
+    decoded === undefined ? undefined : restoreScrubbedHostPath(decoded, workspaceRoot);
   if (!validFailurePath(candidate, workspaceRoot)) return undefined;
   const normalized = WINDOWS_ROOT.test(workspaceRoot)
     ? normalizeWindowsPath(candidate, workspaceRoot)

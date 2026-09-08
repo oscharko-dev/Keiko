@@ -877,6 +877,67 @@ export function journeyRefresher(
   };
 }
 
+/** An option label that hands the decision back to the run: the operator wants the delivery
+ * finished, not a hand-off. Matched case-insensitively on whole words. */
+const QUESTION_CONTINUE_OPTION = /\b(?:keep|continue|proceed|retry|resume|carry on|go on)\b/iu;
+
+/** What this operator answers when the run asks a free-text question: the decision goes back
+ * to the run, bounded by the issue's own acceptance criteria. */
+const OPERATOR_STANDING_ANSWER =
+  "Continue on your own judgement within the issue's acceptance criteria; keep the change scoped to the issue and finish the delivery.";
+
+/**
+ * Answers a question the run asked the operator (the sidecar's native `question` tool, rendered
+ * by the Coding Workbench's "Runtime questions" region). Rehearsal run-18 waited on such a question
+ * until the lane's own clock ran out: the model, unable to diagnose a test failure from the
+ * verification result it had been given, asked "hand off or keep probing?", and nothing answered.
+ * A real operator answers it in the window; this does the same, through the same controls: the
+ * option that hands the decision back to the run when one exists, otherwise the first option, and
+ * the standing free-text answer when the question offers no options at all.
+ */
+async function answerVisibleQuestion(page: Page): Promise<void> {
+  const forms = page.getByTestId("coding-workbench-questions").locator("form");
+  const count = await forms.count();
+  for (let index = 0; index < count; index += 1) {
+    const form = forms.nth(index);
+    if (!(await form.isVisible())) continue;
+    await answerQuestionForm(form);
+  }
+}
+
+async function answerQuestionForm(form: Locator): Promise<void> {
+  const chosen = await chooseQuestionOptions(form);
+  if (chosen.length === 0) {
+    const custom = form.getByLabel(/^Custom answer for /u);
+    if ((await custom.count()) === 0) return;
+    await custom.first().fill(OPERATOR_STANDING_ANSWER);
+    chosen.push("(free text)");
+  }
+  process.stderr.write(`[lane] answered runtime question: ${chosen.join(" | ")}\n`);
+  await clickWhenActionable(form.getByRole("button", { name: "Send answer", exact: true }));
+}
+
+/** Picks one option per question group (radios and checkboxes share a `name` per question). */
+async function chooseQuestionOptions(form: Locator): Promise<string[]> {
+  const options = form.locator('input[type="radio"], input[type="checkbox"]');
+  const facts = await options.evaluateAll((elements) =>
+    elements.map((element) => ({
+      name: element.getAttribute("name") ?? "",
+      label: element.getAttribute("aria-label") ?? "",
+    })),
+  );
+  const chosen: string[] = [];
+  const groups = new Set(facts.map((fact) => fact.name));
+  for (const group of groups) {
+    const members = facts.filter((fact) => fact.name === group);
+    const pick = members.find((fact) => QUESTION_CONTINUE_OPTION.test(fact.label)) ?? members[0];
+    if (pick === undefined) continue;
+    await form.getByLabel(pick.label, { exact: true }).first().check();
+    chosen.push(pick.label);
+  }
+  return chosen;
+}
+
 async function answerVisibleApproval(page: Page): Promise<void> {
   await clickWhenActionable(page.getByRole("button", { name: "Approve once", exact: true }));
   const changeReview = page.getByRole("region", {
@@ -936,6 +997,7 @@ export async function waitWhileAnsweringApprovals<T>(
         : new Error(`${options.message}: ${pending.message}`, { cause: pending });
     }
     await answerVisibleApproval(page);
+    await answerVisibleQuestion(page);
     await page.waitForTimeout(2_000);
   }
 }
