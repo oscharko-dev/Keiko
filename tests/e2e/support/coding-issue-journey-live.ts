@@ -30,7 +30,6 @@ const SURFACE = 'section[aria-label="Coding Workbench"][data-state]';
 const AUTH_ENDPOINT = "/api/coding-workbench/github-authorization";
 const GATEWAY_READINESS_ENDPOINT = "/api/gateway/readiness";
 const GATEWAY_SETUP_ENDPOINT = "/api/gateway/setup";
-const PROJECTS_ENDPOINT = "/api/projects";
 const CSRF = { "X-Keiko-CSRF": "1" };
 
 export function workbenchSurface(page: Page): Locator {
@@ -433,33 +432,9 @@ export async function grantGithubAccess(page: Page, repositoryRoot: string): Pro
   expect(updated.ok()).toBe(true);
 }
 
-interface RepositoryProjectRegistration {
-  readonly status: number;
-  readonly warning?: unknown;
-}
-
-export interface LiveRepositoryProjectClient {
-  readonly register: (repositoryRoot: string) => Promise<RepositoryProjectRegistration>;
-}
-
-export async function registerTrustedRepositoryProject(
-  client: LiveRepositoryProjectClient,
-  repositoryRoot: string,
-): Promise<void> {
-  const registered = await client.register(repositoryRoot);
-  expect(
-    registered.status,
-    `the repository project registration failed with HTTP ${String(registered.status)}`,
-  ).toBe(201);
-  expect(
-    registered.warning,
-    "the registered repository must inherit package-script trust before worktree provisioning",
-  ).toBeUndefined();
-}
-
 export interface LiveIssueWorkspacePreparation {
   readonly open: () => Promise<void>;
-  readonly registerProject: () => Promise<void>;
+  readonly trustWorkspace: () => Promise<void>;
   readonly bindIssue: () => Promise<void>;
 }
 
@@ -482,54 +457,79 @@ export async function prepareTrustedIssueWorkspace(
   steps: LiveIssueWorkspacePreparation,
 ): Promise<void> {
   await steps.open();
-  await steps.registerProject();
+  await steps.trustWorkspace();
   await steps.bindIssue();
 }
 
-// Real affordance: the project/repository open flow. EditorEmptyState.tsx ("Shown when the editor
-// window is open without a bound project root (e.g. toggled from the left rail)") is the one
-// `createProject` call site that renders its manual-path fallback UNCONDITIONALLY, alongside the
-// native picker, rather than instead of it (compare RepositoryFolderSwitcher.tsx's `FolderPanel`,
-// which renders the manual form ONLY when native dialogs are unsupported -- unusable here since
-// `nativeFileDialogSupported` reports true on darwin/win32 regardless of automation). Toggling the
-// left rail's "Editor" tool with no root bound (a fresh coding-only workspace has no "editor" window
-// yet) mounts EditorEmptyState directly, with no dialog to drive first.
-async function openEmptyEditorWindow(page: Page): Promise<Locator> {
+// Real affordance: the workspace trust decision.
+//
+// #3390: this step used to register the repository as a project through `EditorEmptyState`'s
+// manual-path fallback, reached by toggling the left rail's Editor with no root bound. Two facts
+// retire that path. The production CLI is launched IN the controlled repository
+// (`coding-issue-journey-server.mts` hands `runUiCli` that cwd), so the repository is ALREADY the
+// open project and the selected workspace root -- an operator does not re-register the folder they
+// launched the app in, and `POST /api/projects` for it is an idempotent no-op. And because a root
+// IS selected, the Editor opens BOUND: `EditorEmptyState` renders only for `workspaceRoot.length
+// === 0` (EditorWidget.tsx), so that fallback never appears and the step could not complete.
+//
+// What the operator actually does, and what the provisioner needs before it derives script trust
+// onto the managed worktree, is the explicit trust act: the workspace trust prompt every surface
+// that would run repository-authored code raises for an undecided root. Opening the Editor raises
+// it; "Trust workspace" is the decision. Its disappearance, and the absence of the restricted
+// banner afterwards, are the interface's own confirmation that the decision took effect.
+async function decideLiveWorkspaceTrust(page: Page): Promise<LiveWorkspaceTrustOutcome> {
   await ensureRailToolOpen(page, "Editor");
-  const empty = page.getByTestId("editor-empty-state");
-  await expect(empty).toBeVisible();
-  return empty;
+  const dialog = page.getByRole("alertdialog", { name: "Trust this workspace?" });
+  await expect(
+    dialog,
+    "the Editor must raise the workspace trust decision for an undecided repository root",
+  ).toBeVisible({ timeout: 60_000 });
+  await dialog.getByRole("button", { name: "Trust workspace", exact: true }).click();
+  await expect(dialog).toBeHidden({ timeout: 60_000 });
+  // `WorkspaceTrustBanner` renders as role="note" with the mode as its accessible name
+  // (WorkspaceTrustSurfaces.tsx), and only while the root is NOT trusted -- so its absence here is
+  // the interface's own confirmation that the decision took effect. The role and the exact label
+  // matter: a locator naming a role this banner does not use would find nothing and pass vacuously
+  // no matter what the product did.
+  const restricted = page.getByRole("note", { name: "Restricted Mode" });
+  const outcome = { decided: true, restricted: (await restricted.count()) > 0 };
+  await closeEditorWindow(page);
+  return outcome;
 }
 
-// The scratch Editor window served only to reach EditorEmptyState's real "open a project" control;
-// closing it again keeps the workspace layout the rest of the journey expects (a single "coding"
-// window) rather than leaving an unrelated bound Editor window mounted for the remaining steps.
-// Safe to call right after `openEmptyEditorWindow`: the rail button's `aria-pressed` is still
-// "true" (open), so this click toggles it closed rather than reopening it.
+// The scratch Editor window served only to raise the trust decision for the selected root; closing
+// it again keeps the workspace layout the rest of the journey expects (a single "coding" window)
+// rather than leaving an unrelated bound Editor window mounted for the remaining steps.
+// Safe to call right after the decision: the rail button's `aria-pressed` is still "true" (open),
+// so this click toggles it closed rather than reopening it.
 async function closeEditorWindow(page: Page): Promise<void> {
   await primaryRail(page).getByRole("button", { name: "Editor", exact: true }).click();
 }
 
-async function registerLiveRepositoryProject(page: Page, repositoryRoot: string): Promise<void> {
-  await registerTrustedRepositoryProject(
-    {
-      register: async (path): Promise<RepositoryProjectRegistration> => {
-        const empty = await openEmptyEditorWindow(page);
-        await empty.getByLabel("Project folder path").fill(path);
-        const created = page.waitForResponse(
-          (response) =>
-            response.request().method() === "POST" && response.url().endsWith(PROJECTS_ENDPOINT),
-        );
-        await empty.getByRole("button", { name: "Open", exact: true }).click();
-        const response = await created;
-        await closeEditorWindow(page);
-        if (response.status() !== 201) return { status: response.status() };
-        const body = (await response.json()) as { readonly warning?: unknown };
-        return { status: response.status(), warning: body.warning };
-      },
-    },
-    repositoryRoot,
-  );
+export interface LiveWorkspaceTrustOutcome {
+  /** The trust decision was actually offered and answered, never assumed. */
+  readonly decided: boolean;
+  /** The workspace still reports restricted mode after the decision. */
+  readonly restricted: boolean;
+}
+
+export interface LiveWorkspaceTrustClient {
+  readonly trust: () => Promise<LiveWorkspaceTrustOutcome>;
+}
+
+/** Fails closed on both halves of the precondition: the decision must be reached through the real
+ * prompt, and the workspace must not stay restricted afterwards -- repository scripts the
+ * provisioner derives trust from would otherwise never run. */
+export async function trustRepositoryWorkspace(client: LiveWorkspaceTrustClient): Promise<void> {
+  const outcome = await client.trust();
+  expect(
+    outcome.decided,
+    "the workspace trust decision must be reached before worktree provisioning",
+  ).toBe(true);
+  expect(
+    outcome.restricted,
+    "the repository must not stay in restricted mode before worktree provisioning",
+  ).toBe(false);
 }
 
 // #3390: read from the window's own live status region rather than by calling the readiness route
@@ -800,7 +800,7 @@ export async function driveIssueToDraftPullRequest(
     // the production provisioner derives that trust onto the managed worktree, and (#3394) so the
     // GitHub access grant the issue preview asks for inside Bind names a repository the server
     // already knows -- it accepts a grant for no other.
-    registerProject: () => registerLiveRepositoryProject(page, input.repositoryRoot),
+    trustWorkspace: () => trustRepositoryWorkspace({ trust: () => decideLiveWorkspaceTrust(page) }),
     bindIssue: () =>
       prepareBoundIssueForRun({
         previewAndBind: () => previewAndBindIssue(page, input.issueRef),

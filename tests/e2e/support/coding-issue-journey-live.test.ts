@@ -7,7 +7,7 @@ import {
   readObservedRunWhileAwaitingDraft,
   readObservedRunWhileAwaitingSuccess,
   reconcileLiveWorkbenchAfterModelChange,
-  registerTrustedRepositoryProject,
+  trustRepositoryWorkspace,
 } from "./coding-issue-journey-live.js";
 import type { ObservedRun } from "./coding-issue-journey-live-observed.js";
 
@@ -310,16 +310,17 @@ describe("live journey model-change reload", () => {
 });
 
 describe("live journey repository trust", () => {
-  // #3394/#3390 -- the GitHub access grant is no longer a step of this sequence: it now happens
-  // inside `bindIssue`, driven through the Workbench's own control on the access refusal
-  // (CodingWorkbenchIssueIntake.tsx's `GitHubIssueAccessGrant`). The invariant the previous
-  // four-step order pinned -- never ask the server to authorize a repository it has not registered
-  // (githubAuthorizationRoutes.ts's `registeredRepositoryRoot`, which checks
-  // `deps.store.listProjects()`) -- is STRENGTHENED by that move rather than dropped: the grant is
-  // reachable only from a window already bound to the registered repository path, so no caller can
-  // re-order the two any more. This pins the surviving order, and that the grant is inside the
-  // issue binding rather than ahead of registration.
-  it("registers trust before the issue binding that grants access and provisions the worktree", async () => {
+  // #3394/#3390 -- two moves, both preserving what the original four-step order pinned. The GitHub
+  // access grant left this sequence and now happens inside `bindIssue`, through the Workbench's own
+  // control on the access refusal (CodingWorkbenchIssueIntake.tsx's `GitHubIssueAccessGrant`),
+  // which is reachable only from a window already bound to the registered repository -- so "never
+  // ask the server to authorize a repository it has not registered"
+  // (githubAuthorizationRoutes.ts's `registeredRepositoryRoot`) is now structural rather than
+  // sequenced. And project registration became the WORKSPACE TRUST decision: the production CLI is
+  // launched in the controlled repository, so it is already the open project, while the act the
+  // provisioner actually needs -- and the only one an operator still performs -- is trusting that
+  // root. Both must still precede the issue binding, which is what this pins.
+  it("decides workspace trust before the issue binding that grants access and provisions", async () => {
     const order: string[] = [];
 
     await prepareTrustedIssueWorkspace({
@@ -327,8 +328,8 @@ describe("live journey repository trust", () => {
         order.push("opened");
         return Promise.resolve();
       },
-      registerProject: (): Promise<void> => {
-        order.push("project-registered");
+      trustWorkspace: (): Promise<void> => {
+        order.push("workspace-trusted");
         return Promise.resolve();
       },
       bindIssue: (): Promise<void> => {
@@ -337,30 +338,33 @@ describe("live journey repository trust", () => {
       },
     });
 
-    expect(order).toEqual(["opened", "project-registered", "issue-bound-with-access-granted"]);
+    expect(order).toEqual(["opened", "workspace-trusted", "issue-bound-with-access-granted"]);
   });
 
-  it("registers the accepted repository as a trusted project before provisioning", async () => {
-    const register = vi.fn(() => Promise.resolve({ status: 201 }));
+  // #3390: the two registration pins move onto the act that replaced registration. Their
+  // invariants are unchanged -- the precondition must be genuinely performed, and a repository
+  // whose scripts stay restricted must fail closed rather than proceed into provisioning.
+  it("reaches the workspace trust decision before provisioning", async () => {
+    const trust = vi.fn(() => Promise.resolve({ decided: true, restricted: false }));
 
-    await registerTrustedRepositoryProject({ register }, "/controlled/repository");
+    await trustRepositoryWorkspace({ trust });
 
-    expect(register).toHaveBeenCalledExactlyOnceWith("/controlled/repository");
+    expect(trust).toHaveBeenCalledExactlyOnceWith();
   });
 
-  it("fails closed when project registration keeps repository scripts restricted", async () => {
-    const register = vi.fn(() => Promise.resolve({ status: 201, warning: "restricted" }));
+  it("fails closed when the workspace was never actually asked to be trusted", async () => {
+    const trust = vi.fn(() => Promise.resolve({ decided: false, restricted: false }));
 
-    await expect(
-      registerTrustedRepositoryProject({ register }, "/controlled/repository"),
-    ).rejects.toThrow("must inherit package-script trust");
+    await expect(trustRepositoryWorkspace({ trust })).rejects.toThrow(
+      "trust decision must be reached before worktree provisioning",
+    );
   });
 
-  it("reports only the rejected HTTP status when registration fails", async () => {
-    const register = vi.fn(() => Promise.resolve({ status: 409 }));
+  it("fails closed when the workspace stays restricted after the decision", async () => {
+    const trust = vi.fn(() => Promise.resolve({ decided: true, restricted: true }));
 
-    await expect(
-      registerTrustedRepositoryProject({ register }, "/controlled/repository"),
-    ).rejects.toThrow("failed with HTTP 409");
+    await expect(trustRepositoryWorkspace({ trust })).rejects.toThrow(
+      "must not stay in restricted mode before worktree provisioning",
+    );
   });
 });
