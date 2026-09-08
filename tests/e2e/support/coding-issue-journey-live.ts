@@ -1077,14 +1077,16 @@ async function answerVisibleQuestion(page: Page): Promise<void> {
 }
 
 async function answerQuestionForm(form: Locator): Promise<void> {
-  const custom = form.getByLabel(/^Custom answer for /u);
-  const customCount = await custom.count();
-  const { chosen, unanswered } = await chooseQuestionOptions(form, customCount > 0);
-  if (unanswered > 0) {
-    if (customCount === 0) return;
-    // One free-text field per question that got no pick: the standing answer, never silence.
-    for (let index = 0; index < Math.min(unanswered, customCount); index += 1) {
-      await custom.nth(index).fill(OPERATOR_STANDING_ANSWER);
+  const fields = form.locator("fieldset[data-question-index]");
+  const answers = planQuestionAnswers(await fields.evaluateAll(questionFieldFacts));
+  const chosen: string[] = [];
+  for (const answer of answers) {
+    const field = fields.nth(answer.field);
+    if (answer.kind === "option") {
+      await field.locator(QUESTION_OPTION_INPUTS).nth(answer.option).check({ timeout: 5_000 });
+      chosen.push(answer.label);
+    } else {
+      await field.getByLabel(/^Custom answer for /u).fill(OPERATOR_STANDING_ANSWER);
       chosen.push("(free text)");
     }
   }
@@ -1092,76 +1094,74 @@ async function answerQuestionForm(form: Locator): Promise<void> {
   await clickWhenActionable(form.getByRole("button", { name: "Send answer", exact: true }));
 }
 
-export interface QuestionOptionFact {
-  /** Position among the form's option inputs in DOM order: the handle the pick is checked by. */
-  readonly index: number;
-  /** The question the option belongs to (radios and checkboxes share a `name` per question). */
-  readonly name: string;
-  readonly label: string;
+const QUESTION_OPTION_INPUTS = 'input[type="radio"], input[type="checkbox"]';
+
+export interface QuestionFieldFacts {
+  /** Position of the question's fieldset within the form, in DOM order: the handle every control
+   * of that question is reached through. */
+  readonly field: number;
+  /** The option labels in DOM order. The option text is the `aria-label` of the wrapping
+   * `<label>` (CodingWorkbenchQuestions.tsx), never of the input. */
+  readonly options: readonly string[];
+  /** Whether the question renders its own free-text field ("Custom answer for <header>"). */
+  readonly custom: boolean;
 }
 
-/** Reads the option facts the way the component renders them: the option text is the
- * `aria-label` of the wrapping `<label>` (CodingWorkbenchQuestions.tsx), never of the input. Runs
- * inside the page, so it must stay free of any reference outside its own body. */
-export function questionOptionFacts(elements: readonly Element[]): QuestionOptionFact[] {
-  return elements.map((element, index) => ({
-    index,
-    name: element.getAttribute("name") ?? "",
-    label: (
-      element.closest("label")?.getAttribute("aria-label") ??
-      element.getAttribute("aria-label") ??
-      ""
-    ).trim(),
+/** Reads one question per fieldset, the way the component renders them. Runs inside the page, so
+ * it must stay free of any reference outside its own body. */
+export function questionFieldFacts(fieldsets: readonly Element[]): QuestionFieldFacts[] {
+  return fieldsets.map((fieldset, field) => ({
+    field,
+    options: [...fieldset.querySelectorAll('input[type="radio"], input[type="checkbox"]')].map(
+      (input) => (input.closest("label")?.getAttribute("aria-label") ?? "").trim(),
+    ),
+    custom: fieldset.querySelector('input[id$="-custom"]') !== null,
   }));
 }
 
-export interface QuestionPicks {
-  readonly picks: readonly QuestionOptionFact[];
-  /** Questions left without a pick because every option parks the run and a free-text answer is
-   * available instead. */
-  readonly unanswered: number;
+export type QuestionAnswer =
+  | {
+      readonly kind: "option";
+      readonly field: number;
+      readonly option: number;
+      readonly label: string;
+    }
+  | { readonly kind: "custom"; readonly field: number };
+
+/**
+ * One answer per question, through that question's OWN controls: the option that hands the decision
+ * back to the run; else the first option that does not park it; else the question's own free-text
+ * field, which receives the standing answer; else the first option. A question with neither options
+ * nor a free-text field gets no answer. A free-text field belongs to the question it is rendered
+ * under and is never counted across the form: filling another question's field would, for a
+ * single-choice question, replace the option just picked there (the component treats a non-empty
+ * custom value as THE answer) and leave the question that needed it unanswered.
+ */
+export function planQuestionAnswers(fields: readonly QuestionFieldFacts[]): QuestionAnswer[] {
+  const answers: QuestionAnswer[] = [];
+  for (const { field, options, custom } of fields) {
+    const preferred = preferredQuestionOption(options);
+    if (preferred !== undefined) answers.push(optionAnswer(field, preferred, options));
+    else if (custom) answers.push({ kind: "custom", field });
+    else if (options.length > 0) answers.push(optionAnswer(field, 0, options));
+  }
+  return answers;
 }
 
-/** One pick per question, in this order: the option that hands the decision back to the run; else
- * the first option that does not park it; else -- when the form accepts a free-text answer -- no
- * pick at all, so the standing answer goes in its place; else the first option. Two questions in
- * one form may legitimately offer the same option text, so a pick is identified by its index, never
- * by its label. */
-export function pickQuestionOptions(
-  facts: readonly QuestionOptionFact[],
-  customAnswerAvailable = false,
-): QuestionPicks {
-  const picks: QuestionOptionFact[] = [];
-  let unanswered = 0;
-  for (const group of new Set(facts.map((fact) => fact.name))) {
-    const members = facts.filter((fact) => fact.name === group);
-    const pick = preferredQuestionOption(members);
-    if (pick !== undefined) picks.push(pick);
-    else if (customAnswerAvailable) unanswered += 1;
-    else if (members[0] !== undefined) picks.push(members[0]);
-  }
-  return { picks, unanswered };
+function optionAnswer(field: number, option: number, labels: readonly string[]): QuestionAnswer {
+  return { kind: "option", field, option, label: labels[option] ?? "" };
 }
 
 /** The continue option that does not also park the run, else any option that does not park it,
- * else a continue option even when its wording also mentions the operator. */
-function preferredQuestionOption(
-  members: readonly QuestionOptionFact[],
-): QuestionOptionFact | undefined {
-  const continues = members.filter((fact) => QUESTION_CONTINUE_OPTION.test(fact.label));
-  const proceeds = members.filter((fact) => !QUESTION_DEFER_OPTION.test(fact.label));
-  return continues.find((fact) => proceeds.includes(fact)) ?? proceeds[0] ?? continues[0];
-}
-
-async function chooseQuestionOptions(
-  form: Locator,
-  customAnswerAvailable: boolean,
-): Promise<{ chosen: string[]; unanswered: number }> {
-  const options = form.locator('input[type="radio"], input[type="checkbox"]');
-  const facts = await options.evaluateAll(questionOptionFacts);
-  const { picks, unanswered } = pickQuestionOptions(facts, customAnswerAvailable);
-  for (const pick of picks) await options.nth(pick.index).check({ timeout: 5_000 });
-  return { chosen: picks.map((pick) => pick.label), unanswered };
+ * else a continue option even when its wording also mentions the operator; by position. */
+function preferredQuestionOption(labels: readonly string[]): number | undefined {
+  const continues = labels.flatMap((label, index) =>
+    QUESTION_CONTINUE_OPTION.test(label) ? [index] : [],
+  );
+  const proceeds = labels.flatMap((label, index) =>
+    QUESTION_DEFER_OPTION.test(label) ? [] : [index],
+  );
+  return continues.find((index) => proceeds.includes(index)) ?? proceeds[0] ?? continues[0];
 }
 
 async function answerVisibleApproval(page: Page): Promise<void> {
