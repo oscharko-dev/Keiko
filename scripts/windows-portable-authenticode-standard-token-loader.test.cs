@@ -218,7 +218,11 @@ internal static class StandardTokenLoader {
         if (!GetExitCodeProcess(process.Process, out exitCode)) {
           return Win32Failure(112, "read-restricted-exit");
         }
-        if (exitCode > 99) return Fail(113, "invalid-restricted-exit");
+        if (exitCode > 99) {
+          Console.Error.WriteLine(
+            "standard-token-loader:invalid-restricted-exit:child-" + exitCode.ToString("X8"));
+          return 113;
+        }
         if (exitCode != 0) return (int)exitCode;
         if (writerFailure != null) {
           Console.Error.WriteLine(

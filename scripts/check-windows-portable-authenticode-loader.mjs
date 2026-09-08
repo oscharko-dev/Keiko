@@ -5,6 +5,14 @@ import { pathToFileURL } from "node:url";
 
 const CHILD_TIMEOUT_MS = 40_000;
 const CHILD_OUTPUT_BYTES = 16_384;
+const CLOSED_HELPER_DIAGNOSTIC =
+  /^standard-token-loader:[a-z-]+(?::(?:win32-[0-9]+|[A-Za-z]+:hresult-[0-9A-F]{8}|child-[0-9A-F]{8}))?\r?\n?$/u;
+
+function closedHelperDiagnostic(stderr) {
+  return typeof stderr === "string" && CLOSED_HELPER_DIAGNOSTIC.test(stderr)
+    ? stderr.trim()
+    : "unavailable";
+}
 
 function encodedPowerShell(script) {
   return Buffer.from(script, "utf16le").toString("base64");
@@ -47,7 +55,9 @@ export async function checkWindowsPortableAuthenticodeLoader({
     transportSentinel,
   );
   if (transport.error !== undefined || transport.status !== 0 || transport.stdout !== "") {
-    throw new Error(`restricted stdin probe failed (${transport.status ?? "spawn"})`);
+    throw new Error(
+      `restricted stdin probe failed (${transport.status ?? "spawn"};${closedHelperDiagnostic(transport.stderr)})`,
+    );
   }
   const probe =
     loader +
@@ -59,7 +69,9 @@ export async function checkWindowsPortableAuthenticodeLoader({
     "if($v -cne '1.2.3'){exit 21};exit 0";
   const valid = runRestricted(run, helperPath, powershellPath, systemRoot, probe, input);
   if (valid.error !== undefined || valid.status !== 0 || valid.stdout !== "") {
-    throw new Error(`restricted verifier loader failed (${valid.status ?? "spawn"})`);
+    throw new Error(
+      `restricted verifier loader failed (${valid.status ?? "spawn"};${closedHelperDiagnostic(valid.stderr)})`,
+    );
   }
   for (const invalid of [input.slice(0, -4), `A${input.slice(1)}`]) {
     const denied = runRestricted(run, helperPath, powershellPath, systemRoot, probe, invalid);
