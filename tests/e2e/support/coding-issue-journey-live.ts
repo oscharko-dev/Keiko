@@ -53,7 +53,12 @@ export async function raiseWorkbench(page: Page): Promise<void> {
     .locator("xpath=ancestor::section[1]")
     .locator("header.win-head");
   if ((await header.count()) === 0) return;
-  await header.first().click();
+  // Bounded and non-throwing on purpose. This runs inside two-second polling loops; a plain
+  // `click()` waits up to thirty seconds for an obstructed header and then throws, which the loop
+  // records as one more failed read and retries -- so the control the raise was meant to uncover is
+  // never reached, and nothing says why (rehearsal run-03 stood still exactly like that). Raising is
+  // an aid, never a precondition: the click that follows performs its own actionability check.
+  await clickWhenActionable(header.first());
 }
 
 // #3394 — the always-mounted left rail (`LeftRail.tsx`, `aria-label={t("rail.primaryNavigation")}`
@@ -865,6 +870,8 @@ export async function waitWhileAnsweringApprovals<T>(
   options: { readonly timeoutMs: number; readonly message: string },
 ): Promise<T> {
   const deadline = Date.now() + options.timeoutMs;
+  const startedAt = Date.now();
+  let heartbeatAt = startedAt;
   let pending: Error | undefined;
   for (;;) {
     try {
@@ -875,6 +882,10 @@ export async function waitWhileAnsweringApprovals<T>(
       if (error instanceof QualificationRunStopped) throw error;
       pending = error instanceof Error ? error : new Error(String(error));
     }
+    // A wait that can run twenty minutes must say what it is waiting on WHILE it waits, not only
+    // when it gives up: without this, a read that failed on every poll was indistinguishable from
+    // a lane that was making progress, until the timeout finally named it.
+    heartbeatAt = liveWaitHeartbeat(options.message, startedAt, heartbeatAt, pending);
     if (Date.now() > deadline) {
       // A read that was still failing when the clock ran out is the most useful thing to report:
       // a bare "expected X" would hide that the lane never got a clean reading at all.
@@ -885,6 +896,24 @@ export async function waitWhileAnsweringApprovals<T>(
     await answerVisibleApproval(page);
     await page.waitForTimeout(2_000);
   }
+}
+
+const HEARTBEAT_EVERY_MS = 30_000;
+
+/** Emits one bounded, body-free progress line per interval to the runner's stderr. */
+function liveWaitHeartbeat(
+  waitingFor: string,
+  startedAt: number,
+  lastAt: number,
+  pending: Error | undefined,
+): number {
+  const now = Date.now();
+  if (now - lastAt < HEARTBEAT_EVERY_MS) return lastAt;
+  const elapsed = Math.round((now - startedAt) / 1000);
+  const detail =
+    pending === undefined ? "" : ` -- last read failed: ${pending.message.slice(0, 200)}`;
+  process.stderr.write(`[lane] +${String(elapsed)}s waiting: ${waitingFor}${detail}\n`);
+  return now;
 }
 
 export interface DeliveredPullRequest {
