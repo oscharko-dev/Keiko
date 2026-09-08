@@ -52,6 +52,7 @@ export {
 // #3026 — cross-package types belong in contracts, and this seam is not a cross-package
 // contract).
 export { portableInstallCarriesReleaseSignature } from "./coding-runtime/productionPortableCodingRuntime.js";
+export { createUpdateCandidateAuthority } from "./update-candidate-authority.js";
 export {
   createUpdateLocalStateManager,
   type CreateUpdateSnapshotInput,
@@ -65,18 +66,12 @@ export {
   type UpdatePreflightService,
 } from "./update-preflight.js";
 export {
-  adoptStateDirUpdateSessionLockForRecovery,
-  claimStateDirUpdateSessionLockForRecovery,
   createFileUpdateSessionLock,
   createStateDirUpdateSessionLock,
-  inspectStateDirUpdateSessionLockForRecovery,
-  releaseStateDirUpdateSessionLockForRecovery,
   updateSessionLockPath,
   type FileUpdateSessionLockOptions,
   type UpdateSessionLock,
   type UpdateSessionLockRecord,
-  type UpdateSessionRecoveryLockInspection,
-  type UpdateSessionRecoveryOwnership,
 } from "./update-session-lock.js";
 export {
   createUpdateSessionManager,
@@ -90,15 +85,7 @@ export {
   type UpdateStartupRecoveryCurrent,
   type UpdateStartupRecoveryPort,
 } from "./update-portable-handoff-recovery.js";
-export {
-  encodePortableRecoveredLaunchDescriptor,
-  PORTABLE_RECOVERED_LAUNCH_ENV,
-  readPortableRecoveredLaunchDescriptor,
-  reconcilePortableNormalStartup,
-  type PortableNormalStartupRecoveryOptions,
-  type PortableNormalStartupRecoveryResult,
-  type PortableRecoveredLaunchDescriptor,
-} from "./update-portable-normal-startup.js";
+export { reconcilePortableNormalStartup } from "./update-portable-normal-startup.js";
 export {
   importLegacyUpdateAuditSnapshot,
   type ImportLegacyUpdateAuditSnapshotOptions,

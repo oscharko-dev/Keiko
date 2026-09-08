@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  ReleaseImpactCatalog,
+  UpdateInstallMode,
   UpdatePreflightReport,
   UpdateRemediationStatusReport,
   UpdateSession,
@@ -12,9 +17,125 @@ import type {
   UpdateSessionManager,
   UpdateSessionStartOutcome,
 } from "@oscharko-dev/keiko-server";
+import { createUpdateLocalStateManager } from "@oscharko-dev/keiko-server";
 import { runCli, type CliIo } from "./runner.js";
 import { runUpdateCli, type UpdateCliDeps, type UpdateCliPreflight } from "./update.js";
 import { isTerminalUpdateSession, renderApplyTerminal } from "./update-output.js";
+
+const defaultRuntimeControl = vi.hoisted(() => ({
+  enabled: false,
+  currentVersion: "0.2.10",
+  installMode: undefined as UpdateInstallMode | undefined,
+  catalog: undefined as ReleaseImpactCatalog | undefined,
+  commandCalls: [] as { readonly command: string; readonly args: readonly string[] }[],
+  failSessionConstruction: false,
+  sinkCloseCount: 0,
+  storeCloseCount: 0,
+}));
+
+vi.mock("@oscharko-dev/keiko-server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@oscharko-dev/keiko-server")>();
+  return {
+    ...actual,
+    createInMemoryUiStore(
+      ...args: Parameters<typeof actual.createInMemoryUiStore>
+    ): ReturnType<typeof actual.createInMemoryUiStore> {
+      const store = actual.createInMemoryUiStore(...args);
+      if (!defaultRuntimeControl.enabled) return store;
+      return new Proxy(store, {
+        get(target, property, receiver): unknown {
+          if (property !== "close") return Reflect.get(target, property, receiver);
+          return (): void => {
+            defaultRuntimeControl.storeCloseCount += 1;
+            target.close();
+          };
+        },
+      });
+    },
+    createFileServerLogSink(
+      ...args: Parameters<typeof actual.createFileServerLogSink>
+    ): ReturnType<typeof actual.createFileServerLogSink> {
+      const sink = actual.createFileServerLogSink(...args);
+      if (!defaultRuntimeControl.enabled) return sink;
+      return {
+        write: sink.write,
+        ...(sink.flush === undefined ? {} : { flush: sink.flush }),
+        close: (): void => {
+          defaultRuntimeControl.sinkCloseCount += 1;
+          sink.close?.();
+        },
+      };
+    },
+    createUpdatePreflightService(
+      options?: Parameters<typeof actual.createUpdatePreflightService>[0],
+    ): ReturnType<typeof actual.createUpdatePreflightService> {
+      if (!defaultRuntimeControl.enabled) return actual.createUpdatePreflightService(options);
+      const installMode = defaultRuntimeControl.installMode;
+      const catalog = defaultRuntimeControl.catalog;
+      if (installMode === undefined || catalog === undefined) {
+        throw new TypeError("Default update runtime test control is incomplete.");
+      }
+      return actual.createUpdatePreflightService({
+        ...options,
+        currentVersion: defaultRuntimeControl.currentVersion,
+        bundledCatalog: catalog,
+        clock: () => new Date("2026-07-01T12:00:00.000Z"),
+        installMode: () => installMode,
+      });
+    },
+    createUpdateSessionManager(
+      options?: Parameters<typeof actual.createUpdateSessionManager>[0],
+    ): ReturnType<typeof actual.createUpdateSessionManager> {
+      if (!defaultRuntimeControl.enabled) return actual.createUpdateSessionManager(options);
+      const installMode = defaultRuntimeControl.installMode;
+      if (installMode === undefined) {
+        throw new TypeError("Default update runtime install mode is missing.");
+      }
+      if (defaultRuntimeControl.failSessionConstruction) {
+        throw new Error("Synthetic default session construction failure.");
+      }
+      return actual.createUpdateSessionManager({
+        ...options,
+        detector: () => installMode,
+        currentVersion: () => defaultRuntimeControl.currentVersion,
+        now: () => Date.parse("2026-07-01T12:00:00.000Z"),
+        idFactory: () => "cli-default-runtime-session",
+        runCommandImpl: (input) => {
+          defaultRuntimeControl.commandCalls.push({
+            command: input.command,
+            args: [...input.args],
+          });
+          return Promise.resolve({
+            command: input.command,
+            args: [...input.args],
+            exitCode: 0,
+            signal: null,
+            stdout: "installed",
+            stderr: "",
+            durationMs: 1,
+            timedOut: false,
+            truncated: false,
+          });
+        },
+      });
+    },
+  };
+});
+
+const defaultRuntimeDirs: string[] = [];
+
+afterEach(() => {
+  defaultRuntimeControl.enabled = false;
+  defaultRuntimeControl.installMode = undefined;
+  defaultRuntimeControl.catalog = undefined;
+  defaultRuntimeControl.commandCalls.length = 0;
+  defaultRuntimeControl.failSessionConstruction = false;
+  defaultRuntimeControl.sinkCloseCount = 0;
+  defaultRuntimeControl.storeCloseCount = 0;
+  for (const dir of defaultRuntimeDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 interface Captured {
   readonly io: CliIo;
@@ -110,6 +231,106 @@ function baseStatus(patch: Partial<UpdateSessionStatus> = {}): UpdateSessionStat
     policy: { enabled: true, source: "default" },
     ...patch,
   };
+}
+
+function defaultRuntimeInstallMode(installRoot: string): UpdateInstallMode {
+  return {
+    schemaVersion: "1",
+    status: "supported",
+    packageName: "@oscharko-dev/keiko",
+    installKind: "package-manager",
+    packageManager: "npm",
+    installRoot,
+    recommendedAction: "package-manager-maintenance",
+    commandPreview: {
+      executable: "npm",
+      args: ["install", "--global", "--ignore-scripts", "@oscharko-dev/keiko@0.2.11"],
+      label: "npm install --global --ignore-scripts @oscharko-dev/keiko@0.2.11",
+    },
+  };
+}
+
+function defaultRuntimeCatalog(): ReleaseImpactCatalog {
+  return {
+    schemaVersion: 1,
+    entries: [
+      {
+        id: "cli-default-runtime-0.2.11",
+        packageName: "@oscharko-dev/keiko",
+        packageVersion: "0.2.11",
+        distTag: "latest",
+        registry: "https://registry.npmjs.org/",
+        releaseTag: "v0.2.11",
+        releaseNoteCategory: "update-notes",
+        releaseNotePriority: "normal",
+        userVisibleChange: "observable",
+        userVisibleSummary: "Default CLI runtime integration fixture.",
+        affectedStateStores: [],
+        stateImpact: [],
+        userActionRequired: false,
+        remediation: "no-action-required",
+        supportedFrom: ["0.2.10"],
+        releaseNoteBullets: ["Exercises the default CLI update runtime."],
+        internalOnly: false,
+        observableImpact: true,
+        defaultPatchNotes: true,
+        oneClickEligible: true,
+        publishGates: [
+          "version-consistency",
+          "publish-manifests",
+          "release-impact",
+          "package-surface",
+          "qi-supply-chain",
+        ],
+        review: {
+          status: "reviewed",
+          reviewer: "release-owner",
+          reviewedAt: "2026-07-01",
+          humanApproved: true,
+          approvalReference: "github-pr-review:synthetic/keiko-cli-fixture#1#1",
+          rationale: "Synthetic reviewed metadata for the CLI composition regression.",
+        },
+      },
+    ],
+  };
+}
+
+function defaultRuntimeFetch(): typeof fetch {
+  return vi.fn((input: Parameters<typeof fetch>[0]) => {
+    const url =
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.startsWith("https://registry.npmjs.org/")) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ "dist-tags": { latest: "0.2.11" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (url.endsWith("/releases/tags/v0.2.11")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            tag_name: "v0.2.11",
+            name: "Keiko 0.2.11",
+            html_url: "https://github.com/oscharko-dev/keiko/releases/tag/v0.2.11",
+            published_at: "2026-07-01T12:00:00.000Z",
+            body: "- Default CLI runtime regression",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    return Promise.resolve(new Response("not found", { status: 404 }));
+  });
+}
+
+function activityLogOperations(stateDir: string): readonly string[] {
+  return readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { readonly op?: unknown })
+    .flatMap((record) => (typeof record.op === "string" ? [record.op] : []));
 }
 
 function portableStatus(patch: Partial<UpdateSessionStatus> = {}): UpdateSessionStatus {
@@ -545,6 +766,87 @@ describe("keiko update CLI", () => {
     expect(c.out()).toContain("Update apply result: restart-required");
     expect(output(c)).not.toContain("SECRET_TOKEN");
     expect(output(c)).not.toContain("/Users/private");
+  });
+
+  it("composes the default runtime around one candidate authority and durable activity sink", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-update-cli-default-"));
+    defaultRuntimeDirs.push(root);
+    const stateDir = join(root, "state");
+    defaultRuntimeControl.enabled = true;
+    defaultRuntimeControl.installMode = defaultRuntimeInstallMode(join(root, "install"));
+    defaultRuntimeControl.catalog = defaultRuntimeCatalog();
+    const c = makeIo();
+
+    const code = await runUpdateCli(
+      ["apply"],
+      c.io,
+      { KEIKO_STATE_DIR: stateDir },
+      {
+        cwd: root,
+        fetchImpl: defaultRuntimeFetch(),
+        sleep: () => Promise.resolve(),
+        pollIntervalMs: 1,
+        maxWaitMs: 100,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(defaultRuntimeControl.commandCalls).toEqual([
+      {
+        command: "npm",
+        args: ["install", "--global", "--ignore-scripts", "@oscharko-dev/keiko@0.2.11"],
+      },
+    ]);
+    expect(c.out()).toContain("Update apply result: restart-required");
+    expect(defaultRuntimeControl.sinkCloseCount).toBe(1);
+    expect(defaultRuntimeControl.storeCloseCount).toBe(1);
+
+    const freshState = createUpdateLocalStateManager({ stateDir }).inspectRuntimeState();
+    expect(freshState).toMatchObject({
+      status: "ok",
+      state: {
+        activeSession: {
+          sessionId: "cli-default-runtime-session",
+          targetVersion: "0.2.11",
+          phase: "restart-required",
+        },
+        recovery: {
+          status: "reconciling",
+          sessionId: "cli-default-runtime-session",
+        },
+      },
+    });
+    expect(activityLogOperations(stateDir)).toEqual(
+      expect.arrayContaining([
+        "update.candidate.issued",
+        "update.candidate.consumed",
+        "update.session.lifecycle",
+      ]),
+    );
+  });
+
+  it("closes owned default-runtime resources when session construction fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-update-cli-construction-"));
+    defaultRuntimeDirs.push(root);
+    defaultRuntimeControl.enabled = true;
+    defaultRuntimeControl.installMode = defaultRuntimeInstallMode(join(root, "install"));
+    defaultRuntimeControl.catalog = defaultRuntimeCatalog();
+    defaultRuntimeControl.failSessionConstruction = true;
+    const c = makeIo();
+
+    const code = await runUpdateCli(
+      ["status"],
+      c.io,
+      { KEIKO_STATE_DIR: join(root, "state") },
+      { cwd: root },
+    );
+
+    expect(code).toBe(1);
+    expect(defaultRuntimeControl.commandCalls).toEqual([]);
+    expect(defaultRuntimeControl.sinkCloseCount).toBe(1);
+    expect(defaultRuntimeControl.storeCloseCount).toBe(1);
+    expect(c.err()).toContain("Unexpected update command failure. Error");
+    expect(c.err()).not.toContain("Synthetic default session construction failure");
   });
 
   it("refuses portable apply through the CLI and routes users back to the update window", async () => {

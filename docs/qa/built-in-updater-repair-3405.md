@@ -1296,9 +1296,10 @@ Scoped formatting, lint and lead diff review passed. The report is retained sepa
 ### Authenticode producer-parity compilation fixture repair
 
 Diagnostic run `34198289921` completed the full Windows packaging job successfully, including
-native optional dependencies. Core quality, all coverage suites, package coverage aggregation,
-Linux/macOS package smokes and the SonarCloud scanner's quality gate also passed for that
-diagnostic branch. Its Node 26 compatibility suite had one failure among 36,103 executed tests:
+native optional dependencies. Core quality and Linux/macOS package smokes also passed for that diagnostic branch. The manual
+workflow deliberately checks out `dev` for every coverage producer and the Sonar aggregate:
+those passing jobs verify `c5c03d48fa1066c985a656d29880ae1c02e68c48`, not the diagnostic or
+repair head. Its Node 26 compatibility suite had one failure among 36,103 executed tests:
 the producer-parity fixture concatenated two C# compilation units, placing productive source
 `using` directives after runtime namespace declarations (CS1529). The fixture now sends the exact
 source units as a JSON array and compiles each independently in the same PowerShell process.
@@ -1311,7 +1312,136 @@ the runtime DER probe did execute with PowerShell present. Linux/Windows parity 
 head remains required. Frozen test SHA-256:
 `20298e0266b91e2955c608a7a04bb11aa259568204a11f84d5c19bf84e8d15e8`.
 No final child-head CI or complete epic-baseline new-code coverage result is inferred from the
-passing diagnostic Sonar gate.
+passing manual Sonar gate on `dev`.
+
+### Manual CI evidence binding correction
+
+The workflow-dispatch coverage producers and Sonar aggregate explicitly select `dev`
+(`.github/workflows/ci.yml:457`, `:561`, `:629`, `:730`). The scanner log for run `34198289921`
+records `SONAR_HEAD_SHA` and SCM revision `c5c03d48fa1066c985a656d29880ae1c02e68c48` and a
+passing main-branch gate. Those results establish the current `dev` baseline only. They do not
+close this child's package/script/UI coverage or Sonar/new-code requirements. The diagnostic
+Windows native/setup/type/build/full package evidence remains bound to its selected head.
+
+A preliminary union of the complete local reports with isolated new regression coverage measures
+84.5% against the unchanged 85% new-code floor. This diagnostic calculation leaves the canonical
+reports untouched and is not a final gate receipt. The integrated report refresh remains pending.
+
+### Real staged macOS secure-read smoke
+
+The approved USearch input verified locally; approved sidecar preparation completed, and the
+repository's normal staging command produced a real macOS arm64 bundle from package 0.3.17.
+`npm run smoke:portable-secure-read -- .portable-runtime/staging/macos-arm64 macos-arm64 --load`
+passed against its actual manifest-declared helper. Manifest SHA-256:
+`5406ca8dc4bdd3115d56d93c6682a465e47d2d041e7d01893c069b576249644a`; helper shipped SHA-256:
+`06e574a1fadf7239530f607e9a2bb03f2809918e4db06b31c5297286be092bac` (34504 bytes). The artifact records source commit
+`90bbe2fd99c602e84547860d1c66197c1b3a5038` and explicitly remains `unverified-staging`.
+This closes the earlier missing-staging-input smoke prerequisite, not signed upgrade eligibility.
+
+Staging prunes package artifacts and workspace/native dependencies. The lead subsequently restored
+the committed dependency graph with official Node 24.18.0 `npm ci --ignore-scripts` (783 packages,
+zero reported vulnerabilities). Future package/test verification must rebuild after ongoing fixes.
+
+### Final audit findings under repair
+
+Independent PR review confirmed two default CLI composition defects: preflight/session did not
+share candidate authority or pass the fresh report, and CLI sessions/local state lacked durable
+state/canonical activity wiring. The CLI owner is repairing these together and adding default
+composition regressions. The necessary existing authority factory will be consumed through the
+private, non-independently-published server package's existing internal barrel; no new HTTP endpoint
+or externally published package API is introduced. The export's actual CLI consumer must remain
+part of final package/architecture verification.
+
+Independent security review confirmed one Windows availability defect: production PowerShell 5.1
+runtime C# compilation lacks a standard-user writable compiler temporary directory after environment
+restriction. The selected repair precompiles the unchanged verifier into a private, deterministic .NET
+Framework assembly and loads validated bytes in memory; ambient temporary authority must not be
+restored. Generator/toolchain pinning and real restricted-token PowerShell 5.1 proof remain pending. The independent accessibility/design-system audit found zero findings and verified
+that all eight UI and four harness hashes still match the existing browser/axe/fidelity evidence.
+That source-bound review does not replace the final HEAD execution receipt.
+
+### Default CLI repair review and focused replay
+
+The CLI composition repair shares the actual candidate authority across preflight and session,
+passes the fresh report to consumption, and wires local state plus canonical file activity into the
+session. Cleanup attempts both owned store and sink closure on normal exit and construction failure.
+Canonical package build/root typecheck passed for the production changes. The initial combined
+focused replay passed all 25 runtime-composition tests; the new CLI fixture exposed an invalid
+synthetic approval reference, which was corrected to the existing supported format without changing
+the production parser. A construction-failure regression additionally proves both owned resources
+close exactly once and the command runner remains untouched.
+
+The owner then passed all 16 CLI tests plus scoped ESLint/Prettier. The lead's independent canonical
+package-coverage configuration replay passed **25/25 tests across CLI and candidate-authority suites
+in 33.61 seconds**, writing only isolated coverage under
+`/tmp/keiko-3405-default-cli-final-root-coverage`. The CLI update module measured 88.53% statements,
+78.67% branches, 90% functions, and 89.28% lines. Independent re-review found **zero findings** and
+confirmed actual factories, issue/consume activity, durable session/recovery readback, and cleanup.
+These results settle the two default CLI wiring findings; final integrated receipts remain pending.
+Frozen source/test SHA-256 values are respectively
+`9b627dc53735eef37806d79ec3e039749dc236a19b6ecfe6a398f52fd382af58` and
+`40b84f8b04c42177c95204561cc14e4a8544756d59eb747a0ff14c074d1445d7`.
+
+Independent consumer review also verified removal of 12 unused server-root aliases: the four
+recovery lock helpers (adopt, claim, inspect, release), their recovery inspection/ownership types,
+the recovered-launch encoder/reader/environment constant, and the three normal-startup
+options/result/descriptor types. Leaf exports remain. The CLI-consumed normal-startup reconciler
+and ordinary lock surfaces remain; the existing authority factory has one new consumed internal
+barrel export. Final assembled package/architecture checks remain required.
+
+### Remaining performance and diagnostic findings
+
+The final performance audit found that each successful active Update window poll (every 2.5 seconds)
+also prepares remediation, which reaches a synchronous recursive state scan without entry, depth,
+or time bounds. This is a confirmed execution-path finding, not a measured latency claim. The repair
+must avoid repeating unchanged remediation preparation and preserve safe handling of incomplete
+scans for compatibility, snapshots, and repair. Existing UI evidence will need refreshing if its
+covered source changes.
+
+Diagnostic run `34201205684` at `e4660b5d9a0de7cda92ef7202d3a8a959b168be9` reports successful
+Windows cross-platform job `101980236635` and Node 26 job `101980236677`. The completed Node 26 job log records
+1804 passing files, seven skipped files, 36110 passing tests and 24 skipped tests in 1020.54 seconds.
+All 20 Windows Authenticode fixture tests passed on Linux, including the repaired source-parity case. Core quality failed on one redundant typed null
+condition in the runtime-composition test. The test-only repair retains the undefined/array boundary
+and asserts the generated alias and scope together as an object before use. Scoped ESLint passed
+with zero warnings and Prettier reported no changes; its focused runtime replay is pending. Frozen
+test SHA-256: `e5fae99c156385332fbb8b3b92892d551932282849fed5fa421c51c67d8214fa`. The diagnostic
+branch's protected-branch rejection is expected and is not a target-branch CI receipt. Coverage and
+Sonar from this manual run still select `dev`, as documented above.
+
+### E2E gateway prerequisite and Windows verifier generation
+
+Both completed diagnostic Chromium smoke jobs (`34198289921` and `34201205684`) reported 60
+failures and 13 passes. Read-only triage traced the shared failure to the E2E gateway fixture's
+unprovisioned credential reference: the setup dialog covered the desktop and no configured chat
+model was available. Restoring the fixture byte-for-byte to `origin/dev` restores its explicitly
+non-secret `e2e-mock` value. The updater-specific harness's redundant key override was removed.
+No production credential handling changed. The lead's real Chromium replay of shell startup,
+chat, and both shell accessibility themes passed **4/4 tests in 48.8 seconds**. The full Chromium smoke
+replay then passed **73/73 tests in 3.4 minutes**. This verifies the shared fixture repair against
+the real BFF and browser. The updater-specific harness digest changed intentionally and its eight
+source-bound evidence journeys must be rerun after the final polling follow-up. Fixture SHA-256:
+`9ccdb592af0021033cb26f4868ff263badff5dcc4d716bb4a2fbac54c6dd69f6`; updater harness SHA-256:
+`8831ac0020b34942be6867bdbc5c0c6480455798d9550ea95f639005b1fb7adf`.
+
+Windows diagnostic inspection `34204823280` at `eb500083ec649d287869bf0bf108a74a451161cb`
+measured the finite Roslyn distribution (111 files, 35634755 bytes) and four explicit .NET Framework
+references. Generation run `34205246166` at `c53826aa7eeac0ca48f8e5cf90617d115c6feff7` used
+those reviewed literal pins, compiled twice in separate temporary directories, and required identical
+asset bytes. Both runs passed. The resulting assembly is 12800 bytes with SHA-256
+`e67641e44c85b7d7e787edffe6aaad173f5277e257a7e1b58d00428d5f5e5a37`; generated TS SHA-256
+`bdc2f45a722760d10cadbf21327f743f65b4fd5945ca9acfb2ee3e7a8eb98e96`. The lead independently
+validated the canonical source, base64 round-trip, length and digests before copying those exact
+bytes into the private runtime module. Source SHA-256:
+`3038b1ba4e5852b4df291bfa890a7a22ebfcaf9d0e244d10e76576f4426bd04f`.
+
+The compiler digest is `3aafb7b9c54fa31a7092af35148971ee616965e7f9a0b80fb7fdc4bdd1d1a555`;
+its distribution digest is `ba14f4ef19598f640ba103fe352e0bdca7a9bb9421b8dd1629df725431bcb8c3`.
+The recorded CLR version is `4.0.30319.42000`. The implementation accounts for Microsoft's
+[documented deterministic compilation inputs](https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/compiler-options/code-generation#deterministic).
+Canonical root and UI native typechecks passed after the runtime stdin transport was integrated.
+Restricted-token PowerShell 5.1 loading, analyzer evidence and final security review remain pending;
+this generation evidence does not qualify signed upgrades.
 
 ## Final verification checklist
 

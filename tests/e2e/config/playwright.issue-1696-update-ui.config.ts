@@ -13,10 +13,6 @@ const stateId = process.env.GITHUB_RUN_ID ?? `issue-3405-update-ui-${String(proc
 const stateDir = e2eStateDir(stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
-// Non-secret, deterministic test-only value. It lets the real BFF resolve the fixture's
-// reference-only gateway config so the mandatory setup dialog cannot cover the update journey.
-// No config or model route is mocked by this suite.
-const UPDATE_UI_FIXTURE_API_KEY = "keiko-e2e-update-ui-fixture-key";
 const prepareRuntimeConfig = [
   "const fs = require('node:fs');",
   `fs.mkdirSync(${JSON.stringify(stateDir)}, { recursive: true });`,
@@ -61,7 +57,6 @@ export default defineConfig({
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),
       KEIKO_CONFIG_FILE: runtimeConfigPath,
-      KEIKO_MODEL_E2E_CHAT_MODEL_API_KEY: UPDATE_UI_FIXTURE_API_KEY,
     },
   },
 });
