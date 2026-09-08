@@ -88,6 +88,9 @@ interface PrDescriptionStatusWireBody {
   };
 }
 
+// The wire body reports `state` as a string; the contract's closed set is consulted through a
+// string-typed view so membership is checked, never narrowed by assertion.
+const APPLIED_STATES: ReadonlySet<string> = APPLIED_PR_DESCRIPTION_STATES;
 const APPLIED_DESCRIPTION_STATE = new RegExp(
   `^(${[...APPLIED_PR_DESCRIPTION_STATES].join("|")})$`,
   "u",
@@ -112,7 +115,8 @@ function descriptionReconciledToReadyPullRequest(
 ): boolean {
   return (
     body.outcome === "observed" &&
-    body.status?.state === "current" &&
+    body.status !== undefined &&
+    APPLIED_STATES.has(body.status.state) &&
     (body.status.effect === "confirmed" || body.status.effect === "reconciled") &&
     readyDescriptionBindingMatches(body.status.binding, pullRequest)
   );
