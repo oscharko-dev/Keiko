@@ -336,6 +336,40 @@ describe("node PR adapter — createPullRequest", () => {
     expect(spawn.calls()[0]?.args).toContain("--hostname");
     expect(spawn.calls()[0]?.args).toContain("github.com");
   });
+  it("returns the created identity when an ordinary parent env value overlaps the projection", async () => {
+    // #3390, rehearsal run-19: the lane exported the fixture's repository slug, the default output
+    // scrub replaced every occurrence of it in the provider's response, and the create failed as
+    // `shape-invalid` although the pull request existed. The response is typed provider data and
+    // runs under the same scrub as every other machine-parsed pull request fact (ADR-0006).
+    const spawn = scriptedSpawn([{ stdout: JSON.stringify(PR_IDENTITY) }]);
+    const result = await makeAdapter(spawn, {
+      PATH: "/usr/bin",
+      KEIKO_QUALIFICATION_REHEARSAL_REPOSITORY: PR_IDENTITY.repository,
+    }).createPullRequest({ ...CREATE, isDraft: true, canonicalGitHubIdentity: true });
+    expect(result).toMatchObject({
+      outcome: "succeeded",
+      createdPrExternalId: "1499",
+      createdPrIdentity: PR_IDENTITY,
+    });
+  });
+  it("names a create response that carried a credential as output-redacted and admits nothing", async () => {
+    const credential = "gho_create_response_leaked_token";
+    const spawn = scriptedSpawn([
+      { stdout: JSON.stringify({ ...PR_IDENTITY, url: `${PR_IDENTITY.url}?token=${credential}` }) },
+    ]);
+    const result = await makeAdapter(spawn, {
+      PATH: "/usr/bin",
+      GH_TOKEN: credential,
+    }).createPullRequest({ ...CREATE, isDraft: true, canonicalGitHubIdentity: true });
+    expect(result).toMatchObject({
+      outcome: "failed",
+      errorCode: "internal-error",
+      failureClass: "identity-unparsable",
+      identityIssue: "output-redacted",
+    });
+    expect(result.createdPrIdentity).toBeUndefined();
+    expect(result.createdPrExternalId).toBeUndefined();
+  });
   it.each([
     ["legacy number", 1499, "shape-invalid"],
     ["unknown payload field", { ...PR_IDENTITY, body: "untrusted content" }, "shape-invalid"],

@@ -92,6 +92,24 @@ export function evaluationLocalGitMutationEnv(
 }
 
 /**
+ * Lane-only variables (the `KEIKO_QUALIFICATION_*` namespace) never reach the product: the launched
+ * server's environment must equal a real operator's plus the documented operator settings the lane
+ * threads in explicitly below. The spawn boundary's fail-closed output scrub treats every
+ * non-allowlisted parent env value as a secret, so a lane value that legitimately overlaps provider
+ * data -- rehearsal run-19's fixture repository slug inside a pull-request response, a CI log or a
+ * pull-request body -- would otherwise be written out of that data as a redaction marker (#3390).
+ */
+const LANE_ONLY_ENV_PREFIX = "KEIKO_QUALIFICATION_";
+
+function withoutLaneOnlyVariables(
+  env: Readonly<Record<string, string | undefined>>,
+): Record<string, string | undefined> {
+  return Object.fromEntries(
+    Object.entries(env).filter(([name]) => !name.startsWith(LANE_ONLY_ENV_PREFIX)),
+  );
+}
+
+/**
  * Threads the resolved, already-validated bounded evaluation budget, and the resolved launcher
  * pairing secret, into the launched process env (#3390 audit F15; live-run pairing fix) rather
  * than relying on the raw, unvalidated `process.env` string this same config surface read it
@@ -110,7 +128,7 @@ export function launchedEnv(
   launcherSecret: string,
 ): Record<string, string | undefined> {
   return {
-    ...baseEnv,
+    ...withoutLaneOnlyVariables(baseEnv),
     // This entry point is the trusted launcher for the live qualification lane. It invokes
     // `runUiCli` directly rather than `npm run dev:start`, so it must opt into the same supported,
     // byte-verified dev runtime that the normal development launcher enables. Discovery still

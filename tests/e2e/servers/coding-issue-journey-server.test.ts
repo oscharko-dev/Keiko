@@ -46,6 +46,30 @@ describe("launchedEnv", () => {
     expect(result.PATH).toBe("/usr/bin");
   });
 
+  it("keeps lane-only variables out of the launched product env", () => {
+    // #3390, rehearsal run-19: the fixture's repository slug, exported for the lane only, reached
+    // the product server and the spawn boundary scrubbed it out of the provider's own pull-request
+    // response. The product sees exactly the operator settings the lane threads in explicitly.
+    const result = launchedEnv(
+      {
+        PATH: "/usr/bin",
+        KEIKO_QUALIFICATION_REHEARSAL_REPOSITORY: "owner/fixture-copy",
+        KEIKO_QUALIFICATION_RECEIPTS_DIR: "/tmp/receipts",
+        KEIKO_QUALIFICATION_SPEND_BUDGET_USD: "999",
+      },
+      40,
+      "/tmp/qualification/spend.db",
+      "a-resolved-launcher-secret",
+    );
+    expect(
+      Object.keys(result)
+        .filter((name) => name.startsWith("KEIKO_QUALIFICATION_"))
+        .sort(),
+    ).toEqual(["KEIKO_QUALIFICATION_SPEND_BUDGET_USD", "KEIKO_QUALIFICATION_SPEND_LEDGER_PATH"]);
+    expect(result.KEIKO_QUALIFICATION_SPEND_BUDGET_USD).toBe("40");
+    expect(result.PATH).toBe("/usr/bin");
+  });
+
   it("does not mutate the base env", () => {
     const base = { KEIKO_QUALIFICATION_SPEND_BUDGET_USD: "10" };
     launchedEnv(base, 40, "/tmp/qualification/spend.db", "a-resolved-launcher-secret");

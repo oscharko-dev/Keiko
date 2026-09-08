@@ -48,6 +48,7 @@ export function parseGitPrBranchHead(value: unknown, headRef: string): string | 
  * success is diagnosable from the activity log alone (#3390, rehearsal run-15). */
 export type GitPrIdentityIssue =
   | "json-invalid"
+  | "output-redacted"
   | "shape-invalid"
   | "repository-mismatch"
   | "head-repository-mismatch"

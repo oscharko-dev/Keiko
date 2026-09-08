@@ -207,7 +207,11 @@ async function createPullRequest(
       failureClass: "argv-invalid",
     });
   }
-  const result = await runGh(ctx, argv);
+  // The response is the provider's typed pull-request projection (`--jq`), consumed by closed
+  // predicates and never surfaced raw: it runs under the typed-read scrub like every other machine-
+  // parsed pull request fact (ADR-0006), so an ordinary parent env value that legitimately overlaps
+  // it -- a repository slug, a branch, a SHA -- cannot corrupt the identity (#3390, run-19).
+  const result = await runGh(gitRemoteReadContext(ctx), argv);
   if (result instanceof Error) {
     return failureFromThrow(result, 0);
   }
@@ -242,6 +246,13 @@ function canonicalCreateResult(
   // The provider may well have created the pull request by now (rehearsal run-15 did: the PR
   // existed, the response did not validate, and nothing named why). The failing step is carried
   // out as a closed word so the activity log can reconstruct it; the bytes never leave here.
+  if (gitRemoteReadWasRedacted(result))
+    return executionResult("failed", result.durationMs, {
+      errorCode: "internal-error",
+      failureClass: "identity-unparsable",
+      identityIssue: "output-redacted",
+      ...outputFacts(result),
+    });
   const diagnosis = explainCreatedGitPrIdentity(result.stdout, req);
   return diagnosis.ok
     ? executionResult("succeeded", result.durationMs, {

@@ -1,7 +1,8 @@
 import type { RunCommandDeps } from "./exec.js";
 import type { CommandResult } from "./types.js";
 
-/** Typed remote reads consume data; ordinary CI context must not corrupt that data. */
+/** Typed remote reads consume data; ordinary CI context must not corrupt that data. A mutation whose
+ * response is itself a typed projection (`pr create --jq <identity>`) is the same case (#3390). */
 export function gitRemoteReadContext<T extends { readonly runDeps: RunCommandDeps }>(
   context: T,
 ): T {

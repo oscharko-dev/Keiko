@@ -352,7 +352,8 @@ Tool `output` strings are redacted at two points:
    Internal typed Git readers use the existing `credentials-only` output scrub when ordinary
    environment values overlap their protocol or configured identity: remote URL reads and
    machine-parsed refs, revisions, index/tree entries, commit identities and GitHub branch, pull
-   request, check and issue-closure facts retain context such as
+   request (including the identity projection a pull-request create returns), check and
+   issue-closure facts retain context such as
    `GITHUB_REF_TYPE=branch` or an accepted task's commit SHA. Credential names,
    declared credential values and built-in secret patterns remain scrubbed, and child environment
    isolation is unchanged. Machine metadata containing a redaction marker is rejected before
