@@ -1360,6 +1360,35 @@ restored. Generator/toolchain pinning and real restricted-token PowerShell 5.1 p
 that all eight UI and four harness hashes still match the existing browser/axe/fidelity evidence.
 That source-bound review does not replace the final HEAD execution receipt.
 
+### Default CLI repair review and focused replay
+
+The CLI composition repair shares the actual candidate authority across preflight and session,
+passes the fresh report to consumption, and wires local state plus canonical file activity into the
+session. Cleanup attempts both owned store and sink closure on normal exit and construction failure.
+Canonical package build/root typecheck passed for the production changes. The initial combined
+focused replay passed all 25 runtime-composition tests; the new CLI fixture exposed an invalid
+synthetic approval reference, which was corrected to the existing supported format without changing
+the production parser. A construction-failure regression additionally proves both owned resources
+close exactly once and the command runner remains untouched.
+
+The owner then passed all 16 CLI tests plus scoped ESLint/Prettier. The lead's independent canonical
+package-coverage configuration replay passed **25/25 tests across CLI and candidate-authority suites
+in 33.61 seconds**, writing only isolated coverage under
+`/tmp/keiko-3405-default-cli-final-root-coverage`. The CLI update module measured 88.53% statements,
+78.67% branches, 90% functions, and 89.28% lines. Independent re-review found **zero findings** and
+confirmed actual factories, issue/consume activity, durable session/recovery readback, and cleanup.
+These results settle the two default CLI wiring findings; final integrated receipts remain pending.
+Frozen source/test SHA-256 values are respectively
+`9b627dc53735eef37806d79ec3e039749dc236a19b6ecfe6a398f52fd382af58` and
+`40b84f8b04c42177c95204561cc14e4a8544756d59eb747a0ff14c074d1445d7`.
+
+Independent consumer review also verified removal of 12 unused server-root aliases: the four
+recovery lock helpers (adopt, claim, inspect, release), their recovery inspection/ownership types,
+the recovered-launch encoder/reader/environment constant, and the three normal-startup
+options/result/descriptor types. Leaf exports remain. The CLI-consumed normal-startup reconciler
+and ordinary lock surfaces remain; the existing authority factory has one new consumed internal
+barrel export. Final assembled package/architecture checks remain required.
+
 ### Remaining performance and diagnostic findings
 
 The final performance audit found that each successful active Update window poll (every 2.5 seconds)
