@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.IO;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
 using System.Threading;
@@ -31,9 +32,19 @@ internal static class StandardTokenLoader {
   private const uint GenericAll = 0x10000000;
   private const uint CreateWindowStationOnly = 0x00000001;
   private const int UserObjectName = 2;
+  private const uint Synchronize = 0x00100000;
+  private const uint ProcessQueryLimitedInformation = 0x1000;
+  private const uint ThreadQueryLimitedInformation = 0x0800;
+  private const uint DaclSecurityInformation = 0x00000004;
+  private const int SeKernelObject = 6;
+  private const int TokenDefaultDacl = 6;
 
   public static int Main(string[] args) {
-    if (args.Length != 3) return Fail(100, "invalid-arguments");
+    if (args.Length != 3 && args.Length != 4) return Fail(100, "invalid-arguments");
+    string mode = args.Length == 4 ? args[3] : "required";
+    if (mode != "required" &&
+      mode != "--original-token-control" &&
+      mode != "--explicit-child-dacl-control") return Fail(100, "invalid-arguments");
     string input = ReadBoundedInput();
     if (input == null) return Fail(101, "input-too-large");
     IntPtr processToken = IntPtr.Zero;
@@ -82,13 +93,76 @@ internal static class StandardTokenLoader {
       int privilegeState = HasOnlyAllowedEnabledPrivilege(restrictedToken);
       if (privilegeState < 0) return Win32Failure(117, "query-restricted-privileges");
       if (privilegeState == 0) return Fail(118, "unexpected-enabled-privilege");
-      return RunChild(restrictedToken, args[0], args[1], args[2], input);
+      if (mode != "required") {
+        SecurityIdentifier user;
+        SecurityIdentifier system;
+        SecurityIdentifier administrators;
+        try {
+          user = GetCurrentUserSid();
+          system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+          administrators = new SecurityIdentifier(
+            WellKnownSidType.BuiltinAdministratorsSid,
+            null);
+        }
+        catch (Exception error) {
+          Console.Error.WriteLine(
+            "standard-token-loader:prepare-control-security:Exception:hresult-" +
+            unchecked((uint)error.HResult).ToString("X8"));
+          return 122;
+        }
+        int originalDacl = ClassifyTokenDefaultDacl(
+          processToken,
+          user,
+          system,
+          administrators);
+        int restrictedDacl = ClassifyTokenDefaultDacl(
+          restrictedToken,
+          user,
+          system,
+          administrators);
+        Console.Error.WriteLine(
+          "standard-token-loader:control-token-dacl:original-" + originalDacl +
+          ":restricted-" + restrictedDacl);
+        bool useOriginalToken = mode == "--original-token-control";
+        return RunChild(
+          useOriginalToken ? processToken : restrictedToken,
+          restrictedImpersonationToken,
+          args[0],
+          args[1],
+          args[2],
+          input,
+          true,
+          !useOriginalToken,
+          user,
+          system,
+          administrators);
+      }
+      return RunChild(
+        restrictedToken,
+        IntPtr.Zero,
+        args[0],
+        args[1],
+        args[2],
+        input,
+        false,
+        false,
+        null,
+        null,
+        null);
     }
     finally {
       if (sidPin.IsAllocated) sidPin.Free();
       if (restrictedImpersonationToken != IntPtr.Zero) CloseHandle(restrictedImpersonationToken);
       if (restrictedToken != IntPtr.Zero) CloseHandle(restrictedToken);
       if (processToken != IntPtr.Zero) CloseHandle(processToken);
+    }
+  }
+
+  private static SecurityIdentifier GetCurrentUserSid() {
+    using (WindowsIdentity identity = WindowsIdentity.GetCurrent()) {
+      SecurityIdentifier user = identity.User;
+      if (user == null) throw new InvalidOperationException();
+      return user;
     }
   }
 
@@ -118,6 +192,117 @@ internal static class StandardTokenLoader {
     }
   }
 
+  private static int ClassifyTokenDefaultDacl(
+    IntPtr token,
+    SecurityIdentifier user,
+    SecurityIdentifier system,
+    SecurityIdentifier administrators) {
+    uint required = 0;
+    GetTokenInformation(token, TokenDefaultDacl, IntPtr.Zero, 0, out required);
+    if (Marshal.GetLastWin32Error() != 122 || required < IntPtr.Size || required > 65536) {
+      return -1;
+    }
+    IntPtr information = Marshal.AllocHGlobal((int)required);
+    try {
+      if (!GetTokenInformation(token, TokenDefaultDacl, information, required, out required)) {
+        return -1;
+      }
+      IntPtr acl = Marshal.ReadIntPtr(information);
+      return ClassifyAcl(acl, user, system, administrators);
+    }
+    catch (Exception) {
+      return -1;
+    }
+    finally {
+      Marshal.FreeHGlobal(information);
+    }
+  }
+
+  private static int ClassifyKernelObjectDacl(
+    IntPtr handle,
+    SecurityIdentifier user,
+    SecurityIdentifier system,
+    SecurityIdentifier administrators) {
+    IntPtr owner;
+    IntPtr group;
+    IntPtr dacl;
+    IntPtr sacl;
+    IntPtr descriptor;
+    uint status = GetSecurityInfo(
+      handle,
+      SeKernelObject,
+      DaclSecurityInformation,
+      out owner,
+      out group,
+      out dacl,
+      out sacl,
+      out descriptor);
+    if (status != 0 || descriptor == IntPtr.Zero) return -1;
+    try {
+      return ClassifyAcl(dacl, user, system, administrators);
+    }
+    catch (Exception) {
+      return -1;
+    }
+    finally {
+      LocalFree(descriptor);
+    }
+  }
+
+  private static int ClassifyAcl(
+    IntPtr acl,
+    SecurityIdentifier user,
+    SecurityIdentifier system,
+    SecurityIdentifier administrators) {
+    if (acl == IntPtr.Zero) return 16;
+    int size = unchecked((ushort)Marshal.ReadInt16(acl, 2));
+    if (size < 8 || size > 65535) return -1;
+    byte[] bytes = new byte[size];
+    Marshal.Copy(acl, bytes, 0, size);
+    var rawAcl = new RawAcl(bytes, 0);
+    if (rawAcl.Count > 256) return -1;
+    int classes = 0;
+    for (int index = 0; index < rawAcl.Count; index++) {
+      var ace = rawAcl[index] as QualifiedAce;
+      if (ace == null ||
+        ace.AceQualifier != AceQualifier.AccessAllowed ||
+        ace.AccessMask == 0) continue;
+      SecurityIdentifier sid = ace.SecurityIdentifier;
+      if (sid.Equals(user)) classes |= 1;
+      else if (sid.Equals(system)) classes |= 2;
+      else if (sid.Equals(administrators)) classes |= 4;
+      else classes |= 8;
+    }
+    return classes;
+  }
+
+  private static int ProbeRestrictedObjectAccess(
+    IntPtr restrictedImpersonationToken,
+    uint processId,
+    uint threadId) {
+    if (!SetThreadToken(IntPtr.Zero, restrictedImpersonationToken)) return -1;
+    IntPtr process = IntPtr.Zero;
+    IntPtr thread = IntPtr.Zero;
+    try {
+      process = OpenProcess(
+        Synchronize | ProcessQueryLimitedInformation,
+        false,
+        processId);
+      thread = OpenThread(
+        Synchronize | ThreadQueryLimitedInformation,
+        false,
+        threadId);
+      return (process != IntPtr.Zero ? 1 : 0) | (thread != IntPtr.Zero ? 2 : 0);
+    }
+    finally {
+      if (thread != IntPtr.Zero) CloseHandle(thread);
+      if (process != IntPtr.Zero) CloseHandle(process);
+      if (!SetThreadToken(IntPtr.Zero, IntPtr.Zero)) {
+        AbortHost(121, "restore-thread-token");
+      }
+    }
+  }
+
   private static string ReadBoundedInput() {
     var buffer = new char[MaxInputChars + 1];
     int offset = 0;
@@ -134,11 +319,17 @@ internal static class StandardTokenLoader {
     private IntPtr station;
     private IntPtr desktop;
     public string Name { get; private set; }
+    public IntPtr SecurityDescriptor { get; private set; }
 
-    private DesktopAuthority(IntPtr stationHandle, IntPtr desktopHandle, string name) {
+    private DesktopAuthority(
+      IntPtr stationHandle,
+      IntPtr desktopHandle,
+      string name,
+      IntPtr securityDescriptor) {
       station = stationHandle;
       desktop = desktopHandle;
       Name = name;
+      SecurityDescriptor = securityDescriptor;
     }
 
     public static bool TryCreate(
@@ -244,9 +435,11 @@ internal static class StandardTokenLoader {
         authority = new DesktopAuthority(
           privateStation,
           privateDesktop,
-          actualStationName + "\\" + desktopName);
+          actualStationName + "\\" + desktopName,
+          securityDescriptor);
         privateStation = IntPtr.Zero;
         privateDesktop = IntPtr.Zero;
+        securityDescriptor = IntPtr.Zero;
         return true;
       }
       catch (Exception error) {
@@ -274,15 +467,25 @@ internal static class StandardTokenLoader {
         CloseWindowStation(station);
         station = IntPtr.Zero;
       }
+      if (SecurityDescriptor != IntPtr.Zero) {
+        LocalFree(SecurityDescriptor);
+        SecurityDescriptor = IntPtr.Zero;
+      }
     }
   }
 
   private static int RunChild(
     IntPtr token,
+    IntPtr restrictedImpersonationToken,
     string powershell,
     string systemRoot,
     string encodedCommand,
-    string input) {
+    string input,
+    bool diagnostics,
+    bool explicitChildSecurity,
+    SecurityIdentifier user,
+    SecurityIdentifier system,
+    SecurityIdentifier administrators) {
     DesktopAuthority authority;
     string authorityStage;
     int authorityCode;
@@ -337,18 +540,60 @@ internal static class StandardTokenLoader {
         var command = new StringBuilder(
           "\"" + powershell + "\" -NoLogo -NoProfile -NonInteractive -EncodedCommand " +
           encodedCommand);
-        if (!CreateProcessAsUserW(
-          token,
-          powershell,
-          command,
-          IntPtr.Zero,
-          IntPtr.Zero,
-          true,
-          CreateUnicodeEnvironment | CreateNoWindow,
-          environment,
-          system32,
-          ref startup,
-          out process)) return Win32Failure(107, "start-restricted-process");
+        bool started;
+        if (explicitChildSecurity) {
+          var childSecurity = new SecurityAttributes {
+            Length = Marshal.SizeOf(typeof(SecurityAttributes)),
+            SecurityDescriptor = authority.SecurityDescriptor,
+            InheritHandle = false,
+          };
+          started = CreateProcessAsUserWithSecurityW(
+            token,
+            powershell,
+            command,
+            ref childSecurity,
+            ref childSecurity,
+            true,
+            CreateUnicodeEnvironment | CreateNoWindow,
+            environment,
+            system32,
+            ref startup,
+            out process);
+        }
+        else {
+          started = CreateProcessAsUserW(
+            token,
+            powershell,
+            command,
+            IntPtr.Zero,
+            IntPtr.Zero,
+            true,
+            CreateUnicodeEnvironment | CreateNoWindow,
+            environment,
+            system32,
+            ref startup,
+            out process);
+        }
+        if (!started) return Win32Failure(107, "start-restricted-process");
+        if (diagnostics) {
+          int processDacl = ClassifyKernelObjectDacl(
+            process.Process,
+            user,
+            system,
+            administrators);
+          int threadDacl = ClassifyKernelObjectDacl(
+            process.Thread,
+            user,
+            system,
+            administrators);
+          int access = ProbeRestrictedObjectAccess(
+            restrictedImpersonationToken,
+            process.ProcessId,
+            process.ThreadId);
+          Console.Error.WriteLine(
+            "standard-token-loader:control-object-dacl:process-" + processDacl +
+            ":thread-" + threadDacl + ":restricted-access-" + access);
+        }
         pipe.DisposeLocalCopyOfClientHandle();
         Exception writerFailure = null;
         var writer = new Thread(() => {
@@ -549,6 +794,38 @@ internal static class StandardTokenLoader {
     ref StartupInfo startupInfo,
     out ProcessInformation processInformation);
 
+  [DllImport(
+    "advapi32.dll",
+    EntryPoint = "CreateProcessAsUserW",
+    CharSet = CharSet.Unicode,
+    SetLastError = true)]
+  private static extern bool CreateProcessAsUserWithSecurityW(
+    IntPtr token,
+    string applicationName,
+    StringBuilder commandLine,
+    ref SecurityAttributes processAttributes,
+    ref SecurityAttributes threadAttributes,
+    [MarshalAs(UnmanagedType.Bool)] bool inheritHandles,
+    uint creationFlags,
+    IntPtr environment,
+    string currentDirectory,
+    ref StartupInfo startupInfo,
+    out ProcessInformation processInformation);
+
+  [DllImport("advapi32.dll", SetLastError = true)]
+  private static extern bool SetThreadToken(IntPtr thread, IntPtr token);
+
+  [DllImport("advapi32.dll", SetLastError = true)]
+  private static extern uint GetSecurityInfo(
+    IntPtr handle,
+    int objectType,
+    uint securityInformation,
+    out IntPtr owner,
+    out IntPtr group,
+    out IntPtr dacl,
+    out IntPtr sacl,
+    out IntPtr securityDescriptor);
+
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   private static extern IntPtr CreateFileW(
     string fileName,
@@ -567,6 +844,18 @@ internal static class StandardTokenLoader {
 
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern bool TerminateProcess(IntPtr process, uint exitCode);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern IntPtr OpenProcess(
+    uint desiredAccess,
+    [MarshalAs(UnmanagedType.Bool)] bool inheritHandle,
+    uint processId);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern IntPtr OpenThread(
+    uint desiredAccess,
+    [MarshalAs(UnmanagedType.Bool)] bool inheritHandle,
+    uint threadId);
 
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern bool CloseHandle(IntPtr handle);
