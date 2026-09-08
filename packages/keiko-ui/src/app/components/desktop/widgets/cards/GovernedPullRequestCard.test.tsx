@@ -543,6 +543,36 @@ describe("GovernedPullRequestCard — PR description application (#3399)", () =>
     expect(client.prDescriptionApprove).toHaveBeenCalledWith(descriptionProposal);
   });
 
+  // #3390 — a retained proposal lives minutes, the pull request it describes lives as long as the
+  // change does. When the proposal has lapsed the Workbench still knows WHICH pull request the
+  // description belongs to and hands that target over alone, so the panel must open ON that pull
+  // request, ready to preview, instead of an empty form the operator has to retype from memory.
+  it("prefills the description form from a known pull request that has no retained proposal", async () => {
+    const review = vi.fn(async () => descriptionPreviewResult());
+    const client = makeDescriptionClient({ prDescriptionReview: review });
+    render(
+      <GovernedPullRequestCard
+        projectId={PROJECT}
+        client={client}
+        ownerAndRepo="oscharko-dev/Keiko"
+        descriptionPrNumber={1499}
+      />,
+    );
+
+    expect(screen.getByLabelText("Description repository (owner/repo)")).toHaveValue(
+      "oscharko-dev/Keiko",
+    );
+    expect(screen.getByLabelText("Description pull request number")).toHaveValue("1499");
+    // Nothing is reviewed on mount: there is no proposal to review, only a target to preview.
+    expect(review).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("gpr-description-preview-button"));
+    await screen.findByTestId("gpr-description-preview");
+    expect(client.prDescriptionPreview).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerAndRepo: "oscharko-dev/Keiko", prNumber: 1499 }),
+    );
+  });
+
   it("one-use approval: applying clears the approval, so a second Apply click is disabled again", async () => {
     const client = makeDescriptionClient();
     render(<GovernedPullRequestCard projectId={PROJECT} client={client} />);

@@ -32,6 +32,7 @@ import { join } from "node:path";
 import { writeCodingIssueJourneyFlowEvidenceReceipt } from "../../../scripts/lib/qualification-evidence-receipt.mjs";
 import { driveOrReuseDraftPullRequest } from "./coding-issue-journey-live-cache.js";
 import {
+  attachQualificationResumeValues,
   qualificationResumeBinding,
   resumeIssueToDraftPullRequest,
 } from "./coding-issue-journey-live-resume.js";
@@ -75,7 +76,11 @@ import {
 import { recordSuccessfulJourneyStage } from "./coding-issue-journey-stage-receipts.js";
 
 const DESCRIPTOR_PATH = join("docs", "acceptance", "coding-issue-journey-3390.json");
-const MAX_AUTHORIZED_BUDGET_NANO_USD = 50_000_000_000;
+// The owner's authorized aggregate ceiling for every paid attempt, probe, failure and retry of the
+// #3390 qualification, raised from USD 50 on 2026-09-08. It lives in frozen lane source on purpose:
+// the durable ledger accepts an owner-configured raise (and records it), so this constant — bound
+// into every flow artifact by the source freeze — is what actually caps the aggregate.
+const MAX_AUTHORIZED_BUDGET_NANO_USD = 100_000_000_000;
 const NANO_USD = 1_000_000_000;
 const JOURNEY_REGION_NAME = "Issue handoff";
 const JOURNEY_REFRESH_BUTTON_NAME = "Refresh observed status";
@@ -370,7 +375,11 @@ function authorizedBudgetNanoUsd(env: Readonly<Record<string, string | undefined
   const raw = env.KEIKO_QUALIFICATION_SPEND_BUDGET_USD;
   const value = raw === undefined || raw.trim() === "" ? Number.NaN : Number(raw) * NANO_USD;
   if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_AUTHORIZED_BUDGET_NANO_USD) {
-    throw new Error("qualification spend authorization exceeds the USD 50 aggregate ceiling");
+    throw new Error(
+      `qualification spend authorization exceeds the authorized aggregate ceiling of ${String(
+        MAX_AUTHORIZED_BUDGET_NANO_USD / NANO_USD,
+      )} USD`,
+    );
   }
   return value;
 }
@@ -491,7 +500,7 @@ async function fetchThenPullControlledBase(page: Page, gitWindow: Locator): Prom
   await sync.click();
   await fetched;
   await expect(sync).not.toHaveAttribute("aria-label", "Run sync: syncing", { timeout: 60_000 });
-  if ((await sync.getAttribute("aria-label")) !== "Run sync: Pull") return;
+  if (!(await controlledBaseIsBehind(page, sync))) return;
   const pulled = waitForSyncExecute(page, "pull");
   await sync.click();
   // `WorktreeMutationConfirmDialog` is an alertdialog, not a dialog: Playwright's role engine
@@ -503,6 +512,43 @@ async function fetchThenPullControlledBase(page: Page, gitWindow: Locator): Prom
     .click();
   await pulled;
   await expect(sync).toHaveAttribute("aria-label", "Run sync: Fetch", { timeout: 60_000 });
+}
+
+/**
+ * Reads the verdict the sync control DERIVED from the fetch, rather than the label painted at one
+ * instant.
+ *
+ * The button's label is a projection of ahead/behind counts that arrive after the fetch settles, so
+ * "not syncing any more" does not mean "counts are fresh". Sampling the label once at that moment
+ * could read a still-stale "Fetch" on a branch that had in fact fallen behind, silently running the
+ * whole flow -- and its paid model work -- against an outdated base. `SyncControl` states the
+ * verdict in words in its own live region ("Up to date with X" / "N behind X" / "Diverged: ..."),
+ * which is the reading that cannot be stale without saying so.
+ *
+ * Every outcome is classified. A base that has diverged is not something to pull past, and any
+ * phrasing this lane does not recognise stops the flow BEFORE the model is paid, naming what it saw.
+ */
+async function controlledBaseIsBehind(page: Page, sync: Locator): Promise<boolean> {
+  const describedBy = await sync.getAttribute("aria-describedby");
+  if (describedBy === null || describedBy === "") {
+    throw new Error("the sync control states no synchronization verdict to read");
+  }
+  const verdict = page.locator(`[id="${describedBy}"]`);
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    const text = ((await verdict.textContent()) ?? "").trim();
+    if (text.startsWith("Diverged:")) {
+      throw new Error(`the controlled base has diverged and cannot be fast-forwarded: ${text}`);
+    }
+    if (text.startsWith("Up to date with ")) return false;
+    if (/^\d+ behind /u.test(text)) return true;
+    if (Date.now() > deadline) {
+      throw new Error(
+        `the sync control never settled on a synchronization verdict (observed: ${text === "" ? "nothing" : text})`,
+      );
+    }
+    await page.waitForTimeout(500);
+  }
 }
 
 /**
@@ -1299,6 +1345,37 @@ async function driveFlowToCompletedOutcome(
   readonly stageEvidence: CodeTaskQualificationFlowStageEvidenceV1;
 }> {
   const exactHead = await resolveExactHeadDelivery(page, flow, repositoryRoot);
+  try {
+    return await completeFlowFromDelivery(page, flow, repositoryRoot, startedAt, {
+      qualifiedSourceCommitSha,
+      exactHead,
+    });
+  } catch (error) {
+    // Everything after the draft pull request is the expensive half of the flow. A failure here has
+    // already paid for the model's work, and continuation mode can pick that work up -- but only
+    // with values nothing produced until now.
+    await attachQualificationResumeValues(page, exactHead.delivered.runId);
+    throw error;
+  }
+}
+
+async function completeFlowFromDelivery(
+  page: Page,
+  flow: QualificationFlowBinding,
+  repositoryRoot: string,
+  startedAt: number,
+  resolved: {
+    readonly qualifiedSourceCommitSha: CodeTaskGitCommitSha;
+    readonly exactHead: Awaited<ReturnType<typeof resolveExactHeadDelivery>>;
+  },
+): Promise<{
+  readonly outcome: JourneyOutcome;
+  readonly readiness: NonNullable<JourneyOutcome["readiness"]>;
+  readonly authorityObservation: CodeTaskQualificationAuthorityObservationV1;
+  readonly rubricReview: CodeTaskQualificationRubricReview;
+  readonly stageEvidence: CodeTaskQualificationFlowStageEvidenceV1;
+}> {
+  const { qualifiedSourceCommitSha, exactHead } = resolved;
   const preMerge = await recordPreMergeStages(page, flow, repositoryRoot, startedAt, exactHead);
   const finalDelivered = exactHead.delivered;
   const rubricReview = await reviewExactHead(flow, finalDelivered, qualifiedSourceCommitSha);

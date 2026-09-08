@@ -5069,6 +5069,7 @@ export type {
   PrDescriptionApplicationEffect,
   PR_DESCRIPTION_APPLICATION_MAX_AGE_MS,
   PR_DESCRIPTION_APPLICATION_REASON_STATES,
+  PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS,
   PR_DESCRIPTION_CONCURRENCY_LIMITATION,
   isPrDescriptionApplicationBinding,
   isPrDescriptionApplicationStatus,

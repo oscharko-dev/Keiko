@@ -3720,10 +3720,14 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       });
     });
 
+    // #3390: the scope has NOT moved here -- same run, same head, same generation binding -- so
+    // the honest cause is that the retention lapsed, not that the change went stale. Reporting
+    // `stale-snapshot` told the operator the head had moved when it had not, and the Code task then
+    // offered no way forward at all.
     retained = false;
     expect(f.orchestrator.status().descriptionStatus).toMatchObject({
       state: "stale",
-      reason: "stale-snapshot",
+      reason: "expired",
     });
     expect(f.orchestrator.status().descriptionStatus).not.toHaveProperty("proposalId");
     expect(
@@ -3731,6 +3735,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
         (event) =>
           event.op === "coding-runtime.description" &&
           event.extra?.event === "stale" &&
+          event.extra.reason === "expired" &&
           event.extra.proposalRetained === false,
       ),
     ).toHaveLength(1);

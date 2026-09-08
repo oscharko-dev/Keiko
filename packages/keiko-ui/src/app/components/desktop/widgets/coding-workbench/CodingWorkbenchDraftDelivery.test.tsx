@@ -9,6 +9,16 @@ import {
 } from "./_workbenchDescriptionStatusTestSupport";
 import { translateCodingWorkbench } from "./coding-workbench-i18n";
 
+/** A delivered pull request whose automatically generated draft is no longer retained. */
+function expiredDescriptionSnapshot(): ReturnType<typeof draftDeliverySnapshot> {
+  const snapshot = draftDeliverySnapshot();
+  const described = descriptionStatusSnapshot({ state: "stale", reason: "expired" });
+  const status = described.descriptionStatus;
+  if (status === undefined) throw new Error("description status fixture absent");
+  const { proposalId: _dropped, ...retained } = status;
+  return { ...snapshot, descriptionStatus: retained };
+}
+
 function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value: T) => void } {
   let resolve = (_value: T): void => undefined;
   const promise = new Promise<T>((settle) => {
@@ -18,6 +28,31 @@ function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value
 }
 
 describe("durable repository delivery in the Code task", () => {
+  // #3390: a lapsed retention used to leave the operator with a false sentence ("the change moved")
+  // and NO control at all -- the automatic draft simply vanished about a minute after the run
+  // ended, with no way back. The card must now say what actually happened and still open the
+  // governed description surface for the pull request it already delivered.
+  it("offers the description surface when the retained draft has expired", async () => {
+    const onReviewDescription = vi.fn();
+    render(
+      <CodingWorkbenchDraftDelivery
+        snapshot={expiredDescriptionSnapshot()}
+        onReviewDescription={onReviewDescription}
+      />,
+    );
+
+    expect(screen.getByTestId("cwb-description-status")).toHaveAttribute("data-reason", "expired");
+    expect(
+      screen.getByRole("region", { name: "Pull request description draft" }),
+    ).toHaveTextContent("The change itself has not moved.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Write the description" }));
+    expect(onReviewDescription).toHaveBeenCalledWith({
+      ownerAndRepo: "owner/repository",
+      prNumber: 7,
+    });
+  });
+
   // #3390: the Code task's four status cards render one state each. Two of them (CI readiness,
   // journey outcome) already carry that state as a `data-state` attribute alongside the translated
   // sentence; these two carried the sentence alone, so the state was readable only by translating

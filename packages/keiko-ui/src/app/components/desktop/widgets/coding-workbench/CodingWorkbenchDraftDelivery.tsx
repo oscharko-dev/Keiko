@@ -115,11 +115,14 @@ function DraftDeliveryCard({
   );
 }
 
+/** #3390: the proposal is optional. A delivered pull request always has a governed description
+ * surface to open; the retained draft is what may have lapsed. Carrying the pull request alone lets
+ * the card hand the operator that surface instead of nothing. */
 export interface WorkbenchDescriptionReviewTarget {
   readonly ownerAndRepo: string;
   readonly prNumber: number;
-  readonly proposalId: string;
-  readonly snapshotDigest: string;
+  readonly proposalId?: string;
+  readonly snapshotDigest?: string;
 }
 
 interface WorkbenchDescriptionDraftTarget {
@@ -186,19 +189,14 @@ function descriptionReviewTarget(
   delivery: DraftDeliveryRecord | undefined,
 ): WorkbenchDescriptionReviewTarget | undefined {
   const pullRequest = delivery?.pullRequest;
-  if (
-    status.proposalId === undefined ||
-    status.snapshotDigest === null ||
-    pullRequest?.state !== "open"
-  ) {
-    return undefined;
-  }
-  return {
-    ownerAndRepo: pullRequest.repository,
-    prNumber: pullRequest.number,
-    proposalId: status.proposalId,
-    snapshotDigest: status.snapshotDigest,
-  };
+  if (pullRequest?.state !== "open") return undefined;
+  const target = { ownerAndRepo: pullRequest.repository, prNumber: pullRequest.number };
+  // With a retained proposal the card opens the EXACT generated draft. Without one — the retention
+  // lapsed, or generation was blocked — it opens the same governed surface on the pull request
+  // alone, where the operator can still write and apply a description. Never nothing.
+  return status.proposalId === undefined || status.snapshotDigest === null
+    ? target
+    : { ...target, proposalId: status.proposalId, snapshotDigest: status.snapshotDigest };
 }
 
 function descriptionDraftTarget(
@@ -296,7 +294,12 @@ function WorkbenchDescriptionReview({
   const t = useCodingWorkbenchTranslate();
   const { draft, unavailable, openDraft } = useWorkbenchDraftReview(draftTarget, reviewDraft);
   if (applicationTarget !== undefined && onReview !== undefined) {
-    return <DescriptionReviewButton onClick={() => onReview(applicationTarget)} />;
+    return (
+      <DescriptionReviewButton
+        retained={applicationTarget.proposalId !== undefined}
+        onClick={() => onReview(applicationTarget)}
+      />
+    );
   }
   if (draftTarget === undefined) return null;
   return (
@@ -370,16 +373,28 @@ function useWorkbenchDraftReview(
   return { draft, unavailable, openDraft };
 }
 
-function DescriptionReviewButton({ onClick }: { readonly onClick: () => void }): ReactNode {
+/** Names what the click actually does. Offering "Review exact draft" when no draft is retained
+ * would promise something the surface cannot deliver. */
+function DescriptionReviewButton({
+  retained = true,
+  onClick,
+}: {
+  readonly retained?: boolean;
+  readonly onClick: () => void;
+}): ReactNode {
   const t = useCodingWorkbenchTranslate();
   return (
     <button
       type="button"
       className={styles.button}
       onClick={onClick}
-      data-testid="cwb-description-review"
+      data-testid={retained ? "cwb-description-review" : "cwb-description-write"}
     >
-      {t("codingWorkbench.descriptionStatus.review")}
+      {t(
+        retained
+          ? "codingWorkbench.descriptionStatus.review"
+          : "codingWorkbench.descriptionStatus.write",
+      )}
     </button>
   );
 }

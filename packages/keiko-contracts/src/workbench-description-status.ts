@@ -33,6 +33,11 @@ export const WORKBENCH_DESCRIPTION_REASON_STATES = {
   "partial-generated": "partial",
   "fallback-generated": "fallback",
   "stale-snapshot": "stale",
+  // #3390: the retained proposal lapsed while the change it describes did NOT move. Reporting that
+  // as `stale-snapshot` told the operator something untrue -- the head was unchanged -- and left
+  // the Code task with no reachable next step. `expired` is already a member of #3399's own reason
+  // vocabulary mapped to `stale`, so this adds a producer, not a new word.
+  expired: "stale",
   // #3400/#3401 final-audit F1: `authority-expired` has no producer today — the description
   // authority's read port (runtimeAuthorityService.ts's `currentGitDeliveryDescriptionAuthority`)
   // deliberately collapses "no record" and "expired record" into the SAME `undefined` return (its

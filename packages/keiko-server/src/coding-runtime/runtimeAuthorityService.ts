@@ -327,7 +327,9 @@ export interface MintGitDeliveryDescriptionAuthorityInput {
   readonly correlationId?: string;
 }
 
-const DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS = 10 * 60 * 1000;
+/** Exported so the description proposal's retention window can be DERIVED from the authority that
+ * backs it, and pinned against it, instead of two independent numbers drifting apart (#3390). */
+export const DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS = 10 * 60 * 1000;
 const MAX_DESCRIPTION_AUTHORITIES = 256;
 
 function descriptionAuthorityLifetime(input: MintGitDeliveryDescriptionAuthorityInput): {

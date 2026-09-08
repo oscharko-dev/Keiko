@@ -9,6 +9,11 @@ import { PrDescription } from "@oscharko-dev/keiko-model-gateway";
 import type { PrDescriptionArtifact } from "@oscharko-dev/keiko-contracts";
 import { prDescriptionArtifactDigestFields } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 import { framePrDescriptionRegion } from "@oscharko-dev/keiko-contracts/runtime/pr-description-region";
+import {
+  PR_DESCRIPTION_APPLICATION_MAX_AGE_MS,
+  PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
+import { DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS } from "../coding-runtime/runtimeAuthorityService.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { DescriptionFixture } from "./prDescriptionTestSupport.js";
 import { prepareDescription, prepareDescriptionArtifact } from "./prDescriptionPreparation.js";
@@ -179,5 +184,23 @@ describe("prepareDescription/prepareDescriptionArtifact — snapshot reservation
     } finally {
       fixture.close();
     }
+  });
+});
+
+// #3390: the retention window exists only because the description authority backing an application
+// lives ten minutes. Deriving the relationship from the real constants — never restating either
+// number — is what stops the two drifting apart later and silently letting a proposal outlive the
+// authority it depends on.
+describe("retained proposal window", () => {
+  it("always lapses at least one approval window before the authority that backs it", () => {
+    expect(
+      PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS + PR_DESCRIPTION_APPLICATION_MAX_AGE_MS,
+    ).toBeLessThanOrEqual(DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS);
+  });
+
+  it("is longer than the observation window it used to be confused with", () => {
+    expect(PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS).toBeGreaterThan(
+      PR_DESCRIPTION_APPLICATION_MAX_AGE_MS,
+    );
   });
 });

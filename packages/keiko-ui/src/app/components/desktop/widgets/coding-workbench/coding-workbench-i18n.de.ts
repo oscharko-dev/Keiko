@@ -635,6 +635,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Deterministisch erstellt; das Modell war nicht verfügbar.",
   "codingWorkbench.descriptionStatus.reason.stale-snapshot":
     "Die Änderung hat sich seit der Entwurfserstellung weiterentwickelt.",
+  "codingWorkbench.descriptionStatus.reason.expired":
+    "Der erzeugte Entwurf wird nicht mehr vorgehalten. Die Änderung selbst ist unverändert.",
   "codingWorkbench.descriptionStatus.reason.authority-expired":
     "Die Berechtigung ist vor Beginn der Erstellung abgelaufen.",
   "codingWorkbench.descriptionStatus.reason.model-egress-denied":
@@ -650,6 +652,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.descriptionStatus.head": "Head-Commit",
   "codingWorkbench.descriptionStatus.generation": "Generation",
   "codingWorkbench.descriptionStatus.review": "Exakten Entwurf prüfen",
+  "codingWorkbench.descriptionStatus.write": "Beschreibung verfassen",
   "codingWorkbench.descriptionStatus.unavailable":
     "Dieser gespeicherte Entwurf ist nicht mehr verfügbar. Aktualisieren Sie den Laufstatus.",
   "codingWorkbench.commitResult.title": "Commit-Ergebnis",

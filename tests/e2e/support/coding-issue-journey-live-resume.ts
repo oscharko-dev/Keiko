@@ -5,7 +5,7 @@
 // workspace/run identities and the tracked/untracked worktree digest on both sides of Bind before starting
 // an independently issue-bound continuation run.
 
-import { expect, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import type {
   CodingWorkbenchIssueBinding,
   CodingWorkbenchMode,
@@ -592,4 +592,65 @@ export async function resumeIssueToDraftPullRequest(
     timeout: 60_000,
   });
   return waitForDraftPullRequest(page, runId);
+}
+
+/**
+ * Attaches everything continuation mode needs, at the moment a flow fails.
+ *
+ * Continuation is configured through eleven environment values with no tool to produce them, so
+ * after a failure an operator faced a choice between reconstructing them by hand and paying for a
+ * whole new run. Nine come from records; the tenth, the worktree digest, is a hash of the model's
+ * own files that only `readQualificationWorktree` can produce -- so it is CALLED here rather than
+ * recomputed, because a second implementation of that formula would drift from the one the
+ * continuation actually verifies against and would fail exactly when it was needed.
+ *
+ * Best effort by construction: it runs on a path that is already failing, and must never replace
+ * that failure with one of its own. What it cannot determine, it says.
+ */
+export async function attachQualificationResumeValues(page: Page, runId: string): Promise<void> {
+  try {
+    const active = await readActiveWorkspace(page);
+    if (active === null) return;
+    const worktree = await readQualificationWorktree(active.managedWorktreePath);
+    const observed = await observedRun(page);
+    await test.info().attach("qualification-resume.env", {
+      contentType: "text/plain",
+      body: resumeExports(active, worktree, observed.state, runId),
+    });
+  } catch (error) {
+    await test.info().attach("qualification-resume.env", {
+      contentType: "text/plain",
+      body: `# continuation values are unavailable: ${String(error)}\n`,
+    });
+  }
+}
+
+function resumeExports(
+  active: ActiveWorkspaceIdentity,
+  worktree: WorktreeIdentity,
+  observedState: string,
+  runId: string,
+): string {
+  const known = new Set(["failed", "cancelled", "recovery-required", "succeeded"]);
+  const lines = [
+    `export KEIKO_QUALIFICATION_RESUME_WORKSPACE=1`,
+    `export KEIKO_QUALIFICATION_RESUME_PRIOR_RUN_ID="${runId}"`,
+    `export KEIKO_QUALIFICATION_RESUME_WORKSPACE_ID="${active.workspaceId}"`,
+    `export KEIKO_QUALIFICATION_RESUME_TASK_ID="${active.taskId}"`,
+    `export KEIKO_QUALIFICATION_RESUME_REPOSITORY_ID="${active.repositoryId}"`,
+    `export KEIKO_QUALIFICATION_RESUME_BASE_BRANCH="${active.baseBranch}"`,
+    `export KEIKO_QUALIFICATION_RESUME_TASK_BRANCH="${active.taskBranch}"`,
+    `export KEIKO_QUALIFICATION_RESUME_WORKTREE_PATH="${active.managedWorktreePath}"`,
+    `export KEIKO_QUALIFICATION_RESUME_HEAD_SHA="${worktree.headSha}"`,
+    `export KEIKO_QUALIFICATION_RESUME_WORKTREE_DIGEST="${worktree.digest}"`,
+  ];
+  // The issue binding digest belongs to the run, not to the workspace record, and the resume path
+  // verifies it against the bound issue the window is showing.
+  lines.push(
+    known.has(observedState)
+      ? `export KEIKO_QUALIFICATION_RESUME_PRIOR_STATE="${observedState}"`
+      : `# the run was in state "${observedState}"; continuation accepts only ${[...known].join(", ")}`,
+    `# KEIKO_QUALIFICATION_RESUME_ISSUE_BINDING_DIGEST: read it from the bound issue in the Code task`,
+  );
+  return `${lines.join("\n")}\n`;
 }

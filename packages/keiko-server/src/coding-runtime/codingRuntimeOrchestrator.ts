@@ -189,6 +189,21 @@ export interface CodingRuntimeDescriptionSupport {
   readonly dispatcher?: WorkbenchDescriptionDispatcher;
 }
 
+/**
+ * #3390: names the actual cause of a lost proposal, from data already in hand.
+ *
+ * A moved scope really is a stale snapshot. An UNCHANGED scope whose hold is simply gone is an
+ * expired retention — the artifact lapsed, the change did not move. Reporting the second as
+ * `stale-snapshot` told the operator their change had moved when nothing had.
+ */
+function lostProposalReason(
+  status: WorkbenchDescriptionStatus,
+  scope: WorkbenchDescriptionScope | undefined,
+): "stale-snapshot" | "expired" {
+  if (scope === undefined) return "stale-snapshot";
+  return sameDescriptionStatusScope(status, scope) ? "expired" : "stale-snapshot";
+}
+
 function isRetainedDescriptionProposal(
   support: CodingRuntimeDescriptionSupport | undefined,
   scope: WorkbenchDescriptionScope | undefined,
@@ -1969,14 +1984,16 @@ export class CodingRuntimeOrchestrator {
     ) {
       return status;
     }
+    const reason = lostProposalReason(status, scope);
     const stale = support?.jobs.markProposalLost(
       snapshot.runId,
       status.proposalId,
+      reason,
       this.now().toISOString(),
     );
-    if (stale?.reason === "stale-snapshot" && stale.proposalId === undefined) {
+    if (stale?.reason === reason && stale.proposalId === undefined) {
       this.logDescriptionEvent(scope ?? { runId: snapshot.runId }, "stale", {
-        reason: "stale-snapshot",
+        reason,
         proposalRetained: false,
       });
     }

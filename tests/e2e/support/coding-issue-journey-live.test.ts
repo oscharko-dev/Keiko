@@ -345,16 +345,24 @@ describe("live journey repository trust", () => {
   // #3390: the two registration pins move onto the act that replaced registration. Their
   // invariants are unchanged -- the precondition must be genuinely performed, and a repository
   // whose scripts stay restricted must fail closed rather than proceed into provisioning.
-  it("reaches the workspace trust decision before provisioning", async () => {
-    const trust = vi.fn(() => Promise.resolve({ decided: true, restricted: false }));
+  // Both ways the decision can be in force: answered here, or already on record from an earlier
+  // run against the same state directory. Neither is assumed -- `decideLiveWorkspaceTrust` reaches
+  // each of them through an observation of the product's own trust state.
+  it.each([true, false])(
+    "reaches the workspace trust decision before provisioning (offered: %s)",
+    async (offered) => {
+      const trust = vi.fn(() => Promise.resolve({ decided: true, offered, restricted: false }));
 
-    await trustRepositoryWorkspace({ trust });
+      await trustRepositoryWorkspace({ trust });
 
-    expect(trust).toHaveBeenCalledExactlyOnceWith();
-  });
+      expect(trust).toHaveBeenCalledExactlyOnceWith();
+    },
+  );
 
   it("fails closed when the workspace was never actually asked to be trusted", async () => {
-    const trust = vi.fn(() => Promise.resolve({ decided: false, restricted: false }));
+    const trust = vi.fn(() =>
+      Promise.resolve({ decided: false, offered: false, restricted: false }),
+    );
 
     await expect(trustRepositoryWorkspace({ trust })).rejects.toThrow(
       "trust decision must be reached before worktree provisioning",
@@ -362,7 +370,7 @@ describe("live journey repository trust", () => {
   });
 
   it("fails closed when the workspace stays restricted after the decision", async () => {
-    const trust = vi.fn(() => Promise.resolve({ decided: true, restricted: true }));
+    const trust = vi.fn(() => Promise.resolve({ decided: true, offered: true, restricted: true }));
 
     await expect(trustRepositoryWorkspace({ trust })).rejects.toThrow(
       "must not stay in restricted mode before worktree provisioning",

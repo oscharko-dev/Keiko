@@ -670,15 +670,26 @@ type DescriptionFormChange = <K extends keyof DescriptionForm>(
   value: DescriptionForm[K],
 ) => void;
 
+// #3390 — a retained proposal and a bare pull request are two different degrees of knowledge, and
+// the panel must open on whichever it was given. The Workbench hands over the full proposal while
+// its holder still has it, and the pull request alone once that holder has let it lapse; in both
+// cases the operator arrives on the right target rather than on an empty form.
 function initialDescriptionForm(
-  ownerAndRepo: string | undefined,
+  target: DescriptionSeed,
   retained: GitDeliveryPrDescriptionProposalInput | undefined,
 ): DescriptionForm {
+  const prNumber = retained?.prNumber ?? target.prNumber;
   return {
-    ownerAndRepo: retained?.ownerAndRepo ?? ownerAndRepo ?? "",
-    prNumber: retained === undefined ? "" : String(retained.prNumber),
+    ownerAndRepo: retained?.ownerAndRepo ?? target.ownerAndRepo ?? "",
+    prNumber: prNumber === undefined ? "" : String(prNumber),
     language: "en",
   };
+}
+
+/** What the caller knows about the description's pull request when no proposal is retained. */
+interface DescriptionSeed {
+  readonly ownerAndRepo: string | undefined;
+  readonly prNumber: number | undefined;
 }
 
 function isValidDescriptionPrNumber(value: string): boolean {
@@ -1357,11 +1368,11 @@ function useRetainedDescriptionProposal(
 }
 
 function useDescriptionForm(
-  ownerAndRepo: string | undefined,
+  target: DescriptionSeed,
   retainedProposal: GitDeliveryPrDescriptionProposalInput | undefined,
 ): { readonly form: DescriptionForm; readonly onChange: DescriptionFormChange } {
   const [form, setForm] = useState<DescriptionForm>(() =>
-    initialDescriptionForm(ownerAndRepo, retainedProposal),
+    initialDescriptionForm(target, retainedProposal),
   );
   const onChange = useCallback(
     <K extends keyof DescriptionForm>(key: K, value: DescriptionForm[K]): void => {
@@ -1375,15 +1386,15 @@ function useDescriptionForm(
 function PrDescriptionPanel({
   client,
   projectId,
-  ownerAndRepo,
+  target,
   retainedProposal,
 }: {
   readonly client: GovernedPullRequestClient;
   readonly projectId: string;
-  readonly ownerAndRepo: string | undefined;
+  readonly target: DescriptionSeed;
   readonly retainedProposal: GitDeliveryPrDescriptionProposalInput | undefined;
 }): ReactNode {
-  const { form, onChange } = useDescriptionForm(ownerAndRepo, retainedProposal);
+  const { form, onChange } = useDescriptionForm(target, retainedProposal);
   const t = useTranslate();
   const descriptionClient = requiredPrDescriptionClient(client);
   const async = useGovernedPrDescriptionActions(descriptionClient);
@@ -1438,6 +1449,7 @@ interface GovernedPullRequestBodyProps {
   readonly headBranchName: string | undefined;
   readonly ownerAndRepo: string | undefined;
   readonly baseBranchName: string | undefined;
+  readonly descriptionPrNumber: number | undefined;
   readonly descriptionProposal: GitDeliveryPrDescriptionProposalInput | undefined;
   readonly titleId: string;
   readonly liveId: string;
@@ -1642,14 +1654,14 @@ function usePullRequestForm(
 function renderPrDescriptionPanel(
   client: GovernedPullRequestClient,
   projectId: string,
-  ownerAndRepo: string | undefined,
+  target: DescriptionSeed,
   retainedProposal: GitDeliveryPrDescriptionProposalInput | undefined,
 ): ReactNode {
   return (
     <PrDescriptionPanel
       client={client}
       projectId={projectId}
-      ownerAndRepo={ownerAndRepo}
+      target={target}
       retainedProposal={retainedProposal}
     />
   );
@@ -1661,6 +1673,7 @@ function GovernedPullRequestBody({
   headBranchName,
   ownerAndRepo,
   baseBranchName,
+  descriptionPrNumber,
   descriptionProposal,
   titleId,
   liveId,
@@ -1685,6 +1698,7 @@ function GovernedPullRequestBody({
   );
   const { canPreview, canExecute, visiblePreview, visibleOutcome, visibleError, liveText } =
     derivePrRenderState(form, async, previewedKey, actionKey);
+  const description = { ownerAndRepo, prNumber: descriptionPrNumber };
   return (
     <div style={CARD_BODY_STYLE} aria-labelledby={titleId}>
       <PrBodyHeader titleId={titleId} liveId={liveId} liveText={liveText} />
@@ -1699,7 +1713,7 @@ function GovernedPullRequestBody({
         onExecute={onExecute}
       />
       <PrOutcome outcome={visibleOutcome} error={visibleError} />
-      {renderPrDescriptionPanel(client, projectId, ownerAndRepo, descriptionProposal)}
+      {renderPrDescriptionPanel(client, projectId, description, descriptionProposal)}
     </div>
   );
 }
@@ -1713,6 +1727,12 @@ export interface GovernedPullRequestCardProps {
   readonly ownerAndRepo?: string | undefined;
   /** Optional base branch inferred from upstream/current branch metadata. */
   readonly baseBranchName?: string | undefined;
+  /**
+   * The pull request the description belongs to, when it is known without a retained proposal —
+   * the Workbench hands this over once its held proposal has lapsed, so the panel still opens on
+   * the right pull request instead of an empty form (#3390).
+   */
+  readonly descriptionPrNumber?: number | undefined;
   /** Exact server-held Workbench proposal to review without a second model generation. */
   readonly descriptionProposal?: GitDeliveryPrDescriptionProposalInput | undefined;
   /** DI seam; defaults to the real BFF client. */
@@ -1724,6 +1744,7 @@ export function GovernedPullRequestCard({
   headBranchName,
   ownerAndRepo,
   baseBranchName,
+  descriptionPrNumber,
   descriptionProposal,
   client = DEFAULT_CLIENT,
 }: GovernedPullRequestCardProps): ReactNode {
@@ -1748,6 +1769,7 @@ export function GovernedPullRequestCard({
       headBranchName={headBranchName}
       ownerAndRepo={ownerAndRepo}
       baseBranchName={baseBranchName}
+      descriptionPrNumber={descriptionPrNumber}
       descriptionProposal={descriptionProposal}
       titleId={titleId}
       liveId={liveId}

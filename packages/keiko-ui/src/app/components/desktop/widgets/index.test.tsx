@@ -447,6 +447,12 @@ vi.mock("./coding-workbench/CodingWorkbenchWindow", () => ({
       readonly root: string | null;
       readonly binding: "repository" | "task-workspace";
       readonly repositoryDialog?: "clone";
+      readonly descriptionReview?: {
+        readonly ownerAndRepo: string;
+        readonly prNumber: number;
+        readonly proposalId?: string;
+        readonly snapshotDigest?: string;
+      };
     }) => void;
   }) => (
     <div data-testid="coding-workbench-window">
@@ -470,6 +476,35 @@ vi.mock("./coding-workbench/CodingWorkbenchWindow", () => ({
         onClick={() => onOpenGit?.({ root: "/worktrees/active-task", binding: "task-workspace" })}
       >
         Open coding task Git
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onOpenGit?.({
+            root: "/repo",
+            binding: "repository",
+            descriptionReview: {
+              ownerAndRepo: "oscharko/Wegwerf-Repo",
+              prNumber: 7,
+              proposalId: "prop-1",
+              snapshotDigest: "d".repeat(64),
+            },
+          })
+        }
+      >
+        Review exact draft
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onOpenGit?.({
+            root: "/repo",
+            binding: "repository",
+            descriptionReview: { ownerAndRepo: "oscharko/Wegwerf-Repo", prNumber: 7 },
+          })
+        }
+      >
+        Write the description
       </button>
     </div>
   ),
@@ -1600,6 +1635,55 @@ describe("workspace widget renderer registry", () => {
 
     expect(await screen.findByTestId("coding-workbench-window")).toHaveTextContent(
       "Coding Workbench",
+    );
+  });
+
+  // #3390 — the Workbench hands the description over in two degrees of knowledge: the retained
+  // proposal while its holder still has it, and the pull request alone once that holder has let it
+  // lapse. Both must arrive at the pull request window; the second is the one that used to leave the
+  // operator on an empty form with no way back to the description they were just offered.
+  it("hands both a retained description proposal and a bare pull request to the PR window", async () => {
+    const ctx = makeCtx();
+    render(<>{WIN_TYPES.coding.render({}, ctx)}</>);
+    await screen.findByTestId("coding-workbench-window");
+
+    fireEvent.click(screen.getByRole("button", { name: "Review exact draft" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("governedPullRequest", {
+      projectPath: "/repo",
+      descriptionOwnerAndRepo: "oscharko/Wegwerf-Repo",
+      descriptionPrNumber: 7,
+      descriptionProposalId: "prop-1",
+      descriptionSnapshotDigest: "d".repeat(64),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Write the description" }));
+    expect(ctx.openWindow).toHaveBeenLastCalledWith("governedPullRequest", {
+      projectPath: "/repo",
+      descriptionOwnerAndRepo: "oscharko/Wegwerf-Repo",
+      descriptionPrNumber: 7,
+      descriptionProposalId: undefined,
+      descriptionSnapshotDigest: undefined,
+    });
+  });
+
+  it("opens the PR window on the handed-over pull request even without a retained proposal", async () => {
+    const ctx = makeCtx();
+    render(
+      <>
+        {WIN_TYPES.governedPullRequest.render(
+          {
+            projectPath: "/repo",
+            descriptionOwnerAndRepo: "oscharko/Wegwerf-Repo",
+            descriptionPrNumber: 7,
+          },
+          ctx,
+        )}
+      </>,
+    );
+
+    expect(await screen.findByLabelText("Description pull request number")).toHaveValue("7");
+    expect(screen.getByLabelText("Description repository (owner/repo)")).toHaveValue(
+      "oscharko/Wegwerf-Repo",
     );
   });
 

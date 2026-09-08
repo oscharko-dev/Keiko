@@ -236,7 +236,11 @@ survive across the separate HTTP calls; the `context()` provider re-derives admi
 every internal call rather than caching it, so a revoked or drifted authority is observed on the
 very next call. Full production composition of description generation (Model Gateway config and
 capability) remains #3398's scope; until composed, the route fails closed as unavailable rather
-than degrading to a fabricated or unvalidated description.
+than degrading to a fabricated or unvalidated description. The bounded description authority's TTL is
+also the ceiling on how long the service retains a generated proposal for review: the retention
+window is derived from it (ADR-0174 D4), so a proposal can never outlive the authority that would
+admit its application, and a retained proposal that lapses while its scope is unchanged is reported
+as `expired` rather than as a moved snapshot.
 
 ### D11 — A dedicated `pr-mark-ready` action kind and approval operation close the approval-less draft->ready transition; no title/body/base PATCH is bundled with the mutation (#3389, epic #3384 corrections 1/2/7)
 

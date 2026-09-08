@@ -8,7 +8,7 @@ import type {
   ModelCapabilityPricing,
   UsageMetadata,
 } from "@oscharko-dev/keiko-model-gateway";
-import { ModelSpendStore } from "./store/model-spend.js";
+import { ModelSpendStore, type SpendCeilingReconciliation } from "./store/model-spend.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import type { ServerLogSink } from "./observability/server-log.js";
 import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
@@ -195,11 +195,34 @@ class PersistentGatewaySpendBudget implements GatewaySpendBudget {
     if (this.path === undefined || !isAbsolute(this.path))
       reject(this.log, correlationId, "spend-ledger-unavailable");
     try {
-      this.store ??= new ModelSpendStore(this.path, this.ceiling);
+      if (this.store === undefined) {
+        this.store = new ModelSpendStore(this.path, this.ceiling);
+        this.reportCeiling(this.store.reconciliation, correlationId);
+      }
       return this.store;
     } catch (error) {
       reject(this.log, correlationId, "spend-ledger-unavailable", error);
     }
+  }
+
+  /**
+   * Reports what opening the ledger did to its ceiling. Without this line, an operator who raised
+   * their configured limit on a closed ledger sees only "budget exceeded" against a number they are
+   * nowhere near, and the log cannot tell them which ceiling actually applied.
+   */
+  private reportCeiling(reconciliation: SpendCeilingReconciliation, correlationId: string): void {
+    this.log.write({
+      category: "gateway",
+      level: reconciliation.disposition === "raise-refused" ? "warn" : "info",
+      op: "gateway.spend.ceiling",
+      correlationId,
+      extra: {
+        disposition: reconciliation.disposition,
+        ceilingNanoUsd: reconciliation.ceilingNanoUsd,
+        configuredNanoUsd: reconciliation.configuredNanoUsd,
+        chargedNanoUsd: reconciliation.chargedNanoUsd,
+      },
+    });
   }
 
   reserve(
@@ -208,10 +231,11 @@ class PersistentGatewaySpendBudget implements GatewaySpendBudget {
     correlationId: string,
   ): GatewaySpendReservation {
     const store = this.ledger(correlationId);
+    const effectiveCeiling = store.reconciliation.ceilingNanoUsd;
     const { pricing, upper } = chargeForAttempt(capability, request, this.log, correlationId);
     let admitted: boolean;
     try {
-      admitted = this.ceiling > 0 && store.reserve(upper);
+      admitted = effectiveCeiling > 0 && store.reserve(upper);
     } catch (error) {
       reject(this.log, correlationId, "spend-ledger-unavailable", error);
     }
@@ -221,7 +245,9 @@ class PersistentGatewaySpendBudget implements GatewaySpendBudget {
       level: "info",
       op: "gateway.spend.reserved",
       correlationId,
-      extra: { reservedNanoUsd: upper, ceilingNanoUsd: this.ceiling },
+      // The ledger's own ceiling, never the configured one: they differ whenever a reused ledger
+      // holds a lower ceiling, and reporting the configured number there hides exactly that case.
+      extra: { reservedNanoUsd: upper, ceilingNanoUsd: effectiveCeiling },
     });
     return reservation(store, upper, pricing, this.log, correlationId);
   }

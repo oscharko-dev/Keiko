@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  PR_DESCRIPTION_APPLICATION_MAX_AGE_MS,
+  PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { createPrDescriptionApplicationService } from "./prDescriptionService.js";
 import { DescriptionFixture } from "./prDescriptionTestSupport.js";
 import type { PrDescriptionPreview } from "./prDescriptionTypes.js";
@@ -198,9 +202,53 @@ describe("body-only description application", () => {
     });
     expect(fixture.writes).toHaveLength(0);
   });
+  // #3390: a generated proposal must stay reviewable long enough for an operator to reach it.
+  // It used to be discarded after one OBSERVATION window -- sixty seconds -- which is a different
+  // quantity from how long the server retains an artifact it has already produced. Every attempt at
+  // the controlled-repository qualification died here: the Code task advertises the automatic draft
+  // and its "Review exact draft" control, and both vanished a minute after the run ended.
+  it("keeps a generated proposal reviewable past one observation window", async () => {
+    const review = await preview();
+    fixture.now += PR_DESCRIPTION_APPLICATION_MAX_AGE_MS + 1_000;
+
+    expect(fixture.service.review(review.proposalId)).toEqual(review);
+  });
+
+  it("stops retaining a generated proposal past the retention window", async () => {
+    const review = await preview();
+    fixture.now += PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS + 1_000;
+
+    expect(fixture.service.review(review.proposalId)).toBeUndefined();
+  });
+
+  it("keeps the generic draft reviewable for the same retention window", async () => {
+    const artifact = await fixture.generateArtifact("Generic Workbench draft");
+    const held = fixture.service.holdDraftArtifact(artifact, fixture.now);
+    if (held === undefined) throw new Error("draft proposal absent");
+    fixture.now += PR_DESCRIPTION_APPLICATION_MAX_AGE_MS + 1_000;
+
+    expect(fixture.service.reviewDraft(held.proposalId)).toEqual(held);
+  });
+
+  // The approval is the one window a longer retention could have widened. It is now measured from
+  // ISSUANCE rather than inherited from whatever remained of the preview, which is both stricter
+  // and more meaningful: approving at the end of a long retention used to yield a one-second lease.
+  it("bounds the approval at one observation window from issuance, however old the proposal is", async () => {
+    const review = await preview();
+    fixture.now += PR_DESCRIPTION_APPLICATION_MAX_AGE_MS * 2;
+    const issued = fixture.service.issueApproval(review.proposalId);
+    if (issued === undefined) throw new Error("approval absent");
+
+    expect(issued.expiresAtMs - fixture.now).toBe(PR_DESCRIPTION_APPLICATION_MAX_AGE_MS);
+  });
+
+  // #3390: "expired" here means the PROPOSAL is no longer retained, which is what execution
+  // re-checks. It used to be driven by advancing one observation window, which worked only while
+  // the retention window happened to be the same number. Driving it from the retention constant
+  // keeps the case honest now that the two are separate quantities.
   it.each(["expired", "revoked"])("does not restore %s approval", async (reason) => {
     const { review, lease } = await approved();
-    if (reason === "expired") fixture.now += 60_000;
+    if (reason === "expired") fixture.now += PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS + 1_000;
     else fixture.live = false;
     expect(await fixture.service.executeApproved(review.proposalId, lease)).toMatchObject({
       outcome: "blocked",

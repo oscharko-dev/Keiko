@@ -142,13 +142,13 @@ describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supers
     const status = generatedStatus(scope(), attempt.generationVersion, "pr-description-1");
     store.settle(scope(), attempt.generationVersion, attempt.revision, status, NOW);
 
-    expect(store.markProposalLost(scope().runId, "pr-description-1", LATER)).toMatchObject({
-      state: "stale",
-      reason: "stale-snapshot",
-      observedAt: LATER,
-    });
+    // #3390: the caller names the cause; the store records exactly what it was handed. Both causes
+    // demote the same way and both drop the proposal id.
+    expect(
+      store.markProposalLost(scope().runId, "pr-description-1", "stale-snapshot", LATER),
+    ).toMatchObject({ state: "stale", reason: "stale-snapshot", observedAt: LATER });
     expect(store.current(scope().runId)).not.toHaveProperty("proposalId");
-    expect(store.markProposalLost(scope().runId, "different-proposal", LATER)).toEqual(
+    expect(store.markProposalLost(scope().runId, "different-proposal", "expired", LATER)).toEqual(
       store.current(scope().runId),
     );
   });

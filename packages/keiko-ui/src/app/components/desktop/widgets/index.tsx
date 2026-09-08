@@ -708,6 +708,7 @@ registerWindowRender("governedPullRequest", (cfg, ctx) => {
           projectId={projectId}
           headBranchName={headBranchName}
           ownerAndRepo={descriptionOwnerAndRepo}
+          descriptionPrNumber={descriptionPrNumber}
           descriptionProposal={descriptionProposal}
         />
       )}

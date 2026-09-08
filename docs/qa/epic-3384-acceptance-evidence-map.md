@@ -26,10 +26,15 @@ Issue → accepted Keiko task → PR → verified merge → closed issue. The pr
 Wegwerf-Repo #1, #3, #4, #5 and #6, using Ask/Supervised/Full/Supervised/Full modes sequentially.
 Preparation is not execution evidence. Each completed run must expose its issue/PR links, task/run
 identity, merge commit, actual checks and closure state, qualification receipt and ledger cost.
-All attempts, probes, failures and retries share one durable aggregate USD 50 ceiling;
-no run may reset that ledger or claim a separate allowance.
+All attempts, probes, failures and retries share one durable aggregate ceiling, raised by the owner
+from USD 50 to **USD 100** on 2026-09-08; no run may reset that ledger or claim a separate
+allowance. The raise applies to the existing ledger and preserves every charge already recorded on
+it: the ledger accepts an owner-configured ceiling raise only while it is healthy, and records the
+raise as `gateway.spend.ceiling` with both numbers. The aggregate cap itself is enforced by
+`MAX_AUTHORIZED_BUDGET_NANO_USD` in frozen lane source, which every flow artifact binds through the
+source freeze.
 Attempts through 15 retained their harness ledger entries, and attempt 16 reuses that same ledger
-under the USD 50 operating ceiling. The ledger is an enforcement record, not proof of provider
+under the USD 100 operating ceiling. The ledger is an enforcement record, not proof of provider
 billing. No attempt may recreate it or discard an earlier charge or reservation; each successful
 flow receipt must record its observed ceiling, spend delta and cumulative harness charge.
 

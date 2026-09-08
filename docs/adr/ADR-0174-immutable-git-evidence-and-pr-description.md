@@ -107,6 +107,20 @@ remain distinct governed operations under ADR-0086, ADR-0087, ADR-0137 and ADR-0
 artifact alone grants none of them. Their adapters must recheck live revision, remote, authority
 and protected body content before any approved effect.
 
+Two different clocks run over that artifact and must not be conflated (#3390). How long an
+*observation of the remote body* may be trusted is a freshness bound on read data
+(`PR_DESCRIPTION_APPLICATION_MAX_AGE_MS`, contract-enforced on every reported status); how long an
+*already generated artifact stays offered for review* is a retention bound on a server-held
+proposal (`PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS`), derived so that a retained proposal
+always lapses at least one freshness window before the description authority that would admit its
+application (ADR-0086 D10). Binding the second to the first made a generated description
+unreviewable one minute after the run that produced it, with the operator told the change had
+moved when nothing had. Neither bound is a substitute for the recheck above: the application path
+re-reads base, head and body immediately before the effect and refuses on any divergence, so
+retention length changes what remains reviewable, never what may be applied. A proposal whose
+holder has lapsed is reported as `expired` — the artifact is gone, the change has not moved — and
+the surface that offered it must still lead the operator to the pull request it belonged to.
+
 ### D5 — Reconstruction and verification
 
 Snapshot capture/read/recheck/expiry/invalidation and narrative generation use existing activity

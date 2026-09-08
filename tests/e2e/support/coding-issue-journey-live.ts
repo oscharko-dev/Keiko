@@ -533,24 +533,58 @@ export async function prepareTrustedIssueWorkspace(
 // that would run repository-authored code raises for an undecided root. Opening the Editor raises
 // it; "Trust workspace" is the decision. Its disappearance, and the absence of the restricted
 // banner afterwards, are the interface's own confirmation that the decision took effect.
+/**
+ * Reaches a trusted repository root through the real interface, whether or not this state directory
+ * has answered the prompt before.
+ *
+ * Trust decisions are stored durably on the server, so the prompt appears exactly once per state
+ * directory. Requiring it unconditionally -- as this helper first did -- meant that re-running a
+ * flow against an existing state directory waited a full minute for a dialog that was never coming
+ * and then failed, AFTER the model had been paid for. Treating its absence as success would be
+ * worse: a product regression that silently trusts a root without asking would pass unnoticed.
+ *
+ * So the absence is not read as success; the trusted state is. `WorkspaceTrustBadge` and
+ * `WorkspaceTrustBanner` both carry `data-trust`, which is the product's OWN reading of the stored
+ * decision -- `trusted`, `restricted` or `unavailable`. One of the two observations must hold
+ * within the window: the prompt is offered and answered, or the product already reports the root as
+ * trusted. Neither within a minute fails closed, naming what was actually on screen.
+ */
 async function decideLiveWorkspaceTrust(page: Page): Promise<LiveWorkspaceTrustOutcome> {
   await ensureRailToolOpen(page, "Editor");
   const dialog = page.getByRole("alertdialog", { name: "Trust this workspace?" });
-  await expect(
-    dialog,
-    "the Editor must raise the workspace trust decision for an undecided repository root",
-  ).toBeVisible({ timeout: 60_000 });
-  await dialog.getByRole("button", { name: "Trust workspace", exact: true }).click();
-  await expect(dialog).toBeHidden({ timeout: 60_000 });
+  const offered = await waitForTrustDecision(page, dialog);
+  if (offered) {
+    await dialog.getByRole("button", { name: "Trust workspace", exact: true }).click();
+    await expect(dialog).toBeHidden({ timeout: 60_000 });
+  }
   // `WorkspaceTrustBanner` renders as role="note" with the mode as its accessible name
   // (WorkspaceTrustSurfaces.tsx), and only while the root is NOT trusted -- so its absence here is
   // the interface's own confirmation that the decision took effect. The role and the exact label
   // matter: a locator naming a role this banner does not use would find nothing and pass vacuously
   // no matter what the product did.
   const restricted = page.getByRole("note", { name: "Restricted Mode" });
-  const outcome = { decided: true, restricted: (await restricted.count()) > 0 };
+  const outcome = { decided: true, offered, restricted: (await restricted.count()) > 0 };
   await closeEditorWindow(page);
   return outcome;
+}
+
+/** Resolves true when the prompt was raised, false when the root already reports as trusted. */
+async function waitForTrustDecision(page: Page, dialog: Locator): Promise<boolean> {
+  const trusted = page.locator('[data-trust="trusted"]');
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    if (await dialog.isVisible()) return true;
+    if ((await trusted.count()) > 0) return false;
+    if (Date.now() > deadline) {
+      const states = await page
+        .locator("[data-trust]")
+        .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-trust")).join(","));
+      throw new Error(
+        `the Editor neither raised the workspace trust decision nor reported a trusted root (observed data-trust: ${states === "" ? "none" : states})`,
+      );
+    }
+    await page.waitForTimeout(500);
+  }
 }
 
 // The scratch Editor window served only to raise the trust decision for the selected root; closing
@@ -563,8 +597,10 @@ async function closeEditorWindow(page: Page): Promise<void> {
 }
 
 export interface LiveWorkspaceTrustOutcome {
-  /** The trust decision was actually offered and answered, never assumed. */
+  /** The root is trusted through the interface -- either just answered, or already on record. */
   readonly decided: boolean;
+  /** The prompt was raised and answered in THIS run, rather than being already decided. */
+  readonly offered: boolean;
   /** The workspace still reports restricted mode after the decision. */
   readonly restricted: boolean;
 }

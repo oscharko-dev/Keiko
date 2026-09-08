@@ -6,7 +6,10 @@ import {
   PR_DESCRIPTION_LANGUAGES,
   prDescriptionArtifactDigestFields,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
-import { PR_DESCRIPTION_CONCURRENCY_LIMITATION } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
+import {
+  PR_DESCRIPTION_CONCURRENCY_LIMITATION,
+  PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import type { PrDescriptionApplicationBinding } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { isGitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 import {
@@ -273,10 +276,22 @@ export async function prepareDescription(
       input,
       reference,
       artifact: generated.artifact,
-      expiresAt: Math.min(now + 60_000, Date.parse(snapshot.expiresAt)),
+      expiresAt: retainedProposalExpiry(now, snapshot.expiresAt),
       now,
     });
   });
+}
+
+/**
+ * How long this proposal stays reviewable: the retention window, but never past the snapshot it is
+ * bound to. The snapshot is an independent ceiling — a proposal whose evidence has lapsed must not
+ * be reviewable however much retention is left.
+ */
+function retainedProposalExpiry(now: number, snapshotExpiresAt: string): number {
+  return Math.min(
+    now + PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS,
+    Date.parse(snapshotExpiresAt),
+  );
 }
 
 export async function prepareDescriptionArtifact(
@@ -316,7 +331,7 @@ export async function prepareDescriptionArtifact(
         input,
         reference,
         artifact,
-        expiresAt: Math.min(now + 60_000, Date.parse(snapshot.expiresAt)),
+        expiresAt: retainedProposalExpiry(now, snapshot.expiresAt),
         now,
       }),
     ),

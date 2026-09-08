@@ -90,10 +90,13 @@ export interface CodingRuntimeDescriptionJobStore {
    */
   readonly recordBudgetExhausted: (scope: WorkbenchDescriptionScope, nowIso: string) => void;
   readonly current: (runId: string) => WorkbenchDescriptionStatus | undefined;
-  /** Durably demotes a status whose process-local #3399 proposal disappeared after restart. */
+  /** Durably demotes a status whose process-local #3399 proposal is no longer held. The caller
+   * supplies WHY, because the two causes are not interchangeable for the operator: the change moved
+   * on (`stale-snapshot`), or the retention lapsed while the change did not (`expired`). */
   readonly markProposalLost: (
     runId: string,
     proposalId: string,
+    reason: "stale-snapshot" | "expired",
     nowIso: string,
   ) => WorkbenchDescriptionStatus | undefined;
   /** Startup-only containment: an attempt still in flight from a prior process is never resumed. */
@@ -392,6 +395,7 @@ function markProposalLost(
   statements: Statements,
   runId: string,
   proposalId: string,
+  reason: "stale-snapshot" | "expired",
   nowIso: string,
 ): WorkbenchDescriptionStatus | undefined {
   const row = readRow(statements, runId);
@@ -403,7 +407,7 @@ function markProposalLost(
   const stale: WorkbenchDescriptionStatus = {
     ...retained,
     state: "stale",
-    reason: "stale-snapshot",
+    reason,
     observedAt: nowIso,
   };
   const prior = JSON.stringify(current);
@@ -441,8 +445,8 @@ export function createCodingRuntimeDescriptionJobStore(
       const row = readRow(statements, runId);
       return row === undefined ? undefined : settledStatus(row);
     },
-    markProposalLost: (runId, proposalId, nowIso): WorkbenchDescriptionStatus | undefined =>
-      markProposalLost(statements, runId, proposalId, nowIso),
+    markProposalLost: (runId, proposalId, reason, nowIso): WorkbenchDescriptionStatus | undefined =>
+      markProposalLost(statements, runId, proposalId, reason, nowIso),
     reconcileInterrupted: (nowIso): readonly string[] => reconcileInterrupted(statements, nowIso),
   };
 }

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { evaluateGitPolicy } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import {
-  PR_DESCRIPTION_APPLICATION_MAX_AGE_MS,
+  PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS,
   isPrDescriptionApplicationStatus,
   type PrDescriptionApplicationStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
@@ -146,7 +146,7 @@ class DescriptionService implements PrDescriptionApplicationService {
     const preview = {
       schemaVersion: "1" as const,
       proposalId: randomUUID(),
-      expiresAt: new Date(now + PR_DESCRIPTION_APPLICATION_MAX_AGE_MS).toISOString(),
+      expiresAt: new Date(now + PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS).toISOString(),
       artifact: structuredClone(artifact),
     };
     this.releaseAllHeldSnapshots();

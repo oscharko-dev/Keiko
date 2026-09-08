@@ -235,11 +235,55 @@ describe("shared persistent model spend admission", () => {
     );
   });
 
-  it("does not enlarge an existing budget when configuration is raised after restart", () => {
+  // Epic #3384 — this pin used to read "does not enlarge an existing budget when configuration is
+  // raised after restart", forbidding a raise outright. That was too strict to be correct: the
+  // configured ceiling reaches the ledger only from the local operator's own environment, so an
+  // operator raising their own limit is an authorization, and refusing it left them permanently at
+  // "budget exceeded" with the only recovery in deleting an undocumented file. The invariant the
+  // pin actually protects is that a ceiling never grows SILENTLY, and that a ledger which broke its
+  // own bound is never re-armed. Both are pinned below, and the aggregate cap on the paid
+  // qualification runs is enforced independently by the frozen lane constant
+  // (`MAX_AUTHORIZED_BUDGET_NANO_USD`) plus the per-flow ledger envelope assertion.
+  it("raises a healthy ledger to a newly configured ceiling and records that it did", () => {
     budget().reserve(capability, request, "before-restart");
-    expect(() => budget("500").reserve(capability, request, "after-restart")).toThrow(
+    events.length = 0;
+
+    budget("500").reserve(capability, request, "after-restart");
+
+    const event = events.find((candidate) => candidate.op === "gateway.spend.ceiling");
+    expect(event?.level).toBe("info");
+    expect(event?.extra).toMatchObject({
+      disposition: "raised",
+      ceilingNanoUsd: 500_000_000_000,
+      configuredNanoUsd: 500_000_000_000,
+    });
+  });
+
+  it("keeps a ledger that broke its own cost bound closed against any configured raise", () => {
+    const hold = budget().reserve(capability, request, "bounded");
+    expect(() => {
+      hold.settle({ ...response.usage, promptTokens: 200 });
+    }).toThrow("spend-bound-unavailable");
+    events.length = 0;
+
+    expect(() => budget("500").reserve(capability, request, "after-bound-violation")).toThrow(
       "spend-budget-exceeded",
     );
+    const event = events.find((candidate) => candidate.op === "gateway.spend.ceiling");
+    expect(event?.level).toBe("warn");
+    expect(event?.extra).toMatchObject({ disposition: "raise-refused", ceilingNanoUsd: 0 });
+  });
+
+  it("still lowers a reused ledger to a smaller configured ceiling", () => {
+    budget().reserve(capability, request, "before-restart");
+    events.length = 0;
+
+    expect(() => budget("1").reserve(capability, request, "after-restart")).toThrow(
+      "spend-budget-exceeded",
+    );
+    expect(
+      events.find((candidate) => candidate.op === "gateway.spend.ceiling")?.extra,
+    ).toMatchObject({ disposition: "lowered", ceilingNanoUsd: 1_000_000_000 });
   });
 
   it.each(["", "-1", "NaN", "50oops", "0"])(

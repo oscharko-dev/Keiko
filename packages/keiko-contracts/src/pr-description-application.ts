@@ -1,7 +1,28 @@
 import { isGitObjectId, isSafeGitRefName } from "./git-repository.js";
 import { isGitHubOwnerAndRepo, GITHUB_ISSUE_NUMBER_MAX } from "./github-issue-reference.js";
 
+/** How long an OBSERVATION of the remote pull request body may be trusted. Contract-enforced on
+ * every status through `validObservationWindow` below. */
 export const PR_DESCRIPTION_APPLICATION_MAX_AGE_MS = 60_000;
+
+/**
+ * How long the server keeps an already-generated proposal REVIEWABLE. A different quantity from the
+ * observation window above, and for a long time wrongly set to it — which is why the Coding
+ * Workbench's automatically generated description draft, and the control offering it, disappeared
+ * about a minute after a run ended, with no way back for the operator (#3390).
+ *
+ * Derived, not chosen: the description authority that backs an application lives ten minutes
+ * (`DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS`, runtimeAuthorityService.ts), so a retained proposal
+ * lapses one observation window BEFORE that authority does. An operator who reaches a still-retained
+ * proposal therefore always has a full approve-and-apply window left, and the retention can never
+ * outlive the authority it depends on. `prDescriptionPreparation.test.ts` pins that arithmetic
+ * against the real constants rather than restating either number.
+ *
+ * This widens nothing. Apply admission is re-derived at effect time: the applying adapter re-reads
+ * the current base, head and body, and refuses on any drift from the approved identity and body
+ * digest. The approval lease is separately bounded at one observation window from issuance.
+ */
+export const PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS = 9 * 60_000;
 export const PR_DESCRIPTION_APPLICATION_REASON_STATES = Object.freeze({
   applied: "current",
   reconciled: "current",

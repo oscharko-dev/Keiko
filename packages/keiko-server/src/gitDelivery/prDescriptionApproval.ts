@@ -1,4 +1,5 @@
 import type { GitDeliveryApprovalRequirement } from "@oscharko-dev/keiko-contracts";
+import { PR_DESCRIPTION_APPLICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import {
   DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
   GIT_DELIVERY_LOCAL_OPERATOR_ID,
@@ -21,7 +22,15 @@ export class PrDescriptionApprovals {
       binding: proposal.approvalBinding,
       approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
       nowMs: now,
-      ttlMs: Date.parse(proposal.review.expiresAt) - now,
+      // One observation window from ISSUANCE, never whatever happens to be left of the proposal's
+      // retention. #3390: with the retention window separated from the observation window, an
+      // inherited remainder would silently lengthen the approval — the one place a longer retention
+      // could have widened anything. Measuring from issuance is also stricter than the old
+      // behaviour, where approving near the end of a preview yielded a one-second lease.
+      ttlMs: Math.min(
+        PR_DESCRIPTION_APPLICATION_MAX_AGE_MS,
+        Date.parse(proposal.review.expiresAt) - now,
+      ),
     });
     proposal.approval = issued.approval;
     return issued;

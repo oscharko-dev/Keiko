@@ -1439,13 +1439,13 @@
     {
       "op": "coding-runtime.authority.mint-failed",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:496",
+      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:498",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.authority.minted",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:541",
+      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:543",
       "package": "keiko-server"
     },
     {
@@ -1457,13 +1457,13 @@
     {
       "op": "coding-runtime.description",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:2215",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:2222",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.description-authority",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:651",
+      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:653",
       "package": "keiko-server"
     },
     {
@@ -2152,6 +2152,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "gateway.spend.ceiling",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/gateway-spend-budget.ts:217",
+      "package": "keiko-server"
+    },
+    {
       "op": "gateway.spend.rejected",
       "category": "gateway",
       "site": "packages/keiko-server/src/gateway-spend-budget.ts:116",
@@ -2160,7 +2166,7 @@
     {
       "op": "gateway.spend.reserved",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-spend-budget.ts:222",
+      "site": "packages/keiko-server/src/gateway-spend-budget.ts:246",
       "package": "keiko-server"
     },
     {
@@ -3633,6 +3639,7 @@
     "gateway.retry.exhausted",
     "gateway.retry.scheduled",
     "gateway.route.rejected",
+    "gateway.spend.ceiling",
     "gateway.spend.rejected",
     "gateway.spend.reserved",
     "gateway.spend.settled",
