@@ -321,12 +321,17 @@ const WRITE_KEYS: Readonly<Record<GitRepositoryAgentOperationKind, ReadonlySet<s
   commit: new Set(["messageDraft", "message", "allowEmpty"]),
   fetch: new Set(["remote", "approval"]),
   pull: new Set(["remote", "approval"]),
+  // #3394 review: `verifiedCommitSha` is mandatory on the delegated push/pr-create/pr-update
+  // approve/execute routes — omitted here before this fix, so a payload that named it (the only way
+  // to satisfy the now-mandatory field through this facade) was rejected as an unknown key before it
+  // ever reached the delegated route's own validation.
   push: new Set([
     "remoteAlias",
     "remoteBranchName",
     "sourceBranchName",
     "forcePush",
     "setUpstreamTracking",
+    "verifiedCommitSha",
     "approval",
   ]),
   "pull-request": new Set([
@@ -340,6 +345,7 @@ const WRITE_KEYS: Readonly<Record<GitRepositoryAgentOperationKind, ReadonlySet<s
     "prExternalId",
     "convertToDraft",
     "convertFromDraft",
+    "verifiedCommitSha",
     "approval",
   ]),
   merge: new Set([

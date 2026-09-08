@@ -727,6 +727,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Kein Wiederherstellungsziel ist festgelegt",
   "codingWorkbench.commitResult.preflight.dirty-worktree-impacts-recovery":
     "Workspace-Änderungen verhindern eine sichere Wiederherstellung",
+  "codingWorkbench.commitResult.preflight.verified-commit-drifted":
+    "Der überprüfte Commit stimmt nicht mehr mit dem aktuellen Stand des Branches überein",
   "codingWorkbench.commitResult.messageViolation.empty-subject": "Die Commit-Betreffzeile ist leer",
   "codingWorkbench.commitResult.messageViolation.missing-conventional-prefix":
     'Der Betreffzeile fehlt ein Conventional-Commit-Präfix (zum Beispiel "feat: ")',

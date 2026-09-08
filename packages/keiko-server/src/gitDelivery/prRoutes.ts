@@ -29,7 +29,7 @@ import type {
   GitDeliveryApprovalClaim,
   GitDeliveryApprovalRequirement,
 } from "@oscharko-dev/keiko-contracts";
-import type { GitPullRequestCommand } from "@oscharko-dev/keiko-tools";
+import type { GitPullRequestCommand, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -182,13 +182,26 @@ function scanError(parsed: Record<string, unknown>): RouteResult | undefined {
 // `prApprovalBinding` (below) hashes the WHOLE typed command, so a client that states which head
 // commit it previewed/approved binds the approval to that content, not merely to branch names/
 // title/body -- an approval minted for one `verifiedCommitSha` no longer matches a request that
-// later names a different one, however far `headBranchName` has since moved in between. Optional
-// (mirrors pushRoutes.ts's identical field exactly): a caller that omits it keeps today's
-// branch-name pr-create/pr-update behavior. Parsing itself is shared with pushRoutes.ts via
-// `approvalEvents.ts`'s `parseVerifiedCommitSha` (#3394 review: was duplicated byte-for-byte
-// between the two routes).
+// later names a different one, however far `headBranchName` has since moved in between. Mandatory
+// for approve/execute (fail closed on absence or a malformed value — `GIT_DELIVERY_PR_BAD_REQUEST`);
+// PREVIEW is the one exception, exactly mirroring pushRoutes.ts (see `buildPartialPrCommand` /
+// `validatePreview` below and that file's header comment for the full reasoning). Parsing itself is
+// shared with pushRoutes.ts via `approvalEvents.ts`'s `parseVerifiedCommitSha` (#3394 review: was
+// duplicated byte-for-byte between the two routes).
 
-function buildCreateCommand(parsed: Record<string, unknown>): GitPullRequestCommand | undefined {
+type PartialCreateCommand = Omit<
+  Extract<GitPullRequestCommand, { kind: "pr-create" }>,
+  "verifiedCommitSha"
+>;
+type PartialUpdateCommand = Omit<
+  Extract<GitPullRequestCommand, { kind: "pr-update" }>,
+  "verifiedCommitSha"
+>;
+type PartialPrCommand = PartialCreateCommand | PartialUpdateCommand;
+
+function buildPartialCreateCommand(
+  parsed: Record<string, unknown>,
+): PartialCreateCommand | undefined {
   if (
     !isOwnerAndRepo(parsed.ownerAndRepo) ||
     !isSafeGitRef(parsed.headBranchName) ||
@@ -199,8 +212,7 @@ function buildCreateCommand(parsed: Record<string, unknown>): GitPullRequestComm
     return undefined;
   }
   const isDraft = optionalBool(parsed.isDraft);
-  const verifiedCommitSha = parseVerifiedCommitSha(parsed.verifiedCommitSha);
-  if (isDraft === undefined || !verifiedCommitSha.ok) return undefined;
+  if (isDraft === undefined) return undefined;
   return {
     kind: "pr-create",
     ownerAndRepo: parsed.ownerAndRepo,
@@ -209,10 +221,15 @@ function buildCreateCommand(parsed: Record<string, unknown>): GitPullRequestComm
     title: parsed.title,
     body: parsed.body,
     isDraft,
-    ...(verifiedCommitSha.value === undefined
-      ? {}
-      : { verifiedCommitSha: verifiedCommitSha.value }),
   };
+}
+
+function buildCreateCommand(parsed: Record<string, unknown>): GitPullRequestCommand | undefined {
+  const partial = buildPartialCreateCommand(parsed);
+  if (partial === undefined) return undefined;
+  const verifiedCommitSha = parseVerifiedCommitSha(parsed.verifiedCommitSha);
+  if (!verifiedCommitSha.ok || verifiedCommitSha.value === undefined) return undefined;
+  return { ...partial, verifiedCommitSha: verifiedCommitSha.value };
 }
 
 // Narrowing guard: when true, the shared string operands are all valid strings on `parsed`.
@@ -257,11 +274,12 @@ function parseConvertFlags(
   return { convertToDraft, convertFromDraft: false };
 }
 
-function buildUpdateCommand(parsed: Record<string, unknown>): GitPullRequestCommand | undefined {
+function buildPartialUpdateCommand(
+  parsed: Record<string, unknown>,
+): PartialUpdateCommand | undefined {
   if (!hasValidUpdateFields(parsed)) return undefined;
   const converts = parseConvertFlags(parsed);
-  const verifiedCommitSha = parseVerifiedCommitSha(parsed.verifiedCommitSha);
-  if (converts === undefined || !verifiedCommitSha.ok) return undefined;
+  if (converts === undefined) return undefined;
   return {
     kind: "pr-update",
     ownerAndRepo: parsed.ownerAndRepo,
@@ -272,10 +290,21 @@ function buildUpdateCommand(parsed: Record<string, unknown>): GitPullRequestComm
     body: parsed.body,
     convertToDraft: converts.convertToDraft,
     convertFromDraft: converts.convertFromDraft,
-    ...(verifiedCommitSha.value === undefined
-      ? {}
-      : { verifiedCommitSha: verifiedCommitSha.value }),
   };
+}
+
+function buildUpdateCommand(parsed: Record<string, unknown>): GitPullRequestCommand | undefined {
+  const partial = buildPartialUpdateCommand(parsed);
+  if (partial === undefined) return undefined;
+  const verifiedCommitSha = parseVerifiedCommitSha(parsed.verifiedCommitSha);
+  if (!verifiedCommitSha.ok || verifiedCommitSha.value === undefined) return undefined;
+  return { ...partial, verifiedCommitSha: verifiedCommitSha.value };
+}
+
+function buildPartialPrCommand(parsed: Record<string, unknown>): PartialPrCommand | undefined {
+  if (parsed.kind === "pr-create") return buildPartialCreateCommand(parsed);
+  if (parsed.kind === "pr-update") return buildPartialUpdateCommand(parsed);
+  return undefined;
 }
 
 function buildPrCommand(parsed: Record<string, unknown>): GitPullRequestCommand | undefined {
@@ -296,6 +325,48 @@ function validate(parsed: unknown): Validation {
   return { kind: "ok", value: { projectId: parsed.projectId, command, approval } };
 }
 
+interface PreviewValidatedRequest {
+  readonly projectId: string;
+  readonly command: PartialPrCommand;
+}
+
+type PreviewValidation =
+  | { readonly kind: "ok"; readonly value: PreviewValidatedRequest }
+  | { readonly kind: "err"; readonly result: RouteResult };
+
+// The preview route's own, lenient validator — never requires `verifiedCommitSha` (see the
+// file-header comment above; mirrors pushRoutes.ts's `validatePreview` exactly).
+function validatePreview(parsed: unknown): PreviewValidation {
+  const bad: PreviewValidation = {
+    kind: "err",
+    result: errResult(400, "GIT_DELIVERY_PR_BAD_REQUEST"),
+  };
+  if (!isPlainObject(parsed) || !hasOnlyAllowedKeys(parsed, ALLOWED_KEYS)) return bad;
+  if (parsed.schemaVersion !== "1" || !isNonEmptyString(parsed.projectId)) return bad;
+  const scanErr = scanError(parsed);
+  if (scanErr !== undefined) return { kind: "err", result: scanErr };
+  const command = buildPartialPrCommand(parsed);
+  if (command === undefined) return bad;
+  return { kind: "ok", value: { projectId: parsed.projectId, command } };
+}
+
+// Mirrors pushRoutes.ts's own placeholder exactly: a PR cannot legitimately be proposed from an
+// unborn HEAD, so this all-zero object id is never a real commit — used only so a preview against
+// one still produces a well-formed command.
+const UNBORN_HEAD_PLACEHOLDER_SHA = "0".repeat(40);
+
+// Resolves the preview-only PR command from the freshly-read LOCAL snapshot (mirrors
+// pushRoutes.ts's `resolvePreviewPushCommand`): `verifiedCommitSha` is always the server's own live
+// local head, never a client-supplied value, since preview mints no approval for a stale value to
+// corrupt.
+function resolvePreviewPrCommand(
+  partial: PartialPrCommand,
+  snapshot: GitWorktreeSnapshot,
+): GitPullRequestCommand {
+  const verifiedCommitSha = snapshot.headSha ?? UNBORN_HEAD_PLACEHOLDER_SHA;
+  return { ...partial, verifiedCommitSha };
+}
+
 // ─── Preview handler (read-only) ────────────────────────────────────────────────────────────────
 
 export const createHandlePrPreview = (
@@ -309,15 +380,16 @@ export const createHandlePrPreview = (
       ctx,
       deps,
       PR_REQUEST_ERRORS,
-      validate,
-      prOwnerAndRepoOf,
+      validatePreview,
+      (value) => value.command.ownerAndRepo,
     );
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
-    const { command } = prepared.value;
+    const { command: partial } = prepared.value;
     const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PR_POLICY_PACK);
     try {
       const snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
+      const command = resolvePreviewPrCommand(partial, snapshot);
       return {
         status: 200,
         body: deps.redactor(buildGitDeliveryPrPreview(command, snapshot, packs)),
@@ -493,7 +565,6 @@ async function handlePrExecute(
       "pr",
       correlationId,
       authority.runId,
-      command.verifiedCommitSha !== undefined,
     );
     return prApprovalRequiredBlock(deps, command);
   }
@@ -561,7 +632,6 @@ export const createHandlePrApprove = (
       "pr",
       correlationId,
       authority.runId,
-      command.verifiedCommitSha !== undefined,
     );
     const body: GitDeliveryPrApproveResponseBody = {
       schemaVersion: "1",

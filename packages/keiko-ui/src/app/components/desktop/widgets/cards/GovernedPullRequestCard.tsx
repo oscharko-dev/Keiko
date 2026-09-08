@@ -1603,6 +1603,7 @@ function usePrFormActionHandlers(
   setForm: Dispatch<SetStateAction<PrForm>>,
   projectId: string,
   async: PrAsync,
+  previewedKey: string,
   setPreviewedKey: Dispatch<SetStateAction<string>>,
   setActionKey: Dispatch<SetStateAction<string>>,
 ): { onPreview: () => void; onExecute: () => void } {
@@ -1626,9 +1627,18 @@ function usePrFormActionHandlers(
   }, [async, form, projectId, setActionKey, setForm, setPreviewedKey]);
 
   const onExecute = useCallback((): void => {
-    setActionKey(prTargetKeyOf(form));
-    async.runExecute(formToInput(form, projectId));
-  }, [async, form, projectId, setActionKey]);
+    const target = prTargetKeyOf(form);
+    setActionKey(target);
+    const input = formToInput(form, projectId);
+    // #3394 review: the reviewed head commit is captured HERE, from the immediately-preceding
+    // preview response — never re-read at execute time. Trusted only when that preview is still for
+    // THIS exact target (mirrors derivePrVisibleState's own staleness gate): a preview left over
+    // from a previous target must never be attached to a different one's execute call. Execute with
+    // no verifiedCommitSha (no preview yet, or a stale one) still reaches the server, which fails
+    // closed on the missing field rather than silently redeeming an unpinned command.
+    const verifiedCommitSha = previewedKey === target ? async.preview?.headCommitSha : undefined;
+    async.runExecute(verifiedCommitSha === undefined ? input : { ...input, verifiedCommitSha });
+  }, [async, form, previewedKey, projectId, setActionKey]);
 
   return { onPreview, onExecute };
 }
@@ -1693,6 +1703,7 @@ function GovernedPullRequestBody({
     setForm,
     projectId,
     async,
+    previewedKey,
     setPreviewedKey,
     setActionKey,
   );

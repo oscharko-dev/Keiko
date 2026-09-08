@@ -53,6 +53,7 @@ const COMMIT_INPUTS: GitDeliveryResolvedInputs = {
 
 const PUSH_FORCE_INPUTS: GitDeliveryResolvedInputs = {
   kind: "push",
+  verifiedCommitSha: "a".repeat(40),
   sourceBranchName: "feature/x",
   remoteAlias: "origin",
   remoteBranchName: "feature/x",
@@ -62,6 +63,7 @@ const PUSH_FORCE_INPUTS: GitDeliveryResolvedInputs = {
 
 const PR_CREATE_INPUTS: GitDeliveryResolvedInputs = {
   kind: "pr-create",
+  verifiedCommitSha: "a".repeat(40),
   headBranchName: "feature/x",
   baseBranchName: "main",
   titleByteLength: 12,

@@ -62,6 +62,7 @@ import {
   gitDeliveryTerminationHandler,
   GitDeliveryRootAuthorityRevokedError,
   KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK,
+  logGitDeliveryUpstreamTrackingFailed,
   readStagedConflictMarkerFileCountFor,
   readStagedPathsFor,
   resolveProjectWorkspace,
@@ -348,6 +349,30 @@ describe("gitDeliveryTerminationHandler — correlation-id wiring for the runCom
     const activity = captureActivityLog();
     const handler = gitDeliveryTerminationHandler({ activityLog: activity.sink }, undefined);
     handler({ reason: "abort", childPid: 4242, windowsTreeKill: "not-attempted" });
+    expect(activity.events[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+  });
+});
+
+// #3394 review follow-up: the interactive pinned-push path's best-effort `--set-upstream-to`
+// follow-up (git-publish-node.ts's `applyUpstreamTrackingIfRequested`) has no branch/remote/error
+// payload to log — this proves the line it DOES write is a distinct, body-free, correctly-routed
+// diagnostic that never overloads `git.delivery.mutation.failed` (which would misreport a
+// successful push as failed).
+describe("logGitDeliveryUpstreamTrackingFailed — content-free diagnostic for the push follow-up", () => {
+  it("writes a distinct op, never git.delivery.mutation.failed, with the caller's correlationId", () => {
+    const activity = captureActivityLog();
+    logGitDeliveryUpstreamTrackingFailed(activity.sink, "request-correlation-9");
+    expect(activity.events).toHaveLength(1);
+    expect(activity.events[0]?.op).toBe("git.delivery.push.upstream-tracking-failed");
+    expect(activity.events[0]?.op).not.toBe("git.delivery.mutation.failed");
+    expect(activity.events[0]?.category).toBe("diagnostic");
+    expect(activity.events[0]?.level).toBe("warn");
+    expect(activity.events[0]?.correlationId).toBe("request-correlation-9");
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID only when the caller genuinely has none in scope", () => {
+    const activity = captureActivityLog();
+    logGitDeliveryUpstreamTrackingFailed(activity.sink, undefined);
     expect(activity.events[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
   });
 });

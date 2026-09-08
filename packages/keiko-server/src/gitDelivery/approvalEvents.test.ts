@@ -34,7 +34,10 @@ describe("parseVerifiedCommitSha", () => {
 });
 
 // The exact shape pushRoutes.ts's and prRoutes.ts's four call sites rely on (#3394 review): same
-// `category`/`status`, `op`/`operation` varying together, and body-free `commitPinned`.
+// `category`/`status`, `op`/`operation` varying together. `commitPinned` was removed (#3394 review,
+// section 9): once `verifiedCommitSha` is mandatory and validated at the request boundary, the field
+// was `true` at every single call site, unconditionally, by construction — dead, not merely
+// simplifiable (AGENTS.md §7).
 describe("logGitDeliveryApprovalEvent", () => {
   it("writes the push approval-required line with the shape both routes rely on", () => {
     const activity = captureActivityLog();
@@ -44,7 +47,6 @@ describe("logGitDeliveryApprovalEvent", () => {
       "push",
       "corr-1",
       "run-1",
-      false,
     );
     expect(activity.events).toEqual([
       {
@@ -52,12 +54,12 @@ describe("logGitDeliveryApprovalEvent", () => {
         op: "git.delivery.push.approval.required",
         correlationId: "corr-1",
         status: 200,
-        extra: { operation: "push", runId: "run-1", commitPinned: false },
+        extra: { operation: "push", runId: "run-1" },
       },
     ]);
   });
 
-  it("writes the pr approval-minted line with commitPinned true when a commit was verified", () => {
+  it("writes the pr approval-minted line with the shared shape", () => {
     const activity = captureActivityLog();
     logGitDeliveryApprovalEvent(
       activity.sink,
@@ -65,7 +67,6 @@ describe("logGitDeliveryApprovalEvent", () => {
       "pr",
       "corr-2",
       "run-2",
-      true,
     );
     expect(activity.events).toEqual([
       {
@@ -73,7 +74,7 @@ describe("logGitDeliveryApprovalEvent", () => {
         op: "git.delivery.pr.approval.minted",
         correlationId: "corr-2",
         status: 200,
-        extra: { operation: "pr", runId: "run-2", commitPinned: true },
+        extra: { operation: "pr", runId: "run-2" },
       },
     ]);
   });

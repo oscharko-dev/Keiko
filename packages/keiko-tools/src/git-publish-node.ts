@@ -30,6 +30,7 @@ import type { GitDeliveryExecutionResult } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import {
   buildPushArgv,
+  buildSetUpstreamToArgv,
   classifyGitPublishRejection,
   GIT_PUBLISH_COMMAND_RULES,
   gitPublishRejectionToErrorCode,
@@ -60,6 +61,12 @@ export interface NodeGitPublishAdapterDeps {
   readonly beforeRemoteDispatch?: () => boolean;
   /** Owning server logs the failure through its existing structured diagnostic port. */
   readonly onPreparationFailure?: (error: unknown) => void;
+  // Best-effort content-free signal for the interactive pinned-push path's post-push
+  // `--set-upstream-to` follow-up (`applyUpstreamTrackingIfRequested` below, #3394 review): the push
+  // itself already succeeded by the time this can fire, so it is visibility for the owning server's
+  // activity log, never a reason to change the push's own reported outcome. Never invoked for the
+  // canonical-URL (`runVerifiedPush`) path, which does not perform this follow-up at all.
+  readonly onUpstreamTrackingFailure?: (() => void) | undefined;
   // The repository root the push runs in. Reused as the spawn-boundary workspace root.
   readonly workspace: WorkspaceInfo;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
@@ -200,6 +207,7 @@ export function createNodeGitPublishAdapter(
   const remoteUrl = canonicalGitHubPushUrl(deps.verifiedRemoteUrl);
   const beforeRemoteDispatch = deps.beforeRemoteDispatch;
   const onPreparationFailure = deps.onPreparationFailure;
+  const onUpstreamTrackingFailure = deps.onUpstreamTrackingFailure;
   return {
     publish: (req: GitPublishExecRequest): Promise<GitPublishExecResult> => {
       let argv: readonly string[];
@@ -210,11 +218,69 @@ export function createNodeGitPublishAdapter(
       } catch {
         return Promise.resolve(executionResult("failed", 0, { errorCode: "internal-error" }));
       }
-      return req.verifiedCommitSha === undefined
-        ? runPush(ctx, argv)
+      // Decision Point A (#3394 review): a canonical GitHub URL is wired only for the issue-bound
+      // workbench delivery path (verifiedRemoteUrl resolved from the task-accepted repository
+      // identity). The interactive route never supplies one, so routing every pinned push through
+      // `runVerifiedPush` (GitHub-only, dispatches to a literal URL rather than the user's own
+      // `remoteAlias`) would silently narrow every non-GitHub interactive push to a hard failure.
+      // When no canonical URL is wired, dispatch the SAME pinned-SHA argv through the ordinary,
+      // remote-host-agnostic transport instead — `buildPushArgv` already pins the exact commit
+      // regardless of which branch this fires through.
+      return remoteUrl === undefined
+        ? runPinnedPush(ctx, argv, req, onUpstreamTrackingFailure)
         : runVerifiedPush(ctx, { ...req }, remoteUrl, beforeRemoteDispatch, onPreparationFailure);
     },
   };
+}
+
+// The interactive (non-GitHub-canonical) pinned-push path: run the pinned argv through the ordinary
+// transport, then — only after a SUCCESSFUL push and only when tracking was requested — best-effort
+// establish upstream tracking as a separate, local-only, no-network step. A raw commit SHA is not "a
+// branch" from `push --set-upstream`'s point of view (verified empirically: `-u` silently no-ops on
+// a raw-SHA source), so tracking cannot be folded into the push argv itself; the remote-tracking ref
+// (`refs/remotes/<alias>/<target>`) already exists locally immediately after a successful push, so
+// this needs no extra fetch.
+async function runPinnedPush(
+  ctx: RunContext,
+  argv: readonly string[],
+  req: GitPublishExecRequest,
+  onUpstreamTrackingFailure: (() => void) | undefined,
+): Promise<GitPublishExecResult> {
+  const result = await runPush(ctx, argv);
+  if (result.outcome === "succeeded" && req.setUpstreamTracking) {
+    await applyUpstreamTrackingIfRequested(ctx, req, onUpstreamTrackingFailure);
+  }
+  return result;
+}
+
+// Best-effort only: a failure here never changes the push's own outcome (the governed,
+// security-relevant action already succeeded — only a local convenience config write did not).
+// `onTerminated` does NOT cover this: it fires only when the harness itself force-terminates a run
+// (timeout/abort/output-cap — exec.ts's `terminate()`), never on an ordinary non-zero exit, which is
+// the realistic failure shape here (e.g. the remote-tracking ref is not yet present, or `.git/config`
+// is transiently locked). Both a thrown error and a plain non-zero exit are therefore reported
+// through the dedicated, content-free `onUpstreamTrackingFailure` seam instead (AGENTS.md §7/§8: no
+// silent failures — the owning server logs this through its existing activity-log port, same as
+// `onPreparationFailure` above).
+async function applyUpstreamTrackingIfRequested(
+  ctx: RunContext,
+  req: GitPublishExecRequest,
+  onUpstreamTrackingFailure: (() => void) | undefined,
+): Promise<void> {
+  let argv: readonly string[];
+  try {
+    argv = buildSetUpstreamToArgv(req.remoteAlias, req.remoteBranchName, req.sourceBranchName);
+  } catch {
+    onUpstreamTrackingFailure?.();
+    return;
+  }
+  // Reuses `runPush`, this file's ONE governed git invocation (the run-command evidence-wiring pin
+  // counts it as the file's single soft-verdict call site): the same sandboxed executor, command
+  // rules and termination evidence, and no second call site to justify. Every non-succeeded
+  // outcome -- a thrown spawn, a non-zero exit, a harness termination -- is the same best-effort
+  // tracking failure and is never propagated to the push's own result.
+  const result = await runPush(ctx, argv);
+  if (result.outcome !== "succeeded") onUpstreamTrackingFailure?.();
 }
 
 async function runVerifiedPush(
@@ -225,7 +291,7 @@ async function runVerifiedPush(
   onPreparationFailure: ((error: unknown) => void) | undefined,
 ): Promise<GitPublishExecResult> {
   const commit = request.verifiedCommitSha;
-  if (remoteUrl === undefined || commit === undefined)
+  if (remoteUrl === undefined)
     return executionResult("failed", 0, { errorCode: "precondition-failed" });
   try {
     return await withPrivatePublishMetadata(ctx.runDeps.workspace.root, commit, async (view) => {

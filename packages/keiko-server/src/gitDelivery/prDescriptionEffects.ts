@@ -95,6 +95,14 @@ function command(
     body: proposal.review.finalBody,
     convertToDraft: false,
     convertFromDraft: false,
+    // #3394 review: `GitPrUpdateCommand.verifiedCommitSha` is now mandatory. This proxy command
+    // never reaches the real dispatch adapter (bodyEffectAdapter below intercepts
+    // `updatePullRequest` and never calls the real PATCH), so this is not new drift protection —
+    // `assertDescriptionUnchanged`/`matchesDescriptionIdentity` already re-verify the full binding
+    // (including `headSha`) immediately before the effect. Pinning the binding's own already-bound
+    // head SHA here keeps this action kind's evidence/preflight projection consistent with every
+    // other governed PR action rather than reporting an unrelated or placeholder value.
+    verifiedCommitSha: binding.headSha,
   };
 }
 export async function applyDescription(
@@ -180,10 +188,11 @@ function bodyEffectAdapter(
       throw new PrDescriptionFailure("invalid-request");
     },
     updatePullRequest: async (request): Promise<GitPrExecResult> => {
-      if (
-        canonicalise({ kind: "pr-update", headBranchName: expected.headBranchName, ...request }) !==
-        canonicalise(expected)
-      )
+      // `request` (GitPrUpdateExecRequest) now carries its own `headBranchName`/`verifiedCommitSha`
+      // (#3394 review), so only `kind` needs injecting to align the two shapes for comparison — an
+      // explicit `headBranchName: expected.headBranchName` here would silently force that field to
+      // "match" regardless of what `request` actually carried, exactly the gap finding 2 closes.
+      if (canonicalise({ kind: "pr-update", ...request }) !== canonicalise(expected))
         throw new PrDescriptionFailure("invalid-request");
       try {
         await assertDescriptionUnchanged(options, proposal, check);

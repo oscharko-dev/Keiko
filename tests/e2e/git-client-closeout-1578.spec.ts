@@ -402,6 +402,7 @@ function prPreviewBody(): unknown {
     actionKind: "pr-create",
     headBranchName: "main",
     baseBranchName: "main",
+    headCommitSha: "a".repeat(40),
     riskClass: "protected-or-merge",
     riskSeverity: 3,
     isDraft: false,

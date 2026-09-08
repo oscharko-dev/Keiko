@@ -84,12 +84,14 @@ export interface GitPrCreateCommand {
   readonly canonicalGitHubIdentity?: true;
   /**
    * The head commit a caller previewed/approved (PR analogue of the #3394 review finding against
-   * `GitPushCommand.verifiedCommitSha`). Optional; when present it becomes part of prRoutes.ts's
-   * approval-binding hash (the binding hashes the whole command), so an approval minted for one
-   * commit no longer matches an execute request naming a different one, however far
-   * `headBranchName` has since moved between mint and execute.
+   * `GitPushCommand.verifiedCommitSha`). Mandatory (#3394 review, finding 2): it becomes part of
+   * prRoutes.ts's approval-binding hash (the binding hashes the whole command), so an approval
+   * minted for one commit no longer matches an execute request naming a different one, however far
+   * `headBranchName` has since moved between mint and execute — and it is the exact fact
+   * git-pr-node.ts's live pre/post dispatch check re-verifies against the branch's actual GitHub
+   * head immediately before creating the pull request.
    */
-  readonly verifiedCommitSha?: string;
+  readonly verifiedCommitSha: string;
 }
 
 export interface GitPrUpdateCommand {
@@ -103,7 +105,7 @@ export interface GitPrUpdateCommand {
   readonly convertToDraft: boolean;
   readonly convertFromDraft: boolean;
   /** Same content-pinning purpose as GitPrCreateCommand.verifiedCommitSha above. */
-  readonly verifiedCommitSha?: string;
+  readonly verifiedCommitSha: string;
 }
 
 export type GitPullRequestCommand = GitPrCreateCommand | GitPrUpdateCommand;
@@ -117,16 +119,25 @@ export interface GitPrCreateExecRequest {
   readonly isDraft: boolean;
   /** Issue-bound delivery pins the provider host and retains complete reconciliation facts. */
   readonly canonicalGitHubIdentity?: true;
+  /** The commit the live pre/post dispatch check (git-pr-node.ts) verifies `headBranchName` against. */
+  readonly verifiedCommitSha: string;
 }
 
 export interface GitPrUpdateExecRequest {
   readonly ownerAndRepo: string;
   readonly prExternalId: string;
+  // #3394 review: absent before this fix (the REST PATCH endpoint this request drives never needs
+  // it) — added so the live pre/post dispatch check (git-pr-node.ts) has a branch to re-read; a PR's
+  // head branch cannot be changed by this PATCH, so this is read-only context for the check, never a
+  // mutation operand.
+  readonly headBranchName: string;
   readonly baseBranchName: string;
   readonly title: string;
   readonly body: string;
   readonly convertToDraft: boolean;
   readonly convertFromDraft: boolean;
+  /** The commit the live pre/post dispatch check (git-pr-node.ts) verifies `headBranchName` against. */
+  readonly verifiedCommitSha: string;
 }
 
 // The executor's structured result: the content-free contract execution result, plus the typed
@@ -151,6 +162,14 @@ export interface GitPrExecResult extends GitDeliveryExecutionResult {
   readonly exitCode?: number | undefined;
   readonly createdPrExternalId?: string | undefined;
   readonly createdPrIdentity?: GitPullRequestIdentity | undefined;
+  /**
+   * #3394 review, finding 2: the live branch head observed by the pre- or post-dispatch drift check
+   * (git-pr-node.ts), present only when that check actually performed a read. Populated on a
+   * `precondition-failed` outcome so the caller can tell the operator what the branch's head
+   * actually was, mirroring `GitPrMarkReadyExecResult.observedIdentity` sized down to just this one
+   * fact.
+   */
+  readonly observedHeadSha?: string | undefined;
 }
 
 /** The closed, body-free failure words and counts an adapter attached to a failed result; carried
@@ -158,7 +177,13 @@ export interface GitPrExecResult extends GitDeliveryExecutionResult {
  * evidence projection (`prExecutionEvidence`) stays the closed kernel shape and never carries them. */
 export type GitPrExecFailureDetail = Pick<
   GitPrExecResult,
-  "rejectionReason" | "failureClass" | "identityIssue" | "stdoutBytes" | "stderrBytes" | "exitCode"
+  | "rejectionReason"
+  | "failureClass"
+  | "identityIssue"
+  | "stdoutBytes"
+  | "stderrBytes"
+  | "exitCode"
+  | "observedHeadSha"
 >;
 
 export interface GitPullRequestAdapter {
@@ -633,6 +658,7 @@ function prResolvedInputs(
   if (command.kind === "pr-create") {
     return {
       kind: "pr-create",
+      verifiedCommitSha: command.verifiedCommitSha,
       headBranchName: command.headBranchName,
       baseBranchName: command.baseBranchName,
       titleByteLength: UTF8.encode(command.title).length,
@@ -642,6 +668,7 @@ function prResolvedInputs(
   }
   return {
     kind: "pr-update",
+    verifiedCommitSha: command.verifiedCommitSha,
     prExternalId: command.prExternalId,
     headBranchName: command.headBranchName,
     baseBranchName: command.baseBranchName,
@@ -816,6 +843,7 @@ async function runPrAdapter(
         title: command.title,
         body: command.body,
         isDraft: command.isDraft,
+        verifiedCommitSha: command.verifiedCommitSha,
         ...(command.canonicalGitHubIdentity === undefined
           ? {}
           : { canonicalGitHubIdentity: command.canonicalGitHubIdentity }),
@@ -824,11 +852,13 @@ async function runPrAdapter(
     return await adapter.updatePullRequest({
       ownerAndRepo: command.ownerAndRepo,
       prExternalId: command.prExternalId,
+      headBranchName: command.headBranchName,
       baseBranchName: command.baseBranchName,
       title: command.title,
       body: command.body,
       convertToDraft: command.convertToDraft,
       convertFromDraft: command.convertFromDraft,
+      verifiedCommitSha: command.verifiedCommitSha,
     });
   } catch {
     return {
@@ -867,6 +897,7 @@ function prFailureDetail(result: GitPrExecResult): Pick<GitPullRequestLifecycleR
     ...(result.stdoutBytes === undefined ? {} : { stdoutBytes: result.stdoutBytes }),
     ...(result.stderrBytes === undefined ? {} : { stderrBytes: result.stderrBytes }),
     ...(result.exitCode === undefined ? {} : { exitCode: result.exitCode }),
+    ...(result.observedHeadSha === undefined ? {} : { observedHeadSha: result.observedHeadSha }),
   };
   return Object.keys(failure).length === 0 ? {} : { failure };
 }

@@ -22,12 +22,17 @@ import {
   type PrDescriptionApplicationStatus,
 } from "@/lib/api";
 
+// #3394 review: `headCommitSha` defaults to a well-formed object id so existing tests exercise the
+// capture-and-resubmit path (the execute call threads `state.preview.headCommitSha` into
+// `verifiedCommitSha`, captured once at preview time — see GovernedPullRequestCard.tsx's
+// `usePrFormActionHandlers`). A test proving the no-preview-yet / stale-preview case overrides it.
 function makePreview(
   overrides: Partial<GitDeliveryPrPreviewResponse> = {},
 ): GitDeliveryPrPreviewResponse {
   return {
     schemaVersion: "1",
     actionKind: "pr-create",
+    headCommitSha: "a".repeat(40),
     headBranchName: "claude/issue-477-x",
     baseBranchName: "dev",
     riskClass: "protected-or-merge",
@@ -225,7 +230,9 @@ describe("GovernedPullRequestCard", () => {
   });
 
   it("dispatches a governed create with the right payload and surfaces the provider PR number", async () => {
-    const prExecute = vi.fn(async () => makeExecute({ createdPrExternalId: "1499" }));
+    const prExecute = vi.fn<GovernedPullRequestClient["prExecute"]>(async () =>
+      makeExecute({ createdPrExternalId: "1499" }),
+    );
     render(<GovernedPullRequestCard projectId={PROJECT} client={makeClient({ prExecute })} />);
     fillForm();
     fireEvent.change(screen.getByLabelText("Head branch"), {
@@ -233,6 +240,11 @@ describe("GovernedPullRequestCard", () => {
     });
     fireEvent.click(screen.getByTestId("gpr-submit"));
     expect(await screen.findByTestId("gpr-outcome")).toBeInTheDocument();
+    // #3394 review: this test never clicks "Preview" first (the submit button does not require
+    // one — `canExecute` does not depend on `previewedKey`), so there is no captured head commit to
+    // thread through; execute must still proceed with no `verifiedCommitSha` on the WIRE call rather
+    // than inventing one (the server fails closed on absence — see the dedicated capture-and-resubmit
+    // test below for the case where a preview DID run).
     expect(prExecute).toHaveBeenCalledWith(
       expect.objectContaining({
         projectId: PROJECT,
@@ -241,6 +253,7 @@ describe("GovernedPullRequestCard", () => {
         baseBranchName: "dev",
       }),
     );
+    expect(prExecute.mock.calls[0]?.[0]).not.toHaveProperty("verifiedCommitSha");
     expect(screen.getByTestId("gpr-outcome")).toHaveTextContent("pr: #1499");
   });
 
@@ -268,6 +281,43 @@ describe("GovernedPullRequestCard", () => {
       }),
     );
     expect(screen.getByTestId("gpr-outcome")).toHaveTextContent("pr-update: succeeded");
+  });
+
+  // #3394 review: proves the capture-and-resubmit contract end to end — the value threaded into
+  // execute is the SPECIFIC commit the preview reported, not a placeholder, and no execute can attach
+  // a commit from a preview that was never run for the current target.
+  it("threads the previewed head commit into execute, never a stale one from a different target (#3394 review)", async () => {
+    const prPreview = vi.fn<GovernedPullRequestClient["prPreview"]>(async () =>
+      makePreview({ headCommitSha: "c".repeat(40) }),
+    );
+    const prExecute = vi.fn<GovernedPullRequestClient["prExecute"]>(async () =>
+      makeExecute({ createdPrExternalId: "1499" }),
+    );
+    render(
+      <GovernedPullRequestCard projectId={PROJECT} client={makeClient({ prPreview, prExecute })} />,
+    );
+    fillForm();
+    fireEvent.change(screen.getByLabelText("Head branch"), {
+      target: { value: "claude/issue-477-x" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await waitFor(() => expect(prPreview).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByTestId("gpr-submit"));
+    await waitFor(() => expect(prExecute).toHaveBeenCalledTimes(1));
+    expect(prExecute).toHaveBeenCalledWith(
+      expect.objectContaining({ verifiedCommitSha: "c".repeat(40) }),
+    );
+
+    // Changing the target after the preview invalidates it (mirrors the existing stale-preview
+    // gate this file already tests elsewhere) — a second execute for a DIFFERENT target must not
+    // carry the first target's previewed commit forward.
+    fireEvent.change(screen.getByLabelText("Head branch"), {
+      target: { value: "claude/issue-477-y" },
+    });
+    fireEvent.click(screen.getByTestId("gpr-submit"));
+    await waitFor(() => expect(prExecute).toHaveBeenCalledTimes(2));
+    expect(prExecute.mock.calls[1]?.[0]?.verifiedCommitSha).toBeUndefined();
   });
 
   // #3389 (epic #3384 correction 1): the approval-less draft->ready transition through this generic

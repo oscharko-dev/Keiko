@@ -611,6 +611,7 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
       remoteAlias: "origin",
       sourceBranchName: "feat/x",
       remoteBranchName: "feat/x",
+      verifiedCommitSha: "a".repeat(40),
     };
     const result = await handleGitAgentOperation(
       ctx(body),

@@ -313,6 +313,7 @@ describe("buildGitDeliveryEvidenceRecord — AC3 recovery disposition + hint", (
 describe("buildGitDeliveryEvidenceRecord — AC2 content-free hashing", () => {
   const PUSH_INPUTS: GitDeliveryResolvedInputs = {
     kind: "push",
+    verifiedCommitSha: "a".repeat(40),
     sourceBranchName: "feature/x",
     remoteAlias: "confidential-remote",
     remoteBranchName: "main",

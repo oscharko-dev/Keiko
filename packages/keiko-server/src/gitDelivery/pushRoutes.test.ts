@@ -74,9 +74,15 @@ import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.
 const PREVIEW = "/api/git-delivery/push/preview";
 const EXECUTE = "/api/git-delivery/push/execute";
 
+// #3394 review, finding 1: `headSha` matches the `verifiedCommitSha` every command/body fixture in
+// this file defaults to ("a".repeat(40) — see `pushBody`), so the new `verified-commit-drifted`
+// preflight check (comparing the two) does not spuriously block every test that does not explicitly
+// exercise drift. A test that WANTS to exercise drift overrides `headSha` (or `verifiedCommitSha`)
+// explicitly.
 const SNAPSHOT: GitWorktreeSnapshot = {
   headDetached: false,
   currentBranchName: "feat/x",
+  headSha: "a".repeat(40),
   stagedFileCount: 0,
   unstagedFileCount: 0,
   untrackedFileCount: 0,
@@ -194,6 +200,12 @@ function seams(overrides: Partial<GitDeliveryPublishSeams> = {}): GitDeliveryPub
   };
 }
 
+// #3394 review, finding 1: `verifiedCommitSha` is mandatory for approve/execute (a request that
+// omits it, or malforms it, is refused with `GIT_DELIVERY_PUSH_BAD_REQUEST` — see
+// `buildPartialPushCommand`/`buildPushCommand` in pushRoutes.ts). Every test in this file that does
+// not specifically exercise absence/malformation gets a valid default here; a test that wants to
+// prove the fail-closed behavior overrides this key explicitly (see the "missing verifiedCommitSha"
+// tests below).
 function pushBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     schemaVersion: "1",
@@ -201,6 +213,7 @@ function pushBody(overrides: Record<string, unknown> = {}): Record<string, unkno
     remoteAlias: "origin",
     remoteBranchName: "feat/x",
     sourceBranchName: "feat/x",
+    verifiedCommitSha: "a".repeat(40),
     ...overrides,
   };
 }
@@ -430,6 +443,7 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
       remoteBranchName: "feat/x",
       forcePush: false,
       setUpstreamTracking: true,
+      verifiedCommitSha: "a".repeat(40),
     };
     const res = await handler(
       ctxFor(
@@ -515,6 +529,7 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
       remoteBranchName: "feat/x",
       forcePush: false,
       setUpstreamTracking: false,
+      verifiedCommitSha: "a".repeat(40),
     };
 
     const res = await handler(
@@ -612,6 +627,7 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
       remoteBranchName: "my-work",
       forcePush: false,
       setUpstreamTracking: false,
+      verifiedCommitSha: "a".repeat(40),
     };
     const res = await handler(
       ctxFor(
@@ -653,6 +669,7 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
       remoteBranchName: "feat/x",
       forcePush: true,
       setUpstreamTracking: false,
+      verifiedCommitSha: "a".repeat(40),
     };
     const res = await handler(
       ctxFor(
@@ -707,6 +724,7 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
       remoteBranchName: "feat/x",
       forcePush: false,
       setUpstreamTracking: false,
+      verifiedCommitSha: "a".repeat(40),
     };
     const res = await handler(
       ctxFor(EXECUTE, pushBody({ approval: issuePushApproval(approvalStore, command) })),
@@ -738,6 +756,7 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
       remoteBranchName: "feat/x",
       forcePush: false,
       setUpstreamTracking: false,
+      verifiedCommitSha: "a".repeat(40),
     };
     const res = await handler(
       ctxFor(EXECUTE, pushBody({ approval: issuePushApproval(approvalStore, command) })),
@@ -765,6 +784,7 @@ describe("push approve — mints the server-issued claim execute consumes (#3387
     remoteBranchName: "feat/x",
     forcePush: false,
     setUpstreamTracking: false,
+    verifiedCommitSha: "a".repeat(40),
   };
 
   it("mints a claim that execute accepts for the exact same push, letting an approval-required push proceed", async () => {
@@ -969,6 +989,12 @@ describe("push approve — mints the server-issued claim execute consumes (#3387
     },
   );
 
+  // #3394 review, section 9: `commitPinned` was removed from this log line entirely. Once
+  // `verifiedCommitSha` is mandatory and validated at the request boundary, the route can never reach
+  // this call with an unpinned command — the field would be `true` at every single call site,
+  // unconditionally, by construction, so it carried zero information and was deleted rather than
+  // hardcoded (AGENTS.md §7). This test still proves the line is body-free: the SHA itself never
+  // appears in the log, only the fact that a mint happened.
   it("logs a body-free line when the mint issues a claim", async () => {
     const activity = captureActivityLog();
     const handler = createHandlePushApprove({
@@ -976,7 +1002,7 @@ describe("push approve — mints the server-issued claim execute consumes (#3387
     });
     await handler(
       {
-        ...ctxFor("/api/git-delivery/push/approve", pushBody()),
+        ...ctxFor("/api/git-delivery/push/approve", pushBody({ verifiedCommitSha: COMMIT_A })),
         correlationId: "corr-push-mint-1",
       },
       deps(),
@@ -987,34 +1013,10 @@ describe("push approve — mints the server-issued claim execute consumes (#3387
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       correlationId: "corr-push-mint-1",
-      extra: { runId: "test-run", commitPinned: false },
+      extra: { runId: "test-run" },
     });
+    expect(events[0]?.extra).not.toHaveProperty("commitPinned");
     expect(JSON.stringify(events[0])).not.toContain("feat/x");
-  });
-
-  // #3394 review: `commitPinned` is body-free evidence (a boolean, never the SHA itself) that lets
-  // `keiko support analyze` distinguish a content-pinned mint from a branch-name-only one directly
-  // from the activity log, without re-deriving it from the (redacted) command shape.
-  it("marks the mint log line commitPinned when the request names a verified commit (#3394 review)", async () => {
-    const activity = captureActivityLog();
-    const handler = createHandlePushApprove({
-      execution: seams({ activityLog: activity.sink }),
-    });
-    await handler(
-      {
-        ...ctxFor("/api/git-delivery/push/approve", pushBody({ verifiedCommitSha: COMMIT_A })),
-        correlationId: "corr-push-mint-2",
-      },
-      deps(),
-    );
-    const events = activity.events.filter(
-      (event) => event.op === "git.delivery.push.approval.minted",
-    );
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      correlationId: "corr-push-mint-2",
-      extra: { runId: "test-run", commitPinned: true },
-    });
     expect(JSON.stringify(events[0])).not.toContain(COMMIT_A);
   });
 });
@@ -1054,6 +1056,7 @@ const WIRING_COMMAND: GitPushCommand = {
   remoteBranchName: "feat/x",
   forcePush: false,
   setUpstreamTracking: false,
+  verifiedCommitSha: "a".repeat(40),
 };
 
 describe("executeGovernedPublish — default publish-adapter termination wiring (F1)", () => {
@@ -1188,6 +1191,7 @@ describe("push execute activity log (AGENTS.md §8 Rule 1)", () => {
       remoteBranchName: "feat/x",
       forcePush: false,
       setUpstreamTracking: true,
+      verifiedCommitSha: "a".repeat(40),
     };
 
     await handler(
@@ -1234,6 +1238,7 @@ describe("push execute activity log (AGENTS.md §8 Rule 1)", () => {
       remoteBranchName: "feat/x",
       forcePush: false,
       setUpstreamTracking: true,
+      verifiedCommitSha: "a".repeat(40),
     };
 
     const res = await handler(

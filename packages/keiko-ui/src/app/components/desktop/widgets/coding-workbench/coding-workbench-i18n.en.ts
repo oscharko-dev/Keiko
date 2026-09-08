@@ -700,6 +700,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.commitResult.preflight.recovery-target-unset": "No recovery target is set",
   "codingWorkbench.commitResult.preflight.dirty-worktree-impacts-recovery":
     "Workspace changes prevent safe recovery",
+  "codingWorkbench.commitResult.preflight.verified-commit-drifted":
+    "The reviewed commit no longer matches the branch's current head",
   "codingWorkbench.commitResult.messageViolation.empty-subject": "The commit subject is empty",
   "codingWorkbench.commitResult.messageViolation.missing-conventional-prefix":
     'The subject is missing a conventional-commit prefix (for example "feat: ")',

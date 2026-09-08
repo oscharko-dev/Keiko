@@ -277,6 +277,7 @@ describe("mutating route groups wire their fallback default through defaultMinta
       body: "b",
       convertToDraft: false,
       convertFromDraft: false,
+      verifiedCommitSha: "a".repeat(40),
     };
     const seams = {
       snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(SNAPSHOT),
@@ -303,6 +304,7 @@ describe("mutating route groups wire their fallback default through defaultMinta
       remoteBranchName: "feat/x",
       forcePush: false,
       setUpstreamTracking: false,
+      verifiedCommitSha: "a".repeat(40),
     };
     const seams = {
       snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(SNAPSHOT),

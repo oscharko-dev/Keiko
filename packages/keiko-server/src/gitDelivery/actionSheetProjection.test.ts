@@ -17,9 +17,13 @@ import { KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK } from "./execution.js";
 import { KEIKO_DEFAULT_PUBLISH_POLICY_PACK } from "./pushExecution.js";
 import { KEIKO_DEFAULT_PR_POLICY_PACK } from "./prExecution.js";
 
+// #3394 review, finding 1: `headSha` matches every push fixture's own `verifiedCommitSha` default
+// ("a".repeat(40)) below, so the new `verified-commit-drifted` preflight check does not spuriously
+// fire for scenarios that never intended to exercise drift.
 const CLEAN_SNAPSHOT: GitWorktreeSnapshot = {
   headDetached: false,
   currentBranchName: "feature/x",
+  headSha: "a".repeat(40),
   stagedFileCount: 3,
   unstagedFileCount: 0,
   untrackedFileCount: 0,
@@ -257,6 +261,7 @@ describe("buildActionSheetFromFacts", () => {
 
 const PUSH_TO_DEV: GitDeliveryResolvedInputs = {
   kind: "push",
+  verifiedCommitSha: "a".repeat(40),
   sourceBranchName: "feat/x",
   remoteAlias: "origin",
   remoteBranchName: "dev",
@@ -295,6 +300,7 @@ const REPO_GATE_PUSH: GitDeliveryRepoPolicyPack = {
 
 const PR_ONTO_UNLISTED_BASE: GitDeliveryResolvedInputs = {
   kind: "pr-create",
+  verifiedCommitSha: "a".repeat(40),
   headBranchName: "feat/x",
   baseBranchName: "scratch/experiment",
   titleByteLength: 20,

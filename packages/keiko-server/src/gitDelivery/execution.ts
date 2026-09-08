@@ -468,6 +468,26 @@ export function logGitDeliveryNoSpawnRefusal(
   });
 }
 
+// The interactive pinned-push path's post-push `git branch --set-upstream-to=…` follow-up
+// (git-publish-node.ts's `applyUpstreamTrackingIfRequested`, #3394 review, ADR-0085 D6) could not
+// establish tracking — either the local-only command exited non-zero or the run itself was
+// terminated/denied. Deliberately its OWN op, never folded into `git.delivery.mutation.failed`: the
+// governed push already succeeded by the time this can fire, so this line must never read, to an
+// operator or `keiko support analyze`, as "the push failed" — it is visibility for "why does this
+// freshly pushed branch show no upstream" only. Body-free by construction: the callback that invokes
+// this carries no branch/remote/error payload at all.
+export function logGitDeliveryUpstreamTrackingFailed(
+  activityLog: ServerLogSink,
+  correlationId: string | undefined,
+): void {
+  activityLog.write({
+    level: "warn",
+    category: "diagnostic",
+    op: "git.delivery.push.upstream-tracking-failed",
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+  });
+}
+
 export function readWorktreeSnapshotFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryExecutionSeams,

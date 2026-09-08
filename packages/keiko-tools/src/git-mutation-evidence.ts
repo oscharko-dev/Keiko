@@ -180,6 +180,9 @@ const ACTION_HINT_BY_PREFLIGHT_FINDING: Readonly<
   "no-operation-to-abort": "retry",
   "recovery-target-unset": "recover-via-strategy",
   "dirty-worktree-impacts-recovery": "recover-via-strategy",
+  // #3394 review: the branch moved since the caller previewed/approved it — re-previewing captures a
+  // fresh reference commit and re-approving redeems against that, so this is a plain retry.
+  "verified-commit-drifted": "retry",
 } as const;
 
 function recoveryForBlockReason(reason: GitDeliveryBlockReason): GitDeliveryRecoveryMetadata {

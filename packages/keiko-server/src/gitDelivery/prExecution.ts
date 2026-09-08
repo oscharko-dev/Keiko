@@ -277,6 +277,15 @@ export interface GitDeliveryPrPreviewBody {
   readonly actionKind: "pr-create" | "pr-update";
   readonly headBranchName: string;
   readonly baseBranchName: string;
+  // #3394 review: the reviewed head commit the caller should capture and resubmit as
+  // `verifiedCommitSha` at approve/execute time (mirrors push's own preview addition). Sourced from
+  // the local snapshot already read for this preview — `buildGitDeliveryPrPreview` is a pure,
+  // local-snapshot-only projection (no remote read), which is safe here because a PR is normally
+  // only proposed for a branch that has already been pushed (governed by the now-hardened push
+  // route), so local and remote head coincide in the non-adversarial case this preview is for. The
+  // LIVE drift check (git-pr-node.ts) is what protects the adversarial/race case at execute time,
+  // using the true GitHub-reported head. Absent only for an unborn HEAD.
+  readonly headCommitSha?: string | undefined;
   readonly riskClass: GitDeliveryRiskClass;
   readonly riskSeverity: number;
   readonly isDraft: boolean;
@@ -383,6 +392,7 @@ export function buildGitDeliveryPrPreview(
     actionKind: command.kind,
     headBranchName: command.headBranchName,
     baseBranchName: command.baseBranchName,
+    ...(snapshot.headSha === undefined ? {} : { headCommitSha: snapshot.headSha }),
     riskClass: parts.riskDigest.riskClass,
     riskSeverity: parts.riskDigest.riskSeverity,
     isDraft: parts.riskDigest.isDraft,

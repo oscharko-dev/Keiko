@@ -1,4 +1,3 @@
-import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 // Deterministic preflight evaluation for governed Git writes (Issue #472, Epic #470).
 //
 // Preflight is a PURE function over a content-free repository snapshot. Same (resolvedInputs,
@@ -88,6 +87,8 @@ const FINDING_REMEDIATION: Readonly<Record<GitPreflightFindingCode, GitPreflight
   "no-operation-to-abort": "user-actionable",
   "recovery-target-unset": "internal",
   "dirty-worktree-impacts-recovery": "user-actionable",
+  // The user just needs to re-preview/re-approve against the branch's current head.
+  "verified-commit-drifted": "user-actionable",
 } as const;
 
 export function gitPreflightRemediationFor(code: GitPreflightFindingCode): GitPreflightRemediation {
@@ -223,16 +224,6 @@ function preflightCommit(
   return findings;
 }
 
-function pushNeedsUpstream(
-  inputs: Extract<GitDeliveryResolvedInputs, { kind: "push" }>,
-  snapshot: GitWorktreeSnapshot,
-): boolean {
-  // An immutable source plus an explicit remote destination needs no local tracking relation.
-  return (
-    !snapshot.hasUpstream && !inputs.setUpstreamTracking && !isGitObjectId(inputs.verifiedCommitSha)
-  );
-}
-
 function preflightPush(
   inputs: Extract<GitDeliveryResolvedInputs, { kind: "push" }>,
   snapshot: GitWorktreeSnapshot,
@@ -241,8 +232,16 @@ function preflightPush(
   if (!snapshot.remoteAliases.includes(inputs.remoteAlias)) {
     findings.push(blocking("remote-alias-missing"));
   }
-  if (pushNeedsUpstream(inputs, snapshot)) {
-    findings.push(blocking("no-upstream-configured"));
+  // #3394 review, finding 1: `verifiedCommitSha` is now mandatory and validated at the request
+  // boundary (a valid Git object id, by construction) — so the "no local tracking relation and no
+  // pinned commit" gap `pushNeedsUpstream` used to close can no longer occur; a caller that omitted
+  // both used to fall through to an un-pinned, un-tracked push, which is now unreachable by
+  // construction (AGENTS.md §7: delete dead code rather than leave an always-false guard in place).
+  // This is the actual anti-drift gate the finding is about: it runs on the FRESHLY re-read snapshot
+  // (never the one a stale preview cached), so it catches "the branch moved since I approved this"
+  // before any adapter call happens at all.
+  if (inputs.verifiedCommitSha !== snapshot.headSha) {
+    findings.push(blocking("verified-commit-drifted"));
   }
   if (snapshot.remoteReachable === false) {
     findings.push(blocking("remote-unreachable"));

@@ -16,7 +16,11 @@ export type GitPreflightFindingCode =
   | "operation-in-progress"
   | "no-operation-to-abort"
   | "recovery-target-unset"
-  | "dirty-worktree-impacts-recovery";
+  | "dirty-worktree-impacts-recovery"
+  // #3394 review, finding 1: the caller-supplied `verifiedCommitSha` no longer equals the freshly
+  // re-read local worktree head — the branch moved between preview/approval and execute. Blocking so
+  // a drifted push is refused instead of silently publishing a different commit than was reviewed.
+  | "verified-commit-drifted";
 
 export const GIT_PREFLIGHT_FINDING_CODES: readonly GitPreflightFindingCode[] = [
   "detached-head",
@@ -36,6 +40,7 @@ export const GIT_PREFLIGHT_FINDING_CODES: readonly GitPreflightFindingCode[] = [
   "no-operation-to-abort",
   "recovery-target-unset",
   "dirty-worktree-impacts-recovery",
+  "verified-commit-drifted",
 ] as const;
 
 // A blocking finding halts the lifecycle before execution; an advisory finding is surfaced for the

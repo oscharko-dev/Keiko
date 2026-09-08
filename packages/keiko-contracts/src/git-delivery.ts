@@ -132,7 +132,11 @@ export interface GitDeliveryCommitInputs {
 
 export interface GitDeliveryPushInputs {
   readonly kind: "push";
-  readonly verifiedCommitSha?: string;
+  // The head commit a caller previewed/approved before this push was dispatched. Mandatory (#3394
+  // review, finding 1): the interactive route used to accept a branch-name-only push with no pinned
+  // commit at all; every push now carries the exact object id the approval was minted against, so an
+  // approval can never be silently redeemed against a branch that has since moved.
+  readonly verifiedCommitSha: string;
   readonly sourceBranchName: string;
   readonly remoteAlias: string;
   readonly remoteBranchName: string;
@@ -142,6 +146,10 @@ export interface GitDeliveryPushInputs {
 
 export interface GitDeliveryPrCreateInputs {
   readonly kind: "pr-create";
+  // PR analogue of GitDeliveryPushInputs.verifiedCommitSha above (#3394 review, finding 2): the head
+  // commit a caller previewed/approved. Mandatory for the same reason and for evidence/risk
+  // projection parity with push.
+  readonly verifiedCommitSha: string;
   readonly headBranchName: string;
   readonly baseBranchName: string;
   readonly titleByteLength: number;
@@ -151,6 +159,7 @@ export interface GitDeliveryPrCreateInputs {
 
 export interface GitDeliveryPrUpdateInputs {
   readonly kind: "pr-update";
+  readonly verifiedCommitSha: string;
   readonly prExternalId: string; // opaque provider-assigned ID
   readonly headBranchName: string;
   readonly baseBranchName: string;
@@ -780,7 +789,7 @@ function isCommitInputs(value: Record<string, unknown>): boolean {
 
 function isPushInputs(value: Record<string, unknown>): boolean {
   return (
-    (value.verifiedCommitSha === undefined || isGitObjectId(value.verifiedCommitSha)) &&
+    isGitObjectId(value.verifiedCommitSha) &&
     isNonEmptyString(value.sourceBranchName) &&
     isNonEmptyString(value.remoteAlias) &&
     isNonEmptyString(value.remoteBranchName) &&
@@ -791,6 +800,7 @@ function isPushInputs(value: Record<string, unknown>): boolean {
 
 function isPrCreateInputs(value: Record<string, unknown>): boolean {
   return (
+    isGitObjectId(value.verifiedCommitSha) &&
     isNonEmptyString(value.headBranchName) &&
     isNonEmptyString(value.baseBranchName) &&
     isNonNegativeInteger(value.titleByteLength) &&
@@ -801,6 +811,7 @@ function isPrCreateInputs(value: Record<string, unknown>): boolean {
 
 function isPrUpdateInputs(value: Record<string, unknown>): boolean {
   return (
+    isGitObjectId(value.verifiedCommitSha) &&
     isNonEmptyString(value.prExternalId) &&
     isNonEmptyString(value.headBranchName) &&
     isNonEmptyString(value.baseBranchName) &&

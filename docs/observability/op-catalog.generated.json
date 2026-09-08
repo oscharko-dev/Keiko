@@ -1488,21 +1488,21 @@
     {
       "op": "coding-runtime.editor-changeset",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:644",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:663",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.editor-changeset",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:663",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:682",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.editor-mutation.settled",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:584",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:589",
       "package": "keiko-server"
     },
     {
@@ -1766,7 +1766,7 @@
     {
       "op": "coding-runtime.tool-result",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolGovernedDelegate.ts:120",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolGovernedDelegate.ts:123",
       "package": "keiko-server"
     },
     {
@@ -2357,13 +2357,13 @@
     {
       "op": "git.delivery.mutation.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:842",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:862",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:874",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:894",
       "package": "keiko-server"
     },
     {
@@ -2381,25 +2381,31 @@
     {
       "op": "git.delivery.pr.approval.minted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/prRoutes.ts:558",
+      "site": "packages/keiko-server/src/gitDelivery/prRoutes.ts:629",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.pr.approval.required",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/prRoutes.ts:490",
+      "site": "packages/keiko-server/src/gitDelivery/prRoutes.ts:562",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.push.approval.minted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/pushRoutes.ts:440",
+      "site": "packages/keiko-server/src/gitDelivery/pushRoutes.ts:516",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.push.approval.required",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/pushRoutes.ts:319",
+      "site": "packages/keiko-server/src/gitDelivery/pushRoutes.ts:396",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.push.upstream-tracking-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:486",
       "package": "keiko-server"
     },
     {
@@ -2447,7 +2453,7 @@
     {
       "op": "git.draft-delivery",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryService.ts:394",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryService.ts:400",
       "package": "keiko-server"
     },
     {
@@ -3688,6 +3694,7 @@
     "git.delivery.pr.approval.required",
     "git.delivery.push.approval.minted",
     "git.delivery.push.approval.required",
+    "git.delivery.push.upstream-tracking-failed",
     "git.delivery.readiness.observed",
     "git.delivery.repository.mismatch",
     "git.delivery.sync.approval.minted",

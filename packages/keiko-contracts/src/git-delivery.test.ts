@@ -374,6 +374,7 @@ describe("parseGitDeliveryResolvedInputs", () => {
       { kind: "commit", messageByteLength: 10, stagedPathCount: 1, allowEmptyCommit: false },
       {
         kind: "push",
+        verifiedCommitSha: "a".repeat(40),
         sourceBranchName: "f",
         remoteAlias: "origin",
         remoteBranchName: "f",
@@ -382,6 +383,7 @@ describe("parseGitDeliveryResolvedInputs", () => {
       },
       {
         kind: "pr-create",
+        verifiedCommitSha: "a".repeat(40),
         headBranchName: "f",
         baseBranchName: "main",
         titleByteLength: 5,
@@ -390,6 +392,7 @@ describe("parseGitDeliveryResolvedInputs", () => {
       },
       {
         kind: "pr-update",
+        verifiedCommitSha: "a".repeat(40),
         prExternalId: "42",
         headBranchName: "f",
         baseBranchName: "main",
@@ -454,6 +457,77 @@ describe("parseGitDeliveryResolvedInputs", () => {
     }
   });
 
+  // #3394 review (findings 1 & 2): `verifiedCommitSha` is mandatory on push/pr-create/pr-update —
+  // isPushInputs/isPrCreateInputs/isPrUpdateInputs each now require a complete Git object id, never
+  // "absent is fine". Fail closed: absence, or a malformed value, is rejected the same way any other
+  // required field is.
+  describe("verifiedCommitSha is mandatory on push, pr-create, and pr-update (#3394 review)", () => {
+    const VALID_SHA = "a".repeat(40);
+    const CASES: readonly [string, Record<string, unknown>][] = [
+      [
+        "push",
+        {
+          kind: "push",
+          sourceBranchName: "f",
+          remoteAlias: "origin",
+          remoteBranchName: "f",
+          forcePush: false,
+          setUpstreamTracking: false,
+        },
+      ],
+      [
+        "pr-create",
+        {
+          kind: "pr-create",
+          headBranchName: "f",
+          baseBranchName: "main",
+          titleByteLength: 1,
+          bodyByteLength: 1,
+          isDraft: false,
+        },
+      ],
+      [
+        "pr-update",
+        {
+          kind: "pr-update",
+          prExternalId: "42",
+          headBranchName: "f",
+          baseBranchName: "main",
+          titleByteLength: 1,
+          bodyByteLength: 1,
+          convertToDraft: false,
+          convertFromDraft: false,
+        },
+      ],
+    ];
+
+    it.each(CASES)("rejects %s inputs that omit verifiedCommitSha entirely", (_kind, base) => {
+      const result = parseGitDeliveryResolvedInputs(base);
+      expect(result.ok).toBe(false);
+    });
+
+    it.each(CASES)("rejects %s inputs with a malformed verifiedCommitSha", (_kind, base) => {
+      const abbreviated = parseGitDeliveryResolvedInputs({
+        ...base,
+        verifiedCommitSha: "a".repeat(7),
+      });
+      expect(abbreviated.ok).toBe(false);
+      const uppercase = parseGitDeliveryResolvedInputs({
+        ...base,
+        verifiedCommitSha: VALID_SHA.toUpperCase(),
+      });
+      expect(uppercase.ok).toBe(false);
+    });
+
+    it.each(CASES)("accepts %s inputs with a complete Git object id", (_kind, base) => {
+      const result = parseGitDeliveryResolvedInputs({ ...base, verifiedCommitSha: VALID_SHA });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.kind).toBe(base.kind);
+      }
+    });
+  });
+
   it("accepts a branch-switch with a non-empty branchName and rejects an empty one", () => {
     const ok = parseGitDeliveryResolvedInputs({ kind: "branch-switch", branchName: "main" });
     expect(ok.ok).toBe(true);
@@ -472,6 +546,7 @@ describe("parseGitDeliveryResolvedInputs", () => {
   it("rejects a pr-update that asks to convert both to and from draft (KEIKO-0805)", () => {
     const base = {
       kind: "pr-update",
+      verifiedCommitSha: "a".repeat(40),
       prExternalId: "42",
       headBranchName: "f",
       baseBranchName: "main",
@@ -550,6 +625,7 @@ describe("parseGitDeliveryResolvedInputs", () => {
 describe("parseGitDeliveryActionEnvelope (soundness: kind === resolvedInputs.kind)", () => {
   const validPushInputs: GitDeliveryPushInputs = {
     kind: "push",
+    verifiedCommitSha: "a".repeat(40),
     sourceBranchName: "f",
     remoteAlias: "origin",
     remoteBranchName: "f",
@@ -741,6 +817,7 @@ describe("risk-class classifiers", () => {
   it("gitDeliveryRiskClassForInputs escalates a force-push above its default publish class", () => {
     const force: GitDeliveryResolvedInputs = {
       kind: "push",
+      verifiedCommitSha: "a".repeat(40),
       sourceBranchName: "f",
       remoteAlias: "origin",
       remoteBranchName: "f",

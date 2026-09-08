@@ -303,6 +303,12 @@ export class DraftDeliveryController implements DraftDeliveryService {
       body,
       isDraft: true,
       canonicalGitHubIdentity: true,
+      // #3394 review, finding 2 / §0.2: `verifiedCommitSha` is now mandatory on `GitPrCreateCommand`.
+      // By the time this runs, `preparePullRequest` has already asserted `current.phase === "pushed"`
+      // and `remote.headSha === current.binding.headSha` (throwing `DraftDeliveryFailure` otherwise a
+      // few lines above), so `current.binding.headSha` is already the live, drift-checked head of the
+      // branch this PR proposes to open — safe and correct to pin here.
+      verifiedCommitSha: current.binding.headSha,
     };
     const record = proposalRecord(this.options, current.binding, command, current);
     storeDraft(this.options, context, record, current.revision);

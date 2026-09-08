@@ -330,12 +330,18 @@ function syncExecuteBody(operation: "fetch" | "pull"): unknown {
   };
 }
 
+// #3394 review: `headCommitSha` is the reviewed head SHA the browser must capture from this preview
+// and resubmit as `verifiedCommitSha` at execute time (GitClientWindow.tsx refuses to propose a push
+// whose preview carried none).
+const PUSH_HEAD_COMMIT_SHA = "a".repeat(40);
+
 function pushPreviewBody(): unknown {
   return {
     schemaVersion: "1",
     remoteAlias: "origin",
     remoteBranchName: "main",
     sourceBranchName: "main",
+    headCommitSha: PUSH_HEAD_COMMIT_SHA,
     riskClass: "normal",
     wouldCreateRemoteBranch: false,
     wouldTriggerChecks: true,
@@ -426,6 +432,25 @@ async function installMutationRoutes(
     calls.branchSwitches.push(parsePostBody(route));
     await route.fulfill(
       jsonBody({ schemaVersion: "1", status: "succeeded", actionKind: "branch-switch" }),
+    );
+  });
+  // #3394 review: pre-existing gap, unrelated to this fix — confirmed still present at the freeze
+  // commit. Epic #3384 correction 5 made every sync/push mutation mint an approval unconditionally
+  // (proposeGitDeliverySync / proposePush, api.ts) before executing, but this fixture never mocked
+  // any */approve route, so those calls fell through to the real running server and failed against
+  // an unregistered project. Mocked here, alongside the fix under test, so this file's own push (and
+  // pull/fetch) evidence — and this fix's own capture-and-resend behavior — are reachable at all.
+  await page.route("**/api/git-delivery/*/approve", async (route) => {
+    await route.fulfill(
+      jsonBody({
+        schemaVersion: "1",
+        approval: {
+          schemaVersion: "1",
+          approvalId: "e2e-1576-approval",
+          approvalToken: "e2e-1576-token",
+        },
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+      }),
     );
   });
   await page.route("**/api/git-delivery/fetch/preview", async (route) => {

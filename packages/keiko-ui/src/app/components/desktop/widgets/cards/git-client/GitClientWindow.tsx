@@ -515,6 +515,47 @@ function pushInput(projectId: string, syncView: SyncView): PushInput | null {
   };
 }
 
+type PushPreviewResult = Awaited<ReturnType<GitClientSeam["pushPreview"]>>;
+
+// Resolves a completed preview into either the execute input (with the reviewed head SHA captured
+// from THIS preview — never re-read at click time) or `undefined` once the block has already been
+// reported through `completeSync`. Extracted from `runPushSync` purely to stay under the repo's
+// max-lines-per-function budget (AGENTS.md §6) — no behavioral seam of its own.
+function pushProposeInput(
+  preview: PushPreviewResult,
+  input: PushInput,
+  context: SyncExecutionContext,
+  t: I18nTranslate,
+): PushInput | undefined {
+  if (preview.policyOutcome !== "allowed" || preview.preflightBlockingCodes.length > 0) {
+    completeSync(
+      context,
+      blockedOutcome(
+        t("gitClientWindow.sync.blocked", {
+          reason: preview.policyBlockReason ?? preview.preflightBlockingCodes.join(", "),
+        }),
+      ),
+      false,
+    );
+    return undefined;
+  }
+  // #3394 review: the reviewed head SHA is captured HERE, once, from the preview response that was
+  // just evaluated — never re-read at click time. `verifiedCommitSha` is mandatory for execute
+  // (pushExecution.ts fails closed on absence), so an unborn-HEAD preview (no `headCommitSha`) must
+  // not silently execute an unpinned push.
+  if (preview.headCommitSha === undefined) {
+    completeSync(
+      context,
+      blockedOutcome(
+        t("gitClientWindow.sync.blocked", { reason: preview.preflightBlockingCodes.join(", ") }),
+      ),
+      false,
+    );
+    return undefined;
+  }
+  return { ...input, verifiedCommitSha: preview.headCommitSha };
+}
+
 function runPushSync(
   client: GitClientSeam,
   projectId: string,
@@ -527,19 +568,8 @@ function runPushSync(
   void client
     .pushPreview(input)
     .then((preview) => {
-      if (preview.policyOutcome !== "allowed" || preview.preflightBlockingCodes.length > 0) {
-        completeSync(
-          context,
-          blockedOutcome(
-            t("gitClientWindow.sync.blocked", {
-              reason: preview.policyBlockReason ?? preview.preflightBlockingCodes.join(", "),
-            }),
-          ),
-          false,
-        );
-        return undefined;
-      }
-      return client.pushPropose(input);
+      const proceedInput = pushProposeInput(preview, input, context, t);
+      return proceedInput === undefined ? undefined : client.pushPropose(proceedInput);
     })
     .then(
       (result) => {

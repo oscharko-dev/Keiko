@@ -2978,6 +2978,15 @@ export interface GitDeliveryPushInput {
   readonly sourceBranchName: string;
   readonly forcePush?: boolean;
   readonly setUpstreamTracking?: boolean;
+  // #3394 review, finding 1: mandatory for approve/execute (a missing or malformed value is refused
+  // as a shape-invalid 400 — never a silent default); optional here only because the SAME type also
+  // backs the read-only preview call, which never requires or enforces it (there is nothing to pin
+  // or drift against on a single, self-contained read — see pushRoutes.ts's own `validatePreview`).
+  // Mirrors the existing `approval` field's shape exactly: present-but-optional on this client type,
+  // enforced server-side per route. The execute call always supplies it, captured from the
+  // immediately-preceding preview response's own `headCommitSha` (see GitClientWindow.tsx's
+  // `runPushSync`) — never re-derived at click time.
+  readonly verifiedCommitSha?: string;
   readonly approval?: GitDeliveryApprovalClaim;
 }
 
@@ -2986,6 +2995,9 @@ export interface GitDeliveryPushPreviewResponse {
   readonly remoteAlias: string;
   readonly remoteBranchName: string;
   readonly sourceBranchName: string;
+  // The reviewed head SHA to capture and resubmit as `verifiedCommitSha` at approve/execute time.
+  // Absent only for an unborn HEAD (nothing to push, so nothing to pin).
+  readonly headCommitSha?: string;
   readonly riskClass: string;
   readonly wouldCreateRemoteBranch: boolean;
   readonly wouldTriggerChecks: boolean;
@@ -3014,6 +3026,9 @@ function gitDeliveryPushBody(input: GitDeliveryPushInput): string {
     ...(input.setUpstreamTracking === undefined
       ? {}
       : { setUpstreamTracking: input.setUpstreamTracking }),
+    ...(input.verifiedCommitSha === undefined
+      ? {}
+      : { verifiedCommitSha: input.verifiedCommitSha }),
     ...(input.approval === undefined ? {} : { approval: input.approval }),
   });
 }
@@ -3142,6 +3157,13 @@ export interface GitDeliveryPrInput {
   readonly prExternalId?: string;
   readonly convertToDraft?: boolean;
   readonly convertFromDraft?: boolean;
+  // #3394 review, finding 2: mandatory for approve/execute (a missing or malformed value is refused
+  // as a shape-invalid 400 — never a silent default); optional here only because the SAME type also
+  // backs the read-only preview call, which never requires or enforces it. Mirrors `approval`'s
+  // shape exactly: present-but-optional on this client type, enforced server-side per route. The
+  // execute call always supplies it, captured from the immediately-preceding preview response's own
+  // `headCommitSha` (see GovernedPullRequestCard.tsx) — never re-derived at click time.
+  readonly verifiedCommitSha?: string;
   readonly approval?: GitDeliveryApprovalClaim;
 }
 
@@ -3156,6 +3178,9 @@ export interface GitDeliveryPrPreviewResponse {
   readonly actionKind: GitDeliveryPrKind;
   readonly headBranchName: string;
   readonly baseBranchName: string;
+  // The reviewed head commit to capture and resubmit as `verifiedCommitSha` at approve/execute time
+  // (mirrors push's own preview addition). Absent only for an unborn HEAD.
+  readonly headCommitSha?: string;
   readonly riskClass: string;
   readonly riskSeverity: number;
   readonly isDraft: boolean;
@@ -3193,6 +3218,9 @@ function gitDeliveryPrBody(input: GitDeliveryPrInput): string {
     ...(input.prExternalId === undefined ? {} : { prExternalId: input.prExternalId }),
     ...(input.convertToDraft === undefined ? {} : { convertToDraft: input.convertToDraft }),
     ...(input.convertFromDraft === undefined ? {} : { convertFromDraft: input.convertFromDraft }),
+    ...(input.verifiedCommitSha === undefined
+      ? {}
+      : { verifiedCommitSha: input.verifiedCommitSha }),
     ...(input.approval === undefined ? {} : { approval: input.approval }),
   });
 }

@@ -13,6 +13,7 @@ import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contract
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import {
   buildPushArgv,
+  buildSetUpstreamToArgv,
   classifyGitPublishRejection,
   evaluateGitPublishEffectivePolicy,
   GIT_PUBLISH_ALLOWED_SUBCOMMANDS,
@@ -31,10 +32,14 @@ import { isCommandAllowed } from "./sandbox.js";
 
 const NO_APPROVAL: GitDeliveryApprovalRequirement = { required: false };
 
+// #3394 review, finding 1: `headSha` matches `command()`'s own default `verifiedCommitSha` below, so
+// the new `verified-commit-drifted` preflight check does not spuriously fire for every scenario that
+// never intended to exercise drift. A test that DOES want drift overrides one side or the other.
 function snapshot(overrides: Partial<GitWorktreeSnapshot> = {}): GitWorktreeSnapshot {
   return {
     headDetached: false,
     currentBranchName: "feat/x",
+    headSha: "a".repeat(40),
     stagedFileCount: 0,
     unstagedFileCount: 0,
     untrackedFileCount: 0,
@@ -50,6 +55,7 @@ function snapshot(overrides: Partial<GitWorktreeSnapshot> = {}): GitWorktreeSnap
 function command(overrides: Partial<GitPushCommand> = {}): GitPushCommand {
   return {
     kind: "push",
+    verifiedCommitSha: "a".repeat(40),
     sourceBranchName: "feat/x",
     remoteAlias: "origin",
     remoteBranchName: "feat/x",
@@ -185,44 +191,90 @@ describe("buildPushArgv", () => {
     },
   );
 
-  it("cannot mix an immutable push with a moving tracking update or force", () => {
-    for (const override of [{ setUpstreamTracking: true }, { forcePush: true }]) {
-      expect(() =>
-        buildPushArgv(command({ verifiedCommitSha: "a".repeat(40), ...override })),
-      ).toThrow(GitPublishArgvError);
-    }
+  // #3394 review, §0.1 (Decision Point A): `setUpstreamTracking` is no longer refused here. `-u`
+  // silently no-ops on a raw-SHA source (a raw commit is not "a branch" from `--set-upstream`'s
+  // point of view), which is WHY the refusal used to exist — but every push is pinned now, so the
+  // combination is common (a brand-new local branch pushed for the first time). The Node adapter
+  // runs the local-only `git branch --set-upstream-to=…` follow-up explicitly after a successful
+  // pinned push instead (git-publish-node.test.ts), so the argv builder no longer needs to refuse
+  // it. Force is refused for an entirely separate reason (AC4) and stays refused regardless.
+  it("still refuses to build a force push even with a verified commit (AC4)", () => {
+    expect(() =>
+      buildPushArgv(command({ verifiedCommitSha: "a".repeat(40), forcePush: true })),
+    ).toThrow(GitPublishArgvError);
   });
 
-  it("builds an explicit refspec push", () => {
-    expect(buildPushArgv(command())).toEqual(["push", "origin", "feat/x:feat/x"]);
-  });
-
-  it("adds --set-upstream when requested", () => {
-    expect(buildPushArgv(command({ setUpstreamTracking: true }))).toEqual([
+  it("pins the refspec to the exact verified commit even when upstream tracking is also requested", () => {
+    const verifiedCommitSha = "a".repeat(40);
+    expect(buildPushArgv(command({ verifiedCommitSha, setUpstreamTracking: true }))).toEqual([
       "push",
-      "--set-upstream",
       "origin",
-      "feat/x:feat/x",
+      `${verifiedCommitSha}:refs/heads/feat/x`,
     ]);
+  });
+
+  // Every command is pinned now (`verifiedCommitSha` is mandatory on `GitPushCommand`), so the
+  // plain, unpinned `src:dst` refspec shape is unreachable by construction — `buildPushArgv` always
+  // calls `verifiedPushArgv`, and `--set-upstream` is never emitted from the argv itself (tracking
+  // is a separate, local-only follow-up step — see git-publish-node.ts).
+  it("builds a pinned refspec push using the command's own verifiedCommitSha", () => {
+    expect(buildPushArgv(command())).toEqual([
+      "push",
+      "origin",
+      `${"a".repeat(40)}:refs/heads/feat/x`,
+    ]);
+  });
+
+  it("never emits --set-upstream from the argv itself, regardless of setUpstreamTracking", () => {
+    expect(buildPushArgv(command({ setUpstreamTracking: true }))).not.toContain("--set-upstream");
+    expect(buildPushArgv(command({ setUpstreamTracking: false }))).not.toContain("--set-upstream");
   });
 
   it("refuses to build a force push (AC4)", () => {
     expect(() => buildPushArgv(command({ forcePush: true }))).toThrow(GitPublishArgvError);
   });
 
+  // `sourceBranchName` is no longer validated (or used) by `buildPushArgv`: every push is pinned to
+  // `verifiedCommitSha` now, so the argv's source operand is the commit, never `sourceBranchName` —
+  // that field is validated separately, by `buildSetUpstreamToArgv`, only when the local-only
+  // tracking follow-up actually runs (see the dedicated describe block below).
   it("rejects refspec-injection, flag-injection, whitespace, and control chars in refs", () => {
     expect(() => buildPushArgv(command({ remoteBranchName: "a:b" }))).toThrow(GitPublishArgvError);
-    expect(() => buildPushArgv(command({ sourceBranchName: "-x" }))).toThrow(GitPublishArgvError);
     expect(() => buildPushArgv(command({ remoteAlias: "" }))).toThrow(GitPublishArgvError);
     expect(() => buildPushArgv(command({ remoteBranchName: "a b" }))).toThrow(GitPublishArgvError);
-    expect(() => buildPushArgv(command({ sourceBranchName: "a\tb" }))).toThrow(GitPublishArgvError);
     expect(() => buildPushArgv(command({ remoteAlias: "a\u0000b" }))).toThrow(GitPublishArgvError);
   });
 
+  // #3394 review, §0.1: `branch` joined the allowlist for the local-only `--set-upstream-to` follow-up
+  // (git-publish-node.ts) — `buildPushArgv` itself still only ever emits `push`.
   it("only ever emits the `push` subcommand", () => {
-    expect(GIT_PUBLISH_ALLOWED_SUBCOMMANDS).toEqual(["push"]);
+    expect(GIT_PUBLISH_ALLOWED_SUBCOMMANDS).toEqual(["push", "branch"]);
     expect(gitPublishArgvIsGoverned(buildPushArgv(command()))).toBe(true);
     expect(gitPublishArgvIsGoverned(["fetch", "origin"])).toBe(false);
+  });
+});
+
+describe("buildSetUpstreamToArgv (#3394 review, §0.1 — local-only tracking follow-up)", () => {
+  it("builds a plain, local-only `branch --set-upstream-to=<remote>/<target> <source>` argv", () => {
+    expect(buildSetUpstreamToArgv("origin", "feat/x", "feat/x")).toEqual([
+      "branch",
+      "--set-upstream-to=origin/feat/x",
+      "feat/x",
+    ]);
+  });
+
+  it("is governed under the publish allowlist (defense-in-depth boundary)", () => {
+    expect(gitPublishArgvIsGoverned(buildSetUpstreamToArgv("origin", "feat/x", "feat/x"))).toBe(
+      true,
+    );
+  });
+
+  it("rejects refspec-injection, flag-injection, whitespace, empty, and control chars in every operand", () => {
+    expect(() => buildSetUpstreamToArgv("", "feat/x", "feat/x")).toThrow(GitPublishArgvError);
+    expect(() => buildSetUpstreamToArgv("-o", "feat/x", "feat/x")).toThrow(GitPublishArgvError);
+    expect(() => buildSetUpstreamToArgv("origin", "a:b", "feat/x")).toThrow(GitPublishArgvError);
+    expect(() => buildSetUpstreamToArgv("origin", "feat/x", "-x")).toThrow(GitPublishArgvError);
+    expect(() => buildSetUpstreamToArgv("origin", "feat/x", "a b")).toThrow(GitPublishArgvError);
   });
 });
 
@@ -390,7 +442,13 @@ describe("runGitPublish — preflight gate", () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
-  it("blocks a missing upstream when not setting upstream", async () => {
+  // #3394 review: `no-upstream-configured` used to block here (no local tracking relation AND no
+  // pinned commit). Now that `verifiedCommitSha` is mandatory, the "and no pinned commit" half can
+  // never be true, so this scenario no longer blocks — an immutable pinned source plus an explicit
+  // remote destination needs no local tracking relation (AGENTS.md §7: proves the dead-code deletion
+  // in git-mutation-preflight.ts rather than leaving the old expectation to silently pass for the
+  // wrong reason).
+  it("no longer blocks a missing upstream now that the push carries a pinned commit", async () => {
     const { adapter, publish } = fakeAdapter(SUCCESS);
     const result = await runGitPublish(
       { command: command(), approval: NO_APPROVAL },
@@ -402,9 +460,30 @@ describe("runGitPublish — preflight gate", () => {
         newActionId: () => "a1",
       },
     );
+    expect(result.lifecycle.outcome.status).toBe("succeeded");
+    expect(publish).toHaveBeenCalledOnce();
+  });
+
+  // #3394 review, finding 1 — the actual anti-drift gate: the branch moved (locally) since the
+  // caller's `verifiedCommitSha` was approved. This is what turns "the branch moved since I
+  // approved this" into a clear, typed, user-actionable block instead of silently publishing a
+  // different commit than was reviewed. Runs on the FRESHLY re-read snapshot passed to
+  // `runGitPublish`, never a stale cached one.
+  it("blocks the push when the pinned commit no longer matches the freshly-read local head (verified-commit-drifted)", async () => {
+    const { adapter, publish } = fakeAdapter(SUCCESS);
+    const result = await runGitPublish(
+      { command: command({ verifiedCommitSha: "a".repeat(40) }), approval: NO_APPROVAL },
+      {
+        adapter,
+        snapshot: snapshot({ headSha: "c".repeat(40) }),
+        repoPolicyPack: safePack(),
+        now: () => 0,
+        newActionId: () => "a1",
+      },
+    );
     expect(result.lifecycle.outcome.status).toBe("blocked");
     expect(result.lifecycle.preflight.blocking.map((f) => f.code)).toContain(
-      "no-upstream-configured",
+      "verified-commit-drifted",
     );
     expect(publish).not.toHaveBeenCalled();
   });
@@ -641,6 +720,7 @@ describe("runGitPublish — execution + rejection surfacing", () => {
     expect(result.lifecycle.outcome.status).toBe("succeeded");
     expect(result.rejection).toBeUndefined();
     expect(publish).toHaveBeenCalledWith({
+      verifiedCommitSha: "a".repeat(40),
       sourceBranchName: "feat/x",
       remoteAlias: "origin",
       remoteBranchName: "feat/x",

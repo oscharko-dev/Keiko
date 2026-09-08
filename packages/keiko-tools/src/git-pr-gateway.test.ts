@@ -57,6 +57,7 @@ function createCommand(overrides: Partial<GitPrCreateCommand> = {}): GitPrCreate
     title: "feat: governed pr command center",
     body: "Implements the governed PR command center.",
     isDraft: false,
+    verifiedCommitSha: "a".repeat(40),
     ...overrides,
   };
 }
@@ -195,11 +196,13 @@ describe("buildPrUpdateArgv", () => {
       buildPrUpdateArgv({
         ownerAndRepo: "oscharko-dev/Keiko",
         prExternalId: "1499",
+        headBranchName: "claude/issue-477-x",
         baseBranchName: "dev",
         title: "feat: updated",
         body: "Updated body",
         convertToDraft: false,
         convertFromDraft: false,
+        verifiedCommitSha: "a".repeat(40),
       }),
     ).toEqual([
       "api",
@@ -220,11 +223,13 @@ describe("buildPrUpdateArgv", () => {
       buildPrUpdateArgv({
         ownerAndRepo: "o/r",
         prExternalId: "12a",
+        headBranchName: "claude/issue-477-x",
         baseBranchName: "dev",
         title: "t",
         body: "b",
         convertToDraft: false,
         convertFromDraft: false,
+        verifiedCommitSha: "a".repeat(40),
       }),
     ).toThrow(GitPrArgvError);
   });
@@ -234,11 +239,13 @@ describe("buildPrUpdateArgv", () => {
   it("rejects a dot-segment repository, a leading-hyphen owner, an oversize body and a U+FFFD body", () => {
     const base = {
       prExternalId: "1499",
+      headBranchName: "claude/issue-477-x",
       baseBranchName: "dev",
       title: "feat: updated",
       body: "Updated body",
       convertToDraft: false,
       convertFromDraft: false,
+      verifiedCommitSha: "a".repeat(40),
     };
     expect(() => buildPrUpdateArgv({ ...base, ownerAndRepo: "owner/.." })).toThrow(GitPrArgvError);
     expect(() => buildPrUpdateArgv({ ...base, ownerAndRepo: "owner/." })).toThrow(GitPrArgvError);
@@ -595,6 +602,7 @@ describe("runGitPullRequest lifecycle gates", () => {
       body: "Updated",
       convertToDraft: false,
       convertFromDraft: true,
+      verifiedCommitSha: "a".repeat(40),
     };
     const pack: GitDeliveryRepoPolicyPack = {
       schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,

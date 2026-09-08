@@ -3,7 +3,10 @@
 //   * POST /api/git-delivery/push/preview  — READ-ONLY. Builds the pre-publish risk context: the remote
 //       target, the risk class, would-create-remote-branch / force-blocked flags, the preflight findings
 //       (incl. non-fast-forward and missing-upstream), and the policy decision. Never mutates, never
-//       records evidence.
+//       records evidence. Reports the freshly-read local head as `headCommitSha` (#3394 review) so the
+//       caller can capture it and resubmit it as `verifiedCommitSha` at approve/execute time — preview
+//       itself never requires the field, since there is nothing to pin or drift against on a single,
+//       self-contained read.
 //   * POST /api/git-delivery/push/approve  — Mints the server-issued approval claim an issue-bound push
 //       requires before execute may proceed (#3387, ADR-0138 D2/D4, epic #3384 correction 5: a delivery
 //       effect is approval-required in every mode, including Full access — never mode-denied merely
@@ -24,7 +27,7 @@
 // diff content, secrets, or credentials. CSRF + JSON content type are enforced centrally by server.ts.
 
 import type { GitDeliveryApprovalClaim } from "@oscharko-dev/keiko-contracts";
-import type { GitPushCommand } from "@oscharko-dev/keiko-tools";
+import type { GitPushCommand, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -145,21 +148,37 @@ function scanError(parsed: Record<string, unknown>): RouteResult | undefined {
   return undefined;
 }
 
-// #3394 review: `pushApprovalBinding` (below) hashes the WHOLE typed command, so a client that
-// states which commit it previewed/approved binds the approval to that content, not merely to
-// branch names + flags -- an approval minted for one `verifiedCommitSha` no longer matches a
-// request that later names a different one, however the local branch has moved in between.
-// Optional (like `mergeRoutes.ts`'s `expectedHeadRefHash`): a caller that omits it keeps today's
-// branch-name push; one that supplies it gets both the tighter binding AND the existing SHA-pinned
-// dispatch path (`git-publish-gateway.ts`'s `verifiedPushArgv`), which publishes exactly that
-// commit regardless of what the branch currently points to -- the same mechanism
-// `draftDeliveryService.ts` already trusts for the autonomous delivery path. Parsing itself is
-// shared with `prRoutes.ts` via `approvalEvents.ts`'s `parseVerifiedCommitSha` (#3394 review: was
-// duplicated byte-for-byte between the two routes).
+// #3394 review, finding 1: `pushApprovalBinding` (below) hashes the WHOLE typed command, so a
+// client that states which commit it previewed/approved binds the approval to that content, not
+// merely to branch names + flags -- an approval minted for one `verifiedCommitSha` no longer
+// matches a request that later names a different one, however the local branch has moved in
+// between. Mandatory for approve/execute (a caller that omits it, or sends a malformed value, is
+// refused as `GIT_DELIVERY_PUSH_BAD_REQUEST` — fail closed, never a silent unpinned push): every
+// governed push now dispatches through the SHA-pinned path (`git-publish-gateway.ts`'s
+// `verifiedPushArgv`), which publishes exactly that commit regardless of what the branch currently
+// points to -- the same mechanism `draftDeliveryService.ts` already trusts for the autonomous
+// delivery path. Parsing itself is shared with `prRoutes.ts` via `approvalEvents.ts`'s
+// `parseVerifiedCommitSha` (#3394 review: was duplicated byte-for-byte between the two routes).
+//
+// PREVIEW is the one exception: `buildPartialPushCommand`/`validatePreview` below build every OTHER
+// operand identically but never require this field — a read-only preview mints nothing and executes
+// nothing, so there is no approval binding for an omitted/stale value to corrupt. The preview
+// handler resolves the field itself from the freshly-read local snapshot before evaluating preflight
+// (see `resolvePreviewPushCommand`), and reports that same value back as `headCommitSha` for the
+// caller to capture and resubmit.
 
-// Builds the typed push command from validated ref + boolean operands, or undefined when any operand is
-// malformed.
-function buildPushCommand(parsed: Record<string, unknown>): GitPushCommand | undefined {
+// The operands every push command needs regardless of route strictness.
+interface PartialPushCommand {
+  readonly sourceBranchName: string;
+  readonly remoteAlias: string;
+  readonly remoteBranchName: string;
+  readonly forcePush: boolean;
+  readonly setUpstreamTracking: boolean;
+}
+
+// Builds the shared operands from validated ref + boolean fields, or undefined when any is malformed.
+// `verifiedCommitSha` is deliberately NOT part of this shape — see the file-header comment above.
+function buildPartialPushCommand(parsed: Record<string, unknown>): PartialPushCommand | undefined {
   if (
     !isSafeGitRef(parsed.remoteAlias) ||
     !isSafeGitRef(parsed.remoteBranchName) ||
@@ -169,21 +188,26 @@ function buildPushCommand(parsed: Record<string, unknown>): GitPushCommand | und
   }
   const forcePush = optionalBool(parsed.forcePush);
   const setUpstreamTracking = optionalBool(parsed.setUpstreamTracking);
-  const verifiedCommitSha = parseVerifiedCommitSha(parsed.verifiedCommitSha);
-  if (forcePush === undefined || setUpstreamTracking === undefined || !verifiedCommitSha.ok) {
+  if (forcePush === undefined || setUpstreamTracking === undefined) {
     return undefined;
   }
   return {
-    kind: "push",
     sourceBranchName: parsed.sourceBranchName,
     remoteAlias: parsed.remoteAlias,
     remoteBranchName: parsed.remoteBranchName,
     forcePush,
     setUpstreamTracking,
-    ...(verifiedCommitSha.value === undefined
-      ? {}
-      : { verifiedCommitSha: verifiedCommitSha.value }),
   };
+}
+
+// Builds the typed push command APPROVE/EXECUTE require: the shared operands plus a mandatory,
+// well-formed `verifiedCommitSha` (fail-closed: undefined on absence or a malformed value).
+function buildPushCommand(parsed: Record<string, unknown>): GitPushCommand | undefined {
+  const partial = buildPartialPushCommand(parsed);
+  if (partial === undefined) return undefined;
+  const verifiedCommitSha = parseVerifiedCommitSha(parsed.verifiedCommitSha);
+  if (!verifiedCommitSha.ok || verifiedCommitSha.value === undefined) return undefined;
+  return { kind: "push", ...partial, verifiedCommitSha: verifiedCommitSha.value };
 }
 
 function validate(parsed: unknown): Validation {
@@ -196,6 +220,53 @@ function validate(parsed: unknown): Validation {
   const approval = parseGitDeliveryApprovalRequest(parsed.approval);
   if (command === undefined || approval === undefined) return bad;
   return { kind: "ok", value: { projectId: parsed.projectId, command, approval } };
+}
+
+interface PreviewValidatedRequest {
+  readonly projectId: string;
+  readonly command: PartialPushCommand;
+}
+
+type PreviewValidation =
+  | { readonly kind: "ok"; readonly value: PreviewValidatedRequest }
+  | { readonly kind: "err"; readonly result: RouteResult };
+
+// The preview route's own, lenient validator: identical field-shape checks, but never requires
+// `verifiedCommitSha` (see the file-header comment above).
+function validatePreview(parsed: unknown): PreviewValidation {
+  const bad: PreviewValidation = {
+    kind: "err",
+    result: errResult(400, "GIT_DELIVERY_PUSH_BAD_REQUEST"),
+  };
+  if (!isPlainObject(parsed) || !hasOnlyAllowedKeys(parsed, ALLOWED_KEYS)) return bad;
+  if (parsed.schemaVersion !== "1" || !isNonEmptyString(parsed.projectId)) return bad;
+  const scanErr = scanError(parsed);
+  if (scanErr !== undefined) return { kind: "err", result: scanErr };
+  const command = buildPartialPushCommand(parsed);
+  if (command === undefined) return bad;
+  return { kind: "ok", value: { projectId: parsed.projectId, command } };
+}
+
+// A push cannot legitimately target an unborn HEAD (there is nothing to push), so this all-zero
+// object id is never a real commit — used only so a preview against an unborn HEAD still produces a
+// well-formed command; the resulting `verified-commit-drifted` finding is the correct, fail-closed
+// outcome (there is no live head to pin to).
+const UNBORN_HEAD_PLACEHOLDER_SHA = "0".repeat(40);
+
+// Resolves the preview-only push command from the freshly-read snapshot: `verifiedCommitSha` is
+// ALWAYS the server's own live local head, never a client-supplied value (preview has no approval to
+// bind, so there is nothing for a stale client value to corrupt) — this makes preview's own
+// `verified-commit-drifted` preflight comparison a tautology (by construction, it can never fire for
+// a single, self-contained read) and is exactly the value reported back as `headCommitSha`.
+function resolvePreviewPushCommand(
+  partial: PartialPushCommand,
+  snapshot: GitWorktreeSnapshot,
+): GitPushCommand {
+  return {
+    kind: "push",
+    ...partial,
+    verifiedCommitSha: snapshot.headSha ?? UNBORN_HEAD_PLACEHOLDER_SHA,
+  };
 }
 
 async function pushSignatureRequirement(
@@ -227,13 +298,19 @@ export const createHandlePushPreview = (
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
     const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-    const prepared = await prepareGitDeliveryRequest(ctx, deps, PUSH_REQUEST_ERRORS, validate);
+    const prepared = await prepareGitDeliveryRequest(
+      ctx,
+      deps,
+      PUSH_REQUEST_ERRORS,
+      validatePreview,
+    );
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
-    const { command } = prepared.value;
+    const { command: partial } = prepared.value;
     const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PUBLISH_POLICY_PACK);
     try {
       const snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
+      const command = resolvePreviewPushCommand(partial, snapshot);
       const signatureRequirement = await pushSignatureRequirement(
         workspace,
         command,
@@ -322,7 +399,6 @@ async function runPushMutation(input: PushMutationInput): Promise<RouteResult> {
       "push",
       input.correlationId,
       authority.runId,
-      command.verifiedCommitSha !== undefined,
     );
     return pushApprovalRequiredBlock(deps);
   }
@@ -443,7 +519,6 @@ export const createHandlePushApprove = (
       "push",
       correlationId,
       authority.runId,
-      command.verifiedCommitSha !== undefined,
     );
     const body: GitDeliveryPushApproveResponseBody = {
       schemaVersion: "1",

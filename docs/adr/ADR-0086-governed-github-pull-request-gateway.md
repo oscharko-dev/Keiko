@@ -341,6 +341,65 @@ two route definitions live once, in `prMarkReadyExecution.ts`'s own
 `createGitDeliveryPrMarkReadyRouteGroup`; `prRoutes.ts` spreads that group into the mounted PR route
 table rather than re-listing the patterns, so the two can never drift apart.
 
+### D12 — `verifiedCommitSha` is mandatory on `pr-create` and `pr-update`, and a live-head re-read immediately before dispatch closes the same drift window D6 (ADR-0085) closes for push (#3394 review, finding 2)
+
+A #3394 review of the merged #476/#477/#3387 slices found finding 2: nothing on the PR create/update
+path re-verified that the commit a human approved was still the commit that shipped. A caller could
+mint an approval for `pr-create` against head commit A, the branch could move to commit C before the
+approved claim was redeemed, and the create would dispatch to GitHub against whatever the branch
+happened to be at execute time — silently substituting C for the approved A. ADR-0085 D6 closes the
+equivalent gap for `push` with a preflight finding against a freshly re-read local snapshot; the PR
+gateway has no local snapshot to re-read (D4: `preflightNoLocalPrecondition` is intentionally a
+no-op for pr-create/pr-update, since GitHub-side state is not derivable from local git facts), so the
+fix here is a live provider re-read at the point D4 already identified as the right layer for
+provider-side facts.
+
+- **The contract shape.** `GitDeliveryPrCreateInputs` and `GitDeliveryPrUpdateInputs`
+  (`keiko-contracts/git-delivery.ts`) both gain `readonly verifiedCommitSha: string`, validated
+  unconditionally by `isGitObjectId` in `isPrCreateInputs`/`isPrUpdateInputs` — a request shaped
+  without it, or with a malformed value, is a shape-invalid `400`, never a silent default.
+  `GitPrCreateCommand.verifiedCommitSha` and `GitPrUpdateCommand.verifiedCommitSha`
+  (`git-pr-gateway.ts`) carry the same mandatory field through to the adapter request shapes
+  (`GitPrCreateExecRequest`, `GitPrUpdateExecRequest`); `GitPrUpdateExecRequest` additionally gains a
+  mandatory `headBranchName: string`, because re-reading a live head needs to know which branch to
+  read and an update command otherwise identifies its target PR by number/identity alone.
+- **The live-head check, in the Node executor.** `git-pr-node.ts` factors branch-head reading into
+  `readBranchHeadFor` (reused by the existing public `readBranchHead` adapter method from D2/D9) and
+  adds a shared `checkLiveHead(ctx, req, verifiedCommitSha)` helper returning a `LiveHeadCheck`
+  (`{ matches: boolean; observedHeadSha: string | undefined }`). `createPullRequest` and
+  `updatePullRequest` each wrap their existing dispatch body (renamed to
+  `dispatchCreatePullRequest`/`dispatchUpdatePullRequest`) with:
+  1. **Pre-dispatch check** — `checkLiveHead` runs first. When it does not match,
+     `preconditionFailedResult` returns a `GitPrExecResult` with `errorCode: "precondition-failed"`
+     and the observed head, and the create/update mutation method on `GitPullRequestAdapter` is
+     **never called** — no `gh api` mutation is dispatched for a stale approval.
+  2. **Post-dispatch check** — after a successful create/update, the same live head is read again.
+     A branch can still move in the narrow window between the pre-check and the provider call; if it
+     has, `draftedButDriftedResult` reports the dispatched outcome as drift (not as clean success)
+     while still surfacing whatever the provider actually returned, so the PR the user sees reflects
+     reality rather than a falsely-confident "succeeded".
+  `GitPrExecResult` gains `readonly observedHeadSha?: string | undefined` (and the
+  `GitPrExecFailureDetail` projection Pick<> gains the same field) purely for this diagnosis —
+  content-free: a commit id, never a title, body, or provider payload.
+- **The reviewer's exact scenario, proven by test.** `git-pr-node.test.ts` adds drift-scenario tests
+  that reproduce finding 2 literally: approve/redeem a `pr-create` claim minted against head commit A,
+  advance the fixture branch to commit C, replay the SAME claim (still bound to A) — the pre-dispatch
+  `checkLiveHead` observes C, refuses with `precondition-failed`, and the fixture's create-mutation
+  spawn is asserted to never have been invoked. The equivalent case is proven for `pr-update`.
+- **Preview parity with push (ADR-0085 D6).** The PR preview response gains `headCommitSha` from the
+  live snapshot at preview time (`GitDeliveryPrPreviewBody`), and `GovernedPullRequestCard.tsx`
+  captures it and resubmits it as `verifiedCommitSha` on approve/execute, gated on
+  `previewedKey === target` so a stale captured value from a previous target is never attached to a
+  new one. Preview itself stays read-only and is not required to carry the field — it has nothing to
+  pin yet.
+- **Why not extend `preflightNoLocalPrecondition` instead (see also Alternative 5 below).** The
+  drift check needs a live GitHub read (the current head of the named branch), which is exactly the
+  category of fact D4's Alternative 3 already excluded from the local-snapshot preflight evaluator.
+  Colocating the check with the OTHER live provider reads the PR executor already performs (D2's
+  `readBranchHeadFor`, D9's canonical create read, D11's mark-ready identity re-read) keeps every
+  "read GitHub immediately before mutating GitHub" check in one place and one pattern, rather than
+  inventing a second one inside a local-snapshot evaluator that cannot make network calls.
+
 ## Consequences
 
 ### Positive
@@ -389,6 +448,24 @@ table rather than re-listing the patterns, so the two can never drift apart.
 - **Cons**: `GovernedGitFlowCard` is already 700+ LOC with four sections. Adding a full PR surface (metadata editor, readiness summary, blockers, policy explanation, preview/execute actions) would push it past 1000 LOC. The PR lifecycle (create/update/close) is independent of the local flow lifecycle (branch/stage/commit/push): a user updating an existing PR has no reason to navigate through the local-flow sections. A single card mixes two distinct user-intent flows with different data dependencies, making testing harder (one fake adapter seam would need to cover both local-mutation and PR operations) and making state management more complex (the local-flow state machine and the PR state machine are independent).
 - **Why rejected**: D7. Lifecycle independence, test separability, and god-module avoidance collectively outweigh the minor convenience of single-card co-location. The GovernedPullRequestCard is launched from the Publish section of GovernedGitFlowCard, preserving the flow without bloating the existing card.
 
+### Alternative 5: Rely on approval-claim binding alone, without a live-head re-read (#3394 finding 2)
+
+- **Pros**: No extra `gh api` read on the mutation path; the approval claim already binds the exact
+  typed command (including, after this ADR, `verifiedCommitSha`), so a claim minted for one command
+  cannot literally be redeemed for a different one.
+- **Cons**: Binding the claim to the command only proves the human approved dispatching *this specific
+  `verifiedCommitSha` value* — it says nothing about whether that commit is still what the target
+  branch actually points at by the time the claim is redeemed. The branch itself is mutable state
+  outside the claim; a claim minted honestly against head A remains redeemable, unchanged, after the
+  branch has moved to C, and dispatch would proceed against a commit the human never reviewed under
+  that approval.
+- **Why rejected**: Approval-claim binding and live-state re-verification answer different questions
+  (D11 draws the identical distinction for `pr-mark-ready`: "a claim minted for an ordinary metadata
+  edit was therefore indistinguishable, at the approval layer, from a claim for the ready-for-review
+  transition" — binding alone was insufficient there for the same structural reason). D12 adds the
+  re-read precisely because the claim's binding hash was never designed to also assert freshness of
+  mutable remote state.
+
 ## Related
 
 - ADR-0080: Governed Git delivery contracts (PR input shapes, execution error codes, recovery vocabulary reused unchanged; provider-neutral PR state interfaces reused)
@@ -408,6 +485,10 @@ table rather than re-listing the patterns, so the two can never drift apart.
   pattern D10's `pr-description-apply` follows, mirroring the commit/push/PR mint routes)
 - Epic #3384 / Issue #3399: Apply a managed Keiko description through the governed pull request
   update path (D10's action kind, mint route, and description authority)
+- ADR-0085 D6: the equivalent mandatory-commit-pinning enforcement for `push` (PR #3394 review,
+  finding 1); D12 mirrors its preview-capture/resubmit UI pattern for pr-create/pr-update
+- PR #3394: review that found commit pinning optional on the push route (finding 1, ADR-0085 D6) and
+  unenforced on PR create/update (finding 2, D12 above)
 
 ## Date
 

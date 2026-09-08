@@ -16,18 +16,26 @@
 import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import type { ServerLogSink } from "../observability/server-log.js";
 
-// A caller-supplied, already-verified commit SHA a governed push / PR create / PR update request MAY
-// carry: a full Git object id when the client states which commit it previewed/approved, or nothing
-// when it relies on today's branch-name-only binding. Consumed by `pushRoutes.ts`'s
+// A caller-supplied commit SHA a governed push / PR create / PR update request carries: a full Git
+// object id naming the commit the client previewed/approved. Consumed by `pushRoutes.ts`'s
 // `pushApprovalBinding` and `prRoutes.ts`'s `prApprovalBinding`, which each hash the WHOLE typed
 // command — carrying this value makes the approval binding content-sensitive to the exact commit,
 // not merely to branch names/flags/title/body, so an approval minted for one `verifiedCommitSha` no
 // longer matches a request that later names a different one however far the branch has since moved.
 //
-// Optional, like `mergeRoutes.ts`'s own `expectedHeadRefHash` — but NOT unified with it: that field
-// accepts an abbreviated, case-insensitive hex SHA (7-64 chars) to match a live provider-reported
-// head, a different acceptance shape from this one, which requires a complete, canonical
-// (`isGitObjectId`) object id.
+// #3394 review: mandatory for every push/pr-create/pr-update APPROVE and EXECUTE request — a missing
+// or malformed value is `{ ok: false }` there, fail-closed, never a silent default (findings 1/2).
+// The PREVIEW routes are the one exception: they never mutate or mint anything, so they parse the
+// request WITHOUT requiring this field at all (see each route's own `validatePreview`) and instead
+// always report the server's own freshly-read local head back to the caller (`headCommitSha` on the
+// preview response) for it to capture and resubmit at approve/execute time — there is nothing to
+// "drift" against on a single, self-contained preview read. This parser stays a plain shape check
+// (present + a complete Git object id, or absent); presence is enforced by each strict call site, not
+// by this function, so the one parser serves both the lenient preview path and the strict mutation
+// path. Optional-when-absent, like `mergeRoutes.ts`'s own `expectedHeadRefHash` — but NOT unified
+// with it: that field accepts an abbreviated, case-insensitive hex SHA (7-64 chars) to match a live
+// provider-reported head, a different acceptance shape from this one, which requires a complete,
+// canonical (`isGitObjectId`) object id.
 export function parseVerifiedCommitSha(
   value: unknown,
 ): { ok: true; value?: string } | { ok: false } {
@@ -51,22 +59,26 @@ export type GitDeliveryApprovalEventOp =
 // #3387 (ADR-0138 D2): shared by the push and PR execute/approve routes' approval-required and
 // approval-minted lines — see `pushApprovalRequiredBlock`/`prApprovalRequiredBlock` for why the
 // mandatory consumed-approval gate this logs cannot be substituted by policy-pack disposition alone.
-// `commitPinned` (#3394 review) is body-free evidence (a boolean, never the SHA itself) that lets
-// `keiko support analyze` distinguish a content-pinned mint/require from a branch-name-only one
-// directly from the activity log, without re-deriving it from the (redacted) command shape.
+// #3394 review: this line used to also carry `commitPinned`, a boolean that told `keiko support
+// analyze` whether the mint/require was content-pinned or branch-name-only. Once `verifiedCommitSha`
+// is mandatory and validated at the request boundary (see `parseVerifiedCommitSha` above), the route
+// cannot reach this call with an unpinned command — `commitPinned` would be `true` at every single
+// call site, unconditionally, by construction. AGENTS.md §7: a parameter whose value is provably
+// constant carries zero information and is dead code, not merely simplifiable — worse, leaving it in
+// as a hardcoded `true` would invite a future log reader to believe a `false` case is still
+// reachable. Removed rather than hardcoded.
 export function logGitDeliveryApprovalEvent(
   activityLog: ServerLogSink,
   op: GitDeliveryApprovalEventOp,
   operation: "push" | "pr",
   correlationId: string,
   runId: string,
-  commitPinned: boolean,
 ): void {
   activityLog.write({
     category: "security",
     op,
     correlationId,
     status: 200,
-    extra: { operation, runId, commitPinned },
+    extra: { operation, runId },
   });
 }

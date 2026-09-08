@@ -311,7 +311,7 @@ export class DraftDeliveryFixture {
     const argv = [...buildPushArgv({ kind: "push", forcePush: false, ...request })];
     argv[1] = this.remote;
     this.git(argv);
-    this.prs = this.prs.map((pr) => ({ ...pr, headSha: request.verifiedCommitSha ?? pr.headSha }));
+    this.prs = this.prs.map((pr) => ({ ...pr, headSha: request.verifiedCommitSha }));
     return Promise.resolve({
       schemaVersion: "1",
       outcome: this.failAfterPush ? "failed" : "succeeded",

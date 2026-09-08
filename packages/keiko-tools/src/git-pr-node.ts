@@ -42,6 +42,7 @@ import {
   type GitPrExecResult,
   type GitPrMarkReadyExecRequest,
   type GitPrMarkReadyExecResult,
+  type GitPrReadHeadRequest,
   type GitPrReadRequest,
   type GitPrUpdateExecRequest,
   type GitPullRequestInspectionAdapter,
@@ -195,7 +196,71 @@ function parseNodeId(stdout: string): string | undefined {
   return isGithubNodeId(trimmed) ? trimmed : undefined;
 }
 
+// #3394 review, finding 2: the shared pre/post live-head check both `createPullRequest` and
+// `updatePullRequest` run — mirrors `markPullRequestReady`'s existing pre/post pattern (isPreMutationDrift
+// / isPostMutationDrift above) using the already production-implemented `readBranchHead` read
+// (`buildPrReadBranchHeadArgv` + `parseGitPrBranchHead`, a plain `git/ref/heads/<branch>` read,
+// independent of whether a PR exists yet — works identically for create and update). Factored into one
+// helper (rather than duplicated per command kind) to stay under the repository's complexity/line
+// budgets (AGENTS.md §6).
+interface LiveHeadCheck {
+  readonly matches: boolean;
+  readonly observedHeadSha: string | undefined;
+}
+
+async function checkLiveHead(
+  ctx: RunContext,
+  req: GitPrReadHeadRequest,
+  verifiedCommitSha: string,
+): Promise<LiveHeadCheck> {
+  const observed = await readBranchHeadFor(ctx, req);
+  return {
+    matches: observed.ok && observed.value === verifiedCommitSha,
+    observedHeadSha: observed.ok ? observed.value : undefined,
+  };
+}
+
+function preconditionFailedResult(check: LiveHeadCheck): GitPrExecResult {
+  return executionResult("failed", 0, {
+    errorCode: "precondition-failed",
+    ...(check.observedHeadSha === undefined ? {} : { observedHeadSha: check.observedHeadSha }),
+  });
+}
+
+// The PR now exists (or was already updated); the operator must be able to find it, so the
+// create-specific `createdPrExternalId`/`createdPrIdentity` fields are preserved even though the
+// outcome is downgraded to "failed" — never return the plain success once a post-dispatch drift is
+// observed (a caught drift silently reported as "succeeded" is exactly the gap finding 2 closes).
+function draftedButDriftedResult(
+  dispatched: GitPrExecResult,
+  check: LiveHeadCheck,
+): GitPrExecResult {
+  return {
+    ...dispatched,
+    outcome: "failed",
+    errorCode: "precondition-failed",
+    ...(check.observedHeadSha === undefined ? {} : { observedHeadSha: check.observedHeadSha }),
+  };
+}
+
 async function createPullRequest(
+  ctx: RunContext,
+  req: GitPrCreateExecRequest,
+): Promise<GitPrExecResult> {
+  const headReq = { ownerAndRepo: req.ownerAndRepo, headBranchName: req.headBranchName };
+  const pre = await checkLiveHead(ctx, headReq, req.verifiedCommitSha);
+  if (!pre.matches) {
+    return preconditionFailedResult(pre);
+  }
+  const dispatched = await dispatchCreatePullRequest(ctx, req);
+  if (dispatched.outcome !== "succeeded") {
+    return dispatched;
+  }
+  const post = await checkLiveHead(ctx, headReq, req.verifiedCommitSha);
+  return post.matches ? dispatched : draftedButDriftedResult(dispatched, post);
+}
+
+async function dispatchCreatePullRequest(
   ctx: RunContext,
   req: GitPrCreateExecRequest,
 ): Promise<GitPrExecResult> {
@@ -465,6 +530,27 @@ async function updatePullRequest(
   ctx: RunContext,
   req: GitPrUpdateExecRequest,
 ): Promise<GitPrExecResult> {
+  const headReq = { ownerAndRepo: req.ownerAndRepo, headBranchName: req.headBranchName };
+  const pre = await checkLiveHead(ctx, headReq, req.verifiedCommitSha);
+  if (!pre.matches) {
+    return preconditionFailedResult(pre);
+  }
+  const dispatched = await dispatchUpdatePullRequest(ctx, req);
+  if (dispatched.outcome !== "succeeded") {
+    return dispatched;
+  }
+  // There is no PR-identity payload in the PATCH/draft-transition response to reuse (unlike create's
+  // own `--jq` projection), so a fresh read is the only option here — the same underlying re-read
+  // primitive (`checkLiveHead` / `readBranchHeadFor`) mark-ready already established, not a second
+  // implementation.
+  const post = await checkLiveHead(ctx, headReq, req.verifiedCommitSha);
+  return post.matches ? dispatched : draftedButDriftedResult(dispatched, post);
+}
+
+async function dispatchUpdatePullRequest(
+  ctx: RunContext,
+  req: GitPrUpdateExecRequest,
+): Promise<GitPrExecResult> {
   let argv: readonly string[];
   try {
     argv = buildPrUpdateArgv(req);
@@ -509,15 +595,23 @@ export function createNodeGitPullRequestAdapter(
         (value) => parseGitPrIdentityList(value, input.ownerAndRepo, input.headBranchName),
       );
     },
-    readBranchHead: (req): Promise<GitPrInspectionResult<string>> => {
-      const input = { ...req };
-      return inspectRemote(
-        gitRemoteReadContext(ctx),
-        () => buildPrReadBranchHeadArgv(input),
-        (value) => parseGitPrBranchHead(value, input.headBranchName),
-      );
-    },
+    readBranchHead: (req): Promise<GitPrInspectionResult<string>> => readBranchHeadFor(ctx, req),
   };
+}
+
+// Shared by the public `readBranchHead` adapter method above and the pre/post live-head drift check
+// (`checkLiveHead`) `createPullRequest`/`updatePullRequest` run — one implementation of "read the
+// branch's live head", never two.
+function readBranchHeadFor(
+  ctx: RunContext,
+  req: GitPrReadHeadRequest,
+): Promise<GitPrInspectionResult<string>> {
+  const input = { ...req };
+  return inspectRemote(
+    gitRemoteReadContext(ctx),
+    () => buildPrReadBranchHeadArgv(input),
+    (value) => parseGitPrBranchHead(value, input.headBranchName),
+  );
 }
 
 async function inspectRemote<T>(

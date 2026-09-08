@@ -340,6 +340,11 @@ function makeSyncPreview(
   };
 }
 
+// #3394 review: `headCommitSha` defaults to a well-formed object id so every existing test that
+// mocks a successful preview keeps exercising the capture-and-resubmit path (GitClientWindow.tsx's
+// `runPushSync` refuses to propose when a preview carries no `headCommitSha`, matching
+// `pushExecution.ts`'s own fail-closed handling of an unborn-HEAD preview). A test proving the
+// unborn-HEAD block overrides this explicitly to `undefined`.
 function makePushPreview(
   overrides: Partial<GitDeliveryPushPreviewResponse> = {},
 ): GitDeliveryPushPreviewResponse {
@@ -348,6 +353,7 @@ function makePushPreview(
     remoteAlias: "origin",
     remoteBranchName: "main",
     sourceBranchName: "main",
+    headCommitSha: "a".repeat(40),
     riskClass: "normal",
     wouldCreateRemoteBranch: false,
     wouldTriggerChecks: true,
@@ -2015,6 +2021,8 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
         setUpstreamTracking: true,
       }),
     );
+    // #3394 review: `verifiedCommitSha` is captured from the preview's own `headCommitSha` and
+    // threaded through to the execute call — never independently re-derived at click time.
     expect(client.pushPropose).toHaveBeenCalledWith({
       projectId: REPO_A.path,
       remoteAlias: "origin",
@@ -2022,6 +2030,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
       sourceBranchName: "feature/local",
       forcePush: false,
       setUpstreamTracking: true,
+      verifiedCommitSha: "a".repeat(40),
     });
   });
 

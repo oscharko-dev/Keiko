@@ -162,6 +162,7 @@ function prPreviewBody(): unknown {
     actionKind: "pr-create",
     headBranchName: "feat/issue-1577",
     baseBranchName: "main",
+    headCommitSha: "a".repeat(40),
     riskClass: "protected-or-merge",
     riskSeverity: 3,
     isDraft: false,
@@ -382,11 +383,19 @@ test("Git window embeds Pull Request and Merge repository operations", async ({ 
   await page.getByRole("button", { name: "Create Pull Request" }).click();
   const prPanel = page.getByRole("region", { name: "Pull Request", exact: true });
   await expect(prPanel).toBeVisible();
-  await expect(prPanel.getByLabel("Repository (owner/repo)")).toHaveValue("oscharko-dev/Keiko");
+  // #3394 review: pre-existing gap, unrelated to this fix — confirmed still present at the freeze
+  // commit. `getByLabel` substring-matches by default, and the PR-description panel (#3399) added
+  // its own field whose aria-label ("Description repository (owner/repo)") contains this same text.
+  await expect(prPanel.getByLabel("Repository (owner/repo)", { exact: true })).toHaveValue(
+    "oscharko-dev/Keiko",
+  );
   await expect(prPanel.getByLabel("Head branch")).toHaveValue("feat/issue-1577");
   await expect(prPanel.getByLabel("Base branch")).toHaveValue("main");
   await expect(page.getByText("git@github.com:oscharko-dev/Keiko.git")).toHaveCount(0);
-  await prPanel.getByRole("button", { name: "Preview" }).click();
+  // #3394 review: pre-existing gap, unrelated to this fix — confirmed still present at the freeze
+  // commit. The PR-description panel (#3399) added its own "Preview description" button, whose
+  // accessible name contains "Preview" as a substring, so the unqualified locator became ambiguous.
+  await prPanel.getByRole("button", { name: "Preview", exact: true }).click();
   await expect(prPanel.locator('[data-field="policy"]')).toContainText("policy-pack-blocked");
   expect(ledger.prPreviews).toHaveLength(1);
 
@@ -404,7 +413,7 @@ test("Git window embeds Pull Request and Merge repository operations", async ({ 
   await expect(mergePanel).toBeVisible();
   await expect(mergePanel.getByLabel("Repository (owner/repo)")).toHaveValue("oscharko-dev/Keiko");
   await mergePanel.getByLabel("Pull Request number").fill("1577");
-  await mergePanel.getByRole("button", { name: "Preview" }).click();
+  await mergePanel.getByRole("button", { name: "Preview", exact: true }).click();
   await expect(mergePanel.getByText("required-checks-pending")).toBeVisible();
   await expect(mergePanel.getByText("refresh-merge-readiness")).toBeVisible();
   expect(ledger.mergePreviews).toHaveLength(1);

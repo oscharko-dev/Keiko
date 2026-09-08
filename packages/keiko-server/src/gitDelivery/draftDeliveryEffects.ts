@@ -1,4 +1,8 @@
-import type { GitPublishExecResult, GitPrExecResult } from "@oscharko-dev/keiko-tools";
+import type {
+  GitPublishExecResult,
+  GitPrExecResult,
+  GitWorktreeSnapshot,
+} from "@oscharko-dev/keiko-tools";
 import type { GitDeliveryApprovalRequirement } from "@oscharko-dev/keiko-contracts";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
@@ -67,10 +71,26 @@ function snapshot(effect: EffectContext): ReturnType<typeof readGitRawWorktreeSn
 // so it must never back a push's snapshotReader: doing so silently disables preflightPush's
 // non-fast-forward and nothing-to-push checks. The push effect reads the real tracking state
 // through `readGitWorktreeSnapshot` instead.
-function pushSnapshot(effect: EffectContext): ReturnType<typeof readGitWorktreeSnapshot> {
-  return readGitWorktreeSnapshot(
+//
+// #3394 review (Decision Point A): the interactive route's new `verified-commit-drifted` preflight
+// check (git-mutation-preflight.ts) compares `verifiedCommitSha` against the snapshot's LOCAL head —
+// exactly right for an interactive user whose approval reflects "what I am looking at right now".
+// The issue-bound workbench delivery path is different by design (ADR-0085 D1): its OWN, stronger
+// drift protection is `assertBeforeEffect`'s remote-head check above, and it must be able to publish
+// the EXACT commit a proposal was bound to even after the same autonomous agent has kept committing
+// on the same branch while that proposal was pending — "a moving local branch can never substitute
+// another commit after approval" cuts both ways: an ADVANCING local branch must not block publishing
+// the exact commit that already went through this path's own authoritative (remote) drift check.
+// `headSha` is therefore reported as the already-verified commit for this one comparison; every
+// other field stays the real, live read (non-fast-forward / nothing-to-push must still see real
+// tracking state).
+async function pushSnapshot(effect: EffectContext): Promise<GitWorktreeSnapshot> {
+  const raw = await readGitWorktreeSnapshot(
     runtimeGitReadDeps(effect.context, effect.options.execution ?? {}),
   );
+  return effect.proposal.command.kind === "push"
+    ? { ...raw, headSha: effect.proposal.command.verifiedCommitSha }
+    : raw;
 }
 export async function executeDraftDeliveryEffect(
   options: DraftDeliveryServiceOptions,

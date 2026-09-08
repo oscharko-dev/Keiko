@@ -225,6 +225,13 @@ function seams(overrides: Partial<GitDeliveryPullRequestSeams> = {}): GitDeliver
   };
 }
 
+// #3394 review, finding 2: `verifiedCommitSha` is mandatory for approve/execute (a request that
+// omits it, or malforms it, is refused with `GIT_DELIVERY_PR_BAD_REQUEST` — see
+// `buildPartialCreateCommand`/`buildCreateCommand` in prRoutes.ts). Every test in this file that does
+// not specifically exercise absence/malformation gets a valid default here so the mandatory-field
+// change does not silently turn hundreds of unrelated assertions into 400s; a test that wants to
+// prove the fail-closed behavior overrides this key explicitly (see the "missing verifiedCommitSha"
+// tests below).
 function createBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     schemaVersion: "1",
@@ -236,6 +243,7 @@ function createBody(overrides: Record<string, unknown> = {}): Record<string, unk
     title: "feat: governed pull request command center",
     body: "Implements the #477 governed pull request command center.",
     isDraft: false,
+    verifiedCommitSha: "a".repeat(40),
     ...overrides,
   };
 }
@@ -494,6 +502,7 @@ const DEFAULT_CREATE_COMMAND: GitPullRequestCommand = {
   title: "feat: governed pull request command center",
   body: "Implements the #477 governed pull request command center.",
   isDraft: false,
+  verifiedCommitSha: "a".repeat(40),
 };
 
 describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
@@ -849,6 +858,7 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
       body: "Updated body",
       convertToDraft: false,
       convertFromDraft: false,
+      verifiedCommitSha: "a".repeat(40),
     };
     const res = await handler(
       ctxFor(EXECUTE, {
@@ -861,6 +871,7 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
         baseBranchName: "dev",
         title: "feat: updated title",
         body: "Updated body",
+        verifiedCommitSha: "a".repeat(40),
         approval: issuePrApproval(approvalStore, updateCommand),
       }),
       deps(),
@@ -892,6 +903,7 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
       body: "Updated body",
       convertToDraft: false,
       convertFromDraft: true,
+      verifiedCommitSha: "a".repeat(40),
     };
     const res = await handler(
       ctxFor(EXECUTE, {
@@ -1026,6 +1038,48 @@ describe("pr approve — mints the server-issued claim execute consumes (#3387)"
     expect(adapter.creates()).toBe(0);
   });
 
+  // THE REVIEWER'S EXACT SCENARIO, driven through the full route stack with a fake PR adapter
+  // (design doc §11): approve pr-create with verifiedCommitSha = A; the branch has since moved to C
+  // on GitHub; the SAME A is replayed at execute (so the approval-BINDING hash matches and the
+  // adapter genuinely IS invoked, unlike the COMMIT_B test above, which is refused earlier, by the
+  // binding check, before any adapter call). Here the fake adapter stands in for git-pr-node.ts's own
+  // live pre-dispatch `checkLiveHead`, which is what would actually observe the drift in production
+  // (proven directly, with a real scripted spawn, in git-pr-node.test.ts) — this proves the ROUTE
+  // correctly surfaces that outcome end-to-end rather than a silent, clean "succeeded".
+  it("surfaces a live-head drift the adapter reports as failed/precondition-failed, even though the SAME approved commit was replayed (#3394 review, finding 2 — reviewer's exact scenario)", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issuePrApproval(approvalStore, {
+      ...DEFAULT_CREATE_COMMAND,
+      verifiedCommitSha: COMMIT_A,
+    });
+    const movedTo = "c".repeat(40);
+    const adapter = recordingPrAdapter({
+      schemaVersion: "1",
+      outcome: "failed",
+      durationMs: 3,
+      errorCode: "precondition-failed",
+      observedHeadSha: movedTo,
+    });
+    const handler = createHandlePrExecute({
+      execution: seams({ prAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const res = await handler(
+      ctxFor(EXECUTE, createBody({ approval, verifiedCommitSha: COMMIT_A })),
+      deps(),
+    );
+    const body = res.body as GitDeliveryPrExecuteResponseBody;
+    // `precondition-failed` is classified `recovery-required` by the kernel's closed failure
+    // taxonomy (gitMutationCategoryForExecutionResult), exactly as mark-ready's own drift refusal
+    // already is -- never a clean "succeeded", and the error code names the drift.
+    expect(body).toMatchObject({
+      status: "recovery-required",
+      executionErrorCode: "precondition-failed",
+    });
+    // The adapter WAS invoked (the approval binding matched) -- unlike the COMMIT_B case above,
+    // where the mismatch is caught before any adapter call.
+    expect(adapter.creates()).toBe(1);
+  });
+
   // The task names both `pr-create` and `pr-update` explicitly: `buildUpdateCommand` threads
   // `verifiedCommitSha` the same way `buildCreateCommand` does, so this proves the pr-update wire
   // path also produces a command whose binding hash covers the reviewed commit, not just pr-create.
@@ -1093,35 +1147,14 @@ describe("pr approve — mints the server-issued claim execute consumes (#3387)"
     expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
   });
 
+  // #3394-class review, section 9: `commitPinned` was removed from this log line entirely. Once
+  // `verifiedCommitSha` is mandatory and validated at the request boundary, the route can never reach
+  // this call with an unpinned command — the field would be `true` at every single call site,
+  // unconditionally, by construction, so it carried zero information and was deleted rather than
+  // hardcoded (AGENTS.md §7). This test still proves the line is body-free: the SHA itself never
+  // appears in the log, only the fact that a mint happened. Mirrors pushRoutes.test.ts's identical
+  // treatment for the push route.
   it("logs a body-free line when the mint issues a claim", async () => {
-    const activity: ServerLogEvent[] = [];
-    const handler = createHandlePrApprove({
-      execution: seams({
-        activityLog: {
-          write: (event): void => {
-            activity.push(event);
-          },
-        },
-      }),
-    });
-    await handler(
-      { ...ctxFor("/api/git-delivery/pr/approve", createBody()), correlationId: "corr-pr-mint-1" },
-      deps(),
-    );
-    const events = activity.filter((event) => event.op === "git.delivery.pr.approval.minted");
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      correlationId: "corr-pr-mint-1",
-      extra: { runId: "test-run" },
-    });
-    expect(JSON.stringify(events[0])).not.toContain("governed pull request command center");
-  });
-
-  // #3394-class review (PR analogue): `commitPinned` is body-free evidence (a boolean, never the
-  // SHA itself) that lets `keiko support analyze` distinguish a content-pinned PR mint from a
-  // branch-name-only one directly from the activity log, without re-deriving it from the (redacted)
-  // command shape. Mirrors pushRoutes.test.ts's identical pin for the push route.
-  it("marks the mint log line commitPinned when the request names a verified commit (#3394-class review, PR analogue)", async () => {
     const activity: ServerLogEvent[] = [];
     const handler = createHandlePrApprove({
       execution: seams({
@@ -1135,16 +1168,18 @@ describe("pr approve — mints the server-issued claim execute consumes (#3387)"
     await handler(
       {
         ...ctxFor("/api/git-delivery/pr/approve", createBody({ verifiedCommitSha: COMMIT_A })),
-        correlationId: "corr-pr-mint-2",
+        correlationId: "corr-pr-mint-1",
       },
       deps(),
     );
     const events = activity.filter((event) => event.op === "git.delivery.pr.approval.minted");
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
-      correlationId: "corr-pr-mint-2",
-      extra: { runId: "test-run", commitPinned: true },
+      correlationId: "corr-pr-mint-1",
+      extra: { runId: "test-run" },
     });
+    expect(events[0]?.extra).not.toHaveProperty("commitPinned");
+    expect(JSON.stringify(events[0])).not.toContain("governed pull request command center");
     expect(JSON.stringify(events[0])).not.toContain(COMMIT_A);
   });
 
@@ -1253,6 +1288,7 @@ const WIRING_COMMAND: GitPullRequestCommand = {
   title: "wiring probe",
   body: "",
   isDraft: false,
+  verifiedCommitSha: "a".repeat(40),
 };
 
 describe("executeGovernedPullRequest — default PR-adapter termination wiring (F1)", () => {
@@ -1705,6 +1741,7 @@ describe("pr mark-ready routes (#3389)", () => {
       body: "b",
       convertToDraft: false,
       convertFromDraft: false,
+      verifiedCommitSha: "a".repeat(40),
     };
     const foreignApproval = issuePrApproval(approvalStore, genericPrCommand);
     const adapter = recordingMarkReadyAdapter({
