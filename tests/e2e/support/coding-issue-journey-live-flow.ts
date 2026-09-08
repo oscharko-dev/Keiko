@@ -533,18 +533,18 @@ async function bindGitWindowToControlledRepository(
 ): Promise<void> {
   const label = repositoryButtonLabel(repositoryRoot);
   // The connected toolbar names the bound checkout on its repository selector (RepositoryToolbar's
-  // `RepositoryCell`, aria-label "Repository", text = the project's name); the connect panel lists
-  // it as a recent repository whose button reads the same name.
-  const repository = gitWindow.getByLabel("Repository toolbar").getByLabel("Repository", {
+  // `RepositoryCell`, a combobox labelled "Repository" whose trigger renders the project's name and
+  // its path as two separate nodes -- so the name is matched as its own exact text node, never as
+  // the trigger's concatenated text, which real run-28 showed reads "Wegwerf-Repo/Users/..."). The
+  // connect panel lists the checkout as a recent repository whose button reads the same name.
+  const repository = gitWindow.getByLabel("Repository toolbar").getByRole("combobox", {
+    name: "Repository",
     exact: true,
   });
   const recent = gitWindow.getByRole("button", { name: label, exact: true });
   const deadline = Date.now() + 60_000;
   for (;;) {
-    if ((await repository.count()) > 0) {
-      const bound = ((await repository.first().textContent()) ?? "").trim();
-      if (bound === label) return;
-    }
+    if ((await repository.getByText(label, { exact: true }).count()) > 0) return;
     if ((await recent.count()) > 0 && (await recent.first().isVisible())) {
       await recent.first().click();
     }
