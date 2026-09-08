@@ -18,19 +18,101 @@ import {
 const JOURNEY_REGION_NAME = "Issue handoff";
 const REFRESH_BUTTON_NAME = "Refresh observed status";
 const PROPOSE_BUTTON_NAME = "Review ready-for-review request";
+const MARK_READY_EXECUTE_ENDPOINT = "/api/git-delivery/pr/mark-ready/execute";
+/** The route's own failure codes that the governed PR card answers with "Refresh the observed
+ * status before trying again": a provider that rejected or could not serve the mutation. A real
+ * operator follows that instruction; so does this lane, a bounded number of times. */
+const RETRYABLE_MARK_READY_CODES: ReadonlySet<string> = new Set([
+  "provider-rejected",
+  "provider-unavailable",
+]);
+const MARK_READY_ATTEMPTS = 3;
+const MARK_READY_RETRY_PAUSE_MS = 20_000;
 
+interface MarkReadyVerdict {
+  readonly status: string;
+  readonly executionErrorCode: string | undefined;
+  readonly rejectionReason: string | undefined;
+}
+
+/**
+ * Proposes the observed draft for review through the journey card and judges the outcome by the
+ * product's OWN answer to the click -- the body of the `mark-ready/execute` response -- never by the
+ * control's absence. Real flow 3 of #3390 (run-53) taught why: the provider rejected the mutation,
+ * the card showed its failure alert, and the control was momentarily gone while the refresh was in
+ * flight, which the previous "no longer offered" check read as success; the run then failed two
+ * steps later at the ready-identity reconciliation with the PR still a draft. A provider failure is
+ * retried as the card instructs (refresh, then request again); every other failure ends the flow
+ * here, naming the route's code and reason.
+ */
 export async function proposeJourneyReady(page: Page): Promise<void> {
   await raiseWorkbench(page);
   const journey = page.getByRole("region", { name: JOURNEY_REGION_NAME, exact: true });
   await expect(journey).toBeVisible({ timeout: 60_000 });
   const refresh = journey.getByRole("button", { name: REFRESH_BUTTON_NAME });
   const propose = journey.getByRole("button", { name: PROPOSE_BUTTON_NAME });
-  await waitForProposeReadyOffer(page, propose);
-  await propose.click();
+  for (let attempt = 1; ; attempt += 1) {
+    await waitForProposeReadyOffer(page, propose);
+    const verdict = await proposeReadyOnce(page, propose);
+    if (verdict.status === "succeeded") break;
+    const summary = describeMarkReadyVerdict(verdict);
+    if (attempt >= MARK_READY_ATTEMPTS || !isRetryableMarkReadyVerdict(verdict)) {
+      throw new Error(
+        `ready-for-review request ${summary} after ${String(attempt)} attempt(s); the PR stays a draft`,
+      );
+    }
+    process.stderr.write(
+      `[lane] ready-for-review request ${summary}; refreshing and requesting again as the card instructs (attempt ${String(attempt)} of ${String(MARK_READY_ATTEMPTS)})\n`,
+    );
+    await page.waitForTimeout(MARK_READY_RETRY_PAUSE_MS);
+  }
   await clickWhenActionable(refresh);
   // A successfully redeemed proposal converts the observed PR from draft to ready, so the control
   // is no longer offered (`canProposeJourneyReady` requires `identity.isDraft === true`).
   await expect(propose).toHaveCount(0, { timeout: 60_000 });
+}
+
+/** One click on the control, answered by the execute route it mints and redeems the one-use
+ * approval through. The approve/execute pair is the product's own sequence behind the control. */
+async function proposeReadyOnce(page: Page, propose: Locator): Promise<MarkReadyVerdict> {
+  const executed = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith(MARK_READY_EXECUTE_ENDPOINT),
+    { timeout: 2 * 60_000 },
+  );
+  await propose.click();
+  const response = await executed;
+  if (!response.ok()) {
+    return {
+      status: `http-${String(response.status())}`,
+      executionErrorCode: undefined,
+      rejectionReason: undefined,
+    };
+  }
+  const body = (await response.json()) as {
+    readonly status?: unknown;
+    readonly executionErrorCode?: unknown;
+    readonly rejectionReason?: unknown;
+  };
+  return {
+    status: typeof body.status === "string" ? body.status : "unreadable",
+    executionErrorCode:
+      typeof body.executionErrorCode === "string" ? body.executionErrorCode : undefined,
+    rejectionReason: typeof body.rejectionReason === "string" ? body.rejectionReason : undefined,
+  };
+}
+
+function isRetryableMarkReadyVerdict(verdict: MarkReadyVerdict): boolean {
+  return (
+    verdict.status === "failed" &&
+    verdict.executionErrorCode !== undefined &&
+    RETRYABLE_MARK_READY_CODES.has(verdict.executionErrorCode)
+  );
+}
+
+function describeMarkReadyVerdict(verdict: MarkReadyVerdict): string {
+  return `${verdict.status} (${verdict.executionErrorCode ?? "no code"}/${verdict.rejectionReason ?? "no reason"})`;
 }
 
 /**
