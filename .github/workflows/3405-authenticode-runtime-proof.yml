@@ -92,21 +92,6 @@ jobs:
             scripts/windows-portable-authenticode-standard-token-loader.test.cs
           if ($LASTEXITCODE -ne 0) { throw "Restricted-token loader helper build failed" }
           $powershell = Join-Path $env:SystemRoot "System32/WindowsPowerShell/v1.0/powershell.exe"
-          $controlCommand = [Convert]::ToBase64String(
-            [Text.Encoding]::Unicode.GetBytes("exit 0"))
-          foreach ($control in @(
-            @{ Name = "token-default-dacl"; Mode = "--token-default-dacl-control" }
-          )) {
-            $controlStatus = 255
-            try {
-              "" | & $helper $powershell $env:SystemRoot $controlCommand $control.Mode
-              $controlStatus = $LASTEXITCODE
-            }
-            catch {
-              if ($LASTEXITCODE -is [int]) { $controlStatus = $LASTEXITCODE }
-            }
-            Write-Host "authenticode-loader-control:$($control.Name):exit-$controlStatus"
-          }
           node scripts/check-windows-portable-authenticode-loader.mjs `
             --helper $helper --powershell $powershell `
             --runtime packages/keiko-server/dist/coding-runtime/windowsPortableAuthenticode.js `

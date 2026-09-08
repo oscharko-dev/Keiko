@@ -1,9 +1,7 @@
 using System;
-using System.ComponentModel;
 using System.IO;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
-using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
 using System.Threading;
@@ -33,30 +31,10 @@ internal static class StandardTokenLoader {
   private const uint GenericAll = 0x10000000;
   private const uint CreateWindowStationOnly = 0x00000001;
   private const int UserObjectName = 2;
-  private const uint Synchronize = 0x00100000;
-  private const uint ProcessQueryLimitedInformation = 0x1000;
-  private const uint ThreadQueryLimitedInformation = 0x0800;
-  private const uint DaclSecurityInformation = 0x00000004;
-  private const int SeKernelObject = 6;
-  private const int TokenGroups = 2;
-  private const int TokenOwner = 4;
   private const int TokenDefaultDacl = 6;
-  private const int TokenElevationType = 18;
-  private const int TokenLinkedToken = 19;
-  private const int TokenIntegrityLevel = 25;
-  private const uint SeGroupEnabled = 0x00000004;
-  private const uint SeGroupUseForDenyOnlyMask = 0x00000010;
-  private const uint SeGroupLogonId = 0xC0000000;
 
   public static int Main(string[] args) {
-    if (args.Length != 3 && args.Length != 4) return Fail(100, "invalid-arguments");
-    string mode = args.Length == 4 ? args[3] : "required";
-    if (mode != "required" &&
-      mode != "--original-token-control" &&
-      mode != "--explicit-child-dacl-control" &&
-      mode != "--group-only-control" &&
-      mode != "--privilege-only-control" &&
-      mode != "--token-default-dacl-control") return Fail(100, "invalid-arguments");
+    if (args.Length != 3) return Fail(100, "invalid-arguments");
     string input = ReadBoundedInput();
     if (input == null) return Fail(101, "input-too-large");
     IntPtr processToken = IntPtr.Zero;
@@ -82,12 +60,10 @@ internal static class StandardTokenLoader {
           Attributes = SeGroupUseForDenyOnly,
         },
       };
-      bool groupOnlyControl = mode == "--group-only-control";
-      bool privilegeOnlyControl = mode == "--privilege-only-control";
       if (!CreateRestrictedToken(
         processToken,
-        groupOnlyControl ? 0 : DisableMaxPrivilege,
-        privilegeOnlyControl ? 0U : 1U,
+        DisableMaxPrivilege,
+        1,
         disabled,
         0,
         IntPtr.Zero,
@@ -103,92 +79,35 @@ internal static class StandardTokenLoader {
         restrictedImpersonationToken,
         administratorsSid,
         out administratorsEnabled)) return Win32Failure(115, "check-admin-membership");
-      if (!privilegeOnlyControl && administratorsEnabled) {
-        return Fail(116, "administrator-still-enabled");
-      }
+      if (administratorsEnabled) return Fail(116, "administrator-still-enabled");
       int privilegeState = HasOnlyAllowedEnabledPrivilege(restrictedToken);
       if (privilegeState < 0) return Win32Failure(117, "query-restricted-privileges");
-      if (!groupOnlyControl && privilegeState == 0) {
-        return Fail(118, "unexpected-enabled-privilege");
+      if (privilegeState == 0) return Fail(118, "unexpected-enabled-privilege");
+      SecurityIdentifier user;
+      try {
+        user = GetCurrentUserSid();
       }
-      if (mode != "required") {
-        SecurityIdentifier user;
-        SecurityIdentifier system;
-        SecurityIdentifier administrators;
-        try {
-          user = GetCurrentUserSid();
-          system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
-          administrators = new SecurityIdentifier(
-            WellKnownSidType.BuiltinAdministratorsSid,
-            null);
-        }
-        catch (Exception error) {
-          Console.Error.WriteLine(
-            "standard-token-loader:prepare-control-security:Exception:hresult-" +
-            unchecked((uint)error.HResult).ToString("X8"));
-          return 122;
-        }
-        if (mode == "--token-default-dacl-control") {
-          int defaultDaclError;
-          bool defaultDaclErrorIsHResult;
-          if (!TrySetPrivateTokenDefaultDacl(
-            restrictedToken,
-            user,
-            out defaultDaclError,
-            out defaultDaclErrorIsHResult)) {
-            string classification = defaultDaclErrorIsHResult
-              ? "Exception:hresult-" + unchecked((uint)defaultDaclError).ToString("X8")
-              : "win32-" + defaultDaclError;
-            Console.Error.WriteLine(
-              "standard-token-loader:set-control-default-dacl:" + classification);
-            return 123;
-          }
-        }
-        int originalDacl = ClassifyTokenDefaultDacl(
-          processToken,
-          user,
-          system,
-          administrators);
-        int restrictedDacl = ClassifyTokenDefaultDacl(
-          restrictedToken,
-          user,
-          system,
-          administrators);
+      catch (Exception error) {
         Console.Error.WriteLine(
-          "standard-token-loader:control-token-dacl:original-" + originalDacl +
-          ":restricted-" + restrictedDacl);
-        WriteTokenShape(
-          processToken,
-          restrictedToken,
-          user,
-          system,
-          administrators);
-        bool useOriginalToken = mode == "--original-token-control";
-        return RunChild(
-          useOriginalToken ? processToken : restrictedToken,
-          restrictedImpersonationToken,
-          args[0],
-          args[1],
-          args[2],
-          input,
-          true,
-          mode == "--explicit-child-dacl-control",
-          user,
-          system,
-          administrators);
+          "standard-token-loader:prepare-default-dacl:Exception:hresult-" +
+          unchecked((uint)error.HResult).ToString("X8"));
+        return 122;
       }
-      return RunChild(
+      int defaultDaclError;
+      bool defaultDaclErrorIsHResult;
+      if (!TrySetPrivateTokenDefaultDacl(
         restrictedToken,
-        IntPtr.Zero,
-        args[0],
-        args[1],
-        args[2],
-        input,
-        false,
-        false,
-        null,
-        null,
-        null);
+        user,
+        out defaultDaclError,
+        out defaultDaclErrorIsHResult)) {
+        string classification = defaultDaclErrorIsHResult
+          ? "Exception:hresult-" + unchecked((uint)defaultDaclError).ToString("X8")
+          : "win32-" + defaultDaclError;
+        Console.Error.WriteLine(
+          "standard-token-loader:set-default-dacl:" + classification);
+        return 123;
+      }
+      return RunChild(restrictedToken, args[0], args[1], args[2], input);
     }
     finally {
       if (sidPin.IsAllocated) sidPin.Free();
@@ -261,263 +180,6 @@ internal static class StandardTokenLoader {
     }
   }
 
-  private static void WriteTokenShape(
-    IntPtr originalToken,
-    IntPtr candidateToken,
-    SecurityIdentifier user,
-    SecurityIdentifier system,
-    SecurityIdentifier administrators) {
-    byte[] userSid = GetSidBytes(user);
-    byte[] systemSid = GetSidBytes(system);
-    byte[] administratorsSid = GetSidBytes(administrators);
-    var users = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
-    var authenticated = new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null);
-    var interactive = new SecurityIdentifier(WellKnownSidType.InteractiveSid, null);
-    byte[] usersSid = GetSidBytes(users);
-    byte[] authenticatedSid = GetSidBytes(authenticated);
-    byte[] interactiveSid = GetSidBytes(interactive);
-    int originalGroups = ClassifyTokenGroups(
-      originalToken,
-      usersSid,
-      authenticatedSid,
-      interactiveSid);
-    int candidateGroups = ClassifyTokenGroups(
-      candidateToken,
-      usersSid,
-      authenticatedSid,
-      interactiveSid);
-    int originalIntegrity = ClassifyTokenIntegrity(originalToken);
-    int candidateIntegrity = ClassifyTokenIntegrity(candidateToken);
-    int originalOwner = ClassifyTokenOwner(
-      originalToken,
-      userSid,
-      systemSid,
-      administratorsSid);
-    int candidateOwner = ClassifyTokenOwner(
-      candidateToken,
-      userSid,
-      systemSid,
-      administratorsSid);
-    Console.Error.WriteLine(
-      "standard-token-loader:control-token-shape:original-" +
-      FormatGroupStates(originalGroups) +
-      "-integrity-" + originalIntegrity + "-owner-" + originalOwner +
-      ":candidate-" + FormatGroupStates(candidateGroups) +
-      "-integrity-" + candidateIntegrity +
-      "-owner-" + candidateOwner);
-    WriteLinkedTokenShape(
-      originalToken,
-      userSid,
-      systemSid,
-      administratorsSid,
-      usersSid,
-      authenticatedSid,
-      interactiveSid);
-  }
-
-  private static void WriteLinkedTokenShape(
-    IntPtr originalToken,
-    byte[] userSid,
-    byte[] systemSid,
-    byte[] administratorsSid,
-    byte[] usersSid,
-    byte[] authenticatedSid,
-    byte[] interactiveSid) {
-    int elevationType = ReadTokenInt32(originalToken, TokenElevationType);
-    IntPtr linkedToken = ReadLinkedToken(originalToken);
-    if (linkedToken == IntPtr.Zero) {
-      Console.Error.WriteLine(
-        "standard-token-loader:control-linked-token:unavailable-elevation-" + elevationType);
-      return;
-    }
-    try {
-      int groups = ClassifyTokenGroups(
-        linkedToken,
-        usersSid,
-        authenticatedSid,
-        interactiveSid);
-      int integrity = ClassifyTokenIntegrity(linkedToken);
-      int owner = ClassifyTokenOwner(
-        linkedToken,
-        userSid,
-        systemSid,
-        administratorsSid);
-      Console.Error.WriteLine(
-        "standard-token-loader:control-linked-token:elevation-" + elevationType + "-" +
-        FormatGroupStates(groups) + "-integrity-" + integrity + "-owner-" + owner);
-    }
-    finally {
-      CloseHandle(linkedToken);
-    }
-  }
-
-  private static int ReadTokenInt32(IntPtr token, int informationClass) {
-    int value;
-    uint returned;
-    IntPtr information = Marshal.AllocHGlobal(4);
-    try {
-      if (!GetTokenInformation(token, informationClass, information, 4, out returned) ||
-        returned != 4) return -1;
-      value = Marshal.ReadInt32(information);
-    }
-    finally {
-      Marshal.FreeHGlobal(information);
-    }
-    return value;
-  }
-
-  private static IntPtr ReadLinkedToken(IntPtr token) {
-    uint returned;
-    IntPtr information = Marshal.AllocHGlobal(IntPtr.Size);
-    try {
-      if (!GetTokenInformation(
-        token,
-        TokenLinkedToken,
-        information,
-        unchecked((uint)IntPtr.Size),
-        out returned) || returned != unchecked((uint)IntPtr.Size)) return IntPtr.Zero;
-      return Marshal.ReadIntPtr(information);
-    }
-    finally {
-      Marshal.FreeHGlobal(information);
-    }
-  }
-
-  private static string FormatGroupStates(int states) {
-    if (states < 0) return "groups-error";
-    return "users-" + (states & 3) +
-      "-authenticated-" + ((states >> 2) & 3) +
-      "-interactive-" + ((states >> 4) & 3) +
-      "-logon-" + ((states >> 6) & 3);
-  }
-
-  private static byte[] GetSidBytes(SecurityIdentifier sid) {
-    byte[] bytes = new byte[sid.BinaryLength];
-    sid.GetBinaryForm(bytes, 0);
-    return bytes;
-  }
-
-  private static int ClassifyTokenGroups(
-    IntPtr token,
-    byte[] usersSid,
-    byte[] authenticatedSid,
-    byte[] interactiveSid) {
-    uint required = 0;
-    GetTokenInformation(token, TokenGroups, IntPtr.Zero, 0, out required);
-    if (Marshal.GetLastWin32Error() != 122 || required < 4 || required > 65536) return -1;
-    IntPtr information = Marshal.AllocHGlobal((int)required);
-    try {
-      if (!GetTokenInformation(token, TokenGroups, information, required, out required)) return -1;
-      int count = Marshal.ReadInt32(information);
-      if (count < 0 || count > 1024) return -1;
-      int firstGroupOffset = IntPtr.Size == 8 ? 8 : 4;
-      int groupSize = Marshal.SizeOf(typeof(SidAndAttributes));
-      if ((long)firstGroupOffset + (long)count * groupSize > required) return -1;
-      int usersState = 0;
-      int authenticatedState = 0;
-      int interactiveState = 0;
-      int logonState = 0;
-      for (int index = 0; index < count; index++) {
-        IntPtr entryAddress = IntPtr.Add(information, firstGroupOffset + index * groupSize);
-        var entry = (SidAndAttributes)Marshal.PtrToStructure(
-          entryAddress,
-          typeof(SidAndAttributes));
-        int state = ClassifyGroupState(entry.Attributes);
-        if (EqualSid(entry.Sid, usersSid)) usersState = Math.Max(usersState, state);
-        if (EqualSid(entry.Sid, authenticatedSid)) {
-          authenticatedState = Math.Max(authenticatedState, state);
-        }
-        if (EqualSid(entry.Sid, interactiveSid)) {
-          interactiveState = Math.Max(interactiveState, state);
-        }
-        if ((entry.Attributes & SeGroupLogonId) == SeGroupLogonId) {
-          logonState = Math.Max(logonState, state);
-        }
-      }
-      return usersState |
-        (authenticatedState << 2) |
-        (interactiveState << 4) |
-        (logonState << 6);
-    }
-    catch (Exception) {
-      return -1;
-    }
-    finally {
-      Marshal.FreeHGlobal(information);
-    }
-  }
-
-  private static int ClassifyGroupState(uint attributes) {
-    if ((attributes & SeGroupUseForDenyOnlyMask) != 0) return 2;
-    if ((attributes & SeGroupEnabled) != 0) return 3;
-    return 1;
-  }
-
-  private static int ClassifyTokenIntegrity(IntPtr token) {
-    uint required = 0;
-    GetTokenInformation(token, TokenIntegrityLevel, IntPtr.Zero, 0, out required);
-    if (Marshal.GetLastWin32Error() != 122 || required < IntPtr.Size || required > 65536) {
-      return -1;
-    }
-    IntPtr information = Marshal.AllocHGlobal((int)required);
-    try {
-      if (!GetTokenInformation(
-        token,
-        TokenIntegrityLevel,
-        information,
-        required,
-        out required)) return -1;
-      IntPtr sid = Marshal.ReadIntPtr(information);
-      IntPtr countAddress = GetSidSubAuthorityCount(sid);
-      if (countAddress == IntPtr.Zero) return -1;
-      byte count = Marshal.ReadByte(countAddress);
-      if (count == 0) return -1;
-      IntPtr ridAddress = GetSidSubAuthority(sid, unchecked((uint)(count - 1)));
-      if (ridAddress == IntPtr.Zero) return -1;
-      uint rid = unchecked((uint)Marshal.ReadInt32(ridAddress));
-      if (rid < 0x1000) return 0;
-      if (rid < 0x2000) return 1;
-      if (rid < 0x3000) return 2;
-      if (rid < 0x4000) return 3;
-      if (rid < 0x5000) return 4;
-      return 5;
-    }
-    catch (Exception) {
-      return -1;
-    }
-    finally {
-      Marshal.FreeHGlobal(information);
-    }
-  }
-
-  private static int ClassifyTokenOwner(
-    IntPtr token,
-    byte[] userSid,
-    byte[] systemSid,
-    byte[] administratorsSid) {
-    uint required = 0;
-    GetTokenInformation(token, TokenOwner, IntPtr.Zero, 0, out required);
-    if (Marshal.GetLastWin32Error() != 122 || required < IntPtr.Size || required > 65536) {
-      return -1;
-    }
-    IntPtr information = Marshal.AllocHGlobal((int)required);
-    try {
-      if (!GetTokenInformation(token, TokenOwner, information, required, out required)) return -1;
-      IntPtr owner = Marshal.ReadIntPtr(information);
-      if (owner == IntPtr.Zero) return 0;
-      if (EqualSid(owner, userSid)) return 1;
-      if (EqualSid(owner, systemSid)) return 2;
-      if (EqualSid(owner, administratorsSid)) return 4;
-      return 8;
-    }
-    catch (Exception) {
-      return -1;
-    }
-    finally {
-      Marshal.FreeHGlobal(information);
-    }
-  }
-
   private static int HasOnlyAllowedEnabledPrivilege(IntPtr token) {
     var changeNotify = new Luid();
     if (!LookupPrivilegeValueW(null, "SeChangeNotifyPrivilege", out changeNotify)) return -1;
@@ -544,117 +206,6 @@ internal static class StandardTokenLoader {
     }
   }
 
-  private static int ClassifyTokenDefaultDacl(
-    IntPtr token,
-    SecurityIdentifier user,
-    SecurityIdentifier system,
-    SecurityIdentifier administrators) {
-    uint required = 0;
-    GetTokenInformation(token, TokenDefaultDacl, IntPtr.Zero, 0, out required);
-    if (Marshal.GetLastWin32Error() != 122 || required < IntPtr.Size || required > 65536) {
-      return -1;
-    }
-    IntPtr information = Marshal.AllocHGlobal((int)required);
-    try {
-      if (!GetTokenInformation(token, TokenDefaultDacl, information, required, out required)) {
-        return -1;
-      }
-      IntPtr acl = Marshal.ReadIntPtr(information);
-      return ClassifyAcl(acl, user, system, administrators);
-    }
-    catch (Exception) {
-      return -1;
-    }
-    finally {
-      Marshal.FreeHGlobal(information);
-    }
-  }
-
-  private static int ClassifyKernelObjectDacl(
-    IntPtr handle,
-    SecurityIdentifier user,
-    SecurityIdentifier system,
-    SecurityIdentifier administrators) {
-    IntPtr owner;
-    IntPtr group;
-    IntPtr dacl;
-    IntPtr sacl;
-    IntPtr descriptor;
-    uint status = GetSecurityInfo(
-      handle,
-      SeKernelObject,
-      DaclSecurityInformation,
-      out owner,
-      out group,
-      out dacl,
-      out sacl,
-      out descriptor);
-    if (status != 0 || descriptor == IntPtr.Zero) return -1;
-    try {
-      return ClassifyAcl(dacl, user, system, administrators);
-    }
-    catch (Exception) {
-      return -1;
-    }
-    finally {
-      LocalFree(descriptor);
-    }
-  }
-
-  private static int ClassifyAcl(
-    IntPtr acl,
-    SecurityIdentifier user,
-    SecurityIdentifier system,
-    SecurityIdentifier administrators) {
-    if (acl == IntPtr.Zero) return 16;
-    int size = unchecked((ushort)Marshal.ReadInt16(acl, 2));
-    if (size < 8 || size > 65535) return -1;
-    byte[] bytes = new byte[size];
-    Marshal.Copy(acl, bytes, 0, size);
-    var rawAcl = new RawAcl(bytes, 0);
-    if (rawAcl.Count > 256) return -1;
-    int classes = 0;
-    for (int index = 0; index < rawAcl.Count; index++) {
-      var ace = rawAcl[index] as QualifiedAce;
-      if (ace == null ||
-        ace.AceQualifier != AceQualifier.AccessAllowed ||
-        ace.AccessMask == 0) continue;
-      SecurityIdentifier sid = ace.SecurityIdentifier;
-      if (sid.Equals(user)) classes |= 1;
-      else if (sid.Equals(system)) classes |= 2;
-      else if (sid.Equals(administrators)) classes |= 4;
-      else classes |= 8;
-    }
-    return classes;
-  }
-
-  private static int ProbeRestrictedObjectAccess(
-    IntPtr restrictedImpersonationToken,
-    uint processId,
-    uint threadId) {
-    if (!SetThreadToken(IntPtr.Zero, restrictedImpersonationToken)) return -1;
-    IntPtr process = IntPtr.Zero;
-    IntPtr thread = IntPtr.Zero;
-    try {
-      process = OpenProcess(
-        Synchronize | ProcessQueryLimitedInformation,
-        false,
-        processId);
-      thread = OpenThread(
-        Synchronize | ThreadQueryLimitedInformation,
-        false,
-        threadId);
-      return (process != IntPtr.Zero ? 1 : 0) | (thread != IntPtr.Zero ? 2 : 0);
-    }
-    finally {
-      if (thread != IntPtr.Zero) CloseHandle(thread);
-      if (process != IntPtr.Zero) CloseHandle(process);
-      if (!SetThreadToken(IntPtr.Zero, IntPtr.Zero)) {
-        AbortHost(121, "restore-thread-token");
-      }
-    }
-  }
-
   private static string ReadBoundedInput() {
     var buffer = new char[MaxInputChars + 1];
     int offset = 0;
@@ -671,17 +222,11 @@ internal static class StandardTokenLoader {
     private IntPtr station;
     private IntPtr desktop;
     public string Name { get; private set; }
-    public IntPtr SecurityDescriptor { get; private set; }
 
-    private DesktopAuthority(
-      IntPtr stationHandle,
-      IntPtr desktopHandle,
-      string name,
-      IntPtr securityDescriptor) {
+    private DesktopAuthority(IntPtr stationHandle, IntPtr desktopHandle, string name) {
       station = stationHandle;
       desktop = desktopHandle;
       Name = name;
-      SecurityDescriptor = securityDescriptor;
     }
 
     public static bool TryCreate(
@@ -787,11 +332,9 @@ internal static class StandardTokenLoader {
         authority = new DesktopAuthority(
           privateStation,
           privateDesktop,
-          actualStationName + "\\" + desktopName,
-          securityDescriptor);
+          actualStationName + "\\" + desktopName);
         privateStation = IntPtr.Zero;
         privateDesktop = IntPtr.Zero;
-        securityDescriptor = IntPtr.Zero;
         return true;
       }
       catch (Exception error) {
@@ -819,25 +362,15 @@ internal static class StandardTokenLoader {
         CloseWindowStation(station);
         station = IntPtr.Zero;
       }
-      if (SecurityDescriptor != IntPtr.Zero) {
-        LocalFree(SecurityDescriptor);
-        SecurityDescriptor = IntPtr.Zero;
-      }
     }
   }
 
   private static int RunChild(
     IntPtr token,
-    IntPtr restrictedImpersonationToken,
     string powershell,
     string systemRoot,
     string encodedCommand,
-    string input,
-    bool diagnostics,
-    bool explicitChildSecurity,
-    SecurityIdentifier user,
-    SecurityIdentifier system,
-    SecurityIdentifier administrators) {
+    string input) {
     DesktopAuthority authority;
     string authorityStage;
     int authorityCode;
@@ -892,60 +425,18 @@ internal static class StandardTokenLoader {
         var command = new StringBuilder(
           "\"" + powershell + "\" -NoLogo -NoProfile -NonInteractive -EncodedCommand " +
           encodedCommand);
-        bool started;
-        if (explicitChildSecurity) {
-          var childSecurity = new SecurityAttributes {
-            Length = Marshal.SizeOf(typeof(SecurityAttributes)),
-            SecurityDescriptor = authority.SecurityDescriptor,
-            InheritHandle = false,
-          };
-          started = CreateProcessAsUserWithSecurityW(
-            token,
-            powershell,
-            command,
-            ref childSecurity,
-            ref childSecurity,
-            true,
-            CreateUnicodeEnvironment | CreateNoWindow,
-            environment,
-            system32,
-            ref startup,
-            out process);
-        }
-        else {
-          started = CreateProcessAsUserW(
-            token,
-            powershell,
-            command,
-            IntPtr.Zero,
-            IntPtr.Zero,
-            true,
-            CreateUnicodeEnvironment | CreateNoWindow,
-            environment,
-            system32,
-            ref startup,
-            out process);
-        }
-        if (!started) return Win32Failure(107, "start-restricted-process");
-        if (diagnostics) {
-          int processDacl = ClassifyKernelObjectDacl(
-            process.Process,
-            user,
-            system,
-            administrators);
-          int threadDacl = ClassifyKernelObjectDacl(
-            process.Thread,
-            user,
-            system,
-            administrators);
-          int access = ProbeRestrictedObjectAccess(
-            restrictedImpersonationToken,
-            process.ProcessId,
-            process.ThreadId);
-          Console.Error.WriteLine(
-            "standard-token-loader:control-object-dacl:process-" + processDacl +
-            ":thread-" + threadDacl + ":restricted-access-" + access);
-        }
+        if (!CreateProcessAsUserW(
+          token,
+          powershell,
+          command,
+          IntPtr.Zero,
+          IntPtr.Zero,
+          true,
+          CreateUnicodeEnvironment | CreateNoWindow,
+          environment,
+          system32,
+          ref startup,
+          out process)) return Win32Failure(107, "start-restricted-process");
         pipe.DisposeLocalCopyOfClientHandle();
         Exception writerFailure = null;
         var writer = new Thread(() => {
@@ -1139,16 +630,6 @@ internal static class StandardTokenLoader {
     byte[] sid,
     ref uint sidSize);
 
-  [DllImport("advapi32.dll")]
-  [return: MarshalAs(UnmanagedType.Bool)]
-  private static extern bool EqualSid(IntPtr firstSid, byte[] secondSid);
-
-  [DllImport("advapi32.dll", SetLastError = true)]
-  private static extern IntPtr GetSidSubAuthorityCount(IntPtr sid);
-
-  [DllImport("advapi32.dll", SetLastError = true)]
-  private static extern IntPtr GetSidSubAuthority(IntPtr sid, uint subAuthority);
-
   [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   private static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(
     string stringSecurityDescriptor,
@@ -1170,38 +651,6 @@ internal static class StandardTokenLoader {
     ref StartupInfo startupInfo,
     out ProcessInformation processInformation);
 
-  [DllImport(
-    "advapi32.dll",
-    EntryPoint = "CreateProcessAsUserW",
-    CharSet = CharSet.Unicode,
-    SetLastError = true)]
-  private static extern bool CreateProcessAsUserWithSecurityW(
-    IntPtr token,
-    string applicationName,
-    StringBuilder commandLine,
-    ref SecurityAttributes processAttributes,
-    ref SecurityAttributes threadAttributes,
-    [MarshalAs(UnmanagedType.Bool)] bool inheritHandles,
-    uint creationFlags,
-    IntPtr environment,
-    string currentDirectory,
-    ref StartupInfo startupInfo,
-    out ProcessInformation processInformation);
-
-  [DllImport("advapi32.dll", SetLastError = true)]
-  private static extern bool SetThreadToken(IntPtr thread, IntPtr token);
-
-  [DllImport("advapi32.dll", SetLastError = true)]
-  private static extern uint GetSecurityInfo(
-    IntPtr handle,
-    int objectType,
-    uint securityInformation,
-    out IntPtr owner,
-    out IntPtr group,
-    out IntPtr dacl,
-    out IntPtr sacl,
-    out IntPtr securityDescriptor);
-
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   private static extern IntPtr CreateFileW(
     string fileName,
@@ -1220,18 +669,6 @@ internal static class StandardTokenLoader {
 
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern bool TerminateProcess(IntPtr process, uint exitCode);
-
-  [DllImport("kernel32.dll", SetLastError = true)]
-  private static extern IntPtr OpenProcess(
-    uint desiredAccess,
-    [MarshalAs(UnmanagedType.Bool)] bool inheritHandle,
-    uint processId);
-
-  [DllImport("kernel32.dll", SetLastError = true)]
-  private static extern IntPtr OpenThread(
-    uint desiredAccess,
-    [MarshalAs(UnmanagedType.Bool)] bool inheritHandle,
-    uint threadId);
 
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern bool CloseHandle(IntPtr handle);
