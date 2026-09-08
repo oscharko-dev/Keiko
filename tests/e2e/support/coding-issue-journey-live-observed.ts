@@ -209,11 +209,39 @@ export async function assertObservedRuntimeReady(page: Page): Promise<void> {
   );
 }
 
+export interface ObservedCommitReceipt {
+  readonly status: string;
+  readonly reason: string;
+  readonly headSha: string;
+  readonly verificationEvidenceId: string;
+  readonly proposalId: string;
+}
+
+/** The verified commit receipt, or `undefined` while none is displayed. The card renders ONLY for
+ * the run the window is currently showing (`result.runId === runId`, CodingWorkbenchCommitResult.tsx),
+ * so its presence is itself the interface's own proof that the receipt belongs to this run — which
+ * is why nothing here compares a run id the window never displays. */
+export async function observedCommitReceipt(
+  page: Page,
+): Promise<ObservedCommitReceipt | undefined> {
+  const card = cardWith(page, "cwb-commit-result");
+  if (!(await present(card))) return undefined;
+  const state = card.getByTestId("cwb-commit-result");
+  return {
+    status: await attribute(state, "data-state"),
+    reason: await attribute(state, "data-reason"),
+    headSha: await fact(card, "headSha"),
+    verificationEvidenceId: await fact(card, "verificationEvidenceId"),
+    proposalId: await fact(card, "proposalId"),
+  };
+}
+
 export interface ObservedRun {
   readonly state: string;
   readonly delivery: ObservedDelivery | undefined;
   readonly description: ObservedDescriptionStatus | undefined;
   readonly ciReadiness: ObservedCiReadiness | undefined;
+  readonly commitReceipt: ObservedCommitReceipt | undefined;
 }
 
 /** One reading of everything the Code task is currently showing about its run. */
@@ -223,6 +251,7 @@ export async function observedRun(page: Page): Promise<ObservedRun> {
     delivery: await observedDelivery(page),
     description: await observedDescriptionStatus(page),
     ciReadiness: await observedCiReadiness(page),
+    commitReceipt: await observedCommitReceipt(page),
   };
 }
 

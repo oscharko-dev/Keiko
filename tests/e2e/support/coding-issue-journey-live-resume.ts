@@ -26,12 +26,12 @@ import {
   issueResolutionTaskInstructions,
   openLiveWorkbench,
   reacceptBoundIssue,
-  runtimeSnapshot,
   waitWhileAnsweringApprovals,
-  readSnapshotWhileAwaitingDraft,
+  readObservedRunWhileAwaitingDraft,
   workbenchSurface,
   type DeliveredPullRequest,
 } from "./coding-issue-journey-live.js";
+import { observedDiagnosis, observedRun } from "./coding-issue-journey-live-observed.js";
 import { selectCodingIssueMode } from "./coding-issue-browser.js";
 
 const RUN_ENDPOINT = "/api/coding-workbench/runtime/runs";
@@ -502,46 +502,40 @@ function readPredecessorRunId(runId: string): string | undefined {
   }
 }
 
-export function assertContinuationCanReachDraft(
-  snapshot: CodingWorkbenchRuntimeSnapshot,
-  runId: string,
-): void {
-  if (snapshot.runId !== runId || snapshot.draftDelivery?.phase === "draft-created") return;
-  if (snapshot.state === "taken-over") {
-    throw new Error(
-      `continued run ${runId} reached taken-over before creating a draft pull request`,
-    );
-  }
-  if (
-    snapshot.state === "failed" ||
-    snapshot.state === "cancelled" ||
-    snapshot.state === "recovery-required" ||
-    snapshot.state === "succeeded"
-  ) {
-    throw new Error(
-      `continued run ${runId} reached ${snapshot.state} before creating a draft pull request`,
-    );
-  }
-}
-
+// #3390: `assertContinuationCanReachDraft` used to live here. It stopped the continuation wait when
+// the run reached a terminal state without a draft, and existed only because the shared guard let a
+// snapshot for a DIFFERENT run id pass through untouched. The shared guard no longer compares a run
+// id no window displays -- it reads the state the Code task is showing, and that state belongs to
+// the run the window is showing -- so it now stops on every terminal state by itself, for the
+// continuation exactly as for a first run. The invariant is unchanged and pinned once, at that
+// shared guard (coding-issue-journey-live.test.ts, "live journey draft wait").
 async function waitForDraftPullRequest(page: Page, runId: string): Promise<DeliveredPullRequest> {
-  const snapshot = await waitWhileAnsweringApprovals(
+  const observed = await waitWhileAnsweringApprovals(
     page,
-    async () => {
-      const current = await readSnapshotWhileAwaitingDraft(() => runtimeSnapshot(page), runId);
-      assertContinuationCanReachDraft(current, runId);
-      return current;
-    },
-    (value) => value.runId === runId && value.draftDelivery?.phase === "draft-created",
+    () =>
+      readObservedRunWhileAwaitingDraft(
+        () => observedRun(page),
+        () => observedDiagnosis(page),
+      ),
+    (value) => value.delivery?.phase === "draft-created",
     {
       timeoutMs: 25 * 60_000,
       message: "expected the continued model run to create a real draft pull request",
     },
   );
-  const pullRequest = snapshot.draftDelivery?.pullRequest;
-  if (pullRequest === undefined)
-    throw new Error("continued run draft pull request was unavailable");
-  return { runId, ...pullRequest };
+  const delivery = observed.delivery;
+  const pullRequest = delivery?.pullRequest;
+  if (delivery === undefined || pullRequest === undefined) {
+    throw new Error("the Code task did not display a continued draft pull request");
+  }
+  return {
+    runId,
+    repository: delivery.repository,
+    number: pullRequest.number,
+    baseRef: delivery.baseRef,
+    headRef: delivery.headRef,
+    headSha: pullRequest.headSha,
+  };
 }
 
 export async function resumeIssueToDraftPullRequest(

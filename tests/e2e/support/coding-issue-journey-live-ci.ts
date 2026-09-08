@@ -6,45 +6,68 @@
 // module only watches the outcome the model produces and keeps answering approvals meanwhile.
 
 import type { Page } from "@playwright/test";
-import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
-import { runtimeSnapshot, waitWhileAnsweringApprovals } from "./coding-issue-journey-live.js";
+import {
+  GIT_CI_READINESS_REASON_STATES,
+  type ReadinessSnapshot,
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
+import { waitWhileAnsweringApprovals } from "./coding-issue-journey-live.js";
+import {
+  observedCiReadiness,
+  type ObservedCiReadiness,
+} from "./coding-issue-journey-live-observed.js";
 
-const TERMINAL_CI_STATES = new Set<ReadinessSnapshot["state"]>(["technical-ready", "blocked"]);
+const TERMINAL_CI_STATES = new Set<string>(["technical-ready", "blocked"]);
 
 export interface CiRepairOutcome {
   readonly finalState: ReadinessSnapshot["state"];
   readonly observedFailureBeforeReady: boolean;
   readonly requiredChecks: ReadinessSnapshot["requiredChecks"];
-  /** The exact head observed at the moment a `failed` readiness was first recorded; `undefined`
-   * when no failure was ever observed. */
+  /** The exact head shown at the moment a `failed` readiness was first displayed; `undefined`
+   * when no failure was ever shown. */
   readonly failureHeadSha: string | undefined;
-  /** The exact head bound to the terminal readiness snapshot this outcome resolved on. */
+  /** The exact head bound to the terminal readiness this outcome resolved on. */
   readonly finalHeadSha: string;
+}
+
+// #3390: read from the CI readiness card the operator watches, not from a route this lane calls.
+// The card reports a DISPLAYED state, which also covers `stale` for an observation the window no
+// longer trusts -- so this waits for a terminal readiness that is currently trustworthy, which is
+// exactly the one an operator would act on. A stale reading simply is not terminal and the wait
+// continues.
+// Derived from the contract that produces the state, never a second copy of the list: a new
+// readiness state then narrows here automatically instead of failing as an "unknown" one.
+const READINESS_STATES = new Set<string>(Object.values(GIT_CI_READINESS_REASON_STATES));
+
+function terminalReadinessState(state: string): ReadinessSnapshot["state"] {
+  if (!READINESS_STATES.has(state)) {
+    throw new TypeError(`the CI readiness card displayed an unknown state "${state}"`);
+  }
+  // Narrowed by the membership check above, which is the same closed vocabulary the card renders.
+  return state as ReadinessSnapshot["state"];
 }
 
 export async function waitForCiRepairOutcome(page: Page): Promise<CiRepairOutcome> {
   let observedFailure = false;
   let failureHeadSha: string | undefined;
-  const snapshot = await waitWhileAnsweringApprovals(
+  const readiness = await waitWhileAnsweringApprovals(
     page,
-    async () => {
-      const value = await runtimeSnapshot(page);
-      if (value.ciReadiness?.state === "failed") {
+    async (): Promise<ObservedCiReadiness | undefined> => {
+      const value = await observedCiReadiness(page);
+      if (value?.state === "failed") {
         observedFailure = true;
-        failureHeadSha ??= value.ciReadiness.headSha;
+        failureHeadSha ??= value.headSha;
       }
       return value;
     },
-    (value) => value.ciReadiness !== undefined && TERMINAL_CI_STATES.has(value.ciReadiness.state),
+    (value) => value !== undefined && TERMINAL_CI_STATES.has(value.state),
     {
       timeoutMs: 20 * 60_000,
       message: "expected the real model to drive CI readiness to a terminal state",
     },
   );
-  const readiness = snapshot.ciReadiness;
-  if (readiness === undefined) throw new Error("expected a recorded CI readiness observation");
+  if (readiness === undefined) throw new Error("expected a displayed CI readiness observation");
   return {
-    finalState: readiness.state,
+    finalState: terminalReadinessState(readiness.state),
     observedFailureBeforeReady: observedFailure,
     requiredChecks: readiness.requiredChecks,
     failureHeadSha,

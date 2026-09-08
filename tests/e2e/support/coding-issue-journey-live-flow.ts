@@ -52,11 +52,15 @@ import { proposeJourneyReady } from "./coding-issue-journey-live-mark-ready.js";
 import {
   type DeliveredPullRequest,
   openLiveWorkbench,
-  readSnapshotWhileAwaitingSuccess,
-  runtimeSnapshot,
+  readObservedRunWhileAwaitingSuccess,
   waitWhileAnsweringApprovals,
 } from "./coding-issue-journey-live.js";
-import { activeTaskWorkspaceRoot } from "./coding-issue-journey-live.js";
+import {
+  observedDelivery,
+  observedDiagnosis,
+  observedRun,
+} from "./coding-issue-journey-live-observed.js";
+import type { RetainedDescriptionBinding } from "./coding-issue-journey-live-description.js";
 import { resolveLiveJourneyEnv } from "./coding-issue-journey-live-runners.js";
 import { currentPlatformKey, receiptsDir } from "./coding-issue-journey-scenarios.js";
 import {
@@ -101,8 +105,12 @@ export interface SpendSnapshot {
   readonly charged: number;
 }
 
+// #3390: `runId` is gone from this shape. It was compared against the initial delivery's run id to
+// prove the final delivery belonged to the same attempt -- a fact no window displays. The same
+// guarantee now comes from what the interface DOES show: the awaiting-success guard fails the
+// moment the delivery card stops naming this pull request, and `sameStablePullRequest` below still
+// pins repository, number and both refs against the initial delivery.
 export interface FinalDeliverySnapshot {
-  readonly runId: string | undefined;
   readonly phase: string | undefined;
   readonly reason: string | undefined;
   readonly bindingHeadSha: string | undefined;
@@ -661,7 +669,6 @@ export function resolveFinalDeliveredPullRequest(
 ): DeliveredPullRequest {
   const current = snapshot.pullRequest;
   if (
-    snapshot.runId !== initial.runId ||
     snapshot.phase !== "draft-created" ||
     snapshot.reason !== "completed" ||
     current === undefined ||
@@ -862,25 +869,33 @@ function assertRedGreenVerification(events: readonly Readonly<Record<string, unk
   }
 }
 
+// #3390: the run's own `result.status` reaches no rendered element, and the receipt's run id is
+// never displayed either. Neither is missed. The window shows the run reaching `succeeded`, and the
+// commit-result card renders ONLY for the run the window is currently showing
+// (`result.runId === runId`, CodingWorkbenchCommitResult.tsx), so the receipt's presence IS the
+// interface's own proof that it belongs to this run -- the check the run-id comparison performed.
 async function assertVerifiedModelChange(
   page: Page,
   delivered: DeliveredPullRequest,
 ): Promise<void> {
-  const snapshot = await waitWhileAnsweringApprovals(
+  const observed = await waitWhileAnsweringApprovals(
     page,
-    () => readSnapshotWhileAwaitingSuccess(() => runtimeSnapshot(page), delivered.runId),
-    (value) => value.state === "succeeded" && value.result?.status === "succeeded",
+    () =>
+      readObservedRunWhileAwaitingSuccess(
+        () => observedRun(page),
+        delivered.number,
+        () => observedDiagnosis(page),
+      ),
+    (value) => value.state === "succeeded" && value.commitReceipt?.status === "succeeded",
     {
       timeoutMs: 25 * 60_000,
       message: "model run did not settle successfully after creating its draft pull request",
     },
   );
-  const verified = snapshot.verifiedCommitResult;
+  const verified = observed.commitReceipt;
   if (
-    snapshot.result?.status !== "succeeded" ||
     verified?.status !== "succeeded" ||
     verified.reason !== "completed" ||
-    verified.runId !== delivered.runId ||
     verified.headSha !== delivered.headSha ||
     verified.verificationEvidenceId.length === 0
   ) {
@@ -979,21 +994,21 @@ async function recordDeliveryAndCiStages(
 
 async function applyAndRecordDescription(
   page: Page,
+  repositoryRoot: string,
   delivered: DeliveredPullRequest,
   flow: QualificationFlowBinding,
   startedAt: number,
   toolCallCount: number,
 ): Promise<{
   readonly stage: CodeTaskQualificationFlowStageEvidenceV1["description"];
-  readonly workspaceRoot: string;
+  readonly retained: RetainedDescriptionBinding;
 }> {
   const description = await waitForAutoDraftDescription(page);
-  // Mirrors the Workbench's own "Review description" control: the card opens on the run's task
-  // workspace root, which is where the server retained the proposal -- not on the repository root.
-  // The post-mark-ready status refresh reads that same retained scope, so the root is returned
-  // rather than re-derived from a run that is terminal by then.
-  const workspaceRoot = await activeTaskWorkspaceRoot(page);
-  const retained = await mountGovernedPullRequestCard(page, workspaceRoot, delivered, description);
+  // The card opens on the run's own task workspace scope, which is where the server retained the
+  // proposal -- never on the repository root. That scope is READ BACK from the card's own review
+  // request rather than compared against a path the product deliberately never displays, and the
+  // post-mark-ready refresh is then pinned to the same one.
+  const retained = await mountGovernedPullRequestCard(page, repositoryRoot, delivered, description);
   await applyAutoDraftDescriptionThroughPrCard(page, retained);
   const receiptDigest = await recordSuccessfulJourneyStage(
     page,
@@ -1005,7 +1020,7 @@ async function applyAndRecordDescription(
   );
   return {
     stage: stageReceiptIdentity("description-auto-draft-and-apply", receiptDigest),
-    workspaceRoot,
+    retained,
   };
 }
 
@@ -1044,15 +1059,23 @@ async function resolveExactHeadDelivery(
   if (ci.finalState !== "technical-ready") {
     throw new Error("qualification flow did not reach exact-head technical readiness");
   }
-  const snapshot = await runtimeSnapshot(page);
+  const delivery = await observedDelivery(page);
   const exactHead = resolveFinalDeliveredPullRequest(
     delivered,
     {
-      runId: snapshot.runId,
-      phase: snapshot.draftDelivery?.phase,
-      reason: snapshot.draftDelivery?.reason,
-      bindingHeadSha: snapshot.draftDelivery?.binding.headSha,
-      pullRequest: snapshot.draftDelivery?.pullRequest,
+      phase: delivery?.phase,
+      reason: delivery?.reason,
+      bindingHeadSha: delivery?.headSha,
+      pullRequest:
+        delivery?.pullRequest === undefined
+          ? undefined
+          : {
+              repository: delivery.repository,
+              number: delivery.pullRequest.number,
+              baseRef: delivery.baseRef,
+              headRef: delivery.headRef,
+              headSha: delivery.pullRequest.headSha,
+            },
     },
     ci.finalHeadSha,
   );
@@ -1067,6 +1090,7 @@ async function resolveExactHeadDelivery(
 async function recordPreMergeStages(
   page: Page,
   flow: QualificationFlowBinding,
+  repositoryRoot: string,
   startedAt: number,
   exactHead: Awaited<ReturnType<typeof resolveExactHeadDelivery>>,
 ): Promise<{
@@ -1085,13 +1109,14 @@ async function recordPreMergeStages(
   );
   const description = await applyAndRecordDescription(
     page,
+    repositoryRoot,
     delivered,
     flow,
     startedAt,
     toolCallCount,
   );
   await proposeJourneyReady(page);
-  await reconcileAppliedDescriptionAfterMarkReady(page, description.workspaceRoot, delivered);
+  await reconcileAppliedDescriptionAfterMarkReady(page, description.retained, delivered);
   const flowBinding = stageFlowBinding(flow, delivered);
   const markReadyDigest = await recordSuccessfulJourneyStage(
     page,
@@ -1149,7 +1174,7 @@ async function driveFlowToCompletedOutcome(
   readonly stageEvidence: CodeTaskQualificationFlowStageEvidenceV1;
 }> {
   const exactHead = await resolveExactHeadDelivery(page, flow, repositoryRoot);
-  const preMerge = await recordPreMergeStages(page, flow, startedAt, exactHead);
+  const preMerge = await recordPreMergeStages(page, flow, repositoryRoot, startedAt, exactHead);
   const finalDelivered = exactHead.delivered;
   const rubricReview = await reviewExactHead(flow, finalDelivered, qualifiedSourceCommitSha);
   await executeGovernedMerge(page, repositoryRoot, finalDelivered);

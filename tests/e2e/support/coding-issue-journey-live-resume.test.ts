@@ -8,7 +8,6 @@ import type {
   CodingWorkbenchRuntimeSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 import {
-  assertContinuationCanReachDraft,
   qualificationResumeBinding,
   readQualificationWorktree,
   resumeExistingIssueWorkspace,
@@ -216,20 +215,12 @@ describe("live qualification continuation", () => {
     }
   });
 
-  it.each(["taken-over", "failed", "cancelled", "recovery-required", "succeeded"] as const)(
-    "stops waiting when the continued run reaches %s without a draft pull request",
-    (state) => {
-      expect(() => {
-        assertContinuationCanReachDraft(snapshot("run-new", state), "run-new");
-      }).toThrow(`continued run run-new reached ${state} before creating a draft pull request`);
-      expect(() => {
-        assertContinuationCanReachDraft(snapshot("run-other", state), "run-new");
-      }).not.toThrow();
-      expect(() => {
-        assertContinuationCanReachDraft(snapshot("run-new", "running"), "run-new");
-      }).not.toThrow();
-    },
-  );
+  // #3390: the continuation-specific "stops waiting when the continued run reaches X" pin moved to
+  // the shared draft-wait guard it now delegates to (coding-issue-journey-live.test.ts, "live
+  // journey draft wait"), which covers the same five terminal states. It is not dropped: the
+  // continuation only ever needed its own copy because the shared guard used to wave through a
+  // snapshot whose run id differed, and that comparison is gone -- the guard reads the state the
+  // window is showing, which is by construction this run's.
 
   it("requires the complete exact resume binding when continuation is selected", () => {
     expect(qualificationResumeBinding({})).toBeUndefined();

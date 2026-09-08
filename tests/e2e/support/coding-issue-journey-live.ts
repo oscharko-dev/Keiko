@@ -13,23 +13,24 @@
 // snapshot for the effect the model is expected to eventually produce.
 
 import { expect, type Locator, type Page } from "@playwright/test";
-import type {
-  CodingWorkbenchMode,
-  CodingWorkbenchRuntimeSnapshot,
-  ModelCapability,
-} from "@oscharko-dev/keiko-contracts";
+import type { CodingWorkbenchMode, ModelCapability } from "@oscharko-dev/keiko-contracts";
 import type { GatewayReadinessReport } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { isCodingWorkbenchModel } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 import { selectCodingIssueMode } from "./coding-issue-browser.js";
+import {
+  assertObservedRuntimeReady,
+  observedDiagnosis,
+  observedRun,
+  type ObservedRun,
+} from "./coding-issue-journey-live-observed.js";
 
 const SURFACE = 'section[aria-label="Coding Workbench"][data-state]';
 const AUTH_ENDPOINT = "/api/coding-workbench/github-authorization";
 const MODELS_ENDPOINT = "/api/models";
 const GATEWAY_READINESS_ENDPOINT = "/api/gateway/readiness";
 const GATEWAY_SETUP_ENDPOINT = "/api/gateway/setup";
-const READINESS_ENDPOINT = "/api/coding-workbench/runtime/readiness";
 const PROJECTS_ENDPOINT = "/api/projects";
 const CSRF = { "X-Keiko-CSRF": "1" };
 
@@ -198,10 +199,13 @@ interface LiveModelQualificationClient {
   readonly enableWorkflow: (modelId: string) => Promise<void>;
 }
 
+// #3390: keyed entirely on what the desktop DISPLAYS. The internal `workspaceId` is a React key
+// and reaches no rendered element, and the task branch is already carried by the branch control's
+// own accessible name ("Manage branch <name>"), so neither needs a hidden route read: the task
+// workspace button, the repository control and the branch control name the same workspace between
+// them, and all three are on screen.
 export interface LiveWorkbenchIdentity {
-  readonly workspaceId: string | null;
-  readonly taskId: string | null;
-  readonly taskBranch: string | null;
+  readonly taskControlName: string;
   readonly repositoryControlName: string;
   readonly branchControlName: string;
 }
@@ -246,38 +250,12 @@ export async function reconcileLiveWorkbenchAfterModelChange(
   await client.waitForWorkspaceIdentity(workspaceIdentity);
 }
 
-interface ActiveTaskWorkspaceResponse {
-  readonly active: {
-    readonly instance: {
-      readonly workspaceId: string;
-      readonly taskId: string;
-      readonly taskBranch: string;
-    };
-    /** The run's task workspace root (`WorkspaceBinding.activeRoot`, the managed worktree). */
-    readonly binding?: { readonly activeRoot?: string };
-  } | null;
-}
-
-async function activeTaskWorkspace(page: Page): Promise<ActiveTaskWorkspaceResponse["active"]> {
-  const response = await page.request.get("/api/task-workspaces/active");
-  expect(
-    response.ok(),
-    `the active-workspace read failed with HTTP ${String(response.status())}`,
-  ).toBe(true);
-  return ((await response.json()) as ActiveTaskWorkspaceResponse).active;
-}
-
-/** The root the server keys run-bound description proposals by (`descriptionApplicationTarget`:
- * `workspace.binding.activeRoot`), read from the production active-workspace route -- the governed
- * pull request card must be opened on this exact root, never on the bound repository root. */
-export async function activeTaskWorkspaceRoot(page: Page): Promise<string> {
-  const active = await activeTaskWorkspace(page);
-  const root = active?.binding?.activeRoot;
-  if (root === undefined || root.length === 0) {
-    throw new Error("the active task workspace root was unavailable for the description review");
-  }
-  return root;
-}
+// #3390: the active task workspace ROOT used to be read here from `/api/task-workspaces/active`.
+// It is gone on purpose. The product deliberately does NOT display that path -- the workspace chip
+// was explicitly stripped of the raw filesystem root, and `BoundRootTarget` is content-free by
+// construction -- so scraping it back out of a route would have contradicted a deliberate product
+// decision in order to assert something no operator can see. The description scope is now pinned by
+// CONSISTENCY across the requests the card itself issues (coding-issue-journey-live-description.ts).
 
 async function controlName(locator: Locator, kind: string): Promise<string> {
   await expect(locator).toBeVisible();
@@ -299,19 +277,17 @@ async function waitForWorkbenchWorkspace(page: Page): Promise<void> {
   await expect(status).toBeVisible({ timeout: 60_000 });
 }
 
+function taskWorkspaceControl(page: Page): Locator {
+  return page.locator('button[aria-label^="Task workspaces: "]');
+}
+
 async function currentLiveWorkbenchIdentity(page: Page): Promise<LiveWorkbenchIdentity> {
   // ActiveWorkspaceContext publishes "Workspace ready" only after it has reconciled the server
-  // instance and the rendered repository binding. Read the server identity after that boundary,
-  // then re-read it after capturing the controls so a concurrent restoration cannot be mistaken
-  // for a stable pre-setup identity.
+  // instance and the rendered repository binding, so every control read below is taken after that
+  // boundary and names the reconciled workspace rather than a pre-setup one.
   await waitForWorkbenchWorkspace(page);
-  const active = await activeTaskWorkspace(page);
-  const taskName = active === null ? "no active workspace" : active.instance.taskId;
-  await expect(page.getByRole("button", { name: `Task workspaces: ${taskName}` })).toBeVisible();
-  const identity = {
-    workspaceId: active?.instance.workspaceId ?? null,
-    taskId: active?.instance.taskId ?? null,
-    taskBranch: active?.instance.taskBranch ?? null,
+  return {
+    taskControlName: await controlName(taskWorkspaceControl(page), "task workspace"),
     repositoryControlName: await controlName(
       page.locator('button[aria-label^="Manage repository "]'),
       "repository",
@@ -321,21 +297,15 @@ async function currentLiveWorkbenchIdentity(page: Page): Promise<LiveWorkbenchId
       "branch",
     ),
   };
-  expect(await activeTaskWorkspace(page)).toEqual(active);
-  return identity;
 }
 
 async function waitForLiveWorkbenchIdentity(
   page: Page,
   identity: LiveWorkbenchIdentity,
 ): Promise<void> {
-  await expect
-    .poll(async () => (await activeTaskWorkspace(page))?.instance.workspaceId ?? null, {
-      timeout: 60_000,
-    })
-    .toBe(identity.workspaceId);
-  const taskName = identity.taskId ?? "no active workspace";
-  await expect(page.getByRole("button", { name: `Task workspaces: ${taskName}` })).toBeVisible();
+  await expect(page.getByRole("button", { name: identity.taskControlName })).toBeVisible({
+    timeout: 60_000,
+  });
   await waitForWorkbenchResources(page);
   await expect(page.getByRole("button", { name: identity.repositoryControlName })).toBeVisible();
   await expect(page.getByRole("button", { name: identity.branchControlName })).toBeVisible();
@@ -518,20 +488,13 @@ async function registerLiveRepositoryProject(page: Page, repositoryRoot: string)
   );
 }
 
+// #3390: read from the window's own live status region rather than by calling the readiness route
+// the UI already calls for itself. The authority must be selected FIRST: the product re-reads
+// readiness for whichever authority is currently requested, so asking before the operator has
+// chosen would answer for the wrong one.
 export async function assertRuntimeReady(page: Page, mode: CodingWorkbenchMode): Promise<void> {
-  await expect
-    .poll(
-      async () => {
-        const response = await page.request.get(
-          `${READINESS_ENDPOINT}?${new URLSearchParams({ requestedMode: mode }).toString()}`,
-        );
-        if (!response.ok()) return false;
-        const body = (await response.json()) as { readonly runtimeAvailable: boolean };
-        return body.runtimeAvailable;
-      },
-      { timeout: 60_000, message: "coding runtime must report ready before a run may start" },
-    )
-    .toBe(true);
+  await selectCodingIssueMode(page, mode);
+  await assertObservedRuntimeReady(page);
 }
 
 async function previewAndAcceptIssue(page: Page, issueRef: string): Promise<void> {
@@ -634,11 +597,16 @@ function assertBoundIssueStartPayload(payload: unknown, issueRef: string): void 
     throw new Error("coding-run start payload was not bound to the accepted issue");
 }
 
+/** Starts the run and returns its id, taken from the response the product itself received for the
+ * operator's click. The run id is a correlation key -- it addresses the activity log and binds the
+ * evidence receipt -- not a fact the interface owes the operator, and the Code task deliberately
+ * keeps it out of the chrome. Reading it from the product's own traffic is therefore the honest
+ * source; nothing here asks a route for it. */
 export async function startCodingRun(
   page: Page,
   mode: CodingWorkbenchMode,
   issueRef: string,
-): Promise<void> {
+): Promise<string> {
   await selectCodingIssueMode(page, mode);
   await page.getByLabel("Task instructions").fill(issueResolutionTaskInstructions());
   const startButton = page.getByRole("button", { name: "Start coding run", exact: true });
@@ -659,12 +627,11 @@ export async function startCodingRun(
     response.ok(),
     `the coding-run start call failed with HTTP ${String(response.status())}`,
   ).toBe(true);
-}
-
-export async function runtimeSnapshot(page: Page): Promise<CodingWorkbenchRuntimeSnapshot> {
-  const response = await page.request.get("/api/coding-workbench/runtime/status");
-  expect(response.ok()).toBe(true);
-  return (await response.json()) as CodingWorkbenchRuntimeSnapshot;
+  const { runId } = (await response.json()) as { readonly runId?: string };
+  if (runId === undefined || runId.length === 0) {
+    throw new Error("the coding-run start did not return a run id");
+  }
+  return runId;
 }
 
 async function clickIfVisible(control: Locator): Promise<void> {
@@ -719,7 +686,7 @@ export interface DriveToDraftPrInput {
   readonly mode: CodingWorkbenchMode;
 }
 
-const DRAFT_WAIT_TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeSnapshot["state"]> = new Set([
+const DRAFT_WAIT_TERMINAL_STATES: ReadonlySet<string> = new Set([
   "taken-over",
   "failed",
   "cancelled",
@@ -727,43 +694,50 @@ const DRAFT_WAIT_TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeSnapshot["st
   "succeeded",
 ]);
 
-const UNSUCCESSFUL_TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeSnapshot["state"]> = new Set([
+const UNSUCCESSFUL_TERMINAL_STATES: ReadonlySet<string> = new Set([
   "taken-over",
   "failed",
   "cancelled",
   "recovery-required",
 ]);
 
-export async function readSnapshotWhileAwaitingDraft(
-  read: () => Promise<CodingWorkbenchRuntimeSnapshot>,
-  expectedRunId?: string,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  const snapshot = await read();
+// #3390: both guards now read what the Code task DISPLAYS, so a lane failure reads the way the
+// operator's own screen would. `diagnose` supplies the window's live status sentence and any alert
+// in place of the internal `failureCode`, which no window ever displayed -- a strictly more useful
+// failure message, and one a support bundle can be matched against.
+export async function readObservedRunWhileAwaitingDraft(
+  read: () => Promise<ObservedRun>,
+  diagnose: () => Promise<string>,
+): Promise<ObservedRun> {
+  const observed = await read();
   if (
-    (expectedRunId !== undefined && snapshot.runId !== expectedRunId) ||
-    snapshot.draftDelivery?.phase === "draft-created" ||
-    !DRAFT_WAIT_TERMINAL_STATES.has(snapshot.state)
+    observed.delivery?.phase === "draft-created" ||
+    !DRAFT_WAIT_TERMINAL_STATES.has(observed.state)
   ) {
-    return snapshot;
+    return observed;
   }
-  const runId = snapshot.runId ?? "unavailable";
-  const failure = snapshot.failureCode === undefined ? "" : ` (${snapshot.failureCode})`;
   throw new Error(
-    `coding run ${runId} reached ${snapshot.state}${failure} before creating a draft pull request`,
+    `the coding run reached ${observed.state} before creating a draft pull request -- ${await diagnose()}`,
   );
 }
 
-export async function readSnapshotWhileAwaitingSuccess(
-  read: () => Promise<CodingWorkbenchRuntimeSnapshot>,
-  expectedRunId: string,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  const snapshot = await read();
-  if (snapshot.runId !== expectedRunId) {
-    throw new Error(`coding run changed while awaiting terminal success`);
+// The run-identity guard this replaces compared a run id no window displays. Its invariant --
+// never accept ANOTHER attempt's success as this one's -- is relocated onto the fact the interface
+// does show: the delivery card must still name the pull request this flow delivered. A second run
+// would have its own delivery, or none yet.
+export async function readObservedRunWhileAwaitingSuccess(
+  read: () => Promise<ObservedRun>,
+  expectedPullRequestNumber: number,
+  diagnose: () => Promise<string>,
+): Promise<ObservedRun> {
+  const observed = await read();
+  if (observed.delivery?.pullRequest?.number !== expectedPullRequestNumber) {
+    throw new Error(
+      `the Code task stopped showing pull request #${String(expectedPullRequestNumber)} while awaiting terminal success`,
+    );
   }
-  if (!UNSUCCESSFUL_TERMINAL_STATES.has(snapshot.state)) return snapshot;
-  const failure = snapshot.failureCode === undefined ? "" : ` (${snapshot.failureCode})`;
-  throw new Error(`coding run ${expectedRunId} reached ${snapshot.state}${failure}`);
+  if (!UNSUCCESSFUL_TERMINAL_STATES.has(observed.state)) return observed;
+  throw new Error(`the coding run reached ${observed.state} -- ${await diagnose()}`);
 }
 
 /**
@@ -791,30 +765,36 @@ export async function driveIssueToDraftPullRequest(
       }),
   });
   await assertRuntimeReady(page, input.mode);
-  await startCodingRun(page, input.mode, input.issueRef);
+  const runId = await startCodingRun(page, input.mode, input.issueRef);
   await expect(workbenchSurface(page)).toHaveAttribute("data-state", "running", {
     timeout: 60_000,
   });
-  const snapshot = await waitWhileAnsweringApprovals(
+  const observed = await waitWhileAnsweringApprovals(
     page,
-    () => readSnapshotWhileAwaitingDraft(() => runtimeSnapshot(page)),
-    (value) => value.draftDelivery?.phase === "draft-created",
+    () =>
+      readObservedRunWhileAwaitingDraft(
+        () => observedRun(page),
+        () => observedDiagnosis(page),
+      ),
+    (value) => value.delivery?.phase === "draft-created",
     {
       timeoutMs: 25 * 60_000,
       message: "expected a real draft pull request to be recorded within the live run",
     },
   );
-  const runId = snapshot.runId;
-  const pullRequest = snapshot.draftDelivery?.pullRequest;
-  if (runId === undefined || pullRequest === undefined) {
-    throw new Error("expected a recorded run id and pull request after the live drive");
+  const delivery = observed.delivery;
+  const pullRequest = delivery?.pullRequest;
+  if (delivery === undefined || pullRequest === undefined) {
+    throw new Error("the Code task did not display a delivered pull request after the live drive");
   }
+  // The delivery card names the repository and both refs of the target it delivered against; the
+  // pull request link and the observed-remote facts name the created pull request itself.
   return {
     runId,
-    repository: pullRequest.repository,
+    repository: delivery.repository,
     number: pullRequest.number,
-    baseRef: pullRequest.baseRef,
-    headRef: pullRequest.headRef,
+    baseRef: delivery.baseRef,
+    headRef: delivery.headRef,
     headSha: pullRequest.headSha,
   };
 }

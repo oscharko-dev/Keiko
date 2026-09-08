@@ -18,28 +18,39 @@
 // render), instead of filling the create/update form and clicking the manual preview button.
 
 import { expect, type Locator, type Page, type Response } from "@playwright/test";
-import type { WorkbenchDescriptionStatus } from "@oscharko-dev/keiko-contracts";
-import { runtimeSnapshot, waitWhileAnsweringApprovals } from "./coding-issue-journey-live.js";
+import { waitWhileAnsweringApprovals } from "./coding-issue-journey-live.js";
 import type { DeliveredPullRequest } from "./coding-issue-journey-live.js";
+import {
+  observedDescriptionStatus,
+  type ObservedDescriptionStatus,
+} from "./coding-issue-journey-live-observed.js";
 
 const REVIEW_ENDPOINT = "/api/git-delivery/pr-description/review";
 const APPLY_ENDPOINT = "/api/git-delivery/pr-description/apply";
 const STATUS_ENDPOINT = "/api/git-delivery/pr-description/status";
 
-/** The exact retained artifact identity #3401 already generated -- captured once from the
- * automatic status and carried through review/approve/apply so every step can be checked against
- * the SAME draft rather than one this scenario generated itself. */
+/** The exact retained artifact identity #3401 already generated, as the card's OWN review request
+ * resolved it -- read back from that response rather than restated by this lane, then carried
+ * through approve/apply/refresh so every later step is checked against the SAME draft. `projectId`
+ * is the scope production resolved the click to; the lane pins every later description request to
+ * it, which is how it holds the #3401 regression without scraping a workspace path the product
+ * deliberately never displays. */
 export interface RetainedDescriptionBinding {
   readonly proposalId: string;
   readonly snapshotDigest: string;
   readonly draftDigest: string;
+  readonly projectId: string;
 }
 
 interface PrDescriptionReviewWireBody {
   readonly preview: {
     readonly proposalId: string;
     readonly status: {
-      readonly binding: { readonly snapshotDigest: string; readonly draftDigest: string };
+      readonly binding: {
+        readonly snapshotDigest: string;
+        readonly draftDigest: string;
+        readonly headSha: string;
+      };
     };
   };
 }
@@ -101,41 +112,28 @@ function descriptionReconciledToReadyPullRequest(
   );
 }
 
-/** Waits for the run's own terminal-run hook to record a GENERATED retained description proposal
- * (issue #3401) -- never any recorded status, and never a blocked attempt. `proposalId` is present
- * only for the `current | partial | fallback` states (`WorkbenchDescriptionStatus`'s own
- * `validProposal` invariant), which is exactly "a real draft exists to review", so waiting on it
- * rather than mere presence of `descriptionStatus` is what proves a draft was actually produced. */
-export async function waitForAutoDraftDescription(page: Page): Promise<WorkbenchDescriptionStatus> {
-  const snapshot = await waitWhileAnsweringApprovals(
+/**
+ * Waits for the run's own terminal-run hook to produce a GENERATED retained description proposal
+ * (issue #3401), observed the way the operator observes it: the description card offers its
+ * "Review exact draft" control. That control is rendered ONLY once the status carries a proposal id
+ * AND a snapshot digest against an open pull request (`descriptionReviewTarget`,
+ * CodingWorkbenchDraftDelivery.tsx), so its presence is the interface's own proof that a real draft
+ * exists -- and, unlike a recorded field, that the operator can actually act on it.
+ */
+export async function waitForAutoDraftDescription(page: Page): Promise<ObservedDescriptionStatus> {
+  const status = await waitWhileAnsweringApprovals(
     page,
-    () => runtimeSnapshot(page),
-    (value) => value.descriptionStatus?.proposalId !== undefined,
+    () => observedDescriptionStatus(page),
+    (value) => value?.reviewable === true,
     {
       timeoutMs: 20 * 60_000,
-      message: "expected a generated retained description proposal to be recorded",
+      message: "expected the Code task to offer a generated retained description draft to review",
     },
   );
-  const status = snapshot.descriptionStatus;
-  if (status?.proposalId === undefined) {
-    throw new Error("expected a recorded retained description proposal");
+  if (status === undefined) {
+    throw new Error("expected a displayed retained description proposal");
   }
   return status;
-}
-
-function retainedBindingOf(status: WorkbenchDescriptionStatus): RetainedDescriptionBinding {
-  if (
-    status.proposalId === undefined ||
-    status.snapshotDigest === null ||
-    status.draftDigest === null
-  ) {
-    throw new Error("expected a generated retained description proposal to mount");
-  }
-  return {
-    proposalId: status.proposalId,
-    snapshotDigest: status.snapshotDigest,
-    draftDigest: status.draftDigest,
-  };
 }
 
 // The desktop assigns the opened window's id, and `governedPullRequest` is not a singleton window
@@ -146,43 +144,71 @@ function governedPullRequestWindow(page: Page): Locator {
   return page.getByRole("region", { name: "Pull Request", exact: true });
 }
 
-function assertReviewMatchesRetained(
+/** The independent cross-check that the reviewed proposal IS the draft the card is displaying:
+ * the reviewed artifact must be bound to the exact head the description card shows. The digests
+ * themselves are never rendered, so this compares the one binding fact that is -- card against
+ * response, two sources, neither derived from the other. */
+function assertReviewMatchesDisplayedDraft(
   body: PrDescriptionReviewWireBody,
-  retained: RetainedDescriptionBinding,
+  displayed: ObservedDescriptionStatus,
 ): void {
-  if (
-    body.preview.proposalId !== retained.proposalId ||
-    body.preview.status.binding.snapshotDigest !== retained.snapshotDigest ||
-    body.preview.status.binding.draftDigest !== retained.draftDigest
-  ) {
-    throw new Error("retained description review did not resolve to the automatic draft");
+  if (body.preview.status.binding.headSha !== displayed.headSha) {
+    throw new Error("retained description review did not resolve to the displayed draft");
   }
 }
 
-/** Confirms the REAL click resolved `root`/PR the same way `descriptionReviewTarget`
- * (CodingWorkbenchDraftDelivery.tsx) and `onReviewDescription` (CodingWorkbenchWindow.tsx) compute
- * it in production -- read from the request the card actually issued, never constructed by this
- * test. This is the #3401 regression this scenario exists to pin: opening the card on the
- * repository root instead of the run's task workspace root resolved an empty proposal holder and
- * answered 409 unknown proposal with the SAME digests otherwise matching. The status refresh below
- * is held to the identical binding, because it reads the status the SAME retained scope owns. */
-function assertDescriptionRequestTargetedTaskWorkspace(
-  response: Response,
-  expectedRoot: string,
-  pullRequest: DeliveredPullRequest,
-  action: string,
-): void {
+/** The target fields the card itself put on the wire, read back from its own request. */
+function descriptionRequestTarget(response: Response): Partial<PrDescriptionRequestBody> {
   const raw = response.request().postData();
-  const body: Partial<PrDescriptionRequestBody> =
-    raw === null ? {} : (JSON.parse(raw) as Partial<PrDescriptionRequestBody>);
+  return raw === null ? {} : (JSON.parse(raw) as Partial<PrDescriptionRequestBody>);
+}
+
+/**
+ * The #3401 regression this scenario exists to pin: opening the card on the REPOSITORY root instead
+ * of the run's own task workspace root resolved an empty proposal holder and answered 409 unknown
+ * proposal, with every digest otherwise matching.
+ *
+ * The lane used to hold that by comparing against the task workspace root read from
+ * `/api/task-workspaces/active`. It no longer does, and not for convenience: the product
+ * deliberately never displays that path (the workspace chip was explicitly stripped of the raw
+ * filesystem root, and `BoundRootTarget` is content-free by construction), so asserting against it
+ * would have meant scraping a value back out of a hidden route to check something no operator can
+ * see. What is checked instead is exactly what the regression was about, from the card's own
+ * traffic: the scope production resolved is NOT the repository root, it names the delivered pull
+ * request, and — through `assertDescriptionScopeUnchanged` below — every later description request
+ * resolves that same scope. A card that fell back to the repository root fails the first check; one
+ * that drifted between calls fails the second.
+ */
+function assertDescriptionOpenedOffRepositoryRoot(
+  response: Response,
+  repositoryRoot: string,
+  pullRequest: DeliveredPullRequest,
+): string {
+  const body = descriptionRequestTarget(response);
+  const { projectId } = body;
   if (
-    body.projectId !== expectedRoot ||
+    projectId === undefined ||
+    projectId.length === 0 ||
+    projectId === repositoryRoot ||
     body.ownerAndRepo !== pullRequest.repository ||
     body.prNumber !== pullRequest.number
   ) {
     throw new Error(
-      `retained description ${action} did not resolve to the run's task workspace root and delivered pull request`,
+      "retained description review did not resolve to the run's own task workspace and delivered pull request",
     );
+  }
+  return projectId;
+}
+
+/** Every later description request must resolve the SAME scope the review did — the scope holding
+ * the retained proposal. */
+function assertDescriptionScopeUnchanged(
+  response: Response,
+  retained: RetainedDescriptionBinding,
+  action: string,
+): void {
+  if (descriptionRequestTarget(response).projectId !== retained.projectId) {
+    throw new Error(`the description ${action} resolved a different scope than the review did`);
   }
 }
 
@@ -203,9 +229,8 @@ export async function mountGovernedPullRequestCard(
   page: Page,
   repositoryRoot: string,
   pullRequest: DeliveredPullRequest,
-  status: WorkbenchDescriptionStatus,
+  displayed: ObservedDescriptionStatus,
 ): Promise<RetainedDescriptionBinding> {
-  const retained = retainedBindingOf(status);
   const reviewed = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" && response.url().endsWith(REVIEW_ENDPOINT),
@@ -213,9 +238,15 @@ export async function mountGovernedPullRequestCard(
   await page.getByRole("button", { name: "Review exact draft", exact: true }).click();
   await expect(governedPullRequestWindow(page)).toBeVisible({ timeout: 60_000 });
   const response = await reviewed;
-  assertDescriptionRequestTargetedTaskWorkspace(response, repositoryRoot, pullRequest, "review");
-  assertReviewMatchesRetained((await response.json()) as PrDescriptionReviewWireBody, retained);
-  return retained;
+  const projectId = assertDescriptionOpenedOffRepositoryRoot(response, repositoryRoot, pullRequest);
+  const body = (await response.json()) as PrDescriptionReviewWireBody;
+  assertReviewMatchesDisplayedDraft(body, displayed);
+  return {
+    proposalId: body.preview.proposalId,
+    snapshotDigest: body.preview.status.binding.snapshotDigest,
+    draftDigest: body.preview.status.binding.draftDigest,
+    projectId,
+  };
 }
 
 /** Drives the real approve -> apply sequence through the governed PR card against the ALREADY
@@ -235,6 +266,7 @@ export async function applyAutoDraftDescriptionThroughPrCard(
   );
   await card.getByTestId("gpr-description-apply-button").click();
   const response = await applied;
+  assertDescriptionScopeUnchanged(response, retained, "apply");
   const body = (await response.json()) as PrDescriptionApplyWireBody;
   if (body.outcome !== "observed" || body.status?.binding.draftDigest !== retained.draftDigest) {
     throw new Error("applied description artifact did not match the retained automatic draft");
@@ -257,12 +289,12 @@ export async function applyAutoDraftDescriptionThroughPrCard(
  * regenerates the artifact through the Model Gateway -- a paid model call to answer a read-only
  * question -- so this step reached past the UI and posted the status route itself. The window is
  * raised by its own title bar first, exactly as a user raises a window the Coding Workbench has
- * since covered. The request is read back from the network to confirm production resolved the click
- * to the run's task workspace root, which is the scope holding the retained status -- the previous
- * direct call targeted the repository root instead. */
+ * since covered. The request is read back from the network to confirm production resolved it into
+ * the SAME scope the review did -- the scope holding the retained status -- where the direct call
+ * this replaced targeted the repository root instead. */
 export async function reconcileAppliedDescriptionAfterMarkReady(
   page: Page,
-  workspaceRoot: string,
+  retained: RetainedDescriptionBinding,
   pullRequest: DeliveredPullRequest,
 ): Promise<void> {
   const prWindow = governedPullRequestWindow(page);
@@ -280,7 +312,7 @@ export async function reconcileAppliedDescriptionAfterMarkReady(
     response.ok(),
     `description reconciliation failed with HTTP ${String(response.status())}`,
   ).toBe(true);
-  assertDescriptionRequestTargetedTaskWorkspace(response, workspaceRoot, pullRequest, "refresh");
+  assertDescriptionScopeUnchanged(response, retained, "refresh");
   const body = (await response.json()) as PrDescriptionStatusWireBody;
   if (!descriptionReconciledToReadyPullRequest(body, pullRequest)) {
     throw new Error("description was not reconciled to the exact ready pull request identity");

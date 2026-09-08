@@ -2,7 +2,7 @@
 // selectable journey rows and the corresponding stages of each five-flow qualification drive.
 
 import type { CodingWorkbenchMode, JourneyOutcome } from "@oscharko-dev/keiko-contracts";
-import type { WorkbenchDescriptionStatus } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
+import type { ObservedDescriptionStatus } from "./coding-issue-journey-live-observed.js";
 import type { DeliveredPullRequest } from "./coding-issue-journey-live.js";
 import {
   evaluateCiRepairLoopOutcome,
@@ -51,7 +51,7 @@ export function ciRepairAssertions(outcome: CiRepairOutcome): readonly string[] 
 }
 
 export function descriptionAssertions(
-  status: WorkbenchDescriptionStatus,
+  status: ObservedDescriptionStatus,
   retained: RetainedDescriptionBinding,
 ): readonly string[] {
   return [

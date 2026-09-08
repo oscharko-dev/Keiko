@@ -1,29 +1,48 @@
-import type {
-  CodingWorkbenchRuntimeSnapshot,
-  ModelCapability,
-} from "@oscharko-dev/keiko-contracts";
+import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
   prepareBoundIssueForRun,
   prepareTrustedIssueWorkspace,
   qualifyLiveModel,
-  readSnapshotWhileAwaitingDraft,
-  readSnapshotWhileAwaitingSuccess,
+  readObservedRunWhileAwaitingDraft,
+  readObservedRunWhileAwaitingSuccess,
   reconcileLiveWorkbenchAfterModelChange,
   registerTrustedRepositoryProject,
 } from "./coding-issue-journey-live.js";
+import type { ObservedRun } from "./coding-issue-journey-live-observed.js";
 
-function runtimeSnapshot(
-  state: CodingWorkbenchRuntimeSnapshot["state"],
-  override: Partial<CodingWorkbenchRuntimeSnapshot> = {},
-): CodingWorkbenchRuntimeSnapshot {
+const DIAGNOSIS = "Running. Revision 1.";
+const diagnose = (): Promise<string> => Promise.resolve(DIAGNOSIS);
+
+/** One reading of the Code task, as the observation layer reports it. */
+function observedRun(state: string, override: Partial<ObservedRun> = {}): ObservedRun {
   return {
-    schemaVersion: "1",
     state,
-    revision: 1,
-    updatedAt: "2026-09-06T16:51:00.000Z",
-    runId: "run-terminal",
+    delivery: undefined,
+    description: undefined,
+    ciReadiness: undefined,
+    commitReceipt: undefined,
     ...override,
+  };
+}
+
+function deliveredDraft(phase = "draft-created", number = 1): ObservedRun["delivery"] {
+  return {
+    phase,
+    reason: "completed",
+    repository: "owner/repository",
+    issueNumber: 1,
+    headRef: "keiko/task",
+    headSha: "4".repeat(40),
+    baseRef: "master",
+    baseSha: "3".repeat(40),
+    proposalId: "pull-request-1",
+    pullRequest: {
+      number,
+      url: `https://example.test/pull/${String(number)}`,
+      headSha: "4".repeat(40),
+      baseSha: "3".repeat(40),
+    },
   };
 }
 
@@ -31,63 +50,21 @@ describe("live journey draft wait", () => {
   it.each(["taken-over", "failed", "cancelled", "recovery-required", "succeeded"] as const)(
     "stops after one read when the live run reaches %s without a draft",
     async (state) => {
-      const read = vi.fn(() => Promise.resolve(runtimeSnapshot(state)));
+      const read = vi.fn(() => Promise.resolve(observedRun(state)));
 
-      await expect(readSnapshotWhileAwaitingDraft(read)).rejects.toThrow(
-        `coding run run-terminal reached ${state} before creating a draft pull request`,
+      await expect(readObservedRunWhileAwaitingDraft(read, diagnose)).rejects.toThrow(
+        `the coding run reached ${state} before creating a draft pull request -- ${DIAGNOSIS}`,
       );
       expect(read).toHaveBeenCalledOnce();
     },
   );
 
   it("retains a created draft when the runtime becomes terminal later", async () => {
-    const snapshot = runtimeSnapshot("failed", {
-      failureCode: "runtime-failed",
-      draftDelivery: {
-        schemaVersion: "1",
-        revision: 1,
-        phase: "draft-created",
-        reason: "completed",
-        proposalId: "pull-request-1",
-        proposalDigest: "b".repeat(64),
-        recordedAt: "2026-09-06T16:51:00.000Z",
-        binding: {
-          runId: "run-terminal",
-          workspaceDigest: "c".repeat(64),
-          runtimeAuthorityDigest: "d".repeat(64),
-          envelopeDigest: "e".repeat(64),
-          remoteDigest: "f".repeat(64),
-          issueBindingDigest: "1".repeat(64),
-          issueIdDigest: "2".repeat(64),
-          issueNumber: 1,
-          repository: "owner/repository",
-          remoteAlias: "origin",
-          baseRef: "master",
-          baseSha: "3".repeat(40),
-          headRef: "keiko/task",
-          headSha: "4".repeat(40),
-          verifiedCommitProposalId: "commit-1",
-          recoveryId: "delivery-1",
-        },
-        pullRequest: {
-          number: 1,
-          externalId: "PR_1",
-          url: "https://example.test/pull/1",
-          repository: "owner/repository",
-          headRepository: "owner/repository",
-          headRef: "keiko/task",
-          headSha: "4".repeat(40),
-          baseRef: "master",
-          baseSha: "3".repeat(40),
-          state: "open",
-          isDraft: true,
-        },
-      },
-    });
+    const observed = observedRun("failed", { delivery: deliveredDraft() });
 
-    await expect(readSnapshotWhileAwaitingDraft(() => Promise.resolve(snapshot))).resolves.toBe(
-      snapshot,
-    );
+    await expect(
+      readObservedRunWhileAwaitingDraft(() => Promise.resolve(observed), diagnose),
+    ).resolves.toBe(observed);
   });
 });
 
@@ -95,31 +72,49 @@ describe("live journey terminal-success wait", () => {
   it.each(["running", "paused", "succeeded"] as const)(
     "keeps the exact run available while it is %s",
     async (state) => {
-      const snapshot = runtimeSnapshot(state);
+      const observed = observedRun(state, { delivery: deliveredDraft() });
       await expect(
-        readSnapshotWhileAwaitingSuccess(() => Promise.resolve(snapshot), "run-terminal"),
-      ).resolves.toBe(snapshot);
+        readObservedRunWhileAwaitingSuccess(() => Promise.resolve(observed), 1, diagnose),
+      ).resolves.toBe(observed);
     },
   );
 
   it.each(["taken-over", "failed", "cancelled", "recovery-required"] as const)(
     "fails promptly when the exact run reaches %s",
     async (state) => {
-      const read = vi.fn(() => Promise.resolve(runtimeSnapshot(state)));
-      await expect(readSnapshotWhileAwaitingSuccess(read, "run-terminal")).rejects.toThrow(
-        `coding run run-terminal reached ${state}`,
+      const read = vi.fn(() => Promise.resolve(observedRun(state, { delivery: deliveredDraft() })));
+      await expect(readObservedRunWhileAwaitingSuccess(read, 1, diagnose)).rejects.toThrow(
+        `the coding run reached ${state} -- ${DIAGNOSIS}`,
       );
       expect(read).toHaveBeenCalledOnce();
     },
   );
 
-  it("rejects a different run instead of accepting its success", async () => {
+  // #3390: this pin used to compare a run id no window displays ("rejects a different run instead
+  // of accepting its success"). Its invariant -- never accept another attempt's success as this
+  // one's -- is unchanged, held against the fact the interface DOES show: the delivery card must
+  // still name the pull request this flow delivered.
+  it("rejects a success the Code task no longer shows this pull request for", async () => {
     await expect(
-      readSnapshotWhileAwaitingSuccess(
-        () => Promise.resolve(runtimeSnapshot("succeeded", { runId: "run-other" })),
-        "run-terminal",
+      readObservedRunWhileAwaitingSuccess(
+        () =>
+          Promise.resolve(
+            observedRun("succeeded", { delivery: deliveredDraft("draft-created", 2) }),
+          ),
+        1,
+        diagnose,
       ),
-    ).rejects.toThrow("coding run changed while awaiting terminal success");
+    ).rejects.toThrow("stopped showing pull request #1");
+  });
+
+  it("rejects a success the Code task shows no delivery for at all", async () => {
+    await expect(
+      readObservedRunWhileAwaitingSuccess(
+        () => Promise.resolve(observedRun("succeeded")),
+        1,
+        diagnose,
+      ),
+    ).rejects.toThrow("stopped showing pull request #1");
   });
 });
 
@@ -305,9 +300,7 @@ describe("live journey model-change reload", () => {
 
   it("waits for the pre-reload task workspace identity after the workbench renders", async () => {
     const identity = {
-      workspaceId: "ws-1",
-      taskId: "issue-1",
-      taskBranch: "keiko/issue-1",
+      taskControlName: "Task workspaces: issue-1",
       repositoryControlName: "Manage repository ws-1",
       branchControlName: "Manage branch keiko/issue-1",
     };
@@ -343,9 +336,7 @@ describe("live journey model-change reload", () => {
 
   it("does not reload when the model profile was already qualified", async () => {
     const identity = {
-      workspaceId: null,
-      taskId: null,
-      taskBranch: null,
+      taskControlName: "Task workspaces: no active workspace",
       repositoryControlName: "Manage repository fixture",
       branchControlName: "Manage branch master",
     };
