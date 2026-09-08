@@ -34,6 +34,7 @@ import type { PrDescription } from "@oscharko-dev/keiko-model-gateway";
 import { PR_DESCRIPTION_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 import { GITHUB_ISSUE_NUMBER_MAX } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import { isGitHubIssueReaderAuthorized } from "../coding-context/githubIssueReaderAuthorization.js";
 import type { GitPullRequestBodyAdapter } from "@oscharko-dev/keiko-tools";
 import { createNodeGitPullRequestAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
@@ -80,7 +81,8 @@ export type GitDeliveryPrDescriptionErrorCode =
   | "GIT_DELIVERY_PR_DESCRIPTION_UNAVAILABLE"
   | "GIT_DELIVERY_PR_DESCRIPTION_UNKNOWN_PROPOSAL"
   | "GIT_DELIVERY_PR_DESCRIPTION_MODEL_EGRESS_DENIED"
-  | "GIT_DELIVERY_PR_DESCRIPTION_REPOSITORY_MISMATCH";
+  | "GIT_DELIVERY_PR_DESCRIPTION_REPOSITORY_MISMATCH"
+  | "GIT_DELIVERY_PR_DESCRIPTION_READER_UNAUTHORIZED";
 
 const SAFE_MESSAGES: Readonly<Record<GitDeliveryPrDescriptionErrorCode, string>> = {
   GIT_DELIVERY_PR_DESCRIPTION_BAD_REQUEST:
@@ -99,6 +101,8 @@ const SAFE_MESSAGES: Readonly<Record<GitDeliveryPrDescriptionErrorCode, string>>
   // #3384 B5-8: the workspace's own `origin` remote does not resolve to the requested repository.
   GIT_DELIVERY_PR_DESCRIPTION_REPOSITORY_MISMATCH:
     "The requested repository does not match this project's own Git remote.",
+  GIT_DELIVERY_PR_DESCRIPTION_READER_UNAUTHORIZED:
+    "Reading this repository's pull requests is not authorized for this checkout.",
 };
 
 const errResult = (status: number, code: GitDeliveryPrDescriptionErrorCode): RouteResult => ({
@@ -463,6 +467,92 @@ interface DescriptionContextProviderOptions {
   readonly authorityScope?: GitDeliveryDescriptionAuthorityScope;
 }
 
+// The reader grant is the one admission a read-only observation needs (ADR-0086 D10, #3390): the
+// same per-checkout grant `isGitHubIssueReaderAuthorized` applies for every other provider read.
+// Its identity digest scopes the service instance to the checkout, never to a run or an authority.
+function admitDescriptionReader(
+  deps: UiHandlerDeps,
+  workspace: WorkspaceInfo,
+  correlationId: string,
+  logSink: ServerLogSink,
+):
+  | { readonly allowed: true; readonly scope: AdmittedScope }
+  | { readonly allowed: false; readonly result: RouteResult } {
+  if (
+    !isGitHubIssueReaderAuthorized(deps, workspace.root, { correlationId, activityLog: logSink })
+  ) {
+    return {
+      allowed: false,
+      result: errResult(403, "GIT_DELIVERY_PR_DESCRIPTION_READER_UNAUTHORIZED"),
+    };
+  }
+  return {
+    allowed: true,
+    scope: { runId: undefined, authorityDigest: readerAuthorityDigest(workspace) },
+  };
+}
+
+function readerAuthorityDigest(workspace: WorkspaceInfo): string {
+  return sha256Hex(
+    canonicalise({ domain: "keiko-pr-description-reader-v1", repositoryRoot: workspace.root }),
+  );
+}
+
+function readerContextProvider({
+  deps,
+  request,
+  workspace,
+  correlationId,
+  logSink,
+  key,
+}: Omit<DescriptionContextProviderOptions, "ctx" | "authorityScope">): () =>
+  PrDescriptionContext | undefined {
+  const accessScope = { key };
+  const authorized = (): boolean =>
+    isGitHubIssueReaderAuthorized(deps, workspace.root, { correlationId, activityLog: logSink });
+  return (): PrDescriptionContext | undefined => {
+    if (!authorized()) return undefined;
+    return {
+      workspace,
+      repository: request.ownerAndRepo,
+      prNumber: request.prNumber,
+      accessScope,
+      authorityDigest: readerAuthorityDigest(workspace),
+      correlationId,
+      stillAuthorized: authorized,
+    };
+  };
+}
+
+// One place chooses the admission source and the context that re-derives it per call, so the two
+// can never disagree: a route admitted as a reader is re-checked as a reader, and a route admitted
+// by the delivery authority is re-checked against that authority.
+function admitForRoute(
+  admission: DescriptionAdmission,
+  input: Omit<DescriptionContextProviderOptions, "key" | "authorityScope">,
+):
+  | {
+      readonly allowed: true;
+      readonly key: string;
+      readonly contextProvider: () => PrDescriptionContext | undefined;
+    }
+  | { readonly allowed: false; readonly result: RouteResult } {
+  const { ctx, deps, request, workspace, correlationId, logSink } = input;
+  const admitted =
+    admission === "reader"
+      ? admitDescriptionReader(deps, workspace, correlationId, logSink)
+      : admitDescription(ctx, deps, request, workspace, logSink);
+  if (!admitted.allowed) return admitted;
+  const identity =
+    admitted.scope.runId ?? (admission === "reader" ? "reader" : "description-authority");
+  const key = cacheKey(request, `${identity}:${admitted.scope.authorityDigest}`);
+  const contextProvider =
+    admission === "reader"
+      ? readerContextProvider({ deps, request, workspace, correlationId, logSink, key })
+      : descriptionContextProvider({ ...input, key });
+  return { allowed: true, key, contextProvider };
+}
+
 function descriptionContextProvider({
   ctx,
   deps,
@@ -656,12 +746,23 @@ export function resolvePrDescriptionApplicationServiceForRequest(
     : { ok: true, service };
 }
 
+/**
+ * #3390: which admission a route needs. Preview, review, approve and apply CHANGE the pull request
+ * and are admitted by the delivery authority (a running run, or the bounded description authority).
+ * The status refresh only READS the remote body and persists what it observed -- the same class of
+ * effect as the Issue handoff's refresh -- so it is admitted by the per-checkout GitHub-reader grant
+ * alone. Routing it through the mutation gate refused every refresh once the run had settled, which
+ * is exactly when an operator reconciles a description against the now-ready pull request.
+ */
+type DescriptionAdmission = "mutation" | "reader";
+
 async function prepare<V extends BaseFields>(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   options: PrDescriptionRouteOptions,
   correlationId: string,
   validate: (parsed: unknown) => Validation<V>,
+  admission: DescriptionAdmission = "mutation",
 ): Promise<
   | { readonly ok: true; readonly value: PreparedPrDescriptionRequest<V> }
   | { readonly ok: false; readonly result: RouteResult }
@@ -685,19 +786,9 @@ async function prepare<V extends BaseFields>(
     logRepositoryMismatch(logSink, correlationId);
     return { ok: false, result: errResult(403, "GIT_DELIVERY_PR_DESCRIPTION_REPOSITORY_MISMATCH") };
   }
-  const admitted = admitDescription(ctx, deps, request, workspace, logSink);
-  if (!admitted.allowed) return { ok: false, result: admitted.result };
-  const authorityIdentity = `${admitted.scope.runId ?? "description-authority"}:${admitted.scope.authorityDigest}`;
-  const key = cacheKey(request, authorityIdentity);
-  const contextProvider = descriptionContextProvider({
-    ctx,
-    deps,
-    request,
-    workspace,
-    correlationId,
-    logSink,
-    key,
-  });
+  const gate = admitForRoute(admission, { ctx, deps, request, workspace, correlationId, logSink });
+  if (!gate.allowed) return { ok: false, result: gate.result };
+  const { key, contextProvider } = gate;
   const service = serviceFor(options, deps, seams, workspace, key, contextProvider);
   if (service === undefined) return { ok: false, result: unavailableService() };
   return { ok: true, value: { value: request, workspace, service, context: contextProvider } };
@@ -884,7 +975,7 @@ export const createHandlePrDescriptionStatus = (
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   return async (ctx, deps): Promise<RouteResult> => {
     const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-    const prepared = await prepare(ctx, deps, options, correlationId, validateStatus);
+    const prepared = await prepare(ctx, deps, options, correlationId, validateStatus, "reader");
     if (!prepared.ok) return prepared.result;
     const { service } = prepared.value;
     const result = await service.reconcile();

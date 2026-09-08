@@ -11,6 +11,7 @@
 //   * The apply-lifecycle op literals are emitted with correlation, body-free.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -472,6 +473,29 @@ describe("pr-description routes — validation (#3399)", () => {
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({
       error: { code: "GIT_DELIVERY_PR_DESCRIPTION_BAD_REQUEST" },
+    });
+  });
+
+  // #3390: the status refresh is a READ -- it re-observes the remote body and persists the
+  // observation -- so it is admitted by the per-checkout GitHub-reader grant alone, like the Issue
+  // handoff's refresh, never by the delivery authority. Routing it through the mutation gate refused
+  // every refresh once the run had settled (rehearsal run-08: 403 `accepted-run-unavailable` on the
+  // reconcile after ready-for-review), which is exactly when an operator reconciles the description.
+  it("admits the status refresh through the GitHub reader grant when no run is active", async () => {
+    const repositoryId = githubIssueReaderRepositoryId(projectId);
+    if (repositoryId === undefined) throw new Error("fixture project must resolve a repository id");
+    store.updateGitHubIssueReaderAuthorization(repositoryId, true, 0);
+    const handler = createHandlePrDescriptionStatus(optionsWithFixtureService());
+    const res = await handler(ctxFor(STATUS, body()), deps({ gitDeliveryAuthority: undefined }));
+    expect(res.status).toBe(200);
+  });
+
+  it("refuses the status refresh without the GitHub reader grant, whatever run is active", async () => {
+    const handler = createHandlePrDescriptionStatus(optionsWithFixtureService());
+    const res = await handler(ctxFor(STATUS, body()), deps());
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_PR_DESCRIPTION_READER_UNAUTHORIZED" },
     });
   });
 

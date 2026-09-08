@@ -255,7 +255,12 @@ settled `succeeded` with its draft pull request in place answers; a pull request
 delivered, a moved head, or a plain create/update finds nothing and fails closed with the same
 `accepted-run-unavailable` a missing run produces. The run-bound gate had made both operations
 unreachable in the one state they are needed in, since the run settles the moment its draft pull
-request exists.
+request exists. The description **status** refresh is a
+read -- it re-observes the remote body and persists the observation -- and is therefore admitted by
+the per-checkout GitHub-reader grant alone, exactly like the Issue handoff's refresh, never by the
+delivery authority; routing it through the mutation gate had refused every refresh once the run had
+settled, which is precisely when an operator reconciles the description against the now-ready pull
+request.
 
 ### D11 — A dedicated `pr-mark-ready` action kind and approval operation close the approval-less draft->ready transition; no title/body/base PATCH is bundled with the mutation (#3389, epic #3384 corrections 1/2/7)
 
