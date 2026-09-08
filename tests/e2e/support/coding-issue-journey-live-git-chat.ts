@@ -16,6 +16,7 @@ import {
   openGovernedGitWindow,
   openLiveWorkbench,
   openSettingsTab,
+  raiseWindow,
 } from "./coding-issue-journey-live.js";
 import { fetchGitChangeScopes } from "./git-change-chat-3400.js";
 
@@ -335,6 +336,10 @@ export async function refineDescriptionOverChat(
   turns: readonly string[],
 ): Promise<void> {
   const chatWindow = page.locator(CHAT_WINDOW);
+  // The Git window the operator just used stays on top and covers the composer (the probe
+  // rehearsal of 2026-09-08 retried the click for 30 s against it); bring Chat forward first, the
+  // way an operator does.
+  await raiseWindow(page, chatWindow, "Chat");
   for (const message of turns) {
     const composer = chatWindow.getByRole("textbox", { name: "Chat message" });
     await composer.click();
@@ -352,6 +357,7 @@ export async function refineDescriptionOverChat(
  * ending in a real GitHub PATCH of the pull request body. */
 export async function reviewApproveApplyGitChangeDescription(page: Page): Promise<void> {
   const chatWindow = page.locator(CHAT_WINDOW);
+  await raiseWindow(page, chatWindow, "Chat");
   await chatWindow.getByTestId("git-change-description-preview").click();
   await expect(chatWindow.getByTestId("git-change-description-preview-body")).toBeVisible({
     timeout: 120_000,
