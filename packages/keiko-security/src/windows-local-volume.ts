@@ -49,7 +49,7 @@ while (-not [IO.Directory]::Exists($p)) {
   $p = $parent
 }
 try {
-  $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly((New-Object Reflection.AssemblyName('KeikoLocalVolume')), [Reflection.Emit.AssemblyBuilderAccess]::Run)
+  $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly([Reflection.AssemblyName]::new('KeikoLocalVolume'), [Reflection.Emit.AssemblyBuilderAccess]::Run)
   $module = $assembly.DefineDynamicModule('KeikoLocalVolume')
   $type = $module.DefineType('KeikoLocalVolumeApi', [Reflection.TypeAttributes]'Public, Abstract, Sealed')
   $attributes = [Reflection.MethodAttributes]'Public, Static, PinvokeImpl'
@@ -76,13 +76,13 @@ try {
     try {
       if (-not $tagInfo.Invoke($null, @($handle, [int]9, $tag, [uint32]8)) -or (([Runtime.InteropServices.Marshal]::ReadInt32($tag, 0) -band 0x400) -ne 0)) { exit 1 }
     } finally { [Runtime.InteropServices.Marshal]::FreeHGlobal($tag) }
-    $final = New-Object Text.StringBuilder 32768
+    $final = [Text.StringBuilder]::new(32768)
     $length = $finalName.Invoke($null, @($handle, $final, [uint32]$final.Capacity, [uint32]0))
     if ($length -eq 0 -or $length -ge $final.Capacity) { exit 1 }
     $canonical = $final.ToString()
     if ($canonical.StartsWith('\\?\')) { $canonical = $canonical.Substring(4) }
     if (-not $canonical.TrimEnd('\').Equals($p.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) { exit 1 }
-    $volume = New-Object Text.StringBuilder 32768
+    $volume = [Text.StringBuilder]::new(32768)
     if (-not $volumePath.Invoke($null, @($p, $volume, [uint32]$volume.Capacity))) { exit 1 }
     $kind = $driveType.Invoke($null, @($volume.ToString()))
     if ($kind -ne 2 -and $kind -ne 3 -and $kind -ne 6) { exit 1 }

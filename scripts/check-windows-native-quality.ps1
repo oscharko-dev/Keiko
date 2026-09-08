@@ -226,11 +226,7 @@ const security = await import("@oscharko-dev/keiko-security/windows-local-volume
 security.assertWindowsLocalVolume(process.argv[1]);
 '@
     node --input-type=module -e $securityPositive $scratch
-    if ($LASTEXITCODE -ne 0) {
-      $diagnostic = node scripts/__tests__/windows-local-volume-diagnostic.mjs $scratch
-      if ($LASTEXITCODE -ne 0) { throw "Shared Windows locality authority rejected a local root (diagnostic unavailable)" }
-      throw "Shared Windows locality authority rejected a local root ($diagnostic)"
-    }
+    if ($LASTEXITCODE -ne 0) { throw "Shared Windows locality authority rejected a local root" }
     $securityNegative = @'
 const security = await import("@oscharko-dev/keiko-security/windows-local-volume");
 try { security.assertWindowsLocalVolume(process.argv[1]); } catch { process.exit(0); }
