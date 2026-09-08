@@ -36,6 +36,7 @@ const listMock = vi.hoisted(() => vi.fn());
 const repairMock = vi.hoisted(() => vi.fn());
 const baseBranchMock = vi.hoisted(() => vi.fn());
 const previewMock = vi.hoisted(() => vi.fn());
+const githubGrantMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
@@ -48,6 +49,10 @@ vi.mock("@/lib/task-workspace-api", () => ({
   listTaskWorkspaces: listMock,
   repairTaskWorkspace: repairMock,
   fetchRepositoryBaseBranch: baseBranchMock,
+}));
+
+vi.mock("../../hooks/useGitHubIssueReaderAuthorization", () => ({
+  useGitHubIssueReaderAuthorization: githubGrantMock,
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -87,6 +92,34 @@ function previewResponse(
       defaultBaseRef: "dev",
       bindingDigest: "e".repeat(64),
     },
+  };
+}
+
+// The settled, ungranted reading of the per-repository GitHub issue-reader grant (#3385) — the
+// state a repository is in when the issue preview refuses with `auth-required`.
+function grantState(
+  overrides: Partial<ReturnType<typeof baseGrant>> = {},
+): ReturnType<typeof baseGrant> {
+  return { ...baseGrant(), ...overrides };
+}
+
+function baseGrant(): {
+  repositoryId: string | null;
+  authorized: boolean;
+  revision: number;
+  pending: boolean;
+  error: null | "hydrate" | "persist" | "conflict" | "unknown-repository";
+  change: (authorized: boolean) => void;
+  reload: () => void;
+} {
+  return {
+    repositoryId: "repo-1",
+    authorized: false,
+    revision: 3,
+    pending: false,
+    error: null,
+    change: vi.fn(),
+    reload: vi.fn(),
   };
 }
 
@@ -302,11 +335,13 @@ describe("CodingWorkbenchSetup issue intake (#3385)", () => {
       repairMock,
       baseBranchMock,
       previewMock,
+      githubGrantMock,
     ]) {
       mock.mockReset();
     }
     baseBranchMock.mockResolvedValue(null);
     previewMock.mockResolvedValue(previewResponse());
+    githubGrantMock.mockReturnValue(grantState());
   });
 
   afterEach(() => {
@@ -702,6 +737,72 @@ describe("CodingWorkbenchSetup issue intake (#3385)", () => {
     expect(screen.getByLabelText("Target branch")).toBeInTheDocument();
   });
 
+  // #3390: reading an issue requires this repository's issue-reader grant, so without it the very
+  // first action in this window fails. The only control for it lived in Settings, which resolves
+  // its own bound root — and at this point no task workspace exists, so that root is not this
+  // repository, leaving the refusal's own advice unreachable. The grant is offered where the wall
+  // is hit, for the exact path this intake is bound to.
+  it("offers the GitHub issue-access grant for the bound repository when access is missing", async () => {
+    const user = userEvent.setup();
+    const change = vi.fn();
+    githubGrantMock.mockReturnValue(grantState({ change }));
+    previewMock.mockRejectedValue(refusal("auth-required", 403));
+    renderWorkbench(workspaceApi());
+
+    await enterRepositoryAndIssue(user);
+    await user.click(previewButton());
+    await screen.findByTestId("coding-workbench-issue-alert");
+
+    expect(githubGrantMock).toHaveBeenCalledWith(REPOSITORY_PATH);
+    await user.click(screen.getByRole("button", { name: "Enable GitHub issue access" }));
+    expect(change).toHaveBeenCalledWith(true);
+  });
+
+  it("keeps the grant control out of every refusal that is not about access", async () => {
+    const user = userEvent.setup();
+    previewMock.mockRejectedValue(refusal("issue-unavailable", 404));
+    renderWorkbench(workspaceApi());
+
+    await enterRepositoryAndIssue(user);
+    await user.click(previewButton());
+    await screen.findByTestId("coding-workbench-issue-alert");
+
+    expect(
+      screen.queryByRole("button", { name: "Enable GitHub issue access" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("withdraws the grant control once the server confirms access, leaving only the retry", async () => {
+    const user = userEvent.setup();
+    githubGrantMock.mockReturnValue(grantState({ authorized: true }));
+    previewMock.mockRejectedValue(refusal("auth-required", 403));
+    renderWorkbench(workspaceApi());
+
+    await enterRepositoryAndIssue(user);
+    await user.click(previewButton());
+    await screen.findByTestId("coding-workbench-issue-alert");
+
+    expect(
+      screen.queryByRole("button", { name: "Enable GitHub issue access" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("names the failure to write the grant without leaking the repository path", async () => {
+    const user = userEvent.setup();
+    githubGrantMock.mockReturnValue(grantState({ error: "persist" }));
+    previewMock.mockRejectedValue(refusal("auth-required", 403));
+    renderWorkbench(workspaceApi());
+
+    await enterRepositoryAndIssue(user);
+    await user.click(previewButton());
+    await screen.findByTestId("coding-workbench-issue-alert");
+
+    const grantError = screen.getByTestId("coding-workbench-issue-grant-error");
+    expect(grantError).toHaveAttribute("role", "alert");
+    expect(grantError.textContent ?? "").not.toContain(REPOSITORY_PATH);
+  });
+
   it("resets a ready preview when the reference is edited", async () => {
     const user = userEvent.setup();
     renderWorkbench(workspaceApi());
@@ -715,7 +816,7 @@ describe("CodingWorkbenchSetup issue intake (#3385)", () => {
 
   it.each([
     ["invalid-reference", 400, "That is not a GitHub issue reference."],
-    ["auth-required", 403, "Enable it under Settings → Security → GitHub issue access"],
+    ["auth-required", 403, "Enable it here, then preview again."],
     ["issue-unavailable", 404, "The issue could not be read."],
     ["clone-failed", 409, "The repository could not be cloned."],
     ["authority-denied", 403, "The current authority does not allow binding a run to this issue."],

@@ -366,14 +366,16 @@ describe("live journey model-change reload", () => {
 });
 
 describe("live journey repository trust", () => {
-  // #3394 -- registerProject now precedes grantGithub (previously the reverse). The invariant this
-  // test pins -- registration before the issue provisions its managed worktree -- is unchanged;
-  // what moved is registerProject ALSO preceding grantGithub, because the server accepts a GitHub
-  // access grant only for an already-registered repository
+  // #3394/#3390 -- the GitHub access grant is no longer a step of this sequence: it now happens
+  // inside `bindIssue`, driven through the Workbench's own control on the access refusal
+  // (CodingWorkbenchIssueIntake.tsx's `GitHubIssueAccessGrant`). The invariant the previous
+  // four-step order pinned -- never ask the server to authorize a repository it has not registered
   // (githubAuthorizationRoutes.ts's `registeredRepositoryRoot`, which checks
-  // `deps.store.listProjects()`), and nothing before this point registers one. The previous order
-  // asked the server to authorize a repository it had never heard of.
-  it("registers trust before granting GitHub access or provisioning the managed worktree", async () => {
+  // `deps.store.listProjects()`) -- is STRENGTHENED by that move rather than dropped: the grant is
+  // reachable only from a window already bound to the registered repository path, so no caller can
+  // re-order the two any more. This pins the surviving order, and that the grant is inside the
+  // issue binding rather than ahead of registration.
+  it("registers trust before the issue binding that grants access and provisions the worktree", async () => {
     const order: string[] = [];
 
     await prepareTrustedIssueWorkspace({
@@ -385,17 +387,13 @@ describe("live journey repository trust", () => {
         order.push("project-registered");
         return Promise.resolve();
       },
-      grantGithub: (): Promise<void> => {
-        order.push("github-authorized");
-        return Promise.resolve();
-      },
       bindIssue: (): Promise<void> => {
-        order.push("issue-bound");
+        order.push("issue-bound-with-access-granted");
         return Promise.resolve();
       },
     });
 
-    expect(order).toEqual(["opened", "project-registered", "github-authorized", "issue-bound"]);
+    expect(order).toEqual(["opened", "project-registered", "issue-bound-with-access-granted"]);
   });
 
   it("registers the accepted repository as a trusted project before provisioning", async () => {

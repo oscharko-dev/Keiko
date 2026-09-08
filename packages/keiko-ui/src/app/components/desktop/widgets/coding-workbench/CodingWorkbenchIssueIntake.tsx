@@ -13,6 +13,7 @@ import {
   type IssueIntakeController,
   type IssueIntakeFailure,
 } from "./useCodingWorkbenchIssueIntake";
+import { useGitHubIssueReaderAuthorization } from "../../hooks/useGitHubIssueReaderAuthorization";
 import type { CodingWorkbenchSetupRuntimePosture } from "./CodingWorkbenchSetup";
 import styles from "./CodingWorkbenchIssueIntake.module.css";
 import workbenchStyles from "./CodingWorkbenchWindow.module.css";
@@ -198,7 +199,7 @@ function visibleFailure(
 }
 
 function IntakeFailure(
-  props: Pick<IntakeProps, "intake" | "runtimePosture" | "onOpenGit"> & {
+  props: Pick<IntakeProps, "intake" | "runtimePosture" | "onOpenGit" | "repositoryPath"> & {
     readonly alertRef: RefObject<HTMLParagraphElement | null>;
   },
 ): ReactNode {
@@ -231,7 +232,52 @@ function IntakeFailure(
       {failure.failure === "repository-mismatch" ? (
         <RepositoryHandoff onOpenGit={props.onOpenGit} />
       ) : null}
+      {failure.failure === "auth-required" ? (
+        <GitHubIssueAccessGrant repositoryPath={props.repositoryPath} />
+      ) : null}
     </>
+  );
+}
+
+// #3390: reading a GitHub issue needs this repository's issue-reader grant (#3385), so a missing
+// grant stops the very first action in this window. The only control for it lived in Settings,
+// which resolves its own bound root -- and no task workspace exists yet at this point, so that root
+// is not this repository and the refusal's own advice pointed somewhere the operator could not act
+// for the repository they had just named here. The grant is therefore offered where the wall is
+// actually hit, for the exact path this intake is bound to, reusing the settings surface's own
+// server-revisioned hook rather than a second grant path (AGENTS.md SS5). It withdraws itself as
+// soon as the server confirms access; withdrawing a grant stays in Settings, where the full
+// enabled/disabled control and the repository identity live.
+function GitHubIssueAccessGrant({
+  repositoryPath,
+}: {
+  readonly repositoryPath: string;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const path = repositoryPath.trim();
+  const grant = useGitHubIssueReaderAuthorization(path === "" ? null : path);
+  if (path === "" || grant.authorized) return null;
+  return (
+    <div className={styles["cmp-issue-actions"]} data-testid="coding-workbench-issue-grant">
+      <button
+        type="button"
+        className={workbenchStyles.button}
+        disabled={grant.pending}
+        aria-describedby={ALERT_ID}
+        onClick={() => grant.change(true)}
+      >
+        {t("codingWorkbench.issue.enableAccess")}
+      </button>
+      {grant.error === null ? null : (
+        <p
+          className={styles["cmp-issue-alert"]}
+          role="alert"
+          data-testid="coding-workbench-issue-grant-error"
+        >
+          {t(`codingWorkbench.githubAccess.error.${grant.error}`)}
+        </p>
+      )}
+    </div>
   );
 }
 

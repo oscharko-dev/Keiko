@@ -951,7 +951,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.issue.error.repository-mismatch":
     "Das Issue gehört zu einem anderen Repository als dem unter diesem Pfad. Ändere den Repository-Pfad oder öffne den Git-Client, um zu diesem Repository zu wechseln oder es zu klonen. Keiko leitet niemals stillschweigend um.",
   "codingWorkbench.issue.error.auth-required":
-    "Der GitHub-Issue-Zugriff ist für dieses Repository nicht aktiviert. Aktiviere ihn unter Einstellungen → Sicherheit → GitHub-Issue-Zugriff und lade die Vorschau erneut.",
+    "Der GitHub-Issue-Zugriff ist für dieses Repository nicht aktiviert. Aktiviere ihn hier und starte die Vorschau erneut.",
+  "codingWorkbench.issue.enableAccess": "GitHub-Issue-Zugriff aktivieren",
   "codingWorkbench.issue.error.issue-unavailable":
     "Das Issue konnte nicht gelesen werden. Es ist möglicherweise geschlossen, übertragen, gelöscht, ein Pull Request oder außerhalb des Zugriffs dieser Installation.",
   "codingWorkbench.issue.error.read-transient-failure":

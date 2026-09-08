@@ -912,7 +912,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.issue.error.repository-mismatch":
     "The issue belongs to a different repository than the one at this path. Change the repository path, or open the Git client to switch to or clone that repository. Keiko never redirects silently.",
   "codingWorkbench.issue.error.auth-required":
-    "GitHub issue access is not enabled for this repository. Enable it under Settings → Security → GitHub issue access, then preview again.",
+    "GitHub issue access is not enabled for this repository. Enable it here, then preview again.",
+  "codingWorkbench.issue.enableAccess": "Enable GitHub issue access",
   "codingWorkbench.issue.error.issue-unavailable":
     "The issue could not be read. It may be closed, transferred, deleted, a pull request, or outside the access this installation has.",
   "codingWorkbench.issue.error.read-transient-failure":

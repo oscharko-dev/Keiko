@@ -392,56 +392,20 @@ export async function ensureWorkflowEligibleModel(page: Page): Promise<boolean> 
   return changed;
 }
 
-// #3394 PRODUCT GAP -- left as a direct API call, unconverted. The scoping bug this comment
-// originally cited is now fixed: `GitHubIssueAccessSettings` (AutonomySettings.tsx) receives the
-// settings panel's own bound `root`, threaded from `AutonomySettings` exactly like every sibling
-// tab (`<EditorSettingsPanel root={root} />`, `<ManagedLanguageSettings root={root} />`,
-// `<DebuggingSettings root={root} />`, `<AutonomySettings root={root} />` -- SettingsPanel.tsx),
-// falling back to `useOptionalChatSessionProject()` only when no root is bound. That fix alone
-// does not unblock this conversion: two further, independent preconditions still do.
+// The GitHub issue-reader grant, over the authorization route.
 //
-// 1) Sequencing. `SettingsPanelSessionHost` resolves the bound root as
-//    `ctx.activeRoot ?? ctx.linkedRoot ?? activeProject?.path ?? undefined`
-//    (packages/keiko-ui/src/app/components/desktop/widgets/index.tsx:397). `ctx.activeRoot` is
-//    the ACTIVE TASK WORKSPACE root (ADR-0090, useActiveWorkspaceState.ts) and stays null until
-//    one is bound -- which happens only once Bind succeeds, i.e. after issue preview. But issue
-//    preview itself requires THIS SAME grant to already exist
-//    (packages/keiko-server/src/coding-context/githubIssueResolution.ts's `resolveReader` ->
-//    `isGitHubIssueReaderAuthorized`, gating `issuePreviewRoutes.ts`), so `ctx.activeRoot` can
-//    never hold the target repository at the moment the grant must be created. `ctx.linkedRoot`
-//    is structurally unavailable to a Settings window regardless of timing -- the "settings"
-//    window type is absent from `FILES_CONTEXT_TYPES` (windows/connectionUtils.ts), so
-//    `receivesFilesContext("settings")` is always false. That leaves `activeProject?.path`, which
-//    can only be set through `RepositoryFolderSwitcher.tsx`'s `chatActions.addProject` -- and its
-//    manual-path fallback is UNREACHABLE whenever the host reports native file-dialog support
-//    (`nativeFileDialogSupported` returns true for darwin/win32,
-//    packages/keiko-server/src/native-file-dialog/adapter.ts), exactly the platform this journey
-//    runs on (`runs-on: macos-14`, .github/workflows/code-task-real-binary.yml).
+// #3390: the five qualification flows no longer use this. They grant through the Workbench's own
+// control on the issue-access refusal (`previewIssueGrantingAccessIfRefused` above ->
+// CodingWorkbenchIssueIntake.tsx's `GitHubIssueAccessGrant`), which is the real user journey and
+// the reason that control now exists: the only affordance used to live in Settings, whose bound
+// root at grant time is not the repository the operator just named in the Workbench.
 //
-//    A register-then-reload sequence would resolve this FOR THIS JOURNEY: `registerProject` (now
-//    sequenced before `grantGithub`, see `prepareTrustedIssueWorkspace` above) registers
-//    `repositoryRoot` server-side, and a `page.reload()` afterward would re-run AppShell's
-//    `useChatSession({ autoCreate: false })` bootstrap (useChatSession.ts's `bootstrapSession`),
-//    which re-fetches the project list and auto-selects the first available registered project as
-//    `activeProject` -- the same reload-to-resync technique `reconcileLiveWorkbenchAfterModelChange`
-//    above already uses for a stale-client-state problem of the same shape. That is not sufficient
-//    on its own, though: see (2).
-//
-// 2) This function is shared with a caller this fix cannot safely reach. `grantGithubAccess` is
-//    also called directly by `coding-issue-journey-live-git-chat.ts`'s
-//    `connectControlledPullRequestToChat`, BEFORE that function's own `page.goto("/")` and
-//    `seedWorkspace` -- i.e. before any workbench window, or possibly any navigation at all in a
-//    fresh browser context, is guaranteed to exist. (That caller registers its own repository
-//    directly via `POST /api/projects` inside `createChatForFixture`, independent of
-//    `prepareTrustedIssueWorkspace`, so it does not share this file's ordering fix.) A
-//    reload-and-drive-the-checkbox body here would carry assumptions -- a bound "coding" window, a
-//    "Repository path" field holding this exact value -- that do not hold for that caller, which
-//    is outside this file's ownership. Splitting the function into two near-duplicates rather than
-//    reusing one would trade this gap for the exact problem AGENTS.md SS5 warns against.
-//
-// Until issue preview stops gating on this grant, or the shared caller above no longer needs
-// `grantGithubAccess` to work before any navigation, there is no single real, browser-driven
-// action that safely replaces this call for every caller of this shared function.
+// What remains here serves ONE caller: `coding-issue-journey-live-git-chat.ts`'s
+// `connectControlledPullRequestToChat`, a scenario that never previews an issue and therefore never
+// reaches that control. There the grant is a FIXTURE PRECONDITION, not a user step under
+// qualification -- it exists so that scenario does not silently depend on an issue-to-PR flow
+// having run first in the same process (review 3941793542). It is deliberately not a step of the
+// five flows, and nothing in those flows calls it.
 export async function grantGithubAccess(page: Page, repositoryRoot: string): Promise<void> {
   const observed = await page.request.get(
     `${AUTH_ENDPOINT}?${new URLSearchParams({ repositoryPath: repositoryRoot }).toString()}`,
@@ -482,26 +446,29 @@ export async function registerTrustedRepositoryProject(
 export interface LiveIssueWorkspacePreparation {
   readonly open: () => Promise<void>;
   readonly registerProject: () => Promise<void>;
-  readonly grantGithub: () => Promise<void>;
   readonly bindIssue: () => Promise<void>;
 }
 
-// #3394 -- registerProject now precedes grantGithub (it used to follow it). The server accepts a
-// GitHub access grant only for an already-registered repository
+// #3394/#3390 -- the GitHub access grant used to be a step of its own here, performed by PUTting
+// the authorization route, because the only control for it lived in Settings bound to a root this
+// window had not produced yet. The Workbench now offers the grant itself on the access refusal
+// (CodingWorkbenchIssueIntake.tsx's `GitHubIssueAccessGrant`), so granting happens inside
+// `bindIssue`, through the real control, exactly as a user reaches it.
+//
+// The server accepts a grant only for an already-registered repository
 // (packages/keiko-server/src/coding-context/githubAuthorizationRoutes.ts's
 // `registeredRepositoryRoot`, which checks `deps.store.listProjects()`), and nothing before this
 // point registers `repositoryRoot` -- `coding-issue-journey-server.mts` starts with an empty
-// project store, and `openLiveWorkbench` only seeds the window layout, never `/api/projects`. The
-// previous order (grantGithub before registerProject) asked the server to authorize a repository
-// it had never heard of. registerProject already had to precede bindIssue for its own, separate
-// reason (trust must be derived before the provisioner runs, see the comment at the call site
-// below); this keeps both orderings in one sequence.
+// project store, and `openLiveWorkbench` only seeds the window layout, never `/api/projects`. That
+// ordering is now structural rather than sequenced: the grant control exists only inside a window
+// bound to the registered repository path. registerProject also has to precede bindIssue for its
+// own, separate reason (trust must be derived before the provisioner runs, see the comment at the
+// call site below).
 export async function prepareTrustedIssueWorkspace(
   steps: LiveIssueWorkspacePreparation,
 ): Promise<void> {
   await steps.open();
   await steps.registerProject();
-  await steps.grantGithub();
   await steps.bindIssue();
 }
 
@@ -574,11 +541,38 @@ async function previewAndAcceptIssue(page: Page, issueRef: string): Promise<void
   }
   await expect(issueField).toBeVisible();
   await issueField.fill(issueRef);
-  await page.getByRole("button", { name: "Preview issue", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Issue preview", exact: true })).toBeVisible({
-    timeout: 60_000,
-  });
+  await previewIssueGrantingAccessIfRefused(page);
   await page.getByRole("button", { name: "Use this issue", exact: true }).click();
+}
+
+/**
+ * Previews the entered issue, and -- when the repository has no GitHub issue-reader grant yet --
+ * enables it through the Workbench's OWN control before previewing again. That refuse-grant-retry
+ * sequence IS the real user journey (#3390): the preview is the moment the missing precondition
+ * shows up, and `GitHubIssueAccessGrant` (CodingWorkbenchIssueIntake.tsx) offers it right there for
+ * the exact repository path the intake is bound to. Before that control existed this lane PUT the
+ * authorization route itself, because the only affordance lived in Settings, bound to a root no
+ * task workspace had produced yet.
+ *
+ * Any refusal that is NOT the access one is surfaced as itself rather than retried: only the
+ * access refusal has a remedy on this surface.
+ */
+async function previewIssueGrantingAccessIfRefused(page: Page): Promise<void> {
+  const preview = page.getByRole("button", { name: "Preview issue", exact: true });
+  const previewRegion = page.getByRole("region", { name: "Issue preview", exact: true });
+  const alert = page.getByTestId("coding-workbench-issue-alert");
+  const grant = page.getByRole("button", { name: "Enable GitHub issue access", exact: true });
+  await preview.click();
+  await expect(previewRegion.or(alert).first()).toBeVisible({ timeout: 60_000 });
+  if (await alert.isVisible()) {
+    await expect(alert).toHaveAttribute("data-failure", "auth-required");
+    await grant.click();
+    // The control withdraws itself only once the server has confirmed the grant, so its
+    // disappearance is the confirmation -- never an optimistic local flag.
+    await expect(grant).toBeHidden({ timeout: 60_000 });
+    await preview.click();
+  }
+  await expect(previewRegion).toBeVisible({ timeout: 60_000 });
 }
 
 export async function previewAndBindIssue(page: Page, issueRef: string): Promise<void> {
@@ -785,11 +779,10 @@ export async function driveIssueToDraftPullRequest(
   await prepareTrustedIssueWorkspace({
     open: () => openLiveWorkbench(page, input.repositoryRoot),
     // Project registration is the folder picker's explicit trust act. It must precede Bind so
-    // the production provisioner derives that trust onto the managed worktree, and (#3394) it
-    // must precede the GitHub access grant too -- the server accepts a grant only for an
-    // already-registered repository.
+    // the production provisioner derives that trust onto the managed worktree, and (#3394) so the
+    // GitHub access grant the issue preview asks for inside Bind names a repository the server
+    // already knows -- it accepts a grant for no other.
     registerProject: () => registerLiveRepositoryProject(page, input.repositoryRoot),
-    grantGithub: () => grantGithubAccess(page, input.repositoryRoot),
     bindIssue: () =>
       prepareBoundIssueForRun({
         previewAndBind: () => previewAndBindIssue(page, input.issueRef),
