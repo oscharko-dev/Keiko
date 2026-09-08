@@ -1841,37 +1841,66 @@ export function validateCodeTaskQualificationManifest(
     : { ok: true, value: value as unknown as CodeTaskQualificationManifestV1 };
 }
 
+function scenarioRegistrationFailure(
+  scenario: CodeTaskQualificationScenarioV1,
+  registeredScenarioIds: ReadonlySet<string>,
+): string | undefined {
+  return registeredScenarioIds.has(scenario.scenarioId)
+    ? undefined
+    : `unregistered scenario: ${scenario.scenarioId}`;
+}
+
+function scenarioBlockedReasonFailure(
+  scenario: CodeTaskQualificationScenarioV1,
+): string | undefined {
+  return scenario.outcome === "blocked" && scenario.blockedReason.outcome !== "known"
+    ? `blocked scenario missing reason: ${scenario.scenarioId}`
+    : undefined;
+}
+
+// The three ways a "passed" verdict can rest on provenance the manifest must not trust: a
+// scripted double, an untrusted production-functional claim, and -- generalizing the same
+// evidence-presence rule externalAuditDigestFailures already applies to the single hardcoded
+// "keiko-issue-audit" scenario id -- a real-model claim carrying zero verification evidence
+// (no artifact digest and no known receipt digest). Structurally valid, substantively empty.
+function scenarioProvenanceFailure(
+  scenario: CodeTaskQualificationScenarioV1,
+  registeredProductionFunctionalScenarioIds: ReadonlySet<string>,
+): string | undefined {
+  if (scenario.outcome !== "passed") return undefined;
+  if (scenario.provenance === "scripted") {
+    return `scripted-model provenance cannot establish qualification: ${scenario.scenarioId}`;
+  }
+  if (
+    scenario.provenance === "production-functional" &&
+    (scenario.evidenceClass !== "production-functional" ||
+      !registeredProductionFunctionalScenarioIds.has(scenario.scenarioId))
+  ) {
+    return `production-functional provenance is not trusted for scenario: ${scenario.scenarioId}`;
+  }
+  if (
+    scenario.provenance === "real-model" &&
+    scenario.artifactDigests.length === 0 &&
+    scenario.receiptDigest.outcome !== "known"
+  ) {
+    return `passed real-model scenario carries no verification evidence: ${scenario.scenarioId}`;
+  }
+  return undefined;
+}
+
 // Split out of codeTaskQualificationManifestFailures to keep that function's cyclomatic
-// complexity under the repository ceiling: these are the three per-scenario rules, evaluated once
-// per entry in the loop below.
+// complexity under the repository ceiling: these are the per-scenario rules, evaluated once per
+// entry in the loop below.
 function scenarioQualificationFailures(
   scenario: CodeTaskQualificationScenarioV1,
   registeredScenarioIds: ReadonlySet<string>,
   registeredProductionFunctionalScenarioIds: ReadonlySet<string>,
 ): readonly string[] {
-  const failures: string[] = [];
-  if (!registeredScenarioIds.has(scenario.scenarioId)) {
-    failures.push(`unregistered scenario: ${scenario.scenarioId}`);
-  }
-  if (scenario.outcome === "blocked" && scenario.blockedReason.outcome !== "known") {
-    failures.push(`blocked scenario missing reason: ${scenario.scenarioId}`);
-  }
-  if (scenario.outcome === "passed" && scenario.provenance === "scripted") {
-    failures.push(
-      `scripted-model provenance cannot establish qualification: ${scenario.scenarioId}`,
-    );
-  }
-  if (
-    scenario.outcome === "passed" &&
-    scenario.provenance === "production-functional" &&
-    (scenario.evidenceClass !== "production-functional" ||
-      !registeredProductionFunctionalScenarioIds.has(scenario.scenarioId))
-  ) {
-    failures.push(
-      `production-functional provenance is not trusted for scenario: ${scenario.scenarioId}`,
-    );
-  }
-  return failures;
+  return [
+    scenarioRegistrationFailure(scenario, registeredScenarioIds),
+    scenarioBlockedReasonFailure(scenario),
+    scenarioProvenanceFailure(scenario, registeredProductionFunctionalScenarioIds),
+  ].filter((failure): failure is string => failure !== undefined);
 }
 
 // #3390 audit F3: a manifest that omits a required scenario entirely (rather than reporting it as

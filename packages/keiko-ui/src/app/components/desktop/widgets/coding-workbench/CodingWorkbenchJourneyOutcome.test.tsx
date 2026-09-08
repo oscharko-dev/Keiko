@@ -14,6 +14,7 @@ import {
   createPrMarkReadyProposeHandler,
   prMarkReadyProposalRequestFor,
 } from "./CodingWorkbenchJourneyOutcome";
+import { JourneyDetails } from "./_JourneyDetails";
 import { completedJourneyFixture, journeyFixture } from "./_journeyOutcomeTestSupport";
 
 import { axe } from "jest-axe";
@@ -80,6 +81,42 @@ describe("observed issue journey handoff", () => {
       );
     }
     expect(group?.querySelector('[data-fact="headSha"] dd')?.textContent).toBe(readiness.headSha);
+  });
+
+  // KfQ-confirmed: `state` alone collapses at least 4 distinct "blocked" reasons -- an operator
+  // reading only the coarse state after the run settles cannot distinguish a closed pull request
+  // from a merge conflict from an exhausted repair budget, each requiring a different remedy. The
+  // reason must be visible text here, not only the machine-readable `data-reason` attribute.
+  // Renders `JourneyDetails` directly (not the outer `CodingWorkbenchJourneyOutcome`, whose
+  // `matchesJourneySnapshot` cross-checks the readiness snapshot against the fixture's OWN
+  // `snapshot` prop and would reject an overridden, no-longer-matching readiness before this
+  // group ever renders): the CI group's own contract is what this test exercises.
+  it("shows the specific blocked reason as visible text, distinguishable from other blocked reasons", () => {
+    const fixture = journeyFixture();
+    const readiness = fixture.outcome.readiness;
+    if (readiness === null) throw new Error("journey fixture must carry a readiness snapshot");
+    const outcome = {
+      ...fixture.outcome,
+      readiness: {
+        ...readiness,
+        state: "blocked" as const,
+        reason: "pull-request-closed" as const,
+      },
+    };
+    render(<JourneyDetails outcome={outcome} now={NOW.getTime()} />);
+
+    const state = screen.getByTestId("cwb-journey-ci");
+    expect(state).toHaveAttribute("data-state", "blocked");
+    expect(state).toHaveAttribute("data-reason", "pull-request-closed");
+    // The coarse state must keep its state-color-coded class, mirroring the sibling
+    // CodingWorkbenchCiReadiness card's `cwb-ci-state` output (both read the same CI vocabulary).
+    expect(state.className).not.toBe("");
+    expect(screen.getByText("CI observation blocked")).toBeInTheDocument();
+    expect(screen.getByText("The pull request is no longer open.")).toBeInTheDocument();
+    // A sibling "blocked" reason must render distinguishable text -- proving this is real
+    // per-reason text, not a second copy of the coarse state label.
+    expect(screen.queryByText("The observed required checks passed.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Required checks cannot proceed.")).not.toBeInTheDocument();
   });
 
   it("renders ready-for-review as a closed, non-clickable approval-path-pending control by default (#3389 AC3)", async () => {

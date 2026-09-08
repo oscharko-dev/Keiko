@@ -31,8 +31,17 @@ function card(testId: string): HTMLElement {
   return section;
 }
 
+// Mirrors the live lane's own `fact()` (coding-issue-journey-live-observed.ts): a missing or
+// empty fact throws instead of resolving to "", so a card that silently drops a fact fails this
+// pinned test loudly -- exactly as it would fail the paid live qualification run -- rather than
+// falling through to a generic string-mismatch diff (or, for a future assertion that never checks
+// the value, not failing at all).
 function fact(testId: string, id: string): string {
-  return card(testId).querySelector(`[data-fact="${id}"] dd`)?.textContent?.trim() ?? "";
+  const value = card(testId).querySelector(`[data-fact="${id}"] dd`)?.textContent?.trim() ?? "";
+  if (value.length === 0) {
+    throw new Error(`the "${testId}" card did not display the "${id}" fact`);
+  }
+  return value;
 }
 
 function commitReceipt(): VerifiedCommitResult {
@@ -60,6 +69,16 @@ function commitReceipt(): VerifiedCommitResult {
 describe("Code task observation contract (#3390)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  // This fixture's `fact()` must fail as loudly as the live lane's own `fact()` does: a card that
+  // silently drops a value the lane depends on is exactly the "benign unavailable" defect class
+  // this file exists to catch before a paid live run does.
+  it("throws, like the live lane's own fact(), when a fact is missing rather than resolving to an empty string", () => {
+    render(<CodingWorkbenchDraftDelivery snapshot={draftDeliverySnapshot()} />);
+    expect(() => fact("cwb-draft-delivery-state", "not-a-real-fact-id")).toThrow(
+      /did not display the "not-a-real-fact-id" fact/,
+    );
   });
 
   // The lane reads each card in ONE round trip so every value comes from the same paint, and that

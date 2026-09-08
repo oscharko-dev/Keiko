@@ -437,6 +437,12 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "prepare-bridge-close",
   "prepare-run-root-remove",
   "tool-facade-failed",
+  // KfQ 3954841973: a coding-runtime backend process (plus its HTTP/SSE client and tool bridge)
+  // that was already spawned when launch failed later (lease-broker unavailable, launch-shape
+  // validation) is disposed on the failure path -- mirrors opencodeRuntimeComposition.ts's
+  // `recordPrepareDisposalFailure` (KEIKO-0320): the disposal call can itself throw, and
+  // swallowing that would leave the same class of leak with no diagnostic and no retry hook.
+  "coding-runtime-backend-disposal-failed",
   "sidecar-gateway-evidence-aggregation-failed",
   "coding-sidecar-gateway-profile-unavailable",
   "coding-sidecar-gateway-tool-contract-rejected",

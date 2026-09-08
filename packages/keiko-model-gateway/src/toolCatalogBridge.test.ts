@@ -762,4 +762,50 @@ describe("provider invocation batch bounds", () => {
       expect(log.some((event) => event.op === "gateway.tool-catalog.call-bound")).toBe(false);
     },
   );
+
+  // The array-level check used to reuse `TOOL_CATALOG_LIMITS.maxArgumentBytes` -- sized for ONE
+  // call's arguments -- as a budget shared across the WHOLE batch, so several individually-legal
+  // calls could combine past that ceiling and be rejected wholesale.
+  it("binds a batch whose combined size exceeds one call's byte budget, when every call is individually within it", () => {
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
+      (): number => NOW,
+    );
+    const bigTodo = "x".repeat(65_000); // under maxStringBytes (65_536) on its own
+    const calls = Array.from({ length: 5 }, (_unused, index) => ({
+      id: `call-${String(index)}`,
+      name: "todowrite",
+      arguments: { todos: [bigTodo] },
+    }));
+    expect(bigTodo.length * calls.length).toBeGreaterThan(TOOL_CATALOG_LIMITS.maxArgumentBytes);
+    const bound = bridge.bindCalls(calls);
+    expect(bound.map((call) => call.id)).toEqual(calls.map((call) => call.id));
+  });
+
+  it("still rejects a single call whose own arguments exceed the per-call byte budget", () => {
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
+      (): number => NOW,
+    );
+    const tooBig = "x".repeat(65_000);
+    const calls = Array.from({ length: 5 }, (_unused, index) => ({
+      id: `call-${String(index)}`,
+      name: "todowrite",
+      // Five strings well past maxArgumentBytes on their own -- this ONE call must still fail.
+      arguments: { todos: [tooBig, tooBig, tooBig, tooBig, tooBig] },
+    }));
+    expect(() => bridge.bindCalls(calls)).toThrow(GatewayToolCatalogError);
+  });
+
+  it("rejects a sparse calls array smuggled past a plain length check", () => {
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
+      (): number => NOW,
+    );
+    const calls = [{ id: "call-0", name: "todowrite", arguments: { todos: [] } }];
+    calls.length = 2; // a hole at index 1: no own property, but `.length` reports 2
+    expect(() => bridge.bindCalls(calls)).toThrow(
+      expect.objectContaining({ reason: "invalid-arguments" }),
+    );
+  });
 });

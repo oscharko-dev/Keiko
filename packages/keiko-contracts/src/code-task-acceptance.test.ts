@@ -17,6 +17,8 @@ import {
   isCodeTaskContentFreeNote,
   isCodeTaskIsoInstant,
   isCodeTaskRepoRelativePath,
+  isCodeTaskSha256Digest,
+  type CodeTaskSha256Digest,
   validateCodeTaskAcceptanceContribution,
   validateCodeTaskQualificationManifest,
   validateCodeTaskQualificationFlowArtifact,
@@ -31,6 +33,12 @@ import { withPollutedPrototype } from "./code-task-pollution-test-support.js";
 const COMMIT_SHA = "a".repeat(40);
 const TREE_SHA = "b".repeat(40);
 const DIGEST = "c".repeat(64);
+/** The branded digest the production shape demands, derived through the production guard. */
+function digest(value: string): CodeTaskSha256Digest {
+  if (!isCodeTaskSha256Digest(value))
+    throw new TypeError("test digest must be a sha256 hex digest");
+  return value;
+}
 
 function validContribution(): CodeTaskAcceptanceContributionV1 {
   const parsed: unknown = JSON.parse(
@@ -49,7 +57,7 @@ function validContribution(): CodeTaskAcceptanceContributionV1 {
           outcome: "passed",
           recordedAt: "2026-07-16T12:00:00Z",
           artifactDigests: [DIGEST],
-          receiptDigest: { outcome: "known", value: DIGEST },
+          receiptDigest: { outcome: "known", value: digest(DIGEST) },
         },
       ],
       salvage: [
@@ -745,7 +753,7 @@ function validQualificationManifest(): CodeTaskQualificationManifestV1 {
           recordedAt: "2026-09-04T12:00:00Z",
           blockedReason: { outcome: "absent" },
           artifactDigests: [DIGEST],
-          receiptDigest: { outcome: "known", value: DIGEST },
+          receiptDigest: { outcome: "known", value: digest(DIGEST) },
         },
       ],
       flows: [],
@@ -1330,6 +1338,42 @@ describe("codeTaskQualificationManifestFailures and codeTaskQualificationVerdict
     expect(codeTaskQualificationVerdictFor(failedScenario, { ...binding, epicIssue: 1982 })).toBe(
       "failed",
     );
+  });
+
+  it("a passed real-model scenario with no artifact and no known receipt cannot qualify", () => {
+    const manifest = validQualificationManifest();
+    const scenario = manifest.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const evidenceFree: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      scenarios: [{ ...scenario, artifactDigests: [], receiptDigest: { outcome: "absent" } }],
+    };
+    expect(codeTaskQualificationManifestFailures(evidenceFree, binding)).toContain(
+      "passed real-model scenario carries no verification evidence: issue-to-pr-full-access",
+    );
+    expect(codeTaskQualificationVerdictFor(evidenceFree, binding)).toBe("blocked");
+
+    // Either evidence form alone is sufficient -- only the total absence of both is a failure.
+    const artifactOnly: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      scenarios: [
+        { ...scenario, artifactDigests: [digest(DIGEST)], receiptDigest: { outcome: "absent" } },
+      ],
+    };
+    expect(codeTaskQualificationManifestFailures(artifactOnly, binding)).toEqual([]);
+
+    const receiptOnly: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      scenarios: [
+        {
+          ...scenario,
+          artifactDigests: [],
+          receiptDigest: { outcome: "known", value: digest(DIGEST) },
+        },
+      ],
+    };
+    expect(codeTaskQualificationManifestFailures(receiptOnly, binding)).toEqual([]);
   });
 
   it("a passed scenario resting on scripted provenance cannot qualify, and names the scenario", () => {

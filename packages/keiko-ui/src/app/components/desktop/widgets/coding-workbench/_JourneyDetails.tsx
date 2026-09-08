@@ -9,6 +9,7 @@ import { journeyCiCurrent, journeyDescriptionCurrent } from "./_journeyPresentat
 import { CheckCounts, Fact } from "./CodingWorkbenchCiReadiness";
 import common from "./CodingWorkbenchWindow.module.css";
 import styles from "./CodingWorkbenchJourneyOutcome.module.css";
+import ciStyles from "./CodingWorkbenchCiReadiness.module.css";
 
 export function JourneyDetails({
   outcome,
@@ -99,14 +100,26 @@ function JourneyCi({
   // and reason on one element, the check counts and the observed head as data. A reader that
   // resolved the verdict from translated text would break on the first wording change, and one
   // that could not resolve it at all waited twenty minutes for a card that had already answered.
+  // The reason is ALSO rendered as visible text (mirroring the sibling CodingWorkbenchCiReadiness
+  // card's ObservationDetails and CodingWorkbenchJourneyOutcome's own state/reason pair): `state`
+  // alone collapses several distinct "blocked" reasons -- pull-request-closed, merge-conflict,
+  // repair-budget-exhausted, required-checks-blocked -- onto one operator-invisible value, each
+  // requiring a different remedy, and this group is the sole current source for it once the run
+  // has settled.
   return (
     <section className={styles["cmp-journey-group"]} aria-label={t("codingWorkbench.journey.ci")}>
       <h4>{t("codingWorkbench.journey.ci")}</h4>
-      <output data-testid="cwb-journey-ci" data-state={state} data-reason={ci?.reason}>
+      <output
+        className={ciStyles["cmp-ci-state"]}
+        data-testid="cwb-journey-ci"
+        data-state={state}
+        data-reason={ci?.reason}
+      >
         {t(`codingWorkbench.ci.state.${state}`)}
       </output>
       {ci !== null && (
         <>
+          <p className={common.helpText}>{t(`codingWorkbench.ci.reason.${ci.reason}`)}</p>
           <p>
             {t("codingWorkbench.journey.checkCounts", {
               passed: ci.requiredChecks.passed,

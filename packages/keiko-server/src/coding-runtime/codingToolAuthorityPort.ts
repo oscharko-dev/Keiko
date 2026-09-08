@@ -592,11 +592,17 @@ function actionClassesAllowed(
 ): boolean {
   if (request.action === "git" && request.operation === "stage" && approved)
     return hasClasses(envelope.authority.actionClasses, ["workspace-read"]);
-  if (request.action === "delivery" && deliveryHasScopedApproval(request)) {
-    if (request.phase === "propose" || request.phase === "reconcile")
-      return hasClasses(envelope.authority.actionClasses, ["workspace-read"]);
-    if (approved && envelope.authority.effectiveMode !== "autonomous-delivery")
-      return hasClasses(envelope.authority.actionClasses, ["workspace-read"]);
+  // Propose/reconcile plan a delivery without performing one yet, so they need only
+  // workspace-read -- but a matched per-action approval on the EXECUTE phase is not a substitute
+  // for the envelope actually carrying delivery authority (KfQ-confirmed: this used to also
+  // relax execute to workspace-read whenever approved outside autonomous-delivery, silently
+  // skipping the delivery-substrate/connector-access requirement below for every other mode).
+  if (
+    request.action === "delivery" &&
+    deliveryHasScopedApproval(request) &&
+    (request.phase === "propose" || request.phase === "reconcile")
+  ) {
+    return hasClasses(envelope.authority.actionClasses, ["workspace-read"]);
   }
   return hasClasses(envelope.authority.actionClasses, codingToolRequiredActionClasses(request));
 }
@@ -664,12 +670,18 @@ function commitPolicyAllowed(
   const mode = envelope.authority.effectiveMode;
   const effect = codingWorkbenchCodeTaskDeliveryEffectFor(mode, request.intent);
   if (effect === "denied" || (!approved && effect !== "allowed")) return false;
-  return (
-    mode !== "autonomous-delivery" ||
-    (isDraftToolRequest(request)
-      ? deliveryAllowed(envelope, request.intent)
-      : hasScope(envelope.authority.connectorScopes, "source-control.write"))
-  );
+  // Only autonomous-delivery can reach here without a per-action approval (every other mode's
+  // delivery effect is always "approval-required", never "allowed", so `approved` is guaranteed
+  // true above) -- that unsupervised, structural-authority-only path must keep the fuller
+  // deliveryAllowed check, network egress for a draft-tool (push/PR) intent included.
+  //
+  // KfQ-confirmed HIGH: for every OTHER mode, this used to skip straight to `true` once a
+  // per-action approval was matched, dropping the `source-control.write` connector-scope check
+  // entirely. An approval proof authorizes the ACTION, never a substitute for the envelope's own
+  // delivery/git-write scope -- mirrors gitPolicyAllowed's documented, unconditional approach
+  // (this file, below): approved && effect-allowed && a real connector scope, every mode.
+  if (mode === "autonomous-delivery") return deliveryAllowed(envelope, request.intent);
+  return hasScope(envelope.authority.connectorScopes, "source-control.write");
 }
 
 /**

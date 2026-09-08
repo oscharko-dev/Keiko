@@ -19,6 +19,10 @@ import {
   codingToolApprovalBindingDigest,
 } from "../coding-runtime/codingToolApprovalBridge.js";
 import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
+import {
+  codingRuntimeActionClassesForMode,
+  codingRuntimeConnectorScopesForMode,
+} from "../coding-runtime/runtimeAuthorityService.js";
 import type { VerifiedCommitService } from "./verifiedCommitTypes.js";
 
 interface CommitFacadeFixtureInput {
@@ -41,20 +45,21 @@ interface CommitFacadeFixtureResult {
   >;
 }
 
+// Derived from the same producer the real authority mint uses (runtimeAuthorityService.ts),
+// never a restated approximation (AGENTS.md §7): delivery-substrate/connector-access and the
+// source-control connector scopes are granted at every mode, not only autonomous-delivery --
+// codingWorkbenchCodeTaskDeliveryEffectFor never returns "denied" for the delivery resource
+// scope, only "approval-required" or (autonomous-delivery) "allowed". A fixture that hand-rolled
+// "autonomous-delivery only" here previously masked KfQ 3954987423/3954987428's authority-check
+// bypass: the port's own bug (relaxing an approved commit-execute to workspace-read in every
+// other mode) went untested because this fixture already withheld those classes/scopes from
+// every other mode for an unrelated reason, so the port's missing check was never exercised.
 function fixtureEnvelope(input: CommitFacadeFixtureInput): CodingWorkbenchRuntimeAuthorityEnvelope {
   return {
     authority: {
       effectiveMode: input.mode,
-      actionClasses: [
-        "workspace-read",
-        "workspace-write",
-        "verification",
-        ...(input.mode === "autonomous-delivery" ? ["delivery-substrate"] : []),
-        ...(input.draftDeliveryService !== undefined && input.mode === "autonomous-delivery"
-          ? ["network-egress"]
-          : []),
-      ],
-      connectorScopes: input.mode === "autonomous-delivery" ? ["source-control.write"] : [],
+      actionClasses: codingRuntimeActionClassesForMode(input.mode, undefined),
+      connectorScopes: codingRuntimeConnectorScopesForMode(input.mode),
       commandPolicy: { mode: "deny", allow: [], deny: [], requirePerCommandApproval: true },
       networkPolicy:
         input.draftDeliveryService !== undefined && input.mode === "autonomous-delivery"

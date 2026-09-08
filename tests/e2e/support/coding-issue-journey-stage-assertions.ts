@@ -2,6 +2,10 @@
 // selectable journey rows and the corresponding stages of each five-flow qualification drive.
 
 import type { CodingWorkbenchMode, JourneyOutcome } from "@oscharko-dev/keiko-contracts";
+// The outer package root is a type-only entrypoint (pinned by
+// packageSurface.test.ts's "keeps runtime values out of the outer type-only entrypoint") --
+// `sameGitHubOwnerAndRepo` is a value, reachable only through this runtime subpath re-export.
+import { sameGitHubOwnerAndRepo } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import type { ObservedDescriptionStatus } from "./coding-issue-journey-live-observed.js";
 import type { DeliveredPullRequest } from "./coding-issue-journey-live.js";
 import {
@@ -85,7 +89,11 @@ export function governedMergeAndClosureEvidence(
     remote.issue.state === "closed",
     typeof remote.mergedAt === "string",
     typeof remote.issue.closedAt === "string",
-    remote.identity.repository === outcome.binding.repository,
+    // The provider-cased identity (remote.identity.repository) and the lowercased journey
+    // binding slug (outcome.binding.repository) name the same repository whenever they match
+    // case-insensitively -- rehearsal run-13's root cause was polling this exact equality against
+    // `oscharko/Wegwerf-Repo`, which never holds under strict `===`.
+    sameGitHubOwnerAndRepo(remote.identity.repository, outcome.binding.repository),
     remote.identity.number === outcome.binding.prNumber,
     remote.issue.number === outcome.binding.issueNumber,
   ].every(Boolean);

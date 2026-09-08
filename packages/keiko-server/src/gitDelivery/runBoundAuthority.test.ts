@@ -914,6 +914,22 @@ describe("post-delivery handoff admission (#3390)", () => {
     ).toEqual({ allowed: false, reason: "accepted-run-unavailable" });
   });
 
+  // KEIKO-0154: the merge route's own request validator (SHA_RE) accepts mixed-case hex for
+  // expectedHeadRefHash, which flows into `admission.headSha` here, while the delivered record's
+  // headSha is always the provider's lowercase form -- a correct but differently-cased admission
+  // headSha must still match, exactly like git-merge-gateway.ts's mergeHeadHashMismatch. Uses a
+  // hash with actual hex letters (DELIVERED's all-digit "1"s fold to themselves either way, so it
+  // cannot tell a real case-insensitive compare apart from an unfixed exact-match bug).
+  it("admits a head that matches the delivered head only by letter case", () => {
+    const deliveredWithLetters = { ...DELIVERED, headSha: "a1b2c3d4e5".repeat(4) };
+    expect(
+      decide(
+        { operation: "pull-request", handoff: "pr-mark-ready" },
+        admission(deliveredWithLetters, deliveredWithLetters.headSha.toUpperCase()),
+      ),
+    ).toEqual({ allowed: true, runId: "run-settled", envelopeDigest: "a".repeat(64) });
+  });
+
   it("falls back to accepted-run-unavailable when no settled run delivered the pull request", () => {
     expect(decide({ operation: "merge" }, admission(undefined))).toEqual({
       allowed: false,

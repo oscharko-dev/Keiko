@@ -374,7 +374,17 @@ function admitByDeliveredPullRequest(
   if (admission === undefined || !isHandoffOperation(request)) return undefined;
   const delivered = admission.port.current(admission.scope);
   if (delivered === undefined) return undefined;
-  if (admission.headSha !== undefined && admission.headSha !== delivered.headSha) return undefined;
+  // KEIKO-0154: compare case-insensitively, mirroring git-merge-gateway.ts's
+  // mergeHeadHashMismatch. Git SHAs are hex and the merge route's own request validator accepts
+  // mixed case (mergeRoutes.ts's SHA_RE), while the provider always reports lowercase -- so a
+  // correct but upper/mixed-case admission.headSha would otherwise be wrongly reported as
+  // "accepted-run-unavailable" and block a legitimate merge/pr-mark-ready handoff.
+  if (
+    admission.headSha !== undefined &&
+    admission.headSha.toLowerCase() !== delivered.headSha.toLowerCase()
+  ) {
+    return undefined;
+  }
   return { allowed: true, runId: delivered.runId, envelopeDigest: delivered.envelopeDigest };
 }
 

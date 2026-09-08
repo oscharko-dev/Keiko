@@ -463,7 +463,16 @@ function omissionRollUp(
       if (omittedFiles > 0) omissions.push({ reason, files: omittedFiles, hunks: 0 });
       continue;
     }
-    const affected = entries.filter((entry) => entry.omission === reason);
+    // `omission` is the one entry field with no mandatory-presence check of its own (unlike
+    // `additions`/`omittedHunks`/etc., which validateEntryIdentity already forces to be OWN
+    // properties before an entry is accepted here) -- so a plain `entry.omission` read would
+    // still resolve a hostile inherited value on an entry that legitimately carries no own
+    // `omission` property. Read it the same own-property-only way the validator does (`field()`
+    // itself takes `Record<string, unknown>`, not the closed entry union, so the ownership check
+    // is inlined here rather than widening that signature for one call site).
+    const affected = entries.filter(
+      (entry) => Object.hasOwn(entry, "omission") && entry.omission === reason,
+    );
     if (affected.length === 0) continue;
     const hunks = affected.reduce((sum, entry) => sum + entry.omittedHunks, 0);
     omissions.push({ reason, files: affected.length, hunks });
@@ -808,8 +817,26 @@ function validateEntryKindRules(
   validatePairing(entry, path, entryIsPaired(entry, kind), reasons);
 }
 
+// A generated-omission entry must leave exactly the trace its own contract promises: a cut, and
+// nothing else -- no hunks, no dropped-hunk count, no line statistics. Split out to keep
+// `validateTextualOmission`'s cyclomatic complexity under the repository ceiling.
+function isContentFreeGeneratedOmission(
+  entry: Record<string, unknown>,
+  omittedHunks: unknown,
+): boolean {
+  const hunks = field(entry, "hunks");
+  return (
+    Array.isArray(hunks) &&
+    hunks.length === 0 &&
+    omittedHunks === 0 &&
+    field(entry, "additions") === 0 &&
+    field(entry, "deletions") === 0
+  );
+}
+
 // A textual entry's omission can only be a limit or the generated policy, and each must leave a
-// trace: byte-cap shows as a cut or dropped hunks, generated always as a cut (no patch lane ran).
+// trace: byte-cap shows as a cut or dropped hunks, generated always as a cut (no patch lane ran)
+// with zero hunks and zero statistics -- never a cut that still carries content.
 function validateTextualOmission(
   entry: Record<string, unknown>,
   path: string,
@@ -829,6 +856,9 @@ function validateTextualOmission(
   }
   if (omission === "generated") {
     if (!truncated) reasons.push(`${path} generated omission must be truncated`);
+    if (!isContentFreeGeneratedOmission(entry, omittedHunks)) {
+      reasons.push(`${path} generated omission must carry no hunks or statistics`);
+    }
     return;
   }
   reasons.push(`${path}.omission is not valid for a textual entry`);

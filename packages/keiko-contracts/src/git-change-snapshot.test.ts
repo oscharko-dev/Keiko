@@ -23,6 +23,7 @@ import {
   type GitChangeSnapshotLimits,
 } from "./git-change-snapshot.js";
 import { isVerifiedCommitResult, type VerifiedCommitResult } from "./verified-commit.js";
+import { withPollutedPrototype } from "./code-task-pollution-test-support.js";
 
 // Deterministic, content-free stand-ins with the exact shape the validator demands. The validator
 // never recomputes a digest (the contracts leaf has no crypto), so any 64-hex value is a digest.
@@ -404,6 +405,36 @@ describe("validateGitChangeSnapshotResult — union members", () => {
     );
   });
 
+  it("rejects a generated omission that still carries hunks or statistics", () => {
+    // truncated is satisfied, but textual()'s default hunk/additions/deletions survive --
+    // "generated" must leave a bare cut, not a cut that still reports content.
+    expectRejected(
+      snapshot([textual("add", "g1", { truncated: true, omission: "generated" })]),
+      "must carry no hunks or statistics",
+    );
+    expectRejected(
+      snapshot([
+        textual("add", "g2", {
+          truncated: true,
+          omission: "generated",
+          hunks: [],
+          additions: 0,
+          deletions: 0,
+          omittedHunks: 1,
+        }),
+      ]),
+      "must carry no hunks or statistics",
+    );
+    const bareCut = textual("add", "g3", {
+      truncated: true,
+      omission: "generated",
+      hunks: [],
+      additions: 0,
+      deletions: 0,
+    });
+    expect(validateGitChangeSnapshotResult(snapshot([bareCut]))).toMatchObject({ ok: true });
+  });
+
   it("requires unique evidence ids", () => {
     const duplicate = textual("modify", "2", { evidenceId: hex64("e1") });
     expectRejected(snapshot([textual("add", "1"), duplicate]), "unique evidenceIds");
@@ -423,6 +454,19 @@ describe("validateGitChangeSnapshotResult — hostile inputs", () => {
     expect(reasonsOf(inherited)).toEqual(["snapshot must be a plain object"]);
     const prototypeOutcome = Object.create(null) as Record<string, unknown>;
     expect(reasonsOf(prototypeOutcome)).toEqual(["outcome must be a snapshot outcome"]);
+  });
+
+  it("never lets a globally-polluted `omission` value shape the completeness roll-up", () => {
+    // A legitimate entry that carries no omission at all -- no own `omission` property.
+    const clean = textual("modify", "z");
+    expect(Object.hasOwn(clean, "omission")).toBe(false);
+    const rolledUp = withPollutedPrototype(
+      "omission",
+      { value: "byte-cap", enumerable: true },
+      () => summarizeGitChangeSnapshotCompleteness({ entries: [clean], totalFiles: 1, bytes: 10 }),
+    );
+    expect(rolledUp.omissions).toEqual([]);
+    expect(rolledUp.omittedFiles).toBe(0);
   });
 
   it("closes the key set on own names, non-enumerable names and symbols", () => {

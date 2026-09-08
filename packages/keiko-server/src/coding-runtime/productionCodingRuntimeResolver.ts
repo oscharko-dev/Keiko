@@ -43,7 +43,11 @@ import {
   editorAgentAuthorityRegistry,
 } from "../editor/agentAuthorityRegistry.js";
 import { editorAgentRegistry } from "../editor/agentSessionRegistry.js";
-import type { ServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import type { CodingRuntimePermissionPort } from "./codingRuntimePermissionPort.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
@@ -780,7 +784,7 @@ function createRunRecord(args: Omit<RunToolSurfaceInput, "signal">): ResolverRun
     research,
     onRuntimeEvent,
   });
-  const detachLease = attachRuntimeMutationLease(input, surface.leases, surface.invocationRegistry);
+  const detachLease = attachedRuntimeMutationLease(input, surface, backend, request.runId);
   return {
     manager: backend.manager,
     ciRepairBudget: surface.ciRepairBudget,
@@ -797,6 +801,25 @@ function createRunRecord(args: Omit<RunToolSurfaceInput, "signal">): ResolverRun
     dispose: createRunDisposer(detachLease, surface.leases, surface.invocationRegistry, backend),
     unavailableOptionalTools: surface.unavailableOptionalTools,
   };
+}
+
+// KfQ-confirmed: `createBackendRun` above has already spawned/supervised the real backend process
+// by the time this runs -- if the lease broker is unavailable (a real server-wide singleton,
+// disposed on shutdown, capped at 64 concurrent ports), the previous code threw straight out of
+// `createRunRecord` with no reference to `backend` in scope at the catch site
+// (`launchResolver`'s `resolve`), leaking the process, its HTTP/SSE client, and its tool bridge.
+function attachedRuntimeMutationLease(
+  input: ProductionCodingRuntimeResolverInput,
+  surface: RunToolSurface,
+  backend: QualifiedProductionRuntimeRun,
+  runId: string,
+): (() => void) | undefined {
+  try {
+    return attachRuntimeMutationLease(input, surface.leases, surface.invocationRegistry);
+  } catch (error) {
+    disposeFailedBackendRun(backend, runId, input.diagnostics);
+    throw error;
+  }
 }
 
 // ADR-0043 D11-D14 (#3390): registers this run's tool bridge as "the current" one the BFF route
@@ -955,8 +978,66 @@ function createBackendRun({
     },
     resolveWorkspaceRootAccess,
   });
-  validateBackendLaunch(backend.launch, context);
+  validateLaunchedBackend(backend, context, request.runId, input.diagnostics);
   return backend;
+}
+
+// KfQ-confirmed: `validateBackendLaunch` runs AFTER `input.backend.createRun(...)` has already
+// spawned/supervised a real child process plus an HTTP/SSE client and tool bridge for the
+// production OpenCode backend -- a throw here used to discard that already-built `backend` with
+// no disposal path. Split out so `createBackendRun` stays under the repository's per-function
+// line ceiling.
+function validateLaunchedBackend(
+  backend: QualifiedProductionRuntimeRun,
+  context: CodingRuntimeTrustedContext,
+  runId: string,
+  diagnostics: ServerDiagnosticSink | undefined,
+): void {
+  try {
+    validateBackendLaunch(backend.launch, context);
+  } catch (error) {
+    disposeFailedBackendRun(backend, runId, diagnostics);
+    throw error;
+  }
+}
+
+// Mirrors opencodeRuntimeComposition.ts's disposeFailedPrepare/recordPrepareDisposalFailure
+// (KEIKO-0320): best-effort cleanup of a backend that was spawned but never became a usable run.
+// `dispose()` can itself throw synchronously or return a promise that rejects later -- either way
+// the ORIGINAL failure that triggered this disposal is what the caller re-throws, never replaced
+// by a disposal failure, but a disposal failure must still reach an operator diagnostic instead of
+// vanishing (AGENTS.md §7 "no silent failures"): that would be the same leak this fix exists to
+// close, just moved one step later and left with no diagnostic and no retry hook.
+function disposeFailedBackendRun(
+  backend: QualifiedProductionRuntimeRun,
+  runId: string,
+  diagnostics: ServerDiagnosticSink | undefined,
+): void {
+  try {
+    const disposal = backend.dispose?.();
+    if (disposal !== undefined) {
+      void disposal.catch((error: unknown) => {
+        recordBackendDisposalFailure(diagnostics, runId, error);
+      });
+    }
+  } catch (error) {
+    recordBackendDisposalFailure(diagnostics, runId, error);
+  }
+}
+
+function recordBackendDisposalFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.backend-run",
+    source: "production-coding-runtime-resolver.dispose-failed-backend",
+    errorClass: contentFreeErrorClass(error),
+    message: "coding-runtime-backend-disposal-failed",
+  });
 }
 
 /** One parameter object: the facade needs the whole run context, not an argument list to mis-order. */

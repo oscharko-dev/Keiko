@@ -487,6 +487,53 @@ describe("production coding runtime resolver", () => {
     ).toThrow();
     expect(expiredCreateRun).not.toHaveBeenCalled();
   });
+
+  // KfQ 3954841973: a backend process (plus its HTTP/SSE client and tool bridge) was already
+  // spawned by `createRun` below by the time the lease broker rejects attachment -- verifies the
+  // already-built backend is disposed instead of leaked when that happens.
+  it("disposes an already-spawned backend when lease attachment fails after creation", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const dispose = vi.fn(() => Promise.resolve());
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) => ({
+      ...backendRun(input.request.runId),
+      dispose,
+    }));
+    const runtimeMutationLeaseBroker = { attach: () => undefined };
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer, runtimeMutationLeaseBroker),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+
+    expect(() => host.launchResolver.resolve(request)).toThrow(
+      "runtime-mutation-lease-broker-unavailable",
+    );
+    expect(createRun).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("disposes an already-spawned backend when launch validation rejects its shape", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const dispose = vi.fn(() => Promise.resolve());
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) => ({
+      ...backendRun(input.request.runId),
+      launch: { ...backendRun(input.request.runId).launch, executablePath: "" },
+      dispose,
+    }));
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+
+    expect(() => host.launchResolver.resolve(request)).toThrow();
+    expect(createRun).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
 });
 
 function researchUnavailable(

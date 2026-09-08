@@ -540,6 +540,78 @@ describe("CodingToolAuthorityPort", () => {
       expect(admitted.ok && admitted.mutationGuard.deliveryApproval).toEqual({ claim: undefined });
     },
   );
+  // Confirmed HIGH finding: an approved commit-execute in any mode other than
+  // autonomous-delivery must still require the envelope to actually carry `delivery-substrate`
+  // (actionClassesAllowed) and `source-control.write` (commitPolicyAllowed's deliveryAllowed
+  // check) -- a matched per-action approval is not a substitute for either. Mirrors "keeps
+  // approved commit delivery available after narrowing to %s" above, but with the class/scope an
+  // Authority Envelope that never granted delivery authority would be missing.
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "denies an approved commit delivery when the narrowed envelope lost delivery-substrate (%s)",
+    (effectiveMode) => {
+      const envelope = restrictedEnvelope({
+        effectiveMode,
+        actionClasses: ["workspace-read", "connector-access"],
+        connectorScopes: ["source-control.read", "source-control.write"],
+        networkPolicy: { mode: "deny-all", connectorScopes: [] },
+      });
+      const authority = {
+        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+      };
+      const approvalProofVerifier = {
+        matches: vi.fn(() => false),
+        consume: vi.fn(() => false),
+        matchesCommit: vi.fn(() => true),
+        consumeCommit: vi.fn(() => ({ approvalId: "commit-approved" })),
+      };
+      const port = createCodingToolAuthorityPort(authority, runtimeContext, {
+        approvalProofVerifier,
+      });
+      const request = {
+        action: "delivery" as const,
+        actionId: "commit-missing-class",
+        idempotencyKey: "commit-missing-class",
+        intent: "commit" as const,
+        phase: "execute" as const,
+        proposalId: "commit-proposal",
+      };
+      expect(port.admit("capability", request).ok).toBe(false);
+    },
+  );
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "denies an approved commit delivery when the narrowed envelope lost the source-control.write scope (%s)",
+    (effectiveMode) => {
+      const envelope = restrictedEnvelope({
+        effectiveMode,
+        actionClasses: ["workspace-read", "delivery-substrate", "connector-access"],
+        connectorScopes: [],
+        networkPolicy: { mode: "deny-all", connectorScopes: [] },
+      });
+      const authority = {
+        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+      };
+      const approvalProofVerifier = {
+        matches: vi.fn(() => false),
+        consume: vi.fn(() => false),
+        matchesCommit: vi.fn(() => true),
+        consumeCommit: vi.fn(() => ({ approvalId: "commit-approved" })),
+      };
+      const port = createCodingToolAuthorityPort(authority, runtimeContext, {
+        approvalProofVerifier,
+      });
+      const request = {
+        action: "delivery" as const,
+        actionId: "commit-missing-scope",
+        idempotencyKey: "commit-missing-scope",
+        intent: "commit" as const,
+        phase: "execute" as const,
+        proposalId: "commit-proposal",
+      };
+      expect(port.admit("capability", request).ok).toBe(false);
+    },
+  );
   it("admits approval-free Full access delivery only from the complete live policy envelope", () => {
     const request = {
       action: "delivery" as const,

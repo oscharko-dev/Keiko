@@ -2,7 +2,10 @@ import type {
   GatewayToolCatalogAdvertisement,
   ToolInvocationBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
-import type { ToolResultReason } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  TOOL_CATALOG_LIMITS,
+  type ToolResultReason,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   captureCatalogJson,
   createToolInvocationNormalizer,
@@ -258,6 +261,29 @@ function bindCall(
     );
   }
 }
+// `captureCatalogJson`'s budget is a single accumulator shared across everything it copies --
+// right-sized for one call's arguments, wrong for a batch: `TOOL_CATALOG_LIMITS.maxResultBytes`
+// caps any single invocation at exactly `maxArgumentBytes`, so a shared budget across the whole
+// array would reject up to `maxArrayItems` legitimate calls (e.g. 50 parallel tool calls) the
+// moment their COMBINED size passes one call's ceiling, even though every one of them is
+// individually well under it. The array only needs to be proven genuine and bounded in length
+// here -- mirrors copyArray's own shape checks (dense, correctly-prototyped, no smuggled own
+// keys, no sparse holes or accessor-backed indices) without sharing a byte budget across
+// siblings; `captureCall` below still re-validates (and re-bounds) every entry individually.
+function requireGenuineCallArray(calls: readonly NormalizedToolCall[]): void {
+  const genuineIndex = (index: number): boolean => {
+    const descriptor = Object.getOwnPropertyDescriptor(calls, String(index));
+    return descriptor !== undefined && "value" in descriptor && descriptor.enumerable === true;
+  };
+  requireBridge(
+    Array.isArray(calls) &&
+      Object.getPrototypeOf(calls) === Array.prototype &&
+      Reflect.ownKeys(calls).length === calls.length + 1 &&
+      calls.length <= TOOL_CATALOG_LIMITS.maxArrayItems &&
+      calls.every((_call, index) => genuineIndex(index)),
+    "invalid-arguments",
+  );
+}
 function bindCalls(
   normalizer: ToolInvocationNormalizer | undefined,
   calls: readonly NormalizedToolCall[],
@@ -266,9 +292,8 @@ function bindCalls(
 ): readonly NormalizedToolCall[] {
   let entries: readonly NormalizedToolCall[];
   try {
-    const captured = captureCatalogJson(calls);
-    requireBridge(Array.isArray(captured), "invalid-arguments");
-    entries = (captured as readonly NormalizedToolCall[]).map(captureCall);
+    requireGenuineCallArray(calls);
+    entries = calls.map(captureCall);
     requireBridge(
       new Set(entries.map((call) => call.id)).size === entries.length,
       "invalid-arguments",
