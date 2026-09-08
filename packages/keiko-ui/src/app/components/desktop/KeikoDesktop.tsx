@@ -34,8 +34,9 @@ export function KeikoDesktop(): ReactNode {
     // that already shows the app -- pasted into its address bar, or navigated by a driver -- is a
     // same-document fragment navigation. It fires `hashchange` and never re-runs the boot effect
     // above, so the attestation was neither redeemed nor stripped (#3390, real runs 30 and 32).
-    // The router never captured such a fragment (its popstate handler ignores browser-created
-    // entries), so the redemption's own history strip is final here and no replace is needed.
+    // By hashchange time the router's mount effect has patched `history.replaceState` to sync
+    // external calls into its canonical URL, so this strip lands there directly -- unlike boot,
+    // whose child effect runs first and hits the still-native call, hence its explicit replace.
     const onHashChange = (): void => {
       if (!pairingFragmentPresent()) return;
       void redeemCodingAppSessionPairingFragment();

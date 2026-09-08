@@ -2,10 +2,7 @@ import type { ReactNode } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
-import {
-  redeemCodingAppSessionPairingFragment,
-  redeemCodingAppSessionPairingOnBoot,
-} from "@/lib/coding-app-session-client";
+import { redeemCodingAppSessionPairingOnBoot } from "@/lib/coding-app-session-client";
 import { KeikoDesktop } from "./KeikoDesktop";
 
 const replace = vi.fn();
@@ -18,10 +15,18 @@ vi.mock("./AppShell", () => ({
   AppShell: (): ReactNode => <section aria-label="Mock app shell" />,
 }));
 
-vi.mock("@/lib/coding-app-session-client", () => ({
-  redeemCodingAppSessionPairingOnBoot: vi.fn(() => Promise.resolve(false)),
-  redeemCodingAppSessionPairingFragment: vi.fn(() => Promise.resolve(true)),
-}));
+// Only the boot entry is mocked; `redeemCodingAppSessionPairingFragment` stays the real
+// implementation so the same-document arrival tests below exercise its actual address-bar and
+// network effects instead of a recorded mock call (#3390 review).
+vi.mock("@/lib/coding-app-session-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/coding-app-session-client")>();
+  return {
+    ...actual,
+    redeemCodingAppSessionPairingOnBoot: vi.fn(() => Promise.resolve(false)),
+  };
+});
+
+const PAIR_PATH = "/api/coding-workbench/app-session/pair";
 
 const PAIRING_FRAGMENT = encodeCodingAppSessionPairingFragment({
   requestId: "desktop-arrival",
@@ -39,7 +44,6 @@ function navigateSameDocument(hash: string): void {
 describe("KeikoDesktop", () => {
   afterEach(() => {
     replace.mockClear();
-    vi.mocked(redeemCodingAppSessionPairingFragment).mockClear();
     window.history.replaceState(null, "", "/");
   });
 
@@ -82,7 +86,8 @@ describe("KeikoDesktop", () => {
 
   // #3390, real runs 30 and 32: opening the launcher URL in the tab that already shows the app is
   // a same-document fragment navigation. The boot effect never runs again, so without a hashchange
-  // path the attestation was neither redeemed nor stripped and stayed in the address bar.
+  // path the attestation was neither redeemed nor stripped and stayed in the address bar. Asserts
+  // the real redemption's own effect (the address bar is cleaned) rather than a mocked call.
   it("redeems a pairing fragment that arrives through a same-document navigation", async () => {
     render(<KeikoDesktop />);
     await waitFor(() => {
@@ -92,7 +97,7 @@ describe("KeikoDesktop", () => {
     navigateSameDocument(PAIRING_FRAGMENT);
 
     await waitFor(() => {
-      expect(redeemCodingAppSessionPairingFragment).toHaveBeenCalledTimes(1);
+      expect(window.location.hash).toBe("");
     });
   });
 
@@ -101,7 +106,7 @@ describe("KeikoDesktop", () => {
 
     navigateSameDocument("#main");
 
-    expect(redeemCodingAppSessionPairingFragment).not.toHaveBeenCalled();
+    expect(window.location.hash).toBe("#main");
   });
 
   it("stops listening for pairing arrivals once unmounted", () => {
@@ -110,6 +115,36 @@ describe("KeikoDesktop", () => {
 
     navigateSameDocument(PAIRING_FRAGMENT);
 
-    expect(redeemCodingAppSessionPairingFragment).not.toHaveBeenCalled();
+    expect(window.location.hash).toBe(PAIRING_FRAGMENT);
+  });
+
+  // #3390 review: the router's mount effect patches `history.replaceState` to sync external calls
+  // into its canonical URL once installed, so a same-document arrival needs no router replace --
+  // unlike the boot path above. This drives the real redeemer (only `OnBoot` is mocked) against a
+  // stubbed network and fails if the `hashchange` listener is ever removed.
+  it("pins the clean address bar and posts the pairing after a same-document arrival (#3390)", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      render(<KeikoDesktop />);
+      await waitFor(() => {
+        expect(redeemCodingAppSessionPairingOnBoot).toHaveBeenCalled();
+      });
+
+      navigateSameDocument(PAIRING_FRAGMENT);
+
+      await waitFor(() => {
+        expect(window.location.hash).toBe("");
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      });
+      const [path, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(path).toBe(PAIR_PATH);
+      expect(init.method).toBe("POST");
+      expect(replace).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
