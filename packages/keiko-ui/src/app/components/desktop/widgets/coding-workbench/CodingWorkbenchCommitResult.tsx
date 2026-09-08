@@ -35,13 +35,19 @@ export function CodingWorkbenchCommitResult({
   return (
     <section className={styles.card} aria-label={t("codingWorkbench.commitResult.title")}>
       <h3 className={styles.approvalResearchTitle}>{t("codingWorkbench.commitResult.title")}</h3>
-      <output>{t(`codingWorkbench.commitResult.status.${receipt.status}`)}</output>
+      <output
+        data-testid="cwb-commit-result"
+        data-state={receipt.status}
+        data-reason={receipt.reason}
+      >
+        {t(`codingWorkbench.commitResult.status.${receipt.status}`)}
+      </output>
       <p className={styles.helpText}>
         {t(`codingWorkbench.commitResult.reason.${receipt.reason}`)}
       </p>
       {receipt.headSha === undefined ? null : (
         <dl className={styles.approvalFacts}>
-          <div className={styles.approvalFact}>
+          <div className={styles.approvalFact} data-fact="headSha">
             <dt>{t("codingWorkbench.commitResult.head")}</dt>
             <dd>{receipt.headSha}</dd>
           </div>

@@ -19,6 +19,23 @@ describe("exact-head Workbench CI observation", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
+  // #3390: same reason as the delivery card's fact keys — every observation fact and check count
+  // was addressable only through its translated label or a translated `aria-label`, so nothing
+  // could read "the observed commit" or "the failed required checks" without knowing the locale.
+  it("identifies every observation fact and check count by a stable key", () => {
+    render(<CodingWorkbenchCiReadiness snapshot={ciReadinessSnapshot()} />);
+    const region = screen.getByRole("region", { name: "CI readiness" });
+    expect(region.querySelector('[data-fact="headSha"] dd')).toHaveTextContent("3".repeat(40));
+    expect(region.querySelector('[data-fact="observedAt"] time')).toHaveAttribute(
+      "datetime",
+      CI_OBSERVED_AT,
+    );
+    const required = region.querySelector('[data-checks="required"]');
+    expect(required?.querySelector('[data-count="failed"] dd')).toHaveTextContent("0");
+    const advisory = region.querySelector('[data-checks="advisory"]');
+    expect(advisory?.querySelector('[data-count="failed"] dd')).toHaveTextContent("1");
+  });
+
   it("separates technical success, advisory failures, draft and outstanding human review", async () => {
     render(<CodingWorkbenchCiReadiness snapshot={ciReadinessSnapshot()} />);
     const region = screen.getByRole("region", { name: "CI readiness" });

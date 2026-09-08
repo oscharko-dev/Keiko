@@ -142,8 +142,8 @@ export function CodingWorkbenchCommitBinding({
         {t("codingWorkbench.approval.commit.binding")}
       </summary>
       <dl className={styles.approvalFacts}>
-        {commitBindingFacts(result, t).map(({ label, value }) => (
-          <div className={styles.approvalFact} key={label}>
+        {commitBindingFacts(result, t).map(({ id, label, value }) => (
+          <div className={styles.approvalFact} data-fact={id} key={id}>
             <dt>{label}</dt>
             <dd>{value}</dd>
           </div>
@@ -153,19 +153,38 @@ export function CodingWorkbenchCommitBinding({
   );
 }
 
+// #3390: `id` is the fact's stable, locale-independent identity; `label` is what the operator
+// reads. Mirrors `DeliveryFacts` on the delivery card and `Fact` on the CI card.
 function commitBindingFacts(
   result: CommitReview["result"],
   t: CodingWorkbenchTranslate,
-): readonly { readonly label: string; readonly value: string }[] {
+): readonly { readonly id: string; readonly label: string; readonly value: string }[] {
   return [
-    { label: t("codingWorkbench.approval.commit.proposal"), value: result.proposalId },
     {
+      id: "proposalId",
+      label: t("codingWorkbench.approval.commit.proposal"),
+      value: result.proposalId,
+    },
+    {
+      id: "verificationEvidenceId",
       label: t("codingWorkbench.approval.commit.verification"),
       value: result.verificationEvidenceId,
     },
-    { label: t("codingWorkbench.approval.commit.base"), value: result.baseSha },
-    { label: t("codingWorkbench.approval.commit.parent"), value: result.parentSha },
-    { label: t("codingWorkbench.approval.commit.tree"), value: result.stagedTreeDigest },
-    { label: t("codingWorkbench.approval.commit.messageDigest"), value: result.messageDigest },
+    { id: "baseSha", label: t("codingWorkbench.approval.commit.base"), value: result.baseSha },
+    {
+      id: "parentSha",
+      label: t("codingWorkbench.approval.commit.parent"),
+      value: result.parentSha,
+    },
+    {
+      id: "stagedTreeDigest",
+      label: t("codingWorkbench.approval.commit.tree"),
+      value: result.stagedTreeDigest,
+    },
+    {
+      id: "messageDigest",
+      label: t("codingWorkbench.approval.commit.messageDigest"),
+      value: result.messageDigest,
+    },
   ];
 }

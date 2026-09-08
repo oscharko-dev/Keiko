@@ -46,6 +46,22 @@ describe("verified commit outcome in the Code task", () => {
     vi.restoreAllMocks();
   });
 
+  // #3390: same reason as the sibling status cards — the receipt's status, reason and binding facts
+  // were addressable only through their translated text, so no machine could read "did this commit
+  // succeed" or "which verification evidence backs it" without knowing the locale.
+  it("exposes the receipt status, reason and binding facts by stable key", () => {
+    render(<CodingWorkbenchCommitResult result={receipt()} runId="run-1" />);
+    const region = screen.getByRole("region", { name: "Commit result" });
+    const state = screen.getByTestId("cwb-commit-result");
+    expect(state).toHaveAttribute("data-state", "succeeded");
+    expect(state).toHaveAttribute("data-reason", "completed");
+    expect(region.querySelector('[data-fact="headSha"] dd')).toHaveTextContent("5".repeat(40));
+    expect(region.querySelector('[data-fact="verificationEvidenceId"] dd')).toHaveTextContent(
+      "verification-3386",
+    );
+    expect(region.querySelector('[data-fact="proposalId"] dd')).toHaveTextContent("proposal-1");
+  });
+
   it("shows the exact successful receipt with no new approval controls", async () => {
     render(<CodingWorkbenchCommitResult result={receipt()} runId="run-1" />);
     expect(screen.getByRole("region", { name: "Commit result" })).toHaveTextContent(

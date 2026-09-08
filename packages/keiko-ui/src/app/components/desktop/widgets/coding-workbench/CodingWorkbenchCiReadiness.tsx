@@ -116,16 +116,23 @@ function ObservationDetails({
         <CheckCounts kind="advisory" counts={observation.advisoryChecks} t={t} />
       </div>
       <dl className={common.approvalFacts}>
-        <Fact label={t("codingWorkbench.ci.head")} value={<code>{observation.headSha}</code>} />
         <Fact
+          id="headSha"
+          label={t("codingWorkbench.ci.head")}
+          value={<code>{observation.headSha}</code>}
+        />
+        <Fact
+          id="observedAt"
           label={t("codingWorkbench.ci.observedAt")}
           value={<ObservedTime value={observation.observedAt} />}
         />
         <Fact
+          id="expiresAt"
           label={t("codingWorkbench.ci.expiresAt")}
           value={<ObservedTime value={observation.expiresAt} />}
         />
         <Fact
+          id="complete"
           label={t("codingWorkbench.ci.completeness")}
           value={t(`codingWorkbench.ci.${observation.complete ? "complete" : "incomplete"}`)}
         />
@@ -145,11 +152,15 @@ function CheckCounts({
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   return (
-    <section className={styles["cmp-ci-checks"]} aria-label={t(`codingWorkbench.ci.${kind}`)}>
+    <section
+      className={styles["cmp-ci-checks"]}
+      data-checks={kind}
+      aria-label={t(`codingWorkbench.ci.${kind}`)}
+    >
       <h4>{t(`codingWorkbench.ci.${kind}`)}</h4>
       <dl className={styles["cmp-ci-counts"]}>
         {COUNTS.map((key) => (
-          <div key={key}>
+          <div data-count={key} key={key}>
             <dt>{t(`codingWorkbench.ci.count.${key}`)}</dt>
             <dd>{counts[key]}</dd>
           </div>
@@ -178,28 +189,42 @@ function ReviewContext({
   return (
     <dl className={common.approvalFacts}>
       <Fact
+        id="pullRequestStatus"
         label={t("codingWorkbench.ci.pullRequest")}
         value={t(`codingWorkbench.ci.pr.${pullRequest.status}`)}
       />
       <Fact
+        id="isDraft"
         label={t("codingWorkbench.ci.draft")}
         value={t(`codingWorkbench.ci.${pullRequest.isDraft ? "isDraft" : "notDraft"}`)}
       />
-      <Fact label={t("codingWorkbench.ci.humanReview")} value={review} />
+      <Fact id="humanReview" label={t("codingWorkbench.ci.humanReview")} value={review} />
       <Fact
+        id="conflict"
         label={t("codingWorkbench.ci.conflict")}
         value={t(`codingWorkbench.ci.conflict.${pullRequest.conflict}`)}
       />
       <Fact
+        id="baseCurrency"
         label={t("codingWorkbench.ci.baseCurrency")}
         value={t(`codingWorkbench.ci.base.${pullRequest.baseCurrency}`)}
       />
     </dl>
   );
 }
-function Fact({ label, value }: { readonly label: string; readonly value: ReactNode }): ReactNode {
+// #3390: `id` is the fact's stable, locale-independent identity; `label` is what the operator
+// reads. Mirrors `DeliveryFacts` on the sibling delivery card.
+function Fact({
+  id,
+  label,
+  value,
+}: {
+  readonly id: string;
+  readonly label: string;
+  readonly value: ReactNode;
+}): ReactNode {
   return (
-    <div className={common.approvalFact}>
+    <div className={common.approvalFact} data-fact={id}>
       <dt>{label}</dt>
       <dd className={styles["cmp-ci-value"]}>{value}</dd>
     </div>
