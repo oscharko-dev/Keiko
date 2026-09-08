@@ -17,6 +17,7 @@ import { PassThrough } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
@@ -26,10 +27,15 @@ import {
   type RuntimeSupervisorLaunchRequest,
 } from "./runtimeProcessSupervisor.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
+import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
+import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
+import type { OpenCodeGovernedSinkReceipt } from "./opencodeRuntimeAdapter.js";
+import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import {
   OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
   projectOpenCodeProtocolSurface,
 } from "./opencodeProtocolSurface.js";
+import { createOpenCodeRuntimeComposition } from "./opencodeRuntimeComposition.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 
 const dirs: string[] = [];
@@ -200,11 +206,7 @@ const OPENAPI = {
 const PROTOCOL_HANDSHAKE_DIGEST = projectOpenCodeProtocolSurface(OPENAPI).digest;
 
 interface OpenCodeRuntimeComposition {
-  readonly manager: {
-    start(request: Record<string, unknown>): unknown;
-    stop(runId: string): Promise<unknown>;
-    health(): unknown;
-  };
+  readonly manager: CodingRuntimeManager;
   readonly toolBridge: {
     readonly url: string;
     handle(input: {
@@ -267,13 +269,13 @@ interface OpenCodeRuntimeCompositionModule {
     readonly governedEventSink: {
       readonly execute: (
         identityKey: string,
-        event: Readonly<Record<string, unknown>>,
-      ) => Promise<"applied" | "duplicate">;
+        event: OpenCodeReconciliationEvent,
+      ) => Promise<OpenCodeGovernedSinkReceipt>;
     };
     readonly safeActivity?: {
       readonly arm: () => void;
       readonly clear: () => void;
-      readonly ingest: (signal: unknown) => boolean;
+      readonly ingest: (signal: CodingSafeActivitySignal) => boolean;
       readonly recordDrops: (count: number) => void;
       readonly settleTool: (input: {
         readonly actionId: string;
@@ -281,11 +283,12 @@ interface OpenCodeRuntimeCompositionModule {
         readonly occurredAt: string;
       }) => void;
     };
-    readonly onRuntimeEvent?: (event: Readonly<Record<string, unknown>>) => void;
+    readonly onRuntimeEvent?: (event: CodingWorkbenchRuntimeEvent) => void;
+    readonly onQuestionObserved?: (identity: string) => void;
     readonly gatewayReadiness: {
-      readonly waitForObservedRequest: () => Promise<boolean>;
+      readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
       readonly verifyObserved: (runId: string) => void;
-      readonly clear: () => void;
+      readonly clear: (runId: string, preserveVerification?: boolean) => void;
     };
     readonly fetch: typeof globalThis.fetch;
     readonly supervisor: ReturnType<typeof createRuntimeProcessSupervisor>;
@@ -301,10 +304,9 @@ interface OpenCodeRuntimeCompositionModule {
   }): OpenCodeRuntimeComposition;
 }
 
-async function compositionModule(): Promise<OpenCodeRuntimeCompositionModule> {
-  const moduleName = "./opencodeRuntimeComposition.js";
-  return (await import(moduleName)) as OpenCodeRuntimeCompositionModule;
-}
+const openCodeRuntimeCompositionModule: OpenCodeRuntimeCompositionModule = {
+  createOpenCodeRuntimeComposition,
+};
 
 function tempDir(prefix: string): string {
   const value = mkdtempSync(join(tmpdir(), prefix));
@@ -445,11 +447,11 @@ interface StartBridgeControl {
   readonly onSseStart?: (controller: ReadableStreamDefaultController<Uint8Array>) => void;
   readonly sseFrame?: string;
   readonly historyCalls?: Readonly<Record<string, number>>[];
-  readonly governedEvents?: Readonly<Record<string, unknown>>[];
+  readonly governedEvents?: OpenCodeReconciliationEvent[];
   readonly questionObservations?: string[];
   readonly safeActivity?: FixtureSafeActivity;
   readonly diagnostics?: ServerDiagnosticSink;
-  readonly runtimeEvents?: Readonly<Record<string, unknown>>[];
+  readonly runtimeEvents?: CodingWorkbenchRuntimeEvent[];
   readonly mode?: "governed-assist" | "supervised-coding" | "autonomous-delivery";
   readonly runControl?: {
     readonly promptBodies: string[];
@@ -500,7 +502,7 @@ function optionalDiagnostics(control: StartBridgeControl | undefined): {
 }
 
 function optionalRuntimeEvents(control: StartBridgeControl | undefined): {
-  readonly onRuntimeEvent?: (event: Readonly<Record<string, unknown>>) => void;
+  readonly onRuntimeEvent?: (event: CodingWorkbenchRuntimeEvent) => void;
 } {
   const sink = control?.runtimeEvents;
   return sink === undefined
@@ -698,7 +700,7 @@ async function startBridgeFixture(
         ? Promise.resolve({ status: "observed", evidence: [] })
         : facade.execute(input),
   };
-  const runtime = (await compositionModule()).createOpenCodeRuntimeComposition({
+  const runtime = openCodeRuntimeCompositionModule.createOpenCodeRuntimeComposition({
     portable: { verification: portable.verification, resourceRoot, target: "macos-arm64" },
     stateBaseRoot: join(root, "state"),
     capabilities: {
@@ -1017,7 +1019,7 @@ describe("unmounted OpenCode runtime composition", () => {
       ) as CodingToolFacade["execute"],
     };
     const authorityOrder: string[] = [];
-    const governedEvents: Readonly<Record<string, unknown>>[] = [];
+    const governedEvents: OpenCodeReconciliationEvent[] = [];
     const authorityLifecycle = {
       revokeRuntime: (runId: string): true => {
         authorityOrder.push(`revoke:${runId}`);
@@ -1036,7 +1038,7 @@ describe("unmounted OpenCode runtime composition", () => {
         return true;
       },
     };
-    const runtime = (await compositionModule()).createOpenCodeRuntimeComposition({
+    const runtime = openCodeRuntimeCompositionModule.createOpenCodeRuntimeComposition({
       portable: { verification: portable.verification, resourceRoot, target: "macos-arm64" },
       stateBaseRoot,
       capabilities: {
@@ -1296,7 +1298,7 @@ describe("private OpenCode run control", () => {
   });
 
   it("aliases live permission ids and resolves only the run-owned upstream request", async () => {
-    const runtimeEvents: Readonly<Record<string, unknown>>[] = [];
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
     const permissionRequests: {
       readonly method: string;
       readonly path: string;
@@ -1361,7 +1363,7 @@ describe("private OpenCode run control", () => {
       if (typeof permission !== "object" || permission === null || Array.isArray(permission)) {
         throw new Error("expected public permission request");
       }
-      const requestId = (permission as Record<string, unknown>).requestId;
+      const { requestId } = permission;
       expect(requestId).toMatch(/^permission-[0-9]+$/u);
       expect(requestId).not.toBe(upstreamPermission.id);
       expect(permission).toMatchObject({ scopeLabel: "workspace-scope" });
@@ -1387,7 +1389,7 @@ describe("private OpenCode run control", () => {
 
   it("accepts status omission only when causal terminal history exists", async () => {
     const prompt = "SENTINEL_PRIVATE_RUN_PROMPT";
-    const governedEvents: Readonly<Record<string, unknown>>[] = [];
+    const governedEvents: OpenCodeReconciliationEvent[] = [];
     let history: readonly Readonly<Record<string, unknown>>[] = completedTurnHistory().slice(0, 1);
     const runControl = {
       promptBodies: [] as string[],

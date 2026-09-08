@@ -1232,6 +1232,20 @@ bounded diagnosis. Neither the full job nor production-signed N−1/N qualificat
 green. KHA1 coordinator acceptance remains disabled. On 2026-09-08, GitHub `dev` is still
 `c5c03d48fa1066c985a656d29880ae1c02e68c48`, and issue ownership is unchanged.
 
+### Runtime composition test collection repair
+
+Cold dynamic loading of the runtime composition consumed 10.5–11.7 seconds inside a
+15-second test budget; measured startup and shutdown took approximately 60 and 6 milliseconds.
+The test now statically imports the factory during collection and checks its fixture interface
+against the production types. Existing startup/test timeouts and permission shape assertions
+are preserved. The lead reviewed the final test-only diff at SHA-256
+`6eb3b1540f10021cb2cfda37963c2ad4ff29b8ccb1629345291b31f1034d1eb8`.
+
+The typed fixture replay passed all 25 tests in 18.49 seconds, and the two timing-sensitive
+cases passed with coverage in 18.67 seconds. Canonical Node 24.18.0 package/root typechecking
+also passed. The final diff restores the original permission guard after those executions;
+the complete final-head suite is still required. No production lifecycle behavior changed.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification
