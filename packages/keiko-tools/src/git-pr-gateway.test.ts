@@ -536,6 +536,43 @@ describe("runGitPullRequest lifecycle gates", () => {
     expect(result.rejection?.disposition).toBe("user-fixable");
   });
 
+  // #3390: rehearsal runs 15 and 17 created their pull request while the delivery recorded only
+  // `internal-error`; the adapter's closed words and counts now ride on the lifecycle result so
+  // the caller's log names the failing step. The evidence kernel shape stays closed.
+  it("carries the adapter's failure detail on the lifecycle result, never in the evidence kernel", async () => {
+    const failed: GitPrExecResult = {
+      schemaVersion: "1",
+      outcome: "failed",
+      durationMs: 1185,
+      errorCode: "internal-error",
+      failureClass: "identity-unparsable",
+      identityIssue: "shape-invalid",
+      stdoutBytes: 417,
+      stderrBytes: 0,
+      exitCode: 0,
+    };
+    const { adapter } = fakeAdapter(failed);
+    const result = await runGitPullRequest(
+      { command: createCommand(), approval: NO_APPROVAL },
+      deps({ adapter, pack: safePack() }),
+    );
+    expect(result.failure).toEqual({
+      failureClass: "identity-unparsable",
+      identityIssue: "shape-invalid",
+      stdoutBytes: 417,
+      stderrBytes: 0,
+      exitCode: 0,
+    });
+    expect(result.lifecycle.outcome.status).toBe("failed");
+    if (result.lifecycle.outcome.status !== "failed") throw new Error("unreachable");
+    expect(result.lifecycle.outcome.executionResult).toEqual({
+      schemaVersion: "1",
+      outcome: "failed",
+      durationMs: 1185,
+      errorCode: "internal-error",
+    });
+  });
+
   it("does not attach a rejection descriptor when the run was aborted", async () => {
     const aborted: GitPrExecResult = { schemaVersion: "1", outcome: "aborted", durationMs: 1 };
     const { adapter } = fakeAdapter(aborted);

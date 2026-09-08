@@ -2344,19 +2344,19 @@
     {
       "op": "git.delivery.dispatch.no-spawn",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:462",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:464",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:804",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:835",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:836",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:867",
       "package": "keiko-server"
     },
     {

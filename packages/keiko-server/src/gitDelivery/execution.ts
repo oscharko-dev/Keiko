@@ -12,6 +12,8 @@ import type {
   CommandTerminationEvidence,
   GitDeliveryActionKind,
   GitDeliveryApprovalRequirement,
+  GitDeliveryBlockReason,
+  GitDeliveryExecutionErrorCode,
   GitDeliveryExecutionResult,
   GitDeliveryRepoPolicyPack,
   GitSyncOperation,
@@ -618,7 +620,12 @@ interface GitDeliveryLifecycleRecordInput {
   readonly activityLog: ServerLogSink;
   readonly correlationId: string | undefined;
   readonly authorityDenied: boolean;
+  /** The provider adapter's closed failure words and counts (#3390), logged with the mutation. */
+  readonly failureDetail?: GitDeliveryFailureDetail | undefined;
 }
+
+/** What an adapter may say about a failed provider call, body-free: closed words and counts. */
+export type GitDeliveryFailureDetail = Readonly<Record<string, string | number | undefined>>;
 
 // Returns the lifecycle it actually recorded so a caller that answers the client from the same
 // fact (executeGovernedMutation) reports the governance block it persisted, rather than projecting
@@ -630,7 +637,7 @@ export function recordGitDeliveryLifecycle(
     ? authorityDeniedGitDeliveryLifecycle(input.result)
     : input.result;
   persistGitDeliveryEvidence(input.deps, lifecycle, input.snapshot, input.repoId, input.now);
-  logGitDeliveryMutation(input.activityLog, lifecycle, input.correlationId);
+  logGitDeliveryMutation(input.activityLog, lifecycle, input.correlationId, input.failureDetail);
   return lifecycle;
 }
 
@@ -768,33 +775,57 @@ const UNSUCCESSFUL_MUTATION_STATUSES: ReadonlySet<string> = new Set([
  */
 export function executionFailureDetail(
   outcome: GitMutationLifecycleResult["outcome"],
-): Readonly<Record<string, string>> {
+  detail: GitDeliveryFailureDetail = {},
+): Readonly<Record<string, string | number>> {
   if (outcome.status !== "failed" && outcome.status !== "recovery-required") return {};
   const result: unknown = outcome.executionResult;
-  if (typeof result !== "object" || result === null) return {};
-  const detail: Record<string, string> = {};
-  for (const key of ["rejectionReason", "failureClass", "identityIssue"] as const) {
-    const value: unknown = Reflect.get(result, key);
-    if (typeof value === "string" && /^[a-z][a-z-]{0,39}$/u.test(value)) detail[key] = value;
+  const admitted: Record<string, string | number> = {};
+  const admit = (key: string, value: unknown): void => {
+    if (typeof value === "string" && /^[a-z][a-z-]{0,39}$/u.test(value)) admitted[key] = value;
+    else if (typeof value === "number" && Number.isSafeInteger(value)) admitted[key] = value;
+  };
+  for (const key of FAILURE_DETAIL_KEYS) {
+    if (typeof result === "object" && result !== null) admit(key, Reflect.get(result, key));
+    admit(key, detail[key]);
   }
-  return detail;
+  return admitted;
+}
+
+const FAILURE_DETAIL_KEYS = [
+  "rejectionReason",
+  "failureClass",
+  "identityIssue",
+  "stdoutBytes",
+  "stderrBytes",
+  "exitCode",
+] as const;
+
+function executionErrorCodeOf(
+  outcome: GitMutationLifecycleResult["outcome"],
+): GitDeliveryExecutionErrorCode | undefined {
+  return outcome.status === "failed" || outcome.status === "recovery-required"
+    ? (outcome.executionResult.errorCode ?? "internal-error")
+    : undefined;
+}
+
+function policyBlockReasonOf(
+  outcome: GitMutationLifecycleResult["outcome"],
+): GitDeliveryBlockReason | undefined {
+  return outcome.status === "blocked" && outcome.category === "policy-block"
+    ? outcome.blockReason
+    : undefined;
 }
 
 export function logGitDeliveryMutation(
   log: ServerLogSink,
   result: GitMutationLifecycleResult,
   correlationId: string | undefined,
+  failureDetail: GitDeliveryFailureDetail = {},
 ): void {
   const { outcome, envelope, phaseReached, preflight } = result;
   const unsuccessful = UNSUCCESSFUL_MUTATION_STATUSES.has(outcome.status);
-  const executionErrorCode =
-    outcome.status === "failed" || outcome.status === "recovery-required"
-      ? (outcome.executionResult.errorCode ?? "internal-error")
-      : undefined;
-  const blockReason =
-    outcome.status === "blocked" && outcome.category === "policy-block"
-      ? outcome.blockReason
-      : undefined;
+  const executionErrorCode = executionErrorCodeOf(outcome);
+  const blockReason = policyBlockReasonOf(outcome);
   log.write({
     // Without an explicit level this line defaulted to `info`, so a FAILED governed mutation or
     // push was filtered out entirely under `KEIKO_LOG_LEVEL=warn` — the threshold an operator
@@ -819,7 +850,7 @@ export function logGitDeliveryMutation(
         outcome.status === "approval-required" ? outcome.requiredApprovers.length : 0,
       blockReason,
       executionErrorCode,
-      ...executionFailureDetail(outcome),
+      ...executionFailureDetail(outcome, failureDetail),
     },
   });
 }

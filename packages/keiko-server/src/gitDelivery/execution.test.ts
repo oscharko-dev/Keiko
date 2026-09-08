@@ -67,6 +67,7 @@ import {
   resolveProjectWorkspace,
   type GitDeliveryExecutionSeams,
   executionFailureDetail,
+  logGitDeliveryMutation,
 } from "./execution.js";
 import {
   deriveManagedWorktreePath,
@@ -510,6 +511,34 @@ describe("executionFailureDetail — closed provider failure words on the mutati
       identityIssue: "shape-invalid",
     });
     expect(executionFailureDetail(failed({ ...base, failureClass: "Free text here" }))).toEqual({});
+  });
+
+  it("admits the detail the PR path hands in beside the result's own words", () => {
+    const events: ServerLogEvent[] = [];
+    logGitDeliveryMutation(
+      { write: (event) => events.push(event) },
+      lifecycle(failed({ ...base })),
+      "corr-1",
+      {
+        failureClass: "identity-unparsable",
+        identityIssue: "shape-invalid",
+        stdoutBytes: 417,
+        stderrBytes: 0,
+        exitCode: 0,
+        note: "Not a closed word!",
+      },
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.extra).toMatchObject({
+      actionKind: "commit",
+      executionErrorCode: "internal-error",
+      failureClass: "identity-unparsable",
+      identityIssue: "shape-invalid",
+      stdoutBytes: 417,
+      stderrBytes: 0,
+      exitCode: 0,
+    });
+    expect(events[0]?.extra).not.toHaveProperty("note");
   });
 
   it("is empty for a success and for a failure without adapter detail", () => {

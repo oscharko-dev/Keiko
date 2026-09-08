@@ -135,9 +135,21 @@ export interface GitPrExecResult extends GitDeliveryExecutionResult {
   readonly rejectionReason?: GitPullRequestRejectionReason | undefined;
   readonly failureClass?: GitPrCreateFailureClass | undefined;
   readonly identityIssue?: GitPrIdentityIssue | undefined;
+  /** Body-free size and exit facts of the failed provider call: counts, never the bytes. */
+  readonly stdoutBytes?: number | undefined;
+  readonly stderrBytes?: number | undefined;
+  readonly exitCode?: number | undefined;
   readonly createdPrExternalId?: string | undefined;
   readonly createdPrIdentity?: GitPullRequestIdentity | undefined;
 }
+
+/** The closed, body-free failure words and counts an adapter attached to a failed result; carried
+ * on the lifecycle result so the caller's activity log can name the failing step (#3390). The
+ * evidence projection (`prExecutionEvidence`) stays the closed kernel shape and never carries them. */
+export type GitPrExecFailureDetail = Pick<
+  GitPrExecResult,
+  "rejectionReason" | "failureClass" | "identityIssue" | "stdoutBytes" | "stderrBytes" | "exitCode"
+>;
 
 export interface GitPullRequestAdapter {
   createPullRequest(req: GitPrCreateExecRequest): Promise<GitPrExecResult>;
@@ -600,6 +612,7 @@ export interface GitPullRequestOrchestratorDeps {
 export interface GitPullRequestLifecycleResult {
   readonly lifecycle: GitMutationLifecycleResult;
   readonly rejection?: GitPullRequestRejection | undefined;
+  readonly failure?: GitPrExecFailureDetail | undefined;
   readonly createdPrExternalId?: string | undefined;
   readonly createdPrIdentity?: GitPullRequestIdentity | undefined;
 }
@@ -836,6 +849,18 @@ function prExecutionEvidence(result: GitPrExecResult): GitDeliveryExecutionResul
   };
 }
 
+function prFailureDetail(result: GitPrExecResult): Pick<GitPullRequestLifecycleResult, "failure"> {
+  const failure: GitPrExecFailureDetail = {
+    ...(result.rejectionReason === undefined ? {} : { rejectionReason: result.rejectionReason }),
+    ...(result.failureClass === undefined ? {} : { failureClass: result.failureClass }),
+    ...(result.identityIssue === undefined ? {} : { identityIssue: result.identityIssue }),
+    ...(result.stdoutBytes === undefined ? {} : { stdoutBytes: result.stdoutBytes }),
+    ...(result.stderrBytes === undefined ? {} : { stderrBytes: result.stderrBytes }),
+    ...(result.exitCode === undefined ? {} : { exitCode: result.exitCode }),
+  };
+  return Object.keys(failure).length === 0 ? {} : { failure };
+}
+
 function createdIdentityResult(
   result: GitPrExecResult,
 ): Pick<GitPullRequestLifecycleResult, "createdPrIdentity"> {
@@ -892,6 +917,7 @@ export async function runGitPullRequest(
     return {
       lifecycle,
       rejection: gitPullRequestRejectionFor(reason),
+      ...prFailureDetail(result),
       ...(createdPrExternalId !== undefined ? { createdPrExternalId } : {}),
     };
   }

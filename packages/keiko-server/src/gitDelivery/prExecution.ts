@@ -216,6 +216,7 @@ export async function executeGovernedPullRequest(
     activityLog,
     correlationId,
     authorityDenied: seams.authorityDenialCapture?.result !== undefined,
+    ...(result.failure === undefined ? {} : { failureDetail: result.failure }),
   });
   return result;
 }

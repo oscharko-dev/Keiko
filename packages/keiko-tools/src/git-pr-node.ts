@@ -218,6 +218,7 @@ async function createPullRequest(
     return executionResult("failed", result.durationMs, {
       errorCode: "internal-error",
       failureClass: "output-truncated",
+      ...outputFacts(result),
     });
   if (req.canonicalGitHubIdentity === true) return canonicalCreateResult(req, result);
   const createdPrExternalId = parsePrNumber(result.stdout);
@@ -228,6 +229,7 @@ async function createPullRequest(
     return executionResult("failed", result.durationMs, {
       errorCode: "internal-error",
       failureClass: "number-unparsable",
+      ...outputFacts(result),
     });
   }
   return executionResult("succeeded", result.durationMs, { createdPrExternalId });
@@ -250,7 +252,19 @@ function canonicalCreateResult(
         errorCode: "internal-error",
         failureClass: "identity-unparsable",
         identityIssue: diagnosis.issue,
+        ...outputFacts(result),
       });
+}
+
+/** Sizes and exit code of a finished provider call: counts only, never a byte of output. */
+function outputFacts(
+  result: CommandResult,
+): Pick<GitPrExecResult, "stdoutBytes" | "stderrBytes" | "exitCode"> {
+  return {
+    stdoutBytes: Buffer.byteLength(result.stdout, "utf8"),
+    stderrBytes: Buffer.byteLength(result.stderr, "utf8"),
+    ...(typeof result.exitCode === "number" ? { exitCode: result.exitCode } : {}),
+  };
 }
 
 // Looks up a PR's GraphQL node id — the shared first step of every draft-state transition (the REST
