@@ -1,0 +1,131 @@
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  FRAMEWORK_REFERENCE_NAMES,
+  assertPinnedToolchain,
+  boundedDirectoryDigest,
+  generateVerifierAsset,
+  inspectVerifierToolchain,
+  renderGeneratedVerifierAsset,
+  verifierCompilerArguments,
+} from "../generate-windows-portable-authenticode-verifier.mjs";
+
+const roots = [];
+
+function temporaryRoot() {
+  const root = mkdtempSync(join(tmpdir(), "keiko-authenticode-generator-test-"));
+  roots.push(root);
+  return root;
+}
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
+});
+
+function fixture() {
+  const root = temporaryRoot();
+  const compilerDirectory = join(root, "Roslyn");
+  const referenceDirectory = join(root, "Reference Assemblies");
+  const sourcePath = join(root, "verifier.cs");
+  mkdirSync(join(compilerDirectory, "en"), { recursive: true });
+  mkdirSync(referenceDirectory, { recursive: true });
+  const compilerPath = join(compilerDirectory, "csc.exe");
+  writeFileSync(compilerPath, "compiler");
+  writeFileSync(join(compilerDirectory, "Microsoft.CodeAnalysis.dll"), "roslyn");
+  writeFileSync(join(compilerDirectory, "en", "csc.resources.dll"), "resources");
+  for (const name of FRAMEWORK_REFERENCE_NAMES) writeFileSync(join(referenceDirectory, name), name);
+  writeFileSync(sourcePath, "namespace Keiko { public static class Probe {} }\n");
+  const expectedToolchain = inspectVerifierToolchain({ compilerPath, referenceDirectory });
+  return { compilerPath, expectedToolchain, referenceDirectory, sourcePath };
+}
+
+describe("Windows portable Authenticode verifier generator", () => {
+  it("hashes every regular compiler-distribution member in stable relative-path order", () => {
+    const { compilerPath } = fixture();
+    const compilerDirectory = join(compilerPath, "..");
+    const first = boundedDirectoryDigest(compilerDirectory);
+    const second = boundedDirectoryDigest(compilerDirectory);
+    expect(first).toEqual(second);
+    expect(first.fileCount).toBe(3);
+
+    writeFileSync(join(compilerDirectory, "Microsoft.CodeAnalysis.dll"), "changed");
+    expect(boundedDirectoryDigest(compilerDirectory).sha256).not.toBe(first.sha256);
+  });
+
+  it("pins deterministic AnyCPU compilation without ambient response files or references", () => {
+    const args = verifierCompilerArguments({
+      outputPath: String.raw`C:\scratch\output\Keiko.Portable.Runtime.Authenticode.dll`,
+      references: Object.fromEntries(
+        FRAMEWORK_REFERENCE_NAMES.map((name) => [name, String.raw`C:\refs\${name}`]),
+      ),
+      scratchRoot: String.raw`C:\scratch`,
+      sourcePath: String.raw`C:\scratch\source\windows-portable-authenticode-verifier.cs`,
+    });
+    expect(args).toEqual(
+      expect.arrayContaining([
+        "/noconfig",
+        "/nostdlib+",
+        "/deterministic+",
+        "/debug-",
+        "/target:library",
+        "/platform:anycpu",
+        "/langversion:5",
+        String.raw`/pathmap:C:\scratch=/_/`,
+      ]),
+    );
+    expect(args.filter((value) => value.startsWith("/reference:"))).toHaveLength(4);
+  });
+
+  it("rejects compiler-distribution and framework-reference drift", () => {
+    const { expectedToolchain } = fixture();
+    expect(() => assertPinnedToolchain(expectedToolchain, expectedToolchain)).not.toThrow();
+    expect(() =>
+      assertPinnedToolchain(
+        { ...expectedToolchain, compilerSha256: "0".repeat(64) },
+        expectedToolchain,
+      ),
+    ).toThrow(/compiler digest/u);
+    expect(() =>
+      assertPinnedToolchain(
+        {
+          ...expectedToolchain,
+          compilerDistribution: {
+            ...expectedToolchain.compilerDistribution,
+            sha256: "0".repeat(64),
+          },
+        },
+        expectedToolchain,
+      ),
+    ).toThrow(/compiler distribution/u);
+  });
+
+  it("emits a byte-stable asset and bounds the compiler subprocess", () => {
+    const fixtureData = fixture();
+    const assembly = Buffer.from("deterministic-assembly");
+    const spawn = vi.fn((_command, args, _options) => {
+      const output = args.find((value) => value.startsWith("/out:"));
+      if (output === undefined) throw new Error("missing output argument");
+      writeFileSync(output.slice("/out:".length), assembly);
+      return { status: 0, stderr: "", stdout: "" };
+    });
+    const first = generateVerifierAsset({ ...fixtureData, spawn });
+    const second = generateVerifierAsset({ ...fixtureData, spawn });
+    expect(first.assembly).toEqual(assembly);
+    expect(first.asset).toBe(second.asset);
+    expect(first.asset).toBe(
+      renderGeneratedVerifierAsset({
+        assembly,
+        source: "namespace Keiko { public static class Probe {} }\n",
+        toolchain: fixtureData.expectedToolchain,
+      }),
+    );
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(spawn.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({ maxBuffer: 1024 * 1024, shell: false, timeout: 60_000 }),
+    );
+  });
+});
+import { Buffer } from "node:buffer";

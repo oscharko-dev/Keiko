@@ -6,8 +6,11 @@ import { WindowsSystemDirectoryError, type SecurityLogEvent } from "@oscharko-de
 import {
   WINDOWS_RFC3161_VERIFIER_SOURCE,
   resolveWindowsAuthenticodeSystem,
+  validateWindowsAuthenticodeVerifierAssembly,
   windowsAuthenticodeIdentityScript,
   windowsAuthenticodePublisherIdentityScript,
+  windowsAuthenticodeVerifierAssemblyInput,
+  windowsAuthenticodeVerifierLoaderScript,
   windowsPublisherIdentityMatches,
   windowsPublisherIdentityMatchesAsync,
   windowsSignerIdentity,
@@ -73,15 +76,14 @@ function runtimeDerEvidence(): RuntimeDerEvidence {
   const script = [
     "$ErrorActionPreference='Stop'",
     "$sources=@([Console]::In.ReadToEnd()|ConvertFrom-Json)",
-    "$refs=[string][AppContext]::GetData('TRUSTED_PLATFORM_ASSEMBLIES') -split [IO.Path]::PathSeparator",
-    "$sources|ForEach-Object{Add-Type -TypeDefinition $_ -ReferencedAssemblies $refs}",
+    "[Reflection.Assembly]::Load([Convert]::FromBase64String($sources[0]))|Out-Null",
     `function Test-RuntimeTst([string]$hex){[Keiko.Portable.Runtime.Rfc3161]::VerifyTstInfo([Convert]::FromHexString($hex),[Convert]::FromHexString('${SIGNATURE_HEX}'))}`,
     "$oidBytes=[Convert]::FromHexString('0603883703')",
     `$result=[ordered]@{canonical=(Test-RuntimeTst '${CANONICAL_TST_INFO}');fractional=(Test-RuntimeTst '${FRACTIONAL_TST_INFO}');noncanonicalOid=(Test-RuntimeTst '${NONCANONICAL_OID_TST_INFO}');trailingZero=(Test-RuntimeTst '${TRAILING_ZERO_TST_INFO}');oid=[Keiko.Portable.Runtime.Rfc3161]::DecodeOid($oidBytes)}`,
     "$result|ConvertTo-Json -Compress",
   ].join(";");
   return powershellJsonProbe(
-    [WINDOWS_RFC3161_VERIFIER_SOURCE],
+    [windowsAuthenticodeVerifierAssemblyInput()],
     script,
     30_000,
   ) as RuntimeDerEvidence;
@@ -91,8 +93,9 @@ function rfc3161ParityEvidence(): Rfc3161ParityEvidence {
   const script = [
     "$ErrorActionPreference='Stop'",
     "$sources=@([Console]::In.ReadToEnd()|ConvertFrom-Json)",
+    "[Reflection.Assembly]::Load([Convert]::FromBase64String($sources[0]))|Out-Null",
     "$refs=[string][AppContext]::GetData('TRUSTED_PLATFORM_ASSEMBLIES') -split [IO.Path]::PathSeparator",
-    "$sources|ForEach-Object{Add-Type -TypeDefinition $_ -ReferencedAssemblies $refs}",
+    "Add-Type -TypeDefinition $sources[1] -ReferencedAssemblies $refs",
     `function Test-ProducerParity([string]$hex){$bytes=[Convert]::FromHexString($hex);$signature=[Convert]::FromHexString('${SIGNATURE_HEX}');$runtime=[Keiko.Portable.Runtime.Rfc3161]::VerifyTstInfo($bytes,$signature);$method=[Keiko.Portable.WindowsPortableRfc3161].GetMethod('TryReadTstInfo',[Reflection.BindingFlags]'NonPublic,Static');$invokeArgs=[object[]]@($bytes,$signature,[DateTimeOffset]::MinValue);try{$producer=[bool]$method.Invoke($null,$invokeArgs)}catch{$producer=$false};return @($runtime,$producer)}`,
     `$oidBytes=[Convert]::FromHexString('0603883703')`,
     "$oidReader=[System.Formats.Asn1.AsnReader]::new($oidBytes,[System.Formats.Asn1.AsnEncodingRules]::DER)",
@@ -100,7 +103,7 @@ function rfc3161ParityEvidence(): Rfc3161ParityEvidence {
     "$result|ConvertTo-Json -Compress",
   ].join(";");
   return powershellJsonProbe(
-    [WINDOWS_RFC3161_VERIFIER_SOURCE, PRODUCER_RFC3161_SOURCE],
+    [windowsAuthenticodeVerifierAssemblyInput(), PRODUCER_RFC3161_SOURCE],
     script,
     60_000,
   ) as Rfc3161ParityEvidence;
@@ -144,7 +147,27 @@ describe("Windows portable Authenticode identity", (): void => {
     expect(script).toContain("SignerCertificate.Thumbprint");
     expect(script).toContain("GenerationTimes[0]");
     expect(script).toContain("LocalMachine\\AuthRoot");
+    expect(script).toContain("[Reflection.Assembly]::Load($b)");
+    expect(script).not.toContain("Add-Type");
+    expect(script).not.toContain(WINDOWS_RFC3161_VERIFIER_SOURCE);
     expect(script).not.toContain("IgnoreNotTimeValid");
+  });
+
+  it("binds the precompiled verifier to exact source and assembly hashes", (): void => {
+    const input = windowsAuthenticodeVerifierAssemblyInput();
+    const loader = windowsAuthenticodeVerifierLoaderScript();
+
+    expect(validateWindowsAuthenticodeVerifierAssembly(input)).toBe(input);
+    expect(() => validateWindowsAuthenticodeVerifierAssembly(input.slice(0, -4))).toThrow(
+      "Windows Authenticode verifier asset is invalid",
+    );
+    expect(() => validateWindowsAuthenticodeVerifierAssembly(`A${input.slice(1)}`)).toThrow(
+      "Windows Authenticode verifier asset is invalid",
+    );
+    expect(loader).toContain("[Console]::In");
+    expect(loader).toContain("$r.Peek() -ne -1");
+    expect(loader).toContain("[Reflection.Assembly]::Load($b)");
+    expect(loader).not.toContain("Add-Type");
   });
 
   it("embeds the producer-equivalent RFC3161 SHA-256 and historical-time gates", (): void => {

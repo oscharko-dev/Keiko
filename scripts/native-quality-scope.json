@@ -138,6 +138,12 @@
       "gates": ["dotnet-analyzers", "compiler-warnings-as-errors", "rfc3161-fixtures"]
     },
     {
+      "path": "packages/keiko-server/src/coding-runtime/windows-portable-authenticode-verifier.cs",
+      "language": "csharp",
+      "platforms": ["windows"],
+      "gates": ["dotnet-analyzers", "compiler-warnings-as-errors", "rfc3161-fixtures"]
+    },
+    {
       "path": "native/setup-bootstrap/keiko-setup-bootstrap.c",
       "language": "c",
       "platforms": ["windows"],

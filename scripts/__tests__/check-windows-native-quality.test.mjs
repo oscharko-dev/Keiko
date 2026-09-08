@@ -180,6 +180,12 @@ describe("Windows immutable-generation native quality wiring", () => {
       'throw "MSVC Windows update coordinator mechanics build failed"',
       "& $coordinatorTestOut",
       'throw "Windows update coordinator mechanics verification failed"',
+      'node (Join-Path $root "scripts/check-windows-portable-authenticode-verifier.mjs")',
+      'throw "Authenticode verifier deterministic asset check failed"',
+      '"scripts/windows-portable-authenticode-standard-token-loader.test.cs"',
+      'throw "Restricted-token Authenticode loader helper build failed"',
+      'node (Join-Path $root "scripts/check-windows-portable-authenticode-loader.mjs")',
+      'throw "Restricted-token Authenticode loader verification failed"',
     ];
     for (const wiring of required) expect(activeGate).toContain(wiring);
   });

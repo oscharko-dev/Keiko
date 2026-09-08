@@ -27,5 +27,7 @@
          restore graph with the ASP.NET Core targeting pack for no compiler benefit. -->
     <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.9" />
     <Compile Include="../windows-portable-rfc3161.cs" Link="windows-portable-rfc3161.cs" />
+    <Compile Include="../../packages/keiko-server/src/coding-runtime/windows-portable-authenticode-verifier.cs"
+             Link="windows-portable-authenticode-verifier.cs" />
   </ItemGroup>
 </Project>

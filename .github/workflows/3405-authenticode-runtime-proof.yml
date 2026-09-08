@@ -1,0 +1,60 @@
+name: 3405 Authenticode runtime proof
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/3405-windows-native-mechanics-proof]
+    paths:
+      - .github/workflows/3405-authenticode-runtime-proof.yml
+      - packages/keiko-server/src/coding-runtime/windows-portable-authenticode-verifier.cs
+      - packages/keiko-server/src/coding-runtime/windowsPortableAuthenticode.ts
+      - packages/keiko-server/src/coding-runtime/windowsPortableAuthenticodeVerifier.generated.ts
+      - packages/keiko-server/src/update-portable-platform-verification.ts
+      - scripts/check-windows-native-quality.ps1
+      - scripts/check-windows-portable-authenticode-loader.mjs
+      - scripts/check-windows-portable-authenticode-verifier.mjs
+      - scripts/generate-windows-portable-authenticode-verifier.mjs
+      - scripts/windows-portable-authenticode-standard-token-loader.test.cs
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-proof:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: "8.0.x"
+      - name: Install the locked dependency graph
+        run: npm ci --ignore-scripts
+      - name: Build package runtime used by the loader proof
+        timeout-minutes: 20
+        run: npm run build:packages
+      - name: Configure MSVC
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
+          $installation = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $installation) { throw "Visual Studio C++ tools were not found" }
+          $vcvars = Join-Path $installation "VC/Auxiliary/Build/vcvars64.bat"
+          $vcvarsWrapper = Join-Path $env:RUNNER_TEMP "keiko-vcvars-env.cmd"
+          Set-Content -LiteralPath $vcvarsWrapper -Encoding ascii -Value "@call `"$vcvars`" >nul`r`n@set"
+          $environment = & cmd.exe /d /c $vcvarsWrapper
+          if ($LASTEXITCODE -ne 0) { throw "MSVC environment initialization failed" }
+          foreach ($name in @("PATH", "INCLUDE", "LIB", "LIBPATH")) {
+            $line = $environment | Where-Object { $_ -match "^$name=" } | Select-Object -First 1
+            if (-not $line) { throw "MSVC environment did not define $name" }
+            $line | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+      - name: Run the complete Windows native quality gate
+        run: npm run check:native:windows

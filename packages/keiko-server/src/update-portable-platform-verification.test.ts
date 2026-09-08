@@ -6,6 +6,7 @@ interface CommandCall {
   readonly args: readonly string[];
   readonly env: NodeJS.ProcessEnv;
   readonly signal: AbortSignal | undefined;
+  readonly stdin: string | undefined;
 }
 
 function commandRecorder(outputFor: (call: CommandCall) => string = () => ""): {
@@ -20,8 +21,9 @@ function commandRecorder(outputFor: (call: CommandCall) => string = () => ""): {
       args: readonly string[],
       env: NodeJS.ProcessEnv,
       signal: AbortSignal | undefined,
+      stdin: string | undefined,
     ): Promise<string> => {
-      const call = { command, args, env, signal };
+      const call = { command, args, env, signal, stdin };
       calls.push(call);
       return Promise.resolve(outputFor(call));
     },
@@ -33,6 +35,7 @@ type CommandCallRecorder = (
   args: readonly string[],
   env: NodeJS.ProcessEnv,
   signal: AbortSignal | undefined,
+  stdin: string | undefined,
 ) => Promise<string>;
 
 const WINDOWS_ROOT = "C".repeat(40);
@@ -66,6 +69,9 @@ describe("portable platform verification", () => {
       String.raw`D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
     ]);
     expect(recorder.calls[0]?.args.join(" ")).toContain("Get-AuthenticodeSignature");
+    expect(recorder.calls[0]?.args.join(" ")).toContain("[Reflection.Assembly]::Load($b)");
+    expect(recorder.calls[0]?.args.join(" ")).not.toContain("Add-Type");
+    expect(recorder.calls[0]?.stdin).toMatch(/^[A-Za-z0-9+/]+=*$/u);
     expect(recorder.calls[0]?.args.at(-1)).toBe("C:\\Users\\keiko\\stage");
     expect(recorder.calls[1]?.args.at(-1)).toBe("C:\\Users\\keiko\\current\\Keiko.exe");
     expect(recorder.calls.map((call) => call.env)).toEqual([
