@@ -269,7 +269,7 @@ export async function applyAutoDraftDescriptionThroughPrCard(
   await expect(card.getByTestId("gpr-description-preview")).toBeVisible({ timeout: 60_000 });
   // The Coding Workbench window can sit over the Pull Request window it opened; an operator clicks
   // the window to bring it forward before working in it.
-  await raiseWindow(prWindow);
+  await raiseWindow(page, prWindow, "Pull Request");
   await card.getByTestId("gpr-description-approve-button").click();
   await expect(card.getByTestId("gpr-description-apply-button")).toBeEnabled();
   const applied = page.waitForResponse(
@@ -310,7 +310,7 @@ export async function reconcileAppliedDescriptionAfterMarkReady(
   pullRequest: DeliveredPullRequest,
 ): Promise<void> {
   const prWindow = governedPullRequestWindow(page);
-  await raiseWindow(prWindow);
+  await raiseWindow(page, prWindow, "Pull Request");
   const card = prWindow.getByTestId("gpr-description");
   const refresh = card.getByTestId("gpr-description-status-button");
   await expect(refresh).toBeEnabled({ timeout: 60_000 });

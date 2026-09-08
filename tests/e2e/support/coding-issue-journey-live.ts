@@ -49,7 +49,11 @@ export function workbenchSurface(page: Page): Locator {
  * it. Every workbench interaction that can follow one of those windows raises it first.
  */
 export async function raiseWorkbench(page: Page): Promise<void> {
-  await raiseWindow(workbenchSurface(page).locator("xpath=ancestor::section[1]"));
+  await raiseWindow(
+    page,
+    workbenchSurface(page).locator("xpath=ancestor::section[1]"),
+    "Coding Workbench",
+  );
 }
 
 /**
@@ -65,10 +69,38 @@ export async function raiseWorkbench(page: Page): Promise<void> {
  * and nothing says why (rehearsal run-03 stood still exactly like that). Raising is an aid, never a
  * precondition: the click that follows performs its own actionability check.
  */
-export async function raiseWindow(window: Locator): Promise<void> {
+export async function raiseWindow(page: Page, window: Locator, title: string): Promise<void> {
   const header = window.locator("header.win-head");
   if ((await header.count()) === 0) return;
   await clickWhenActionable(header.first());
+  if (await isTopWindow(window)) return;
+  // The title bar itself was covered. An operator then reaches for the other way this desktop
+  // offers: the footer's window palette lists every open window and brings the chosen one forward.
+  await page.locator('button[aria-controls="footer-window-palette"]').click();
+  await page
+    .getByRole("region", { name: "Open windows", exact: true })
+    .getByRole("button", {
+      name: new RegExp(`^(Focus|Restore) ${escapeRegExp(title)} window`, "u"),
+    })
+    .click();
+  await expect(window, `${title} window must come to the front`).toHaveAttribute(
+    "data-top",
+    "true",
+    { timeout: 10_000 },
+  );
+}
+
+async function isTopWindow(window: Locator): Promise<boolean> {
+  try {
+    await expect(window).toHaveAttribute("data-top", "true", { timeout: 1_500 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 // #3394 — the always-mounted left rail (`LeftRail.tsx`, `aria-label={t("rail.primaryNavigation")}`
