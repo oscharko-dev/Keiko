@@ -1232,6 +1232,87 @@ bounded diagnosis. Neither the full job nor production-signed N−1/N qualificat
 green. KHA1 coordinator acceptance remains disabled. On 2026-09-08, GitHub `dev` is still
 `c5c03d48fa1066c985a656d29880ae1c02e68c48`, and issue ownership is unchanged.
 
+### Runtime composition test collection repair
+
+Cold dynamic loading of the runtime composition consumed 10.5–11.7 seconds inside a
+15-second test budget; measured startup and shutdown took approximately 60 and 6 milliseconds.
+The test now statically imports the factory during collection and checks its fixture interface
+against the production types. Existing startup/test timeouts and permission shape assertions
+are preserved. The lead reviewed the final test-only diff at SHA-256
+`6eb3b1540f10021cb2cfda37963c2ad4ff29b8ccb1629345291b31f1034d1eb8`.
+
+The typed fixture replay passed all 25 tests in 18.49 seconds, and the two timing-sensitive
+cases passed with coverage in 18.67 seconds. Canonical Node 24.18.0 package/root typechecking
+also passed. The final diff restores the original permission guard after those executions;
+the complete final-head suite is still required. No production lifecycle behavior changed.
+
+### Windows setup smoke verified after canonical fixture preparation
+
+Diagnostic `e2c17c77b`, run `34198289921`, Windows job `101971015297`, passed both the
+complete productive native quality step and the following setup-bootstrap smoke. It also
+passed Windows package-graph typechecking and package build. The smoke fixture now resolves
+its newly created temporary root with `realpathSync.native` before deriving Unicode/custom
+installation paths. The primary smoke file is byte-identical to the runner input, SHA-256
+`d87826e9ba3e53931884733a25255dbd0d880bb54792ad1c9db2e0b9a7185bac`.
+No production canonical-path check was relaxed. The overall run remains incomplete; its
+protected-branch gate rejects the temporary diagnostic branch by design, and this diagnostic
+run is not final child-head CI or signed release qualification.
+
+Scripts coverage completed with 183 passing files, 4,283 passing tests, 51 failing tests and
+85 skipped tests in 908.79 seconds. The two failing files were environmental: the scripted
+release test could not resolve a trusted `gh`, and route wiring rejected source timestamps
+newer than the pre-run build. After freezing source, rebuilding and supplying a protected
+copy of the exact installed gh 2.92.0 binary through PATH, both complete files passed in the
+four-file replay. That replay also passed runtime composition; its two failures were new
+Windows preacceptance fixture construction, currently being corrected without weakening WAL
+validation. All-report preliminary new-code coverage is 83.8% against 85%; meaningful missing
+Windows recovery and generation-signing/staging cases are under test. No coverage or source
+mapping gate is claimed green until the complete reports are refreshed.
+
+### Additional Windows recovery authority regressions
+
+Four test-only scenarios now cover legitimate pre-acceptance settlement, current-generation
+drift before that settlement, a native launch exception before child PID publication, and
+candidate-generation drift after native recovery. The fixture constructs pre-acceptance state
+before any accepted receipt exists; it does not regress the persisted WAL. Drift retains the
+WAL, and the launch-failure retry proves that the live recovery owner prevents a second launch.
+The complete normal-startup file passed all 28 tests with isolated coverage in 17.78 seconds;
+scoped formatting/lint and lead diff review passed. Frozen test SHA-256:
+`c7237e3426de96ea0519b56f5fec799419cd06b18c27c65cf7267996c694fbcc`.
+The isolated report remains separate from the full-suite coverage reports.
+
+### Windows generation staging and signing command regressions
+
+Three existing script suites now exercise production-generation lane rejection, exact generation
+binding passed to the launcher compiler, malformed binding/missing fixed output, and the real
+signing command dispatchers for inventory closure and generation verification. A changed launcher
+digest is rejected against the closed generation. These are scoped deterministic command/fixture
+checks; they do not claim a native compiler run or production signature qualification.
+
+The isolated scripts-coverage replay passed all 64 tests across the three files in 3.70 seconds.
+Scoped formatting, lint and lead diff review passed. The report is retained separately at
+`/tmp/keiko-3405-windows-generation.LGM7nP/coverage` pending a complete coverage refresh.
+
+### Authenticode producer-parity compilation fixture repair
+
+Diagnostic run `34198289921` completed the full Windows packaging job successfully, including
+native optional dependencies. Core quality, all coverage suites, package coverage aggregation,
+Linux/macOS package smokes and the SonarCloud scanner's quality gate also passed for that
+diagnostic branch. Its Node 26 compatibility suite had one failure among 36,103 executed tests:
+the producer-parity fixture concatenated two C# compilation units, placing productive source
+`using` directives after runtime namespace declarations (CS1529). The fixture now sends the exact
+source units as a JSON array and compiles each independently in the same PowerShell process.
+Product C# and all canonical/adversarial parity assertions are unchanged.
+
+At the repaired fixture, the lead's canonical full typecheck passed and the normal-startup plus
+Authenticode replay passed 47 tests in 22.15 seconds. One producer-parity test retains its existing
+macOS platform skip because producer SignedCms loading can block in Apple's Security framework;
+the runtime DER probe did execute with PowerShell present. Linux/Windows parity at the repaired
+head remains required. Frozen test SHA-256:
+`20298e0266b91e2955c608a7a04bb11aa259568204a11f84d5c19bf84e8d15e8`.
+No final child-head CI or complete epic-baseline new-code coverage result is inferred from the
+passing diagnostic Sonar gate.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification

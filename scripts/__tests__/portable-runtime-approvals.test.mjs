@@ -630,6 +630,26 @@ describe("portable assets stage helper", () => {
     expect(plain).not.toContain("--windows-generation-production");
   });
 
+  it("rejects generation staging outside its explicit production Windows lane before spawning", async () => {
+    const { runPortableAssetsStage } = await import("../run-portable-assets-stage.mjs");
+
+    expect(() => runPortableAssetsStage(["--target"])).toThrow("--target requires a value");
+    expect(() =>
+      runPortableAssetsStage(["--target", "macos-arm64", "--windows-generation-production"]),
+    ).toThrow("requires non-evaluation windows-x64 staging");
+    expect(() =>
+      runPortableAssetsStage([
+        "--target",
+        "windows-x64",
+        "--evaluation",
+        "--windows-generation-production",
+      ]),
+    ).toThrow("requires non-evaluation windows-x64 staging");
+    expect(() =>
+      runPortableAssetsStage(["--target", "windows-x64", "--unexpected", "value"]),
+    ).toThrow("unsupported argument --unexpected");
+  });
+
   it("collects sidecar specs and derives approved stage arguments", async () => {
     const { collectSidecarSpecPaths, stageArgumentsForTarget } =
       await import("../run-portable-assets-stage.mjs");
