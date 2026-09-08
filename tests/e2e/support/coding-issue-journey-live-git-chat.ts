@@ -347,9 +347,12 @@ export async function refineDescriptionOverChat(
     const send = chatWindow.getByRole("button", { name: "Send message" });
     await expect(send).toBeEnabled();
     await send.click();
-    // The sent turn is rendered twice once the chat has more than one question: as the message
-    // itself and, truncated, as the question map's jump card. The message body is the exact text.
-    await expect(chatWindow.getByText(message, { exact: true }).first()).toBeVisible();
+    // The sent turn is rendered twice once the chat holds more than one question: as the message
+    // bubble and, CSS-truncated, as the question map's collapsed jump card, which carries the
+    // full text too. The newest user bubble is the sent turn -- the same real markup
+    // editor-chat-roundtrip-2119.spec.ts asserts on.
+    const sentTurn = chatWindow.locator('article.chat-msg[data-role="user"]').last();
+    await expect(sentTurn.locator(".chat-msg-content")).toHaveText(message);
     await waitForOwnTerminalSendStatus(chatWindow);
   }
 }
