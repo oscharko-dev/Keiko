@@ -17,8 +17,10 @@ import { DescriptionFixture } from "../../../packages/keiko-server/src/gitDelive
 import {
   assertQualificationSpendEnvelope,
   buildQualificationFlowArtifact,
+  classifySyncVerdict,
   hasRedGreenVerificationSequence,
   hasUsefulRepositorySearchSequence,
+  isTrackedEvidenceReceiptsDir,
   isUsefulRepositorySearchEvent,
   qualifiedCiRepairAssertions,
   resolveFinalDeliveredPullRequest,
@@ -713,5 +715,53 @@ describe("completed live qualification flow evidence", () => {
         authorized,
       ),
     ).toThrow("authorized monotonic envelope");
+  });
+});
+
+// Keiko for Quality on #3394: the base-sync verdict classifier names every phrase SyncControl can
+// render (SyncControl.tsx `describeSync`), and the rehearsal-receipts guard checks redirection,
+// not presence -- the Playwright config pre-populates the tracked default before any spec runs.
+describe("controlled base sync verdict", () => {
+  it("classifies every SyncControl phrase", () => {
+    expect(
+      classifySyncVerdict("Up to date with origin/master. Fetch checks for remote updates."),
+    ).toBe("current");
+    expect(classifySyncVerdict("2 behind origin/master. Pull fast-forward changes.")).toBe(
+      "behind",
+    );
+    expect(classifySyncVerdict("")).toBe("pending");
+    expect(() =>
+      classifySyncVerdict(
+        "Diverged: 1 ahead, 2 behind. Fetch latest, then use Merge to reconcile.",
+      ),
+    ).toThrow("diverged");
+    expect(() => classifySyncVerdict("1 ahead of origin/master. Push local commits.")).toThrow(
+      "local commits",
+    );
+    expect(() =>
+      classifySyncVerdict("Publish master to origin and set upstream tracking."),
+    ).toThrow("no upstream");
+  });
+});
+
+describe("rehearsal receipts redirection", () => {
+  it("recognises the tracked evidence directory under any checkout root", () => {
+    expect(
+      isTrackedEvidenceReceiptsDir("/repo/docs/qa/evidence/coding-issue-journey/3390/receipts"),
+    ).toBe(true);
+    expect(
+      isTrackedEvidenceReceiptsDir("/repo/docs/qa/evidence/coding-issue-journey/3390/receipts/"),
+    ).toBe(true);
+    expect(isTrackedEvidenceReceiptsDir("/somewhere/else/receipts-rehearsal")).toBe(false);
+  });
+  it("refuses a rehearsal whose receipts would land in the tracked evidence directory", () => {
+    expect(() =>
+      selectedQualificationFlow({
+        KEIKO_QUALIFICATION_FLOW_ORDINAL: "1",
+        KEIKO_QUALIFICATION_REHEARSAL_REPOSITORY: "oscharko/Wegwerf-Repo-Probe",
+        KEIKO_QUALIFICATION_RECEIPTS_DIR:
+          "/repo/docs/qa/evidence/coding-issue-journey/3390/receipts",
+      }),
+    ).toThrow("point away from the tracked evidence directory");
   });
 });

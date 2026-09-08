@@ -19,12 +19,12 @@
 
 import { expect, type Locator, type Page, type Response } from "@playwright/test";
 import { APPLIED_PR_DESCRIPTION_STATES } from "@oscharko-dev/keiko-contracts/runtime/git-journey-freshness";
+import { sameGitHubOwnerAndRepo } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { waitWhileAnsweringApprovals, raiseWindow } from "./coding-issue-journey-live.js";
 import type { DeliveredPullRequest } from "./coding-issue-journey-live.js";
 import {
   observedDescriptionStatus,
   type ObservedDescriptionStatus,
-  sameRepositorySlug,
 } from "./coding-issue-journey-live-observed.js";
 
 const REVIEW_ENDPOINT = "/api/git-delivery/pr-description/review";
@@ -118,7 +118,7 @@ function readyDescriptionBindingMatches(
 ): boolean {
   return (
     binding !== undefined &&
-    sameRepositorySlug(binding.repository, pullRequest.repository) &&
+    sameGitHubOwnerAndRepo(binding.repository, pullRequest.repository) &&
     binding.prNumber === pullRequest.number &&
     binding.headRef === pullRequest.headRef &&
     binding.headSha === pullRequest.headSha &&

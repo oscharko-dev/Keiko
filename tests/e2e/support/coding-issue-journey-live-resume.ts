@@ -625,6 +625,12 @@ export async function attachQualificationResumeValues(page: Page, runId: string)
   }
 }
 
+/** POSIX single-quoting for a file an operator shell `source`s: a branch name or a path may legally
+ * carry characters the shell would otherwise expand or execute inside double quotes. */
+export function shellQuoted(value: string): string {
+  return `'${value.replaceAll("'", String.raw`'\''`)}'`;
+}
+
 function resumeExports(
   active: ActiveWorkspaceIdentity,
   worktree: WorktreeIdentity,
@@ -634,22 +640,22 @@ function resumeExports(
   const known = new Set(["failed", "cancelled", "recovery-required", "succeeded"]);
   const lines = [
     `export KEIKO_QUALIFICATION_RESUME_WORKSPACE=1`,
-    `export KEIKO_QUALIFICATION_RESUME_PRIOR_RUN_ID="${runId}"`,
-    `export KEIKO_QUALIFICATION_RESUME_WORKSPACE_ID="${active.workspaceId}"`,
-    `export KEIKO_QUALIFICATION_RESUME_TASK_ID="${active.taskId}"`,
-    `export KEIKO_QUALIFICATION_RESUME_REPOSITORY_ID="${active.repositoryId}"`,
-    `export KEIKO_QUALIFICATION_RESUME_BASE_BRANCH="${active.baseBranch}"`,
-    `export KEIKO_QUALIFICATION_RESUME_TASK_BRANCH="${active.taskBranch}"`,
-    `export KEIKO_QUALIFICATION_RESUME_WORKTREE_PATH="${active.managedWorktreePath}"`,
-    `export KEIKO_QUALIFICATION_RESUME_HEAD_SHA="${worktree.headSha}"`,
-    `export KEIKO_QUALIFICATION_RESUME_WORKTREE_DIGEST="${worktree.digest}"`,
+    `export KEIKO_QUALIFICATION_RESUME_PRIOR_RUN_ID=${shellQuoted(runId)}`,
+    `export KEIKO_QUALIFICATION_RESUME_WORKSPACE_ID=${shellQuoted(active.workspaceId)}`,
+    `export KEIKO_QUALIFICATION_RESUME_TASK_ID=${shellQuoted(active.taskId)}`,
+    `export KEIKO_QUALIFICATION_RESUME_REPOSITORY_ID=${shellQuoted(active.repositoryId)}`,
+    `export KEIKO_QUALIFICATION_RESUME_BASE_BRANCH=${shellQuoted(active.baseBranch)}`,
+    `export KEIKO_QUALIFICATION_RESUME_TASK_BRANCH=${shellQuoted(active.taskBranch)}`,
+    `export KEIKO_QUALIFICATION_RESUME_WORKTREE_PATH=${shellQuoted(active.managedWorktreePath)}`,
+    `export KEIKO_QUALIFICATION_RESUME_HEAD_SHA=${shellQuoted(worktree.headSha)}`,
+    `export KEIKO_QUALIFICATION_RESUME_WORKTREE_DIGEST=${shellQuoted(worktree.digest)}`,
   ];
   // The issue binding digest belongs to the run, not to the workspace record, and the resume path
   // verifies it against the bound issue the window is showing.
   lines.push(
     known.has(observedState)
-      ? `export KEIKO_QUALIFICATION_RESUME_PRIOR_STATE="${observedState}"`
-      : `# the run was in state "${observedState}"; continuation accepts only ${[...known].join(", ")}`,
+      ? `export KEIKO_QUALIFICATION_RESUME_PRIOR_STATE=${shellQuoted(observedState)}`
+      : `# the run was in state ${shellQuoted(observedState)}; continuation accepts only ${[...known].join(", ")}`,
     `# KEIKO_QUALIFICATION_RESUME_ISSUE_BINDING_DIGEST: read it from the bound issue in the Code task`,
   );
   return `${lines.join("\n")}\n`;

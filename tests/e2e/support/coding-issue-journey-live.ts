@@ -593,13 +593,19 @@ export async function prepareTrustedIssueWorkspace(
  * So the absence is not read as success; the trusted state is. `WorkspaceTrustBadge` and
  * `WorkspaceTrustBanner` both carry `data-trust`, which is the product's OWN reading of the stored
  * decision -- `trusted`, `restricted` or `unavailable`. One of the two observations must hold
- * within the window: the prompt is offered and answered, or the product already reports the root as
- * trusted. Neither within a minute fails closed, naming what was actually on screen.
+ * within the window: the prompt is offered and answered, or -- for a resume of an earlier run's
+ * state directory only -- the product already reports the root as trusted. A fresh run that finds
+ * the root trusted without a prompt fails closed: that is the reused-state condition the trust
+ * canary exists to catch, not a decision. Neither within a minute fails closed too, naming what was
+ * actually on screen.
  */
-async function decideLiveWorkspaceTrust(page: Page): Promise<LiveWorkspaceTrustOutcome> {
+async function decideLiveWorkspaceTrust(
+  page: Page,
+  resuming: boolean,
+): Promise<LiveWorkspaceTrustOutcome> {
   await ensureRailToolOpen(page, "Editor");
   const dialog = page.getByRole("alertdialog", { name: "Trust this workspace?" });
-  const offered = await waitForTrustDecision(page, dialog);
+  const offered = await waitForTrustDecision(page, dialog, resuming);
   if (offered) {
     await dialog.getByRole("button", { name: "Trust workspace", exact: true }).click();
     await expect(dialog).toBeHidden({ timeout: 60_000 });
@@ -615,13 +621,22 @@ async function decideLiveWorkspaceTrust(page: Page): Promise<LiveWorkspaceTrustO
   return outcome;
 }
 
-/** Resolves true when the prompt was raised, false when the root already reports as trusted. */
-async function waitForTrustDecision(page: Page, dialog: Locator): Promise<boolean> {
+/** Resolves true when the prompt was raised, false when a resumed root already reports as trusted. */
+async function waitForTrustDecision(
+  page: Page,
+  dialog: Locator,
+  resuming: boolean,
+): Promise<boolean> {
   const trusted = page.locator('[data-trust="trusted"]');
   const deadline = Date.now() + 60_000;
   for (;;) {
     if (await dialog.isVisible()) return true;
-    if ((await trusted.count()) > 0) return false;
+    if ((await trusted.count()) > 0) {
+      if (resuming) return false;
+      throw new Error(
+        "the Editor reported the root as already trusted before this fresh run was offered the workspace trust decision -- a reused state directory; only a resume (KEIKO_QUALIFICATION_RESUME_WORKSPACE=1) may start from a trusted root",
+      );
+    }
     if (Date.now() > deadline) {
       const states = await page
         .locator("[data-trust]")
@@ -841,10 +856,18 @@ export async function clickWhenActionable(control: Locator): Promise<void> {
   if (!(await control.isEnabled())) return;
   try {
     await control.click({ timeout: 5_000 });
-  } catch {
-    // Occluded, detached, or still settling. The caller polls again in two seconds.
-    return;
+  } catch (error) {
+    // Occluded, detached, or still settling: the caller polls again in two seconds. The reason is
+    // recorded rather than swallowed, so a control that never becomes clickable leaves a trail in
+    // the lane log instead of a bare timeout at the end of a paid run.
+    process.stderr.write(`[lane] click deferred: ${firstErrorLine(error)}\n`);
   }
+}
+
+/** The first line of an error message: Playwright appends its multi-line call log. */
+export function firstErrorLine(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.split("\n")[0] ?? message;
 }
 
 /**
@@ -1109,7 +1132,11 @@ export async function driveIssueToDraftPullRequest(
     // the production provisioner derives that trust onto the managed worktree, and (#3394) so the
     // GitHub access grant the issue preview asks for inside Bind names a repository the server
     // already knows -- it accepts a grant for no other.
-    trustWorkspace: () => trustRepositoryWorkspace({ trust: () => decideLiveWorkspaceTrust(page) }),
+    trustWorkspace: () =>
+      trustRepositoryWorkspace({
+        trust: () =>
+          decideLiveWorkspaceTrust(page, process.env.KEIKO_QUALIFICATION_RESUME_WORKSPACE === "1"),
+      }),
     bindIssue: () =>
       prepareBoundIssueForRun({
         previewAndBind: () => previewAndBindIssue(page, input.issueRef),

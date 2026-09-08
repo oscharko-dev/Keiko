@@ -25,6 +25,7 @@ import {
   validateCodeTaskQualificationFlowArtifact,
 } from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
 import { isJourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-validation";
+import { sameGitHubOwnerAndRepo } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -62,7 +63,6 @@ import {
   observedDelivery,
   observedDiagnosis,
   observedRun,
-  sameRepositorySlug,
 } from "./coding-issue-journey-live-observed.js";
 import type { RetainedDescriptionBinding } from "./coding-issue-journey-live-description.js";
 import { resolveLiveJourneyEnv } from "./coding-issue-journey-live-runners.js";
@@ -157,7 +157,7 @@ function hasCompletedRemote(outcome: JourneyOutcome): outcome is CompletedRemote
 
 function outcomeMatchesFlow(outcome: JourneyOutcome, flow: QualificationFlowBinding): boolean {
   return (
-    sameRepositorySlug(outcome.binding.repository, flow.repository) &&
+    sameGitHubOwnerAndRepo(outcome.binding.repository, flow.repository) &&
     outcome.binding.issueNumber === flow.issueNumber &&
     outcome.remote?.issue.number === flow.issueNumber
   );
@@ -364,12 +364,25 @@ function withRehearsalRepository(
     throw new Error("KEIKO_QUALIFICATION_REHEARSAL_REPOSITORY must be an owner/repo slug");
   }
   const receipts = env.KEIKO_QUALIFICATION_RECEIPTS_DIR?.trim();
-  if (receipts === undefined || receipts.length === 0) {
+  if (receipts === undefined || receipts.length === 0 || isTrackedEvidenceReceiptsDir(receipts)) {
     throw new Error(
       "KEIKO_QUALIFICATION_REHEARSAL_REPOSITORY requires KEIKO_QUALIFICATION_RECEIPTS_DIR to point away from the tracked evidence directory",
     );
   }
   return { ...flow, repository: rehearsal };
+}
+
+/** The receipts directory the qualification evidence is committed under. The Playwright config
+ * writes this default back into the environment before any spec runs, so a merely present
+ * `KEIKO_QUALIFICATION_RECEIPTS_DIR` says nothing about redirection: only a path outside it does. */
+const TRACKED_RECEIPTS_DIR_SUFFIX = "docs/qa/evidence/coding-issue-journey/3390/receipts";
+
+export function isTrackedEvidenceReceiptsDir(path: string): boolean {
+  const normalized = path.replaceAll("\\", "/").replace(/\/+$/u, "");
+  return (
+    normalized === TRACKED_RECEIPTS_DIR_SUFFIX ||
+    normalized.endsWith(`/${TRACKED_RECEIPTS_DIR_SUFFIX}`)
+  );
 }
 
 function spendSnapshot(path: string): SpendSnapshot {
@@ -556,20 +569,40 @@ async function fetchThenPullControlledBase(page: Page, gitWindow: Locator): Prom
  * Every outcome is classified. A base that has diverged is not something to pull past, and any
  * phrasing this lane does not recognise stops the flow BEFORE the model is paid, naming what it saw.
  */
+export type SyncVerdict = "behind" | "current" | "pending";
+
+/** Classifies the sentence `SyncControl` renders into its live region (SyncControl.tsx
+ * `describeSync`): every phrase it can produce is named here. A base this lane must not pull past
+ * -- diverged, ahead of its upstream, or without one -- stops the flow before the model is paid. */
+export function classifySyncVerdict(text: string): SyncVerdict {
+  if (text.startsWith("Diverged:")) {
+    throw new Error(`the controlled base has diverged and cannot be fast-forwarded: ${text}`);
+  }
+  if (/^\d+ ahead of /u.test(text)) {
+    throw new Error(
+      `the controlled base carries local commits its upstream does not have, so a pull cannot make it the remote base: ${text}`,
+    );
+  }
+  if (text.startsWith("Publish ")) {
+    throw new Error(`the controlled base has no upstream to synchronize with: ${text}`);
+  }
+  if (text.startsWith("Up to date with ")) return "current";
+  if (/^\d+ behind /u.test(text)) return "behind";
+  return "pending";
+}
+
 async function controlledBaseIsBehind(page: Page, sync: Locator): Promise<boolean> {
   const describedBy = await sync.getAttribute("aria-describedby");
   if (describedBy === null || describedBy === "") {
     throw new Error("the sync control states no synchronization verdict to read");
   }
-  const verdict = page.locator(`[id="${describedBy}"]`);
+  const verdictNode = page.locator(`[id="${describedBy}"]`);
   const deadline = Date.now() + 60_000;
   for (;;) {
-    const text = ((await verdict.textContent()) ?? "").trim();
-    if (text.startsWith("Diverged:")) {
-      throw new Error(`the controlled base has diverged and cannot be fast-forwarded: ${text}`);
-    }
-    if (text.startsWith("Up to date with ")) return false;
-    if (/^\d+ behind /u.test(text)) return true;
+    const text = ((await verdictNode.textContent()) ?? "").trim();
+    const verdict = classifySyncVerdict(text);
+    if (verdict === "current") return false;
+    if (verdict === "behind") return true;
     if (Date.now() > deadline) {
       throw new Error(
         `the sync control never settled on a synchronization verdict (observed: ${text === "" ? "nothing" : text})`,
@@ -769,7 +802,7 @@ async function waitForPreMergeReadiness(
     (outcome) =>
       outcome?.readiness?.state === "technical-ready" &&
       outcome.readiness.complete &&
-      sameRepositorySlug(outcome.readiness.repository, delivered.repository) &&
+      sameGitHubOwnerAndRepo(outcome.readiness.repository, delivered.repository) &&
       outcome.readiness.prNumber === delivered.number &&
       outcome.readiness.baseRef === delivered.baseRef &&
       outcome.readiness.headRef === delivered.headRef &&
@@ -803,7 +836,7 @@ function sameStablePullRequest(
   current: NonNullable<FinalDeliverySnapshot["pullRequest"]>,
 ): boolean {
   return (
-    sameRepositorySlug(current.repository, initial.repository) &&
+    sameGitHubOwnerAndRepo(current.repository, initial.repository) &&
     current.number === initial.number &&
     current.baseRef === initial.baseRef &&
     current.headRef === initial.headRef
@@ -1129,7 +1162,7 @@ function stageFlowBinding(
   flow: QualificationFlowBinding,
   delivered: DeliveredPullRequest,
 ): NonNullable<Parameters<typeof recordSuccessfulJourneyStage>[4]> {
-  if (!sameRepositorySlug(delivered.repository, flow.repository)) {
+  if (!sameGitHubOwnerAndRepo(delivered.repository, flow.repository)) {
     // Naming both sides matters: this fired once with a bare message and cost a full rehearsal to
     // locate, because nothing said WHICH repository the delivered pull request claimed.
     throw new Error(

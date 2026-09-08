@@ -11,6 +11,7 @@ import {
   qualificationResumeBinding,
   readQualificationWorktree,
   resumeExistingIssueWorkspace,
+  shellQuoted,
   type QualificationResumeBinding,
 } from "./coding-issue-journey-live-resume.js";
 import { createHash } from "node:crypto";
@@ -512,5 +513,14 @@ describe("qualification worktree identity", () => {
     const executable = await readQualificationWorktree(repository);
 
     expect(executable.digest).not.toBe(ordinary.digest);
+  });
+});
+
+// Keiko for Quality on #3394: the resume file is `source`d by an operator shell, so every value is
+// single-quoted -- a branch name or path may legally carry what double quotes would still expand.
+describe("resume env quoting", () => {
+  it("single-quotes every value so a sourced file cannot expand or execute it", () => {
+    expect(shellQuoted("keiko/task/issue-1")).toBe("'keiko/task/issue-1'");
+    expect(shellQuoted('it\'s $(x) `y` "z"')).toBe("'it'\\''s $(x) `y` \"z\"'");
   });
 });

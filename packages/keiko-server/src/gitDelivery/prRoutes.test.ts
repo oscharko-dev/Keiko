@@ -497,6 +497,59 @@ const DEFAULT_CREATE_COMMAND: GitPullRequestCommand = {
 };
 
 describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
+  it("carries the adapter's failure words onto the mutation log line (#3390, rehearsal run-19)", async () => {
+    // The whole path with a real adapter response: executeGovernedPullRequest -> lifecycle ->
+    // recordGitDeliveryLifecycle -> executionFailureDetail. `execution.test.ts` hand-builds the
+    // outcome and detail; this is the route-level proof that the adapter's closed words survive.
+    const adapter = recordingPrAdapter({
+      schemaVersion: "1",
+      outcome: "failed",
+      durationMs: 3,
+      errorCode: "internal-error",
+      failureClass: "identity-unparsable",
+      identityIssue: "shape-invalid",
+      stdoutBytes: 367,
+      stderrBytes: 0,
+      exitCode: 0,
+    });
+    const activity: ServerLogEvent[] = [];
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const handler = createHandlePrExecute({
+      execution: seams({
+        prAdapterFactory: () => adapter.adapter,
+        approvalStore,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
+    });
+    await handler(
+      {
+        ...ctxFor(
+          EXECUTE,
+          createBody({ approval: issuePrApproval(approvalStore, DEFAULT_CREATE_COMMAND) }),
+        ),
+        correlationId: "request-correlation-pr-failure-detail",
+      },
+      deps({ evidenceStore: capturingEvidenceStore().store }),
+    );
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({
+      correlationId: "request-correlation-pr-failure-detail",
+      extra: {
+        actionKind: "pr-create",
+        status: "failed",
+        failureClass: "identity-unparsable",
+        identityIssue: "shape-invalid",
+        stdoutBytes: 367,
+        stderrBytes: 0,
+        exitCode: 0,
+      },
+    });
+  });
+
   it("opens a permitted PR, returns the provider PR number, and records content-free evidence (AC5)", async () => {
     const adapter = recordingPrAdapter();
     const cap = capturingEvidenceStore();
