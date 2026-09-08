@@ -66,6 +66,7 @@ import {
   readStagedPathsFor,
   resolveProjectWorkspace,
   type GitDeliveryExecutionSeams,
+  executionFailureDetail,
 } from "./execution.js";
 import {
   deriveManagedWorktreePath,
@@ -472,6 +473,55 @@ const exec = {
   durationMs: 1,
   errorCode: "internal-error" as const,
 };
+
+// #3390: a create that reached the provider yet could not be reported as a success used to leave
+// only `internal-error` in the log (rehearsal run-15: the pull request existed, nothing named why).
+// The adapter's closed failure words travel onto the mutation line; free text never does.
+describe("executionFailureDetail — closed provider failure words on the mutation log line", () => {
+  const failed = (
+    executionResult: GitDeliveryExecutionResult & Record<string, unknown>,
+  ): GitMutationLifecycleResult["outcome"] => ({
+    status: "failed",
+    category: "provider-failure",
+    executionResult,
+  });
+  const base = {
+    schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
+    outcome: "failed",
+    durationMs: 1272,
+    errorCode: "internal-error",
+  } as const;
+
+  it("carries the adapter's closed words and drops everything that is not one", () => {
+    expect(
+      executionFailureDetail(
+        failed({
+          ...base,
+          rejectionReason: "unknown",
+          failureClass: "identity-unparsable",
+          identityIssue: "shape-invalid",
+          stdout: "never logged",
+          note: "Not a closed word!",
+        }),
+      ),
+    ).toEqual({
+      rejectionReason: "unknown",
+      failureClass: "identity-unparsable",
+      identityIssue: "shape-invalid",
+    });
+    expect(executionFailureDetail(failed({ ...base, failureClass: "Free text here" }))).toEqual({});
+  });
+
+  it("is empty for a success and for a failure without adapter detail", () => {
+    expect(
+      executionFailureDetail({
+        status: "succeeded",
+        executionResult: { ...base, outcome: "succeeded" },
+      }),
+    ).toEqual({});
+    expect(executionFailureDetail(failed({ ...base }))).toEqual({});
+  });
+});
 
 describe("gitDeliveryMutationResponse — content-free projection of every outcome", () => {
   it("succeeded", () => {

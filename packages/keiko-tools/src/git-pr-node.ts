@@ -49,7 +49,7 @@ import {
   type GitPrInspectionResult,
 } from "./git-pr-gateway.js";
 import {
-  parseCreatedGitPrIdentity,
+  explainCreatedGitPrIdentity,
   parseGitPrBranchHead,
   parseGitPrIdentity,
   parseGitPrIdentityList,
@@ -164,7 +164,10 @@ function failureFromThrow(error: unknown, durationMs: number): GitPrExecResult {
   if (error instanceof CommandCancelledError) {
     return executionResult("aborted", durationMs);
   }
-  return executionResult("failed", durationMs, { errorCode: "internal-error" });
+  return executionResult("failed", durationMs, {
+    errorCode: "internal-error",
+    failureClass: "invocation-error",
+  });
 }
 
 async function runGh(ctx: RunContext, argv: readonly string[]): Promise<CommandResult | Error> {
@@ -199,7 +202,10 @@ async function createPullRequest(
     const projection = req.canonicalGitHubIdentity === true ? GIT_PR_IDENTITY_JQ : ".number";
     argv = [...buildPrCreateArgv(req), "--jq", projection];
   } catch {
-    return executionResult("failed", 0, { errorCode: "internal-error" });
+    return executionResult("failed", 0, {
+      errorCode: "internal-error",
+      failureClass: "argv-invalid",
+    });
   }
   const result = await runGh(ctx, argv);
   if (result instanceof Error) {
@@ -209,14 +215,20 @@ async function createPullRequest(
     return rejectionFromExit(result);
   }
   if (result.truncated)
-    return executionResult("failed", result.durationMs, { errorCode: "internal-error" });
+    return executionResult("failed", result.durationMs, {
+      errorCode: "internal-error",
+      failureClass: "output-truncated",
+    });
   if (req.canonicalGitHubIdentity === true) return canonicalCreateResult(req, result);
   const createdPrExternalId = parsePrNumber(result.stdout);
   if (createdPrExternalId === undefined) {
     // Exit 0 with an unparsable number (`--jq .number` emits `null` on an unexpected response
     // shape) means the provider gave us nothing the caller can reference. Reporting success
     // without an id would strand the UI on a PR it cannot open — fail closed instead.
-    return executionResult("failed", result.durationMs, { errorCode: "internal-error" });
+    return executionResult("failed", result.durationMs, {
+      errorCode: "internal-error",
+      failureClass: "number-unparsable",
+    });
   }
   return executionResult("succeeded", result.durationMs, { createdPrExternalId });
 }
@@ -225,12 +237,19 @@ function canonicalCreateResult(
   req: GitPrCreateExecRequest,
   result: CommandResult,
 ): GitPrExecResult {
-  const createdPrIdentity = parseCreatedGitPrIdentity(result.stdout, req);
-  return createdPrIdentity === undefined
-    ? executionResult("failed", result.durationMs, { errorCode: "internal-error" })
-    : executionResult("succeeded", result.durationMs, {
-        createdPrExternalId: String(createdPrIdentity.number),
-        createdPrIdentity,
+  // The provider may well have created the pull request by now (rehearsal run-15 did: the PR
+  // existed, the response did not validate, and nothing named why). The failing step is carried
+  // out as a closed word so the activity log can reconstruct it; the bytes never leave here.
+  const diagnosis = explainCreatedGitPrIdentity(result.stdout, req);
+  return diagnosis.ok
+    ? executionResult("succeeded", result.durationMs, {
+        createdPrExternalId: String(diagnosis.identity.number),
+        createdPrIdentity: diagnosis.identity,
+      })
+    : executionResult("failed", result.durationMs, {
+        errorCode: "internal-error",
+        failureClass: "identity-unparsable",
+        identityIssue: diagnosis.issue,
       });
 }
 

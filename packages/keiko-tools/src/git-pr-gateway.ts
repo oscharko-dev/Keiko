@@ -62,7 +62,7 @@ import type { GitMutationFailureCategory } from "./git-mutation-taxonomy.js";
 import { gitMutationCategoryForExecutionResult } from "./git-mutation-taxonomy.js";
 import { resolveGitDeliveryApprovalGate } from "./git-approval-gate.js";
 
-import { GIT_PR_IDENTITY_JQ } from "./git-pr-identity.js";
+import { GIT_PR_IDENTITY_JQ, type GitPrIdentityIssue } from "./git-pr-identity.js";
 export { GIT_PR_IDENTITY_JQ } from "./git-pr-identity.js";
 
 const UTF8 = new TextEncoder();
@@ -122,8 +122,19 @@ export interface GitPrUpdateExecRequest {
 // The executor's structured result: the content-free contract execution result, plus the typed
 // provider-rejection reason classified from GitHub's own error envelope, plus the provider-assigned PR
 // number on a successful create.
+/** Why a create that did not report a provider rejection still failed. Closed, body-free (#3390):
+ * the class names the failing step of the adapter itself, never command output. */
+export type GitPrCreateFailureClass =
+  | "argv-invalid"
+  | "invocation-error"
+  | "output-truncated"
+  | "number-unparsable"
+  | "identity-unparsable";
+
 export interface GitPrExecResult extends GitDeliveryExecutionResult {
   readonly rejectionReason?: GitPullRequestRejectionReason | undefined;
+  readonly failureClass?: GitPrCreateFailureClass | undefined;
+  readonly identityIssue?: GitPrIdentityIssue | undefined;
   readonly createdPrExternalId?: string | undefined;
   readonly createdPrIdentity?: GitPullRequestIdentity | undefined;
 }

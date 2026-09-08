@@ -759,6 +759,27 @@ const UNSUCCESSFUL_MUTATION_STATUSES: ReadonlySet<string> = new Set([
   "recovery-required",
 ]);
 
+/**
+ * The closed, body-free failure words a provider adapter attaches to a failed execution result
+ * (#3390): a rejection reason, a create failure class and the identity validation that failed.
+ * Rehearsal run-15's pull request existed on GitHub while the log said only `internal-error`; with
+ * these on the mutation line the failing step is reconstructable from the log alone. Anything that
+ * is not a short closed word never reaches the log.
+ */
+export function executionFailureDetail(
+  outcome: GitMutationLifecycleResult["outcome"],
+): Readonly<Record<string, string>> {
+  if (outcome.status !== "failed" && outcome.status !== "recovery-required") return {};
+  const result: unknown = outcome.executionResult;
+  if (typeof result !== "object" || result === null) return {};
+  const detail: Record<string, string> = {};
+  for (const key of ["rejectionReason", "failureClass", "identityIssue"] as const) {
+    const value: unknown = Reflect.get(result, key);
+    if (typeof value === "string" && /^[a-z][a-z-]{0,39}$/u.test(value)) detail[key] = value;
+  }
+  return detail;
+}
+
 export function logGitDeliveryMutation(
   log: ServerLogSink,
   result: GitMutationLifecycleResult,
@@ -798,6 +819,7 @@ export function logGitDeliveryMutation(
         outcome.status === "approval-required" ? outcome.requiredApprovers.length : 0,
       blockReason,
       executionErrorCode,
+      ...executionFailureDetail(outcome),
     },
   });
 }

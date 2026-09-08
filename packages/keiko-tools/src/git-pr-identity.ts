@@ -43,28 +43,68 @@ export function parseGitPrBranchHead(value: unknown, headRef: string): string | 
     : undefined;
 }
 
+/** Which validation a provider create response failed. Closed and body-free: it names the failing
+ * step, never the bytes, so a create that reached the provider yet could not be reported as a
+ * success is diagnosable from the activity log alone (#3390, rehearsal run-15). */
+export type GitPrIdentityIssue =
+  | "json-invalid"
+  | "shape-invalid"
+  | "repository-mismatch"
+  | "head-repository-mismatch"
+  | "head-ref-mismatch"
+  | "base-ref-mismatch"
+  | "draft-mismatch"
+  | "state-not-open";
+
+export type CreatedGitPrIdentityDiagnosis =
+  | { readonly ok: true; readonly identity: GitPullRequestIdentity }
+  | { readonly ok: false; readonly issue: GitPrIdentityIssue };
+
+interface CreatedGitPrRequest {
+  readonly ownerAndRepo: string;
+  readonly headBranchName: string;
+  readonly baseBranchName: string;
+  readonly isDraft: boolean;
+}
+
+function createdIdentityIssue(
+  identity: GitPullRequestIdentity,
+  request: CreatedGitPrRequest,
+): GitPrIdentityIssue | undefined {
+  if (!sameGitHubOwnerAndRepo(identity.repository, request.ownerAndRepo))
+    return "repository-mismatch";
+  if (!sameGitHubOwnerAndRepo(identity.headRepository, request.ownerAndRepo))
+    return "head-repository-mismatch";
+  if (identity.headRef !== request.headBranchName) return "head-ref-mismatch";
+  if (identity.baseRef !== request.baseBranchName) return "base-ref-mismatch";
+  if (identity.isDraft !== request.isDraft) return "draft-mismatch";
+  if (identity.state !== "open") return "state-not-open";
+  return undefined;
+}
+
+/** Validates the provider's create response against the request that produced it and names the
+ * first failing step; `parseCreatedGitPrIdentity` below is the identity-or-nothing view of it. */
+export function explainCreatedGitPrIdentity(
+  stdout: string,
+  request: CreatedGitPrRequest,
+): CreatedGitPrIdentityDiagnosis {
+  let value: unknown;
+  try {
+    value = JSON.parse(stdout);
+  } catch {
+    return { ok: false, issue: "json-invalid" };
+  }
+  if (!isGitPullRequestIdentity(value)) return { ok: false, issue: "shape-invalid" };
+  const issue = createdIdentityIssue(value, request);
+  return issue === undefined ? { ok: true, identity: value } : { ok: false, issue };
+}
+
 export function parseCreatedGitPrIdentity(
   stdout: string,
-  request: {
-    readonly ownerAndRepo: string;
-    readonly headBranchName: string;
-    readonly baseBranchName: string;
-    readonly isDraft: boolean;
-  },
+  request: CreatedGitPrRequest,
 ): GitPullRequestIdentity | undefined {
-  try {
-    const identity = parseGitPrIdentity(JSON.parse(stdout) as unknown, request.ownerAndRepo);
-    if (identity === undefined) return undefined;
-    return sameGitHubOwnerAndRepo(identity.headRepository, request.ownerAndRepo) &&
-      identity.headRef === request.headBranchName &&
-      identity.baseRef === request.baseBranchName &&
-      identity.isDraft === request.isDraft &&
-      identity.state === "open"
-      ? identity
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const diagnosis = explainCreatedGitPrIdentity(stdout, request);
+  return diagnosis.ok ? diagnosis.identity : undefined;
 }
 
 export const GIT_PR_IDENTITY_JQ =

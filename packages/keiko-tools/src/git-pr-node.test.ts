@@ -337,25 +337,59 @@ describe("node PR adapter — createPullRequest", () => {
     expect(spawn.calls()[0]?.args).toContain("github.com");
   });
   it.each([
-    ["legacy number", 1499],
-    ["unknown payload field", { ...PR_IDENTITY, body: "untrusted content" }],
-    ["wrong repository", { ...PR_IDENTITY, repository: "elsewhere/repo" }],
-    ["fork head", { ...PR_IDENTITY, headRepository: "elsewhere/Keiko" }],
-    ["wrong head", { ...PR_IDENTITY, headRef: "different-head" }],
-    ["wrong base", { ...PR_IDENTITY, baseRef: "main" }],
-    ["ready instead of draft", { ...PR_IDENTITY, isDraft: false }],
-    ["closed PR", { ...PR_IDENTITY, state: "closed" }],
-    ["abbreviated SHA", { ...PR_IDENTITY, headSha: "aaaaaaa" }],
-  ])("does not claim canonical create success for %s", async (_name, value) => {
+    ["legacy number", 1499, "shape-invalid"],
+    ["unknown payload field", { ...PR_IDENTITY, body: "untrusted content" }, "shape-invalid"],
+    [
+      "wrong repository",
+      {
+        ...PR_IDENTITY,
+        repository: "elsewhere/repo",
+        url: "https://github.com/elsewhere/repo/pull/1499",
+      },
+      "repository-mismatch",
+    ],
+    [
+      "fork head",
+      { ...PR_IDENTITY, headRepository: "elsewhere/Keiko" },
+      "head-repository-mismatch",
+    ],
+    ["wrong head", { ...PR_IDENTITY, headRef: "different-head" }, "head-ref-mismatch"],
+    ["wrong base", { ...PR_IDENTITY, baseRef: "main" }, "base-ref-mismatch"],
+    ["ready instead of draft", { ...PR_IDENTITY, isDraft: false }, "draft-mismatch"],
+    ["closed PR", { ...PR_IDENTITY, state: "closed" }, "state-not-open"],
+    ["abbreviated SHA", { ...PR_IDENTITY, headSha: "aaaaaaa" }, "shape-invalid"],
+  ])("does not claim canonical create success for %s", async (_name, value, issue) => {
     const spawn = scriptedSpawn([{ stdout: JSON.stringify(value) }]);
     const result = await makeAdapter(spawn).createPullRequest({
       ...CREATE,
       isDraft: true,
       canonicalGitHubIdentity: true,
     });
-    expect(result).toMatchObject({ outcome: "failed", errorCode: "internal-error" });
+    // #3390: the failing step is named as a closed word (rehearsal run-15 could not be diagnosed
+    // from a bare `internal-error` while the provider had created the pull request).
+    expect(result).toMatchObject({
+      outcome: "failed",
+      errorCode: "internal-error",
+      failureClass: "identity-unparsable",
+      identityIssue: issue,
+    });
     expect(result.createdPrIdentity).toBeUndefined();
     expect(result.createdPrExternalId).toBeUndefined();
+  });
+
+  it("names an unparsable create response body as json-invalid", async () => {
+    const spawn = scriptedSpawn([{ stdout: "not json at all\n" }]);
+    const result = await makeAdapter(spawn).createPullRequest({
+      ...CREATE,
+      isDraft: true,
+      canonicalGitHubIdentity: true,
+    });
+    expect(result).toMatchObject({
+      outcome: "failed",
+      errorCode: "internal-error",
+      failureClass: "identity-unparsable",
+      identityIssue: "json-invalid",
+    });
   });
 
   it("binds response validation to the request captured before asynchronous execution", async () => {
@@ -639,6 +673,7 @@ describe("node PR adapter — output parsing edge cases", () => {
     const result = await makeAdapter(spawn).createPullRequest(CREATE);
     expect(result.outcome).toBe("failed");
     expect(result.errorCode).toBe("internal-error");
+    expect(result.failureClass).toBe("number-unparsable");
     expect(result.createdPrExternalId).toBeUndefined();
   });
 

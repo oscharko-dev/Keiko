@@ -440,5 +440,18 @@ export async function observedDiagnosis(page: Page): Promise<string> {
   const status = (await textOf(shell.locator(LIFECYCLE_STATUS))).replace(/\s+/gu, " ");
   const alert = shell.getByRole("alert");
   const message = (await present(alert)) ? (await textOf(alert)).replace(/\s+/gu, " ") : "";
-  return message.length === 0 ? status : `${status} ${message}`;
+  // The delivery card's own phase and reason: rehearsal run-15 ended "succeeded before creating a
+  // draft pull request" while the card had been showing `recovery-required` / `ambiguous-remote`
+  // all along -- the one fact that named the failure.
+  const delivery = await observedDeliveryPhrase(page);
+  return [status, message, delivery].filter((part) => part.length > 0).join(" ");
+}
+
+async function observedDeliveryPhrase(page: Page): Promise<string> {
+  try {
+    const delivery = await observedDelivery(page);
+    return delivery === undefined ? "" : `Delivery: ${delivery.phase} (${delivery.reason}).`;
+  } catch {
+    return "";
+  }
 }
