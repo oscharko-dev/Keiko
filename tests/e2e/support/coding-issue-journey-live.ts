@@ -49,15 +49,25 @@ export function workbenchSurface(page: Page): Locator {
  * it. Every workbench interaction that can follow one of those windows raises it first.
  */
 export async function raiseWorkbench(page: Page): Promise<void> {
-  const header = workbenchSurface(page)
-    .locator("xpath=ancestor::section[1]")
-    .locator("header.win-head");
+  await raiseWindow(workbenchSurface(page).locator("xpath=ancestor::section[1]"));
+}
+
+/**
+ * Brings one desktop window in front of the others the way an operator does: by clicking its title
+ * bar. Windows on this desktop overlap, and a control in a window that another window covers is
+ * visible yet not actionable -- Playwright reports "subtree intercepts pointer events" and retries
+ * until its timeout (rehearsal run-05: the Coding Workbench sat over the Pull Request window it had
+ * just opened, and "Approve" could not be clicked).
+ *
+ * Bounded and non-throwing on purpose. This runs inside two-second polling loops; a plain `click()`
+ * waits up to thirty seconds for an obstructed header and then throws, which the loop records as one
+ * more failed read and retries -- so the control the raise was meant to uncover is never reached,
+ * and nothing says why (rehearsal run-03 stood still exactly like that). Raising is an aid, never a
+ * precondition: the click that follows performs its own actionability check.
+ */
+export async function raiseWindow(window: Locator): Promise<void> {
+  const header = window.locator("header.win-head");
   if ((await header.count()) === 0) return;
-  // Bounded and non-throwing on purpose. This runs inside two-second polling loops; a plain
-  // `click()` waits up to thirty seconds for an obstructed header and then throws, which the loop
-  // records as one more failed read and retries -- so the control the raise was meant to uncover is
-  // never reached, and nothing says why (rehearsal run-03 stood still exactly like that). Raising is
-  // an aid, never a precondition: the click that follows performs its own actionability check.
   await clickWhenActionable(header.first());
 }
 

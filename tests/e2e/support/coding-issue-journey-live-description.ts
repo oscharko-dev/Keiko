@@ -18,7 +18,7 @@
 // render), instead of filling the create/update form and clicking the manual preview button.
 
 import { expect, type Locator, type Page, type Response } from "@playwright/test";
-import { waitWhileAnsweringApprovals } from "./coding-issue-journey-live.js";
+import { waitWhileAnsweringApprovals, raiseWindow } from "./coding-issue-journey-live.js";
 import type { DeliveredPullRequest } from "./coding-issue-journey-live.js";
 import {
   observedDescriptionStatus,
@@ -264,8 +264,12 @@ export async function applyAutoDraftDescriptionThroughPrCard(
   page: Page,
   retained: RetainedDescriptionBinding,
 ): Promise<void> {
-  const card = governedPullRequestWindow(page).getByTestId("gpr-description");
+  const prWindow = governedPullRequestWindow(page);
+  const card = prWindow.getByTestId("gpr-description");
   await expect(card.getByTestId("gpr-description-preview")).toBeVisible({ timeout: 60_000 });
+  // The Coding Workbench window can sit over the Pull Request window it opened; an operator clicks
+  // the window to bring it forward before working in it.
+  await raiseWindow(prWindow);
   await card.getByTestId("gpr-description-approve-button").click();
   await expect(card.getByTestId("gpr-description-apply-button")).toBeEnabled();
   const applied = page.waitForResponse(
@@ -306,7 +310,7 @@ export async function reconcileAppliedDescriptionAfterMarkReady(
   pullRequest: DeliveredPullRequest,
 ): Promise<void> {
   const prWindow = governedPullRequestWindow(page);
-  await prWindow.locator("header.win-head").click();
+  await raiseWindow(prWindow);
   const card = prWindow.getByTestId("gpr-description");
   const refresh = card.getByTestId("gpr-description-status-button");
   await expect(refresh).toBeEnabled({ timeout: 60_000 });
