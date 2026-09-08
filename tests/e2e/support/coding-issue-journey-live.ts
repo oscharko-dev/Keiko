@@ -902,7 +902,15 @@ export function journeyRefresher(
 
 /** An option label that hands the decision back to the run: the operator wants the delivery
  * finished, not a hand-off. Matched case-insensitively on whole words. */
-const QUESTION_CONTINUE_OPTION = /\b(?:keep|continue|proceed|retry|resume|carry on|go on)\b/iu;
+const QUESTION_CONTINUE_OPTION =
+  /\b(?:keep|continue|proceed|retry|resume|carry on|go on|go ahead|finish|complete|deliver|implement|apply|fix|create|open)\b/iu;
+
+/** An option label that parks the run instead: it asks the operator for direction, waits, hands
+ * off, or abandons the work. The probe rehearsal of 2026-09-08 stalled on exactly this: the run
+ * offered "Provide guidance" first, the lane took it as "the first option", and the run then ended
+ * as succeeded without ever creating its draft pull request. Matched case-insensitively. */
+const QUESTION_DEFER_OPTION =
+  /\b(?:guidance|guide me|wait|hold|pause|stop|abort|cancel|abandon|hand(?:s)? off|hand it (?:back|over)|ask|clarif\w*|later|manual\w*|skip|defer|escalat\w*|operator|human)\b/iu;
 
 /** What this operator answers when the run asks a free-text question: the decision goes back
  * to the run, bounded by the issue's own acceptance criteria. */
@@ -915,8 +923,9 @@ const OPERATOR_STANDING_ANSWER =
  * until the lane's own clock ran out: the model, unable to diagnose a test failure from the
  * verification result it had been given, asked "hand off or keep probing?", and nothing answered.
  * A real operator answers it in the window; this does the same, through the same controls: the
- * option that hands the decision back to the run when one exists, otherwise the first option, and
- * the standing free-text answer when the question offers no options at all.
+ * option that hands the decision back to the run when one exists, otherwise the first option that
+ * does not park the run, and the standing free-text answer when every option parks it (or the
+ * question offers no options at all) and the form accepts one.
  */
 async function answerVisibleQuestion(page: Page): Promise<void> {
   const forms = page.getByTestId("coding-workbench-questions").locator("form");
@@ -929,12 +938,16 @@ async function answerVisibleQuestion(page: Page): Promise<void> {
 }
 
 async function answerQuestionForm(form: Locator): Promise<void> {
-  const chosen = await chooseQuestionOptions(form);
-  if (chosen.length === 0) {
-    const custom = form.getByLabel(/^Custom answer for /u);
-    if ((await custom.count()) === 0) return;
-    await custom.first().fill(OPERATOR_STANDING_ANSWER);
-    chosen.push("(free text)");
+  const custom = form.getByLabel(/^Custom answer for /u);
+  const customCount = await custom.count();
+  const { chosen, unanswered } = await chooseQuestionOptions(form, customCount > 0);
+  if (unanswered > 0) {
+    if (customCount === 0) return;
+    // One free-text field per question that got no pick: the standing answer, never silence.
+    for (let index = 0; index < Math.min(unanswered, customCount); index += 1) {
+      await custom.nth(index).fill(OPERATOR_STANDING_ANSWER);
+      chosen.push("(free text)");
+    }
   }
   process.stderr.write(`[lane] answered runtime question: ${chosen.join(" | ")}\n`);
   await clickWhenActionable(form.getByRole("button", { name: "Send answer", exact: true }));
@@ -963,24 +976,53 @@ export function questionOptionFacts(elements: readonly Element[]): QuestionOptio
   }));
 }
 
-/** One pick per question: the option that hands the decision back to the run when one exists,
- * otherwise the first. Two questions in one form may legitimately offer the same option text, so a
- * pick is identified by its index, never by its label. */
-export function pickQuestionOptions(facts: readonly QuestionOptionFact[]): QuestionOptionFact[] {
-  const picks: QuestionOptionFact[] = [];
-  for (const group of new Set(facts.map((fact) => fact.name))) {
-    const members = facts.filter((fact) => fact.name === group);
-    const pick = members.find((fact) => QUESTION_CONTINUE_OPTION.test(fact.label)) ?? members[0];
-    if (pick !== undefined) picks.push(pick);
-  }
-  return picks;
+export interface QuestionPicks {
+  readonly picks: readonly QuestionOptionFact[];
+  /** Questions left without a pick because every option parks the run and a free-text answer is
+   * available instead. */
+  readonly unanswered: number;
 }
 
-async function chooseQuestionOptions(form: Locator): Promise<string[]> {
+/** One pick per question, in this order: the option that hands the decision back to the run; else
+ * the first option that does not park it; else -- when the form accepts a free-text answer -- no
+ * pick at all, so the standing answer goes in its place; else the first option. Two questions in
+ * one form may legitimately offer the same option text, so a pick is identified by its index, never
+ * by its label. */
+export function pickQuestionOptions(
+  facts: readonly QuestionOptionFact[],
+  customAnswerAvailable = false,
+): QuestionPicks {
+  const picks: QuestionOptionFact[] = [];
+  let unanswered = 0;
+  for (const group of new Set(facts.map((fact) => fact.name))) {
+    const members = facts.filter((fact) => fact.name === group);
+    const pick = preferredQuestionOption(members);
+    if (pick !== undefined) picks.push(pick);
+    else if (customAnswerAvailable) unanswered += 1;
+    else if (members[0] !== undefined) picks.push(members[0]);
+  }
+  return { picks, unanswered };
+}
+
+/** The continue option that does not also park the run, else any option that does not park it,
+ * else a continue option even when its wording also mentions the operator. */
+function preferredQuestionOption(
+  members: readonly QuestionOptionFact[],
+): QuestionOptionFact | undefined {
+  const continues = members.filter((fact) => QUESTION_CONTINUE_OPTION.test(fact.label));
+  const proceeds = members.filter((fact) => !QUESTION_DEFER_OPTION.test(fact.label));
+  return continues.find((fact) => proceeds.includes(fact)) ?? proceeds[0] ?? continues[0];
+}
+
+async function chooseQuestionOptions(
+  form: Locator,
+  customAnswerAvailable: boolean,
+): Promise<{ chosen: string[]; unanswered: number }> {
   const options = form.locator('input[type="radio"], input[type="checkbox"]');
-  const picks = pickQuestionOptions(await options.evaluateAll(questionOptionFacts));
+  const facts = await options.evaluateAll(questionOptionFacts);
+  const { picks, unanswered } = pickQuestionOptions(facts, customAnswerAvailable);
   for (const pick of picks) await options.nth(pick.index).check({ timeout: 5_000 });
-  return picks.map((pick) => pick.label);
+  return { chosen: picks.map((pick) => pick.label), unanswered };
 }
 
 async function answerVisibleApproval(page: Page): Promise<void> {
