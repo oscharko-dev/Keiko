@@ -83,10 +83,10 @@ import {
   prepareGitDeliveryRequest,
   type GitDeliveryAuthorityContinuityDenialCapture,
   type GitDeliveryAuthorityIdentity,
+  type GitDeliveryAuthorityAuditSeams,
   type GitDeliveryRequestErrors,
 } from "./requestPreparation.js";
 import type { GitDeliveryDeliveredPullRequestAdmission } from "./runBoundAuthority.js";
-import type { GitDeliveryAuthorityAuditSeams } from "./requestPreparation.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
 

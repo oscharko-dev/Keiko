@@ -203,7 +203,12 @@ describe("startRun verify dispatch", () => {
     await waitForTerminal(result.runId);
     const record = registry.get(result.runId);
     expect(record).toBeDefined();
+    // The fixture workspace declares no verification step, so the orchestrator reports the whole
+    // verification as skipped (KEIKO-0848). That is a verdict the run reached, not a broken run:
+    // the run completes and the completion event carries the honest overall status.
     expect(record?.status).toBe("completed");
+    const completed = record?.sink.buffered().find((e) => e.type === "run:completed");
+    expect(completed).toMatchObject({ report: "verify overall=skipped" });
   });
 
   it("emits a run:started SSE event with taskType=verify before the run completes", () => {

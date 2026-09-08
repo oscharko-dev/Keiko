@@ -781,14 +781,21 @@ export function executionFailureDetail(
   const result: unknown = outcome.executionResult;
   const admitted: Record<string, string | number> = {};
   const admit = (key: string, value: unknown): void => {
-    if (typeof value === "string" && /^[a-z][a-z-]{0,39}$/u.test(value)) admitted[key] = value;
-    else if (typeof value === "number" && Number.isSafeInteger(value)) admitted[key] = value;
+    if (closedFailureDetailValue(value)) admitted[key] = value;
   };
   for (const key of FAILURE_DETAIL_KEYS) {
     if (typeof result === "object" && result !== null) admit(key, Reflect.get(result, key));
     admit(key, detail[key]);
   }
   return admitted;
+}
+
+/** A closed word or a safe integer: the only value shapes a failure detail may carry onto the log. */
+function closedFailureDetailValue(value: unknown): value is string | number {
+  return (
+    (typeof value === "string" && /^[a-z][a-z-]{0,39}$/u.test(value)) ||
+    (typeof value === "number" && Number.isSafeInteger(value))
+  );
 }
 
 const FAILURE_DETAIL_KEYS = [

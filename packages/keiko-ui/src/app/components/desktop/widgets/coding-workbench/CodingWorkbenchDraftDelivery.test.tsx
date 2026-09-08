@@ -28,6 +28,13 @@ function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value
 }
 
 describe("durable repository delivery in the Code task", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   // #3390: a lapsed retention used to leave the operator with a false sentence ("the change moved")
   // and NO control at all -- the automatic draft simply vanished about a minute after the run
   // ended, with no way back. The card must now say what actually happened and still open the
@@ -89,13 +96,6 @@ describe("durable repository delivery in the Code task", () => {
     const state = screen.getByTestId("cwb-description-status");
     expect(state).toHaveAttribute("data-state", "current");
     expect(state).toHaveAttribute("data-reason", "generated");
-  });
-
-  beforeEach(() => {
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
-  });
-  afterEach(() => {
-    vi.restoreAllMocks();
   });
 
   it("shows the confirmed draft and exact immutable target with a safe PR link", async () => {

@@ -254,7 +254,7 @@ describe("post-run description refresh (#3390)", () => {
       });
       const afterArrival = refreshRun.mock.calls.length;
       vi.advanceTimersByTime(POST_RUN_DESCRIPTION_POLL_MS * 3);
-      expect(refreshRun.mock.calls.length).toBe(afterArrival);
+      expect(refreshRun.mock.calls).toHaveLength(afterArrival);
       unmount();
     } finally {
       vi.useRealTimers();
@@ -277,7 +277,7 @@ describe("post-run description refresh (#3390)", () => {
       vi.advanceTimersByTime(POST_RUN_DESCRIPTION_POLL_MAX_MS);
       const atLimit = refreshRun.mock.calls.length;
       vi.advanceTimersByTime(POST_RUN_DESCRIPTION_POLL_MS * 5);
-      expect(refreshRun.mock.calls.length).toBe(atLimit);
+      expect(refreshRun.mock.calls).toHaveLength(atLimit);
       unmount();
     } finally {
       vi.useRealTimers();
