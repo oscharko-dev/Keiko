@@ -128,6 +128,12 @@ async function grantGithubIssueReaderAccessThroughSettings(page: Page): Promise<
   const toggle = settings.getByRole("checkbox", {
     name: /Allow reading GitHub issues for this repository/u,
   });
+  // The control is server-controlled (AutonomySettings.tsx): `checked` follows the persisted grant
+  // and the input is disabled while the grant loads or saves, so a click flips it only once the PUT
+  // has settled. The probe rehearsal of 2026-09-08 failed on `check()`, which asserts an instant
+  // flip -- the grant had in fact succeeded a moment later. Wait for the control to be usable,
+  // click it, and read the persisted state back through the same control.
+  await expect(toggle).toBeEnabled({ timeout: 30_000 });
   if (!(await toggle.isChecked())) {
     const granted = page.waitForResponse(
       (response) =>
@@ -135,13 +141,14 @@ async function grantGithubIssueReaderAccessThroughSettings(page: Page): Promise<
         response.url().endsWith("/api/coding-workbench/github-authorization"),
       { timeout: 30_000 },
     );
-    await toggle.check();
+    await toggle.click();
     const response = await granted;
     expect(
       response.ok(),
       `the GitHub access grant failed with HTTP ${String(response.status())}`,
     ).toBe(true);
   }
+  await expect(toggle).toBeChecked({ timeout: 30_000 });
   await closeSettingsWindow(page);
 }
 
