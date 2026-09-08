@@ -1265,13 +1265,13 @@
     {
       "op": "portable.windows-authenticode.system-binary-refused",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/windowsPortableAuthenticode.ts:63",
+      "site": "packages/keiko-server/src/coding-runtime/windowsPortableAuthenticode.ts:76",
       "package": "keiko-server"
     },
     {
       "op": "portable.windows-authenticode.system-binary-refused",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/windowsPortableAuthenticode.ts:71",
+      "site": "packages/keiko-server/src/coding-runtime/windowsPortableAuthenticode.ts:84",
       "package": "keiko-server"
     },
     {
@@ -1409,7 +1409,7 @@
     {
       "op": "update.runtime.event",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-local-state.ts:1586",
+      "site": "packages/keiko-server/src/update-local-state.ts:1605",
       "package": "keiko-server"
     },
     {

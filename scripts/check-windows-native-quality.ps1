@@ -393,6 +393,53 @@ static const size_t KEIKO_RUNTIME_ATTESTATION_LENGTH = 20u;
   node (Join-Path $root "native/runtime-supervisor/test-protocol.mjs")
   if ($LASTEXITCODE -ne 0) { throw "runtime-supervisor Job Object qualification failed" }
 
+  $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
+  if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+    throw "Visual Studio locator was not found"
+  }
+  $installations = @(
+    & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+  )
+  if ($LASTEXITCODE -ne 0 -or $installations.Count -ne 1) {
+    throw "Exactly one latest Visual Studio MSBuild installation is required"
+  }
+  $csharpCompiler = Join-Path $installations[0] "MSBuild/Current/Bin/Roslyn/csc.exe"
+  $frameworkReferences = Join-Path ${env:ProgramFiles(x86)} `
+    "Reference Assemblies/Microsoft/Framework/.NETFramework/v4.8.1"
+  if (-not (Test-Path -LiteralPath $csharpCompiler -PathType Leaf) -or
+      -not (Test-Path -LiteralPath $frameworkReferences -PathType Container)) {
+    throw "The reviewed C# compiler or .NET Framework references were not found"
+  }
+  node (Join-Path $root "scripts/check-windows-portable-authenticode-verifier.mjs") `
+    --compiler $csharpCompiler --references $frameworkReferences
+  if ($LASTEXITCODE -ne 0) { throw "Authenticode verifier deterministic asset check failed" }
+
+  $standardTokenSource = Join-Path $root `
+    "scripts/windows-portable-authenticode-standard-token-loader.test.cs"
+  $standardTokenHelper = Join-Path $scratch "windows-portable-authenticode-standard-token-loader.exe"
+  $standardTokenReferences = @(
+    "mscorlib.dll", "System.dll", "System.Core.dll", "System.Security.dll" |
+      ForEach-Object { "/reference:" + (Join-Path $frameworkReferences $_) }
+  )
+  & $csharpCompiler /nologo /noconfig /nostdlib+ /deterministic+ /optimize+ /debug- `
+    /warn:4 /warnaserror+ /target:exe /platform:anycpu /langversion:5 /utf8output `
+    "/pathmap:$scratch=/_/" "/out:$standardTokenHelper" @standardTokenReferences `
+    $standardTokenSource
+  if ($LASTEXITCODE -ne 0) { throw "Restricted-token Authenticode loader helper build failed" }
+  $windowsPowerShell = Join-Path $env:SystemRoot `
+    "System32/WindowsPowerShell/v1.0/powershell.exe"
+  $serverRuntime = Join-Path $root `
+    "packages/keiko-server/dist/coding-runtime/windowsPortableAuthenticode.js"
+  if (-not (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf) -or
+      -not (Test-Path -LiteralPath $serverRuntime -PathType Leaf)) {
+    throw "Trusted Windows PowerShell or built Authenticode runtime was not found"
+  }
+  node (Join-Path $root "scripts/check-windows-portable-authenticode-loader.mjs") `
+    --helper $standardTokenHelper --powershell $windowsPowerShell `
+    --runtime $serverRuntime --system-root $env:SystemRoot
+  if ($LASTEXITCODE -ne 0) { throw "Restricted-token Authenticode loader verification failed" }
+
   $project = Join-Path $PSScriptRoot "native-quality/windows-rfc3161-quality.csproj"
   $intermediate = Join-Path $scratch "obj/"
   $output = Join-Path $scratch "bin/"
@@ -403,6 +450,17 @@ static const size_t KEIKO_RUNTIME_ATTESTATION_LENGTH = 20u;
     "-p:BaseIntermediateOutputPath=$intermediate" "-p:OutputPath=$output" `
     "-p:RestoreLockedMode=true"
   if ($LASTEXITCODE -ne 0) { throw ".NET analyzer quality build failed" }
+
+  $runtimeVerifierProject = Join-Path $PSScriptRoot `
+    "native-quality/windows-authenticode-verifier-quality.csproj"
+  $runtimeVerifierIntermediate = Join-Path $scratch "authenticode-verifier-obj/"
+  $runtimeVerifierOutput = Join-Path $scratch "authenticode-verifier-bin/"
+  dotnet build $runtimeVerifierProject --configuration Release --nologo `
+    "-p:BaseIntermediateOutputPath=$runtimeVerifierIntermediate" `
+    "-p:OutputPath=$runtimeVerifierOutput" `
+    "-p:KeikoFrameworkReferencePath=$frameworkReferences" `
+    "-p:RestoreLockedMode=true"
+  if ($LASTEXITCODE -ne 0) { throw ".NET runtime Authenticode analyzer quality build failed" }
 
   & pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot "__tests__/windows-rfc3161-fixtures.ps1")
   if ($LASTEXITCODE -ne 0) { throw "RFC3161 fixture verification failed" }
