@@ -94,11 +94,13 @@ const KNOWN_CREDENTIAL_ENV_NAMES: readonly string[] = Object.freeze([
   "GITHUB_ENTERPRISE_TOKEN",
 ]);
 
-// A parent var whose NAME says it carries a credential. Deliberately a contains-match on the
-// secret-bearing words and nothing wider: `AUTH` is absent because GIT_AUTHOR_NAME carries a
-// person's name, and a name is exactly the kind of value this mode exists to let through.
+// A parent var whose NAME says it carries a credential: a contains-match on the secret-bearing
+// words plus any name that ENDS in `_KEY` (SIGNING_KEY, GPG_KEY, ENCRYPTION_KEY, SSH_KEY, ...), and
+// nothing wider: `AUTH` is absent because GIT_AUTHOR_NAME carries a person's name, and a bare
+// `KEY` would match KEYBOARD-style names -- a name is exactly the kind of value this mode exists to
+// let through. A public key scrubbed by the suffix rule is the acceptable side of that line.
 const CREDENTIAL_ENV_NAME_PATTERN =
-  /TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_KEY|PRIVATE_KEY|ACCESS_KEY/iu;
+  /(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_KEY|PRIVATE_KEY|ACCESS_KEY)|(?:_KEY$)/iu;
 
 export function isCredentialEnvName(name: string): boolean {
   return KNOWN_CREDENTIAL_ENV_NAMES.includes(name) || CREDENTIAL_ENV_NAME_PATTERN.test(name);

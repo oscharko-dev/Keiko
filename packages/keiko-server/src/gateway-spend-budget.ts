@@ -10,7 +10,7 @@ import type {
 } from "@oscharko-dev/keiko-model-gateway";
 import { ModelSpendStore, type SpendCeilingReconciliation } from "./store/model-spend.js";
 import { processServerLogSink } from "./process-log-sink.js";
-import type { ServerLogSink } from "./observability/server-log.js";
+import { errorKindOf, type ServerLogSink } from "./observability/server-log.js";
 import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
 
 export const QUALIFICATION_SPEND_BUDGET_USD_ENV = "KEIKO_QUALIFICATION_SPEND_BUDGET_USD";
@@ -85,6 +85,22 @@ function upperCharge(
   return cost(pricing, capability.contextWindow, output);
 }
 
+/** A usage report the pricing cannot turn into a safe charge must not discard the response the
+ * model already produced: `settle` runs in a `finally`, and an exception escaping from there
+ * replaced a successful call with a raw error. The reserved upper bound stays charged -- the
+ * conservative outcome -- and the failure is named on the settlement line. */
+function measureCharge(
+  pricing: ModelCapabilityPricing,
+  usage: UsageMetadata | undefined,
+  upper: number,
+): { readonly charged: number; readonly errorKind?: string } {
+  try {
+    return { charged: measuredCharge(pricing, usage, upper) };
+  } catch (error) {
+    return { charged: upper, errorKind: errorKindOf(error) };
+  }
+}
+
 function measuredCharge(
   pricing: ModelCapabilityPricing,
   usage: UsageMetadata | undefined,
@@ -137,7 +153,8 @@ function reservation(
     settle(usage): void {
       if (settled) return;
       settled = true;
-      const charged = measuredCharge(pricing, usage, upper);
+      const measurement = measureCharge(pricing, usage, upper);
+      const charged = measurement.charged;
       try {
         if (charged > upper) store.exhaust(charged - upper);
         else store.refund(upper - charged);
@@ -146,13 +163,16 @@ function reservation(
       }
       log.write({
         category: "gateway",
-        level: "info",
+        level: measurement.errorKind === undefined ? "info" : "warn",
         op: "gateway.spend.settled",
         correlationId,
         extra: {
           chargedNanoUsd: charged,
-          measured: usage !== undefined && charged !== upper,
+          measured: usage !== undefined && charged !== upper && measurement.errorKind === undefined,
           boundExceeded: charged > upper,
+          ...(measurement.errorKind === undefined
+            ? {}
+            : { measurementErrorKind: measurement.errorKind }),
         },
       });
       if (charged > upper) reject(log, correlationId, "spend-bound-unavailable");

@@ -62,10 +62,10 @@ import {
   type GitPrBody,
 } from "./git-pr-body.js";
 import { CommandCancelledError, CommandTimeoutError } from "./errors.js";
-import { collectCredentialEnvValues, collectSensitiveEnvValues } from "./sandbox.js";
 import { gitRemoteReadContext, gitRemoteReadWasRedacted } from "./git-remote-read-context.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
+  defaultOutputScrubSecrets,
   nodeSpawnFn,
   runCommand,
   type ExecutableResolver,
@@ -542,15 +542,11 @@ async function inspectRemote<T>(
   }
 }
 
-/** Whether the default output scrub -- every non-allowlisted parent env value plus the declared
- * credentials, exactly the set `runCommand` applies -- would alter this content-bearing text. */
+/** Whether the default output scrub -- the very set `runCommand` applies -- would alter this
+ * content-bearing text. */
 function contentScrubAlters(ctx: RunContext, text: string): boolean {
   const { processEnv, policy } = ctx.runDeps;
-  const secrets = [
-    ...collectSensitiveEnvValues(processEnv, policy.envAllowlist),
-    ...collectCredentialEnvValues(processEnv, policy.credentialEnvAllowlist ?? []),
-  ];
-  return redact(text, secrets) !== text;
+  return redact(text, defaultOutputScrubSecrets(processEnv, policy)) !== text;
 }
 
 function bodyAdapter(ctx: RunContext): GitPullRequestBodyAdapter {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type {
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchRuntimeAuthorityEnvelope,
@@ -12,6 +13,7 @@ import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-c
 import {
   EDITOR_AGENT_AUTHORITY_MAX_RECORDS,
   EditorAgentAuthorityRegistry,
+  editorAgentAuthorityEnvelopeDigest,
   editorAgentAuthorizedConnectorScopes,
   editorAgentWorkspaceRootDigest,
 } from "./agentAuthorityRegistry.js";
@@ -84,6 +86,15 @@ function action(overrides: Partial<EditorAgentAction> = {}): EditorAgentAction {
     ...overrides,
   };
 }
+
+describe("editor agent authority digests", () => {
+  // Keiko for Quality on #3394: the registry used a file-local canonical JSON with a
+  // locale-sensitive key sort; every digest now goes through the shared canonical form.
+  it("digests the envelope through the shared canonical form and hash (KEIKO-0577)", () => {
+    const value = envelope();
+    expect(editorAgentAuthorityEnvelopeDigest(value)).toBe(sha256Hex(canonicalise(value)));
+  });
+});
 
 describe("EditorAgentAuthorityRegistry", () => {
   it("resolves only the server-registered digest for the matching workspace and ceiling", () => {

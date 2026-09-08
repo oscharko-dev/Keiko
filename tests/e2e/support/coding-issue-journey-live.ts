@@ -940,25 +940,47 @@ async function answerQuestionForm(form: Locator): Promise<void> {
   await clickWhenActionable(form.getByRole("button", { name: "Send answer", exact: true }));
 }
 
-/** Picks one option per question group (radios and checkboxes share a `name` per question). */
-async function chooseQuestionOptions(form: Locator): Promise<string[]> {
-  const options = form.locator('input[type="radio"], input[type="checkbox"]');
-  const facts = await options.evaluateAll((elements) =>
-    elements.map((element) => ({
-      name: element.getAttribute("name") ?? "",
-      label: element.getAttribute("aria-label") ?? "",
-    })),
-  );
-  const chosen: string[] = [];
-  const groups = new Set(facts.map((fact) => fact.name));
-  for (const group of groups) {
+export interface QuestionOptionFact {
+  /** Position among the form's option inputs in DOM order: the handle the pick is checked by. */
+  readonly index: number;
+  /** The question the option belongs to (radios and checkboxes share a `name` per question). */
+  readonly name: string;
+  readonly label: string;
+}
+
+/** Reads the option facts the way the component renders them: the option text is the
+ * `aria-label` of the wrapping `<label>` (CodingWorkbenchQuestions.tsx), never of the input. Runs
+ * inside the page, so it must stay free of any reference outside its own body. */
+export function questionOptionFacts(elements: readonly Element[]): QuestionOptionFact[] {
+  return elements.map((element, index) => ({
+    index,
+    name: element.getAttribute("name") ?? "",
+    label: (
+      element.closest("label")?.getAttribute("aria-label") ??
+      element.getAttribute("aria-label") ??
+      ""
+    ).trim(),
+  }));
+}
+
+/** One pick per question: the option that hands the decision back to the run when one exists,
+ * otherwise the first. Two questions in one form may legitimately offer the same option text, so a
+ * pick is identified by its index, never by its label. */
+export function pickQuestionOptions(facts: readonly QuestionOptionFact[]): QuestionOptionFact[] {
+  const picks: QuestionOptionFact[] = [];
+  for (const group of new Set(facts.map((fact) => fact.name))) {
     const members = facts.filter((fact) => fact.name === group);
     const pick = members.find((fact) => QUESTION_CONTINUE_OPTION.test(fact.label)) ?? members[0];
-    if (pick === undefined) continue;
-    await form.getByLabel(pick.label, { exact: true }).first().check();
-    chosen.push(pick.label);
+    if (pick !== undefined) picks.push(pick);
   }
-  return chosen;
+  return picks;
+}
+
+async function chooseQuestionOptions(form: Locator): Promise<string[]> {
+  const options = form.locator('input[type="radio"], input[type="checkbox"]');
+  const picks = pickQuestionOptions(await options.evaluateAll(questionOptionFacts));
+  for (const pick of picks) await options.nth(pick.index).check({ timeout: 5_000 });
+  return picks.map((pick) => pick.label);
 }
 
 async function answerVisibleApproval(page: Page): Promise<void> {
@@ -1020,7 +1042,11 @@ export async function waitWhileAnsweringApprovals<T>(
         : new Error(`${options.message}: ${pending.message}`, { cause: pending });
     }
     await answerVisibleApproval(page);
-    await answerVisibleQuestion(page);
+    // Guarded like `clickWhenActionable`: a question the window is still binding, or an option that
+    // cannot be checked yet, defers to the next tick instead of ending the poll -- and the run.
+    await answerVisibleQuestion(page).catch((error: unknown) => {
+      process.stderr.write(`[lane] question answer deferred: ${firstErrorLine(error)}\n`);
+    });
     await page.waitForTimeout(2_000);
   }
 }

@@ -174,6 +174,24 @@ describe("shared persistent model spend admission", () => {
     ).toThrow("spend-bound-unavailable");
   });
 
+  it("charges the reserved bound and keeps the response when the usage report cannot be priced", () => {
+    // Keiko for Quality on #3394: `measuredCharge` threw from `settle`, which runs in a `finally`,
+    // and a successful model response was replaced by a raw error. The reserved upper bound stays
+    // charged -- the conservative outcome -- and the settlement line names the failure.
+    const hold = budget().reserve(capability, request, "unpriceable-usage");
+    expect(() => {
+      hold.settle({ ...response.usage, promptTokens: Number.MAX_SAFE_INTEGER });
+    }).not.toThrow();
+    const settlement = events.find((event) => event.op === "gateway.spend.settled");
+    expect(settlement?.level).toBe("warn");
+    expect(settlement?.extra).toMatchObject({
+      chargedNanoUsd: 120_000_000_000,
+      measured: false,
+      boundExceeded: false,
+    });
+    expect(typeof settlement?.extra?.measurementErrorKind).toBe("string");
+  });
+
   it("does not enforce a qualification ceiling when no spend budget is configured", async () => {
     const call = vi.fn(() => Promise.resolve(response));
     const spendBudget = createGatewaySpendBudget({});

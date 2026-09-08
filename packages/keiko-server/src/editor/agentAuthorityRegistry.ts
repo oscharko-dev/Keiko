@@ -1,4 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type {
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchConnectorScope,
@@ -120,7 +121,7 @@ export function editorAgentWorkspaceRootDigest(workspaceRoot: string): string {
 export function editorAgentAuthorityEnvelopeDigest(
   envelope: CodingWorkbenchAuthorityEnvelope,
 ): string {
-  return createHash("sha256").update(canonicalJson(envelope), "utf8").digest("hex");
+  return sha256Hex(canonicalise(envelope));
 }
 
 export function editorAgentAuthorizedConnectorScopes(
@@ -138,19 +139,6 @@ export function editorAgentAuthorizedConnectorScopes(
   const networkScopes = new Set(envelope.networkPolicy.connectorScopes);
   const authorized = envelope.connectorScopes.filter((scope) => networkScopes.has(scope));
   return authorized.length === 0 ? undefined : authorized;
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right));
-    return `{${entries
-      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }
 
 function expired(nowIso: string, expiresAt: string): boolean {
@@ -231,7 +219,7 @@ export class EditorAgentAuthorityRegistry {
     const record = this.records.get(key);
     if (record === undefined) return { ok: false, reason: "invalid" };
     if (record.runtimeEnvelope !== undefined) {
-      return canonicalJson(record.runtimeEnvelope) === canonicalJson(envelope)
+      return canonicalise(record.runtimeEnvelope) === canonicalise(envelope)
         ? registration
         : { ok: false, reason: "invalid" };
     }
@@ -700,9 +688,7 @@ function runtimeFacts(
     connectorScopes: envelope.authority.connectorScopes,
     runtimeSource: envelope.authority.runtimeSource,
     modelSource: envelope.authority.modelProfile.source,
-    budgetDigest: createHash("sha256")
-      .update(canonicalJson(envelope.authority.budget), "utf8")
-      .digest("hex"),
+    budgetDigest: sha256Hex(canonicalise(envelope.authority.budget)),
     commandPolicyDigest: digestCanonical(envelope.authority.commandPolicy),
     networkPolicyDigest: digestCanonical(envelope.authority.networkPolicy),
     gatesDigest: digestCanonical(envelope.authority.gates),
@@ -719,8 +705,8 @@ function runtimeDrift(
   const bindingDrift = runtimeBindingDrift(expected, actual);
   if (bindingDrift !== undefined) return bindingDrift;
   if (
-    canonicalJson(expected.actionClasses) !== canonicalJson(actual.actionClasses) ||
-    canonicalJson(expected.connectorScopes) !== canonicalJson(actual.connectorScopes)
+    canonicalise(expected.actionClasses) !== canonicalise(actual.actionClasses) ||
+    canonicalise(expected.connectorScopes) !== canonicalise(actual.connectorScopes)
   )
     return "scope-drift";
   if (expected.budgetDigest !== actual.budgetDigest) return "budget-drift";
@@ -745,7 +731,7 @@ function policyFactsDrifted(
 }
 
 function digestCanonical(value: unknown): string {
-  return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
+  return sha256Hex(canonicalise(value));
 }
 
 function runtimeBindingDrift(

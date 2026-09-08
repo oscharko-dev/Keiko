@@ -965,6 +965,19 @@ interface BuildResultOptions {
   readonly attestation: SandboxAttestation | undefined;
 }
 
+/** The scrub set of the default output mode: every non-allowlisted parent env value plus the
+ * declared credentials. One computation for the spawn boundary and for a typed reader that holds
+ * content-bearing text to the same standard (the pull-request body read in git-pr-node). */
+export function defaultOutputScrubSecrets(
+  processEnv: NodeJS.ProcessEnv,
+  policy: SandboxPolicy,
+): readonly string[] {
+  return [
+    ...collectSensitiveEnvValues(processEnv, policy.envAllowlist),
+    ...collectCredentialEnvValues(processEnv, policy.credentialEnvAllowlist ?? []),
+  ];
+}
+
 function buildResult(options: BuildResultOptions): CommandResult {
   const { input, buffers, state, exitCode, termSignal, deps, startedAt, attestation } = options;
   // A credential the policy deliberately handed to the child is still scrubbed on the way out: a
@@ -976,10 +989,7 @@ function buildResult(options: BuildResultOptions): CommandResult {
   const secrets =
     deps.policy.outputScrub === "credentials-only"
       ? collectCredentialLikeEnvValues(deps.processEnv, deps.policy.credentialEnvAllowlist ?? [])
-      : [
-          ...collectSensitiveEnvValues(deps.processEnv, deps.policy.envAllowlist),
-          ...collectCredentialEnvValues(deps.processEnv, deps.policy.credentialEnvAllowlist ?? []),
-        ];
+      : defaultOutputScrubSecrets(deps.processEnv, deps.policy);
   const attest = attestation === undefined ? {} : { attestation };
   if (buffers.truncated) {
     // Real over-cap byte count from the raw arrival counter (ADR-0054 D5). Clamped at 0 so a

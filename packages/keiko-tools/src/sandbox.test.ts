@@ -121,6 +121,11 @@ describe("collectCredentialLikeEnvValues — credentials-only scrub set", () => 
       "KEIKO_API_KEY",
       "SSH_PRIVATE_KEY",
       "S3_ACCESS_KEY",
+      "SIGNING_KEY",
+      "GPG_KEY",
+      "ENCRYPTION_KEY",
+      "SSH_KEY",
+      "deploy_key",
     ]) {
       expect(isCredentialEnvName(name), name).toBe(true);
     }
@@ -131,6 +136,9 @@ describe("collectCredentialLikeEnvValues — credentials-only scrub set", () => 
       "GIT_AUTHOR_NAME",
       "SSH_AUTH_SOCK",
       "PATH",
+      "KEYBOARD_LAYOUT",
+      "HOTKEY_MODE",
+      "GPG_KEY_ID",
     ]) {
       expect(isCredentialEnvName(name), name).toBe(false);
     }

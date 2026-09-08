@@ -4,6 +4,7 @@ import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogLevel, ServerLogSink } from "../observability/index.js";
 import { errorKindOf } from "../observability/server-log.js";
 import { realpathSync } from "node:fs";
+import { REDACTION_PLACEHOLDER } from "@oscharko-dev/keiko-security";
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { readGitRemoteUrl } from "@oscharko-dev/keiko-tools/internal/git-mutation";
@@ -351,7 +352,7 @@ export async function githubRemoteOwnerAndRepoFor(
 // The marker `runCommand` substitutes for a scrubbed environment value. Checked here only to NAME
 // the outcome on the activity log; the refusal itself already comes from
 // `githubOwnerAndRepoFromRemoteUrl`, whose segment rule rejects the marker's brackets.
-const SPAWN_REDACTION_MARKER = "[REDACTED]";
+const SPAWN_REDACTION_MARKER = REDACTION_PLACEHOLDER;
 
 function unresolvedOutcomeFor(
   remoteUrl: string,
