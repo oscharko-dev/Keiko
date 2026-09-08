@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { logDescription } from "./prDescriptionProjection.js";
 import { DescriptionFixture } from "./prDescriptionTestSupport.js";
+import { PrDescriptionFailure } from "./prDescriptionTypes.js";
 
 // Owner audit of PR #3394, finding b3-15 (AGENTS.md §8): every description failure logged
 // `errorKind: "internal"` unconditionally instead of deriving it from the actual thrown error the
@@ -28,6 +29,21 @@ describe("prDescriptionProjection — logDescription errorKind", () => {
     expect(line?.level).toBe("warn");
     expect(line?.errorKind).toBe("TypeError");
     expect(line?.errorKind).not.toBe("internal");
+  });
+
+  it("carries a failure's closed detail code onto the line (#3390, rehearsal run-20)", () => {
+    fixture = new DescriptionFixture();
+    logDescription(
+      fixture.options,
+      fixture.context,
+      "preview",
+      "provider-failed",
+      undefined,
+      new PrDescriptionFailure("provider-failed", { detail: "read-invalid-response" }),
+    );
+    const line = fixture.events.find((event) => event.op === "git.pr-description");
+    expect(line?.errorKind).toBe("PrDescriptionFailure");
+    expect(line?.extra?.detail).toBe("read-invalid-response");
   });
 
   it("omits errorKind entirely when no error was passed", () => {

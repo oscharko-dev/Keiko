@@ -93,14 +93,19 @@ export async function readDescriptionBody(
 ): Promise<GitPrBody> {
   if (!validDescriptionContext(context)) throw new PrDescriptionFailure("authority-denied");
   const adapter = options.adapter(context);
-  if (adapter === undefined) throw new PrDescriptionFailure("provider-failed");
+  if (adapter === undefined)
+    throw new PrDescriptionFailure("provider-failed", { detail: "adapter-unavailable" });
   const read = await adapter.readPullRequestBody({
     ownerAndRepo: context.repository,
     prExternalId: String(context.prNumber),
   });
   if (!validDescriptionContext(context)) throw new PrDescriptionFailure("authority-denied");
-  if (!read.ok) throw new PrDescriptionFailure("provider-failed");
-  if (!validReadBody(read.value, context)) throw new PrDescriptionFailure("provider-failed");
+  // Rehearsal run-20 (#3390): a bare `provider-failed` could not say which read failed or why; the
+  // adapter's closed reason travels as the failure's `detail` onto the activity log line.
+  if (!read.ok)
+    throw new PrDescriptionFailure("provider-failed", { detail: `read-${read.reason}` });
+  if (!validReadBody(read.value, context))
+    throw new PrDescriptionFailure("provider-failed", { detail: "read-body-invalid" });
   if (read.value.identity.state !== "open") throw new PrDescriptionFailure("stale-pr");
   assertSafeDescriptionBody(options, read.value.body);
   return structuredClone(read.value);

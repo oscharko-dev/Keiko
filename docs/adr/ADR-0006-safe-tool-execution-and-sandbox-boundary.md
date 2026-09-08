@@ -358,8 +358,10 @@ Tool `output` strings are redacted at two points:
    declared credential values and built-in secret patterns remain scrubbed, and child environment
    isolation is unchanged. Machine metadata containing a redaction marker is rejected before
    parsing or hashing; corrupted identities must never become verification facts or permit a push.
-   Content-bearing blob, patch, pull-request body and CI failure-log readers retain the default
-   all-environment-value scrub. An explicitly stricter caller policy remains authoritative; typed
+   Content-bearing blob, patch and CI failure-log readers retain the default all-environment-value
+   scrub; the pull-request body reader applies that same scrub to the body text it returns (text the
+   scrub would alter is an altered read, never a fact) while the identity envelope around it is a
+   typed fact. An explicitly stricter caller policy remains authoritative; typed
    GitHub reads share their original invocation, byte, deadline and authority budgets.
 
 2. **ToolCallResult.output** — the `WorkspaceToolHost.execute` method returns `output` that is

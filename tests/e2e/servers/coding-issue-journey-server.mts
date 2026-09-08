@@ -100,13 +100,31 @@ export function evaluationLocalGitMutationEnv(
  * pull-request body -- would otherwise be written out of that data as a redaction marker (#3390).
  */
 const LANE_ONLY_ENV_PREFIX = "KEIKO_QUALIFICATION_";
+// The two documented operator settings the product itself reads under this prefix
+// (`gateway-spend-budget.ts`); `launchedEnv` threads their validated values in explicitly.
+const PRODUCT_LANE_SETTINGS: ReadonlySet<string> = new Set([
+  "KEIKO_QUALIFICATION_SPEND_BUDGET_USD",
+  "KEIKO_QUALIFICATION_SPEND_LEDGER_PATH",
+]);
+
+function isLaneOnlyVariable(name: string): boolean {
+  return name.startsWith(LANE_ONLY_ENV_PREFIX) && !PRODUCT_LANE_SETTINGS.has(name);
+}
 
 function withoutLaneOnlyVariables(
   env: Readonly<Record<string, string | undefined>>,
 ): Record<string, string | undefined> {
-  return Object.fromEntries(
-    Object.entries(env).filter(([name]) => !name.startsWith(LANE_ONLY_ENV_PREFIX)),
-  );
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !isLaneOnlyVariable(name)));
+}
+
+/** The product runs inside THIS process (`runUiCli` composes it in-process) and its adapters read
+ * `process.env` directly, so the launched env alone cannot keep lane-only variables away from the
+ * spawn boundary's output scrub: they are removed from the process env itself once this entry has
+ * consumed them. Exported for the unit test. */
+export function pruneLaneOnlyVariables(env: Record<string, string | undefined>): void {
+  for (const name of Object.keys(env)) {
+    if (isLaneOnlyVariable(name)) Reflect.deleteProperty(env, name);
+  }
 }
 
 /**
@@ -183,16 +201,15 @@ async function main(): Promise<number> {
   // project. Pointing it at the controlled repository checkout is what makes this composition
   // real rather than a stand-in.
   const launcherSecret = resolveLauncherSecret(process.env);
+  const identityHome = process.env.KEIKO_QUALIFICATION_GIT_IDENTITY_HOME;
+  pruneLaneOnlyVariables(process.env);
   const serverEnv = launchedEnv(
     process.env,
     resolved.config.spendBudgetUsd,
     resolved.config.spendLedgerPath,
     launcherSecret,
   );
-  const localGitMutationEnv = evaluationLocalGitMutationEnv(
-    serverEnv,
-    process.env.KEIKO_QUALIFICATION_GIT_IDENTITY_HOME,
-  );
+  const localGitMutationEnv = evaluationLocalGitMutationEnv(serverEnv, identityHome);
   return runUiCli(args, processIo(), serverEnv, {
     cwd: resolved.config.controlledRepositoryRoot,
     ...(localGitMutationEnv === undefined ? {} : { localGitMutationEnv }),

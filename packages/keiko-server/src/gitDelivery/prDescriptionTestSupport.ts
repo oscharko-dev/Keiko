@@ -40,6 +40,8 @@ export class DescriptionFixture {
   public keepOld = false;
   public afterWrite: (() => void) | undefined;
   public beforeRead: (() => void) | undefined;
+  /** When set, the next body read fails with this closed reason instead of returning `remote`. */
+  public readOutcome: Extract<GitPrInspectionResult<GitPrBody>, { ok: false }> | undefined;
   public afterCapture: (() => void) | undefined;
   public status: PrDescriptionApplicationStatus | undefined;
   public readonly context: PrDescriptionContext;
@@ -250,6 +252,7 @@ export class DescriptionFixture {
     return {
       readPullRequestBody: (): Promise<GitPrInspectionResult<GitPrBody>> => {
         this.beforeRead?.();
+        if (this.readOutcome !== undefined) return Promise.resolve(this.readOutcome);
         return Promise.resolve({ ok: true, value: structuredClone(this.remote) });
       },
       updatePullRequestBody: (request): Promise<GitPrExecResult> => {

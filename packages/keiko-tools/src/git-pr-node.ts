@@ -62,7 +62,9 @@ import {
   type GitPrBody,
 } from "./git-pr-body.js";
 import { CommandCancelledError, CommandTimeoutError } from "./errors.js";
+import { collectCredentialEnvValues, collectSensitiveEnvValues } from "./sandbox.js";
 import { gitRemoteReadContext, gitRemoteReadWasRedacted } from "./git-remote-read-context.js";
+import { redact } from "@oscharko-dev/keiko-security";
 import {
   nodeSpawnFn,
   runCommand,
@@ -540,14 +542,33 @@ async function inspectRemote<T>(
   }
 }
 
+/** Whether the default output scrub -- every non-allowlisted parent env value plus the declared
+ * credentials, exactly the set `runCommand` applies -- would alter this content-bearing text. */
+function contentScrubAlters(ctx: RunContext, text: string): boolean {
+  const { processEnv, policy } = ctx.runDeps;
+  const secrets = [
+    ...collectSensitiveEnvValues(processEnv, policy.envAllowlist),
+    ...collectCredentialEnvValues(processEnv, policy.credentialEnvAllowlist ?? []),
+  ];
+  return redact(text, secrets) !== text;
+}
+
 function bodyAdapter(ctx: RunContext): GitPullRequestBodyAdapter {
   return {
     readPullRequestBody: (request): Promise<GitPrInspectionResult<GitPrBody>> => {
       const input = { ...request };
+      // The response is a typed identity envelope around content-bearing text. The envelope runs
+      // under the typed-read scrub like every other pull request fact (rehearsal run-20 lost the
+      // repository slug out of it and the description preview failed as provider-failed); the body
+      // text keeps the default content scrub's fail-closed semantics: text that scrub would alter
+      // is an altered read, never a fact (ADR-0006, #3390).
       return inspectRemote(
-        ctx,
+        gitRemoteReadContext(ctx),
         () => buildPrBodyReadArgv(input),
-        (value) => parseGitPrBody(value, input),
+        (value) => {
+          const parsed = parseGitPrBody(value, input);
+          return parsed !== undefined && contentScrubAlters(ctx, parsed.body) ? undefined : parsed;
+        },
       );
     },
     updatePullRequestBody: async (request): Promise<GitPrExecResult> => {

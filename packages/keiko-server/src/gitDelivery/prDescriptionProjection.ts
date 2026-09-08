@@ -38,6 +38,12 @@ export function applicationStatus(
 export function descriptionFailureReason(error: unknown): PrDescriptionApplicationReason {
   return error instanceof PrDescriptionFailure ? error.reason : "provider-failed";
 }
+/** The closed detail word a `PrDescriptionFailure` carries behind its generic reason, if any. */
+function failureDetail(error: unknown): { readonly detail?: string } {
+  return error instanceof PrDescriptionFailure && error.detail !== undefined
+    ? { detail: error.detail }
+    : {};
+}
 export function logDescription(
   options: PrDescriptionServiceOptions,
   context: PrDescriptionContext,
@@ -60,6 +66,7 @@ export function logDescription(
       artifactDigest: status?.binding.draftDigest,
       bodyDigest: status?.binding.finalBodyDigest,
       ...(error === undefined ? {} : describeError(error)),
+      ...failureDetail(error),
     },
   });
 }

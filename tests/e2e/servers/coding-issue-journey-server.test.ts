@@ -13,6 +13,7 @@ import {
   defaultUiStaticRoot,
   evaluationLocalGitMutationEnv,
   launchedEnv,
+  pruneLaneOnlyVariables,
   resolveLauncherSecret,
 } from "./coding-issue-journey-server.mjs";
 
@@ -68,6 +69,23 @@ describe("launchedEnv", () => {
     ).toEqual(["KEIKO_QUALIFICATION_SPEND_BUDGET_USD", "KEIKO_QUALIFICATION_SPEND_LEDGER_PATH"]);
     expect(result.KEIKO_QUALIFICATION_SPEND_BUDGET_USD).toBe("40");
     expect(result.PATH).toBe("/usr/bin");
+  });
+
+  it("prunes lane-only variables from the process env in place, keeping the product's own settings", () => {
+    const env: Record<string, string | undefined> = {
+      PATH: "/usr/bin",
+      KEIKO_QUALIFICATION_REHEARSAL_REPOSITORY: "owner/fixture-copy",
+      KEIKO_QUALIFICATION_SPEND_BUDGET_USD: "40",
+      KEIKO_QUALIFICATION_SPEND_LEDGER_PATH: "/tmp/spend.db",
+      KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS: "1000000",
+    };
+    pruneLaneOnlyVariables(env);
+    expect(Object.keys(env).sort()).toEqual([
+      "KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS",
+      "KEIKO_QUALIFICATION_SPEND_BUDGET_USD",
+      "KEIKO_QUALIFICATION_SPEND_LEDGER_PATH",
+      "PATH",
+    ]);
   });
 
   it("does not mutate the base env", () => {

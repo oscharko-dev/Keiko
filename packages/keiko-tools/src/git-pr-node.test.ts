@@ -776,6 +776,44 @@ describe("node git pull request adapter — `gh` can authenticate", () => {
 });
 
 describe("node PR adapter — exact body-only reads and writes", () => {
+  it("returns the exact body when an ordinary parent env value overlaps the identity envelope", async () => {
+    // #3390, rehearsal run-20: the repository slug the lane had exported was scrubbed out of the
+    // identity that travels with the body, and the description preview failed as provider-failed.
+    const body = "Closes #42\n";
+    const spawn = scriptedSpawn([
+      {
+        stdout: JSON.stringify({ identity: PR_IDENTITY, body, updatedAt: "2026-09-05T00:00:00Z" }),
+      },
+    ]);
+    const adapter = makeAdapter(spawn, {
+      PATH: "/usr/bin",
+      KEIKO_QUALIFICATION_REHEARSAL_REPOSITORY: PR_IDENTITY.repository,
+    });
+    expect(
+      await adapter.readPullRequestBody({
+        ownerAndRepo: CREATE.ownerAndRepo,
+        prExternalId: "1499",
+      }),
+    ).toMatchObject({ ok: true, value: { body } });
+  });
+  it("still treats body text the content scrub would alter as an altered read", async () => {
+    const body = "Deployed from /srv/build-agent-42/checkout\n";
+    const spawn = scriptedSpawn([
+      {
+        stdout: JSON.stringify({ identity: PR_IDENTITY, body, updatedAt: "2026-09-05T00:00:00Z" }),
+      },
+    ]);
+    const adapter = makeAdapter(spawn, {
+      PATH: "/usr/bin",
+      BUILD_ROOT: "/srv/build-agent-42/checkout",
+    });
+    expect(
+      await adapter.readPullRequestBody({
+        ownerAndRepo: CREATE.ownerAndRepo,
+        prExternalId: "1499",
+      }),
+    ).toEqual({ ok: false, reason: "invalid-response" });
+  });
   it("preserves exact markdown and emits only a canonical body patch", async () => {
     const body = "# Template\r\nCloses #42\r\n";
     const spawn = scriptedSpawn([

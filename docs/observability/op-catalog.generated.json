@@ -1449,6 +1449,13 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-runtime.backend-run",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/productionCodingRuntimeResolver.ts:1036",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-runtime.compaction",
       "category": "process",
       "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:722",
@@ -2089,7 +2096,7 @@
     {
       "op": "evidence.retention",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:680",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:686",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2518,7 +2525,7 @@
     {
       "op": "git.pr-description",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/prDescriptionProjection.ts:51",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionProjection.ts:57",
       "package": "keiko-server"
     },
     {
@@ -3500,6 +3507,7 @@
     "coding-runtime.approval.waiting",
     "coding-runtime.authority.mint-failed",
     "coding-runtime.authority.minted",
+    "coding-runtime.backend-run",
     "coding-runtime.compaction",
     "coding-runtime.description",
     "coding-runtime.description-authority",

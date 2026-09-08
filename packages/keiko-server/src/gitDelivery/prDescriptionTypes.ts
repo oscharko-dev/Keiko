@@ -99,11 +99,15 @@ export interface PrDescriptionApplicationService {
   invalidate(): void;
 }
 export class PrDescriptionFailure extends Error {
+  /** A closed detail word behind a generic reason -- which provider read or validation failed --
+   * carried onto the `git.pr-description` activity log line by `logDescription`. Never free text. */
+  public readonly detail?: string;
   public constructor(
     public readonly reason: PrDescriptionApplicationReason,
-    options?: ErrorOptions,
+    options?: ErrorOptions & { readonly detail?: string },
   ) {
     super(reason, options);
     this.name = "PrDescriptionFailure";
+    if (options?.detail !== undefined) this.detail = options.detail;
   }
 }

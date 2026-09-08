@@ -16,7 +16,11 @@ import {
 import { DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS } from "../coding-runtime/runtimeAuthorityService.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { DescriptionFixture } from "./prDescriptionTestSupport.js";
-import { prepareDescription, prepareDescriptionArtifact } from "./prDescriptionPreparation.js";
+import {
+  prepareDescription,
+  prepareDescriptionArtifact,
+  readDescriptionBody,
+} from "./prDescriptionPreparation.js";
 import { PrDescriptionFailure } from "./prDescriptionTypes.js";
 import type { PrDescriptionServiceOptions } from "./prDescriptionTypes.js";
 
@@ -202,5 +206,22 @@ describe("retained proposal window", () => {
     expect(PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS).toBeGreaterThan(
       PR_DESCRIPTION_APPLICATION_MAX_AGE_MS,
     );
+  });
+});
+
+describe("readDescriptionBody — failure detail (#3390, rehearsal run-20)", () => {
+  it("names the adapter's closed read reason as the failure code behind provider-failed", async () => {
+    const fixture = new DescriptionFixture();
+    try {
+      fixture.readOutcome = { ok: false, reason: "invalid-response" };
+      const failure: unknown = await readDescriptionBody(fixture.options, fixture.context).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(PrDescriptionFailure);
+      expect(failure).toMatchObject({ reason: "provider-failed", detail: "read-invalid-response" });
+    } finally {
+      fixture.close();
+    }
   });
 });
