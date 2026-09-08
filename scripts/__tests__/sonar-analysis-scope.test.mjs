@@ -45,6 +45,7 @@ const repositorySonarProperties = readFileSync(
   resolve(import.meta.dirname, "..", "..", "sonar-project.properties"),
   "utf8",
 );
+const repositoryNativeEntries = readNativeScope(resolve(import.meta.dirname, "..", ".."));
 
 const nativeEntries = [
   {
@@ -313,6 +314,19 @@ describe("Sonar analysis scope", () => {
         "native C entry is missing native-static-analysis: native/launcher.c",
         "native C entry has no behavior or boundary gate: native/launcher.c",
       ]),
+    );
+  });
+
+  it("fails when a newly tracked native header has no compensating-quality inventory entry", () => {
+    const forgottenHeader = "native/portable-launcher/keiko-portable-new-surface.h";
+    const failures = analysisScopeFailures({
+      files: [...repositoryNativeEntries.map((entry) => entry.path), forgottenHeader],
+      nativeEntries: repositoryNativeEntries,
+      properties: validProperties,
+    });
+
+    expect(failures).toContain(
+      `native source has no compensating quality gate: ${forgottenHeader}`,
     );
   });
 

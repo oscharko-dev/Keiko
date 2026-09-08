@@ -1210,6 +1210,28 @@ The preceding `timeout-path` classification was ambiguous because Windows CRLF c
 one instrumentation replacement. Diagnostic-only normalization and exact-match assertions
 now guard every substitution. No production path, timeout or trust authority was changed.
 
+### Windows locality boundary verified on the native runner
+
+Diagnostic `bef4bb401` / run `34159907995` isolated the timeout to the exact `New-Object`
+assembly-name construction before dynamic assembly creation. The repair replaces that call
+and both fixed StringBuilder constructions with direct .NET constructors. Independent security
+review approved the three substitutions with zero findings; all native checks, environment,
+input, output and timeout bounds remain unchanged. Temporary diagnostic code is removed.
+
+Diagnostic `fa132874a` / run `34196895373`, Windows job `101966584709`, passed the complete
+productive native quality step at 2026-09-08T07:06:08.384Z. This includes the native retained
+local-root/rename checks, real native and TypeScript local-positive and mapped-SMB-negative
+checks, compiler/analyzer, coordinator, protocol, setup boundary, supervisor and .NET fixtures.
+The twelve primary locality/inventory files are byte-identical to that tested diagnostic head.
+The lead's focused constructor/runtime/wiring replay passed all sixty-seven tests. The existing
+native inventory repair also retains its independent twenty-five-test pass and schema v1.
+
+The Windows job remains red: its next, separate setup-bootstrap smoke returned status 17
+where zero was expected (stdout 282 bytes, stderr 103 bytes). That downstream failure is under
+bounded diagnosis. Neither the full job nor production-signed N−1/N qualification is claimed
+green. KHA1 coordinator acceptance remains disabled. On 2026-09-08, GitHub `dev` is still
+`c5c03d48fa1066c985a656d29880ae1c02e68c48`, and issue ownership is unchanged.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification

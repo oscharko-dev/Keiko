@@ -143,6 +143,20 @@ static void test_create_root(wchar_t root[TEST_PATH_CAP]) {
   free(temporary);
 }
 
+static void test_canonical_local_directory(
+    const wchar_t *path,
+    wchar_t output[TEST_PATH_CAP]
+) {
+  HANDLE directory = keiko_windows_atomic_open_directory(
+      path,
+      FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE
+  );
+  assert(directory != INVALID_HANDLE_VALUE && directory != NULL);
+  assert(keiko_windows_local_volume_final_path(directory, output));
+  assert(CloseHandle(directory));
+}
+
 static void test_directory_owner_policy(void) {
   BYTE user_storage[SECURITY_MAX_SID_SIZE];
   BYTE system_storage[SECURITY_MAX_SID_SIZE];
@@ -669,6 +683,7 @@ static void test_capsule_and_receipt_junctions_are_refused(void) {
   } test_paths;
   test_paths *paths = (test_paths *)calloc(1u, sizeof(*paths));
   keiko_coordinator_context context;
+  keiko_windows_local_volume_pin locality_pin;
   DWORD attributes;
   assert(paths != NULL);
   memset(&context, 0, sizeof(context));
@@ -677,6 +692,7 @@ static void test_capsule_and_receipt_junctions_are_refused(void) {
   assert(test_join(paths->capsule_link, paths->root, L"\\capsule-link"));
   assert(CreateDirectoryW(paths->outside_capsule, NULL));
   assert(test_create_junction(paths->capsule_link, paths->outside_capsule));
+  assert(!keiko_windows_local_volume_pin_path(paths->capsule_link, 1, &locality_pin));
   context.capsule = paths->capsule_link;
   assert(!keiko_coordinator_windows_pin_capsule(&context));
   assert(RemoveDirectoryW(paths->capsule_link));
@@ -739,6 +755,43 @@ static void test_plan_paths_bind_exact_generation_names(void) {
              L"C:\\.keiko-portable-updates\\stage-1\\Keiko\\.portable\\generations\\7777777777777777777777777777777777777777777777777777777777777777"
          ) == 0);
   keiko_coordinator_windows_paths_clear(&paths);
+}
+
+static void test_coordinator_pins_local_managed_root(void) {
+  typedef struct {
+    wchar_t original_root[TEST_PATH_CAP];
+    wchar_t root[TEST_PATH_CAP];
+    wchar_t managed[TEST_PATH_CAP];
+    wchar_t stage[TEST_PATH_CAP];
+    wchar_t renamed[TEST_PATH_CAP];
+  } test_paths;
+  test_paths *paths = (test_paths *)calloc(1u, sizeof(*paths));
+  keiko_coordinator_context context;
+  assert(paths != NULL);
+  memset(&context, 0, sizeof(context));
+  test_create_root(paths->original_root);
+  test_canonical_local_directory(paths->original_root, paths->root);
+  assert(test_join(paths->managed, paths->root, L"\\managed"));
+  assert(test_join(paths->stage, paths->root, L"\\stage"));
+  assert(test_join(paths->renamed, paths->root, L"\\managed-renamed"));
+  assert(CreateDirectoryW(paths->managed, NULL));
+  assert(CreateDirectoryW(paths->stage, NULL));
+  context.plan.field[KEIKO_KHP_MANAGED_ROOT] =
+      keiko_coordinator_windows_utf8_wide(paths->managed);
+  context.plan.field[KEIKO_KHP_STAGE_ROOT] =
+      keiko_coordinator_windows_utf8_wide(paths->stage);
+  assert(context.plan.field[KEIKO_KHP_MANAGED_ROOT] != NULL);
+  assert(context.plan.field[KEIKO_KHP_STAGE_ROOT] != NULL);
+  assert(keiko_coordinator_windows_roots_same_volume(&context));
+  assert(keiko_coordinator_windows_managed_root_current(&context));
+  assert(!MoveFileExW(paths->managed, paths->renamed, MOVEFILE_WRITE_THROUGH));
+  keiko_windows_local_volume_clear(&context.managed_root);
+  free(context.plan.field[KEIKO_KHP_STAGE_ROOT]);
+  free(context.plan.field[KEIKO_KHP_MANAGED_ROOT]);
+  context.plan.field[KEIKO_KHP_STAGE_ROOT] = NULL;
+  context.plan.field[KEIKO_KHP_MANAGED_ROOT] = NULL;
+  assert(keiko_windows_update_remove_tree(paths->root, GetTickCount64() + 10000u));
+  free(paths);
 }
 
 static void test_recovery_runtime_and_lock_binding(void) {
@@ -1047,6 +1100,7 @@ static void test_pipe_writes_are_deadline_bounded(void) {
 }
 
 int wmain(void) {
+  test_coordinator_pins_local_managed_root();
   test_directory_owner_policy();
   test_copy_walk_budget_is_bounded();
   test_recovery_runtime_and_lock_binding();

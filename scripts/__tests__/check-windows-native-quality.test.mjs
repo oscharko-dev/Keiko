@@ -31,6 +31,21 @@ const PRODUCTION_SETUP_BOOTSTRAP = "scripts/build-windows-portable-setup.mjs";
 const PRODUCTION_SECURE_READ = "scripts/build-secure-workspace-read.mjs";
 const PRODUCTION_RUNTIME_SUPERVISOR = "scripts/build-runtime-supervisor.mjs";
 
+it("runs native and shared Windows locality authorities against a mapped SMB root", () => {
+  const gate = readFileSync(GATE, "utf8");
+  expect(gate).toContain("native/keiko-windows-local-volume.windows.test.c");
+  expect(gate).toContain("New-SmbShare");
+  expect(gate).toContain("-FullAccess $runnerIdentity");
+  expect(gate).toContain("New-PSDrive");
+  expect(gate).not.toContain("-Credential");
+  expect(gate).toContain("@oscharko-dev/keiko-security/windows-local-volume");
+  expect(gate).toContain("security.assertWindowsLocalVolume(process.argv[1])");
+  expect(gate).toContain("Native local-volume authority accepted a mapped SMB root");
+  expect(gate).toContain("Shared Windows locality authority accepted a mapped SMB root");
+  expect(gate).toContain("Remove-PSDrive");
+  expect(gate).toContain("Remove-SmbShare");
+});
+
 function hasPwsh() {
   try {
     execFileSync("pwsh", ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.Major"], {
@@ -161,7 +176,7 @@ describe("Windows immutable-generation native quality wiring", () => {
       "& $treeHashTestOut",
       'throw "Windows tree-hash behavior verification failed"',
       '$coordinatorTest = Join-Path $root "native/portable-launcher/keiko-portable-update-coordinator.windows.test.c"',
-      '& cl.exe @nativeFlags $windowsVersionDefine \'/DKEIKO_PORTABLE_TARGET="windows-x64"\'',
+      "& cl.exe @nativeFlags $windowsVersionDefine '/DKEIKO_PORTABLE_TARGET=\"windows-x64\"'",
       'throw "MSVC Windows update coordinator mechanics build failed"',
       "& $coordinatorTestOut",
       'throw "Windows update coordinator mechanics verification failed"',

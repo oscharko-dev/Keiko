@@ -187,6 +187,62 @@ try {
   $windowsVersionDefine = "/D_WIN32_WINNT=0x0A00"
   $generationDefine = '/DKEIKO_PORTABLE_GENERATION_ID="6c88e790a0339797e4941fec266c2f861e7515fb667739e297b8c42c622e6eaa"'
 
+  $localVolumeTest = Join-Path $root "native/keiko-windows-local-volume.windows.test.c"
+  $localVolumeTestOut = Join-Path $scratch "keiko-windows-local-volume-test.exe"
+  $localVolumeTestObject = Join-Path $scratch "keiko-windows-local-volume-test.obj"
+  & cl.exe @nativeFlags $windowsVersionDefine "/Fo:$localVolumeTestObject" `
+    "/Fe:$localVolumeTestOut" $localVolumeTest
+  if ($LASTEXITCODE -ne 0) { throw "MSVC Windows local-volume authority build failed" }
+  & $localVolumeTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows local-volume authority verification failed" }
+
+  $sharePath = Join-Path $scratch "mapped-locality"
+  $shareName = "keiko-locality-" + [Guid]::NewGuid().ToString("N")
+  $driveName = $null
+  $shareCreated = $false
+  New-Item -ItemType Directory -Path $sharePath | Out-Null
+  try {
+    $runnerIdentity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    New-SmbShare -Name $shareName -Path $sharePath -FullAccess $runnerIdentity | Out-Null
+    $shareCreated = $true
+    foreach ($codePoint in 90..68) {
+      $candidate = [char]$codePoint
+      if (-not (Get-PSDrive -Name $candidate -ErrorAction SilentlyContinue)) {
+        $driveName = [string]$candidate
+        break
+      }
+    }
+    if ($null -eq $driveName) { throw "No unused drive letter is available for locality proof" }
+    New-PSDrive -Name $driveName -PSProvider FileSystem -Root "\\localhost\$shareName" `
+      -Persist -Scope Script | Out-Null
+    $mappedRoot = $driveName + ":\"
+    & $localVolumeTestOut --probe $scratch
+    if ($LASTEXITCODE -ne 0) { throw "Native local-volume authority rejected a local root" }
+    & $localVolumeTestOut --probe $mappedRoot
+    if ($LASTEXITCODE -eq 0) { throw "Native local-volume authority accepted a mapped SMB root" }
+
+    $securityPositive = @'
+const security = await import("@oscharko-dev/keiko-security/windows-local-volume");
+security.assertWindowsLocalVolume(process.argv[1]);
+'@
+    node --input-type=module -e $securityPositive $scratch
+    if ($LASTEXITCODE -ne 0) { throw "Shared Windows locality authority rejected a local root" }
+    $securityNegative = @'
+const security = await import("@oscharko-dev/keiko-security/windows-local-volume");
+try { security.assertWindowsLocalVolume(process.argv[1]); } catch { process.exit(0); }
+process.exit(41);
+'@
+    node --input-type=module -e $securityNegative $mappedRoot
+    if ($LASTEXITCODE -ne 0) { throw "Shared Windows locality authority accepted a mapped SMB root" }
+  } finally {
+    if ($null -ne $driveName) {
+      Remove-PSDrive -Name $driveName -Force -ErrorAction SilentlyContinue
+    }
+    if ($shareCreated) {
+      Remove-SmbShare -Name $shareName -Force -Confirm:$false -ErrorAction SilentlyContinue
+    }
+  }
+
   $launcher = Join-Path $root "native/portable-launcher/keiko-portable-launcher.c"
   $launcherOut = Join-Path $scratch "keiko-launcher.exe"
   $launcherObject = Join-Path $scratch "keiko-launcher.obj"

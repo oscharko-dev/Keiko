@@ -45,6 +45,8 @@ function assertProcess(call: Invocation | undefined): void {
 function assertQuery(query: string): void {
   [
     "AssemblyBuilderAccess]::Run",
+    "[Reflection.AssemblyName]::new('KeikoLocalVolume')",
+    "[Text.StringBuilder]::new(32768)",
     "DefinePInvokeMethod",
     "GetFileInformationByHandleEx",
     "GetFinalPathNameByHandleW",
@@ -55,6 +57,7 @@ function assertQuery(query: string): void {
     expect(query).toContain(needle);
   });
   expect(query).not.toContain("Add-Type");
+  expect(query).not.toContain("New-Object");
   expect(query).not.toContain("TEMP");
 }
 
