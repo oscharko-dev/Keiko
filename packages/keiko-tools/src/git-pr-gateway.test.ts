@@ -320,6 +320,44 @@ describe("classifyGitPullRequestRejection", () => {
     expect(classifyGitPullRequestRejection("some other text")).toBe("unknown");
   });
 
+  // #3390 flow 3 (run-53): the mark-ready GraphQL mutation was rejected with output no phrase
+  // matched, so the operator and the log saw "unknown". gh puts the GraphQL `errors[]` JSON on
+  // stdout; its `type` is GitHub's closed vocabulary and classifies the failure when the wording
+  // does not.
+  it("classifies GitHub GraphQL failures by their error type when no phrase matches", () => {
+    const graphql = (type: string, message = ""): string =>
+      JSON.stringify({
+        data: { markPullRequestReadyForReview: null },
+        errors: [{ type, path: ["markPullRequestReadyForReview"], message }],
+      });
+    expect(classifyGitPullRequestRejection(`${graphql("NOT_FOUND")}\ngh: request failed`)).toBe(
+      "not-found",
+    );
+    expect(classifyGitPullRequestRejection(graphql("SERVICE_UNAVAILABLE"))).toBe(
+      "provider-unavailable",
+    );
+    expect(classifyGitPullRequestRejection(graphql("RATE_LIMITED"))).toBe("rate-limited");
+    expect(classifyGitPullRequestRejection(graphql("UNPROCESSABLE"))).toBe("validation-error");
+    expect(classifyGitPullRequestRejection(graphql("FORBIDDEN"))).toBe("permission-denied");
+    expect(classifyGitPullRequestRejection(graphql("SOMETHING_NEW"))).toBe("unknown");
+    expect(classifyGitPullRequestRejection("{not json\ngh: request failed")).toBe("unknown");
+  });
+
+  it("recognises GitHub's transient and mutation-specific wordings", () => {
+    expect(
+      classifyGitPullRequestRejection(
+        "gh: Something went wrong while executing your query. This may be the result of a GitHub bug.",
+      ),
+    ).toBe("provider-unavailable");
+    expect(classifyGitPullRequestRejection("gh: HTTP 500: Internal Server Error")).toBe(
+      "provider-unavailable",
+    );
+    expect(classifyGitPullRequestRejection("gh: was submitted too quickly")).toBe("rate-limited");
+    expect(
+      classifyGitPullRequestRejection("gh: Could not resolve to a node with the global id of 'x'"),
+    ).toBe("not-found");
+  });
+
   it("resolves ambiguous messages by the load-bearing row order (rate-limit > 403, already-exists > 422)", () => {
     expect(classifyGitPullRequestRejection("HTTP 403 and secondary rate limit exceeded")).toBe(
       "rate-limited",

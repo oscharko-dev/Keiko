@@ -2050,7 +2050,48 @@ describe("pr mark-ready routes (#3389)", () => {
     );
     const drift = activity.filter((event) => event.op === "git.delivery.pr-mark-ready.drift");
     expect(drift).toHaveLength(1);
-    expect(drift[0]).toMatchObject({ correlationId: "corr-mark-ready-drift" });
+    expect(drift[0]).toMatchObject({
+      correlationId: "corr-mark-ready-drift",
+      extra: { outcome: "failed", errorCode: "precondition-failed" },
+    });
+
+    // #3390 flow 3 (run-53): the provider rejected the mutation and the line carried only
+    // "failed" -- the closed-vocabulary code and reason are the evidence the log must keep.
+    const rejected = await mintMarkReadyApproval(approvalStore);
+    const rejectedAdapter = recordingMarkReadyAdapter({
+      schemaVersion: "1",
+      outcome: "failed",
+      durationMs: 6_327,
+      errorCode: "provider-rejected",
+      rejectionReason: "unknown",
+    });
+    await createHandlePrMarkReadyExecute({
+      approvalStore,
+      activityLog,
+      now: () => 1_700_000_000_003,
+      adapterFactory: () => rejectedAdapter.adapter,
+      ciReaderFactory: cleanCiReaderFactory,
+    })(
+      {
+        ...ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval: rejected })),
+        correlationId: "corr-mark-ready-rejected",
+      },
+      deps(),
+    );
+    const failed = activity.filter(
+      (event) =>
+        event.op === "git.delivery.pr-mark-ready.executed" &&
+        event.correlationId === "corr-mark-ready-rejected",
+    );
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({
+      extra: {
+        outcome: "failed",
+        durationMs: 6_327,
+        errorCode: "provider-rejected",
+        rejectionReason: "unknown",
+      },
+    });
   });
 
   // Final-audit F2/#3390 (ADR-0138 D2): before this fix, the coarse admission gate hard-denied both

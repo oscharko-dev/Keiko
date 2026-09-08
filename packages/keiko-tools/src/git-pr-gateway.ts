@@ -496,7 +496,16 @@ export function gitPrArgvIsGoverned(argv: readonly string[]): boolean {
 const REJECTION_PHRASES: readonly (readonly [GitPullRequestRejectionReason, readonly string[]])[] =
   [
     ["already-exists", ["a pull request already exists", "already exists for"]],
-    ["rate-limited", ["rate limit exceeded", "secondary rate limit", "exceeded a secondary rate"]],
+    [
+      "rate-limited",
+      [
+        "rate limit exceeded",
+        "secondary rate limit",
+        "exceeded a secondary rate",
+        "too quickly",
+        "abuse detection",
+      ],
+    ],
     [
       "permission-denied",
       [
@@ -508,7 +517,7 @@ const REJECTION_PHRASES: readonly (readonly [GitPullRequestRejectionReason, read
         "forbidden",
       ],
     ],
-    ["not-found", ["http 404", "not found"]],
+    ["not-found", ["http 404", "not found", "could not resolve to a node"]],
     [
       "head-unpublished",
       ["head sha can't be blank", "field: head", '"field":"head"', "no ref found"],
@@ -526,6 +535,9 @@ const REJECTION_PHRASES: readonly (readonly [GitPullRequestRejectionReason, read
         "http 504",
         "bad gateway",
         "service unavailable",
+        "http 500",
+        "internal server error",
+        "something went wrong while executing your query",
         "could not resolve host",
         "connection refused",
         "timed out",
@@ -534,12 +546,56 @@ const REJECTION_PHRASES: readonly (readonly [GitPullRequestRejectionReason, read
     ],
   ];
 
+// A GitHub GraphQL failure reaches `gh api graphql` as an HTTP 200 whose body carries `errors[]`;
+// gh then exits 1 with that JSON on stdout and a one-line summary on stderr whose wording need not
+// match any REST phrase above. Each error's `type` is GitHub's closed vocabulary, so it is the
+// reliable signal: read it from any JSON line of the output and map it, after the phrase rows (whose
+// order stays load-bearing). #3390 flow 3 (run-53) ended as "unknown" for exactly this gap.
+const GRAPHQL_ERROR_TYPE_REASONS: Readonly<Record<string, GitPullRequestRejectionReason>> = {
+  NOT_FOUND: "not-found",
+  FORBIDDEN: "permission-denied",
+  RATE_LIMITED: "rate-limited",
+  UNPROCESSABLE: "validation-error",
+  SERVICE_UNAVAILABLE: "provider-unavailable",
+};
+
+function graphqlErrorType(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const type = (error as { readonly type?: unknown }).type;
+  return typeof type === "string" ? type : undefined;
+}
+
+function graphqlErrorTypes(output: string): readonly string[] {
+  const types: string[] = [];
+  for (const line of output.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{")) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    const errors = (parsed as { readonly errors?: unknown } | null)?.errors;
+    if (!Array.isArray(errors)) continue;
+    for (const error of errors) {
+      const type = graphqlErrorType(error);
+      if (type !== undefined) types.push(type);
+    }
+  }
+  return types;
+}
+
 export function classifyGitPullRequestRejection(output: string): GitPullRequestRejectionReason {
   const haystack = output.toLowerCase();
   for (const [reason, phrases] of REJECTION_PHRASES) {
     if (phrases.some((phrase) => haystack.includes(phrase))) {
       return reason;
     }
+  }
+  for (const type of graphqlErrorTypes(output)) {
+    const reason = GRAPHQL_ERROR_TYPE_REASONS[type];
+    if (reason !== undefined) return reason;
   }
   return "unknown";
 }

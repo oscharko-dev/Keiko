@@ -688,12 +688,22 @@ function logMarkReadyOutcome(
   result: GitPrMarkReadyExecResult,
 ): void {
   const isDrift = result.outcome === "failed" && result.errorCode === "precondition-failed";
+  // errorCode / rejectionReason are closed vocabularies (GitDeliveryExecutionErrorCode,
+  // GitPullRequestRejectionReason) and the ONLY body-free record of WHY a mark-ready failed. #3390
+  // flow 3 (run-53) failed here as provider-rejected/unknown while this line said "failed" and
+  // nothing else, so the defect could not be rebuilt from the log alone (ADR-0173 Rule 1).
   log(
     options.activityLog,
     isDrift ? "git.delivery.pr-mark-ready.drift" : "git.delivery.pr-mark-ready.executed",
     correlationId,
     200,
-    { prExternalId: command.prExternalId, outcome: result.outcome },
+    {
+      prExternalId: command.prExternalId,
+      outcome: result.outcome,
+      durationMs: result.durationMs,
+      ...(result.errorCode === undefined ? {} : { errorCode: result.errorCode }),
+      ...(result.rejectionReason === undefined ? {} : { rejectionReason: result.rejectionReason }),
+    },
   );
 }
 
