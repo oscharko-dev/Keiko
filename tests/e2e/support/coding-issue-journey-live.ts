@@ -13,14 +13,14 @@
 // snapshot for the effect the model is expected to eventually produce.
 
 import { expect, type Locator, type Page } from "@playwright/test";
-import type { CodingWorkbenchMode, ModelCapability } from "@oscharko-dev/keiko-contracts";
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import type { GatewayReadinessReport } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
-import { isCodingWorkbenchModel } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 import { selectCodingIssueMode } from "./coding-issue-browser.js";
 import {
   assertObservedRuntimeReady,
+  LIFECYCLE_STATUS,
   observedDiagnosis,
   observedRun,
   type ObservedRun,
@@ -28,7 +28,6 @@ import {
 
 const SURFACE = 'section[aria-label="Coding Workbench"][data-state]';
 const AUTH_ENDPOINT = "/api/coding-workbench/github-authorization";
-const MODELS_ENDPOINT = "/api/models";
 const GATEWAY_READINESS_ENDPOINT = "/api/gateway/readiness";
 const GATEWAY_SETUP_ENDPOINT = "/api/gateway/setup";
 const PROJECTS_ENDPOINT = "/api/projects";
@@ -134,30 +133,39 @@ export async function openLiveWorkbench(page: Page, repositoryRoot: string): Pro
   await expect(page.getByLabel("Repository path")).toHaveValue(repositoryRoot);
 }
 
-async function liveModels(page: Page): Promise<readonly ModelCapability[]> {
-  const modelsResponse = await page.request.get(MODELS_ENDPOINT);
-  expect(modelsResponse.ok()).toBe(true);
-  const { models } = (await modelsResponse.json()) as {
-    readonly models: readonly ModelCapability[];
-  };
-  return models;
+/** The chat models the gateway is configured with, read from the Settings Models tab the operator
+ * uses. `conv-elig-ok` is the PRODUCT's own conversation-eligibility badge, rendered exactly for
+ * `kind === "chat"` (`isConversationEligibleModel`), so filtering on it uses the product's own
+ * classification instead of a second copy of the rule. */
+async function displayedChatModelIds(page: Page): Promise<readonly string[]> {
+  const settings = await openSettingsTab(page, "Models");
+  const rows = settings.locator(".ml-row").filter({ has: page.getByTestId("conv-elig-ok") });
+  const names = await rows.locator(".ml-name").allTextContents();
+  return names.map((name) => name.trim()).filter((name) => name.length > 0);
 }
 
-function qualificationChatModel(models: readonly ModelCapability[]): ModelCapability {
-  const chatModels = models.filter((model) => model.kind === "chat");
-  const eligible = chatModels.filter((model) => model.workflowEligible);
-  const candidates = eligible.length > 0 ? eligible : chatModels;
-  expect(
-    candidates.length,
-    "the configured Model Gateway must expose at least one chat model",
-  ).toBeGreaterThan(0);
-  expect(
-    candidates.length,
-    "the live qualification config must identify one unambiguous chat model",
-  ).toBe(1);
-  const candidate = candidates[0];
-  if (candidate === undefined) throw new Error("live qualification chat model was unavailable");
-  return candidate;
+/**
+ * The Code task's OWN verdict that the configured model can power a coding run.
+ *
+ * This is the only surface that answers the full rule: `isCodingWorkbenchModel` additionally
+ * requires a fresh tool-calling proof, workflow eligibility and a coding use case, and the Models
+ * tab displays none of those three. It is also the verdict the Start control actually gates on, so
+ * asking the window is both the honest question and the decisive one -- rather than re-deriving the
+ * predicate here from a route's fields, which is what this replaced.
+ *
+ * The window re-reads its model source on the gateway-config and model-readiness announcements
+ * (`coding-workbench-runtime-effects.ts`, whose comment records the exact defect that behaviour
+ * fixes), so a remedy applied in Settings reaches this without a reload -- but not instantly, hence
+ * the bounded wait.
+ */
+async function usableModelSource(page: Page, timeoutMs = 30_000): Promise<boolean> {
+  const status = workbenchSurface(page).locator(LIFECYCLE_STATUS);
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (((await status.textContent()) ?? "").includes("Model source ready.")) return true;
+    if (Date.now() > deadline) return false;
+    await page.waitForTimeout(1_000);
+  }
 }
 
 // Real affordance: SettingsPanel.tsx's Models tab, `ModelCapabilityRow`'s "Run readiness check"
@@ -193,8 +201,11 @@ async function refreshToolCallingProof(page: Page, modelId: string): Promise<voi
   expect(report.verifiedCapabilities.toolCalling).toBe(true);
 }
 
-interface LiveModelQualificationClient {
-  readonly loadModels: () => Promise<readonly ModelCapability[]>;
+export interface LiveModelQualificationClient {
+  /** The Code task's own verdict that the configured model can power a coding run. */
+  readonly usableModelSource: () => Promise<boolean>;
+  /** The chat models the Settings Models tab displays, by id. */
+  readonly displayedChatModelIds: () => Promise<readonly string[]>;
   readonly refreshToolCalling: (modelId: string) => Promise<void>;
   readonly enableWorkflow: (modelId: string) => Promise<void>;
 }
@@ -216,27 +227,52 @@ interface LiveWorkbenchReloadClient {
   readonly waitForWorkspaceIdentity: (identity: LiveWorkbenchIdentity) => Promise<void>;
 }
 
+/**
+ * Brings the configured model to a state the Code task will start a run on, using only real
+ * operator remedies and the product's own verdict.
+ *
+ * #3390: this used to read `/api/models` and re-derive `isCodingWorkbenchModel` from the returned
+ * fields, deciding for itself which remedy was needed. It now asks the window -- the surface the
+ * Start control actually gates on -- and applies the two remedies an operator has, in the order an
+ * operator would: prove tool calling through the Models tab's readiness check, then mark the model
+ * workflow-eligible through the gateway dialog. Neither is attempted while the source is already
+ * usable, so an already-qualified profile still costs no paid probe.
+ *
+ * Returns whether anything was changed, which the caller uses to decide on a reconciling reload.
+ */
 export async function qualifyLiveModel(client: LiveModelQualificationClient): Promise<boolean> {
-  let changed = false;
-  let model = qualificationChatModel(await client.loadModels());
-  if (!model.toolCalling) {
-    const selectedModelId = model.id;
-    await client.refreshToolCalling(selectedModelId);
-    changed = true;
-    model = qualificationChatModel(await client.loadModels());
-    expect(model.id, "readiness must refresh the selected model").toBe(selectedModelId);
-    expect(model.toolCalling, "readiness must publish the refreshed tool-calling proof").toBe(true);
+  if (await client.usableModelSource()) return false;
+  const modelId = await theOneDisplayedChatModel(client);
+  await client.refreshToolCalling(modelId);
+  if (!(await client.usableModelSource())) {
+    await client.enableWorkflow(modelId);
+    expect(
+      await client.usableModelSource(),
+      "setup must publish the selected model as coding-workbench capable",
+    ).toBe(true);
   }
-  if (isCodingWorkbenchModel(model)) return changed;
-  const selectedModelId = model.id;
-  await client.enableWorkflow(selectedModelId);
-  model = qualificationChatModel(await client.loadModels());
-  expect(model.id, "setup must preserve the selected model identity").toBe(selectedModelId);
+  // A remedy must qualify the model it was applied to. The route-reading version pinned this by
+  // comparing the model identity the gateway republished; the same guarantee now comes from the
+  // Models tab still displaying that one model and no other.
   expect(
-    isCodingWorkbenchModel(model),
-    "setup must publish the selected model as coding-workbench capable",
-  ).toBe(true);
+    await theOneDisplayedChatModel(client),
+    "qualification must preserve the selected model identity",
+  ).toBe(modelId);
   return true;
+}
+
+async function theOneDisplayedChatModel(client: LiveModelQualificationClient): Promise<string> {
+  const ids = await client.displayedChatModelIds();
+  expect(
+    ids.length,
+    "the configured Model Gateway must expose at least one chat model",
+  ).toBeGreaterThan(0);
+  expect(ids.length, "the live qualification config must identify one unambiguous chat model").toBe(
+    1,
+  );
+  const id = ids[0];
+  if (id === undefined) throw new Error("live qualification chat model was unavailable");
+  return id;
 }
 
 export async function reconcileLiveWorkbenchAfterModelChange(
@@ -350,7 +386,8 @@ async function enableCodingWorkflowEligibility(page: Page, modelId: string): Pro
 export async function ensureWorkflowEligibleModel(page: Page): Promise<boolean> {
   const workspaceIdentity = await currentLiveWorkbenchIdentity(page);
   const changed = await qualifyLiveModel({
-    loadModels: () => liveModels(page),
+    usableModelSource: () => usableModelSource(page),
+    displayedChatModelIds: () => displayedChatModelIds(page),
     refreshToolCalling: (modelId) => refreshToolCallingProof(page, modelId),
     enableWorkflow: (modelId) => enableCodingWorkflowEligibility(page, modelId),
   });

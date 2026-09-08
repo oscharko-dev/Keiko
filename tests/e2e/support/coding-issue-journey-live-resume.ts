@@ -394,6 +394,15 @@ interface ActiveWorkspaceResponse {
   readonly active: { readonly instance: ActiveWorkspaceIdentity } | null;
 }
 
+// #3390: the two reads below are the only ones left in this lane, and they are deliberate.
+//
+// They serve continuation mode alone (`KEIKO_QUALIFICATION_RESUME`), an operator recovery path that
+// is not one of the five qualification flows -- those now read every fact from the interface. What
+// these two ask for cannot be asked of the interface: they reconstruct a PRIOR run's identity and
+// the workspace record it left behind, in order to decide whether continuing is safe at all. The
+// Code task shows the run it is currently running, never a previous one, so there is no surface
+// displaying a historical run to read instead. The live half of the continuation -- everything the
+// operator actually watches -- goes through the same observation layer the first-run lane uses.
 async function readActiveWorkspace(page: Page): Promise<ActiveWorkspaceIdentity | null> {
   const response = await page.request.get(ACTIVE_WORKSPACE_ENDPOINT);
   expect(response.ok(), `active workspace read failed with HTTP ${String(response.status())}`).toBe(

@@ -27,6 +27,9 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import type { GitCiCheckCounts } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 
 const WORKBENCH = 'section[aria-label="Coding Workbench"][data-state]';
+/** The window's own lifecycle announcement. Selected by element rather than by role: `<output>` has
+ * the implicit `status` role, so several cards would otherwise match. */
+export const LIFECYCLE_STATUS = 'p.sr-only[role="status"]';
 const CHECK_COUNTS = ["total", "passed", "failed", "pending", "blocked", "unknown"] as const;
 
 /** The card owning `testId` — its NEAREST enclosing section, never an outer one. Scoping by the
@@ -202,7 +205,7 @@ export async function observedCiReadiness(page: Page): Promise<ObservedCiReadine
  * a run to start on. `Runtime unavailable.` and `Runtime refresh failed.` are neither.
  */
 export async function assertObservedRuntimeReady(page: Page): Promise<void> {
-  const status = page.locator(WORKBENCH).getByRole("status");
+  const status = page.locator(WORKBENCH).locator(LIFECYCLE_STATUS);
   await expect(status, "coding runtime must report ready before a run may start").toContainText(
     /Runtime ready\.|unverified evaluation runtime/u,
     { timeout: 60_000 },
@@ -260,7 +263,7 @@ export async function observedRun(page: Page): Promise<ObservedRun> {
  * rather than naming an internal code no window ever displayed. */
 export async function observedDiagnosis(page: Page): Promise<string> {
   const shell = page.locator(WORKBENCH);
-  const status = (await textOf(shell.getByRole("status"))).replace(/\s+/gu, " ");
+  const status = (await textOf(shell.locator(LIFECYCLE_STATUS))).replace(/\s+/gu, " ");
   const alert = shell.getByRole("alert");
   const message = (await present(alert)) ? (await textOf(alert)).replace(/\s+/gu, " ") : "";
   return message.length === 0 ? status : `${status} ${message}`;

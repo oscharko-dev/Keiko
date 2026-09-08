@@ -1,6 +1,6 @@
-import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
+  type LiveModelQualificationClient,
   prepareBoundIssueForRun,
   prepareTrustedIssueWorkspace,
   qualifyLiveModel,
@@ -118,153 +118,106 @@ describe("live journey terminal-success wait", () => {
   });
 });
 
-function chatModel(overrides: Partial<ModelCapability> = {}): ModelCapability {
+// #3390: the qualification no longer reads `/api/models` and re-derives `isCodingWorkbenchModel`
+// from its fields. It asks the Code task whether the configured model can power a run -- the
+// verdict the Start control itself gates on, and the only one covering the parts of that rule the
+// Models tab never displays -- and applies the two remedies an operator has, in an operator's
+// order. Every invariant the route-reading version pinned is pinned here on that shape.
+function client(
+  overrides: Partial<LiveModelQualificationClient> = {},
+): LiveModelQualificationClient {
   return {
-    id: "qualified-chat",
-    kind: "chat",
-    contextWindow: 1_050_000,
-    maxOutputTokens: 8_192,
-    toolCalling: false,
-    toolCallingVerification: {
-      status: "verified",
-      checkedAt: new Date().toISOString(),
-      probe: "gateway-tool-calling-v1",
-      configurationFingerprint: "qualification-profile",
-    },
-    structuredOutput: true,
-    streaming: true,
-    supportsImageInput: false,
-    supportsDocumentInput: false,
-    workflowEligible: true,
-    costClass: "high",
-    latencyClass: "slow",
-    throughputHint: "qualification",
-    preferredUseCases: ["coding"],
-    knownLimitations: [],
+    usableModelSource: vi.fn(() => Promise.resolve(false)),
+    displayedChatModelIds: vi.fn(() => Promise.resolve(["qualified-chat"])),
+    refreshToolCalling: vi.fn<(modelId: string) => Promise<void>>(),
+    enableWorkflow: vi.fn<(modelId: string) => Promise<void>>(),
     ...overrides,
   };
 }
 
+/** Answers `false` for the first `unusableReads` questions, then `true`. */
+function sourceUsableAfter(unusableReads: number): () => Promise<boolean> {
+  let asked = 0;
+  return () => Promise.resolve(++asked > unusableReads);
+}
+
 describe("live journey model qualification", () => {
-  it("refreshes an expired tool-calling proof before rejecting the configured model", async () => {
-    const loadModels = vi
-      .fn<() => Promise<readonly ModelCapability[]>>()
-      .mockResolvedValueOnce([chatModel()])
-      .mockResolvedValueOnce([chatModel({ toolCalling: true })]);
-    const refreshToolCalling = vi.fn<(modelId: string) => Promise<void>>();
-    const enableWorkflow = vi.fn<(modelId: string) => Promise<void>>();
+  it("proves tool calling first when the Code task reports no usable model source", async () => {
+    const deps = client({ usableModelSource: sourceUsableAfter(1) });
 
-    await expect(
-      qualifyLiveModel({ loadModels, refreshToolCalling, enableWorkflow }),
-    ).resolves.toBe(true);
+    await expect(qualifyLiveModel(deps)).resolves.toBe(true);
 
-    expect(refreshToolCalling).toHaveBeenCalledExactlyOnceWith("qualified-chat");
-    expect(loadModels).toHaveBeenCalledTimes(2);
-    expect(enableWorkflow).not.toHaveBeenCalled();
+    expect(deps.refreshToolCalling).toHaveBeenCalledExactlyOnceWith("qualified-chat");
+    expect(deps.enableWorkflow).not.toHaveBeenCalled();
   });
 
-  it("does not probe a current workflow-eligible tool-calling model", async () => {
-    const loadModels = vi.fn(() => Promise.resolve([chatModel({ toolCalling: true })]));
-    const refreshToolCalling = vi.fn<(modelId: string) => Promise<void>>();
-    const enableWorkflow = vi.fn<(modelId: string) => Promise<void>>();
+  it("does not probe a model the Code task already accepts", async () => {
+    const deps = client({ usableModelSource: vi.fn(() => Promise.resolve(true)) });
 
-    await expect(
-      qualifyLiveModel({ loadModels, refreshToolCalling, enableWorkflow }),
-    ).resolves.toBe(false);
+    await expect(qualifyLiveModel(deps)).resolves.toBe(false);
 
-    expect(refreshToolCalling).not.toHaveBeenCalled();
-    expect(enableWorkflow).not.toHaveBeenCalled();
+    expect(deps.refreshToolCalling).not.toHaveBeenCalled();
+    expect(deps.enableWorkflow).not.toHaveBeenCalled();
+    expect(deps.displayedChatModelIds).not.toHaveBeenCalled();
   });
 
-  it("uses supported setup when an otherwise eligible chat model lacks the coding use case", async () => {
-    const loadModels = vi
-      .fn<() => Promise<readonly ModelCapability[]>>()
-      .mockResolvedValueOnce([chatModel({ toolCalling: true, preferredUseCases: ["Chat"] })])
-      .mockResolvedValueOnce([
-        chatModel({ toolCalling: true, preferredUseCases: ["Chat", "Coding"] }),
-      ]);
-    const refreshToolCalling = vi.fn<(modelId: string) => Promise<void>>();
-    const enableWorkflow = vi.fn<(modelId: string) => Promise<void>>();
+  it("falls through to gateway setup when the proof alone does not make the source usable", async () => {
+    const deps = client({ usableModelSource: sourceUsableAfter(2) });
 
-    await expect(
-      qualifyLiveModel({ loadModels, refreshToolCalling, enableWorkflow }),
-    ).resolves.toBe(true);
+    await expect(qualifyLiveModel(deps)).resolves.toBe(true);
 
-    expect(refreshToolCalling).not.toHaveBeenCalled();
-    expect(enableWorkflow).toHaveBeenCalledExactlyOnceWith("qualified-chat");
-    expect(loadModels).toHaveBeenCalledTimes(2);
+    expect(deps.refreshToolCalling).toHaveBeenCalledExactlyOnceWith("qualified-chat");
+    expect(deps.enableWorkflow).toHaveBeenCalledExactlyOnceWith("qualified-chat");
   });
 
-  it("fails closed when setup does not publish a coding-workbench model", async () => {
-    const loadModels = vi.fn(() =>
-      Promise.resolve([chatModel({ toolCalling: true, preferredUseCases: ["Chat"] })]),
+  it("fails closed when neither remedy makes the source usable", async () => {
+    const deps = client();
+
+    await expect(qualifyLiveModel(deps)).rejects.toThrow(
+      "publish the selected model as coding-workbench capable",
     );
-    const refreshToolCalling = vi.fn<(modelId: string) => Promise<void>>();
-    const enableWorkflow = vi.fn<(modelId: string) => Promise<void>>();
 
-    await expect(
-      qualifyLiveModel({ loadModels, refreshToolCalling, enableWorkflow }),
-    ).rejects.toThrow("publish the selected model as coding-workbench capable");
-
-    expect(refreshToolCalling).not.toHaveBeenCalled();
-    expect(enableWorkflow).toHaveBeenCalledExactlyOnceWith("qualified-chat");
-    expect(loadModels).toHaveBeenCalledTimes(2);
+    expect(deps.enableWorkflow).toHaveBeenCalledExactlyOnceWith("qualified-chat");
   });
 
   it("fails before a paid probe when the configured chat model is ambiguous", async () => {
-    const loadModels = vi.fn(() => Promise.resolve([chatModel(), chatModel({ id: "other-chat" })]));
-    const refreshToolCalling = vi.fn<(modelId: string) => Promise<void>>();
-    const enableWorkflow = vi.fn<(modelId: string) => Promise<void>>();
+    const deps = client({
+      displayedChatModelIds: vi.fn(() => Promise.resolve(["qualified-chat", "other-chat"])),
+    });
 
-    await expect(
-      qualifyLiveModel({ loadModels, refreshToolCalling, enableWorkflow }),
-    ).rejects.toThrow("one unambiguous chat model");
+    await expect(qualifyLiveModel(deps)).rejects.toThrow("one unambiguous chat model");
 
-    expect(refreshToolCalling).not.toHaveBeenCalled();
-    expect(enableWorkflow).not.toHaveBeenCalled();
+    expect(deps.refreshToolCalling).not.toHaveBeenCalled();
+    expect(deps.enableWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("fails before a paid probe when no chat model is configured at all", async () => {
+    const deps = client({ displayedChatModelIds: vi.fn(() => Promise.resolve([])) });
+
+    await expect(qualifyLiveModel(deps)).rejects.toThrow("at least one chat model");
+
+    expect(deps.refreshToolCalling).not.toHaveBeenCalled();
   });
 
   it("does not enable workflow eligibility after a failed readiness refresh", async () => {
     const failure = new Error("readiness failed");
-    const loadModels = vi.fn(() => Promise.resolve([chatModel()]));
-    const refreshToolCalling = vi.fn(() => Promise.reject(failure));
-    const enableWorkflow = vi.fn<(modelId: string) => Promise<void>>();
+    const deps = client({ refreshToolCalling: vi.fn(() => Promise.reject(failure)) });
 
-    await expect(qualifyLiveModel({ loadModels, refreshToolCalling, enableWorkflow })).rejects.toBe(
-      failure,
+    await expect(qualifyLiveModel(deps)).rejects.toBe(failure);
+
+    expect(deps.enableWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("rejects a qualification that ends on a different model identity", async () => {
+    const displayedChatModelIds = vi
+      .fn<() => Promise<readonly string[]>>()
+      .mockResolvedValueOnce(["qualified-chat"])
+      .mockResolvedValue(["replacement"]);
+    const deps = client({ usableModelSource: sourceUsableAfter(1), displayedChatModelIds });
+
+    await expect(qualifyLiveModel(deps)).rejects.toThrow(
+      "qualification must preserve the selected model identity",
     );
-
-    expect(loadModels).toHaveBeenCalledExactlyOnceWith();
-    expect(enableWorkflow).not.toHaveBeenCalled();
-  });
-
-  it("rejects a different model identity published after readiness", async () => {
-    const loadModels = vi
-      .fn<() => Promise<readonly ModelCapability[]>>()
-      .mockResolvedValueOnce([chatModel()])
-      .mockResolvedValueOnce([chatModel({ id: "replacement", toolCalling: true })]);
-    const refreshToolCalling = vi.fn<(modelId: string) => Promise<void>>();
-    const enableWorkflow = vi.fn<(modelId: string) => Promise<void>>();
-
-    await expect(
-      qualifyLiveModel({ loadModels, refreshToolCalling, enableWorkflow }),
-    ).rejects.toThrow("refresh the selected model");
-
-    expect(enableWorkflow).not.toHaveBeenCalled();
-  });
-
-  it("rejects a readiness response that does not publish tool-calling support", async () => {
-    const loadModels = vi
-      .fn<() => Promise<readonly ModelCapability[]>>()
-      .mockResolvedValue([chatModel()]);
-    const refreshToolCalling = vi.fn<(modelId: string) => Promise<void>>();
-    const enableWorkflow = vi.fn<(modelId: string) => Promise<void>>();
-
-    await expect(
-      qualifyLiveModel({ loadModels, refreshToolCalling, enableWorkflow }),
-    ).rejects.toThrow("publish the refreshed tool-calling proof");
-
-    expect(enableWorkflow).not.toHaveBeenCalled();
   });
 });
 
