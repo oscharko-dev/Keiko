@@ -30,6 +30,25 @@ export async function checkWindowsPortableAuthenticodeLoader({
   const runtime = await import(pathToFileURL(resolve(serverRuntimePath)).href);
   const loader = runtime.windowsAuthenticodeVerifierLoaderScript();
   const input = runtime.windowsAuthenticodeVerifierAssemblyInput();
+  const transportSentinel = "keiko-authenticode-stdin-v1";
+  const transportProbe =
+    "$ErrorActionPreference='Stop';$s=[Console]::In.ReadToEnd();" +
+    `if($s -cne '${transportSentinel}'){exit 23};` +
+    "if($null -ne $env:TMP -or $null -ne $env:TEMP -or $null -ne $env:USERPROFILE){exit 20};" +
+    "$i=[Security.Principal.WindowsIdentity]::GetCurrent();" +
+    "$p=[Security.Principal.WindowsPrincipal]::new($i);" +
+    "if($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){exit 22};exit 0";
+  const transport = runRestricted(
+    run,
+    helperPath,
+    powershellPath,
+    systemRoot,
+    transportProbe,
+    transportSentinel,
+  );
+  if (transport.error !== undefined || transport.status !== 0 || transport.stdout !== "") {
+    throw new Error(`restricted stdin probe failed (${transport.status ?? "spawn"})`);
+  }
   const probe =
     loader +
     "if($null -ne $env:TMP -or $null -ne $env:TEMP -or $null -ne $env:USERPROFILE){exit 20};" +

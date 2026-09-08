@@ -214,12 +214,19 @@ internal static class StandardTokenLoader {
           return 110;
         }
         if (!writer.Join(TeardownTimeoutMs)) AbortHost(109, "writer-did-not-stop");
-        if (writerFailure != null) return Fail(111, "stdin-transport-failed");
         uint exitCode;
         if (!GetExitCodeProcess(process.Process, out exitCode)) {
           return Win32Failure(112, "read-restricted-exit");
         }
-        return exitCode <= 99 ? (int)exitCode : Fail(113, "invalid-restricted-exit");
+        if (exitCode > 99) return Fail(113, "invalid-restricted-exit");
+        if (exitCode != 0) return (int)exitCode;
+        if (writerFailure != null) {
+          Console.Error.WriteLine(
+            "standard-token-loader:stdin-write:" + writerFailure.GetType().Name +
+            ":hresult-" + writerFailure.HResult.ToString("X8"));
+          return 111;
+        }
+        return 0;
       }
       finally {
         if (process.Thread != IntPtr.Zero) CloseHandle(process.Thread);

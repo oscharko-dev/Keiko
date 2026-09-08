@@ -50,6 +50,54 @@ jobs:
             "-p:KeikoFrameworkReferencePath=$references" "-p:RestoreLockedMode=true"
           if ($LASTEXITCODE -ne 0) { throw ".NET runtime Authenticode analyzer proof failed" }
 
+  loader-proof:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts
+      - name: Build package runtime used by the loader proof
+        timeout-minutes: 10
+        run: npm run build:packages
+      - name: Compile and run the restricted-token loader proof
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
+          $installations = @(
+            & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+          )
+          if ($LASTEXITCODE -ne 0 -or $installations.Count -ne 1) {
+            throw "Exactly one latest Visual Studio MSBuild installation is required"
+          }
+          $compiler = Join-Path $installations[0] "MSBuild/Current/Bin/Roslyn/csc.exe"
+          $references = Join-Path ${env:ProgramFiles(x86)} "Reference Assemblies/Microsoft/Framework/.NETFramework/v4.8.1"
+          node scripts/check-windows-portable-authenticode-verifier.mjs --compiler $compiler --references $references
+          if ($LASTEXITCODE -ne 0) { throw "Authenticode verifier deterministic asset check failed" }
+          $helper = Join-Path $env:RUNNER_TEMP "windows-portable-authenticode-standard-token-loader.exe"
+          $referenceArgs = @(
+            "mscorlib.dll", "System.dll", "System.Core.dll", "System.Security.dll" |
+              ForEach-Object { "/reference:" + (Join-Path $references $_) }
+          )
+          & $compiler /nologo /noconfig /nostdlib+ /deterministic+ /optimize+ /debug- `
+            /warn:4 /warnaserror+ /target:exe /platform:anycpu /langversion:5 /utf8output `
+            "/pathmap:$env:RUNNER_TEMP=/_/" "/out:$helper" @referenceArgs `
+            scripts/windows-portable-authenticode-standard-token-loader.test.cs
+          if ($LASTEXITCODE -ne 0) { throw "Restricted-token loader helper build failed" }
+          $powershell = Join-Path $env:SystemRoot "System32/WindowsPowerShell/v1.0/powershell.exe"
+          node scripts/check-windows-portable-authenticode-loader.mjs `
+            --helper $helper --powershell $powershell `
+            --runtime packages/keiko-server/dist/coding-runtime/windowsPortableAuthenticode.js `
+            --system-root $env:SystemRoot
+          if ($LASTEXITCODE -ne 0) { throw "Restricted-token loader proof failed" }
+
   runtime-proof:
     runs-on: windows-latest
     timeout-minutes: 30
