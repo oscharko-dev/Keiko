@@ -1409,6 +1409,40 @@ test SHA-256: `e5fae99c156385332fbb8b3b92892d551932282849fed5fa421c51c67d8214fa`
 branch's protected-branch rejection is expected and is not a target-branch CI receipt. Coverage and
 Sonar from this manual run still select `dev`, as documented above.
 
+### E2E gateway prerequisite and Windows verifier generation
+
+Both completed diagnostic Chromium smoke jobs (`34198289921` and `34201205684`) reported 60
+failures and 13 passes. Read-only triage traced the shared failure to the E2E gateway fixture's
+unprovisioned credential reference: the setup dialog covered the desktop and no configured chat
+model was available. Restoring the fixture byte-for-byte to `origin/dev` restores its explicitly
+non-secret `e2e-mock` value. The updater-specific harness's redundant key override was removed.
+No production credential handling changed. The lead's real Chromium replay of shell startup,
+chat, and both shell accessibility themes passed **4/4 tests in 48.8 seconds**. The full Chromium smoke
+replay then passed **73/73 tests in 3.4 minutes**. This verifies the shared fixture repair against
+the real BFF and browser. The updater-specific harness digest changed intentionally and its eight
+source-bound evidence journeys must be rerun after the final polling follow-up. Fixture SHA-256:
+`9ccdb592af0021033cb26f4868ff263badff5dcc4d716bb4a2fbac54c6dd69f6`; updater harness SHA-256:
+`8831ac0020b34942be6867bdbc5c0c6480455798d9550ea95f639005b1fb7adf`.
+
+Windows diagnostic inspection `34204823280` at `eb500083ec649d287869bf0bf108a74a451161cb`
+measured the finite Roslyn distribution (111 files, 35634755 bytes) and four explicit .NET Framework
+references. Generation run `34205246166` at `c53826aa7eeac0ca48f8e5cf90617d115c6feff7` used
+those reviewed literal pins, compiled twice in separate temporary directories, and required identical
+asset bytes. Both runs passed. The resulting assembly is 12800 bytes with SHA-256
+`e67641e44c85b7d7e787edffe6aaad173f5277e257a7e1b58d00428d5f5e5a37`; generated TS SHA-256
+`bdc2f45a722760d10cadbf21327f743f65b4fd5945ca9acfb2ee3e7a8eb98e96`. The lead independently
+validated the canonical source, base64 round-trip, length and digests before copying those exact
+bytes into the private runtime module. Source SHA-256:
+`3038b1ba4e5852b4df291bfa890a7a22ebfcaf9d0e244d10e76576f4426bd04f`.
+
+The compiler digest is `3aafb7b9c54fa31a7092af35148971ee616965e7f9a0b80fb7fdc4bdd1d1a555`;
+its distribution digest is `ba14f4ef19598f640ba103fe352e0bdca7a9bb9421b8dd1629df725431bcb8c3`.
+The recorded CLR version is `4.0.30319.42000`. The implementation accounts for Microsoft's
+[documented deterministic compilation inputs](https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/compiler-options/code-generation#deterministic).
+Canonical root and UI native typechecks passed after the runtime stdin transport was integrated.
+Restricted-token PowerShell 5.1 loading, analyzer evidence and final security review remain pending;
+this generation evidence does not qualify signed upgrades.
+
 ## Final verification checklist
 
 These commands are required evidence, not a claim that they have all run. Native qualification
