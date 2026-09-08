@@ -33,6 +33,9 @@ export async function checkWindowsPortableAuthenticodeLoader({
   const probe =
     loader +
     "if($null -ne $env:TMP -or $null -ne $env:TEMP -or $null -ne $env:USERPROFILE){exit 20};" +
+    "$i=[Security.Principal.WindowsIdentity]::GetCurrent();" +
+    "$p=[Security.Principal.WindowsPrincipal]::new($i);" +
+    "if($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){exit 22};" +
     "$v=[Keiko.Portable.Runtime.Rfc3161]::DecodeOid([byte[]](6,2,42,3));" +
     "if($v -cne '1.2.3'){exit 21};exit 0";
   const valid = runRestricted(run, helperPath, powershellPath, systemRoot, probe, input);

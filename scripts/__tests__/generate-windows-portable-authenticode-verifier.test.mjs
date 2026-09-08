@@ -100,6 +100,41 @@ describe("Windows portable Authenticode verifier generator", () => {
         expectedToolchain,
       ),
     ).toThrow(/compiler distribution/u);
+    expect(() =>
+      assertPinnedToolchain(
+        {
+          ...expectedToolchain,
+          referenceSha256: {
+            ...expectedToolchain.referenceSha256,
+            "System.Security.dll": "0".repeat(64),
+          },
+        },
+        expectedToolchain,
+      ),
+    ).toThrow(/System.Security.dll digest/u);
+  });
+
+  it.each([
+    ["a UTF-8 BOM", "\ufeffnamespace Keiko { public static class Probe {} }\n"],
+    ["CRLF line endings", "namespace Keiko { public static class Probe {} }\r\n"],
+    ["a missing trailing newline", "namespace Keiko { public static class Probe {} }"],
+  ])("rejects verifier source with %s before starting the compiler", (_label, source) => {
+    const fixtureData = fixture();
+    writeFileSync(fixtureData.sourcePath, source);
+    const spawn = vi.fn();
+
+    expect(() => generateVerifierAsset({ ...fixtureData, spawn })).toThrow(/verifier source/u);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the deterministic compiler exits unsuccessfully", () => {
+    const fixtureData = fixture();
+    const spawn = vi.fn(() => ({ status: 1, stderr: "compile error", stdout: "" }));
+
+    expect(() => generateVerifierAsset({ ...fixtureData, spawn })).toThrow(
+      /deterministic verifier compilation failed \(1\)/u,
+    );
+    expect(spawn).toHaveBeenCalledOnce();
   });
 
   it("emits a byte-stable asset and bounds the compiler subprocess", () => {

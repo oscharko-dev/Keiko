@@ -14,6 +14,7 @@ internal static class StandardTokenLoader {
   private const uint TokenAssignPrimary = 0x1;
   private const uint TokenDuplicate = 0x2;
   private const uint TokenQuery = 0x8;
+  private const uint SePrivilegeEnabled = 0x2;
   private const uint CreateNoWindow = 0x08000000;
   private const uint CreateUnicodeEnvironment = 0x00000400;
   private const uint StartfUseStdHandles = 0x00000100;
@@ -70,12 +71,14 @@ internal static class StandardTokenLoader {
         SecurityImpersonation,
         out restrictedImpersonationToken)) return Win32Failure(114, "duplicate-token");
       bool administratorsEnabled;
-      if (!IsTokenRestricted(restrictedToken) ||
-          !CheckTokenMembership(
-            restrictedImpersonationToken,
-            administratorsSid,
-            out administratorsEnabled) ||
-          administratorsEnabled) return Fail(115, "token-not-restricted");
+      if (!CheckTokenMembership(
+        restrictedImpersonationToken,
+        administratorsSid,
+        out administratorsEnabled)) return Win32Failure(115, "check-admin-membership");
+      if (administratorsEnabled) return Fail(116, "administrator-still-enabled");
+      int privilegeState = HasOnlyAllowedEnabledPrivilege(restrictedToken);
+      if (privilegeState < 0) return Win32Failure(117, "query-restricted-privileges");
+      if (privilegeState == 0) return Fail(118, "unexpected-enabled-privilege");
       return RunChild(restrictedToken, args[0], args[1], args[2], input);
     }
     finally {
@@ -83,6 +86,32 @@ internal static class StandardTokenLoader {
       if (restrictedImpersonationToken != IntPtr.Zero) CloseHandle(restrictedImpersonationToken);
       if (restrictedToken != IntPtr.Zero) CloseHandle(restrictedToken);
       if (processToken != IntPtr.Zero) CloseHandle(processToken);
+    }
+  }
+
+  private static int HasOnlyAllowedEnabledPrivilege(IntPtr token) {
+    var changeNotify = new Luid();
+    if (!LookupPrivilegeValueW(null, "SeChangeNotifyPrivilege", out changeNotify)) return -1;
+    uint required = 0;
+    GetTokenInformation(token, 3, IntPtr.Zero, 0, out required);
+    if (Marshal.GetLastWin32Error() != 122 || required < 4 || required > 65536) return -1;
+    IntPtr privileges = Marshal.AllocHGlobal((int)required);
+    try {
+      if (!GetTokenInformation(token, 3, privileges, required, out required)) return -1;
+      int count = Marshal.ReadInt32(privileges);
+      if (count < 0 || count > 256 || required < 4 + count * 12) return 0;
+      for (int index = 0; index < count; index++) {
+        int offset = 4 + index * 12;
+        uint attributes = unchecked((uint)Marshal.ReadInt32(privileges, offset + 8));
+        if ((attributes & SePrivilegeEnabled) == 0) continue;
+        uint lowPart = unchecked((uint)Marshal.ReadInt32(privileges, offset));
+        int highPart = Marshal.ReadInt32(privileges, offset + 4);
+        if (lowPart != changeNotify.LowPart || highPart != changeNotify.HighPart) return 0;
+      }
+      return 1;
+    }
+    finally {
+      Marshal.FreeHGlobal(privileges);
     }
   }
 
@@ -224,6 +253,12 @@ internal static class StandardTokenLoader {
   }
 
   [StructLayout(LayoutKind.Sequential)]
+  private struct Luid {
+    public uint LowPart;
+    public int HighPart;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
   private struct SecurityAttributes {
     public int Length;
     public IntPtr SecurityDescriptor;
@@ -288,13 +323,24 @@ internal static class StandardTokenLoader {
     out IntPtr newToken);
 
   [DllImport("advapi32.dll", SetLastError = true)]
-  private static extern bool IsTokenRestricted(IntPtr token);
-
-  [DllImport("advapi32.dll", SetLastError = true)]
   private static extern bool CheckTokenMembership(
     IntPtr token,
     byte[] sid,
     [MarshalAs(UnmanagedType.Bool)] out bool isMember);
+
+  [DllImport("advapi32.dll", SetLastError = true)]
+  private static extern bool GetTokenInformation(
+    IntPtr token,
+    int informationClass,
+    IntPtr information,
+    uint informationLength,
+    out uint returnLength);
+
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern bool LookupPrivilegeValueW(
+    string systemName,
+    string name,
+    out Luid luid);
 
   [DllImport("advapi32.dll", SetLastError = true)]
   private static extern bool CreateWellKnownSid(

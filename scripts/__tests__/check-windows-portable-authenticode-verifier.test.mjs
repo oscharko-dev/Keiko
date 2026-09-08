@@ -36,4 +36,22 @@ describe("committed Windows portable Authenticode verifier asset", () => {
       }),
     ).toThrow(/source digest/u);
   });
+
+  it("rejects malformed compiler and framework-reference pins before regeneration", () => {
+    expect(() =>
+      assertCommittedVerifierAsset({
+        ...COMMITTED_VERIFIER_ASSET,
+        compilerDistribution: null,
+      }),
+    ).toThrow(/compiler-distribution pin/u);
+    expect(() =>
+      assertCommittedVerifierAsset({
+        ...COMMITTED_VERIFIER_ASSET,
+        referenceSha256: {
+          ...COMMITTED_VERIFIER_ASSET.referenceSha256,
+          "System.Core.dll": "not-a-digest",
+        },
+      }),
+    ).toThrow(/System.Core.dll pin/u);
+  });
 });

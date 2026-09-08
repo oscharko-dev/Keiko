@@ -20,6 +20,27 @@ permissions:
   contents: read
 
 jobs:
+  analyzer-proof:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: "8.0.x"
+      - name: Analyze both RFC3161 implementations with the locked graph
+        shell: pwsh
+        run: |
+          $intermediate = Join-Path $env:RUNNER_TEMP "authenticode-analyzer-obj/"
+          $output = Join-Path $env:RUNNER_TEMP "authenticode-analyzer-bin/"
+          dotnet build scripts/native-quality/windows-rfc3161-quality.csproj --configuration Release --nologo `
+            "-p:BaseIntermediateOutputPath=$intermediate" "-p:OutputPath=$output" `
+            "-p:RestoreLockedMode=true"
+          if ($LASTEXITCODE -ne 0) { throw ".NET Authenticode analyzer proof failed" }
+
   runtime-proof:
     runs-on: windows-latest
     timeout-minutes: 30
