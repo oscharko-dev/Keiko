@@ -4,6 +4,7 @@
 // exist on its props, so no click could ever open the connect surface (git-chat-ui-mount item).
 
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import type { GitBranchListEntry } from "@/lib/api";
@@ -83,6 +84,28 @@ describe("RepositoryToolbar — Connect to Chat", () => {
   it("never renders Connect to Chat before a repository is selected", () => {
     render(<RepositoryToolbar {...baseProps()} selectedPath={null} onConnectToChat={vi.fn()} />);
     expect(screen.queryByRole("button", { name: "Connect to Chat" })).not.toBeInTheDocument();
+  });
+
+  // #3390: with one repository connected, the toolbar was the operator's only surface and it had
+  // no way to add another local checkout -- the connect panel (and with it the Add repository
+  // dialog) only renders while nothing is bound. The Repository menu now carries that action.
+  it("offers Add repository in the Repository menu and reports it without selecting a path", async () => {
+    const user = userEvent.setup();
+    const onAddRepository = vi.fn();
+    const props = baseProps();
+    render(<RepositoryToolbar {...props} onAddRepository={onAddRepository} />);
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: "Add repository" }));
+    expect(onAddRepository).toHaveBeenCalledTimes(1);
+    expect(props.onSelectRepository).not.toHaveBeenCalled();
+  });
+
+  it("lists only repositories in the menu when the toolbar cannot add one", async () => {
+    const user = userEvent.setup();
+    render(<RepositoryToolbar {...baseProps()} />);
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    expect(await screen.findByRole("option", { name: /alpha/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Add repository" })).not.toBeInTheDocument();
   });
 
   it("jest-axe: no violations with Connect to Chat, Open in Editor and Open Files all present", async () => {

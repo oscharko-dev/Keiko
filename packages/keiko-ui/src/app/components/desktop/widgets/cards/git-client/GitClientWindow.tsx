@@ -827,13 +827,16 @@ export function GitClientWindow({
   const [commitNonce, setCommitNonce] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<"clone" | "open">("clone");
+  const openRepositoryDialog = useCallback((mode: "clone" | "open"): void => {
+    setDialogMode(mode);
+    setDialogOpen(true);
+  }, []);
   useEffect(() => {
     if (initialRepositoryDialog === undefined) return;
-    setDialogMode(initialRepositoryDialog);
-    setDialogOpen(true);
+    openRepositoryDialog(initialRepositoryDialog);
     updateCfg?.({ repositoryDialog: "" });
     reportClientDiagnostic(`[keiko] git repository dialog handoff: ${initialRepositoryDialog}`);
-  }, [initialRepositoryDialog, updateCfg]);
+  }, [initialRepositoryDialog, openRepositoryDialog, updateCfg]);
   const [newBranchOpen, setNewBranchOpen] = useState(false);
   // Issue #3400 — "Connect to Chat" dialog for the active repository comparison.
   const [connectToChatOpen, setConnectToChatOpen] = useState(false);
@@ -1653,6 +1656,7 @@ export function GitClientWindow({
         onOpenEditor={onOpenEditor}
         onOpenFiles={onOpenFiles}
         onConnectToChat={() => setConnectToChatOpen(true)}
+        onAddRepository={() => openRepositoryDialog("open")}
       />
       {/* A rejected branch switch must never render as silent success: the New Branch dialog
           shows its own copy of this outcome while it is open (the create-then-switch chain runs
@@ -1674,14 +1678,8 @@ export function GitClientWindow({
             loading={reposLoading}
             error={reposError}
             onSelect={reconnectRepository}
-            onConnect={() => {
-              setDialogMode("open");
-              setDialogOpen(true);
-            }}
-            onClone={() => {
-              setDialogMode("clone");
-              setDialogOpen(true);
-            }}
+            onConnect={() => openRepositoryDialog("open")}
+            onClone={() => openRepositoryDialog("clone")}
           />
         ) : (
           <>

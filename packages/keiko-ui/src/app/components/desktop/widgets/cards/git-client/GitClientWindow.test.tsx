@@ -942,6 +942,17 @@ describe("GitClientWindow — repository selector combobox (toolbar)", () => {
     render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
     expect(await screen.findByRole("combobox", { name: "Repository" })).toBeInTheDocument();
   });
+
+  // #3390: the probe rehearsal of 2026-09-08 timed out in a Git window connected to the controlled
+  // clone -- there was no way to add the scenario's unregistered checkout from that state.
+  it("opens the Add repository dialog in open-local mode from the Repository menu", async () => {
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+    await user.click(await screen.findByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: "Add repository" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add repository" });
+    expect(within(dialog).getByLabelText("Local repository path")).toBeInTheDocument();
+  });
 });
 
 describe("GitClientWindow — add-repository dialog", () => {

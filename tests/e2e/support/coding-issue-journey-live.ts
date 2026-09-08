@@ -224,11 +224,15 @@ export async function openGovernedGitWindow(
  * uses is not rendered until a task has bound the repository.
  *
  * A checkout the desktop has never seen before -- no recent entry, e.g. the git-to-chat scenario's
- * disposable worktree (#3390) -- has no "recent" button to click either; the loop then reaches for
- * the connect panel's own "Connect repository" control and adds it through the SAME
- * `AddRepositoryDialog` an operator uses, rather than a direct `/api/projects` POST. This never
- * fires for the four flows above: their controlled checkout is always already a recent entry, so
- * the first branch below returns before the "Connect repository" button is ever looked for.
+ * disposable worktree (#3390) -- has no "recent" button to click either. The Git window then shows
+ * one of two things, and the operator adds the checkout through the SAME `AddRepositoryDialog` from
+ * either: the connect panel's "Connect repository" control when no repository is bound, or -- the
+ * usual case, since the server registers the controlled clone at start and the window opens on it
+ * -- the "Add repository" entry of the connected toolbar's Repository menu (the probe rehearsal of
+ * 2026-09-08 timed out here: the window was connected to the controlled clone, whose toolbar had no
+ * way to add another checkout; that entry is the product fix). Never a direct `/api/projects`
+ * POST. Neither branch fires for the four flows above: their controlled checkout is always already
+ * a recent entry, so the first branch below returns before either control is looked for.
  */
 async function bindGitWindowToControlledRepository(
   gitWindow: Locator,
@@ -247,33 +251,59 @@ async function bindGitWindowToControlledRepository(
   const recent = gitWindow.getByRole("button", { name: label, exact: true });
   const connect = gitWindow.getByRole("button", { name: "Connect repository", exact: true });
   const deadline = Date.now() + 60_000;
+  let seen = "neither a recent entry nor a repository control";
   for (;;) {
     if ((await repository.getByText(label, { exact: true }).count()) > 0) return;
-    if ((await recent.count()) > 0 && (await recent.first().isVisible())) {
+    if (await firstVisible(recent)) {
+      seen = "the recent entry";
       await recent.first().click();
-    } else if ((await connect.count()) > 0 && (await connect.first().isVisible())) {
-      await registerLocalRepositoryThroughGitWindow(gitWindow, repositoryRoot);
+    } else if (await firstVisible(connect)) {
+      seen = "the connect panel";
+      await connect.first().click();
+      await addRepositoryThroughDialog(gitWindow, repositoryRoot);
+    } else if (await firstVisible(repository)) {
+      seen = "a toolbar bound to another repository";
+      await addRepositoryFromToolbarMenu(gitWindow, repositoryRoot);
     }
     if (Date.now() > deadline) {
       throw new Error(
-        `the Git window did not bind the controlled repository "${label}" within a minute`,
+        `the Git window did not bind the controlled repository "${label}" within a minute (last seen: ${seen})`,
       );
     }
     await gitWindow.page().waitForTimeout(1_000);
   }
 }
 
-/**
- * Adds a local checkout the desktop has never registered as a project, through the Git window's own
- * "Connect repository" -> "Open local repository" flow (`AddRepositoryDialog.tsx`), exactly as an
- * operator adds an existing folder. `onAdded` (GitClientWindow.tsx) reconnects to it immediately, so
- * the caller's next poll finds it already selected.
- */
-async function registerLocalRepositoryThroughGitWindow(
+async function firstVisible(locator: Locator): Promise<boolean> {
+  return (await locator.count()) > 0 && locator.first().isVisible();
+}
+
+/** The connected toolbar's Repository menu carries one action entry, "Add repository"
+ * (RepositoryToolbar.tsx's `ADD_REPOSITORY_OPTION`), which opens the same dialog the connect panel
+ * does -- the operator's only way to bind a checkout the desktop has not registered while another
+ * repository is already connected. */
+async function addRepositoryFromToolbarMenu(
   gitWindow: Locator,
   repositoryRoot: string,
 ): Promise<void> {
-  await gitWindow.getByRole("button", { name: "Connect repository", exact: true }).click();
+  await gitWindow
+    .getByLabel("Repository toolbar")
+    .getByRole("combobox", { name: "Repository", exact: true })
+    .click();
+  await gitWindow.page().getByRole("option", { name: "Add repository", exact: true }).click();
+  await addRepositoryThroughDialog(gitWindow, repositoryRoot);
+}
+
+/**
+ * Completes the Git window's own "Add repository" -> "Open local repository" dialog
+ * (`AddRepositoryDialog.tsx`) for a local checkout, exactly as an operator adds an existing folder.
+ * `onAdded` (GitClientWindow.tsx) reconnects to it immediately, so the caller's next poll finds it
+ * already selected.
+ */
+async function addRepositoryThroughDialog(
+  gitWindow: Locator,
+  repositoryRoot: string,
+): Promise<void> {
   const dialog = gitWindow.page().getByRole("dialog", { name: "Add repository" });
   await expect(dialog).toBeVisible();
   await dialog.getByLabel("Local repository path").fill(repositoryRoot);

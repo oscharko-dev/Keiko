@@ -3,9 +3,10 @@
 import type { ReactNode } from "react";
 import type { GitBranchListEntry } from "@/lib/api";
 import { useTranslate } from "@/lib/i18n";
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import type { GitRepositoryStatusResponse, ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "../../../Icons";
-import KeikoSelect from "../../../KeikoSelect";
+import KeikoSelect, { type KeikoSelectProps } from "../../../KeikoSelect";
 import { BranchSelector } from "./BranchSelector";
 import { SyncControl, type GitSyncView } from "./SyncControl";
 import type { SyncOutcomeView } from "./sync-outcome";
@@ -46,6 +47,53 @@ export interface RepositoryToolbarProps {
   readonly onOpenFiles?: ((root: string) => void) | undefined;
   /** Issue #3400 — opens the "Connect to Chat" dialog for the active repository comparison. */
   readonly onConnectToChat?: () => void;
+  /** #3390 — opens the Add repository dialog from the connected toolbar's Repository menu. Until
+   * this existed the dialog was reachable only from the connect panel, i.e. only while NO
+   * repository was bound: an operator with one connected repository had no way to add another
+   * local checkout the desktop had not registered yet. */
+  readonly onAddRepository?: (() => void) | undefined;
+}
+
+/** The value of the Repository menu's one action entry. Every repository option's value is an
+ * absolute path, so this sentinel can never collide with one. */
+export const ADD_REPOSITORY_OPTION = "__add-repository__";
+
+type RepositorySection = KeikoSelectProps["sections"][number];
+
+/** The Repository menu's action entry, present only when the toolbar can add a repository. */
+interface AddRepositoryEntry {
+  readonly label: string;
+  readonly onSelect: () => void;
+}
+
+// The dialog this entry opens names itself from the optional widget catalog; the entry uses the
+// SAME key so menu and dialog can never drift apart.
+function useAddRepositoryEntry(
+  onAddRepository: (() => void) | undefined,
+): AddRepositoryEntry | undefined {
+  const optionalT = useOptionalWidgetTranslate();
+  return onAddRepository === undefined
+    ? undefined
+    : { label: optionalT("gitClientWindow.addRepository.title"), onSelect: onAddRepository };
+}
+
+function repositorySections(
+  repositories: readonly ProjectWithAvailability[],
+  addRepositoryLabel: string | undefined,
+): RepositorySection[] {
+  const sections: RepositorySection[] = [
+    {
+      options: repositories.map((repo) => ({
+        value: repo.path,
+        label: repo.name,
+        description: repo.path,
+      })),
+    },
+  ];
+  if (addRepositoryLabel !== undefined) {
+    sections.push({ options: [{ value: ADD_REPOSITORY_OPTION, label: addRepositoryLabel }] });
+  }
+  return sections;
 }
 
 function currentBranchName(
@@ -206,6 +254,7 @@ interface ConnectedToolbarCellsProps {
   readonly syncOutcome: SyncOutcomeView | null;
   readonly syncError: string | null;
   readonly onSelectRepository: (path: string) => void;
+  readonly addRepository: AddRepositoryEntry | undefined;
   readonly onSwitchBranch: (branchName: string, trigger: HTMLButtonElement) => void;
   readonly onCreateBranch: (trigger: HTMLButtonElement) => void;
   readonly onRunSync: () => void;
@@ -214,48 +263,47 @@ interface ConnectedToolbarCellsProps {
 
 // The Repository / Current branch / Sync cells of the connected toolbar. Extracted so
 // RepositoryToolbar itself stays under the max-lines-per-function bar.
-// The Repository picker cell's contents. Extracted so ConnectedToolbarCells stays under the
+// The Repository picker cell. Extracted so ConnectedToolbarCells stays under the
 // max-lines-per-function bar.
 function RepositoryCell({
   repositories,
   selectedPath,
+  addRepository,
   onSelectRepository,
 }: {
   readonly repositories: readonly ProjectWithAvailability[];
   readonly selectedPath: string | null;
+  readonly addRepository: AddRepositoryEntry | undefined;
   readonly onSelectRepository: (path: string) => void;
 }): ReactNode {
   return (
-    <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-      <span style={{ color: "var(--fg-dim)" }}>
-        <FolderIcon size={16} />
+    <ToolbarCell label="Repository" minWidth={248}>
+      <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+        <span style={{ color: "var(--fg-dim)" }}>
+          <FolderIcon size={16} />
+        </span>
+        <KeikoSelect
+          value={selectedPath ?? ""}
+          ariaLabel="Repository"
+          menuTitle="Repository"
+          placeholder="Select a repository"
+          triggerStyle={{
+            minWidth: 0,
+            border: "none",
+            background: "transparent",
+            padding: 0,
+            height: "auto",
+            font: "600 14px var(--font-ui)",
+            color: "var(--fg)",
+          }}
+          sections={repositorySections(repositories, addRepository?.label)}
+          onValueChange={(value) => {
+            if (value === ADD_REPOSITORY_OPTION) addRepository?.onSelect();
+            else onSelectRepository(value);
+          }}
+        />
       </span>
-      <KeikoSelect
-        value={selectedPath ?? ""}
-        ariaLabel="Repository"
-        menuTitle="Repository"
-        placeholder="Select a repository"
-        triggerStyle={{
-          minWidth: 0,
-          border: "none",
-          background: "transparent",
-          padding: 0,
-          height: "auto",
-          font: "600 14px var(--font-ui)",
-          color: "var(--fg)",
-        }}
-        sections={[
-          {
-            options: repositories.map((repo) => ({
-              value: repo.path,
-              label: repo.name,
-              description: repo.path,
-            })),
-          },
-        ]}
-        onValueChange={onSelectRepository}
-      />
-    </span>
+    </ToolbarCell>
   );
 }
 
@@ -272,6 +320,7 @@ function ConnectedToolbarCells({
   syncOutcome,
   syncError,
   onSelectRepository,
+  addRepository,
   onSwitchBranch,
   onCreateBranch,
   onRunSync,
@@ -279,13 +328,12 @@ function ConnectedToolbarCells({
 }: ConnectedToolbarCellsProps): ReactNode {
   return (
     <>
-      <ToolbarCell label="Repository" minWidth={248}>
-        <RepositoryCell
-          repositories={repositories}
-          selectedPath={selectedPath}
-          onSelectRepository={onSelectRepository}
-        />
-      </ToolbarCell>
+      <RepositoryCell
+        repositories={repositories}
+        selectedPath={selectedPath}
+        addRepository={addRepository}
+        onSelectRepository={onSelectRepository}
+      />
 
       <ToolbarCell label="Current branch" minWidth={190}>
         <BranchSelector
@@ -330,8 +378,10 @@ export function RepositoryToolbar({
   onOpenEditor,
   onOpenFiles,
   onConnectToChat,
+  onAddRepository,
 }: RepositoryToolbarProps): ReactNode {
   const t = useTranslate();
+  const addRepository = useAddRepositoryEntry(onAddRepository);
   const hasRepository = selectedPath !== null;
   const branchValue = currentBranchName(branches, status);
 
@@ -352,6 +402,7 @@ export function RepositoryToolbar({
         syncOutcome={syncOutcome}
         syncError={syncError}
         onSelectRepository={onSelectRepository}
+        addRepository={addRepository}
         onSwitchBranch={onSwitchBranch}
         onCreateBranch={onCreateBranch}
         onRunSync={onRunSync}
