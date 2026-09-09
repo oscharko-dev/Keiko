@@ -146,15 +146,23 @@ describe("initial compiler and finite migration conformance gate", () => {
 // outcome for both clones. Everything else the closeout checks must still pass in either
 // environment, so any other defect still fails these tests.
 function closeoutFailuresThisCloneCanReach(root = ROOT) {
-  const { sourceHead } = JSON.parse(readFileSync(join(root, H1_PROVENANCE_PATH), "utf8"));
+  const { currentHead, sourceHead } = JSON.parse(
+    readFileSync(join(root, H1_PROVENANCE_PATH), "utf8"),
+  );
+  const failures = [];
+  if (!isAncestorOfDev(currentHead, root, execFileSync)) {
+    failures.push(
+      `H1 handoff evidence unreachable: landedDevCommit ${currentHead} is not an ancestor of dev`,
+    );
+  }
   try {
     git(root, ["cat-file", "-e", `${sourceHead}^{commit}`]);
-    return [];
   } catch {
-    return [
+    failures.push(
       `H1 handoff evidence unverifiable: sourceHead ${sourceHead} is not a resolvable Git commit`,
-    ];
+    );
   }
+  return failures;
 }
 
 describe("closeout enforcement", () => {
@@ -910,6 +918,15 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
       return "";
     };
     expect(isAncestorOfDev("a".repeat(40), ROOT, execute)).toBe(true);
+  });
+  it("fails closed when neither remote-tracking nor local dev exists", () => {
+    const visited = [];
+    const execute = (_git, args) => {
+      visited.push(args.at(-1));
+      throw new Error("missing dev ref");
+    };
+    expect(isAncestorOfDev("a".repeat(40), ROOT, execute)).toBe(false);
+    expect(visited).toEqual(["refs/remotes/origin/dev", "refs/heads/dev"]);
   });
   // The tests above stub `identityFailures` to isolate the recheck's own control flow. This proves
   // the REAL, unstubbed identity cross-check actually agrees with the real producer, and actually
