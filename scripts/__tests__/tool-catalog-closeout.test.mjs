@@ -353,6 +353,30 @@ describe("exact-head catalog closeout artifact", () => {
     expect(result).toEqual({ h1, evidenceRef: "h1-provenance.v1" });
     expect(visited).toEqual(["migration", "postmerge"]);
   });
+  it("routes producer evidence through checkpoint validation and aggregates every failure", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-closeout-checkpoint-"));
+    roots.push(root);
+    const h1Path = join(root, "h1-producer-checkpoint.v1.json");
+    writeFileSync(h1Path, JSON.stringify({ sourceHead: "a".repeat(40) }));
+    const visited = [];
+    await expect(
+      qualifiedH1(root, h1Path, {
+        migrationFailures: async () => {
+          visited.push("migration");
+          return ["migration failure"];
+        },
+        handoffFailures: async () => {
+          throw new Error("producer evidence must not use postmerge validation");
+        },
+        checkpointFailures: async (_root, options) => {
+          visited.push("checkpoint");
+          expect(options.checkpointPath).toBe("h1-producer-checkpoint.v1.json");
+          return ["checkpoint failure"];
+        },
+      }),
+    ).rejects.toThrow("H1 handoff or migration qualification failed");
+    expect(visited).toEqual(["migration", "checkpoint"]);
+  });
   it("rejects unknown H1 evidence stages", async () => {
     const f = await fixture();
     f.context.h1EvidenceRef = "narrated-h1-ready";

@@ -817,8 +817,14 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
     expect(
       h1LandingReceiptSemanticFailures({ ...review, rawComment: "forbidden" }, record, "review"),
     ).toEqual(["H1 landing review receipt malformed: unexpected top-level fields"]);
+    expect(h1LandingReceiptSemanticFailures(null, record, "verification")).toEqual([
+      "H1 landing verification receipt malformed: unexpected top-level fields",
+    ]);
+    expect(h1LandingReceiptSemanticFailures([], record, "review")).toEqual([
+      "H1 landing review receipt malformed: unexpected top-level fields",
+    ]);
   });
-  it("rejects incomplete checks, divergent trees, unresolved reviews, and catalog drift", () => {
+  it("rejects every mismatched verification and review settlement dimension", () => {
     const record = JSON.parse(readFileSync(join(ROOT, H1_PROVENANCE_PATH), "utf8"));
     const verification = JSON.parse(
       readFileSync(join(ROOT, "docs/qa/evidence/h1-verification.v1.json"), "utf8"),
@@ -839,6 +845,18 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
       ...review,
       binding: { ...review.binding, handlerSetDigest: "0".repeat(64) },
     };
+    const mismatchedVerificationIdentity = {
+      ...verification,
+      repository: "other/repository",
+    };
+    const invalidVerificationMetadata = { ...verification, mergedAt: 0 };
+    const failedManagedVerification = {
+      ...verification,
+      managedVerification: { ...verification.managedVerification, result: "failed" },
+    };
+    const mismatchedReviewIdentity = { ...review, currentHead: "0".repeat(40) };
+    const wrongReviewKind = { ...review, reviewKind: "premerge-review" };
+    const wrongReviewOwner = { ...review, ownerIssue: 0 };
     expect(h1LandingReceiptSemanticFailures(incompleteChecks, record, "verification")).toContain(
       "H1 landing verification receipt required-check settlement mismatch",
     );
@@ -850,6 +868,24 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
     );
     expect(h1LandingReceiptSemanticFailures(driftedBinding, record, "review")).toContain(
       "H1 landing review receipt catalog binding mismatch",
+    );
+    expect(
+      h1LandingReceiptSemanticFailures(mismatchedVerificationIdentity, record, "verification"),
+    ).toContain("H1 landing verification receipt identity mismatch");
+    expect(
+      h1LandingReceiptSemanticFailures(invalidVerificationMetadata, record, "verification"),
+    ).toContain("H1 landing verification receipt integration metadata mismatch");
+    expect(
+      h1LandingReceiptSemanticFailures(failedManagedVerification, record, "verification"),
+    ).toContain("H1 landing verification receipt has no passing managed verification");
+    expect(h1LandingReceiptSemanticFailures(mismatchedReviewIdentity, record, "review")).toContain(
+      "H1 landing review receipt identity mismatch",
+    );
+    expect(h1LandingReceiptSemanticFailures(wrongReviewKind, record, "review")).toContain(
+      "H1 landing review receipt kind mismatch",
+    );
+    expect(h1LandingReceiptSemanticFailures(wrongReviewOwner, record, "review")).toContain(
+      "H1 landing review receipt owner mismatch",
     );
   });
   it("fails closed on an identity mismatch against the current producer", async () => {
