@@ -16,6 +16,15 @@ const scanner81PrFullLog = readFileSync(
   resolve(import.meta.dirname, "fixtures", "sonar-analysis", "scanner-8.1-pr-full.txt"),
   "utf8",
 );
+const scanner81PrUnchangedSourcesLog = readFileSync(
+  resolve(
+    import.meta.dirname,
+    "fixtures",
+    "sonar-analysis",
+    "scanner-8.1-pr-unchanged-sources.txt",
+  ),
+  "utf8",
+);
 
 function freshJavascriptAnalysis(eligible) {
   return [
@@ -170,6 +179,14 @@ describe("Sonar scanner warning gate", () => {
     expect(fullAnalysisEvidenceFailures(scanner81PrFullLog)).toEqual([]);
   });
 
+  // PR #3434 changed no JS/TS source: Sonar skipped the taint analysis instead of printing the
+  // SonarJasmin plan, so the sensor-scoped receipts are the only full-graph evidence. The scanner
+  // quotes the UDG directory it reads; a verifier that only recognised the unquoted redaction
+  // rejected every such log.
+  it("accepts the sensor-scoped receipts of a PR whose taint analysis skipped unchanged sources", () => {
+    expect(fullAnalysisEvidenceFailures(scanner81PrUnchangedSourcesLog)).toEqual([]);
+  });
+
   it.each([
     [
       "a large partial fresh-source inventory",
@@ -193,15 +210,15 @@ describe("Sonar scanner warning gate", () => {
     [
       "a receipt without its producer read",
       scanner81PrFullLog.replace(
-        "* Reading SonarArchitecture UDG data from directory <redacted>/architecture/js\n",
+        '* Reading SonarArchitecture UDG data from directory "<redacted>/architecture/js"\n',
         "",
       ),
     ],
     [
       "a producer read for the wrong language",
       scanner81PrFullLog.replace(
-        "* Reading SonarArchitecture UDG data from directory <redacted>/architecture/js",
-        "* Reading SonarArchitecture UDG data from directory <redacted>/architecture/ts",
+        '* Reading SonarArchitecture UDG data from directory "<redacted>/architecture/js"',
+        '* Reading SonarArchitecture UDG data from directory "<redacted>/architecture/ts"',
       ),
     ],
     [
