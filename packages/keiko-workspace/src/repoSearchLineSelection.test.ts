@@ -496,12 +496,25 @@ describe("looksLikeSignatureStart", () => {
   // `RangeError: Maximum call stack size exceeded` inside `RegExp.test` at 4,000 chunks. The
   // comma-list line above never reached this: it has no whitespace, so only one repetition ever
   // matched. `looksLikeTypedCallStart` now evaluates the same predicate in one pass.
+  // 1,600 chunks, not the 200 that first reproduced the finding: below ~20 ms `assertLinearGrowth`
+  // falls back to its noise floor and the comparison degrades into an absolute 60 ms budget, which
+  // would accept a re-introduced quadratic that happens to measure 4 ms and 16 ms. The fixed scan
+  // takes ~27 ms at 1,600 chunks (3.2M characters) and ~54 ms at 3,200 here, so the assertion stays
+  // the growth ratio the helper documents. The retired pattern needed ~19 s for the small sample.
   it("resolves an adversarial sparse-whitespace chunked no-paren line in linear time", () => {
     assertLinearGrowth(
       looksLikeSignatureStart,
       (units) => ("a".repeat(1_999) + " ").repeat(units),
-      200,
+      1_600,
     );
+  });
+
+  // The growth ratio above cannot see the second failure the retired pattern had on this shape:
+  // at 4,000 chunks `RegExp.test` threw `RangeError: Maximum call stack size exceeded` rather than
+  // running slowly. The single-pass scan has no recursion to exhaust, so the same input must simply
+  // return.
+  it("does not overflow the stack on the line that crashed the retired pattern", () => {
+    expect(looksLikeSignatureStart(("a".repeat(1_999) + " ").repeat(4_000))).toBe(false);
   });
 });
 
