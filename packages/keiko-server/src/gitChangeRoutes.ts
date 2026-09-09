@@ -506,7 +506,11 @@ function persistConnectedScope(
     now,
   );
   try {
-    deps.store.updateChat(chatId, { gitChangeScopes: [...existingScopes, scope] });
+    // Appends against the list as it is at write time, not against the array captured before
+    // `resolveConnectSnapshot`'s multi-second await: two concurrent connects for one chat both
+    // read the same list, and writing a stale copy back dropped the other's scope while leaving
+    // its relationship edge behind (#3384 review).
+    deps.store.mutateGitChangeScopes(chatId, (current) => [...current, scope]);
   } catch (error) {
     if (error instanceof UiStoreError) {
       archiveGitChangeRelationship(deps, workspaceId, scope.relationshipId);
@@ -529,14 +533,20 @@ function persistConnectedScope(
   return { status: 200, body: result };
 }
 
+// The rollback removes exactly the replacement it created and restores the entry it replaced,
+// against the current list, instead of writing back a whole array captured before the failed
+// attempt: a scope another request connected meanwhile must not be undone by this compensation.
 function compensateFailedStaleReplacement(
   deps: UiHandlerDeps,
   workspaceId: string,
   chatId: string,
-  existingScopes: readonly ChatGitChangeScope[],
+  restored: ChatGitChangeScope,
   replacementRelationshipId: string,
 ): void {
-  deps.store.updateChat(chatId, { gitChangeScopes: existingScopes });
+  deps.store.mutateGitChangeScopes(chatId, (current) => [
+    ...current.filter((entry) => entry.relationshipId !== replacementRelationshipId),
+    restored,
+  ]);
   archiveGitChangeRelationship(deps, workspaceId, replacementRelationshipId);
 }
 
@@ -547,11 +557,14 @@ function replaceStaleScope(
   found: FoundGitChangeScope,
   staleScope: ChatGitChangeScope,
 ): RouteResult | undefined {
-  const remaining = found.existing.filter(
-    (entry) => entry.relationshipId !== found.scope.relationshipId,
-  );
   try {
-    deps.store.updateChat(chatId, { gitChangeScopes: [...remaining, staleScope] });
+    // Same rule on the refresh path: the entry being replaced is identified by its relationship
+    // id and removed from the CURRENT list inside the write, so a scope another request connected
+    // during `captureComparison`'s await survives.
+    deps.store.mutateGitChangeScopes(chatId, (current) => [
+      ...current.filter((entry) => entry.relationshipId !== found.scope.relationshipId),
+      staleScope,
+    ]);
   } catch (error) {
     archiveGitChangeRelationship(deps, workspaceId, staleScope.relationshipId);
     throw error;
@@ -564,7 +577,7 @@ function replaceStaleScope(
       deps,
       workspaceId,
       chatId,
-      found.existing,
+      found.scope,
       staleScope.relationshipId,
     );
     throw error;
@@ -574,7 +587,7 @@ function replaceStaleScope(
     deps,
     workspaceId,
     chatId,
-    found.existing,
+    found.scope,
     staleScope.relationshipId,
   );
   return errResult(409, "GIT_CHANGE_RELATIONSHIP_CONFLICT");

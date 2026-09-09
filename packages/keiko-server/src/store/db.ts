@@ -10,6 +10,7 @@ import {
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
   canonicalDesktopChatTurnReferenceSeed,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ChatGitChangeScope } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
 // Reused directly rather than re-declared: `store/db.ts` lives inside `keiko-server` itself, the
 // same package that owns `ServerLogSink`/`ServerLogEvent`, so — unlike `KnowledgeLogSink`
@@ -67,6 +68,7 @@ import {
   listChats as sqlListChats,
   listChatsLimited as sqlListChatsLimited,
   touchChat as sqlTouchChat,
+  mutateGitChangeScopes as sqlMutateGitChangeScopes,
   updateChat as sqlUpdateChat,
 } from "./chats.js";
 import {
@@ -645,6 +647,10 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     ): Chat => createChatRecord(db, options, projectPath, title, selectedModel, opts),
     updateChat: (id: string, patch: UpdateChatPatch, updateOptions?: UpdateChatOptions): Chat =>
       sqlUpdateChat(db, id, patch, options.now(), updateOptions),
+    mutateGitChangeScopes: (
+      id: string,
+      mutate: (current: readonly ChatGitChangeScope[]) => readonly ChatGitChangeScope[],
+    ): Chat => sqlMutateGitChangeScopes(db, id, mutate, options.now()),
     deleteChat: (id: string): void => {
       sqlDeleteChat(db, id);
     },

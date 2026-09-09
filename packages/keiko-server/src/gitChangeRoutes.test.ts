@@ -7,6 +7,7 @@
 // exercised — not merely mocked. The chat store is the real in-memory UiStore.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GitChangeSnapshotCaptureInput } from "./gitChangeSnapshotService.js";
 import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -190,10 +191,43 @@ interface Harness {
   readonly chatStore: UiStore;
 }
 
+// A capture that parks the FIRST call until it is released, so two connect requests can be
+// interleaved deterministically: both read the chat, then the writes happen in a controlled order.
+function parkingSnapshotService(results: readonly GitChangeSnapshotResult[]): {
+  readonly service: UiHandlerDeps["gitChangeSnapshotService"];
+  readonly release: () => void;
+} {
+  let index = 0;
+  let releaseFirst: (() => void) | undefined;
+  const parked = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const base = fakeSnapshotService(results);
+  if (base === undefined) throw new TypeError("Fake snapshot service is required");
+  return {
+    release: (): void => {
+      if (releaseFirst === undefined) throw new TypeError("Parked capture is not armed");
+      releaseFirst();
+    },
+    service: {
+      ...base,
+      capture: async (
+        request: GitChangeSnapshotCaptureInput,
+      ): Promise<{ readonly snapshot: GitChangeSnapshotResult }> => {
+        const first = index === 0;
+        index += 1;
+        if (first) await parked;
+        return base.capture(request);
+      },
+    },
+  };
+}
+
 function buildHarness(opts: {
   readonly runnerScript: RunnerScript;
   readonly snapshots: readonly GitChangeSnapshotResult[];
   readonly workspaceId?: string;
+  readonly snapshotService?: UiHandlerDeps["gitChangeSnapshotService"];
 }): Harness {
   const db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON");
@@ -215,7 +249,7 @@ function buildHarness(opts: {
   const deps = {
     store: chatStore,
     relationship,
-    gitChangeSnapshotService: fakeSnapshotService(opts.snapshots),
+    gitChangeSnapshotService: opts.snapshotService ?? fakeSnapshotService(opts.snapshots),
     redactor: (value: unknown): unknown => value,
     env: process.env,
     activityLog: undefined,
@@ -344,6 +378,35 @@ function connectRequestBody(chatId: string): Record<string, unknown> {
 }
 
 describe("POST /api/git-change/connect (Issue #3400)", () => {
+  // Two connects for the same chat, interleaved so both read `gitChangeScopes` before either
+  // writes. The write must append to the list as it is at write time; against the previous code —
+  // which wrote back `[...capturedBeforeTheAwait, scope]` — the slower request silently dropped
+  // the faster one's scope and left its relationship edge behind (#3384 review).
+  it("keeps both scopes when two concurrent connects interleave around the capture await", async () => {
+    const parking = parkingSnapshotService([
+      fixtureSnapshot({ headSha: "a".repeat(40) }),
+      fixtureSnapshot({ headSha: "b".repeat(40) }),
+    ]);
+    const { deps, chatStore } = buildHarness({
+      runnerScript: {},
+      snapshots: [],
+      snapshotService: parking.service,
+    });
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    const slow = connectHandler(makeCtx(connectRequestBody(chat.id)), deps);
+    // Let the first request reach its parked capture before the second one starts, so both have
+    // already read the chat.
+    await Promise.resolve();
+    const fast = asRouteResult(await connectHandler(makeCtx(connectRequestBody(chat.id)), deps));
+    expect(fast.status).toBe(200);
+    parking.release();
+    const slowResult = asRouteResult(await slow);
+    expect(slowResult.status).toBe(200);
+    const scopes = chatStore.findChatById(chat.id)?.gitChangeScopes ?? [];
+    expect(scopes).toHaveLength(2);
+    expect(new Set(scopes.map((scope) => scope.relationshipId)).size).toBe(2);
+  });
+
   it("blocks with detached-head before any relationship or scope is created", async () => {
     const { deps, chatStore } = buildHarness({
       runnerScript: { detached: true },
@@ -488,7 +551,7 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
       snapshots: [fixtureSnapshot()],
     });
     const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
-    vi.spyOn(chatStore, "updateChat").mockImplementationOnce(() => {
+    vi.spyOn(chatStore, "mutateGitChangeScopes").mockImplementationOnce(() => {
       throw invalidRequest("simulated malformed persisted scope");
     });
     const events: ServerLogEvent[] = [];

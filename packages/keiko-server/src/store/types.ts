@@ -20,6 +20,7 @@ import type {
   UpdateChatPatch,
   NewChatMessage,
   UpdateChatMessagePatch,
+  ChatGitChangeScope,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   CodingWorkbenchMode,
@@ -114,6 +115,15 @@ export interface UiStore {
     opts?: CreateChatOptions,
   ) => Chat;
   readonly updateChat: (id: string, patch: UpdateChatPatch, options?: UpdateChatOptions) => Chat;
+  /**
+   * Atomic git-change scope mutation: the callback receives the CURRENT list, read inside the same
+   * transaction as the write. The only safe way to append or replace an entry across an await
+   * (#3384 review), because the column carries no etag for a compare-and-swap.
+   */
+  readonly mutateGitChangeScopes: (
+    id: string,
+    mutate: (current: readonly ChatGitChangeScope[]) => readonly ChatGitChangeScope[],
+  ) => Chat;
   readonly deleteChat: (id: string) => void;
 
   readonly listMessages: (chatId: string, limit?: number) => readonly ChatMessage[];

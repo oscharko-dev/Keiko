@@ -1033,6 +1033,42 @@ function validateTotalSourceCap(
   }
 }
 
+/**
+ * Applies a git-change scope mutation against the row as it is AT WRITE TIME, inside one
+ * transaction. #3384 review: both route call sites captured `chat.gitChangeScopes` before a
+ * multi-second await (a git subprocess, and for pull-request mode a provider round trip) and then
+ * wrote `[...captured, entry]` back. The column has no etag, so two concurrent connects for one
+ * chat both read the same array and the later write silently dropped the earlier scope, leaving
+ * its relationship edge behind with nothing pointing at it. The caller now supplies the intent and
+ * the store re-reads the current list, so a stale snapshot cannot be written back.
+ */
+export function mutateGitChangeScopes(
+  db: DatabaseSync,
+  id: string,
+  mutate: (current: readonly ChatGitChangeScope[]) => readonly ChatGitChangeScope[],
+  now: number,
+  options?: UpdateChatOptions,
+): Chat {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const current = findChatById(db, id);
+    if (current === undefined) throw notFound("Chat not found");
+    const next = mutate(current.gitChangeScopes ?? []);
+    const chat = updateChat(
+      db,
+      id,
+      { gitChangeScopes: next.length === 0 ? null : next },
+      now,
+      options,
+    );
+    db.exec("COMMIT");
+    return chat;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 export function updateChat(
   db: DatabaseSync,
   id: string,
