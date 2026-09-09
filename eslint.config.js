@@ -64,6 +64,11 @@ export default defineConfig(
       "dist/**",
       "**/dist/**",
       "coverage/**",
+      // Playwright output (.gitignore line "test-results/"): trace-viewer resource bundles under
+      // test-results/.playwright-artifacts-*/traces/resources/*.js are minified browser code with no
+      // source maps. Left in the lint set, one local e2e run followed by `npm run lint` reported
+      // thousands of no-undef / return-type / complexity findings that belong to no source file.
+      "test-results/**",
       "node_modules/**",
       "packages/keiko-ui/**",
       "ui/**",
