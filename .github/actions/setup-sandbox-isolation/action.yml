@@ -7,14 +7,44 @@ description: >
   before the suite runs, or every verification silently fails closed under `bwrap: setting up
   uid map: Permission denied` and the suite cannot pass. Extracted per KEIKO-1020 so a future
   change to the install line touches ONE file instead of the eight duplicated sites in ci.yml
-  and e2e-extended.yml.
+  and e2e-extended.yml. It also owns the job's apt preflight: every Linux Playwright install in
+  this repository runs after this action, so a broken third-party source in the runner image is
+  neutralised here once rather than in each consumer.
 runs:
   using: composite
   steps:
+    - name: Remove unused third-party apt sources
+      shell: bash
+      run: |
+        # The hosted runner image ships third-party apt sources this project never installs from.
+        # A broken one fails `apt-get update` for EVERY consumer in the job, not just the next
+        # line. On 2026-09-09 Google's Chrome repository served a `Hash Sum mismatch`: it took down
+        # this action's own install across all ten Linux jobs of run 34383195546, and then
+        # `playwright install --with-deps`, whose internal apt call this repository does not
+        # control. Removing the source we do not use fixes the whole class at the one layer that
+        # owns this job's apt configuration -- Keiko installs no Chrome from apt, Playwright
+        # downloads its own browser builds.
+        for source in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+          [ -f "${source}" ] || continue
+          if grep -q "dl\.google\.com" "${source}"; then
+            echo "removing unused third-party apt source: ${source}"
+            sudo rm -f "${source}"
+          fi
+        done
     - name: Install bubblewrap
       shell: bash
       run: |
-        sudo apt-get update
+        # `apt-get update` exits non-zero when ANY configured repository fails to refresh, so one
+        # unhealthy source decides this step even though bubblewrap comes from the Ubuntu archive.
+        # The step above removes the sources this project never uses; this loop covers what remains
+        # -- a genuinely transient Ubuntu mirror. Retry it, then let the install be the verdict: a
+        # bubblewrap that cannot be installed still fails closed, which is the outcome this action
+        # exists to guarantee.
+        for attempt in 1 2 3; do
+          if sudo apt-get update; then break; fi
+          echo "apt-get update attempt ${attempt} did not refresh every repository; retrying"
+          sleep "$((attempt * 5))"
+        done
         sudo apt-get install -y bubblewrap
         # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor, blocking Bubblewrap's
         # own uid-map setup. `|| true` keeps the step green on runner images that already carry a
