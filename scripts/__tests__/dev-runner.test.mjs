@@ -233,6 +233,46 @@ describe("proxyHttp request target validation", () => {
     }
   });
 
+  // The 502 above was unattributable because the upstream error was discarded outright: the browser
+  // saw a failed chunk fetch and the runner said nothing, so the cause had to be reconstructed from
+  // a Playwright trace. Pin that the failure now names itself.
+  it("answers an unreachable upstream with 502 and names the failing request", async () => {
+    const probe = createHttpServer(() => undefined);
+    await new Promise((resolve) => probe.listen(0, "127.0.0.1", resolve));
+    const address = probe.address();
+    if (address === null || typeof address === "string") throw new Error("Expected TCP address.");
+    const deadPort = address.port;
+    await new Promise((resolve, reject) =>
+      probe.close((error) => (error ? reject(error) : resolve())),
+    );
+
+    const written = [];
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk) => (written.push(String(chunk)), true));
+    try {
+      const request = new PassThrough();
+      Object.assign(request, { headers: {}, method: "GET", url: "/_next/static/chunks/probe.js" });
+      const response = new PassThrough();
+      response.writeHead = vi.fn();
+      const completed = new Promise((resolve) => response.on("end", resolve));
+      proxyHttp(request, response, deadPort);
+      request.end();
+      response.resume();
+      await completed;
+
+      expect(response.writeHead).toHaveBeenCalledWith(502, {
+        "content-type": "text/plain; charset=utf-8",
+      });
+      const diagnostic = written.join("");
+      expect(diagnostic).toContain("dev-runner: upstream GET /_next/static/chunks/probe.js");
+      expect(diagnostic).toContain(`:${String(deadPort)} failed`);
+      expect(diagnostic).toContain("ECONNREFUSED");
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
   it("forwards a valid encoded origin-form target byte-for-byte", async () => {
     let receivedTarget;
     const upstream = createHttpServer((request, response) => {
