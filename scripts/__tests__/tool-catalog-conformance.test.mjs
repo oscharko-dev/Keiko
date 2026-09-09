@@ -135,6 +135,28 @@ describe("initial compiler and finite migration conformance gate", () => {
     ).toEqual([]);
   });
 });
+// PR #3394 landed on `dev` by SQUASH, so its reviewed source head is not reachable from any
+// branch or tag and a clone that never fetched `refs/pull/3394/head` simply does not carry that
+// object -- every CI checkout included, `fetch-depth: 0` notwithstanding, because depth 0 clones
+// every ref, not every orphaned commit. `checkToolCatalogMigrationCloseout` resolves that head
+// against real Git and fails closed when it cannot, which is correct: the closeout is a deliberate
+// LOCAL qualification run and `arch:check` deliberately invokes the conformance gate without
+// `--closeout`. These two assertions are the only place the closeout runs where the object may be
+// absent, so they measure that precondition instead of silently inheriting it, and pin the exact
+// outcome for both clones. Everything else the closeout checks must still pass in either
+// environment, so any other defect still fails these tests.
+function closeoutFailuresThisCloneCanReach(root = ROOT) {
+  const { sourceHead } = JSON.parse(readFileSync(join(root, H1_PROVENANCE_PATH), "utf8"));
+  try {
+    git(root, ["cat-file", "-e", `${sourceHead}^{commit}`]);
+    return [];
+  } catch {
+    return [
+      `H1 handoff evidence unverifiable: sourceHead ${sourceHead} is not a resolvable Git commit`,
+    ];
+  }
+}
+
 describe("closeout enforcement", () => {
   it("requires the producer checkpoint even before the final dev merge exists", async () => {
     const errors = await checkToolCatalogMigrationCloseout(ROOT, {
@@ -157,7 +179,7 @@ describe("closeout enforcement", () => {
         {},
         { producerCheckpointFailures: async () => [] },
       ),
-    ).toEqual([]);
+    ).toEqual(closeoutFailuresThisCloneCanReach());
   });
   it.each([
     [
@@ -850,7 +872,7 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
         {},
         { producerCheckpointFailures: async () => [] },
       ),
-    ).toEqual([]);
+    ).toEqual(closeoutFailuresThisCloneCanReach());
   });
   // The stubbed `execute` above proves the recheck's own control flow. This proves the REAL,
   // unstubbed git-reachability check against this actual repository: `dev`'s own current tip is
