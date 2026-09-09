@@ -219,9 +219,12 @@ function architectureUdgReadLanguage(line) {
   const marker = "Reading SonarArchitecture UDG data from directory";
   const markerAt = line.indexOf(marker);
   if (markerAt < 0) return undefined;
+  // Scanner 8.1 quotes the directory it reads ("…/architecture/js"); the language is the last
+  // path segment either way.
   const segments = line
     .slice(markerAt + marker.length)
     .trim()
+    .replaceAll('"', "")
     .replaceAll("\\", "/")
     .split("/")
     .filter(Boolean);
