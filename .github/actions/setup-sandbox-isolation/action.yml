@@ -14,7 +14,19 @@ runs:
     - name: Install bubblewrap
       shell: bash
       run: |
-        sudo apt-get update
+        # `apt-get update` exits non-zero when ANY configured repository fails to refresh, and the
+        # hosted runner image ships third-party sources we do not use. On 2026-09-09 Google's
+        # Chrome repository served a `Hash Sum mismatch` and every Linux job of run 34383195546
+        # died here, before `apt-get install` was ever reached, on a change that touched no
+        # workflow. Bubblewrap comes from the Ubuntu archive, so an unrelated repository must not
+        # decide this step: retry the refresh for a genuinely transient mirror, then let the
+        # install be the verdict. A bubblewrap that cannot be installed still fails closed, which
+        # is the outcome this action exists to guarantee.
+        for attempt in 1 2 3; do
+          if sudo apt-get update; then break; fi
+          echo "apt-get update attempt ${attempt} did not refresh every repository; retrying"
+          sleep "$((attempt * 5))"
+        done
         sudo apt-get install -y bubblewrap
         # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor, blocking Bubblewrap's
         # own uid-map setup. `|| true` keeps the step green on runner images that already carry a
