@@ -1034,7 +1034,7 @@
     {
       "op": "<dynamic>",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:390",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:392",
       "package": "keiko-server"
     },
     {
@@ -2197,37 +2197,37 @@
     {
       "op": "git-change.chat.blocked",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:517",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:521",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.blocked",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:598",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:611",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.blocked",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:646",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:659",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.blocked",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:677",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:690",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.blocked",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:721",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:734",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.connected",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:522",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:526",
       "package": "keiko-server"
     },
     {
@@ -2239,13 +2239,13 @@
     {
       "op": "git-change.chat.refreshed",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:776",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:789",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.stale",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:726",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:739",
       "package": "keiko-server"
     },
     {
@@ -2501,31 +2501,31 @@
     {
       "op": "git.journey-observation",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:658",
+      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:645",
       "package": "keiko-server"
     },
     {
       "op": "git.journey-outcome.recorded",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:519",
+      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:506",
       "package": "keiko-server"
     },
     {
       "op": "git.journey-outcome.recorded",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:535",
+      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:522",
       "package": "keiko-server"
     },
     {
       "op": "git.journey-readiness.refreshed",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:290",
+      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:277",
       "package": "keiko-server"
     },
     {
       "op": "git.journey-readiness.refreshed",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:312",
+      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:299",
       "package": "keiko-server"
     },
     {
@@ -3155,7 +3155,7 @@
     {
       "op": "store.opened",
       "category": "setup",
-      "site": "packages/keiko-server/src/store/db.ts:951",
+      "site": "packages/keiko-server/src/store/db.ts:957",
       "package": "keiko-server"
     },
     {

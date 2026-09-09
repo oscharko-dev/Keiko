@@ -31,11 +31,11 @@ import {
 import { isEditorAgentVerificationResult } from "@oscharko-dev/keiko-contracts/runtime/editor-agent-verification";
 import { EDITOR_AGENT_TOOL_DEFINITIONS } from "@oscharko-dev/keiko-tools";
 import type { EditorAgentToolOutput } from "@oscharko-dev/keiko-tools";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import {
   createKeikoToolCatalog,
   createToolDescriptor,
   createToolRef,
-  NATIVE_TOOL_CATALOG_RUNTIME,
   type CatalogRegistrationSet,
   type CatalogSetEntry,
 } from "@oscharko-dev/keiko-tool-catalog";
@@ -189,10 +189,15 @@ export function editorAgentRegistrationSet(): CatalogRegistrationSet {
   return {
     profile: { id: "editor", version: 1 },
     adapterDialect: { id: "editor-json-schema", version: 1 },
-    // The shared constant, never a hand-copied literal: `assertCatalogDialect` compares this
-    // against `NATIVE_TOOL_CATALOG_RUNTIME`, so a copy would reject every editor registration on
-    // the next `KEIKO_PRODUCT_VERSION` bump (b3-25).
-    adapterRuntime: NATIVE_TOOL_CATALOG_RUNTIME,
+    // Derived from the one product version, never a hand-copied version literal:
+    // `assertCatalogDialect` compares this against `NATIVE_TOOL_CATALOG_RUNTIME`, which is
+    // `{ id: "keiko", version: KEIKO_PRODUCT_VERSION }`, so a copied version string would reject
+    // every editor registration on the next bump (b3-25). The constant itself is not re-exported
+    // from the tool-catalog barrel on purpose: that package's `src` tree is the subject of
+    // container-measured performance evidence (docs/release/3415-tool-catalog-perf-evidence.json)
+    // that cannot be regenerated outside its pinned linux/arm64 image, so adding an export there
+    // would invalidate committed evidence for a re-export.
+    adapterRuntime: { id: "keiko", version: KEIKO_PRODUCT_VERSION },
     nativeExtensions: [],
     compatibility: [],
     entries,
