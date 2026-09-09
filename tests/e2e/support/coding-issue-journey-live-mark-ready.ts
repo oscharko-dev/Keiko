@@ -9,6 +9,8 @@
 // #3390 AC5) -- this module never calls a merge or issue-close route.
 
 import { expect, type Locator, type Page } from "@playwright/test";
+import type { GitDeliveryExecutionErrorCode } from "@oscharko-dev/keiko-contracts";
+import { isGitDeliveryExecutionErrorCode } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import {
   clickWhenActionable,
   journeyRefresher,
@@ -19,19 +21,18 @@ const JOURNEY_REGION_NAME = "Issue handoff";
 const REFRESH_BUTTON_NAME = "Refresh observed status";
 const PROPOSE_BUTTON_NAME = "Review ready-for-review request";
 const MARK_READY_EXECUTE_ENDPOINT = "/api/git-delivery/pr/mark-ready/execute";
-/** The route's own failure codes that the governed PR card answers with "Refresh the observed
- * status before trying again": a provider that rejected or could not serve the mutation. A real
- * operator follows that instruction; so does this lane, a bounded number of times. */
-const RETRYABLE_MARK_READY_CODES: ReadonlySet<string> = new Set([
-  "provider-rejected",
-  "provider-unavailable",
-]);
+/** Execution error codes (the contract's closed vocabulary) that mean the provider could not be
+ * reached or did not answer in time: `GIT_PR_REJECTION_ERROR_CODE` maps rate-limited and
+ * provider-unavailable rejections to network-failure, and a timed-out dispatch to timeout. */
+const TRANSIENT_MARK_READY_CODES: ReadonlySet<GitDeliveryExecutionErrorCode> =
+  new Set<GitDeliveryExecutionErrorCode>(["network-failure", "timeout"]);
 const MARK_READY_ATTEMPTS = 3;
 const MARK_READY_RETRY_PAUSE_MS = 20_000;
 
-interface MarkReadyVerdict {
+export interface MarkReadyVerdict {
   readonly status: string;
-  readonly executionErrorCode: string | undefined;
+  readonly executionErrorCode: GitDeliveryExecutionErrorCode | undefined;
+  /** The provider-rejection reason the route reports next to provider-rejected; wire value. */
   readonly rejectionReason: string | undefined;
 }
 
@@ -97,17 +98,27 @@ async function proposeReadyOnce(page: Page, propose: Locator): Promise<MarkReady
   };
   return {
     status: typeof body.status === "string" ? body.status : "unreadable",
-    executionErrorCode:
-      typeof body.executionErrorCode === "string" ? body.executionErrorCode : undefined,
+    executionErrorCode: isGitDeliveryExecutionErrorCode(body.executionErrorCode)
+      ? body.executionErrorCode
+      : undefined,
     rejectionReason: typeof body.rejectionReason === "string" ? body.rejectionReason : undefined,
   };
 }
 
-function isRetryableMarkReadyVerdict(verdict: MarkReadyVerdict): boolean {
+/**
+ * A failed verdict is worth the card's "refresh, then request again" when nothing in it says the
+ * next attempt must fail the same way: the provider was unreachable or slow (network-failure,
+ * timeout), or it rejected the mutation with output the classifier could not attribute to any
+ * permanent cause -- `provider-rejected` with reason `unknown`, which is exactly what real flow 3
+ * of #3390 (run-53) reported and what succeeded on the next attempt. A rejection the classifier
+ * DID attribute (validation-error, permission-denied, not-found) and every precondition or internal
+ * failure are permanent for this head and end the flow.
+ */
+export function isRetryableMarkReadyVerdict(verdict: MarkReadyVerdict): boolean {
+  if (verdict.status !== "failed" || verdict.executionErrorCode === undefined) return false;
+  if (TRANSIENT_MARK_READY_CODES.has(verdict.executionErrorCode)) return true;
   return (
-    verdict.status === "failed" &&
-    verdict.executionErrorCode !== undefined &&
-    RETRYABLE_MARK_READY_CODES.has(verdict.executionErrorCode)
+    verdict.executionErrorCode === "provider-rejected" && verdict.rejectionReason === "unknown"
   );
 }
 
