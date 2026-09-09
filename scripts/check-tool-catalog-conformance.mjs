@@ -406,21 +406,36 @@ function validManagedVerification(value) {
   );
 }
 
-function validRequiredChecks(value, sourceHead) {
-  const evidenceRef = `github:${H1_INTEGRATION_REPOSITORY}#pull/${String(H1_INTEGRATION_PR)}/checks@${sourceHead}`;
+function validRequiredCheckCounts(value) {
   return (
-    hasExactFields(value, REQUIRED_CHECK_FIELDS) &&
-    value.sourceHead === sourceHead &&
     isPositiveInteger(value.configured) &&
     Number.isSafeInteger(value.satisfied) &&
     value.satisfied === value.configured &&
     Number.isSafeInteger(value.successfulEvidenceRuns) &&
     value.successfulEvidenceRuns >= value.satisfied &&
     value.failed === 0 &&
-    value.pending === 0 &&
+    value.pending === 0
+  );
+}
+
+function validRequiredChecks(value, sourceHead) {
+  const evidenceRef = `github:${H1_INTEGRATION_REPOSITORY}#pull/${String(H1_INTEGRATION_PR)}/checks@${sourceHead}`;
+  return (
+    hasExactFields(value, REQUIRED_CHECK_FIELDS) &&
+    value.sourceHead === sourceHead &&
+    validRequiredCheckCounts(value) &&
     HEX_64.test(value.requirementsDigest) &&
     HEX_64.test(value.evidenceDigest) &&
     value.evidenceRef === evidenceRef
+  );
+}
+
+function validVerificationMetadata(receipt) {
+  return (
+    receipt.verificationKind === "postmerge-source-head-and-required-ci" &&
+    receipt.baseRef === "dev" &&
+    HEX_40.test(receipt.baseHead) &&
+    isIsoInstant(receipt.mergedAt)
   );
 }
 
@@ -430,12 +445,7 @@ function verificationReceiptFailures(receipt, record) {
   const failures = [];
   if (!validLandingReceiptIdentity(receipt, record, "verification"))
     failures.push("H1 landing verification receipt identity mismatch");
-  if (
-    receipt.verificationKind !== "postmerge-source-head-and-required-ci" ||
-    receipt.baseRef !== "dev" ||
-    !HEX_40.test(receipt.baseHead) ||
-    !isIsoInstant(receipt.mergedAt)
-  )
+  if (!validVerificationMetadata(receipt))
     failures.push("H1 landing verification receipt integration metadata mismatch");
   if (!HEX_40.test(receipt.sourceTree) || receipt.sourceTree !== receipt.currentTree)
     failures.push("H1 landing verification receipt Git tree identity mismatch");
@@ -462,6 +472,13 @@ function validReviewThreads(value, sourceHead) {
   const evidenceRef = `github:${H1_INTEGRATION_REPOSITORY}#pull/${String(H1_INTEGRATION_PR)}/review-threads@${sourceHead}`;
   return (
     hasExactFields(value, REVIEW_THREAD_FIELDS) &&
+    validReviewThreadCounts(value) &&
+    value.evidenceRef === evidenceRef
+  );
+}
+
+function validReviewThreadCounts(value) {
+  return (
     Number.isSafeInteger(value.total) &&
     value.total > 0 &&
     value.resolved === value.total &&
@@ -470,8 +487,7 @@ function validReviewThreads(value, sourceHead) {
     value.current > 0 &&
     value.current <= value.total &&
     value.currentResolved === value.current &&
-    value.currentUnresolved === 0 &&
-    value.evidenceRef === evidenceRef
+    value.currentUnresolved === 0
   );
 }
 
