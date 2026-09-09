@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { access, readFile, rm } from "node:fs/promises";
-import { createServer, request } from "node:http";
+import { Agent, createServer, request } from "node:http";
 import { connect } from "node:net";
 import { createRequire } from "node:module";
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -825,6 +825,30 @@ function forwardProxyResponse({ upstreamRes, res, lifecycle, policy, targetPort 
   upstreamRes.pipe(res);
 }
 
+// Node's global agent pools keep-alive sockets, and a pooled socket that the upstream closes at the
+// instant it is reused fails the request with ECONNRESET before a byte reaches the server. The
+// handler below can only answer that with 502, which is how a `/_next/static/chunks/*.js` fetch came
+// back 502 twice on CI while a sibling chunk requested in the same millisecond returned 200. This
+// proxy fronts a loopback development server and has no use for pooled connections, so give it an
+// agent that never reuses one: the race disappears by construction instead of being retried around.
+const proxyAgent = new Agent({ keepAlive: false });
+
+// Discarding this error is how a proxied 502 became unattributable: the browser saw a failed chunk
+// fetch and the runner said nothing, so the cause had to be reconstructed from a Playwright trace.
+// Name the request and the reason instead. Repository tooling keeps deterministic stderr output
+// rather than the product activity log (AGENTS.md §8).
+function answerUpstreamFailure({ error, req, res, path, targetPort, lifecycle }) {
+  if (!lifecycle.settle()) return;
+  if (!res.headersSent) {
+    res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+  }
+  process.stderr.write(
+    `dev-runner: upstream ${String(req.method)} ${path} to :${String(targetPort)} failed ` +
+      `(${String(error.code ?? error.message)})\n`,
+  );
+  res.end("Development upstream is not available.");
+}
+
 export function proxyHttp(
   req,
   res,
@@ -849,6 +873,7 @@ export function proxyHttp(
   });
   const upstream = request(
     {
+      agent: proxyAgent,
       hostname: host,
       port: targetPort,
       path,
@@ -865,13 +890,9 @@ export function proxyHttp(
       }),
   );
   lifecycle.bindRequest(upstream);
-  upstream.on("error", () => {
-    if (!lifecycle.settle()) return;
-    if (!res.headersSent) {
-      res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
-    }
-    res.end("Development upstream is not available.");
-  });
+  upstream.on("error", (error) =>
+    answerUpstreamFailure({ error, req, res, path, targetPort, lifecycle }),
+  );
   req.pipe(upstream);
 }
 

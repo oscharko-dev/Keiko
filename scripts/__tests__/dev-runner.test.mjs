@@ -195,6 +195,44 @@ describe("proxyHttp request target validation", () => {
     expect(response.end).toHaveBeenCalledWith("Invalid development proxy request path.");
   });
 
+  // A keep-alive socket that the upstream closes at the instant the proxy dispatches on it fails
+  // the request with ECONNRESET before a single byte reaches the server, and `proxyHttp` turns any
+  // upstream error into a 502. That is how a `/_next/static/chunks/*.js` fetch came back 502 twice
+  // on CI (runs 34407832798 and its `ui` re-run) while a sibling chunk requested in the same
+  // millisecond returned 200 — proving the upstream was up and only the connection had died. This
+  // proxy fronts a loopback dev server, so it has no use for pooled connections: pin that two
+  // sequential proxied requests never share one upstream socket, which removes the race by
+  // construction rather than retrying around it.
+  it("never reuses an upstream socket between proxied requests", async () => {
+    const sockets = new Set();
+    const upstream = createHttpServer((request, response) => {
+      sockets.add(request.socket);
+      response.end("proxied");
+    });
+    try {
+      await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+      const address = upstream.address();
+      if (address === null || typeof address === "string") throw new Error("Expected TCP address.");
+      for (const path of ["/first", "/second"]) {
+        const request = new PassThrough();
+        Object.assign(request, { headers: {}, method: "GET", url: path });
+        const response = new PassThrough();
+        response.writeHead = vi.fn();
+        const completed = new Promise((resolve) => response.on("end", resolve));
+        proxyHttp(request, response, address.port);
+        request.end();
+        response.resume();
+        await completed;
+        expect(response.writeHead).toHaveBeenCalledWith(200, expect.any(Object));
+      }
+      expect(sockets.size).toBe(2);
+    } finally {
+      await new Promise((resolve, reject) =>
+        upstream.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
   it("forwards a valid encoded origin-form target byte-for-byte", async () => {
     let receivedTarget;
     const upstream = createHttpServer((request, response) => {
