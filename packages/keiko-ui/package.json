@@ -40,11 +40,18 @@
     "with a matching implementation still raise the declared floor. Monaco's reachable source uses",
     "Intl.Segmenter, which sets Firefox 125; PDF.js's non-polyfilled AbortSignal.any sets Chrome/Edge",
     "116 and Safari 17.4. WebKit is a required smoke proxy for Safari, not a claim that Playwright's",
-    "patched Linux WebKit build is byte-identical to Safari 17.4 on Apple platforms."
+    "patched Linux WebKit build is byte-identical to Safari 17.4 on Apple platforms.",
+    "PDF.js 6.3.289 removed the bundled core-js provider for Promise.withResolvers while keeping the",
+    "call sites, so that API moved from polyfilled to required-of-the-host and check:browser-baseline",
+    "computed the new floor itself: chrome/edge >= 119 (Firefox 121 and Safari 17.4 were already",
+    "below the declared floors). Promise.try and URL.parse still execute bundled providers and are",
+    "still proven by deleting them in the required PDF.js runtime smoke; withResolvers is no longer",
+    "deleted there, because asserting that a dependency restores a polyfill it no longer ships would",
+    "pin a fiction."
   ],
   "browserslist": [
-    "chrome >= 116",
-    "edge >= 116",
+    "chrome >= 119",
+    "edge >= 119",
     "firefox >= 125",
     "safari >= 17.4"
   ],
