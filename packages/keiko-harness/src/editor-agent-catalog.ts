@@ -24,7 +24,10 @@ import {
   type ToolCallResult,
   type ToolDefinition,
 } from "@oscharko-dev/keiko-contracts";
-import { isEditorAgentActionResult } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
+  isEditorAgentActionResult,
+  isEditorAgentSessionSnapshot,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { isEditorAgentVerificationResult } from "@oscharko-dev/keiko-contracts/runtime/editor-agent-verification";
 import { EDITOR_AGENT_TOOL_DEFINITIONS } from "@oscharko-dev/keiko-tools";
 import type { EditorAgentToolOutput } from "@oscharko-dev/keiko-tools";
@@ -32,6 +35,7 @@ import {
   createKeikoToolCatalog,
   createToolDescriptor,
   createToolRef,
+  NATIVE_TOOL_CATALOG_RUNTIME,
   type CatalogRegistrationSet,
   type CatalogSetEntry,
 } from "@oscharko-dev/keiko-tool-catalog";
@@ -185,7 +189,10 @@ export function editorAgentRegistrationSet(): CatalogRegistrationSet {
   return {
     profile: { id: "editor", version: 1 },
     adapterDialect: { id: "editor-json-schema", version: 1 },
-    adapterRuntime: { id: "keiko", version: "0.3.17" },
+    // The shared constant, never a hand-copied literal: `assertCatalogDialect` compares this
+    // against `NATIVE_TOOL_CATALOG_RUNTIME`, so a copy would reject every editor registration on
+    // the next `KEIKO_PRODUCT_VERSION` bump (b3-25).
+    adapterRuntime: NATIVE_TOOL_CATALOG_RUNTIME,
     nativeExtensions: [],
     compatibility: [],
     entries,
@@ -282,6 +289,31 @@ function failedEditorDisposition(
     : RESULT_CONTRACT_FAILED;
 }
 
+// The sessions and snapshot payloads are validated exactly like the action-result and
+// verification ones: a malformed `{ok:true, kind:"snapshot", snapshot:null}` from a transport hop
+// or a future client must be a result-contract failure, never a clean completion.
+// `EditorAgentSnapshotResponse` allows a null snapshot (no active session), so null is accepted and
+// any other non-snapshot value is not.
+function readDisposition(value: Record<string, unknown>): LegacyPortCatalogResultDisposition {
+  if (value.kind === "sessions")
+    return Array.isArray(value.sessions) && value.sessions.every(isEditorAgentSessionSnapshot)
+      ? { status: "completed", reason: "none" }
+      : RESULT_CONTRACT_FAILED;
+  if (value.kind === "snapshot")
+    return value.snapshot === null || isEditorAgentSessionSnapshot(value.snapshot)
+      ? { status: "completed", reason: "none" }
+      : RESULT_CONTRACT_FAILED;
+  return RESULT_CONTRACT_FAILED;
+}
+
+function verificationDisposition(result: unknown): LegacyPortCatalogResultDisposition {
+  if (!isEditorAgentVerificationResult(result)) return RESULT_CONTRACT_FAILED;
+  if (result.outcome === "completed") return { status: "completed", reason: "none" };
+  return result.disposition === "review-required"
+    ? { status: "denied", reason: "approval-required" }
+    : { status: "denied", reason: "hard-denial" };
+}
+
 function successfulEditorDisposition(
   value: Record<string, unknown>,
 ): LegacyPortCatalogResultDisposition {
@@ -289,16 +321,8 @@ function successfulEditorDisposition(
     return isEditorAgentActionResult(value.result)
       ? actionDisposition(value.result)
       : RESULT_CONTRACT_FAILED;
-  if (value.kind === "verification") {
-    if (!isEditorAgentVerificationResult(value.result)) return RESULT_CONTRACT_FAILED;
-    if (value.result.outcome === "completed") return { status: "completed", reason: "none" };
-    return value.result.disposition === "review-required"
-      ? { status: "denied", reason: "approval-required" }
-      : { status: "denied", reason: "hard-denial" };
-  }
-  return value.kind === "sessions" || value.kind === "snapshot"
-    ? { status: "completed", reason: "none" }
-    : RESULT_CONTRACT_FAILED;
+  if (value.kind === "verification") return verificationDisposition(value.result);
+  return readDisposition(value);
 }
 
 function parsedEditorDisposition(value: unknown): LegacyPortCatalogResultDisposition {

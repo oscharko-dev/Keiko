@@ -100,6 +100,12 @@ export type LegacyPortCatalogLifecycleObservation =
       readonly resultCount: number;
       readonly durationMs: number;
       readonly truncated: boolean;
+      /**
+       * Constructor name of the value a budget port or bound handler threw, when this settlement
+       * was caused by one. Body-free (ADR-0173 D4): the defect class travels, the message, stack
+       * and arguments do not. Absent for every settlement that was not caused by a throw.
+       */
+      readonly errorName?: string | undefined;
     };
 
 export type LegacyPortCatalogLifecycleObserver = (
@@ -268,7 +274,44 @@ function resolveDispatchTarget(
 // shape, and `"failed" in reserved` narrows just as precisely.
 type ReserveOutcome =
   | { readonly reservation: ToolInvocationBudgetReservation }
-  | { readonly failed: ToolInvocationBudgetReservation | undefined };
+  | {
+      readonly failed: ToolInvocationBudgetReservation | undefined;
+      readonly disposition: FailureDisposition;
+    };
+
+/**
+ * The two pre-settlement failure shapes this adapter can produce, kept apart because the closed
+ * vocabulary keeps them apart (`TOOL_RESULT_REASONS`): "the budget said no" is a `denied` outcome
+ * an operator can act on, "the budget port itself broke" and "the handler threw" are `failed`.
+ * Collapsing all three into `failed`/`handler-failed` lost that distinction.
+ */
+type FailureDisposition =
+  | {
+      readonly status: "denied";
+      readonly reason: "budget-exhausted";
+      readonly errorName?: string | undefined;
+    }
+  | {
+      readonly status: "failed";
+      readonly reason: "budget-port-failed" | "handler-failed";
+      readonly errorName?: string | undefined;
+    };
+
+const BUDGET_DENIED: FailureDisposition = Object.freeze({
+  status: "denied",
+  reason: "budget-exhausted",
+});
+const BUDGET_PORT_FAILED: FailureDisposition = Object.freeze({
+  status: "failed",
+  reason: "budget-port-failed",
+});
+
+// The thrown value's constructor name is the one piece of a caught error that is safe to carry
+// into body-free evidence (ADR-0173 D4): it names the defect class without the message, the stack
+// or any argument value. `describeError`-style bodies stay out of this package's observations.
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.constructor.name : typeof error;
+}
 
 /**
  * Reserves and checks the budget without ever leaving a reservation dangling: a denied reserve()
@@ -280,11 +323,42 @@ function reserveOrFail(
   descriptor: ToolDescriptor,
   invocationId: string,
 ): ReserveOutcome {
-  const reservation = context.budgetPort.reserve(descriptor, context, invocationId);
-  if (reservation === undefined) return { failed: undefined };
-  if (context.budgetPort.check(reservation, context)) return { reservation };
-  context.budgetPort.release(reservation);
-  return { failed: reservation };
+  let reservation;
+  try {
+    reservation = context.budgetPort.reserve(descriptor, context, invocationId);
+  } catch (error) {
+    return {
+      failed: undefined,
+      disposition: { ...BUDGET_PORT_FAILED, errorName: errorName(error) },
+    };
+  }
+  if (reservation === undefined) return { failed: undefined, disposition: BUDGET_DENIED };
+  try {
+    if (context.budgetPort.check(reservation, context)) return { reservation };
+  } catch (error) {
+    releaseQuietly(context, reservation);
+    return {
+      failed: reservation,
+      disposition: { ...BUDGET_PORT_FAILED, errorName: errorName(error) },
+    };
+  }
+  releaseQuietly(context, reservation);
+  return { failed: reservation, disposition: BUDGET_DENIED };
+}
+
+// A release that itself throws must not replace the outcome being reported: the caller already
+// decided why this invocation failed, and losing that to a second fault would be the same defect
+// this repair is about. The release failure is still named, never swallowed silently.
+function releaseQuietly(
+  context: HarnessCatalogContext,
+  reservation: ToolInvocationBudgetReservation,
+): string | undefined {
+  try {
+    context.budgetPort.release(reservation);
+    return undefined;
+  } catch (error) {
+    return errorName(error);
+  }
 }
 
 /**
@@ -299,7 +373,10 @@ async function executeOrFail(
   alias: string,
   invocation: BoundToolInvocation,
   reservation: ToolInvocationBudgetReservation,
-): Promise<{ readonly result: ToolCallResult } | { readonly failed: true }> {
+): Promise<
+  | { readonly result: ToolCallResult }
+  | { readonly failed: true; readonly disposition: FailureDisposition }
+> {
   try {
     const result = await port.execute({
       toolCallId,
@@ -308,17 +385,53 @@ async function executeOrFail(
       signal: context.signal,
     });
     return { result };
-  } catch {
-    context.budgetPort.release(reservation);
-    return { failed: true };
+  } catch (error) {
+    releaseQuietly(context, reservation);
+    return {
+      failed: true,
+      disposition: { status: "failed", reason: "handler-failed", errorName: errorName(error) },
+    };
   }
 }
 
-/** The shaped ADR-0175 D6 outcome for any pre-settlement throw/rejection; body-free by design. */
-function handlerFailedOutcome(
+// The envelope is a discriminated union on `status`, so the two dispositions build it in their own
+// branches instead of spreading a widened pair into it.
+function preSettlementEnvelope(
+  invocation: BoundToolInvocation,
+  invocationId: string,
+  disposition: FailureDisposition,
+): ToolResultEnvelope {
+  const identity = {
+    schemaVersion: 1,
+    invocationId,
+    toolRef: invocation.toolRef,
+    projectionDigest: invocation.projectionDigest,
+    effectStarted: false,
+    metrics: {
+      inputBytes: catalogJsonBytes(invocation.arguments),
+      outputBytes: 0,
+      resultCount: 0,
+      durationMs: 0,
+    },
+    page: null,
+    data: null,
+  } as const;
+  return disposition.status === "denied"
+    ? { ...identity, status: "denied", reason: disposition.reason }
+    : { ...identity, status: "failed", reason: disposition.reason };
+}
+
+/**
+ * The shaped ADR-0175 D6 outcome for a pre-settlement failure; body-free by design. The status and
+ * reason come from the caller's `FailureDisposition` rather than being hard-coded, so a budget
+ * denial reports `denied`/`budget-exhausted`, a broken budget port `failed`/`budget-port-failed`
+ * and a throwing handler `failed`/`handler-failed`.
+ */
+function preSettlementOutcome(
   invocation: BoundToolInvocation,
   invocationId: string,
   reservation: ToolInvocationBudgetReservation | undefined,
+  disposition: FailureDisposition,
 ): Extract<CatalogToolDispatchOutcome, { readonly kind: "settled" }> {
   return {
     kind: "settled",
@@ -328,25 +441,9 @@ function handlerFailedOutcome(
       settlementId: invocationId,
       budgetDisposition: reservation === undefined ? "not-reserved" : "released",
       effectStarted: false,
-      status: "failed",
+      status: disposition.status,
     },
-    result: {
-      schemaVersion: 1,
-      invocationId,
-      toolRef: invocation.toolRef,
-      projectionDigest: invocation.projectionDigest,
-      status: "failed",
-      reason: "handler-failed",
-      effectStarted: false,
-      metrics: {
-        inputBytes: catalogJsonBytes(invocation.arguments),
-        outputBytes: 0,
-        resultCount: 0,
-        durationMs: 0,
-      },
-      page: null,
-      data: null,
-    },
+    result: preSettlementEnvelope(invocation, invocationId, disposition),
   };
 }
 
@@ -457,8 +554,13 @@ async function dispatch(input: DispatchInput): Promise<CatalogToolDispatchOutcom
   const { descriptor, alias } = resolveDispatchTarget(catalog, projection, invocation.toolRef);
   const reserved = reserveOrFail(context, descriptor, invocationId);
   if ("failed" in reserved) {
-    const outcome = handlerFailedOutcome(invocation, invocationId, reserved.failed);
-    observeSettlement(observe, binding, outcome);
+    const outcome = preSettlementOutcome(
+      invocation,
+      invocationId,
+      reserved.failed,
+      reserved.disposition,
+    );
+    observeSettlement(observe, binding, outcome, reserved.disposition.errorName);
     return outcome;
   }
   return dispatchReserved({
@@ -509,8 +611,13 @@ async function dispatchReserved(input: ReservedDispatchInput): Promise<CatalogTo
     input.reservation,
   );
   if ("failed" in executed) {
-    const outcome = handlerFailedOutcome(invocation, invocationId, input.reservation);
-    observeSettlement(observe, binding, outcome);
+    const outcome = preSettlementOutcome(
+      invocation,
+      invocationId,
+      input.reservation,
+      executed.disposition,
+    );
+    observeSettlement(observe, binding, outcome, executed.disposition.errorName);
     return outcome;
   }
   context.budgetPort.commit(input.reservation);
@@ -537,10 +644,12 @@ function observeSettlement(
   observe: LegacyPortCatalogLifecycleObserver | undefined,
   binding: LegacyPortCatalogBindingEvidence,
   outcome: Extract<CatalogToolDispatchOutcome, { readonly kind: "settled" }>,
+  failureName?: string,
 ): void {
   const { receipt, result } = outcome;
   observe?.({
     phase: "invocation-settled",
+    ...(failureName === undefined ? {} : { errorName: failureName }),
     binding,
     invocationId: receipt.invocationId,
     toolRef: requireToolRef(result.toolRef),

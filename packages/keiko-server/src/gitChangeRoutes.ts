@@ -23,7 +23,6 @@
 // `projectPath` (set at project-creation time), matched by the exact same membership check the
 // snapshot service itself performs internally, never a fresh browser-authored root.
 
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import type {
   Chat,
   ChatGitChangeScope,
@@ -44,6 +43,7 @@ import { processServerLogSink } from "./process-log-sink.js";
 import { parsePorcelainV2Branch } from "./gitPorcelainStatus.js";
 import { codingWorkbenchRemoteDigest } from "./coding-context/githubIssueResolution.js";
 import {
+  contentFreeWorkspaceFor,
   githubRemoteOwnerAndRepoFor,
   isGitHubIssueReaderAuthorized,
 } from "./coding-context/githubIssueReaderAuthorization.js";
@@ -166,42 +166,44 @@ function parseRefreshRequest(value: unknown): RefreshRequest | undefined {
   return { chatId, relationshipId };
 }
 
-function contentFreeWorkspace(root: string): WorkspaceInfo {
-  return {
-    root,
-    selectedRoot: root,
-    name: undefined,
-    version: undefined,
-    testFramework: "unknown",
-    sourceDirs: [],
-    testDirs: [],
-    languages: [],
-    ignoreLines: [],
-  };
-}
+const HEAD_STATE_BLOCKED_REASON = Object.freeze({
+  unborn: "unborn-head",
+  detached: "detached-head",
+  unavailable: "repository-unavailable",
+}) satisfies Record<"unborn" | "detached" | "unavailable", GitChangeBlockedReason>;
 
 // ─── Head-state precondition (detached / unborn) ───────────────────────────────────────────────
 // The issue's Baseline Delta blocks a detached or unborn HEAD before capture ever runs, rather
 // than surfacing it as a generic snapshot failure: neither state names a stable branch a later
 // refresh or PR match could re-resolve.
+// `git rev-parse -q --verify HEAD` exits 1 for "no such ref", which IS the unborn case, and any
+// other non-zero code for an operational failure: a sandbox preflight refusal, a lock contention
+// error, a permissions problem, a crashed binary. `expectedExitCodes` is advisory for a downstream
+// observer and changes nothing about the raw code (keiko-git/src/types.ts), so collapsing "not 0"
+// into "unborn" told the operator "this repository has no commits yet" for every one of those.
+// Only exit 1 is unborn; everything else is `unavailable`, which the caller blocks as
+// `repository-unavailable`.
 async function detectHeadState(
   runner: GitProcessRunner,
   repositoryRoot: string,
   timeoutMs: number,
-): Promise<"attached" | "detached" | "unborn"> {
+): Promise<"attached" | "detached" | "unborn" | "unavailable"> {
   const verify = await runner(["rev-parse", "-q", "--verify", "HEAD"], {
     cwd: repositoryRoot,
     maxBytes: 4096,
     timeoutMs,
     expectedExitCodes: [1],
   });
-  if (verify.exitCode !== 0) return "unborn";
+  if (verify.exitCode === 1) return "unborn";
+  if (verify.exitCode !== 0) return "unavailable";
   const status = await runner(["status", "--porcelain=v2", "--branch", "-z"], {
     cwd: repositoryRoot,
     maxBytes: 65536,
     timeoutMs,
   });
-  if (status.exitCode !== 0) return "unborn";
+  // A failing `status` probe is likewise an operational fault, not evidence of an unborn HEAD:
+  // this line is only reached once `rev-parse` already resolved HEAD successfully.
+  if (status.exitCode !== 0) return "unavailable";
   return parsePorcelainV2Branch(status.stdout).detached ? "detached" : "attached";
 }
 
@@ -228,7 +230,7 @@ async function resolvePullRequestByHead(
   });
   if (ownerAndRepo === undefined) return "remote-unresolved";
   const adapter = createNodeGitPullRequestAdapter({
-    workspace: contentFreeWorkspace(repositoryRoot),
+    workspace: contentFreeWorkspaceFor(repositoryRoot),
     processEnv: deps.env,
   });
   const result = await adapter.findPullRequestsByHead({ ownerAndRepo, headBranchName: headRef });
@@ -258,7 +260,7 @@ async function captureComparison(
   const service = deps.gitChangeSnapshotService;
   if (service === undefined) return "repository-unavailable";
   const capture = await service.capture({
-    workspace: contentFreeWorkspace(repositoryRoot),
+    workspace: contentFreeWorkspaceFor(repositoryRoot),
     baseRef,
     headRef,
     accessScope: {},
@@ -445,9 +447,7 @@ async function resolveConnectSnapshot(
   const repository = await resolveChatRepository(projectPath, runner, timeoutMs);
   if (repository === undefined) throw new GitChangeBlocked("chat-project-unavailable");
   const headState = await detectHeadState(runner, repository.repositoryRoot, timeoutMs);
-  if (headState !== "attached") {
-    throw new GitChangeBlocked(headState === "unborn" ? "unborn-head" : "detached-head");
-  }
+  if (headState !== "attached") throw new GitChangeBlocked(HEAD_STATE_BLOCKED_REASON[headState]);
   const comparison = await resolveConnectComparison(
     deps,
     repository.repositoryRoot,

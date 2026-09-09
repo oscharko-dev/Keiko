@@ -10,7 +10,7 @@ export {
   createCatalogManifest,
   gatewayToolDefinitions,
 } from "./projection.js";
-export { CATALOG_DIALECTS } from "./dialect.js";
+export { CATALOG_DIALECTS, NATIVE_TOOL_CATALOG_RUNTIME } from "./dialect.js";
 export { validateToolResultEnvelope } from "./result.js";
 export type { ToolResultValidationBinding } from "./result.js";
 export { computeHandlerSetDigest } from "./handler-set.js";

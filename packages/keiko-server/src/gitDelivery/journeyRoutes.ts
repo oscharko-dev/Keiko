@@ -38,6 +38,7 @@ import type {
   resolveJourneyDescriptionCheckoutRoots as ResolveJourneyDescriptionCheckoutRootsFn,
 } from "../coding-runtime/productionDraftDeliveryDependencies.js";
 import { hasOnlyAllowedKeys, isPlainObject, readParsedGitDeliveryBody } from "./requestGuards.js";
+import { contentFreeWorkspaceFor } from "../coding-context/githubIssueReaderAuthorization.js";
 import {
   JourneyObservationController,
   type JourneyObservationContext,
@@ -138,20 +139,6 @@ function readDescriptionStatus(
   };
   const read = store.readStatus(context);
   return read.ok && read.status !== undefined ? read.status : null;
-}
-
-function contentFreeReadWorkspace(root: string): WorkspaceInfo {
-  return {
-    root,
-    selectedRoot: root,
-    name: undefined,
-    version: undefined,
-    testFramework: "unknown",
-    sourceDirs: [],
-    testDirs: [],
-    languages: [],
-    ignoreLines: [],
-  };
 }
 
 // ─── Options (test-only override seam, mirrors GitDeliveryPrRouteOptions) ─────────────────────
@@ -464,7 +451,7 @@ function descriptionFor(
     // Read-only and safe to try in order — a wrong candidate can only ever come back "not found",
     // never a fabricated or foreign status (see `resolveJourneyDescriptionCheckoutRoots`).
     for (const root of resolveCheckoutRoots(deps, repositoryId)) {
-      const workspace = contentFreeReadWorkspace(root);
+      const workspace = contentFreeWorkspaceFor(root);
       const status = readDescriptionStatus(
         deps,
         workspace,

@@ -14,8 +14,10 @@ import { createHarnessCatalogBudget } from "./catalog-budget.js";
 import { newCounters } from "./context.js";
 import { DEFAULT_LIMITS } from "./types.js";
 import {
+  createLegacyPortCatalogBinding,
   createLegacyPortCatalogFactory,
   type LegacyPortCatalogHandlerAttestation,
+  type LegacyPortCatalogLifecycleObservation,
 } from "./legacy-port-catalog.js";
 import type { ToolCallResult, ToolPort } from "./ports.js";
 import type { HarnessCatalogContext, HarnessToolExecutionEvidence } from "./catalog-runtime.js";
@@ -159,7 +161,13 @@ describe("legacy-port catalog dispatch settlement (F11)", () => {
     expect(f.observed).toHaveLength(0);
   });
 
-  it("releases the reservation and returns failed/handler-failed when check() is revoked pre-dispatch", async () => {
+  // The pin moved, it did not relax: everything it guarded stays asserted below unchanged (the
+  // reservation released, the charge and run counter actually refunded, a shaped ADR-0175 D6
+  // outcome instead of an unshaped throw, the handler never reached). Only the reason is
+  // corrected. A revoked check() is the budget saying no, which the closed vocabulary calls
+  // `denied`/`budget-exhausted`; reporting it as `failed`/`handler-failed` collapsed it with a
+  // genuine handler exception and hid "you are out of budget" from the operator (#3384 review).
+  it("releases the reservation and returns denied/budget-exhausted when check() is revoked pre-dispatch", async () => {
     // The budget's constructor consumes the first clock read; reserve() consumes the second
     // (still live); check() consumes the third and observes the deadline has passed, before
     // port.execute() ever runs, so the real budget's own check()-failure branch fires
@@ -183,10 +191,76 @@ describe("legacy-port catalog dispatch settlement (F11)", () => {
       signal: f.context.signal,
     });
     if (outcome.kind !== "settled") throw new TypeError("Expected settled outcome");
-    expect(outcome.result.status).toBe("failed");
-    expect(outcome.result.reason).toBe("handler-failed");
+    expect(outcome.result.status).toBe("denied");
+    expect(outcome.result.reason).toBe("budget-exhausted");
+    expect(outcome.receipt.status).toBe("denied");
     expect(outcome.receipt.budgetDisposition).toBe("released");
     expect(f.counters).toMatchObject({ toolCalls: 0, commandExecutions: 0 });
     expect(executed).toBe(false);
+  });
+
+  // A budget port that THROWS is a different outcome from a budget that declines: the contract
+  // separates `failed`/`budget-port-failed` from `denied`/`budget-exhausted`, and the thrown
+  // value's class name must survive into the settlement observation so the defect is not lost
+  // (AGENTS.md sections 7 and 8: no silent catch).
+  it("reports a throwing budget port as failed/budget-port-failed and names the error class", async () => {
+    const f = fixture();
+    const observations: LegacyPortCatalogLifecycleObservation[] = [];
+    const port = scriptedPort(() =>
+      Promise.resolve({ toolCallId: "call-1", output: "ok", durationMs: 1 }),
+    );
+    const context = {
+      ...f.context,
+      budgetPort: {
+        ...f.context.budgetPort,
+        reserve: (): never => {
+          throw new RangeError("budget port unavailable");
+        },
+      },
+    };
+    const binding = createLegacyPortCatalogBinding(
+      f.catalog,
+      PROFILE,
+      port,
+      handlerAttestations(f),
+      (observation) => observations.push(observation),
+    );
+    const outcome = await binding.factory(context).execute({
+      toolCallId: "call-1",
+      invocation: f.invocation,
+      signal: f.context.signal,
+    });
+    if (outcome.kind !== "settled") throw new TypeError("Expected settled outcome");
+    expect(outcome.result.status).toBe("failed");
+    expect(outcome.result.reason).toBe("budget-port-failed");
+    expect(outcome.receipt.budgetDisposition).toBe("not-reserved");
+    expect(observations.find((entry) => entry.phase === "invocation-settled")).toMatchObject({
+      errorName: "RangeError",
+    });
+  });
+
+  // The same rule for the handler side: the bound port's thrown class must reach the observation.
+  it("names the error class when the bound ToolPort throws", async () => {
+    const f = fixture();
+    const observations: LegacyPortCatalogLifecycleObservation[] = [];
+    const port = scriptedPort(() => Promise.reject(new TypeError("handler exploded")));
+    const binding = createLegacyPortCatalogBinding(
+      f.catalog,
+      PROFILE,
+      port,
+      handlerAttestations(f),
+      (observation) => observations.push(observation),
+    );
+    const outcome = await binding.factory(f.context).execute({
+      toolCallId: "call-1",
+      invocation: f.invocation,
+      signal: f.context.signal,
+    });
+    if (outcome.kind !== "settled") throw new TypeError("Expected settled outcome");
+    expect(outcome.result.status).toBe("failed");
+    expect(outcome.result.reason).toBe("handler-failed");
+    expect(observations.find((entry) => entry.phase === "invocation-settled")).toMatchObject({
+      errorName: "TypeError",
+    });
   });
 });

@@ -86,6 +86,9 @@ interface RunnerScript {
   readonly detached?: boolean;
   readonly unborn?: boolean;
   readonly repositoryRoot?: string;
+  /** Raw exit code for the HEAD probe, for the codes that are NOT "no such ref". */
+  readonly verifyExitCode?: number;
+  readonly statusExitCode?: number;
 }
 
 function fakeRunnerResult(
@@ -104,11 +107,11 @@ function fakeRunnerResult(
     return base(`${repositoryRoot}\n\n`);
   }
   if (args.includes("--verify")) {
-    return base("", script.unborn === true ? 1 : 0);
+    return base("", script.verifyExitCode ?? (script.unborn === true ? 1 : 0));
   }
   if (args.includes("status")) {
     const header = script.detached === true ? "# branch.head (detached)\n" : "# branch.head main\n";
-    return base(header);
+    return base(header, script.statusExitCode ?? 0);
   }
   throw new Error(`unexpected git invocation: ${args.join(" ")}`);
 }
@@ -270,7 +273,8 @@ const pullRequestByHeadSlot = vi.hoisted<PullRequestByHeadSlot>(() => ({
   identities: [],
 }));
 
-vi.mock("./coding-context/githubIssueReaderAuthorization.js", () => ({
+vi.mock("./coding-context/githubIssueReaderAuthorization.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./coding-context/githubIssueReaderAuthorization.js")>()),
   isGitHubIssueReaderAuthorized: (): boolean => pullRequestByHeadSlot.authorized,
   githubRemoteOwnerAndRepoFor: (): Promise<string> => Promise.resolve("acme/widgets"),
 }));
@@ -358,6 +362,34 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
     const ctx = makeCtx(connectRequestBody(chat.id));
     const result = asRouteResult(await connectHandler(ctx, deps));
     expect(result.body).toEqual({ status: "blocked", reason: "unborn-head" });
+  });
+
+  // Only exit 1 from `git rev-parse -q --verify HEAD` means "no such ref". A sandbox preflight
+  // refusal, a lock contention error or a crashed binary exits with another code on a repository
+  // that has commits, and reporting that as "this repository has no commits yet" sends the
+  // operator after the wrong defect (#3384 review).
+  it.each([[128], [126], [2]])(
+    "blocks with repository-unavailable when the HEAD probe fails with exit %i",
+    async (verifyExitCode) => {
+      const { deps, chatStore } = buildHarness({ runnerScript: { verifyExitCode }, snapshots: [] });
+      const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+      const ctx = makeCtx(connectRequestBody(chat.id));
+      const result = asRouteResult(await connectHandler(ctx, deps));
+      expect(result.body).toEqual({ status: "blocked", reason: "repository-unavailable" });
+      expect(chatStore.findChatById(chat.id)?.gitChangeScopes ?? []).toHaveLength(0);
+    },
+  );
+
+  // The same rule for the branch probe, which is only reached once HEAD already resolved.
+  it("blocks with repository-unavailable when the branch probe fails", async () => {
+    const { deps, chatStore } = buildHarness({
+      runnerScript: { statusExitCode: 128 },
+      snapshots: [],
+    });
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    const ctx = makeCtx(connectRequestBody(chat.id));
+    const result = asRouteResult(await connectHandler(ctx, deps));
+    expect(result.body).toEqual({ status: "blocked", reason: "repository-unavailable" });
   });
 
   it("connects an exact comparison: creates a git-change relationship and persists the chat scope", async () => {
