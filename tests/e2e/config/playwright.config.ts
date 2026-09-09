@@ -120,9 +120,18 @@ export default defineConfig({
   testIgnore: "code-task-*.spec.ts",
   fullyParallel: false,
   workers: 1,
-  timeout: 60_000,
+  // 2026-09-09: three independent smoke failures in one day on the required `ui` context, one per
+  // browser, all of them an element that was present but not yet interactable within the assertion
+  // window on a saturated runner: a workbench state transition after an approval click
+  // (`[webkit] coding-workbench-1994`), a window-close control that resolved and then did not accept
+  // the click (`[firefox] release-smoke`), and an editor workspace that had not become visible
+  // (`[chromium] editor-chat-roundtrip-2119`). None reproduces locally, and each passed on a re-run.
+  // Every sibling config in this directory already asserts with a 30 s window; this one was the
+  // outlier at 15 s. Matching them removes the load sensitivity without weakening what is asserted:
+  // a genuinely broken surface never becomes visible, however long the window.
+  timeout: 90_000,
   expect: {
-    timeout: 15_000,
+    timeout: 30_000,
   },
   reporter: process.env.CI ? [["github"], ["line"]] : "line",
   use: {
