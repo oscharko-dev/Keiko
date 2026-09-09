@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "scenarioId": "git-to-chat-connect-refine-apply",
+  "evidenceClass": "playwright-journey",
+  "sourceCommitSha": "3af295760373908725ebc6391de722e100093d3e",
+  "platformTarget": "macos-arm64",
+  "result": "passed",
+  "assertions": [
+    "git-change-chat-connected:true",
+    "refined-over-turns:2",
+    "governed-apply-completed:true",
+    "no-forbidden-session-requests:true",
+    "no-forbidden-session-tool-events:true"
+  ],
+  "usage": {
+    "spendObservability": "unknown",
+    "observedToolCallEvents": 0,
+    "observedRunDurationMs": 40483
+  }
+}
