@@ -93,23 +93,6 @@ export async function toolCatalogMigrationBytes(root = process.cwd()) {
       digest: sha256Hex(canonicalise(contract.inventory)),
     },
     nonDispatchProbes: [nonDispatchProbeDisposition()],
-    // Non-authorizing pending-H1 handoff record (#3406); see governed-tool-contract-pins.mjs's
-    // `pendingH1` comment for what each field means and who may change it. The prerequisite #3411
-    // merge identity is this same document's own `sourceContractDigest` -- the #3411 architecture
-    // checkpoint this record depends on -- never a second, independently computed digest.
-    // landedDevCommit/landedTreeDigest are source-owned pins: #3414 records H1's actual
-    // dev-reachable merge identity after integration; generated output never invents them.
-    pendingH1: {
-      owner: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.owner,
-      canonicalTool: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.canonicalTool,
-      prerequisiteMerge: {
-        issue: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.prerequisiteIssue,
-        contractDigest: sourceContractDigest,
-      },
-      removalIssue: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.removalIssue,
-      landedDevCommit: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.landedDevCommit,
-      landedTreeDigest: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.landedTreeDigest,
-    },
   };
   return format(`${JSON.stringify(migration, null, 2)}\n`, {
     parser: "json",
@@ -189,7 +172,7 @@ export async function checkToolCatalogMigrationCloseout(
   return [
     ...inventoryErrors,
     ...(await producerCheckpointFailures(root, options)),
-    ...(await checkH1HandoffEvidence(root, migration.pendingH1)),
+    ...(await checkH1HandoffEvidence(root, GOVERNED_TOOL_CONTRACT_PINS.h1Provenance)),
   ];
 }
 
@@ -197,7 +180,7 @@ export async function checkToolCatalogMigrationCloseout(
 // alone writes it after H1 reaches `dev` (see governed-tool-migration.md). PR #3394's verified
 // squash landing is now recorded; nothing is inferred from a branch label or issue status
 // (AGENTS.md §7). The fail-closed recheck requires populated
-// `pendingH1.landedDevCommit`/`landedTreeDigest` to have a durable record that agrees, is reachable
+// the stable landing pins to have a durable record that agrees, is reachable
 // from `dev`, resolve `sourceHead` against real Git and rebind its declared `treeDigest` to the
 // real owned-source content at both `sourceHead` and the consuming `currentHead` commit, and agree
 // with the real current producer's own identity — anything missing, stale, unresolvable, or
@@ -426,8 +409,7 @@ function validManagedVerification(value) {
 }
 
 function validRequiredChecks(value, sourceHead) {
-  const evidenceRef =
-    `github:${H1_INTEGRATION_REPOSITORY}#pull/${String(H1_INTEGRATION_PR)}/checks@${sourceHead}`;
+  const evidenceRef = `github:${H1_INTEGRATION_REPOSITORY}#pull/${String(H1_INTEGRATION_PR)}/checks@${sourceHead}`;
   return (
     hasExactFields(value, REQUIRED_CHECK_FIELDS) &&
     value.sourceHead === sourceHead &&
@@ -479,8 +461,7 @@ function validReviewBinding(value, record) {
 }
 
 function validReviewThreads(value, sourceHead) {
-  const evidenceRef =
-    `github:${H1_INTEGRATION_REPOSITORY}#pull/${String(H1_INTEGRATION_PR)}/review-threads@${sourceHead}`;
+  const evidenceRef = `github:${H1_INTEGRATION_REPOSITORY}#pull/${String(H1_INTEGRATION_PR)}/review-threads@${sourceHead}`;
   return (
     hasExactFields(value, REVIEW_THREAD_FIELDS) &&
     Number.isSafeInteger(value.total) &&
@@ -537,9 +518,7 @@ function landingReceiptFailures(root, record, kind, execute) {
   if (result.receipt === null || result.failures.length > 0) return result.failures;
   const failures = h1LandingReceiptSemanticFailures(result.receipt, record, kind);
   if (failures.length > 0) return failures;
-  return kind === "verification"
-    ? landingTreeFailures(root, result.receipt, record, execute)
-    : [];
+  return kind === "verification" ? landingTreeFailures(root, result.receipt, record, execute) : [];
 }
 
 function readCheckpointReceipt(root, record, kind) {
@@ -708,7 +687,7 @@ export function ownedSourceDigestAt(commit, root, execute, ownedPaths = H1_OWNED
 
 /**
  * Review 3941891302 (H1 handoff recheck gap): the recheck previously compared only the two
- * caller-declared tree digests (`record.treeDigest` vs `pendingH1.landedTreeDigest`) and never
+ * caller-declared tree digests (`record.treeDigest` vs the landing pin) and never
  * resolved `sourceHead` against Git or bound its content to the consuming commit — a nonexistent
  * `sourceHead` with a fabricated `treeDigest` repeated in both records passed with no failures.
  * This independently: (1) resolves `sourceHead` as a real, existing Git commit; (2) recomputes the
@@ -765,7 +744,7 @@ export async function realSourceHeadFailures(
 
 /**
  * #3414 AC7 / #3415 AC5-AC6. Returns `[]` while H1 has not landed to `dev` (both fields honestly
- * null — the expected state, never a failure). Once EITHER field is populated, every fact below
+ * null — the historical expected state, never a failure). Once EITHER field is populated, every fact below
  * must independently check out or this fails closed with a precise reason; nothing here trusts a
  * caller-declared value it has not itself re-derived or cross-checked.
  */
@@ -779,9 +758,11 @@ function pendingFieldFailures(landedDevCommit, landedTreeDigest) {
     ];
   }
   if (!HEX_40.test(landedDevCommit))
-    return ["H1 handoff evidence malformed: pendingH1.landedDevCommit is not a 40-hex commit SHA"];
+    return [
+      "H1 handoff evidence malformed: landing pin landedDevCommit is not a 40-hex commit SHA",
+    ];
   if (!HEX_64.test(landedTreeDigest))
-    return ["H1 handoff evidence malformed: pendingH1.landedTreeDigest is not a 64-hex digest"];
+    return ["H1 handoff evidence malformed: landing pin landedTreeDigest is not a 64-hex digest"];
   return null;
 }
 
@@ -789,11 +770,11 @@ function staleRecordFailures(record, landedDevCommit, landedTreeDigest) {
   const failures = [];
   if (record.treeDigest !== landedTreeDigest)
     failures.push(
-      "H1 handoff evidence stale: durable record's treeDigest does not match pendingH1.landedTreeDigest",
+      "H1 handoff evidence stale: durable record's treeDigest does not match landing pin landedTreeDigest",
     );
   if (record.currentHead !== landedDevCommit)
     failures.push(
-      "H1 handoff evidence stale: durable record's currentHead does not match pendingH1.landedDevCommit",
+      "H1 handoff evidence stale: durable record's currentHead does not match landing pin landedDevCommit",
     );
   return failures;
 }
@@ -820,7 +801,7 @@ async function landedEvidenceFailures(root, landedDevCommit, landedTreeDigest, d
 
 export async function checkH1HandoffEvidence(
   root,
-  pendingH1,
+  landingPins,
   {
     execute = execFileSync,
     identityFailures = realProducerIdentityFailures,
@@ -830,9 +811,8 @@ export async function checkH1HandoffEvidence(
   } = {},
 ) {
   const repositoryRoot = root === undefined ? process.cwd() : root;
-  const migration =
-    pendingH1 ?? JSON.parse(await toolCatalogMigrationBytes(repositoryRoot)).pendingH1;
-  const { landedDevCommit, landedTreeDigest } = migration;
+  const landing = landingPins ?? GOVERNED_TOOL_CONTRACT_PINS.h1Provenance;
+  const { landedDevCommit, landedTreeDigest } = landing;
   const early = pendingFieldFailures(landedDevCommit, landedTreeDigest);
   if (early !== null) return early;
   return landedEvidenceFailures(repositoryRoot, landedDevCommit, landedTreeDigest, {

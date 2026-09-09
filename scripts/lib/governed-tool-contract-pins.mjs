@@ -19,28 +19,17 @@
 // literal `path`/`probe`/`disposition` fields for a still-current owner (#3413 F8 review, finding
 // b1-9: "coding-delivery-policy" is the worked example, tracked below).
 export const GOVERNED_TOOL_CONTRACT_PINS = {
-  // #3406: the non-authorizing pending-H1 handoff record for #3386's H1 local repository-search
-  // handler (docs/architecture/governed-tool-migration.md). `owner` and `canonicalTool` name who
-  // and what; `prerequisiteIssue` names the #3411 architecture checkpoint this entry may only
-  // exist after (toolCatalogMigrationBytes binds its actual digest from the same
-  // `sourceContractDigest` the migration document already computes, never a second formula);
-  // `removalIssue` is #3414, which alone records the durable H1Provenance handoff.
-  // `landedDevCommit`/`landedTreeDigest` now pin the actual #3394 squash landing; this entry grants
-  // no allowlist exception and is never read as an authorization by any code path. #3415's
-  // `checkH1HandoffEvidence` (check-tool-catalog-conformance.mjs, folded into
-  // checkToolCatalogMigrationCloseout) independently rechecks both fields the moment either is
-  // populated -- see docs/architecture/governed-tool-migration.md for exactly what it verifies.
+  // #3414/#3415: stable inputs for independently revalidating the durable H1Provenance record.
+  // The temporary `pendingH1` migration record is removed after #3394's verified landing; these
+  // pins preserve only the dev merge identity and the source-closure seeds needed by the permanent
+  // validator. They grant no allowlist exception and are never read by runtime authorization.
   // Review 3941891302: that recheck also resolves the durable record's `sourceHead` against real
   // Git and rebinds its declared `treeDigest` to the runtime closure seeded by this annex.
   // The closure follows first-party runtime imports/re-exports and includes workspace export maps
   // and the dependency lockfile, so shared execution guards cannot escape the binding. The annex
   // stays separate from the immutable 43-row migration census; adding an implementation dependency
   // never rewrites historical migration ownership.
-  pendingH1: {
-    owner: 3386,
-    canonicalTool: { canonicalId: "keiko.repo.search", contractVersion: 1 },
-    prerequisiteIssue: 3411,
-    removalIssue: 3414,
+  h1Provenance: {
     landedDevCommit: "96188897e245d8fa5f02949e8655854ad08a7e86",
     landedTreeDigest: "4a13a6f50e50acc58fa13262e8689032d1acd83deaf862577e3e88173f55d519",
     ownedImplementation: [

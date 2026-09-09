@@ -6,7 +6,7 @@ import { collectH1OwnedSourcePaths } from "../lib/h1-source-closure.mjs";
 import { GOVERNED_TOOL_CONTRACT_PINS } from "../lib/governed-tool-contract-pins.mjs";
 
 let root;
-const entry = GOVERNED_TOOL_CONTRACT_PINS.pendingH1.ownedImplementation[0];
+const entry = GOVERNED_TOOL_CONTRACT_PINS.h1Provenance.ownedImplementation[0];
 function write(path, content) {
   mkdirSync(dirname(join(root, path)), { recursive: true });
   writeFileSync(join(root, path), content);
@@ -14,9 +14,9 @@ function write(path, content) {
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "keiko-h1-runtime-closure-"));
-  for (const path of GOVERNED_TOOL_CONTRACT_PINS.pendingH1.ownedImplementation) write(path, "");
+  for (const path of GOVERNED_TOOL_CONTRACT_PINS.h1Provenance.ownedImplementation) write(path, "");
   write("package-lock.json", "{}");
-  for (const path of GOVERNED_TOOL_CONTRACT_PINS.pendingH1.ownedImplementation) {
+  for (const path of GOVERNED_TOOL_CONTRACT_PINS.h1Provenance.ownedImplementation) {
     write(`packages/${path.split("/")[1]}/package.json`, "{}");
   }
 });

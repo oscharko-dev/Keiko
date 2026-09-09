@@ -428,7 +428,10 @@ exact-schema JSON whose bytes are SHA-256-pinned by `H1Provenance`; extra fields
 unresolved current review threads, identity drift, or a mismatched merge tree fail closed. H1
 provenance survives removal of the temporary pending-H1 migration entry, is independently
 revalidated by #3415, and never enters a semantic projection digest. #3390 consumes the retained
-closeout reference before live qualification.
+closeout reference before live qualification. The temporary entry is now removed from the generated
+migration document. `GOVERNED_TOOL_CONTRACT_PINS.h1Provenance` retains only the landing identities
+and dependency-closure seeds required for permanent validation; it is not a migration row or a
+runtime authority input.
 
 
 ## Migration, verification and consequences

@@ -88,42 +88,13 @@ describe("initial compiler and finite migration conformance gate", () => {
     );
   }, 30_000);
 
-  // #3406/#3414 (F6): the non-authorizing pending-H1 handoff record for #3386's H1 local
-  // repository-search handler. Fails-before: prior to this record's addition, the generated
-  // migration document carried no `pendingH1` field at all, so #3406's acceptance criterion
-  // (owner, canonical tool reference, prerequisite #3411 merge identity, removal issue #3414,
-  // initially-empty landedDevCommit/landedTreeDigest) existed only as prose in
-  // governed-tool-migration.md, never as an actual record.
-  it("carries the non-authorizing pending-H1 handoff record with exactly its six fields", async () => {
+  // #3414/#3415: after the durable landing record exists, the temporary migration handoff must
+  // disappear while stable source-owned pins retain the independently revalidated merge identity.
+  it("removes the temporary pending-H1 migration record after durable provenance lands", async () => {
     const migration = JSON.parse(await toolCatalogMigrationBytes(ROOT));
-    expect(Object.keys(migration.pendingH1).sort()).toEqual(
-      [
-        "owner",
-        "canonicalTool",
-        "prerequisiteMerge",
-        "removalIssue",
-        "landedDevCommit",
-        "landedTreeDigest",
-      ].sort(),
-    );
-    expect(migration.pendingH1.owner).toBe(3386);
-    expect(migration.pendingH1.canonicalTool).toEqual({
-      canonicalId: "keiko.repo.search",
-      contractVersion: 1,
-    });
-    expect(migration.pendingH1.prerequisiteMerge.issue).toBe(3411);
-    expect(migration.pendingH1.prerequisiteMerge.contractDigest).toBe(
-      migration.sourceContractDigest,
-    );
-    expect(migration.pendingH1.removalIssue).toBe(3414);
-    // #3414 pins the actual dev landing through the source-owned producer; generated output must
-    // derive it rather than restating either identity in the fixture.
-    expect(migration.pendingH1.landedDevCommit).toBe(
-      GOVERNED_TOOL_CONTRACT_PINS.pendingH1.landedDevCommit,
-    );
-    expect(migration.pendingH1.landedTreeDigest).toBe(
-      GOVERNED_TOOL_CONTRACT_PINS.pendingH1.landedTreeDigest,
-    );
+    expect(migration).not.toHaveProperty("pendingH1");
+    expect(GOVERNED_TOOL_CONTRACT_PINS.h1Provenance.landedDevCommit).toMatch(/^[a-f0-9]{40}$/u);
+    expect(GOVERNED_TOOL_CONTRACT_PINS.h1Provenance.landedTreeDigest).toMatch(/^[a-f0-9]{64}$/u);
   });
   it("pins the one non-dispatch readiness probe without granting a path exception", () => {
     const source = readFileSync(join(ROOT, PROBE), "utf8");
@@ -641,7 +612,7 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
       await checkH1HandoffEvidence(ROOT, { landedDevCommit: null, landedTreeDigest: null }),
     ).toEqual([]);
   });
-  it("fails closed on a partially populated pending record", async () => {
+  it("fails closed on partially populated landing pins", async () => {
     expect(
       await checkH1HandoffEvidence(ROOT, {
         landedDevCommit: "a".repeat(40),
@@ -658,14 +629,16 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
         landedTreeDigest: "b".repeat(64),
       }),
     ).toEqual([
-      "H1 handoff evidence malformed: pendingH1.landedDevCommit is not a 40-hex commit SHA",
+      "H1 handoff evidence malformed: landing pin landedDevCommit is not a 40-hex commit SHA",
     ]);
     expect(
       await checkH1HandoffEvidence(ROOT, {
         landedDevCommit: "a".repeat(40),
         landedTreeDigest: "not-a-digest",
       }),
-    ).toEqual(["H1 handoff evidence malformed: pendingH1.landedTreeDigest is not a 64-hex digest"]);
+    ).toEqual([
+      "H1 handoff evidence malformed: landing pin landedTreeDigest is not a 64-hex digest",
+    ]);
   });
   it("fails closed when no durable H1Provenance record exists", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-"));
@@ -723,7 +696,7 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
       }),
     ).toEqual(["H1 handoff evidence malformed: not valid JSON"]);
   });
-  it("fails closed on a stale record (treeDigest/currentHead do not match pendingH1)", async () => {
+  it("fails closed on a stale record (treeDigest/currentHead do not match landing pins)", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-"));
     workDir = root;
     mkdirSync(join(root, "docs", "architecture"), { recursive: true });
@@ -734,7 +707,7 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
       { execute: () => "", identityFailures: async () => [] },
     );
     expect(errors).toContain(
-      "H1 handoff evidence stale: durable record's currentHead does not match pendingH1.landedDevCommit",
+      "H1 handoff evidence stale: durable record's currentHead does not match landing pin landedDevCommit",
     );
   });
   it("fails closed when landedDevCommit is not reachable from dev", async () => {
@@ -805,7 +778,11 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
     expect(h1LandingReceiptSemanticFailures(verification, record, "verification")).toEqual([]);
     expect(h1LandingReceiptSemanticFailures(review, record, "review")).toEqual([]);
     expect(
-      h1LandingReceiptSemanticFailures({ ...verification, rawOutput: "forbidden" }, record, "verification"),
+      h1LandingReceiptSemanticFailures(
+        { ...verification, rawOutput: "forbidden" },
+        record,
+        "verification",
+      ),
     ).toEqual(["H1 landing verification receipt malformed: unexpected top-level fields"]);
     expect(
       h1LandingReceiptSemanticFailures({ ...review, rawComment: "forbidden" }, record, "review"),
