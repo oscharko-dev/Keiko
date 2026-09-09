@@ -837,15 +837,19 @@ const proxyAgent = new Agent({ keepAlive: false });
 // fetch and the runner said nothing, so the cause had to be reconstructed from a Playwright trace.
 // Name the request and the reason instead. Repository tooling keeps deterministic stderr output
 // rather than the product activity log (AGENTS.md §8).
+export function upstreamFailureDiagnostic(method, path, targetPort, error) {
+  return (
+    `dev-runner: upstream ${String(method)} ${path} to :${String(targetPort)} failed ` +
+    `(${String(error.code ?? error.message)})\n`
+  );
+}
+
 function answerUpstreamFailure({ error, req, res, path, targetPort, lifecycle }) {
   if (!lifecycle.settle()) return;
   if (!res.headersSent) {
     res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
   }
-  process.stderr.write(
-    `dev-runner: upstream ${String(req.method)} ${path} to :${String(targetPort)} failed ` +
-      `(${String(error.code ?? error.message)})\n`,
-  );
+  process.stderr.write(upstreamFailureDiagnostic(req.method, path, targetPort, error));
   res.end("Development upstream is not available.");
 }
 
