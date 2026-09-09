@@ -77,7 +77,7 @@ A `workflow-hygiene` job whose check context is `workflow hygiene`. It runs, on 
 after one checkout: actionlint 1.7.12 downloaded from the same URL and verified against the same
 SHA-256 `8aca8db9…a3d8`, invoked as `./actionlint -color .github/workflows/*.yml`; the pinned-SHA
 grep verbatim, including its `./` and `docker://` exemptions and its 40-hex pattern; zizmor 1.26.1
-through `zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054` (v0.6.2) with
+through `zizmorcore/zizmor-action@70fb788f84895a7701f5643d103d587e460b5c99` (v0.6.3) with
 `config: .github/zizmor.yml`, `advanced-security: false` and `annotations: true`, and `.github/zizmor.yml`
 itself unchanged; and OSV-Scanner through
 `google/osv-scanner-action/osv-scanner-action@6e4298ebc4db23e847df9b2e2de2939d6f066c67` (v2.5.1)
