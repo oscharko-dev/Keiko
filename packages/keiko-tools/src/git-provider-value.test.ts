@@ -1,4 +1,7 @@
-import { gitDeliveryObservationFailure } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
+import {
+  gitDeliveryObservationFailure,
+  type GitDeliveryObservationFailureReason,
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 
 import {
   CommandCancelledError,
@@ -83,19 +86,27 @@ describe("single provider metadata projections", () => {
   // The generic-`Error` case above reached "provider-unavailable" through the classifier's own
   // total fallback, so it could not tell the two shapes apart; every thrown local error must keep
   // its specific reason through this path (owner audit finding b2-17).
-  it.each([
-    ["denied", new CommandDeniedError("denied"), "authority-denied"],
+  const thrownLocalErrors: readonly (readonly [
+    string,
+    Error,
+    GitDeliveryObservationFailureReason,
+  ])[] = [
+    ["denied", new CommandDeniedError("denied", "gh"), "authority-denied"],
     ["cancelled", new CommandCancelledError("cancelled"), "cancelled"],
-    ["timed out", new CommandTimeoutError("timeout"), "timeout"],
-    ["output-capped", new OutputLimitError("too much output"), "output-truncated"],
-  ])("classifies a thrown %s command error by its own reason", async (_label, error, reason) => {
-    const run = (): Promise<CommandResult> => Promise.reject(error);
-    // The expected envelope comes from the contract's own producer, never a restated state map.
-    expect(await readGitProviderValue({ argv: [], run })).toEqual({
-      status: "unavailable",
-      failure: gitDeliveryObservationFailure(reason),
-    });
-  });
+    ["timed out", new CommandTimeoutError("timeout", 1_000), "timeout"],
+    ["output-capped", new OutputLimitError("too much output", 1_024), "output-truncated"],
+  ];
+  it.each(thrownLocalErrors)(
+    "classifies a thrown %s command error by its own reason",
+    async (_label, error, reason) => {
+      const run = (): Promise<CommandResult> => Promise.reject(error);
+      // The expected envelope comes from the contract's own producer, never a restated state map.
+      expect(await readGitProviderValue({ argv: [], run })).toEqual({
+        status: "unavailable",
+        failure: gitDeliveryObservationFailure(reason),
+      });
+    },
+  );
 });
 
 // F32 (#3384 audit): one owner for the GitHub REST GET argv envelope. Every governed GET builder in
