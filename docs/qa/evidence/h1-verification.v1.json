@@ -1,11 +1,31 @@
 {
   "schemaVersion": 1,
   "status": "verified",
-  "verificationKind": "deterministic-production-managed",
-  "sourceHead": "503b5abe3dd7fa92b72a0a6723fced2f3349ee51",
-  "ownedSourceDigest": "97c576a31af4586a41ea048314e9c996b3f8371921e624dac9099aabda5c3060",
-  "command": "npm exec vitest run -- packages/keiko-workspace/src/codingRepositorySearch.test.ts packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.test.ts packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts --reporter=json --outputFile=/tmp/keiko-3384-audit/h1-verification-503b5abe-results.json --maxWorkers=2",
-  "testFiles": 3,
-  "testCount": 83,
-  "result": "passed"
+  "verificationKind": "postmerge-source-head-and-required-ci",
+  "repository": "oscharko-dev/Keiko",
+  "integrationPr": 3394,
+  "sourceHead": "41aeca96072d30de30d6bf84e1102c1efece65b3",
+  "currentHead": "96188897e245d8fa5f02949e8655854ad08a7e86",
+  "sourceTree": "69523c6020188993fa26368a7a58570b80825847",
+  "currentTree": "69523c6020188993fa26368a7a58570b80825847",
+  "ownedSourceDigest": "4a13a6f50e50acc58fa13262e8689032d1acd83deaf862577e3e88173f55d519",
+  "baseRef": "dev",
+  "baseHead": "37cd58aa08a3ca76808f4ae75d97f801707fab3f",
+  "mergedAt": "2026-09-09T15:49:04Z",
+  "managedVerification": {
+    "testFiles": 3,
+    "testCount": 83,
+    "result": "passed"
+  },
+  "requiredChecks": {
+    "sourceHead": "41aeca96072d30de30d6bf84e1102c1efece65b3",
+    "configured": 10,
+    "satisfied": 10,
+    "successfulEvidenceRuns": 11,
+    "failed": 0,
+    "pending": 0,
+    "requirementsDigest": "cced61e4b909d6e4f24c81450c9964319e6a5d6d9ab333c3b4992ea58c8f5476",
+    "evidenceDigest": "2e60b44602180c39dbd86993b9bba006d520d0a97b1c59418ed69e884284b739",
+    "evidenceRef": "github:oscharko-dev/Keiko#pull/3394/checks@41aeca96072d30de30d6bf84e1102c1efece65b3"
+  }
 }

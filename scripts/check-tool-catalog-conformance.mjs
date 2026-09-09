@@ -93,23 +93,6 @@ export async function toolCatalogMigrationBytes(root = process.cwd()) {
       digest: sha256Hex(canonicalise(contract.inventory)),
     },
     nonDispatchProbes: [nonDispatchProbeDisposition()],
-    // Non-authorizing pending-H1 handoff record (#3406); see governed-tool-contract-pins.mjs's
-    // `pendingH1` comment for what each field means and who may change it. The prerequisite #3411
-    // merge identity is this same document's own `sourceContractDigest` -- the #3411 architecture
-    // checkpoint this record depends on -- never a second, independently computed digest.
-    // landedDevCommit/landedTreeDigest stay null until #3414 records H1's actual dev-reachable
-    // merge identity and removes this entry in the same migration.
-    pendingH1: {
-      owner: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.owner,
-      canonicalTool: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.canonicalTool,
-      prerequisiteMerge: {
-        issue: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.prerequisiteIssue,
-        contractDigest: sourceContractDigest,
-      },
-      removalIssue: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.removalIssue,
-      landedDevCommit: null,
-      landedTreeDigest: null,
-    },
   };
   return format(`${JSON.stringify(migration, null, 2)}\n`, {
     parser: "json",
@@ -189,15 +172,15 @@ export async function checkToolCatalogMigrationCloseout(
   return [
     ...inventoryErrors,
     ...(await producerCheckpointFailures(root, options)),
-    ...(await checkH1HandoffEvidence(root, migration.pendingH1)),
+    ...(await checkH1HandoffEvidence(root, GOVERNED_TOOL_CONTRACT_PINS.h1Provenance)),
   ];
 }
 
 // #3414 AC7 / #3415 AC5-AC6: the durable, independently-verifiable H1 dev-landing record. #3414
-// alone may write it (once H1 actually reaches `dev` — see governed-tool-migration.md); this repo
-// has no such landing on this head, so nothing here fabricates one (AGENTS.md §7). What this DOES
-// provide now is the fail-closed RECHECK: if `pendingH1.landedDevCommit`/`landedTreeDigest` are
-// ever populated, this record must exist, pass shape validation, agree with them, be reachable
+// alone writes it after H1 reaches `dev` (see governed-tool-migration.md). PR #3394's verified
+// squash landing is now recorded; nothing is inferred from a branch label or issue status
+// (AGENTS.md §7). The fail-closed recheck requires populated
+// the stable landing pins to have a durable record that agrees, is reachable
 // from `dev`, resolve `sourceHead` against real Git and rebind its declared `treeDigest` to the
 // real owned-source content at both `sourceHead` and the consuming `currentHead` commit, and agree
 // with the real current producer's own identity — anything missing, stale, unresolvable, or
@@ -205,6 +188,9 @@ export async function checkToolCatalogMigrationCloseout(
 // otherwise declare a nonexistent `sourceHead` and a fabricated `treeDigest` and pass unchecked).
 export const H1_PROVENANCE_PATH = "docs/architecture/h1-provenance.v1.json";
 export const H1_PRODUCER_CHECKPOINT_PATH = "docs/architecture/h1-producer-checkpoint.v1.json";
+const H1_INTEGRATION_REPOSITORY = "oscharko-dev/Keiko";
+const H1_INTEGRATION_PR = 3394;
+const H1_OWNER_ISSUE = 3386;
 const HEX_64 = /^[a-f0-9]{64}$/u;
 const HEX_40 = /^[a-f0-9]{40}$/u;
 
@@ -315,6 +301,8 @@ function checkpointAncestorFailures(root, record, execute) {
 
 function acceptedCheckpointReceipt(receipt, record, kind) {
   return (
+    typeof receipt === "object" &&
+    receipt !== null &&
     receipt.schemaVersion === 1 &&
     receipt.status === (kind === "verification" ? "verified" : "accepted") &&
     receipt.sourceHead === record.sourceHead &&
@@ -322,23 +310,264 @@ function acceptedCheckpointReceipt(receipt, record, kind) {
   );
 }
 
-function checkpointReceiptFailures(root, record, kind) {
+function hasExactFields(value, expected) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const actual = Object.keys(value).sort(compareStrings);
+  const sortedExpected = [...expected].sort(compareStrings);
+  return (
+    actual.length === sortedExpected.length &&
+    sortedExpected.every((field, index) => field === actual[index])
+  );
+}
+
+function isPositiveInteger(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+function isIsoInstant(value) {
+  if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) return false;
+  const milliseconds = new Date(value).toISOString();
+  return value === milliseconds || value === milliseconds.replace(".000Z", "Z");
+}
+
+const VERIFICATION_RECEIPT_FIELDS = Object.freeze([
+  "schemaVersion",
+  "status",
+  "verificationKind",
+  "repository",
+  "integrationPr",
+  "sourceHead",
+  "currentHead",
+  "sourceTree",
+  "currentTree",
+  "ownedSourceDigest",
+  "baseRef",
+  "baseHead",
+  "mergedAt",
+  "managedVerification",
+  "requiredChecks",
+]);
+const MANAGED_VERIFICATION_FIELDS = Object.freeze(["testFiles", "testCount", "result"]);
+const REQUIRED_CHECK_FIELDS = Object.freeze([
+  "sourceHead",
+  "configured",
+  "satisfied",
+  "successfulEvidenceRuns",
+  "failed",
+  "pending",
+  "requirementsDigest",
+  "evidenceDigest",
+  "evidenceRef",
+]);
+const REVIEW_RECEIPT_FIELDS = Object.freeze([
+  "schemaVersion",
+  "status",
+  "reviewKind",
+  "repository",
+  "integrationPr",
+  "ownerIssue",
+  "sourceHead",
+  "currentHead",
+  "ownedSourceDigest",
+  "binding",
+  "reviewThreads",
+]);
+const BINDING_FIELDS = Object.freeze([
+  "catalogRevision",
+  "profile",
+  "projectionDigest",
+  "handlerSetDigest",
+]);
+const REVIEW_THREAD_FIELDS = Object.freeze([
+  "total",
+  "resolved",
+  "unresolved",
+  "current",
+  "currentResolved",
+  "currentUnresolved",
+  "evidenceRef",
+]);
+
+function validLandingReceiptIdentity(receipt, record, kind) {
+  return (
+    acceptedCheckpointReceipt(receipt, record, kind) &&
+    receipt.repository === H1_INTEGRATION_REPOSITORY &&
+    receipt.integrationPr === H1_INTEGRATION_PR &&
+    receipt.currentHead === record.currentHead
+  );
+}
+
+function validManagedVerification(value) {
+  return (
+    hasExactFields(value, MANAGED_VERIFICATION_FIELDS) &&
+    isPositiveInteger(value.testFiles) &&
+    isPositiveInteger(value.testCount) &&
+    value.result === "passed"
+  );
+}
+
+function validRequiredCheckCounts(value) {
+  return (
+    isPositiveInteger(value.configured) &&
+    Number.isSafeInteger(value.satisfied) &&
+    value.satisfied === value.configured &&
+    Number.isSafeInteger(value.successfulEvidenceRuns) &&
+    value.successfulEvidenceRuns >= value.satisfied &&
+    value.failed === 0 &&
+    value.pending === 0
+  );
+}
+
+function validRequiredChecks(value, sourceHead) {
+  const evidenceRef = `github:${H1_INTEGRATION_REPOSITORY}#pull/${String(H1_INTEGRATION_PR)}/checks@${sourceHead}`;
+  return (
+    hasExactFields(value, REQUIRED_CHECK_FIELDS) &&
+    value.sourceHead === sourceHead &&
+    validRequiredCheckCounts(value) &&
+    HEX_64.test(value.requirementsDigest) &&
+    HEX_64.test(value.evidenceDigest) &&
+    value.evidenceRef === evidenceRef
+  );
+}
+
+function validVerificationMetadata(receipt) {
+  return (
+    receipt.verificationKind === "postmerge-source-head-and-required-ci" &&
+    receipt.baseRef === "dev" &&
+    HEX_40.test(receipt.baseHead) &&
+    isIsoInstant(receipt.mergedAt)
+  );
+}
+
+function verificationReceiptFailures(receipt, record) {
+  if (!hasExactFields(receipt, VERIFICATION_RECEIPT_FIELDS))
+    return ["H1 landing verification receipt malformed: unexpected top-level fields"];
+  const failures = [];
+  if (!validLandingReceiptIdentity(receipt, record, "verification"))
+    failures.push("H1 landing verification receipt identity mismatch");
+  if (!validVerificationMetadata(receipt))
+    failures.push("H1 landing verification receipt integration metadata mismatch");
+  if (!HEX_40.test(receipt.sourceTree) || receipt.sourceTree !== receipt.currentTree)
+    failures.push("H1 landing verification receipt Git tree identity mismatch");
+  if (!validManagedVerification(receipt.managedVerification))
+    failures.push("H1 landing verification receipt has no passing managed verification");
+  if (!validRequiredChecks(receipt.requiredChecks, record.sourceHead))
+    failures.push("H1 landing verification receipt required-check settlement mismatch");
+  return failures;
+}
+
+function validReviewBinding(value, record) {
+  return (
+    hasExactFields(value, BINDING_FIELDS) &&
+    value.catalogRevision === record.catalogRevision &&
+    hasExactFields(value.profile, ["id", "version"]) &&
+    value.profile.id === record.profile.id &&
+    value.profile.version === record.profile.version &&
+    value.projectionDigest === record.projectionDigest &&
+    value.handlerSetDigest === record.handlerSetDigest
+  );
+}
+
+function validReviewThreads(value, sourceHead) {
+  const evidenceRef = `github:${H1_INTEGRATION_REPOSITORY}#pull/${String(H1_INTEGRATION_PR)}/review-threads@${sourceHead}`;
+  return (
+    hasExactFields(value, REVIEW_THREAD_FIELDS) &&
+    validReviewThreadCounts(value) &&
+    value.evidenceRef === evidenceRef
+  );
+}
+
+function validReviewThreadCounts(value) {
+  return (
+    Number.isSafeInteger(value.total) &&
+    value.total > 0 &&
+    value.resolved === value.total &&
+    value.unresolved === 0 &&
+    Number.isSafeInteger(value.current) &&
+    value.current > 0 &&
+    value.current <= value.total &&
+    value.currentResolved === value.current &&
+    value.currentUnresolved === 0
+  );
+}
+
+function reviewReceiptFailures(receipt, record) {
+  if (!hasExactFields(receipt, REVIEW_RECEIPT_FIELDS))
+    return ["H1 landing review receipt malformed: unexpected top-level fields"];
+  const failures = [];
+  if (!validLandingReceiptIdentity(receipt, record, "review"))
+    failures.push("H1 landing review receipt identity mismatch");
+  if (receipt.reviewKind !== "postmerge-github-review-settlement")
+    failures.push("H1 landing review receipt kind mismatch");
+  if (receipt.ownerIssue !== H1_OWNER_ISSUE)
+    failures.push("H1 landing review receipt owner mismatch");
+  if (!validReviewBinding(receipt.binding, record))
+    failures.push("H1 landing review receipt catalog binding mismatch");
+  if (!validReviewThreads(receipt.reviewThreads, record.sourceHead))
+    failures.push("H1 landing review receipt thread settlement mismatch");
+  return failures;
+}
+
+function landingTreeFailures(root, receipt, record, execute) {
+  const currentTree = resolveCommitTreeId(record.currentHead, root, execute);
+  if (currentTree === null)
+    return ["H1 landing verification receipt current Git tree is not resolvable"];
+  if (
+    !HEX_40.test(receipt.sourceTree) ||
+    receipt.sourceTree !== receipt.currentTree ||
+    receipt.currentTree !== currentTree
+  )
+    return ["H1 landing verification receipt Git tree identity mismatch"];
+  return [];
+}
+
+export function h1LandingReceiptSemanticFailures(receipt, record, kind) {
+  return kind === "verification"
+    ? verificationReceiptFailures(receipt, record)
+    : reviewReceiptFailures(receipt, record);
+}
+
+function landingReceiptFailures(root, record, kind, execute) {
+  const result = readCheckpointReceipt(root, record, kind);
+  if (result.receipt === null || result.failures.length > 0) return result.failures;
+  const failures = h1LandingReceiptSemanticFailures(result.receipt, record, kind);
+  if (failures.length > 0) return failures;
+  return kind === "verification" ? landingTreeFailures(root, result.receipt, record, execute) : [];
+}
+
+function readCheckpointReceipt(root, record, kind) {
   const receiptPath = `docs/qa/evidence/h1-${kind}.v1.json`;
   const ref = kind === "verification" ? record.verificationRef : record.reviewRef;
   const prefix = `${receiptPath}#sha256=`;
   if (!ref.startsWith(prefix) || !HEX_64.test(ref.slice(prefix.length)))
-    return [`H1 producer checkpoint invalid ${kind} reference: expected a pinned local receipt`];
+    return {
+      receipt: null,
+      failures: [
+        `H1 producer checkpoint invalid ${kind} reference: expected a pinned local receipt`,
+      ],
+    };
   try {
     const bytes = readFileSync(join(root, receiptPath), "utf8");
     if (sha256Hex(bytes) !== ref.slice(prefix.length))
-      return [`H1 producer checkpoint stale ${kind} receipt: content digest mismatch`];
-    const receipt = JSON.parse(bytes);
-    if (!acceptedCheckpointReceipt(receipt, record, kind))
-      return [`H1 producer checkpoint invalid ${kind} receipt: source or acceptance mismatch`];
-    return [];
+      return {
+        receipt: null,
+        failures: [`H1 producer checkpoint stale ${kind} receipt: content digest mismatch`],
+      };
+    return { receipt: JSON.parse(bytes), failures: [] };
   } catch {
-    return [`H1 producer checkpoint missing or malformed ${kind} receipt`];
+    return {
+      receipt: null,
+      failures: [`H1 producer checkpoint missing or malformed ${kind} receipt`],
+    };
   }
+}
+
+function checkpointReceiptFailures(root, record, kind) {
+  const result = readCheckpointReceipt(root, record, kind);
+  if (result.receipt === null || result.failures.length > 0) return result.failures;
+  return acceptedCheckpointReceipt(result.receipt, record, kind)
+    ? []
+    : [`H1 producer checkpoint invalid ${kind} receipt: source or acceptance mismatch`];
 }
 
 function checkpointWorktreeFailures(root, execute, ownedPaths) {
@@ -385,8 +614,22 @@ export async function checkH1ProducerCheckpoint(
 }
 
 export function isAncestorOfDev(commit, root, execute) {
+  const git = resolveHostExecutable("git");
+  const remoteDev = "refs/remotes/origin/dev";
+  const localDev = "refs/heads/dev";
+  let devRef = remoteDev;
   try {
-    execute(resolveHostExecutable("git"), ["merge-base", "--is-ancestor", commit, "dev"], {
+    execute(git, ["show-ref", "--verify", "--quiet", remoteDev], { cwd: root, encoding: "utf8" });
+  } catch {
+    devRef = localDev;
+    try {
+      execute(git, ["show-ref", "--verify", "--quiet", localDev], { cwd: root, encoding: "utf8" });
+    } catch {
+      return false;
+    }
+  }
+  try {
+    execute(git, ["merge-base", "--is-ancestor", commit, devRef], {
       cwd: root,
       encoding: "utf8",
     });
@@ -445,7 +688,7 @@ function resolveCommitTreeId(commit, root, execute) {
 }
 
 // The one digest formula for "owned source content at a commit", reused by both the producer side
-// (once #3414 lands real H1Provenance) and this recheck — never restated. Reads each owned path's
+// (the producer checkpoint and durable H1Provenance) and this recheck — never restated. Reads each owned path's
 // exact byte content at `commit` via Git's byte-framed batch reader (fails closed if any path is
 // absent from that commit's tree) and hashes sorted {path, contentBase64} pairs with this file's own
 // canonical digest primitive (`canonicalise`/`sha256Hex`, keiko-security — this file's own
@@ -458,7 +701,7 @@ export function ownedSourceDigestAt(commit, root, execute, ownedPaths = H1_OWNED
 
 /**
  * Review 3941891302 (H1 handoff recheck gap): the recheck previously compared only the two
- * caller-declared tree digests (`record.treeDigest` vs `pendingH1.landedTreeDigest`) and never
+ * caller-declared tree digests (`record.treeDigest` vs the landing pin) and never
  * resolved `sourceHead` against Git or bound its content to the consuming commit — a nonexistent
  * `sourceHead` with a fabricated `treeDigest` repeated in both records passed with no failures.
  * This independently: (1) resolves `sourceHead` as a real, existing Git commit; (2) recomputes the
@@ -515,7 +758,7 @@ export async function realSourceHeadFailures(
 
 /**
  * #3414 AC7 / #3415 AC5-AC6. Returns `[]` while H1 has not landed to `dev` (both fields honestly
- * null — the expected state, never a failure). Once EITHER field is populated, every fact below
+ * null — the historical expected state, never a failure). Once EITHER field is populated, every fact below
  * must independently check out or this fails closed with a precise reason; nothing here trusts a
  * caller-declared value it has not itself re-derived or cross-checked.
  */
@@ -529,9 +772,11 @@ function pendingFieldFailures(landedDevCommit, landedTreeDigest) {
     ];
   }
   if (!HEX_40.test(landedDevCommit))
-    return ["H1 handoff evidence malformed: pendingH1.landedDevCommit is not a 40-hex commit SHA"];
+    return [
+      "H1 handoff evidence malformed: landing pin landedDevCommit is not a 40-hex commit SHA",
+    ];
   if (!HEX_64.test(landedTreeDigest))
-    return ["H1 handoff evidence malformed: pendingH1.landedTreeDigest is not a 64-hex digest"];
+    return ["H1 handoff evidence malformed: landing pin landedTreeDigest is not a 64-hex digest"];
   return null;
 }
 
@@ -539,11 +784,11 @@ function staleRecordFailures(record, landedDevCommit, landedTreeDigest) {
   const failures = [];
   if (record.treeDigest !== landedTreeDigest)
     failures.push(
-      "H1 handoff evidence stale: durable record's treeDigest does not match pendingH1.landedTreeDigest",
+      "H1 handoff evidence stale: durable record's treeDigest does not match landing pin landedTreeDigest",
     );
   if (record.currentHead !== landedDevCommit)
     failures.push(
-      "H1 handoff evidence stale: durable record's currentHead does not match pendingH1.landedDevCommit",
+      "H1 handoff evidence stale: durable record's currentHead does not match landing pin landedDevCommit",
     );
   return failures;
 }
@@ -551,7 +796,7 @@ function staleRecordFailures(record, landedDevCommit, landedTreeDigest) {
 async function landedEvidenceFailures(root, landedDevCommit, landedTreeDigest, deps) {
   const { record, shapeFailures } = readH1Provenance(root, deps.provenancePath);
   if (record === null || shapeFailures.length > 0) return shapeFailures;
-  return [
+  const identityFailures = [
     ...staleRecordFailures(record, landedDevCommit, landedTreeDigest),
     ...(isAncestorOfDev(landedDevCommit, root, deps.execute)
       ? []
@@ -561,27 +806,33 @@ async function landedEvidenceFailures(root, landedDevCommit, landedTreeDigest, d
     ...(await deps.sourceHeadFailures(root, record, deps.execute)),
     ...(await deps.identityFailures(root, record)),
   ];
+  if (identityFailures.length > 0) return identityFailures;
+  return [
+    ...deps.receiptFailures(root, record, "verification", deps.execute),
+    ...deps.receiptFailures(root, record, "review", deps.execute),
+  ];
 }
 
 export async function checkH1HandoffEvidence(
   root,
-  pendingH1,
+  landingPins,
   {
     execute = execFileSync,
     identityFailures = realProducerIdentityFailures,
+    receiptFailures = landingReceiptFailures,
     sourceHeadFailures = realSourceHeadFailures,
     provenancePath = H1_PROVENANCE_PATH,
   } = {},
 ) {
   const repositoryRoot = root === undefined ? process.cwd() : root;
-  const migration =
-    pendingH1 ?? JSON.parse(await toolCatalogMigrationBytes(repositoryRoot)).pendingH1;
-  const { landedDevCommit, landedTreeDigest } = migration;
+  const landing = landingPins ?? GOVERNED_TOOL_CONTRACT_PINS.h1Provenance;
+  const { landedDevCommit, landedTreeDigest } = landing;
   const early = pendingFieldFailures(landedDevCommit, landedTreeDigest);
   if (early !== null) return early;
   return landedEvidenceFailures(repositoryRoot, landedDevCommit, landedTreeDigest, {
     execute,
     identityFailures,
+    receiptFailures,
     sourceHeadFailures,
     provenancePath,
   });

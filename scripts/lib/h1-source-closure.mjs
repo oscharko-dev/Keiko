@@ -34,7 +34,7 @@ function runtimeDependency(root, importer, specifier) {
 
 export function collectH1OwnedSourcePaths(root = process.cwd()) {
   const canonicalRoot = realpathSync(resolve(root));
-  const pending = [...GOVERNED_TOOL_CONTRACT_PINS.pendingH1.ownedImplementation];
+  const pending = [...GOVERNED_TOOL_CONTRACT_PINS.h1Provenance.ownedImplementation];
   const paths = new Set();
   const manifests = new Set(["package-lock.json"]);
   while (pending.length > 0) {
