@@ -1,3 +1,11 @@
+import { gitDeliveryObservationFailure } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
+
+import {
+  CommandCancelledError,
+  CommandDeniedError,
+  CommandTimeoutError,
+  OutputLimitError,
+} from "./errors.js";
 import { describe, expect, it, vi } from "vitest";
 import { buildGitHubApiGetArgv, readGitProviderValue } from "./git-provider-value.js";
 import { buildPrReadArgv, GIT_PR_IDENTITY_JQ } from "./git-pr-gateway.js";
@@ -69,6 +77,23 @@ describe("single provider metadata projections", () => {
     expect(await readGitProviderValue({ argv: [], run })).toEqual({
       status: "unavailable",
       failure: { reason: "provider-unavailable", state: "pending" },
+    });
+  });
+
+  // The generic-`Error` case above reached "provider-unavailable" through the classifier's own
+  // total fallback, so it could not tell the two shapes apart; every thrown local error must keep
+  // its specific reason through this path (owner audit finding b2-17).
+  it.each([
+    ["denied", new CommandDeniedError("denied"), "authority-denied"],
+    ["cancelled", new CommandCancelledError("cancelled"), "cancelled"],
+    ["timed out", new CommandTimeoutError("timeout"), "timeout"],
+    ["output-capped", new OutputLimitError("too much output"), "output-truncated"],
+  ])("classifies a thrown %s command error by its own reason", async (_label, error, reason) => {
+    const run = (): Promise<CommandResult> => Promise.reject(error);
+    // The expected envelope comes from the contract's own producer, never a restated state map.
+    expect(await readGitProviderValue({ argv: [], run })).toEqual({
+      status: "unavailable",
+      failure: gitDeliveryObservationFailure(reason),
     });
   });
 });

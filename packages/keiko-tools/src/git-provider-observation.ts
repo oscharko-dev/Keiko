@@ -32,6 +32,16 @@ function providerFailure(result: CommandResult): GitDeliveryObservationFailureRe
   return "provider-unavailable";
 }
 
+// The `Error` half of `classifyGitProviderReadFailure`, exported because `localFailure` is total
+// over `Error` while the combined classifier's return type is not: a caller holding a
+// `CommandResult | Error` can take this decision first, which both narrows `result` to
+// `CommandResult` for the rest of its body and keeps the "always defined" fact in the type. The
+// alternative — classify first, then re-test `instanceof Error` — produces a branch that can never
+// run (owner audit finding b2-17; AGENTS.md §6).
+export function classifyGitProviderLocalFailure(error: Error): GitDeliveryObservationFailure {
+  return gitDeliveryObservationFailure(localFailure(error));
+}
+
 export function classifyGitProviderReadFailure(
   result: CommandResult | Error,
 ): GitDeliveryObservationFailure | undefined {
@@ -148,22 +158,18 @@ function acceptPage(
   return { done: state.values.length === state.total };
 }
 
-// Owner audit finding b2-17: `classifyGitProviderReadFailure` routes every `Error` through
-// `localFailure`, which is total over `Error` (its final branch is an unconditional
-// "provider-unavailable", never `undefined` — the same shape `git-provider-value.ts`'s own
-// classifier has). Calling `localFailure` directly here — the same call
-// `classifyGitProviderReadFailure` itself makes for an `Error` — narrows `result` to
-// `CommandResult` for the rest of the function AND keeps the "always defined" fact visible in the
-// type (`localFailure` returns a bare reason, never `| undefined`), instead of re-testing
-// `instanceof Error` a second time only to fall through a branch that could never run (deleted
-// dead code, AGENTS.md §6).
+// Owner audit finding b2-17: take the `Error` decision first through the shared
+// `classifyGitProviderLocalFailure` — the same call `classifyGitProviderReadFailure` itself makes
+// for an `Error` — so `result` is narrowed to `CommandResult` for the rest of the function and no
+// branch can be reached only when a total classifier returned `undefined`. `readGitProviderValue`
+// in `git-provider-value.ts` is the second caller of that helper, for the same reason.
 function evaluateResponse(
   input: GitProviderPageInput,
   state: PageState,
   result: CommandResult | Error,
 ): { readonly done: boolean; readonly failure?: GitDeliveryObservationFailure } {
   if (result instanceof Error) {
-    return { done: true, failure: gitDeliveryObservationFailure(localFailure(result)) };
+    return { done: true, failure: classifyGitProviderLocalFailure(result) };
   }
   state.bytes +=
     Buffer.byteLength(result.stdout, "utf8") + Buffer.byteLength(result.stderr, "utf8");

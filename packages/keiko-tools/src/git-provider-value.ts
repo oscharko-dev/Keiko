@@ -3,6 +3,7 @@ import {
   type GitDeliveryObservationFailure,
 } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import {
+  classifyGitProviderLocalFailure,
   classifyGitProviderReadFailure,
   type GitProviderReadRunner,
 } from "./git-provider-observation.js";
@@ -40,13 +41,13 @@ export async function readGitProviderValue(request: Input): Promise<GitProviderV
   }
   if (cancelled(input.signal))
     return { status: "unavailable", failure: gitDeliveryObservationFailure("cancelled") };
+  // Classify the `Error` case first (owner audit finding b2-17): it is total, so it both decides
+  // that case and narrows `result` to `CommandResult` below. Classifying first and re-testing
+  // `instanceof Error` afterwards leaves a branch that can never run.
+  if (result instanceof Error)
+    return { status: "unavailable", failure: classifyGitProviderLocalFailure(result) };
   const failure = classifyGitProviderReadFailure(result);
   if (failure !== undefined) return { status: "unavailable", failure };
-  if (result instanceof Error)
-    return {
-      status: "unavailable",
-      failure: gitDeliveryObservationFailure("provider-unavailable"),
-    };
   if (Buffer.byteLength(result.stdout, "utf8") + Buffer.byteLength(result.stderr, "utf8") > 262_144)
     return { status: "unavailable", failure: gitDeliveryObservationFailure("output-truncated") };
   try {
