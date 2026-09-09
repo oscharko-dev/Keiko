@@ -325,6 +325,37 @@ describe("collectBestLines", () => {
   });
 });
 
+/**
+ * Asserts that a scan grows linearly with input length instead of quadratically -- the S8786
+ * shape every adversarial regression below guards against. The line is timed at `units` and at
+ * `2 * units` back-to-back (minimum of two samples each, so one transient stall cannot pass for
+ * growth); a linear scan roughly doubles, while the pre-fix quadratic patterns grew ~4x per
+ * doubling (measured 18/68/265/1067 ms and 170/717/2976/12085 ms along successive doublings).
+ * The ratio is what makes the guard hermetic: an absolute wall-clock budget (1,500 ms before this
+ * change) inflates with the parallel test-suite load on a hosted runner -- the comma case that
+ * takes ~90 ms here took 1,546 ms in the Node 26 compatibility job of #3394 -- whereas a ratio of
+ * two measurements taken under the same load does not.
+ */
+function assertLinearGrowth(
+  scan: (line: string) => boolean,
+  build: (units: number) => string,
+  units: number,
+): void {
+  const sampleMs = (line: string): number => {
+    let best = Number.POSITIVE_INFINITY;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const start = performance.now();
+      expect(scan(line)).toBe(false);
+      best = Math.min(best, performance.now() - start);
+    }
+    return best;
+  };
+  const small = sampleMs(build(units));
+  const large = sampleMs(build(units * 2));
+  // Below ~20 ms a measurement is dominated by timer and scheduling noise, not by the pattern.
+  expect(large).toBeLessThan(3 * Math.max(small, 20));
+}
+
 describe("looksLikeBlockHeader", () => {
   it("recognises common signature shapes across languages", () => {
     expect(looksLikeBlockHeader("public void foo(int a, int b) {")).toBe(true);
@@ -355,18 +386,10 @@ describe("looksLikeBlockHeader", () => {
   // head-shapes, never followed by `{`) the engine re-walks the greedy-then-backtrack search for
   // a closing `)` from every one of those starting points, which is quadratic in line length. A
   // 40,000-character adversarial line (no keyword, no `{` anywhere) would have taken well over a
-  // second; the bounded parameter-list class keeps this linear. The wall-clock budget below
-  // carries large headroom over that measured cost specifically so it asserts "not quadratic",
-  // not a tight performance SLA — decoupling the regression guard from CI-load-driven timing
-  // noise (same class as PR #2471's code review finding, addressed for other files in this
-  // session).
+  // second; the bounded parameter-list class keeps this linear. `assertLinearGrowth` asserts "not quadratic" as a growth ratio between two
+  // lengths measured under the same load, never as an absolute wall-clock budget.
   it("resolves an adversarial no-brace line in linear time", () => {
-    const adversarialLine = "a b()".repeat(8_000);
-    const start = Date.now();
-    const result = looksLikeBlockHeader(adversarialLine);
-    const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(1500);
-    expect(result).toBe(false);
+    assertLinearGrowth(looksLikeBlockHeader, (units) => "a b()".repeat(units), 8_000);
   });
 
   // Second S8786 regression: bounding only the parameter-list class left an independent
@@ -376,17 +399,10 @@ describe("looksLikeBlockHeader", () => {
   // the type-prefix class in isolation from the (already-bounded) parameter-list class. Against
   // the pre-fix pattern (parameter-list bounded, type-prefix left as `*`) this took well over a
   // second at this length with clear quadratic (~4x per doubling) growth; the bounded type-prefix
-  // class keeps it linear. The wall-clock budget below carries large headroom over that measured
-  // cost specifically so it asserts "not quadratic", not a tight performance SLA — decoupling the
-  // regression guard from CI-load-driven timing noise (same class as PR #2471's code review
-  // finding, addressed for other files in this session).
+  // class keeps it linear. `assertLinearGrowth` asserts "not quadratic" as a growth ratio between
+  // two lengths measured under the same load, never as an absolute wall-clock budget.
   it("resolves an adversarial comma-separated no-brace line in linear time", () => {
-    const adversarialLine = "x y(" + "a,".repeat(20_000) + ";z";
-    const start = Date.now();
-    const result = looksLikeBlockHeader(adversarialLine);
-    const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(1500);
-    expect(result).toBe(false);
+    assertLinearGrowth(looksLikeBlockHeader, (units) => "x y(" + "a,".repeat(units) + ";z", 20_000);
   });
 
   // Third S8786 regression: the trailing `(?:throws\s+[^{]+)?` clause was left unbounded even
@@ -397,16 +413,11 @@ describe("looksLikeBlockHeader", () => {
   // is itself unbounded, giving the same O(n^2) shape as the first two findings (confirmed via
   // the real exported function: 170/717/2976/12085 ms at 7,500/15,000/30,000/60,000 chars, a
   // clean ~4.2x-per-doubling quadratic curve). Bounding the throws-tail class to 500 characters
-  // (comfortably beyond any real throws-clause) keeps this linear; the wall-clock budget below
-  // carries large headroom over the bounded-linear cost while staying far below what the
-  // unbounded quadratic version took at this length.
+  // (comfortably beyond any real throws-clause) keeps this linear; `assertLinearGrowth` asserts
+  // "not quadratic" as a growth ratio between two lengths measured under the same load, never as
+  // an absolute wall-clock budget.
   it("resolves an adversarial no-brace line with a throws clause in linear time", () => {
-    const adversarialLine = "a b() throws c ".repeat(4_000);
-    const start = Date.now();
-    const result = looksLikeBlockHeader(adversarialLine);
-    const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(1500);
-    expect(result).toBe(false);
+    assertLinearGrowth(looksLikeBlockHeader, (units) => "a b() throws c ".repeat(units), 2_000);
   });
 
   // Regression for the follow-up finding that a *narrow* finite bound is itself a behaviour
@@ -469,16 +480,9 @@ describe("looksLikeSignatureStart", () => {
   // fail. Against the pre-fix pattern (unbounded type-prefix class inside the repeated group)
   // this showed the same clean ~4x-per-doubling quadratic growth as the `looksLikeBlockHeader`
   // finding (18ms/68ms/265ms/1067ms at 8k/16k/32k/64k repetitions); the bounded class keeps it
-  // linear. The wall-clock budget below carries large headroom over that measured cost
-  // specifically so it asserts "not quadratic", not a tight performance SLA — decoupling the
-  // regression guard from CI-load-driven timing noise (same class as PR #2471's code review
-  // finding, addressed for other files in this session).
+  // linear. `assertLinearGrowth` asserts "not quadratic" as a growth ratio between two
+  // lengths measured under the same load, never as an absolute wall-clock budget.
   it("resolves an adversarial comma-separated no-paren line in linear time", () => {
-    const adversarialLine = "a,".repeat(20_000) + ";z";
-    const start = Date.now();
-    const result = looksLikeSignatureStart(adversarialLine);
-    const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(1500);
-    expect(result).toBe(false);
+    assertLinearGrowth(looksLikeSignatureStart, (units) => "a,".repeat(units) + ";z", 20_000);
   });
 });
