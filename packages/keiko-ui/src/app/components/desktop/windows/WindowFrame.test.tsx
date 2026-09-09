@@ -471,6 +471,75 @@ describe("WindowFrame content zoom controls", () => {
     expect(linkedAllFilesRoots).toHaveBeenCalledWith("prompt-enhancer-1");
   });
 
+  // A window whose own content takes focus while it initializes must not raise itself over the
+  // window the user moved to. Observed in CI as a "Close Files window" click that could never land:
+  // the editor window's content (Monaco, the workspace-trust banner) grabbed focus after the user
+  // had raised the Files window, and every focus grab put the editor back on top. Audit C061 /
+  // WCAG 2.4.11 covers TABBING into a lower window, which the shell records as
+  // `inputModality="keyboard"`; content autofocus is neither a Tab nor a pointer press.
+  it("does not raise a background window when its own content steals focus from another window", () => {
+    vi.useFakeTimers();
+    document.documentElement.dataset.inputModality = "pointer";
+    const focus = vi.fn();
+    const other = document.createElement("section");
+    other.className = "window";
+    const otherControl = document.createElement("button");
+    other.append(otherControl);
+    document.body.append(other);
+
+    render(
+      <WindowFrame
+        win={appWindow({ id: "editor-1", type: "editor" })}
+        top={false}
+        connState={null}
+        linkRevision={0}
+        api={api({ focus })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const frame = screen.getByRole("region");
+    fireEvent.focus(frame, { relatedTarget: otherControl });
+    vi.advanceTimersByTime(50);
+
+    expect(focus).not.toHaveBeenCalled();
+    other.remove();
+    delete document.documentElement.dataset.inputModality;
+    vi.useRealTimers();
+  });
+
+  // The accessibility behaviour the handler exists for still holds: tabbing into a lower window
+  // raises it, so the focused control cannot stay hidden behind the top window.
+  it("raises a background window when the user tabs into it from another window", () => {
+    vi.useFakeTimers();
+    document.documentElement.dataset.inputModality = "keyboard";
+    const focus = vi.fn();
+    const other = document.createElement("section");
+    other.className = "window";
+    const otherControl = document.createElement("button");
+    other.append(otherControl);
+    document.body.append(other);
+
+    render(
+      <WindowFrame
+        win={appWindow({ id: "editor-1", type: "editor" })}
+        top={false}
+        connState={null}
+        linkRevision={0}
+        api={api({ focus })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    fireEvent.focus(screen.getByRole("region"), { relatedTarget: otherControl });
+    vi.advanceTimersByTime(1);
+
+    expect(focus).toHaveBeenCalledWith("editor-1");
+    other.remove();
+    delete document.documentElement.dataset.inputModality;
+    vi.useRealTimers();
+  });
+
   it("defers focus long enough for selectable text drags to start", () => {
     vi.useFakeTimers();
     registerWindowRender("promptEnhancer", () => (

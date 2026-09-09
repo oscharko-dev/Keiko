@@ -47,6 +47,7 @@ import {
   authorityStateDir,
 } from "./support/coding-runtime-2386-authority.js";
 import { openEditorWorkspace, openTreeFile } from "./support/editorWorkspace.js";
+import { activateWindow } from "./support/window-chrome.js";
 
 const stateDir = authorityStateDir();
 const repositoryRoot = authorityRepositoryRoot(stateDir);
@@ -243,15 +244,17 @@ async function openRealBinaryEditorBridge(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Editor" }).click();
   const workspace = await openEditorWorkspace(page);
   const editorWindow = page.locator('section[data-window-id="editor"]');
-  await editorWindow.focus();
-  await expect(editorWindow).toHaveAttribute("data-top", "true");
+  // Raise through the shared helper, which uses the product's own pointer path. A bare focus() no
+  // longer raises a window: WindowFrame only treats keyboard navigation as a raise signal, so a
+  // still-loading window cannot grab focus and jump over the one the user moved to.
+  await activateWindow(editorWindow);
   // The caret is aria-hidden since #2605 (role="tree" may own only treeitem/group), so it is
   // addressed by selector rather than by role. Expansion is also reachable via Arrow Right.
   await workspace.locator('button.tr-caret-btn[aria-label="Expand folder: src"]').click();
   await openTreeFile(workspace, AUTHORITY_TARGET_RELATIVE_PATH);
   await expect.poll(() => hasEditorSession(page, root)).toBe(true);
   await assertInheritedWorkspaceTrust(page);
-  await page.locator('section[data-window-id="coding"]').focus();
+  await activateWindow(page.locator('section[data-window-id="coding"]'));
 }
 
 // M11 (#2612/#2686) rebuilt workspace trust around user-facing projects: registering the folder
