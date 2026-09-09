@@ -1,0 +1,258 @@
+import type { ReactNode } from "react";
+import type {
+  JourneyOutcome,
+  GitJourneyRemoteFacts,
+} from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
+import {
+  APPLIED_PR_DESCRIPTION_STATES,
+  journeyEvidenceFresh,
+} from "@oscharko-dev/keiko-contracts/runtime/git-journey-freshness";
+import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
+import { journeyCiCurrent, journeyDescriptionCurrent } from "./_journeyPresentation";
+import { CheckCounts, Fact } from "./CodingWorkbenchCiReadiness";
+import common from "./CodingWorkbenchWindow.module.css";
+import styles from "./CodingWorkbenchJourneyOutcome.module.css";
+import ciStyles from "./CodingWorkbenchCiReadiness.module.css";
+
+export function JourneyDetails({
+  outcome,
+  now,
+}: {
+  readonly outcome: JourneyOutcome;
+  readonly now: number;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  return (
+    <>
+      <JourneyIdentity outcome={outcome} />
+      <div className={styles["cmp-journey-groups"]}>
+        <JourneyCi outcome={outcome} now={now} />
+        <JourneyDescription outcome={outcome} now={now} />
+      </div>
+      {outcome.remote === null ? (
+        <p className={common.helpText}>{t("codingWorkbench.journey.remoteUnknown")}</p>
+      ) : (
+        <JourneyRemote remote={outcome.remote} />
+      )}
+      {outcome.observationFailure !== null && (
+        <p className={common.helpText}>
+          {t(`codingWorkbench.ci.reason.${outcome.observationFailure.reason}`)}
+        </p>
+      )}
+    </>
+  );
+}
+function JourneyIdentity({
+  outcome,
+}: {
+  readonly outcome: Pick<JourneyOutcome, "binding" | "observedAt" | "expiresAt">;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const root = `https://github.com/${outcome.binding.repository}`;
+  return (
+    <>
+      <div className={styles["cmp-journey-links"]}>
+        <a
+          href={`${root}/issues/${String(outcome.binding.issueNumber)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {t("codingWorkbench.journey.issueLink", { number: outcome.binding.issueNumber })}
+        </a>
+        <a
+          href={`${root}/pull/${String(outcome.binding.prNumber)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {t("codingWorkbench.journey.prLink", { number: outcome.binding.prNumber })}
+        </a>
+      </div>
+      <dl className={common.approvalFacts}>
+        <JourneyFact label={t("codingWorkbench.ci.head")}>
+          <code>{outcome.binding.headSha}</code>
+        </JourneyFact>
+        <JourneyFact label={t("codingWorkbench.draftDelivery.baseRef")}>
+          {outcome.binding.baseRef}
+        </JourneyFact>
+        <JourneyFact label={t("codingWorkbench.ci.observedAt")}>
+          <JourneyTime value={outcome.observedAt} />
+        </JourneyFact>
+        <JourneyFact label={t("codingWorkbench.ci.expiresAt")}>
+          <JourneyTime value={outcome.expiresAt} />
+        </JourneyFact>
+      </dl>
+    </>
+  );
+}
+
+function JourneyCi({
+  outcome,
+  now,
+}: {
+  readonly outcome: JourneyOutcome;
+  readonly now: number;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const ci = outcome.readiness;
+  let state: "unobserved" | "stale" | NonNullable<JourneyOutcome["readiness"]>["state"] =
+    "unobserved";
+  if (ci !== null) state = journeyCiCurrent(outcome, now) ? ci.state : "stale";
+  // #3390: once the run has settled, this group is the operator's only CURRENT reading of CI
+  // readiness -- the CI readiness card reports a settled run's own observations as historical by
+  // design -- so it carries the same machine-readable contract that card does: the displayed state
+  // and reason on one element, the check counts and the observed head as data. A reader that
+  // resolved the verdict from translated text would break on the first wording change, and one
+  // that could not resolve it at all waited twenty minutes for a card that had already answered.
+  // The reason is ALSO rendered as visible text (mirroring the sibling CodingWorkbenchCiReadiness
+  // card's ObservationDetails and CodingWorkbenchJourneyOutcome's own state/reason pair): `state`
+  // alone collapses several distinct "blocked" reasons -- pull-request-closed, merge-conflict,
+  // repair-budget-exhausted, required-checks-blocked -- onto one operator-invisible value, each
+  // requiring a different remedy, and this group is the sole current source for it once the run
+  // has settled.
+  return (
+    <section className={styles["cmp-journey-group"]} aria-label={t("codingWorkbench.journey.ci")}>
+      <h4>{t("codingWorkbench.journey.ci")}</h4>
+      <output
+        className={ciStyles["cmp-ci-state"]}
+        data-testid="cwb-journey-ci"
+        data-state={state}
+        data-reason={ci?.reason}
+      >
+        {t(`codingWorkbench.ci.state.${state}`)}
+      </output>
+      {ci !== null && (
+        <>
+          <p className={common.helpText}>{t(`codingWorkbench.ci.reason.${ci.reason}`)}</p>
+          <p>
+            {t("codingWorkbench.journey.checkCounts", {
+              passed: ci.requiredChecks.passed,
+              total: ci.requiredChecks.total,
+              failed: ci.advisoryChecks.failed,
+            })}
+          </p>
+          <CheckCounts kind="required" counts={ci.requiredChecks} t={t} />
+          <CheckCounts kind="advisory" counts={ci.advisoryChecks} t={t} />
+          <dl className={common.approvalFacts}>
+            <Fact
+              id="headSha"
+              label={t("codingWorkbench.ci.head")}
+              value={<code>{ci.headSha}</code>}
+            />
+          </dl>
+          <JourneyReviewCounts outcome={outcome} />
+        </>
+      )}
+    </section>
+  );
+}
+function JourneyReviewCounts({
+  outcome,
+}: {
+  readonly outcome: Pick<JourneyOutcome, "readiness">;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const review = outcome.readiness?.humanReview;
+  if (review === undefined || review.visibility === "unknown")
+    return <p>{t("codingWorkbench.ci.reviewUnknown")}</p>;
+  return (
+    <p>
+      {t("codingWorkbench.ci.reviewCounts", {
+        approved: review.approvedCount ?? 0,
+        required: review.requiredCount ?? 0,
+        changes: review.changesRequestedCount ?? 0,
+      })}
+    </p>
+  );
+}
+function descriptionState(
+  outcome: JourneyOutcome,
+  now: number,
+): "unavailable" | NonNullable<JourneyOutcome["description"]>["state"] {
+  const description = outcome.description;
+  if (description === null) return "unavailable";
+  // Whether the application still holds is the shared contract rule's verdict: while the pull
+  // request is open it needs the live revision and a read within the observation window; once the
+  // delivered head has merged it rests on the receipt for that head, however old the last read
+  // (#3390, rehearsal run-24). A merged journey's applied description is therefore not "stale".
+  if (journeyDescriptionCurrent(outcome, now)) return description.state;
+  if (!journeyEvidenceFresh(description, now)) return "stale";
+  if (APPLIED_PR_DESCRIPTION_STATES.has(description.state)) return "stale";
+  return description.state;
+}
+function JourneyDescription({
+  outcome,
+  now,
+}: {
+  readonly outcome: JourneyOutcome;
+  readonly now: number;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const state = descriptionState(outcome, now);
+  const applied = journeyDescriptionCurrent(outcome, now);
+  return (
+    <section
+      className={styles["cmp-journey-group"]}
+      aria-label={t("codingWorkbench.journey.description")}
+    >
+      <h4>{t("codingWorkbench.journey.description")}</h4>
+      <p>{t(`codingWorkbench.journey.description.${state}`)}</p>
+      <p>
+        {t(`codingWorkbench.journey.${applied ? "descriptionApplied" : "descriptionUnconfirmed"}`)}
+      </p>
+      {outcome.description !== null && (
+        <p>{t(`codingWorkbench.journey.completeness.${outcome.description.completeness}`)}</p>
+      )}
+    </section>
+  );
+}
+function JourneyRemote({ remote }: { readonly remote: GitJourneyRemoteFacts }): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  return (
+    <dl className={common.approvalFacts}>
+      <JourneyFact label={t("codingWorkbench.ci.pullRequest")}>
+        {t(`codingWorkbench.draftDelivery.remote.${remote.identity.state}`)}
+      </JourneyFact>
+      <JourneyFact label={t("codingWorkbench.ci.draft")}>
+        {t(`codingWorkbench.ci.${remote.identity.isDraft ? "isDraft" : "notDraft"}`)}
+      </JourneyFact>
+      <JourneyFact label={t("codingWorkbench.ci.humanReview")}>
+        {t(`codingWorkbench.journey.review.${remote.reviewDecision}`)}
+      </JourneyFact>
+      <JourneyFact label={t("codingWorkbench.journey.conversations")}>
+        {t("codingWorkbench.journey.conversationCounts", remote.reviewConversations)}
+      </JourneyFact>
+      <JourneyFact label={t("codingWorkbench.journey.merge")}>
+        {remote.mergedAt === null ? (
+          t("codingWorkbench.journey.notMerged")
+        ) : (
+          <JourneyTime value={remote.mergedAt} />
+        )}
+      </JourneyFact>
+      <JourneyFact label={t("codingWorkbench.journey.issueState")}>
+        {t(`codingWorkbench.journey.issue.${remote.issue.state}`)}
+      </JourneyFact>
+      {remote.issue.closedAt !== null && (
+        <JourneyFact label={t("codingWorkbench.journey.closedAt")}>
+          <JourneyTime value={remote.issue.closedAt} />
+        </JourneyFact>
+      )}
+    </dl>
+  );
+}
+function JourneyFact({
+  label,
+  children,
+}: {
+  readonly label: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <div className={common.approvalFact}>
+      <dt>{label}</dt>
+      <dd className={styles["cmp-journey-value"]}>{children}</dd>
+    </div>
+  );
+}
+function JourneyTime({ value }: { readonly value: string }): ReactNode {
+  return <time dateTime={value}>{value.replace("T", " ").replace(".000Z", " UTC")}</time>;
+}

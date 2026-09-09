@@ -13,12 +13,16 @@ import {
   cloneRepository as fetchCloneRepository,
   createProject,
   fetchGitBranches,
-  fetchGitDeliverySyncExecute,
   fetchGitDeliverySyncPreview,
   fetchGitDeliveryCommitExecute,
   fetchGitDeliveryCommitPreview,
   fetchGitDeliveryLocalBranchCreate,
   fetchGitDeliveryLocalBranchSwitch,
+  fetchGitDeliveryPrApprove,
+  fetchGitDeliveryPrDescriptionApply,
+  fetchGitDeliveryPrDescriptionApprove,
+  fetchGitDeliveryPrDescriptionPreview,
+  fetchGitDeliveryPrDescriptionStatus,
   fetchGitDeliveryPushExecute,
   fetchGitDeliveryPushPreview,
   fetchGitDeliveryStage,
@@ -29,6 +33,9 @@ import {
   fetchGitSummary,
   fetchGitStatus,
   fetchProjects,
+  proposeCommit,
+  proposeGitDeliverySync,
+  proposePush,
   reconnectProject,
 } from "@/lib/api";
 import type { GitDeliveryCommitPreviewResponse } from "@/lib/api";
@@ -113,12 +120,19 @@ describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
     expect(DEFAULT_GIT_CLIENT.commitExecute).toBe(fetchGitDeliveryCommitExecute);
   });
 
+  // F3 (epic #3384 final audit): commitPropose is the mint-then-execute entry point
+  // commitChanges (GitClientWindow.tsx) actually calls, so it must wire to the real
+  // mint-then-execute wrapper, not to the bare execute call.
+  it("commitPropose is proposeCommit", () => {
+    expect(DEFAULT_GIT_CLIENT.commitPropose).toBe(proposeCommit);
+  });
+
   it("syncPreview is fetchGitDeliverySyncPreview", () => {
     expect(DEFAULT_GIT_CLIENT.syncPreview).toBe(fetchGitDeliverySyncPreview);
   });
 
-  it("syncExecute is fetchGitDeliverySyncExecute", () => {
-    expect(DEFAULT_GIT_CLIENT.syncExecute).toBe(fetchGitDeliverySyncExecute);
+  it("syncExecute is the approval-minting sync proposal", () => {
+    expect(DEFAULT_GIT_CLIENT.syncExecute).toBe(proposeGitDeliverySync);
   });
 
   it("pushPreview is fetchGitDeliveryPushPreview", () => {
@@ -127,6 +141,37 @@ describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
 
   it("pushExecute is fetchGitDeliveryPushExecute", () => {
     expect(DEFAULT_GIT_CLIENT.pushExecute).toBe(fetchGitDeliveryPushExecute);
+  });
+
+  // F3 (epic #3384 final audit): pushPropose is the mint-then-execute entry point runPushSync
+  // (GitClientWindow.tsx) actually calls, so it must wire to the real mint-then-execute
+  // wrapper, not to the bare execute call.
+  it("pushPropose is proposePush", () => {
+    expect(DEFAULT_GIT_CLIENT.pushPropose).toBe(proposePush);
+  });
+
+  // #3387/#3399 (epic #3384): before this pass, DEFAULT_GIT_CLIENT had no prApprove or
+  // prDescription* fields at all, so GovernedPullRequestCard rendered through the generic Git
+  // window (GitClientWindow) always degraded to the pre-#3387 unapproved pr-execute call and never
+  // showed the preview -> approve -> apply Description panel. Wired exactly like mergeApprove.
+  it("prApprove is fetchGitDeliveryPrApprove", () => {
+    expect(DEFAULT_GIT_CLIENT.prApprove).toBe(fetchGitDeliveryPrApprove);
+  });
+
+  it("prDescriptionPreview is fetchGitDeliveryPrDescriptionPreview", () => {
+    expect(DEFAULT_GIT_CLIENT.prDescriptionPreview).toBe(fetchGitDeliveryPrDescriptionPreview);
+  });
+
+  it("prDescriptionApprove is fetchGitDeliveryPrDescriptionApprove", () => {
+    expect(DEFAULT_GIT_CLIENT.prDescriptionApprove).toBe(fetchGitDeliveryPrDescriptionApprove);
+  });
+
+  it("prDescriptionApply is fetchGitDeliveryPrDescriptionApply", () => {
+    expect(DEFAULT_GIT_CLIENT.prDescriptionApply).toBe(fetchGitDeliveryPrDescriptionApply);
+  });
+
+  it("prDescriptionStatus is fetchGitDeliveryPrDescriptionStatus", () => {
+    expect(DEFAULT_GIT_CLIENT.prDescriptionStatus).toBe(fetchGitDeliveryPrDescriptionStatus);
   });
 });
 
@@ -367,6 +412,11 @@ describe("useGitActions", () => {
         status: "succeeded",
         actionKind: "commit",
       })),
+      commitPropose: vi.fn<GitClientSeam["commitPropose"]>(async () => ({
+        schemaVersion: "1",
+        status: "succeeded",
+        actionKind: "commit",
+      })),
       syncPreview: vi.fn<GitClientSeam["syncPreview"]>(),
       syncExecute: vi.fn<GitClientSeam["syncExecute"]>(),
       pushPreview: vi.fn<GitClientSeam["pushPreview"]>(),
@@ -375,8 +425,18 @@ describe("useGitActions", () => {
         status: "succeeded",
         actionKind: "push",
       })),
+      pushPropose: vi.fn<GitClientSeam["pushPropose"]>(async () => ({
+        schemaVersion: "1",
+        status: "succeeded",
+        actionKind: "push",
+      })),
       prPreview: vi.fn<GitClientSeam["prPreview"]>(),
+      prApprove: vi.fn<GitClientSeam["prApprove"]>(),
       prExecute: vi.fn<GitClientSeam["prExecute"]>(),
+      prDescriptionPreview: vi.fn<GitClientSeam["prDescriptionPreview"]>(),
+      prDescriptionApprove: vi.fn<GitClientSeam["prDescriptionApprove"]>(),
+      prDescriptionApply: vi.fn<GitClientSeam["prDescriptionApply"]>(),
+      prDescriptionStatus: vi.fn<GitClientSeam["prDescriptionStatus"]>(),
       mergePreview: vi.fn<GitClientSeam["mergePreview"]>(),
       mergeApprove: vi.fn<GitClientSeam["mergeApprove"]>(),
       mergeExecute: vi.fn<GitClientSeam["mergeExecute"]>(),

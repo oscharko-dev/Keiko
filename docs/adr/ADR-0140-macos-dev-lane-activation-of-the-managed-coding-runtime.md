@@ -98,7 +98,41 @@ unrecognized values are ignored fail-closed. Enabling the dev lane never widens 
 readiness projection reports the same ceiling the mint clamp enforces; the previously reported
 autonomous-delivery ceiling was a separate authority knob and could diverge from enforcement.
 
-### D6 — Development stop owns bounded runtime teardown
+### D6 — Long-lived gateway-only network confinement on macOS (Issue #2951)
+
+The macOS dev-lane backend (`devLaneRuntimeProcessBackend.ts`) never spawns the sidecar directly.
+Every launch is wrapped in a `RuntimeGatewayConfinement` (ADR-0043 D11–D13,
+`packages/keiko-sandbox/src/runtime-gateway.ts`): a Seatbelt profile that denies all network egress
+by default and carves out exactly one outbound allowance — the loopback gateway/BFF port the caller
+attests — plus denies mach-lookup, Apple Event, and `LSOpen` escapes. `process-fork` remains
+available for the pinned OpenCode sidecar's Git handshake (#3390), while `process-exec` is
+deny-by-default and admits only the verified runtime executable and Apple's fixed Git
+launcher/implementation paths. Arbitrary shells, curl, compilers, and other child executables are
+refused. Every admitted descendant inherits the same Seatbelt profile, including the network
+denial above. The backend refuses to spawn at all when no confinement is attached, or when the
+policy's `runId`/`treeBindingId`
+does not match the launch request, before any process exists (fail-closed, consistent with D5's
+kill-switch precedence).
+
+The profile is asymmetric by design: outbound is a single pinned allowance (the caller-attested
+gateway host/port), but inbound is not port-pinned at all — the compiled rule is
+`(allow network-inbound (local <family> "localhost:*"))`
+(`packages/keiko-sandbox/src/backends.ts`'s `buildGatewaySeatbeltCommand`), so the confined process
+may itself accept a connection on any local port, as long as the peer is loopback-sourced (`deny
+network*` still blocks every route to a non-loopback peer in either direction). This is what lets
+the sidecar's own HTTP server bind and answer `/health` and other local callers without a second,
+narrower carve-out; it does not weaken the egress boundary this ADR closes, since an inbound-only
+allowance grants no ability to reach out to a network destination the outbound rule denies.
+
+This closes the network side of the dev lane's confinement for macOS only. It does **not** extend to
+the Windows dev lane or to `nativeRuntimeProcessBackend.ts` (the backend this ADR also names in its
+title and D3 for Windows process-group supervision): neither carries an OS-level network policy
+today. A Windows-activated sidecar is confined by D2's structural checkout confinement and D3's
+digest-pinned payload trust, but not by a kernel-enforced egress boundary. Closing that gap requires
+a Windows-native equivalent of the Seatbelt allowlist and is tracked as remaining work (Issue #2951),
+not claimed here as done.
+
+### D7 — Development stop owns bounded runtime teardown
 
 `npm run dev:stop` signals the trusted development runner first. The runner gives the BFF longer
 than the BFF's complete bounded runtime-disposal window before escalating, so the coding
@@ -106,6 +140,28 @@ orchestrator can revoke authority, terminate the owned OpenCode process group, a
 state before UI and watcher processes disappear. The stop command waits for the runner and every
 tracked child; it does not report success while a tracked process remains alive. `--force` remains
 an explicit last-resort hard stop.
+
+### D8 — Cross-platform gateway policy moves to a shared contract type (Issue #2951 follow-up, 2026-09-05)
+
+D6's Seatbelt confinement now flows through a contract-level `NetworkGatewayPolicy`
+(`keiko-contracts/src/tools.ts`) and keiko-sandbox's generic `planIsolatedRun`/`selectGatewayBackend`
+planning path (ADR-0043 D14) instead of a macOS-only helper called directly: the dev-lane backend
+builds an `IsolatedRunPlan` with that policy and lets the shared planner pick (and, on an
+unsupported host, refuse) the backend, rather than assuming Seatbelt is always present. The observed
+behaviour on a working macOS host is unchanged — same profile, same `/usr/bin/sandbox-exec` path —
+but a macOS host missing `sandbox-exec` itself now fails the launch closed with a reasoned decision
+instead of an OS-level spawn error surfacing after the fact.
+
+D6's Windows/native gap also gets an explicit, shared refusal: `nativeRuntimeProcessBackend.ts` can
+now be given the same gateway policy and, because its launch-packet protocol has no way to enforce
+one, always fails the launch with the identical reason keiko-sandbox's planner would produce for an
+unsupported host. Production composition (`productionOpenCodeBackend.ts`) now always attaches that
+policy to a native/Windows launch too, via the unconditional `runtimeGatewayConfinement` helper at
+both native-backend construction sites (the release/evaluation-lane path and `devLaneSupervisor`'s
+Windows branch) — so a Windows-activated sidecar today fails closed pre-spawn with
+`GATEWAY_UNSUPPORTED_ON_HOST_REASON` (`nativeRuntimeProcessBackend.ts`'s refusal path) rather than
+running unconfined. This matches ADR-0043 D14's own description of the same wiring; the two ADRs
+converge instead of describing the fact differently.
 
 ## Consequences
 

@@ -1,5 +1,6 @@
 import { apiKeyHeaderValue, DEFAULT_API_KEY_HEADER_NAME, trimTrailingSlash } from "./config.js";
 import { gatewayFetch } from "./http.js";
+import { providerOutputTokenLimit } from "./output-token-limit.js";
 import type { GatewayConfig, ModelProviderConfig } from "./types.js";
 
 export interface GatewayReadinessChatCompletionRequest {
@@ -9,6 +10,7 @@ export interface GatewayReadinessChatCompletionRequest {
   readonly stream?: boolean | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
   readonly maxResponseBytes?: number | undefined;
+  readonly maxOutputTokens?: number | undefined;
 }
 
 function providerHeaders(provider: ModelProviderConfig): Record<string, string> {
@@ -29,6 +31,15 @@ function readinessChatCompletionsUrl(provider: ModelProviderConfig): string {
   return `${trimmed}/chat/completions`;
 }
 
+function withoutOutputTokenLimits(
+  body: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  const bounded = { ...body };
+  delete bounded.max_tokens;
+  delete bounded.max_completion_tokens;
+  return bounded;
+}
+
 // Gateway-owned raw chat-completions probe for operational readiness checks. The server needs a raw
 // provider-shaped response to verify streaming/tool/schema/multimodal capabilities, but credentialed
 // HTTP egress still stays inside the model-gateway package and uses the central config-level egress
@@ -36,10 +47,11 @@ function readinessChatCompletionsUrl(provider: ModelProviderConfig): string {
 export function requestGatewayReadinessChatCompletion(
   request: GatewayReadinessChatCompletionRequest,
 ): Promise<Response> {
-  const { config, provider, body, stream, fetchImpl, maxResponseBytes } = request;
+  const { config, provider, body, stream, fetchImpl, maxResponseBytes, maxOutputTokens } = request;
   const requestBody = JSON.stringify({
     model: provider.modelId,
-    ...body,
+    ...withoutOutputTokenLimits(body),
+    ...providerOutputTokenLimit(maxOutputTokens, provider),
     ...(stream === true ? { stream: true, stream_options: { include_usage: true } } : {}),
   });
   return gatewayFetch(readinessChatCompletionsUrl(provider), {

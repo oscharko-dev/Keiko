@@ -78,6 +78,7 @@ export const PACKAGE_DIR_NAMES: ReadonlySet<string> = new Set([
   "keiko-sdk",
   "keiko-security",
   "keiko-server",
+  "keiko-tool-catalog",
   "keiko-tools",
   "keiko-ui",
   "keiko-verification",

@@ -81,6 +81,7 @@ import {
   UiStoreError,
   isProjectAvailable,
   type Chat,
+  type ChatGitChangeScope,
   type ChatMessage,
   type ChatTurnInspection,
   type Project,
@@ -94,6 +95,38 @@ import { validateProjectPath } from "./store/validation.js";
 import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
+// Issue #3400 (epic #3384, contract correction 4): the server-minted description authority
+// (#3399) that admits model egress of git-change snapshot content outside a running Code task.
+// Read-only consumption of the existing owning module — never redefined here.
+import { authorizeGitDeliveryModelEgress } from "./gitDelivery/runBoundAuthority.js";
+import {
+  generateGitChangeChatDescription,
+  gitChangeDescriptionAuthorityScopeFor,
+} from "./gitChangeChatContext.js";
+// Issue #3400 (epic #3384, Frozen Product Decision 6 / issue correction 1): the apply action
+// routes ONLY through the existing body-only description application service (#3399), never
+// through `executeGovernedPullRequest`'s coupled title+body+base update path. Read-only
+// consumption of the existing owning module — never redefined here.
+import type { PrDescriptionApplicationResult } from "./gitDelivery/prDescriptionTypes.js";
+// Final-audit F5 (#3400): reuses the SAME admitted, per-(project, repository, PR) service factory
+// this route group's own preview/approve/apply handlers already run through — never a second,
+// independently-composed service surface (AGENTS.md §5).
+import {
+  resolvePrDescriptionApplicationServiceForRequest,
+  type BaseFields as PrDescriptionBaseFields,
+  type PrDescriptionRouteOptions,
+} from "./gitDelivery/prDescriptionRoutes.js";
+// Re-derives the SAME trusted repository root the connect flow resolved, through the SAME
+// git-membership check -- never a second, independently-drifting copy of that trust boundary.
+import { resolveChatRepository } from "./gitChangeRepository.js";
+import { observedGitRunner } from "./gitProcessActivity.js";
+import { defaultGitProcessRunner } from "@oscharko-dev/keiko-git";
+import {
+  githubRemoteOwnerAndRepoFor,
+  isGitHubIssueReaderAuthorized,
+} from "./coding-context/githubIssueReaderAuthorization.js";
+import { hasOnlyAllowedKeys } from "./gitDelivery/requestGuards.js";
+import { processServerLogSink } from "./process-log-sink.js";
 import {
   currentAuditRedactString,
   currentConversationReady,
@@ -225,6 +258,19 @@ function isRouteResult(value: unknown): value is RouteResult {
   return isRecord(value) && typeof value.status === "number" && "body" in value;
 }
 
+/**
+ * An identity call every "parsed value, or a typed `RouteResult` on failure" return below funnels
+ * through, with `T` given explicitly at each call site rather than inferred. Without it, a
+ * function whose branches return a bare parsed primitive in one place and a `RouteResult` object
+ * literal in another gets reported as "returning different types" even though every branch is
+ * assignable to the one declared union -- the checker sees each return's own narrower literal
+ * type instead of the annotated union. Routing every return through this call gives the checker
+ * the SAME concrete type (`T | RouteResult`) at every return statement in the function.
+ */
+function asParsedOrRouteResult<T>(value: T | RouteResult): T | RouteResult {
+  return value;
+}
+
 function chatCapability(deps: UiHandlerDeps, modelId: string): ModelCapability | undefined {
   const config = currentGatewayConfig(deps);
   return config === undefined ? findCapability(modelId) : findConfiguredCapability(config, modelId);
@@ -272,15 +318,15 @@ function modelFromBody(body: Record<string, unknown>, deps: UiHandlerDeps): stri
   const modelId = explicitChatModelId(body) ?? defaultChatModelId(deps);
   const capability = chatCapability(deps, modelId);
   if (capability?.kind !== "chat") {
-    return {
+    return asParsedOrRouteResult<string>({
       status: 400,
       body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id."),
-    };
+    });
   }
   if (deps.gatewayConfig !== undefined && !currentConversationReady(deps, modelId)) {
-    return unreadyChatModelResult();
+    return asParsedOrRouteResult<string>(unreadyChatModelResult());
   }
-  return modelId;
+  return asParsedOrRouteResult<string>(modelId);
 }
 
 function pickProjectPath(body: Record<string, unknown>, deps: UiHandlerDeps): string {
@@ -474,21 +520,24 @@ function parseMemoryContext(value: unknown): Record<string, unknown> | RouteResu
 }
 
 function parseMemoryEnabled(raw: Record<string, unknown>): boolean | RouteResult {
-  if (raw.enabled === undefined) return true;
-  if (typeof raw.enabled === "boolean") return raw.enabled;
-  return { status: 400, body: errorBody("BAD_REQUEST", "memory.enabled must be a boolean.") };
+  if (raw.enabled === undefined) return asParsedOrRouteResult<boolean>(true);
+  if (typeof raw.enabled === "boolean") return asParsedOrRouteResult<boolean>(raw.enabled);
+  return asParsedOrRouteResult<boolean>({
+    status: 400,
+    body: errorBody("BAD_REQUEST", "memory.enabled must be a boolean."),
+  });
 }
 
 function parseMemoryBudget(raw: Record<string, unknown>): number | RouteResult | undefined {
   const budgetTokens = pickNumber(raw, "budgetTokens");
   if (budgetTokens === undefined) return undefined;
   if (Number.isFinite(budgetTokens) && Number.isInteger(budgetTokens) && budgetTokens >= 0) {
-    return budgetTokens;
+    return asParsedOrRouteResult<number>(budgetTokens);
   }
-  return {
+  return asParsedOrRouteResult<number>({
     status: 400,
     body: errorBody("BAD_REQUEST", "memory.budgetTokens must be a non-negative integer."),
-  };
+  });
 }
 
 function parseMemoryMode(
@@ -720,12 +769,12 @@ export function parseClientTurnId(value: unknown): string | RouteResult | undefi
     value.length > MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS ||
     value.trim().length === 0
   ) {
-    return {
+    return asParsedOrRouteResult<string>({
       status: 400,
       body: errorBody("BAD_REQUEST", "clientTurnId must be a bounded non-blank string."),
-    };
+    });
   }
-  return value;
+  return asParsedOrRouteResult<string>(value);
 }
 
 export function parseExpectedGroundingScopeIdentity(
@@ -2171,7 +2220,10 @@ async function finalizeAndRecordBufferedTurn(
   deps: UiHandlerDeps,
   turn: BufferedTurnContext,
   memory: ConversationMemoryResultWire,
-  result: { userMessage: ChatMessage; response: NormalizedResponse },
+  result: {
+    userMessage: ChatMessage;
+    response: Pick<NormalizedResponse, "content"> & { usage?: NormalizedResponse["usage"] };
+  },
   abortSignal: AbortSignal,
   compaction: BufferedCompactionContext,
 ): Promise<RouteResult> {
@@ -2194,7 +2246,12 @@ function commitBufferedTurn(
   deps: UiHandlerDeps,
   turn: BufferedTurnContext,
   memory: ConversationMemoryResultWire,
-  result: { readonly userMessage: ChatMessage; readonly response: NormalizedResponse },
+  result: {
+    readonly userMessage: ChatMessage;
+    readonly response: Pick<NormalizedResponse, "content"> & {
+      readonly usage?: NormalizedResponse["usage"];
+    };
+  },
   redactedContent: string,
   memoryActions: readonly ConversationMemoryActionWire[],
 ): RouteResult {
@@ -2227,7 +2284,7 @@ function commitBufferedTurn(
     body: {
       chat: updatedChat,
       messages: [userMessage, assistantMessage],
-      usage: result.response.usage,
+      ...(result.response.usage === undefined ? {} : { usage: result.response.usage }),
       memory: { ...memory, actions: memoryActions },
       ...(conversationImageDeliveries(request).length === 0
         ? {}
@@ -2243,7 +2300,10 @@ async function finalizeBufferedTurn(
   deps: UiHandlerDeps,
   turn: BufferedTurnContext,
   memory: ConversationMemoryResultWire,
-  result: { userMessage: ChatMessage; response: NormalizedResponse },
+  result: {
+    userMessage: ChatMessage;
+    response: Pick<NormalizedResponse, "content"> & { usage?: NormalizedResponse["usage"] };
+  },
   abortSignal: AbortSignal,
 ): Promise<RouteResult> {
   const { request, modelId, memoryContext } = turn;
@@ -2257,6 +2317,236 @@ async function finalizeBufferedTurn(
     return requestCancelledResult();
   }
   return commitBufferedTurn(deps, turn, memory, result, redactedContent, memoryActions);
+}
+
+interface HeldChatDescription {
+  readonly proposalId?: string;
+  readonly status: ChatGitChangeScope["descriptionStatus"];
+  readonly service?: import("./gitDelivery/prDescriptionTypes.js").PrDescriptionApplicationService;
+}
+
+async function holdChatDescriptionProposal(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  chat: Chat,
+  scope: ChatGitChangeScope,
+  artifact: import("@oscharko-dev/keiko-contracts").PrDescriptionArtifact,
+  correlationId: string,
+): Promise<HeldChatDescription> {
+  if (scope.pullRequestNumber === undefined) {
+    return { status: artifact.outcome === "complete" ? "current" : artifact.outcome };
+  }
+  const repository = await resolveGitChangeApplyOwnerAndRepo(deps, chat, correlationId);
+  if (!repository.ok) {
+    gitChangeDescriptionTargetUnavailable(deps, correlationId, repository.reason);
+    return { status: "blocked" };
+  }
+  const resolution = resolvePrDescriptionApplicationServiceForRequest(
+    deps,
+    ctx,
+    {
+      projectId: chat.projectPath,
+      ownerAndRepo: repository.ownerAndRepo,
+      prNumber: scope.pullRequestNumber,
+      snapshotDigest: scope.snapshotDigest,
+    },
+    correlationId,
+    {},
+    gitChangeDescriptionAuthorityScopeFor(scope),
+  );
+  if (!resolution.ok) return { status: "blocked" };
+  const preview = await resolution.service.previewArtifact(artifact);
+  return preview.outcome === "preview"
+    ? {
+        proposalId: preview.preview.proposalId,
+        status: preview.preview.status.state,
+        service: resolution.service,
+      }
+    : {
+        status: preview.outcome === "observed" ? preview.status.state : "blocked",
+        service: resolution.service,
+      };
+}
+
+function updateChatDescriptionScope(
+  deps: UiHandlerDeps,
+  chatId: string,
+  expected: ChatGitChangeScope,
+  held: HeldChatDescription,
+): Chat | undefined {
+  const current = deps.store.findChatById(chatId);
+  const scopes = current?.gitChangeScopes;
+  if (current === undefined || scopes === undefined) return undefined;
+  const selected = scopes.find((scope) => scope.relationshipId === expected.relationshipId);
+  if (selected?.snapshotDigest !== expected.snapshotDigest) return undefined;
+  const next = scopes.map((scope): ChatGitChangeScope => {
+    if (scope.relationshipId !== expected.relationshipId) return scope;
+    const base = { ...scope };
+    delete base.descriptionProposalId;
+    return {
+      ...base,
+      descriptionStatus: held.status,
+      ...(held.proposalId === undefined ? {} : { descriptionProposalId: held.proposalId }),
+    };
+  });
+  return deps.store.updateChat(chatId, { gitChangeScopes: next });
+}
+
+async function generateAdmittedGitChangeTurn(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  scope: ChatGitChangeScope,
+  admission: AdmittedTurnHandle,
+  signal: AbortSignal,
+  correlationId: string,
+): Promise<Awaited<ReturnType<typeof generateGitChangeChatDescription>>> {
+  const gatewayTurn = captureGatewayTurnSnapshot(deps, prepared.request, admission.userMessage);
+  return generateGitChangeChatDescription({
+    deps,
+    projectPath: prepared.chat.projectPath,
+    scope,
+    correlationId,
+    signal,
+    history: gatewayHistoryPrefix(gatewayTurn),
+    latestIntent: prepared.request.content,
+  });
+}
+
+function descriptionTurnResponse(
+  content: string,
+  usage:
+    | import("@oscharko-dev/keiko-model-gateway").PrDescription.PrDescriptionGenerationUsage
+    | undefined,
+): Pick<NormalizedResponse, "content"> & { usage?: NormalizedResponse["usage"] } {
+  return {
+    content,
+    ...(usage === undefined
+      ? {}
+      : {
+          usage: {
+            requestId: usage.requestId,
+            promptTokens: usage.promptTokens,
+            completionTokens: usage.completionTokens,
+            latencyMs: usage.latencyMs,
+            costClass: usage.costClass,
+          },
+        }),
+  };
+}
+
+function gitChangeGenerationFailureStatus(reason: string): number {
+  if (reason === "authority-denied") return 403;
+  if (reason === "snapshot-unavailable" || reason === "invalid-snapshot") return 409;
+  return 503;
+}
+
+function gitChangeGenerationFailure(reason: string): RouteResult {
+  return reason === "cancelled"
+    ? requestCancelledResult()
+    : {
+        status: gitChangeGenerationFailureStatus(reason),
+        body: errorBody(
+          "GIT_CHANGE_DESCRIPTION_UNAVAILABLE",
+          "The connected Git change could not produce a current description.",
+        ),
+      };
+}
+
+function rejectUnavailableGitChangeGeneration(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  admission: AdmittedTurnHandle,
+  reason: string,
+): RouteResult {
+  settleRejectedDesktopChatTurn(
+    deps,
+    prepared,
+    admission,
+    reason === "cancelled" ? "cancelled" : "failed",
+  );
+  return gitChangeGenerationFailure(reason);
+}
+
+export async function persistGitChangeDescriptionTurn(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  abortSignal: AbortSignal,
+): Promise<RouteResult> {
+  const scope = activeGitChangeScope(prepared.chat);
+  if (scope === undefined)
+    return { status: 409, body: errorBody("GIT_CHANGE_SCOPE_NOT_FOUND", "Scope not found.") };
+  const admission = admitDesktopChatTurn(deps, prepared);
+  if (admission.kind === "replay") return { status: 200, body: admission.response };
+  if (admission.kind === "rejected") return admission.result;
+  const memory = await resolveBufferedMemory(
+    deps,
+    prepared,
+    admission,
+    abortSignal,
+    ctx.correlationId,
+  );
+  if (isRouteResult(memory)) return memory;
+  return completeGitChangeDescriptionTurn(
+    ctx,
+    deps,
+    prepared,
+    scope,
+    admission,
+    memory,
+    abortSignal,
+  );
+}
+
+async function completeGitChangeDescriptionTurn(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  scope: ChatGitChangeScope,
+  admission: AdmittedTurnHandle,
+  memory: ConversationMemoryResultWire,
+  abortSignal: AbortSignal,
+): Promise<RouteResult> {
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+  const generated = await generateAdmittedGitChangeTurn(
+    deps,
+    prepared,
+    scope,
+    admission,
+    abortSignal,
+    correlationId,
+  );
+  if (generated.status === "unavailable") {
+    return rejectUnavailableGitChangeGeneration(deps, prepared, admission, generated.reason);
+  }
+  const held = await holdChatDescriptionProposal(
+    ctx,
+    deps,
+    prepared.chat,
+    scope,
+    generated.artifact,
+    correlationId,
+  );
+  if (updateChatDescriptionScope(deps, prepared.chat.id, scope, held) === undefined) {
+    held.service?.invalidate();
+    failDesktopChatTurn(deps, prepared.request);
+    return gitChangeGenerationFailure("snapshot-unavailable");
+  }
+  const result = await finalizeBufferedTurn(
+    deps,
+    prepared,
+    memory,
+    {
+      userMessage: admission.userMessage,
+      response: descriptionTurnResponse(generated.artifact.markdown, generated.usage),
+    },
+    abortSignal,
+  );
+  if (result.status !== 200) {
+    held.service?.invalidate();
+    updateChatDescriptionScope(deps, prepared.chat.id, scope, { status: "blocked" });
+  }
+  return result;
 }
 
 export async function handleCreateDesktopChat(
@@ -2315,9 +2605,9 @@ function normalizeDesktopProjectPath(
   deps: UiHandlerDeps,
 ): string | RouteResult {
   try {
-    return validateProjectPath(projectPath, { mustExist: false });
+    return asParsedOrRouteResult<string>(validateProjectPath(projectPath, { mustExist: false }));
   } catch (error) {
-    return desktopChatErrorResult(error, deps);
+    return asParsedOrRouteResult<string>(desktopChatErrorResult(error, deps));
   }
 }
 
@@ -2552,6 +2842,486 @@ export function validateCurrentDesktopChatSend(
   );
 }
 
+// ─── Issue #3400 (epic #3384) — git-change description-authority admission ─────────────────────
+//
+// A chat's connected git-change scope is not model-egress authority by itself (Architecture
+// Invariants: "Connecting context is not model-egress authority"). Every turn on a git-change-
+// scoped chat re-derives the server-minted description authority (#3399, contract correction 4)
+// before any snapshot content reaches the Model Gateway. `deps.gitChangeDescriptionAuthorityPort`
+// is a direct, official `UiHandlerDeps` field (description-composition-closeout): production
+// composition threads the SAME minted port onto it and onto `gitDeliveryDescriptionAuthority`
+// (deps.test.ts pins the two are `===`) — `undefined` (an unqualified runtime host, or a test
+// fixture that never wired one) fails admission CLOSED, never open: no port to consult is exactly
+// the same as no live authority record.
+
+// The scope always keys on the immutable base/head pair rather than a PR identity: `remoteDigest`
+// (correction 6) plus `baseRef`/`headRef` are present on every connected git-change scope whether
+// or not a pull request was resolved, while the PR-identity variant of
+// `GitDeliveryDescriptionAuthorityScope` needs an `ownerAndRepo` slug this wire shape deliberately
+// does not carry (correction 2 admits only safe, server-issued facts). The accepted buffered or
+// streamed turn mints this scope immediately before admission, using the accepted per-turn mode;
+// connect/refresh only persists context and never grants later model egress. The shared scope
+// producer keeps turn admission, artifact retention and governed apply on one exact identity.
+// #3400/#3401 final-audit F1: the closed reason a denied Chat admission carries — distinguishes a
+// description authority record that existed for the exact scope but has passed its `expiresAt`
+// from every other closed case (no port wired at all, or a scope that was never minted), reusing
+// `authorizeGitDeliveryModelEgress`'s own expired-vs-absent discriminant rather than a second one.
+export type GitChangeDescriptionTurnDenial = "authority-expired" | "model-egress-denied";
+
+export type GitChangeDescriptionTurnAdmission =
+  | { readonly admitted: true }
+  | { readonly admitted: false; readonly reason: GitChangeDescriptionTurnDenial };
+
+/**
+ * Admits only when a live, unexpired description authority record exists for the EXACT scope
+ * (remoteDigest, base/head, snapshotDigest) the caller re-derived just now — never a cached or
+ * assumed admission. A denial carries the closed reason: `authority-expired` when the record was
+ * minted for this exact scope and has since expired, `model-egress-denied` for every other closed
+ * case (no port wired, or a scope that was never minted).
+ */
+export function admitGitChangeDescriptionTurn(
+  deps: UiHandlerDeps,
+  scope: ChatGitChangeScope,
+  nowIso: string,
+): GitChangeDescriptionTurnAdmission {
+  const port = deps.gitChangeDescriptionAuthorityPort;
+  if (port === undefined) return { admitted: false, reason: "model-egress-denied" };
+  const decision = authorizeGitDeliveryModelEgress(
+    port,
+    gitChangeDescriptionAuthorityScopeFor(scope),
+    nowIso,
+  );
+  if (decision.allowed) return { admitted: true };
+  return {
+    admitted: false,
+    reason: decision.reason === "authority-expired" ? "authority-expired" : "model-egress-denied",
+  };
+}
+
+function logGitChangeTurnAuthority(
+  correlationId: string | undefined,
+  admission: GitChangeDescriptionTurnAdmission,
+  relationshipId: string,
+): void {
+  getServerLogger()[admission.admitted ? "info" : "warn"]({
+    category: "security",
+    op: admission.admitted
+      ? "pr-description.chat.turn.admitted"
+      : "pr-description.chat.turn.denied",
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    ...(admission.admitted ? {} : { errorKind: admission.reason }),
+    extra: { relationshipId },
+  });
+}
+
+// V1 connects at most one git-change comparison per chat in practice; a chat that somehow carries
+// several treats the most-recently-connected one as the active turn scope.
+export function activeGitChangeScope(chat: Chat): ChatGitChangeScope | undefined {
+  const scopes = chat.gitChangeScopes;
+  return scopes?.at(-1);
+}
+
+/**
+ * Denies a normal Chat turn on a git-change-connected chat BEFORE the Model Gateway is reached
+ * when the description authority for its active scope is missing or expired. Returns `undefined`
+ * (proceed) for a chat with no connected git-change scope at all.
+ */
+// Exported so the streaming send path (chat-stream-handlers.ts) re-derives the SAME admission —
+// via the SAME formula, never a restated copy — rather than only the buffered /api/desktop/chat
+// path gating a git-change-connected chat. Both are real client transports for sending a turn.
+export function admitGitChangeScopedTurn(
+  deps: UiHandlerDeps,
+  chat: Chat,
+  acceptedMode: CodingWorkbenchMode | undefined,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  const scope = activeGitChangeScope(chat);
+  if (scope === undefined) return undefined;
+  const effectiveCorrelationId = correlationId ?? UNKNOWN_CORRELATION_ID;
+  if (acceptedMode === undefined || deps.mintDescriptionAuthority === undefined) {
+    const admission = { admitted: false, reason: "model-egress-denied" } as const;
+    logGitChangeTurnAuthority(effectiveCorrelationId, admission, scope.relationshipId);
+    return {
+      status: 409,
+      body: errorBody(
+        "GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED",
+        "The description authority for this connected Git change is missing or has expired.",
+      ),
+    };
+  }
+  const nowIso = new Date().toISOString();
+  deps.mintDescriptionAuthority({
+    scope: gitChangeDescriptionAuthorityScopeFor(scope),
+    requestedMode: acceptedMode,
+    nowIso,
+    correlationId: effectiveCorrelationId,
+  });
+  const admission = admitGitChangeDescriptionTurn(deps, scope, nowIso);
+  logGitChangeTurnAuthority(effectiveCorrelationId, admission, scope.relationshipId);
+  if (admission.admitted) return undefined;
+  return {
+    status: 409,
+    body: errorBody(
+      "GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED",
+      "The description authority for this connected Git change is missing or has expired.",
+    ),
+  };
+}
+
+export function acceptedGitChangeChatMode(
+  deps: UiHandlerDeps,
+  request: Pick<SendDesktopChatRequest, "memory">,
+): CodingWorkbenchMode | undefined {
+  const requestedMode = request.memory?.mode;
+  return requestedMode === undefined
+    ? undefined
+    : resolveMemoryCaptureAutonomyMode(deps, requestedMode);
+}
+
+// ─── Issue #3400 — apply routes only through the description application service (#3399) ────────
+//
+// Frozen Product Decision 6 / issue correction 1: the ONLY admitted write from a git-change-
+// connected Chat is a body-only description apply through the existing #3399 service. Final-audit
+// F7: production composition now reaches this handler with a real, composed
+// `PrDescriptionApplicationService` (`deps.prDescriptionApplicationService`, deps.ts's own
+// composition root) — a typed field, no optional-cast seam. Absent under the same closed
+// condition `deps.prDescriptionGeneration` is absent under (no configured model profile), apply is
+// unavailable — it NEVER falls back to `executeGovernedPullRequest` (prExecution.ts), which is the
+// only other PR-update path and is coupled title+body+base, not body-only.
+
+/**
+ * Applies an already-approved PR-description proposal through the existing body-only service.
+ * Returns `undefined` when the service is not yet composed (apply unavailable) rather than
+ * substituting any other write path.
+ */
+export function applyGitChangeDescription(
+  deps: UiHandlerDeps,
+  proposalId: string,
+  lease: object,
+): Promise<PrDescriptionApplicationResult> | undefined {
+  return deps.prDescriptionApplicationService?.executeApproved(proposalId, lease);
+}
+
+// ─── Issue #3400 — the real handler Chat reaches for the apply action (final-audit F5) ──────────
+//
+// Before this fix, `applyGitChangeDescription` above had zero production callers: nothing ever
+// invoked it from a route, so the apply effect was reachable only in tests. This handler is that
+// caller. A Chat-connected git-change scope only ever names a repository via `remoteDigest`
+// (contract correction 6) and only carries a `pullRequestNumber` once a PR was resolved at connect
+// time, so `ownerAndRepo` (the raw slug #3399's admission needs) is re-derived live from the SAME
+// trusted repository root the connect flow used, through the SAME git-membership check
+// (`resolveChatRepository`) and the SAME GitHub-reader authorization gate every other git-change
+// route reuses -- never a fresh, browser-authored identity.
+//
+// routes.ts registers the approve/review/apply handlers lazily to avoid the existing ESM cycle;
+// every request names only the server-held Chat scope and proposal.
+interface GitChangeApplyDescriptionRequest {
+  readonly chatId: string;
+  readonly relationshipId: string;
+  readonly proposalId: string;
+}
+
+const GIT_CHANGE_APPLY_DESCRIPTION_KEYS: ReadonlySet<string> = new Set([
+  "schemaVersion",
+  "chatId",
+  "relationshipId",
+  "proposalId",
+]);
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+// Every field beyond this closed set is rejected before any lookup runs -- the same
+// "binding smuggling" guard prDescriptionRoutes.ts's own `baseFields` applies: a request that adds
+// `ownerAndRepo`, `prNumber`, or any other field this action never accepts is refused at
+// validation, never silently ignored.
+function parseGitChangeApplyDescriptionRequest(
+  value: unknown,
+): GitChangeApplyDescriptionRequest | undefined {
+  if (!isRecord(value) || !hasOnlyAllowedKeys(value, GIT_CHANGE_APPLY_DESCRIPTION_KEYS)) {
+    return undefined;
+  }
+  if (value.schemaVersion !== "1") return undefined;
+  const { chatId, relationshipId, proposalId } = value;
+  if (!nonEmptyString(chatId) || !nonEmptyString(relationshipId) || !nonEmptyString(proposalId)) {
+    return undefined;
+  }
+  return { chatId, relationshipId, proposalId };
+}
+
+interface FoundGitChangeApplyScope {
+  readonly chat: Chat;
+  readonly scope: ChatGitChangeScope;
+}
+
+function findConnectedGitChangeScope(
+  deps: UiHandlerDeps,
+  chatId: string,
+  relationshipId: string,
+): FoundGitChangeApplyScope | undefined {
+  const chat = deps.store.findChatById(chatId);
+  if (chat === undefined) return undefined;
+  const scope = (chat.gitChangeScopes ?? []).find(
+    (entry) => entry.relationshipId === relationshipId,
+  );
+  return scope === undefined ? undefined : { chat, scope };
+}
+
+// Re-derives `ownerAndRepo` live rather than reading it from the persisted scope (which never
+// stores it -- only its `remoteDigest`, contract correction 6): the SAME resolution the connect
+// flow performs for pull-request mode, so a live apply always checks the repository's CURRENT
+// GitHub-reader grant rather than trusting one observed at connect time.
+type GitChangeRepositoryResolution =
+  | { readonly ok: true; readonly ownerAndRepo: string }
+  | {
+      readonly ok: false;
+      readonly reason: "repository-unavailable" | "reader-unauthorized" | "remote-unresolved";
+    };
+
+async function resolveGitChangeApplyOwnerAndRepo(
+  deps: UiHandlerDeps,
+  chat: Chat,
+  correlationId: string,
+): Promise<GitChangeRepositoryResolution> {
+  const runner = observedGitRunner(
+    defaultGitProcessRunner,
+    deps.activityLog ?? processServerLogSink(),
+    correlationId,
+  );
+  const repository = await resolveChatRepository(chat.projectPath, runner, 30_000);
+  if (repository === undefined) return { ok: false, reason: "repository-unavailable" };
+  if (!isGitHubIssueReaderAuthorized(deps, repository.repositoryRoot, { correlationId })) {
+    return { ok: false, reason: "reader-unauthorized" };
+  }
+  const ownerAndRepo = await githubRemoteOwnerAndRepoFor(
+    repository.repositoryRoot,
+    deps.env,
+    undefined,
+    { correlationId },
+  );
+  return ownerAndRepo === undefined
+    ? { ok: false, reason: "remote-unresolved" }
+    : { ok: true, ownerAndRepo };
+}
+
+function gitChangeApplyUnavailableResult(): RouteResult {
+  return {
+    status: 409,
+    body: errorBody(
+      "GIT_CHANGE_APPLY_UNAVAILABLE",
+      "This connected Git change has no pull request to apply a description to.",
+    ),
+  };
+}
+
+function gitChangeDescriptionTargetUnavailable(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  reason: Exclude<GitChangeRepositoryResolution, { readonly ok: true }>["reason"],
+): RouteResult {
+  (deps.activityLog ?? processServerLogSink()).write({
+    category: "security",
+    op: "git-change.chat.description-target.denied",
+    correlationId,
+    level: "warn",
+    errorKind: reason,
+  });
+  const unauthorized = reason === "reader-unauthorized";
+  let errorCode = "GIT_CHANGE_APPLY_REMOTE_UNRESOLVED";
+  if (unauthorized) {
+    errorCode = "GIT_CHANGE_APPLY_READER_UNAUTHORIZED";
+  } else if (reason === "repository-unavailable") {
+    errorCode = "GIT_CHANGE_APPLY_REPOSITORY_UNAVAILABLE";
+  }
+  return {
+    status: unauthorized ? 403 : 409,
+    body: errorBody(
+      errorCode,
+      unauthorized
+        ? "Repository-reader authority is required for this connected Git change."
+        : "The connected Git repository identity is unavailable.",
+    ),
+  };
+}
+
+interface GitChangeApplyDescriptionTarget {
+  readonly request: GitChangeApplyDescriptionRequest;
+  readonly baseFields: PrDescriptionBaseFields;
+  readonly scope: ChatGitChangeScope;
+}
+
+async function resolveGitChangeApplyTarget(
+  deps: UiHandlerDeps,
+  request: GitChangeApplyDescriptionRequest,
+  correlationId: string,
+): Promise<GitChangeApplyDescriptionTarget | RouteResult> {
+  const found = findConnectedGitChangeScope(deps, request.chatId, request.relationshipId);
+  if (found === undefined) {
+    return { status: 404, body: errorBody("GIT_CHANGE_SCOPE_NOT_FOUND", "Scope not found.") };
+  }
+  if (found.scope.pullRequestNumber === undefined) return gitChangeApplyUnavailableResult();
+  const repository = await resolveGitChangeApplyOwnerAndRepo(deps, found.chat, correlationId);
+  if (!repository.ok) {
+    return gitChangeDescriptionTargetUnavailable(deps, correlationId, repository.reason);
+  }
+  return {
+    request,
+    scope: found.scope,
+    baseFields: {
+      projectId: found.chat.projectPath,
+      ownerAndRepo: repository.ownerAndRepo,
+      prNumber: found.scope.pullRequestNumber,
+      snapshotDigest: found.scope.snapshotDigest,
+    },
+  };
+}
+
+function logGitChangeApplyOutcome(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  outcome: PrDescriptionApplicationResult["outcome"],
+): void {
+  (deps.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    op: "git-change.chat.apply",
+    correlationId,
+    extra: { outcome },
+  });
+}
+
+/**
+ * Final-audit F5: the real handler Chat reaches for the apply action. Resolves the connected
+ * git-change scope, reuses #3399's own admitted service factory for the exact (project,
+ * repository, PR) the scope now names, consumes the one-use approval, and executes through
+ * `applyGitChangeDescription` above -- the SAME narrow gateway, never a second write path.
+ */
+export const createHandleGitChangeApplyDescription = (
+  options: PrDescriptionRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    const cancellation = createRequestCancellation(ctx, "git-change description apply cancelled");
+    const parsed = await readJsonObject(ctx.req, cancellation.signal).finally(cancellation.dispose);
+    if (isRouteResult(parsed)) return parsed;
+    const request = parseGitChangeApplyDescriptionRequest(parsed);
+    if (request === undefined) {
+      return { status: 400, body: errorBody("BAD_REQUEST", "Invalid apply-description request.") };
+    }
+    const target = await resolveGitChangeApplyTarget(deps, request, correlationId);
+    if (!("baseFields" in target)) return target;
+    const resolution = resolvePrDescriptionApplicationServiceForRequest(
+      deps,
+      ctx,
+      target.baseFields,
+      correlationId,
+      options,
+      gitChangeDescriptionAuthorityScopeFor(target.scope),
+    );
+    if (!resolution.ok) return resolution.result;
+    const lease = resolution.service.consumeApproval(request.proposalId);
+    if (lease === undefined) {
+      return {
+        status: 409,
+        body: errorBody("GIT_CHANGE_APPLY_UNKNOWN_PROPOSAL", "Proposal is unknown or expired."),
+      };
+    }
+    const applied = await applyGitChangeDescription(
+      { ...deps, prDescriptionApplicationService: resolution.service },
+      request.proposalId,
+      lease,
+    );
+    if (applied === undefined) return gitChangeApplyUnavailableResult();
+    updateChatDescriptionScope(deps, target.request.chatId, target.scope, {
+      status: applied.outcome === "observed" ? applied.status.state : "blocked",
+    });
+    logGitChangeApplyOutcome(deps, correlationId, applied.outcome);
+    return { status: 200, body: deps.redactor(applied) };
+  };
+};
+
+/** Issues the one-use approval for the exact Chat-held artifact and snapshot-bound service. */
+export const createHandleGitChangeApproveDescription = (
+  options: PrDescriptionRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    const cancellation = createRequestCancellation(
+      ctx,
+      "git-change description approval cancelled",
+    );
+    const parsed = await readJsonObject(ctx.req, cancellation.signal).finally(cancellation.dispose);
+    if (isRouteResult(parsed)) return parsed;
+    const request = parseGitChangeApplyDescriptionRequest(parsed);
+    if (request === undefined) {
+      return {
+        status: 400,
+        body: errorBody("BAD_REQUEST", "Invalid approve-description request."),
+      };
+    }
+    const target = await resolveGitChangeApplyTarget(deps, request, correlationId);
+    if (!("baseFields" in target)) return target;
+    const resolution = resolvePrDescriptionApplicationServiceForRequest(
+      deps,
+      ctx,
+      target.baseFields,
+      correlationId,
+      options,
+      gitChangeDescriptionAuthorityScopeFor(target.scope),
+    );
+    if (!resolution.ok) return resolution.result;
+    const issued = resolution.service.issueApproval(request.proposalId);
+    if (issued === undefined) {
+      return {
+        status: 409,
+        body: errorBody("GIT_CHANGE_APPROVE_UNKNOWN_PROPOSAL", "Proposal is unknown or expired."),
+      };
+    }
+    return {
+      status: 200,
+      body: deps.redactor({
+        schemaVersion: "1",
+        proposalId: request.proposalId,
+        expiresAt: new Date(issued.expiresAtMs).toISOString(),
+      }),
+    };
+  };
+};
+
+/** Returns the exact Chat-held proposal body without invoking description generation again. */
+export const createHandleGitChangeReviewDescription = (
+  options: PrDescriptionRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    const cancellation = createRequestCancellation(ctx, "git-change description review cancelled");
+    const parsed = await readJsonObject(ctx.req, cancellation.signal).finally(cancellation.dispose);
+    if (isRouteResult(parsed)) return parsed;
+    const request = parseGitChangeApplyDescriptionRequest(parsed);
+    if (request === undefined) {
+      return { status: 400, body: errorBody("BAD_REQUEST", "Invalid review-description request.") };
+    }
+    const target = await resolveGitChangeApplyTarget(deps, request, correlationId);
+    if (!("baseFields" in target)) return target;
+    const resolution = resolvePrDescriptionApplicationServiceForRequest(
+      deps,
+      ctx,
+      target.baseFields,
+      correlationId,
+      options,
+      gitChangeDescriptionAuthorityScopeFor(target.scope),
+    );
+    if (!resolution.ok) return resolution.result;
+    const review = resolution.service.review(request.proposalId);
+    return review === undefined
+      ? {
+          status: 409,
+          body: errorBody("GIT_CHANGE_REVIEW_UNKNOWN_PROPOSAL", "Proposal is unknown or expired."),
+        }
+      : { status: 200, body: deps.redactor({ outcome: "preview", preview: review }) };
+  };
+};
+
 export async function handleSendDesktopChat(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -2561,12 +3331,18 @@ export async function handleSendDesktopChat(
     const parsed = await parseDesktopChatSend(ctx, deps, cancellation.signal);
     if (cancellation.signal.aborted) return requestCancelledResult();
     if (isRouteResult(parsed)) return parsed;
-    await ensureOnDemandConversationReadiness(
-      deps,
-      parsed.request.modelId ?? parsed.chat.selectedModel,
-    );
     const prepared = validateDesktopChatSend(parsed, deps);
     if (isRouteResult(prepared)) return prepared;
+    if (activeGitChangeScope(prepared.chat) === undefined) {
+      await ensureOnDemandConversationReadiness(deps, prepared.modelId);
+    }
+    const gitChangeDenial = admitGitChangeScopedTurn(
+      deps,
+      prepared.chat,
+      acceptedGitChangeChatMode(deps, prepared.request),
+      ctx.correlationId,
+    );
+    if (gitChangeDenial !== undefined) return gitChangeDenial;
     const inspection = inspectDesktopChatTurn(deps, prepared);
     if (inspection.kind === "replay") return { status: 200, body: inspection.response };
     if (inspection.kind === "rejected") return inspection.result;
@@ -2577,7 +3353,18 @@ export async function handleSendDesktopChat(
       () => {
         const current = validateCurrentDesktopChatSend(parsed, deps);
         if (isRouteResult(current)) return current;
-        return persistModelChatTurn(deps, current, cancellation.signal, ctx.correlationId);
+        // Re-derived immediately before dispatch (not only at the earlier fast-fail check above):
+        // a queued turn may wait long enough for the authority to expire in between.
+        const gitChangeDenial = admitGitChangeScopedTurn(
+          deps,
+          current.chat,
+          acceptedGitChangeChatMode(deps, current.request),
+          ctx.correlationId,
+        );
+        if (gitChangeDenial !== undefined) return gitChangeDenial;
+        return activeGitChangeScope(current.chat) === undefined
+          ? persistModelChatTurn(deps, current, cancellation.signal, ctx.correlationId)
+          : persistGitChangeDescriptionTurn(ctx, deps, current, cancellation.signal);
       },
     );
     return result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result;

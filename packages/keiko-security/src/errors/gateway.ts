@@ -72,7 +72,7 @@ export class ModelRefusalError extends GatewayError {
 
 export class MalformedToolCallError extends GatewayError {
   readonly code = ERROR_CODES.MALFORMED_TOOL_CALL;
-  readonly retryable = false;
+  readonly retryable: boolean = false;
 }
 
 export class ContextOverflowError extends GatewayError {

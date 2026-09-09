@@ -10,6 +10,7 @@ import {
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
   canonicalDesktopChatTurnReferenceSeed,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ChatGitChangeScope } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
 // Reused directly rather than re-declared: `store/db.ts` lives inside `keiko-server` itself, the
 // same package that owns `ServerLogSink`/`ServerLogEvent`, so — unlike `KnowledgeLogSink`
@@ -67,6 +68,7 @@ import {
   listChats as sqlListChats,
   listChatsLimited as sqlListChatsLimited,
   touchChat as sqlTouchChat,
+  mutateGitChangeScopes as sqlMutateGitChangeScopes,
   updateChat as sqlUpdateChat,
 } from "./chats.js";
 import {
@@ -112,6 +114,10 @@ import {
   readMemoryAutonomyPolicy as sqlReadMemoryAutonomyPolicy,
   updateMemoryAutonomyPolicy as sqlUpdateMemoryAutonomyPolicy,
 } from "./memory-autonomy-policy.js";
+import {
+  readGitHubIssueReaderAuthorization as sqlReadGitHubIssueReaderAuthorization,
+  updateGitHubIssueReaderAuthorization as sqlUpdateGitHubIssueReaderAuthorization,
+} from "./github-issue-reader-authorization.js";
 import { invalidRequest } from "./errors.js";
 
 const DEFAULT_REDACT = (s: string): string => s;
@@ -641,6 +647,10 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     ): Chat => createChatRecord(db, options, projectPath, title, selectedModel, opts),
     updateChat: (id: string, patch: UpdateChatPatch, updateOptions?: UpdateChatOptions): Chat =>
       sqlUpdateChat(db, id, patch, options.now(), updateOptions),
+    mutateGitChangeScopes: (
+      id: string,
+      mutate: (current: readonly ChatGitChangeScope[]) => readonly ChatGitChangeScope[],
+    ): Chat => sqlMutateGitChangeScopes(db, id, mutate, options.now()),
     deleteChat: (id: string): void => {
       sqlDeleteChat(db, id);
     },
@@ -728,6 +738,16 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     readMemoryAutonomyPolicy: () => sqlReadMemoryAutonomyPolicy(db),
     updateMemoryAutonomyPolicy: (mode, expectedRevision) =>
       sqlUpdateMemoryAutonomyPolicy(db, mode, expectedRevision),
+    readGitHubIssueReaderAuthorization: (repositoryId) =>
+      sqlReadGitHubIssueReaderAuthorization(db, repositoryId),
+    updateGitHubIssueReaderAuthorization: (repositoryId, authorized, expectedRevision) =>
+      sqlUpdateGitHubIssueReaderAuthorization(
+        db,
+        repositoryId,
+        authorized,
+        expectedRevision,
+        new Date(options.now()).toISOString(),
+      ),
     readWorkspaceTrustRecord: (rootRef: string): WorkspaceTrustRecordRow | undefined =>
       sqlReadWorkspaceTrustRecord(db, rootRef),
     writeWorkspaceTrustRecord: (row: WorkspaceTrustRecordRowInput): void => {
@@ -802,7 +822,10 @@ function quarantineCorruptDb(target: string, cause?: unknown): void {
 //
 // FIXED, closed table-name list this package already owns — enumerated explicitly from
 // `schema.ts`'s own `CREATE TABLE` statements, never a dynamic `sqlite_master` walk. No migration
-// through v19 has ever dropped or renamed one of these tables.
+// through v19 has ever dropped or renamed one of these tables. The v28 migration (Issue #3400)
+// internally renames and rebuilds `relationships` and `relationship_lifecycle_history` to widen
+// the `relationships` CHECK constraint, but both tables exist under their ORIGINAL names once the
+// migration completes — this list needs no change for that rebuild.
 export const UI_STORE_FINGERPRINT_TABLES = [
   "projects",
   "chats",
@@ -813,7 +836,11 @@ export const UI_STORE_FINGERPRINT_TABLES = [
   "task_workspace_instances",
   "task_workspace_active_pointer",
   "coding_runtime_snapshots",
+  "coding_runtime_ci_repair_budgets",
+  "git_journey_outcomes",
+  "coding_runtime_description_jobs",
   "memory_autonomy_policy",
+  "github_issue_reader_authorization",
   "workspace_trust_records",
   "workspace_manifests",
   "workspace_manifest_roots",

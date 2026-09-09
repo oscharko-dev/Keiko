@@ -137,6 +137,12 @@ byte-identical shapes. The channel therefore leaks neither the existence of a se
 existence of protected content. This mirrors the existing `idle()` snapshot and the content-free SSE
 reset frame.
 
+A successful content-free terminal SSE snapshot is an accepted write followed by stream closure.
+It is not backpressure. The writer separately handles a false write result and an actual write
+exception, including the initial reset, live snapshot and heartbeat. Closure must not turn a
+successful terminal write into an error or allow a previously queued snapshot to reopen the
+stream. Existing stream counters and correlated activity-log events record genuine write errors.
+
 ### D7 — The CI pairing fake mints read authority and is therefore production-unreachable by construction
 
 A deterministic fake pairing port exists for CI so the channel is testable without a real launcher.
@@ -242,14 +248,19 @@ distinct authentication error. The response does not reveal managed-worktree con
 existence. A valid session enables the bounded existing readers; no new Git route, parser, or durable
 content store is introduced.
 
-### F6 — The cookie reaches only the two authenticated API route families
+### F6 — The cookie reaches only authenticated API route families
 
-The same session bearer is issued as two host-scoped cookies, one at `/api/coding-workbench` and one
-at `/api/git`. This reaches both authenticated route families without presenting the bearer to their
-broader `/api` ancestor or unrelated BFF routes. `Path` remains browser hygiene, not a security
-boundary. `HttpOnly`, `SameSite=Strict`, loopback host scope, hashed server storage, rotation,
-revocation, and expiry remain unchanged; sign-out clears both browser projections after revoking the
-single server-side session.
+The same session bearer is issued as host-scoped cookies for the protected route families:
+`/api/coding-workbench`, `/api/git`, `/api/files`, `/api/editor`, `/api/runtime`, `/api/runs`,
+`/api/workspaces`, `/api/desktop/chat`, and `/api/task-workspaces`. The final path carries the
+paired session to issue-bound workspace provisioning (#3384/#3385); preview and provisioning
+independently validate that session before resolving issue content. Cookie issuance and revocation
+share one explicit path list so sign-out clears every browser projection.
+
+No live bearer is issued at the broader `/api` ancestor or to unrelated BFF routes. Issuance and
+sign-out also expire the retired `/api` and `/api/editor/local-history` projections. `Path` remains
+browser hygiene, not a security boundary. `HttpOnly`, `SameSite=Strict`, loopback host scope, hashed
+server storage, rotation, revocation, and expiry remain unchanged.
 
 ### F7 — Run-to-worktree binding stays single-sourced and read-only
 

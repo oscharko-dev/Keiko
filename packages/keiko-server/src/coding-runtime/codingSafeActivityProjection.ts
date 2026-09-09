@@ -31,6 +31,8 @@ import {
   type ServerDiagnosticSink,
   type ServerDiagnosticSummary,
 } from "../diagnostics-log.js";
+import { correlationIdOrUnknown } from "../correlation.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 
 const DEFAULT_TTL_MS = 30 * 60_000;
 const DEFAULT_MAX_SUBSCRIBERS = 32;
@@ -121,6 +123,7 @@ export interface CodingSafeActivityProjectionOptions {
   readonly now?: (() => number) | undefined;
   readonly ttlMs?: number | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
   readonly limits?: CodingSafeActivityProjectionLimits | undefined;
   readonly maxDroppedEventCount?: number | undefined;
   readonly maxSubscribers?: number | undefined;
@@ -215,10 +218,13 @@ interface ResolvedLimits {
   readonly maxPlanBytes: number;
 }
 
+type SignalApplication = "accepted" | "capacity-dropped" | "rejected";
+
 class SafeActivityProjection implements CodingSafeActivityProjection {
   private readonly now: () => number;
   private readonly ttlMs: number;
   private readonly diagnostics: ServerDiagnosticSink | undefined;
+  private readonly activityLog: ServerLogSink | undefined;
   private readonly limits: ResolvedLimits;
   private readonly maxDroppedEventCount: number;
   private readonly maxSubscribers: number;
@@ -233,6 +239,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     this.now = options.now ?? Date.now;
     this.ttlMs = positive(options.ttlMs, DEFAULT_TTL_MS);
     this.diagnostics = options.diagnostics;
+    this.activityLog = options.activityLog;
     this.limits = resolvedLimits(options.limits);
     this.maxDroppedEventCount = boundedCounterLimit(options.maxDroppedEventCount);
     this.maxSubscribers = positive(options.maxSubscribers, DEFAULT_MAX_SUBSCRIBERS);
@@ -276,14 +283,34 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     const rollbackNeeded = isFeedNearProjectionLimit(entry, this.limits);
     const priorFeed = rollbackNeeded ? structuredClone(entry.feed) : undefined;
     const priorMessageTurns = rollbackNeeded ? new Map(entry.messageTurns) : undefined;
-    const accepted = applySignal(entry, signal, this.limits);
-    if (!accepted) return this.reject(runId, "projection-rejected");
+    const application = applySignal(entry, signal, this.limits);
+    if (application === "rejected") return this.reject(runId, "projection-rejected");
     if (signal.signalId !== undefined) {
       rememberBoundedIdentity(entry.signalIds, signal.signalId, this.maxSignalIdentities);
     }
     entry.feed.updatedAt = signal.occurredAt;
+    const capacityDrop = capacityDropForApplication(
+      entry,
+      application,
+      this.maxDroppedEventCount,
+      signal.occurredAt,
+    );
     enforceFeedBounds(entry, this.limits);
-    return this.finalizeIngest(runId, entry, priorFeed, priorMessageTurns);
+    return this.finalizeCapacityDrop(runId, entry, priorFeed, priorMessageTurns, capacityDrop);
+  }
+
+  private finalizeCapacityDrop(
+    runId: string,
+    entry: ProjectionEntry,
+    priorFeed: StoredFeed | undefined,
+    priorMessageTurns: Map<string, string> | undefined,
+    capacityDrop: DropCountChange | undefined,
+  ): boolean {
+    const finalized = this.finalizeIngest(runId, entry, priorFeed, priorMessageTurns);
+    if (finalized && capacityDrop !== undefined) {
+      this.emitDropMilestones(runId, "capacity-rejected", capacityDrop.previous, capacityDrop.next);
+    }
+    return finalized;
   }
 
   /**
@@ -331,7 +358,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (next === previous) return;
     entry.feed = withDroppedCount(entry.feed, next, instant(this.now()));
     this.notify();
-    this.emitDropMilestones(reason, previous, next);
+    this.emitDropMilestones(runId, reason, previous, next);
   }
 
   public purge(runId: string, reason: CodingSafeActivityPurgeReason): void {
@@ -415,13 +442,22 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
 
   private purgeCurrent(reason: CodingSafeActivityPurgeReason): void {
     const retained = this.entry !== undefined || this.subscribers.size > 0;
+    const correlationId = correlationIdOrUnknown(this.entry?.runId ?? this.subscriberRunId);
     const notify = this.entry !== undefined;
     const subscribers = [...this.subscribers];
     this.clearCurrentEntry();
     this.subscribers.clear();
     this.subscriberRunId = undefined;
     if (notify) this.notifySubscribers(subscribers, null);
-    if (retained) emitPurgeDiagnostic(this.diagnostics, this.now, reason);
+    if (retained) {
+      emitPurgeDiagnostic(this.diagnostics, this.now, correlationId, reason);
+      this.activityLog?.write({
+        category: "process",
+        op: "coding-runtime.safe-activity",
+        correlationId,
+        extra: { event: "purged", reason },
+      });
+    }
   }
 
   private clearCurrentEntry(): void {
@@ -450,14 +486,21 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   }
 
   private emitDropMilestones(
+    runId: string,
     reason: CodingSafeActivityDropReason,
     previous: number,
     next: number,
   ): void {
+    this.activityLog?.write({
+      category: "process",
+      op: "coding-runtime.safe-activity",
+      correlationId: correlationIdOrUnknown(runId),
+      extra: { event: "dropped", reason, occurrenceCount: next },
+    });
     for (let milestone = 1; milestone <= next; milestone *= 2) {
       if (milestone <= previous || milestone <= this.lastEmittedDropCount) continue;
       this.lastEmittedDropCount = milestone;
-      emitDropDiagnostic(this.diagnostics, this.now, reason, milestone);
+      emitDropDiagnostic(this.diagnostics, this.now, runId, reason, milestone);
     }
   }
 
@@ -521,31 +564,45 @@ function applySignal(
   entry: ProjectionEntry,
   signal: CodingSafeActivitySignal,
   limits: ResolvedLimits,
-): boolean {
-  if (entry.feed.availability !== "available") return false;
+): SignalApplication {
+  if (entry.feed.availability !== "available") return "rejected";
   if (signal.kind === "message") return applyMessage(entry, signal, limits);
-  if (signal.kind === "text") return applyText(entry, signal, limits);
-  if (signal.kind === "plan") return applyPlan(entry, signal, limits);
-  return applyTool(entry, signal, limits);
+  if (signal.kind === "text") return applicationResult(applyText(entry, signal, limits));
+  if (signal.kind === "plan") return applicationResult(applyPlan(entry, signal, limits));
+  return applicationResult(applyTool(entry, signal, limits));
+}
+
+function applicationResult(accepted: boolean): SignalApplication {
+  return accepted ? "accepted" : "rejected";
 }
 
 function applyMessage(
   entry: ProjectionEntry,
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "message" }>,
   limits: ResolvedLimits,
-): boolean {
-  if (entry.feed.availability !== "available") return false;
+): SignalApplication {
+  if (entry.feed.availability !== "available") return "rejected";
   const knownTurn = entry.messageTurns.get(signal.messageId);
-  if (knownTurn !== undefined) return true;
+  if (knownTurn !== undefined) return "accepted";
   const turn = turnForMessage(entry, signal);
-  if (turn === undefined) return false;
+  if (turn === undefined) return "rejected";
+  let application: SignalApplication = "accepted";
   if (turn.messages.length >= limits.maxMessagesPerTurn) {
     turn.truncated = true;
-    return true;
+    if (!evictOldestAssistantMessage(entry, turn)) return "capacity-dropped";
+    application = "capacity-dropped";
   }
   turn.messages.push(newMessage(signal));
   entry.messageTurns.set(signal.messageId, turn.turnId);
   enforceTurnCount(entry, limits.maxTurns);
+  return application;
+}
+
+function evictOldestAssistantMessage(entry: ProjectionEntry, turn: MutableTurn): boolean {
+  const index = turn.messages.findIndex(({ role }) => role === "assistant");
+  if (index < 0) return false;
+  const removed = turn.messages.splice(index, 1)[0];
+  if (removed !== undefined) entry.messageTurns.delete(removed.messageId);
   return true;
 }
 
@@ -961,6 +1018,35 @@ function withDroppedCount(
   };
 }
 
+function incrementDroppedCount(
+  entry: ProjectionEntry,
+  maximum: number,
+  updatedAt: string,
+): DropCountChange | undefined {
+  if (entry.feed.availability !== "available") return undefined;
+  const previous = entry.feed.droppedEventCount;
+  const next = Math.min(maximum, previous + 1);
+  if (next === previous) return undefined;
+  entry.feed = withDroppedCount(entry.feed, next, updatedAt);
+  return { previous, next };
+}
+
+interface DropCountChange {
+  readonly previous: number;
+  readonly next: number;
+}
+
+function capacityDropForApplication(
+  entry: ProjectionEntry,
+  application: SignalApplication,
+  maximum: number,
+  updatedAt: string,
+): DropCountChange | undefined {
+  return application === "capacity-dropped"
+    ? incrementDroppedCount(entry, maximum, updatedAt)
+    : undefined;
+}
+
 // Issue #3245: both drop/purge reason unions are small and genuinely closed (5 members each), so
 // each (reason -> fixed vocabulary member) pairing is enumerated directly rather than moved to
 // `code` — `code` already carries the fixed generic event code here (CODING_SAFE_ACTIVITY_*), and
@@ -990,11 +1076,12 @@ const SAFE_ACTIVITY_PURGE_SUMMARY: Readonly<
 function emitDropDiagnostic(
   sink: ServerDiagnosticSink | undefined,
   now: () => number,
+  runId: string,
   reason: CodingSafeActivityDropReason,
   count: number,
 ): void {
   emitServerDiagnostic(sink, {
-    correlationId: `safe-activity-drop-${String(count)}`,
+    correlationId: correlationIdOrUnknown(runId),
     timestamp: instant(now()),
     operation: "coding-runtime.safe-activity",
     source: "opencode.safe-activity",
@@ -1008,10 +1095,11 @@ function emitDropDiagnostic(
 function emitPurgeDiagnostic(
   sink: ServerDiagnosticSink | undefined,
   now: () => number,
+  correlationId: string,
   reason: CodingSafeActivityPurgeReason,
 ): void {
   emitServerDiagnostic(sink, {
-    correlationId: `safe-activity-purge-${reason}`,
+    correlationId,
     timestamp: instant(now()),
     operation: "coding-runtime.safe-activity",
     source: "opencode.safe-activity",

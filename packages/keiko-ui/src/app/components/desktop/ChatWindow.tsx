@@ -124,6 +124,9 @@ import { VoiceDialogInterruptButton, VoiceDialogModeSwitch } from "./VoiceDialog
 import styles from "./ChatWindow.module.css";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
 import { fetchFilesSearch, updateChat } from "@/lib/api";
+import { GitChangeScopePill } from "./GitChangeScopePill";
+import { ConnectedScopePill } from "./ConnectedScopePill";
+import { ConnectorScopePill } from "./ConnectorScopePill";
 import type { ChatEditorApplyOutcome } from "@/lib/chat-editor-apply";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
@@ -176,9 +179,9 @@ interface ChatWindowProps {
   readonly workflowCompact?: boolean;
   readonly linkedRoot?: string | null;
   readonly linkedRoots?: readonly string[];
-  readonly openEditorFile?: ((request: OpenEditorFileRequest) => OpenEditorFileResult) | undefined;
-  readonly previewWindows?: PdfCitationPreviewWindowApi | undefined;
-  readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
+  readonly openEditorFile?: (request: OpenEditorFileRequest) => OpenEditorFileResult;
+  readonly previewWindows?: PdfCitationPreviewWindowApi;
+  readonly onOpenRunResult?: (message: ChatMessage) => void;
 }
 
 // Stable id for the no-model alert so aria-describedby chains can reference it.
@@ -812,16 +815,16 @@ function ChatBubbleImpl({
   layout = "stack",
 }: {
   readonly message: ChatMessage;
-  readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
-  readonly onRegenerate?: ((assistantMessageId: string) => Promise<void>) | undefined;
-  readonly onCancelRegenerate?: (() => void) | undefined;
+  readonly onOpenRunResult: ((message: ChatMessage) => void) | undefined;
+  readonly onRegenerate?: (assistantMessageId: string) => Promise<void>;
+  readonly onCancelRegenerate?: () => void;
   readonly showRegenerate?: boolean;
   readonly regenerating?: boolean;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly onApplyCodeBlock?: AssistantCodeBlockApply | undefined;
   readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
-  readonly windowId?: string | undefined;
+  readonly windowId: string | undefined;
   // Issue #1296 — true only for the live assistant turn while tokens are arriving,
   // so the DS 0.4.0 streaming caret blinks at the growing edge of the text.
   readonly streaming?: boolean;
@@ -998,13 +1001,13 @@ function TypingBubble(): ReactNode {
 
 interface ConversationThreadProps {
   readonly messages: readonly ChatMessage[];
-  readonly streamingAssistantMessage?: ChatMessage | undefined;
-  readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
+  readonly streamingAssistantMessage: ChatMessage | undefined;
+  readonly onOpenRunResult: ((message: ChatMessage) => void) | undefined;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly onApplyCodeBlock: AssistantCodeBlockApply | undefined;
   readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
-  readonly windowId?: string | undefined;
+  readonly windowId: string | undefined;
   readonly sending: boolean;
   readonly sendStatus: SendStatus;
   readonly regeneratingMessageId: string | undefined;
@@ -1963,21 +1966,21 @@ interface VoiceDialogComposerControlsProps {
   // whether the mounted button is actionable, exactly as VoiceDialogInterruptButton expects.
   readonly canInterrupt: boolean;
   readonly onInterrupt: (() => void) | undefined;
-  readonly compact?: boolean | undefined;
+  readonly compact: boolean | undefined;
 }
 
 interface ComposerContextControlsProps {
   readonly session: ChatSessionApi;
   readonly selectedModelCapability: ModelCapability | undefined;
   readonly onAttachFiles: (files: readonly File[]) => void;
-  readonly controlsNarrow?: boolean | undefined;
+  readonly controlsNarrow: boolean | undefined;
 }
 
 interface VoiceDialogMicMuteButtonProps {
   readonly muted: boolean;
   readonly onToggle: () => void;
-  readonly buttonRef?: Ref<HTMLButtonElement> | undefined;
-  readonly compact?: boolean | undefined;
+  readonly buttonRef: Ref<HTMLButtonElement> | undefined;
+  readonly compact: boolean | undefined;
 }
 
 function VoiceDialogMicMuteButton({
@@ -4062,6 +4065,18 @@ function LocalKnowledgeScopeControl({
   );
 }
 
+// uiux-fix F041 (C172) — the same catalog load that feeds the grounding select's option lists
+// also names the connector pills, so a connected capsule/capsule-set shows its display name
+// instead of a raw id (ConnectorScopePill falls back to the id when a key is absent).
+function connectorScopeLabels(catalog: KnowledgeCatalog): ReadonlyMap<string, string> {
+  const labels = new Map<string, string>();
+  for (const capsule of catalog.capsules) labels.set(`capsule:${capsule.id}`, capsule.displayName);
+  for (const capsuleSet of catalog.capsuleSets) {
+    labels.set(`set:${capsuleSet.id}`, capsuleSet.displayName);
+  }
+  return labels;
+}
+
 function ChatScopeHeaderImpl({
   chat,
   onChatChanged,
@@ -4085,6 +4100,17 @@ function ChatScopeHeaderImpl({
         catalog={catalog}
         connected={connected}
       />
+      <ConnectedScopePill chat={chat} onDisconnect={onChatChanged} />
+      <ConnectorScopePill
+        chat={chat}
+        onDisconnect={onChatChanged}
+        labels={connectorScopeLabels(catalog)}
+      />
+      {/* Issue #3400 — the git-change comparison connected via the Git window's "Connect to
+          Chat" action renders here, alongside the grounding scope control, so its current /
+          stale / blocked status and refresh/disconnect actions are visible where a turn is
+          actually sent. Renders nothing when the chat has no connected git-change scope. */}
+      <GitChangeScopePill chat={chat} onDisconnect={onChatChanged} onRefreshed={onChatChanged} />
       {memoryControl !== undefined ? (
         <div className="chat-scope-header-actions">{memoryControl}</div>
       ) : null}

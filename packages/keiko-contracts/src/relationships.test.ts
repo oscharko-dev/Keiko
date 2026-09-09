@@ -26,9 +26,9 @@ describe("schema version", () => {
 });
 
 describe("RELATIONSHIP_OBJECT_KINDS", () => {
-  it("contains exactly the 14 taxonomy object kinds", () => {
-    expect(RELATIONSHIP_OBJECT_KINDS).toHaveLength(14);
-    expect(new Set(RELATIONSHIP_OBJECT_KINDS).size).toBe(14);
+  it("contains exactly the 15 taxonomy object kinds (Issue #3400 added git-change)", () => {
+    expect(RELATIONSHIP_OBJECT_KINDS).toHaveLength(15);
+    expect(new Set(RELATIONSHIP_OBJECT_KINDS).size).toBe(15);
   });
 
   it("contains every kind referenced by taxonomy.md §4", () => {
@@ -47,6 +47,7 @@ describe("RELATIONSHIP_OBJECT_KINDS", () => {
       "data-source",
       "skill",
       "mcp-tool",
+      "git-change",
     ];
     for (const kind of required) {
       expect(RELATIONSHIP_OBJECT_KINDS).toContain(kind);
@@ -188,6 +189,9 @@ describe("RELATIONSHIP_TYPE_DEFINITIONS", () => {
     const readsContext = RELATIONSHIP_TYPE_DEFINITIONS["reads-context"];
     expect(readsContext.validSourceKinds).toContain("workflow-run");
     expect(readsContext.validTargetKinds).toContain("memory");
+    // Issue #3400: a Chat may read-context a server-resolved git-change comparison.
+    expect(readsContext.validSourceKinds).toContain("chat");
+    expect(readsContext.validTargetKinds).toContain("git-change");
 
     const proposesPatch = RELATIONSHIP_TYPE_DEFINITIONS["proposes-patch"];
     expect(proposesPatch.validSourceKinds).toEqual(["workflow-run"]);

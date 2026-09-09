@@ -17,10 +17,17 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GitDeliveryRepoPolicyPack } from "@oscharko-dev/keiko-contracts";
+import type {
+  GitDeliveryApprovalClaim,
+  GitDeliveryRepoPolicyPack,
+} from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import type { GitPushCommand, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
-import type { GitPublishExecResult, GitRemotePublishAdapter } from "@oscharko-dev/keiko-tools";
+import type {
+  GitPublishExecRequest,
+  GitPublishExecResult,
+  GitRemotePublishAdapter,
+} from "@oscharko-dev/keiko-tools";
 import type { NodeGitPublishAdapterDeps } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -50,21 +57,32 @@ vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal
   };
 });
 
-import { createHandlePushExecute, createHandlePushPreview } from "./pushRoutes.js";
+import {
+  createHandlePushApprove,
+  createHandlePushExecute,
+  createHandlePushPreview,
+} from "./pushRoutes.js";
 import {
   executeGovernedPublish,
   type GitDeliveryPushExecuteResponseBody,
   type GitDeliveryPushPreviewBody,
   type GitDeliveryPublishSeams,
 } from "./pushExecution.js";
+import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
 const PREVIEW = "/api/git-delivery/push/preview";
 const EXECUTE = "/api/git-delivery/push/execute";
 
+// #3394 review, finding 1: `headSha` matches the `verifiedCommitSha` every command/body fixture in
+// this file defaults to ("a".repeat(40) — see `pushBody`), so the new `verified-commit-drifted`
+// preflight check (comparing the two) does not spuriously block every test that does not explicitly
+// exercise drift. A test that WANTS to exercise drift overrides `headSha` (or `verifiedCommitSha`)
+// explicitly.
 const SNAPSHOT: GitWorktreeSnapshot = {
   headDetached: false,
   currentBranchName: "feat/x",
+  headSha: "a".repeat(40),
   stagedFileCount: 0,
   unstagedFileCount: 0,
   untrackedFileCount: 0,
@@ -182,6 +200,12 @@ function seams(overrides: Partial<GitDeliveryPublishSeams> = {}): GitDeliveryPub
   };
 }
 
+// #3394 review, finding 1: `verifiedCommitSha` is mandatory for approve/execute (a request that
+// omits it, or malforms it, is refused with `GIT_DELIVERY_PUSH_BAD_REQUEST` — see
+// `buildPartialPushCommand`/`buildPushCommand` in pushRoutes.ts). Every test in this file that does
+// not specifically exercise absence/malformation gets a valid default here; a test that wants to
+// prove the fail-closed behavior overrides this key explicitly (see the "missing verifiedCommitSha"
+// tests below).
 function pushBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     schemaVersion: "1",
@@ -189,8 +213,49 @@ function pushBody(overrides: Record<string, unknown> = {}): Record<string, unkno
     remoteAlias: "origin",
     remoteBranchName: "feat/x",
     sourceBranchName: "feat/x",
+    verifiedCommitSha: "a".repeat(40),
     ...overrides,
   };
+}
+
+// Mints a real HTTP approval against the running test server's mount (the SHARED default approval
+// store the production route table falls back to, since these HTTP-level tests never inject a
+// seams.approvalStore override) and returns the request body with that claim attached — proves the
+// mint route end to end for the one HTTP-fetch-level test that needs it.
+async function approveThenBody(
+  body: Record<string, unknown>,
+  approvePath: string,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`http://${UI_HOST}:${String(port)}${approvePath}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+    body: JSON.stringify(body),
+  });
+  const approved = (await res.json()) as { approval: GitDeliveryApprovalClaim };
+  return { ...body, approval: approved.approval };
+}
+
+// #3387 (ADR-0138 D2): an accepted run's push now requires an actually consumed, server-issued
+// claim — mirrors commitRoutes.test.ts's issueCommitApproval, minting into a caller-supplied store
+// against the SAME binding runPushMutation resolves at consume time (projectId, operation "push",
+// the exact typed command, and the default test authority's runId/envelopeDigest).
+function issuePushApproval(
+  approvalStore: ReturnType<typeof createInMemoryGitDeliveryApprovalStore>,
+  command: GitPushCommand,
+  authority: { readonly runId?: string; readonly envelopeDigest?: string } = {},
+): GitDeliveryApprovalClaim {
+  return approvalStore.issue({
+    binding: {
+      projectId,
+      operation: "push",
+      command,
+      runId: authority.runId ?? "test-run",
+      envelopeDigest: authority.envelopeDigest ?? "c".repeat(64),
+    },
+    approvedByUserId: "u-1",
+    nowMs: 1_700_000_000_000,
+    ttlMs: 60_000,
+  }).approval;
 }
 
 async function closeServer(): Promise<void> {
@@ -234,10 +299,14 @@ describe("push routes — central enforcement", () => {
     await closeServer();
     await startBound({ env: {} });
     for (const path of [PREVIEW, EXECUTE]) {
+      const body =
+        path === EXECUTE
+          ? await approveThenBody(pushBody(), "/api/git-delivery/push/approve")
+          : pushBody();
       const res = await fetch(`http://${UI_HOST}:${String(port)}${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
-        body: JSON.stringify(pushBody()),
+        body: JSON.stringify(body),
       });
       expect(res.status).toBe(409);
       expect(await res.json()).toMatchObject({
@@ -363,17 +432,55 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
   it("executes a permitted user-namespace push and records evidence (AC5)", async () => {
     const adapter = recordingPublishAdapter();
     const cap = capturingEvidenceStore();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandlePushExecute({
-      execution: seams({ publishAdapterFactory: () => adapter.adapter }),
+      execution: seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
     });
+    const command: GitPushCommand = {
+      kind: "push",
+      sourceBranchName: "feat/x",
+      remoteAlias: "origin",
+      remoteBranchName: "feat/x",
+      forcePush: false,
+      setUpstreamTracking: true,
+      verifiedCommitSha: "a".repeat(40),
+    };
     const res = await handler(
-      ctxFor(EXECUTE, pushBody({ setUpstreamTracking: true })),
+      ctxFor(
+        EXECUTE,
+        pushBody({
+          setUpstreamTracking: true,
+          approval: issuePushApproval(approvalStore, command),
+        }),
+      ),
       deps({ evidenceStore: cap.store }),
     );
     expect((res.body as GitDeliveryPushExecuteResponseBody).status).toBe("succeeded");
     expect(adapter.calls()).toBe(1);
     expect(cap.count()).toBe(1);
   });
+
+  // #3387: proves the mandatory-approval check is unconditional — previously "honoured"
+  // `{ required: false }` — a request-supplied claim of NO approval — as sufficient to push. Mirrors
+  // commitRoutes.test.ts's equivalent pin for the commit route (#3386).
+  it.each([
+    ["an absent approval field", undefined],
+    ["an explicit { required: false }", { required: false }],
+  ] as const)(
+    "does not push an accepted run's direct HTTP request that carries %s",
+    async (_label, approval) => {
+      const adapter = recordingPublishAdapter();
+      const handler = createHandlePushExecute({
+        execution: seams({ publishAdapterFactory: () => adapter.adapter }),
+      });
+      const res = await handler(
+        ctxFor(EXECUTE, pushBody({ ...(approval === undefined ? {} : { approval }) })),
+        deps(),
+      );
+      expect((res.body as GitDeliveryPushExecuteResponseBody).status).toBe("approval-required");
+      expect(adapter.calls()).toBe(0);
+    },
+  );
 
   // The continuity guard re-checks authority right before remote dispatch (a TOCTOU gap: policy/preflight
   // evaluation takes time, and the admitted authority can change or be revoked while that runs). Before
@@ -407,16 +514,27 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
         return { ...active, runId: "replacement-run", envelopeDigest: "d".repeat(64) };
       },
     };
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandlePushExecute({
       execution: seams({
         publishAdapterFactory: () => adapter.adapter,
         activityLog: activity.sink,
+        approvalStore,
       }),
     });
+    const command: GitPushCommand = {
+      kind: "push",
+      sourceBranchName: "feat/x",
+      remoteAlias: "origin",
+      remoteBranchName: "feat/x",
+      forcePush: false,
+      setUpstreamTracking: false,
+      verifiedCommitSha: "a".repeat(40),
+    };
 
     const res = await handler(
       {
-        ...ctxFor(EXECUTE, pushBody()),
+        ...ctxFor(EXECUTE, pushBody({ approval: issuePushApproval(approvalStore, command) })),
         correlationId: "request-correlation-push-continuity",
       },
       deps({ gitDeliveryAuthority: authority, evidenceStore: cap.store }),
@@ -498,11 +616,39 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
 
   it("executes a push to an ordinary user branch that follows no Keiko naming convention", async () => {
     const adapter = recordingPublishAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    // The user has `my-work` checked out: a push names the checkout, or preflight refuses it with
+    // `source-branch-not-checked-out` (#3394 review) before the adapter is reached.
     const handler = createHandlePushExecute({
-      execution: seams({ publishAdapterFactory: () => adapter.adapter }),
+      execution: seams({
+        publishAdapterFactory: () => adapter.adapter,
+        approvalStore,
+        snapshotReader: () =>
+          Promise.resolve({
+            ...SNAPSHOT,
+            currentBranchName: "my-work",
+            existingLocalBranchNames: ["my-work", "dev"],
+          }),
+      }),
     });
+    const command: GitPushCommand = {
+      kind: "push",
+      sourceBranchName: "my-work",
+      remoteAlias: "origin",
+      remoteBranchName: "my-work",
+      forcePush: false,
+      setUpstreamTracking: false,
+      verifiedCommitSha: "a".repeat(40),
+    };
     const res = await handler(
-      ctxFor(EXECUTE, pushBody({ remoteBranchName: "my-work", sourceBranchName: "my-work" })),
+      ctxFor(
+        EXECUTE,
+        pushBody({
+          remoteBranchName: "my-work",
+          sourceBranchName: "my-work",
+          approval: issuePushApproval(approvalStore, command),
+        }),
+      ),
       deps({
         gitDeliveryAuthority: permittedGitDeliveryAuthority(
           () => projectId,
@@ -523,10 +669,26 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
 
   it("blocks a force push and never invokes the remote adapter (AC4)", async () => {
     const adapter = recordingPublishAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandlePushExecute({
-      execution: seams({ publishAdapterFactory: () => adapter.adapter }),
+      execution: seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
     });
-    const res = await handler(ctxFor(EXECUTE, pushBody({ forcePush: true })), deps());
+    const command: GitPushCommand = {
+      kind: "push",
+      sourceBranchName: "feat/x",
+      remoteAlias: "origin",
+      remoteBranchName: "feat/x",
+      forcePush: true,
+      setUpstreamTracking: false,
+      verifiedCommitSha: "a".repeat(40),
+    };
+    const res = await handler(
+      ctxFor(
+        EXECUTE,
+        pushBody({ forcePush: true, approval: issuePushApproval(approvalStore, command) }),
+      ),
+      deps(),
+    );
     const body = res.body as GitDeliveryPushExecuteResponseBody;
     expect(body.status).toBe("blocked");
     expect(body.blockReason).toBe("risk-class-ceiling");
@@ -558,13 +720,27 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
 
   it("blocks a non-fast-forward push at preflight, executing nothing (AC5)", async () => {
     const adapter = recordingPublishAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandlePushExecute({
       execution: seams({
         publishAdapterFactory: () => adapter.adapter,
         snapshotReader: () => Promise.resolve({ ...SNAPSHOT, behindCount: 3 }),
+        approvalStore,
       }),
     });
-    const res = await handler(ctxFor(EXECUTE, pushBody()), deps());
+    const command: GitPushCommand = {
+      kind: "push",
+      sourceBranchName: "feat/x",
+      remoteAlias: "origin",
+      remoteBranchName: "feat/x",
+      forcePush: false,
+      setUpstreamTracking: false,
+      verifiedCommitSha: "a".repeat(40),
+    };
+    const res = await handler(
+      ctxFor(EXECUTE, pushBody({ approval: issuePushApproval(approvalStore, command) })),
+      deps(),
+    );
     const body = res.body as GitDeliveryPushExecuteResponseBody;
     expect(body.status).toBe("blocked");
     expect(body.preflightFindingCodes).toContain("non-fast-forward");
@@ -580,15 +756,279 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
       rejectionReason: "permission-denied",
     });
     const cap = capturingEvidenceStore();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandlePushExecute({
-      execution: seams({ publishAdapterFactory: () => adapter.adapter }),
+      execution: seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
     });
-    const res = await handler(ctxFor(EXECUTE, pushBody()), deps({ evidenceStore: cap.store }));
+    const command: GitPushCommand = {
+      kind: "push",
+      sourceBranchName: "feat/x",
+      remoteAlias: "origin",
+      remoteBranchName: "feat/x",
+      forcePush: false,
+      setUpstreamTracking: false,
+      verifiedCommitSha: "a".repeat(40),
+    };
+    const res = await handler(
+      ctxFor(EXECUTE, pushBody({ approval: issuePushApproval(approvalStore, command) })),
+      deps({ evidenceStore: cap.store }),
+    );
     const body = res.body as GitDeliveryPushExecuteResponseBody;
     expect(body.status).toBe("failed");
     expect(body.publishRejectionReason).toBe("permission-denied");
     expect(body.recoveryDisposition).toBe("user-fixable");
     expect(cap.count()).toBe(1);
+  });
+});
+
+// #3387 — before this route existed, no HTTP path could mint a push approval claim: the route did
+// not exist. Proves the mint route end to end: redeemable exactly once, refused for another
+// operation or run, and reachable from a running accepted run regardless of mode (ADR-0138 D2 — a
+// delivery effect is approval-required in every mode, never mode-denied merely because the mode is
+// lower; the coarse admission gate this route's own authority check runs through already resolves
+// "approval-required" rather than "mode-denied" below autonomous-delivery, per #3386).
+describe("push approve — mints the server-issued claim execute consumes (#3387)", () => {
+  const COMMAND: GitPushCommand = {
+    kind: "push",
+    sourceBranchName: "feat/x",
+    remoteAlias: "origin",
+    remoteBranchName: "feat/x",
+    forcePush: false,
+    setUpstreamTracking: false,
+    verifiedCommitSha: "a".repeat(40),
+  };
+
+  it("mints a claim that execute accepts for the exact same push, letting an approval-required push proceed", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approveHandler = createHandlePushApprove({ execution: seams({ approvalStore }) });
+    const minted = await approveHandler(
+      ctxFor("/api/git-delivery/push/approve", pushBody()),
+      deps(),
+    );
+    expect(minted.status).toBe(200);
+    const approval = (minted.body as { approval: GitDeliveryApprovalClaim }).approval;
+
+    const adapter = recordingPublishAdapter();
+    const executeHandler = createHandlePushExecute({
+      execution: seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const res = await executeHandler(ctxFor(EXECUTE, pushBody({ approval })), deps());
+    expect((res.body as GitDeliveryPushExecuteResponseBody).status).toBe("succeeded");
+    expect(adapter.calls()).toBe(1);
+  });
+
+  it("mints a claim redeemable only once", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issuePushApproval(approvalStore, COMMAND);
+    const adapter = recordingPublishAdapter();
+    const executeHandler = createHandlePushExecute({
+      execution: seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const first = await executeHandler(ctxFor(EXECUTE, pushBody({ approval })), deps());
+    expect((first.body as GitDeliveryPushExecuteResponseBody).status).toBe("succeeded");
+    // The claim was consumed by the first execute: a second redemption attempt no longer matches any
+    // stored record, so resolveGitDeliveryApprovalRequirement refuses it as a malformed/unknown claim
+    // (400), never re-honouring it as a fresh "approval-required" disposition.
+    const second = await executeHandler(ctxFor(EXECUTE, pushBody({ approval })), deps());
+    expect(second.status).toBe(400);
+    expect(adapter.calls()).toBe(1);
+  });
+
+  it("refuses a claim minted for a different push command", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issuePushApproval(approvalStore, { ...COMMAND, remoteBranchName: "other" });
+    const adapter = recordingPublishAdapter();
+    const handler = createHandlePushExecute({
+      execution: seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const res = await handler(ctxFor(EXECUTE, pushBody({ approval })), deps());
+    expect(res.status).toBe(400);
+    expect(adapter.calls()).toBe(0);
+  });
+
+  // #3394 review: `pushApprovalBinding` used to hash only branch names/flags, never a commit, so an
+  // approval minted here stayed valid for whatever `sourceBranchName` pointed to at execute time --
+  // not what a human reviewed at preview/approval time. `verifiedCommitSha` pins the binding (and,
+  // downstream, the actual dispatch) to the exact commit that was approved.
+  const COMMIT_A = "a".repeat(40);
+  const COMMIT_B = "b".repeat(40);
+
+  it("mints a claim bound to a verified commit and lets execute proceed against that same commit (#3394 review)", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approveHandler = createHandlePushApprove({ execution: seams({ approvalStore }) });
+    const minted = await approveHandler(
+      ctxFor("/api/git-delivery/push/approve", pushBody({ verifiedCommitSha: COMMIT_A })),
+      deps(),
+    );
+    expect(minted.status).toBe(200);
+    const approval = (minted.body as { approval: GitDeliveryApprovalClaim }).approval;
+
+    const adapter = recordingPublishAdapter();
+    const executeHandler = createHandlePushExecute({
+      execution: seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const res = await executeHandler(
+      ctxFor(EXECUTE, pushBody({ approval, verifiedCommitSha: COMMIT_A })),
+      deps(),
+    );
+    expect((res.body as GitDeliveryPushExecuteResponseBody).status).toBe("succeeded");
+    expect(adapter.calls()).toBe(1);
+  });
+
+  it("refuses to execute against a different commit than the one the approval was minted for, even with identical branch names/flags (#3394 review)", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issuePushApproval(approvalStore, { ...COMMAND, verifiedCommitSha: COMMIT_A });
+    const adapter = recordingPublishAdapter();
+    const handler = createHandlePushExecute({
+      execution: seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    // Same remote/source/target/flags as approved -- only the reviewed commit has since moved
+    // (e.g. a concurrent process advanced the branch between approval and this execute).
+    const res = await handler(
+      ctxFor(EXECUTE, pushBody({ approval, verifiedCommitSha: COMMIT_B })),
+      deps(),
+    );
+    expect(res.status).toBe(400);
+    expect(adapter.calls()).toBe(0);
+  });
+
+  it("dispatches the approved commit itself to the remote adapter, not a plain branch-name push (#3394 review)", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issuePushApproval(approvalStore, { ...COMMAND, verifiedCommitSha: COMMIT_A });
+    let received: GitPublishExecRequest | undefined;
+    const adapter: GitRemotePublishAdapter = {
+      publish: (request): Promise<GitPublishExecResult> => {
+        received = request;
+        return Promise.resolve({ schemaVersion: "1", outcome: "succeeded", durationMs: 1 });
+      },
+    };
+    const handler = createHandlePushExecute({
+      execution: seams({ publishAdapterFactory: () => adapter, approvalStore }),
+    });
+    const res = await handler(
+      ctxFor(EXECUTE, pushBody({ approval, verifiedCommitSha: COMMIT_A })),
+      deps(),
+    );
+    expect((res.body as GitDeliveryPushExecuteResponseBody).status).toBe("succeeded");
+    expect(received?.verifiedCommitSha).toBe(COMMIT_A);
+  });
+
+  it("refuses a claim minted for a different run", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issuePushApproval(approvalStore, COMMAND, { runId: "another-run" });
+    const adapter = recordingPublishAdapter();
+    const handler = createHandlePushExecute({
+      execution: seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const res = await handler(ctxFor(EXECUTE, pushBody({ approval })), deps());
+    expect(res.status).toBe(400);
+    expect(adapter.calls()).toBe(0);
+  });
+
+  it("denies the mint itself when no accepted run authority is active", async () => {
+    const handler = createHandlePushApprove({ execution: seams() });
+    const res = await handler(
+      ctxFor("/api/git-delivery/push/approve", pushBody()),
+      deps({ gitDeliveryAuthority: { current: () => undefined } }),
+    );
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+  });
+
+  // Final-audit F2/#3390 (ADR-0138 D2): this describe block's own header comment claims
+  // "reachable from a running accepted run regardless of mode", but before this fix every test here
+  // only ever exercised the fixture default (autonomous-delivery) — the coarse admission gate
+  // hard-denied both push/approve and push/execute with "approval-required" below it, and no
+  // production path ever redeemed it. FAILING BEFORE THE FIX: `modeDeps()`'s approve call returned
+  // 403 GIT_DELIVERY_AUTHORITY_DENIED at the `gitDeliveryAuthorityGate` call inside
+  // `createHandlePushApprove`, never reaching `store.issue()`.
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "mints and consumes a push approval end to end at %s",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+          {
+            headRef: "feat/x",
+            baseRef: "dev",
+            allowDetachedHead: false,
+            allowedPrefixes: ["feat/"],
+          },
+        ),
+      });
+      const approvalStore = createInMemoryGitDeliveryApprovalStore();
+      const approveHandler = createHandlePushApprove({ execution: seams({ approvalStore }) });
+      const minted = await approveHandler(
+        ctxFor("/api/git-delivery/push/approve", pushBody()),
+        modeDeps,
+      );
+      expect(minted.status).toBe(200);
+      const approval = (minted.body as { approval: GitDeliveryApprovalClaim }).approval;
+
+      const adapter = recordingPublishAdapter();
+      const executeHandler = createHandlePushExecute({
+        execution: seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
+      });
+      const res = await executeHandler(ctxFor(EXECUTE, pushBody({ approval })), modeDeps);
+      expect((res.body as GitDeliveryPushExecuteResponseBody).status).toBe("succeeded");
+      expect(adapter.calls()).toBe(1);
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "still returns approval-required (never mode-denied) at %s when execute carries no approval",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+          {
+            headRef: "feat/x",
+            baseRef: "dev",
+            allowDetachedHead: false,
+            allowedPrefixes: ["feat/"],
+          },
+        ),
+      });
+      const executeHandler = createHandlePushExecute({ execution: seams() });
+      const res = await executeHandler(ctxFor(EXECUTE, pushBody()), modeDeps);
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ status: "approval-required", actionKind: "push" });
+    },
+  );
+
+  // #3394 review, section 9: `commitPinned` was removed from this log line entirely. Once
+  // `verifiedCommitSha` is mandatory and validated at the request boundary, the route can never reach
+  // this call with an unpinned command — the field would be `true` at every single call site,
+  // unconditionally, by construction, so it carried zero information and was deleted rather than
+  // hardcoded (AGENTS.md §7). This test still proves the line is body-free: the SHA itself never
+  // appears in the log, only the fact that a mint happened.
+  it("logs a body-free line when the mint issues a claim", async () => {
+    const activity = captureActivityLog();
+    const handler = createHandlePushApprove({
+      execution: seams({ activityLog: activity.sink }),
+    });
+    await handler(
+      {
+        ...ctxFor("/api/git-delivery/push/approve", pushBody({ verifiedCommitSha: COMMIT_A })),
+        correlationId: "corr-push-mint-1",
+      },
+      deps(),
+    );
+    const events = activity.events.filter(
+      (event) => event.op === "git.delivery.push.approval.minted",
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      correlationId: "corr-push-mint-1",
+      extra: { runId: "test-run" },
+    });
+    expect(events[0]?.extra).not.toHaveProperty("commitPinned");
+    expect(JSON.stringify(events[0])).not.toContain("feat/x");
+    expect(JSON.stringify(events[0])).not.toContain(COMMIT_A);
   });
 });
 
@@ -627,6 +1067,7 @@ const WIRING_COMMAND: GitPushCommand = {
   remoteBranchName: "feat/x",
   forcePush: false,
   setUpstreamTracking: false,
+  verifiedCommitSha: "a".repeat(40),
 };
 
 describe("executeGovernedPublish — default publish-adapter termination wiring (F1)", () => {
@@ -747,15 +1188,32 @@ describe("push execute activity log (AGENTS.md §8 Rule 1)", () => {
       errorCode: "provider-rejected",
       rejectionReason: "permission-denied",
     });
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandlePushExecute({
       execution: {
-        ...seams({ publishAdapterFactory: () => adapter.adapter }),
+        ...seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
         activityLog: warnOnly,
       },
     });
+    const command: GitPushCommand = {
+      kind: "push",
+      sourceBranchName: "feat/x",
+      remoteAlias: "origin",
+      remoteBranchName: "feat/x",
+      forcePush: false,
+      setUpstreamTracking: true,
+      verifiedCommitSha: "a".repeat(40),
+    };
 
     await handler(
-      ctxWithCorrelation(EXECUTE, pushBody({ setUpstreamTracking: true }), "corr-push-failed-1"),
+      ctxWithCorrelation(
+        EXECUTE,
+        pushBody({
+          setUpstreamTracking: true,
+          approval: issuePushApproval(approvalStore, command),
+        }),
+        "corr-push-failed-1",
+      ),
       deps(),
     );
 
@@ -776,15 +1234,33 @@ describe("push execute activity log (AGENTS.md §8 Rule 1)", () => {
   it("reports a governed push under the request's correlation id, marked as a push", async () => {
     const adapter = recordingPublishAdapter();
     const activity = captureActivityLog();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandlePushExecute({
       execution: seams({
         publishAdapterFactory: () => adapter.adapter,
         activityLog: activity.sink,
+        approvalStore,
       }),
     });
+    const command: GitPushCommand = {
+      kind: "push",
+      sourceBranchName: "feat/x",
+      remoteAlias: "origin",
+      remoteBranchName: "feat/x",
+      forcePush: false,
+      setUpstreamTracking: true,
+      verifiedCommitSha: "a".repeat(40),
+    };
 
     const res = await handler(
-      ctxWithCorrelation(EXECUTE, pushBody({ setUpstreamTracking: true }), "corr-push-000001"),
+      ctxWithCorrelation(
+        EXECUTE,
+        pushBody({
+          setUpstreamTracking: true,
+          approval: issuePushApproval(approvalStore, command),
+        }),
+        "corr-push-000001",
+      ),
       deps(),
     );
 

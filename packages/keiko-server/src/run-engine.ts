@@ -392,11 +392,14 @@ function dispatchExplain(
 }
 
 // Maps a VerificationStatus to the BFF RunStatus. Verify has no "appliable" snapshot — the gates
-// either pass, fail/skip/deny (terminal), or are cancelled. `passed` → completed; `cancelled` →
-// cancelled; every other terminal status (failed/skipped/denied/timed-out/resource-exceeded) is
-// surfaced as `failed` so the registry stays in a known terminal state.
+// either pass, fail/deny (terminal), are skipped as a whole, or are cancelled. `passed` and
+// `skipped` → completed: a report whose every step was skipped is an honest verdict the run
+// reached, not a run that broke (KEIKO-0848; the `run:completed` event still carries
+// `overall=skipped`, and the verified-commit path refuses it as `verification-missing`).
+// `cancelled` → cancelled; every other terminal status (failed/denied/timed-out/
+// resource-exceeded) is surfaced as `failed` so the registry stays in a known terminal state.
 function verifyStatusToRun(status: VerificationReport["overallStatus"]): TerminalStatus {
-  if (status === "passed") {
+  if (status === "passed" || status === "skipped") {
     return "completed";
   }
   if (status === "cancelled") {

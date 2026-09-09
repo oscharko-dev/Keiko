@@ -1,16 +1,27 @@
+import { opencodeRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
 import { isAbsolute } from "node:path";
+import { correlationIdOrUnknown } from "../correlation.js";
+import { describeError } from "../diagnostics-log.js";
+import type { ServerLogSink } from "../observability/server-log.js";
+import { processServerLogSink } from "../process-log-sink.js";
 
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
+import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 
-import { createFixedOpenCodeConfig } from "./opencodeLaunchProfile.js";
+import {
+  createFixedOpenCodeConfig,
+  type OpenCodeContextGeometry,
+} from "./opencodeLaunchProfile.js";
 import {
   createOpenCodeReconciler,
+  isOpenCodeCompactionActivity,
   OPEN_CODE_EVENT_KINDS,
   type OpenCodeReconciliationEvent,
   type OpenCodeReconciliationPreparation,
   type OpenCodeReconciler,
 } from "./opencodeReconciler.js";
 import type { OpenCodeLiveControl } from "./opencodeProtocol.js";
+import { MAX_APPROVAL_CHALLENGE_TTL_MS } from "./codingRuntimeOrchestrator.js";
 import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_PINNED_VERSION,
@@ -28,6 +39,7 @@ const MAX_HISTORY_CATCH_UP_ATTEMPTS = 4;
 const MAX_STREAM_RECONNECTS = 3;
 // The generated client must outlive the server-owned 30 s governed tool-bridge deadline.
 const OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS = 35_000;
+const OPEN_CODE_APPROVAL_TOOL_CLIENT_TIMEOUT_MS = MAX_APPROVAL_CHALLENGE_TTL_MS + 5_000;
 export const OPEN_CODE_MAX_TURN_WAIT_MS = 30 * 60_000;
 
 export type OpenCodeGovernedSinkReceipt = "applied" | "duplicate";
@@ -68,6 +80,8 @@ export interface GeneratedOpenCodeBundle {
     readonly model: string;
     readonly agent: Readonly<Record<string, { readonly prompt: string }>>;
     readonly provider: Readonly<Record<string, unknown>>;
+    readonly compaction: Readonly<Record<string, boolean | number>>;
+    readonly tool_output: Readonly<{ readonly max_bytes: number }>;
     readonly tools: Readonly<Record<string, boolean>>;
     readonly permission: Readonly<Record<string, string>>;
   };
@@ -75,6 +89,9 @@ export interface GeneratedOpenCodeBundle {
 }
 
 export interface OpenCodeRuntimeAdapterPorts {
+  readonly activityLog?: ServerLogSink | undefined;
+  readonly correlationId?: string | undefined;
+  readonly contextGeometry?: OpenCodeContextGeometry | undefined;
   readonly readiness: {
     readonly verifiedTarget: { readonly executable: string; readonly attestationDigest: string };
     readonly configDigest: string;
@@ -501,52 +518,90 @@ async function startAdapter(
   }>,
 ): Promise<OpenCodeAdapterReady | OpenCodeAdapterFailure> {
   const { readiness } = ports;
-  let phase: OpenCodeReadinessPhase = "target-attestation";
+  let phase = recordReadinessPhase(ports, "target-attestation");
   try {
     if (!validTarget(readiness) || !(await readiness.verifyTargetAttestation())) {
       return fail("target-attestation");
     }
-    phase = "config-materialization";
+    phase = recordReadinessPhase(ports, "config-materialization");
     if (!(await readiness.materialize(createGeneratedOpenCodeBundle()))) {
       return fail("config-materialization");
     }
-    phase = "endpoint";
+    phase = recordReadinessPhase(ports, "endpoint");
     const endpoint = parseStartupEndpoint(await readiness.startupLine());
     if (endpoint === undefined) return fail("endpoint");
-    phase = "authenticated-health";
+    phase = recordReadinessPhase(ports, "authenticated-health");
     const authenticated = await readiness.health("basic");
     if (authenticated.status !== 200) return fail("authenticated-health");
     if (authenticated.version !== OPENCODE_PINNED_VERSION)
       return fail("authenticated-health-version");
-    phase = "unauthenticated-health";
+    phase = recordReadinessPhase(ports, "unauthenticated-health");
     const unauthenticated = await readiness.health("none");
     if (unauthenticated.status !== 401) return fail("unauthenticated-health");
-    phase = "openapi-digest";
+    phase = recordReadinessPhase(ports, "openapi-digest");
     if ((await readiness.openApiDigest()) !== readiness.verifiedTarget.attestationDigest) {
       return fail("openapi-digest");
     }
-    phase = "sse-history-reconciliation";
+    phase = recordReadinessPhase(ports, "sse-history-reconciliation");
     const firstHint = await openSubscription();
-    phase = "session-echo";
+    phase = recordReadinessPhase(ports, "session-echo");
     const sessionId = await readiness.sessionEcho();
     if (!SESSION_ID.test(sessionId)) return fail("session-echo");
-    phase = "sse-history-reconciliation";
+    phase = recordReadinessPhase(ports, "sse-history-reconciliation");
     if (!(await reconcileHint(ports, state, firstHint.hint, firstHint.signal))) {
       return fail("sse-history-reconciliation");
     }
     if (!state.checkpoints.has(sessionId)) return fail("session-echo");
-    phase = "gateway-challenge";
+    phase = recordReadinessPhase(ports, "gateway-challenge");
     if (!(await readiness.gatewayChallenge())) return fail("gateway-challenge");
-    phase = "tool-facade-challenge";
+    phase = recordReadinessPhase(ports, "tool-facade-challenge");
     if (!(await readiness.toolFacadeChallenge())) return fail("tool-facade-challenge");
-    phase = "sse-history-reconciliation";
+    phase = recordReadinessPhase(ports, "sse-history-reconciliation");
     if (!(await reconcileHistory(ports, state, firstHint.signal))) {
       return fail("sse-history-reconciliation");
     }
     return { ok: true, endpoint, sessionId, configDigest: readiness.configDigest };
-  } catch {
+  } catch (error) {
+    (ports.activityLog ?? processServerLogSink()).write({
+      category: "process",
+      level: "error",
+      op: "coding-runtime.readiness.failed",
+      correlationId: correlationIdOrUnknown(ports.correlationId),
+      errorKind: "internal",
+      extra: { phase, ...describeError(error) },
+    });
     return fail(phase);
   }
+}
+
+function recordReadinessPhase(
+  ports: OpenCodeRuntimeAdapterPorts,
+  phase: OpenCodeReadinessPhase,
+): OpenCodeReadinessPhase {
+  (ports.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    level: "info",
+    op: "coding-runtime.readiness.phase",
+    correlationId: correlationIdOrUnknown(ports.correlationId),
+    extra: {
+      phase,
+      ...(phase === "config-materialization"
+        ? {
+            dependencyInstallPolicy: "offline",
+            ...(ports.contextGeometry === undefined
+              ? {}
+              : {
+                  contextWindowTokens: ports.contextGeometry.contextWindowTokens,
+                  maxInputTokens: ports.contextGeometry.maxInputTokens,
+                  maxOutputTokens: ports.contextGeometry.maxOutputTokens,
+                  compactionAuto: true,
+                  compactionPrune: true,
+                }),
+          }
+        : {}),
+    },
+  });
+  return phase;
 }
 
 function validTarget(readiness: OpenCodeRuntimeAdapterPorts["readiness"]): boolean {
@@ -639,6 +694,7 @@ async function applyHistoryPlan(
     if (receipt !== "applied" && receipt !== "duplicate") throw new Error("sink-receipt-invalid");
   }
   if (!prepared.commit()) throw new Error("reconciler-commit-conflict");
+  recordCompactionActivity(ports, prepared.projections);
   replaceMap(state.checkpoints, planned.checkpoints);
   replaceMap(state.evidenceCheckpoints, planned.evidenceCheckpoints);
   replaceMap(state.terminalCheckpoints, planned.terminalCheckpoints);
@@ -646,7 +702,34 @@ async function applyHistoryPlan(
   replaceMap(state.recent, planned.recent);
   replaceMap(state.observedIds, planned.observedIds);
   for (const signal of activity) {
-    if (ports.safeActivitySink?.ingest(signal) === false) ports.safeActivitySink.recordDrops(1);
+    // The sink owns rejection accounting and records the projection-specific closed reason.
+    ports.safeActivitySink?.ingest(signal);
+  }
+}
+
+function recordCompactionActivity(
+  ports: OpenCodeRuntimeAdapterPorts,
+  projections: readonly import("./opencodeReconciler.js").OpenCodeProjection[],
+): void {
+  const activityLog = ports.activityLog ?? processServerLogSink();
+  for (const projection of projections) {
+    const activity = projection.compaction;
+    if (activity === undefined) continue;
+    const failure = activity.event === "failed";
+    activityLog.write({
+      category: "process",
+      level: failure ? "error" : "info",
+      op: "coding-runtime.compaction",
+      correlationId: correlationIdOrUnknown(ports.correlationId),
+      ...(failure ? { errorKind: activity.errorKind } : {}),
+      extra: failure
+        ? {
+            event: activity.event,
+            compactionIdSha256: activity.compactionIdSha256,
+            finishReason: activity.finishReason,
+          }
+        : activity,
+    });
   }
 }
 
@@ -803,13 +886,15 @@ function validControl(value: unknown): value is OpenCodeLiveControl {
 
 function validEvent(event: OpenCodeReconciliationEvent): boolean {
   return (
-    exactRecord(event, ["id", "aggregateId", "sequence", "digest", "kind"]) &&
+    (exactRecord(event, ["id", "aggregateId", "sequence", "digest", "kind"]) ||
+      exactRecord(event, ["id", "aggregateId", "sequence", "digest", "kind", "compaction"])) &&
     EVENT_ID.test(event.id) &&
     SESSION_ID.test(event.aggregateId) &&
     Number.isSafeInteger(event.sequence) &&
     event.sequence >= 0 &&
     DIGEST.test(event.digest) &&
-    OPEN_CODE_EVENT_KINDS.includes(event.kind)
+    OPEN_CODE_EVENT_KINDS.includes(event.kind) &&
+    isOpenCodeCompactionActivity(event.compaction)
   );
 }
 
@@ -869,7 +954,14 @@ function runCleanup(safety: OpenCodeRuntimeAdapterPorts["safety"]): void {
 
 export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
   return {
-    config: createFixedOpenCodeConfig(),
+    // The no-argument bundle is used only by the adapter's readiness shape and hermetic tool-source
+    // fixtures. Production materialization passes the per-run config built from admitted gateway
+    // geometry in opencodeRuntimeComposition.ts.
+    config: createFixedOpenCodeConfig({
+      contextWindowTokens: 32_768,
+      maxInputTokens: 28_672,
+      maxOutputTokens: 4_096,
+    }),
     toolSources: Object.fromEntries(
       OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name, action, arguments: schemas }) => [
         name,
@@ -879,44 +971,120 @@ export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
   };
 }
 
+// #3386/#3387/#3388: git-status/git-diff/git-stage/git-commit/git-push/git-pull-request/git-ci are
+// each a fixed wire shape onto codingToolIpc.ts's existing "git"/"delivery" actions (see
+// `wireRequestFor` below); git-execute is the one shared redemption tool that turns any pending
+// stage/commit/push/pull-request proposalId into the matching execute-phase request once a human
+// has approved it through the existing Workbench approval channel -- the model never commits,
+// pushes or opens a pull request directly.
 type GeneratedToolAction =
-  "read" | "discover" | "edit" | "verification" | "egress" | "skill" | "child-agent";
+  | "read"
+  | "discover"
+  | "repository-search"
+  | "edit"
+  | "verification"
+  | "egress"
+  | "skill"
+  | "child-agent"
+  | "git-status"
+  | "git-diff"
+  | "git-stage"
+  | "git-commit"
+  | "git-push"
+  | "git-pull-request"
+  | "git-ci"
+  | "git-execute";
 
+/**
+ * The fixed wire `action` and literal (non-model-supplied) fields for every git/delivery action.
+ * `git-execute` builds its request entirely at runtime from the model-supplied `kind` instead (see
+ * `toolSource`), so it is deliberately absent here.
+ */
+function wireRequestFor(
+  action: GeneratedToolAction,
+): { readonly action: string; readonly literal: Readonly<Record<string, unknown>> } | undefined {
+  switch (action) {
+    // #3406/#3414: projects #3386's H1 search handler through the same "search" wire action
+    // codingToolIpc.ts's `searchRequest` parser already accepts; `toolSource` below nests the
+    // model-supplied arguments under `repositoryRequest` instead of the flat top-level fields
+    // every other action uses (see the `repository-search` special case there).
+    case "repository-search":
+      return { action: "search", literal: {} };
+    case "git-status":
+      return { action: "git", literal: { operation: "status" } };
+    case "git-diff":
+      return { action: "git", literal: { operation: "diff" } };
+    case "git-stage":
+      return { action: "git", literal: { operation: "stage", phase: "propose" } };
+    case "git-ci":
+      return { action: "git", literal: { operation: "ci" } };
+    case "git-commit":
+      return { action: "delivery", literal: { intent: "commit", phase: "propose" } };
+    case "git-push":
+      return { action: "delivery", literal: { intent: "push", phase: "propose" } };
+    case "git-pull-request":
+      return { action: "delivery", literal: { intent: "pull-request", phase: "propose" } };
+    default:
+      return undefined;
+  }
+}
+
+// The native plugin and actual provider use one description owner. Otherwise richer native
+// read/edit guidance is replaced by a generic catalog description at the gateway boundary.
 function toolDescription(action: GeneratedToolAction): string {
-  if (action === "discover") {
-    return (
-      "Find exact workspace-relative file paths through Keiko's bounded repository discovery. " +
-      "Search by short filename or path keywords before reading files; * returns only a bounded " +
-      "overview. Denied and ignored paths never appear."
-    );
-  }
-  if (action === "read") {
-    return (
-      "Read one repository text file through Keiko governance — the only way to observe " +
-      "workspace content. startLine/maxLines select the returned line window (start at 1 with " +
-      "a generous maxLines for a whole small file); the result reports totalLines plus " +
-      "nextStartLine when truncated, and the whole-file SHA-256 digest that " +
-      "keiko_changeset_edit requires as expectedContentHash."
-    );
-  }
-  if (action === "egress") {
-    return "Fetch one approved public https URL through governed read-only research (#2387).";
-  }
-  if (action === "skill") return "Invoke one exact server-approved read-only skill.";
-  if (action === "child-agent") return "Run one bounded, one-layer read-only child agent.";
-  if (action === "verification") {
-    return (
-      "Run one vetted repository verification through Keiko governance — the only way to " +
-      "execute checks (there is no shell). Pick exactly one verifierId: test, targeted-test, " +
-      "typecheck, lint, or build."
-    );
-  }
-  return (
-    "Submit a bounded changeset through Keiko governance — the only way to modify workspace " +
-    "files. Provide one strict unified diff and, for every listed file, the " +
-    "expectedContentHash digest returned by its most recent keiko_workspace_read; on a digest " +
-    "mismatch re-read the file and rebuild the patch."
+  const definition = OPENCODE_TOOL_SOURCE_DEFINITIONS.find((tool) => tool.action === action);
+  const entry = opencodeRegistrationSet().entries.find(
+    (candidate) => candidate.alias === definition?.name,
   );
+  if (entry === undefined) throw new TypeError("OpenCode tool is missing from the catalog");
+  return entry.descriptor.description;
+}
+
+function toolClientTimeoutMs(action: GeneratedToolAction): number {
+  return action === "git-stage" ||
+    action === "git-commit" ||
+    action === "git-push" ||
+    action === "git-pull-request"
+    ? OPEN_CODE_APPROVAL_TOOL_CLIENT_TIMEOUT_MS
+    : OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS;
+}
+
+function toolApprovalProofSource(): readonly string[] {
+  return [
+    "function ciObservationPermission(approvalProof) {",
+    '  if (!approvalProof) throw new Error("keiko-tool-invalid");',
+    "  return {",
+    '    patterns: ["ci"], metadata: { kind: "command-execution", actionClass: "command-execution", reasonCode: "approval-required", actionKind: "ci-observe", scopeLabel: "workspace-scope", risk: "low", policyReason: "approval-required", commandLabel: "ci", ...approvalProof },',
+    "  };",
+    "}",
+    "function toolApprovalRequired(request) {",
+    "  const mode = process.env.KEIKO_CODING_MODE;",
+    '  if (request.action === "git" && request.operation === "ci") return mode === "governed-assist" || mode === "supervised-coding";',
+    '  return mode === "governed-assist" && ["verification", "command"].includes(request.action);',
+    "}",
+    "async function toolApprovalTarget(request) {",
+    '  if (request.action === "verification" && request.verifierId === "targeted-test") {',
+    '    if (typeof request.targetPath !== "string") throw new Error("keiko-tool-invalid");',
+    '    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(request.targetPath));',
+    '    const targetPathHash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");',
+    "    return { targetId: `targeted-test:${targetPathHash}`, targetPathHash };",
+    "  }",
+    '  if (request.action === "verification") return { targetId: request.verifierId };',
+    '  if (request.action === "command") return { targetId: request.commandId };',
+    '  return request.action === "git" && request.operation === "ci" ? { targetId: "ci" } : undefined;',
+    "}",
+    "async function toolApprovalProof(request) {",
+    "  if (!toolApprovalRequired(request)) return;",
+    "  const runId = process.env.KEIKO_CODING_RUN_ID;",
+    "  const target = await toolApprovalTarget(request);",
+    '  if (!runId || !target || typeof target.targetId !== "string") throw new Error("keiko-tool-invalid");',
+    "  const { targetId, targetPathHash } = target;",
+    '  const payload = JSON.stringify(["coding-tool-approval-v1", runId, request.action, request.actionId, request.idempotencyKey, targetId]);',
+    '  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));',
+    '  const approvalDigest = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");',
+    "  return { actionId: request.actionId, idempotencyKey: request.idempotencyKey, approvalId: request.actionId, approvalDigest, ...(targetPathHash ? { targetPathHash } : {}) };",
+    "}",
+  ];
 }
 
 function governedPermissionSource(): readonly string[] {
@@ -940,19 +1108,13 @@ function governedPermissionSource(): readonly string[] {
     '    patterns: [args.verifierId], metadata: { kind: "command-execution", actionClass: "command-execution", reasonCode: "approval-required", actionKind: "verification-command", scopeLabel: "workspace-scope", risk: "low", policyReason: "approval-required", commandLabel: args.verifierId, ...approvalProof },',
     "  };",
     "}",
-    "async function toolApprovalProof(request) {",
-    '  if (process.env.KEIKO_CODING_MODE !== "governed-assist" || !["verification", "command"].includes(request.action)) return;',
-    "  const runId = process.env.KEIKO_CODING_RUN_ID;",
-    '  const targetId = request.action === "verification" ? request.verifierId : request.commandId;',
-    '  if (!runId || typeof targetId !== "string") throw new Error("keiko-tool-invalid");',
-    '  const payload = JSON.stringify(["coding-tool-approval-v1", runId, request.action, request.actionId, request.idempotencyKey, targetId]);',
-    '  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));',
-    '  const approvalDigest = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");',
-    "  return { actionId: request.actionId, idempotencyKey: request.idempotencyKey, approvalId: request.actionId, approvalDigest };",
-    "}",
+    ...toolApprovalProofSource(),
     "async function askForGovernedPermission(args, context, approvalProof) {",
-    '  if (process.env.KEIKO_CODING_MODE !== "governed-assist") return;',
-    '  const request = action === "edit" ? editPermission(args) : action === "verification" ? verificationPermission(args, approvalProof) : undefined;',
+    "  const mode = process.env.KEIKO_CODING_MODE;",
+    "  let request;",
+    '  if (mode === "governed-assist" && action === "edit") request = editPermission(args);',
+    '  else if (mode === "governed-assist" && action === "verification") request = verificationPermission(args, approvalProof);',
+    '  else if ((mode === "governed-assist" || mode === "supervised-coding") && action === "git-ci") request = ciObservationPermission(approvalProof);',
     "  if (!request) return;",
     "  await context.ask({",
     "    permission: governedPermission,",
@@ -970,15 +1132,22 @@ function toolSource(
   schemas: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
 ): string {
   const argumentNames = Object.keys(schemas);
+  // The literal (non-model-supplied) wire fields for a fixed-shape git/delivery action, e.g.
+  // `{ operation: "stage", phase: "propose" }`. `git-execute` builds its wire `action` and these
+  // fields entirely from the model-supplied `kind` at call time instead (see the `wireAction`
+  // override below), so it deliberately keeps the descriptive `action` literal here.
+  const wire = wireRequestFor(action) ?? { action, literal: {} };
   return [
-    "const MAX_RESPONSE_BYTES = 262144;",
-    `const TIMEOUT_MS = ${String(OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS)};`,
+    `const MAX_RESPONSE_BYTES = ${String(CODING_TOOL_MAX_BODY_BYTES)};`,
+    `const TIMEOUT_MS = ${String(toolClientTimeoutMs(action))};`,
     `const action = ${JSON.stringify(action)};`,
+    `const wireAction = ${JSON.stringify(wire.action)};`,
+    `const literalFields = ${JSON.stringify(wire.literal)};`,
     `const argumentNames = ${JSON.stringify(argumentNames)};`,
     `const inputSchemas = ${JSON.stringify(schemas)};`,
     "function validResult(value) {",
     '  if (!value || typeof value !== "object" || Array.isArray(value)) return false;',
-    '  if (!["completed", "failed", "denied", "invalid", "cancelled", "busy", "observed"].includes(value.status)) return false;',
+    '  if (!["completed", "failed", "denied", "invalid", "cancelled", "timeout", "busy", "observed"].includes(value.status)) return false;',
     '  if ((action !== "read" && action !== "discover" && action !== "egress") || value.status !== "completed") return true;',
     "  const read = value.read;",
     '  if (!read || typeof read !== "object" || Array.isArray(read) || typeof read.text !== "string" || !Number.isSafeInteger(read.byteCount) || !/^[a-f0-9]{64}$/.test(read.digest)) return false;',
@@ -994,8 +1163,29 @@ function toolSource(
     "    const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
     '    if (!endpoint || !capability) throw new Error("keiko-tool-unavailable");',
     "    const identity = `${context.sessionID}:${context.callID || context.messageID}`;",
-    "    const request = { action, actionId: identity, idempotencyKey: identity };",
+    "    const request = { action: wireAction, actionId: identity, idempotencyKey: identity, ...literalFields };",
     "    for (const name of argumentNames) request[name] = args[name];",
+    '    if (action === "verification" && request.targetPath === "") delete request.targetPath;',
+    // git-execute is the one action whose wire shape depends on a model-supplied argument
+    // (`kind`): redeeming a stage proposal posts `{action:"git",operation:"stage",...}` while
+    // redeeming a commit/push/pull-request proposal posts `{action:"delivery",intent:kind,...}`.
+    // `kind` itself is never a wire field -- codingToolIpc.ts's exact-key parsers would reject it.
+    '    if (action === "git-execute") {',
+    '      request.action = args.kind === "stage" ? "git" : "delivery";',
+    '      request.phase = "execute";',
+    '      if (args.kind === "stage") request.operation = "stage";',
+    "      else request.intent = args.kind;",
+    "      delete request.kind;",
+    "    }",
+    // repository-search is the one action whose wire shape nests the model-supplied arguments:
+    // codingToolIpc.ts's `searchRequest` parser requires the exact keys
+    // `["action","actionId","idempotencyKey","repositoryRequest"]`, so the flat fields the loop
+    // above just set are moved under `repositoryRequest` (with the fixed `kind: "search"`) and
+    // removed from the top level rather than left alongside it.
+    '    if (action === "repository-search") {',
+    '      request.repositoryRequest = { kind: "search", mode: args.mode, query: args.query, caseSensitive: args.caseSensitive, includeGlobs: args.includeGlobs, excludeGlobs: args.excludeGlobs, maxResults: args.maxResults };',
+    "      for (const name of argumentNames) delete request[name];",
+    "    }",
     "    const approvalProof = await toolApprovalProof(request);",
     "    await askForGovernedPermission(args, context, approvalProof);",
     "    if (approvalProof) request.approvalProof = { approvalId: approvalProof.approvalId, approvalDigest: approvalProof.approvalDigest };",

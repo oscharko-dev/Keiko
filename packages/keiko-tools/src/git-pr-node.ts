@@ -24,21 +24,49 @@
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { GitDeliveryExecutionResult } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
+import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 import {
   buildPrConvertDraftGraphqlArgv,
   buildPrCreateArgv,
   buildPrMarkReadyGraphqlArgv,
+  buildPrReadArgv,
+  buildPrReadByHeadArgv,
+  buildPrReadBranchHeadArgv,
   buildPrUpdateArgv,
   classifyGitPullRequestRejection,
   GIT_PULL_REQUEST_COMMAND_RULES,
+  GIT_PR_IDENTITY_JQ,
   gitPrRejectionToErrorCode,
+  isGithubNodeId,
   type GitPrCreateExecRequest,
   type GitPrExecResult,
+  type GitPrMarkReadyExecRequest,
+  type GitPrMarkReadyExecResult,
+  type GitPrReadHeadRequest,
+  type GitPrReadRequest,
   type GitPrUpdateExecRequest,
-  type GitPullRequestAdapter,
+  type GitPullRequestInspectionAdapter,
+  type GitPullRequestMarkReadyAdapter,
+  type GitPrInspectionResult,
 } from "./git-pr-gateway.js";
-import { CommandCancelledError, CommandTimeoutError } from "./errors.js";
 import {
+  explainCreatedGitPrIdentity,
+  parseGitPrBranchHead,
+  parseGitPrIdentity,
+  parseGitPrIdentityList,
+} from "./git-pr-identity.js";
+import {
+  buildPrBodyReadArgv,
+  buildPrBodyUpdateArgv,
+  parseGitPrBody,
+  type GitPullRequestBodyAdapter,
+  type GitPrBody,
+} from "./git-pr-body.js";
+import { CommandCancelledError, CommandTimeoutError } from "./errors.js";
+import { gitRemoteReadContext, gitRemoteReadWasRedacted } from "./git-remote-read-context.js";
+import { redact } from "@oscharko-dev/keiko-security";
+import {
+  defaultOutputScrubSecrets,
   nodeSpawnFn,
   runCommand,
   type ExecutableResolver,
@@ -74,17 +102,19 @@ export interface NodeGitPullRequestAdapterDeps {
   readonly onTerminated?: ((evidence: CommandTerminationEvidence) => void) | undefined;
 }
 
-function executionResult(
+function executionResult<
+  Result extends GitPrExecResult | GitPrMarkReadyExecResult = GitPrExecResult,
+>(
   outcome: GitDeliveryExecutionResult["outcome"],
   durationMs: number,
-  extra?: Partial<GitPrExecResult>,
-): GitPrExecResult {
+  extra?: Partial<Result>,
+): Result {
   return {
     schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
     outcome,
     durationMs: Math.max(0, Math.trunc(durationMs)),
     ...extra,
-  };
+  } as Result;
 }
 
 interface RunContext {
@@ -137,7 +167,10 @@ function failureFromThrow(error: unknown, durationMs: number): GitPrExecResult {
   if (error instanceof CommandCancelledError) {
     return executionResult("aborted", durationMs);
   }
-  return executionResult("failed", durationMs, { errorCode: "internal-error" });
+  return executionResult("failed", durationMs, {
+    errorCode: "internal-error",
+    failureClass: "invocation-error",
+  });
 }
 
 async function runGh(ctx: RunContext, argv: readonly string[]): Promise<CommandResult | Error> {
@@ -160,36 +193,195 @@ function parsePrNumber(stdout: string): string | undefined {
 
 function parseNodeId(stdout: string): string | undefined {
   const trimmed = stdout.trim();
-  return /^[A-Za-z0-9_=-]+$/.test(trimmed) ? trimmed : undefined;
+  return isGithubNodeId(trimmed) ? trimmed : undefined;
+}
+
+// #3394 review, finding 2: the shared pre/post live-head check both `createPullRequest` and
+// `updatePullRequest` run — mirrors `markPullRequestReady`'s existing pre/post pattern (isPreMutationDrift
+// / isPostMutationDrift above) using the already production-implemented `readBranchHead` read
+// (`buildPrReadBranchHeadArgv` + `parseGitPrBranchHead`, a plain `git/ref/heads/<branch>` read,
+// independent of whether a PR exists yet — works identically for create and update). Factored into one
+// helper (rather than duplicated per command kind) to stay under the repository's complexity/line
+// budgets (AGENTS.md §6).
+interface LiveHeadCheck {
+  readonly matches: boolean;
+  readonly observedHeadSha: string | undefined;
+}
+
+async function checkLiveHead(
+  ctx: RunContext,
+  req: GitPrReadHeadRequest,
+  verifiedCommitSha: string,
+): Promise<LiveHeadCheck> {
+  const observed = await readBranchHeadFor(ctx, req);
+  return {
+    matches: observed.ok && observed.value === verifiedCommitSha,
+    observedHeadSha: observed.ok ? observed.value : undefined,
+  };
+}
+
+function preconditionFailedResult(check: LiveHeadCheck): GitPrExecResult {
+  return executionResult("failed", 0, {
+    errorCode: "precondition-failed",
+    ...(check.observedHeadSha === undefined ? {} : { observedHeadSha: check.observedHeadSha }),
+  });
+}
+
+// The PR now exists (or was already updated); the operator must be able to find it, so the
+// create-specific `createdPrExternalId`/`createdPrIdentity` fields are preserved even though the
+// outcome is downgraded to "failed" — never return the plain success once a post-dispatch drift is
+// observed (a caught drift silently reported as "succeeded" is exactly the gap finding 2 closes).
+function draftedButDriftedResult(
+  dispatched: GitPrExecResult,
+  check: LiveHeadCheck,
+): GitPrExecResult {
+  return {
+    ...dispatched,
+    outcome: "failed",
+    errorCode: "precondition-failed",
+    ...(check.observedHeadSha === undefined ? {} : { observedHeadSha: check.observedHeadSha }),
+  };
 }
 
 async function createPullRequest(
   ctx: RunContext,
   req: GitPrCreateExecRequest,
 ): Promise<GitPrExecResult> {
+  const headReq = { ownerAndRepo: req.ownerAndRepo, headBranchName: req.headBranchName };
+  const pre = await checkLiveHead(ctx, headReq, req.verifiedCommitSha);
+  if (!pre.matches) {
+    return preconditionFailedResult(pre);
+  }
+  const dispatched = await dispatchCreatePullRequest(ctx, req);
+  if (dispatched.outcome !== "succeeded") {
+    return dispatched;
+  }
+  const post = await checkLiveHead(ctx, headReq, req.verifiedCommitSha);
+  return post.matches ? dispatched : draftedButDriftedResult(dispatched, post);
+}
+
+async function dispatchCreatePullRequest(
+  ctx: RunContext,
+  req: GitPrCreateExecRequest,
+): Promise<GitPrExecResult> {
   let argv: readonly string[];
   try {
-    // Append `--jq .number` so the success stdout is just the provider-assigned PR number (a clean,
-    // parse-robust value rather than the full PR JSON, which redaction or the output cap could disturb).
-    argv = [...buildPrCreateArgv(req), "--jq", ".number"];
+    const projection = req.canonicalGitHubIdentity === true ? GIT_PR_IDENTITY_JQ : ".number";
+    argv = [...buildPrCreateArgv(req), "--jq", projection];
   } catch {
-    return executionResult("failed", 0, { errorCode: "internal-error" });
+    return executionResult("failed", 0, {
+      errorCode: "internal-error",
+      failureClass: "argv-invalid",
+    });
   }
-  const result = await runGh(ctx, argv);
+  // The response is the provider's typed pull-request projection (`--jq`), consumed by closed
+  // predicates and never surfaced raw: it runs under the typed-read scrub like every other machine-
+  // parsed pull request fact (ADR-0006), so an ordinary parent env value that legitimately overlaps
+  // it -- a repository slug, a branch, a SHA -- cannot corrupt the identity (#3390, run-19).
+  const result = await runGh(gitRemoteReadContext(ctx), argv);
   if (result instanceof Error) {
     return failureFromThrow(result, 0);
   }
-  if (result.exitCode !== 0) {
+  if (result.exitCode !== 0 || result.timedOut) {
     return rejectionFromExit(result);
   }
+  if (result.truncated)
+    return executionResult("failed", result.durationMs, {
+      errorCode: "internal-error",
+      failureClass: "output-truncated",
+      ...outputFacts(result),
+    });
+  if (req.canonicalGitHubIdentity === true) return canonicalCreateResult(req, result);
   const createdPrExternalId = parsePrNumber(result.stdout);
   if (createdPrExternalId === undefined) {
     // Exit 0 with an unparsable number (`--jq .number` emits `null` on an unexpected response
     // shape) means the provider gave us nothing the caller can reference. Reporting success
     // without an id would strand the UI on a PR it cannot open — fail closed instead.
-    return executionResult("failed", result.durationMs, { errorCode: "internal-error" });
+    return executionResult("failed", result.durationMs, {
+      errorCode: "internal-error",
+      failureClass: "number-unparsable",
+      ...outputFacts(result),
+    });
   }
   return executionResult("succeeded", result.durationMs, { createdPrExternalId });
+}
+
+function canonicalCreateResult(
+  req: GitPrCreateExecRequest,
+  result: CommandResult,
+): GitPrExecResult {
+  // The provider may well have created the pull request by now (rehearsal run-15 did: the PR
+  // existed, the response did not validate, and nothing named why). The failing step is carried
+  // out as a closed word so the activity log can reconstruct it; the bytes never leave here.
+  if (gitRemoteReadWasRedacted(result))
+    return executionResult("failed", result.durationMs, {
+      errorCode: "internal-error",
+      failureClass: "identity-unparsable",
+      identityIssue: "output-redacted",
+      ...outputFacts(result),
+    });
+  const diagnosis = explainCreatedGitPrIdentity(result.stdout, req);
+  return diagnosis.ok
+    ? executionResult("succeeded", result.durationMs, {
+        createdPrExternalId: String(diagnosis.identity.number),
+        createdPrIdentity: diagnosis.identity,
+      })
+    : executionResult("failed", result.durationMs, {
+        errorCode: "internal-error",
+        failureClass: "identity-unparsable",
+        identityIssue: diagnosis.issue,
+        ...outputFacts(result),
+      });
+}
+
+/** Sizes and exit code of a finished provider call: counts only, never a byte of output. */
+function outputFacts(
+  result: CommandResult,
+): Pick<GitPrExecResult, "stdoutBytes" | "stderrBytes" | "exitCode"> {
+  return {
+    stdoutBytes: Buffer.byteLength(result.stdout, "utf8"),
+    stderrBytes: Buffer.byteLength(result.stderr, "utf8"),
+    ...(typeof result.exitCode === "number" ? { exitCode: result.exitCode } : {}),
+  };
+}
+
+// Looks up a PR's GraphQL node id — the shared first step of every draft-state transition (the REST
+// update endpoint cannot toggle it). Returns the node id, or the failed exec result to propagate as-is.
+type NodeIdLookup =
+  | { readonly ok: true; readonly nodeId: string }
+  | { readonly ok: false; readonly failure: GitPrExecResult };
+
+async function fetchPrNodeId(
+  ctx: RunContext,
+  ownerAndRepo: string,
+  prExternalId: string,
+): Promise<NodeIdLookup> {
+  const idResult = await runGh(gitRemoteReadContext(ctx), [
+    "api",
+    `/repos/${ownerAndRepo}/pulls/${prExternalId}`,
+    "--jq",
+    ".node_id",
+  ]);
+  if (idResult instanceof Error) {
+    return { ok: false, failure: failureFromThrow(idResult, 0) };
+  }
+  if (gitRemoteReadWasRedacted(idResult)) {
+    return {
+      ok: false,
+      failure: executionResult("failed", idResult.durationMs, { errorCode: "internal-error" }),
+    };
+  }
+  if (idResult.exitCode !== 0) {
+    return { ok: false, failure: rejectionFromExit(idResult) };
+  }
+  const nodeId = parseNodeId(idResult.stdout);
+  if (nodeId === undefined) {
+    return {
+      ok: false,
+      failure: executionResult("failed", idResult.durationMs, { errorCode: "internal-error" }),
+    };
+  }
+  return { ok: true, nodeId };
 }
 
 // Performs the draft↔ready transition the REST update endpoint cannot: looks up the PR's GraphQL node
@@ -202,25 +394,13 @@ async function runDraftTransition(
   if (!req.convertToDraft && !req.convertFromDraft) {
     return undefined;
   }
-  const idResult = await runGh(ctx, [
-    "api",
-    `/repos/${req.ownerAndRepo}/pulls/${req.prExternalId}`,
-    "--jq",
-    ".node_id",
-  ]);
-  if (idResult instanceof Error) {
-    return failureFromThrow(idResult, totalDuration);
-  }
-  if (idResult.exitCode !== 0) {
-    return rejectionFromExit(idResult);
-  }
-  const nodeId = parseNodeId(idResult.stdout);
-  if (nodeId === undefined) {
-    return executionResult("failed", totalDuration, { errorCode: "internal-error" });
+  const node = await fetchPrNodeId(ctx, req.ownerAndRepo, req.prExternalId);
+  if (!node.ok) {
+    return node.failure;
   }
   const mutation = req.convertToDraft
-    ? buildPrConvertDraftGraphqlArgv(nodeId)
-    : buildPrMarkReadyGraphqlArgv(nodeId);
+    ? buildPrConvertDraftGraphqlArgv(node.nodeId)
+    : buildPrMarkReadyGraphqlArgv(node.nodeId);
   const mutationResult = await runGh(ctx, mutation);
   if (mutationResult instanceof Error) {
     return failureFromThrow(mutationResult, totalDuration);
@@ -228,7 +408,146 @@ async function runDraftTransition(
   return mutationResult.exitCode === 0 ? undefined : rejectionFromExit(mutationResult);
 }
 
+// #3389: reads the live PR identity (head/base SHA, draft state) through the SAME governed read used
+// by the public `readPullRequest` adapter method — factored out so `markPullRequestReady` can re-read
+// the identical facts immediately before and after the mutation without a second implementation.
+function readPrIdentity(
+  ctx: RunContext,
+  req: GitPrReadRequest,
+): Promise<GitPrInspectionResult<GitPullRequestIdentity>> {
+  const input = { ...req };
+  return inspectRemote(
+    gitRemoteReadContext(ctx),
+    () => buildPrReadArgv(input),
+    (value) => {
+      const identity = parseGitPrIdentity(value, input.ownerAndRepo);
+      return String(identity?.number) === input.prExternalId ? identity : undefined;
+    },
+  );
+}
+
+// Projects a `GitPrExecResult` failure (from `fetchPrNodeId` / `runGh`) onto the narrower mark-ready
+// result shape — never carries the create-specific `createdPrExternalId`/`createdPrIdentity` fields.
+function asMarkReadyFailure(result: GitPrExecResult): GitPrMarkReadyExecResult {
+  return executionResult<GitPrMarkReadyExecResult>(result.outcome, result.durationMs, {
+    ...(result.errorCode !== undefined ? { errorCode: result.errorCode } : {}),
+    ...(result.rejectionReason !== undefined ? { rejectionReason: result.rejectionReason } : {}),
+  });
+}
+
+// #3389 (epic #3384 corrections 1/2/7): the draft->ready transition, deliberately isolated from
+// `updatePullRequest` — no title/body/base PATCH is ever bundled with it. Re-reads the live PR
+// identity immediately before AND after the mutation and refuses (never spawns the mutation, or
+// reports the observed drift) on any mismatch against the caller's expected head/base SHA — the
+// governed caller's one-use approval binds exactly those facts, so a claim minted against a PR that
+// has since moved can never be redeemed.
+// True when the live PR facts no longer match what the mark-ready claim was minted against — the
+// PR must still be exactly the draft the approval bound (same head/base SHA).
+function isPreMutationDrift(
+  identity: GitPullRequestIdentity,
+  req: GitPrMarkReadyExecRequest,
+): boolean {
+  return (
+    identity.headSha !== req.expectedHeadSha ||
+    identity.baseSha !== req.expectedBaseSha ||
+    !identity.isDraft
+  );
+}
+
+// True when the mutation reported success but the read-back does not confirm it: still a draft, or
+// the head moved during the call. A `mutationResult.exitCode === 0` alone never proves the transition.
+function isPostMutationDrift(
+  identity: GitPullRequestIdentity,
+  req: GitPrMarkReadyExecRequest,
+): boolean {
+  return (
+    identity.isDraft ||
+    identity.headSha !== req.expectedHeadSha ||
+    identity.baseSha !== req.expectedBaseSha
+  );
+}
+
+type MarkReadyMutationOutcome =
+  | { readonly ok: true; readonly durationMs: number }
+  | { readonly ok: false; readonly failure: GitPrMarkReadyExecResult };
+
+async function runMarkReadyMutation(
+  ctx: RunContext,
+  req: GitPrMarkReadyExecRequest,
+): Promise<MarkReadyMutationOutcome> {
+  const node = await fetchPrNodeId(ctx, req.ownerAndRepo, req.prExternalId);
+  if (!node.ok) {
+    return { ok: false, failure: asMarkReadyFailure(node.failure) };
+  }
+  const mutationResult = await runGh(ctx, buildPrMarkReadyGraphqlArgv(node.nodeId));
+  if (mutationResult instanceof Error) {
+    return { ok: false, failure: asMarkReadyFailure(failureFromThrow(mutationResult, 0)) };
+  }
+  if (mutationResult.exitCode !== 0) {
+    return { ok: false, failure: asMarkReadyFailure(rejectionFromExit(mutationResult)) };
+  }
+  return { ok: true, durationMs: mutationResult.durationMs };
+}
+
+async function markPullRequestReady(
+  ctx: RunContext,
+  req: GitPrMarkReadyExecRequest,
+): Promise<GitPrMarkReadyExecResult> {
+  const before = await readPrIdentity(ctx, req);
+  if (!before.ok) {
+    return executionResult<GitPrMarkReadyExecResult>("failed", 0, {
+      errorCode: "precondition-failed",
+    });
+  }
+  if (isPreMutationDrift(before.value, req)) {
+    return executionResult<GitPrMarkReadyExecResult>("failed", 0, {
+      errorCode: "precondition-failed",
+      observedIdentity: before.value,
+    });
+  }
+  const mutation = await runMarkReadyMutation(ctx, req);
+  if (!mutation.ok) {
+    return mutation.failure;
+  }
+  const after = await readPrIdentity(ctx, req);
+  if (!after.ok) {
+    return executionResult<GitPrMarkReadyExecResult>("failed", mutation.durationMs, {
+      errorCode: "precondition-failed",
+    });
+  }
+  if (isPostMutationDrift(after.value, req)) {
+    return executionResult<GitPrMarkReadyExecResult>("failed", mutation.durationMs, {
+      errorCode: "precondition-failed",
+      observedIdentity: after.value,
+    });
+  }
+  return executionResult<GitPrMarkReadyExecResult>("succeeded", mutation.durationMs, {
+    observedIdentity: after.value,
+  });
+}
+
 async function updatePullRequest(
+  ctx: RunContext,
+  req: GitPrUpdateExecRequest,
+): Promise<GitPrExecResult> {
+  const headReq = { ownerAndRepo: req.ownerAndRepo, headBranchName: req.headBranchName };
+  const pre = await checkLiveHead(ctx, headReq, req.verifiedCommitSha);
+  if (!pre.matches) {
+    return preconditionFailedResult(pre);
+  }
+  const dispatched = await dispatchUpdatePullRequest(ctx, req);
+  if (dispatched.outcome !== "succeeded") {
+    return dispatched;
+  }
+  // There is no PR-identity payload in the PATCH/draft-transition response to reuse (unlike create's
+  // own `--jq` projection), so a fresh read is the only option here — the same underlying re-read
+  // primitive (`checkLiveHead` / `readBranchHeadFor`) mark-ready already established, not a second
+  // implementation.
+  const post = await checkLiveHead(ctx, headReq, req.verifiedCommitSha);
+  return post.matches ? dispatched : draftedButDriftedResult(dispatched, post);
+}
+
+async function dispatchUpdatePullRequest(
   ctx: RunContext,
   req: GitPrUpdateExecRequest,
 ): Promise<GitPrExecResult> {
@@ -254,12 +573,103 @@ async function updatePullRequest(
 
 export function createNodeGitPullRequestAdapter(
   deps: NodeGitPullRequestAdapterDeps,
-): GitPullRequestAdapter {
+): GitPullRequestInspectionAdapter & GitPullRequestBodyAdapter & GitPullRequestMarkReadyAdapter {
   const ctx = buildRunContext(deps);
   return {
+    ...bodyAdapter(ctx),
     createPullRequest: (req: GitPrCreateExecRequest): Promise<GitPrExecResult> =>
-      createPullRequest(ctx, req),
+      createPullRequest(ctx, { ...req }),
     updatePullRequest: (req: GitPrUpdateExecRequest): Promise<GitPrExecResult> =>
       updatePullRequest(ctx, req),
+    markPullRequestReady: (req: GitPrMarkReadyExecRequest): Promise<GitPrMarkReadyExecResult> =>
+      markPullRequestReady(ctx, { ...req }),
+    readPullRequest: (req): Promise<GitPrInspectionResult<GitPullRequestIdentity>> =>
+      readPrIdentity(ctx, { ...req }),
+    findPullRequestsByHead: (
+      req,
+    ): Promise<GitPrInspectionResult<readonly GitPullRequestIdentity[]>> => {
+      const input = { ...req };
+      return inspectRemote(
+        gitRemoteReadContext(ctx),
+        () => buildPrReadByHeadArgv(input),
+        (value) => parseGitPrIdentityList(value, input.ownerAndRepo, input.headBranchName),
+      );
+    },
+    readBranchHead: (req): Promise<GitPrInspectionResult<string>> => readBranchHeadFor(ctx, req),
+  };
+}
+
+// Shared by the public `readBranchHead` adapter method above and the pre/post live-head drift check
+// (`checkLiveHead`) `createPullRequest`/`updatePullRequest` run — one implementation of "read the
+// branch's live head", never two.
+function readBranchHeadFor(
+  ctx: RunContext,
+  req: GitPrReadHeadRequest,
+): Promise<GitPrInspectionResult<string>> {
+  const input = { ...req };
+  return inspectRemote(
+    gitRemoteReadContext(ctx),
+    () => buildPrReadBranchHeadArgv(input),
+    (value) => parseGitPrBranchHead(value, input.headBranchName),
+  );
+}
+
+async function inspectRemote<T>(
+  ctx: RunContext,
+  argv: () => readonly string[],
+  parse: (value: unknown) => T | undefined,
+): Promise<GitPrInspectionResult<T>> {
+  try {
+    const result = await runGh(ctx, argv());
+    if (result instanceof Error) return { ok: false, reason: "provider-unavailable" };
+    if (gitRemoteReadWasRedacted(result)) return { ok: false, reason: "invalid-response" };
+    if (result.timedOut || result.truncated) return { ok: false, reason: "provider-unavailable" };
+    if (result.exitCode !== 0)
+      return {
+        ok: false,
+        reason: classifyGitPullRequestRejection(`${result.stdout}\n${result.stderr}`),
+      };
+    const value = parse(JSON.parse(result.stdout) as unknown);
+    return value === undefined ? { ok: false, reason: "invalid-response" } : { ok: true, value };
+  } catch {
+    return { ok: false, reason: "invalid-response" };
+  }
+}
+
+/** Whether the default output scrub -- the very set `runCommand` applies -- would alter this
+ * content-bearing text. */
+function contentScrubAlters(ctx: RunContext, text: string): boolean {
+  const { processEnv, policy } = ctx.runDeps;
+  return redact(text, defaultOutputScrubSecrets(processEnv, policy)) !== text;
+}
+
+function bodyAdapter(ctx: RunContext): GitPullRequestBodyAdapter {
+  return {
+    readPullRequestBody: (request): Promise<GitPrInspectionResult<GitPrBody>> => {
+      const input = { ...request };
+      // The response is a typed identity envelope around content-bearing text. The envelope runs
+      // under the typed-read scrub like every other pull request fact (rehearsal run-20 lost the
+      // repository slug out of it and the description preview failed as provider-failed); the body
+      // text keeps the default content scrub's fail-closed semantics: text that scrub would alter
+      // is an altered read, never a fact (ADR-0006, #3390).
+      return inspectRemote(
+        gitRemoteReadContext(ctx),
+        () => buildPrBodyReadArgv(input),
+        (value) => {
+          const parsed = parseGitPrBody(value, input);
+          return parsed !== undefined && contentScrubAlters(ctx, parsed.body) ? undefined : parsed;
+        },
+      );
+    },
+    updatePullRequestBody: async (request): Promise<GitPrExecResult> => {
+      try {
+        const result = await runGh(ctx, buildPrBodyUpdateArgv({ ...request }));
+        if (result instanceof Error) return failureFromThrow(result, 0);
+        if (result.exitCode !== 0 || result.timedOut) return rejectionFromExit(result);
+        return executionResult("succeeded", result.durationMs);
+      } catch (error) {
+        return failureFromThrow(error, 0);
+      }
+    },
   };
 }

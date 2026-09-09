@@ -1,3 +1,5 @@
+import type { GatewayToolCatalogAdvertisement } from "./governed-tool-bridge.js";
+import type { BoundToolInvocation } from "./governed-tool-lifecycle.js";
 // Gateway-layer WIRE contract types: model identity, request/response shapes, streaming envelope,
 // and tool-call normalisation. Credential-bearing or runtime-port shapes (ModelProviderConfig,
 // GatewayConfig, CircuitBreakerConfig, ProviderAdapter, Clock, CircuitBreakerStatus) STAY in
@@ -270,6 +272,19 @@ export interface ModelCapability {
    * provider that advertises speech output.
    */
   readonly supportedVoicePersonas?: readonly VoicePersona[] | undefined;
+  /**
+   * Optional per-token USD pricing (live-journey-readiness-1). Absent means the model carries no
+   * known dollar cost: a caller enforcing a spend budget against an un-priced model must fail
+   * closed (reason `spend-pricing-unavailable`) rather than silently treat it as free. Content-free
+   * — a public list price, never a negotiated rate or an account-specific discount.
+   */
+  readonly pricing?: ModelCapabilityPricing | undefined;
+}
+
+/** Public per-million-token USD list price for a model capability. See {@link ModelCapability.pricing}. */
+export interface ModelCapabilityPricing {
+  readonly inputUsdPerMillionTokens: number;
+  readonly outputUsdPerMillionTokens: number;
 }
 
 function normalizedCodingUseCase(value: string): string {
@@ -655,9 +670,10 @@ export function assertValidGatewaySamplingParameters(parameters: GatewaySampling
 }
 
 export interface GatewayRequest {
+  /** Server-produced projection/offer. Tool-bearing requests require this exact bound arm. */
+  readonly toolCatalog?: GatewayToolCatalogAdvertisement | undefined;
   readonly modelId: string;
   readonly messages: readonly ChatMessage[];
-  readonly tools?: readonly ToolDefinition[] | undefined;
   readonly responseFormat?: ResponseFormat | undefined;
   readonly stream?: boolean | undefined;
   readonly cancellationSignal?: AbortSignal | undefined;
@@ -679,6 +695,8 @@ export interface GatewayRequest {
 // ─── Tool-call normalisation ──────────────────────────────────────────────────
 
 export interface NormalizedToolCall {
+  /** Required on new tool-bearing gateway responses; alias remains provider transport data. */
+  readonly invocation?: BoundToolInvocation | undefined;
   readonly id: string;
   readonly name: string;
   readonly arguments: Record<string, unknown>;

@@ -566,9 +566,9 @@ test("round-trips browser undo/redo across an agent-applied edit (#1394 pin)", a
 //
 // This is the surviving half of the retired editor-agent-docking-2122 suite. Its other journeys
 // registered a browser-supplied Authority Envelope through `POST /api/editor/agent/authority` and
-// `/api/coding-workbench/autonomous-delivery/confirm` — routes #2256 deliberately unmounted
-// (routes.test.ts pins that they stay unmounted), so they asserted a capability the product no
-// longer has. See `docs/keiko-editor/2091-agent-docking-demo.md` for the one behaviour that leaves
+// `/api/coding-workbench/autonomous-delivery/confirm` — routes #2256 left unmounted and #2958
+// deleted (routes.test.ts pins that they stay unmatched), so they asserted a capability the product
+// no longer has. See `docs/keiko-editor/2091-agent-docking-demo.md` for the one behaviour that leaves
 // end-to-end coverage with them, and why it cannot be relocated onto the current path.
 const SPLIT_WINDOW_ID = "editor-agent-pins-split";
 const SECOND_FILE = "src/second.ts";

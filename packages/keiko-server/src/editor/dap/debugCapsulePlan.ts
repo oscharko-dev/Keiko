@@ -138,6 +138,8 @@ export interface Layer2DebugCapsulePlan extends DebugCapsulePlanBinding {
 
 export interface DebugCapsuleLayer2Input {
   readonly candidate: unknown;
+  /** Operation correlation minted by the server-owned launch route. */
+  readonly correlationId?: string | undefined;
   readonly binding: DebugCapsulePlanBinding;
   readonly adapter: {
     readonly providerId: string;

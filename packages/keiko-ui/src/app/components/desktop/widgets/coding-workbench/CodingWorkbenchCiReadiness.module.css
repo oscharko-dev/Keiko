@@ -1,0 +1,59 @@
+.cmp-ci-state {
+  display: block;
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+.cmp-ci-state[data-state="technical-ready"] {
+  color: var(--feedback-success);
+}
+.cmp-ci-state[data-state="failed"],
+.cmp-ci-state[data-state="blocked"] {
+  color: var(--feedback-danger);
+}
+.cmp-ci-state[data-state="stale"],
+.cmp-ci-state[data-state="unknown"] {
+  color: var(--feedback-warning);
+}
+.cmp-ci-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  gap: var(--space-3);
+  margin-block: var(--space-3);
+}
+.cmp-ci-checks {
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface-inset);
+}
+.cmp-ci-checks h4 {
+  margin: 0 0 var(--space-2);
+}
+.cmp-ci-counts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-8);
+  margin: 0;
+}
+.cmp-ci-counts > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-1);
+}
+.cmp-ci-counts dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.cmp-ci-value {
+  overflow-wrap: anywhere;
+}
+@media (forced-colors: active) {
+  .cmp-ci-checks {
+    border-color: CanvasText;
+  }
+  .cmp-ci-state {
+    color: CanvasText;
+  }
+}

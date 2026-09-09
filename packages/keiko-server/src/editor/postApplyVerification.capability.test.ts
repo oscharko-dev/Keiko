@@ -81,7 +81,44 @@ async function createRunnableWorkspace(): Promise<string> {
   return root;
 }
 
+async function createNodeTestWorkspace(): Promise<string> {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "keiko-postapply-node-test-")));
+  await writeFile(
+    join(root, "package.json"),
+    `${JSON.stringify({ name: "fixture", scripts: { test: "node --test" } })}\n`,
+    "utf8",
+  );
+  await mkdir(join(root, "test"), { recursive: true });
+  await writeFile(join(root, "test", "applied.test.js"), "export {};\n", "utf8");
+  return root;
+}
+
 describe("defaultPostApplyVerification — the admitted capability reaches the spawn boundary", () => {
+  it("plans the exact Node native target through the same verification boundary", async () => {
+    runs.length = 0;
+    const root = await createNodeTestWorkspace();
+    try {
+      const result = await defaultPostApplyVerification({
+        realRoot: root,
+        fs: nodeWorkspaceFs,
+        appliedTestFiles: ["test/applied.test.js"],
+        signal: new AbortController().signal,
+        correlationId: undefined,
+      });
+
+      expect(result.command).toBe("node --test");
+      expect(runs[0]?.plan.steps).toEqual([
+        expect.objectContaining({
+          kind: "targeted-test",
+          command: "node",
+          args: ["--test", "test/applied.test.js"],
+        }),
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("forwards the injected WorkspaceFs to runVerification for a planned targeted-test step", async () => {
     runs.length = 0;
     const root = await createRunnableWorkspace();

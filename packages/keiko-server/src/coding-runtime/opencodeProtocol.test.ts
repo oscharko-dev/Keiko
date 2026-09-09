@@ -6,6 +6,7 @@ import {
   OPENCODE_APPROVED_ENDPOINTS,
   createOpenCodeSseDecoder,
   classifyOpenCodeLiveControl,
+  isOpenCodeFacadeDispatchedTool,
   parseOpenCodeHistory,
   parseOpenCodeSse,
   projectOpenCodePermissionEvent,
@@ -442,13 +443,45 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
         time: 61,
       });
 
-    expect(parseOpenCodeHistory([row(compactionPart)])).toMatchObject({
+    const started = parseOpenCodeHistory([row(compactionPart)]);
+    expect(started).toMatchObject({
       ok: true,
-      value: [{ sequence: 61, kind: "observation" }],
+      value: [
+        {
+          sequence: 61,
+          kind: "observation",
+          compaction: {
+            event: "started",
+            auto: true,
+            overflow: false,
+            retainedTail: false,
+          },
+        },
+      ],
     });
-    expect(
-      parseOpenCodeHistory([row({ ...compactionPart, tail_start_id: "msg_retained_tail" })]),
-    ).toMatchObject({ ok: true });
+    if (!started.ok) throw new Error("expected compaction start");
+    expect(started.value[0]?.compaction?.compactionIdSha256).toMatch(/^[0-9a-f]{64}$/u);
+    const retained = parseOpenCodeHistory([
+      row({ ...compactionPart, tail_start_id: "msg_retained_tail" }),
+    ]);
+    expect(retained).toMatchObject({
+      ok: true,
+      value: [
+        {
+          compaction: {
+            event: "tail-retained",
+            auto: true,
+            overflow: false,
+            retainedTail: true,
+          },
+        },
+      ],
+    });
+    if (!retained.ok) throw new Error("expected retained compaction tail");
+    const retainedActivity = retained.value[0]?.compaction;
+    if (retainedActivity?.event !== "tail-retained") throw new Error("expected tail metadata");
+    expect(retainedActivity.compactionIdSha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(retainedActivity.tailStartIdSha256).toMatch(/^[0-9a-f]{64}$/u);
     for (const invalid of [
       { ...compactionPart, auto: "true" },
       { ...compactionPart, overflow: 0 },
@@ -461,11 +494,88 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
         reason: "event-unknown",
       });
     }
-    expect(
-      JSON.stringify(
-        parseOpenCodeHistory([row({ ...compactionPart, tail_start_id: "msg_retained_tail" })]),
-      ),
-    ).not.toMatch(/auto|tail_start_id/u);
+    const serialized = JSON.stringify(
+      parseOpenCodeHistory([row({ ...compactionPart, tail_start_id: "msg_retained_tail" })]),
+    );
+    expect(serialized).not.toMatch(/msg_assistant|msg_retained_tail|tail_start_id/u);
+  });
+
+  it("projects only settled native compaction summary outcomes without their bodies", () => {
+    const row = (extra: Record<string, unknown>): Record<string, unknown> =>
+      syncRow(62, "message.updated.1", {
+        sessionID: "ses_1",
+        info: assistantMessage({
+          time: { created: 1, completed: 2 },
+          parentID: "msg_compaction",
+          mode: "compaction",
+          agent: "compaction",
+          summary: true,
+          ...extra,
+        }),
+      });
+    const completed = parseOpenCodeHistory([row({ finish: "stop" })]);
+    expect(completed).toMatchObject({
+      ok: true,
+      value: [
+        {
+          compaction: {
+            event: "completed",
+          },
+        },
+      ],
+    });
+    if (!completed.ok) throw new Error("expected completed compaction summary");
+    expect(completed.value[0]?.compaction?.compactionIdSha256).toMatch(/^[0-9a-f]{64}$/u);
+    const failed = parseOpenCodeHistory([
+      row({
+        finish: "error",
+        error: {
+          name: "ContextOverflowError",
+          data: { message: "SENTINEL_PRIVATE_PROVIDER_BODY" },
+        },
+      }),
+    ]);
+    expect(failed).toMatchObject({
+      ok: true,
+      value: [
+        {
+          compaction: {
+            event: "failed",
+            errorKind: "ContextOverflowError",
+            finishReason: "error",
+          },
+        },
+      ],
+    });
+    expect(JSON.stringify(failed)).not.toContain("SENTINEL_PRIVATE_PROVIDER_BODY");
+    const failedWithoutFinish = parseOpenCodeHistory([
+      row({
+        error: {
+          name: "ContextOverflowError",
+          data: { message: "SENTINEL_PRIVATE_PROVIDER_BODY" },
+        },
+      }),
+    ]);
+    expect(failedWithoutFinish).toMatchObject({
+      ok: true,
+      value: [
+        {
+          kind: "terminal-failure",
+          compaction: {
+            event: "failed",
+            errorKind: "ContextOverflowError",
+            finishReason: "error",
+          },
+        },
+      ],
+    });
+    expect(JSON.stringify(failedWithoutFinish)).not.toContain("SENTINEL_PRIVATE_PROVIDER_BODY");
+    const ordinary = parseOpenCodeHistory([
+      row({ finish: "stop", mode: "build", agent: "build", summary: true }),
+    ]);
+    expect(ordinary).toMatchObject({ ok: true });
+    if (!ordinary.ok) throw new Error("expected ordinary summary marker");
+    expect(ordinary.value[0]).not.toHaveProperty("compaction");
   });
 
   it("keeps productive tool-loop lifecycle events content-free and non-terminal", () => {
@@ -524,7 +634,6 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     { name: "ProviderAuthError", data: { providerID: "functional", message: "SENTINEL" } },
     { name: "UnknownError", data: { message: "SENTINEL", ref: "bounded-reference" } },
     { name: "MessageOutputLengthError", data: {} },
-    { name: "MessageAbortedError", data: { message: "SENTINEL" } },
     { name: "StructuredOutputError", data: { message: "SENTINEL", retries: 2 } },
     { name: "ContextOverflowError", data: { message: "SENTINEL", responseBody: "SENTINEL" } },
     { name: "ContentFilterError", data: { message: "SENTINEL" } },
@@ -550,6 +659,24 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     expect(parsed).toMatchObject({
       ok: true,
       value: [{ sequence: 1, kind: "terminal-failure" }],
+    });
+    expect(JSON.stringify(parsed)).not.toContain("SENTINEL");
+  });
+
+  it("settles the pinned native abort error without retaining its body", () => {
+    const parsed = parseOpenCodeHistory([
+      syncRow(1, "message.updated.1", {
+        sessionID: "ses_1",
+        info: assistantMessage({
+          error: { name: "MessageAbortedError", data: { message: "SENTINEL" } },
+          time: { created: 1, completed: 2 },
+        }),
+      }),
+    ]);
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      value: [{ sequence: 1, kind: "terminal" }],
     });
     expect(JSON.stringify(parsed)).not.toContain("SENTINEL");
   });
@@ -621,10 +748,19 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     const parsed = parseOpenCodeHistory([row(errorState)]);
     expect(parsed).toMatchObject({ ok: true, value: [{ kind: "observation" }] });
     expect(JSON.stringify(parsed)).not.toContain(sentinel);
+    const withNativeMetadata = parseOpenCodeHistory([
+      row({ ...errorState, metadata: { nativeDiagnostic: "PRIVATE_NATIVE_TOOL_DETAIL" } }),
+    ]);
+    expect(withNativeMetadata).toMatchObject({
+      ok: true,
+      value: [{ kind: "observation" }],
+    });
+    expect(JSON.stringify(withNativeMetadata)).not.toContain("PRIVATE_NATIVE_TOOL_DETAIL");
     for (const invalid of [
       { ...errorState, error: "" },
       { ...errorState, error: "x".repeat(4097) },
       { ...errorState, time: { start: 1 } },
+      { ...errorState, metadata: "not-a-record" },
       { ...errorState, unexpected: true },
     ]) {
       expect(parseOpenCodeHistory([row(invalid)])).toEqual({
@@ -910,6 +1046,68 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
       actionKind: "verification-command",
     });
     expect(projectedVerification?.requestId).toMatch(/^permission-[0-9]+$/u);
+    const projectedTargeted = projectOpenCodePermissionEvent(
+      {
+        ...base,
+        properties: {
+          ...base.properties,
+          patterns: ["targeted-test"],
+          metadata: {
+            kind: "command-execution",
+            actionClass: "command-execution",
+            reasonCode: "approval-required",
+            expiresAt: "2026-07-23T14:05:00.000Z",
+            actionKind: "verification-command",
+            scopeLabel: "workspace-scope",
+            risk: "low",
+            policyReason: "approval-required",
+            commandLabel: "targeted-test",
+            actionId: "session:targeted",
+            idempotencyKey: "session:targeted",
+            approvalId: "session:targeted",
+            approvalDigest: "b".repeat(64),
+            targetPathHash: "c".repeat(64),
+          },
+        },
+      },
+      "ses_1",
+    );
+    expect(projectedTargeted).toMatchObject({
+      actionKind: "verification-command",
+      commandLabel: "targeted-test",
+      targetPathHash: "c".repeat(64),
+    });
+    const projectedCiObservation = projectOpenCodePermissionEvent(
+      {
+        ...base,
+        properties: {
+          ...base.properties,
+          patterns: ["ci"],
+          metadata: {
+            kind: "command-execution",
+            actionClass: "command-execution",
+            reasonCode: "approval-required",
+            expiresAt: "2026-07-23T14:05:00.000Z",
+            actionKind: "ci-observe",
+            scopeLabel: "workspace-scope",
+            risk: "low",
+            policyReason: "approval-required",
+            commandLabel: "ci",
+            actionId: "session:ci-call",
+            idempotencyKey: "session:ci-call",
+            approvalId: "session:ci-call",
+            approvalDigest: "b".repeat(64),
+          },
+        },
+      },
+      "ses_1",
+    );
+    expect(projectedCiObservation).toMatchObject({
+      type: "permission-request",
+      kind: "command-execution",
+      actionKind: "ci-observe",
+      commandLabel: "ci",
+    });
     for (const rejected of [
       { ...base, extra: true },
       { ...base, properties: { ...base.properties, sessionID: "ses_foreign" } },
@@ -1030,6 +1228,15 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     ]);
     expect(parsed).toMatchObject({ ok: true, value: [{ kind: "question" }] });
     expect(JSON.stringify(parsed)).not.toContain(sentinel);
+  });
+
+  it("classifies keiko_* tools as facade-dispatched and question/todowrite/unknown tools as not (#3390)", () => {
+    expect(isOpenCodeFacadeDispatchedTool("keiko_workspace_discover")).toBe(true);
+    expect(isOpenCodeFacadeDispatchedTool("keiko_workspace_read")).toBe(true);
+    expect(isOpenCodeFacadeDispatchedTool("question")).toBe(false);
+    expect(isOpenCodeFacadeDispatchedTool("todowrite")).toBe(false);
+    expect(isOpenCodeFacadeDispatchedTool("not-a-real-tool")).toBe(false);
+    expect(isOpenCodeFacadeDispatchedTool("")).toBe(false);
   });
 });
 

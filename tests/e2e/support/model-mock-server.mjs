@@ -27,6 +27,7 @@ const JOURNAL_CAPTURE_MARKER = "KEIKO_E2E_JOURNAL_CAPTURE";
 const SALIENCE_PROMPT_MARKER = "You extract durable memories from a chat turn";
 const GROUNDED_PROMPT_MARKER =
   "You are Keiko answering a repository question from a connected Files scope";
+const PR_DESCRIPTION_PROMPT_MARKER = "Write a factual pull-request description";
 const GROUNDING_PARITY_EVIDENCE_MARKER = "KEIKO_E2E_GROUNDING_PARITY";
 const GROUNDING_PARITY_REPLY =
   "repositoryParityStatus is defined in the repository fixture [src/repository-parity.ts:2].";
@@ -89,6 +90,8 @@ function streamCompletion(res) {
 }
 
 function bufferedContent(rawRequest) {
+  const description = prDescriptionCandidate(rawRequest);
+  if (description !== undefined) return description;
   if (
     rawRequest.includes(GROUNDED_PROMPT_MARKER) &&
     rawRequest.includes(GROUNDING_PARITY_EVIDENCE_MARKER)
@@ -111,6 +114,34 @@ function bufferedContent(rawRequest) {
       tags: ["journal-e2e"],
     },
   ]);
+}
+
+function prDescriptionCandidate(rawRequest) {
+  if (!rawRequest.includes(PR_DESCRIPTION_PROMPT_MARKER)) return undefined;
+  let parsed;
+  try {
+    parsed = JSON.parse(rawRequest);
+  } catch {
+    return undefined;
+  }
+  const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
+  const text = messages
+    .map((message) => (typeof message?.content === "string" ? message.content : ""))
+    .join("\n");
+  const evidenceIds = [
+    ...new Set([...text.matchAll(/"evidenceId":"([^"]+)"/gu)].map((match) => match[1])),
+  ];
+  if (evidenceIds.length === 0) return undefined;
+  const refinement = text.includes("Second connected refinement")
+    ? "Second connected refinement is visible in the exact held pull-request body."
+    : "First connected refinement is retained for the next Chat turn.";
+  const statement = { text: refinement, evidenceIds };
+  return JSON.stringify({
+    summary: [statement],
+    keyChanges: [statement],
+    risks: [],
+    reviewerFocus: [],
+  });
 }
 
 function bufferedCompletion(res, rawRequest) {

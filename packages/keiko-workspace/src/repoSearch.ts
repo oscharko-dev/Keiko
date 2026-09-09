@@ -40,7 +40,12 @@ import {
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import { containedRealPathInfo, isCanonicalAllowedContainedPath } from "./realpath.js";
-import { buildMatcher, compileGlob, fingerprintFor } from "./repoSearchMatchers.js";
+import {
+  buildMatcher,
+  compileGlob,
+  fingerprintFor,
+  type LiteralQueryInterpretation,
+} from "./repoSearchMatchers.js";
 import {
   cachedLexicalRecordRequiresLiveMatch,
   prepareCachedLexicalQuery,
@@ -168,6 +173,7 @@ export interface ReadExcerptResult {
 }
 
 interface FacadeDeps {
+  readonly queryInterpretation?: LiteralQueryInterpretation | undefined;
   readonly fs?: WorkspaceFs;
   readonly nowMs?: () => number;
   // Internal absolute request ceiling. Public callers normally use elapsedMsMax; the request-local
@@ -208,7 +214,13 @@ type CandidateSetProvider = (
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-function clampToBytes(text: string, maxBytes: number): { excerpt: string; truncated: boolean } {
+// Exported so callers that must clamp a byte budget outside the searchText/readExcerpt facade
+// (e.g. the coding-repository H1 excerpt projection, which redacts before this final clamp) reuse
+// this exact UTF-8-boundary-safe truncation instead of re-deriving it.
+export function clampToBytes(
+  text: string,
+  maxBytes: number,
+): { excerpt: string; truncated: boolean } {
   if (maxBytes <= 0) {
     return { excerpt: "", truncated: true };
   }
@@ -465,7 +477,7 @@ function mergeSearchAtoms(
 // cannot block the event loop for multiple seconds. discoverFiles() itself remains synchronous
 // (sync walk is load-bearing for importGraph/testSourcePairing callers); the yield here covers
 // the already-async per-file scan pass where the loop overhead is measurable.
-const SCAN_YIELD_INTERVAL = 64;
+const SCAN_YIELD_INTERVAL = 32;
 const PROJECT_METADATA_SCAN_MIN_FILES = 256;
 const PROJECT_METADATA_SCAN_MAX_FILES = 512;
 
@@ -503,6 +515,7 @@ type SearchTextRunnerDeps = Required<Pick<FacadeDeps, "fs" | "nowMs">> &
     | "contentLane"
     | "deadlineAtMs"
     | "candidateContentFor"
+    | "queryInterpretation"
   >;
 
 function buildSearchTextRunner(
@@ -523,8 +536,8 @@ function buildSearchTextRunner(
     startMs: deps.nowMs(),
     ...(deps.deadlineAtMs === undefined ? {} : { deadlineAtMs: deps.deadlineAtMs }),
     signal: deps.signal,
-    matcher: buildMatcher(query),
-    fingerprint: fingerprintFor(query),
+    matcher: buildMatcher(query, deps.queryInterpretation),
+    fingerprint: fingerprintFor(query, deps.queryInterpretation),
     policy: resolveSearchPolicy(scope.relativePaths.length > 0, deps.searchHints),
     query,
     contentLane: deps.contentLane ?? "evidence",
@@ -2050,6 +2063,7 @@ function completedSearchResult(inputs: CompletedSearchResultInputs): SearchResul
 
 function buildSearchTextDeps(deps: FacadeDeps): SearchTextRunnerDeps {
   return {
+    queryInterpretation: deps.queryInterpretation,
     fs: deps.fs ?? nodeWorkspaceFs,
     nowMs: deps.nowMs ?? Date.now,
     ...(deps.candidatePathGlobs === undefined

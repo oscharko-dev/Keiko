@@ -16,6 +16,9 @@ import {
 } from "./windows-portable-signing.mjs";
 import { assertWindowsProductionVerificationInput } from "./windows-portable-verification-input.mjs";
 import { sha256File } from "./lib/digest.mjs";
+import { writeQualificationEvidenceReceipt } from "./lib/qualification-evidence-receipt.mjs";
+
+export { writeQualificationEvidenceReceipt };
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
@@ -226,6 +229,26 @@ function required(options, name) {
   return value;
 }
 
+// #3390 audit F8: mirrors qualify-macos-runtime-release.mjs's evidence bridge -- translates this
+// script's own real qualification receipt into the `<scenarioId>.receipt.json` + `.artifact` pair
+// the #3390 checker and manifest producer already read, so a real, passing Windows qualification
+// becomes evidence with no separate step. While #2198/#2951 remain open this mode is never invoked
+// for the packaged-reference scenario; its manifest row carries the descriptor's own closed
+// `blocked` reason instead -- never a fabricated receipt. The writer itself is shared with
+// qualify-macos-runtime-release.mjs via scripts/lib/qualification-evidence-receipt.mjs; see the
+// `import`/`export` above.
+
+function maybeWriteQualificationEvidence(options, receipt) {
+  const receiptsDir = options["qualification-receipts"];
+  if (receiptsDir === undefined) return;
+  writeQualificationEvidenceReceipt({
+    receiptsDir: resolve(receiptsDir),
+    scenarioId: required(options, "scenario-id"),
+    receipt,
+    recordedAt: new Date().toISOString(),
+  });
+}
+
 export function qualifyWindowsRuntimeRelease(
   options,
   { platform = process.platform, spawnSyncImpl = spawnSync } = {},
@@ -260,6 +283,7 @@ export function qualifyWindowsRuntimeRelease(
   const output = resolve(required(options, "output"));
   if (dirname(output) === output) fail("output path is invalid");
   writeFileSync(output, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
+  maybeWriteQualificationEvidence(options, receipt);
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(import.meta.filename)) {

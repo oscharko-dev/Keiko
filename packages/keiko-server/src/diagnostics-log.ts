@@ -405,6 +405,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "runtime-stderr-counts",
   "runtime-stream-drain-failed",
   "runtime-approval-revocation-failed",
+  "runtime-approval-resolution-failed",
   "runtime-handshake-failed",
   "runtime-lifecycle-failed",
   "runtime-start-failed",
@@ -424,6 +425,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   // misreported every invariant/projection failure it fired for as an expiry.
   "safe-activity-purged-invariant-violation",
   "workspace-discovery-failed",
+  "workspace-read-failed",
   // The editor-agent root containment port could not complete its authority proof at all (the
   // resolver threw rather than returning a classified verdict). Every classified denial is already
   // on the activity log as `workspace.root.denied`; this covers the one refusal that had no record.
@@ -435,6 +437,12 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "prepare-bridge-close",
   "prepare-run-root-remove",
   "tool-facade-failed",
+  // KfQ 3954841973: a coding-runtime backend process (plus its HTTP/SSE client and tool bridge)
+  // that was already spawned when launch failed later (lease-broker unavailable, launch-shape
+  // validation) is disposed on the failure path -- mirrors opencodeRuntimeComposition.ts's
+  // `recordPrepareDisposalFailure` (KEIKO-0320): the disposal call can itself throw, and
+  // swallowing that would leave the same class of leak with no diagnostic and no retry hook.
+  "coding-runtime-backend-disposal-failed",
   "sidecar-gateway-evidence-aggregation-failed",
   "coding-sidecar-gateway-profile-unavailable",
   "coding-sidecar-gateway-tool-contract-rejected",

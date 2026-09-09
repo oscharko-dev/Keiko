@@ -5,6 +5,9 @@ import {
   useCodingWorkbenchPairingEffect,
   useCodingWorkbenchWorkspaceEffect,
   useCodingWorkbenchRuntimeRefreshEffects,
+  POST_RUN_DESCRIPTION_POLL_MAX_MS,
+  POST_RUN_DESCRIPTION_POLL_MS,
+  awaitingPostRunDescription,
 } from "./coding-workbench-runtime-effects";
 import { STREAMABLE_RUNTIME_STATES } from "./useCodingWorkbenchRuntime";
 import {
@@ -189,5 +192,95 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
     unmount();
     window.dispatchEvent(new CustomEvent(GATEWAY_CONFIG_UPDATED_EVENT));
     expect(refreshSource).toHaveBeenCalledTimes(3);
+  });
+});
+
+// #3390: the description job is dispatched AT the terminal transition and generates a few seconds
+// later -- after the run's event stream (live states only) has delivered its last re-snapshot. The
+// card an operator was watching kept the pre-generation state for good while a freshly opened
+// window showed "Review exact draft" at once (rehearsal run-04). The settled run is re-read, on a
+// bounded cadence, exactly while that generation is pending.
+describe("post-run description refresh (#3390)", () => {
+  const settled = (overrides: Record<string, unknown> = {}): CodingWorkbenchRuntimeState =>
+    ({
+      run: {
+        status: "ready",
+        value: {
+          runId: "run-1",
+          state: "succeeded",
+          draftDelivery: { phase: "draft-created" },
+          ...overrides,
+        },
+        error: null,
+      },
+    }) as unknown as CodingWorkbenchRuntimeState;
+
+  it("is pending only for a succeeded run with a draft pull request and no description yet", () => {
+    expect(awaitingPostRunDescription(settled().run.value)).toBe(true);
+    expect(awaitingPostRunDescription(settled({ state: "running" }).run.value)).toBe(false);
+    expect(
+      awaitingPostRunDescription(settled({ draftDelivery: { phase: "pushed" } }).run.value),
+    ).toBe(false);
+    expect(
+      awaitingPostRunDescription(
+        settled({ descriptionStatus: { state: "current", reason: "generated" } }).run.value,
+      ),
+    ).toBe(false);
+    expect(awaitingPostRunDescription(null)).toBe(false);
+  });
+
+  it("re-reads the settled run on the poll cadence until the description arrives, then stops", () => {
+    vi.useFakeTimers();
+    try {
+      const refreshRun = vi.fn(() => Promise.resolve());
+      const noop = vi.fn(() => Promise.resolve());
+      const { rerender, unmount } = renderHook(
+        ({ state }: { state: CodingWorkbenchRuntimeState }) => {
+          useCodingWorkbenchRuntimeRefreshEffects({
+            state,
+            refreshRuntime: noop,
+            refreshSource: noop,
+            refreshRun,
+          });
+        },
+        { initialProps: { state: settled() } },
+      );
+      const mountReads = refreshRun.mock.calls.length;
+      vi.advanceTimersByTime(POST_RUN_DESCRIPTION_POLL_MS * 3);
+      expect(refreshRun.mock.calls.length - mountReads).toBe(3);
+
+      rerender({
+        state: settled({ descriptionStatus: { state: "current", reason: "generated" } }),
+      });
+      const afterArrival = refreshRun.mock.calls.length;
+      vi.advanceTimersByTime(POST_RUN_DESCRIPTION_POLL_MS * 3);
+      expect(refreshRun.mock.calls).toHaveLength(afterArrival);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up after the bounded window so a job that never settles cannot poll forever", () => {
+    vi.useFakeTimers();
+    try {
+      const refreshRun = vi.fn(() => Promise.resolve());
+      const noop = vi.fn(() => Promise.resolve());
+      const { unmount } = renderHook(() => {
+        useCodingWorkbenchRuntimeRefreshEffects({
+          state: settled(),
+          refreshRuntime: noop,
+          refreshSource: noop,
+          refreshRun,
+        });
+      });
+      vi.advanceTimersByTime(POST_RUN_DESCRIPTION_POLL_MAX_MS);
+      const atLimit = refreshRun.mock.calls.length;
+      vi.advanceTimersByTime(POST_RUN_DESCRIPTION_POLL_MS * 5);
+      expect(refreshRun.mock.calls).toHaveLength(atLimit);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

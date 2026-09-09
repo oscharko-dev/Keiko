@@ -62,10 +62,13 @@ import {
   gitDeliveryTerminationHandler,
   GitDeliveryRootAuthorityRevokedError,
   KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK,
+  logGitDeliveryUpstreamTrackingFailed,
   readStagedConflictMarkerFileCountFor,
   readStagedPathsFor,
   resolveProjectWorkspace,
   type GitDeliveryExecutionSeams,
+  executionFailureDetail,
+  logGitDeliveryMutation,
 } from "./execution.js";
 import {
   deriveManagedWorktreePath,
@@ -350,6 +353,30 @@ describe("gitDeliveryTerminationHandler — correlation-id wiring for the runCom
   });
 });
 
+// #3394 review follow-up: the interactive pinned-push path's best-effort `--set-upstream-to`
+// follow-up (git-publish-node.ts's `applyUpstreamTrackingIfRequested`) has no branch/remote/error
+// payload to log — this proves the line it DOES write is a distinct, body-free, correctly-routed
+// diagnostic that never overloads `git.delivery.mutation.failed` (which would misreport a
+// successful push as failed).
+describe("logGitDeliveryUpstreamTrackingFailed — content-free diagnostic for the push follow-up", () => {
+  it("writes a distinct op, never git.delivery.mutation.failed, with the caller's correlationId", () => {
+    const activity = captureActivityLog();
+    logGitDeliveryUpstreamTrackingFailed(activity.sink, "request-correlation-9");
+    expect(activity.events).toHaveLength(1);
+    expect(activity.events[0]?.op).toBe("git.delivery.push.upstream-tracking-failed");
+    expect(activity.events[0]?.op).not.toBe("git.delivery.mutation.failed");
+    expect(activity.events[0]?.category).toBe("diagnostic");
+    expect(activity.events[0]?.level).toBe("warn");
+    expect(activity.events[0]?.correlationId).toBe("request-correlation-9");
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID only when the caller genuinely has none in scope", () => {
+    const activity = captureActivityLog();
+    logGitDeliveryUpstreamTrackingFailed(activity.sink, undefined);
+    expect(activity.events[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+  });
+});
+
 // ─── F1: the sibling default readers (readStagedPathsFor / readStagedConflictMarkerFileCountFor)
 // — audit finding: unlike readWorktreeSnapshotFor/adapterFor above, these two receive NO
 // termination callback at all in their DEFAULT (no-seam) branch, so a request-scoped local
@@ -472,6 +499,83 @@ const exec = {
   durationMs: 1,
   errorCode: "internal-error" as const,
 };
+
+// #3390: a create that reached the provider yet could not be reported as a success used to leave
+// only `internal-error` in the log (rehearsal run-15: the pull request existed, nothing named why).
+// The adapter's closed failure words travel onto the mutation line; free text never does.
+describe("executionFailureDetail — closed provider failure words on the mutation log line", () => {
+  const failed = (
+    executionResult: GitDeliveryExecutionResult & Record<string, unknown>,
+  ): GitMutationLifecycleResult["outcome"] => ({
+    status: "failed",
+    category: "provider-failure",
+    executionResult,
+  });
+  const base = {
+    schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
+    outcome: "failed",
+    durationMs: 1272,
+    errorCode: "internal-error",
+  } as const;
+
+  it("carries the adapter's closed words and drops everything that is not one", () => {
+    expect(
+      executionFailureDetail(
+        failed({
+          ...base,
+          rejectionReason: "unknown",
+          failureClass: "identity-unparsable",
+          identityIssue: "shape-invalid",
+          stdout: "never logged",
+          note: "Not a closed word!",
+        }),
+      ),
+    ).toEqual({
+      rejectionReason: "unknown",
+      failureClass: "identity-unparsable",
+      identityIssue: "shape-invalid",
+    });
+    expect(executionFailureDetail(failed({ ...base, failureClass: "Free text here" }))).toEqual({});
+  });
+
+  it("admits the detail the PR path hands in beside the result's own words", () => {
+    const events: ServerLogEvent[] = [];
+    logGitDeliveryMutation(
+      { write: (event) => events.push(event) },
+      lifecycle(failed({ ...base })),
+      "corr-1",
+      {
+        failureClass: "identity-unparsable",
+        identityIssue: "shape-invalid",
+        stdoutBytes: 417,
+        stderrBytes: 0,
+        exitCode: 0,
+        note: "Not a closed word!",
+      },
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.extra).toMatchObject({
+      actionKind: "commit",
+      executionErrorCode: "internal-error",
+      failureClass: "identity-unparsable",
+      identityIssue: "shape-invalid",
+      stdoutBytes: 417,
+      stderrBytes: 0,
+      exitCode: 0,
+    });
+    expect(events[0]?.extra).not.toHaveProperty("note");
+  });
+
+  it("is empty for a success and for a failure without adapter detail", () => {
+    expect(
+      executionFailureDetail({
+        status: "succeeded",
+        executionResult: { ...base, outcome: "succeeded" },
+      }),
+    ).toEqual({});
+    expect(executionFailureDetail(failed({ ...base }))).toEqual({});
+  });
+});
 
 describe("gitDeliveryMutationResponse — content-free projection of every outcome", () => {
   it("succeeded", () => {

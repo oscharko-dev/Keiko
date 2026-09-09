@@ -23,6 +23,7 @@ export type {
   ModelReasoningEffort,
   InfillingAlignment,
   ModelCapability,
+  ModelCapabilityPricing,
   CompletionInteractionMode,
   CompletionDegradeReason,
   CompletionModelSelection,
@@ -172,6 +173,18 @@ export interface FigmaConnectorConfig {
   readonly accessToken?: string | undefined;
 }
 
+/**
+ * Server-owned branding for generated PR descriptions (#3398). `logoUrl` is an operator-declared
+ * candidate only — never trusted as-is downstream. `resolvePrDescriptionBrandingFromConfig`
+ * (config.ts) is the sole place that turns it into a `PrDescriptionBranding`, reusing
+ * `validatedPrDescriptionLogoUrl` (prDescription/render.ts) to decide whether it actually clears
+ * the immutable public HTTPS SVG bar; an absent or invalid value falls back to text-only
+ * attribution rather than failing config load, since branding is decorative, never load-bearing.
+ */
+export interface GatewayBrandingConfig {
+  readonly logoUrl?: string | undefined;
+}
+
 export interface GatewayConfig {
   readonly providers: readonly ModelProviderConfig[];
   readonly circuitBreaker: CircuitBreakerConfig;
@@ -180,6 +193,7 @@ export interface GatewayConfig {
   readonly reranker?: RerankerConfig | undefined;
   readonly egress?: OutboundHttpEgressConfig | undefined;
   readonly figma?: FigmaConnectorConfig | undefined;
+  readonly branding?: GatewayBrandingConfig | undefined;
 }
 
 // ─── Provider adapter interface (runtime port — STAYS local) ──────────────────

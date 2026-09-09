@@ -10,6 +10,7 @@ import {
   DEFAULT_FAILURE_THRESHOLD,
   DEFAULT_HALF_OPEN_PROBES,
   TOOL_CALLING_VERIFICATION_MAX_AGE_MS,
+  hasConfiguredEnvModelProvider,
   loadConfigFromFile,
   loadEgressConfigFromFile,
   migrateLegacyChatContextWindows,
@@ -18,6 +19,7 @@ import {
   parseGatewayConfig,
   parseModelCapability,
   resolveOutboundHttpEgressConfig,
+  resolvePrDescriptionBrandingFromConfig,
   toolCallingConfigurationFingerprint,
   toSafeObject,
   type ParseGatewayConfigOptions,
@@ -243,6 +245,34 @@ describe("parseGatewayConfig", () => {
       expect((error as Error).message).toContain("figma.accessToken");
       expect((error as Error).message).not.toContain("figd_bad-token");
     }
+  });
+
+  it("parses an optional server-owned PR-description branding logo URL (#3398)", () => {
+    const immutable = `https://cdn.example.org/${"a".repeat(40)}/keiko-logo.svg`;
+    const config = parseGatewayConfig({
+      ...(validRaw() as Record<string, unknown>),
+      branding: { logoUrl: `  ${immutable}  ` },
+    });
+
+    expect(config.branding?.logoUrl).toBe(immutable);
+  });
+
+  it("accepts a branding block with no logoUrl, present but empty", () => {
+    const config = parseGatewayConfig({
+      ...(validRaw() as Record<string, unknown>),
+      branding: {},
+    });
+
+    expect(config.branding).toEqual({});
+  });
+
+  it("rejects a non-object branding block", () => {
+    expect(() =>
+      parseGatewayConfig({
+        ...(validRaw() as Record<string, unknown>),
+        branding: "https://cdn.example.org/logo.svg",
+      }),
+    ).toThrow(/branding must be an object/);
   });
 
   it("parses an optional self-hosted LiteLLM reranker block", () => {
@@ -1396,6 +1426,41 @@ describe("parseGatewayConfig", () => {
   });
 });
 
+// Issue #3398 (child correction 8): the config-level key never fails config load — only
+// `resolvePrDescriptionBrandingFromConfig`'s reuse of `validatedPrDescriptionLogoUrl` decides
+// whether the operator's declared logo actually renders. Every branch here proves the fallback
+// to text-only "by Keiko" attribution is real, not merely the absence of a throw.
+describe("resolvePrDescriptionBrandingFromConfig (#3398)", () => {
+  const immutable = `https://cdn.example.org/${"a".repeat(40)}/keiko-logo.svg`;
+
+  function configWithBranding(logoUrl: string | undefined): ReturnType<typeof parseGatewayConfig> {
+    return parseGatewayConfig({
+      ...(validRaw() as Record<string, unknown>),
+      ...(logoUrl === undefined ? {} : { branding: { logoUrl } }),
+    });
+  }
+
+  it("resolves an immutable public HTTPS SVG logo URL to a renderable branding fact", () => {
+    expect(resolvePrDescriptionBrandingFromConfig(configWithBranding(immutable))).toEqual({
+      immutableLogoUrl: immutable,
+      availability: "public",
+    });
+  });
+
+  it("falls back to no branding when the key is absent", () => {
+    expect(resolvePrDescriptionBrandingFromConfig(configWithBranding(undefined))).toEqual({});
+  });
+
+  it.each([
+    "http://cdn.example.org/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/keiko-logo.svg", // not https
+    `https://cdn.example.org/${"a".repeat(40)}/keiko-logo.png`, // not .svg
+    "https://cdn.example.org/keiko-logo.svg", // no content-hash path segment
+    `https://user:pw@cdn.example.org/${"a".repeat(40)}/keiko-logo.svg`, // embedded credentials
+  ])("falls back to no branding for an invalid configured logo URL: %s", (logoUrl) => {
+    expect(resolvePrDescriptionBrandingFromConfig(configWithBranding(logoUrl))).toEqual({});
+  });
+});
+
 describe("toSafeObject", () => {
   it("omits credential and endpoint fields entirely", () => {
     const config = parseGatewayConfig(
@@ -1852,6 +1917,63 @@ describe("parseModelCapability", () => {
         "capabilities[0]",
       ),
     ).toThrow(/tokenAccounting\.counterId/u);
+  });
+
+  // live-journey-readiness-1: `pricing` is an optional, content-free public list price. Absent
+  // means the model carries no known dollar cost — a spend-budget enforcement layer must treat
+  // that as "unpriced" and fail closed rather than assume zero cost.
+  it("accepts and round-trips optional pricing", () => {
+    const raw = {
+      ...validCapability(),
+      pricing: { inputUsdPerMillionTokens: 3, outputUsdPerMillionTokens: 15 },
+    };
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed.pricing).toEqual(raw.pricing);
+  });
+
+  it("omits pricing when the capability declares none (stays undefined, never defaulted)", () => {
+    const parsed = parseModelCapability(validCapability(), "capabilities[0]");
+    expect(parsed.pricing).toBeUndefined();
+  });
+
+  it("rejects a negative or non-finite pricing rate", () => {
+    expect(() =>
+      parseModelCapability(
+        {
+          ...validCapability(),
+          pricing: { inputUsdPerMillionTokens: -1, outputUsdPerMillionTokens: 15 },
+        },
+        "capabilities[0]",
+      ),
+    ).toThrow(/pricing\.inputUsdPerMillionTokens/u);
+    expect(() =>
+      parseModelCapability(
+        {
+          ...validCapability(),
+          pricing: {
+            inputUsdPerMillionTokens: 3,
+            outputUsdPerMillionTokens: Number.POSITIVE_INFINITY,
+          },
+        },
+        "capabilities[0]",
+      ),
+    ).toThrow(/pricing\.outputUsdPerMillionTokens/u);
+  });
+
+  it("rejects an unknown pricing field (strict — no silent absorption)", () => {
+    expect(() =>
+      parseModelCapability(
+        {
+          ...validCapability(),
+          pricing: {
+            inputUsdPerMillionTokens: 3,
+            outputUsdPerMillionTokens: 15,
+            discountCode: "friends-and-family",
+          },
+        },
+        "capabilities[0]",
+      ),
+    ).toThrow(/pricing\.discountCode/u);
   });
 
   // Issue #1210: supportsInfilling / infillingAlignment are recognised strict-list keys and
@@ -2937,5 +3059,48 @@ describe("circuit breaker defaults stay pinned to the contracts-owned value", ()
     expect(DEFAULT_FAILURE_THRESHOLD).toBe(DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG.failureThreshold);
     expect(DEFAULT_COOLDOWN_MS).toBe(DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG.cooldownMs);
     expect(DEFAULT_HALF_OPEN_PROBES).toBe(DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG.halfOpenProbes);
+  });
+});
+
+// Final-audit F13/F24: the ONE env-only provider-admission formula every caller (keiko-server's
+// production Gateway composition, the #3390 real-model qualification harness) must share instead
+// of restating a weaker copy that accepts the API key alone.
+describe("hasConfiguredEnvModelProvider", () => {
+  it("is false when only the API key half of the pair is set", () => {
+    expect(
+      hasConfiguredEnvModelProvider({
+        KEIKO_MODEL_EXAMPLE_API_KEY: "sk-fixture-not-a-real-secret",
+      }),
+    ).toBe(false);
+  });
+
+  it("is false when only the base-URL half of the pair is set", () => {
+    expect(
+      hasConfiguredEnvModelProvider({
+        KEIKO_MODEL_EXAMPLE_BASE_URL: "https://gateway.internal.example/v1",
+      }),
+    ).toBe(false);
+  });
+
+  it("is true only once both halves of the pair are set", () => {
+    expect(
+      hasConfiguredEnvModelProvider({
+        KEIKO_MODEL_EXAMPLE_API_KEY: "sk-fixture-not-a-real-secret",
+        KEIKO_MODEL_EXAMPLE_BASE_URL: "https://gateway.internal.example/v1",
+      }),
+    ).toBe(true);
+  });
+
+  it("checks one specific model id's token when given, ignoring an unrelated qualifying pair", () => {
+    const env = {
+      KEIKO_MODEL_OTHER_API_KEY: "sk-fixture-not-a-real-secret",
+      KEIKO_MODEL_OTHER_BASE_URL: "https://gateway.internal.example/v1",
+    };
+    expect(hasConfiguredEnvModelProvider(env, "example")).toBe(false);
+    expect(hasConfiguredEnvModelProvider(env, "other")).toBe(true);
+  });
+
+  it("is false on an empty environment", () => {
+    expect(hasConfiguredEnvModelProvider({})).toBe(false);
   });
 });

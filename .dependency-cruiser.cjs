@@ -44,6 +44,23 @@ const PRODUCTION_SOURCE_PATH_NOT = "\\.(test|spec)\\.[cm]?[jt]sx?$";
 /** @type {import("dependency-cruiser").IConfiguration} */
 module.exports = {
   forbidden: [
+    {
+      name: "adr-0019-direction-2c-tool-catalog-only-contracts-security",
+      comment:
+        "ADR-0175 D1: concrete descriptors and their compiler are pure catalog metadata. " +
+        "Only the contracts and security leaves are dependencies; handlers and I/O stay with existing owners. " +
+        "The AST import-policy gate independently rejects non-workspace imports and raw capabilities.",
+      severity: "error",
+      from: {
+        path: "^(packages/keiko-tool-catalog/src/|tests/architecture/fixtures/tool-catalog/)",
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|tool-catalog)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|tool-catalog)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|tool-catalog))",
+      },
+    },
     // ---------------------------------------------------------------------------------------
     // ADR-0019 §"Required Dependency Direction" — 9 rules
     // ---------------------------------------------------------------------------------------
@@ -194,7 +211,7 @@ module.exports = {
       name: "adr-0019-direction-3c-tools-only-contracts-security-workspace",
       comment:
         "ADR-0019 direction rule 3 (tools boundary): keiko-tools may depend on " +
-        "keiko-contracts, keiko-security, keiko-workspace, keiko-sandbox, and keiko-git only. " +
+        "keiko-tool-catalog (pure definitions), keiko-contracts, keiko-security, keiko-workspace, keiko-sandbox, and keiko-git only. " +
         "keiko-git is allowed so the governed git flows consume the shared git core instead of " +
         "keeping a private copy. Workspace is " +
         "an allowed dependency because ADR-0019 trust rule 4 explicitly directs tools to route " +
@@ -213,11 +230,17 @@ module.exports = {
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|workspace|sandbox|tools|git)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|workspace|sandbox|tools|git)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|workspace|sandbox|tools|git)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|tool-catalog|security|workspace|sandbox|tools|git)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|tool-catalog|security|workspace|sandbox|tools|git)|" +
+          "@oscharko-dev/keiko-(?!contracts|tool-catalog|security|workspace|sandbox|tools|git)|" +
           "src/(tools|harness|workflows|cli|ui|verification|evaluations|gateway|audit|workspace)|" +
-          siblingPackageSourcePattern(["contracts", "security", "workspace", "git"]) +
+          siblingPackageSourcePattern([
+            "tool-catalog",
+            "contracts",
+            "security",
+            "workspace",
+            "git",
+          ]) +
           ")",
       },
     },
@@ -248,7 +271,7 @@ module.exports = {
       name: "adr-0019-direction-3a-model-gateway-only-contracts-security",
       comment:
         "ADR-0019 direction rule 3 (model-gateway boundary): keiko-model-gateway may depend only " +
-        "on keiko-contracts and keiko-security. The boundary also forbids imports into the retired " +
+        "on keiko-contracts, keiko-security and the pure ADR-0175 tool catalog. Runtime handlers remain forbidden. The boundary also forbids imports into the retired " +
         "root `src/gateway/` shim so productive model access remains package-routed.",
       severity: "error",
       from: {
@@ -260,11 +283,11 @@ module.exports = {
         // Forbidden destinations include every retired root src shim so a future
         // packages/keiko-model-gateway/src/** deep import is rejected even if the shim reappears.
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|tool-catalog|model-gateway)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|tool-catalog|model-gateway)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|tool-catalog|model-gateway)|" +
           "src/(gateway|harness|workflows|cli|ui|verification|evaluations|workspace|tools|audit)|" +
-          siblingPackageSourcePattern(["contracts", "security"]) +
+          siblingPackageSourcePattern(["contracts", "security", "tool-catalog"]) +
           ")",
       },
     },
@@ -595,7 +618,7 @@ module.exports = {
       name: "adr-0019-direction-4a-harness-only-contracts-security-model-gateway-workspace-tools-evidence",
       comment:
         "ADR-0019 direction rule 4 (harness boundary): keiko-harness may depend on " +
-        "keiko-contracts, keiko-security, keiko-model-gateway, keiko-workspace, keiko-tools, " +
+        "keiko-tool-catalog (pure definitions), keiko-contracts, keiko-security, keiko-model-gateway, keiko-workspace, keiko-tools, " +
         "and keiko-evidence only. The boundary also forbids imports into every retired root " +
         "`src/<domain>/` shim — including the shims of its own allow-listed dependencies " +
         "(`src/gateway/`, `src/workspace/`, `src/tools/`, `src/audit/`) — so production callers " +
@@ -608,11 +631,12 @@ module.exports = {
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|evidence)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|evidence)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|evidence)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|tool-catalog|security|model-gateway|workspace|tools|harness|evidence)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|tool-catalog|security|model-gateway|workspace|tools|harness|evidence)|" +
+          "@oscharko-dev/keiko-(?!contracts|tool-catalog|security|model-gateway|workspace|tools|harness|evidence)|" +
           "src/(harness|workflows|cli|ui|verification|evaluations|gateway|workspace|tools|audit)|" +
           siblingPackageSourcePattern([
+            "tool-catalog",
             "contracts",
             "security",
             "model-gateway",
@@ -670,7 +694,7 @@ module.exports = {
         "keiko-sdk, keiko-local-knowledge, keiko-memory-vault, keiko-memory-governance, " +
         "keiko-memory-retrieval, keiko-memory-capture, keiko-memory-consolidation, " +
         "keiko-quality-intelligence, " +
-        "and keiko-connectors " +
+        "keiko-tool-catalog (pure catalog compiled by the server, #3413), and keiko-connectors " +
         "only, and must reach those allowed dependencies through their public package " +
         "surfaces (`@oscharko-dev/keiko-<name>`). The to.path therefore forbids both the " +
         "non-allow-listed siblings (`cli|evaluations`) AND retired root `src/*` shims, " +
@@ -698,9 +722,9 @@ module.exports = {
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
           "src/(ui|cli|evaluations|gateway|workspace|tools|harness|workflows|audit|verification))",
       },
     },

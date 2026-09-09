@@ -12,11 +12,18 @@ import { makeWorkspace, recordingSpawn } from "./_support.js";
 import { createNodeGitPublishAdapter } from "./git-publish-node.js";
 import type { GitPublishExecRequest } from "./git-publish-gateway.js";
 
+// #3394 review: `setUpstreamTracking` is false here so a successful push in these env-forwarding
+// tests never triggers the best-effort tracking follow-up (`applyUpstreamTrackingIfRequested`,
+// git-publish-node.ts) — that follow-up is its own, second spawn, and this file's fake spawn shares
+// ONE recorded child across every call (see `recordingSpawn`), so a second spawn here would hang
+// waiting for a "close" event the test never emits a second time. The follow-up itself is covered
+// end-to-end, against a real local git remote, in git-publish-node.integration.test.ts.
 const PUSH: GitPublishExecRequest = {
   remoteAlias: "origin",
   sourceBranchName: "claude/issue-2843",
   remoteBranchName: "claude/issue-2843",
-  setUpstreamTracking: true,
+  setUpstreamTracking: false,
+  verifiedCommitSha: "a".repeat(40),
 };
 
 const REMOTE_PARENT_ENV: NodeJS.ProcessEnv = {

@@ -11,9 +11,17 @@
   },
   "include": [
     "coding-runtime-2385-server.mts",
+    "coding-issue-intake-server.mts",
+    "coding-issue-commit-server.mts",
+    "coding-issue-delivery-server.mts",
+    "coding-issue-ci-server.mts",
     "coding-runtime-2386-server.mts",
     "coding-runtime-2387-server.mts",
     "coding-runtime-2483-real-binary-server.mts",
-    "coding-runtime-server-shared.mts"
+    "coding-runtime-server-shared.mts",
+    "coding-issue-journey-server.mts",
+    "coding-issue-handoff-server.mts",
+    "coding-issue-handoff-transport.mts",
+    "git-change-chat-3400-server.mts"
   ]
 }

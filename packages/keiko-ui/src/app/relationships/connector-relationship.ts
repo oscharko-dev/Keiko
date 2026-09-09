@@ -18,7 +18,7 @@ function stableKey(chatId: string, workspacePath: string): string {
   let h = 2166136261;
   const input = `${chatId}|${workspacePath}`;
   for (let i = 0; i < input.length; i += 1) {
-    h = Math.imul(h ^ input.charCodeAt(i), 16777619);
+    h = Math.imul(h ^ (input.codePointAt(i) ?? 0), 16777619);
   }
   return `rc-${(h >>> 0).toString(36)}-${(input.length & 0xffff).toString(36)}`;
 }
@@ -40,3 +40,15 @@ export function recordReadsContextRelationship(chatId: string, workspacePath: st
     }
   });
 }
+
+// Issue #3400 (epic #3384) — a git-change target does NOT use this best-effort, fire-and-forget
+// pattern. Unlike the Files↔Chat edge above (recorded here AFTER an already-successful client-side
+// scope bind), a git-change relationship is a server-issued fact: the server resolves the trusted
+// repository, captures the immutable snapshot, creates the `reads-context` relationship, AND
+// persists the resulting `ChatGitChangeScope` onto the chat row in ONE atomic call
+// (`POST /api/git-change/connect`, `@/lib/api`'s `connectGitChangeToChat`). Calling
+// `recordReadsContextRelationship`-style client-side creation for a git-change target would
+// double-create the relationship and let the browser author a target it cannot validate — exactly
+// what the architecture invariants forbid ("the browser sends only a server-issued scope
+// reference"). The Git-window connect affordance calls `connectGitChangeToChat` directly; nothing
+// in this file wraps it.

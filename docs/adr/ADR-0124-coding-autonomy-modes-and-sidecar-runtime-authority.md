@@ -72,11 +72,17 @@ verification-oriented activity, and content-free connector metadata. It does not
 workspace mutation, local command execution, or delivery-substrate activity.
 
 `supervised-coding` adds governed workspace writes and governed command execution under an explicit
-Authority Envelope and approval gates. It still excludes delivery-substrate authority.
+Authority Envelope and approval gates. Delivery-substrate activity is not excluded outright —
+ADR-0138 D2 corrects this: every delivery effect (commit, fetch, pull, push, pull-request, merge)
+remains separately approval-required in this mode, never a flat, unredeemable denial.
 
-`autonomous-delivery` is the highest mode. It may include delivery-substrate actions, but only when
-the Authority Envelope explicitly grants them and only in later children that implement those
-surfaces. Naming the mode here does not implement the runner.
+`autonomous-delivery` is the highest mode. It may include delivery-substrate actions once the
+Authority Envelope explicitly grants them and a later child implements the corresponding surface,
+but a delivery effect is never admitted from the mode label alone: ADR-0138 D2 keeps delivery
+separately governed. The accepted Code-task path may use the live, action-specific Full access
+envelope as policy authorization for commit, push, and draft-pull-request execution without a
+per-action operator claim; Ask and Supervised still require that claim, and merge remains explicit.
+Naming the mode here does not implement the runner.
 
 ### D2 — Effective mode is the fail-closed minimum of request and deployment ceiling
 

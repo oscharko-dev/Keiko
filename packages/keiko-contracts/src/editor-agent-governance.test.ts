@@ -134,26 +134,21 @@ describe("effect-class taxonomy (Issue #1395 D1)", () => {
     for (const type of NON_MUTATING) expect(isMutatingEditorAgentAction(type)).toBe(false);
   });
 
-  it("gates server-resolved repository reads through workspace-read authority", () => {
-    for (const type of ["navigateSymbol", "searchWorkspace"] as const) {
+  it("allows repository reads in every mode while retaining authority and hard denials", () => {
+    for (const type of ["navigateSymbol", "searchWorkspace", "queryGit"] as const) {
       const baseline = classifyEditorAgentAction(type, ctx());
       expect(baseline.disposition).toBe("allowed");
-      // ADR-0138's monotonic matrix gates workspace-contained actions behind approval under
-      // governed-assist; the supervised middle mode admits the repository-backed read directly.
-      expect(
-        composeEditorAgentActionPolicyDecision(
-          baseline,
-          authority("governed-assist", { actionClasses: ["workspace-read"] }),
-          EDITOR_AGENT_ACTION_APPROVAL_RISK[type],
-        ),
-      ).toMatchObject({ disposition: "review-required", effectClass: "workspace-read" });
-      expect(
-        composeEditorAgentActionPolicyDecision(
-          baseline,
-          authority("supervised-coding", { actionClasses: ["workspace-read"] }),
-          EDITOR_AGENT_ACTION_APPROVAL_RISK[type],
-        ),
-      ).toMatchObject({ disposition: "allowed", effectClass: "workspace-read" });
+      // ADR-0138 D4: reads keep their Authority Envelope action-class, trust, containment, and
+      // budget gates, but never enter the effectful workspace approval matrix.
+      for (const mode of CODING_WORKBENCH_MODES) {
+        expect(
+          composeEditorAgentActionPolicyDecision(
+            baseline,
+            authority(mode, { actionClasses: ["workspace-read"] }),
+            EDITOR_AGENT_ACTION_APPROVAL_RISK[type],
+          ),
+        ).toMatchObject({ disposition: "allowed", effectClass: "workspace-read" });
+      }
       expect(
         composeEditorAgentActionPolicyDecision(
           baseline,
@@ -166,6 +161,13 @@ describe("effect-class taxonomy (Issue #1395 D1)", () => {
         denyReason: "mode-policy-denied",
       });
     }
+    expect(
+      composeEditorAgentActionPolicyDecision(
+        classifyEditorAgentAction("requestVerification", ctx()),
+        authority("governed-assist", { actionClasses: ["verification"] }),
+        EDITOR_AGENT_ACTION_APPROVAL_RISK.requestVerification,
+      ),
+    ).toMatchObject({ disposition: "review-required", effectClass: "execution" });
   });
 });
 

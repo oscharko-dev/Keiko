@@ -11,6 +11,7 @@ export type {
   ChatTurnInspection,
   CreateChatOptions,
   GroundedAnswer,
+  GitHubIssueReaderAuthorizationRecord,
   MemoryAutonomyPolicyRecord,
   NewChatMessage,
   Project,
@@ -26,6 +27,8 @@ export type {
   WorkspaceManifestRootProject,
   WorkspaceTrustRecordRow,
   WorkspaceTrustRecordRowInput,
+  ChatGitChangeScope,
+  ChatGitChangeDescriptionStatus,
 } from "./types.js";
 export {
   UiStoreError,

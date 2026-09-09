@@ -131,6 +131,28 @@ describe("runVerification — outcomes", () => {
     expect(report.results[0]?.status).toBe("skipped");
     expect(report.results[0]?.detail).toContain("no lint script");
     expect(rec.calls()).toHaveLength(0);
+    // #3390 (KEIKO-0848 class): a plan whose only step was skipped executed nothing, so it is
+    // "skipped", never "passed" -- the verified-commit proof requires an executed, passing step,
+    // and the model must read the same verdict the proof applies.
+    expect(report.overallStatus).toBe("skipped");
+  });
+
+  it("a skipped step beside a passed step still reports passed", async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { stdout: "ok\n", exitCode: 0 });
+    const skip = step({
+      kind: "lint",
+      scriptName: undefined,
+      command: "npm",
+      args: ["run", "lint"],
+      skipReason: "no lint script",
+    });
+    const report = await runVerification(
+      planOf([skip, step({ kind: "test" })], ws.info.root),
+      depsWith(ws, rec.fn),
+    );
+    expect(report.results.map((result) => result.status)).toEqual(["skipped", "passed"]);
     expect(report.overallStatus).toBe("passed");
   });
 
@@ -189,6 +211,45 @@ describe("runVerification — outcomes", () => {
       scriptName: undefined,
       command: "npx",
       args: ["jest", "--config=jest.config.js", "src/add.test.ts"],
+    });
+    const report = await runVerification(planOf([invalid], ws.info.root), depsWith(ws, rec.fn));
+    expect(report.results[0]?.status).toBe("denied");
+    expect(rec.calls()).toHaveLength(0);
+  });
+
+  it("runs an exact Node native targeted-test step through the governed spawn boundary", async () => {
+    const ws = makeWorkspace({ testFramework: "node-test" });
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const targeted = step({
+      kind: "targeted-test",
+      scriptName: undefined,
+      command: "node",
+      args: ["--test", "src/a.test.js"],
+    });
+
+    const report = await runVerification(planOf([targeted], ws.info.root), depsWith(ws, rec.fn));
+
+    expect(report.results[0]?.status).toBe("passed");
+    expect(rec.calls()).toHaveLength(1);
+    expect(rec.calls()[0]?.command).toMatch(/(?:^|\/)node$/u);
+    expect(rec.calls()[0]?.args).toEqual(["--test", "src/a.test.js"]);
+  });
+
+  it.each([
+    ["escape", ["--test", "../escape.test.js"]],
+    ["absolute", ["--test", "/tmp/absolute.test.js"]],
+    ["eval-short", ["--test", "-e", "process.exit(0)"]],
+    ["eval-long", ["--test", "--eval=process.exit(0)"]],
+    ["extra-flag", ["--test", "src/a.test.js", "--watch"]],
+  ])("rejects malformed Node native targeted-test arguments: %s", async (_label, args) => {
+    const ws = makeWorkspace({ testFramework: "node-test" });
+    const rec = recordingSpawn();
+    const invalid = step({
+      kind: "targeted-test",
+      scriptName: undefined,
+      command: "node",
+      args,
     });
     const report = await runVerification(planOf([invalid], ws.info.root), depsWith(ws, rec.fn));
     expect(report.results[0]?.status).toBe("denied");

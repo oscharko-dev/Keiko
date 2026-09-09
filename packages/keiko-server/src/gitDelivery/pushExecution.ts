@@ -46,6 +46,7 @@ import {
   gitDeliveryTerminationHandler,
   logGitDeliveryNoSpawnRefusal,
   logGitDeliveryPreconditionFailure,
+  logGitDeliveryUpstreamTrackingFailed,
   recordGitDeliveryLifecycle,
   readWorktreeSnapshotFor,
   type GitDeliveryMutationResponseBody,
@@ -150,17 +151,22 @@ function publishAdapterFor(
   correlationId: string | undefined,
 ): GitRemotePublishAdapter {
   if (seams.publishAdapterFactory !== undefined) return seams.publishAdapterFactory(workspace);
+  const activityLog = seams.activityLog ?? processServerLogSink();
   return createNodeGitPublishAdapter({
     workspace,
     processEnv: process.env,
     now,
     onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
+    onUpstreamTrackingFailure: (): void => {
+      logGitDeliveryUpstreamTrackingFailed(activityLog, correlationId);
+    },
   });
 }
 
 function pushInputsOf(command: GitPushCommand): GitDeliveryPushInputs {
   return {
     kind: "push",
+    verifiedCommitSha: command.verifiedCommitSha,
     sourceBranchName: command.sourceBranchName,
     remoteAlias: command.remoteAlias,
     remoteBranchName: command.remoteBranchName,
@@ -241,6 +247,12 @@ export interface GitDeliveryPushPreviewBody {
   readonly remoteAlias: string;
   readonly remoteBranchName: string;
   readonly sourceBranchName: string;
+  // #3394 review: the reviewed head SHA the caller should capture and resubmit as
+  // `verifiedCommitSha` at approve/execute time (never re-derived at click time). Sourced from the
+  // SAME freshly-read snapshot the preflight/policy projection below already used — no new IO.
+  // Absent only for an unborn HEAD (nothing to push, so nothing to pin); the UI disables push when
+  // absent, consistent with the existing "cannot act on an incomplete preview" pattern.
+  readonly headCommitSha?: string | undefined;
   readonly riskClass: GitDeliveryRiskClass;
   readonly wouldCreateRemoteBranch: boolean;
   readonly wouldTriggerChecks: boolean;
@@ -288,6 +300,7 @@ export function buildGitDeliveryPushPreview(
     remoteAlias: command.remoteAlias,
     remoteBranchName: command.remoteBranchName,
     sourceBranchName: command.sourceBranchName,
+    ...(snapshot.headSha === undefined ? {} : { headCommitSha: snapshot.headSha }),
     riskClass: gitDeliveryRiskClassForInputs(inputs),
     wouldCreateRemoteBranch: command.setUpstreamTracking && !snapshot.hasUpstream,
     wouldTriggerChecks: true,

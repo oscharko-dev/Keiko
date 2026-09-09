@@ -96,12 +96,34 @@ describe("resolveExistingAllowedWorkspaceRealRoot", () => {
     expect(realPathCalls).toBe(0);
   });
 
-  it("admits a canonical Codex worktree below its internal state root", () => {
-    const root = "/home/user/.codex/worktrees/task/project";
+  // #3390: the carve-out named `.codex` alone, although Claude Code creates its agent worktrees
+  // under `.claude/worktrees/<task>/` in exactly the same shape and this repository's own contract
+  // names `claude/…` branches. Every workspace feature therefore refused to open for an agent or a
+  // person working inside a Claude Code worktree: the root was denied before anything was read.
+  it.each([
+    "/home/user/.codex/worktrees/task/project",
+    "/home/user/.claude/worktrees/task/project",
+  ])("admits a canonical agent worktree below its tool state root: %s", (root) => {
     const baseFs = memFs("/home/user", {});
     const fs: WorkspaceFs = { ...baseFs, realPath: (): string => root };
 
     expect(resolveExistingAllowedWorkspaceRealRoot(fs, root)).toBe(root);
+  });
+
+  // The carve-out stays exactly as narrow as it was: one denied segment, which must be an agent
+  // tool directory, immediately followed by `worktrees/<name>` with content below it.
+  it.each([
+    "/home/user/.claude",
+    "/home/user/.claude/worktrees",
+    "/home/user/.claude/worktrees/project/.aws",
+    "/home/user/.ssh/worktrees/task/project",
+    "/home/user/.idea/worktrees/task/project",
+    "/home/user/.claude/tasks/task/project",
+  ])("keeps refusing a denied root the worktree carve-out does not cover: %s", (root) => {
+    const baseFs = memFs("/home/user", {});
+    const fs: WorkspaceFs = { ...baseFs, realPath: (): string => root };
+
+    expect(() => resolveExistingAllowedWorkspaceRealRoot(fs, root)).toThrow(PathDeniedError);
   });
 
   it("admits only the exact canonical root pre-authorized by its owning layer", () => {

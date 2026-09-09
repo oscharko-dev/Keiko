@@ -518,11 +518,16 @@ request":
 - **The browser reports to the log, body-free.** `POST /api/diagnostics/client` accepts a
   `ClientDiagnosticIngestRequest` (`keiko-contracts`) — a bounded message, `clientTs`, an optional
   SSE `readyState`, a closed `kind`, and an optional `correlationId` that the server re-validates
-  with `isValidCorrelationId` and drops otherwise — and writes `client.diagnostic` with the message
+  with `isValidCorrelationId` — and writes `client.diagnostic` with the message
   redacted into `clientNote` (never under a `message` key) behind a process-wide token bucket
   (reusing the editor's inline-completion limiter, 60 s window) that logs one
   `client.diagnostic.rate-limited` line per window carrying the count of further drops it
   suppressed, and answers `204` whether a report was kept or dropped.
+  A valid original request correlation takes precedence. Reports without one, including reports
+  whose supplied id fails validation, use the validated ingest request correlation; internal
+  callers without either use `UNKNOWN_CORRELATION_ID`. Rate-limit notices use the ingest request
+  correlation. This keeps message-only browser notices reconstructable without inventing an
+  original request or admitting a malformed client id.
   The route's body reader returns a module-tagged outcome, not a duck-typed `RouteResult`, so a
   client body shaped like `{status, body}` can never be reflected as the route's own response. On the
   browser side the existing `reportClientDiagnostic` sink fans out to the console and to this route

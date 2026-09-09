@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { Readable } from "node:stream";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +19,10 @@ import {
 } from "./gateway-readiness.js";
 import type { RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
+import {
+  QUALIFICATION_SPEND_BUDGET_USD_ENV,
+  QUALIFICATION_SPEND_LEDGER_PATH_ENV,
+} from "./gateway-spend-budget.js";
 
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -73,12 +78,13 @@ function depsWith(
   config: GatewayConfig | undefined,
   fetchImpl: typeof fetch = vi.fn(),
   diagnostics?: ServerDiagnosticSink,
+  env: Readonly<Record<string, string | undefined>> = {},
 ): UiHandlerDeps {
   return {
     config,
     configPresent: config !== undefined,
     evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
-    env: {},
+    env,
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
@@ -182,6 +188,174 @@ afterEach(() => {
 });
 
 describe("gateway readiness route", () => {
+  it("reserves the shared spend ceiling before chat probe dispatch", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-readiness-budget-"));
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const base = gatewayConfig();
+    const config: GatewayConfig = {
+      ...base,
+      capabilities: base.capabilities?.map((capability) => ({
+        ...capability,
+        ...(capability.kind === "chat" ? { maxOutputTokens: 20 } : {}),
+        pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+      })),
+    };
+    const deps = depsWith(config, fetchImpl, undefined, {
+      [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0",
+      [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.json"),
+    });
+    try {
+      const report = await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
+      if ("status" in report) throw new Error("expected readiness report");
+      expect(report.probes.map(({ name, status }) => [name, status])).toEqual([["chat", "failed"]]);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      deps.store.close();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reserves the shared spend ceiling before embedding probe dispatch", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-embedding-probe-budget-"));
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [{ message: { role: "assistant", content: "OK" } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }),
+      ),
+    ) as typeof fetch;
+    const base = gatewayConfig();
+    const config: GatewayConfig = {
+      ...base,
+      capabilities: base.capabilities?.map((capability) => ({
+        ...capability,
+        ...(capability.kind === "chat" ? { maxOutputTokens: 20 } : {}),
+        pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+      })),
+    };
+    const deps = depsWith(config, fetchImpl, undefined, {
+      [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0.008",
+      [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.json"),
+    });
+    try {
+      const report = await runGatewayReadiness(
+        { options: { probes: ["chat", "embedding"] } },
+        deps,
+      );
+      if ("status" in report) throw new Error("expected readiness report");
+      expect(report.probes.map(({ name, status }) => [name, status])).toEqual([
+        ["chat", "passed"],
+        ["embedding", "failed"],
+      ]);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(requestBodyAt(fetchImpl, 0).max_tokens).toBe(20);
+    } finally {
+      deps.store.close();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records a failed tool probe when the preceding chat consumes the remaining ceiling", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-tool-runner-budget-"));
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK"))) as typeof fetch;
+    const base = gatewayConfig();
+    const config: GatewayConfig = {
+      ...base,
+      capabilities: base.capabilities?.map((capability) =>
+        capability.kind === "chat"
+          ? {
+              ...capability,
+              contextWindow: 100,
+              maxOutputTokens: 20,
+              pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+            }
+          : capability,
+      ),
+    };
+    const recordVerification = vi.fn();
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl, undefined, {
+        [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0.00012",
+        [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.json"),
+      }),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        generation: () => 3,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability: () => false,
+      },
+    };
+    try {
+      const report = await runGatewayReadiness(
+        { options: { probes: ["chat", "tool_calling"] } },
+        deps,
+      );
+      if ("status" in report) throw new Error("expected readiness report");
+      expect(report.probes.map(({ name, status }) => [name, status])).toEqual([
+        ["chat", "passed"],
+        ["tool_calling", "failed"],
+      ]);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(recordVerification).toHaveBeenCalledWith("partial", 3);
+    } finally {
+      deps.store.close();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not dispatch a reranker probe after chat consumes the remaining ceiling", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-reranker-runner-budget-"));
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK"))) as typeof fetch;
+    const base = gatewayConfig();
+    const pricedCapability = {
+      ...createDefaultChatCapability("test-chat-model"),
+      contextWindow: 100,
+      maxOutputTokens: 20,
+      pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+    };
+    const config: GatewayConfig = {
+      ...base,
+      capabilities: [
+        pricedCapability,
+        embeddingCapability("text-embedding-3-small"),
+        { ...pricedCapability, id: "qwen3-reranker" },
+      ],
+      reranker: {
+        modelId: "qwen3-reranker",
+        baseUrl: "https://reranker.internal/v1",
+        apiKey: "reranker-secret",
+        timeoutMs: 10_000,
+      },
+    };
+    const deps = depsWith(config, fetchImpl, undefined, {
+      [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0.00012",
+      [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.json"),
+    });
+    try {
+      const report = await runGatewayReadiness({ options: { probes: ["chat", "reranker"] } }, deps);
+      if ("status" in report) throw new Error("expected readiness report");
+      expect(report.probes.map(({ name, status }) => [name, status])).toEqual([
+        ["chat", "passed"],
+        ["reranker", "failed"],
+      ]);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    } finally {
+      deps.store.close();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps credentialed chat completion transport inside the model gateway package", () => {
     const source = readFileSync(join(CURRENT_DIR, "gateway-readiness.ts"), "utf8");
 

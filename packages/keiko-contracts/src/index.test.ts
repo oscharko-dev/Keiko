@@ -849,6 +849,11 @@ describe("keiko-contracts package surface", () => {
     expect(mod.isCodeTaskIsoInstant("2026-07-16T12:00:00Z")).toBe(true);
     expect(mod.isCodeTaskRepoRelativePath("packages/keiko-contracts/src/index.ts")).toBe(true);
     expect(mod.isCodeTaskContentFreeNote("bounded note")).toBe(true);
+    expect(mod.CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND).toBe(
+      "code-task-qualification-flow-evidence",
+    );
+    expect(mod.CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS).toHaveLength(10);
+    expect(mod.validateCodeTaskQualificationFlowArtifact({}).ok).toBe(false);
 
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<import("./index.js").CodeTaskAcceptanceContributionV1>();
@@ -867,6 +872,17 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").CodeTaskGitTreeSha>();
     pin<import("./index.js").CodeTaskSha256Digest>();
     pin<import("./index.js").CodeTaskIsoInstant>();
+    pin<import("./index.js").CodeTaskQualificationAuthorityObservationV1>();
+    pin<import("./index.js").CodeTaskQualificationFlowArtifactV1>();
+    pin<import("./index.js").CodeTaskQualificationFlowBindingV1>();
+    pin<import("./index.js").CodeTaskQualificationFlowStageEvidenceV1>();
+    pin<import("./index.js").CodeTaskQualificationFlowSpendV1>();
+    pin<import("./index.js").CodeTaskQualificationFlowTransition>();
+    pin<import("./index.js").CodeTaskQualificationFlowV1>();
+    pin<import("./index.js").CodeTaskQualificationRequiredChecksV1>();
+    pin<import("./index.js").CodeTaskQualificationRubricReview>();
+    pin<import("./index.js").CodeTaskQualificationRubricReviewV1>();
+    pin<import("./index.js").CodeTaskQualificationStageReceiptV1>();
   });
 
   it("code-task governance contracts remain available at their declared public surface (#2386)", async () => {
@@ -927,7 +943,9 @@ describe("keiko-contracts package surface", () => {
     expect(GIT_DELIVERY_PROVIDER_SCHEMA_VERSION).toBe("1");
 
     // Count assertions are intentional surface pins; bump deliberately when #472+ extends the surface.
-    expect(GIT_DELIVERY_ACTION_KINDS).toHaveLength(11);
+    // #3389 (epic #3384 correction 7): 11 -> 13 with "pr-description-apply" (#3399) and
+    // "pr-mark-ready"; the same pin lives in git-delivery.test.ts and moves together with this one.
+    expect(GIT_DELIVERY_ACTION_KINDS).toHaveLength(13);
     expect(GIT_DELIVERY_RISK_CLASSES).toHaveLength(4);
     // Includes the server-owned continuity guard's typed authority-denied audit outcome.
     expect(GIT_DELIVERY_BLOCK_REASONS).toHaveLength(9);

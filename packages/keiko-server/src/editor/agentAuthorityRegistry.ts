@@ -1,4 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type {
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchConnectorScope,
@@ -81,6 +82,13 @@ interface AuthorityRecord {
   readonly runtimeEnvelope?: CodingWorkbenchRuntimeAuthorityEnvelope | undefined;
   readonly runtimeDelegations?: Map<string, RuntimeDelegationReservation> | undefined;
   readonly runtimeIdempotencyKeys?: Set<string> | undefined;
+  /**
+   * The issue-binding fingerprint the run was minted with (epic #3384 correction 8: the execution
+   * binding never carries `issueBinding`, so this is the registry's own bookkeeping copy — never
+   * projected to the envelope, a snapshot, or evidence — used only to detect a mid-run rebind to a
+   * different issue in `runtimeDrift`).
+   */
+  readonly runtimeIssueBindingDigest?: string | undefined;
   revoked: boolean;
 }
 
@@ -113,7 +121,7 @@ export function editorAgentWorkspaceRootDigest(workspaceRoot: string): string {
 export function editorAgentAuthorityEnvelopeDigest(
   envelope: CodingWorkbenchAuthorityEnvelope,
 ): string {
-  return createHash("sha256").update(canonicalJson(envelope), "utf8").digest("hex");
+  return sha256Hex(canonicalise(envelope));
 }
 
 export function editorAgentAuthorizedConnectorScopes(
@@ -131,19 +139,6 @@ export function editorAgentAuthorizedConnectorScopes(
   const networkScopes = new Set(envelope.networkPolicy.connectorScopes);
   const authorized = envelope.connectorScopes.filter((scope) => networkScopes.has(scope));
   return authorized.length === 0 ? undefined : authorized;
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right));
-    return `{${entries
-      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }
 
 function expired(nowIso: string, expiresAt: string): boolean {
@@ -213,6 +208,7 @@ export class EditorAgentAuthorityRegistry {
     envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
     deploymentCeiling: CodingWorkbenchMode,
     nowIso: string,
+    issueBindingDigest?: string,
   ): EditorAgentAuthorityRegistration {
     if (!validateCodingWorkbenchRuntimeAuthorityEnvelope(envelope).ok) {
       return { ok: false, reason: "invalid" };
@@ -223,7 +219,7 @@ export class EditorAgentAuthorityRegistry {
     const record = this.records.get(key);
     if (record === undefined) return { ok: false, reason: "invalid" };
     if (record.runtimeEnvelope !== undefined) {
-      return canonicalJson(record.runtimeEnvelope) === canonicalJson(envelope)
+      return canonicalise(record.runtimeEnvelope) === canonicalise(envelope)
         ? registration
         : { ok: false, reason: "invalid" };
     }
@@ -232,6 +228,7 @@ export class EditorAgentAuthorityRegistry {
       runtimeEnvelope: envelope,
       runtimeDelegations: new Map(),
       runtimeIdempotencyKeys: new Set(),
+      runtimeIssueBindingDigest: issueBindingDigest,
     });
     return registration;
   }
@@ -279,7 +276,10 @@ export class EditorAgentAuthorityRegistry {
     if (!resolved.ok) return resolved;
     const envelope = resolved.record.runtimeEnvelope;
     if (envelope === undefined) return { ok: false, reason: "authority-resolution-failed" };
-    const drift = runtimeDrift(runtimeFacts(envelope), liveFacts);
+    const drift = runtimeDrift(
+      runtimeFacts(envelope, resolved.record.runtimeIssueBindingDigest),
+      liveFacts,
+    );
     return drift === undefined ? { ok: true, envelope } : { ok: false, reason: drift };
   }
 
@@ -299,6 +299,38 @@ export class EditorAgentAuthorityRegistry {
     return reserveUsage(resolved.record, { toolCalls: 0, patchBytes: 0, promptTokens })
       ? { ok: true }
       : { ok: false, reason: "authority-budget-exceeded" };
+  }
+
+  /**
+   * Reconciles a prompt-token reservation already booked by {@link reserveRuntimePromptTokens}
+   * against the provider's actual reported usage for that same call, once known. A tool-calling
+   * client resends its whole growing history on every turn, so charging the full pre-call
+   * estimate on every call and never correcting it exhausts the budget in a fraction of the calls
+   * a real run needs (live-journey-readiness-2). Settlement never re-runs budget admission — the
+   * call already dispatched — and never fails on its own account: a run that already spent real
+   * tokens must not be retroactively rejected by this post-hoc correction. The estimate is
+   * subtracted and the actual value added in one combined update, never two separate mutations, so
+   * a reservation from a concurrent call on the same run cannot observe an intermediate negative
+   * or doubled value; the floor at zero guards the same case if a settlement ever raced ahead of
+   * its matching reservation.
+   */
+  public settleRuntimePromptTokens(
+    reference: EditorAgentGovernedAuthorityReference,
+    reservedPromptTokens: number,
+    actualPromptTokens: number,
+    nowIso: string,
+  ):
+    | { readonly ok: true }
+    | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
+    if (!validUsageCount(reservedPromptTokens) || !validUsageCount(actualPromptTokens)) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    const resolved = this.resolveRetainedRuntime(reference, nowIso);
+    if (!resolved.ok) return resolved;
+    if (!settlePromptTokens(resolved.record, reservedPromptTokens, actualPromptTokens)) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    return { ok: true };
   }
 
   /** Revalidates retained authority at a pause/resume boundary without consuming budget. */
@@ -585,7 +617,10 @@ function admitRuntimeDelegation(
     record.runtimeIdempotencyKeys.has(idempotencyKey)
   )
     return { ok: false, reason: "authority-replayed" };
-  const drift = runtimeDrift(runtimeFacts(record.runtimeEnvelope), liveFacts);
+  const drift = runtimeDrift(
+    runtimeFacts(record.runtimeEnvelope, record.runtimeIssueBindingDigest),
+    liveFacts,
+  );
   if (drift !== undefined) return { ok: false, reason: drift };
   if (!reserveUsage(record, usage)) return { ok: false, reason: "authority-budget-exceeded" };
   record.runtimeDelegations.set(delegationId, {
@@ -617,12 +652,35 @@ function reserveUsage(
   return true;
 }
 
+/**
+ * See {@link EditorAgentAuthorityRegistry.settleRuntimePromptTokens} for the reconciliation.
+ * Returns false — and books nothing — when `reservedPromptTokens` exceeds what is currently
+ * booked on the record. There is no per-call reservation identity to bind to (the ledger holds
+ * only one running total per run), so this is the strongest check available: a settlement can
+ * never claim to refund more than the record actually has outstanding, which also rejects a
+ * replayed settlement once its first application has already reduced the booked total below the
+ * replayed `reservedPromptTokens` (reviewer 3941836283).
+ */
+function settlePromptTokens(
+  record: AuthorityRecord,
+  reservedPromptTokens: number,
+  actualPromptTokens: number,
+): boolean {
+  if (reservedPromptTokens > record.usage.promptTokens) return false;
+  record.usage.promptTokens = Math.max(
+    0,
+    record.usage.promptTokens - reservedPromptTokens + actualPromptTokens,
+  );
+  return true;
+}
+
 function validUsageCount(value: number): boolean {
   return Number.isSafeInteger(value) && value >= 0;
 }
 
 function runtimeFacts(
   envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+  issueBindingDigest?: string,
 ): CodingWorkbenchRuntimeAuthorityFacts {
   return {
     binding: envelope.binding,
@@ -630,14 +688,13 @@ function runtimeFacts(
     connectorScopes: envelope.authority.connectorScopes,
     runtimeSource: envelope.authority.runtimeSource,
     modelSource: envelope.authority.modelProfile.source,
-    budgetDigest: createHash("sha256")
-      .update(canonicalJson(envelope.authority.budget), "utf8")
-      .digest("hex"),
+    budgetDigest: sha256Hex(canonicalise(envelope.authority.budget)),
     commandPolicyDigest: digestCanonical(envelope.authority.commandPolicy),
     networkPolicyDigest: digestCanonical(envelope.authority.networkPolicy),
     gatesDigest: digestCanonical(envelope.authority.gates),
     branchConstraintsDigest: digestCanonical(envelope.authority.branch),
     modelProfileDigest: digestCanonical(envelope.authority.modelProfile),
+    issueBindingDigest,
   };
 }
 
@@ -648,8 +705,8 @@ function runtimeDrift(
   const bindingDrift = runtimeBindingDrift(expected, actual);
   if (bindingDrift !== undefined) return bindingDrift;
   if (
-    canonicalJson(expected.actionClasses) !== canonicalJson(actual.actionClasses) ||
-    canonicalJson(expected.connectorScopes) !== canonicalJson(actual.connectorScopes)
+    canonicalise(expected.actionClasses) !== canonicalise(actual.actionClasses) ||
+    canonicalise(expected.connectorScopes) !== canonicalise(actual.connectorScopes)
   )
     return "scope-drift";
   if (expected.budgetDigest !== actual.budgetDigest) return "budget-drift";
@@ -674,14 +731,15 @@ function policyFactsDrifted(
 }
 
 function digestCanonical(value: unknown): string {
-  return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
+  return sha256Hex(canonicalise(value));
 }
 
 function runtimeBindingDrift(
   expected: CodingWorkbenchRuntimeAuthorityFacts,
   actual: CodingWorkbenchRuntimeAuthorityFacts,
 ): CodingWorkbenchRuntimeFailureCode | undefined {
-  if (expected.binding.taskId !== actual.binding.taskId) return "task-drift";
+  if (expected.binding.taskId !== actual.binding.taskId || issueBindingDiffers(expected, actual))
+    return "task-drift";
   if (
     expected.binding.workspaceId !== actual.binding.workspaceId ||
     expected.binding.workspaceRootDigest !== actual.binding.workspaceRootDigest
@@ -696,6 +754,17 @@ function runtimeBindingDrift(
     expected.binding.branchHeadDigest !== actual.binding.branchHeadDigest
     ? "branch-drift"
     : undefined;
+}
+
+function issueBindingDiffers(
+  expected: CodingWorkbenchRuntimeAuthorityFacts,
+  actual: CodingWorkbenchRuntimeAuthorityFacts,
+): boolean {
+  // The execution binding never carries `issueBinding` (epic #3384 correction 8), so drift is
+  // detected off the content-free fingerprint the registry retained at mint time
+  // (`AuthorityRecord.runtimeIssueBindingDigest`, threaded through `runtimeFacts`) against the
+  // live fingerprint the caller reports now — never off the binding object itself.
+  return (expected.issueBindingDigest ?? null) !== (actual.issueBindingDigest ?? null);
 }
 
 function localBridgeAuthorityEnvelope(

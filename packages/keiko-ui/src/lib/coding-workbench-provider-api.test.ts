@@ -134,6 +134,23 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
     });
   });
 
+  // #3390 closeout: the readiness dimension appended for a profile whose derived
+  // `maxPromptTokens` cannot survive one real gateway call (epic #3384).
+  it("accepts the appended model-context-window-insufficient reason", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        status: "unavailable",
+        reason: "model-context-window-insufficient",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).resolves.toMatchObject({
+      status: "unavailable",
+      reason: "model-context-window-insufficient",
+    });
+  });
+
   it("rejects a non-object top-level response so the isObjectRecord guard fails closed", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse("not an object")));
 

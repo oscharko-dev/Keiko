@@ -9,11 +9,7 @@ import { describe, expect, it } from "vitest";
 import { makeFakeChild, makeWorkspace, recordingSpawn } from "./_support.js";
 import { createNodeGitPullRequestAdapter } from "./git-pr-node.js";
 import type { HomeProvider, SpawnFn } from "./exec.js";
-import type {
-  GitPrCreateExecRequest,
-  GitPrUpdateExecRequest,
-  GitPullRequestAdapter,
-} from "./git-pr-gateway.js";
+import type { GitPrCreateExecRequest, GitPrUpdateExecRequest } from "./git-pr-gateway.js";
 
 const FAKE_HOME: HomeProvider = { make: () => "/tmp/keiko-fake-home", cleanup: () => undefined };
 
@@ -54,11 +50,14 @@ function scriptedSpawn(steps: readonly SpawnStep[]): ScriptedSpawn {
   return { fn, calls: () => calls };
 }
 
-function makeAdapter(spawn: ScriptedSpawn): GitPullRequestAdapter {
+function makeAdapter(
+  spawn: ScriptedSpawn,
+  processEnv: NodeJS.ProcessEnv = { PATH: "/usr/bin" },
+): ReturnType<typeof createNodeGitPullRequestAdapter> {
   const { info } = makeWorkspace();
   return createNodeGitPullRequestAdapter({
     workspace: info,
-    processEnv: { PATH: "/usr/bin" },
+    processEnv,
     now: () => 0,
     spawn: spawn.fn,
     home: FAKE_HOME,
@@ -73,28 +72,410 @@ const CREATE: GitPrCreateExecRequest = {
   title: "feat: governed pr",
   body: "body",
   isDraft: false,
+  verifiedCommitSha: "a".repeat(40),
 };
+
+// #3394 review, finding 2: `createPullRequest`/`updatePullRequest` now re-read the branch's live head
+// (`readBranchHead`) BEFORE dispatching and, on a successful dispatch, once more AFTER — a scripted
+// spawn sequence for either method must supply this response as its first step (and, when the
+// dispatch itself is expected to succeed, once more as its last step). This builds the exact 3-key
+// `{ref,type,sha}` shape `parseGitPrBranchHead` requires so the check reports a match.
+function branchHeadStep(headBranchName: string, sha: string): SpawnStep {
+  return { stdout: JSON.stringify({ ref: `refs/heads/${headBranchName}`, type: "commit", sha }) };
+}
+
+const MATCHING_HEAD = branchHeadStep(CREATE.headBranchName, CREATE.verifiedCommitSha);
+
+const PR_IDENTITY = {
+  number: 1499,
+  externalId: "PR_kwDO123",
+  url: "https://github.com/oscharko-dev/Keiko/pull/1499",
+  repository: "oscharko-dev/Keiko",
+  headRepository: "oscharko-dev/Keiko",
+  headRef: CREATE.headBranchName,
+  headSha: "a".repeat(40),
+  baseRef: "dev",
+  baseSha: "b".repeat(40),
+  state: "open",
+  isDraft: true,
+} as const;
+
+describe("node PR adapter — canonical reconciliation reads", () => {
+  it("reads the complete body-free provider identity by number", async () => {
+    const spawn = scriptedSpawn([{ stdout: JSON.stringify(PR_IDENTITY) }]);
+
+    const result = await makeAdapter(spawn).readPullRequest({
+      ownerAndRepo: CREATE.ownerAndRepo,
+      prExternalId: "1499",
+    });
+
+    expect(result).toEqual({ ok: true, value: PR_IDENTITY });
+    expect(spawn.calls()[0]?.args).toContain("/repos/oscharko-dev/Keiko/pulls/1499");
+    expect(spawn.calls()[0]?.args).toContain("github.com");
+  });
+
+  // Owner audit finding b3-11: `state=all` with `per_page=2` and the API's default `created desc`
+  // ordering can push an older open PR off the page when a closed PR was created more recently,
+  // so the "ambiguous pull request" fail-closed check in `resolvePullRequestByHead` (which filters
+  // this result to `state === "open"`) would see one open PR where two actually exist. Restricting
+  // the query itself to `state=open` means every slot returned is one the caller's open-filter can
+  // count.
+  it("reads open head matches, scoped server-side, without pagination or body fields", async () => {
+    const spawn = scriptedSpawn([{ stdout: JSON.stringify([PR_IDENTITY]) }]);
+
+    const result = await makeAdapter(spawn).findPullRequestsByHead({
+      ownerAndRepo: CREATE.ownerAndRepo,
+      headBranchName: CREATE.headBranchName,
+    });
+
+    expect(result).toEqual({ ok: true, value: [PR_IDENTITY] });
+    const args = spawn.calls()[0]?.args ?? [];
+    expect(args.some((arg) => arg.includes("state=open") && arg.includes("per_page=2"))).toBe(true);
+    expect(args.some((arg) => arg.includes("state=all"))).toBe(false);
+    expect(args).not.toContain("--paginate");
+    expect(args.at(-1)).not.toMatch(/title|body|user|email/u);
+  });
+
+  it.each([
+    { number: 0 },
+    { number: 1.1 },
+    { number: 10 ** 10 },
+    { number: 1500 },
+    { externalId: "" },
+    { externalId: "x".repeat(256) },
+    { externalId: "not a node id" },
+    { url: "https://github.com.evil.test/oscharko-dev/Keiko/pull/1499" },
+    { url: "https://github.com/oscharko-dev/Keiko/pull/1499?token=value" },
+    { repository: "elsewhere/project" },
+    { headRepository: null },
+    { headRepository: "owner/../user" },
+    { headRef: "HEAD^" },
+    { baseRef: "refs/tags/dev" },
+    { headSha: "a".repeat(7) },
+    { baseSha: "b".repeat(41) },
+    { state: "merged" },
+    { isDraft: "true" },
+    { body: "unexpected body must not leave the adapter" },
+  ])("refuses an invalid or mismatched remote identity %j", async (overrides) => {
+    const spawn = scriptedSpawn([{ stdout: JSON.stringify({ ...PR_IDENTITY, ...overrides }) }]);
+    const result = await makeAdapter(spawn).readPullRequest({
+      ownerAndRepo: CREATE.ownerAndRepo,
+      prExternalId: "1499",
+    });
+    expect(result).toEqual({ ok: false, reason: "invalid-response" });
+  });
+
+  it.each([
+    { value: null },
+    { value: {} },
+    { value: [PR_IDENTITY, PR_IDENTITY, PR_IDENTITY] },
+    { value: [{ ...PR_IDENTITY, headRef: "other" }] },
+  ])("refuses malformed, over-limit or unrelated head results %j", async ({ value }) => {
+    const spawn = scriptedSpawn([{ stdout: JSON.stringify(value) }]);
+    const result = await makeAdapter(spawn).findPullRequestsByHead({
+      ownerAndRepo: CREATE.ownerAndRepo,
+      headBranchName: CREATE.headBranchName,
+    });
+    expect(result).toEqual({ ok: false, reason: "invalid-response" });
+  });
+
+  it.each([
+    { value: [] },
+    {
+      value: [
+        PR_IDENTITY,
+        { ...PR_IDENTITY, number: 1500, url: PR_IDENTITY.url.replace("1499", "1500") },
+      ],
+    },
+  ])("preserves zero matches and ambiguous multiple matches %j", async ({ value }) => {
+    const spawn = scriptedSpawn([{ stdout: JSON.stringify(value) }]);
+    const result = await makeAdapter(spawn).findPullRequestsByHead({
+      ownerAndRepo: CREATE.ownerAndRepo,
+      headBranchName: CREATE.headBranchName,
+    });
+    expect(result).toEqual({ ok: true, value });
+  });
+
+  it("re-reads a remote branch as its exact commit SHA", async () => {
+    const value = {
+      ref: `refs/heads/${CREATE.headBranchName}`,
+      sha: PR_IDENTITY.headSha,
+      type: "commit",
+    };
+    const spawn = scriptedSpawn([{ stdout: JSON.stringify(value) }]);
+    const result = await makeAdapter(spawn).readBranchHead({
+      ownerAndRepo: CREATE.ownerAndRepo,
+      headBranchName: CREATE.headBranchName,
+    });
+    expect(result).toEqual({ ok: true, value: PR_IDENTITY.headSha });
+    expect(spawn.calls()[0]?.args).toContain(
+      "/repos/oscharko-dev/Keiko/git/ref/heads/claude%2Fissue-477-x",
+    );
+  });
+
+  it("preserves typed branch facts that also occur in noncredential parent context", async () => {
+    const spawn = scriptedSpawn([
+      {
+        stdout: JSON.stringify({
+          ref: `refs/heads/${CREATE.headBranchName}`,
+          sha: PR_IDENTITY.headSha,
+          type: "commit",
+        }),
+      },
+    ]);
+    const result = await makeAdapter(spawn, {
+      PATH: "/usr/bin",
+      GITHUB_HEAD_REF: CREATE.headBranchName,
+      GITHUB_SHA: PR_IDENTITY.headSha,
+      GITHUB_REPOSITORY: CREATE.ownerAndRepo,
+    }).readBranchHead({
+      ownerAndRepo: CREATE.ownerAndRepo,
+      headBranchName: CREATE.headBranchName,
+    });
+    expect(result).toEqual({ ok: true, value: PR_IDENTITY.headSha });
+  });
+
+  it("still rejects a credential value reflected as a provider branch SHA", async () => {
+    const spawn = scriptedSpawn([
+      {
+        stdout: JSON.stringify({
+          ref: `refs/heads/${CREATE.headBranchName}`,
+          sha: PR_IDENTITY.headSha,
+          type: "commit",
+        }),
+      },
+    ]);
+    const result = await makeAdapter(spawn, {
+      PATH: "/usr/bin",
+      GH_TOKEN: PR_IDENTITY.headSha,
+    }).readBranchHead({
+      ownerAndRepo: CREATE.ownerAndRepo,
+      headBranchName: CREATE.headBranchName,
+    });
+    expect(result).toEqual({ ok: false, reason: "invalid-response" });
+    expect(JSON.stringify(result)).not.toContain(PR_IDENTITY.headSha);
+  });
+
+  it("rejects typed branch metadata when redaction changed only an ignored field", async () => {
+    const credential = "provider-secret-ignored-field";
+    const spawn = scriptedSpawn([
+      {
+        stdout: JSON.stringify({
+          ref: `refs/heads/${CREATE.headBranchName}`,
+          sha: PR_IDENTITY.headSha,
+          type: "commit",
+          ignored: credential,
+        }),
+      },
+    ]);
+    const result = await makeAdapter(spawn, {
+      PATH: "/usr/bin",
+      CUSTOM_API_KEY: credential,
+    }).readBranchHead({
+      ownerAndRepo: CREATE.ownerAndRepo,
+      headBranchName: CREATE.headBranchName,
+    });
+    expect(result).toEqual({ ok: false, reason: "invalid-response" });
+  });
+
+  it.each([
+    { ref: "refs/tags/other", sha: PR_IDENTITY.headSha, type: "commit" },
+    { ref: `refs/heads/${CREATE.headBranchName}`, sha: PR_IDENTITY.headSha, type: "tag" },
+    { ref: `refs/heads/${CREATE.headBranchName}`, sha: "HEAD", type: "commit" },
+  ])("refuses a remote reference that is not the requested commit branch %j", async (value) => {
+    const spawn = scriptedSpawn([{ stdout: JSON.stringify(value) }]);
+    const result = await makeAdapter(spawn).readBranchHead({
+      ownerAndRepo: CREATE.ownerAndRepo,
+      headBranchName: CREATE.headBranchName,
+    });
+    expect(result).toEqual({ ok: false, reason: "invalid-response" });
+  });
+
+  it("classifies remote absence without admitting the provider error body", async () => {
+    const spawn = scriptedSpawn([{ stderr: "gh: Not Found (HTTP 404)", exit: 1 }]);
+    const result = await makeAdapter(spawn).readBranchHead({
+      ownerAndRepo: CREATE.ownerAndRepo,
+      headBranchName: CREATE.headBranchName,
+    });
+    expect(result).toEqual({ ok: false, reason: "not-found" });
+  });
+
+  it("rejects invalid operands before spawning", async () => {
+    const spawn = scriptedSpawn([]);
+    const adapter = makeAdapter(spawn);
+    expect(
+      await adapter.findPullRequestsByHead({ ownerAndRepo: "owner/..", headBranchName: "main" }),
+    ).toEqual({ ok: false, reason: "invalid-response" });
+    expect(
+      await adapter.readBranchHead({
+        ownerAndRepo: CREATE.ownerAndRepo,
+        headBranchName: "refs/tags/a",
+      }),
+    ).toEqual({ ok: false, reason: "invalid-response" });
+    expect(
+      await adapter.readPullRequest({ ownerAndRepo: CREATE.ownerAndRepo, prExternalId: "1/merge" }),
+    ).toEqual({ ok: false, reason: "invalid-response" });
+    expect(spawn.calls()).toEqual([]);
+  });
+});
+
+const UPDATE_HEAD_BRANCH = "claude/issue-477-x";
+const UPDATE_VERIFIED_SHA = "a".repeat(40);
+const UPDATE_MATCHING_HEAD = branchHeadStep(UPDATE_HEAD_BRANCH, UPDATE_VERIFIED_SHA);
 
 function updateReq(over: Partial<GitPrUpdateExecRequest> = {}): GitPrUpdateExecRequest {
   return {
     ownerAndRepo: "oscharko-dev/Keiko",
     prExternalId: "1499",
+    headBranchName: UPDATE_HEAD_BRANCH,
     baseBranchName: "dev",
     title: "feat: updated",
     body: "updated body",
     convertToDraft: false,
     convertFromDraft: false,
+    verifiedCommitSha: UPDATE_VERIFIED_SHA,
     ...over,
   };
 }
 
 describe("node PR adapter — createPullRequest", () => {
+  it("creates an issue-bound PR on canonical GitHub and returns its complete identity", async () => {
+    const spawn = scriptedSpawn([
+      MATCHING_HEAD,
+      { stdout: JSON.stringify(PR_IDENTITY) },
+      MATCHING_HEAD,
+    ]);
+    const result = await makeAdapter(spawn).createPullRequest({
+      ...CREATE,
+      isDraft: true,
+      canonicalGitHubIdentity: true,
+    });
+    expect(result).toMatchObject({
+      outcome: "succeeded",
+      createdPrExternalId: "1499",
+      createdPrIdentity: PR_IDENTITY,
+    });
+    // The pre-check (index 0) runs first; the actual create dispatch is the SECOND spawn.
+    expect(spawn.calls()[1]?.args).toContain("--hostname");
+    expect(spawn.calls()[1]?.args).toContain("github.com");
+    expect(spawn.calls()).toHaveLength(3);
+  });
+  it("returns the created identity when an ordinary parent env value overlaps the projection", async () => {
+    // #3390, rehearsal run-19: the lane exported the fixture's repository slug, the default output
+    // scrub replaced every occurrence of it in the provider's response, and the create failed as
+    // `shape-invalid` although the pull request existed. The response is typed provider data and
+    // runs under the same scrub as every other machine-parsed pull request fact (ADR-0006).
+    const spawn = scriptedSpawn([
+      MATCHING_HEAD,
+      { stdout: JSON.stringify(PR_IDENTITY) },
+      MATCHING_HEAD,
+    ]);
+    const result = await makeAdapter(spawn, {
+      PATH: "/usr/bin",
+      KEIKO_QUALIFICATION_REHEARSAL_REPOSITORY: PR_IDENTITY.repository,
+    }).createPullRequest({ ...CREATE, isDraft: true, canonicalGitHubIdentity: true });
+    expect(result).toMatchObject({
+      outcome: "succeeded",
+      createdPrExternalId: "1499",
+      createdPrIdentity: PR_IDENTITY,
+    });
+  });
+  it("names a create response that carried a credential as output-redacted and admits nothing", async () => {
+    const credential = "gho_create_response_leaked_token";
+    // The dispatch itself fails (identity-unparsable), so no post-check spawn ever runs.
+    const spawn = scriptedSpawn([
+      MATCHING_HEAD,
+      { stdout: JSON.stringify({ ...PR_IDENTITY, url: `${PR_IDENTITY.url}?token=${credential}` }) },
+    ]);
+    const result = await makeAdapter(spawn, {
+      PATH: "/usr/bin",
+      GH_TOKEN: credential,
+    }).createPullRequest({ ...CREATE, isDraft: true, canonicalGitHubIdentity: true });
+    expect(result).toMatchObject({
+      outcome: "failed",
+      errorCode: "internal-error",
+      failureClass: "identity-unparsable",
+      identityIssue: "output-redacted",
+    });
+    expect(result.createdPrIdentity).toBeUndefined();
+    expect(result.createdPrExternalId).toBeUndefined();
+  });
+  it.each([
+    ["legacy number", 1499, "shape-invalid"],
+    ["unknown payload field", { ...PR_IDENTITY, body: "untrusted content" }, "shape-invalid"],
+    [
+      "wrong repository",
+      {
+        ...PR_IDENTITY,
+        repository: "elsewhere/repo",
+        url: "https://github.com/elsewhere/repo/pull/1499",
+      },
+      "repository-mismatch",
+    ],
+    [
+      "fork head",
+      { ...PR_IDENTITY, headRepository: "elsewhere/Keiko" },
+      "head-repository-mismatch",
+    ],
+    ["wrong head", { ...PR_IDENTITY, headRef: "different-head" }, "head-ref-mismatch"],
+    ["wrong base", { ...PR_IDENTITY, baseRef: "main" }, "base-ref-mismatch"],
+    ["ready instead of draft", { ...PR_IDENTITY, isDraft: false }, "draft-mismatch"],
+    ["closed PR", { ...PR_IDENTITY, state: "closed" }, "state-not-open"],
+    ["abbreviated SHA", { ...PR_IDENTITY, headSha: "aaaaaaa" }, "shape-invalid"],
+  ])("does not claim canonical create success for %s", async (_name, value, issue) => {
+    const spawn = scriptedSpawn([MATCHING_HEAD, { stdout: JSON.stringify(value) }]);
+    const result = await makeAdapter(spawn).createPullRequest({
+      ...CREATE,
+      isDraft: true,
+      canonicalGitHubIdentity: true,
+    });
+    // #3390: the failing step is named as a closed word (rehearsal run-15 could not be diagnosed
+    // from a bare `internal-error` while the provider had created the pull request).
+    expect(result).toMatchObject({
+      outcome: "failed",
+      errorCode: "internal-error",
+      failureClass: "identity-unparsable",
+      identityIssue: issue,
+    });
+    expect(result.createdPrIdentity).toBeUndefined();
+    expect(result.createdPrExternalId).toBeUndefined();
+  });
+
+  it("names an unparsable create response body as json-invalid", async () => {
+    const spawn = scriptedSpawn([MATCHING_HEAD, { stdout: "not json at all\n" }]);
+    const result = await makeAdapter(spawn).createPullRequest({
+      ...CREATE,
+      isDraft: true,
+      canonicalGitHubIdentity: true,
+    });
+    expect(result).toMatchObject({
+      outcome: "failed",
+      errorCode: "internal-error",
+      failureClass: "identity-unparsable",
+      identityIssue: "json-invalid",
+    });
+  });
+
+  it("binds response validation to the request captured before asynchronous execution", async () => {
+    const request = { ...CREATE, isDraft: true, canonicalGitHubIdentity: true as const };
+    const spawn = scriptedSpawn([
+      MATCHING_HEAD,
+      { stdout: JSON.stringify(PR_IDENTITY) },
+      MATCHING_HEAD,
+    ]);
+    const operation = makeAdapter(spawn).createPullRequest(request);
+    request.headBranchName = "changed-during-provider-call";
+    request.isDraft = false;
+    expect(await operation).toMatchObject({ outcome: "succeeded", createdPrIdentity: PR_IDENTITY });
+  });
+
   it("spawns the governed `gh api POST /pulls --jq .number` and returns the provider PR number", async () => {
-    const spawn = scriptedSpawn([{ stdout: "1499\n", exit: 0 }]);
+    const spawn = scriptedSpawn([MATCHING_HEAD, { stdout: "1499\n", exit: 0 }, MATCHING_HEAD]);
     const result = await makeAdapter(spawn).createPullRequest(CREATE);
     expect(result.outcome).toBe("succeeded");
     expect(result.createdPrExternalId).toBe("1499");
-    const call = spawn.calls()[0];
+    // The pre-check (index 0) runs first; the actual create dispatch is the SECOND spawn.
+    const call = spawn.calls()[1];
     expect(call?.command).toBe("gh");
     expect(call?.args.slice(0, 4)).toEqual([
       "api",
@@ -103,10 +484,14 @@ describe("node PR adapter — createPullRequest", () => {
       "/repos/oscharko-dev/Keiko/pulls",
     ]);
     expect(call?.args).toContain("--jq");
+    expect(spawn.calls()).toHaveLength(3);
   });
 
   it("classifies a GitHub permission error from a non-zero exit", async () => {
-    const spawn = scriptedSpawn([{ stderr: "gh: HTTP 403: Resource not accessible", exit: 1 }]);
+    const spawn = scriptedSpawn([
+      MATCHING_HEAD,
+      { stderr: "gh: HTTP 403: Resource not accessible", exit: 1 },
+    ]);
     const result = await makeAdapter(spawn).createPullRequest(CREATE);
     expect(result.outcome).toBe("failed");
     expect(result.rejectionReason).toBe("permission-denied");
@@ -115,6 +500,7 @@ describe("node PR adapter — createPullRequest", () => {
 
   it("classifies a validation error from a non-zero exit", async () => {
     const spawn = scriptedSpawn([
+      MATCHING_HEAD,
       { stderr: "gh: Validation Failed (HTTP 422): no commits between dev and head", exit: 1 },
     ]);
     const result = await makeAdapter(spawn).createPullRequest(CREATE);
@@ -123,7 +509,7 @@ describe("node PR adapter — createPullRequest", () => {
   });
 
   it("maps a thrown spawn to an internal-error failure", async () => {
-    const spawn = scriptedSpawn([{ throwError: true }]);
+    const spawn = scriptedSpawn([MATCHING_HEAD, { throwError: true }]);
     const result = await makeAdapter(spawn).createPullRequest(CREATE);
     expect(result.outcome).toBe("failed");
     expect(result.errorCode).toBe("internal-error");
@@ -136,19 +522,59 @@ describe("node PR adapter — createPullRequest", () => {
       ownerAndRepo: "noslash",
     });
     expect(result.outcome).toBe("failed");
-    expect(result.errorCode).toBe("internal-error");
+    // #3394 review: the live pre-check (checkLiveHead) now runs FIRST and itself needs to build a
+    // read argv from the same ownerAndRepo/headBranchName — an invalid identity fails that read
+    // (caught as `invalid-response`, treated the same as a live mismatch), so this now surfaces as
+    // `precondition-failed`, one step earlier than the create argv's own (never-reached) validation.
+    expect(result.errorCode).toBe("precondition-failed");
     expect(spawn.calls()).toHaveLength(0);
+  });
+
+  // #3394 review, finding 2 — THE REVIEWER'S EXACT SCENARIO: approve pr-create with verifiedCommitSha
+  // = A; the branch has since moved to C; replaying the SAME A at execute must be refused with
+  // precondition-failed, and the create must never be dispatched at all. Before this fix, nothing
+  // re-read the live branch head, so this exact request dispatched and created the PR against C.
+  it("refuses to create when the live branch head has moved since the caller's verifiedCommitSha was approved (pre-dispatch)", async () => {
+    const movedTo = "c".repeat(40);
+    const spawn = scriptedSpawn([branchHeadStep(CREATE.headBranchName, movedTo)]);
+    const result = await makeAdapter(spawn).createPullRequest(CREATE);
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("precondition-failed");
+    expect(result.observedHeadSha).toBe(movedTo);
+    // The create `gh api POST /pulls` call must never have been dispatched.
+    expect(spawn.calls()).toHaveLength(1);
+    expect(result.createdPrExternalId).toBeUndefined();
+  });
+
+  // A second concurrent move landing AFTER dispatch but before the post-check re-read: the create
+  // already happened (the PR now exists against whatever the provider accepted), so the caller must
+  // still learn the PR's identity even though the outcome is downgraded to failed — never a silent,
+  // clean "succeeded" for a drifted create.
+  it("downgrades a successful create to precondition-failed when the head moved during dispatch (post-dispatch), while preserving the created PR's identity", async () => {
+    const movedTo = "c".repeat(40);
+    const spawn = scriptedSpawn([
+      MATCHING_HEAD, // pre-check: still matches
+      { stdout: "1499\n", exit: 0 }, // the create dispatch itself succeeds
+      branchHeadStep(CREATE.headBranchName, movedTo), // post-check: branch has since moved
+    ]);
+    const result = await makeAdapter(spawn).createPullRequest(CREATE);
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("precondition-failed");
+    expect(result.observedHeadSha).toBe(movedTo);
+    // The PR was actually created — the operator must be able to find it.
+    expect(result.createdPrExternalId).toBe("1499");
   });
 });
 
 describe("node PR adapter — updatePullRequest", () => {
   it("runs a single PATCH when no draft transition is requested", async () => {
-    const spawn = scriptedSpawn([{ exit: 0 }]);
+    // pre-check, PATCH, post-check.
+    const spawn = scriptedSpawn([UPDATE_MATCHING_HEAD, { exit: 0 }, UPDATE_MATCHING_HEAD]);
     const result = await makeAdapter(spawn).updatePullRequest(updateReq());
     expect(result.outcome).toBe("succeeded");
     expect(result.createdPrExternalId).toBe("1499");
-    expect(spawn.calls()).toHaveLength(1);
-    expect(spawn.calls()[0]?.args.slice(0, 4)).toEqual([
+    expect(spawn.calls()).toHaveLength(3);
+    expect(spawn.calls()[1]?.args.slice(0, 4)).toEqual([
       "api",
       "--method",
       "PATCH",
@@ -158,30 +584,40 @@ describe("node PR adapter — updatePullRequest", () => {
 
   it("performs the mark-ready GraphQL transition: PATCH → node-id GET → mutation", async () => {
     const spawn = scriptedSpawn([
+      UPDATE_MATCHING_HEAD, // pre-check
       { exit: 0 }, // PATCH
       { stdout: "PR_kwDO123\n", exit: 0 }, // node-id GET
       { exit: 0 }, // graphql mutation
+      UPDATE_MATCHING_HEAD, // post-check
     ]);
     const result = await makeAdapter(spawn).updatePullRequest(
       updateReq({ convertFromDraft: true }),
     );
     expect(result.outcome).toBe("succeeded");
-    expect(spawn.calls()).toHaveLength(3);
-    const mutation = spawn.calls()[2];
+    expect(spawn.calls()).toHaveLength(5);
+    const mutation = spawn.calls()[3];
     expect(mutation?.args[0]).toBe("api");
     expect(mutation?.args[1]).toBe("graphql");
     expect(mutation?.args.some((a) => a.includes("markPullRequestReadyForReview"))).toBe(true);
   });
 
   it("performs the convert-to-draft GraphQL transition", async () => {
-    const spawn = scriptedSpawn([{ exit: 0 }, { stdout: "PR_kwDO123\n", exit: 0 }, { exit: 0 }]);
+    const spawn = scriptedSpawn([
+      UPDATE_MATCHING_HEAD,
+      { exit: 0 },
+      { stdout: "PR_kwDO123\n", exit: 0 },
+      { exit: 0 },
+      UPDATE_MATCHING_HEAD,
+    ]);
     const result = await makeAdapter(spawn).updatePullRequest(updateReq({ convertToDraft: true }));
     expect(result.outcome).toBe("succeeded");
-    expect(spawn.calls()[2]?.args.some((a) => a.includes("convertPullRequestToDraft"))).toBe(true);
+    expect(spawn.calls()[3]?.args.some((a) => a.includes("convertPullRequestToDraft"))).toBe(true);
   });
 
   it("fails the update when the node-id lookup is rejected", async () => {
+    // The dispatch itself fails, so no post-check spawn ever runs.
     const spawn = scriptedSpawn([
+      UPDATE_MATCHING_HEAD, // pre-check
       { exit: 0 }, // PATCH succeeds
       { stderr: "gh: Not Found (HTTP 404)", exit: 1 }, // node-id GET fails
     ]);
@@ -190,11 +626,12 @@ describe("node PR adapter — updatePullRequest", () => {
     );
     expect(result.outcome).toBe("failed");
     expect(result.rejectionReason).toBe("not-found");
-    expect(spawn.calls()).toHaveLength(2);
+    expect(spawn.calls()).toHaveLength(3);
   });
 
   it("fails the update when the GraphQL draft mutation is rejected", async () => {
     const spawn = scriptedSpawn([
+      UPDATE_MATCHING_HEAD, // pre-check
       { exit: 0 }, // PATCH
       { stdout: "PR_kwDO123\n", exit: 0 }, // node-id GET
       { stderr: "gh: HTTP 422: Unprocessable", exit: 1 }, // graphql mutation fails
@@ -202,7 +639,182 @@ describe("node PR adapter — updatePullRequest", () => {
     const result = await makeAdapter(spawn).updatePullRequest(updateReq({ convertToDraft: true }));
     expect(result.outcome).toBe("failed");
     expect(result.rejectionReason).toBe("validation-error");
+    expect(spawn.calls()).toHaveLength(4);
+  });
+
+  // #3394 review, finding 2 — the reviewer's exact scenario, PR-update analogue: the live branch
+  // head has already moved away from the approved verifiedCommitSha before the update is even
+  // dispatched — refused with precondition-failed, and the PATCH is never sent.
+  it("refuses to update when the live branch head has moved since the caller's verifiedCommitSha was approved (pre-dispatch)", async () => {
+    const movedTo = "c".repeat(40);
+    const spawn = scriptedSpawn([branchHeadStep(UPDATE_HEAD_BRANCH, movedTo)]);
+    const result = await makeAdapter(spawn).updatePullRequest(updateReq());
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("precondition-failed");
+    expect(result.observedHeadSha).toBe(movedTo);
+    expect(spawn.calls()).toHaveLength(1);
+  });
+
+  // A concurrent move landing AFTER the PATCH but before the post-check re-read: the update already
+  // took effect, so the outcome must still be downgraded to failed rather than reporting a silent,
+  // clean "succeeded" for a drifted update.
+  it("downgrades a successful update to precondition-failed when the head moved during dispatch (post-dispatch)", async () => {
+    const movedTo = "c".repeat(40);
+    const spawn = scriptedSpawn([
+      UPDATE_MATCHING_HEAD, // pre-check: still matches
+      { exit: 0 }, // PATCH succeeds
+      branchHeadStep(UPDATE_HEAD_BRANCH, movedTo), // post-check: branch has since moved
+    ]);
+    const result = await makeAdapter(spawn).updatePullRequest(updateReq());
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("precondition-failed");
+    expect(result.observedHeadSha).toBe(movedTo);
+  });
+});
+
+// #3389: the draft->ready transition, isolated from updatePullRequest — no title/body/base PATCH is
+// ever bundled with it, and the live PR identity is re-read immediately before AND after the
+// mutation. Corrections 1/2/7 (epic #3384): this is the ONLY execution path for the transition.
+describe("node PR adapter — markPullRequestReady (#3389)", () => {
+  const MARK_READY_REQ = {
+    ownerAndRepo: CREATE.ownerAndRepo,
+    prExternalId: "1499",
+    expectedHeadSha: PR_IDENTITY.headSha,
+    expectedBaseSha: PR_IDENTITY.baseSha,
+  };
+  const READY_IDENTITY = { ...PR_IDENTITY, isDraft: false };
+
+  it("succeeds: re-read (draft) -> node-id GET -> mutation -> re-read (ready), no PATCH", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: JSON.stringify(PR_IDENTITY) }, // pre-read: still draft, matching SHAs
+      { stdout: "PR_kwDO123\n", exit: 0 }, // node-id GET
+      { exit: 0 }, // graphql mutation
+      { stdout: JSON.stringify(READY_IDENTITY) }, // post-read: no longer draft, same head
+    ]);
+    const result = await makeAdapter(spawn).markPullRequestReady(MARK_READY_REQ);
+    expect(result.outcome).toBe("succeeded");
+    expect(result.observedIdentity).toEqual(READY_IDENTITY);
+    expect(spawn.calls()).toHaveLength(4);
+    // Never a PATCH: every call is a GET or the fixed GraphQL mutation.
+    expect(spawn.calls().some((c) => c.args.includes("PATCH"))).toBe(false);
+    const mutation = spawn.calls()[2];
+    expect(mutation?.args[0]).toBe("api");
+    expect(mutation?.args[1]).toBe("graphql");
+    expect(mutation?.args.some((a) => a.includes("markPullRequestReadyForReview"))).toBe(true);
+  });
+
+  it("drift: refuses (no spawn beyond the pre-read) when the live head SHA no longer matches the claim", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: JSON.stringify({ ...PR_IDENTITY, headSha: "9".repeat(40) }) },
+    ]);
+    const result = await makeAdapter(spawn).markPullRequestReady(MARK_READY_REQ);
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("precondition-failed");
+    expect(spawn.calls()).toHaveLength(1);
+  });
+
+  it("drift: refuses when the PR is no longer a draft at the pre-read", async () => {
+    const spawn = scriptedSpawn([{ stdout: JSON.stringify(READY_IDENTITY) }]);
+    const result = await makeAdapter(spawn).markPullRequestReady(MARK_READY_REQ);
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("precondition-failed");
+    expect(spawn.calls()).toHaveLength(1);
+  });
+
+  // #3389 repair (review finding): a secret-redacted pre-mutation identity read must never gate the
+  // mutation as safe. On this narrow, field-format-validated identity shape, the redactor's literal
+  // "[REDACTED]" marker already fails isGitPullRequestIdentity's own format check independently of
+  // readPrIdentity's `exactOutput: true` flag — both guards agree, belt-and-suspenders, and this pin
+  // holds either way. `exactOutput: true` is kept for the structural invariant ("never trust an
+  // altered read"), matching readPullRequestBody's established convention for a comparable read,
+  // rather than relying only on incidental field-format strictness to keep this true.
+  it("fails closed (precondition-failed, no further spawn) when the pre-mutation identity read comes back redacted", async () => {
+    const credential = "1234567890";
+    const spawn = scriptedSpawn([
+      { stdout: JSON.stringify({ ...PR_IDENTITY, externalId: credential }) },
+    ]);
+    const { info } = makeWorkspace();
+    const adapter = createNodeGitPullRequestAdapter({
+      workspace: info,
+      processEnv: { PATH: "/usr/bin", GH_TOKEN: credential },
+      spawn: spawn.fn,
+      home: FAKE_HOME,
+      resolveExecutable: () => "gh",
+    });
+    const result = await adapter.markPullRequestReady(MARK_READY_REQ);
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("precondition-failed");
+    expect(spawn.calls()).toHaveLength(1);
+  });
+
+  it("drift: reports failure when the mutation appears to succeed but the post-read still shows a draft", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: JSON.stringify(PR_IDENTITY) },
+      { stdout: "PR_kwDO123\n", exit: 0 },
+      { exit: 0 },
+      { stdout: JSON.stringify(PR_IDENTITY) }, // post-read: still a draft
+    ]);
+    const result = await makeAdapter(spawn).markPullRequestReady(MARK_READY_REQ);
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("precondition-failed");
+  });
+
+  // Owner audit finding b1-7: the post-mutation drift check compared isDraft and headSha only,
+  // silently accepting a base retarget that happened between the pre-read and the mutation even
+  // though the approval is bound to base+head and the docstring above promises refusal on any
+  // head/base mismatch.
+  it("drift: reports failure when the post-read shows the base SHA moved during the mutation", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: JSON.stringify(PR_IDENTITY) }, // pre-read: matches
+      { stdout: "PR_kwDO123\n", exit: 0 },
+      { exit: 0 },
+      { stdout: JSON.stringify({ ...READY_IDENTITY, baseSha: "c".repeat(40) }) }, // post-read: base retargeted
+    ]);
+    const result = await makeAdapter(spawn).markPullRequestReady(MARK_READY_REQ);
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("precondition-failed");
+  });
+
+  it("propagates a rejected node-id lookup without ever reaching the mutation", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: JSON.stringify(PR_IDENTITY) },
+      { stderr: "gh: Not Found (HTTP 404)", exit: 1 },
+    ]);
+    const result = await makeAdapter(spawn).markPullRequestReady(MARK_READY_REQ);
+    expect(result.outcome).toBe("failed");
+    expect(result.rejectionReason).toBe("not-found");
+    expect(spawn.calls()).toHaveLength(2);
+  });
+
+  it("propagates a rejected GraphQL mutation", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: JSON.stringify(PR_IDENTITY) },
+      { stdout: "PR_kwDO123\n", exit: 0 },
+      { stderr: "gh: HTTP 422: Unprocessable", exit: 1 },
+    ]);
+    const result = await makeAdapter(spawn).markPullRequestReady(MARK_READY_REQ);
+    expect(result.outcome).toBe("failed");
+    expect(result.rejectionReason).toBe("validation-error");
     expect(spawn.calls()).toHaveLength(3);
+  });
+
+  // AC4 (epic #3384): the coding runtime exposes neither merge nor issue-close mutations — every
+  // spawn this adapter method can ever produce is one of the four fixed shapes above (a read GET,
+  // the node-id GET, or the fixed markPullRequestReadyForReview mutation); none references a merge
+  // endpoint or an issue-close mutation.
+  it("never spawns a merge or issue-close call across every branch", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: JSON.stringify(PR_IDENTITY) },
+      { stdout: "PR_kwDO123\n", exit: 0 },
+      { exit: 0 },
+      { stdout: JSON.stringify(READY_IDENTITY) },
+    ]);
+    await makeAdapter(spawn).markPullRequestReady(MARK_READY_REQ);
+    for (const call of spawn.calls()) {
+      const joined = call.args.join(" ").toLowerCase();
+      expect(joined).not.toContain("merge");
+      expect(joined).not.toMatch(/close.*issue|issues\/\d+/u);
+    }
   });
 });
 
@@ -211,15 +823,16 @@ describe("node PR adapter — output parsing edge cases", () => {
     // A "created" PR the caller cannot reference is a contract breach, not a success: `--jq
     // .number` emits `null` when the response shape is unexpected, and the UI would render a
     // successful outcome pointing at nothing.
-    const spawn = scriptedSpawn([{ stdout: "not-a-number\n", exit: 0 }]);
+    const spawn = scriptedSpawn([MATCHING_HEAD, { stdout: "not-a-number\n", exit: 0 }]);
     const result = await makeAdapter(spawn).createPullRequest(CREATE);
     expect(result.outcome).toBe("failed");
     expect(result.errorCode).toBe("internal-error");
+    expect(result.failureClass).toBe("number-unparsable");
     expect(result.createdPrExternalId).toBeUndefined();
   });
 
   it("fails the create when the response number is jq null", async () => {
-    const spawn = scriptedSpawn([{ stdout: "null\n", exit: 0 }]);
+    const spawn = scriptedSpawn([MATCHING_HEAD, { stdout: "null\n", exit: 0 }]);
     const result = await makeAdapter(spawn).createPullRequest(CREATE);
     expect(result.outcome).toBe("failed");
     expect(result.errorCode).toBe("internal-error");
@@ -227,6 +840,7 @@ describe("node PR adapter — output parsing edge cases", () => {
 
   it("fails the draft transition when the node id is malformed", async () => {
     const spawn = scriptedSpawn([
+      UPDATE_MATCHING_HEAD, // pre-check
       { exit: 0 }, // PATCH
       { stdout: "not a node id!\n", exit: 0 }, // node-id GET returns a malformed id
     ]);
@@ -279,5 +893,121 @@ describe("node git pull request adapter — `gh` can authenticate", () => {
   it("still copies by name only — an unrelated ambient secret never reaches gh", async () => {
     const env = await prLaneEnv();
     expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+  });
+});
+
+describe("node PR adapter — exact body-only reads and writes", () => {
+  it("returns the exact body when an ordinary parent env value overlaps the identity envelope", async () => {
+    // #3390, rehearsal run-20: the repository slug the lane had exported was scrubbed out of the
+    // identity that travels with the body, and the description preview failed as provider-failed.
+    const body = "Closes #42\n";
+    const spawn = scriptedSpawn([
+      {
+        stdout: JSON.stringify({ identity: PR_IDENTITY, body, updatedAt: "2026-09-05T00:00:00Z" }),
+      },
+    ]);
+    const adapter = makeAdapter(spawn, {
+      PATH: "/usr/bin",
+      KEIKO_QUALIFICATION_REHEARSAL_REPOSITORY: PR_IDENTITY.repository,
+    });
+    expect(
+      await adapter.readPullRequestBody({
+        ownerAndRepo: CREATE.ownerAndRepo,
+        prExternalId: "1499",
+      }),
+    ).toMatchObject({ ok: true, value: { body } });
+  });
+  it("still treats body text the content scrub would alter as an altered read", async () => {
+    const body = "Deployed from /srv/build-agent-42/checkout\n";
+    const spawn = scriptedSpawn([
+      {
+        stdout: JSON.stringify({ identity: PR_IDENTITY, body, updatedAt: "2026-09-05T00:00:00Z" }),
+      },
+    ]);
+    const adapter = makeAdapter(spawn, {
+      PATH: "/usr/bin",
+      BUILD_ROOT: "/srv/build-agent-42/checkout",
+    });
+    expect(
+      await adapter.readPullRequestBody({
+        ownerAndRepo: CREATE.ownerAndRepo,
+        prExternalId: "1499",
+      }),
+    ).toEqual({ ok: false, reason: "invalid-response" });
+  });
+  it("preserves exact markdown and emits only a canonical body patch", async () => {
+    const body = "# Template\r\nCloses #42\r\n";
+    const spawn = scriptedSpawn([
+      {
+        stdout: JSON.stringify({ identity: PR_IDENTITY, body, updatedAt: "2026-09-05T00:00:00Z" }),
+      },
+      { stdout: "1499" },
+    ]);
+    const adapter = makeAdapter(spawn);
+    expect(
+      await adapter.readPullRequestBody({
+        ownerAndRepo: CREATE.ownerAndRepo,
+        prExternalId: "1499",
+      }),
+    ).toMatchObject({ ok: true, value: { body } });
+    expect(
+      await adapter.updatePullRequestBody({
+        ownerAndRepo: CREATE.ownerAndRepo,
+        prExternalId: "1499",
+        body,
+      }),
+    ).toMatchObject({ outcome: "succeeded" });
+    expect(spawn.calls()[1]?.args).toEqual([
+      "api",
+      "--hostname",
+      "github.com",
+      "--method",
+      "PATCH",
+      "/repos/oscharko-dev/Keiko/pulls/1499",
+      "-f",
+      `body=${body}`,
+      "--jq",
+      ".number",
+    ]);
+  });
+  it("refuses redacted exact body even when credential replacement has the same byte length", async () => {
+    const credential = "1234567890";
+    const spawn = scriptedSpawn([
+      {
+        stdout: JSON.stringify({
+          identity: PR_IDENTITY,
+          body: credential,
+          updatedAt: "2026-09-05T00:00:00Z",
+        }),
+      },
+    ]);
+    const { info } = makeWorkspace();
+    const adapter = createNodeGitPullRequestAdapter({
+      workspace: info,
+      processEnv: { PATH: "/usr/bin", GH_TOKEN: credential },
+      spawn: spawn.fn,
+      home: FAKE_HOME,
+      resolveExecutable: () => "gh",
+    });
+    expect(
+      await adapter.readPullRequestBody({
+        ownerAndRepo: CREATE.ownerAndRepo,
+        prExternalId: "1499",
+      }),
+    ).toEqual({ ok: false, reason: "invalid-response" });
+    expect(spawn.calls()).toHaveLength(1);
+  });
+  it("refuses forbidden patch fields without spawning", async () => {
+    const spawn = scriptedSpawn([]);
+    const input = {
+      ownerAndRepo: CREATE.ownerAndRepo,
+      prExternalId: "1499",
+      body: "text",
+      title: "bad",
+    };
+    expect(await makeAdapter(spawn).updatePullRequestBody(input)).toMatchObject({
+      outcome: "failed",
+    });
+    expect(spawn.calls()).toHaveLength(0);
   });
 });

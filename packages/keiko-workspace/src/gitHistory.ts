@@ -377,7 +377,7 @@ function pointedGitdir(
 // Strategy: check whether HEAD lives directly at `.git/HEAD` first (covers the normal case AND
 // the memFs directory simulation where only child keys are recorded); fall back to treating
 // `.git` as a worktree-pointer file only when that leaf check fails.
-function resolveGitdir(
+export function resolveGitdir(
   fs: WorkspaceFs,
   root: string,
 ): Promise<AuthorizedGitMetadataBase | undefined> {

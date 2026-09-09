@@ -13,6 +13,7 @@ export {
   deepRedactStrings,
   isCredentialKeyName,
   objectContainsCredentialKey,
+  REDACTION_PLACEHOLDER,
 } from "./redaction.js";
 
 export { assertValidRunId } from "./runid.js";

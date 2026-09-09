@@ -119,6 +119,9 @@ const DIFF_NO_EXTERNAL_ARGS: readonly string[] = ["--no-ext-diff", "--no-textcon
 const PRE_SUBCOMMAND_FLAG_NO_VALUE: ReadonlySet<string> = new Set([
   "--no-pager",
   "--no-optional-locks",
+  // Exact snapshot reads prohibit lazy network fetches and mutable local object replacement.
+  "--no-lazy-fetch",
+  "--no-replace-objects",
 ]);
 
 // The config-override flags, named ONCE. `forbiddenTwoTokenConfigOverride` below reads this set to

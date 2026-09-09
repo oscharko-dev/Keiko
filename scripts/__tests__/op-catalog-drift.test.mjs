@@ -6,6 +6,11 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { generateOpCatalog } from "../generate-op-catalog.mjs";
+import {
+  TOOL_CATALOG_OPERATIONS_PATH,
+  generateToolCatalogOperations,
+  toolCatalogOperationsBytes,
+} from "../lib/tool-catalog-operations.mjs";
 
 // Pins docs/observability/op-catalog.generated.json against the generator that derives it — the
 // same "derive, don't restate, pin with a drift test" pattern route-template.test.ts already runs
@@ -38,6 +43,13 @@ function withFixturePackage(pkgName, fileContents, check) {
 }
 
 describe("op catalog drift", () => {
+  it("pins the separate future lifecycle contract without inventing runtime source sites", async () => {
+    const catalog = generateOpCatalog(repoRoot);
+    const bytes = readFileSync(join(repoRoot, TOOL_CATALOG_OPERATIONS_PATH), "utf8");
+    expect(catalog.operationContracts).toEqual([TOOL_CATALOG_OPERATIONS_PATH]);
+    expect(bytes).toBe(await toolCatalogOperationsBytes(repoRoot));
+    expect(JSON.parse(bytes)).toEqual(generateToolCatalogOperations(repoRoot));
+  });
   it("matches the checked-in file exactly, by value, in the same order", () => {
     const regenerated = generateOpCatalog(repoRoot);
     const checkedIn = readCheckedInCatalog();
@@ -56,6 +68,43 @@ describe("op catalog drift", () => {
     const checkedIn = readCheckedInCatalog();
     expect(checkedIn.$schema).toBe("keiko-op-catalog/1");
     expect(checkedIn.generatedBy).toBe("scripts/generate-op-catalog.mjs");
+  });
+
+  // PR #3394 regression: a stale regeneration dropped these 26 still-emitted operations while
+  // leaving the catalog internally self-consistent. Pin the incident's complete vocabulary at the
+  // production generator boundary so regenerating the JSON cannot silently bless the same loss.
+  it("retains every operation lost by the issue-to-PR catalog regression", () => {
+    const catalog = generateOpCatalog(repoRoot);
+    expect(catalog.operations).toEqual(
+      expect.arrayContaining([
+        "coding-runtime.description",
+        "coding-runtime.operation.refused",
+        "coding-runtime.run.recovery-acknowledged",
+        "coding-sidecar.gateway.readiness-insufficient",
+        "coding-sidecar.gateway.rejected",
+        "coding-sidecar.tool-facade.rejected",
+        "editor.producer-turn.completed",
+        "gateway.tool-catalog.native-passthrough",
+        "git-change.chat.apply",
+        "git-change.chat.blocked",
+        "git-change.chat.connected",
+        "git-change.chat.refreshed",
+        "git-change.chat.stale",
+        "git.delivery.commit.approval.minted",
+        "git.delivery.commit.approval.required",
+        "git.delivery.pr.approval.minted",
+        "git.delivery.pr.approval.required",
+        "git.delivery.push.approval.minted",
+        "git.delivery.push.approval.required",
+        "git.journey-outcome.recorded",
+        "pr-description.chat.turn.admitted",
+        "pr-description.chat.turn.denied",
+        "pr-description.model-egress.denied",
+        "pr-description.workbench.egress.denied",
+        "runtime.confinement.unavailable",
+        "tool-catalog.dispatch-unbound",
+      ]),
+    );
   });
 
   // #2902 W5: orchestrator.ts's logIndexing/logEmbeddingRun/logDocument hardcode `category` inside
@@ -320,5 +369,195 @@ describe("op catalog drift", () => {
         expect(fixtureEntries[0]?.category).toBe("gateway");
       },
     );
+  });
+});
+
+describe("approved diagnostic operation source extraction", () => {
+  it("captures literal operations through the diagnostic builder and emitter", () => {
+    withFixturePackage(
+      "keiko-server",
+      `
+      emitServerDiagnostic(sink, {
+        operation: "tool-catalog.invocation.failed",
+        correlationId: "fixture", errorClass: "Error", message: "server-operation-failed",
+      });
+      const record = serverDiagnosticFromError({
+        operation: "tool-catalog.bind.unavailable", error,
+      });
+      emitServerDiagnostic(sink, serverDiagnosticFromError({ operation: "fixture.nested", error }));
+      defaultServerDiagnosticSink.record({ operation: "fixture.default", errorClass: "Error" });
+    `,
+      (root) => {
+        const catalog = generateOpCatalog(root);
+        const literals = catalog.entries.filter((entry) => entry.op !== "<dynamic>");
+        expect(literals.map((entry) => entry.op)).toEqual([
+          "fixture.default",
+          "fixture.nested",
+          "tool-catalog.bind.unavailable",
+          "tool-catalog.invocation.failed",
+        ]);
+        expect(
+          literals.every(
+            (entry) =>
+              entry.category === "diagnostic" && entry.sourceKind === "diagnostic-operation",
+          ),
+        ).toBe(true);
+      },
+    );
+  });
+  it("does not catalogue payload fields, nested fields, prose or unsupported wrappers as literal operations", () => {
+    withFixturePackage(
+      "keiko-server",
+      `
+      const data = { operation: "payload.operation" };
+      unsupportedDiagnostic({ operation: "wrapper.operation" });
+      object.emitServerDiagnostic(sink, { operation: "object.operation" });
+      const prose = 'emitServerDiagnostic(sink, { operation: "prose.operation" })';
+      emitServerDiagnostic(sink, { extra: { operation: "nested.payload" }, operation: runtimeOperation });
+      emitServerDiagnostic(sink, wrap({ operation: "wrapped.operation" }));
+    `,
+      (root) => {
+        const catalog = generateOpCatalog(root);
+        expect(catalog.entries.every((entry) => entry.op === "<dynamic>")).toBe(true);
+        expect(catalog.entries).toHaveLength(2);
+      },
+    );
+  });
+});
+
+describe("diagnostic source completeness and false-positive boundaries", () => {
+  it("does not resolve a constant from prose or conflicting lexical bindings", () => {
+    withFixturePackage(
+      "keiko-server",
+      `
+      const FROM_PROSE = runtime();
+      const prose = 'const FROM_PROSE = "fixture.fabricated";';
+      emitServerDiagnostic(sink, { operation: FROM_PROSE });
+      if (flag) { const SHADOWED = "fixture.first"; emitServerDiagnostic(sink, { operation: SHADOWED }); }
+      else { const SHADOWED = "fixture.second"; emitServerDiagnostic(sink, { operation: SHADOWED }); }
+      const MIXED = "fixture.constant";
+      function local() { const MIXED = runtime(); emitServerDiagnostic(sink, { operation: MIXED }); }
+    `,
+      (root) => {
+        const catalog = generateOpCatalog(root);
+        expect(catalog.entries).toHaveLength(4);
+        expect(catalog.entries.every((entry) => entry.op === "<dynamic>")).toBe(true);
+      },
+    );
+  });
+});
+
+describe("diagnostic operation projection rules", () => {
+  it("keeps source sites while deduplicating the actual operation vocabulary", () => {
+    withFixturePackage(
+      "keiko-server",
+      `
+      const FAILURE_OP = "fixture.repeat";
+      emitServerDiagnostic(sink, { operation: FAILURE_OP });
+      emitServerDiagnostic(sink, { operation: "fixture.repeat" });
+      emitServerDiagnostic(sink, { operation: flag ? "fixture.same" : "fixture.same" });
+    `,
+      (root) => {
+        const catalog = generateOpCatalog(root);
+        expect(catalog.operations).toEqual(["fixture.repeat", "fixture.same"]);
+        expect(catalog.entries.filter((entry) => entry.op === "fixture.repeat")).toHaveLength(2);
+        expect(new Set(catalog.entries.map((entry) => entry.site)).size).toBe(3);
+        expect(catalog.entries.filter((entry) => entry.op === "fixture.same")).toHaveLength(1);
+      },
+    );
+  });
+  it("keeps concatenation, templates and overwritable fields dynamic", () => {
+    withFixturePackage(
+      "keiko-server",
+      [
+        'emitServerDiagnostic(sink, { operation: "fixture." + suffix });',
+        "emitServerDiagnostic(sink, { operation: `fixture.${suffix}` });",
+        'emitServerDiagnostic(sink, { operation: "fixture.before-spread", ...input });',
+        'emitServerDiagnostic(sink, { operation: "fixture.before-key", [key]: value });',
+        'emitServerDiagnostic(sink, { operation: "fixture.before-getter", get operation() { return value; } });',
+        'emitServerDiagnostic(sink, { ...input, operation: "fixture.after-spread" });',
+        'serverDiagnosticFromError(({ operation: "fixture.wrapped" }));',
+        'emitServerDiagnostic(sink, { extra: { operation: "nested.payload" }, operation: "fixture.outer" });',
+      ].join("\n"),
+      (root) => {
+        const catalog = generateOpCatalog(root);
+        expect(catalog.operations).toEqual(["fixture.after-spread", "fixture.outer"]);
+        expect(catalog.entries.filter((entry) => entry.op === "<dynamic>")).toHaveLength(6);
+      },
+    );
+  });
+  it("retains approved diagnostic spelling without relaxing activity-op validation", () => {
+    withFixturePackage(
+      "keiko-server",
+      `
+      emitServerDiagnostic(sink, { operation: "figma.snapshotBuild" });
+      serverDiagnosticFromError({ operation: "POST /api/gateway/setup" });
+      emitServerDiagnostic(sink, { operation: "invalid@operation" });
+      log.write({ category: "diagnostic", op: "figma.snapshotBuild" });
+    `,
+      (root) => {
+        const catalog = generateOpCatalog(root);
+        expect(catalog.violations.map((entry) => entry.op)).toEqual([
+          "figma.snapshotBuild",
+          "invalid@operation",
+        ]);
+        expect(
+          catalog.entries.find((entry) => entry.op === "POST /api/gateway/setup")?.sourceKind,
+        ).toBe("diagnostic-operation");
+      },
+    );
+  });
+  it("includes the three current direct-sink owners and ignores unrelated record methods", () => {
+    const catalog = generateOpCatalog(repoRoot);
+    for (const operation of [
+      "grounded.entailment",
+      "coding-runtime.sse-fanout",
+      "coding-app-session.channel.subscribe",
+    ])
+      expect(
+        catalog.entries.some(
+          (entry) => entry.op === operation && entry.sourceKind === "diagnostic-operation",
+        ),
+      ).toBe(true);
+    withFixturePackage(
+      "keiko-server",
+      'diagnostics.record({operation: "unapproved.record"}); sink.record({operation: "unapproved.sink"});',
+      (root) => {
+        expect(generateOpCatalog(root).entries).toEqual([]);
+      },
+    );
+  });
+  it("proves closed spread keys without guessing runtime or overriding keys", () => {
+    withFixturePackage(
+      "keiko-server",
+      [
+        'emitServerDiagnostic(sink, { operation: "fixture.closed", ...(code === undefined ? {} : { code }) });',
+        'emitServerDiagnostic(sink, { operation: "fixture.object", ...{ code, source: nested() } });',
+        'emitServerDiagnostic(sink, { operation: "fixture.overridden", ...(flag ? {} : { operation }) });',
+        'emitServerDiagnostic(sink, { operation: "fixture.computed", ...(flag ? {} : { [key]: value }) });',
+        'emitServerDiagnostic(sink, { operation: "fixture.spread", ...(flag ? {} : { ...input }) });',
+        'emitServerDiagnostic(sink, { operation: "fixture.shorthand", operation });',
+        'emitServerDiagnostic(sink, { operation: "fixture.method", operation() { return value; } });',
+        'emitServerDiagnostic(sink, { operation: "fixture.getter", get "operation"() { return value; } });',
+      ].join("\n"),
+      (root) => {
+        const catalog = generateOpCatalog(root);
+        expect(catalog.operations).toEqual(["fixture.closed", "fixture.object"]);
+        expect(catalog.entries.filter((entry) => entry.op === "<dynamic>")).toHaveLength(6);
+      },
+    );
+  });
+  it("rejects a generated vocabulary or source-kind tamper", () => {
+    const generated = generateOpCatalog(repoRoot);
+    const removed = structuredClone(generated);
+    removed.operations.pop();
+    expect(removed).not.toEqual(generated);
+    const provenance = structuredClone(generated);
+    const diagnostic = provenance.entries.find(
+      (entry) => entry.sourceKind === "diagnostic-operation",
+    );
+    expect(diagnostic).toBeDefined();
+    delete diagnostic.sourceKind;
+    expect(provenance).not.toEqual(generated);
   });
 });

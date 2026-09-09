@@ -33,6 +33,37 @@ function stagedEdit(overrides: Partial<StagedEditRequest> = {}): StagedEditReque
 }
 
 describe("CodingToolInvocationRegistry (Issue #2332)", () => {
+  it("retains only a detached body-free terminal receipt for a replay", () => {
+    const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+    const request = stagedEdit();
+    const receipt = {
+      invocationId: "invocation-1",
+      reservationId: "reservation-1",
+      settlementId: "settlement-1",
+      budgetDisposition: "committed" as const,
+      effectStarted: true,
+      status: "completed" as const,
+    };
+    expect(registry.inspect(request)).toEqual({ kind: "missing" });
+    registry.stage(request);
+    expect(registry.inspect(request)).toEqual({ kind: "in-flight" });
+    registry.take(request);
+    expect(registry.inspect(request)).toEqual({ kind: "in-flight" });
+    expect(registry.settle(request, receipt)).toBe(true);
+    receipt.invocationId = "later-mutation";
+    expect(registry.inspect(request)).toEqual({
+      kind: "terminal",
+      receipt: { ...receipt, invocationId: "invocation-1" },
+    });
+    expect(registry.stage(stagedEdit())).toEqual({ kind: "replayed" });
+    expect(registry.settle(request, receipt)).toBe(false);
+    expect(registry.tombstoneFor(request.runId, request.actionId, request.idempotencyKey)).toEqual(
+      {},
+    );
+    expect(request.payload.every((byte) => byte === 0)).toBe(true);
+    registry.revokeRun(request.runId);
+    expect(registry.inspect(request)).toEqual({ kind: "revoked" });
+  });
   it("caps each run at eight entries, 262,144 bytes per entry, and 2 MiB in aggregate", () => {
     const registry = createCodingToolInvocationRegistry({ now: () => 0 });
 

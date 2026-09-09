@@ -22,6 +22,7 @@ import {
   gitPrArgvIsGoverned,
   GitPrArgvError,
   gitPullRequestRejectionFor,
+  isGithubNodeId,
   runGitPullRequest,
   type GitPrCreateCommand,
   type GitPrExecResult,
@@ -56,6 +57,7 @@ function createCommand(overrides: Partial<GitPrCreateCommand> = {}): GitPrCreate
     title: "feat: governed pr command center",
     body: "Implements the governed PR command center.",
     isDraft: false,
+    verifiedCommitSha: "a".repeat(40),
     ...overrides,
   };
 }
@@ -157,6 +159,35 @@ describe("buildPrCreateArgv", () => {
       buildPrCreateArgv({ ...createCommand(), body: `a${String.fromCharCode(0)}b` }),
     ).toThrow(GitPrArgvError);
   });
+
+  // F16 (#3384 audit): the write path's ownerAndRepo validator must be exactly as strict as the read
+  // path's isGitHubOwnerAndRepo — a dot-segment repository turns `/repos/${repo}/pulls` into a path
+  // that escapes the intended resource. The pre-fix local OWNER_REPO_RE (`[A-Za-z0-9._-]+/[A-Za-z0-9._-]+`)
+  // admitted all three of these; this pin fails on that regex and passes once buildPrCreateArgv routes
+  // through isGitHubOwnerAndRepo.
+  it("rejects a dot-segment repository and a leading-hyphen owner", () => {
+    expect(() => buildPrCreateArgv({ ...createCommand(), ownerAndRepo: "owner/.." })).toThrow(
+      GitPrArgvError,
+    );
+    expect(() => buildPrCreateArgv({ ...createCommand(), ownerAndRepo: "owner/." })).toThrow(
+      GitPrArgvError,
+    );
+    expect(() => buildPrCreateArgv({ ...createCommand(), ownerAndRepo: "-owner/repo" })).toThrow(
+      GitPrArgvError,
+    );
+  });
+
+  // F26 (#3384 audit): assertBody must delegate to the one owner of body validation
+  // (validGitPrBodyText, git-pr-body.ts) instead of a second, weaker control-char-only regex — closing
+  // the byte-size cap and U+FFFD/round-trip gaps on the create path.
+  it("rejects a body over the byte-size cap and a body containing U+FFFD", () => {
+    expect(() => buildPrCreateArgv({ ...createCommand(), body: "x".repeat(65_537) })).toThrow(
+      GitPrArgvError,
+    );
+    expect(() =>
+      buildPrCreateArgv({ ...createCommand(), body: "has a \uFFFD replacement char" }),
+    ).toThrow(GitPrArgvError);
+  });
 });
 
 describe("buildPrUpdateArgv", () => {
@@ -165,11 +196,13 @@ describe("buildPrUpdateArgv", () => {
       buildPrUpdateArgv({
         ownerAndRepo: "oscharko-dev/Keiko",
         prExternalId: "1499",
+        headBranchName: "claude/issue-477-x",
         baseBranchName: "dev",
         title: "feat: updated",
         body: "Updated body",
         convertToDraft: false,
         convertFromDraft: false,
+        verifiedCommitSha: "a".repeat(40),
       }),
     ).toEqual([
       "api",
@@ -190,12 +223,40 @@ describe("buildPrUpdateArgv", () => {
       buildPrUpdateArgv({
         ownerAndRepo: "o/r",
         prExternalId: "12a",
+        headBranchName: "claude/issue-477-x",
         baseBranchName: "dev",
         title: "t",
         body: "b",
         convertToDraft: false,
         convertFromDraft: false,
+        verifiedCommitSha: "a".repeat(40),
       }),
+    ).toThrow(GitPrArgvError);
+  });
+
+  // F16/F26 (#3384 audit): the update path shares the same ownerAndRepo/body validation gaps as
+  // create — both must close identically.
+  it("rejects a dot-segment repository, a leading-hyphen owner, an oversize body and a U+FFFD body", () => {
+    const base = {
+      prExternalId: "1499",
+      headBranchName: "claude/issue-477-x",
+      baseBranchName: "dev",
+      title: "feat: updated",
+      body: "Updated body",
+      convertToDraft: false,
+      convertFromDraft: false,
+      verifiedCommitSha: "a".repeat(40),
+    };
+    expect(() => buildPrUpdateArgv({ ...base, ownerAndRepo: "owner/.." })).toThrow(GitPrArgvError);
+    expect(() => buildPrUpdateArgv({ ...base, ownerAndRepo: "owner/." })).toThrow(GitPrArgvError);
+    expect(() => buildPrUpdateArgv({ ...base, ownerAndRepo: "-owner/repo" })).toThrow(
+      GitPrArgvError,
+    );
+    expect(() =>
+      buildPrUpdateArgv({ ...base, ownerAndRepo: "o/r", body: "x".repeat(65_537) }),
+    ).toThrow(GitPrArgvError);
+    expect(() =>
+      buildPrUpdateArgv({ ...base, ownerAndRepo: "o/r", body: "has a \uFFFD replacement char" }),
     ).toThrow(GitPrArgvError);
   });
 });
@@ -211,6 +272,21 @@ describe("draft-toggle graphql builders", () => {
       "pullRequestId=PR_kwDO123",
     ]);
     expect(buildPrConvertDraftGraphqlArgv("PR_kwDO123")[3]).toContain("convertPullRequestToDraft");
+    expect(() => buildPrMarkReadyGraphqlArgv("bad id!")).toThrow(GitPrArgvError);
+  });
+});
+
+// F27 (#3384 audit): isGithubNodeId is the one owner of the node-id format; git-pr-node.ts's
+// parseNodeId must reuse it rather than re-declaring the regex.
+describe("isGithubNodeId — the one owner of the GitHub node-id format", () => {
+  it("accepts the same shapes assertNodeId (via buildPrMarkReadyGraphqlArgv) accepts", () => {
+    expect(isGithubNodeId("PR_kwDO123")).toBe(true);
+    expect(() => buildPrMarkReadyGraphqlArgv("PR_kwDO123")).not.toThrow();
+  });
+  it("rejects the same shapes assertNodeId rejects: empty and disallowed characters", () => {
+    expect(isGithubNodeId("")).toBe(false);
+    expect(isGithubNodeId("bad id!")).toBe(false);
+    expect(() => buildPrMarkReadyGraphqlArgv("")).toThrow(GitPrArgvError);
     expect(() => buildPrMarkReadyGraphqlArgv("bad id!")).toThrow(GitPrArgvError);
   });
 });
@@ -242,6 +318,44 @@ describe("classifyGitPullRequestRejection", () => {
       "provider-unavailable",
     );
     expect(classifyGitPullRequestRejection("some other text")).toBe("unknown");
+  });
+
+  // #3390 flow 3 (run-53): the mark-ready GraphQL mutation was rejected with output no phrase
+  // matched, so the operator and the log saw "unknown". gh puts the GraphQL `errors[]` JSON on
+  // stdout; its `type` is GitHub's closed vocabulary and classifies the failure when the wording
+  // does not.
+  it("classifies GitHub GraphQL failures by their error type when no phrase matches", () => {
+    const graphql = (type: string, message = ""): string =>
+      JSON.stringify({
+        data: { markPullRequestReadyForReview: null },
+        errors: [{ type, path: ["markPullRequestReadyForReview"], message }],
+      });
+    expect(classifyGitPullRequestRejection(`${graphql("NOT_FOUND")}\ngh: request failed`)).toBe(
+      "not-found",
+    );
+    expect(classifyGitPullRequestRejection(graphql("SERVICE_UNAVAILABLE"))).toBe(
+      "provider-unavailable",
+    );
+    expect(classifyGitPullRequestRejection(graphql("RATE_LIMITED"))).toBe("rate-limited");
+    expect(classifyGitPullRequestRejection(graphql("UNPROCESSABLE"))).toBe("validation-error");
+    expect(classifyGitPullRequestRejection(graphql("FORBIDDEN"))).toBe("permission-denied");
+    expect(classifyGitPullRequestRejection(graphql("SOMETHING_NEW"))).toBe("unknown");
+    expect(classifyGitPullRequestRejection("{not json\ngh: request failed")).toBe("unknown");
+  });
+
+  it("recognises GitHub's transient and mutation-specific wordings", () => {
+    expect(
+      classifyGitPullRequestRejection(
+        "gh: Something went wrong while executing your query. This may be the result of a GitHub bug.",
+      ),
+    ).toBe("provider-unavailable");
+    expect(classifyGitPullRequestRejection("gh: HTTP 500: Internal Server Error")).toBe(
+      "provider-unavailable",
+    );
+    expect(classifyGitPullRequestRejection("gh: was submitted too quickly")).toBe("rate-limited");
+    expect(
+      classifyGitPullRequestRejection("gh: Could not resolve to a node with the global id of 'x'"),
+    ).toBe("not-found");
   });
 
   it("resolves ambiguous messages by the load-bearing row order (rate-limit > 403, already-exists > 422)", () => {
@@ -421,6 +535,34 @@ describe("runGitPullRequest lifecycle gates", () => {
     expect(inputs.kind).toBe("pr-create");
   });
 
+  it("retains canonical identity for reconciliation outside the evidence envelope", async () => {
+    const identity = {
+      number: 1499,
+      externalId: "PR_kwDO123",
+      url: "https://github.com/oscharko-dev/Keiko/pull/1499",
+      repository: "oscharko-dev/Keiko",
+      headRepository: "oscharko-dev/Keiko",
+      headRef: "claude/issue-477-x",
+      headSha: "a".repeat(40),
+      baseRef: "dev",
+      baseSha: "b".repeat(40),
+      state: "open" as const,
+      isDraft: true,
+    };
+    const { adapter, create } = fakeAdapter({ ...SUCCESS, createdPrIdentity: identity });
+    const result = await runGitPullRequest(
+      {
+        command: createCommand({ isDraft: true, canonicalGitHubIdentity: true }),
+        approval: NO_APPROVAL,
+      },
+      deps({ adapter, pack: safePack() }),
+    );
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ canonicalGitHubIdentity: true }));
+    expect(result.createdPrIdentity).toEqual(identity);
+    expect(JSON.stringify(result.lifecycle.envelope)).not.toContain(identity.url);
+    expect(JSON.stringify(result.lifecycle.envelope)).not.toContain(identity.externalId);
+  });
+
   it("attaches a rejection descriptor when the provider rejects an executed create", async () => {
     const rejected: GitPrExecResult = {
       schemaVersion: "1",
@@ -437,6 +579,43 @@ describe("runGitPullRequest lifecycle gates", () => {
     expect(result.lifecycle.outcome.status).toBe("failed");
     expect(result.rejection?.reason).toBe("validation-error");
     expect(result.rejection?.disposition).toBe("user-fixable");
+  });
+
+  // #3390: rehearsal runs 15 and 17 created their pull request while the delivery recorded only
+  // `internal-error`; the adapter's closed words and counts now ride on the lifecycle result so
+  // the caller's log names the failing step. The evidence kernel shape stays closed.
+  it("carries the adapter's failure detail on the lifecycle result, never in the evidence kernel", async () => {
+    const failed: GitPrExecResult = {
+      schemaVersion: "1",
+      outcome: "failed",
+      durationMs: 1185,
+      errorCode: "internal-error",
+      failureClass: "identity-unparsable",
+      identityIssue: "shape-invalid",
+      stdoutBytes: 417,
+      stderrBytes: 0,
+      exitCode: 0,
+    };
+    const { adapter } = fakeAdapter(failed);
+    const result = await runGitPullRequest(
+      { command: createCommand(), approval: NO_APPROVAL },
+      deps({ adapter, pack: safePack() }),
+    );
+    expect(result.failure).toEqual({
+      failureClass: "identity-unparsable",
+      identityIssue: "shape-invalid",
+      stdoutBytes: 417,
+      stderrBytes: 0,
+      exitCode: 0,
+    });
+    expect(result.lifecycle.outcome.status).toBe("failed");
+    if (result.lifecycle.outcome.status !== "failed") throw new Error("unreachable");
+    expect(result.lifecycle.outcome.executionResult).toEqual({
+      schemaVersion: "1",
+      outcome: "failed",
+      durationMs: 1185,
+      errorCode: "internal-error",
+    });
   });
 
   it("does not attach a rejection descriptor when the run was aborted", async () => {
@@ -461,6 +640,7 @@ describe("runGitPullRequest lifecycle gates", () => {
       body: "Updated",
       convertToDraft: false,
       convertFromDraft: true,
+      verifiedCommitSha: "a".repeat(40),
     };
     const pack: GitDeliveryRepoPolicyPack = {
       schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,

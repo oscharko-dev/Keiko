@@ -2,6 +2,7 @@
 // asynchronously, and exposes the run id, config fingerprint, a result Promise, and a
 // cancel() that aborts the single per-run AbortController (ADR-0004 D4, D9).
 
+import { bindHarnessCatalog, type HarnessCatalogFactory } from "./catalog-runtime.js";
 import { HARNESS_VERSION } from "@oscharko-dev/keiko-contracts/runtime/harness";
 import type { Clock } from "@oscharko-dev/keiko-model-gateway";
 import { systemClock } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
@@ -31,14 +32,17 @@ export interface AgentConfig {
   readonly model: string;
   readonly workingDirectory: string;
   readonly limits?: Partial<HarnessLimits> | undefined;
-  // Defaults true. Wave 1 never applies a patch regardless; the flag documents intent and
-  // is the seam a future apply-mode issue toggles without changing the harness API.
+  // Defaults true: no productive native catalog is bound or advertised. False permits only
+  // an explicitly injected catalog factory using this run's existing accounting owner.
   readonly dryRun?: boolean | undefined;
 }
 
 export interface HarnessDeps {
   readonly model: ModelPort;
   readonly tools: ToolPort;
+  // Composition supplies genuine authority/handler binding; legacy ToolPort methods are never
+  // an execution fallback. The factory receives this run's counters through a reservation port.
+  readonly bindToolCatalog?: HarnessCatalogFactory;
   readonly sink: EventSink;
   readonly clock?: Clock | undefined;
   readonly idSource?: IdSource | undefined;
@@ -134,6 +138,8 @@ function buildContext(
     cancelReason: undefined,
     cancelledAtState: undefined,
   };
+  if (!resolveDryRun(config) && deps.bindToolCatalog !== undefined)
+    ctx.catalog = bindHarnessCatalog(ctx, runId, deps.bindToolCatalog);
   return { ctx, memory };
 }
 
@@ -145,7 +151,7 @@ function armWallTimeDeadline(
 ): () => void {
   let cleared = false;
   const deadlineController = new AbortController();
-  void clock
+  clock
     .sleep(ctx.limits.maxWallTimeMs, deadlineController.signal)
     .then(() => {
       // isSettled() bails out one tick earlier than `cleared` (set only once clearDeadline, a

@@ -58,6 +58,72 @@ We will introduce a dedicated remote publish gateway in keiko-tools, a Node push
 
 The local kernel (`runGitMutation`) and the local adapter are **unchanged**. The structural invariant tests proving the local allowlist excludes network verbs remain true because push never flows through the local adapter.
 
+Issue-bound Workbench delivery (#3387) added a `verifiedCommitSha` operand to the same command,
+contract and adapter, originally optional. A #3394 review of the merged slice found the field
+enforced nowhere outside that one issue-bound path: the interactive/manual governed-git-flow route
+built and dispatched an ordinary `<sourceBranchName>:<remoteBranchName>` push with no pinned commit
+at all, so "a moving local branch can never substitute another commit after approval" was true only
+for the one caller that happened to always populate the field, not as a property of the push
+gateway itself. D6 below closes that gap: `verifiedCommitSha` is now `readonly verifiedCommitSha:
+string` on `GitPushCommand` (mandatory, contract-validated as a complete 40- or 64-character Git
+object id — `isGitObjectId`), and every push, from either dispatch path, pins an explicit
+`<verifiedCommitSha>:refs/heads/<target>` refspec. There is no remaining code path that can build or
+execute an unpinned push argv.
+
+Two dispatch paths exist in the Node executor (`git-publish-node.ts`), selected by whether the
+request carries a canonical GitHub URL (`remoteUrl === undefined ? runPinnedPush(...) :
+runVerifiedPush(...)`), and both now share the mandatory-pinning invariant:
+
+- **`runVerifiedPush`** — unchanged mechanism, issue-bound Workbench delivery only. The refspec is
+  `<verifiedCommitSha>:refs/heads/<literal feature branch>`; a moving local branch can never
+  substitute another commit after approval. This path still rejects upstream tracking setup, ref
+  expressions, forced updates and non-branch destinations. The run owner binds the approved
+  repository, remote, base and head, checks authority before dispatch and reconciles the actual
+  remote head afterwards; the argv builder alone does not grant delivery authority. A real
+  bare-remote test advances the local branch after approval and proves only the approved immutable
+  commit is published.
+- **`runPinnedPush`** — the interactive/manual governed-git-flow route, dispatching through the
+  user's own configured remote alias (never a literal URL) via `buildPushArgv`'s pinned refspec.
+  Unlike `runVerifiedPush` it now also honours `setUpstreamTracking`: a raw commit source cannot be
+  tracked by `push --set-upstream` itself (`-u` silently no-ops on a SHA source), so tracking is
+  established as a separate, local-only, no-network follow-up — `git branch
+  --set-upstream-to=<remoteAlias>/<remoteBranchName> <sourceBranchName>` (`buildSetUpstreamToArgv`)
+  — run through the SAME sandboxed publish executor immediately after a successful pinned push
+  (`applyUpstreamTrackingIfRequested`). The follow-up is best-effort: its failure never undoes or
+  fails the push, which has already succeeded by the time it runs. A failure (thrown, or a plain
+  non-zero exit — `onTerminated` does not fire here, since it only covers a run the harness itself
+  force-terminated, never an ordinary exit) is reported through the dedicated, content-free
+  `onUpstreamTrackingFailure` seam, which the owning server logs via its existing activity-log port
+  (`git.delivery.push.upstream-tracking-failed`, category `diagnostic`) — visibility for an operator,
+  never a reason to change the push's own reported outcome (AGENTS.md §7/§8).
+
+Verified issue-bound pushes also capture an exact canonical GitHub transport URL. The workspace
+Git metadata owner creates a temporary minimal bare Git view in the existing executor-owned
+ephemeral directory facility, outside both the authorized checkout and its Git metadata. It shares
+only the authorized object store and bounded shallow identities. The dedicated push executor selects that view, suppresses
+global/system Git configuration, disables HTTP redirects and passes the approved URL literally.
+It never reopens the checkout's live remote, push-URL or URL-rewrite configuration for that effect.
+The temporary view carries no source index, branch refs, hooks or original config and is removed
+after the attempt. Pre-dispatch checks bind directory identities and the exact generated metadata
+contents. The workspace boundary denies access to that external effect directory; protection from
+an arbitrary process with the same host-user privileges is the separate runtime-containment
+qualification (#2951), not a property of a temporary pathname or an inode check.
+Existing authority, cancellation, environment redaction and the push-only
+allowlist still apply. This is transient effect metadata, not another managed workspace or clone.
+
+For that verified HTTPS path, Git uses the standard `gh auth git-credential` protocol through one
+host-scoped helper after clearing inherited helpers. The helper executable is resolved by the
+existing trusted PATH owner and its absolute path is quoted for Git's credential shell. It targets
+only `https://github.com`, pins the gh host and noninteractive behavior, and refuses account/config
+selectors resolving inside the managed workspace. Keiko does not invoke the helper separately or
+read its credential bytes; Git and gh exchange them directly. SSH keeps its existing account/agent
+lane. Hermetic tests exercise the actual Git credential protocol using synthetic values and prove
+a hostile configured helper executes without the reset and is excluded with it; they do not qualify
+live authentication or native Windows credential execution.
+
+Preparation failures use the production factory's existing activity-log and structured diagnostic
+ports with the run correlation. No remote URL, path or credential enters those events.
+
 ### D2 — The publish-rejection taxonomy is derived in the trusted layer, surfaced as typed tokens
 
 `GitPublishRejectionReason` is a closed union: `non-fast-forward | fetch-first | no-upstream | auth-failed | permission-denied | protected-ref | remote-unavailable | unknown`. The Node executor (`git-publish-node.ts`) classifies a non-zero `git push` exit by matching git's own English status phrases in the captured (secret-redacted) output via the pure `classifyGitPublishRejection` matcher, then maps the reason to:
@@ -86,6 +152,76 @@ lost after admission, no process is spawned, the route returns the correlated 40
 contract, and the existing mutation ledger records one `blocked` / `authority-denied` /
 `policy-forbidden` terminal outcome rather than either dropping the attempt or persisting the
 adapter's synthetic internal failure.
+
+### D6 — `verifiedCommitSha` is mandatory on every push, and a new blocking preflight finding re-verifies it against the freshly read local head (#3394 review)
+
+A review of the merged #476/#3387 slices (PR #3394) raised two findings. Finding 1: commit pinning
+was optional on the governed push route's contract shape, so a caller of the interactive route
+(never the issue-bound one) could omit `verifiedCommitSha` entirely and fall through to an unpinned
+push — the "moving local branch can never substitute another commit after approval" guarantee D1
+describes was therefore not a property of the gateway, only an accident of one caller's behaviour.
+Finding 2 (mirrored in ADR-0086 D12) is that a mutated command could be approved for one commit and
+executed after the branch moved, with nothing re-checking that the commit approved is the commit
+that ships.
+
+Both are closed the same way this gateway closes every other risk in its scope: as reusable kernel
+machinery, not a call-site check.
+
+- **The contract shape.** `GitDeliveryPushInputs.verifiedCommitSha` (`keiko-contracts/git-delivery.ts`)
+  changes from `verifiedCommitSha?: string` to `readonly verifiedCommitSha: string`, and
+  `isPushInputs` validates it unconditionally with the existing `isGitObjectId` guard — a request
+  shaped without it, or with a malformed value, is a shape-invalid `400` at the contract boundary,
+  never a silent default. `GitPushCommand.verifiedCommitSha` and `GitPublishExecRequest.verifiedCommitSha`
+  (`git-publish-gateway.ts`) follow the same shape; `buildPushArgv` always builds the pinned refspec
+  (D1) — there is no remaining branch that builds an unpinned one.
+- **The new preflight finding.** `git-mutation-preflight.ts` gains `"verified-commit-drifted"` in
+  `GitPreflightFindingCode`, and `preflightPush` emits it (blocking, user-actionable) when
+  `inputs.verifiedCommitSha !== snapshot.headSha`. Preflight always runs against a **freshly re-read**
+  `GitWorktreeSnapshot` (never a value cached from an earlier preview), so this is the actual
+  anti-drift gate: it catches "the local branch moved since this push was approved" before any
+  adapter call happens, for either dispatch path. It replaces `pushNeedsUpstream` /
+  `"no-upstream-configured"`, a narrower check that only existed to catch the "no tracking relation
+  and no pinned commit" combination the now-mandatory field makes unreachable by construction
+  (AGENTS.md §7: delete the dead code rather than leave an always-false guard in place). Losing that
+  check does not reduce coverage — an actually-unconfigured upstream on a pinned push still fails,
+  just later and more informatively, when git itself rejects the pinned refspec.
+- **The branch-identity finding (review of the drift check).** `snapshot.headSha` is the head of
+  the branch that is *checked out*, so `verified-commit-drifted` only speaks for `sourceBranchName`
+  when that branch is the checkout. `preflightPush` therefore also emits
+  `"source-branch-not-checked-out"` (blocking, user-actionable) when `snapshot.currentBranchName`
+  is not `inputs.sourceBranchName` — including a detached head, where no branch is checked out at
+  all. A caller naming a branch the snapshot never read is refused outright instead of being judged
+  (and possibly passed) by another branch's head; the pinned refspec then publishes exactly the
+  commit the checked-out branch was at when it was reviewed. Recovery hint: `adjust-policy-target`
+  (re-target the push, or check the named branch out, and preview again).
+- **Why this does not defeat D1's own guarantee for the issue-bound path.** D1's canonical-URL path
+  intentionally publishes the exact approved commit even when the local branch has since moved
+  further — that is the whole point of pinning. A blanket "input must equal live local head" check
+  would instead block that legitimate case as drift. The server-side effect wiring
+  (`draftDeliveryEffects.ts`'s `pushSnapshot`) resolves this by reading the real snapshot and then,
+  for a `push` command only, substituting `headSha: command.verifiedCommitSha` before preflight ever
+  sees it — the check trivially holds for the commit that was actually approved, and D1's guarantee
+  is preserved exactly as before. The interactive/manual route takes no such override: for it, the
+  check is evaluated against the real live local head, so a genuine local drift between preview and
+  execute is caught rather than pinned around. Both behaviours are proven by test: a real bare-remote
+  integration test advances the local branch after approval and confirms the pinned commit still
+  publishes on the issue-bound path (D1's existing coverage), and a new preflight test confirms the
+  interactive path blocks with `verified-commit-drifted` when the local head has moved since the
+  value being pushed was captured.
+- **Cross-reference.** ADR-0086 D12 documents the equivalent enforcement for `pr-create` and
+  `pr-update` (a live-head re-read immediately before the provider dispatch, rather than a preflight
+  finding, since PR gateway has no local-snapshot preflight to extend — see Alternative 3 there).
+- **Where a legitimate caller gets the value.** A mandatory field is only safe if the normal flow
+  never has to ask a human to type a commit SHA. The read-only push preview route already resolves a
+  live snapshot to project policy and preflight; it now additionally returns that snapshot's own
+  `headSha` as `headCommitSha` on the preview response body. The interactive UI (`GitClientWindow.tsx`)
+  captures that value at preview time and resubmits it as `verifiedCommitSha` on the approve/execute
+  calls that follow — never re-reading the head at execute time itself, and only when the preview is
+  still valid for the current target (mirrors the existing `previewedKey === targetKey` staleness gate
+  already used for the visible preview). Approval (`/push/approve`) mints a claim bound to the whole
+  typed command including this field, so a claim minted for one `verifiedCommitSha` cannot be
+  redeemed for another. Preview itself stays read-only and never requires the field: it has no claim
+  to mint and nothing to pin yet.
 
 ## Consequences
 
@@ -148,6 +284,10 @@ adapter's synthetic internal failure.
 - Issue #476: Safe publish orchestration for push, upstream handling, and protected-target awareness (this ADR)
 - Issues #477–#478: PR command center, merge governance (next children; extend provider execution)
 - Issue #470: Epic — governed end-to-end Git delivery
+- ADR-0086 D12: the equivalent mandatory-commit-pinning enforcement for `pr-create`/`pr-update` (PR
+  #3394 review, finding 2)
+- PR #3394: review that found commit pinning optional on this route (finding 1) and unenforced on PR
+  create/update (finding 2); D6 and ADR-0086 D12 are the fix
 
 ## Date
 

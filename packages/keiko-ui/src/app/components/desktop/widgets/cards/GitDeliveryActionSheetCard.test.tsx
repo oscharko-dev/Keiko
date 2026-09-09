@@ -286,6 +286,7 @@ describe("GitDeliveryActionSheetCard", () => {
       projectId: "/repos/project",
       resolvedInputs: {
         kind: "push" as const,
+        verifiedCommitSha: "a".repeat(40),
         sourceBranchName: "feature/x",
         remoteAlias: "origin",
         remoteBranchName: "feature/x",
@@ -320,6 +321,7 @@ describe("GitDeliveryActionSheetCard", () => {
       projectId: "/repos/project",
       resolvedInputs: {
         kind: "push" as const,
+        verifiedCommitSha: "a".repeat(40),
         sourceBranchName: "feature/x",
         remoteAlias: "origin",
         remoteBranchName: "feature/x",

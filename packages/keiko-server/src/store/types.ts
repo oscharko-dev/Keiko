@@ -20,6 +20,7 @@ import type {
   UpdateChatPatch,
   NewChatMessage,
   UpdateChatMessagePatch,
+  ChatGitChangeScope,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   CodingWorkbenchMode,
@@ -46,9 +47,26 @@ export type {
   ChatRole,
   WorkflowStatus,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+// Issue #3400 (epic #3384) — the third, sibling Git-change Chat scope list.
+export type {
+  ChatGitChangeScope,
+  ChatGitChangeDescriptionStatus,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
+export { CHAT_GIT_CHANGE_DESCRIPTION_STATUSES } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 export interface MemoryAutonomyPolicyRecord {
   readonly requestedMode: CodingWorkbenchMode;
+  readonly revision: number;
+}
+
+/**
+ * Issue #3385: whether the GitHub issue reader is authorized for ONE repository, identified by the
+ * content-free id the task workspace derives. No credential, path, remote URL or owner/name pair is
+ * stored — `gh` remains the only credential boundary.
+ */
+export interface GitHubIssueReaderAuthorizationRecord {
+  readonly repositoryId: string;
+  readonly authorized: boolean;
   readonly revision: number;
 }
 
@@ -97,6 +115,15 @@ export interface UiStore {
     opts?: CreateChatOptions,
   ) => Chat;
   readonly updateChat: (id: string, patch: UpdateChatPatch, options?: UpdateChatOptions) => Chat;
+  /**
+   * Atomic git-change scope mutation: the callback receives the CURRENT list, read inside the same
+   * transaction as the write. The only safe way to append or replace an entry across an await
+   * (#3384 review), because the column carries no etag for a compare-and-swap.
+   */
+  readonly mutateGitChangeScopes: (
+    id: string,
+    mutate: (current: readonly ChatGitChangeScope[]) => readonly ChatGitChangeScope[],
+  ) => Chat;
   readonly deleteChat: (id: string) => void;
 
   readonly listMessages: (chatId: string, limit?: number) => readonly ChatMessage[];
@@ -161,6 +188,15 @@ export interface UiStore {
     mode: CodingWorkbenchMode,
     expectedRevision: number,
   ) => MemoryAutonomyPolicyRecord | undefined;
+
+  readonly readGitHubIssueReaderAuthorization: (
+    repositoryId: string,
+  ) => GitHubIssueReaderAuthorizationRecord | undefined;
+  readonly updateGitHubIssueReaderAuthorization: (
+    repositoryId: string,
+    authorized: boolean,
+    expectedRevision: number,
+  ) => GitHubIssueReaderAuthorizationRecord | undefined;
 
   // Canonical workspace-trust persistence (issue #2521, ADR-0147 D3/D8). The store persists opaque,
   // content-free rows; all trust semantics (derivation, validation, projection) live above the port.

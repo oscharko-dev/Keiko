@@ -18,10 +18,16 @@ resource/risk matrix, separately approved delivery, and editor-agent compatibili
 corrects only the missing runtime ownership and delegation boundary. It does not activate a process,
 implement an adapter, execute a connector, or add a browser route.
 
-Production route and orchestrator migration is explicitly deferred to Issue #2256. The existing
-client-envelope runtime routes are not validated by this decision, are not claimed safe or migrated,
-and must not activate productive runtime traffic. Epic #1982 remains blocked until #2256 removes
-that caller-authored authority path and wires these contracts through the production orchestrator.
+Production route and orchestrator migration was deferred to Issue #2256, which left the
+client-envelope runtime routes unmounted, and Issue #2958 (audit KEIKO-0115/KEIKO-0135) then deleted
+them along with the policy and approval store behind them:
+`POST /api/coding-workbench/autonomous-delivery/{confirm,execute}` and
+`POST /api/editor/agent/authority` no longer exist as code, and `routes.test.ts` pins all three
+patterns as unmatched. The single mounted autonomous coding-delivery authority path is
+`CODING_RUNTIME_ROUTE_GROUP`, whose envelopes are minted by
+`runtimeAuthorityService.confirmStart`; every state-changing Git delivery operation is admitted by
+`gitDelivery/runBoundAuthority.authorizeGitDelivery` against that accepted run and gated by the
+one-use `gitDelivery/approvalStore`.
 
 ## Decision
 
@@ -31,6 +37,29 @@ The closed start request contains only a request id, transient task intent, requ
 model source. Stop, takeover, and recovery requests contain only a request id and run id. Exact-key
 validation rejects every additional field. Raw task intent is transient model input and is absent
 from durable runtime state, events, failures, and evidence.
+
+Issue #3385 adds an optional raw `issueRef` and accepted-preview digest to that intent. A paired
+local app session and the selected checkout's existing GitHub reader grant admit preview reads.
+The browser receives only the shared preview projection and bounded untrusted excerpts; it cannot
+submit a binding or select the issue's base branch. Existing task-workspace provisioning resolves
+the default base server-side and rechecks the accepted digest before creating a workspace.
+
+Before minting an issue-bound run, the server resolves the issue again and rejects PRs, closed or
+unreadable issues, changed provenance, stale content and missing authority. The immutable GitHub
+node id, canonical remote digest, checkout id, issue number, default base and content revision are
+bound into the existing execution binding and start confirmation. The same closed issue validator
+guards authority, public snapshots and the durable ledger. Retrying revalidates the previous
+binding; generic tasks retain their existing behavior. Bounded issue text enters only the initial
+model turn through the existing context-pack builder and never enters the durable projections.
+The orchestrator keeps the human task intent unchanged and carries labelled untrusted context in a
+separate server-only `initialContext` dispatch field. Explicit-skill tracking observes only the
+human text. The pinned OpenCode 1.17.17 prompt transport sends context as a separate `synthetic: true`
+text part: it reaches the model but the existing safe-activity projection omits its user-message echo.
+The combined prompt retains the existing byte ceiling. The Codex control port currently accepts
+only text, so its adapter composes the same labelled context after explicit-skill tracking; it never
+feeds that composed string back into skill authorization. Follow-up turns carry no implicit context.
+The existing body-free `coding-runtime.run.issue-context-attached` event records initial attachment;
+raw context stays absent from runtime snapshots, generated runtime configuration and activity logs.
 
 ### D2 — One server aggregate owns runtime authority
 
@@ -46,7 +75,12 @@ opaque run id and envelope digest cross into the adapter seam.
 
 Minting requires a server-issued, action-bound, one-use human confirmation. The Authority Envelope
 itself is retained for the complete run so the existing registry remains the sole source of
-cumulative runtime/tool/patch budgets. Each adapter delegation has a fresh idempotency/replay
+cumulative runtime/tool/patch budgets. The deployment may configure the cumulative prompt-token
+allowance for newly minted envelopes with `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` (default
+200,000; positive decimal integers up to 2,000,000). Invalid values fail closed; this cannot alter
+an existing envelope or reset its usage. Native context compaction changes subsequent request
+size, not cumulative accounting, and the separate Model Gateway spend ceiling remains enforced.
+Each adapter delegation has a fresh idempotency/replay
 identity. Before every delegation, the BFF re-resolves live facts and rejects task, workspace,
 project, branch, action/connector scope, budget, runtime source, or model source drift. Expiry,
 delegation replay, stop, and takeover fail closed. V1 permits exactly one active run per BFF; a
@@ -135,8 +169,13 @@ it but may not weaken or reinterpret it.
   transport/backpressure, and real-binary execution belong to ordered corrective children and cannot
   be inferred from these contracts. Process-tree ownership and revocation-before-termination are
   normative here; #2251 implements them and #2258 qualifies the platform backends before activation.
-- No production traffic is migrated by Issue #2252. Issue #2256 owns route replacement and
-  orchestrator wiring because this issue expressly forbids browser-route implementation.
+- No production traffic was migrated by Issue #2252; Issue #2256 owned route replacement and
+  orchestrator wiring because this issue expressly forbade browser-route implementation. Issue #2958
+  completed that removal by deleting the unmounted caller-authored authority scaffolding, so no
+  second, unreachable delivery front door remains beside the server-owned path. No primitive was
+  relocated out of it: the one-use proof store, envelope digest, branch and scope admission, ceiling
+  clamp, and operator stop all already had live owners, and the boundary assertions its tests
+  carried moved onto `gitDelivery/runBoundAuthority.test.ts`.
 
 ## Alternatives considered
 

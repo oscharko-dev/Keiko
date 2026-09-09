@@ -3,6 +3,7 @@ import {
   GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES,
   GIT_REPOSITORY_SCHEMA_VERSION,
   GIT_STATUS_CODES,
+  isSafeGitRefName,
   validateGitRepositoryDiffResponse,
   validateGitRepositoryStatusResponse,
 } from "./git-repository.js";
@@ -367,5 +368,71 @@ describe("diff response: reason, repositoryRoot, truncated/maxBytes consistency 
     if (!result.ok) {
       expect(result.reasons).toContain("truncated must be true when diff exceeds maxBytes");
     }
+  });
+});
+
+// KfQ Major: UNSAFE_REF_SUFFIXES applied `.lock` with endsWith() against the WHOLE ref, but git's
+// rule is per slash-separated component -- `git check-ref-format --allow-onelevel` refuses
+// `a.lock/b` as surely as `a.lock`. The sibling leading-dot rule in the same predicate was already
+// per component, so `a.lock/b`, `x.lock/y/z` and `refs/heads/a.lock/b` passed contract validation
+// and were then rejected at the git boundary: the exact divergence class the consolidation of the
+// predicate into this file claimed to close. Every row below was checked against
+// `git check-ref-format --allow-onelevel <ref>` (git 2.55) and agrees with it. The predicate is
+// deliberately stricter than git elsewhere (length cap, charset allowlist), so the "accepts" rows
+// are the floor the deterministic shapes Keiko emits rely on, not a claim of equivalence.
+describe("isSafeGitRefName", () => {
+  it.each(["a.lock/b", "x.lock/y/z", "refs/heads/a.lock/b", "a.lock.lock/b", "a/b.lock", "a.lock"])(
+    "rejects %j: a component ending in .lock, as git does",
+    (ref) => {
+      expect(isSafeGitRefName(ref)).toBe(false);
+    },
+  );
+
+  it.each(["a.lock-not-suffix/b", "feature/lock", "lock/a", "a.locked/b", "a.lockb/c", "x.Lock/y"])(
+    "accepts %j: .lock that is not a component suffix, as git does",
+    (ref) => {
+      expect(isSafeGitRefName(ref)).toBe(true);
+    },
+  );
+
+  it.each([
+    "a..b",
+    "a/",
+    "a.",
+    "-a",
+    "a@{b}",
+    "a~1",
+    "a^",
+    "a\\b",
+    "a b",
+    ".a",
+    "a/.b",
+    "a//b",
+    "/a",
+    "a:b",
+    "a?b",
+    "a*b",
+    "a[b",
+    "@",
+    "a\tb",
+    "",
+  ])("rejects %j, as git check-ref-format --allow-onelevel does", (ref) => {
+    expect(isSafeGitRefName(ref)).toBe(false);
+  });
+
+  // git's trailing-dot rule is whole-ref only (`a.` is refused, `a./b` is not), unlike the
+  // leading-dot and `.lock` rules, which are per component: pinned so the per-component treatment
+  // is not extended to it by analogy.
+  it.each([
+    "main",
+    "refs/heads/main",
+    "feature/x-1.2",
+    "release/1.0",
+    "a/b/c",
+    "a.b",
+    "a./b",
+    "keiko/task/my-task-abc12345",
+  ])("accepts %j, as git check-ref-format --allow-onelevel does", (ref) => {
+    expect(isSafeGitRefName(ref)).toBe(true);
   });
 });
