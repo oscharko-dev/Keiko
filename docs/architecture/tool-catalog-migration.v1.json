@@ -30,7 +30,7 @@
       "contractDigest": "4bb2d5e817b7b16a2cbabb60fd03fc63c0f92316b72d6e2dbdf858e773f11342"
     },
     "removalIssue": 3414,
-    "landedDevCommit": null,
-    "landedTreeDigest": null
+    "landedDevCommit": "96188897e245d8fa5f02949e8655854ad08a7e86",
+    "landedTreeDigest": "4a13a6f50e50acc58fa13262e8689032d1acd83deaf862577e3e88173f55d519"
   }
 }

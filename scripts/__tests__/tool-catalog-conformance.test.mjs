@@ -27,6 +27,7 @@ import {
   TOOL_CATALOG_MIGRATION_PATH,
   toolCatalogMigrationBytes,
 } from "../check-tool-catalog-conformance.mjs";
+import { GOVERNED_TOOL_CONTRACT_PINS } from "../lib/governed-tool-contract-pins.mjs";
 import { scanToolRegistrySource } from "../lib/tool-catalog-inventory.mjs";
 import { resolveHostExecutable } from "../lib/host-executable.mjs";
 import {
@@ -114,10 +115,14 @@ describe("initial compiler and finite migration conformance gate", () => {
       migration.sourceContractDigest,
     );
     expect(migration.pendingH1.removalIssue).toBe(3414);
-    // Initially empty: no code path may treat this record as an authorization while these are
-    // null -- only #3414 may populate them once H1 actually reaches dev.
-    expect(migration.pendingH1.landedDevCommit).toBeNull();
-    expect(migration.pendingH1.landedTreeDigest).toBeNull();
+    // #3414 pins the actual dev landing through the source-owned producer; generated output must
+    // derive it rather than restating either identity in the fixture.
+    expect(migration.pendingH1.landedDevCommit).toBe(
+      GOVERNED_TOOL_CONTRACT_PINS.pendingH1.landedDevCommit,
+    );
+    expect(migration.pendingH1.landedTreeDigest).toBe(
+      GOVERNED_TOOL_CONTRACT_PINS.pendingH1.landedTreeDigest,
+    );
   });
   it("pins the one non-dispatch readiness probe without granting a path exception", () => {
     const source = readFileSync(join(ROOT, PROBE), "utf8");

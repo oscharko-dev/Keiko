@@ -97,8 +97,8 @@ export async function toolCatalogMigrationBytes(root = process.cwd()) {
     // `pendingH1` comment for what each field means and who may change it. The prerequisite #3411
     // merge identity is this same document's own `sourceContractDigest` -- the #3411 architecture
     // checkpoint this record depends on -- never a second, independently computed digest.
-    // landedDevCommit/landedTreeDigest stay null until #3414 records H1's actual dev-reachable
-    // merge identity and removes this entry in the same migration.
+    // landedDevCommit/landedTreeDigest are source-owned pins: #3414 records H1's actual
+    // dev-reachable merge identity after integration; generated output never invents them.
     pendingH1: {
       owner: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.owner,
       canonicalTool: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.canonicalTool,
@@ -107,8 +107,8 @@ export async function toolCatalogMigrationBytes(root = process.cwd()) {
         contractDigest: sourceContractDigest,
       },
       removalIssue: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.removalIssue,
-      landedDevCommit: null,
-      landedTreeDigest: null,
+      landedDevCommit: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.landedDevCommit,
+      landedTreeDigest: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.landedTreeDigest,
     },
   };
   return format(`${JSON.stringify(migration, null, 2)}\n`, {
@@ -385,15 +385,20 @@ export async function checkH1ProducerCheckpoint(
 }
 
 export function isAncestorOfDev(commit, root, execute) {
-  try {
-    execute(resolveHostExecutable("git"), ["merge-base", "--is-ancestor", commit, "dev"], {
-      cwd: root,
-      encoding: "utf8",
-    });
-    return true;
-  } catch {
-    return false;
+  const git = resolveHostExecutable("git");
+  for (const devRef of ["refs/remotes/origin/dev", "refs/heads/dev"]) {
+    try {
+      execute(git, ["show-ref", "--verify", "--quiet", devRef], { cwd: root, encoding: "utf8" });
+      execute(git, ["merge-base", "--is-ancestor", commit, devRef], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      return true;
+    } catch {
+      // A stale or absent local ref cannot override a current remote-tracking dev ref.
+    }
   }
+  return false;
 }
 
 export async function realProducerIdentityFailures(root, record) {

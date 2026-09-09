@@ -24,10 +24,9 @@ export const GOVERNED_TOOL_CONTRACT_PINS = {
   // and what; `prerequisiteIssue` names the #3411 architecture checkpoint this entry may only
   // exist after (toolCatalogMigrationBytes binds its actual digest from the same
   // `sourceContractDigest` the migration document already computes, never a second formula);
-  // `removalIssue` is #3414, which alone may remove this entry once it lands the durable
-  // H1Provenance handoff. `landedDevCommit`/`landedTreeDigest` stay null here (initially empty) --
-  // this entry grants no allowlist exception and is never read as an authorization by any code
-  // path; only #3414 may populate those two fields once H1 actually reaches dev. #3415's
+  // `removalIssue` is #3414, which alone records the durable H1Provenance handoff.
+  // `landedDevCommit`/`landedTreeDigest` now pin the actual #3394 squash landing; this entry grants
+  // no allowlist exception and is never read as an authorization by any code path. #3415's
   // `checkH1HandoffEvidence` (check-tool-catalog-conformance.mjs, folded into
   // checkToolCatalogMigrationCloseout) independently rechecks both fields the moment either is
   // populated -- see docs/architecture/governed-tool-migration.md for exactly what it verifies.
@@ -42,6 +41,8 @@ export const GOVERNED_TOOL_CONTRACT_PINS = {
     canonicalTool: { canonicalId: "keiko.repo.search", contractVersion: 1 },
     prerequisiteIssue: 3411,
     removalIssue: 3414,
+    landedDevCommit: "96188897e245d8fa5f02949e8655854ad08a7e86",
+    landedTreeDigest: "4a13a6f50e50acc58fa13262e8689032d1acd83deaf862577e3e88173f55d519",
     ownedImplementation: [
       "packages/keiko-contracts/src/coding-repository-search.ts",
       "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts",
